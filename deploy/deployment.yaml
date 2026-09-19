@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: artifacts
+  labels:
+    app.kubernetes.io/name: artifacts
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # A new pod starts (and must pass its readiness probe) before the old one
+      # stops -- migrate()'s advisory lock is exactly what makes that safe for
+      # two pods to run this entrypoint against the same schema at once.
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: artifacts
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: artifacts
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          # CI rewrites the tag on `deploy/kustomization.yaml`'s `images:` entry --
+          # never edit the tag here.
+          image: git.tenfourty.site/jeremy/artifacts:bootstrap
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: artifacts-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: artifacts-db-app
+                  key: uri
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              # Deliberately no cpu limit (fleet convention) -- memory only.
+              memory: 512Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          # The router is fail-closed (`artifacts.app.create_app`): a probe with no
+          # Host header, or the wrong one, gets a 404 from the router itself, never
+          # a 200 from the app behind it. Every probe must therefore carry the
+          # gallery Host explicitly.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+              httpHeaders:
+                - name: Host
+                  value: artifacts.tenfourty.site
+            failureThreshold: 30
+            periodSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+              httpHeaders:
+                - name: Host
+                  value: artifacts.tenfourty.site
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+              httpHeaders:
+                - name: Host
+                  value: artifacts.tenfourty.site
+      volumes:
+        - name: tmp
+          emptyDir: {}
