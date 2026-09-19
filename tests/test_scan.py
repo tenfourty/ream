@@ -111,6 +111,50 @@ def test_a_case_insensitive_group_of_plain_literal_text_still_loads(pattern):
     assert [name for name, _ in scan.parse_shapes(f"safe_fold\t{pattern}\n")] == ["safe_fold"]
 
 
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "(?i:api_key=)AKIA",  # an uppercase literal outside the group
+        "(?i:token=)[A-Z0-9]{20}",  # an uppercase-only class outside the group
+        "(?i:token=)\\x41",  # an escape that names an uppercase letter
+        "(?i:token=)[^A-Z]",  # negated, naming A-Z without a-z
+        "(?i:token=)[A-Za-f]",  # a counterpart, but only for A-F: G-Z would never match
+        "(?i:token=)[^a-z]+",  # negated, a-z without A-Z: `A` matches, its lowercase does not
+        "(?i:token=)?\\d{6}",  # folded to `token=?`, the `?` would quantify only the `=`
+    ],
+)
+def test_a_shape_the_lowercased_search_would_narrow_is_rejected(pattern):
+    # A (?i:...) shape is searched, in full, over a lowercased copy of the
+    # body, with its groups folded to bare lowercase text. Anything that
+    # search would stop matching -- an uppercase letter (the copy has
+    # none), or a quantifier the fold would re-attach -- is refused at load.
+    with pytest.raises(scan.ShapesError):
+        scan.parse_shapes(f"narrowed\t{pattern}\n")
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "(?i:token=)\\S+",  # case-neutral escapes are not letters
+        "(?i:token=)[A-Za-z0-9]{20}",  # a class admitting both cases
+        "(?i:token=)[^A-Za-z]",  # negated too
+        "(?i:key=)[0-9A-Fa-f]{32}",  # hex: each uppercase letter has its counterpart
+        "(?i:token=)[A-Fa-z]",  # the counterpart present, and wider
+        "(?i:token=)(?P<Value>[a-z]+)",  # a group name is syntax, not matched text
+    ],
+)
+def test_a_pattern_that_matches_the_same_once_lowered_still_loads(pattern):
+    assert [name for name, _ in scan.parse_shapes(f"same_lowered\t{pattern}\n")] == [
+        "same_lowered"
+    ]
+
+
+def test_the_packaged_shapes_file_passes_every_load_time_guard():
+    text = (scan.resources.files("artifacts") / "secret_shapes.txt").read_text(encoding="utf-8")
+    assert [name for name, _ in scan.parse_shapes(text)] == [name for name, _ in scan.SHAPES]
+    assert len(scan.SHAPES) == 22
+
+
 # --- performance: each view is scanned once per shape, not once per line
 # per shape, and results are bounded regardless of match density. ----------
 

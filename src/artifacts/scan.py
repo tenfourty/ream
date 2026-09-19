@@ -173,6 +173,86 @@ _ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
 # open a group of this kind, so such a shape cannot load at all.
 _INLINE_CASE_INSENSITIVE = re.compile(r"\(\?i:((?:[^\\.^$*+?{}\[\]()|]|\\[^A-Za-z0-9])*)\)")
 
+# The whole folded pattern -- not just its groups -- is searched over the
+# lowercased copy, which holds no uppercase ASCII letter, so parse_shapes
+# refuses anything in it the lowering would stop from matching:
+#   - an uppercase letter outside a character class;
+#   - a class naming an uppercase letter without its lowercase counterpart
+#     (`[A-Z0-9]`, `[A-Za-f]`), since the lowered text only ever offers the
+#     counterpart. A wider lowercase side is fine: `[0-9A-Fa-f]`, `[A-Fa-z]`.
+#     For a NEGATED class the same holds the other way round too: `[^a-z]`
+#     matches `A` in the original and not the `a` it becomes, so a negated
+#     class must name both cases of every letter it names, or neither;
+#   - any escape outside the case-neutral set below: `\x41`, `\u0041`,
+#     `\N{...}` and numeric escapes can name an uppercase letter unseen.
+# Group names and comments are syntax, not matched text, so their letters
+# do not count.
+_CASE_NEUTRAL_ESCAPES = frozenset("sSdDwWbBtnrfv")
+# The fold replaces a group with its bare text, so a quantifier right after
+# one would re-attach to the text's last character: `(?i:tok=)?` becomes
+# `tok=?`. parse_shapes refuses it. (A group body holds no `)`, see above.)
+_QUANTIFIED_CASE_INSENSITIVE_GROUP = re.compile(r"\(\?i:[^)]*\)[?*+{]")
+_GROUP_SYNTAX = re.compile(r"\(\?P<[^>]*>|\(\?P=[^)]*\)|\(\?#[^)]*\)")
+
+
+def _fold(source: str) -> str:
+    """`source` with each `(?i:...)` group replaced by its lowercased text."""
+    return _INLINE_CASE_INSENSITIVE.sub(lambda m: m.group(1).lower(), source)
+
+
+def _class_survives_lowering(text: str) -> bool:
+    """Whether the character class `text` matches, on the lowercased copy,
+    everything it matches on the original. Its letters are read by
+    compiling the class itself, not by parsing its ranges by hand."""
+    try:
+        admits = re.compile(text).fullmatch
+    except re.error:
+        return False
+    negated = text.startswith("[^")
+    named = {c for c in string.ascii_letters if bool(admits(c)) != negated}
+    for upper, lower in zip(string.ascii_uppercase, string.ascii_lowercase, strict=True):
+        if upper in named and lower not in named:
+            return False
+        if negated and lower in named and upper not in named:
+            return False
+    return True
+
+
+def _survives_lowering(folded: str) -> bool:
+    """Whether a search for `folded` over the lowercased copy finds
+    everything the shape would find on the original (see above)."""
+    pattern = _GROUP_SYNTAX.sub("(", folded)
+    class_start = None
+    i = 0
+    while i < len(pattern):
+        char = pattern[i]
+        if char == "\\":
+            escaped = pattern[i + 1 : i + 2]
+            if not escaped or (
+                escaped.isascii() and escaped.isalnum() and escaped not in _CASE_NEUTRAL_ESCAPES
+            ):
+                return False
+            i += 2
+            continue
+        if class_start is None:
+            if char == "[":
+                class_start = i
+                i += 1
+                if pattern.startswith("^", i):
+                    i += 1
+                if pattern.startswith("]", i):  # a leading `]` is a literal
+                    i += 1
+                continue
+            if char in string.ascii_uppercase:
+                return False
+        elif char == "]":
+            if not _class_survives_lowering(pattern[class_start : i + 1]):
+                return False
+            class_start = None
+        i += 1
+    return class_start is None
+
+
 _VALUE_BOUNDARY = re.compile(r"""[\s"'&;,]""")
 
 # Where an assignment's value starts. Skipped first: whatever sits between
@@ -245,6 +325,19 @@ def parse_shapes(text: str) -> list[tuple[str, re.Pattern]]:
                 " text -- scan() lowercases it and searches a lowercased copy of the body,"
                 " which is only the same search for literal text"
             )
+        if _QUANTIFIED_CASE_INSENSITIVE_GROUP.search(pattern):
+            raise ShapesError(
+                f"secret shape line {number} ({name}): a quantifier after a (?i:...) group"
+                " would quantify only its last character once the group is folded"
+            )
+        if "(?i:" in pattern and not _survives_lowering(_fold(pattern)):
+            raise ShapesError(
+                f"secret shape line {number} ({name}): searched over a lowercased copy of the"
+                " body, where an uppercase letter outside a class, a class naming an uppercase"
+                " letter without its lowercase one (negated: a letter in one case only), or an"
+                " escape that can name an uppercase letter would not match as it does on the"
+                " original"
+            )
         try:
             compiled = re.compile(pattern, re.MULTILINE)
         except re.error as exc:
@@ -292,8 +385,7 @@ def _fast_pattern(compiled: re.Pattern) -> tuple[re.Pattern, bool]:
     source = compiled.pattern
     if "(?i:" not in source:
         return compiled, False
-    folded = _INLINE_CASE_INSENSITIVE.sub(lambda m: m.group(1).lower(), source)
-    return re.compile(folded, re.MULTILINE), True
+    return re.compile(_fold(source), re.MULTILINE), True
 
 
 def _detag(text: str) -> str:
