@@ -5,10 +5,12 @@ never from a header, query parameter or body field, so nothing else can
 influence whose artifacts a request sees or changes.
 """
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from artifacts import comments, keys, store
+from artifacts import comments, decisions, keys, store
 from artifacts.db import Database
 
 
@@ -27,6 +29,18 @@ class CommentBody(BaseModel):
     quote: str = ""
     anchor: dict | None = None
     thread_root: str | None = None
+
+
+class DecisionBody(BaseModel):
+    question: str
+    # `Any`, not `list[dict]`: a malformed shape (a string, a list of strings, ...)
+    # must reach decisions._validate_options and come back as ITS one InvalidOptions
+    # -- naming only the field "options" -- rather than being rejected first by
+    # Pydantic's own validator, which would report a different error shape for "not a
+    # list" than for "a list, but the second entry has a bad letter". One field, one
+    # kind of failure, whichever way it fails.
+    options: Any
+    recommended: str | None = None
 
 
 # A scanner exception means the scanner is broken, not that the caller's
@@ -222,5 +236,82 @@ def agent_router(db: Database) -> APIRouter:
                 db, agent, include_resolved=include_resolved
             )
         ]
+
+    @router.post("/artifacts/{artifact_id}/decisions", status_code=201)
+    def create_decision(
+        artifact_id: str, payload: DecisionBody, agent: str = Depends(caller)
+    ):
+        try:
+            return decisions.ask(
+                db,
+                agent=agent,
+                artifact_id=artifact_id,
+                question=payload.question,
+                options=payload.options,
+                recommended=payload.recommended,
+            ).__dict__
+        except store.BodyTooLarge as exc:
+            raise HTTPException(
+                413,
+                {
+                    "field": exc.field,
+                    "size": exc.size,
+                    "detail": f"{exc.field} exceeds the size limit",
+                },
+            ) from exc
+        except store.InvalidText as exc:
+            raise HTTPException(
+                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+            ) from exc
+        except store.SecretFound as found:
+            raise HTTPException(
+                422, _refused_detail(found.field, found.findings)
+            ) from found
+        except store.ScanFailed as exc:
+            raise HTTPException(
+                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+            ) from exc
+        except decisions.InvalidOptions as exc:
+            raise HTTPException(
+                422, {"field": exc.field, "detail": "not a valid set of options"}
+            ) from exc
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such artifact") from exc
+
+    @router.get("/artifacts/{artifact_id}/decisions")
+    def list_decisions(
+        artifact_id: str, include_answered: bool = False, agent: str = Depends(caller)
+    ):
+        try:
+            store.get_owned(db, agent, artifact_id)
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such artifact") from exc
+        return [
+            row.__dict__
+            for row in decisions.list_for_artifact(
+                db, artifact_id, include_answered=include_answered
+            )
+        ]
+
+    @router.get("/decisions")
+    def list_all_decisions(
+        include_answered: bool = False, agent: str = Depends(caller)
+    ):
+        # This is how an agent learns Jeremy's answer -- across every artifact it
+        # owns, with no nudge wired at all: a plain poll of this route, with
+        # include_answered=true, is the whole mechanism until the nudge slice lands.
+        return [
+            row.__dict__
+            for row in decisions.list_for_agent(
+                db, agent, include_answered=include_answered
+            )
+        ]
+
+    @router.post("/decisions/{decision_id}/close")
+    def close_decision(decision_id: str, agent: str = Depends(caller)):
+        try:
+            return decisions.close(db, agent, decision_id).__dict__
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such decision") from exc
 
     return router

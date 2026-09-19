@@ -3,28 +3,53 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import store
+from artifacts import decisions, store
 from artifacts.app import create_gallery_app
 
 XSS = '"><img src=x onerror=alert(1)>'
 
 _PAGE = "<!doctype html><html><head></head><body>x</body></html>"
 
+_OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
+
+
+def _publish_and_ask(db, question: str = "ship it?", options=None) -> tuple:
+    published = store.publish(db, "ops-seat", "Board", _PAGE)
+    row = decisions.ask(
+        db,
+        agent="ops-seat",
+        artifact_id=published.id,
+        question=question,
+        options=options or _OPTIONS,
+    )
+    return published, row
+
 
 def test_the_list_escapes_a_hostile_title(db):
-    store.publish(db, "ops-seat", XSS, "<!doctype html><html><head></head><body>x</body></html>")
-    page = TestClient(create_gallery_app(db)).get("/", headers={"Remote-User": "jeremy"}).text
+    store.publish(
+        db, "ops-seat", XSS, "<!doctype html><html><head></head><body>x</body></html>"
+    )
+    page = (
+        TestClient(create_gallery_app(db))
+        .get("/", headers={"Remote-User": "jeremy"})
+        .text
+    )
     assert "<img src=x" not in page
     assert "&lt;img src=x" in page or "&#" in page
 
 
 def test_the_detail_page_frames_the_content_origin_and_inlines_nothing(db):
     published = store.publish(
-        db, "ops-seat", "Board", "<!doctype html><html><head></head><body>secret-body</body></html>"
+        db,
+        "ops-seat",
+        "Board",
+        "<!doctype html><html><head></head><body>secret-body</body></html>",
     )
-    page = TestClient(create_gallery_app(db)).get(
-        f"/a/{published.id}", headers={"Remote-User": "jeremy"}
-    ).text
+    page = (
+        TestClient(create_gallery_app(db))
+        .get(f"/a/{published.id}", headers={"Remote-User": "jeremy"})
+        .text
+    )
     token = store.read_token(db, published.id)
     assert f'src="{store.content_url(published.id, token)}"' in page
     assert "secret-body" not in page
@@ -37,7 +62,9 @@ def test_the_gallery_sets_its_own_strict_headers(db, which):
     strength of `/` alone."""
     published = store.publish(db, "ops-seat", "Board", _PAGE)
     path = "/" if which == "list" else f"/a/{published.id}"
-    response = TestClient(create_gallery_app(db)).get(path, headers={"Remote-User": "jeremy"})
+    response = TestClient(create_gallery_app(db)).get(
+        path, headers={"Remote-User": "jeremy"}
+    )
     csp = response.headers["content-security-policy"]
     assert "frame-ancestors 'none'" in csp
     assert "frame-src https://*.tenfourty.com" in csp
@@ -60,9 +87,11 @@ def test_the_detail_page_escapes_the_title_it_now_shows(db):
     published = store.publish(
         db, "ops-seat", XSS, "<!doctype html><html><head></head><body>x</body></html>"
     )
-    page = TestClient(create_gallery_app(db)).get(
-        f"/a/{published.id}", headers={"Remote-User": "jeremy"}
-    ).text
+    page = (
+        TestClient(create_gallery_app(db))
+        .get(f"/a/{published.id}", headers={"Remote-User": "jeremy"})
+        .text
+    )
     assert "<img src=x" not in page
 
 
@@ -71,9 +100,11 @@ def test_the_detail_iframe_is_sandboxed_against_navigation_and_forms(db):
     be able to navigate Jeremy's signed-in gallery tab, e.g. to a fake sign-in page. Asserting
     set equality (not just "contains") means adding a token back later fails this test too."""
     published = store.publish(db, "ops-seat", "Board", _PAGE)
-    page = TestClient(create_gallery_app(db)).get(
-        f"/a/{published.id}", headers={"Remote-User": "jeremy"}
-    ).text
+    page = (
+        TestClient(create_gallery_app(db))
+        .get(f"/a/{published.id}", headers={"Remote-User": "jeremy"})
+        .text
+    )
     match = re.search(r'<iframe[^>]*\bsandbox="([^"]*)"', page)
     assert match is not None, "detail page has no sandboxed iframe"
     assert set(match.group(1).split()) == {
@@ -91,7 +122,11 @@ def _ids_in_order(page: str) -> list[str]:
 def test_the_list_is_capped_at_two_hundred_rows(db):
     for i in range(201):
         store.publish(db, "ops-seat", f"page {i}", _PAGE)
-    page = TestClient(create_gallery_app(db)).get("/", headers={"Remote-User": "jeremy"}).text
+    page = (
+        TestClient(create_gallery_app(db))
+        .get("/", headers={"Remote-User": "jeremy"})
+        .text
+    )
     assert len(_ids_in_order(page)) == 200
 
 
@@ -103,7 +138,11 @@ def test_the_list_orders_newest_first(db):
             (older.id,),
         )
     newer = store.publish(db, "ops-seat", "newer", _PAGE)
-    page = TestClient(create_gallery_app(db)).get("/", headers={"Remote-User": "jeremy"}).text
+    page = (
+        TestClient(create_gallery_app(db))
+        .get("/", headers={"Remote-User": "jeremy"})
+        .text
+    )
     order = _ids_in_order(page)
     assert order.index(newer.id) < order.index(older.id)
 
@@ -113,7 +152,11 @@ def test_the_list_includes_every_agents_pages(db):
     no `where agent = ...`."""
     one = store.publish(db, "ops-seat", "one", _PAGE)
     two = store.publish(db, "other-seat", "two", _PAGE)
-    page = TestClient(create_gallery_app(db)).get("/", headers={"Remote-User": "jeremy"}).text
+    page = (
+        TestClient(create_gallery_app(db))
+        .get("/", headers={"Remote-User": "jeremy"})
+        .text
+    )
     ids = _ids_in_order(page)
     assert one.id in ids
     assert two.id in ids
@@ -132,7 +175,11 @@ def test_the_list_breaks_updated_at_ties_by_id(db):
             "update artifact set updated_at = '2026-01-01T00:00:00Z' where id = any(%s)",
             (ids,),
         )
-    page = TestClient(create_gallery_app(db)).get("/", headers={"Remote-User": "jeremy"}).text
+    page = (
+        TestClient(create_gallery_app(db))
+        .get("/", headers={"Remote-User": "jeremy"})
+        .text
+    )
     order = [i for i in _ids_in_order(page) if i in ids]
     assert order == sorted(ids, reverse=True)
 
@@ -143,3 +190,125 @@ def test_store_module_docstring_is_encodable():
     import artifacts.store as store_module
 
     store_module.__doc__.encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Decisions: the one place on the detail page Jeremy can act, not just look.
+# ---------------------------------------------------------------------------
+
+
+def test_the_detail_page_renders_a_form_per_decision(db):
+    published, row = _publish_and_ask(db)
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert f'action="/d/{row.id}/answer"' in page
+    assert "(a) yes" in page
+    assert "(b) no" in page
+
+
+def test_the_decisions_block_marks_the_recommended_option(db):
+    published, _row = _publish_and_ask(db)
+    decisions.ask(
+        db,
+        agent="ops-seat",
+        artifact_id=published.id,
+        question="proceed?",
+        options=_OPTIONS,
+        recommended="a",
+    )
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert "(a) yes -- recommended" in page
+    assert "(b) no -- recommended" not in page
+
+
+def test_a_page_with_no_decisions_shows_no_decisions_block(db):
+    published = store.publish(db, "ops-seat", "Board", _PAGE)
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert "Decisions" not in page
+    assert "<form" not in page
+
+
+def test_the_decisions_block_escapes_a_hostile_question(db):
+    published, _row = _publish_and_ask(db, question="<script>alert(1)</script>")
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert "<script>alert(1)</script>" not in page
+    assert "&lt;script&gt;" in page
+
+
+def test_an_answered_decision_still_offers_every_button(db):
+    """He can change his mind -- re-answering is allowed, so the form must not
+    disappear or drop a button just because a decision already has an answer."""
+    published, row = _publish_and_ask(db)
+    decisions.answer(db, row.id, letter="a", note="go ahead", by="jeremy")
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert "Answered: (a) yes" in page
+    assert "go ahead" in page
+    assert f'action="/d/{row.id}/answer"' in page
+    assert "(a) yes" in page
+    assert "(b) no" in page
+
+
+def test_answering_with_no_origin_is_refused(db):
+    published, row = _publish_and_ask(db)
+    response = TestClient(create_gallery_app(db)).post(
+        f"/d/{row.id}/answer", data={"letter": "a"}
+    )
+    assert response.status_code == 403
+    assert (
+        decisions.list_for_artifact(db, published.id, include_answered=True)[0].answer
+        is None
+    )
+
+
+def test_answering_with_a_foreign_origin_is_refused(db):
+    _published, row = _publish_and_ask(db)
+    response = TestClient(create_gallery_app(db)).post(
+        f"/d/{row.id}/answer",
+        data={"letter": "a"},
+        headers={"origin": "https://evil.example"},
+    )
+    assert response.status_code == 403
+
+
+def test_answering_with_cross_site_sec_fetch_site_is_refused(db):
+    _published, row = _publish_and_ask(db)
+    response = TestClient(create_gallery_app(db)).post(
+        f"/d/{row.id}/answer",
+        data={"letter": "a"},
+        headers={"origin": store.gallery_origin(), "sec-fetch-site": "cross-site"},
+    )
+    assert response.status_code == 403
+
+
+def test_answering_with_the_right_signals_redirects_and_stores_the_answer(db):
+    published, row = _publish_and_ask(db)
+    response = TestClient(create_gallery_app(db)).post(
+        f"/d/{row.id}/answer",
+        data={"letter": "a", "note": "go ahead"},
+        headers={"origin": store.gallery_origin(), "sec-fetch-site": "same-origin"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/a/{published.id}"
+    updated = decisions.list_for_artifact(db, published.id, include_answered=True)[0]
+    assert updated.answer == "a"
+    assert updated.answer_note == "go ahead"
+
+
+def test_answering_works_with_no_sec_fetch_site_header_at_all(db):
+    """Sec-Fetch-Site is checked only when present -- a client that never sends it is
+    judged on Origin alone, not refused for silence on a header it never had."""
+    _published, row = _publish_and_ask(db)
+    response = TestClient(create_gallery_app(db)).post(
+        f"/d/{row.id}/answer",
+        data={"letter": "a"},
+        headers={"origin": store.gallery_origin()},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def test_the_framed_page_and_its_tokenised_src_are_unchanged_by_decisions(db):
+    published, _row = _publish_and_ask(db)
+    token = store.read_token(db, published.id)
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert f'src="{store.content_url(published.id, token)}"' in page

@@ -106,3 +106,33 @@ create table if not exists comment (
 
 create index if not exists comment_artifact_idx on comment (artifact_id, created_at);
 create index if not exists comment_thread_idx on comment (thread_root);
+
+-- A decision is an agent's lettered question, not free-form prose: `options` is a JSON
+-- array of {"letter": "a", "label": "..."} in the order the agent gave them, so the
+-- page can render them as a fixed sequence of buttons rather than re-sorting an object's
+-- keys. `version_n` records the version the decision was posed on, exactly as
+-- `comment.version_n` records the version a comment was written against -- a decision
+-- asked against version 3 still says version 3 once the page has moved on to version 7.
+-- `answer`/`answer_note`/`answered_at`/`answered_by` are all null (answer_note: empty
+-- string) until Jeremy answers, and all move together on every answer, including a
+-- second one that replaces the first -- there is no history of past answers, only the
+-- current one. `closed_at` is the agent withdrawing a question it no longer needs
+-- answered (it stopped mattering, or the agent moved on), distinct from an answer: a
+-- decision can be answered and still open (Jeremy may change his mind), or closed with
+-- no answer at all (the agent gave up waiting).
+create table if not exists decision (
+    id           text primary key,
+    artifact_id  text not null references artifact(id) on delete cascade,
+    version_n    integer not null,
+    question     text not null,
+    options      jsonb not null,
+    recommended  text,
+    answer       text,
+    answer_note  text not null default '',
+    answered_at  timestamptz,
+    answered_by  text,
+    created_at   timestamptz not null default now(),
+    closed_at    timestamptz
+);
+
+create index if not exists decision_artifact_idx on decision (artifact_id, created_at);
