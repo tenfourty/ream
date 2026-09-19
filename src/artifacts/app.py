@@ -10,23 +10,27 @@ from artifacts.gallery import gallery_router
 
 
 def create_gallery_app(db: Database | None = None) -> FastAPI:
-    # The schema is served from INSIDE /api/v1, not from FastAPI's default
-    # /openapi.json. Everything under /api/v1/* is what Authelia bypasses for
-    # agent keys; /openapi.json is not, so it answered 302 to a login page an
-    # agent key cannot complete. That is worse than a 404 while someone is
+    # openapi_url=None turns OFF FastAPI's own unauthenticated schema route.
+    # The schema is served instead by the agent router at
+    # /api/v1/openapi.json, BEHIND the same agent key as every other route
+    # there (see artifacts.api.agent_router).
+    #
+    # It has to live under /api/v1 because that prefix is the only path
+    # Authelia bypasses for agent keys -- the default /openapi.json answered
+    # 302 to a login no key can complete, which is worse than a 404 while
     # debugging: a 404 says "not here", a redirect reads as one step short of
-    # working, over and over. Building the first client against this service
-    # meant reading api.py, decisions.py and store.py by hand to get every
-    # route, payload, error code and field name right -- which is precisely
-    # the drift a served schema prevents.
+    # working, over and over. But a bypassed path is an UNAUTHENTICATED path,
+    # so serving it from the router rather than from FastAPI is what keeps
+    # "what does this API look like" from being answerable by any device on
+    # the LAN. Every consumer the schema exists for already holds a key.
     #
     # docs_url/redoc_url stay off: the machine-readable contract is the point,
-    # an interactive UI would be a second surface with no reader.
+    # and an interactive UI would be a second surface with no reader.
     app = FastAPI(
         title="artifacts gallery",
         docs_url=None,
         redoc_url=None,
-        openapi_url="/api/v1/openapi.json",
+        openapi_url=None,
     )
 
     @app.exception_handler(RequestValidationError)

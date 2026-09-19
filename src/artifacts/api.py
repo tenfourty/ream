@@ -87,6 +87,21 @@ def agent_router(db: Database) -> APIRouter:
             raise HTTPException(401, "unknown or revoked key")
         return key.agent
 
+    @router.get("/openapi.json")
+    def schema(request: Request, agent: str = Depends(caller)):
+        """The machine-readable contract, behind the same key as the data.
+
+        It lives here rather than at FastAPI's default /openapi.json for two
+        reasons that pull in opposite directions. It must sit under /api/v1,
+        because that is the only prefix Authelia bypasses for agent keys --
+        outside it, asking for the schema returned a 302 to a login no key can
+        complete. And a bypassed prefix is an unauthenticated prefix, so the
+        route carries `caller` like everything else: the shape of this API is
+        not something any device on the LAN should be able to ask for, and
+        every consumer it exists for already holds a key.
+        """
+        return request.app.openapi()
+
     @router.post("/artifacts", status_code=201)
     def create(payload: PublishBody, agent: str = Depends(caller)):
         try:
