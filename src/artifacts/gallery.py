@@ -5,8 +5,9 @@ interpolation goes through `escape()` explicitly. If this grows past a few field
 introducing Jinja with `autoescape=True` is a contained change -- do that rather than
 adding a sixth hand-escaped field.
 
-No in-app identity check: Authelia gates this host at the ingress, and `/api/v1`
-already rejects a `Remote-User` header outright (Task 5). Nothing here reads it.
+No in-app identity check: Authelia gates this host at the ingress. `/api/v1` does not
+special-case a `Remote-User` header either -- it simply ignores one, since identity
+there comes only from the verified key (Task 5). Nothing in this module reads it.
 """
 
 from fastapi import APIRouter, HTTPException
@@ -31,6 +32,10 @@ def gallery_headers() -> dict[str, str]:
         ),
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
+        # The content app's frame is cross-origin from this page; without this, a
+        # malicious page in that frame could still pop open a same-window-name
+        # window and reach back into this tab via window.opener.
+        "cross-origin-opener-policy": "same-origin",
     }
 
 
@@ -42,9 +47,12 @@ def gallery_router(db: Database) -> APIRouter:
         with db.connect() as conn:
             rows = conn.execute(
                 # Bounded: an unpaginated list is fine at ten artifacts and a
-                # page nobody can load at ten thousand.
+                # page nobody can load at ten thousand. `, id desc` breaks a tie
+                # on `updated_at` (two rows can share one, e.g. re-touched by
+                # the same migration) so the order is fixed, not whatever a
+                # plan with no full ORDER BY happens to return today.
                 "select id, title, updated_at from artifact"
-                " order by updated_at desc limit 200"
+                " order by updated_at desc, id desc limit 200"
             ).fetchall()
         items = "".join(
             f'<li><a href="/a/{escape(row[0])}">{escape(row[1])}</a>'
@@ -68,12 +76,22 @@ def gallery_router(db: Database) -> APIRouter:
         if row is None:
             raise HTTPException(404, "no such artifact")
         # The one place the capability token is rendered: a page only Jeremy's Authelia session
-        # can load, with Referrer-Policy: no-referrer so it never leaves in a Referer.
+        # can load. The token then travels in the iframe's src, and it is the CONTENT app's own
+        # Referrer-Policy: no-referrer (content.py) that keeps it out of a Referer once that
+        # framed page makes requests of its own -- this gallery's no-referrer header covers only
+        # this page's own, tokenless /a/<id> URL.
         src = escape(content_url(artifact_id, row[1]))
+        # Sandboxed with no allow-top-navigation*, no allow-forms, no allow-modals: an agent's
+        # page must never be able to navigate Jeremy's signed-in gallery tab out from under him
+        # (e.g. to a fake sign-in page) or pop a dialog over it. allow-same-origin is safe here
+        # because the frame is cross-origin to the gallery (its own <id>.<domain> origin), and it
+        # needs its own origin for the content app's `connect-src 'self'`.
+        sandbox = "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
         return HTMLResponse(
             f"<!doctype html><title>{escape(row[0])}</title>"
             f"<h1>{escape(row[0])}</h1>"
-            f'<iframe src="{src}" style="width:100%;height:100vh;border:0"></iframe>',
+            f'<iframe src="{src}" sandbox="{sandbox}"'
+            f' style="width:100%;height:100vh;border:0"></iframe>',
             headers=gallery_headers(),
         )
 

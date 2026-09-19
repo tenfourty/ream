@@ -1,4 +1,4 @@
-"""Publishing, patching, reading and listing artifacts.
+r"""Publishing, patching, reading and listing artifacts.
 
 `publish` and `patch` check the cheapest guard first, and the scanner last, so
 CPU is never spent on behalf of a caller who has no right to it. `patch` in
