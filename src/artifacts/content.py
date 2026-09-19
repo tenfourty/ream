@@ -1,23 +1,19 @@
-import os
 import re
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from artifacts import hosts
 from artifacts.db import Database
-from artifacts.store import content_domain
-
-
-def gallery_origin() -> str:
-    """Read at call time, exactly like store.content_domain(). A module-level
-    os.environ.get() is fixed at import, so no test can override it and the
-    deployment has to set it before the first import of this module."""
-    return os.environ.get("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+from artifacts.store import (
+    gallery_origin,  # re-exported: artifacts.content.gallery_origin still resolves
+)
 
 _BASE_CSP = (
     "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
     "script-src 'self' 'unsafe-inline'; font-src 'self'; form-action 'none'; "
-    "base-uri 'none'; worker-src 'none'; "
+    "base-uri 'none'; worker-src 'none'; webrtc 'block'; "
 )
 
 
@@ -44,33 +40,72 @@ SHIM = "<script>window.claude={use:async(n)=>null};</script>"  # replaced in Tas
 # of degrading. Serve the null shim there and let the page render read-only.
 INERT_SHIM = "<script>window.claude={use:async(n)=>null};window.storage=null;</script>"
 
+# An optional BOM, then leading whitespace and whole HTML comments, then the leading
+# doctype -- everything up to and including it is one match, so the shim can be spliced
+# in right after it.
+_LEADING_DOCTYPE = re.compile(
+    r"^(﻿?\s*(?:<!--.*?-->\s*)*<!doctype[^>]*>)", re.IGNORECASE | re.DOTALL
+)
+
 
 def inject(body: str, shim: str) -> str:
-    """Put the shim in the document, wherever the document lets us.
+    """Put the shim immediately after the document's leading doctype (skipping an
+    optional BOM, leading whitespace and any whole HTML comments before it), or at
+    the very start of the document when there is no such doctype.
 
-    A plain `body.replace("</head>", ...)` silently does nothing on a page with
-    no head -- `<!doctype html><body>...` is ordinary agent-written HTML -- and
-    the page then loads with no runtime at all and no error anywhere. Try the
-    head close, then the body open, then the front of the document; the page
-    always ends up with a runtime. Matching is case-insensitive: `</HEAD>` is
-    the same tag.
+    The previous approach searched for `</head>`, which (a) ran the shim AFTER any
+    classic head script that itself calls `window.claude`, (b) was captured by a
+    `</head>` hidden inside an HTML comment, leaving the page with no runtime at
+    all, and (c) could land INSIDE a `<script>` whose own text contains the literal
+    string `</head>`, where the injected `</script>` closed that script early.
+    Anchoring on the doctype instead runs the shim before any of the page's own
+    script and is immune to a `</head>` anywhere in the document's content -- in a
+    comment, in a string, or nowhere at all.
     """
-    for pattern, where in ((r"</head\s*>", "before"), (r"<body\b[^>]*>", "after")):
-        match = re.search(pattern, body, re.IGNORECASE)
-        if match:
-            at = match.start() if where == "before" else match.end()
-            return body[:at] + shim + body[at:]
-    return shim + body
+    match = _LEADING_DOCTYPE.match(body)
+    at = match.end() if match else 0
+    return body[:at] + shim + body[at:]
+
+
+def _first_host_header(scope: dict) -> str | None:
+    """The FIRST `host` header from a raw ASGI scope, decoded latin-1 (HTTP header
+    bytes are not guaranteed UTF-8). `app.py`'s router reads Host the exact same way,
+    so a host is never judged one way by the router and another way here."""
+    for key, value in scope.get("headers") or []:
+        if key == b"host":
+            return value.decode("latin-1")
+    return None
 
 
 def _artifact_id(request: Request) -> str | None:
-    host = request.headers.get("host", "").split(":")[0]
-    suffix = "." + content_domain()
-    return host[: -len(suffix)] if host.endswith(suffix) else None
+    return hosts.artifact_id(hosts.normalise(_first_host_header(request.scope)))
 
 
 def create_content_app(db: Database) -> FastAPI:
-    app = FastAPI(docs_url=None, redoc_url=None)
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.middleware("http")
+    async def _base_headers(request: Request, call_next):
+        """Every content response carries at least the minimum header set, not just
+        the 200 page: FastAPI's own 404/405/422 and the router-adjacent responses
+        below all pass through here too. A response that already carries the page's
+        full CSP (`headers_for`) is left untouched -- this only fills the gap."""
+        response = await call_next(request)
+        if "content-security-policy" not in response.headers:
+            response.headers["x-content-type-options"] = "nosniff"
+            response.headers["referrer-policy"] = "no-referrer"
+            response.headers["content-security-policy"] = (
+                f"default-src 'none'; frame-ancestors {gallery_origin()}"
+            )
+        return response
+
+    @app.exception_handler(RequestValidationError)
+    async def _on_validation_error(
+        _request: Request, _exc: RequestValidationError
+    ) -> JSONResponse:
+        """Never the submitted value, never its location -- a version path takes one
+        int, so the only way to invalidate it is to send something that isn't one."""
+        return JSONResponse(status_code=422, content={"detail": "invalid request"})
 
     def _load(artifact_id: str, n: int | None) -> tuple[str, int] | None:
         with db.connect() as conn:
@@ -96,7 +131,7 @@ def create_content_app(db: Database) -> FastAPI:
     def _serve(request: Request, n: int | None) -> Response:
         artifact_id = _artifact_id(request)
         if artifact_id is None:
-            return Response("not found", status_code=404)
+            return Response("not found", status_code=404, media_type="text/plain")
         # Framed-only is asserted POSITIVELY. Denying just "document" serves the page to
         # any client that sends no Sec-Fetch-Dest at all -- curl, a script's fetch, an old
         # browser -- which is every client that is not a browser honouring the frame.
@@ -105,7 +140,7 @@ def create_content_app(db: Database) -> FastAPI:
             return RedirectResponse(f"{gallery_origin()}/a/{artifact_id}", status_code=303)
         loaded = _load(artifact_id, n)
         if loaded is None:
-            return Response("not found", status_code=404)
+            return Response("not found", status_code=404, media_type="text/plain")
         body, _served = loaded
         live = n is None
         html = inject(body, SHIM if live else INERT_SHIM)

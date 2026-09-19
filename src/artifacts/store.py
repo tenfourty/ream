@@ -115,6 +115,13 @@ def content_domain() -> str:
     return os.environ.get("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
 
 
+def gallery_origin() -> str:
+    """Read at call time, exactly like content_domain(). A module-level
+    os.environ.get() is fixed at import, so no test can override it and the
+    deployment has to set it before the first import of this module."""
+    return os.environ.get("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+
+
 def url_for(artifact_id: str) -> str:
     return f"https://{artifact_id}.{content_domain()}/"
 

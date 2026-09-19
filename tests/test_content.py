@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from artifacts import keys, store
-from artifacts.content import create_content_app
+from artifacts.content import SHIM, create_content_app, inject
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
 GALLERY = "https://artifacts.tenfourty.site"
@@ -41,21 +41,30 @@ def test_a_top_level_request_is_sent_to_the_gallery_instead(content, published):
 
 
 def test_the_header_set_is_on_every_page_response(content):
-    headers = content.get("/", headers=FRAMED).headers
-    csp = headers["content-security-policy"]
-    for directive in [
-        "default-src 'none'",
-        "connect-src 'self'",
-        "form-action 'none'",
-        "base-uri 'none'",
-        "worker-src 'none'",
-        f"frame-ancestors {GALLERY}",
-    ]:
-        assert directive in csp
-    assert headers["referrer-policy"] == "no-referrer"
-    assert headers["x-dns-prefetch-control"] == "off"
-    assert headers["cross-origin-opener-policy"] == "same-origin"
-    assert headers["cross-origin-resource-policy"] == "same-origin"
+    """Checked on the current page AND on an inert version (`/v/1`): a header the live
+    page happens to carry proves nothing about what an inert snapshot carries, and vice
+    versa. `connect-src` differs by design (live vs inert), so it is parametrised; every
+    other directive and header applies identically to both."""
+    for path, connect in (("/", "connect-src 'self'"), ("/v/1", "connect-src 'none'")):
+        headers = content.get(path, headers=FRAMED).headers
+        csp = headers["content-security-policy"]
+        for directive in [
+            "default-src 'none'",
+            connect,
+            "form-action 'none'",
+            "base-uri 'none'",
+            "worker-src 'none'",
+            "webrtc 'block'",
+            f"frame-ancestors {GALLERY}",
+        ]:
+            assert directive in csp
+        assert headers["referrer-policy"] == "no-referrer"
+        assert headers["x-dns-prefetch-control"] == "off"
+        assert headers["cross-origin-opener-policy"] == "same-origin"
+        assert headers["cross-origin-resource-policy"] == "same-origin"
+        assert headers["x-content-type-options"] == "nosniff"
+        assert headers["permissions-policy"] == "geolocation=(), camera=(), microphone=(), payment=()"
+        assert headers["cache-control"] == "no-store"
 
 
 def test_an_older_version_is_inert_but_still_answers_the_contract(content):
@@ -65,9 +74,12 @@ def test_an_older_version_is_inert_but_still_answers_the_contract(content):
     response = content.get("/v/1", headers=FRAMED)
     assert response.status_code == 200
     assert "hi</body>" in response.text and "hi again" not in response.text
-    assert "connect-src 'none'" in response.headers["content-security-policy"]
+    csp = response.headers["content-security-policy"]
+    assert "connect-src 'none'" in csp
+    assert "connect-src 'self'" not in csp
     assert "window.claude" in response.text
     assert "use:async(n)=>null" in response.text
+    assert "window.storage=null" in response.text
 
 
 def test_the_current_version_by_number_is_inert_too(content):
@@ -77,11 +89,23 @@ def test_the_current_version_by_number_is_inert_too(content):
     response = content.get("/v/2", headers=FRAMED)
     assert response.status_code == 200
     assert "hi again" in response.text
+    csp = response.headers["content-security-policy"]
+    assert "connect-src 'none'" in csp
+    assert "connect-src 'self'" not in csp
     assert "use:async(n)=>null" in response.text
+    assert "window.storage=null" in response.text
 
 
 def test_the_current_version_carries_the_runtime_shim(content):
-    assert "window.claude" in content.get("/", headers=FRAMED).text
+    """The reverse of the two inert tests above: the live page has egress open and no
+    inert marker, so a mutant that served the inert shim (or inert headers) everywhere
+    is caught here just as the inert tests catch the opposite mutant."""
+    response = content.get("/", headers=FRAMED)
+    assert "window.claude" in response.text
+    assert "window.storage=null" not in response.text
+    csp = response.headers["content-security-policy"]
+    assert "connect-src 'self'" in csp
+    assert "connect-src 'none'" not in csp
 
 
 @pytest.mark.parametrize("sent", [{}, {"sec-fetch-dest": "empty"}, {"sec-fetch-dest": ""}])
@@ -133,3 +157,55 @@ def test_a_pending_version_is_never_served(db, content, published):
     assert content.get("/v/99", headers=FRAMED).status_code == 404
     # and the live current version is still served, so the filter has not just broken reads
     assert content.get("/", headers=FRAMED).status_code == 200
+
+
+def test_every_content_response_carries_the_base_headers(content):
+    """The global constraint is "every content response", not "every page response":
+    the 303, the router's own 404s, and FastAPI's 404/422 all count. Each must carry
+    nosniff and a CSP, and the 422 must never echo the value that triggered it."""
+    responses = [
+        content.get("/", headers={"sec-fetch-dest": "document"}, follow_redirects=False),
+        content.get("/v/999999", headers=FRAMED),  # unknown version -> 404
+        content.get("/v/<script>alert(1)<", headers=FRAMED),  # not an int -> 422
+    ]
+    for response in responses:
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert "content-security-policy" in response.headers
+    assert responses[2].status_code == 422
+    assert "<script>" not in responses[2].text
+    assert "alert(1)" not in responses[2].text
+
+
+def test_the_openapi_document_is_not_served(content):
+    assert content.get("/openapi.json", headers=FRAMED).status_code == 404
+
+
+def test_inject_places_the_shim_right_after_the_leading_doctype():
+    page = "<!doctype html><html><head><title>t</title></head><body>hi</body></html>"
+    result = inject(page, SHIM)
+    assert result == "<!doctype html>" + SHIM + "<html><head><title>t</title></head><body>hi</body></html>"
+
+
+def test_inject_is_not_fooled_by_a_head_close_hidden_in_a_comment():
+    page = (
+        "<!doctype html><html><head><!-- </head> --><title>t</title></head>"
+        "<body>hi</body></html>"
+    )
+    result = inject(page, SHIM)
+    # the shim landed right after the doctype, well before the comment -- not inside it
+    assert result.index(SHIM) < result.index("<!-- </head> -->")
+
+
+def test_inject_leaves_a_script_containing_the_text_head_close_intact():
+    page = (
+        '<!doctype html><html><head><script>var x = "</head>";</script></head>'
+        "<body>hi</body></html>"
+    )
+    result = inject(page, SHIM)
+    assert '<script>var x = "</head>";</script>' in result
+
+
+def test_inject_precedes_the_pages_first_script():
+    page = '<!doctype html><html><head><script>console.log("hi")</script></head></html>'
+    result = inject(page, SHIM)
+    assert result.index(SHIM) < result.index("<script>console.log")
