@@ -46,6 +46,7 @@ Task 5's body-size cap does not already bound.
 """
 
 import bisect
+import functools
 import html
 import re
 import string
@@ -118,6 +119,7 @@ _ASSIGNMENT_SHAPES = frozenset(
 _PLACEHOLDER = re.compile(
     r"""(
         <[A-Za-z0-9_ .-]+>  # <YOUR_TOKEN>, <your-token-here>, <PASSWORD>
+        |&lt;[A-Za-z0-9_ .-]+&gt;  # the same, HTML-escaped, as the raw view reads it
         |\$\{[^}\n]*\}      # ${VAR}
         |\{\{[^}\n]*\}\}    # {{ template }}
         |[*xX]{3,}          # ****, xxxxxxxx, XXXXXXXX (masked)
@@ -146,36 +148,67 @@ _HTML_TAG = re.compile(r"<[A-Za-z/!?][^<>]*>")
 # as markup would -- `AKIA<soft-hyphen>IOSFODNN7EXAMPLE`, `AKIA&shy;...` once
 # unescaped. Stripped from the text view only, after entities are decoded
 # (an entity like `&shy;` decodes TO one of these, so stripping must happen
-# after `html.unescape`, not before).
-# str.translate() keys a mapping by CODE POINT (an int), not by character --
-# a dict keyed by the characters themselves is silently ignored, matching
-# nothing (a real bug caught here in fix round 3's own tests: an earlier
-# draft did exactly this and stripped nothing at all).
-_ZERO_WIDTH = dict.fromkeys((0x00AD, 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF), None)
+# after `html.unescape`, not before). Removed with str.replace, never
+# str.translate: translate is fast only on ASCII text, and one emoji
+# anywhere in a 512 KiB page made it cost about 50 ms (fix round 5).
+_INVISIBLE = ("\u00ad", "\u200b", "\u200c", "\u200d", "\u2060", "\ufeff")
 
-# ASCII-only, length-preserving lowercase. str.translate over this table
-# never changes a string's length; str.lower() can -- U+0130 (LATIN CAPITAL
-# LETTER I WITH DOT ABOVE) lowercases to TWO code points -- which would
-# shift every offset after it in a lowered copy relative to the original,
-# corrupting both line numbers and placeholder value extraction for
-# anything found past it. Only A-Z is remapped; every other character,
-# ASCII or not, passes through unchanged.
+# ASCII-only, length-preserving lowercase: only A-Z is remapped, every other
+# character, ASCII or not, passes through unchanged. str.lower() is never
+# used on a view: U+0130 (LATIN CAPITAL LETTER I WITH DOT ABOVE) lowercases
+# to TWO code points, which would shift every offset after it in a lowered
+# copy, corrupting line numbers and placeholder value extraction; and the
+# Kelvin sign lowercases to an ASCII `k`, which a negated class such as
+# `[^A-Za-z]` then refuses although it matched the original (fix round 5).
+# _lower_ascii applies this table through UTF-8 bytes; the result is the
+# same as `view.translate(_ASCII_LOWER)`.
 _ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+_ASCII_LOWER_BYTES = bytes.maketrans(
+    string.ascii_uppercase.encode("ascii"), string.ascii_lowercase.encode("ascii")
+)
 
-# Matches an inline scoped case-insensitive group whose body is PLAIN LITERAL
-# text, e.g. `(?i:password=)`, so it can be folded to lowercase and the flag
-# stripped -- see _fast_pattern. The body may hold no regex metacharacter
-# at all, only escaped punctuation (`\.`, `\-`). That is the only kind of
-# group the fold keeps correct: lowercasing `\S` gives `\s`, `\x41` never
-# matches a lowercased body, and a class, alternation, nested group or
-# quantifier inside the group is either mis-parsed here or matches
-# something else once lowered. parse_shapes refuses any `(?i:` that does not
-# open a group of this kind, so such a shape cannot load at all.
+
+def _lower_ascii(view: str) -> str:
+    """`view` with A-Z lowered and nothing else changed.
+
+    str.translate has a fast path for ASCII text only: with a single
+    character outside ASCII anywhere in a 512 KiB view it took about 50 ms
+    against 1.4 ms (fix round 5). bytes.translate has no such cliff, and in
+    UTF-8 the bytes 0x41-0x5A only ever encode A-Z -- every byte of a
+    multi-byte character is 0x80 or above -- so translating the encoded view
+    and decoding it lowers exactly A-Z. `surrogatepass` carries a lone
+    surrogate (JSON can deliver one) through unchanged.
+    """
+    encoded = view.encode("utf-8", "surrogatepass")
+    return encoded.translate(_ASCII_LOWER_BYTES).decode("utf-8", "surrogatepass")
+
+
+# The grammar of a scoped case-insensitive group whose body is PLAIN LITERAL
+# text, e.g. `(?i:password=)`, matched at a group's opening `(`: the body may
+# hold no regex metacharacter at all, only escaped punctuation (`\.`, `\-`,
+# `\)`). That is the only kind of group the fold keeps correct: lowercasing
+# `\S` gives `\s`, `\x41` never matches a lowercased body, and a class,
+# alternation, nested group or quantifier inside the group matches
+# something else once lowered. The group's own closing `)` is where this
+# grammar stops, never the first `)` in the text -- the body can hold `\)`.
 _INLINE_CASE_INSENSITIVE = re.compile(r"\(\?i:((?:[^\\.^$*+?{}\[\]()|]|\\[^A-Za-z0-9])*)\)")
 
-# The whole folded pattern -- not just its groups -- is searched over the
-# lowercased copy, which holds no uppercase ASCII letter, so parse_shapes
-# refuses anything in it the lowering would stop from matching:
+# A shape with a `(?i:...)` group is searched, in full, over an ASCII-
+# lowercased copy of the body, with each group folded into a non-capturing
+# group of its lowercased text (see _fast_pattern). parse_shapes refuses any
+# such shape the lowered search would not match the same way (fix rounds 4
+# and 5):
+#   - any non-ASCII character: the copy lowers A-Z only, so `(?i:contraseña)`
+#     folded to `contraseña` never meets the `Ñ` of `CONTRASEÑA`, and `İ`
+#     lowercases to two code points;
+#   - verbose mode (an inline flag set naming `x`) and `(?#...)` comments:
+#     either can hide a quantifier from anything reading the pattern's text,
+#     `(?x)x(?i:tok) ?` or `x(?i:tok)(?#c)?`;
+#   - a `(?i:` that is not a real group -- inside a character class, or
+#     straight after a backslash -- or whose body is not plain literal text;
+#   - a quantifier straight after a group. Folding into `(?:...)` already
+#     keeps such a quantifier on the whole group; refusing it as well means
+#     neither safeguard is the only one;
 #   - an uppercase letter outside a character class;
 #   - a class naming an uppercase letter without its lowercase counterpart
 #     (`[A-Z0-9]`, `[A-Za-f]`), since the lowered text only ever offers the
@@ -185,19 +218,72 @@ _INLINE_CASE_INSENSITIVE = re.compile(r"\(\?i:((?:[^\\.^$*+?{}\[\]()|]|\\[^A-Za-
 #     class must name both cases of every letter it names, or neither;
 #   - any escape outside the case-neutral set below: `\x41`, `\u0041`,
 #     `\N{...}` and numeric escapes can name an uppercase letter unseen.
-# Group names and comments are syntax, not matched text, so their letters
-# do not count.
+# The pattern is read token by token, the way `re` reads it -- escapes and
+# classes skipped whole -- never searched as text: `\(?P<Abc>` is a literal
+# paren followed by the text `P<Abc>`, not a group name, and `[(?i:=)]` is
+# a class, not a group.
 _CASE_NEUTRAL_ESCAPES = frozenset("sSdDwWbBtnrfv")
-# The fold replaces a group with its bare text, so a quantifier right after
-# one would re-attach to the text's last character: `(?i:tok=)?` becomes
-# `tok=?`. parse_shapes refuses it. (A group body holds no `)`, see above.)
-_QUANTIFIED_CASE_INSENSITIVE_GROUP = re.compile(r"\(\?i:[^)]*\)[?*+{]")
-_GROUP_SYNTAX = re.compile(r"\(\?P<[^>]*>|\(\?P=[^)]*\)|\(\?#[^)]*\)")
+_VERBOSE_OR_COMMENT = re.compile(r"\(\?(?:[A-Za-z-]*x|#)")
+# At a `(` outside a class: syntax whose letters are not matched text -- a
+# group name, a named backreference, an inline flag set.
+_GROUP_SYNTAX = re.compile(r"\(\?(?:P<[^>]*>|P=[^)]*\)|[aiLmsux]*(?:-[imsx]*)?[:)])")
 
 
-def _fold(source: str) -> str:
-    """`source` with each `(?i:...)` group replaced by its lowercased text."""
-    return _INLINE_CASE_INSENSITIVE.sub(lambda m: m.group(1).lower(), source)
+def _case_insensitive_groups(pattern: str) -> list[tuple[int, int]] | None:
+    """The `(start, end)` span of every `(?i:...)` group in `pattern`, found
+    by reading the pattern as `re` does, or None if any `(?i:` in it is not
+    a real, plain-literal, unquantified group (see above)."""
+    groups: list[tuple[int, int]] = []
+    in_class = False
+    i = 0
+    while i < len(pattern):
+        char = pattern[i]
+        if char == "\\":
+            i += 2
+            continue
+        if in_class:
+            in_class = char != "]"
+            i += 1
+            continue
+        if char == "[":
+            i += 1
+            if pattern.startswith("^", i):
+                i += 1
+            if pattern.startswith("]", i):  # a leading `]` is a literal
+                i += 1
+            in_class = True
+            continue
+        if pattern.startswith("(?i:", i):
+            group = _INLINE_CASE_INSENSITIVE.match(pattern, i)
+            if group is None or (i and pattern[i - 1] == "\\"):
+                return None
+            if pattern[group.end() : group.end() + 1] in ("?", "*", "+", "{"):
+                return None
+            groups.append(group.span())
+            i = group.end()
+            continue
+        i += 1
+    # Any `(?i:` not counted above sits in a class or an escape.
+    return groups if len(groups) == pattern.count("(?i:") else None
+
+
+@functools.cache
+def _fold(source: str) -> str | None:
+    """`source` with each `(?i:...)` group replaced by a non-capturing group
+    of its lowercased text, or None if it has a `(?i:` that is not a real
+    plain-literal group. A non-capturing group, never bare text: bare text
+    re-attaches whatever follows -- `(?i:tok=)?` would become `tok=?`, and
+    `x{1,(?i:2)}` the quantifier `x{1,2}`."""
+    groups = _case_insensitive_groups(source)
+    if groups is None:
+        return None
+    parts = []
+    last = 0
+    for start, end in groups:
+        parts += [source[last:start], "(?:", source[start + 4 : end - 1].lower(), ")"]
+        last = end
+    parts.append(source[last:])
+    return "".join(parts)
 
 
 def _class_survives_lowering(text: str) -> bool:
@@ -221,58 +307,86 @@ def _class_survives_lowering(text: str) -> bool:
 def _survives_lowering(folded: str) -> bool:
     """Whether a search for `folded` over the lowercased copy finds
     everything the shape would find on the original (see above)."""
-    pattern = _GROUP_SYNTAX.sub("(", folded)
     class_start = None
     i = 0
-    while i < len(pattern):
-        char = pattern[i]
+    while i < len(folded):
+        char = folded[i]
         if char == "\\":
-            escaped = pattern[i + 1 : i + 2]
-            if not escaped or (
-                escaped.isascii() and escaped.isalnum() and escaped not in _CASE_NEUTRAL_ESCAPES
-            ):
+            escaped = folded[i + 1 : i + 2]
+            if not escaped or (escaped.isalnum() and escaped not in _CASE_NEUTRAL_ESCAPES):
                 return False
             i += 2
             continue
-        if class_start is None:
-            if char == "[":
-                class_start = i
+        if class_start is not None:
+            if char == "]":
+                if not _class_survives_lowering(folded[class_start : i + 1]):
+                    return False
+                class_start = None
+            i += 1
+            continue
+        if char == "[":
+            class_start = i
+            i += 1
+            if folded.startswith("^", i):
                 i += 1
-                if pattern.startswith("^", i):
-                    i += 1
-                if pattern.startswith("]", i):  # a leading `]` is a literal
-                    i += 1
+            if folded.startswith("]", i):  # a leading `]` is a literal
+                i += 1
+            continue
+        if char == "(":
+            syntax = _GROUP_SYNTAX.match(folded, i)
+            if syntax:
+                i = syntax.end()
                 continue
-            if char in string.ascii_uppercase:
-                return False
-        elif char == "]":
-            if not _class_survives_lowering(pattern[class_start : i + 1]):
-                return False
-            class_start = None
+        if char in string.ascii_uppercase:
+            return False
         i += 1
     return class_start is None
 
 
-_VALUE_BOUNDARY = re.compile(r"""[\s"'&;,]""")
+# What ends a value once it has started: whitespace, a quote, `&`, `;`, `,`,
+# or a whole HTML tag (fix round 5). A tag is markup, not value text: read
+# as value text, `</code>` in the raw view turned `<code>API_TOKEN=&lt;your-
+# token&gt;</code>` -- the visible way to write a placeholder in HTML -- into
+# a value that is no placeholder. Only a whole tag counts, the same shape
+# _HTML_TAG deletes; the text view has those deleted already, and glues
+# the pieces either side of one back together, so a value split by markup
+# is still read whole there.
+_VALUE_BOUNDARY = re.compile(r"""[\s"'&;,]|<[A-Za-z/!?][^<>]*>""")
 
 # Where an assignment's value starts. Skipped first: whatever sits between
 # the operator and the value without being the value -- whitespace of any
 # kind except a line break (a non-breaking space, `&nbsp;` once unescaped,
 # hides a value no better than a plain space does) and quotes
-# (`password = "x"`). If that reaches the end of the line, the value is on a
-# later line (fix round 4): the match goes on through at most
-# _VALUE_LOOKAHEAD_LINES blank lines -- each a line break plus the same
-# skippable run -- and the value is the first token of the next non-blank
-# line. Landing on a line break or the end of the text after that means the
-# value is genuinely empty. The pattern is unambiguous -- the two skipped
-# classes are disjoint, and each repetition starts with a line break neither
-# of them matches -- so it never backtracks; and the runs it skips are
-# blank, so no two matches' runs overlap and the total work over a view
-# stays linear.
+# (`password = "x"`), including the HTML-escaped forms the raw view reads
+# (`&quot;`, `&#x27;`, `&nbsp;` ... -- what html.escape() writes; fix round
+# 5). If that reaches the end of the line, the value is on a later line
+# (fix round 4): the match goes on through at most _VALUE_LOOKAHEAD_LINES
+# blank lines -- each a line break plus the same skippable run -- and the
+# value is the first token of the next non-blank line. Landing on a line
+# break or the end of the text after that means the value is genuinely
+# empty. The pattern is unambiguous -- the skipped units start with
+# different characters (whitespace, a quote, `&`), and each repetition
+# starts with a line break none of them matches -- so it never backtracks
+# beyond one short entity name; and the runs it skips are blank, so no two
+# matches' runs overlap and the total work over a view stays linear.
 _VALUE_LOOKAHEAD_LINES = 3
-_VALUE_START = re.compile(
-    rf"""(?:[^\S\n]|['"])*(?:\n(?:[^\S\n]|['"])*){{0,{_VALUE_LOOKAHEAD_LINES}}}"""
+_SKIPPED_BEFORE_VALUE = (
+    r"""(?:[^\S\n]|['"]|&(?:quot|apos|nbsp|#0*(?:34|39|160)|#[xX]0*(?:22|27|[aA]0));)"""
 )
+_VALUE_START = re.compile(
+    rf"{_SKIPPED_BEFORE_VALUE}*(?:\n{_SKIPPED_BEFORE_VALUE}*){{0,{_VALUE_LOOKAHEAD_LINES}}}"
+)
+
+# A value that starts with `&`, `;` or `,` is a value -- a generated
+# password starts with one of the three about once in 30 -- except where the
+# character only closes an empty one (fix round 5): an `&` (or `&amp;`) that
+# starts the next query parameter (`?password=&next=1`) or has nothing after
+# it, and a `;` or `,` with nothing after it (`pass=;`). "Nothing" is
+# whitespace, a quote, a tag or the end of the text. Anywhere after the
+# value's first character, `&`, `;` and `,` still end it (_VALUE_BOUNDARY).
+_ENDS = r"""(?=[\s"'<]|\Z)"""
+_EMPTY_BEFORE_AMPERSAND = re.compile(rf"&(?:amp;)?(?:[\w.~%\[\]-]+=|{_ENDS})")
+_EMPTY_BEFORE_SEPARATOR = re.compile(rf"[;,]{_ENDS}")
 
 # How much of a value token is read for classification, counted from where
 # the token starts (not from the operator, so leading whitespace cannot push
@@ -282,6 +396,37 @@ _VALUE_WINDOW = 200
 _MAX_LINES_PER_SHAPE = 5
 _MAX_RAW_MATCHES_PER_SHAPE = 500
 _MAX_FINDINGS_TOTAL = 50
+
+
+def _check_case_insensitive(number: int, name: str, pattern: str) -> None:
+    """Raise ShapesError unless a shape holding `(?i:` searches the same way
+    folded, over the lowercased copy (see _INLINE_CASE_INSENSITIVE)."""
+    where = f"secret shape line {number} ({name})"
+    if not pattern.isascii():
+        raise ShapesError(
+            f"{where}: a shape with a (?i:...) group must be ASCII -- scan() lowers A-Z"
+            " only, so a non-ASCII letter would never meet its other case"
+        )
+    if _VERBOSE_OR_COMMENT.search(pattern):
+        raise ShapesError(
+            f"{where}: a shape with a (?i:...) group may not use verbose mode or (?#...)"
+            " comments -- either can hide what follows a group"
+        )
+    folded = _fold(pattern)
+    if folded is None:
+        raise ShapesError(
+            f"{where}: every (?i: must open a group of plain literal text, outside any"
+            " class, not after a backslash, and with no quantifier after it -- scan()"
+            " lowercases the group and searches a lowercased copy of the body, which is"
+            " only the same search for such a group"
+        )
+    if not _survives_lowering(folded):
+        raise ShapesError(
+            f"{where}: searched over a lowercased copy of the body, where an uppercase"
+            " letter outside a class, a class naming an uppercase letter without its"
+            " lowercase one (negated: a letter in one case only), or an escape that can"
+            " name an uppercase letter would not match as it does on the original"
+        )
 
 
 def parse_shapes(text: str) -> list[tuple[str, re.Pattern]]:
@@ -316,28 +461,8 @@ def parse_shapes(text: str) -> list[tuple[str, re.Pattern]]:
                 f"secret shape line {number} ({name}): \\A/\\Z anchor the whole body -- use"
                 " ^/$ with the (implicit) MULTILINE compile if a line boundary is meant"
             )
-        # Every `(?i:` must open a plain-literal group: a safe group holds no
-        # `(`, so each one accounts for exactly one `(?i:`, and any shortfall
-        # is a group _fast_pattern would fold wrongly.
-        if pattern.count("(?i:") != len(_INLINE_CASE_INSENSITIVE.findall(pattern)):
-            raise ShapesError(
-                f"secret shape line {number} ({name}): a (?i:...) group must be plain literal"
-                " text -- scan() lowercases it and searches a lowercased copy of the body,"
-                " which is only the same search for literal text"
-            )
-        if _QUANTIFIED_CASE_INSENSITIVE_GROUP.search(pattern):
-            raise ShapesError(
-                f"secret shape line {number} ({name}): a quantifier after a (?i:...) group"
-                " would quantify only its last character once the group is folded"
-            )
-        if "(?i:" in pattern and not _survives_lowering(_fold(pattern)):
-            raise ShapesError(
-                f"secret shape line {number} ({name}): searched over a lowercased copy of the"
-                " body, where an uppercase letter outside a class, a class naming an uppercase"
-                " letter without its lowercase one (negated: a letter in one case only), or an"
-                " escape that can name an uppercase letter would not match as it does on the"
-                " original"
-            )
+        if "(?i:" in pattern:
+            _check_case_insensitive(number, name, pattern)
         try:
             compiled = re.compile(pattern, re.MULTILINE)
         except re.error as exc:
@@ -370,7 +495,8 @@ def _fast_pattern(compiled: re.Pattern) -> tuple[re.Pattern, bool]:
     `(?i:...)` shapes here costing about 125 ms per view against ~12 ms for
     a same-length case-sensitive literal. Folding the `(?i:...)` group's
     literal content to lowercase and dropping the flag turns it into a
-    plain literal search against a pre-lowered copy of the view instead --
+    plain literal search (a non-capturing group of literal text is searched
+    as fast as the bare literal) against a pre-lowered copy of the view --
     every original-case form collapses to the same lowered text, so a
     case-sensitive search for the lowered literal against the lowered view
     finds exactly what the case-insensitive search against the original
@@ -380,12 +506,23 @@ def _fast_pattern(compiled: re.Pattern) -> tuple[re.Pattern, bool]:
     Only the flagged literal is folded, not the whole pattern -- bearer_token
     is `(?i:bearer)\\s+[A-Za-z0-9._~+/-]{16,}`, where the value class outside
     the flagged group already matches lowercase characters, so it needs no
-    change to keep working against a lowered body.
+    change to keep working against a lowered body. parse_shapes refuses any
+    shape where that would not hold (see _INLINE_CASE_INSENSITIVE). Four
+    non-ASCII letters that `re` folds to an ASCII one (the Kelvin sign, long
+    s, and dotted and dotless I) stay as they are in the lowered copy, so a
+    folded group does not match them.
+
+    A pattern whose groups cannot be folded -- never one parse_shapes has
+    loaded -- is searched as it is, over the view as it is: slower, never
+    wrong.
     """
     source = compiled.pattern
     if "(?i:" not in source:
         return compiled, False
-    return re.compile(_fold(source), re.MULTILINE), True
+    folded = _fold(source)
+    if folded is None:
+        return compiled, False
+    return re.compile(folded, re.MULTILINE), True
 
 
 def _detag(text: str) -> str:
@@ -416,13 +553,17 @@ def _text_view(raw_view: str) -> str:
     are unescaped before the zero-width strip, not after, because an entity
     such as `&shy;` decodes TO a zero-width character in the first place.
     """
-    return html.unescape(_detag(raw_view)).translate(_ZERO_WIDTH)
+    text_view = html.unescape(_detag(raw_view))
+    if not text_view.isascii():
+        for char in _INVISIBLE:
+            text_view = text_view.replace(char, "")
+    return text_view
 
 
 def _value_after(text: str, start: int) -> str:
     """The value token following an assignment match that ends at `start`:
-    bounded at the next whitespace, quote, `&`, `;`, `,`, or the end of a
-    `_VALUE_WINDOW`-character window. For placeholder classification only --
+    bounded at the next whitespace, quote, `&`, `;`, `,`, whole HTML tag, or
+    the end of a `_VALUE_WINDOW`-character window. For placeholder classification only --
     never returned, logged, or included in a `Finding`. Only ever called for
     a shape whose match already ends exactly at the assignment operator, so
     no separator needs stripping; `_VALUE_START` skips leading whitespace and
@@ -435,35 +576,50 @@ def _value_after(text: str, start: int) -> str:
     the credential was dropped). With no non-blank line in reach, the value
     is genuinely empty, and an empty value is a placeholder.
 
-    A `${...}`/`{{...}}`/`<...>` wrapper's OWN closing delimiter is found
-    first, and the boundary search resumes only after it: `{{ vault_secret
-    }}` has a plain space inside the braces that is not a value boundary,
-    while `${PW}hunter2fake` has real content trailing the closing brace
-    that very much is one. Skip only past a wrapper that actually closes;
-    an unclosed one falls through to the plain boundary search unchanged.
+    A value's FIRST character is part of it even when it is `&`, `;` or `,`
+    (fix round 5: `DB_PASSWORD=&k2...` was read as empty and dropped), unless
+    it only closes an empty value (see _EMPTY_BEFORE_AMPERSAND). A whole
+    HTML tag in first place that is not placeholder-shaped (`</td>`) is not
+    a value either; a tag later on ends one (see _VALUE_BOUNDARY).
+
+    A `${...}`/`{{...}}`/`<...>`/`&lt;...&gt;` wrapper's OWN closing
+    delimiter is found first, and the boundary search resumes only after
+    it: `{{ vault_secret }}` has a plain space inside the braces that is not
+    a value boundary, while `${PW}hunter2fake` has real content trailing the
+    closing brace that very much is one. Skip only past a wrapper that
+    actually closes; an unclosed one falls through to the plain boundary
+    search unchanged.
     """
     # Everything below works on `text` in place, slicing out only the token
     # itself: this runs once per assignment match, and a placeholder flood
     # is one match every few characters. The skipping regex runs only when
-    # the operator is followed by whitespace or a quote at all.
+    # the operator is followed by whitespace, a quote or an `&` at all.
     end = len(text)
     if start == end:
         return ""
     first = text[start]
     pos = start
-    if first.isspace() or first in "'\"":
+    if first.isspace() or first in "'\"&":
         pos = _VALUE_START.match(text, start).end()
         if pos == end:
             return ""
         first = text[pos]
-    # `first` is now neither whitespace (bar a line break) nor a quote, so
-    # the token is empty exactly when `first` is one of _VALUE_BOUNDARY's
-    # other characters.
-    if first in "\n&;,":
+    if first == "\n":
         return ""
     limit = pos + _VALUE_WINDOW
+    # Where the boundary search starts: past the first character when that
+    # character is itself a boundary, so the value keeps it.
     skip = pos
-    if first == "$" and text.startswith("${", pos):
+    if first == "&":
+        if _EMPTY_BEFORE_AMPERSAND.match(text, pos, limit):
+            return ""
+        close = text.find("&gt;", pos, limit) if text.startswith("&lt;", pos) else -1
+        skip = close + 4 if close != -1 else pos + 1
+    elif first in ";,":
+        if _EMPTY_BEFORE_SEPARATOR.match(text, pos):
+            return ""
+        skip = pos + 1
+    elif first == "$" and text.startswith("${", pos):
         close = text.find("}", pos, limit)
         skip = close + 1 if close != -1 else pos
     elif first == "{" and text.startswith("{{", pos):
@@ -471,6 +627,14 @@ def _value_after(text: str, start: int) -> str:
         skip = close + 2 if close != -1 else pos
     elif first == "<":
         close = text.find(">", pos, limit)
+        # Markup, not a value (`<td>DB_PASSWORD=</td>`): the text view
+        # deletes the tag and reads whatever follows it.
+        if (
+            close != -1
+            and _PLACEHOLDER.fullmatch(text, pos, close + 1) is None
+            and _HTML_TAG.fullmatch(text, pos, close + 1)
+        ):
+            return ""
         skip = close + 1 if close != -1 else pos
     boundary = _VALUE_BOUNDARY.search(text, skip, limit)
     return text[pos : boundary.start() if boundary else limit]
@@ -569,7 +733,7 @@ def scan(text: str) -> list[Finding]:
     raw_view = "\n".join(text.splitlines())
     text_view = _text_view(raw_view)
     view_texts = (raw_view,) if text_view == raw_view else (raw_view, text_view)
-    views = [(view, view.translate(_ASCII_LOWER)) for view in view_texts]
+    views = [(view, _lower_ascii(view)) for view in view_texts]
 
     # Keyed by the view's index in `views`, so each view gets its own table.
     offsets_cache: dict[int, list[int]] = {}

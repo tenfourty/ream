@@ -120,14 +120,14 @@ def test_a_case_insensitive_group_of_plain_literal_text_still_loads(pattern):
         "(?i:token=)[^A-Z]",  # negated, naming A-Z without a-z
         "(?i:token=)[A-Za-f]",  # a counterpart, but only for A-F: G-Z would never match
         "(?i:token=)[^a-z]+",  # negated, a-z without A-Z: `A` matches, its lowercase does not
-        "(?i:token=)?\\d{6}",  # folded to `token=?`, the `?` would quantify only the `=`
+        "(?i:token=)?\\d{6}",  # a quantifier after a group (bare-text folding broke it)
     ],
 )
 def test_a_shape_the_lowercased_search_would_narrow_is_rejected(pattern):
     # A (?i:...) shape is searched, in full, over a lowercased copy of the
-    # body, with its groups folded to bare lowercase text. Anything that
-    # search would stop matching -- an uppercase letter (the copy has
-    # none), or a quantifier the fold would re-attach -- is refused at load.
+    # body, with each group folded to its lowercased text. Anything that
+    # search would stop matching -- an uppercase letter (the copy has none),
+    # or a quantifier after a group -- is refused at load.
     with pytest.raises(scan.ShapesError):
         scan.parse_shapes(f"narrowed\t{pattern}\n")
 
@@ -147,6 +147,65 @@ def test_a_pattern_that_matches_the_same_once_lowered_still_loads(pattern):
     assert [name for name, _ in scan.parse_shapes(f"same_lowered\t{pattern}\n")] == [
         "same_lowered"
     ]
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        # Fix round 5: the eight shapes the round-4 review got past the guard.
+        # Each loaded, its original pattern matched a body, and scan() found
+        # nothing on that body.
+        "(?i:contraseña)=\\S+",  # non-ASCII: `.lower()` folds ñ, the lowered copy keeps Ñ
+        "(?i:İd)=\\S+",  # non-ASCII: İ lowercases to two code points
+        "x(?i:a\\))?=\\S+",  # a quantifier after a group whose body holds `\)`
+        "pw(?i:\\(old\\))?=\\S+",  # the same
+        "(?x)x(?i:tok) ?=\\S+",  # verbose: a space before the quantifier
+        "x(?i:tok)(?#c)?=\\S+",  # a comment before the quantifier
+        "secret[(?i:=)]\\S+",  # a `(?i:` inside a character class
+        "(?:\\(?i:\\)x)=\\S+",  # a `(?i:` after an escaped paren
+    ],
+)
+def test_every_guard_bypass_the_round_4_review_built_is_refused(pattern):
+    with pytest.raises(scan.ShapesError):
+        scan.parse_shapes(f"bypass\t{pattern}\n")
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "(?i:token=)ñ",  # non-ASCII outside the group: Ñ in the body never lowers to it
+        "(?i:token=)\\S+(?-x:a)",  # any inline flag set naming x
+        "(?ix:a)(?i:token=)",  # the same, combined with i
+        "\\\\(?i:token=)",  # a `(?i:` straight after a backslash, even an escaped one
+        "(?i:token=)\\(?P<Abc>",  # not a group name: `\(` is a literal paren, P and A are text
+        "(?i:token=)[\\(?P<A>]",  # nor inside a class
+    ],
+)
+def test_the_rest_of_the_pattern_is_read_as_re_reads_it_not_textually(pattern):
+    with pytest.raises(scan.ShapesError):
+        scan.parse_shapes(f"textual\t{pattern}\n")
+
+
+@pytest.mark.parametrize(
+    ("pattern", "body"),
+    [
+        # Folded to bare text, `{1,` and `2` and `}` became the quantifier
+        # `{1,2}`; folded into a non-capturing group they stay literal text.
+        ("x{1,(?i:2)}y=", "x{1,2}y=hunter2fake"),
+        ("x{(?i:2)}y=", "x{2}y=hunter2fake"),
+        # A non-ASCII letter in the body is left alone by the lowering, so a
+        # negated class still matches it: `.lower()` would turn the Kelvin
+        # sign into an ASCII `k` that `[^A-Za-z]` refuses.
+        ("(?i:token=)[^A-Za-z]", "TOKEN=\u212a"),
+        ("(?i:token=)[^A-Za-z]", "token=\u0130"),
+    ],
+)
+def test_the_fast_path_finds_what_the_original_pattern_finds(monkeypatch, pattern, body):
+    shapes = scan.parse_shapes(f"probe\t{pattern}\n")
+    [(_, compiled)] = shapes
+    assert compiled.search(body)
+    monkeypatch.setattr(scan, "SHAPES", shapes)
+    assert [f.shape for f in scan.scan(body)] == ["probe"]
 
 
 def test_the_packaged_shapes_file_passes_every_load_time_guard():
@@ -653,3 +712,118 @@ def test_a_flood_of_empty_assignments_each_looking_3_lines_ahead_scans_quickly()
     elapsed = time.perf_counter() - start
     assert findings == []
     assert elapsed < 1.0
+
+
+# --- fix round 5: a value that begins with `&`, `;` or `,` is a value. Only
+# `&` starting the next query parameter (`&name=`, `&amp;name=`) or closing
+# the query, and `;`/`,` with nothing after them, leave it empty. -----------
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_shape"),
+    [
+        ("DB_PASSWORD=&k2Lq9fakeXv", "password_assignment"),
+        ("DB_PASSWORD='&k2Lq9fakeXv'", "password_assignment"),
+        ("<pre>DB_PASSWORD=&amp;k2Lq9fakeXv</pre>", "password_assignment"),
+        ("DB_PASSWORD=;k2Lq9fakeXv", "password_assignment"),
+        ("DB_PASSWORD=,k2Lq9fakeXv", "password_assignment"),
+        ("API_TOKEN=&k2Lq9fakeXv", "token_assignment"),
+        ("client_secret=;k2Lq9fakeXv", "secret_assignment"),
+        ("password=\n&hunter2fake", "password_assignment"),
+        # Inside an attribute only the raw view sees it: the text view
+        # deletes the whole tag.
+        ('<input value="password=&amp;k2Lq9fakeXv">', "password_assignment"),
+        ('<div data-env="password=&quot;hunter2fake&quot;">', "password_assignment"),
+    ],
+)
+def test_a_value_starting_with_an_ampersand_semicolon_or_comma_is_classified(
+    body, expected_shape
+):
+    findings = scan.scan(body)
+    assert [f.line for f in findings if f.shape == expected_shape] == [1]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "https://x.invalid/?password=&next=1",  # an empty query parameter
+        '<a href="https://x.invalid/?token=&amp;next=1">x</a>',  # the same, escaped
+        "&amp;token=&amp;",  # an empty last parameter, escaped
+        '<a href="https://x.invalid/?token=&">x</a>',  # a trailing `&`
+        "pass=;",  # a statement with an empty value
+        "password=; set it in the vault",  # an INI-style comment after nothing
+        "DB_PASSWORD=,\nDB_USER=,",
+        # html.escape() output: quotes and angle brackets arrive as entities
+        # in the raw view, and the value inside them is still a placeholder.
+        "<code>password = &quot;changeme&quot;</code>",
+        "<code>password=&#x27;${DB_PASSWORD}&#x27;</code>",
+        "<code>password=&quot;&lt;YOUR_PASSWORD&gt;&quot;</code>",
+        "password=&nbsp;${DB_PASSWORD}",
+    ],
+)
+def test_an_empty_parameter_or_an_escaped_placeholder_stays_clean(body):
+    assert scan.scan(body) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # The visible placeholder form in a table or a code element: the raw
+        # view read `</code>` as part of the value once `&` stopped meaning
+        # "empty", so these were refused.
+        "<code>API_TOKEN=&lt;your-token&gt;</code>",
+        "<td>DB_PASSWORD=&lt;YOUR_DB_PASSWORD&gt;</td>",
+        "<p>password=&nbsp;${DB_PASSWORD}</p>",
+        # The same, unescaped: refused before fix round 5 as well.
+        "<td>password=${DB_PASSWORD}</td>",
+        "<td>password=changeme</td>",
+        # An empty value closed by a tag: the tag is not the value.
+        "<td>DB_PASSWORD=</td>",
+        '<td>password=""</td>',
+        "<td>password=&quot;&quot;</td>",
+    ],
+)
+def test_a_tag_straight_after_a_placeholder_is_not_part_of_it(body):
+    assert scan.scan(body) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<td>password=hunter2fake</td>",
+        "<code>password=${PW}hunter2fake</code>",
+        "<td>password=changeme<span>9fakeXv</span></td>",  # the text view joins them
+    ],
+)
+def test_a_real_value_next_to_a_tag_is_still_caught(body):
+    assert any(f.shape == "password_assignment" for f in scan.scan(body))
+
+
+# --- fix round 5: a body with one non-ASCII character anywhere is lowered
+# and stripped as fast as an ASCII one, and still scanned the same. ---------
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "\U0001f600\npassword=hunter2fake",  # stored four bytes per character
+        "caf\u00e9\npassword=hunter2fake",  # one byte per character, not ASCII
+        "\u2013\npassword=hunter2fake",  # two bytes per character
+        "\ud800\npassword=hunter2fake",  # a lone surrogate, as JSON can deliver one
+        "\U0001f600\npassword\u200b=hunter2fake",  # a zero-width space to strip
+        "\U0001f600\nPASS\u00ad=hunter2fake",  # a soft hyphen to strip
+    ],
+)
+def test_a_non_ascii_body_is_scanned_the_same(body):
+    findings = scan.scan(body)
+    assert [f.line for f in findings if f.shape.endswith("_assignment")] == [2]
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["PASSWORD=Xy", "\u0130STANBUL", "\u212aEY=", "\ud800A\udfffB", "\U0001f600Z\n", "CAF\u00c9"],
+)
+def test_the_lowered_copy_lowers_a_to_z_and_nothing_else(text):
+    lowered = scan._lower_ascii(text)
+    assert lowered == text.translate(str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"))
+    assert len(lowered) == len(text)
