@@ -988,3 +988,72 @@ def test_a_legitimate_short_decimal_charref_still_decodes():
     &#73;&#65;` spells AKIA."""
     findings = scan.scan("token &#65;&#75;&#73;&#65;IOSFODNN7EXAMPLE end")
     assert any(f.shape == "aws_access_key_id" for f in findings)
+
+
+# --- fix round 3: the first version of the crash defang was fail-open on
+# any zero-padded reference, silently losing detections instead of raising.
+# -----------------------------------------------------------------------
+
+
+def test_a_zero_padded_charref_inside_an_aws_key_is_still_found():
+    """The regression that started fix round 3: `&#00000065;` is a
+    perfectly legitimate, if unusually padded, reference to `A` -- the
+    first defang counted its 8 digit characters, decided it was "too long",
+    and defanged it, so `html.unescape` never decoded it and the key was
+    never assembled in the text view. `AKI&#00000065;IOSFODNN7EXAMPLE`
+    published clean at 201 before this fix."""
+    findings = scan.scan("AKI&#00000065;IOSFODNN7EXAMPLE")
+    assert any(f.shape == "aws_access_key_id" for f in findings)
+
+
+def test_an_extremely_zero_padded_charref_is_still_found_and_does_not_crash():
+    """Padding a legitimate reference with thousands of zeros must neither
+    lose the detection (the fail-open regression) nor crash (the original
+    bug) -- stripping leading zeros is a `str.lstrip`, never an `int()`
+    conversion, so it costs the same whether padded with none or with
+    4301."""
+    padded = "&#" + ("0" * 4301) + "65;"
+    findings = scan.scan("AKI" + padded + "IOSFODNN7EXAMPLE")
+    assert any(f.shape == "aws_access_key_id" for f in findings)
+
+
+def test_an_unpadded_charref_is_still_found():
+    findings = scan.scan("AKI&#65;IOSFODNN7EXAMPLE")
+    assert any(f.shape == "aws_access_key_id" for f in findings)
+
+
+def test_more_than_seven_significant_digits_is_never_a_real_code_point():
+    """8 significant digits, no leading zeros -- the smallest 8-digit
+    number, 10,000,000, already exceeds 0x10FFFF (1,114,111), the highest
+    real code point, so this can never be legitimate at any padding.
+    Confirms the >7-significant branch still runs (does not crash, finds
+    nothing new) now that it is reached only after zeros are stripped."""
+    assert scan.scan("&#12345678") == []
+
+
+def _zero_padded_charref(char: str, width: int = 12) -> str:
+    return f"&#{ord(char):0{width}d};"
+
+
+def _charref_encode(text: str, width: int = 12) -> str:
+    """Every character of `text` written as its own zero-padded decimal
+    character reference -- round-trips losslessly through `html.unescape`,
+    so a shape that matches `text` must match this encoding of it too, once
+    decoded."""
+    return "".join(_zero_padded_charref(char, width) for char in text)
+
+
+@pytest.mark.parametrize("name", sorted(SHAPE_FIXTURES))
+def test_every_shape_still_fires_zero_padded_charref_encoded(name):
+    """Makes the fix round 3 regression permanent: a unit test on one
+    encoding (`aws_access_key_id`, unpadded `&#65;`) is exactly what let a
+    24-detection, 8-shape regression through undetected. Every shape gets
+    its own genuine positive fixture, re-encoded character-by-character as
+    zero-padded charrefs -- a shape found in plain form and lost once
+    encoded fails here."""
+    positive, _ = SHAPE_FIXTURES[name]
+    encoded = _charref_encode(positive)
+    findings = scan.scan(encoded)
+    assert any(f.shape == name for f in findings), (
+        f"{name} matched its plain fixture but not the zero-padded-charref encoding of it"
+    )

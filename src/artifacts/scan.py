@@ -582,38 +582,65 @@ def _detag(text: str) -> str:
     return _HTML_TAG.sub(_replace, text)
 
 
-# The highest real code point, 0x10FFFF, is seven decimal digits -- no
-# legitimate numeric character reference ever needs more. `html.unescape`'s
-# own charref regex places no limit on how many decimal digits follow `&#`,
-# and CPython's int(str) refuses one past a few thousand digits (its
-# integer-string conversion limit), which turned a page holding `&#` plus a
-# long digit run into an unhandled `ValueError` -- every publish and patch
-# through this shape, for every agent, failing however `store.ScanFailed`
-# happened to be wired that day (task 5 fix round 2: 422, then 503).
+# `html.unescape`'s own charref regex places no limit on how many decimal
+# digits can follow `&#`, and CPython's int(str) conversion refuses one past
+# a few thousand digits (its integer-string conversion limit) -- a numeric
+# reference carrying an absurd digit run crashed here, at `html.unescape`
+# itself, before this scanner ever saw a finding (task 5 fix round 2:
+# `store.ScanFailed` answered 422, then 503; fix round 3 removed the crash).
 #
-# A reference this long is never legitimate regardless of the crash
-# threshold, so it is defanged before `html.unescape` ever sees it rather
-# than caught after: replacing its digits with a same-count run of a
-# non-digit character drops the whole thing out of `_charref`'s own match
-# (neither the decimal alternative, which needs digits, nor the hex one,
-# which needs `x` followed by a hex digit), so `html.unescape` leaves it as
-# inert literal text instead of parsing it at all. Same length in, same
-# length out, so this never shifts a line number the way inserting or
-# deleting text would.
+# The invariant THIS MODULE runs on is newline preservation, not length
+# preservation: `_detag` above already changes length wholesale -- it
+# DELETES every tag, keeping only the newlines it contained, specifically
+# so a line number computed from this view's own newline offsets still
+# means the same line in the raw body -- and so does `html.unescape` on
+# every ordinary reference (`&#65;` becomes one character). fix round 3's
+# first attempt at this defanged every digit run past seven characters
+# unconditionally, which also ate legitimate references padded with
+# leading zeros (`&#00000065;` is `A`, and real content is encoded that
+# way) -- 24 lost detections across 8 secret families, all through the one
+# form a length-preserving substitution cannot touch. Leading zeros carry
+# no information: stripping them is a pure string operation (`str.lstrip`),
+# never an `int()` conversion, so it is exactly as cheap on a 4301-zero run
+# as on none -- CPython's limit is on the conversion, not on counting
+# characters, which is the trap in doing this any other way (`int(digits)`
+# to normalise it would hit the very crash this function exists to avoid).
+#
+# So: strip leading zeros first. What is left is the reference's real
+# magnitude in digits. At most seven of those can ever be a genuine
+# reference, however much zero-padding surrounded it -- 0x10FFFF, the
+# highest real code point, is `1114111`, seven digits -- so hand those
+# straight to `html.unescape` exactly as `int()` would read them, and
+# `&#00000065;` decodes precisely as `&#65;` does. More than seven
+# significant digits is never a real code point at ANY padding: defang it,
+# replacing its digits with a same-count run of a non-digit character so it
+# drops out of `html.unescape`'s own charref match entirely (neither the
+# decimal alternative, which needs digits, nor the hex one, which needs a
+# hex digit after `x`) rather than reaching its `int()` call. The ≤7 branch
+# only ever hands `int()` at most seven characters and the >7 branch hands
+# it none, so nothing here ever reaches the actual limit regardless of how
+# many digits -- leading zeros included -- the input held.
+#
+# Neither branch touches a newline (digits and the placeholder character
+# are not newlines), so this holds `_detag`'s invariant regardless of how
+# much either branch shortens the text or leaves it alone.
 #
 # Applied to the DETAGGED view, not the raw one: `&#1<b></b>1<b></b>1...`
 # holds no long digit run until the tags between the digits are gone, so
 # checking before `_detag` would walk straight past it.
 _MAX_LEGIT_DECIMAL_CHARREF_DIGITS = 7
-_HUGE_DECIMAL_CHARREF = re.compile(
-    rf"&#([0-9]{{{_MAX_LEGIT_DECIMAL_CHARREF_DIGITS + 1},}})"
-)
+_DECIMAL_CHARREF = re.compile(r"&#([0-9]+)")
 
 
 def _defang_huge_decimal_charrefs(detagged: str) -> str:
-    return _HUGE_DECIMAL_CHARREF.sub(
-        lambda match: "&#" + "x" * len(match.group(1)), detagged
-    )
+    def _replace(match: re.Match) -> str:
+        digits = match.group(1)
+        significant = digits.lstrip("0") or "0"
+        if len(significant) <= _MAX_LEGIT_DECIMAL_CHARREF_DIGITS:
+            return "&#" + significant
+        return "&#" + "x" * len(digits)
+
+    return _DECIMAL_CHARREF.sub(_replace, detagged)
 
 
 def _text_view(raw_view: str) -> str:
