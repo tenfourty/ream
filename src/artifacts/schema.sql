@@ -77,3 +77,32 @@ begin
             on delete set null;
     end if;
 end $$;
+
+-- `version_n` records the artifact's current_version at the moment the comment was
+-- written, not a live pointer to "whatever version is current now" -- a comment made
+-- against version 3 must still say version 3 after the page has moved on to version 7,
+-- so Jeremy's note about a paragraph that has since changed is never silently
+-- re-attributed to text it was never about. No foreign key to `version`: a comment
+-- survives a version being superseded (versions are never deleted, but even if that
+-- changed, a comment's own history should outlive the row it was written against).
+-- `thread_root` is self-referential -- a comment and its replies live in the same
+-- table -- and is null exactly on a root comment; a reply names its root's id here.
+-- `on delete cascade` on `thread_root` means deleting a root takes its whole thread with
+-- it, the same shape `artifact_id`'s cascade already gives a whole artifact's comments.
+create table if not exists comment (
+    id           text primary key,
+    artifact_id  text not null references artifact(id) on delete cascade,
+    version_n    integer not null,
+    thread_root  text references comment(id) on delete cascade,
+    anchor       jsonb not null default '{"kind": "page"}'::jsonb,
+    quote        text not null default '',
+    author_kind  text not null check (author_kind in ('human', 'agent')),
+    author       text not null,
+    body         text not null,
+    created_at   timestamptz not null default now(),
+    resolved_at  timestamptz,
+    resolved_by  text
+);
+
+create index if not exists comment_artifact_idx on comment (artifact_id, created_at);
+create index if not exists comment_thread_idx on comment (thread_root);
