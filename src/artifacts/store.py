@@ -111,6 +111,7 @@ class ArtifactRow:
     visibility: str
     current_version: int
     revision: str
+    url: str
 
 
 def content_domain() -> str:
@@ -336,7 +337,7 @@ def get_owned(db: Database, agent: str, artifact_id: str) -> ArtifactRow:
             "select revision from version where artifact_id = %s and n = %s",
             (row[0], row[4]),
         ).fetchone()
-    return ArtifactRow(*row, revision[0])
+    return ArtifactRow(*row, revision[0], url_for(row[0]))
 
 
 def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
@@ -349,4 +350,4 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             " where artifact.agent = %s order by artifact.updated_at desc",
             (agent,),
         ).fetchall()
-    return [ArtifactRow(*row) for row in rows]
+    return [ArtifactRow(*row, url_for(row[0])) for row in rows]

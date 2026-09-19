@@ -674,11 +674,12 @@ def test_a_scanner_failure_on_patch_also_answers_503(client, db, monkeypatch):
     assert response.json()["detail"]["field"] == "body"
 
 
-def test_reading_an_artifact_by_api_reports_its_current_revision(client, db):
-    """`artifacts-publish --update` (client.py) reads GET /artifacts/{id} to learn the
-    expected_revision to PATCH with -- it has no other source, since the body itself is
-    never returned to an agent by this route. Both the single-artifact read and the
-    listing must carry it."""
+def test_reading_an_artifact_by_api_reports_its_current_revision_and_url(client, db):
+    """`artifacts-publish` (client.py) needs two things neither read route carried
+    before: `--update` reads GET /artifacts/{id} for the expected_revision to PATCH
+    with (the body itself is never returned to an agent by this route), and `--list`
+    reads GET /artifacts for a url per line. Both the single-artifact read and the
+    listing must carry both fields."""
     token, _ = keys.mint(db, agent="ops-seat")
     created = client.post(
         "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
@@ -688,9 +689,11 @@ def test_reading_an_artifact_by_api_reports_its_current_revision(client, db):
         f"/api/v1/artifacts/{created['id']}", headers=auth(token)
     ).json()
     assert fetched["revision"] == created["revision"]
+    assert fetched["url"] == created["url"]
 
     listed = client.get("/api/v1/artifacts", headers=auth(token)).json()
     assert listed[0]["revision"] == created["revision"]
+    assert listed[0]["url"] == created["url"]
 
     patched = client.patch(
         f"/api/v1/artifacts/{created['id']}",
