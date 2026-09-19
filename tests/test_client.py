@@ -490,3 +490,40 @@ def test_key_absence_also_covers_401_and_a_double_409_and_a_usage_error(
     captured = capsys.readouterr()
     assert fake_key not in captured.out
     assert fake_key not in captured.err
+
+
+def test_a_csp_warning_reaches_stderr_and_leaves_stdout_parseable(
+    live, key_file, tmp_path, capsys
+):
+    """An author who cannot see the rendered page must still hear that half of
+    it will not run. The advisory goes to stderr on purpose: stdout stays the
+    one-line JSON a caller pipes into something else."""
+    path, _token = key_file
+    page = tmp_path / "page.html"
+    page.write_text(
+        "<!doctype html>\n"
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">\n'
+        "<body>hi</body></html>\n"
+    )
+
+    rc = client.main(["--key-file", str(path), str(page), "--title", "Board"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    published = json.loads(captured.out.strip())
+    assert published["id"] and "warnings" not in published
+    assert "remote_stylesheet" in captured.err
+    assert "line 2" in captured.err
+    assert "fonts.googleapis.com" not in captured.err
+
+
+def test_a_clean_publish_prints_no_warning_line(live, key_file, tmp_path, capsys):
+    path, _token = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>hi</body></html>")
+
+    rc = client.main(["--key-file", str(path), str(page), "--title", "Board"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "warning:" not in captured.err

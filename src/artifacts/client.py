@@ -230,6 +230,35 @@ def _list(key: str) -> list[dict]:
     return _request("GET", f"{_api_base()}/artifacts", key, None)
 
 
+def _print_warnings(result: dict) -> None:
+    """CSP advisories to STDERR, one line each, so stdout stays parseable JSON.
+
+    The server sends these because the author cannot see its own rendered page
+    and would otherwise learn nothing about a Google font or a hand-rolled
+    form until Jeremy opened a half-rendered page. They are advisory: the
+    publish succeeded. Printed field by field rather than passed through, for
+    the same reason `_print_published` whitelists stdout.
+    """
+    warnings = result.get("warnings")
+    if not isinstance(warnings, list):
+        return
+    for warning in warnings:
+        if not isinstance(warning, dict):
+            continue
+        shape, line, hint = (
+            warning.get("shape"),
+            warning.get("line"),
+            warning.get("hint"),
+        )
+        if not isinstance(shape, str) or not isinstance(line, int):
+            continue
+        print(
+            f"warning: {shape} at line {line}"
+            + (f" -- {hint}" if isinstance(hint, str) else ""),
+            file=sys.stderr,
+        )
+
+
 def _print_published(result: dict) -> None:
     """Whitelist, not passthrough: print only id/url/revision, exactly what the
     brief asks for, so a future field the server starts returning can never
@@ -243,6 +272,7 @@ def _print_published(result: dict) -> None:
             }
         )
     )
+    _print_warnings(result)
 
 
 def build_parser() -> argparse.ArgumentParser:

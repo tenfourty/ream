@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from artifacts import comments, decisions, events, keys, store
+from artifacts import comments, csp, decisions, events, keys, store
 from artifacts.db import Database
 
 
@@ -90,7 +90,8 @@ def agent_router(db: Database) -> APIRouter:
     @router.post("/artifacts", status_code=201)
     def create(payload: PublishBody, agent: str = Depends(caller)):
         try:
-            return store.publish(db, agent, payload.title, payload.body).__dict__
+            published = store.publish(db, agent, payload.title, payload.body)
+            return {**published.__dict__, "warnings": csp.as_json(payload.body)}
         except store.BodyTooLarge as exc:
             raise HTTPException(
                 413,
@@ -116,14 +117,15 @@ def agent_router(db: Database) -> APIRouter:
     @router.patch("/artifacts/{artifact_id}")
     def update(artifact_id: str, payload: PatchBody, agent: str = Depends(caller)):
         try:
-            return store.patch(
+            published = store.patch(
                 db,
                 agent,
                 artifact_id,
                 payload.body,
                 payload.expected_revision,
                 title=payload.title,
-            ).__dict__
+            )
+            return {**published.__dict__, "warnings": csp.as_json(payload.body)}
         except store.BodyTooLarge as exc:
             raise HTTPException(
                 413,
@@ -158,6 +160,22 @@ def agent_router(db: Database) -> APIRouter:
             return store.get_owned(db, agent, artifact_id).__dict__
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
+
+    @router.get("/artifacts/{artifact_id}/body")
+    def read_body(artifact_id: str, agent: str = Depends(caller)):
+        """The publisher reads back what it published.
+
+        The rendered page is unreachable to its own author by design (framed
+        requests with a capability token only), so this is the only self-check
+        an agent has: it proves what is stored, not what a browser makes of
+        it. `warnings` repeats the CSP advisory for the stored body, so a page
+        published before that check existed still reports its own problems.
+        """
+        try:
+            stored = store.get_body(db, agent, artifact_id)
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such artifact") from exc
+        return {**stored.__dict__, "warnings": csp.as_json(stored.body)}
 
     @router.get("/artifacts")
     def index(agent: str = Depends(caller)):

@@ -104,6 +104,14 @@ class Published:
 
 
 @dataclass(frozen=True)
+class StoredBody:
+    id: str
+    version: int
+    revision: str
+    body: str
+
+
+@dataclass(frozen=True)
 class ArtifactRow:
     id: str
     title: str
@@ -362,13 +370,43 @@ def get_owned(db: Database, agent: str, artifact_id: str) -> ArtifactRow:
         row = _owned(conn, artifact_id, agent)
         if row is None:
             raise NotFound()
-        # The client's only way to learn the expected_revision for a PATCH: the body
-        # itself is never returned to an agent by this route, only its current hash.
+        # The client's only way to learn the expected_revision for a PATCH: this
+        # route returns the body's current hash, never the body. `get_body()`
+        # below is the route that hands the body itself back to its owner.
         revision = conn.execute(
             "select revision from version where artifact_id = %s and n = %s",
             (row[0], row[4]),
         ).fetchone()
     return ArtifactRow(*row, revision[0], url_for(row[0]))
+
+
+def get_body(db: Database, agent: str, artifact_id: str) -> StoredBody:
+    """The current version's stored body, to its own agent.
+
+    An author cannot otherwise see what it published. The rendered page is
+    served only to a framed request carrying a capability token no agent is
+    given, and the gallery is behind Jeremy's login, so until this existed the
+    only thing a publisher could verify about its own page was the title --
+    which is exactly why the first board here carried a PAGE TITLE placeholder
+    in <title> for two hours.
+
+    This is strictly less exposure than the content origin already has: the
+    same bytes, unrendered, to the one agent that wrote them and already holds
+    them. Ownership is checked the same way every other owning route checks
+    it, and a body belonging to another agent is a plain 404, never a 403 --
+    an agent learns nothing about what it does not own.
+    """
+    with db.connect() as conn:
+        row = _owned(conn, artifact_id, agent)
+        if row is None:
+            raise NotFound()
+        version = conn.execute(
+            "select n, revision, body from version where artifact_id = %s and n = %s",
+            (row[0], row[4]),
+        ).fetchone()
+    return StoredBody(
+        id=row[0], version=version[0], revision=version[1], body=version[2]
+    )
 
 
 def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
