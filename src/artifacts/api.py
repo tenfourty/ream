@@ -357,6 +357,16 @@ def agent_router(db: Database) -> APIRouter:
         except store.NotFound as exc:
             raise HTTPException(404, "no such decision") from exc
 
+    # "Seen it" is a separate call from "done with it" on purpose: the alert that
+    # catches a lost answer needs the first fact, and most answers here are acted on
+    # over hours by work that happens somewhere else entirely.
+    @router.post("/decisions/{decision_id}/acknowledge")
+    def acknowledge_decision(decision_id: str, agent: str = Depends(caller)):
+        try:
+            return decisions.acknowledge(db, agent, decision_id).__dict__
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such decision") from exc
+
     @router.get("/events")
     def list_events(
         since: int = Query(0, ge=0),

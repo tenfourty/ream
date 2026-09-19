@@ -388,3 +388,28 @@ def test_list_for_agent_never_returns_a_closed_decision_even_with_include_answer
         "/api/v1/decisions?include_answered=true", headers=auth(token)
     ).json()
     assert listed == []
+
+
+def test_the_answer_event_is_addressed_to_the_agent_that_owns_the_page(client, db):
+    """The join's columns are read from the end of the row, and this is why.
+
+    `answer` selects the decision's own columns plus two from the joined artifact,
+    and for a while it read those two by number -- the numbers that happened to
+    follow a twelve-column list. Adding two columns to that list (19 Sep 2026, the
+    acknowledgement pair) moved them, so the owning agent silently became None and
+    every answer tried to write an event addressed to nobody. A NOT NULL constraint
+    caught it that day; this test is what catches it when the shape changes again
+    somewhere the database is more forgiving.
+    """
+    from artifacts import events
+
+    token, _ = keys.mint(db, agent="page-owner")
+    artifact = _publish(client, token)
+    created = _ask(client, token, artifact["id"])
+
+    decisions.answer(db, created["id"], letter="a", by="jeremy")
+
+    rows = events.list_for_agent(db, "page-owner", since=0, limit=10)
+    answered = [row for row in rows if row.kind == "decision_answered"]
+    assert len(answered) == 1
+    assert answered[0].artifact_id == artifact["id"]

@@ -137,6 +137,20 @@ create table if not exists decision (
 
 create index if not exists decision_artifact_idx on decision (artifact_id, created_at);
 
+-- ACKNOWLEDGEMENT is "an agent has SEEN this answer", which is not the same fact as
+-- "the work is done" (`closed_at`) and not the same as "Jeremy answered"
+-- (`answered_at`). It exists because the alert that catches a lost answer has to
+-- distinguish a slow owner from a dead one, and "the page was republished" cannot do
+-- that: most answers here are acted on by doing infrastructure work over hours -- a
+-- commit, a playbook, an SSH session -- so an alert waiting for completion fires on
+-- correctly handled decisions, gets muted, and then misses the real one.
+-- Set once and never moved: the question the alert asks is "did anyone hear this",
+-- and the first hearing is the answer to it. Closing implies acknowledgement, because
+-- an agent that finished the work necessarily heard the answer -- and an agent that
+-- just does its job should pay nothing extra.
+alter table decision add column if not exists acknowledged_at timestamptz;
+alter table decision add column if not exists acknowledged_by text;
+
 -- The nudge journal: every interaction Jeremy has with a page -- answering a
 -- decision, leaving a comment, resolving a thread -- appends exactly one row here,
 -- in the SAME transaction as the write it describes (see decisions.answer, the

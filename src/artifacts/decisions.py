@@ -68,7 +68,8 @@ MAX_OPTIONS = 6
 _COLUMNS = (
     "decision.id, decision.artifact_id, decision.version_n, decision.question,"
     " decision.options, decision.recommended, decision.answer, decision.answer_note,"
-    " decision.answered_at, decision.answered_by, decision.created_at, decision.closed_at"
+    " decision.answered_at, decision.answered_by, decision.created_at, decision.closed_at,"
+    " decision.acknowledged_at, decision.acknowledged_by"
 )
 
 
@@ -86,6 +87,8 @@ class DecisionRow:
     answered_by: str | None
     created_at: str
     closed_at: str | None
+    acknowledged_at: str | None
+    acknowledged_by: str | None
 
 
 class InvalidOptions(Exception):
@@ -171,6 +174,8 @@ def _row_to_decision(row) -> DecisionRow:
         answered_by=row[9],
         created_at=row[10].isoformat(),
         closed_at=row[11].isoformat() if row[11] is not None else None,
+        acknowledged_at=row[12].isoformat() if row[12] is not None else None,
+        acknowledged_by=row[13],
     )
 
 
@@ -307,7 +312,13 @@ def answer(
         ).fetchone()
         if row is None:
             raise store.NotFound()
-        artifact_id, options, title, owning_agent = row[1], row[4], row[12], row[13]
+        # Counted from the END, deliberately. These two come from the join, not from
+        # `_COLUMNS`, so their position is "last two" and nothing else; written as
+        # row[12], row[13] they were correct only for as long as `_COLUMNS` had
+        # exactly twelve entries. Adding the two acknowledgement columns silently
+        # turned `owning_agent` into `acknowledged_by` -- always None -- and every
+        # answer then tried to write an event with no agent.
+        artifact_id, options, title, owning_agent = row[1], row[4], row[-2], row[-1]
 
         letters = {option["letter"] for option in options}
         if letter not in letters:
@@ -377,8 +388,58 @@ def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
         if row is None:
             raise store.NotFound()
         if row[11] is None:  # closed_at
+            # Closing implies acknowledgement -- an agent that finished the work
+            # necessarily heard the answer -- but only when nothing has acknowledged
+            # it yet, so an earlier, truer "seen at" is never overwritten by a later
+            # close. `coalesce` does both in one statement.
             conn.execute(
-                "update decision set closed_at = now() where id = %s", (decision_id,)
+                "update decision set closed_at = now(),"
+                " acknowledged_at = coalesce(acknowledged_at, now()),"
+                " acknowledged_by = coalesce(acknowledged_by, %s)"
+                " where id = %s",
+                (agent, decision_id),
+            )
+            row = conn.execute(
+                f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
+                (decision_id,),
+            ).fetchone()
+    return _row_to_decision(row)
+
+
+def acknowledge(db: Database, agent: str, decision_id: str) -> DecisionRow:
+    """"I have seen this answer" -- a different fact from "the work is done".
+
+    The alert that catches a lost answer keys on answered-and-not-acknowledged, and it
+    has to tell a slow owner from a dead one. Neither of the facts already in this
+    table can do that: `answered_at` is about Jeremy, and `closed_at` is about the work
+    being finished, which here usually means a commit or a playbook or an SSH session
+    hours later. An alert that waits for completion fires on decisions that are being
+    handled correctly, gets muted, and then misses the one that was genuinely lost.
+
+    Idempotent, and deliberately not a "latest seen" timestamp: the first
+    acknowledgement is the one that answers the question the alert asks, so a second
+    call returns the row unchanged rather than moving the time forward. Same shape as
+    `close`, including `NotFound` covering both a decision that does not exist and one
+    owned by another agent.
+
+    Acknowledging an unanswered decision is allowed and means nothing yet -- the alert
+    only ever reads it alongside `answered_at`. Refusing it would be a guard whose only
+    effect is to make a retry after an answer arrives fail for the wrong reason.
+    """
+    with db.connect() as conn:
+        row = conn.execute(
+            f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
+            " join artifact on artifact.id = decision.artifact_id"
+            " where decision.id = %s and artifact.agent = %s",
+            (decision_id, agent),
+        ).fetchone()
+        if row is None:
+            raise store.NotFound()
+        if row[12] is None:  # acknowledged_at
+            conn.execute(
+                "update decision set acknowledged_at = now(), acknowledged_by = %s"
+                " where id = %s",
+                (agent, decision_id),
             )
             row = conn.execute(
                 f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
