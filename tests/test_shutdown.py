@@ -243,3 +243,32 @@ def test_no_look_starts_after_the_deadline_has_passed(db, monkeypatch):
     assert rows == []
     assert elapsed < 0.5
     assert len(looks) <= 1, f"{len(looks)} looks for a hold that had already expired"
+
+
+def test_the_shutdown_answer_is_the_feed_s_normal_empty_shape(db, monkeypatch):
+    """What a client actually receives matters as much as when it receives it.
+
+    Measured 19 Sep 2026: the server half worked -- a held request ended at the
+    roll in 110.8 s instead of hanging to the client's 300 s ceiling -- and a
+    waiter still died, because the body it got back was not JSON and it treated
+    that as fatal. Whatever this service says on its way out has to be an
+    ORDINARY quiet round in the feed's own shape: same content type, an empty
+    list, no rows. Anything else asks every client, including ones nobody here
+    wrote, to special-case a deploy.
+    """
+    from fastapi.testclient import TestClient
+
+    from artifacts import keys
+    from artifacts.app import create_gallery_app
+
+    token, _ = keys.mint(db, agent="leaving-seat")
+    client = TestClient(create_gallery_app(db))
+
+    events.begin_shutdown()
+    response = client.get(
+        "/api/v1/events?since=0&wait=30", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json() == []
