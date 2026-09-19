@@ -82,6 +82,15 @@ def _ask(client, token: str, artifact_id: str, **overrides) -> dict:
         ),
         pytest.param("not-a-list", id="a-non-list"),
         pytest.param(["a", "b"], id="a-list-of-strings"),
+        pytest.param(
+            # A literal `\ud800` escape in a non-raw string literal is a real lone
+            # surrogate in memory (see test_gallery.py's own note on this) -- it
+            # survives JSON decoding but neither `utf-8` nor Postgres `text` can
+            # hold one. This is the inherited gap named in the nudge-transport
+            # brief: nothing here named a lone surrogate in an option label before.
+            [{"letter": "a", "label": "bad\ud800label"}, {"letter": "b", "label": "y"}],
+            id="lone-surrogate-in-label",
+        ),
     ],
 )
 def test_each_rejected_options_shape_names_only_options(options):
@@ -94,6 +103,22 @@ def test_each_accepted_options_shape_round_trips():
     validated, letters = decisions._validate_options(_OPTIONS)
     assert validated == _OPTIONS
     assert letters == {"a", "b"}
+
+
+def test_exactly_six_options_is_the_accepted_boundary_seven_is_refused():
+    """MAX_OPTIONS is 6; `test_each_rejected_options_shape_names_only_options`
+    already covers one option and seven, but nothing before this named the
+    boundary itself -- the inherited gap the nudge-transport brief calls out.
+    A future off-by-one in the cap (`<=` becoming `<`, or vice versa) must fail
+    a test whose name says exactly what it protects."""
+    six = [{"letter": c, "label": c} for c in "abcdef"]
+    validated, letters = decisions._validate_options(six)
+    assert len(validated) == decisions.MAX_OPTIONS == 6
+    assert letters == set("abcdef")
+
+    seven = [{"letter": c, "label": c} for c in "abcdefg"]
+    with pytest.raises(decisions.InvalidOptions):
+        decisions._validate_options(seven)
 
 
 def test_a_bad_options_shape_over_the_api_never_echoes_the_callers_content(client, db):
