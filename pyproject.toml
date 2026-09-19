@@ -1,7 +1,7 @@
 [project]
 name = "artifacts"
 version = "0.1.0"
-description = "Add your description here"
+description = "A self-hosted artifacts publisher: agents publish HTML pages over a keyed API; Jeremy views them in an Authelia-gated gallery."
 readme = "README.md"
 authors = [
     { name = "Jeremy Brown", email = "jeremy@tenfourty.com" }
