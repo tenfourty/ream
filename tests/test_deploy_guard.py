@@ -7,15 +7,21 @@ because the bug being guarded against (a `git log` error read as "nothing
 newer") only shows up against real git plumbing.
 """
 
+import shutil
 import subprocess
 from pathlib import Path
 
 _SCRIPT = Path(__file__).resolve().parents[1] / ".forgejo" / "scripts" / "deploy-guard.sh"
+# Resolved once to full paths -- bandit's S607 objects to a bare "git"/"bash"
+# (a $PATH lookup an attacker could redirect); every argument list below is
+# otherwise fixed by this file, never built from external input (S603).
+_GIT = shutil.which("git")
+_BASH = shutil.which("bash")
 
 
 def _git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(repo), *args],
+    result = subprocess.run(  # noqa: S603
+        [_GIT, "-C", str(repo), *args],
         capture_output=True,
         text=True,
         check=True,
@@ -41,11 +47,12 @@ def _commit(repo: Path, message: str) -> str:
 
 
 def _run_guard(repo: Path, base: str, ref: str = "HEAD") -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["bash", str(_SCRIPT), base, ref],
+    return subprocess.run(  # noqa: S603
+        [_BASH, str(_SCRIPT), base, ref],
         cwd=repo,
         capture_output=True,
         text=True,
+        check=False,
     )
 
 
