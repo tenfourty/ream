@@ -13,9 +13,26 @@ SCHEMA_VERSION = 1
 _MIGRATE_LOCK_KEY = 0x61727466_61637473  # "artfacts" in hex-ish, just needs to be fixed
 
 
+# A connect that can block forever turns a bounded wait into an unbounded one.
+# `events.wait_for_agent` opens one of these per look, twice a second, per
+# waiter; with no timeout a single slow connect -- a Postgres failover, a
+# cluster switchover, a deploy -- parks the loop past a deadline it has already
+# agreed with the caller. Five seconds is far longer than a LAN connect and far
+# shorter than any hold, so it bounds the pathological case without touching the
+# ordinary one. Only applied when the DSN does not already say otherwise.
+_CONNECT_TIMEOUT_SECONDS = 5
+
+
+def _with_connect_timeout(dsn: str) -> str:
+    if "connect_timeout" in dsn:
+        return dsn
+    sep = "&" if "?" in dsn else "?"
+    return f"{dsn}{sep}connect_timeout={_CONNECT_TIMEOUT_SECONDS}"
+
+
 class Database:
     def __init__(self, dsn: str) -> None:
-        self.dsn = dsn
+        self.dsn = _with_connect_timeout(dsn)
 
     @contextmanager
     def connect(self) -> Iterator[psycopg.Connection]:

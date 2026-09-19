@@ -204,3 +204,42 @@ def test_arming_works_on_what_create_app_actually_returns(db, monkeypatch):
 
     response = TestClient(armed, base_url="https://artifacts.tenfourty.site").get("/healthz")
     assert response.status_code == 200, "arming must not change how the app routes"
+
+
+# ----------------------------------------------------- the look is bounded too
+
+
+def test_a_dsn_gets_a_connect_timeout_and_keeps_one_it_already_has():
+    """A connect that can block forever turns a bounded wait into an unbounded
+    one: `wait_for_agent` opens one connection per look, twice a second, and a
+    Postgres failover mid-hold would otherwise park the loop past a deadline it
+    has already promised the caller."""
+    from artifacts.db import Database
+
+    assert "connect_timeout=5" in Database("postgresql:///artifacts").dsn
+    assert "?connect_timeout=5" in Database("postgresql:///artifacts").dsn
+    assert "&connect_timeout=5" in Database("postgresql:///a?sslmode=require").dsn
+
+    already = Database("postgresql:///a?connect_timeout=30").dsn
+    assert already.count("connect_timeout") == 1, "a stated timeout must win"
+    assert "connect_timeout=30" in already
+
+
+def test_no_look_starts_after_the_deadline_has_passed(db, monkeypatch):
+    """A look is a round trip, not a free operation. One started after the
+    deadline spends time the caller never agreed to."""
+    looks = []
+
+    def counting_look(*_args, **_kwargs):
+        looks.append(time.monotonic())
+        return []
+
+    monkeypatch.setattr(events, "list_for_agent", counting_look)
+
+    began = time.monotonic()
+    rows = events.wait_for_agent(db, "ops-seat", since=0, seconds=0.0)
+    elapsed = time.monotonic() - began
+
+    assert rows == []
+    assert elapsed < 0.5
+    assert len(looks) <= 1, f"{len(looks)} looks for a hold that had already expired"

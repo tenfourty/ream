@@ -206,6 +206,12 @@ def wait_for_agent(
                 # Asked to stop before this hold even began: answer at once
                 # rather than opening a request that cannot be honoured.
                 return list_for_agent(db, agent, since=since, limit=limit)
+            # The deadline is checked BEFORE the look as well as after. A look
+            # is a database round trip, not a free operation, and the caller was
+            # promised an answer by a wall-clock moment: starting one more look
+            # after the deadline has passed spends time nobody agreed to.
+            if time.monotonic() >= deadline:
+                return []
             rows = list_for_agent(db, agent, since=since, limit=limit)
             if rows:
                 return rows
