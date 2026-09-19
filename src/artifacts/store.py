@@ -16,11 +16,21 @@ before `field` existed: same message, same log line, wrong field named in
 both. A lone surrogate (`"\ud800"`) survives JSON decoding but neither `utf-8`
 nor Postgres `text` can hold one, so encoding it for the size check is also a
 guard, refusing with `InvalidText` rather than crashing. Every refusal is
-logged on `artifacts.refusals` at WARNING with the agent seat, the artifact id
-(when patching) and the field -- a size refusal adds the value's size, a scan
+logged on `artifacts.refusals` -- a size refusal adds the value's size, a scan
 refusal adds the shape names and finding count -- never the value itself or a
 matched value, which `scan.Finding` never carries in the first place. A 404 or
 a stale-revision 409 is routine, not a refusal, and is never logged.
+
+Almost every refusal is logged at WARNING and answered as 422: the caller's
+own content tripped a guard working as designed, and rewriting the content is
+the right response. `ScanFailed` is the one exception in both directions: the
+scanner itself broke, the content is not the problem, and telling the caller
+422 would send a well-behaved agent into an infinite loop rewriting a page
+that was never at fault while the actual defect goes unfixed. It is logged at
+ERROR -- distinguishable from a routine `shapes=` refusal line at a glance,
+not just by grepping `reason=scan_failed` -- and answered 503, saying plainly
+that the fault is ours, nothing published, and to tell the operator rather
+than rewrite and retry.
 
 Every write is one transaction: `publish`'s three statements and `patch`'s two
 run inside `conn.transaction()`, so a failure partway through -- a NUL byte
@@ -147,13 +157,21 @@ def _check_secrets(
     try:
         findings = scan.scan(value)
     except Exception as exc:
-        # scan() can raise (e.g. CPython's integer-to-string conversion limit,
-        # hit inside html.unescape on a body holding thousands of digits after
-        # `&#`) -- a scanner exception is not "no findings", so it must refuse
+        # scan() can raise (the known case was CPython's integer-to-string
+        # conversion limit inside html.unescape, since fixed at the source --
+        # this guard is now the net for whatever the next one turns out to
+        # be) -- a scanner exception is not "no findings", so it must refuse
         # exactly as a real finding would, never fall through to a clean
         # publish. Only the exception's type is logged, never its message or
         # the value that triggered it.
-        _refusals.warning(
+        #
+        # Logged at ERROR, not WARNING: a `shapes=` line below is the gate
+        # doing its job, but a `scan_failed` line is a defect in the scanner
+        # itself, and it needs to look different at a glance, not just under
+        # a `reason=scan_failed` grep -- a run of these hiding inside a
+        # weekly refusal count is invisible until every publish and patch,
+        # for every agent, is silently failing closed.
+        _refusals.error(
             "publish refused: agent=%s artifact=%s field=%s reason=scan_failed error=%s",
             agent,
             artifact_id or "-",

@@ -22,6 +22,19 @@ class PatchBody(BaseModel):
     expected_revision: str
 
 
+# A scanner exception means the scanner is broken, not that the caller's
+# content is -- 422 would tell a well-behaved agent to rewrite and resubmit
+# a page that was never at fault, forever, while the actual defect goes
+# unfixed. 503 says plainly that the fault is ours and nothing published;
+# the field name is safe to include (it says which field, not what was in
+# it), the content never is.
+_SCAN_FAILED_DETAIL = (
+    "the secret scanner failed -- this is a fault on our side, not yours. "
+    "Nothing was published. Do not rewrite and resubmit this content; tell "
+    "the operator."
+)
+
+
 def _refused_detail(field: str, findings) -> dict:
     """The scanner's findings, already de-duplicated and capped, as the
     structured 422 body: where a shape fired, and in which field, never what
@@ -72,11 +85,7 @@ def agent_router(db: Database) -> APIRouter:
             ) from found
         except store.ScanFailed as exc:
             raise HTTPException(
-                422,
-                {
-                    "field": exc.field,
-                    "detail": f"could not scan {exc.field} for secrets",
-                },
+                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
             ) from exc
 
     @router.patch("/artifacts/{artifact_id}")
@@ -104,11 +113,7 @@ def agent_router(db: Database) -> APIRouter:
             ) from found
         except store.ScanFailed as exc:
             raise HTTPException(
-                422,
-                {
-                    "field": exc.field,
-                    "detail": f"could not scan {exc.field} for secrets",
-                },
+                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
             ) from exc
         except store.RevisionMismatch as exc:
             raise HTTPException(

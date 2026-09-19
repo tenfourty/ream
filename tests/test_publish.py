@@ -54,6 +54,14 @@ def _patch_raw_json(client, url, payload, headers):
     )
 
 
+def _boom(_value):
+    """A stand-in for a broken `scan.scan` -- the crash class this used to
+    be reachable through (`&#` plus a long decimal digit run) is fixed at
+    the source (task 5 fix round 2, item 5), so `store.ScanFailed`'s tests
+    now inject a failure directly rather than depend on a specific bug."""
+    raise ValueError("scanner exploded")
+
+
 def test_publishing_returns_a_one_label_url(client, db):
     token, _ = keys.mint(db, agent="ops-seat")
     response = client.post(
@@ -558,55 +566,109 @@ def test_two_real_concurrent_patches_never_return_500(client, db):
     assert sorted([response_a.status_code, response_b.status_code]) == [200, 409]
 
 
-def test_a_scan_failure_is_refused_and_leaves_no_row_at_create(client, db):
-    """`&#` followed by thousands of digits makes `html.unescape` inside
-    `scan.scan` raise `ValueError` -- CPython's integer-to-string conversion
-    limit. A scanner exception is not "no findings": it must refuse exactly
-    as a real finding would, never fall through to a clean publish."""
+def test_a_scanner_failure_is_refused_and_leaves_no_row_at_create(
+    client, db, monkeypatch
+):
+    """A scanner exception is not "no findings": it must refuse exactly as a
+    real finding would, never fall through to a clean publish."""
     token, _ = keys.mint(db, agent="ops-seat")
+    monkeypatch.setattr(store.scan, "scan", _boom)
     with db.connect() as conn:
         before = conn.execute("select count(*) from artifact").fetchone()[0]
-    body = PAGE + "&#" + "1" * 5000
     response = client.post(
-        "/api/v1/artifacts", json={"title": "Board", "body": body}, headers=auth(token)
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
     )
-    assert response.status_code == 422
+    assert response.status_code == 503
     with db.connect() as conn:
         after = conn.execute("select count(*) from artifact").fetchone()[0]
     assert after == before
 
 
-def test_a_scan_failure_is_refused_and_leaves_no_row_at_patch(client, db):
+def test_a_scanner_failure_is_refused_and_leaves_no_row_at_patch(
+    client, db, monkeypatch
+):
     token, _ = keys.mint(db, agent="ops-seat")
     first = client.post(
         "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
     ).json()
     with db.connect() as conn:
         before = conn.execute("select count(*) from version").fetchone()[0]
-    body = PAGE + "&#" + "1" * 5000
+    monkeypatch.setattr(store.scan, "scan", _boom)
     response = client.patch(
         f"/api/v1/artifacts/{first['id']}",
-        json={"body": body, "expected_revision": first["revision"]},
+        json={
+            "body": PAGE.replace("hi", "howdy"),
+            "expected_revision": first["revision"],
+        },
         headers=auth(token),
     )
-    assert response.status_code == 422
+    assert response.status_code == 503
     with db.connect() as conn:
         after = conn.execute("select count(*) from version").fetchone()[0]
     assert after == before
 
 
-def test_a_scan_failure_is_logged_as_a_scanner_failure(client, db, caplog):
+def test_a_scanner_failure_is_logged_at_error_not_warning(
+    client, db, monkeypatch, caplog
+):
+    """A `scan_failed` line is a defect in the scanner, not a routine
+    refusal, and must be distinguishable from one at a glance -- logged at
+    ERROR so a later tidy-up cannot quietly drop it back to WARNING and let
+    a run of these hide inside a weekly refusal count."""
     token, _ = keys.mint(db, agent="ops-seat")
-    body = PAGE + "&#" + "1" * 5000
+    monkeypatch.setattr(store.scan, "scan", _boom)
     with caplog.at_level(logging.WARNING, logger="artifacts.refusals"):
         client.post(
             "/api/v1/artifacts",
-            json={"title": "Board", "body": body},
+            json={"title": "Board", "body": PAGE},
             headers=auth(token),
         )
-    messages = [record.getMessage() for record in caplog.records]
-    assert any(
-        "ops-seat" in message and "scan_failed" in message for message in messages
+    scan_failed = [r for r in caplog.records if "scan_failed" in r.getMessage()]
+    assert scan_failed
+    assert all(r.levelno == logging.ERROR for r in scan_failed)
+    assert any("ops-seat" in r.getMessage() for r in scan_failed)
+
+
+def test_a_scanner_failure_answers_503_naming_the_field_and_never_the_content(
+    client, db, monkeypatch
+):
+    """422 tells a well-behaved agent that ITS content is the problem, and it
+    would rewrite a perfectly good page and resubmit forever while the real
+    defect -- the scanner, ours -- goes unfixed. 503 says plainly the fault
+    is ours, nothing published, and not to rewrite and retry."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    monkeypatch.setattr(store.scan, "scan", _boom)
+    marker = "UNIQUE_MARKER_should_never_be_echoed"
+    response = client.post(
+        "/api/v1/artifacts",
+        json={"title": "Board", "body": PAGE + marker},
+        headers=auth(token),
     )
-    for message in messages:
-        assert "1" * 100 not in message
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    # publish() guards the title before the body, so a scanner broken for
+    # every field is caught on the title first here -- naming it is still
+    # the point of the assertion, whichever field it happens to be.
+    assert detail["field"] == "title"
+    assert "our side" in detail["detail"]
+    assert "operator" in detail["detail"]
+    assert "not" in detail["detail"]
+    assert marker not in response.text
+
+
+def test_a_scanner_failure_on_patch_also_answers_503(client, db, monkeypatch):
+    token, _ = keys.mint(db, agent="ops-seat")
+    first = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
+    ).json()
+    monkeypatch.setattr(store.scan, "scan", _boom)
+    response = client.patch(
+        f"/api/v1/artifacts/{first['id']}",
+        json={
+            "body": PAGE.replace("hi", "howdy"),
+            "expected_revision": first["revision"],
+        },
+        headers=auth(token),
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"]["field"] == "body"

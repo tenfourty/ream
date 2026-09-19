@@ -946,3 +946,45 @@ def test_every_html_space_or_quote_reference_is_skipped_before_a_value():
     refused = [r for r in references if scan.scan(f"password={r}${{DB_PASSWORD}}") != []]
     assert missed == []
     assert refused == []
+
+
+def test_a_decimal_charref_split_by_tags_does_not_crash_once_detagged():
+    """`&#1<b></b>1<b></b>1...` holds no long digit run in the raw body --
+    the digits only become one contiguous run after `_detag` deletes the
+    tags between them (task 5 fix round 2). Before the fix this reached
+    `html.unescape` as a multi-thousand-digit decimal reference and raised
+    inside CPython's int(str) conversion."""
+    body = "&#" + "1<b></b>" * 2000 + "1"
+    assert scan.scan(body) == []
+
+
+def test_a_huge_decimal_charref_with_no_semicolon_does_not_crash():
+    body = "&#" + "0" * 4301 + "7"
+    assert scan.scan(body) == []
+
+
+def test_exactly_4300_decimal_digits_does_not_crash():
+    """4300 is CPython's own integer-string conversion limit -- exactly at
+    it does not raise even unfixed, but the defang applies regardless of
+    that boundary (no legitimate reference needs more than seven digits),
+    so this pins that the fix does not regress the boundary case."""
+    body = "&#" + "1" * 4300
+    assert scan.scan(body) == []
+
+
+def test_a_huge_hex_charref_does_not_crash_and_is_not_defanged():
+    """Base 16 is exempt from CPython's integer-string conversion limit, so
+    a long hex reference never crashed and must not be treated as the
+    decimal case: `_defang_huge_decimal_charrefs` only matches `&#` followed
+    directly by decimal digits, never `&#x`."""
+    body = "&#x" + "1" * 17200 + ";"
+    assert scan.scan(body) == []
+
+
+def test_a_legitimate_short_decimal_charref_still_decodes():
+    """The defang only catches runs longer than any real code point needs --
+    an ordinary reference like `&#65;` (`A`) must still unescape and scan
+    normally, not get swept up by a fix aimed at absurd inputs. `&#65;&#75;
+    &#73;&#65;` spells AKIA."""
+    findings = scan.scan("token &#65;&#75;&#73;&#65;IOSFODNN7EXAMPLE end")
+    assert any(f.shape == "aws_access_key_id" for f in findings)

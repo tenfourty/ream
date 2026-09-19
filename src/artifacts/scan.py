@@ -582,6 +582,40 @@ def _detag(text: str) -> str:
     return _HTML_TAG.sub(_replace, text)
 
 
+# The highest real code point, 0x10FFFF, is seven decimal digits -- no
+# legitimate numeric character reference ever needs more. `html.unescape`'s
+# own charref regex places no limit on how many decimal digits follow `&#`,
+# and CPython's int(str) refuses one past a few thousand digits (its
+# integer-string conversion limit), which turned a page holding `&#` plus a
+# long digit run into an unhandled `ValueError` -- every publish and patch
+# through this shape, for every agent, failing however `store.ScanFailed`
+# happened to be wired that day (task 5 fix round 2: 422, then 503).
+#
+# A reference this long is never legitimate regardless of the crash
+# threshold, so it is defanged before `html.unescape` ever sees it rather
+# than caught after: replacing its digits with a same-count run of a
+# non-digit character drops the whole thing out of `_charref`'s own match
+# (neither the decimal alternative, which needs digits, nor the hex one,
+# which needs `x` followed by a hex digit), so `html.unescape` leaves it as
+# inert literal text instead of parsing it at all. Same length in, same
+# length out, so this never shifts a line number the way inserting or
+# deleting text would.
+#
+# Applied to the DETAGGED view, not the raw one: `&#1<b></b>1<b></b>1...`
+# holds no long digit run until the tags between the digits are gone, so
+# checking before `_detag` would walk straight past it.
+_MAX_LEGIT_DECIMAL_CHARREF_DIGITS = 7
+_HUGE_DECIMAL_CHARREF = re.compile(
+    rf"&#([0-9]{{{_MAX_LEGIT_DECIMAL_CHARREF_DIGITS + 1},}})"
+)
+
+
+def _defang_huge_decimal_charrefs(detagged: str) -> str:
+    return _HUGE_DECIMAL_CHARREF.sub(
+        lambda match: "&#" + "x" * len(match.group(1)), detagged
+    )
+
+
 def _text_view(raw_view: str) -> str:
     """The raw view with tags deleted, entities unescaped, and soft-hyphen/
     zero-width characters removed -- what exposes a credential that markup,
@@ -589,7 +623,8 @@ def _text_view(raw_view: str) -> str:
     are unescaped before the zero-width strip, not after, because an entity
     such as `&shy;` decodes TO a zero-width character in the first place.
     """
-    text_view = html.unescape(_detag(raw_view))
+    detagged = _defang_huge_decimal_charrefs(_detag(raw_view))
+    text_view = html.unescape(detagged)
     if not text_view.isascii():
         for char in _INVISIBLE:
             text_view = text_view.replace(char, "")
