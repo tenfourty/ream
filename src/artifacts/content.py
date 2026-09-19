@@ -100,7 +100,13 @@ def _viewer_report() -> str:
         f"if(e.origin!=={origin})return;"
         "var d=e.data;"
         'if(!d||d.type!=="artifact-slot-sizes"||!Array.isArray(d.sizes))return;'
-        "d.sizes.slice(0,64).forEach(function(s){"
+        # The message carries the COMPLETE set of slots the gallery filled, so a
+        # mark the gallery said nothing about is one nothing fills any more -- an
+        # answered question, which stops being placeable. Its reserved room is
+        # released here rather than left as a gap the page cannot explain. Every
+        # marked element is reset first and then the reported ones are set, so a
+        # slot that keeps its size is never momentarily collapsed.
+        "var want={};d.sizes.slice(0,64).forEach(function(s){"
         # `!s` first: a `sizes` array carrying a null throws on the property read,
         # and the top-level try/catch wraps this listener's REGISTRATION, not its
         # later invocations -- so an exception here would surface in the agent's own
@@ -109,7 +115,11 @@ def _viewer_report() -> str:
         "if(!(s.height>=0&&s.height<=20000))return;"
         "var el=document.querySelector("
         "'[data-artifact-decision=\"'+(window.CSS&&CSS.escape?CSS.escape(s.id):s.id)+'\"]');"
-        'if(el)el.style.minHeight=s.height+"px"})});'
+        "if(el)want[s.id]=s.height});"
+        "Array.prototype.forEach.call("
+        'document.querySelectorAll("[data-artifact-decision]"),function(el){'
+        'var id=el.getAttribute("data-artifact-decision");'
+        'el.style.minHeight=(want[id]||0)+"px"})});'
         "})()}catch(e){}</script>"
     )
 

@@ -77,18 +77,30 @@ const sized = (over = {}) => ({
   g.fire("message", sized({ origin: "https://evil.example" }));
   ok(g.slot.style.minHeight === undefined, "ignores a size message from another origin");
 }
-// 4. bounds and shapes
+// 4. bounds and shapes. A refused height reserves nothing, which is "0px" and
+// not "untouched": the message carries the complete set of filled slots, so a
+// mark it says nothing usable about is a mark nothing fills.
 {
   for (const [h, why] of [[-1, "negative"], [20001, "absurd"], ["96", "a string"], [NaN, "NaN"], [Infinity, "Infinity"]]) {
     const g = build();
     const m = sized(); m.data.sizes = [{ id: "dec1", height: h }];
     g.fire("message", m);
-    ok(g.slot.style.minHeight === undefined, `refuses a height that is ${why}`);
+    ok(g.slot.style.minHeight === "0px", `reserves nothing for a height that is ${why}`);
   }
   const g = build();
   const m = sized(); m.data.sizes = [{ id: "nope", height: 96 }];
   g.fire("message", m);
-  ok(g.slot.style.minHeight === undefined, "ignores a size for a slot the page never marked");
+  ok(g.slot.style.minHeight === "0px", "ignores a size for a slot the page never marked");
+}
+// 4b. a slot the gallery stops filling releases its room
+{
+  const g = build();
+  g.fire("message", sized());
+  ok(g.slot.style.minHeight === "96px", "reserves the room while the slot is filled");
+  const gone = sized(); gone.data.sizes = [];
+  g.fire("message", gone);
+  ok(g.slot.style.minHeight === "0px",
+     "releases it once nothing fills that slot -- an answered question leaves no gap");
 }
 // 5. hostile payloads must not throw
 {

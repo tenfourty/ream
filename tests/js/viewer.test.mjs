@@ -29,8 +29,12 @@ function build() {
   const d1 = el({ "data-decision-id": "dec1" });
   const d2 = el({ "data-decision-id": "dec2" });
   const listeners = [];
+  const asks = el();
+  asks._empty = false;
+  asks.querySelector = function () { return this._empty ? null : d1; };
   const doc = {
-    getElementById: (id) => id === "artifact-frame" ? iframe : id === "artifact-sheet" ? sheet : null,
+    getElementById: (id) => id === "artifact-frame" ? iframe
+      : id === "artifact-sheet" ? sheet : id === "open-asks" ? asks : null,
     querySelectorAll: () => [d1, d2],
   };
   const win = { addEventListener: (t, fn) => t === "message" && listeners.push(fn) };
@@ -38,7 +42,7 @@ function build() {
   new Function("document", "window", "URL", "Map", "Set", "isFinite", src)
     (doc, win, URL, Map, Set, isFinite);
   const send = (e) => listeners.forEach((fn) => fn(e));
-  return { iframe, sheet, d1, d2, send, posted };
+  return { iframe, sheet, d1, d2, send, posted, asks };
 }
 
 const good = (over = {}) => ({
@@ -120,13 +124,39 @@ const good = (over = {}) => ({
   g.send(good({ source: g.iframe.contentWindow }));
   ok(g.posted.length === 2 && g.posted[1][0].sizes[0].height === 120, "reports a size that genuinely changed");
 }
-// 8. nothing is sent when nothing was placed
+// 8. an empty set is still sent, so the page can collapse a slot nothing fills
 {
   const g = build();
   const m = good({ source: g.iframe.contentWindow });
   m.data.slots = [{ id: "nope", top: 1, left: 1, width: 1 }];
   g.send(m);
-  ok(g.posted.length === 0, "says nothing when no control was placed");
+  ok(g.posted.length === 1 && g.posted[0][0].sizes.length === 0,
+     "sends an empty set when nothing was placed, so a stale slot collapses");
+  g.send(m);
+  ok(g.posted.length === 1, "but does not repeat that empty set");
+}
+// 8b. a slot that stops being filled is reported as gone
+{
+  const g = build();
+  const full = good({ source: g.iframe.contentWindow });
+  full.data.slots = [{ id: "dec1", top: 40, left: 10, width: 300 },
+                     { id: "dec2", top: 200, left: 10, width: 300 }];
+  g.send(full);
+  ok(g.posted[0][0].sizes.length === 2, "reports both filled slots");
+  const one = good({ source: g.iframe.contentWindow });
+  one.data.slots = [{ id: "dec1", top: 40, left: 10, width: 300 }];
+  g.send(one);
+  ok(g.posted.length === 2 && g.posted[1][0].sizes.length === 1,
+     "reports the smaller set when one slot is no longer filled");
+}
+// 8c. the stranded heading
+{
+  const g = build();
+  g.send(good({ source: g.iframe.contentWindow }));
+  ok(g.asks.style.display === "", "keeps the open section while a question is still in it");
+  g.asks._empty = true;
+  g.send(good({ source: g.iframe.contentWindow, data: { type: "artifact-state", height: 1201, slots: [] } }));
+  ok(g.asks.style.display === "none", "hides the section once every question has been placed");
 }
 // 9. an unmeasurable control is not reported
 {
@@ -134,7 +164,8 @@ const good = (over = {}) => ({
   g.d1.offsetHeight = undefined;
   g.send(good({ source: g.iframe.contentWindow }));
   ok(g.d1.parentNode === g.sheet, "still places a control it cannot measure");
-  ok(g.posted.length === 0, "but reports no height for it");
+  ok(g.posted.length === 1 && g.posted[0][0].sizes.length === 0,
+     "but reports no height for it, so the page reserves nothing");
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

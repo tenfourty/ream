@@ -235,7 +235,8 @@ var sheet=document.getElementById("artifact-sheet");
 if(!iframe||!sheet)return;
 var contentOrigin;
 try{contentOrigin=new URL(iframe.src).origin}catch(e){return}
-var decisionEls=new Map();var lastSize=new Map();
+var decisionEls=new Map();var lastSent="";
+var asksSection=document.getElementById("open-asks");
 document.querySelectorAll("[data-decision-id]").forEach(function(el){
   decisionEls.set(el.getAttribute("data-decision-id"),el);
 });
@@ -261,19 +262,31 @@ window.addEventListener("message",function(event){
         el.style.width=slot.width+"px";
         var h=el.offsetHeight;if(isNum(h))sizes.push({id:slot.id,height:h});
       });
-      // Tell the page how tall the control it asked for actually is, so its
-      // slot can reserve that room. Without this the control is positioned
-      // over content that never moved aside, and the page reads as broken --
-      // which is exactly what Jeremy saw first time out. Only sent when the
-      // number actually changed, so this cannot oscillate with the resize
-      // observer on the other side.
-      var changed=sizes.filter(function(s){
-        if(lastSize.get(s.id)===s.height)return false;
-        lastSize.set(s.id,s.height);return true;
-      });
-      if(changed.length){
+      // Tell the page how tall each control it asked for actually turned out,
+      // so its slot can reserve exactly that room. Without this the control is
+      // positioned over content that never moved aside and the page reads as
+      // broken. This is the COMPLETE set of slots filled this round, not just
+      // the ones whose number moved: a slot the page still marks but nothing
+      // fills any more -- an answered decision, which is no longer anchorable --
+      // must collapse rather than leave a reserved gap, and the page can only
+      // know that from a list it can diff against its own marks.
+      //
+      // Sent only when the whole set differs from the last one sent, which is
+      // what keeps this from oscillating with the watcher on the page's side:
+      // the page reserves room, its height changes, it reports again, the
+      // controls measure the same, the set is identical, nothing is sent.
+      var payload=JSON.stringify(sizes);
+      if(payload!==lastSent){
+        lastSent=payload;
         iframe.contentWindow.postMessage(
-          {type:"artifact-slot-sizes",sizes:changed},contentOrigin);
+          {type:"artifact-slot-sizes",sizes:sizes},contentOrigin);
+      }
+      // A heading with nothing under it reads as a fault. When every open
+      // question has been lifted into the page, the section they came from is
+      // an empty "Waiting on you" and its hint, stranded above the frame.
+      if(asksSection){
+        asksSection.style.display =
+          asksSection.querySelector("[data-decision-id]") ? "" : "none";
       }
     }
   }catch(e){}
@@ -452,7 +465,7 @@ def _render_decisions(rows: list[decisions.DecisionRow]) -> str:
             "a different one to change it, as often as you like.</p>"
         )
         sections.append(
-            '<section class="asks"><h2>Waiting on you</h2>'
+            '<section class="asks" id="open-asks"><h2>Waiting on you</h2>'
             + "".join(_card(row) for row in open_rows)
             + hint
             + "</section>"
