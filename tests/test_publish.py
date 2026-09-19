@@ -1,5 +1,8 @@
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -199,6 +202,38 @@ def test_a_body_one_byte_over_the_cap_is_refused_with_413(client, db):
     assert response.status_code == 413
 
 
+def test_a_secret_in_the_title_is_refused_even_with_a_clean_body(client, db):
+    token, _ = keys.mint(db, agent="ops-seat")
+    secret = "AKIA" + "IOSFODNN7EXAMPLE"
+    response = client.post(
+        "/api/v1/artifacts",
+        json={"title": f"rotate {secret}", "body": PAGE},
+        headers=auth(token),
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail == {"refused": [{"shape": "aws_access_key_id", "line": 1}]}
+    assert secret not in response.text
+
+
+def test_a_title_at_the_exact_size_cap_is_accepted(client, db):
+    token, _ = keys.mint(db, agent="ops-seat")
+    title = "t" * store.MAX_TITLE_BYTES
+    response = client.post(
+        "/api/v1/artifacts", json={"title": title, "body": PAGE}, headers=auth(token)
+    )
+    assert response.status_code == 201
+
+
+def test_a_title_one_byte_over_the_cap_is_refused_with_413(client, db):
+    token, _ = keys.mint(db, agent="ops-seat")
+    title = "t" * (store.MAX_TITLE_BYTES + 1)
+    response = client.post(
+        "/api/v1/artifacts", json={"title": title, "body": PAGE}, headers=auth(token)
+    )
+    assert response.status_code == 413
+
+
 def test_a_patch_over_the_size_cap_is_refused_with_413_before_scanning(client, db):
     token, _ = keys.mint(db, agent="ops-seat")
     first = client.post(
@@ -281,3 +316,166 @@ def test_a_patch_size_refusal_is_logged_with_the_artifact_id(client, db, caplog)
     assert any(first["id"] in message and str(size) in message for message in messages)
     for message in messages:
         assert "a" * 1000 not in message
+
+
+def test_a_validation_error_never_echoes_the_offending_value(client, db):
+    """`body` must be a string; sending an object trips pydantic's own type
+    check before `store.publish` ever sees it. FastAPI's default handler for
+    this puts the rejected value in `input` -- exactly the leak the scanner's
+    422 is built to avoid, on the framework's error rather than ours."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    secret = "AKIA" + "IOSFODNN7EXAMPLE"
+    response = client.post(
+        "/api/v1/artifacts",
+        json={"title": "x", "body": {"k": secret}},
+        headers=auth(token),
+    )
+    assert response.status_code == 422
+    assert secret not in response.text
+    for error in response.json()["detail"]:
+        assert set(error) == {"loc", "type"}
+
+
+def test_a_missing_field_error_never_echoes_the_rest_of_the_request(client, db):
+    """Pydantic's `missing`-field error echoes the *whole* request body by
+    default, including fields the model never declared -- worse than the
+    type-mismatch case above, since a field named anything at all leaks."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    secret = "AKIA" + "IOSFODNN7EXAMPLE"
+    response = client.post(
+        "/api/v1/artifacts",
+        json={"title": "x", "note": secret},  # `body` is missing entirely
+        headers=auth(token),
+    )
+    assert response.status_code == 422
+    assert secret not in response.text
+    for error in response.json()["detail"]:
+        assert set(error) == {"loc", "type"}
+
+
+def test_a_failed_publish_leaves_no_artifact_row(client, db):
+    """Every statement autocommitted independently used to mean the artifact
+    row could commit and then the version insert fail, leaving a permanent,
+    unpatchable orphan (current_version stays NULL forever). Postgres `text`
+    cannot hold a NUL byte, which is the cheapest way to force exactly that
+    failure -- wrapping the writes in one transaction is what actually fixes
+    it, so this asserts on the row count, not the (still-500) status code."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    with db.connect() as conn:
+        before = conn.execute("select count(*) from artifact").fetchone()[0]
+    with pytest.raises(psycopg.DataError):
+        client.post(
+            "/api/v1/artifacts",
+            json={"title": "x", "body": PAGE + "\x00"},
+            headers=auth(token),
+        )
+    with db.connect() as conn:
+        after = conn.execute("select count(*) from artifact").fetchone()[0]
+    assert after == before
+
+
+def test_a_lost_patch_race_returns_409_not_500(client, db):
+    """Deterministic pin for the UniqueViolation -> RevisionMismatch mapping:
+    a version row already occupies the slot `patch()` is about to insert
+    into, forcing the exact primary-key collision two truly concurrent
+    patches would hit, without depending on real thread timing."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    first = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
+    ).json()
+    with db.connect() as conn:
+        conn.execute(
+            "insert into version (artifact_id, n, body, revision, created_by)"
+            " values (%s, 2, %s, %s, %s)",
+            (first["id"], PAGE, "occupied-slot", "seed"),
+        )
+    response = client.patch(
+        f"/api/v1/artifacts/{first['id']}",
+        json={
+            "body": PAGE.replace("hi", "hello"),
+            "expected_revision": first["revision"],
+        },
+        headers=auth(token),
+    )
+    assert response.status_code == 409
+
+
+def test_two_real_concurrent_patches_never_return_500(client, db):
+    """Two genuine OS threads, synchronised with a barrier so both fire as
+    close to simultaneously as possible, each PATCHing the same artifact with
+    the same `expected_revision` it read. Exactly one must win (200), the
+    other must lose cleanly (409) -- never a raw database error."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    first = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
+    ).json()
+    barrier = threading.Barrier(2)
+
+    def do_patch(new_body: str):
+        barrier.wait()
+        return client.patch(
+            f"/api/v1/artifacts/{first['id']}",
+            json={"body": new_body, "expected_revision": first["revision"]},
+            headers=auth(token),
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        future_a = pool.submit(do_patch, PAGE.replace("hi", "hello"))
+        future_b = pool.submit(do_patch, PAGE.replace("hi", "howdy"))
+        response_a, response_b = future_a.result(), future_b.result()
+
+    assert sorted([response_a.status_code, response_b.status_code]) == [200, 409]
+
+
+def test_a_scan_failure_is_refused_and_leaves_no_row_at_create(client, db):
+    """`&#` followed by thousands of digits makes `html.unescape` inside
+    `scan.scan` raise `ValueError` -- CPython's integer-to-string conversion
+    limit. A scanner exception is not "no findings": it must refuse exactly
+    as a real finding would, never fall through to a clean publish."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    with db.connect() as conn:
+        before = conn.execute("select count(*) from artifact").fetchone()[0]
+    body = PAGE + "&#" + "1" * 5000
+    response = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": body}, headers=auth(token)
+    )
+    assert response.status_code == 422
+    with db.connect() as conn:
+        after = conn.execute("select count(*) from artifact").fetchone()[0]
+    assert after == before
+
+
+def test_a_scan_failure_is_refused_and_leaves_no_row_at_patch(client, db):
+    token, _ = keys.mint(db, agent="ops-seat")
+    first = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
+    ).json()
+    with db.connect() as conn:
+        before = conn.execute("select count(*) from version").fetchone()[0]
+    body = PAGE + "&#" + "1" * 5000
+    response = client.patch(
+        f"/api/v1/artifacts/{first['id']}",
+        json={"body": body, "expected_revision": first["revision"]},
+        headers=auth(token),
+    )
+    assert response.status_code == 422
+    with db.connect() as conn:
+        after = conn.execute("select count(*) from version").fetchone()[0]
+    assert after == before
+
+
+def test_a_scan_failure_is_logged_as_a_scanner_failure(client, db, caplog):
+    token, _ = keys.mint(db, agent="ops-seat")
+    body = PAGE + "&#" + "1" * 5000
+    with caplog.at_level(logging.WARNING, logger="artifacts.refusals"):
+        client.post(
+            "/api/v1/artifacts",
+            json={"title": "Board", "body": body},
+            headers=auth(token),
+        )
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "ops-seat" in message and "scan_failed" in message for message in messages
+    )
+    for message in messages:
+        assert "1" * 100 not in message

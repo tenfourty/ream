@@ -55,6 +55,8 @@ def agent_router(db: Database) -> APIRouter:
             raise HTTPException(413, "body exceeds the size limit") from exc
         except store.SecretFound as found:
             raise HTTPException(422, _refused_detail(found.findings)) from found
+        except store.ScanFailed as exc:
+            raise HTTPException(422, "could not scan this content for secrets") from exc
 
     @router.patch("/artifacts/{artifact_id}")
     def update(artifact_id: str, payload: PatchBody, agent: str = Depends(caller)):
@@ -66,6 +68,8 @@ def agent_router(db: Database) -> APIRouter:
             raise HTTPException(413, "body exceeds the size limit") from exc
         except store.SecretFound as found:
             raise HTTPException(422, _refused_detail(found.findings)) from found
+        except store.ScanFailed as exc:
+            raise HTTPException(422, "could not scan this content for secrets") from exc
         except store.RevisionMismatch as exc:
             raise HTTPException(
                 409, "the artifact moved on; read it and patch again"

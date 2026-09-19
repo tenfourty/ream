@@ -5,18 +5,33 @@ CPU is never spent on behalf of a caller who has no right to it. `patch` in
 particular runs: the size cap (no database round trip) -- ownership (one
 indexed query, so an unknown artifact and someone else's look identical, both
 404) -- the secret scan (the scanner holds the GIL while it reads two views of
-the body, so it always runs last and only once ownership is confirmed). Every
+the body, so it always runs last and only once ownership is confirmed). The
+title is agent-authored and displayed exactly as the body is, so it passes
+through the same two guards -- capped at `MAX_TITLE_BYTES`, well below the
+body's cap, because a title is a page name in a list, not prose. Every
 refusal is logged on `artifacts.refusals` at WARNING with the agent seat and
-the artifact id (when patching) -- a size refusal adds the body's size, a
-scan refusal adds the shape names and finding count -- never the body itself
+the artifact id (when patching) -- a size refusal adds the value's size, a
+scan refusal adds the shape names and finding count -- never the value itself
 or a matched value, which `scan.Finding` never carries in the first place. A
 404 or a stale-revision 409 is routine, not a refusal, and is never logged.
+
+Every write is one transaction: `publish`'s three statements and `patch`'s two
+run inside `conn.transaction()`, so a failure partway through -- a NUL byte
+Postgres refuses in `text`, or anything else -- leaves no row behind rather
+than an artifact with no version an agent can never patch or delete. Two
+patches racing the same `expected_revision` both pass the revision check
+(nothing here takes a lock), but only one can insert `version(artifact_id,
+n)` -- the primary key catches the loser, and its `UniqueViolation` is turned
+into the same `RevisionMismatch` a plain stale read would have given it, so
+the loser sees 409, not a raw database error.
 """
 
 import hashlib
 import logging
 import os
 from dataclasses import dataclass
+
+from psycopg.errors import UniqueViolation
 
 from artifacts import ids, scan
 from artifacts.db import Database
@@ -26,6 +41,10 @@ from artifacts.db import Database
 # not the 4 MiB or 1 MiB first proposed. The largest real page today is
 # ~41 KB: 12x headroom. Raise this only when a real page needs it.
 MAX_BODY_BYTES = 512 * 1024
+
+# A title is a page name shown in a gallery list, not prose -- 512 bytes, not
+# the body's 512 KiB.
+MAX_TITLE_BYTES = 512
 
 _refusals = logging.getLogger("artifacts.refusals")
 
@@ -46,7 +65,7 @@ class RevisionMismatch(Exception): ...
 class NotFound(Exception): ...
 
 
-class Forbidden(Exception): ...
+class ScanFailed(Exception): ...
 
 
 @dataclass(frozen=True)
@@ -78,9 +97,9 @@ def _revision(body: str, n: int) -> str:
     return hashlib.sha256(f"{n}:{body}".encode()).hexdigest()[:16]
 
 
-def _check_size(body: str, *, agent: str, artifact_id: str | None) -> None:
-    size = len(body.encode("utf-8"))
-    if size > MAX_BODY_BYTES:
+def _check_size(value: str, limit: int, *, agent: str, artifact_id: str | None) -> None:
+    size = len(value.encode("utf-8"))
+    if size > limit:
         _refusals.warning(
             "publish refused: agent=%s artifact=%s reason=body_too_large size=%d",
             agent,
@@ -90,8 +109,23 @@ def _check_size(body: str, *, agent: str, artifact_id: str | None) -> None:
         raise BodyTooLarge(size)
 
 
-def _check_secrets(body: str, *, agent: str, artifact_id: str | None) -> None:
-    findings = scan.scan(body)
+def _check_secrets(value: str, *, agent: str, artifact_id: str | None) -> None:
+    try:
+        findings = scan.scan(value)
+    except Exception as exc:
+        # scan() can raise (e.g. CPython's integer-to-string conversion limit,
+        # hit inside html.unescape on a body holding thousands of digits after
+        # `&#`) -- a scanner exception is not "no findings", so it must refuse
+        # exactly as a real finding would, never fall through to a clean
+        # publish. Only the exception's type is logged, never its message or
+        # the value that triggered it.
+        _refusals.warning(
+            "publish refused: agent=%s artifact=%s reason=scan_failed error=%s",
+            agent,
+            artifact_id or "-",
+            type(exc).__name__,
+        )
+        raise ScanFailed() from exc
     if findings:
         shapes = sorted({finding.shape for finding in findings})
         _refusals.warning(
@@ -104,15 +138,25 @@ def _check_secrets(body: str, *, agent: str, artifact_id: str | None) -> None:
         raise SecretFound(findings)
 
 
+def _guard(value: str, limit: int, *, agent: str, artifact_id: str | None) -> None:
+    """Both checks, in order, for one field -- used for the title and, on
+    create, the body. `patch` guards the body itself (see below), since there
+    the scan must wait until after ownership is confirmed."""
+    _check_size(value, limit, agent=agent, artifact_id=artifact_id)
+    _check_secrets(value, agent=agent, artifact_id=artifact_id)
+
+
 def publish(db: Database, agent: str, title: str, body: str) -> Published:
-    _check_size(body, agent=agent, artifact_id=None)
-    _check_secrets(body, agent=agent, artifact_id=None)
+    _guard(title, MAX_TITLE_BYTES, agent=agent, artifact_id=None)
+    _guard(body, MAX_BODY_BYTES, agent=agent, artifact_id=None)
     artifact_id, revision = ids.new_id(), _revision(body, 1)
-    with db.connect() as conn:
+    with db.connect() as conn, conn.transaction():
         # Three steps, not two: `version` references `artifact`, and `artifact.current_version`
         # references `version`, so the two tables point at each other. The artifact row is born
         # with no current version, the first version is written, and only then does the artifact
-        # point at it -- the same shape `patch()` uses for every later version.
+        # point at it -- the same shape `patch()` uses for every later version. All three run in
+        # one transaction: a failure partway through (a NUL byte Postgres refuses, or anything
+        # else) must leave no row behind, not an artifact with no version.
         conn.execute(
             "insert into artifact (id, title, agent, current_version) values (%s, %s, %s, null)",
             (artifact_id, title, agent),
@@ -142,7 +186,7 @@ def _owned(conn, artifact_id: str, agent: str):
 def patch(
     db: Database, agent: str, artifact_id: str, body: str, expected_revision: str
 ) -> Published:
-    _check_size(body, agent=agent, artifact_id=artifact_id)
+    _check_size(body, MAX_BODY_BYTES, agent=agent, artifact_id=artifact_id)
     with db.connect() as conn:
         row = _owned(conn, artifact_id, agent)
         if row is None:
@@ -157,15 +201,28 @@ def patch(
         _check_secrets(body, agent=agent, artifact_id=artifact_id)
         n = current + 1
         revision = _revision(body, n)
-        conn.execute(
-            "insert into version (artifact_id, n, body, revision, created_by)"
-            " values (%s, %s, %s, %s, %s)",
-            (artifact_id, n, body, revision, agent),
-        )
-        conn.execute(
-            "update artifact set current_version = %s, updated_at = now() where id = %s",
-            (n, artifact_id),
-        )
+        try:
+            # One transaction: a failure between the two writes must leave the
+            # artifact exactly as it was, not pointing at a version that was
+            # never written.
+            with conn.transaction():
+                conn.execute(
+                    "insert into version (artifact_id, n, body, revision, created_by)"
+                    " values (%s, %s, %s, %s, %s)",
+                    (artifact_id, n, body, revision, agent),
+                )
+                conn.execute(
+                    "update artifact set current_version = %s, updated_at = now() where id = %s",
+                    (n, artifact_id),
+                )
+        except UniqueViolation as exc:
+            # Two patches raced the same `expected_revision`: both passed the
+            # check above (nothing here takes a lock), but only one of them
+            # can occupy `version(artifact_id, n)` -- the primary key is what
+            # actually prevents the lost update. The loser hits this, not a
+            # lost write, and sees the same 409 a plain stale read would have
+            # given it a moment later.
+            raise RevisionMismatch() from exc
     return Published(
         id=artifact_id, version=n, revision=revision, url=url_for(artifact_id)
     )
