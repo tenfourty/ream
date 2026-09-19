@@ -3,7 +3,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from artifacts.api import agent_router
+from artifacts.content import create_content_app
 from artifacts.db import Database
+from artifacts.store import content_domain
 
 
 def create_gallery_app(db: Database | None = None) -> FastAPI:
@@ -31,3 +33,15 @@ def create_gallery_app(db: Database | None = None) -> FastAPI:
     if db is not None:
         app.include_router(agent_router(db))
     return app
+
+
+def create_app(db: Database):
+    gallery, content = create_gallery_app(db), create_content_app(db)
+
+    async def router(scope, receive, send):
+        headers = dict(scope.get("headers") or [])
+        host = headers.get(b"host", b"").decode().split(":")[0]
+        chosen = content if host.endswith("." + content_domain()) else gallery
+        await chosen(scope, receive, send)
+
+    return router
