@@ -30,12 +30,16 @@ create table if not exists version (
 );
 
 create table if not exists file (
-    artifact_id  text not null references artifact(id) on delete cascade,
+    artifact_id  text not null,
     n            integer not null,
     path         text not null,
     content_type text not null,
     bytes        bytea not null,
-    primary key (artifact_id, n, path)
+    primary key (artifact_id, n, path),
+    -- a file belongs to a VERSION, not merely to an artifact: without this, a file row can name
+    -- a version number that has never existed. Deleting the artifact still cascades, through
+    -- version.
+    foreign key (artifact_id, n) references version(artifact_id, n) on delete cascade
 );
 
 create table if not exists state (
@@ -45,3 +49,22 @@ create table if not exists state (
     updated_at  timestamptz not null default now(),
     primary key (artifact_id, path)
 );
+
+create index if not exists artifact_agent_idx on artifact (agent);
+
+-- artifact.current_version should point at a real version row, but the FK can only be added
+-- after `version` exists (created below `artifact` above), and Postgres has no
+-- ADD CONSTRAINT IF NOT EXISTS, so guard it explicitly for migrate()'s idempotency. MATCH SIMPLE
+-- (the default) leaves current_version unchecked while it is NULL, which is required before the
+-- first version is written.
+do $$
+begin
+    if not exists (
+        select 1 from pg_constraint where conname = 'artifact_current_version_fkey'
+    ) then
+        alter table artifact
+            add constraint artifact_current_version_fkey
+            foreign key (id, current_version) references version(artifact_id, n)
+            on delete set null;
+    end if;
+end $$;
