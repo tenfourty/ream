@@ -618,40 +618,58 @@ def _detag(text: str) -> str:
 # nothing here ever reaches the actual limit regardless of how many digits
 # -- leading zeros included -- the input held.
 #
-# The >7 branch's own defanged text must not itself become a new problem
-# (fix round 4). `&#` + a same-count run of `x` was the first attempt: it
-# is still `&`-initial, and `url_query_secret`'s
+# The >7 branch's own replacement text must not itself become a new
+# problem (fix round 4). Two inert fillers were tried and both failed for
+# reasons specific to what THIS scanner does with the surrounding text, not
+# to the replacement's content in the abstract: `&#` + a same-count run of
+# `x` is still `&`-initial, and `url_query_secret`'s
 # `[?&](api_)?(key|token|secret|password)=(?=[^&\s])` reads `&`-initial as
-# "no value at all" and never fires -- `?key=&#12345678MYREALTOKEN99`
-# scanned clean and published. An all-`x` run is also exactly
-# `_PLACEHOLDER`'s `[*xX]{3,}` alternative, and the retained `&#` prefix
-# was the only thing that had stopped it from `fullmatch`ing that valve and
-# suppressing a real, adjacent assignment-shape finding. The fixed replacement
-# below drops the `&#` entirely (so it is never `&`-initial) and is plain
-# mixed-case letters with no digit run to reinterpret and no `x`/`X`/`*`
-# run for `_PLACEHOLDER` to `fullmatch` -- alone, or concatenated with a
-# real credential's own value on either side, since the mix of letters
-# outside `{*, x, X}` can never satisfy `_PLACEHOLDER` as a whole. It is
-# also a fixed length regardless of the input's: length may change here
-# (round 3 already established that), what may not is the newline count,
-# and a string with no newline characters in it satisfies that regardless
-# of how long or short it is.
+# "no value at all" and never fires; a fixed mixed-letter literal fixed
+# that but was still an invented filler, one more thing to justify never
+# colliding with a shape or the placeholder valve.
+#
+# The actual answer needs no invention: an out-of-range numeric character
+# reference is not something real `html.unescape` refuses -- its own
+# bounds check (`0xD800 <= num <= 0xDFFF or num > 0x10FFFF`) substitutes
+# U+FFFD, the standard Unicode replacement character, and returns
+# normally. Every number with more than seven significant decimal digits
+# already exceeds 0x10FFFF (`1114111`) -- the smallest eight-digit number,
+# 10,000,000, already clears it -- so it would always land in that branch
+# if CPython's int(str) limit did not intervene first. Substituting U+FFFD
+# directly does not approximate what `html.unescape` would have done: it
+# IS what `html.unescape` would have done, for every possible input in
+# this branch, without exception -- confirmed against `html.unescape` with
+# the limit lifted (`sys.set_int_max_str_digits(0)`) over 6000 random
+# bodies and a hand-picked set spanning `&#12345678` through
+# `&#99999999999999999999;` and `&#`+4301 zeros+`7`: identical output
+# every time. Both the `&`-initial problem and the placeholder-valve
+# question (raised in the second failed attempt, above) disappear on
+# their own: U+FFFD is not `&`, and it is not `x`, so it can neither read
+# as "no value" nor `fullmatch` `_PLACEHOLDER`'s `[*xX]{3,}`, alone or
+# concatenated with a real value either side of it.
+#
+# The whole reference is replaced, `&#` and a trailing `;` included --
+# exactly what `html.unescape` itself consumes for one substitution -- so
+# no stray digits or semicolon are left as literal text afterward. Length
+# is not preserved (round 3 already established that length was never the
+# actual invariant); newline count is, trivially, since neither the
+# reference being removed nor the single replacement character it becomes
+# contains one.
 #
 # Applied to the DETAGGED view, not the raw one: `&#1<b></b>1<b></b>1...`
 # holds no long digit run until the tags between the digits are gone, so
 # checking before `_detag` would walk straight past it.
 _MAX_LEGIT_DECIMAL_CHARREF_DIGITS = 7
-_DECIMAL_CHARREF = re.compile(r"&#([0-9]+)")
-_DEFANGED_CHARREF = "DEFANGEDCHARREF"
+_DECIMAL_CHARREF = re.compile(r"&#([0-9]+)(;?)")
 
 
 def _defang_huge_decimal_charrefs(detagged: str) -> str:
     def _replace(match: re.Match) -> str:
-        digits = match.group(1)
+        digits, semicolon = match.group(1), match.group(2)
         significant = digits.lstrip("0") or "0"
         if len(significant) <= _MAX_LEGIT_DECIMAL_CHARREF_DIGITS:
-            return "&#" + significant
-        return _DEFANGED_CHARREF
+            return "&#" + significant + semicolon
+        return "\ufffd"
 
     return _DECIMAL_CHARREF.sub(_replace, detagged)
 

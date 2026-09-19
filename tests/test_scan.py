@@ -1,4 +1,6 @@
+import random
 import re
+import sys
 import time
 
 import pytest
@@ -1123,3 +1125,101 @@ def test_a_shape_anchored_on_an_operator_still_fires_with_a_defang_right_after_i
     assert any(f.shape == name for f in findings), (
         f"{name} lost its match with a defanged run right after its operator"
     )
+
+
+# --- standing property: the defang must behave exactly as `html.unescape`
+# would if CPython's own integer-string conversion limit did not exist.
+# Three bugs in a row (round 2's fail-open, fix3-1's `&`-initial replacement,
+# and whatever the next rewriting mistake turns out to be) were all the same
+# shape: a rewriting step upstream changed something a later stage depended
+# on. A property test catches the SHAPE of that mistake without anyone
+# first having to think of the specific example that demonstrates it. ------
+
+
+def _control_scan(text, monkeypatch):
+    """`scan.scan`, with the crash-preventing defang stubbed to a no-op and
+    CPython's own integer-string conversion limit lifted for the call --
+    the oracle for what the scanner would find if `html.unescape` simply
+    never had a limit to hit. Only ever used here: lifting the limit
+    process-wide is exactly the exposure this module exists to avoid in
+    production, which is why the real fix cannot be "lift the limit"."""
+    monkeypatch.setattr(scan, "_defang_huge_decimal_charrefs", lambda detagged: detagged)
+    original_limit = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(0)
+    try:
+        return scan.scan(text)
+    finally:
+        sys.set_int_max_str_digits(original_limit)
+
+
+def _property_corpus() -> list[str]:
+    corpus = []
+    for positive, _ in SHAPE_FIXTURES.values():
+        corpus.append(positive)
+        corpus.append(_charref_encode(positive))
+        if "=" in positive:
+            operator_end = positive.index("=") + 1
+            corpus.append(
+                positive[:operator_end] + _BIG_DEFANG_RUN + positive[operator_end:]
+            )
+    corpus += [
+        "&#" + "1<b></b>" * 2000 + "1",
+        "&#" + "0" * 4301 + "7",
+        "&#" + "1" * 4300,
+        "&#x" + "1" * 17200 + ";",
+        "AKI&#00000065;IOSFODNN7EXAMPLE",
+        "AKI&#" + ("0" * 4301) + "65;IOSFODNN7EXAMPLE",
+        "AKI&#65;IOSFODNN7EXAMPLE",
+        "&#12345678",
+        "&#12345678;",
+        "&#99999999999999999999;",
+        "&#1114111;",
+        "&#1114112;",
+        "<p>https://example.test/p?key=&#12345678MYREALTOKEN99</p>",
+        "?api_key=&#123456789012",
+        "password=MYREALSECRET99&#12345678",
+        "password=&#12345678MYREALSECRET99",
+        "note &#12345678 password=MYREALSECRET99 end",
+    ]
+    return corpus
+
+
+def test_the_defang_matches_unescape_with_the_limit_lifted_over_the_corpus(monkeypatch):
+    """This is the test that would have caught fix round 2's regression (a
+    zero-padded reference silently lost) and fix round 3's first attempt
+    (`url_query_secret` silently lost) without anyone first constructing
+    the specific example that demonstrated either -- both showed up as an
+    inequality here, not as a hand-picked failing case.
+
+    `monkeypatch.undo()` after each body, not only at test teardown: the
+    real scan for the NEXT body must run with the real defang restored,
+    not with the previous iteration's stub for
+    `_defang_huge_decimal_charrefs` still in place -- otherwise every
+    corpus item after the first would compare the stub against itself.
+    """
+    mismatches = []
+    for body in _property_corpus():
+        real = {(f.shape, f.line) for f in scan.scan(body)}
+        control = {(f.shape, f.line) for f in _control_scan(body, monkeypatch)}
+        monkeypatch.undo()
+        if real != control:
+            mismatches.append((body, real, control))
+    assert not mismatches, mismatches
+
+
+def test_the_defang_matches_unescape_with_the_limit_lifted_over_random_bodies(monkeypatch):
+    """Fuzzed rather than fixture-driven, over the alphabet a rewriting bug
+    like fix round 2's or fix round 3's hides in: digits, `&#;`, markup and
+    whitespace. Seeded so a failure is reproducible."""
+    rng = random.Random(20260919)
+    alphabet = "&#;0123456789xX<>/bp \né"
+    mismatches = []
+    for _ in range(2000):
+        length = rng.randint(0, 60)
+        body = "".join(rng.choice(alphabet) for _ in range(length))
+        real = {(f.shape, f.line) for f in scan.scan(body)}
+        control = {(f.shape, f.line) for f in _control_scan(body, monkeypatch)}
+        monkeypatch.undo()
+        if real != control:
+            mismatches.append((body, real, control))
+    assert not mismatches, mismatches[:5]

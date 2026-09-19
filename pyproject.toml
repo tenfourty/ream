@@ -34,4 +34,7 @@ extend-select = ["S", "B"]
 
 [tool.ruff.lint.per-file-ignores]
 # S101 flags `assert` -- pytest's idiom for every assertion, not a risk here.
-"tests/**" = ["S101"]
+# S311 flags `random.Random` as unfit for cryptographic use -- true, and
+# irrelevant to a seeded fuzz corpus for a property test, which wants
+# reproducible pseudo-randomness, never secrecy.
+"tests/**" = ["S101", "S311"]
