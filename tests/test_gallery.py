@@ -244,7 +244,10 @@ def test_an_answered_decision_still_offers_every_button(db):
     published, row = _publish_and_ask(db)
     decisions.answer(db, row.id, letter="a", note="go ahead", by="jeremy")
     page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
-    assert "You chose <b>(a) yes</b>" in page
+    # An answered decision now lives in the "Already decided" timeline: one quiet
+    # collapsed line carrying the answer, opening to the full card.
+    assert '<details class="settled">' in page
+    assert '<span class="sa">(a) yes</span>' in page
     # The mark that says WHICH one is his, distinct from the recommendation:
     # the chosen button is solid and tagged, and no other button is.
     assert 'value="a" class="chosen"' in page

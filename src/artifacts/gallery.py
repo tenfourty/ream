@@ -148,6 +148,25 @@ a{color:var(--accent-ink)}
 .ask.done .q{font-weight:500}
 .hint{margin:.1rem 0 0;font-size:.8rem;color:var(--muted)}
 
+/* Already decided: one quiet line each, newest first, opening to the full
+   card. <details> so it works with scripts off. */
+.settled-list h2{margin-top:1.8rem}
+.settled{border:1px solid var(--line);border-radius:.55rem;background:var(--card);
+  margin:0 0 .35rem}
+.settled summary{cursor:pointer;list-style:none;padding:.5rem .8rem;display:flex;
+  gap:.6rem;align-items:baseline;flex-wrap:wrap;font-size:.92rem}
+.settled summary::-webkit-details-marker{display:none}
+.settled summary::before{content:"\25B8";color:var(--muted);font-size:.7rem;
+  transition:transform .12s}
+.settled[open] summary::before{transform:rotate(90deg)}
+.settled summary:hover{border-color:var(--accent)}
+.settled .sq{flex:1 1 14rem;color:var(--muted)}
+.settled .sa{color:var(--ok);font-weight:600}
+.settled .settled-body{padding:0 .55rem .55rem}
+.settled .settled-body .ask{margin:0;border-left-color:var(--ok);box-shadow:none}
+.settled .note{margin:.2rem .35rem .5rem;font-size:.9rem;white-space:pre-wrap}
+
+
 /* the page itself */
 /* position:relative -- gallery.js positions a moved decision block against THIS box,
    not the viewport, so its top/left are the iframe's own page coordinates unchanged.
@@ -216,7 +235,7 @@ var sheet=document.getElementById("artifact-sheet");
 if(!iframe||!sheet)return;
 var contentOrigin;
 try{contentOrigin=new URL(iframe.src).origin}catch(e){return}
-var decisionEls=new Map();
+var decisionEls=new Map();var lastSize=new Map();
 document.querySelectorAll("[data-decision-id]").forEach(function(el){
   decisionEls.set(el.getAttribute("data-decision-id"),el);
 });
@@ -230,7 +249,7 @@ window.addEventListener("message",function(event){
       iframe.style.height=data.height+"px";
     }
     if(Array.isArray(data.slots)&&data.slots.length<=64){
-      var seen=new Set();
+      var seen=new Set();var sizes=[];
       data.slots.forEach(function(slot){
         if(!slot||typeof slot.id!=="string"||seen.has(slot.id))return;
         seen.add(slot.id);
@@ -240,7 +259,22 @@ window.addEventListener("message",function(event){
         el.style.top=slot.top+"px";
         el.style.left=slot.left+"px";
         el.style.width=slot.width+"px";
+        var h=el.offsetHeight;if(isNum(h))sizes.push({id:slot.id,height:h});
       });
+      // Tell the page how tall the control it asked for actually is, so its
+      // slot can reserve that room. Without this the control is positioned
+      // over content that never moved aside, and the page reads as broken --
+      // which is exactly what Jeremy saw first time out. Only sent when the
+      // number actually changed, so this cannot oscillate with the resize
+      // observer on the other side.
+      var changed=sizes.filter(function(s){
+        if(lastSize.get(s.id)===s.height)return false;
+        lastSize.set(s.id,s.height);return true;
+      });
+      if(changed.length){
+        iframe.contentWindow.postMessage(
+          {type:"artifact-slot-sizes",sizes:changed},contentOrigin);
+      }
     }
   }catch(e){}
 });
@@ -390,40 +424,76 @@ def _render_decisions(rows: list[decisions.DecisionRow]) -> str:
     """
     if not rows:
         return ""
-    items = []
-    for row in rows:
+
+    open_rows = [r for r in rows if r.answer is None]
+    settled_rows = [r for r in rows if r.answer is not None]
+
+    def _card(row: decisions.DecisionRow, anchorable: bool = True) -> str:
+        """`anchorable` carries the id the page's script matches a slot against.
+        Only an OPEN decision gets one: a settled decision lives inside a collapsed
+        <details> in the timeline, and a page that reported a slot for it would
+        otherwise yank that card out of its own disclosure and drop it on the page."""
         buttons = "".join(_button(option, row) for option in row.options)
-        answered = ""
-        done = ""
-        if row.answer is not None:
-            done = " done"
-            chosen = next(
-                (o["label"] for o in row.options if o["letter"] == row.answer),
-                row.answer,
-            )
-            note = f" &middot; {escape(row.answer_note)}" if row.answer_note else ""
-            answered = (
-                f'<p class="answered">You chose <b>({escape(row.answer)})'
-                f" {escape(chosen)}</b>"
-                f'<span class="when">{escape(_when(row.answered_at))}{note}'
-                "</span></p>"
-            )
-        items.append(
-            f'<div class="ask{done}" data-decision-id="{escape(row.id)}">'
-            f'<p class="q">{escape(row.question)}</p>{answered}'
+        anchor = f' data-decision-id="{escape(row.id)}"' if anchorable else ""
+        return (
+            f'<div class="ask"{anchor}>'
+            f'<p class="q">{escape(row.question)}</p>'
             f'<form method="post" action="/d/{escape(row.id)}/answer">'
             f"{buttons}"
             '<input name="note" placeholder="note (optional)"></form></div>'
         )
-    hint = (
-        '<p class="hint">Pick a letter and it is saved straight away; add a note if '
-        "the options do not fit. Your answer is the filled button &mdash; pick a "
-        "different one to change it, as often as you like.</p>"
-    )
-    return (
-        f'<section class="asks"><h2>The agent is asking you</h2>'
-        f"{''.join(items)}{hint}</section>"
-    )
+
+    sections = []
+
+    if open_rows:
+        hint = (
+            '<p class="hint">Pick a letter and it is saved straight away; add a note '
+            "if the options do not fit. Your answer is the filled button &mdash; pick "
+            "a different one to change it, as often as you like.</p>"
+        )
+        sections.append(
+            '<section class="asks"><h2>Waiting on you</h2>'
+            + "".join(_card(row) for row in open_rows)
+            + hint
+            + "</section>"
+        )
+
+    if settled_rows:
+        # Newest first: what he decided a minute ago is what he is checking, and
+        # a decision from last week is history he scrolls to.
+        settled_rows = sorted(
+            settled_rows, key=lambda r: r.answered_at or "", reverse=True
+        )
+        entries = []
+        for row in settled_rows:
+            chosen = next(
+                (o["label"] for o in row.options if o["letter"] == row.answer),
+                row.answer,
+            )
+            note = (
+                f'<p class="note">{escape(row.answer_note)}</p>'
+                if row.answer_note
+                else ""
+            )
+            # <details>, not a script: it collapses and expands with scripts off,
+            # costs nothing, and keeps the page as fast as Jeremy said he liked.
+            entries.append(
+                '<details class="settled">'
+                f'<summary><span class="when">{escape(_when(row.answered_at))}</span>'
+                f'<span class="sq">{escape(row.question)}</span>'
+                f'<span class="sa">({escape(row.answer)}) {escape(chosen)}</span>'
+                "</summary>"
+                f'<div class="settled-body">{note}'
+                f"{_card(row, anchorable=False)}</div></details>"
+            )
+        sections.append(
+            '<section class="asks settled-list"><h2>Already decided</h2>'
+            + "".join(entries)
+            + '<p class="hint">Open one to see the options again, or to change your '
+            "mind &mdash; nothing here is locked.</p></section>"
+        )
+
+    return "".join(sections)
 
 
 def gallery_router(db: Database) -> APIRouter:

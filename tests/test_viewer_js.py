@@ -45,4 +45,4 @@ def test_the_gallery_script_behaves_when_actually_run(tmp_path):
     # stopped running its cases would still exit 0 with nothing to show.
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
-    assert passed >= 21, result.stdout
+    assert passed >= 30, result.stdout

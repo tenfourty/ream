@@ -27,7 +27,9 @@ _BASE_CSP = (
 def headers_for(live: bool) -> dict[str, str]:
     connect = "connect-src 'self'; " if live else "connect-src 'none'; "
     return {
-        "content-security-policy": _BASE_CSP + connect + f"frame-ancestors {gallery_origin()}",
+        "content-security-policy": _BASE_CSP
+        + connect
+        + f"frame-ancestors {gallery_origin()}",
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
         "x-dns-prefetch-control": "off",
@@ -88,6 +90,26 @@ def _viewer_report() -> str:
         'addEventListener("load",send);addEventListener("resize",send);'
         'if("ResizeObserver"in window){'
         "new ResizeObserver(send).observe(document.documentElement)}"
+        # The return leg. The gallery lifts the control out of the frame and places it
+        # over the slot, so the page must be told how tall it turned out and reserve
+        # that room -- otherwise the control sits on top of whatever came next and the
+        # page reads as broken. Only `min-height` on the slot the page itself marked
+        # is ever touched: no other property, no other element, and nothing at all is
+        # read out of the message beyond an id and a number.
+        'addEventListener("message",function(e){'
+        f"if(e.origin!=={origin})return;"
+        "var d=e.data;"
+        'if(!d||d.type!=="artifact-slot-sizes"||!Array.isArray(d.sizes))return;'
+        "d.sizes.slice(0,64).forEach(function(s){"
+        # `!s` first: a `sizes` array carrying a null throws on the property read,
+        # and the top-level try/catch wraps this listener's REGISTRATION, not its
+        # later invocations -- so an exception here would surface in the agent's own
+        # page console. Found by executing the shim, not by reading it.
+        'if(!s||typeof s.id!=="string"||typeof s.height!=="number")return;'
+        "if(!(s.height>=0&&s.height<=20000))return;"
+        "var el=document.querySelector("
+        "'[data-artifact-decision=\"'+(window.CSS&&CSS.escape?CSS.escape(s.id):s.id)+'\"]');"
+        'if(el)el.style.minHeight=s.height+"px"})});'
         "})()}catch(e){}</script>"
     )
 
@@ -155,7 +177,9 @@ def base_headers() -> dict[str, str]:
 
 
 def create_content_app(db: Database) -> FastAPI:
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, redirect_slashes=False)
+    app = FastAPI(
+        docs_url=None, redoc_url=None, openapi_url=None, redirect_slashes=False
+    )
 
     @app.middleware("http")
     async def _base_headers(request: Request, call_next):
@@ -178,17 +202,24 @@ def create_content_app(db: Database) -> FastAPI:
         return JSONResponse(status_code=422, content={"detail": "invalid request"})
 
     @app.exception_handler(Exception)
-    async def _on_unhandled_error(_request: Request, _exc: Exception) -> PlainTextResponse:
+    async def _on_unhandled_error(
+        _request: Request, _exc: Exception
+    ) -> PlainTextResponse:
         """Starlette's ServerErrorMiddleware sits OUTSIDE the `@app.middleware("http")`
         layer above, so a 500 never passes through `_base_headers` and must carry its own
         minimum header set directly, or an unhandled exception would be the one response
         this origin ever serves with no CSP at all."""
-        return PlainTextResponse("internal error", status_code=500, headers=base_headers())
+        return PlainTextResponse(
+            "internal error", status_code=500, headers=base_headers()
+        )
 
-    def _load(artifact_id: str, token: str | None, n: int | None) -> tuple[str, int] | None:
+    def _load(
+        artifact_id: str, token: str | None, n: int | None
+    ) -> tuple[str, int] | None:
         with db.connect() as conn:
             row = conn.execute(
-                "select current_version, read_token from artifact where id = %s", (artifact_id,)
+                "select current_version, read_token from artifact where id = %s",
+                (artifact_id,),
             ).fetchone()
             # A wrong token and a missing artifact are the same answer: nothing here may confirm
             # that an id exists.
@@ -219,7 +250,9 @@ def create_content_app(db: Database) -> FastAPI:
         # redirect never carries the token: its Location is the gallery's own address for
         # the artifact, not the tokenised one.
         if request.headers.get("sec-fetch-dest") not in ("iframe", "frame"):
-            return RedirectResponse(f"{gallery_origin()}/a/{artifact_id}", status_code=303)
+            return RedirectResponse(
+                f"{gallery_origin()}/a/{artifact_id}", status_code=303
+            )
         loaded = _load(artifact_id, token, n)
         if loaded is None:
             return Response("not found", status_code=404, media_type="text/plain")

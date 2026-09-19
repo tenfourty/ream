@@ -16,14 +16,15 @@ const src = fs.readFileSync(process.argv[2], "utf8");
 let fails = 0, passes = 0;
 const ok = (c, m) => { c ? passes++ : (fails++, console.log("FAIL: " + m)); if (c) console.log("ok   " + m); };
 
-function el(attrs = {}) {
-  return { style: {}, parentNode: null, _attrs: attrs,
+function el(attrs = {}, offsetHeight = 88) {
+  return { style: {}, parentNode: null, _attrs: attrs, offsetHeight,
            getAttribute(k) { return this._attrs[k] ?? null; } };
 }
 
 function build() {
   const iframe = el(); iframe.src = "https://abc.tenfourty.com/";
-  iframe.contentWindow = { NAME: "frame" };
+  const posted = [];
+  iframe.contentWindow = { NAME: "frame", postMessage: (m, o) => posted.push([m, o]) };
   const sheet = el(); sheet.appendChild = function (c) { c.parentNode = sheet; };
   const d1 = el({ "data-decision-id": "dec1" });
   const d2 = el({ "data-decision-id": "dec2" });
@@ -37,7 +38,7 @@ function build() {
   new Function("document", "window", "URL", "Map", "Set", "isFinite", src)
     (doc, win, URL, Map, Set, isFinite);
   const send = (e) => listeners.forEach((fn) => fn(e));
-  return { iframe, sheet, d1, d2, send };
+  return { iframe, sheet, d1, d2, send, posted };
 }
 
 const good = (over = {}) => ({
@@ -102,5 +103,39 @@ const good = (over = {}) => ({
     ok(!threw, "survives a hostile payload: " + JSON.stringify(d).slice(0, 40));
   }
 }
+// 7. the return leg: the page is told how tall the placed control turned out
+{
+  const g = build();
+  g.send(good({ source: g.iframe.contentWindow }));
+  ok(g.posted.length === 1, "tells the page the size of the control it placed");
+  ok(g.posted[0][1] === "https://abc.tenfourty.com", "addresses the size message to the content origin, never '*'");
+  ok(g.posted[0][0].type === "artifact-slot-sizes", "labels the size message");
+  ok(JSON.stringify(g.posted[0][0].sizes) === '[{"id":"dec1","height":88}]', "reports the measured height for that slot");
+  // The page reserves the room, its height changes, and it reports again. The
+  // control has not changed size, so nothing new is sent -- otherwise this and
+  // the page's ResizeObserver would drive each other forever.
+  g.send(good({ source: g.iframe.contentWindow }));
+  ok(g.posted.length === 1, "does not repeat a size that has not changed");
+  g.d1.offsetHeight = 120;
+  g.send(good({ source: g.iframe.contentWindow }));
+  ok(g.posted.length === 2 && g.posted[1][0].sizes[0].height === 120, "reports a size that genuinely changed");
+}
+// 8. nothing is sent when nothing was placed
+{
+  const g = build();
+  const m = good({ source: g.iframe.contentWindow });
+  m.data.slots = [{ id: "nope", top: 1, left: 1, width: 1 }];
+  g.send(m);
+  ok(g.posted.length === 0, "says nothing when no control was placed");
+}
+// 9. an unmeasurable control is not reported
+{
+  const g = build();
+  g.d1.offsetHeight = undefined;
+  g.send(good({ source: g.iframe.contentWindow }));
+  ok(g.d1.parentNode === g.sheet, "still places a control it cannot measure");
+  ok(g.posted.length === 0, "but reports no height for it");
+}
+
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
