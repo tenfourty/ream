@@ -165,6 +165,11 @@ a{color:var(--accent-ink)}
 .settled .settled-body{padding:0 .55rem .55rem}
 .settled .settled-body .ask{margin:0;border-left-color:var(--ok);box-shadow:none}
 .settled .note{margin:.2rem .35rem .5rem;font-size:.9rem;white-space:pre-wrap}
+/* Whether the agent has actually collected the answer. Shown in the summary line
+   ONLY when it has not -- an answer that landed needs no announcement, and the one
+   that did not is the whole reason this is on the page. */
+.settled .unread{color:var(--now);font-size:.82rem;font-weight:600}
+.settled .pickup{margin:.2rem .35rem .5rem;font-size:.82rem;color:var(--muted)}
 
 
 /* the page itself */
@@ -488,6 +493,24 @@ def _render_decisions(rows: list[decisions.DecisionRow]) -> str:
                 if row.answer_note
                 else ""
             )
+            # Jeremy answering and the agent COLLECTING the answer are two different
+            # events, and until tonight the page only ever showed the first. An answer
+            # that nobody picked up looks exactly like one that was acted on an hour
+            # ago, which is the failure this whole listener arc exists to end. So the
+            # summary line carries a mark only in the bad case -- an answer sitting
+            # uncollected -- and the opened card says plainly who took it and when.
+            if row.acknowledged_at:
+                unread = ""
+                pickup = (
+                    f'<p class="pickup">{escape(row.acknowledged_by or "the agent")} '
+                    f"picked this up {escape(_when(row.acknowledged_at))}</p>"
+                )
+            else:
+                unread = '<span class="unread">not picked up yet</span>'
+                pickup = (
+                    '<p class="pickup">No agent has picked this up yet. It is waiting '
+                    "for them, not for you.</p>"
+                )
             # <details>, not a script: it collapses and expands with scripts off,
             # costs nothing, and keeps the page as fast as Jeremy said he liked.
             entries.append(
@@ -495,8 +518,8 @@ def _render_decisions(rows: list[decisions.DecisionRow]) -> str:
                 f'<summary><span class="when">{escape(_when(row.answered_at))}</span>'
                 f'<span class="sq">{escape(row.question)}</span>'
                 f'<span class="sa">({escape(row.answer)}) {escape(chosen)}</span>'
-                "</summary>"
-                f'<div class="settled-body">{note}'
+                f"{unread}</summary>"
+                f'<div class="settled-body">{pickup}{note}'
                 f"{_card(row, anchorable=False)}</div></details>"
             )
         sections.append(

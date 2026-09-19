@@ -575,3 +575,39 @@ def test_the_whole_answer_path_still_works_with_gallery_js_never_fetched(db):
     second = client.get(f"/a/{published.id}").text
     assert 'value="a" class="chosen"' in second
     assert "go ahead" in second
+
+
+def test_an_answer_nobody_collected_says_so_and_one_that_was_collected_does_not(db):
+    """Two different facts, and only one of them was ever on the page.
+
+    Jeremy answering is the end of his part; the agent collecting the answer is
+    the end of the round trip, and those came apart tonight -- a deploy killed a
+    held request and the agent that asked heard nothing more. An uncollected
+    answer used to look exactly like one acted on an hour ago.
+
+    So the mark appears only in the bad case. An answer that landed needs no
+    announcement; one still sitting there is the whole reason for the feature,
+    and it says plainly that it is waiting on the agent, not on him.
+    """
+    published, row = _publish_and_ask(db)
+    decisions.answer(db, row.id, letter="a", by="jeremy")
+
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert '<span class="unread">not picked up yet</span>' in page
+    assert "waiting for them, not for you" in page.lower()
+
+    decisions.acknowledge(db, "ops-seat", row.id)
+
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert "not picked up yet" not in page
+    assert "ops-seat picked this up" in page
+
+
+def test_a_decision_still_waiting_on_him_carries_no_collection_mark(db):
+    """The mark is about an answer's onward journey. A decision he has not
+    answered has no answer to collect, and a "not picked up yet" beside one
+    would read as a reproach for something he has not done yet."""
+    published, _row = _publish_and_ask(db)
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert "not picked up yet" not in page
+    assert "picked this up" not in page
