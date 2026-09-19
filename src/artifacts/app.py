@@ -6,6 +6,7 @@ from artifacts import hosts
 from artifacts.api import agent_router
 from artifacts.content import create_content_app
 from artifacts.db import Database
+from artifacts.gallery import gallery_router
 
 
 def create_gallery_app(db: Database | None = None) -> FastAPI:
@@ -32,6 +33,7 @@ def create_gallery_app(db: Database | None = None) -> FastAPI:
 
     if db is not None:
         app.include_router(agent_router(db))
+        app.include_router(gallery_router(db))
     return app
 
 
