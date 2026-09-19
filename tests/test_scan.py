@@ -81,6 +81,36 @@ def test_a_well_formed_shapes_source_parses_without_raising():
     assert [name for name, _ in shapes] == ["secret_assignment"]
 
 
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "(?i:[a-z]+_token=)",  # a class
+        "(?i:token|secret)=",  # an alternation
+        "(?i:pass(word)?=)",  # a group and a quantifier
+        "(?i:api_?key)",  # a quantifier
+        "(?i:token.)",  # any character
+        "(?i:\\S+=)",  # an escape that lowercases to its opposite (\S -> \s)
+        "(?i:\\x41KIA)",  # an escape that names an uppercase letter
+    ],
+)
+def test_a_case_insensitive_group_that_is_not_a_plain_literal_is_rejected(pattern):
+    # scan() searches a (?i:...) shape case-sensitively, with the group's text
+    # lowercased, over an ASCII-lowercased copy of the view. That is only
+    # the same search when the group is plain literal text: lowercasing
+    # `\S` gives `\s`, and `\x41` never matches a lowercased body. Such a
+    # shape would load and then quietly match the wrong thing.
+    with pytest.raises(scan.ShapesError):
+        scan.parse_shapes(f"unsafe_fold\t{pattern}\n")
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["(?i:X-Api-Key:)", "(?i:client_secret=)", "(?i:api\\.key=)", "(?i:bearer)\\s+[A-Za-z0-9]{16,}"],
+)
+def test_a_case_insensitive_group_of_plain_literal_text_still_loads(pattern):
+    assert [name for name, _ in scan.parse_shapes(f"safe_fold\t{pattern}\n")] == ["safe_fold"]
+
+
 # --- performance: each view is scanned once per shape, not once per line
 # per shape, and results are bounded regardless of match density. ----------
 
@@ -285,7 +315,15 @@ def test_a_realistic_looking_value_is_not_mistaken_for_a_placeholder():
 def test_a_placeholder_body_password_wrapped_in_a_url_still_flags_the_url_shape():
     findings = scan.scan("password=<REDACTED>\ntoken=FAKETOKEN123")
     assert any(f.shape == "token_assignment" for f in findings)
-    assert not any(f.shape == "password_assignment" for f in findings)
+    # Refused on purpose (fix round 4): `<REDACTED>` is a tag to the text view,
+    # exactly like `<br>`, so `password=` there takes its value from the next
+    # line. A browser hides an unescaped `<REDACTED>` anyway; a visible
+    # placeholder is written `&lt;REDACTED&gt;`, which stays excluded.
+    assert any(f.shape == "password_assignment" for f in findings)
+
+
+def test_an_escaped_angle_placeholder_followed_by_more_lines_is_still_excluded():
+    assert scan.scan("DB_PASSWORD=&lt;YOUR_DB_PASSWORD&gt;\nDB_HOST=localhost") == []
 
 
 def test_a_bare_secret_with_nothing_after_it_still_fires():
@@ -355,6 +393,19 @@ def test_a_placeholder_look_alike_url_value_with_a_real_suffix_still_fires(body,
 def test_a_pkcs8_header_split_across_html_elements_is_still_caught():
     findings = scan.scan("<pre>-----BEGIN PRIVATE KEY-----</pre><pre>MIIEfakebase64</pre>")
     assert any(f.shape == "private_key_header" for f in findings)
+
+
+def test_a_text_view_only_hit_is_placed_with_the_text_views_own_newlines():
+    # Only the text view sees `<b>password</b>=...`, and deleting two long
+    # tags puts that match at a text-view offset smaller than the raw body's
+    # first newline. Looked up in the raw view's newline table it would be
+    # reported on line 1; each view must use its own table. The raw-view
+    # `Authorization:` hit (the first shape scanned) makes the raw table the
+    # first one built, so a shared table would be the wrong one.
+    long_tag = '<p class="' + "x" * 200 + '">'
+    body = f"{long_tag}Authorization: a</p>\n{long_tag}b</p>\n<b>password</b>=hunter2fake"
+    findings = scan.scan(body)
+    assert [f.line for f in findings if f.shape == "password_assignment"] == [3]
 
 
 def test_detagging_never_changes_line_numbers_the_raw_body_would_report():
@@ -487,3 +538,74 @@ def test_a_body_with_no_markup_or_entities_does_not_duplicate_findings_via_a_sec
     findings = scan.scan(body)
     assert any(f.shape == "password_assignment" for f in findings)
     assert any(f.shape == "token_assignment" for f in findings)
+
+
+# --- fix round 4: an assignment whose value starts on the next line still
+# has a value. With nothing after the operator on its own line, the first
+# token of the next non-blank line (at most 3 lines ahead) is classified. ---
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_shape"),
+    [
+        ("password=\nhunter2fake", "password_assignment"),
+        ("DB_PASSWORD=\r\nhunter2fake", "password_assignment"),
+        ('const password=\n  "hunter2fake";', "password_assignment"),
+        ("token=\x0cfakeTOK9fakeFAKE", "token_assignment"),
+        ("DB_PASSWORD=<br>\nhunter2fake", "password_assignment"),
+        ("password=\n\n\nhunter2fake", "password_assignment"),  # 3 lines down: in range
+        ("password= \nhunter2fake", "password_assignment"),  # NBSP is nothing
+        ("password= \t　'\nhunter2fake", "password_assignment"),  # so is this mix
+    ],
+)
+def test_a_value_on_the_next_line_is_classified_not_dropped(body, expected_shape):
+    findings = scan.scan(body)
+    assert [f.line for f in findings if f.shape == expected_shape] == [1]
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["password=\n${PASSWORD}", "password=\n{{ vault_pw }}", "password=\n\n  '${PASSWORD}'"],
+)
+def test_a_placeholder_on_the_next_line_is_still_a_placeholder(body):
+    assert scan.scan(body) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["password=\n\n\n\nhunter2fake", "password=\n\n\n\n\nhunter2fake"],
+)
+def test_a_value_4_or_more_lines_down_is_not_looked_for(body):
+    # Lines 2-4 are blank, so the value is genuinely empty and the
+    # empty-means-placeholder rule applies; line 5 onwards is never read.
+    assert scan.scan(body) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "password= hunter2fake",
+        "password=\thunter2fake",
+        "password= hunter2fake",  # NBSP: missed at c2ff307
+        "<p>password=&nbsp;hunter2fake</p>",  # NBSP as an entity: missed at c2ff307
+        "password=　hunter2fake",  # ideographic space: missed at c2ff307
+        'password="hunter2fake"',
+        "password= ' hunter2fake'",
+        "password=" + " " * 250 + "hunter2fake",  # past the old 200-character window
+    ],
+)
+def test_whitespace_or_a_quote_before_a_value_does_not_hide_it(body):
+    # Whitespace is "nothing" whatever its kind, before a value on the same
+    # line just as before a line break.
+    assert any(f.shape == "password_assignment" for f in scan.scan(body))
+
+
+def test_a_flood_of_empty_assignments_each_looking_3_lines_ahead_scans_quickly():
+    # Every match takes the longest lookahead (three blank lines, then give
+    # up) in both views: the leading `&amp;` makes the text view differ.
+    body = "&amp;\n" + "pass=\n\n\n\n" * 116_000  # ~1 MiB
+    start = time.perf_counter()
+    findings = scan.scan(body)
+    elapsed = time.perf_counter() - start
+    assert findings == []
+    assert elapsed < 1.0

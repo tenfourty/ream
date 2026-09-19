@@ -107,7 +107,12 @@ _ASSIGNMENT_SHAPES = frozenset(
 # angle-bracket form is deliberately narrow -- placeholder-style content
 # only (letters, digits, `_ .-`) -- never an arbitrary HTML tag: `</td>` must
 # not fullmatch this, or every value immediately followed by markup would be
-# excluded. This is deliberately not entropy scoring -- the threat this
+# excluded. An UNESCAPED `password=<REDACTED>` with more text within three
+# lines is still refused, on purpose (fix round 4): the text view deletes
+# `<REDACTED>` exactly as it deletes `<br>`, and then reads the value from the
+# next line. A browser hides an unescaped `<REDACTED>` as an unknown tag; a
+# visible placeholder is `&lt;REDACTED&gt;`, which stays excluded. This is
+# deliberately not entropy scoring -- the threat this
 # guards against is an agent accidentally including a real secret, not an
 # adversary evading a gate, and a real secret does not look like `${FOO}`.
 _PLACEHOLDER = re.compile(
@@ -157,12 +162,42 @@ _ZERO_WIDTH = dict.fromkeys((0x00AD, 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF), No
 # ASCII or not, passes through unchanged.
 _ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
 
-# Matches an inline scoped case-insensitive group, e.g. `(?i:password=)`, so
-# its literal content can be folded to lowercase and the flag stripped --
-# see _fast_pattern.
-_INLINE_CASE_INSENSITIVE = re.compile(r"\(\?i:([^)]*)\)")
+# Matches an inline scoped case-insensitive group whose body is PLAIN LITERAL
+# text, e.g. `(?i:password=)`, so it can be folded to lowercase and the flag
+# stripped -- see _fast_pattern. The body may hold no regex metacharacter
+# at all, only escaped punctuation (`\.`, `\-`). That is the only kind of
+# group the fold keeps correct: lowercasing `\S` gives `\s`, `\x41` never
+# matches a lowercased body, and a class, alternation, nested group or
+# quantifier inside the group is either mis-parsed here or matches
+# something else once lowered. parse_shapes refuses any `(?i:` that does not
+# open a group of this kind, so such a shape cannot load at all.
+_INLINE_CASE_INSENSITIVE = re.compile(r"\(\?i:((?:[^\\.^$*+?{}\[\]()|]|\\[^A-Za-z0-9])*)\)")
 
 _VALUE_BOUNDARY = re.compile(r"""[\s"'&;,]""")
+
+# Where an assignment's value starts. Skipped first: whatever sits between
+# the operator and the value without being the value -- whitespace of any
+# kind except a line break (a non-breaking space, `&nbsp;` once unescaped,
+# hides a value no better than a plain space does) and quotes
+# (`password = "x"`). If that reaches the end of the line, the value is on a
+# later line (fix round 4): the match goes on through at most
+# _VALUE_LOOKAHEAD_LINES blank lines -- each a line break plus the same
+# skippable run -- and the value is the first token of the next non-blank
+# line. Landing on a line break or the end of the text after that means the
+# value is genuinely empty. The pattern is unambiguous -- the two skipped
+# classes are disjoint, and each repetition starts with a line break neither
+# of them matches -- so it never backtracks; and the runs it skips are
+# blank, so no two matches' runs overlap and the total work over a view
+# stays linear.
+_VALUE_LOOKAHEAD_LINES = 3
+_VALUE_START = re.compile(
+    rf"""(?:[^\S\n]|['"])*(?:\n(?:[^\S\n]|['"])*){{0,{_VALUE_LOOKAHEAD_LINES}}}"""
+)
+
+# How much of a value token is read for classification, counted from where
+# the token starts (not from the operator, so leading whitespace cannot push
+# the value out of reach).
+_VALUE_WINDOW = 200
 
 _MAX_LINES_PER_SHAPE = 5
 _MAX_RAW_MATCHES_PER_SHAPE = 500
@@ -200,6 +235,15 @@ def parse_shapes(text: str) -> list[tuple[str, re.Pattern]]:
             raise ShapesError(
                 f"secret shape line {number} ({name}): \\A/\\Z anchor the whole body -- use"
                 " ^/$ with the (implicit) MULTILINE compile if a line boundary is meant"
+            )
+        # Every `(?i:` must open a plain-literal group: a safe group holds no
+        # `(`, so each one accounts for exactly one `(?i:`, and any shortfall
+        # is a group _fast_pattern would fold wrongly.
+        if pattern.count("(?i:") != len(_INLINE_CASE_INSENSITIVE.findall(pattern)):
+            raise ShapesError(
+                f"secret shape line {number} ({name}): a (?i:...) group must be plain literal"
+                " text -- scan() lowercases it and searches a lowercased copy of the body,"
+                " which is only the same search for literal text"
             )
         try:
             compiled = re.compile(pattern, re.MULTILINE)
@@ -284,13 +328,20 @@ def _text_view(raw_view: str) -> str:
 
 
 def _value_after(text: str, start: int) -> str:
-    """The value token immediately following an assignment match: bounded at
-    the next whitespace, quote, `&`, `;`, `,`, or end of text. For
-    placeholder classification only -- never returned, logged, or included
-    in a `Finding`. Only ever called for a shape whose match already ends
-    exactly at the assignment operator, so no separator needs stripping;
-    a leading space or quote (`password = "x"`) is stripped before the
-    boundary search so the token itself, not its wrapper, gets classified.
+    """The value token following an assignment match that ends at `start`:
+    bounded at the next whitespace, quote, `&`, `;`, `,`, or the end of a
+    `_VALUE_WINDOW`-character window. For placeholder classification only --
+    never returned, logged, or included in a `Finding`. Only ever called for
+    a shape whose match already ends exactly at the assignment operator, so
+    no separator needs stripping; `_VALUE_START` skips leading whitespace and
+    quotes so the token itself, not its wrapper, gets classified.
+
+    With nothing after the operator on its own line, the token is the first
+    one on the next non-blank line, at most `_VALUE_LOOKAHEAD_LINES` lines
+    ahead: `password=` with `hunter2` on the next line has a value, not "no
+    value" (fix round 4 -- reading it as empty made it a placeholder, and
+    the credential was dropped). With no non-blank line in reach, the value
+    is genuinely empty, and an empty value is a placeholder.
 
     A `${...}`/`{{...}}`/`<...>` wrapper's OWN closing delimiter is found
     first, and the boundary search resumes only after it: `{{ vault_secret
@@ -299,19 +350,38 @@ def _value_after(text: str, start: int) -> str:
     that very much is one. Skip only past a wrapper that actually closes;
     an unclosed one falls through to the plain boundary search unchanged.
     """
-    window = text[start : start + 200].lstrip(" \t'\"")
-    skip = 0
-    if window.startswith("${"):
-        end = window.find("}")
-        skip = end + 1 if end != -1 else 0
-    elif window.startswith("{{"):
-        end = window.find("}}")
-        skip = end + 2 if end != -1 else 0
-    elif window.startswith("<"):
-        end = window.find(">")
-        skip = end + 1 if end != -1 else 0
-    boundary = _VALUE_BOUNDARY.search(window, skip)
-    return window[: boundary.start()] if boundary else window
+    # Everything below works on `text` in place, slicing out only the token
+    # itself: this runs once per assignment match, and a placeholder flood
+    # is one match every few characters. The skipping regex runs only when
+    # the operator is followed by whitespace or a quote at all.
+    end = len(text)
+    if start == end:
+        return ""
+    first = text[start]
+    pos = start
+    if first.isspace() or first in "'\"":
+        pos = _VALUE_START.match(text, start).end()
+        if pos == end:
+            return ""
+        first = text[pos]
+    # `first` is now neither whitespace (bar a line break) nor a quote, so
+    # the token is empty exactly when `first` is one of _VALUE_BOUNDARY's
+    # other characters.
+    if first in "\n&;,":
+        return ""
+    limit = pos + _VALUE_WINDOW
+    skip = pos
+    if first == "$" and text.startswith("${", pos):
+        close = text.find("}", pos, limit)
+        skip = close + 1 if close != -1 else pos
+    elif first == "{" and text.startswith("{{", pos):
+        close = text.find("}}", pos, limit)
+        skip = close + 2 if close != -1 else pos
+    elif first == "<":
+        close = text.find(">", pos, limit)
+        skip = close + 1 if close != -1 else pos
+    boundary = _VALUE_BOUNDARY.search(text, skip, limit)
+    return text[pos : boundary.start() if boundary else limit]
 
 
 def _is_placeholder(shape: str, match: re.Match, text: str) -> bool:
@@ -327,13 +397,15 @@ def _is_placeholder(shape: str, match: re.Match, text: str) -> bool:
     content, not the lowered stand-in used only to locate it.
     """
     named = match.groupdict().get("value")
-    if named is None and shape not in _ASSIGNMENT_SHAPES:
+    if named is not None:
+        value = named.strip(" \t\r\n'\"")
+    elif shape in _ASSIGNMENT_SHAPES:
+        # _value_after's token never starts or ends with whitespace or a
+        # quote, so there is nothing to strip.
+        value = _value_after(text, match.end())
+    else:
         return False
-    value = named if named is not None else _value_after(text, match.end())
-    stripped = value.strip(" \t\r\n'\"")
-    if not stripped:
-        return True
-    return _PLACEHOLDER.fullmatch(stripped) is not None
+    return not value or _PLACEHOLDER.fullmatch(value) is not None
 
 
 def _newline_offsets(view: str) -> list[int]:
@@ -369,13 +441,13 @@ def _shape_lines(
     """
     lines: dict[int, None] = {}
     real_examined = 0
-    for view, lowered in views:
+    for index, (view, lowered) in enumerate(views):
         search_text = lowered if needs_lowered else view
         for match in pattern.finditer(search_text):
             if _is_placeholder(name, match, view):
                 continue
             real_examined += 1
-            lines.setdefault(_line_of(match.start(), offsets_for(view)), None)
+            lines.setdefault(_line_of(match.start(), offsets_for(index)), None)
             if len(lines) >= _MAX_LINES_PER_SHAPE or real_examined >= _MAX_RAW_MATCHES_PER_SHAPE:
                 break
         if len(lines) >= _MAX_LINES_PER_SHAPE or real_examined >= _MAX_RAW_MATCHES_PER_SHAPE:
@@ -407,14 +479,14 @@ def scan(text: str) -> list[Finding]:
     view_texts = (raw_view,) if text_view == raw_view else (raw_view, text_view)
     views = [(view, view.translate(_ASCII_LOWER)) for view in view_texts]
 
+    # Keyed by the view's index in `views`, so each view gets its own table.
     offsets_cache: dict[int, list[int]] = {}
 
-    def offsets_for(view: str) -> list[int]:
-        key = id(view)
-        cached = offsets_cache.get(key)
+    def offsets_for(index: int) -> list[int]:
+        cached = offsets_cache.get(index)
         if cached is None:
-            cached = _newline_offsets(view)
-            offsets_cache[key] = cached
+            cached = _newline_offsets(views[index][0])
+            offsets_cache[index] = cached
         return cached
 
     findings: list[Finding] = []
