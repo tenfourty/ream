@@ -527,3 +527,106 @@ def test_a_clean_publish_prints_no_warning_line(live, key_file, tmp_path, capsys
     assert rc == 0
     captured = capsys.readouterr()
     assert "warning:" not in captured.err
+
+
+_NGINX_502 = (
+    b"<html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n"
+    b"<center><h1>502 Bad Gateway</h1></center>\r\n<hr><center>nginx</center>\r\n"
+    b"</body>\r\n</html>\r\n"
+)
+
+
+class _Opener:
+    """Answers with a scripted sequence: each entry is either a status to raise
+    as an HTTPError, or bytes to return as a successful body."""
+
+    def __init__(self, *script):
+        self.script = list(script)
+        self.calls = 0
+
+    def open(self, request, timeout=None):
+        import io
+
+        self.calls += 1
+        item = self.script.pop(0) if self.script else self.script
+        if isinstance(item, int):
+            raise urllib.error.HTTPError(
+                request.full_url, item, "rolling", {}, io.BytesIO(_NGINX_502)
+            )
+
+        class _R:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *exc):
+                return False
+
+            def read(self_inner):
+                return item
+
+        return _R()
+
+
+def test_a_deploy_in_the_middle_of_a_publish_is_waited_out_not_failed(monkeypatch):
+    """The service redeploys on every push, and while the new copy takes over the
+    front door answers 502 for about a second -- measured 19 Sep 2026, each one
+    returned in thirty milliseconds. Without a retry, any publish landing in that
+    second fails, and an agent has to be told to try again by someone who happens
+    to know a deploy was running."""
+    slept = []
+    monkeypatch.setattr(client.time, "sleep", slept.append)
+    opener = _Opener(502, 503, b'{"id": "abc"}')
+    monkeypatch.setattr(client, "_opener", opener)
+
+    result = client._request(
+        "GET", "https://example.invalid/api/v1/artifacts", "k", None
+    )
+
+    assert result == {"id": "abc"}
+    assert opener.calls == 3
+    # It must actually WAIT: retrying instantly would spend every attempt inside
+    # the same second the front door is unhappy in.
+    assert len(slept) == 2
+    assert all(delay > 0 for delay in slept)
+
+
+def test_a_service_that_only_rolls_fails_naming_the_status_not_the_page(monkeypatch):
+    monkeypatch.setattr(client.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(client, "_opener", _Opener(502, 502, 502, 502))
+
+    with pytest.raises(client.HTTPFailure) as excinfo:
+        client._request("GET", "https://example.invalid/api/v1/artifacts", "k", None)
+
+    assert excinfo.value.status == 502
+    # The body is nginx's, addressed to a browser, and never meant for a terminal
+    # or a transcript. Say what it was; do not show it.
+    assert "Bad Gateway" not in str(excinfo.value.detail)
+    assert "nginx" not in str(excinfo.value.detail)
+    assert "not JSON" in str(excinfo.value.detail)
+
+
+def test_the_services_own_refusal_is_shown_and_never_retried(monkeypatch):
+    """A 422 is the service telling the caller something true about its request.
+    Retrying it would be pointless and would hide the message."""
+    import io
+
+    calls = []
+
+    class _Refuses:
+        def open(self, request, timeout=None):
+            calls.append(1)
+            raise urllib.error.HTTPError(
+                request.full_url,
+                422,
+                "no",
+                {},
+                io.BytesIO(b'{"detail": "that body looks like a secret"}'),
+            )
+
+    monkeypatch.setattr(client, "_opener", _Refuses())
+
+    with pytest.raises(client.HTTPFailure) as excinfo:
+        client._request("POST", "https://example.invalid/api/v1/artifacts", "k", {})
+
+    assert calls == [1]
+    assert excinfo.value.detail == "that body looks like a secret"

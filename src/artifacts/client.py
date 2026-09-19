@@ -16,6 +16,7 @@ import os
 import re
 import stat
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -133,6 +134,31 @@ def _read_key(path: Path) -> str:
     return content
 
 
+# A rolling deploy is a normal event here, not an outage: the front door answers
+# 502/503/504 for about a second while the new copy of the service takes over.
+_ROLLING_STATUSES = frozenset({502, 503, 504})
+_ROLLING_ATTEMPTS = 4
+_ROLLING_BACKOFF = 1.5
+
+
+def _detail(raw: bytes) -> str:
+    """What to SAY about an error body, which is not the same as showing it.
+
+    An error from the service is JSON with a `detail` a person should read. An
+    error from anything in front of it is an HTML page that was never addressed
+    to an agent, and decoding it into a message puts bytes from the network --
+    including any control characters in them -- straight into a terminal and a
+    transcript. Say what it was, not what it contained.
+    """
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return f"the service answered with {len(raw)} bytes that are not JSON"
+    if isinstance(parsed, dict) and "detail" in parsed:
+        return str(parsed["detail"])
+    return f"the service answered with {len(raw)} bytes of JSON carrying no detail"
+
+
 def _request(method: str, url: str, key: str, payload: dict | None) -> dict:
     _check_url_scheme(url)
     data = json.dumps(payload).encode() if payload is not None else None
@@ -148,18 +174,27 @@ def _request(method: str, url: str, key: str, payload: dict | None) -> dict:
     request.add_unredirected_header("Authorization", f"Bearer {key}")
     if data is not None:
         request.add_header("Content-Type", "application/json")
-    try:
-        with _opener.open(request, timeout=_REQUEST_TIMEOUT) as response:
-            raw = response.read()
-    except urllib.error.HTTPError as exc:
-        raw = exc.read()
+    for attempt in range(_ROLLING_ATTEMPTS):
         try:
-            detail = json.loads(raw).get("detail", raw.decode(errors="replace"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            detail = raw.decode(errors="replace")
-        raise HTTPFailure(exc.code, detail) from None
-    except urllib.error.URLError as exc:
-        raise HTTPFailure(0, str(exc.reason)) from None
+            with _opener.open(request, timeout=_REQUEST_TIMEOUT) as response:
+                raw = response.read()
+            break
+        except urllib.error.HTTPError as exc:
+            raw = exc.read()
+            if exc.code in _ROLLING_STATUSES and attempt < _ROLLING_ATTEMPTS - 1:
+                # The service updates itself on every push, and while the new
+                # copy takes over the front door answers with its own error page
+                # -- measured 19 Sep 2026 at about a second of 502s, each
+                # returned in THIRTY MILLISECONDS. Without this, a publish that
+                # lands in that second fails outright, and the agent has to be
+                # told to try again by a human who happens to know there was a
+                # deploy. Sleeping here is the whole point: retrying instantly
+                # would spend every attempt inside the same second.
+                time.sleep(_ROLLING_BACKOFF * (attempt + 1))
+                continue
+            raise HTTPFailure(exc.code, _detail(raw)) from None
+        except urllib.error.URLError as exc:
+            raise HTTPFailure(0, str(exc.reason)) from None
     if not raw:
         return {}
     try:
