@@ -7,6 +7,9 @@ schema names, so the journal's own contract is proven independently of which
 store happens to call it today.
 """
 
+import threading
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -17,8 +20,33 @@ PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></h
 _OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
 
 
+@pytest.fixture()
+def client(db):
+    return TestClient(create_gallery_app(db))
+
+
 def auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def _an_artifact(client, token: str) -> str:
+    return client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
+    ).json()["id"]
+
+
+def _append_event(db, *, agent: str, artifact_id: str) -> int:
+    """One journal row, written the way a real interaction writes it."""
+    with db.connect() as conn:
+        return events.append(
+            conn,
+            artifact_id=artifact_id,
+            agent=agent,
+            actor="jeremy",
+            kind="decision_answered",
+            summary="Jeremy answered",
+            ref_id="ref1",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +316,118 @@ def test_the_events_page_size_is_bounded_at_the_route(db):
         response = client.get(f"/api/v1/events?limit={good}", headers=auth(token))
         assert response.status_code == 200, good
     assert client.get("/api/v1/events?since=-1", headers=auth(token)).status_code == 422
+
+
+def test_a_waiting_agent_is_answered_the_moment_an_event_lands(client, db):
+    """The mechanism by which an agent anywhere hears about an answer: it holds
+    the request open, and Jeremy pressing a button is what ends the wait. No
+    address for the agent is needed, which is the whole point -- a push needs
+    one and an agent on a laptop has none."""
+    token, _ = keys.mint(db, agent="waiter-seat")
+    artifact_id = _an_artifact(client, token)
+
+    started = threading.Event()
+    answer = {}
+
+    def hold():
+        started.set()
+        began = time.monotonic()
+        r = client.get("/api/v1/events?since=0&wait=20", headers=auth(token))
+        answer["rows"] = r.json()
+        answer["waited"] = time.monotonic() - began
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    started.wait(5)
+    # Give the holder time to find nothing and settle into waiting, so this
+    # cannot pass by the row simply being there before the request began.
+    time.sleep(1.0)
+    _append_event(db, agent="waiter-seat", artifact_id=artifact_id)
+    thread.join(20)
+
+    assert not thread.is_alive(), "the waiting request never returned"
+    assert len(answer["rows"]) == 1
+    # It returned because a row landed, not because the wait ran out.
+    assert answer["waited"] < 15
+
+
+def test_a_wait_that_finds_nothing_returns_empty_rather_than_failing(client, db):
+    """An empty answer means 'nothing yet, ask again'. A caller loops on this
+    forever, so a timeout must never look like an error."""
+    token, _ = keys.mint(db, agent="quiet-seat")
+    began = time.monotonic()
+    r = client.get("/api/v1/events?since=0&wait=1", headers=auth(token))
+    waited = time.monotonic() - began
+    assert r.status_code == 200
+    assert r.json() == []
+    # It really waited, and it did not overshoot what was asked for.
+    assert 0.9 < waited < 5
+
+
+def test_an_event_already_there_is_returned_without_waiting(client, db):
+    """A cursor that has fallen behind must not be made to wait for the NEXT
+    event before it is told about the ones it already missed."""
+    token, _ = keys.mint(db, agent="behind-seat")
+    artifact_id = _an_artifact(client, token)
+    _append_event(db, agent="behind-seat", artifact_id=artifact_id)
+
+    began = time.monotonic()
+    r = client.get("/api/v1/events?since=0&wait=30", headers=auth(token))
+    assert len(r.json()) == 1
+    assert time.monotonic() - began < 5
+
+
+def test_one_agents_wait_is_never_ended_by_another_agents_event(client, db):
+    """The scoping that makes this safe to expose: a held request is a standing
+    read of one agent's own events, so an unrelated agent's activity must not
+    end it -- that would both wake the wrong agent and leak that something
+    happened elsewhere."""
+    mine, _ = keys.mint(db, agent="mine-seat")
+    theirs, _ = keys.mint(db, agent="theirs-seat")
+    their_artifact = _an_artifact(client, theirs)
+
+    answer = {}
+
+    def hold():
+        r = client.get("/api/v1/events?since=0&wait=3", headers=auth(mine))
+        answer["rows"] = r.json()
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    time.sleep(0.8)
+    _append_event(db, agent="theirs-seat", artifact_id=their_artifact)
+    thread.join(20)
+
+    assert not thread.is_alive()
+    assert answer["rows"] == []
+
+
+def test_a_wait_longer_than_the_ceiling_is_refused_by_the_route(client, db):
+    """The ceiling is enforced where a bad value becomes a 422 naming the field,
+    not a thread parked for a day."""
+    token, _ = keys.mint(db, agent="greedy-seat")
+    assert (
+        client.get("/api/v1/events?wait=100000", headers=auth(token)).status_code == 422
+    )
+    assert client.get("/api/v1/events?wait=-1", headers=auth(token)).status_code == 422
+
+
+def test_past_the_waiter_ceiling_a_caller_is_answered_instead_of_queued(db):
+    """Waiting costs a worker thread. Past the ceiling the app must degrade to
+    ordinary polling rather than starve every other request -- including the
+    gallery Jeremy is reading."""
+    from artifacts import events as events_module
+
+    held = threading.Semaphore(0)
+    for _ in range(events_module.MAX_WAITERS):
+        assert events_module._waiters.acquire(blocking=False)
+    try:
+        began = time.monotonic()
+        rows = events_module.wait_for_agent(db, "nobody-seat", since=0, seconds=30)
+        assert rows == []
+        # Answered immediately, not after 30 seconds.
+        assert time.monotonic() - began < 2
+    finally:
+        for _ in range(events_module.MAX_WAITERS):
+            events_module._waiters.release()
+        del held

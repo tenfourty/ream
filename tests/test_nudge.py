@@ -35,6 +35,10 @@ def _clean_nudge_state(monkeypatch):
     monkeypatch.delenv("ARTIFACTS_NUDGE_URL", raising=False)
     monkeypatch.delenv("ARTIFACTS_NUDGE_TOKEN", raising=False)
     monkeypatch.delenv("ARTIFACTS_NUDGE_TIMEOUT", raising=False)
+    # This mailbox belongs to ONE seat. Every test below emits as "ops-seat",
+    # so the seat that owns the mailbox is set to match; the tests that prove
+    # the gate itself override it.
+    monkeypatch.setenv("ARTIFACTS_NUDGE_AGENT", "ops-seat")
     monkeypatch.setattr(nudge, "_token_warned", False)
     monkeypatch.setattr(nudge, "_dropped_count", 0)
 
@@ -368,3 +372,45 @@ def test_answering_a_decision_still_redirects_303_while_the_receiver_is_down(
     )
     assert response.status_code == 303
     assert response.headers["location"] == f"/a/{published.id}"
+
+
+def test_a_page_owned_by_another_agent_is_never_pushed_to_this_mailbox(monkeypatch):
+    """Jeremy, 19 Sep: "the agent that published the artifact needs to get the
+    nudge, not ops." This URL is one seat's mailbox. Firing it for every page
+    delivered every agent's answers to the operator and none to the agent that
+    was actually waiting for them."""
+    receiver = _Receiver()
+    origin = receiver.start()
+    try:
+        monkeypatch.setenv("ARTIFACTS_NUDGE_URL", f"{origin}/v1/events/artifacts")
+        monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "test-token-fake")
+        monkeypatch.setenv("ARTIFACTS_NUDGE_AGENT", "ops-seat")
+
+        _emit(agent="some-other-seat")
+        # Then one that SHOULD arrive. Asserting only "nothing came" would pass
+        # just as well against a receiver that was simply broken.
+        _emit(agent="ops-seat")
+        assert receiver.wait(), "the receiver never got the one that should arrive"
+        time.sleep(0.3)
+        assert len(receiver.received) == 1
+        assert json.loads(receiver.bodies[0])["agent"] == "ops-seat"
+    finally:
+        receiver.stop()
+
+
+def test_with_no_seat_named_the_mailbox_is_never_used(monkeypatch):
+    """Unset means "this mailbox belongs to nobody here", which must be silence
+    rather than a fallback to sending everything -- a fallback is precisely the
+    behaviour being removed."""
+    receiver = _Receiver()
+    origin = receiver.start()
+    try:
+        monkeypatch.setenv("ARTIFACTS_NUDGE_URL", f"{origin}/v1/events/artifacts")
+        monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "test-token-fake")
+        monkeypatch.delenv("ARTIFACTS_NUDGE_AGENT", raising=False)
+
+        _emit(agent="ops-seat")
+        time.sleep(0.5)
+        assert receiver.received == []
+    finally:
+        receiver.stop()

@@ -168,6 +168,21 @@ def emit(
         url = os.environ.get("ARTIFACTS_NUDGE_URL", "")
         if not url:
             return
+        # Jeremy, 19 Sep: "the agent that published the artifact needs to get the
+        # nudge, not ops." This URL is ONE mailbox belonging to ONE seat, so it
+        # is only ever the right destination for that seat's own pages. Firing
+        # it for every page made the operator the recipient of everyone's
+        # answers and the owning agent the recipient of none -- which is how an
+        # agent sat unaware of an answer Jeremy had already given it.
+        #
+        # Every other agent is served by the held request on /events?wait=,
+        # which needs no address at all and therefore works for an agent that
+        # is not on this machine. This push stays only because it reaches a
+        # seat that is NOT sitting on such a request: it is an optimisation for
+        # one mailbox, never the mechanism.
+        for_agent = os.environ.get("ARTIFACTS_NUDGE_AGENT", "")
+        if not for_agent or agent != for_agent:
+            return
         token = os.environ.get("ARTIFACTS_NUDGE_TOKEN", "")
         if not token:
             _warn_missing_token_once()

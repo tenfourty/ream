@@ -328,6 +328,7 @@ def agent_router(db: Database) -> APIRouter:
     def list_events(
         since: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=1000),
+        wait: float = Query(0.0, ge=0.0, le=300.0),
         agent: str = Depends(caller),
     ):
         # The mechanism a nudge is only ever an optimisation on top of (see
@@ -342,9 +343,26 @@ def agent_router(db: Database) -> APIRouter:
         # in events.list_for_agent, so a bad value is a 422 naming the field
         # instead of a raw 500 out of Postgres. `ge=1` refuses the negative
         # that used to reach LIMIT unmodified.
+        # `wait` is what turns a cursor into something an agent can be WOKEN by.
+        # Jeremy, 19 Sep: "the agent that published the artifact needs to get the
+        # nudge, not ops." A push needs an address for every agent everywhere,
+        # which no agent outside this machine has; a held request needs none --
+        # the agent already holds the connection, so answering it IS the nudge,
+        # and it works identically for a session on baba and one on a laptop.
+        #
+        # Held in a worker thread (this route is `def`, not `async def`, so
+        # FastAPI already runs it off the event loop) and never holding a
+        # database connection while it sleeps: each look is its own short
+        # connection, so a waiting agent costs a sleeping thread, not a pooled
+        # connection someone else needs.
+        rows = events.list_for_agent(db, agent, since=since, limit=limit)
+        if rows or not wait:
+            return [row.__dict__ for row in rows]
         return [
             row.__dict__
-            for row in events.list_for_agent(db, agent, since=since, limit=limit)
+            for row in events.wait_for_agent(
+                db, agent, since=since, limit=limit, seconds=wait
+            )
         ]
 
     return router
