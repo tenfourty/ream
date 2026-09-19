@@ -7,7 +7,7 @@ influence whose artifacts a request sees or changes.
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from artifacts import comments, decisions, events, keys, store
@@ -316,12 +316,23 @@ def agent_router(db: Database) -> APIRouter:
             raise HTTPException(404, "no such decision") from exc
 
     @router.get("/events")
-    def list_events(since: int = 0, limit: int = 100, agent: str = Depends(caller)):
+    def list_events(
+        since: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=1000),
+        agent: str = Depends(caller),
+    ):
         # The mechanism a nudge is only ever an optimisation on top of (see
         # nudge.py's own docstring): an agent anywhere with a key -- not just one
         # a nudge can reach -- keeps its own cursor and polls this with
         # since=<last seq it saw> to learn everything that happened while it
         # was away, in a fixed order that can never skip or repeat a row.
+        #
+        # `limit` is the only page-size parameter this app exposes over HTTP
+        # (/comments and /decisions simply do not offer one), so it is the only
+        # one that needs a ceiling -- enforced HERE, by the route, rather than
+        # in events.list_for_agent, so a bad value is a 422 naming the field
+        # instead of a raw 500 out of Postgres. `ge=1` refuses the negative
+        # that used to reach LIMIT unmodified.
         return [
             row.__dict__
             for row in events.list_for_agent(db, agent, since=since, limit=limit)

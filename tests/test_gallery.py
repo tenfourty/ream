@@ -244,7 +244,12 @@ def test_an_answered_decision_still_offers_every_button(db):
     published, row = _publish_and_ask(db)
     decisions.answer(db, row.id, letter="a", note="go ahead", by="jeremy")
     page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
-    assert "Answered <b>(a) yes</b>" in page
+    assert "You chose <b>(a) yes</b>" in page
+    # The mark that says WHICH one is his, distinct from the recommendation:
+    # the chosen button is solid and tagged, and no other button is.
+    assert 'value="a" class="chosen"' in page
+    assert "&check; your answer" in page
+    assert page.count("&check; your answer") == 1
     assert "go ahead" in page
     assert f'action="/d/{row.id}/answer"' in page
     assert "(a) yes" in page
@@ -401,3 +406,33 @@ def test_without_fetch_metadata_a_missing_origin_is_still_refused(db):
         decisions.list_for_artifact(db, published.id, include_answered=True)[0].answer
         is None
     )
+
+
+def test_the_chosen_option_outranks_the_recommended_one(db):
+    """The bug Jeremy hit on 19 Sep 2026: he had answered (b), but (a) was the
+    recommendation and the recommendation was the filled button -- so the page
+    showed his answer in words while the strongest visual mark sat on a different
+    letter, and he read it as "I can't change selection".
+
+    Selection is a fact and recommendation is a hint, so when they disagree the
+    fact takes the solid style and the only tag.
+    """
+    published, row = _publish_and_ask(db)
+    decisions.ask(
+        db,
+        agent="ops-seat",
+        artifact_id=published.id,
+        question="which way?",
+        options=_OPTIONS,
+        recommended="a",
+    )
+    decisions.answer(db, row.id, letter="b", by="jeremy")
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+
+    # The answered decision: (b) is his, and it is the solid one.
+    assert 'value="b" class="chosen"' in page
+    # The still-open decision keeps its recommendation as a hint, NOT as a
+    # selection -- it must never carry the chosen class or the chosen tag.
+    assert 'value="a" class="rec"' in page
+    assert 'class="rec chosen"' not in page
+    assert page.count("&check; your answer") == 1

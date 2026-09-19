@@ -272,3 +272,19 @@ def test_the_events_route_is_scoped_to_the_calling_key_and_honours_since_and_lim
     assert {row["seq"] for row in seat_b_events}.isdisjoint(
         {row["seq"] for row in seat_a_events}
     )
+
+
+def test_the_events_page_size_is_bounded_at_the_route(db):
+    """`limit` is the one page-size parameter this app exposes over HTTP, so it is
+    the one that can be abused. An unbounded value reached Postgres's LIMIT
+    unmodified, and a negative one surfaced as a raw 500 rather than a refusal
+    naming the field."""
+    token, _ = keys.mint(db, agent="seat-a")
+    client = TestClient(create_gallery_app(db))
+    for bad in (0, -1, 1001, 10**9):
+        response = client.get(f"/api/v1/events?limit={bad}", headers=auth(token))
+        assert response.status_code == 422, bad
+    for good in (1, 100, 1000):
+        response = client.get(f"/api/v1/events?limit={good}", headers=auth(token))
+        assert response.status_code == 200, good
+    assert client.get("/api/v1/events?since=-1", headers=auth(token)).status_code == 422

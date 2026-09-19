@@ -118,12 +118,19 @@ a{color:var(--accent-ink)}
   padding:.44rem .8rem;border:1px solid var(--line);background:transparent;color:var(--ink);
   text-align:left}
 .ask button:hover{border-color:var(--accent);color:var(--accent-ink)}
-.ask button.rec{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
-@media (prefers-color-scheme:dark){.ask button.rec{color:#10201d}}
-.ask button.rec:hover{filter:brightness(1.08);color:#fff}
-@media (prefers-color-scheme:dark){.ask button.rec:hover{color:#10201d}}
+/* RECOMMENDED is a hint: tinted, outlined, never solid. */
+.ask button.rec{border-color:var(--accent);background:var(--accent-soft);
+  color:var(--accent-ink)}
+/* CHOSEN is a fact, and must outrank the hint: solid, so the eye lands on the
+   answer Jeremy actually gave rather than on the one the agent suggested. The
+   first version filled the RECOMMENDED button instead, and he read the filled
+   button as his selection -- "better but I can't change selection", 19 Sep. */
+.ask button.chosen,.ask button.rec.chosen{background:var(--accent);
+  border-color:var(--accent);color:#fff;font-weight:600}
+@media (prefers-color-scheme:dark){
+  .ask button.chosen,.ask button.rec.chosen{color:#10201d}}
 .ask .tag{font:.68rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
-  opacity:.75;margin-left:.45rem}
+  opacity:.8;margin-left:.45rem;white-space:nowrap}
 .ask input[name=note]{font:inherit;font-size:.9rem;flex:1 1 11rem;min-width:8rem;
   padding:.42rem .6rem;border:1px solid var(--line);border-radius:.45rem;
   background:var(--paper);color:var(--ink)}
@@ -231,6 +238,33 @@ def _when(iso: str) -> str:
     return moment.strftime("%-d %b, %H:%M")
 
 
+def _button(option: dict, row: decisions.DecisionRow) -> str:
+    """One option, carrying two independent marks whose ORDER matters.
+
+    "You chose this" is what Jeremy is looking for when he comes back to a page, so
+    it takes the solid fill and is the only tag shown when both apply. The first
+    version filled the RECOMMENDED button instead, and he read that filled button as
+    his own selection -- "better but I can't change selection", 19 Sep 2026, on a
+    decision he had in fact already answered with a different letter.
+    """
+    chosen = option["letter"] == row.answer
+    recommended = option["letter"] == row.recommended
+    classes = " ".join(
+        c for c in ("rec" if recommended else "", "chosen" if chosen else "") if c
+    )
+    if chosen:
+        tag = '<span class="tag">&check; your answer</span>'
+    elif recommended:
+        tag = '<span class="tag">recommended</span>'
+    else:
+        tag = ""
+    attr = f' class="{classes}"' if classes else ""
+    return (
+        f'<button type="submit" name="letter" value="{escape(option["letter"])}"{attr}>'
+        f"({escape(option['letter'])}) {escape(option['label'])}{tag}</button>"
+    )
+
+
 def _render_decisions(rows: list[decisions.DecisionRow]) -> str:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
@@ -263,20 +297,7 @@ def _render_decisions(rows: list[decisions.DecisionRow]) -> str:
         return ""
     items = []
     for row in rows:
-        buttons = "".join(
-            '<button type="submit" name="letter" value="{letter}"{cls}>'
-            "({letter}) {label}{tag}</button>".format(
-                letter=escape(option["letter"]),
-                label=escape(option["label"]),
-                cls=' class="rec"' if option["letter"] == row.recommended else "",
-                tag=(
-                    '<span class="tag">recommended</span>'
-                    if option["letter"] == row.recommended
-                    else ""
-                ),
-            )
-            for option in row.options
-        )
+        buttons = "".join(_button(option, row) for option in row.options)
         answered = ""
         done = ""
         if row.answer is not None:
@@ -287,9 +308,10 @@ def _render_decisions(rows: list[decisions.DecisionRow]) -> str:
             )
             note = f" &middot; {escape(row.answer_note)}" if row.answer_note else ""
             answered = (
-                f'<p class="answered">Answered <b>({escape(row.answer)})'
+                f'<p class="answered">You chose <b>({escape(row.answer)})'
                 f" {escape(chosen)}</b>"
-                f'<span class="when">{escape(_when(row.answered_at))}{note}</span></p>'
+                f'<span class="when">{escape(_when(row.answered_at))}{note}'
+                "</span></p>"
             )
         items.append(
             f'<div class="ask{done}"><p class="q">{escape(row.question)}</p>{answered}'
@@ -298,8 +320,9 @@ def _render_decisions(rows: list[decisions.DecisionRow]) -> str:
             '<input name="note" placeholder="note (optional)"></form></div>'
         )
     hint = (
-        '<p class="hint">Pick a letter and it is saved; add a note if the options do '
-        "not fit. You can change an answer by picking again.</p>"
+        '<p class="hint">Pick a letter and it is saved straight away; add a note if '
+        "the options do not fit. Your answer is the filled button &mdash; pick a "
+        "different one to change it, as often as you like.</p>"
     )
     return (
         f'<section class="asks"><h2>The agent is asking you</h2>'
