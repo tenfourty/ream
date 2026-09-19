@@ -18,6 +18,10 @@ create table if not exists artifact (
                                     -- are replacing got duplicated after an account rotation.
     visibility      text not null default 'private'
         check (visibility in ('private', 'link', 'public')),
+    read_token      text not null,  -- the capability for reading this page on the content origin
+                                    -- (design D2). A PATH segment, because the id is the hostname
+                                    -- and so travels in DNS and in plaintext TLS SNI; the path is
+                                    -- inside TLS. Never returned by the agent API.
     current_version integer,
     created_at      timestamptz not null default now(),
     updated_at      timestamptz not null default now()

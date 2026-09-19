@@ -1,8 +1,9 @@
 """The one place a `Host` header string becomes a routing decision. `create_app`'s router
-and `content._artifact_id` both call these three functions on the same normalised host, so
+and `content._artifact_id` both call these functions on the same normalised host, so
 a case variant, a trailing dot or a malformed host is judged identically wherever it is
 judged -- never routed one way by the router and read another way by the app it forwarded
-to.
+to. `first_host_header` is the shared read of the raw ASGI scope that feeds `normalise`
+in both places.
 """
 
 import re
@@ -46,3 +47,14 @@ def is_gallery(host: str | None) -> bool:
     if host is None:
         return False
     return host == urlsplit(gallery_origin()).hostname
+
+
+def first_host_header(scope: dict) -> str | None:
+    """The FIRST `host` header from a raw ASGI scope, decoded latin-1 (HTTP header
+    bytes are not guaranteed UTF-8). `app.py`'s router and `content.py`'s app both read
+    Host the exact same way, so a host is never judged one way by one and another way by
+    the other."""
+    for key, value in scope.get("headers") or []:
+        if key == b"host":
+            return value.decode("latin-1")
+    return None

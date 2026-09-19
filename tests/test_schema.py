@@ -16,8 +16,8 @@ def test_migrate_creates_every_table(db):
 def test_migrate_is_idempotent(db):
     with db.connect() as conn:
         conn.execute(
-            "insert into artifact (id, title, agent) values (%s, %s, %s)",
-            ("a1", "t", "agent1"),
+            "insert into artifact (id, title, agent, read_token) values (%s, %s, %s, %s)",
+            ("a1", "t", "agent1", "tok1"),
         )
     db.migrate()
     with db.connect() as conn:
@@ -31,8 +31,8 @@ def test_migrate_is_idempotent(db):
 def test_file_requires_an_existing_version(db):
     with db.connect() as conn:
         conn.execute(
-            "insert into artifact (id, title, agent) values (%s, %s, %s)",
-            ("a1", "t", "agent1"),
+            "insert into artifact (id, title, agent, read_token) values (%s, %s, %s, %s)",
+            ("a1", "t", "agent1", "tok1"),
         )
         with pytest.raises(psycopg.errors.ForeignKeyViolation):
             conn.execute(
@@ -45,8 +45,8 @@ def test_file_requires_an_existing_version(db):
 def test_current_version_must_reference_an_existing_version(db):
     with db.connect() as conn:
         conn.execute(
-            "insert into artifact (id, title, agent) values (%s, %s, %s)",
-            ("a1", "t", "agent1"),
+            "insert into artifact (id, title, agent, read_token) values (%s, %s, %s, %s)",
+            ("a1", "t", "agent1", "tok1"),
         )
         with pytest.raises(psycopg.errors.ForeignKeyViolation):
             conn.execute(
@@ -57,8 +57,8 @@ def test_current_version_must_reference_an_existing_version(db):
 def test_deleting_artifact_with_versions_and_files_succeeds(db):
     with db.connect() as conn:
         conn.execute(
-            "insert into artifact (id, title, agent) values (%s, %s, %s)",
-            ("a1", "t", "agent1"),
+            "insert into artifact (id, title, agent, read_token) values (%s, %s, %s, %s)",
+            ("a1", "t", "agent1", "tok1"),
         )
         conn.execute(
             "insert into version (artifact_id, n, body, revision, created_by) "

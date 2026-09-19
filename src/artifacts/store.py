@@ -46,6 +46,7 @@ the loser sees 409, not a raw database error.
 import hashlib
 import logging
 import os
+import secrets
 from dataclasses import dataclass
 
 from psycopg.errors import UniqueViolation
@@ -124,6 +125,20 @@ def gallery_origin() -> str:
 
 def url_for(artifact_id: str) -> str:
     return f"https://{artifact_id}.{content_domain()}/"
+
+
+def content_url(artifact_id: str, read_token: str) -> str:
+    """The address the GALLERY frames. Never handed to an agent: the token in its path is the
+    capability for reading the page (design D2), and `Published.url` stays token-free."""
+    return f"https://{artifact_id}.{content_domain()}/t/{read_token}/"
+
+
+def read_token(db: Database, artifact_id: str) -> str | None:
+    with db.connect() as conn:
+        row = conn.execute(
+            "select read_token from artifact where id = %s", (artifact_id,)
+        ).fetchone()
+    return row[0] if row else None
 
 
 def _revision(body: str, n: int) -> str:
@@ -216,6 +231,7 @@ def publish(db: Database, agent: str, title: str, body: str) -> Published:
     _guard(title, MAX_TITLE_BYTES, "title", agent=agent, artifact_id=None)
     _guard(body, MAX_BODY_BYTES, "body", agent=agent, artifact_id=None)
     artifact_id, revision = ids.new_id(), _revision(body, 1)
+    token = secrets.token_urlsafe(24)  # 192 bits; URL-safe alphabet, so it is one path segment
     with db.connect() as conn, conn.transaction():
         # Three steps, not two: `version` references `artifact`, and `artifact.current_version`
         # references `version`, so the two tables point at each other. The artifact row is born
@@ -224,8 +240,9 @@ def publish(db: Database, agent: str, title: str, body: str) -> Published:
         # one transaction: a failure partway through (a NUL byte Postgres refuses, or anything
         # else) must leave no row behind, not an artifact with no version.
         conn.execute(
-            "insert into artifact (id, title, agent, current_version) values (%s, %s, %s, null)",
-            (artifact_id, title, agent),
+            "insert into artifact (id, title, agent, read_token, current_version)"
+            " values (%s, %s, %s, %s, null)",
+            (artifact_id, title, agent, token),
         )
         conn.execute(
             "insert into version (artifact_id, n, body, revision, created_by)"

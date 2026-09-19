@@ -1,11 +1,18 @@
+import hmac
 import re
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 
 from artifacts import hosts
 from artifacts.db import Database
+from artifacts.hosts import first_host_header
 from artifacts.store import (
     gallery_origin,  # re-exported: artifacts.content.gallery_origin still resolves
 )
@@ -42,9 +49,14 @@ INERT_SHIM = "<script>window.claude={use:async(n)=>null};window.storage=null;</s
 
 # An optional BOM, then leading whitespace and whole HTML comments, then the leading
 # doctype -- everything up to and including it is one match, so the shim can be spliced
-# in right after it.
+# in right after it. The comment alternative's body is `(?:(?!-->).)*`, not a lazy `.*?`:
+# a lazy dot-star, under backtracking, can span from the first `<!--` all the way to the
+# LAST `-->` before a later doctype -- treating a genuine `<script>` (and anything else)
+# in between as if it were commented out, and landing the shim after it, or inside it.
+# The negative lookahead makes a comment unable to contain `-->` at all, so it can only
+# ever match a single, real HTML comment.
 _LEADING_DOCTYPE = re.compile(
-    r"^(﻿?\s*(?:<!--.*?-->\s*)*<!doctype[^>]*>)", re.IGNORECASE | re.DOTALL
+    r"^(﻿?\s*(?:<!--(?:(?!-->).)*-->\s*)*<!doctype[^>]*>)", re.IGNORECASE | re.DOTALL
 )
 
 
@@ -67,18 +79,14 @@ def inject(body: str, shim: str) -> str:
     return body[:at] + shim + body[at:]
 
 
-def _first_host_header(scope: dict) -> str | None:
-    """The FIRST `host` header from a raw ASGI scope, decoded latin-1 (HTTP header
-    bytes are not guaranteed UTF-8). `app.py`'s router reads Host the exact same way,
-    so a host is never judged one way by the router and another way here."""
-    for key, value in scope.get("headers") or []:
-        if key == b"host":
-            return value.decode("latin-1")
-    return None
-
-
 def _artifact_id(request: Request) -> str | None:
-    return hosts.artifact_id(hosts.normalise(_first_host_header(request.scope)))
+    return hosts.artifact_id(hosts.normalise(first_host_header(request.scope)))
+
+
+def _token_matches(expected: str, given: str | None) -> bool:
+    """hmac.compare_digest raises TypeError on a non-ASCII str, and `given` is whatever the
+    request path carried, so compare bytes: a crafted path is a mismatch, never a 500."""
+    return given is not None and hmac.compare_digest(expected.encode(), given.encode())
 
 
 def create_content_app(db: Database) -> FastAPI:
@@ -107,12 +115,32 @@ def create_content_app(db: Database) -> FastAPI:
         int, so the only way to invalidate it is to send something that isn't one."""
         return JSONResponse(status_code=422, content={"detail": "invalid request"})
 
-    def _load(artifact_id: str, n: int | None) -> tuple[str, int] | None:
+    @app.exception_handler(Exception)
+    async def _on_unhandled_error(_request: Request, _exc: Exception) -> PlainTextResponse:
+        """Starlette's ServerErrorMiddleware sits OUTSIDE the `@app.middleware("http")`
+        layer above, so a 500 never passes through `_base_headers` and must carry its own
+        minimum header set directly, or an unhandled exception would be the one response
+        this origin ever serves with no CSP at all."""
+        return PlainTextResponse(
+            "internal error",
+            status_code=500,
+            headers={
+                "x-content-type-options": "nosniff",
+                "referrer-policy": "no-referrer",
+                "content-security-policy": (
+                    f"default-src 'none'; frame-ancestors {gallery_origin()}"
+                ),
+            },
+        )
+
+    def _load(artifact_id: str, token: str | None, n: int | None) -> tuple[str, int] | None:
         with db.connect() as conn:
             row = conn.execute(
-                "select current_version from artifact where id = %s", (artifact_id,)
+                "select current_version, read_token from artifact where id = %s", (artifact_id,)
             ).fetchone()
-            if row is None:
+            # A wrong token and a missing artifact are the same answer: nothing here may confirm
+            # that an id exists.
+            if row is None or not _token_matches(row[1], token):
                 return None
             wanted = n if n is not None else row[0]
             # `and status = 'live'` is a no-op today -- nothing in this arc writes a
@@ -128,17 +156,19 @@ def create_content_app(db: Database) -> FastAPI:
             ).fetchone()
         return (body[0], wanted) if body else None
 
-    def _serve(request: Request, n: int | None) -> Response:
+    def _serve(request: Request, token: str | None, n: int | None) -> Response:
         artifact_id = _artifact_id(request)
         if artifact_id is None:
             return Response("not found", status_code=404, media_type="text/plain")
         # Framed-only is asserted POSITIVELY. Denying just "document" serves the page to
         # any client that sends no Sec-Fetch-Dest at all -- curl, a script's fetch, an old
         # browser -- which is every client that is not a browser honouring the frame.
-        # `frame` is the legacy <frame> value; nested iframes also send `iframe`.
+        # `frame` is the legacy <frame> value; nested iframes also send `iframe`. This
+        # redirect never carries the token: its Location is the gallery's own address for
+        # the artifact, not the tokenised one.
         if request.headers.get("sec-fetch-dest") not in ("iframe", "frame"):
             return RedirectResponse(f"{gallery_origin()}/a/{artifact_id}", status_code=303)
-        loaded = _load(artifact_id, n)
+        loaded = _load(artifact_id, token, n)
         if loaded is None:
             return Response("not found", status_code=404, media_type="text/plain")
         body, _served = loaded
@@ -147,11 +177,18 @@ def create_content_app(db: Database) -> FastAPI:
         return HTMLResponse(html, headers=headers_for(live))
 
     @app.get("/")
-    def current(request: Request) -> Response:
-        return _serve(request, None)
+    def bare(request: Request) -> Response:
+        # The address an agent is handed (`Published.url`). Unframed, it is sent to the
+        # gallery like any other unframed request; framed, it carries no token and so
+        # opens nothing.
+        return _serve(request, None, None)
 
-    @app.get("/v/{n}")
-    def version(request: Request, n: int) -> Response:
-        return _serve(request, n)
+    @app.get("/t/{token}/")
+    def current(request: Request, token: str) -> Response:
+        return _serve(request, token, None)
+
+    @app.get("/t/{token}/v/{n}")
+    def version(request: Request, token: str, n: int) -> Response:
+        return _serve(request, token, n)
 
     return app

@@ -4,8 +4,9 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from artifacts import hosts
 from artifacts.api import agent_router
-from artifacts.content import _first_host_header, create_content_app
+from artifacts.content import create_content_app
 from artifacts.db import Database
+from artifacts.hosts import first_host_header
 
 
 def create_gallery_app(db: Database | None = None) -> FastAPI:
@@ -42,7 +43,7 @@ def create_app(db: Database):
     through the content ingress therefore reaches it with no identity check at all -- so
     anything that is not exactly the gallery host, and not exactly a well-formed artifact
     host, gets a 404 from the router itself, never a guess at which app it "probably"
-    meant. `content._first_host_header` is reused rather than re-read here, so the router
+    meant. `hosts.first_host_header` is reused rather than re-read here, so the router
     and the content app can never disagree about what the Host header was.
     """
     gallery, content = create_gallery_app(db), create_content_app(db)
@@ -51,7 +52,7 @@ def create_app(db: Database):
         if scope["type"] == "lifespan":
             await gallery(scope, receive, send)
             return
-        host = hosts.normalise(_first_host_header(scope))
+        host = hosts.normalise(first_host_header(scope))
         if hosts.is_gallery(host):
             chosen = gallery
         elif hosts.artifact_id(host) is not None:

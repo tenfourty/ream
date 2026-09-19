@@ -47,12 +47,17 @@ def published_id(db, monkeypatch):
 
 
 @pytest.fixture()
+def token(db, published_id):
+    return store.read_token(db, published_id)
+
+
+@pytest.fixture()
 def client(db, published_id) -> TestClient:
     return TestClient(create_app(db))
 
 
 @pytest.mark.parametrize("host_template, expected", ROWS)
-def test_router_dispatch(client, published_id, host_template, expected):
+def test_router_dispatch(client, published_id, token, host_template, expected):
     host = host_template.format(
         id=published_id, id_upper=published_id.upper(), short=published_id[:-1]
     )
@@ -62,8 +67,8 @@ def test_router_dispatch(client, published_id, host_template, expected):
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
     elif expected == "content":
-        # A framed GET / answers the real page only from the content app.
-        response = client.get("/", headers={"host": host, **FRAMED})
+        # A framed GET of the tokenised path answers the real page only from the content app.
+        response = client.get(f"/t/{token}/", headers={"host": host, **FRAMED})
         assert response.status_code == 200
         assert "hi" in response.text
     else:
@@ -77,12 +82,16 @@ def test_router_dispatch(client, published_id, host_template, expected):
 
 def test_a_content_host_never_reaches_the_gallery_api(client, published_id):
     """The gallery's /api/v1/artifacts is key-gated and answers 401 to a caller with no
-    key. If a content-domain request ever reached the gallery app, this is the route that
-    would prove it, by producing that same 401 on the wrong hostname."""
+    key. A negative assertion here (`!= 401`) would let ANY other status through, a 500
+    included -- assert what the content app actually answers: its own 404, with the base
+    header set, for a route it does not have."""
     response = client.get(
         "/api/v1/artifacts", headers={"host": f"{published_id}.tenfourty.com"}
     )
-    assert response.status_code != 401
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not Found"}
+    csp = response.headers["content-security-policy"]
+    assert "default-src 'none'" in csp
 
 
 @pytest.mark.asyncio
