@@ -13,13 +13,16 @@ survive a deploy, and does not fail honestly either". A test that only proved
 long holds work would have passed throughout.
 """
 
+import asyncio
 import signal
 import threading
 import time
 
 import pytest
+from fastapi.testclient import TestClient
 
 from artifacts import events, serve
+from artifacts.app import create_app
 
 
 @pytest.fixture(autouse=True)
@@ -121,14 +124,25 @@ def test_normal_waiting_is_unchanged_when_nothing_is_shutting_down(db):
 # ------------------------------------------------------------ the signal wiring
 
 
-def test_sigterm_is_wired_to_end_held_requests(monkeypatch):
-    """The wiring, without sending a real signal: install the handlers onto a
-    stand-in app, then call the SIGTERM handler the way the kernel would."""
-    installed = {}
+def _start_lifespan(app):
+    """Drive the ASGI lifespan startup the way uvicorn does."""
 
-    class FakeApp:
-        def add_event_handler(self, name, fn):
-            installed[name] = fn
+    async def receive():
+        return {"type": "lifespan.startup"}
+
+    async def send(_message):
+        return None
+
+    asyncio.run(app({"type": "lifespan"}, receive, send))
+
+
+def test_sigterm_is_wired_to_end_held_requests(monkeypatch):
+    """The wiring, without sending a real signal: arm a stand-in app, start its
+    lifespan, then call the SIGTERM handler the way the kernel would."""
+    seen = []
+
+    async def inner(scope, _receive, _send):
+        seen.append(scope["type"])
 
     previous_called = []
 
@@ -139,10 +153,10 @@ def test_sigterm_is_wired_to_end_held_requests(monkeypatch):
     captured = {}
     monkeypatch.setattr(signal, "signal", lambda sig, fn: captured.__setitem__(sig, fn))
 
-    serve._arm_shutdown_signals(FakeApp())
-    assert "startup" in installed, "the handler must be installed at startup"
-    installed["startup"]()
+    armed = serve._arm_shutdown_signals(inner)
+    _start_lifespan(armed)
 
+    assert seen == ["lifespan"], "the wrapper must still pass the scope through"
     assert signal.SIGTERM in captured and signal.SIGINT in captured
 
     events.clear_shutdown()
@@ -155,21 +169,38 @@ def test_sigterm_is_wired_to_end_held_requests(monkeypatch):
     events.clear_shutdown()
 
 
-def test_the_handler_is_installed_at_startup_not_at_import(monkeypatch):
-    """uvicorn installs its own signal handlers before lifespan startup, so
+def test_nothing_is_installed_until_the_lifespan_starts(monkeypatch):
+    """uvicorn installs its own signal handlers before the lifespan runs, so
     installing ours any earlier would simply be overwritten."""
-    installed = {}
 
-    class FakeApp:
-        def add_event_handler(self, name, fn):
-            installed[name] = fn
+    async def inner(_scope, _receive, _send):
+        return None
 
     calls = []
     monkeypatch.setattr(signal, "signal", lambda sig, fn: calls.append(sig))
     monkeypatch.setattr(signal, "getsignal", lambda _sig: None)
 
-    serve._arm_shutdown_signals(FakeApp())
+    armed = serve._arm_shutdown_signals(inner)
 
-    assert calls == [], "nothing may be installed before startup runs"
-    installed["startup"]()
-    assert calls, "startup must install them"
+    assert calls == [], "nothing may be installed before the lifespan starts"
+    _start_lifespan(armed)
+    assert calls, "the lifespan startup must install them"
+
+
+def test_arming_works_on_what_create_app_actually_returns(db, monkeypatch):
+    """The control that was missing, and the reason this file has a bug to fix.
+
+    The first version armed the app with `add_event_handler`, which exists on a
+    FastAPI object and not on the bare host-routing function `create_app`
+    returns. The test passed anyway, because the stand-in it armed HAD that
+    method: a fake that is kinder than the real thing proves nothing. So this
+    one arms the real object and starts its real lifespan.
+    """
+    monkeypatch.setattr(signal, "signal", lambda _sig, _fn: None)
+    monkeypatch.setattr(signal, "getsignal", lambda _sig: None)
+
+    armed = serve._arm_shutdown_signals(create_app(db))
+    _start_lifespan(armed)  # would raise AttributeError against the first version
+
+    response = TestClient(armed, base_url="https://artifacts.tenfourty.site").get("/healthz")
+    assert response.status_code == 200, "arming must not change how the app routes"

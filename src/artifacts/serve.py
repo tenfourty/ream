@@ -7,15 +7,14 @@ cannot exist until `DATABASE_URL` has been read and the schema migrated.
 import os
 import signal
 
-from fastapi import FastAPI
-
 from artifacts import events
 from artifacts.app import create_app
 from artifacts.db import Database
 
 
-def _arm_shutdown_signals(app: FastAPI) -> None:
-    """End every held /events request as soon as this process is asked to stop.
+def _arm_shutdown_signals(app):
+    """Wrap `app` so every held /events request ends as soon as this process is
+    asked to stop.
 
     Why a signal handler and not a shutdown event: uvicorn runs the lifespan
     shutdown AFTER it has waited for in-flight requests to finish, and a
@@ -25,11 +24,19 @@ def _arm_shutdown_signals(app: FastAPI) -> None:
     and every waiting agent would see a request that simply never answers
     (measured 19 Sep 2026; `artifacts.events._shutdown` carries the evidence).
 
-    The handler is installed on STARTUP rather than at import, because uvicorn
-    installs its own handlers first and would otherwise replace ours. Ours sets
-    the flag and then delegates to whatever was there, so uvicorn's graceful
-    shutdown still runs exactly as it did -- it just finds no request left to
-    wait for.
+    The handler is installed when the LIFESPAN STARTUP arrives rather than at
+    import, because uvicorn installs its own handlers first and would otherwise
+    replace ours. Ours sets the flag and then delegates to whatever was there,
+    so uvicorn's graceful shutdown still runs exactly as it did -- it just finds
+    no request left to wait for.
+
+    Arming happens through the ASGI scope, not through `add_event_handler`,
+    because what `create_app` returns is a bare host-routing function and not a
+    FastAPI object. The first version of this called `add_event_handler` on it
+    and failed at startup with an AttributeError; the test that was supposed to
+    cover it passed a stand-in that HAD that method, so the fake was the bug.
+    A wrapper works against whatever `create_app` returns and cannot drift from
+    it.
     """
 
     def install() -> None:
@@ -49,10 +56,15 @@ def _arm_shutdown_signals(app: FastAPI) -> None:
             except (ValueError, OSError):  # pragma: no cover -- not the main thread
                 continue
 
-    app.add_event_handler("startup", install)
+    async def armed(scope, receive, send):
+        if scope["type"] == "lifespan":
+            install()
+        await app(scope, receive, send)
+
+    return armed
 
 
-def app_from_env() -> FastAPI:
+def app_from_env():
     """Read `DATABASE_URL`, migrate, and return the fail-closed host router
     `create_app` builds. Never includes the DSN -- or anything else read from
     the environment -- in the SystemExit message: a DSN carries the database
@@ -63,6 +75,4 @@ def app_from_env() -> FastAPI:
         raise SystemExit("DATABASE_URL is not set")
     db = Database(dsn)
     db.migrate()
-    app = create_app(db)
-    _arm_shutdown_signals(app)
-    return app
+    return _arm_shutdown_signals(create_app(db))
