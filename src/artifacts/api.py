@@ -22,12 +22,14 @@ class PatchBody(BaseModel):
     expected_revision: str
 
 
-def _refused_detail(findings) -> dict:
+def _refused_detail(field: str, findings) -> dict:
     """The scanner's findings, already de-duplicated and capped, as the
-    structured 422 body: where a shape fired, never what it matched."""
+    structured 422 body: where a shape fired, and in which field, never what
+    it matched."""
     return {
         "refused": [
-            {"shape": finding.shape, "line": finding.line} for finding in findings
+            {"field": field, "shape": finding.shape, "line": finding.line}
+            for finding in findings
         ]
     }
 
@@ -52,11 +54,30 @@ def agent_router(db: Database) -> APIRouter:
         try:
             return store.publish(db, agent, payload.title, payload.body).__dict__
         except store.BodyTooLarge as exc:
-            raise HTTPException(413, "body exceeds the size limit") from exc
+            raise HTTPException(
+                413,
+                {
+                    "field": exc.field,
+                    "size": exc.size,
+                    "detail": f"{exc.field} exceeds the size limit",
+                },
+            ) from exc
+        except store.InvalidText as exc:
+            raise HTTPException(
+                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+            ) from exc
         except store.SecretFound as found:
-            raise HTTPException(422, _refused_detail(found.findings)) from found
+            raise HTTPException(
+                422, _refused_detail(found.field, found.findings)
+            ) from found
         except store.ScanFailed as exc:
-            raise HTTPException(422, "could not scan this content for secrets") from exc
+            raise HTTPException(
+                422,
+                {
+                    "field": exc.field,
+                    "detail": f"could not scan {exc.field} for secrets",
+                },
+            ) from exc
 
     @router.patch("/artifacts/{artifact_id}")
     def update(artifact_id: str, payload: PatchBody, agent: str = Depends(caller)):
@@ -65,11 +86,30 @@ def agent_router(db: Database) -> APIRouter:
                 db, agent, artifact_id, payload.body, payload.expected_revision
             ).__dict__
         except store.BodyTooLarge as exc:
-            raise HTTPException(413, "body exceeds the size limit") from exc
+            raise HTTPException(
+                413,
+                {
+                    "field": exc.field,
+                    "size": exc.size,
+                    "detail": f"{exc.field} exceeds the size limit",
+                },
+            ) from exc
+        except store.InvalidText as exc:
+            raise HTTPException(
+                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+            ) from exc
         except store.SecretFound as found:
-            raise HTTPException(422, _refused_detail(found.findings)) from found
+            raise HTTPException(
+                422, _refused_detail(found.field, found.findings)
+            ) from found
         except store.ScanFailed as exc:
-            raise HTTPException(422, "could not scan this content for secrets") from exc
+            raise HTTPException(
+                422,
+                {
+                    "field": exc.field,
+                    "detail": f"could not scan {exc.field} for secrets",
+                },
+            ) from exc
         except store.RevisionMismatch as exc:
             raise HTTPException(
                 409, "the artifact moved on; read it and patch again"

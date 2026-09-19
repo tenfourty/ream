@@ -1,3 +1,4 @@
+import json
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -27,6 +28,30 @@ def _padded_body(total_bytes: int) -> str:
     filler = total_bytes - len(PAGE.encode("utf-8"))
     assert filler >= 0
     return PAGE + ("a" * filler)
+
+
+def _post_raw_json(client, url, payload, headers):
+    """Send `payload` as a body httpx's own `json=` kwarg cannot carry.
+
+    httpx encodes `json=` with `ensure_ascii=False` and immediately UTF-8-encodes
+    the result, so a lone surrogate (`"\\udc80"`) raises `UnicodeEncodeError`
+    client-side, before any request is built -- it never reaches the server that
+    way. Building the body ourselves with `ensure_ascii=True` escapes the
+    surrogate as literal ASCII text (`\\udc80`), which travels as plain bytes
+    and is only reconstituted into a real Python surrogate by the server's own
+    `json.loads` -- exactly what a real misbehaving client would send.
+    """
+    body = json.dumps(payload, ensure_ascii=True).encode("ascii")
+    return client.post(
+        url, content=body, headers={**headers, "content-type": "application/json"}
+    )
+
+
+def _patch_raw_json(client, url, payload, headers):
+    body = json.dumps(payload, ensure_ascii=True).encode("ascii")
+    return client.patch(
+        url, content=body, headers={**headers, "content-type": "application/json"}
+    )
 
 
 def test_publishing_returns_a_one_label_url(client, db):
@@ -86,7 +111,9 @@ def test_a_body_with_a_secret_is_refused_and_says_where_not_what(client, db):
     )
     assert response.status_code == 422
     detail = response.json()["detail"]
-    assert detail == {"refused": [{"shape": "aws_access_key_id", "line": 1}]}
+    assert detail == {
+        "refused": [{"field": "body", "shape": "aws_access_key_id", "line": 1}]
+    }
     assert secret not in response.text
 
 
@@ -212,8 +239,35 @@ def test_a_secret_in_the_title_is_refused_even_with_a_clean_body(client, db):
     )
     assert response.status_code == 422
     detail = response.json()["detail"]
-    assert detail == {"refused": [{"shape": "aws_access_key_id", "line": 1}]}
+    assert detail == {
+        "refused": [{"field": "title", "shape": "aws_access_key_id", "line": 1}]
+    }
     assert secret not in response.text
+
+
+def test_a_secret_in_the_title_is_distinguishable_from_the_same_secret_in_the_body(
+    client, db
+):
+    """Before `field` existed, a secret on line 1 of the title answered
+    byte-for-byte what the same secret on line 1 of the body would -- the
+    line number, which exists so an agent can fix the line, pointed at line
+    1 of what was actually a clean page."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    secret = "AKIA" + "IOSFODNN7EXAMPLE"
+    in_title = client.post(
+        "/api/v1/artifacts",
+        json={"title": f"rotate {secret}", "body": PAGE},
+        headers=auth(token),
+    )
+    in_body = client.post(
+        "/api/v1/artifacts",
+        json={"title": "Board", "body": PAGE + secret},
+        headers=auth(token),
+    )
+    assert in_title.status_code == in_body.status_code == 422
+    assert in_title.json()["detail"] != in_body.json()["detail"]
+    assert in_title.json()["detail"]["refused"][0]["field"] == "title"
+    assert in_body.json()["detail"]["refused"][0]["field"] == "body"
 
 
 def test_a_title_at_the_exact_size_cap_is_accepted(client, db):
@@ -232,6 +286,83 @@ def test_a_title_one_byte_over_the_cap_is_refused_with_413(client, db):
         "/api/v1/artifacts", json={"title": title, "body": PAGE}, headers=auth(token)
     )
     assert response.status_code == 413
+
+
+def test_an_oversized_title_is_reported_as_a_title_refusal_not_a_body_refusal(
+    client, db
+):
+    """Before `field` existed: a 600-byte title with a 75-byte body answered
+    `413 {"detail": "body exceeds the size limit"}` and logged
+    `reason=body_too_large size=600` -- an agent shrinking its body in
+    response would be refused again, identically, forever."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    title = "é" * 300  # 300 characters, 600 UTF-8 bytes -- over the 512-byte title cap
+    response = client.post(
+        "/api/v1/artifacts", json={"title": title, "body": PAGE}, headers=auth(token)
+    )
+    assert response.status_code == 413
+    detail = response.json()["detail"]
+    assert detail["field"] == "title"
+    assert detail["size"] == 600
+
+
+def test_an_oversized_title_refusal_is_logged_against_the_title_not_the_body(
+    client, db, caplog
+):
+    token, _ = keys.mint(db, agent="ops-seat")
+    title = "é" * 300
+    with caplog.at_level(logging.WARNING, logger="artifacts.refusals"):
+        client.post(
+            "/api/v1/artifacts",
+            json={"title": title, "body": PAGE},
+            headers=auth(token),
+        )
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "field=title" in message and "size=600" in message for message in messages
+    )
+
+
+def test_a_lone_surrogate_in_the_title_is_refused_not_a_500(client, db):
+    """A lone surrogate survives JSON decoding -- Python's str holds one --
+    but neither utf-8 nor Postgres text can, so this must be a 422 refusal,
+    never a 500 raised out of the size check's own `.encode("utf-8")`."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    response = _post_raw_json(
+        client,
+        "/api/v1/artifacts",
+        {"title": "bad\udc80title", "body": PAGE},
+        auth(token),
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["field"] == "title"
+
+
+def test_a_lone_surrogate_in_the_body_is_refused_not_a_500(client, db):
+    token, _ = keys.mint(db, agent="ops-seat")
+    response = _post_raw_json(
+        client,
+        "/api/v1/artifacts",
+        {"title": "Board", "body": PAGE + "\udc80"},
+        auth(token),
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["field"] == "body"
+
+
+def test_a_lone_surrogate_in_a_patch_body_is_refused_not_a_500(client, db):
+    token, _ = keys.mint(db, agent="ops-seat")
+    first = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
+    ).json()
+    response = _patch_raw_json(
+        client,
+        f"/api/v1/artifacts/{first['id']}",
+        {"body": PAGE + "\udc80", "expected_revision": first["revision"]},
+        auth(token),
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["field"] == "body"
 
 
 def test_a_patch_over_the_size_cap_is_refused_with_413_before_scanning(client, db):

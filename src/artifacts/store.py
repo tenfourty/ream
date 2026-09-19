@@ -8,12 +8,19 @@ indexed query, so an unknown artifact and someone else's look identical, both
 the body, so it always runs last and only once ownership is confirmed). The
 title is agent-authored and displayed exactly as the body is, so it passes
 through the same two guards -- capped at `MAX_TITLE_BYTES`, well below the
-body's cap, because a title is a page name in a list, not prose. Every
-refusal is logged on `artifacts.refusals` at WARNING with the agent seat and
-the artifact id (when patching) -- a size refusal adds the value's size, a
-scan refusal adds the shape names and finding count -- never the value itself
-or a matched value, which `scan.Finding` never carries in the first place. A
-404 or a stale-revision 409 is routine, not a refusal, and is never logged.
+body's cap, because a title is a page name in a list, not prose. Every guard
+takes a `field` ("title" or "body") and carries it into the exception, the log
+line and (for a scan finding) the refusal entry -- a title refusal must never
+be reported, logged or measured as a body refusal, which is what happened
+before `field` existed: same message, same log line, wrong field named in
+both. A lone surrogate (`"\ud800"`) survives JSON decoding but neither `utf-8`
+nor Postgres `text` can hold one, so encoding it for the size check is also a
+guard, refusing with `InvalidText` rather than crashing. Every refusal is
+logged on `artifacts.refusals` at WARNING with the agent seat, the artifact id
+(when patching) and the field -- a size refusal adds the value's size, a scan
+refusal adds the shape names and finding count -- never the value itself or a
+matched value, which `scan.Finding` never carries in the first place. A 404 or
+a stale-revision 409 is routine, not a refusal, and is never logged.
 
 Every write is one transaction: `publish`'s three statements and `patch`'s two
 run inside `conn.transaction()`, so a failure partway through -- a NUL byte
@@ -50,13 +57,20 @@ _refusals = logging.getLogger("artifacts.refusals")
 
 
 class SecretFound(Exception):
-    def __init__(self, findings):
+    def __init__(self, field: str, findings):
+        self.field = field
         self.findings = findings
 
 
 class BodyTooLarge(Exception):
-    def __init__(self, size: int):
+    def __init__(self, field: str, size: int):
+        self.field = field
         self.size = size
+
+
+class InvalidText(Exception):
+    def __init__(self, field: str):
+        self.field = field
 
 
 class RevisionMismatch(Exception): ...
@@ -65,7 +79,9 @@ class RevisionMismatch(Exception): ...
 class NotFound(Exception): ...
 
 
-class ScanFailed(Exception): ...
+class ScanFailed(Exception):
+    def __init__(self, field: str):
+        self.field = field
 
 
 @dataclass(frozen=True)
@@ -97,19 +113,37 @@ def _revision(body: str, n: int) -> str:
     return hashlib.sha256(f"{n}:{body}".encode()).hexdigest()[:16]
 
 
-def _check_size(value: str, limit: int, *, agent: str, artifact_id: str | None) -> None:
-    size = len(value.encode("utf-8"))
-    if size > limit:
+def _check_size(
+    value: str, limit: int, field: str, *, agent: str, artifact_id: str | None
+) -> None:
+    try:
+        size = len(value.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        # A lone surrogate (`"\ud800"`) survives JSON decoding -- Python's str
+        # happily holds one -- but neither `utf-8` nor Postgres `text` can, so
+        # this is a refusal, not a bug to repair around. Never echo the text;
+        # only the field name says anything about what was sent.
         _refusals.warning(
-            "publish refused: agent=%s artifact=%s reason=body_too_large size=%d",
+            "publish refused: agent=%s artifact=%s field=%s reason=invalid_text",
             agent,
             artifact_id or "-",
+            field,
+        )
+        raise InvalidText(field) from exc
+    if size > limit:
+        _refusals.warning(
+            "publish refused: agent=%s artifact=%s field=%s reason=body_too_large size=%d",
+            agent,
+            artifact_id or "-",
+            field,
             size,
         )
-        raise BodyTooLarge(size)
+        raise BodyTooLarge(field, size)
 
 
-def _check_secrets(value: str, *, agent: str, artifact_id: str | None) -> None:
+def _check_secrets(
+    value: str, field: str, *, agent: str, artifact_id: str | None
+) -> None:
     try:
         findings = scan.scan(value)
     except Exception as exc:
@@ -120,35 +154,42 @@ def _check_secrets(value: str, *, agent: str, artifact_id: str | None) -> None:
         # publish. Only the exception's type is logged, never its message or
         # the value that triggered it.
         _refusals.warning(
-            "publish refused: agent=%s artifact=%s reason=scan_failed error=%s",
+            "publish refused: agent=%s artifact=%s field=%s reason=scan_failed error=%s",
             agent,
             artifact_id or "-",
+            field,
             type(exc).__name__,
         )
-        raise ScanFailed() from exc
+        raise ScanFailed(field) from exc
     if findings:
         shapes = sorted({finding.shape for finding in findings})
         _refusals.warning(
-            "publish refused: agent=%s artifact=%s shapes=%s findings=%d",
+            "publish refused: agent=%s artifact=%s field=%s shapes=%s findings=%d",
             agent,
             artifact_id or "-",
+            field,
             shapes,
             len(findings),
         )
-        raise SecretFound(findings)
+        raise SecretFound(field, findings)
 
 
-def _guard(value: str, limit: int, *, agent: str, artifact_id: str | None) -> None:
+def _guard(
+    value: str, limit: int, field: str, *, agent: str, artifact_id: str | None
+) -> None:
     """Both checks, in order, for one field -- used for the title and, on
     create, the body. `patch` guards the body itself (see below), since there
-    the scan must wait until after ownership is confirmed."""
-    _check_size(value, limit, agent=agent, artifact_id=artifact_id)
-    _check_secrets(value, agent=agent, artifact_id=artifact_id)
+    the scan must wait until after ownership is confirmed. `field` ("title" or
+    "body") travels with every refusal -- the log line, the size exception,
+    and each scan finding -- so a title refusal is never reported, logged, or
+    even measured as a body refusal."""
+    _check_size(value, limit, field, agent=agent, artifact_id=artifact_id)
+    _check_secrets(value, field, agent=agent, artifact_id=artifact_id)
 
 
 def publish(db: Database, agent: str, title: str, body: str) -> Published:
-    _guard(title, MAX_TITLE_BYTES, agent=agent, artifact_id=None)
-    _guard(body, MAX_BODY_BYTES, agent=agent, artifact_id=None)
+    _guard(title, MAX_TITLE_BYTES, "title", agent=agent, artifact_id=None)
+    _guard(body, MAX_BODY_BYTES, "body", agent=agent, artifact_id=None)
     artifact_id, revision = ids.new_id(), _revision(body, 1)
     with db.connect() as conn, conn.transaction():
         # Three steps, not two: `version` references `artifact`, and `artifact.current_version`
@@ -186,7 +227,7 @@ def _owned(conn, artifact_id: str, agent: str):
 def patch(
     db: Database, agent: str, artifact_id: str, body: str, expected_revision: str
 ) -> Published:
-    _check_size(body, MAX_BODY_BYTES, agent=agent, artifact_id=artifact_id)
+    _check_size(body, MAX_BODY_BYTES, "body", agent=agent, artifact_id=artifact_id)
     with db.connect() as conn:
         row = _owned(conn, artifact_id, agent)
         if row is None:
@@ -198,7 +239,7 @@ def patch(
         ).fetchone()
         if live is None or live[0] != expected_revision:
             raise RevisionMismatch()
-        _check_secrets(body, agent=agent, artifact_id=artifact_id)
+        _check_secrets(body, "body", agent=agent, artifact_id=artifact_id)
         n = current + 1
         revision = _revision(body, n)
         try:
@@ -222,6 +263,19 @@ def patch(
             # actually prevents the lost update. The loser hits this, not a
             # lost write, and sees the same 409 a plain stale read would have
             # given it a moment later.
+            #
+            # Reading ANY UniqueViolation here as "you raced" -- rather than
+            # some other collision -- holds only on two premises, both true
+            # today: `version(artifact_id, n)` is the only unique or exclusion
+            # constraint this insert can hit (`artifact_pkey` is `id`, never
+            # written by this statement), and nothing writes a `version` row
+            # outside this function (including publish()'s first one).
+            # `version.status` already distinguishes 'pending' from 'live' in
+            # the schema -- a later task that promotes a pending version,
+            # restores an old one, or writes versions for uploaded files
+            # breaks the second premise, and this branch would then mislabel a
+            # real collision as a stale revision. Re-check both premises
+            # before adding any such write path.
             raise RevisionMismatch() from exc
     return Published(
         id=artifact_id, version=n, revision=revision, url=url_for(artifact_id)
