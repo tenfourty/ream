@@ -40,6 +40,12 @@ spec:
           envFrom:
             - configMapRef:
                 name: artifacts-config
+            # optional: true is load-bearing: a cluster with no artifacts-nudge
+            # Secret yet must still start this app, with nudging simply inert
+            # (see artifacts.nudge's own docstring) -- never CreateContainerConfigError.
+            - secretRef:
+                name: artifacts-nudge
+                optional: true
           env:
             - name: DATABASE_URL
               valueFrom:

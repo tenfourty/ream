@@ -37,7 +37,7 @@ from dataclasses import dataclass
 
 from psycopg.types.json import Jsonb
 
-from artifacts import ids, nudge, store
+from artifacts import events, ids, nudge, store
 from artifacts.db import Database
 
 # A decision's question is a single line Jeremy reads on a card, not a page body -- 500
@@ -315,25 +315,44 @@ def answer(
 
         store._check_secrets(note, "note", agent=by, artifact_id=artifact_id)
 
-        conn.execute(
-            "update decision set answer = %s, answer_note = %s, answered_at = now(),"
-            " answered_by = %s where id = %s",
-            (letter, note, by, decision_id),
+        label = next(
+            option["label"] for option in options if option["letter"] == letter
         )
+        summary = f"{letter}: {label}"[:200]
+        # One transaction: the answer and the event that describes it commit or
+        # roll back together (events.append's own docstring) -- a nudge must
+        # never be sent for an answer that a later failure in this block undid,
+        # and the journal must never gain a row whose cause never happened.
+        with conn.transaction():
+            conn.execute(
+                "update decision set answer = %s, answer_note = %s, answered_at = now(),"
+                " answered_by = %s where id = %s",
+                (letter, note, by, decision_id),
+            )
+            event_seq = events.append(
+                conn,
+                artifact_id=artifact_id,
+                agent=owning_agent,
+                kind="decision_answered",
+                summary=summary,
+                ref_id=decision_id,
+            )
         updated = conn.execute(
             f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
             (decision_id,),
         ).fetchone()
 
-    label = next(option["label"] for option in options if option["letter"] == letter)
-    # Fire-and-forget, after the write has already succeeded: a nudge that fails must
-    # never be mistaken for an answer that failed (see nudge.py's own docstring).
+    # Fire-and-forget, after the transaction above has actually committed: a nudge
+    # that fails must never be mistaken for an answer that failed (see nudge.py's
+    # own docstring), and `event_seq` must name a row that is durable before any
+    # other agent is told to go read it.
     nudge.emit(
         kind="decision_answered",
         artifact_id=artifact_id,
         title=title,
         agent=owning_agent,
-        summary=f"{letter}: {label}"[:200],
+        summary=summary,
+        event_id=str(event_seq),
     )
     return _row_to_decision(updated)
 

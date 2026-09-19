@@ -136,3 +136,27 @@ create table if not exists decision (
 );
 
 create index if not exists decision_artifact_idx on decision (artifact_id, created_at);
+
+-- The nudge journal: every interaction Jeremy has with a page -- answering a
+-- decision, leaving a comment, resolving a thread -- appends exactly one row here,
+-- in the SAME transaction as the write it describes (see decisions.answer, the
+-- first caller), so an event can never exist without its cause and a cause can
+-- never be recorded without its event. `agent` is the seat the event is FOR (the
+-- artifact's owner), not who performed it -- Jeremy is never a seat, so there is
+-- nothing else `agent` could usefully name. `seq` is a bigserial: monotonic per
+-- database, never reset, which is what lets `?since=<seq>` be a cursor an agent
+-- keeps rather than a timestamp two events could tie on. This table is read from
+-- ANYWHERE with a key (`GET /api/v1/events`); the push to baba's ops inbox
+-- (`nudge.py`) is only an optimisation layered on top -- if it never fires,
+-- `?since=` still delivers everything.
+create table if not exists event (
+    seq         bigserial primary key,
+    artifact_id text not null references artifact(id) on delete cascade,
+    agent       text not null,
+    kind        text not null,
+    summary     text not null default '',
+    ref_id      text,
+    created_at  timestamptz not null default now()
+);
+
+create index if not exists event_agent_seq_idx on event (agent, seq);

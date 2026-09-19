@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from artifacts import comments, decisions, keys, store
+from artifacts import comments, decisions, events, keys, store
 from artifacts.db import Database
 
 
@@ -298,8 +298,9 @@ def agent_router(db: Database) -> APIRouter:
         include_answered: bool = False, agent: str = Depends(caller)
     ):
         # This is how an agent learns Jeremy's answer -- across every artifact it
-        # owns, with no nudge wired at all: a plain poll of this route, with
-        # include_answered=true, is the whole mechanism until the nudge slice lands.
+        # owns: a plain poll of this route, with include_answered=true, works
+        # everywhere a key does. `/events` (below) is the same fact told sooner,
+        # for a session a nudge can actually reach.
         return [
             row.__dict__
             for row in decisions.list_for_agent(
@@ -313,5 +314,17 @@ def agent_router(db: Database) -> APIRouter:
             return decisions.close(db, agent, decision_id).__dict__
         except store.NotFound as exc:
             raise HTTPException(404, "no such decision") from exc
+
+    @router.get("/events")
+    def list_events(since: int = 0, limit: int = 100, agent: str = Depends(caller)):
+        # The mechanism a nudge is only ever an optimisation on top of (see
+        # nudge.py's own docstring): an agent anywhere with a key -- not just one
+        # a nudge can reach -- keeps its own cursor and polls this with
+        # since=<last seq it saw> to learn everything that happened while it
+        # was away, in a fixed order that can never skip or repeat a row.
+        return [
+            row.__dict__
+            for row in events.list_for_agent(db, agent, since=since, limit=limit)
+        ]
 
     return router
