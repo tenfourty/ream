@@ -8,6 +8,7 @@ answer as the gallery: `ARTIFACTS_GALLERY_ORIGIN` is set to this server's own
 environment-driven read `create_app`'s router already uses in `test_router.py`.
 """
 
+import http.server
 import json
 import threading
 import time
@@ -181,3 +182,311 @@ def test_the_key_never_appears_in_any_captured_output(live, key_file, tmp_path, 
     captured = capsys.readouterr()
     assert token not in captured.out
     assert token not in captured.err
+
+
+class _QuietHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args, **kwargs) -> None:  # silence per-request access logs
+        pass
+
+
+def _recording_target(received: list) -> type:
+    """A handler that records every request's headers and answers 200 JSON --
+    used as the thing a refused redirect must never reach."""
+
+    class Handler(_QuietHandler):
+        def _record(self) -> None:
+            received.append(dict(self.headers))
+            body = b"{}"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        do_GET = _record
+        do_POST = _record
+
+    return Handler
+
+
+def _redirector(status: int, location: str) -> type:
+    class Handler(_QuietHandler):
+        def _redirect(self) -> None:
+            self.send_response(status)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_GET = _redirect
+        do_POST = _redirect
+
+    return Handler
+
+
+class _BareServer:
+    """A plain http.server.HTTPServer in its own thread -- used for the redirect
+    tests, which need to control the response themselves (status, Location), not
+    a full FastAPI app."""
+
+    def __init__(self, host: str, handler_cls: type):
+        self.httpd = http.server.HTTPServer((host, 0), handler_cls)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+
+    def start(self) -> str:
+        self.thread.start()
+        return f"http://{self.httpd.server_address[0]}:{self.httpd.server_address[1]}"
+
+    def stop(self) -> None:
+        self.httpd.shutdown()
+        self.thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("status", [302, 307])
+def test_a_redirect_to_another_host_is_refused_and_never_reaches_it(
+    tmp_path, monkeypatch, status
+):
+    """Even a same-host, allowed (loopback) API can answer with a redirect to a
+    DIFFERENT host -- an Authelia bounce, an ingress misroute, anything. The
+    client must never follow it: the target here must see NOTHING at all, not
+    merely "a request with no Authorization"."""
+    received: list = []
+    target = _BareServer("127.0.0.2", _recording_target(received))
+    target_origin = target.start()
+    redirector = _BareServer(
+        "127.0.0.1", _redirector(status, f"{target_origin}/elsewhere")
+    )
+    redirector_origin = redirector.start()
+    try:
+        monkeypatch.setenv("ARTIFACTS_API", f"{redirector_origin}/api/v1")
+        path = tmp_path / "key"
+        path.write_text("art_" + "a" * 40)
+        path.chmod(0o600)
+
+        rc = client.main(["--key-file", str(path), "--list"])
+
+        assert rc == 1
+        assert received == []
+    finally:
+        target.stop()
+        redirector.stop()
+
+
+def test_a_publish_redirected_302_also_never_reaches_the_target(tmp_path, monkeypatch):
+    received: list = []
+    target = _BareServer("127.0.0.2", _recording_target(received))
+    target_origin = target.start()
+    redirector = _BareServer(
+        "127.0.0.1", _redirector(302, f"{target_origin}/elsewhere")
+    )
+    redirector_origin = redirector.start()
+    try:
+        monkeypatch.setenv("ARTIFACTS_API", f"{redirector_origin}/api/v1")
+        path = tmp_path / "key"
+        path.write_text("art_" + "a" * 40)
+        path.chmod(0o600)
+        page = tmp_path / "page.html"
+        page.write_text("<!doctype html><body>hi</body></html>")
+
+        rc = client.main(["--key-file", str(path), str(page), "--title", "Board"])
+
+        assert rc == 1
+        assert received == []
+    finally:
+        target.stop()
+        redirector.stop()
+
+
+def test_an_http_api_to_a_non_loopback_host_is_refused_before_any_connection(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("ARTIFACTS_API", "http://example.com/api/v1")
+    called = []
+    monkeypatch.setattr(
+        client,
+        "_opener",
+        type("Boom", (), {"open": staticmethod(lambda *a, **k: called.append(1))})(),
+    )
+    path = tmp_path / "key"
+    path.write_text("art_" + "a" * 40)
+    path.chmod(0o600)
+
+    rc = client.main(["--key-file", str(path), "--list"])
+
+    assert rc == 2
+    assert called == []
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "127.5.6.7", "::1", "localhost"])
+def test_an_http_api_to_a_loopback_host_is_allowed(host, tmp_path, monkeypatch):
+    """The scheme/host guard must not break the tests' own loopback servers --
+    only a non-loopback http:// target is refused."""
+    monkeypatch.setattr(client, "_check_url_scheme", client._check_url_scheme)
+    # A bracketed literal for the IPv6 case, exactly as a URL requires.
+    netloc = f"[{host}]" if ":" in host else host
+    client._check_url_scheme(f"http://{netloc}/api/v1/artifacts")  # must not raise
+
+
+@pytest.mark.parametrize(
+    "bad_content",
+    [
+        "art_abcdefghijklmnopqrstuvwx\nEXTRA",  # an internal newline
+        "art_abcdefghijklmnopqrst uvwx",  # an internal space
+        "art_abcdefghijklmnopqrstuvwx\r\n",  # a trailing CRLF, not a bare LF
+    ],
+    ids=["internal-newline", "internal-space", "trailing-crlf"],
+)
+def test_a_malformed_key_file_is_refused_with_no_traceback(tmp_path, bad_content, capsys):
+    path = tmp_path / "key"
+    path.write_bytes(bad_content.encode())
+    path.chmod(0o600)
+
+    rc = client.main(["--key-file", str(path), "--list"])
+
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "abcdefghijklmnopqrstuvwx" not in captured.out
+    assert "abcdefghijklmnopqrstuvwx" not in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_an_unexpected_exception_prints_only_its_class_name(
+    live, key_file, monkeypatch, capsys
+):
+    path, token = key_file
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError(f"leaking the key would say {token} here")
+
+    monkeypatch.setattr(client, "_list", _boom)
+
+    rc = client.main(["--key-file", str(path), "--list"])
+
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert captured.err.strip() == "error: RuntimeError"
+    assert token not in captured.out
+    assert token not in captured.err
+
+
+def test_a_missing_file_is_a_usage_error_not_a_traceback(tmp_path, capsys):
+    path = tmp_path / "key"
+    path.write_text("art_" + "a" * 40)
+    path.chmod(0o600)
+
+    rc = client.main(
+        ["--key-file", str(path), str(tmp_path / "does-not-exist.html"), "--title", "X"]
+    )
+
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+    assert "no such file" in captured.err
+
+
+def test_a_non_json_2xx_response_is_treated_as_a_failure(tmp_path, monkeypatch, capsys):
+    class Handler(_QuietHandler):
+        def do_GET(self) -> None:
+            body = b"not json at all"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = _BareServer("127.0.0.1", Handler)
+    origin = server.start()
+    try:
+        monkeypatch.setenv("ARTIFACTS_API", f"{origin}/api/v1")
+        path = tmp_path / "key"
+        path.write_text("art_" + "a" * 40)
+        path.chmod(0o600)
+
+        rc = client.main(["--key-file", str(path), "--list"])
+
+        assert rc == 1
+        assert "unexpected response" in capsys.readouterr().err
+    finally:
+        server.stop()
+
+
+def test_publish_and_update_print_only_id_url_revision(live, key_file, tmp_path, capsys):
+    path, _token = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>hi</body></html>")
+
+    client.main(["--key-file", str(path), str(page), "--title", "Board"])
+    published = json.loads(capsys.readouterr().out.strip())
+    assert set(published.keys()) == {"id", "url", "revision"}
+
+    client.main(
+        ["--key-file", str(path), str(page), "--update", published["id"]]
+    )
+    updated = json.loads(capsys.readouterr().out.strip())
+    assert set(updated.keys()) == {"id", "url", "revision"}
+
+
+def test_a_second_409_gives_up_after_exactly_two_patch_attempts(monkeypatch, tmp_path):
+    patch_attempts = []
+
+    def fake_request(method, _url, _key, payload):
+        if method == "PATCH":
+            patch_attempts.append(payload)
+            raise client.HTTPFailure(409, "the artifact moved on; read it and patch again")
+        if method == "GET":
+            return {"revision": "still-not-what-you-think"}
+        raise AssertionError(f"unexpected method {method}")
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>x</body></html>")
+
+    with pytest.raises(client.HTTPFailure) as excinfo:
+        client._patch_with_retry(str(page), "some-id", "stale-revision", "key")
+
+    assert excinfo.value.status == 409
+    assert len(patch_attempts) == 2
+
+
+def test_key_absence_also_covers_401_and_a_double_409_and_a_usage_error(
+    live, tmp_path, capsys
+):
+    # A syntactically valid but unregistered key -- passes _read_key's shape
+    # check, fails the server's own verification: a real 401, not a local refusal.
+    fake_key = "art_" + "z" * 40
+    path = tmp_path / "key"
+    path.write_text(fake_key)
+    path.chmod(0o600)
+
+    rc = client.main(["--key-file", str(path), "--list"])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert fake_key not in captured.out
+    assert fake_key not in captured.err
+
+    # A double-409 by monkeypatching `_request` (as above), driven through `main`.
+    def fake_request(method, _url, _key, _payload=None):
+        if method == "PATCH":
+            raise client.HTTPFailure(409, "stale")
+        return {"revision": "whatever"}
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(client, "_request", fake_request)
+        page = tmp_path / "page.html"
+        page.write_text("<!doctype html><body>x</body></html>")
+        rc = client.main(["--key-file", str(path), str(page), "--update", "some-id"])
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert fake_key not in captured.out
+        assert fake_key not in captured.err
+    finally:
+        monkeypatch.undo()
+
+    # A usage error (missing FILE).
+    rc = client.main(
+        ["--key-file", str(path), str(tmp_path / "nope.html"), "--title", "X"]
+    )
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert fake_key not in captured.out
+    assert fake_key not in captured.err
