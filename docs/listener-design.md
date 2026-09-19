@@ -5,8 +5,11 @@ rounds is triaged at the end, with the reason. Jeremy chose this shape — "(a)
 and can't we have this on each machine that uses the service?" — so the
 listener ships with the client, not as a setting on one box.
 
-**Nothing is built yet, and five things must have written results first.** They
-are listed under "Prerequisites" below. None of them is code that ships.
+**The listener itself is not built, and six things must have written results
+first.** They are listed under "Prerequisites" below. Four are experiments and
+decisions rather than code; the acknowledgement is built (it needed a column, a
+call and a place on the page before anything could be said about delivery), and
+the arm-time copy is a rule the client must follow rather than a feature.
 
 ## The problem, stated exactly
 
@@ -294,7 +297,7 @@ rule and a cap on consecutive wakes.
 - **No new transport.** It is the feed that already exists, called by someone
   who cannot forget.
 
-## Prerequisites — five, none of them shipping code
+## Prerequisites — six
 
 1. **Per-agent seats**, and the shared seat retired. With a shared seat this
    whole design delivers an answer to "some session on this machine".
@@ -309,6 +312,23 @@ rule and a cap on consecutive wakes.
    depends on the answer.
 5. **The ack decided and built**: the `acknowledge` call, its display in the
    gallery, and the alert's two distinguishable states.
+6. **The listener runs a COPY taken when it was armed, never the file in the
+   shared working tree.** Measured 19 Sep 2026: a waiter was started at 20:21
+   and the script it was reading was rewritten in the tree at 20:24, while that
+   process was still running. bash reads a script incrementally, so the process
+   became a mixture of both versions — its messages came from the new renderer
+   and its control flow from the old loop, and the failure it then reported
+   described a program that exists in no commit. Every session here shares one
+   tree, so this is not an edge case; it is the ordinary condition.
+
+   Note what this does NOT mean. Incident #2 in the service's own log is a copy
+   that went stale and silently became a different program from the one being
+   reasoned about, and its lesson was "make it a shim, never a copy". Both are
+   true, and the resolution is that the copy is taken AT ARM TIME and belongs to
+   that run: fresh by construction, immutable for the life of the process, and
+   named so that its provenance — which commit, armed when — is readable. A
+   long-lived process wants a frozen copy; a path that outlives many runs wants
+   a shim. The mistake is a copy that is neither.
 
 ## Order of work, once those have results
 
