@@ -25,3 +25,13 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.8",
 ]
+
+[tool.ruff.lint]
+# S (bandit) and B (bugbear) are worth enabling deliberately on a service whose
+# whole job is handling credentials and publishing agent-authored HTML -- on
+# top of ruff's E4/E7/E9/F + isort defaults, not replacing them.
+extend-select = ["S", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# S101 flags `assert` -- pytest's idiom for every assertion, not a risk here.
+"tests/**" = ["S101"]

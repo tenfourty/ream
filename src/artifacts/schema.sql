@@ -9,8 +9,13 @@ create table if not exists agent_key (
 create table if not exists artifact (
     id              text primary key,
     title           text not null,
-    agent           text not null,  -- the owning agent's name; no foreign key, because a key
-                                    -- may be revoked and reissued while its artifacts remain
+    agent           text not null,  -- the owning agent's SEAT name. No foreign key to agent_key,
+                                    -- deliberately: a key can be revoked and reissued while its
+                                    -- artifacts remain, so re-minting for the same seat keeps the
+                                    -- whole history. Do not "tidy" this into a real FK, and mint
+                                    -- a replacement key for the same name -- a new seat name is a
+                                    -- new world with an empty listing, which is how the pages we
+                                    -- are replacing got duplicated after an account rotation.
     visibility      text not null default 'private'
         check (visibility in ('private', 'link', 'public')),
     current_version integer,
