@@ -13,6 +13,10 @@ concurrency:
   group: artifacts-main
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   test:
     runs-on: docker
@@ -82,17 +86,19 @@ jobs:
           docker info >/dev/null
 
       - name: build and push
+        env:
+          REGISTRY_PASSWORD: "${{ secrets.REGISTRY_PUSH_TOKEN }}"
         run: |
           set -eu
+          if [ -z "$REGISTRY_PASSWORD" ]; then
+            echo "REGISTRY_PUSH_TOKEN is not set on this repo" >&2
+            exit 1
+          fi
           sha12="${GITHUB_SHA:0:12}"
           image="git.tenfourty.site/jeremy/artifacts:${sha12}"
 
-          # The Actions token, under the same owner as this repo -- ops asked that
-          # this be tried first for pushing the image, rather than a separate
-          # REGISTRY_TOKEN secret. If it lacks package-write permission this job
-          # fails here on its first ever run; that is expected, not worked around.
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login git.tenfourty.site \
-            -u "${{ github.actor }}" --password-stdin
+          printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
+            -u "${{ github.repository_owner }}" --password-stdin
 
           docker build -t "$image" .
           docker push "$image"
@@ -113,17 +119,6 @@ jobs:
           git fetch origin main
           sha12="${GITHUB_SHA:0:12}"
 
-          # Never deploy an older build over a newer one: if origin/main already
-          # carries a commit after this run's sha that is not itself a [skip ci]
-          # deploy bump, a later run is already ahead of this one -- let it win.
-          newer=$(git log --format='%H %s' "${GITHUB_SHA}..origin/main" 2>/dev/null \
-            | grep -v '\[skip ci\]' || true)
-          if [ -n "$newer" ]; then
-            echo "origin/main already has a newer commit; that run's deploy wins:"
-            echo "$newer"
-            exit 0
-          fi
-
           git config user.name "artifacts-ci"
           git config user.email "ci@git.tenfourty.site"
 
@@ -131,17 +126,68 @@ jobs:
           # to preserve, so "reapply the edit on top of the latest origin/main" is
           # `git switch -C main origin/main` + sed + commit -- equivalent to a
           # fetch-and-rebase for this one-line bump, and simpler to make idempotent
-          # across the one retry below.
+          # across the one retry below. The guard runs INSIDE this function, right
+          # after the switch, so the retry (which re-fetches a moved origin/main)
+          # re-checks it too, against the origin/main IT sees, instead of trusting
+          # a check the first call already made against a now-stale origin/main.
+          #
+          # `set -e` does NOT apply inside this function while a caller tests its
+          # exit status (`if bump_and_push; ...` below) -- a failing command deep
+          # inside would otherwise be silently skipped past, not caught. Every
+          # failure this function must act on is therefore checked and `return`ed
+          # explicitly, using exit codes distinct from git's own (usually 1) so the
+          # caller can tell "the guard said stand down" from "a plain push race":
+          # 10 = guard says stand down, 12 = guard hit a git error, 13 = the
+          # newTag: sed did not touch exactly one line. Anything else (a plain
+          # nonzero from `git commit`/`git push`) is treated as a push race worth
+          # one retry.
           bump_and_push() {
             git switch -C main origin/main
-            sed -i "s#newTag: .*#newTag: ${sha12}#" deploy/kustomization.yaml
+
+            .forgejo/scripts/deploy-guard.sh "$GITHUB_SHA" HEAD
+            guard_status=$?
+            if [ "$guard_status" -eq 1 ]; then
+              return 10
+            elif [ "$guard_status" -ne 0 ]; then
+              return 12
+            fi
+
+            before=$(grep -c '^[[:space:]]*newTag: ' deploy/kustomization.yaml)
+            sed -i -E 's#^([[:space:]]*)newTag: .*#\1newTag: '"$sha12"'#' deploy/kustomization.yaml
+            after=$(grep -c '^[[:space:]]*newTag: ' deploy/kustomization.yaml)
+            if [ "$before" -ne 1 ] || [ "$after" -ne 1 ]; then
+              echo "expected exactly 1 newTag: line before and after editing, found $before and $after" >&2
+              return 13
+            fi
+
             git add deploy/kustomization.yaml
             git commit -m "deploy: artifacts ${sha12} [skip ci]"
             git push origin main
           }
 
-          if ! bump_and_push; then
-            echo "push race (a newer bump landed first) -- fetching and retrying once"
-            git fetch origin main
-            bump_and_push
+          # `bump_and_push || status=$?` would capture `true`'s status (0), not
+          # the function's -- `if`/`else` is the idiom that both suppresses
+          # `errexit` for the call and hands back its real exit status.
+          if bump_and_push; then
+            status=0
+          else
+            status=$?
           fi
+          case "$status" in
+            0) exit 0 ;;
+            10) echo "standing down: a newer run's deploy already won"; exit 0 ;;
+            12|13) echo "deploy guard or edit-count check failed hard -- not retrying" >&2; exit "$status" ;;
+          esac
+
+          echo "push race (a newer bump landed first) -- fetching and retrying once"
+          git fetch origin main
+          if bump_and_push; then
+            status=0
+          else
+            status=$?
+          fi
+          case "$status" in
+            0) exit 0 ;;
+            10) echo "standing down: a newer run's deploy already won"; exit 0 ;;
+            *) echo "bump_and_push failed on the retry too (status=$status)" >&2; exit "$status" ;;
+          esac
