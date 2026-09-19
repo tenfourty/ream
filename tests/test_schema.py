@@ -1,7 +1,9 @@
+import threading
+
 import psycopg
 import pytest
 
-from artifacts.db import SCHEMA_VERSION
+from artifacts.db import SCHEMA_VERSION, Database
 
 
 def test_migrate_creates_every_table(db):
@@ -83,3 +85,40 @@ def test_deleting_artifact_with_versions_and_files_succeeds(db):
         ).fetchone()[0]
     assert remaining_versions == 0
     assert remaining_files == 0
+
+
+def test_concurrent_migrate_calls_on_a_fresh_schema_both_succeed(dsn):
+    """Two pods starting together both call migrate() against a schema that has
+    never been migrated. Without a lock serialising them, the `do $$ ... end $$`
+    block's check-then-act (query pg_constraint, then ALTER TABLE ADD CONSTRAINT)
+    is not atomic across two concurrent transactions: both can see the constraint
+    missing, and the second one's ALTER then fails with a duplicate-object error
+    once the first commits. A barrier makes both threads issue their migrate()
+    call at the same instant, giving the race the best chance to show up."""
+    db = Database(dsn)
+    with db.connect() as conn:
+        conn.execute("drop schema public cascade; create schema public;")
+
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        barrier.wait()
+        try:
+            Database(dsn).migrate()
+        except BaseException as exc:  # noqa: BLE001 -- captured across threads, re-raised below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors, errors
+    with db.connect() as conn:
+        rows = conn.execute(
+            "select table_name from information_schema.tables where table_schema = 'public'"
+        ).fetchall()
+    names = {row[0] for row in rows}
+    assert {"agent_key", "artifact", "version", "file", "state"} <= names
