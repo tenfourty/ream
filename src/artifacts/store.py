@@ -110,6 +110,7 @@ class ArtifactRow:
     agent: str
     visibility: str
     current_version: int
+    revision: str
 
 
 def content_domain() -> str:
@@ -327,16 +328,25 @@ def patch(
 def get_owned(db: Database, agent: str, artifact_id: str) -> ArtifactRow:
     with db.connect() as conn:
         row = _owned(conn, artifact_id, agent)
-    if row is None:
-        raise NotFound()
-    return ArtifactRow(*row)
+        if row is None:
+            raise NotFound()
+        # The client's only way to learn the expected_revision for a PATCH: the body
+        # itself is never returned to an agent by this route, only its current hash.
+        revision = conn.execute(
+            "select revision from version where artifact_id = %s and n = %s",
+            (row[0], row[4]),
+        ).fetchone()
+    return ArtifactRow(*row, revision[0])
 
 
 def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
     with db.connect() as conn:
         rows = conn.execute(
-            "select id, title, agent, visibility, current_version from artifact"
-            " where agent = %s order by updated_at desc",
+            "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"
+            " artifact.current_version, version.revision from artifact"
+            " join version on version.artifact_id = artifact.id"
+            " and version.n = artifact.current_version"
+            " where artifact.agent = %s order by artifact.updated_at desc",
             (agent,),
         ).fetchall()
     return [ArtifactRow(*row) for row in rows]

@@ -672,3 +672,34 @@ def test_a_scanner_failure_on_patch_also_answers_503(client, db, monkeypatch):
     )
     assert response.status_code == 503
     assert response.json()["detail"]["field"] == "body"
+
+
+def test_reading_an_artifact_by_api_reports_its_current_revision(client, db):
+    """`artifacts-publish --update` (client.py) reads GET /artifacts/{id} to learn the
+    expected_revision to PATCH with -- it has no other source, since the body itself is
+    never returned to an agent by this route. Both the single-artifact read and the
+    listing must carry it."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    created = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
+    ).json()
+
+    fetched = client.get(
+        f"/api/v1/artifacts/{created['id']}", headers=auth(token)
+    ).json()
+    assert fetched["revision"] == created["revision"]
+
+    listed = client.get("/api/v1/artifacts", headers=auth(token)).json()
+    assert listed[0]["revision"] == created["revision"]
+
+    patched = client.patch(
+        f"/api/v1/artifacts/{created['id']}",
+        json={"body": PAGE.replace("hi", "hello"), "expected_revision": created["revision"]},
+        headers=auth(token),
+    ).json()
+
+    refetched = client.get(
+        f"/api/v1/artifacts/{created['id']}", headers=auth(token)
+    ).json()
+    assert refetched["revision"] == patched["revision"]
+    assert refetched["revision"] != created["revision"]
