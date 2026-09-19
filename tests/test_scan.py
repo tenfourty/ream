@@ -62,9 +62,6 @@ def test_an_empty_shapes_source_fails_closed_instead_of_scanning_nothing():
 
 
 def test_a_pattern_matching_the_empty_string_is_rejected():
-    # An empty-matching pattern would flag every line of every body --
-    # "fails closed" in the narrow sense (every publish refused), but only
-    # ever noticed in production, by every agent, all at once.
     with pytest.raises(scan.ShapesError):
         scan.parse_shapes("wide\t.*")
 
@@ -75,10 +72,6 @@ def test_duplicate_shape_names_are_rejected():
 
 
 def test_a_shapes_pattern_using_a_whole_body_anchor_is_rejected():
-    # \A/\Z anchor the whole body; scan() now searches the whole body in one
-    # pass (M1), so a shape reaching for "start of line" wants ^ under
-    # MULTILINE, not \A -- refuse the anchor that means something different
-    # from what a per-line scan would have given.
     with pytest.raises(scan.ShapesError):
         scan.parse_shapes("bad_anchor\t\\Asecret=")
 
@@ -88,21 +81,41 @@ def test_a_well_formed_shapes_source_parses_without_raising():
     assert [name for name, _ in shapes] == ["secret_assignment"]
 
 
-# --- performance: the whole body is scanned once per shape, not once per
-# line per shape. ------------------------------------------------------------
+# --- performance: each view is scanned once per shape, not once per line
+# per shape, and results are bounded regardless of match density. ----------
 
 
 def test_a_megabyte_of_newlines_scans_in_under_two_seconds():
-    # The previous line-by-line loop cost ~4 s of CPU on exactly this input
-    # (22 shapes x ~1M lines, each a Python-level pattern.search call), and
-    # `re` holds the GIL, so that stalled the whole process -- including its
-    # own health check -- for the duration of one publish. 2 s is a generous
-    # bound so this stays green on slower CI hardware, but it fails loudly
-    # if that loop ever comes back.
     body = "\n" * 1_000_000
     start = time.perf_counter()
     scan.scan(body)
     assert time.perf_counter() - start < 2.0
+
+
+def test_a_dense_single_line_body_gives_a_small_bounded_result_quickly():
+    # Before bounding, one Finding per MATCH (not per line) meant a 1 MB
+    # single-line body dense with hits produced on the order of 200k
+    # Finding objects in about a second -- Task 5's 422 echoes every shape
+    # name, so that became several MB of response body for one publish.
+    body = "?token=1&password=1&secret=1" * 40_000  # ~1.1 MB, one line
+    start = time.perf_counter()
+    findings = scan.scan(body)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 1.0
+    assert 0 < len(findings) <= scan._MAX_FINDINGS_TOTAL
+    # A single-line body: de-duplication to (shape, line) must have
+    # collapsed tens of thousands of matches per shape down to one each.
+    assert all(f.line == 1 for f in findings)
+
+
+def test_a_match_repeated_on_many_distinct_lines_is_capped_per_shape():
+    body = "token=fakevalue1234567890\n" * 100_000
+    start = time.perf_counter()
+    findings = scan.scan(body)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 1.0
+    token_findings = [f for f in findings if f.shape == "token_assignment"]
+    assert 0 < len(token_findings) <= scan._MAX_LINES_PER_SHAPE
 
 
 # --- every shape gets a positive fake it must catch and a near-miss it must
@@ -113,7 +126,10 @@ SHAPE_FIXTURES: dict[str, tuple[str, str]] = {
         "Authorization: Bearer FAKETOKEN123",
         "Authorization required for this page",
     ),
-    "bearer_token": ("Bearer FAKETOKEN123", "Bearermania is a sports talk show"),
+    "bearer_token": (
+        "Bearer FAKETOKEN1234567890AB",
+        "the bearer of this token must present it",
+    ),
     "password_assignment": ("password=FAKEPASS123", "passwordless login is enabled"),
     "passwd_assignment": ("passwd=fakepw123", "passwdgen is a tool name"),
     "pass_assignment": ("pass=fakepw123", "password=fake123"),
@@ -162,8 +178,6 @@ SHAPE_FIXTURES: dict[str, tuple[str, str]] = {
 
 
 def test_every_shape_name_has_a_fixture():
-    # Pins the complete set: deleting a shape, or leaving a new one
-    # untested, fails this before it fails silently in production.
     assert set(SHAPE_FIXTURES) == {name for name, _ in scan.SHAPES}
 
 
@@ -177,21 +191,21 @@ def test_shape_catches_its_fake_and_ignores_its_near_miss(name):
 
 
 def test_url_query_secret_stays_case_sensitive():
-    # Unlike the key-name shapes, this one is reached through a URL query
-    # string, where the names in practice are the lowercase ones already in
-    # the source -- a capitalised key is left alone rather than widening an
-    # already broad, unnamed-value-bearing pattern.
     assert scan.scan("https://example.test/page?Key=FAKETOKEN123") == []
 
 
-def test_bearer_token_stays_case_sensitive():
-    # Measured, not assumed: making this one shape case-insensitive alone
-    # produced 38 of the ~40 net new hits across homelab's own docs/*.md,
-    # because "bearer" is ordinary English/security prose in a way
-    # "password="/"token="/"api_key" are not. RFC 6750's auth-scheme token
-    # is `Bearer`, case-sensitive, anyway.
+def test_bearer_token_requires_a_token_shaped_value_not_just_the_word():
+    # Round 1 kept this shape case-sensitive to dodge prose ("the bearer of
+    # this token..."), reasoning that RFC-correctness made the scheme name
+    # case-sensitive -- wrong, RFC 9110 SS11.1 makes auth schemes
+    # case-insensitive on the wire. Blanket case-insensitivity alone then
+    # fired on 32 of 214 homelab docs files. The value-shape requirement
+    # (16+ base64url-ish characters) is what actually distinguishes a
+    # credential from prose, not case, and it catches JSON/dict forms too.
     assert scan.scan("the bearer of this token must present it") == []
-    assert scan.scan("Bearer FAKETOKEN123") != []
+    assert scan.scan("Bearer FAKETOKEN1234567890AB") != []
+    assert scan.scan("bearer FAKETOKEN1234567890AB") != []  # lowercase scheme
+    assert scan.scan('{"authorization": "bearer FAKETOKEN1234567890AB"}') != []
 
 
 # --- the two BRE-translated shapes: proof the translation was necessary,
@@ -199,11 +213,6 @@ def test_bearer_token_stays_case_sensitive():
 
 
 def test_pasting_either_untranslated_bre_source_back_in_would_go_undetected(monkeypatch):
-    # Guards against exactly the mistake the shapes file's header warns
-    # about: pasting the homelab source's BRE line back in verbatim compiles
-    # without error under Python's `re` (it is not invalid syntax, just the
-    # wrong syntax) and then never matches a real credential again --
-    # silently, with no test failure, unless this one exists.
     bre_sources = {
         "url_query_secret": r"[?&]\(api_\)\?\(key\|token\|secret\|password\)=[^&[:space:]]",
         "url_inline_credentials": r"://[^/[:space:]:]\+:[^/[:space:]@]\+@",
@@ -235,7 +244,8 @@ def test_uppercase_environment_variable_dumps_are_caught(body, expected_shape):
     assert any(f.shape == expected_shape for f in findings)
 
 
-# --- placeholder values are excluded, real-looking ones are not ------------
+# --- placeholder values are excluded only for assignment-style shapes,
+# fullmatch not prefix, and real-looking values are never mistaken for one.
 
 
 @pytest.mark.parametrize(
@@ -247,12 +257,20 @@ def test_uppercase_environment_variable_dumps_are_caught(body, expected_shape):
         "password=********",
         "password=xxxxxxxx",
         "password=changeme",
-        "api_key=example",
         "token=REDACTED",
     ],
 )
-def test_placeholder_values_are_excluded(body):
+def test_placeholder_values_are_excluded_for_assignment_shapes(body):
     assert scan.scan(body) == []
+
+
+def test_placeholder_exclusion_does_not_apply_to_non_assignment_shapes():
+    # api_key_literal's match is just the bare key name -- it never has a
+    # value to classify, so unlike password=/token=/secret=, a
+    # placeholder-looking tail must not suppress it (fix round 1's
+    # regression applied placeholder logic to every shape, not just
+    # assignment ones).
+    assert scan.scan("api_key=example") != []
 
 
 def test_an_assignment_with_no_value_at_all_is_treated_as_a_placeholder():
@@ -265,19 +283,84 @@ def test_a_realistic_looking_value_is_not_mistaken_for_a_placeholder():
 
 
 def test_a_placeholder_body_password_wrapped_in_a_url_still_flags_the_url_shape():
-    # Placeholder exclusion is per-match, not per-body: a value that looks
-    # like a placeholder to one shape does not suppress a different shape
-    # firing on genuinely non-placeholder content elsewhere in the same body.
     findings = scan.scan("password=<REDACTED>\ntoken=FAKETOKEN123")
     assert any(f.shape == "token_assignment" for f in findings)
     assert not any(f.shape == "password_assignment" for f in findings)
 
 
 def test_a_bare_secret_with_nothing_after_it_still_fires():
-    # aws_access_key_id and the header shapes are NOT assignment shapes: the
-    # match itself is the whole secret (or a header announcing one), so
-    # "nothing after it" must not be read as a placeholder -- unlike
-    # `password=` with nothing after it, which is exactly what "empty"
-    # placeholder detection is for.
     assert scan.scan(FAKE_AWS) != []
     assert scan.scan(FAKE_PRIVATE_KEY) != []
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "changeme2026!Xq9",
+        "examplePassw0rd!",
+        "xxxhunter2fake",
+        "XXXX-real-fake-9f8e",
+    ],
+)
+def test_a_value_merely_starting_like_a_placeholder_is_not_excluded(value):
+    # A prefix match (fix round 1's other defect) wrongly excluded any value
+    # that merely STARTS with changeme/example/a run of x -- these are
+    # real-looking values, not placeholders, and must fullmatch to exclude.
+    assert scan.scan(f"password={value}") != []
+
+
+# --- HTML markup around a credential must not hide it: two views (raw body,
+# tag-stripped/entity-unescaped text) are merged. ---------------------------
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_shape"),
+    [
+        (f"<td>{FAKE_AWS}</td>", "aws_access_key_id"),
+        (f"<code>{FAKE_AWS}</code>", "aws_access_key_id"),
+        (f"{FAKE_AWS}<br>", "aws_access_key_id"),
+        (f"key id: {FAKE_AWS} <span>", "aws_access_key_id"),
+        ("<pre>-----BEGIN PRIVATE KEY-----<br>MIIEfakebase64data", "private_key_header"),
+        ("<pre>-----BEGIN PRIVATE KEY-----</pre>", "private_key_header"),
+        ("<p>password=<b>hunter2fake</b></p>", "password_assignment"),
+        ("api_key<br>sk-proj-fakekey123", "api_key_literal"),
+        ("X-Auth-Token: <code>fakevalue123</code>", "x_auth_token_header"),
+        ("Authorization: <code>Basic ZmFrZWJhc2ljZmFrZQ==</code>", "authorization_header"),
+        ("<td>DB_PASSWORD=</td><td>hunter2fake</td>", "password_assignment"),
+        ("<dt>OPENAI_API_KEY</dt><dd>sk-proj-fake123</dd>", "api_key_literal"),
+        ("password=<PASSWORD> actually it is hunter2fake", "password_assignment"),
+        ("password=${PW}hunter2fake", "password_assignment"),
+    ],
+)
+def test_a_credential_next_to_or_split_by_markup_is_still_caught(body, expected_shape):
+    findings = scan.scan(body)
+    assert any(f.shape == expected_shape for f in findings), (
+        f"expected {expected_shape} to fire on markup-adjacent fake"
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_shape"),
+    [
+        ("redis://default:changeme-prod-fake@db.example.test:6379", "url_inline_credentials"),
+        ("redis://default:xxxYfakeZ@db.example.test:6379", "url_inline_credentials"),
+        ("?token=example_live_fake123", "url_query_secret"),
+    ],
+)
+def test_a_placeholder_look_alike_url_value_with_a_real_suffix_still_fires(body, expected_shape):
+    findings = scan.scan(body)
+    assert any(f.shape == expected_shape for f in findings)
+
+
+def test_a_pkcs8_header_split_across_html_elements_is_still_caught():
+    findings = scan.scan("<pre>-----BEGIN PRIVATE KEY-----</pre><pre>MIIEfakebase64</pre>")
+    assert any(f.shape == "private_key_header" for f in findings)
+
+
+def test_detagging_never_changes_line_numbers_the_raw_body_would_report():
+    # A tag replaces to the same number of newlines it contained, so a
+    # credential on line 3 of the raw body is still reported as line 3, not
+    # shifted by however much markup surrounds it.
+    body = "one\ntwo\n<div>\n  password=FAKEPASS123\n</div>\nfive"
+    findings = scan.scan(body)
+    assert any(f.shape == "password_assignment" and f.line == 4 for f in findings)

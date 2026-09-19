@@ -10,17 +10,31 @@ scanner that leaks the credential it caught is worse than no scanner. Do not
 add a field, a log line, or an exception message anywhere in this module that
 carries scanned text.
 
-`scan()` searches the WHOLE body once per shape (`re.MULTILINE`, `finditer`),
-not once per line: a 22-pattern-times-line loop cost about 4 s of CPU on a
-1 MB newline-dense body, and `re` holds the GIL, so that stalled the entire
-process -- including its own health check -- for the duration of one
-publish. Line numbers for a match are derived after the fact from its
-character offset, via a newline-offset table built lazily (only when there
-is at least one match to report), so the common clean-body case pays for
-building that table not at all.
+`scan()` checks two VIEWS of the body against every shape, once each (not
+line by line): the raw body, and a tag-stripped, entity-unescaped TEXT view.
+The text view exists because the scanner's whole input is HTML -- a credential
+sitting in `<td>AKIA...</td>`, or split key-in-one-cell/value-in-the-next
+across a table row, is still there once the markup is treated as what it is,
+whitespace, rather than as part of the value. `_detag()` replaces every tag
+with the SAME number of newlines it contained (never more, never fewer), so
+line numbers computed from a view's own newline offsets always mean the same
+line in the raw body -- a tag can split or join text within a line, but it
+never manufactures or deletes one.
+
+Findings are bounded: at most `_MAX_LINES_PER_SHAPE` distinct lines are kept
+per shape and at most `_MAX_FINDINGS_TOTAL` overall, with (shape, line)
+de-duplicated across both views. Before this bound existed, a single dense
+1 MB body could produce on the order of 200k `Finding` objects -- Task 5's
+422 echoes every shape name, so that became several MB of response body for
+one publish. A shape whose matches keep landing on the same handful of lines
+also stops scanning once `_MAX_RAW_MATCHES_PER_SHAPE` matches have been
+examined, not just once enough distinct lines are found, because a body that
+repeats one match on a single line never grows past one distinct line and
+would otherwise scan to the very end regardless of body size.
 """
 
 import bisect
+import html
 import re
 from dataclasses import dataclass
 from importlib import resources
@@ -45,19 +59,20 @@ class ShapesError(Exception):
 
 # \A/\Z anchor the whole body regardless of where a match starts scanning
 # from, and mean something different from ^/$ under MULTILINE (per-line).
-# Since scan() now searches the whole body in one pass, a shape that reaches
-# for one of these almost certainly means "start/end of a line" -- reject it
-# at load time rather than let it silently mean "start/end of the body".
+# Since scan() searches each view in one pass, a shape that reaches for one
+# of these almost certainly means "start/end of a line" -- reject it at load
+# time rather than let it silently mean "start/end of the body".
 _FORBIDDEN_ANCHORS = ("\\A", "\\Z")
 
-# Shapes whose own pattern ends at an assignment operator, so a match with
-# nothing after it genuinely means "no value was written" -- unlike a match
-# that IS the whole secret (aws_access_key_id) or a header that only
-# announces one follows (the PEM/age/PGP headers, x_auth_token_header),
-# where "nothing after" carries no such meaning and must not be treated as a
-# placeholder. Keep this in sync by hand if an assignment-style shape is
-# added; the safe direction if it drifts is to under-list here, which only
-# means a genuinely-empty value still gets flagged (fails closed).
+# Shapes whose own pattern ends exactly where a value begins: an assignment
+# operator. Only these -- plus any shape whose regex captures the value
+# directly via a named `value` group (url_inline_credentials) -- have a
+# "value" to classify as a placeholder at all. Every other shape (a bare key
+# name, a header, a format-strict value like an AWS key id or a PEM header)
+# always fires once matched, full stop. Applying placeholder logic to those
+# was fix round 1's regression: `</td>` sitting right after an AWS key id is
+# not "the AWS key's value", it is markup that happens to follow it, and
+# treating it as one hid the key in an HTML table cell.
 _ASSIGNMENT_SHAPES = frozenset(
     {
         "password_assignment",
@@ -72,22 +87,41 @@ _ASSIGNMENT_SHAPES = frozenset(
 
 # Values that are plainly placeholders, not accidentally-included secrets:
 # angle-bracket/shell/template fill-ins, redaction runs, and the handful of
-# words people actually type in place of a real credential. This is
-# deliberately not entropy scoring -- the threat this guards against is an
-# agent accidentally including a real secret, not an adversary evading a
-# gate, and a real secret does not look like `${FOO}`.
+# words people actually type in place of a real credential. Checked with
+# `fullmatch`, never a prefix `match`: `changeme2026!Xq9` and `xxxYfakeZ` are
+# real-looking values that merely start the way a placeholder does, and a
+# prefix check excluded them wrongly (fix round 1's other defect). The
+# angle-bracket form is deliberately narrow -- placeholder-style content
+# only (letters, digits, `_ .-`) -- never an arbitrary HTML tag: `</td>` must
+# not fullmatch this, or every value immediately followed by markup would be
+# excluded. This is deliberately not entropy scoring -- the threat this
+# guards against is an agent accidentally including a real secret, not an
+# adversary evading a gate, and a real secret does not look like `${FOO}`.
 _PLACEHOLDER = re.compile(
-    r"""^(
-        <[^>\n]*>       # <placeholder>
-        |\$\{[^}\n]*\}  # ${VAR}
-        |\{\{[^}\n]*\}\} # {{ template }}
-        |[*xX]{3,}      # ****, xxxxxxxx, XXXXXXXX (masked)
+    r"""(
+        <[A-Za-z0-9_ .-]+>  # <YOUR_TOKEN>, <your-token-here>, <PASSWORD>
+        |\$\{[^}\n]*\}      # ${VAR}
+        |\{\{[^}\n]*\}\}    # {{ template }}
+        |[*xX]{3,}          # ****, xxxxxxxx, XXXXXXXX (masked)
         |changeme
         |example
         |redacted
     )""",
     re.IGNORECASE | re.VERBOSE,
 )
+
+# A naive tag matcher, not an HTML parser: it can misfire on a stray `< >`
+# pair in prose or code (e.g. `5 < 10 > 3`), but that only ever makes the
+# TEXT view blind to that one span -- the RAW view still sees it unchanged,
+# and findings from both views are merged, so nothing is lost by erring
+# toward stripping too much here.
+_HTML_TAG = re.compile(r"<[^>]*>")
+
+_VALUE_BOUNDARY = re.compile(r"""[\s"'&;,]""")
+
+_MAX_LINES_PER_SHAPE = 5
+_MAX_RAW_MATCHES_PER_SHAPE = 500
+_MAX_FINDINGS_TOTAL = 50
 
 
 def parse_shapes(text: str) -> list[tuple[str, re.Pattern]]:
@@ -101,8 +135,7 @@ def parse_shapes(text: str) -> list[tuple[str, re.Pattern]]:
     the empty string once compiled is rejected for the same reason, a
     duplicate name is rejected because it would let one shape silently
     shadow another's identity in a Finding, and \\A/\\Z are rejected because
-    scan() now matches over the whole body, not per line (see module
-    docstring).
+    scan() matches over a whole view, not per line (see module docstring).
     """
     shapes: list[tuple[str, re.Pattern]] = []
     seen: set[str] = set()
@@ -147,53 +180,121 @@ def _load_shapes() -> list[tuple[str, re.Pattern]]:
 SHAPES = _load_shapes()
 
 
-def _value_after(text: str, start: int) -> str:
-    """A short, bounded slice of `text` starting at `start`, for placeholder
-    classification only -- never returned, logged or included in a
-    `Finding`. Leading separator/quote/newline characters are stripped so a
-    value like `password="changeme"` or a PEM header's own trailing newline
-    do not hide the token this is meant to classify.
+def _detag(text: str) -> str:
+    """A tag-free view of `text`: every HTML tag becomes a single leading and
+    trailing space around the SAME number of newlines the tag itself
+    contained. Never more, never fewer -- a tag can split or join text
+    within a line, but this must never add or remove a line, since line
+    numbers for this view are computed from its own newline offsets and are
+    meant to mean the same line in the raw body.
     """
-    return text[start : start + 80].lstrip(" \t\r\n=:'\"")
+
+    def _replace(match: re.Match) -> str:
+        return " " + ("\n" * match.group(0).count("\n")) + " "
+
+    return _HTML_TAG.sub(_replace, text)
+
+
+def _value_after(text: str, start: int) -> str:
+    """The value token immediately following an assignment match: bounded at
+    the next whitespace, quote, `&`, `;`, `,`, or end of text. For
+    placeholder classification only -- never returned, logged, or included
+    in a `Finding`. Only ever called for a shape whose match already ends
+    exactly at the assignment operator, so no separator needs stripping;
+    a leading space or quote (`password = "x"`) is stripped before the
+    boundary search so the token itself, not its wrapper, gets classified.
+
+    A `${...}`/`{{...}}`/`<...>` wrapper's OWN closing delimiter is found
+    first, and the boundary search resumes only after it: `{{ vault_secret
+    }}` has a plain space inside the braces that is not a value boundary,
+    while `${PW}hunter2fake` has real content trailing the closing brace
+    that very much is one. Skip only past a wrapper that actually closes;
+    an unclosed one falls through to the plain boundary search unchanged.
+    """
+    window = text[start : start + 200].lstrip(" \t'\"")
+    skip = 0
+    if window.startswith("${"):
+        end = window.find("}")
+        skip = end + 1 if end != -1 else 0
+    elif window.startswith("{{"):
+        end = window.find("}}")
+        skip = end + 2 if end != -1 else 0
+    elif window.startswith("<"):
+        end = window.find(">")
+        skip = end + 1 if end != -1 else 0
+    boundary = _VALUE_BOUNDARY.search(window, skip)
+    return window[: boundary.start()] if boundary else window
 
 
 def _is_placeholder(shape: str, match: re.Match, text: str) -> bool:
+    """Whether `match`'s value is plainly a placeholder. Scoped deliberately
+    to shapes that actually have a value to classify (see
+    `_ASSIGNMENT_SHAPES`); every other shape always returns False here --
+    it always fires once matched.
+    """
     named = match.groupdict().get("value")
+    if named is None and shape not in _ASSIGNMENT_SHAPES:
+        return False
     value = named if named is not None else _value_after(text, match.end())
     stripped = value.strip(" \t\r\n'\"")
     if not stripped:
-        # Only for a shape whose pattern IS an assignment operator, or a
-        # shape whose regex captures the value directly, does "nothing
-        # here" mean "no value was written". For every other shape -- the
-        # whole match is the secret, or the match is a header announcing
-        # one follows -- "nothing after" is the ordinary case and must
-        # still be reported.
-        return named is not None or shape in _ASSIGNMENT_SHAPES
-    return _PLACEHOLDER.match(stripped) is not None
+        return True
+    return _PLACEHOLDER.fullmatch(stripped) is not None
+
+
+def _newline_offsets(view: str) -> list[int]:
+    return [m.start() for m in re.finditer("\n", view)]
+
+
+def _line_of(offset: int, newline_offsets: list[int]) -> int:
+    return bisect.bisect_right(newline_offsets, offset) + 1
+
+
+def _shape_lines(
+    name: str, pattern: re.Pattern, views: list[tuple[str, list[int]]]
+) -> list[int]:
+    """The distinct lines (up to `_MAX_LINES_PER_SHAPE`) where `pattern`
+    matches something that isn't a placeholder, across both views --
+    de-duplicated, and stopping early either once enough lines are found or
+    once `_MAX_RAW_MATCHES_PER_SHAPE` matches have been examined regardless.
+    The second bound matters even when the first never triggers: a body
+    that repeats one match on a single line keeps `lines` at size 1 forever
+    and would otherwise scan to the end of a body of any size.
+    """
+    lines: dict[int, None] = {}
+    examined = 0
+    for view, offsets in views:
+        for match in pattern.finditer(view):
+            examined += 1
+            if not _is_placeholder(name, match, view):
+                lines.setdefault(_line_of(match.start(), offsets), None)
+            if len(lines) >= _MAX_LINES_PER_SHAPE or examined >= _MAX_RAW_MATCHES_PER_SHAPE:
+                break
+        if len(lines) >= _MAX_LINES_PER_SHAPE or examined >= _MAX_RAW_MATCHES_PER_SHAPE:
+            break
+    return list(lines)
 
 
 def scan(text: str) -> list[Finding]:
-    """Return every (shape, line) a shape pattern matched in `text`, minus
-    any match whose value is plainly a placeholder (see `_PLACEHOLDER`).
+    """Return every (shape, line) a shape pattern matched in `text` -- across
+    the raw body and a tag-stripped, entity-unescaped text view -- minus any
+    match whose value is plainly a placeholder, bounded to at most
+    `_MAX_LINES_PER_SHAPE` lines per shape and `_MAX_FINDINGS_TOTAL` overall.
 
     An empty list means clean. It never means "the scanner didn't run" --
     a failure to load shapes raises `ShapesError` at import time instead,
     so a caller checking `scan(body) == []` is never looking at a scanner
     that silently gave up.
     """
-    normalized = "\n".join(text.splitlines())
-    raw: list[tuple[int, str]] = []
+    raw_view = "\n".join(text.splitlines())
+    text_view = html.unescape(_detag(raw_view))
+    views = [(raw_view, _newline_offsets(raw_view)), (text_view, _newline_offsets(text_view))]
+
+    findings: list[Finding] = []
     for name, pattern in SHAPES:
-        for match in pattern.finditer(normalized):
-            if _is_placeholder(name, match, normalized):
-                continue
-            raw.append((match.start(), name))
-    if not raw:
-        return []
-    newline_offsets = [m.start() for m in re.finditer("\n", normalized)]
-    findings = [
-        Finding(shape=name, line=bisect.bisect_right(newline_offsets, offset) + 1)
-        for offset, name in raw
-    ]
+        for line in _shape_lines(name, pattern, views):
+            findings.append(Finding(shape=name, line=line))
+        if len(findings) >= _MAX_FINDINGS_TOTAL:
+            break
     findings.sort(key=lambda f: (f.line, f.shape))
-    return findings
+    return findings[:_MAX_FINDINGS_TOTAL]
