@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.7
-#
 # Two stages: `build` resolves dependencies and builds this project with uv, on
 # top of a full Debian base (uv needs a working compiler toolchain for psycopg's
 # C extension isn't needed here -- psycopg[binary] ships wheels -- but the slim
@@ -17,7 +15,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.12.9 /uv /uvx /bin/
 WORKDIR /app
 ENV UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never \
-    UV_PROJECT_ENVIRONMENT=/app/.venv
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    UV_COMPILE_BYTECODE=1
 
 # Dependencies first, from the lockfile alone: this layer only invalidates when
 # pyproject.toml or uv.lock change, never on a plain source edit.
@@ -32,7 +31,7 @@ RUN uv sync --frozen --no-dev --no-editable
 
 FROM python:3.12-slim-bookworm
 
-COPY --from=build --chown=10001:10001 /app/.venv /app/.venv
+COPY --from=build /app/.venv /app/.venv
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
