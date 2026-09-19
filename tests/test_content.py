@@ -145,9 +145,12 @@ def test_the_gallery_origin_is_read_at_call_time(content, published, monkeypatch
     assert response.headers["location"] == f"https://elsewhere.example/a/{published.id}"
 
 
-def test_an_unknown_artifact_host_is_not_found(content):
+def test_an_unknown_artifact_host_is_not_found(content, token):
+    """The fixture's REAL token, on a host with no matching artifact: this pins "a valid
+    token on a missing host is 404", not just "bare / with no token is 404" -- which
+    cannot tell a missing artifact apart from a missing token at all."""
     content.headers.update({"host": "aaaaaaaaaaaaaaaaaaaaaaaaaa.tenfourty.com"})
-    assert content.get("/", headers=FRAMED).status_code == 404
+    assert content.get(f"/t/{token}/", headers=FRAMED).status_code == 404
 
 
 def test_a_pending_version_is_never_served(db, content, published, token):
@@ -170,11 +173,14 @@ def test_a_pending_version_is_never_served(db, content, published, token):
 
 def test_every_content_response_carries_the_base_headers(content, token):
     """The global constraint is "every content response", not "every page response":
-    the 303, the router's own 404s, and FastAPI's 404/422 all count. Each must carry
-    nosniff and a CSP, and the 422 must never echo the value that triggered it."""
+    the 303, FastAPI's own route-404 (no such route at all), the app's own 404 for a
+    right-token-wrong-version and for a wrong token, and the 422 all count. Each must
+    carry nosniff and a CSP, and the 422 must never echo the value that triggered it."""
     responses = [
         content.get("/", headers={"sec-fetch-dest": "document"}, follow_redirects=False),
-        content.get("/v/999999", headers=FRAMED),  # no such route any more -> 404
+        content.get("/v/999999", headers=FRAMED),  # no such route any more -> FastAPI's 404
+        content.get(f"/t/{token}/v/999999", headers=FRAMED),  # right token, no such version
+        content.get("/t/not-the-token/", headers=FRAMED),  # wrong token
         content.get(f"/t/{token}/v/<script>alert(1)<", headers=FRAMED),  # not an int -> 422
     ]
     for response in responses:
@@ -183,9 +189,9 @@ def test_every_content_response_carries_the_base_headers(content, token):
         csp = response.headers["content-security-policy"]
         assert "default-src 'none'" in csp
         assert f"frame-ancestors {GALLERY}" in csp
-    assert responses[2].status_code == 422
-    assert "<script>" not in responses[2].text
-    assert "alert(1)" not in responses[2].text
+    assert responses[-1].status_code == 422
+    assert "<script>" not in responses[-1].text
+    assert "alert(1)" not in responses[-1].text
 
 
 def test_the_openapi_document_is_not_served(content):
@@ -208,7 +214,9 @@ def test_an_unhandled_error_still_carries_the_base_headers(monkeypatch):
     response = client.get("/t/whatever/", headers=FRAMED)
     assert response.status_code == 500
     assert response.headers["x-content-type-options"] == "nosniff"
-    assert "content-security-policy" in response.headers
+    csp = response.headers["content-security-policy"]
+    assert "default-src 'none'" in csp
+    assert f"frame-ancestors {GALLERY}" in csp
 
 
 def test_inject_places_the_shim_right_after_the_leading_doctype():
@@ -262,3 +270,52 @@ def test_inject_leaves_a_script_containing_a_fake_arrow_intact():
     result = inject(page, SHIM)
     assert result.index(SHIM) == 0
     assert "<script>/* --><!doctype html> */ early()</script>" in result
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        # <!--> : abrupt closing of an EMPTY comment (WHATWG "abrupt-closing-of-empty-comment")
+        "<!--><script>early()</script><!-- --><!doctype html><html><head></head><body></body></html>",
+        # <!---> : same, one more dash
+        "<!---><script>early()</script><!-- --><!doctype html><html><head></head><body></body></html>",
+        # --!> : incorrectly closed comment (WHATWG "incorrectly-closed-comment")
+        "<!-- a --!><script>early()</script><!-- b --><!doctype html><html><head></head><body></body></html>",
+        # --!> ending appearing inside a script's own text
+        "<!-- a --!><script>/* --><!doctype html> */ early()</script>",
+        # <!--> ending appearing inside a script's own text
+        "<!--><script>/* --><!doctype html> */ early()</script>",
+    ],
+)
+def test_inject_recognises_every_html_comment_ending_not_just_dash_dash_gt(page):
+    """The WHATWG HTML tokenizer ends a comment at `<!-->`/`<!--->` (abrupt closing of an
+    empty comment) and at `--!>` (incorrectly closed comment), not just at `-->`. Missing
+    those lets a comment appear to "end" only at the next real `-->`, well past the page's
+    own `<script>` -- landing the shim after that script, or inside a script whose own
+    text happens to contain one of these sequences. With all three endings recognised,
+    none of these five pages looks like "comments then a leading doctype" any more, so the
+    shim goes to the very start -- before the script tag either way, and the original
+    page (script included) is served byte-for-byte after it."""
+    result = inject(page, SHIM)
+    assert result.index(SHIM) == 0
+    assert result.index(SHIM) < result.index("early(")
+    assert page in result
+
+
+def test_inject_still_recognises_an_empty_comment_before_the_doctype():
+    """`<!---->` (an opening `<!--` immediately followed by a closing `-->`, with nothing
+    in between) is a real, complete, legitimate comment -- not one of the abrupt-closing
+    forms above -- and must still be skipped over, landing the shim right after the
+    doctype that follows it."""
+    page = "<!----><!doctype html><html></html>"
+    result = inject(page, SHIM)
+    assert result == "<!----><!doctype html>" + SHIM + "<html></html>"
+
+
+def test_inject_still_recognises_a_comment_containing_a_lone_double_dash():
+    """A lone `--` inside a comment's text (not immediately followed by `>` or `!>`) does
+    not end it -- the comment is still one real comment, ending at its own `-->`, and must
+    still be skipped over."""
+    page = "<!-- a -- b --><!doctype html><html></html>"
+    result = inject(page, SHIM)
+    assert result == "<!-- a -- b --><!doctype html>" + SHIM + "<html></html>"

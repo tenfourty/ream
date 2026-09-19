@@ -28,6 +28,8 @@ def test_the_page_is_served_only_with_its_own_token(db, content, published):
     assert content.get(f"/t/{token}/", headers=FRAMED).status_code == 200
     assert content.get("/t/not-the-token/", headers=FRAMED).status_code == 404
     assert content.get("/", headers=FRAMED).status_code == 404
+    # a case-swap is a different token, byte for byte -- no case-folding anywhere in the path
+    assert content.get(f"/t/{token.swapcase()}/", headers=FRAMED).status_code == 404
     # another artifact's token, presented on this artifact's host, opens nothing
     other = store.publish(db, "ops-seat", "Other", PAGE)
     assert content.get(f"/t/{store.read_token(db, other.id)}/", headers=FRAMED).status_code == 404
@@ -107,3 +109,39 @@ def test_content_url_is_what_the_gallery_frames(db, published, monkeypatch):
     assert store.content_url(published.id, token) == (
         f"https://{published.id}.tenfourty.com/t/{token}/"
     )
+
+
+def _fingerprint(response):
+    """(status, body, content-type, every header except Date) -- Date is the one header
+    that legitimately differs between two responses taken a moment apart."""
+    headers = {k: v for k, v in response.headers.items() if k.lower() != "date"}
+    return response.status_code, response.content, headers
+
+
+def test_a_wrong_token_answers_exactly_like_a_missing_artifact(db, content, published):
+    """Not just "both 404": the SAME status, body, content-type and header set, on a
+    wrong token for a real artifact and on any token for a host with no artifact at all --
+    so nothing here can be used to tell the two apart."""
+    wrong_on_existing = content.get("/t/not-the-token/", headers=FRAMED)
+
+    missing_host = TestClient(create_content_app(db))
+    missing_host.headers.update({"host": "b" * 26 + ".tenfourty.com"})
+    real_token_on_missing_host = missing_host.get(
+        f"/t/{store.read_token(db, published.id)}/", headers=FRAMED
+    )
+
+    assert _fingerprint(wrong_on_existing) == _fingerprint(real_token_on_missing_host)
+
+
+def test_no_trailing_slash_redirect_can_put_the_token_on_the_wire(db, content, published):
+    """Starlette's `redirect_slashes` (on by default) would answer these with a 307 back
+    to the tokenised URL, BEFORE the framed-only check, and its Location scheme follows
+    the ASGI scope -- behind a TLS-terminating ingress uvicorn does not trust for
+    X-Forwarded-Proto, that Location is `http://.../t/<tok>/`, putting the token on the
+    wire in plaintext on an ordinary top-level navigation."""
+    token = store.read_token(db, published.id)
+    for path in (f"/t/{token}", f"/t/{token}/v/1/"):
+        response = content.get(path, headers=FRAMED, follow_redirects=False)
+        assert response.status_code == 404
+        assert "location" not in response.headers
+        assert token not in response.text

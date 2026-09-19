@@ -6,6 +6,8 @@ turns that boundary into a boundary in name only, so every row here asserts
 WHICH app answered, not just a status code.
 """
 
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -92,6 +94,66 @@ def test_a_content_host_never_reaches_the_gallery_api(client, published_id):
     assert response.json() == {"detail": "Not Found"}
     csp = response.headers["content-security-policy"]
     assert "default-src 'none'" in csp
+
+
+async def _raw_get(app, headers: list[tuple[bytes, bytes]], path: str = "/healthz"):
+    """Drive the raw ASGI callable directly with an explicit header list, so a header key
+    (like `host`) can appear more than once -- something no dict of headers can do."""
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
+        "headers": headers,
+        "client": ("testclient", 1234),
+        "server": ("testserver", 80),
+    }
+    await app(scope, receive, send)
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    body = b"".join(m["body"] for m in sent if m["type"] == "http.response.body")
+    return start["status"], body
+
+
+@pytest.mark.asyncio
+async def test_duplicate_host_headers_are_resolved_the_same_way_by_router_and_content(
+    db, published_id, token
+):
+    """The router (`app.py`) and the content app (`content.py`) must pick the SAME host
+    when a request carries two Host headers -- both read the FIRST, via the shared
+    `hosts.first_host_header`. If they ever disagreed (router picks one, content the
+    other), the router could hand a request to the wrong app, or the content app could
+    look up the wrong artifact under the router's nose."""
+    app = create_app(db)
+    content_host = f"{published_id}.tenfourty.com".encode()
+    gallery_host = GALLERY_HOST.encode()
+    framed = [(b"sec-fetch-dest", b"iframe")]
+
+    # content host FIRST -> the content app answers the tokenised path
+    status, body = await _raw_get(
+        app, [(b"host", content_host), (b"host", gallery_host), *framed], f"/t/{token}/"
+    )
+    assert status == 200
+    assert b"hi" in body
+
+    # gallery host FIRST -> the gallery app answers /healthz
+    status, body = await _raw_get(
+        app, [(b"host", gallery_host), (b"host", content_host)], "/healthz"
+    )
+    assert status == 200
+    assert json.loads(body) == {"status": "ok"}
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,6 @@ from artifacts import hosts
 from artifacts.api import agent_router
 from artifacts.content import create_content_app
 from artifacts.db import Database
-from artifacts.hosts import first_host_header
 
 
 def create_gallery_app(db: Database | None = None) -> FastAPI:
@@ -52,7 +51,7 @@ def create_app(db: Database):
         if scope["type"] == "lifespan":
             await gallery(scope, receive, send)
             return
-        host = hosts.normalise(first_host_header(scope))
+        host = hosts.normalise(hosts.first_host_header(scope))
         if hosts.is_gallery(host):
             chosen = gallery
         elif hosts.artifact_id(host) is not None:

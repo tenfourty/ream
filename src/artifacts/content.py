@@ -12,7 +12,6 @@ from fastapi.responses import (
 
 from artifacts import hosts
 from artifacts.db import Database
-from artifacts.hosts import first_host_header
 from artifacts.store import (
     gallery_origin,  # re-exported: artifacts.content.gallery_origin still resolves
 )
@@ -49,14 +48,21 @@ INERT_SHIM = "<script>window.claude={use:async(n)=>null};window.storage=null;</s
 
 # An optional BOM, then leading whitespace and whole HTML comments, then the leading
 # doctype -- everything up to and including it is one match, so the shim can be spliced
-# in right after it. The comment alternative's body is `(?:(?!-->).)*`, not a lazy `.*?`:
-# a lazy dot-star, under backtracking, can span from the first `<!--` all the way to the
-# LAST `-->` before a later doctype -- treating a genuine `<script>` (and anything else)
-# in between as if it were commented out, and landing the shim after it, or inside it.
-# The negative lookahead makes a comment unable to contain `-->` at all, so it can only
-# ever match a single, real HTML comment.
+# in right after it. The comment alternative is not a lazy `.*?-->`: under backtracking
+# that can span from the first `<!--` all the way to the LAST `-->` before a later
+# doctype, treating a genuine `<script>` (and anything else) in between as if it were
+# commented out, and landing the shim after it, or inside it.
+#
+# The WHATWG HTML tokenizer ends a comment at more than plain `-->`: also at `<!-->` and
+# `<!--->` (abrupt closing of an empty comment) and at `--!>` (incorrectly closed
+# comment). Missing those lets a comment appear to "end" only at the FIRST real `-->`
+# that follows, which can be well past a page's own `<script>` -- so the alternative
+# below is `-?>` (the abrupt-close forms, immediately after `<!--`) or a body that
+# contains neither `-->` nor `--!>`, terminated by either. The negative lookahead right
+# after `<!--` is load-bearing: without it, backtracking can still reopen `<!-->`.
 _LEADING_DOCTYPE = re.compile(
-    r"^(﻿?\s*(?:<!--(?:(?!-->).)*-->\s*)*<!doctype[^>]*>)", re.IGNORECASE | re.DOTALL
+    r"^(﻿?\s*(?:<!--(?:-?>|(?!-?>)(?:(?!--!?>).)*--!?>)\s*)*<!doctype[^>]*>)",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -80,7 +86,7 @@ def inject(body: str, shim: str) -> str:
 
 
 def _artifact_id(request: Request) -> str | None:
-    return hosts.artifact_id(hosts.normalise(first_host_header(request.scope)))
+    return hosts.artifact_id(hosts.normalise(hosts.first_host_header(request.scope)))
 
 
 def _token_matches(expected: str, given: str | None) -> bool:
@@ -89,8 +95,21 @@ def _token_matches(expected: str, given: str | None) -> bool:
     return given is not None and hmac.compare_digest(expected.encode(), given.encode())
 
 
+def base_headers() -> dict[str, str]:
+    """The minimum header set every content response carries, even one FastAPI or
+    Starlette generates on its own rather than a route handler here (404/422/500).
+    Read at call time, exactly like `headers_for` -- one function, so the middleware and
+    the 500 handler (which sits OUTSIDE that middleware; see below) can never drift apart
+    into two copies of the same literal."""
+    return {
+        "x-content-type-options": "nosniff",
+        "referrer-policy": "no-referrer",
+        "content-security-policy": f"default-src 'none'; frame-ancestors {gallery_origin()}",
+    }
+
+
 def create_content_app(db: Database) -> FastAPI:
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, redirect_slashes=False)
 
     @app.middleware("http")
     async def _base_headers(request: Request, call_next):
@@ -100,11 +119,8 @@ def create_content_app(db: Database) -> FastAPI:
         full CSP (`headers_for`) is left untouched -- this only fills the gap."""
         response = await call_next(request)
         if "content-security-policy" not in response.headers:
-            response.headers["x-content-type-options"] = "nosniff"
-            response.headers["referrer-policy"] = "no-referrer"
-            response.headers["content-security-policy"] = (
-                f"default-src 'none'; frame-ancestors {gallery_origin()}"
-            )
+            for key, value in base_headers().items():
+                response.headers[key] = value
         return response
 
     @app.exception_handler(RequestValidationError)
@@ -121,17 +137,7 @@ def create_content_app(db: Database) -> FastAPI:
         layer above, so a 500 never passes through `_base_headers` and must carry its own
         minimum header set directly, or an unhandled exception would be the one response
         this origin ever serves with no CSP at all."""
-        return PlainTextResponse(
-            "internal error",
-            status_code=500,
-            headers={
-                "x-content-type-options": "nosniff",
-                "referrer-policy": "no-referrer",
-                "content-security-policy": (
-                    f"default-src 'none'; frame-ancestors {gallery_origin()}"
-                ),
-            },
-        )
+        return PlainTextResponse("internal error", status_code=500, headers=base_headers())
 
     def _load(artifact_id: str, token: str | None, n: int | None) -> tuple[str, int] | None:
         with db.connect() as conn:
