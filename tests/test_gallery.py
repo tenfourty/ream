@@ -216,8 +216,12 @@ def test_the_decisions_block_marks_the_recommended_option(db):
         recommended="a",
     )
     page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
-    assert "(a) yes -- recommended" in page
-    assert "(b) no -- recommended" not in page
+    # Marked twice on purpose: in words, so it still reads correctly with no
+    # stylesheet, and with the class that makes it the filled primary button.
+    assert '(a) yes<span class="tag">recommended</span>' in page
+    assert '(b) no<span class="tag">recommended</span>' not in page
+    assert 'value="a" class="rec"' in page
+    assert 'value="b" class="rec"' not in page
 
 
 def test_a_page_with_no_decisions_shows_no_decisions_block(db):
@@ -240,7 +244,7 @@ def test_an_answered_decision_still_offers_every_button(db):
     published, row = _publish_and_ask(db)
     decisions.answer(db, row.id, letter="a", note="go ahead", by="jeremy")
     page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
-    assert "Answered: (a) yes" in page
+    assert "Answered <b>(a) yes</b>" in page
     assert "go ahead" in page
     assert f'action="/d/{row.id}/answer"' in page
     assert "(a) yes" in page
@@ -312,3 +316,88 @@ def test_the_framed_page_and_its_tokenised_src_are_unchanged_by_decisions(db):
     token = store.read_token(db, published.id)
     page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
     assert f'src="{store.content_url(published.id, token)}"' in page
+
+
+def test_firefoxs_null_origin_is_accepted_when_fetch_metadata_proves_same_origin(db):
+    """The bug that refused Jeremy's first real answer, 19 Sep 2026.
+
+    Firefox derives the `Origin` header from `Referrer-Policy`, and this app sends
+    `no-referrer` (that is what keeps a page's capability token out of a `Referer`).
+    So a genuine click on this app's own form arrives from Firefox carrying
+    `Origin: null`, and an equality check on `Origin` refuses the one person the
+    whole page exists for. `Sec-Fetch-Site: same-origin` is what actually proves the
+    request came from this origin -- the browser sets it, page script cannot forge
+    it, and no referrer policy touches it.
+    """
+    published, row = _publish_and_ask(db)
+    response = TestClient(create_gallery_app(db)).post(
+        f"/d/{row.id}/answer",
+        data={"letter": "a"},
+        headers={"origin": "null", "sec-fetch-site": "same-origin"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert (
+        decisions.list_for_artifact(db, published.id, include_answered=True)[0].answer
+        == "a"
+    )
+
+
+def test_a_missing_origin_is_accepted_only_when_fetch_metadata_proves_same_origin(db):
+    """Absent `Origin` is the same case as `null` -- it is what the referrer policy
+    leaves behind -- so it turns on `Sec-Fetch-Site` alone, and nothing else."""
+    published, row = _publish_and_ask(db)
+    client = TestClient(create_gallery_app(db))
+
+    refused = client.post(
+        f"/d/{row.id}/answer",
+        data={"letter": "a"},
+        headers={"sec-fetch-site": "cross-site"},
+    )
+    assert refused.status_code == 403
+
+    accepted = client.post(
+        f"/d/{row.id}/answer",
+        data={"letter": "a"},
+        headers={"sec-fetch-site": "same-origin"},
+        follow_redirects=False,
+    )
+    assert accepted.status_code == 303
+    assert (
+        decisions.list_for_artifact(db, published.id, include_answered=True)[0].answer
+        == "a"
+    )
+
+
+def test_headers_that_disagree_are_refused(db):
+    """`Sec-Fetch-Site` saying same-origin does not license ANY `Origin`: a value
+    that is neither this origin nor the referrer-policy's `null` means the two
+    headers disagree, and a disagreement is refused rather than resolved."""
+    published, row = _publish_and_ask(db)
+    response = TestClient(create_gallery_app(db)).post(
+        f"/d/{row.id}/answer",
+        data={"letter": "a"},
+        headers={"origin": "https://evil.example", "sec-fetch-site": "same-origin"},
+    )
+    assert response.status_code == 403
+    assert (
+        decisions.list_for_artifact(db, published.id, include_answered=True)[0].answer
+        is None
+    )
+
+
+def test_without_fetch_metadata_a_missing_origin_is_still_refused(db):
+    """The fallback path is unchanged: no `Sec-Fetch-Site` at all means there is no
+    Fetch Metadata to judge on, and `Origin` must then match exactly -- so the
+    `null`/absent leniency above can never be reached by simply omitting both."""
+    published, row = _publish_and_ask(db)
+    client = TestClient(create_gallery_app(db))
+    for headers in ({}, {"origin": "null"}):
+        response = client.post(
+            f"/d/{row.id}/answer", data={"letter": "a"}, headers=headers
+        )
+        assert response.status_code == 403
+    assert (
+        decisions.list_for_artifact(db, published.id, include_answered=True)[0].answer
+        is None
+    )
