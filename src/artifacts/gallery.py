@@ -32,9 +32,17 @@ def gallery_headers() -> dict[str, str]:
         ),
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
-        # The content app's frame is cross-origin from this page; without this, a
-        # malicious page in that frame could still pop open a same-window-name
-        # window and reach back into this tab via window.opener.
+        # The sandboxed iframe below has no allow-top-navigation*, but it DOES
+        # carry allow-popups-to-escape-sandbox (needed for a page to open a
+        # normal, unsandboxed link) -- a popup it opens is no longer sandboxed
+        # at all, and without this header that popup keeps a `window.opener`
+        # back to THIS tab, letting it run `opener.top.location = "..."` and
+        # navigate Jeremy's signed-in gallery out from under him even though
+        # the iframe itself could never do that directly. COOP same-origin
+        # severs that opener link (a cross-origin popup's `window.opener` is
+        # null), which is what actually closes the gap the sandbox leaves
+        # open -- without it, allow-popups-to-escape-sandbox would undo the
+        # no-top-navigation restriction just by one extra hop.
         "cross-origin-opener-policy": "same-origin",
     }
 
