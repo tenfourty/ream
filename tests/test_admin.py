@@ -130,6 +130,30 @@ def test_revoke_key_makes_verify_return_none(db, monkeypatch):
     assert keys.verify(db, token) is None
 
 
+def test_revoke_key_prints_the_agent_it_revoked(db, monkeypatch, capsys):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    _token, key_id = keys.mint(db, agent=AGENT)
+    main(["revoke-key", key_id])
+    out = capsys.readouterr().out
+    assert f"revoked key_id={key_id} agent={AGENT}" in out
+
+
+def test_revoke_key_on_an_unknown_id_fails_loudly(db, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["revoke-key", "no-such-id"])
+    assert "no active key with id no-such-id" in str(excinfo.value)
+
+
+def test_revoke_key_a_second_time_fails_loudly_instead_of_a_silent_no_op(db, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    _token, key_id = keys.mint(db, agent=AGENT)
+    main(["revoke-key", key_id])
+    with pytest.raises(SystemExit) as excinfo:
+        main(["revoke-key", key_id])
+    assert f"no active key with id {key_id}" in str(excinfo.value)
+
+
 def test_list_keys_never_prints_a_hash(db, monkeypatch, capsys):
     monkeypatch.setenv("DATABASE_URL", db.dsn)
     _token, key_id = keys.mint(db, agent=AGENT)

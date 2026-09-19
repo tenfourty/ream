@@ -59,9 +59,28 @@ def verify(db: Database, token: str) -> AgentKey | None:
     return AgentKey(id=row[0], agent=row[1]) if row else None
 
 
-def revoke(db: Database, key_id: str) -> None:
+def revoke(db: Database, key_id: str) -> int:
+    """Returns the number of rows changed: 0 for an unknown id, or for one
+    already revoked -- `revoked_at is null` in the WHERE clause makes both
+    cases a no-op instead of overwriting an earlier revocation's timestamp,
+    and callers use the row count to tell "revoked" from "nothing to do"."""
     with db.connect() as conn:
-        conn.execute("update agent_key set revoked_at = now() where id = %s", (key_id,))
+        cursor = conn.execute(
+            "update agent_key set revoked_at = now() where id = %s and revoked_at is null",
+            (key_id,),
+        )
+        return cursor.rowcount
+
+
+def agent_of(db: Database, key_id: str) -> str | None:
+    """The agent name owning `key_id`, whether or not it's revoked, or None
+    if no such key exists -- so `revoke-key` can report which agent it just
+    revoked without `revoke` itself returning anything but a row count."""
+    with db.connect() as conn:
+        row = conn.execute(
+            "select agent from agent_key where id = %s", (key_id,)
+        ).fetchone()
+    return row[0] if row else None
 
 
 def list_keys(db: Database) -> list[KeyRow]:

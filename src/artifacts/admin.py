@@ -48,7 +48,7 @@ def cmd_new_key(args: argparse.Namespace) -> None:
     path = args.out
     parent = os.path.dirname(os.path.abspath(path))
     if parent and not os.path.isdir(parent):
-        os.makedirs(parent, exist_ok=True)
+        os.makedirs(parent, mode=0o700, exist_ok=True)
         os.chmod(parent, 0o700)  # explicit: umask must never weaken this
 
     try:
@@ -82,7 +82,11 @@ def cmd_register_key(args: argparse.Namespace) -> None:
 
 def cmd_revoke_key(args: argparse.Namespace) -> None:
     db = Database(_database_url())
-    keys.revoke(db, args.key_id)
+    rows = keys.revoke(db, args.key_id)
+    if rows == 0:
+        raise SystemExit(f"no active key with id {args.key_id}")
+    agent = keys.agent_of(db, args.key_id)
+    print(f"revoked key_id={args.key_id} agent={agent}")
 
 
 def cmd_list_keys(_args: argparse.Namespace) -> None:

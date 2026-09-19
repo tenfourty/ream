@@ -21,6 +21,21 @@ def test_revoked_token_stops_verifying(db):
     assert keys.verify(db, token) is None
 
 
+def test_revoke_returns_the_row_count(db):
+    _token, key_id = keys.mint(db, agent="ops-seat")
+    assert keys.revoke(db, key_id) == 1
+
+
+def test_revoke_of_an_unknown_id_changes_nothing(db):
+    assert keys.revoke(db, "no-such-id") == 0
+
+
+def test_revoke_of_an_already_revoked_key_changes_nothing_the_second_time(db):
+    _token, key_id = keys.mint(db, agent="ops-seat")
+    assert keys.revoke(db, key_id) == 1
+    assert keys.revoke(db, key_id) == 0
+
+
 def test_unknown_and_malformed_tokens_return_none(db):
     assert keys.verify(db, "art_not-a-real-token") is None
     assert keys.verify(db, "") is None
