@@ -7,9 +7,20 @@ kind: Kustomization
 namespace: artifacts
 
 resources:
-  - configmap.yaml
   - deployment.yaml
   - service.yaml
+
+# A content-hash suffix on the name (kustomize's default -- not disabled
+# below), so an edit to artifacts-config.env produces a NEW ConfigMap name
+# and rolls the Deployment; a plain `data:` ConfigMap of the same name would
+# edit in place and the running pods would never notice.
+configMapGenerator:
+  - name: artifacts-config
+    envs:
+      - artifacts-config.env
+    options:
+      labels:
+        app.kubernetes.io/name: artifacts
 
 images:
   # CI rewrites ONLY this newTag line, to the first 12 hex characters of the
