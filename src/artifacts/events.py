@@ -139,6 +139,37 @@ _LOOK_EVERY = 0.5
 
 _waiters = threading.BoundedSemaphore(MAX_WAITERS)
 
+# Set when the process has been asked to stop. A held request must END when
+# that happens, promptly and with a normal answer -- it must not sleep on
+# until the platform kills it.
+#
+# Measured on 19 Sep 2026: every deploy that evening silently broke every
+# waiting agent. The pod rolls, the old process is asked to stop, a request
+# sleeping out a 280-second hold does not finish, and 30 seconds later the
+# platform kills it. The client does not see a clean end; it sees a request
+# that never answers, and the old client called that silence. Two seats logged
+# the identical signature -- "timed out after 300001 milliseconds with 0 bytes
+# received" -- at the minute of a roll, while the same service answered
+# wait=5, wait=30, wait=70, wait=110 and wait=180 exactly on time.
+#
+# So the hold waits on THIS, not on the clock: `Event.wait` returns the moment
+# it is set, so shutdown ends every held request at once instead of after up
+# to `_LOOK_EVERY` more seconds, and the caller gets a 200 with whatever is
+# there. An empty 200 already means "nothing yet, ask again", which is exactly
+# what a client should do when the server it was talking to is going away.
+_shutdown = threading.Event()
+
+
+def begin_shutdown() -> None:
+    """End every held request now. Wired to SIGTERM in `artifacts.serve`."""
+    _shutdown.set()
+
+
+def clear_shutdown() -> None:
+    """Undo `begin_shutdown`. For tests, and for a process that is told to stop
+    and then is not."""
+    _shutdown.clear()
+
 
 def wait_for_agent(
     db: Database,
@@ -171,6 +202,10 @@ def wait_for_agent(
     try:
         deadline = time.monotonic() + seconds
         while True:
+            if _shutdown.is_set():
+                # Asked to stop before this hold even began: answer at once
+                # rather than opening a request that cannot be honoured.
+                return list_for_agent(db, agent, since=since, limit=limit)
             rows = list_for_agent(db, agent, since=since, limit=limit)
             if rows:
                 return rows
@@ -178,7 +213,12 @@ def wait_for_agent(
             if remaining <= 0:
                 return []
             # Never overshoot the deadline: a caller that asked for 30 seconds
-            # gets at most 30, not 30 rounded up to the next look.
-            time.sleep(min(_LOOK_EVERY, remaining))
+            # gets at most 30, not 30 rounded up to the next look. And never
+            # outlive a shutdown: `Event.wait` returns the instant `_shutdown`
+            # is set, so the answer goes out while the process can still send
+            # it -- one last look first, so a row that landed in the same
+            # moment is not thrown away.
+            if _shutdown.wait(timeout=min(_LOOK_EVERY, remaining)):
+                return list_for_agent(db, agent, since=since, limit=limit)
     finally:
         _waiters.release()

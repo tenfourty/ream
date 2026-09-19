@@ -45,4 +45,9 @@ EXPOSE 8000
 # ConfigMap sets it, so it does not need to appear on this command line too.
 # --no-access-log is not a style choice: every content-page URL carries its
 # read capability token in the path, and an access log would put it on disk.
-CMD ["uvicorn", "artifacts.serve:app_from_env", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--proxy-headers"]
+# --timeout-graceful-shutdown is a BACKSTOP, not the mechanism: held /events
+# requests end themselves the moment SIGTERM arrives (artifacts.serve), so
+# uvicorn should find nothing to wait for. If something ever does hold on, 15
+# seconds is well inside Kubernetes' 30-second default grace period, so the
+# process exits on its own terms rather than being killed mid-answer.
+CMD ["uvicorn", "artifacts.serve:app_from_env", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--proxy-headers", "--timeout-graceful-shutdown", "15"]
