@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -114,6 +116,54 @@ def test_the_current_version_carries_the_runtime_shim(content, token):
     csp = response.headers["content-security-policy"]
     assert "connect-src 'self'" in csp
     assert "connect-src 'none'" not in csp
+
+
+# ---------------------------------------------------------------------------
+# The viewer report: height and decision-slot geometry, posted to the gallery.
+# ---------------------------------------------------------------------------
+
+
+def test_the_live_page_reports_height_and_decision_slots_to_the_gallery(content, token):
+    """Only the LIVE route gets the viewer half of the shim -- the three triggers the
+    design calls for (load, resize, mutation via ResizeObserver -- never a poll), and
+    the one attribute a page marks a decision slot with."""
+    text = content.get(f"/t/{token}/", headers=FRAMED).text
+    assert "data-artifact-decision" in text
+    assert "ResizeObserver" in text
+    assert "setInterval" not in text  # never a poll
+    assert 'addEventListener("load"' in text
+    assert 'addEventListener("resize"' in text
+    assert "postMessage" in text
+    assert "getBoundingClientRect" in text
+
+
+def test_the_viewer_report_posts_only_to_the_gallery_origin_never_to_star(
+    content, token
+):
+    text = content.get(f"/t/{token}/", headers=FRAMED).text
+    assert "postMessage" in text
+    assert f",{json.dumps(store.gallery_origin())})" in text
+    assert '"*")' not in text
+
+
+def test_the_viewer_report_origin_is_read_at_call_time(content, token, monkeypatch):
+    """Exactly like headers_for and the redirect target: a module-level constant
+    computed once at import would never see this monkeypatch."""
+    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://elsewhere.example")
+    text = content.get(f"/t/{token}/", headers=FRAMED).text
+    assert f",{json.dumps('https://elsewhere.example')})" in text
+    assert f",{json.dumps(GALLERY)})" not in text
+
+
+def test_an_older_version_carries_no_viewer_report(content, token):
+    """Inert means read-only, not read-only except for a viewer channel: an old
+    snapshot is never framed by the gallery today, and must not start reporting
+    geometry back to it."""
+    for path in (f"/t/{token}/v/1", f"/t/{token}/v/2"):
+        text = content.get(path, headers=FRAMED).text
+        assert "ResizeObserver" not in text
+        assert "data-artifact-decision" not in text
+        assert "postMessage" not in text
 
 
 @pytest.mark.parametrize("sent", [{}, {"sec-fetch-dest": "empty"}, {"sec-fetch-dest": ""}])

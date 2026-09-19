@@ -1,4 +1,5 @@
 import hmac
+import json
 import re
 
 from fastapi import FastAPI, Request, Response
@@ -45,6 +46,51 @@ SHIM = "<script>window.claude={use:async(n)=>null};</script>"  # replaced in Tas
 # so removing window.claude entirely makes that page throw a TypeError instead
 # of degrading. Serve the null shim there and let the page render read-only.
 INERT_SHIM = "<script>window.claude={use:async(n)=>null};window.storage=null;</script>"
+
+
+def _viewer_report() -> str:
+    """The other half of what gets injected on a LIVE page -- unrelated to the
+    `window.claude` contract above, so it is a separate `<script>`, concatenated onto
+    `SHIM` only in `_serve` below, never folded into the `SHIM` constant itself: `SHIM`
+    is asserted byte-for-byte in `inject()`'s own unit tests, and this half needs a
+    value (`gallery_origin()`) that has to be read at CALL time, exactly like
+    `headers_for` reads it -- a module-level constant computed once at import would go
+    stale the moment a test (or a future config reload) changes
+    ARTIFACTS_GALLERY_ORIGIN afterwards.
+
+    Reports two things in one message, on the same three triggers -- `load`, `resize`,
+    and a `ResizeObserver` on `documentElement` (never a poll, per the design doc):
+
+    - `height`: this document's own scrollHeight, so the gallery can size the iframe to
+      it instead of leaving a second scrollbar inside the frame.
+    - `slots`: the page-coordinate rectangle (id, top, left, width) of every element the
+      agent marked with `data-artifact-decision="<id>"` -- never the element's own
+      contents. What a reported id is even allowed to mean is entirely the gallery's
+      call: this shim has no idea which ids are real decisions and does not need to.
+
+    Posts only to `parent`, and only to the gallery's own origin -- never `"*"`, or a
+    page that also happens to load inside some OTHER frame could read it. Wrapped in one
+    top-level try/catch: a browser old enough to lack `ResizeObserver` (or anything else
+    here) must never throw into the page's own console, and must never stop
+    `window.claude` (in `SHIM`, already run by the time this executes) from having been
+    assigned.
+    """
+    origin = json.dumps(gallery_origin())
+    return (
+        "<script>try{(function(){"
+        "function b(e){var r=e.getBoundingClientRect();"
+        'return{id:e.getAttribute("data-artifact-decision"),'
+        "top:r.top+scrollY,left:r.left+scrollX,width:r.width}}"
+        'function send(){parent.postMessage({type:"artifact-state",'
+        "height:document.documentElement.scrollHeight,"
+        'slots:Array.from(document.querySelectorAll("[data-artifact-decision]"),b)},'
+        f"{origin})}}"
+        'addEventListener("load",send);addEventListener("resize",send);'
+        'if("ResizeObserver"in window){'
+        "new ResizeObserver(send).observe(document.documentElement)}"
+        "})()}catch(e){}</script>"
+    )
+
 
 # An optional BOM, then leading whitespace and whole HTML comments, then the leading
 # doctype -- everything up to and including it is one match, so the shim can be spliced
@@ -179,7 +225,11 @@ def create_content_app(db: Database) -> FastAPI:
             return Response("not found", status_code=404, media_type="text/plain")
         body, _served = loaded
         live = n is None
-        html = inject(body, SHIM if live else INERT_SHIM)
+        # Only the LIVE page reports geometry to the gallery: an inert snapshot is
+        # never framed by the gallery today (there is no route for it), and inert is
+        # meant to mean "read-only", not "read-only except for a viewer channel".
+        shim = (SHIM + _viewer_report()) if live else INERT_SHIM
+        html = inject(body, shim)
         return HTMLResponse(html, headers=headers_for(live))
 
     @app.get("/")

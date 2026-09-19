@@ -436,3 +436,139 @@ def test_the_chosen_option_outranks_the_recommended_one(db):
     assert 'value="a" class="rec"' in page
     assert 'class="rec chosen"' not in page
     assert page.count("&check; your answer") == 1
+
+
+# ---------------------------------------------------------------------------
+# The viewer shim: one scrollbar, and a decision that appears where the page
+# puts it -- gallery.js, its CSP, and the ids/attributes it acts on.
+# ---------------------------------------------------------------------------
+
+
+def test_gallery_js_is_served_from_self_with_no_dependency(db):
+    response = TestClient(create_gallery_app(db)).get("/gallery.js")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/javascript")
+    text = response.text
+    # single-digit KB, per the design's own budget -- comfortably under it, not
+    # merely under some looser number that would let a regression through unnoticed.
+    assert len(text.encode()) < 4096
+    assert "http://" not in text and "https://" not in text  # no CDN, nothing fetched
+    assert "eval(" not in text
+    assert "new Function(" not in text
+
+
+def test_gallery_js_checks_both_source_and_origin_before_trusting_a_message(db):
+    text = TestClient(create_gallery_app(db)).get("/gallery.js").text
+    assert "event.source" in text and "event.origin" in text
+    assert "iframe.contentWindow" in text
+    # the content origin comes from the iframe's OWN src, never a value the
+    # message itself carries
+    assert "new URL(iframe.src)" in text
+
+
+def test_gallery_js_clamps_height_to_the_documented_range(db):
+    text = TestClient(create_gallery_app(db)).get("/gallery.js").text
+    assert "200" in text
+    assert "20000" in text
+    assert "isFinite" in text
+
+
+def test_gallery_js_never_polls(db):
+    text = TestClient(create_gallery_app(db)).get("/gallery.js").text
+    assert "ResizeObserver" not in text  # that lives in the content shim, not here
+    assert "setInterval" not in text
+    assert "setTimeout" not in text
+
+
+@pytest.mark.parametrize("which", ["list", "detail"])
+def test_the_gallery_csp_allows_only_self_scripts(db, which):
+    published = store.publish(db, "ops-seat", "Board", _PAGE)
+    path = "/" if which == "list" else f"/a/{published.id}"
+    csp = (
+        TestClient(create_gallery_app(db)).get(path).headers["content-security-policy"]
+    )
+    directives = {p.strip() for p in csp.split(";") if p.strip()}
+    assert "script-src 'self'" in directives
+    assert not any(
+        d.startswith("script-src") and "unsafe-inline" in d for d in directives
+    )
+
+
+def test_the_detail_page_loads_gallery_js_and_inlines_no_script(db):
+    published = store.publish(db, "ops-seat", "Board", _PAGE)
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert '<script src="/gallery.js" defer></script>' in page
+    # every <script> tag on this page carries a src -- none is inline, which the CSP
+    # (script-src 'self', no 'unsafe-inline') would refuse to run anyway.
+    assert re.search(r"<script(?![^>]*\bsrc=)[^>]*>", page) is None
+
+
+def test_the_detail_page_ids_the_frame_and_sheet_gallery_js_looks_for(db):
+    published = store.publish(db, "ops-seat", "Board", _PAGE)
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert '<div class="sheet" id="artifact-sheet">' in page
+    assert 'id="artifact-frame"' in page
+
+
+def test_the_list_page_never_loads_gallery_js(db):
+    """No iframe, nothing to size or place -- the list page has no reason to pay
+    for the script at all. (The shared stylesheet's own comments happen to name
+    gallery.js in prose, so this checks for the <script> tag specifically, not the
+    bare substring.)"""
+    store.publish(db, "ops-seat", "Board", _PAGE)
+    page = TestClient(create_gallery_app(db)).get("/").text
+    assert "<script" not in page
+
+
+def test_each_decision_carries_the_id_gallery_js_matches_slots_against(db):
+    published, row = _publish_and_ask(db)
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert f'data-decision-id="{row.id}"' in page
+
+
+def test_two_decisions_get_two_distinct_data_decision_ids(db):
+    published, first = _publish_and_ask(db, question="ship it?")
+    second = decisions.ask(
+        db,
+        agent="ops-seat",
+        artifact_id=published.id,
+        question="which way?",
+        options=_OPTIONS,
+    )
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert f'data-decision-id="{first.id}"' in page
+    assert f'data-decision-id="{second.id}"' in page
+    assert first.id != second.id
+
+
+def test_the_decisions_block_escapes_a_hostile_id_bearing_attribute(db):
+    """`row.id` is a fixed base32 shape from ids.py, never agent content -- escaped
+    anyway, on the same principle as every other field this module renders."""
+    published, row = _publish_and_ask(db, question=XSS)
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert f'data-decision-id="{row.id}"' in page
+    assert "<img src=x" not in page
+
+
+def test_the_whole_answer_path_still_works_with_gallery_js_never_fetched(db):
+    """The promise this task makes: the ANSWER PATH keeps working with scripts off.
+    This test never requests /gallery.js at all -- exactly what a script-blocked
+    browser does -- and still completes the full round trip: render, plain POST,
+    redirect, and the answer showing as chosen on the next render."""
+    published, row = _publish_and_ask(db)
+    client = TestClient(create_gallery_app(db))
+
+    first = client.get(f"/a/{published.id}").text
+    assert f'action="/d/{row.id}/answer"' in first
+
+    response = client.post(
+        f"/d/{row.id}/answer",
+        data={"letter": "a", "note": "go ahead"},
+        headers={"origin": store.gallery_origin(), "sec-fetch-site": "same-origin"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+    second = client.get(f"/a/{published.id}").text
+    assert 'value="a" class="chosen"' in second
+    assert "go ahead" in second

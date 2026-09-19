@@ -20,7 +20,7 @@ of read from something a request could forge.
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from markupsafe import escape
 
 from artifacts import decisions, store
@@ -42,6 +42,12 @@ def gallery_headers() -> dict[str, str]:
     return {
         "content-security-policy": (
             "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self'; "
+            # script-src is 'self' ONLY -- no 'unsafe-inline', no CDN. gallery.js is
+            # the one file this loads, served by this same router; the viewer script
+            # moves and sizes the decisions block, it never becomes the thing that
+            # submits one (the plain <form method="post"> below still does that on
+            # its own, scripts on or off).
+            "script-src 'self'; "
             # frame-src is the content domain only. `https:` would let any bug
             # that reaches this attribute frame anything on the internet,
             # inside the one page that IS logged in.
@@ -143,9 +149,23 @@ a{color:var(--accent-ink)}
 .hint{margin:.1rem 0 0;font-size:.8rem;color:var(--muted)}
 
 /* the page itself */
-.sheet{border:1px solid var(--line);border-radius:.7rem;overflow:hidden;
-  background:var(--card);box-shadow:var(--shadow)}
+/* position:relative -- gallery.js positions a moved decision block against THIS box,
+   not the viewport, so its top/left are the iframe's own page coordinates unchanged.
+   overflow:hidden stays for the iframe's rounded corners; a slot's rect is always
+   inside the iframe's own content box (the height in the same message already sizes
+   it), so it stays inside this box too -- there is no case where keeping it clips a
+   block that is actually where the page said its slot was. */
+.sheet{position:relative;border:1px solid var(--line);border-radius:.7rem;
+  overflow:hidden;background:var(--card);box-shadow:var(--shadow)}
+/* height:78vh is the SCRIPT-OFF floor: a fixed-height scrolling frame, exactly
+   today's behaviour. gallery.js overrides it with an inline style once the framed
+   page reports its real height -- inline always wins over this rule's specificity,
+   so scripts-on and scripts-off never fight over which height applies. */
 .sheet iframe{display:block;width:100%;height:78vh;border:0;background:var(--card)}
+/* A decision block gallery.js has moved onto the sheet, positioned by its own
+   inline top/left/width. Un-positioned blocks (still inside .asks) are never
+   affected by this rule at all. */
+.sheet .ask{position:absolute;margin:0;z-index:1}
 
 /* index */
 .tiles{list-style:none;margin:0;padding:0;display:grid;gap:.8rem;
@@ -162,12 +182,82 @@ a{color:var(--accent-ink)}
 
 _HOME_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg>'
 
+# Served from 'self' at /gallery.js (script-src 'self' above; no inline script, no
+# CDN, no framework, no dependency). One file, single-digit KB, so the CSP change
+# stays a one-liner and there is nothing to bundle.
+#
+# What it does, and no more:
+#  - Reads the iframe's OWN `src` for the content origin to check incoming messages
+#    against -- never trusts a hostname the page reports, only the one the gallery
+#    itself already put in that `src` attribute (`content_url`, in `detail()` below).
+#  - Accepts a message only from `iframe.contentWindow` at that exact origin: both
+#    `event.source` and `event.origin`, not either alone.
+#  - Sizes the iframe to a reported height, but ONLY when it is a finite number
+#    between 200 and 20000 -- anything else is dropped and the last good height (or
+#    the CSS default, .sheet iframe{height:78vh}, before the first one ever arrives)
+#    stands. A page that reports a billion pixels gets nothing.
+#  - Moves an already-rendered `[data-decision-id]` block onto the sheet, absolutely
+#    positioned at a reported slot's rect, but ONLY when that id is already one of
+#    the elements the gallery rendered from the decisions IT loaded for this artifact
+#    -- a `Map` built once from the DOM, never a lookup keyed on the reported value.
+#    A slot for an id not in that map, or a second slot for an id already placed this
+#    message, is silently ignored -- first one wins, same as the id check.
+#  - A decision never reported drops out of this loop entirely and stays exactly
+#    where the server rendered it, in the block above the page: the default, not a
+#    failure. One already positioned, whose slot then stops being reported, is left
+#    where it last was rather than snapped back -- nothing here ever un-positions a
+#    block.
+#  - The whole handler is one try/catch: a malformed message must never throw into
+#    Jeremy's own signed-in tab, whatever an agent's page sends.
+_GALLERY_JS = """(function(){
+"use strict";
+var iframe=document.getElementById("artifact-frame");
+var sheet=document.getElementById("artifact-sheet");
+if(!iframe||!sheet)return;
+var contentOrigin;
+try{contentOrigin=new URL(iframe.src).origin}catch(e){return}
+var decisionEls=new Map();
+document.querySelectorAll("[data-decision-id]").forEach(function(el){
+  decisionEls.set(el.getAttribute("data-decision-id"),el);
+});
+function isNum(v){return typeof v==="number"&&isFinite(v)}
+window.addEventListener("message",function(event){
+  try{
+    if(event.source!==iframe.contentWindow||event.origin!==contentOrigin)return;
+    var data=event.data;
+    if(!data||typeof data!=="object"||data.type!=="artifact-state")return;
+    if(isNum(data.height)&&data.height>=200&&data.height<=20000){
+      iframe.style.height=data.height+"px";
+    }
+    if(Array.isArray(data.slots)&&data.slots.length<=64){
+      var seen=new Set();
+      data.slots.forEach(function(slot){
+        if(!slot||typeof slot.id!=="string"||seen.has(slot.id))return;
+        seen.add(slot.id);
+        var el=decisionEls.get(slot.id);
+        if(!el||!isNum(slot.top)||!isNum(slot.left)||!isNum(slot.width))return;
+        if(el.parentNode!==sheet)sheet.appendChild(el);
+        el.style.top=slot.top+"px";
+        el.style.left=slot.left+"px";
+        el.style.width=slot.width+"px";
+      });
+    }
+  }catch(e){}
+});
+})();
+"""
 
-def _shell(title: str, body: str, meta: str = "", home: bool = True) -> str:
+
+def _shell(
+    title: str, body: str, meta: str = "", home: bool = True, scripts: str = ""
+) -> str:
     """Every gallery page, wrapped the same way: one narrow bar carrying the way
     back, the title and a timestamp, then the body. Deliberately quiet -- the
     agent's page is the thing being read, and chrome that shouts competes with
-    it."""
+    it. `scripts` (default empty) is raw `<script src=...>` tag markup, never inline
+    -- only `detail()` passes one, for the one page that has an iframe to size and
+    decisions to place; it lands right before `</body>`, after everything it acts on
+    already exists in the DOM."""
     back = f'<a class="home" href="/">{_HOME_SVG} Gallery</a>' if home else ""
     meta_html = f'<span class="meta">{escape(meta)}</span>' if meta else ""
     return (
@@ -176,7 +266,7 @@ def _shell(title: str, body: str, meta: str = "", home: bool = True) -> str:
         f"<title>{escape(title)}</title><style>{_CSS}</style></head><body>"
         f'<div class="wrap"><header class="bar">{back}'
         f"<h1>{escape(title)}</h1>{meta_html}</header>"
-        f"{body}</div></body></html>"
+        f"{body}</div>{scripts}</body></html>"
     )
 
 
@@ -284,10 +374,15 @@ def _render_decisions(rows: list[decisions.DecisionRow]) -> str:
     This block is drawn by the GALLERY, not by the agent's page, and that is a trust
     boundary rather than a layout choice: the page is sandboxed on its own origin and
     holds whatever HTML an agent published, so a button rendered inside it could forge
-    an answer or imitate this one. Only this origin holds Jeremy's session. What is
-    still owed (2026-09-19) is placement -- the page should be able to say WHERE its
-    question belongs, and have this trusted control appear there, instead of the
-    control always sitting above the page's own heading.
+    an answer or imitate this one. Only this origin holds Jeremy's session.
+
+    Every `.ask` carries `data-decision-id`, which is how `gallery.js` finds THIS
+    already-rendered, already-trusted block to move -- never how it looks one up: the
+    script builds its own id->element map from exactly these attributes, and a
+    reported id that is not in that map (because it names no decision on THIS
+    artifact) matches nothing and moves nothing. A decision the page never marks a
+    slot for is simply never moved, and stays right here, above the page -- the
+    default, not a failure.
 
     An answered decision still renders every button: re-answering is allowed (see
     `decisions.answer`'s docstring) precisely so Jeremy can change his mind here, on
@@ -314,7 +409,8 @@ def _render_decisions(rows: list[decisions.DecisionRow]) -> str:
                 "</span></p>"
             )
         items.append(
-            f'<div class="ask{done}"><p class="q">{escape(row.question)}</p>{answered}'
+            f'<div class="ask{done}" data-decision-id="{escape(row.id)}">'
+            f'<p class="q">{escape(row.question)}</p>{answered}'
             f'<form method="post" action="/d/{escape(row.id)}/answer">'
             f"{buttons}"
             '<input name="note" placeholder="note (optional)"></form></div>'
@@ -332,6 +428,17 @@ def _render_decisions(rows: list[decisions.DecisionRow]) -> str:
 
 def gallery_router(db: Database) -> APIRouter:
     router = APIRouter()
+
+    @router.get("/gallery.js")
+    def gallery_script() -> Response:
+        # Same header set as every other gallery response (gallery_headers() is cheap
+        # and read at call time) -- one hardened profile for the whole origin, rather
+        # than a script route that is the one response nobody checked.
+        return Response(
+            _GALLERY_JS,
+            media_type="text/javascript; charset=utf-8",
+            headers=gallery_headers(),
+        )
 
     @router.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
@@ -398,8 +505,12 @@ def gallery_router(db: Database) -> APIRouter:
             _shell(
                 row[0],
                 f"{decisions_html}"
-                f'<div class="sheet"><iframe src="{src}" sandbox="{sandbox}"'
-                f' title="{escape(row[0])}"></iframe></div>',
+                f'<div class="sheet" id="artifact-sheet"><iframe id="artifact-frame"'
+                f' src="{src}" sandbox="{sandbox}" title="{escape(row[0])}"></iframe></div>',
+                # gallery.js reads the content origin straight off this iframe's own
+                # `src` -- fixed ids, not a class selector, so a future second iframe
+                # on this page could never be mistaken for this one.
+                scripts='<script src="/gallery.js" defer></script>',
             ),
             headers=gallery_headers(),
         )
