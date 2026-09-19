@@ -138,11 +138,16 @@ jobs:
           # explicitly, using exit codes distinct from git's own (usually 1) so the
           # caller can tell "the guard said stand down" from "a plain push race":
           # 10 = guard says stand down, 12 = guard hit a git error, 13 = the
-          # newTag: sed did not touch exactly one line. Anything else (a plain
-          # nonzero from `git commit`/`git push`) is treated as a push race worth
-          # one retry.
+          # newTag: sed did not touch exactly one line, 14/15/16 = `git switch`/
+          # `add`/`commit` failed before anything was pushed, 17/18 = the fetch
+          # after a successful push failed, or what actually landed on
+          # origin/main does not match what we just pushed. 12/13/17/18 all exit
+          # the job without retrying -- 17/18 in particular happen AFTER a push
+          # already succeeded, so retrying would push a second, redundant bump
+          # commit rather than fix anything. Anything else (a plain nonzero from
+          # `git push` itself) is treated as a push race worth one retry.
           bump_and_push() {
-            git switch -C main origin/main
+            git switch -C main origin/main || return 14
 
             .forgejo/scripts/deploy-guard.sh "$GITHUB_SHA" HEAD
             guard_status=$?
@@ -152,17 +157,34 @@ jobs:
               return 12
             fi
 
+            # Compared as STRINGS, not `-ne`: if deploy/kustomization.yaml is
+            # missing, `grep -c` prints nothing to stdout (its own error goes to
+            # stderr), so `before`/`after` are empty -- `[ "" -ne 1 ]` itself
+            # errors ("integer expression expected"), which makes the `if`
+            # condition false and this check silently passes. `[ "$before" != 1 ]`
+            # has no such hole: an empty string is simply not equal to "1".
             before=$(grep -c '^[[:space:]]*newTag: ' deploy/kustomization.yaml)
             sed -i -E 's#^([[:space:]]*)newTag: .*#\1newTag: '"$sha12"'#' deploy/kustomization.yaml
             after=$(grep -c '^[[:space:]]*newTag: ' deploy/kustomization.yaml)
-            if [ "$before" -ne 1 ] || [ "$after" -ne 1 ]; then
-              echo "expected exactly 1 newTag: line before and after editing, found $before and $after" >&2
+            if [ "$before" != 1 ] || [ "$after" != 1 ]; then
+              echo "expected exactly 1 newTag: line before and after editing, found '$before' and '$after'" >&2
               return 13
             fi
 
-            git add deploy/kustomization.yaml
-            git commit -m "deploy: artifacts ${sha12} [skip ci]"
-            git push origin main
+            git add deploy/kustomization.yaml || return 15
+            git commit -m "deploy: artifacts ${sha12} [skip ci]" || return 16
+            git push origin main || return $?
+
+            # Trust but verify: confirm what actually landed on origin/main is
+            # the bump we think we just pushed, not just that `git push` itself
+            # returned 0.
+            git fetch origin main || return 17
+            landed=$(git show origin/main:deploy/kustomization.yaml \
+              | sed -n -E 's/^[[:space:]]*newTag: (.*)$/\1/p')
+            if [ "$landed" != "$sha12" ]; then
+              echo "origin/main's newTag is '${landed}', expected ${sha12} -- the push did not land what we think it did" >&2
+              return 18
+            fi
           }
 
           # `bump_and_push || status=$?` would capture `true`'s status (0), not
@@ -176,7 +198,7 @@ jobs:
           case "$status" in
             0) exit 0 ;;
             10) echo "standing down: a newer run's deploy already won"; exit 0 ;;
-            12|13) echo "deploy guard or edit-count check failed hard -- not retrying" >&2; exit "$status" ;;
+            12|13|17|18) echo "deploy guard, edit-count, or post-push verification failed hard -- not retrying" >&2; exit "$status" ;;
           esac
 
           echo "push race (a newer bump landed first) -- fetching and retrying once"
