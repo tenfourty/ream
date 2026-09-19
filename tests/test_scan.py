@@ -364,3 +364,126 @@ def test_detagging_never_changes_line_numbers_the_raw_body_would_report():
     body = "one\ntwo\n<div>\n  password=FAKEPASS123\n</div>\nfive"
     findings = scan.scan(body)
     assert any(f.shape == "password_assignment" and f.line == 4 for f in findings)
+
+
+# --- fix round 3: a stray `<` with no later `>` must not make the tag
+# matcher quadratic. ---------------------------------------------------
+
+
+def test_a_stray_angle_bracket_with_no_closing_bracket_scans_quickly():
+    # `x <- 1` (R assignment) has a `<` on every line and never a `>` at
+    # all. Under the old `<[^>]*>` tag pattern this was quadratic: every
+    # `<` made the engine scan to the end of the body hunting for a `>`
+    # that never comes. A clean 1 MiB body of this shape cost 11.1s under
+    # the old pattern; this must stay well under a second.
+    body = "x <- 1\n" * 150_000  # ~1 MiB, no ">" anywhere
+    start = time.perf_counter()
+    findings = scan.scan(body)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 1.0
+    assert findings == []
+
+
+# --- fix round 3: the raw-match safety valve must count only real matches,
+# never placeholders, or a flood of placeholders hides a real secret behind
+# it. --------------------------------------------------------------------
+
+
+def test_a_real_secret_behind_500_placeholder_lines_is_still_caught():
+    placeholder_lines = "DB_PASSWORD=${DB_PASSWORD}\n" * 500
+    body = placeholder_lines + "DB_PASSWORD=hunter2fake\n"
+    findings = scan.scan(body)
+    hits = [f for f in findings if f.shape == "password_assignment"]
+    assert hits, "the real secret after 500 placeholders was not found"
+    assert all(f.line == 501 for f in hits)
+
+
+# --- fix round 3: deleting a tag (not blanking it with whitespace) must
+# reunite a token markup splits through its middle. -------------------------
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_shape"),
+    [
+        (
+            (
+                '<span class="na">DB_PASSWORD</span><span class="o">=</span>'
+                '<span class="s">hunter2fake</span>'
+            ),
+            "password_assignment",
+        ),
+        ("<code>password</code>=hunter2fake", "password_assignment"),
+        (f"{FAKE_AWS[:4]}<wbr>{FAKE_AWS[4:]}", "aws_access_key_id"),
+        (f"{FAKE_AWS[:4]}&shy;{FAKE_AWS[4:]}", "aws_access_key_id"),
+        ("redis://u:<b>pw</b>@h", "url_inline_credentials"),
+    ],
+)
+def test_a_token_split_through_its_middle_by_markup_is_still_caught(body, expected_shape):
+    findings = scan.scan(body)
+    assert any(f.shape == expected_shape for f in findings), (
+        f"expected {expected_shape} to fire on a token split by markup"
+    )
+
+
+def test_soft_hyphen_and_zero_width_characters_are_stripped_from_the_text_view():
+    zero_width_space = chr(0x200B)
+    body = f"password{zero_width_space}=hunter2fake"
+    assert scan.scan(body) != []
+
+
+# --- fix round 3 (proof, not assumption): deleting tags glues adjacent
+# cells together in the text view -- does that ever cost a match a format-
+# strict shape would otherwise have made? -----------------------------------
+
+
+def test_two_aws_keys_glued_together_by_tag_deletion_are_still_both_findable():
+    # <td>AKIA...</td><td>AKIA...</td> becomes one glued run in the text
+    # view once tags are deleted. aws_access_key_id's pattern is
+    # AKIA[0-9A-Z]{16} -- an EXACT 16-character class, not open-ended -- so
+    # the first match consumes exactly 20 characters and finditer's next
+    # search position lands exactly on the second key's leading "AKIA",
+    # with no `\b` involved at all. The raw view never glues anything in
+    # the first place: it still sees `>AKIA...<` with both keys' boundaries
+    # intact. Both routes should mean detection on this line is not lost.
+    body = f"<td>{FAKE_AWS}</td><td>{FAKE_AWS}</td>"
+    findings = scan.scan(body)
+    assert any(f.shape == "aws_access_key_id" for f in findings), (
+        "aws_access_key_id did not fire at all on two keys glued by tag deletion"
+    )
+
+
+# --- fix round 3: the case-insensitive fast path must lowercase with a
+# length-preserving table, never str.lower(), or an offset shifts. ----------
+
+
+def test_a_length_changing_uppercase_letter_earlier_in_the_body_does_not_corrupt_offsets():
+    # U+0130 (LATIN CAPITAL LETTER I WITH DOT ABOVE) lowercases via
+    # str.lower() to TWO code points (i + combining dot above) -- exactly
+    # the length-changing transform the case-insensitive fast path must not
+    # use, since it would shift every offset after it in a lowered copy
+    # relative to the original body, corrupting both the line number
+    # reported for a later match and the value read back for placeholder
+    # classification.
+    turkish_i = chr(0x0130)
+    body = f"{turkish_i}stanbul is a city\npassword=hunter2fake123\ntoken=${{TOKEN}}"
+    findings = scan.scan(body)
+    password_hit = next(f for f in findings if f.shape == "password_assignment")
+    assert password_hit.line == 2
+    assert not any(f.shape == "token_assignment" for f in findings)
+
+
+# --- fix round 3: a body with nothing for the text view to strip should not
+# pay for a second scan pass. ------------------------------------------------
+
+
+def test_a_body_with_no_markup_or_entities_does_not_duplicate_findings_via_a_second_view():
+    # If the text view were built and scanned even when identical to the
+    # raw view, a match would still only be de-duplicated to one line
+    # (Finding de-dup is per shape+line, not per view) -- so this cannot
+    # observe the skip directly through finding counts. It exists as a
+    # behavioural pin: a plain-text body's result is unaffected by whether
+    # the (skipped) second view would have been scanned.
+    body = "password=hunter2fake123\ntoken=anotherfaketoken456"
+    findings = scan.scan(body)
+    assert any(f.shape == "password_assignment" for f in findings)
+    assert any(f.shape == "token_assignment" for f in findings)
