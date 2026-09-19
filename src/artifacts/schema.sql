@@ -187,3 +187,23 @@ create table if not exists event (
 );
 
 create index if not exists event_agent_seq_idx on event (agent, seq);
+
+-- When each seat last asked for its own events.
+--
+-- One row per seat, overwritten on every read: this is not a log, it is the
+-- answer to one question -- "is anybody still listening on this seat?" -- and
+-- the alert that catches a lost answer cannot work without it. An answer that
+-- was given and never collected has two completely different causes, needing
+-- opposite responses: the agent is gone (nobody has read this feed since the
+-- answer, so someone else must collect it), or the agent is alive and stuck
+-- (it has read the feed since, and still has not taken the answer). Without a
+-- last-read time those two look identical, and an alert that cannot tell them
+-- apart teaches whoever reads it to ignore both.
+--
+-- Written at the START of a read, not the end: a waiter parked in a 280-second
+-- hold has been listening for all 280 of those seconds, and recording the time
+-- it gave up would make the most attentive listener look like the most absent.
+create table if not exists seat_read (
+    agent        text primary key,
+    last_read_at timestamptz not null
+);

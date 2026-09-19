@@ -446,3 +446,84 @@ def acknowledge(db: Database, agent: str, decision_id: str) -> DecisionRow:
                 (decision_id,),
             ).fetchone()
     return _row_to_decision(row)
+
+
+# How long an answer may sit uncollected before it is worth saying so. Ten
+# minutes is chosen to be far longer than any healthy round trip -- a held
+# request returns within a second of an answer, and the agent acknowledges as
+# soon as it reads -- and far shorter than Jeremy's patience. It is a parameter
+# rather than a constant at the call site so a caller watching a slow link can
+# raise it without editing this module.
+STUCK_AFTER_SECONDS = 600
+
+
+@dataclass(frozen=True)
+class UncollectedRow:
+    """An answer that Jeremy gave and nobody has taken, with the one fact that
+    says whose problem it is."""
+
+    decision: DecisionRow
+    state: str  # "no_reader" | "stuck"
+    last_read_at: str | None
+
+
+def uncollected(
+    db: Database,
+    *,
+    agent: str | None = None,
+    stuck_after_seconds: int = STUCK_AFTER_SECONDS,
+) -> list[UncollectedRow]:
+    """Answers that were given and never collected, each labelled with WHY.
+
+    The two states need opposite responses, which is the whole reason this
+    distinguishes them:
+
+    - `no_reader` -- nobody has asked this seat for its events since the answer
+      was given. The agent is not listening: it exited, it was never armed, or
+      its machine is off. Nothing will collect this answer until a person or
+      another agent does.
+    - `stuck` -- the seat HAS read its feed since the answer, and still has not
+      acknowledged it. Something is alive and not acting. That is a bug to go
+      and look at, not an absence to work around.
+
+    An alert that reported only "uncollected" would mix those two together, and
+    whoever read it would learn to ignore it -- which is how the original failure
+    (a deploy silently cutting off every waiting agent) went unnoticed for a day.
+
+    Both states wait out `stuck_after_seconds` first: an answer given ten seconds
+    ago has not been lost, it is in flight. `agent` scopes to one seat; omitted,
+    every seat, which is the operator's view.
+    """
+    sql = (
+        f"select {_COLUMNS}, artifact.agent, seat_read.last_read_at from decision"  # noqa: S608 -- fixed constant, not caller input
+        " join artifact on artifact.id = decision.artifact_id"
+        " left join seat_read on seat_read.agent = artifact.agent"
+        " where decision.answered_at is not null"
+        " and decision.acknowledged_at is null"
+        " and decision.answered_at < now() - make_interval(secs => %s)"
+    )
+    params: list[object] = [stuck_after_seconds]
+    if agent is not None:
+        sql += " and artifact.agent = %s"
+        params.append(agent)
+    sql += " order by decision.answered_at asc"
+
+    with db.connect() as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+
+    out = []
+    for row in rows:
+        answered_at, last_read_at = row[8], row[-1]
+        # "Since the answer" is the comparison, not "recently": a seat read an
+        # hour before the answer and never again is exactly as absent as one that
+        # has never been read at all, and saying otherwise would send someone
+        # looking for a live agent that is not there.
+        listening = last_read_at is not None and last_read_at > answered_at
+        out.append(
+            UncollectedRow(
+                decision=_row_to_decision(row),
+                state="stuck" if listening else "no_reader",
+                last_read_at=last_read_at.isoformat() if last_read_at else None,
+            )
+        )
+    return out

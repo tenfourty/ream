@@ -611,3 +611,36 @@ def test_a_decision_still_waiting_on_him_carries_no_collection_mark(db):
     page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
     assert "not picked up yet" not in page
     assert "picked this up" not in page
+
+
+def test_an_uncollected_answer_says_whether_the_agent_is_even_running(db):
+    """"Nobody took your answer" is two situations, needing opposite responses:
+    an agent that is not running (someone else has to collect it) and one that is
+    running and not acting (a bug to go and look at). One comparison tells them
+    apart, and a message that cannot is one he learns to skip."""
+    from artifacts import events
+
+    published, row = _publish_and_ask(db)
+    decisions.answer(db, row.id, letter="a", by="jeremy")
+
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert "probably not running" in page
+
+    events.note_read(db, "ops-seat")
+
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert "probably not running" not in page
+    assert "has looked since you answered" in page
+
+
+def test_a_seat_that_stopped_looking_before_he_answered_counts_as_not_running(db):
+    """The comparison is "since the answer". A seat that was listening an hour
+    ago and is gone now must not be described as still looking."""
+    from artifacts import events
+
+    events.note_read(db, "ops-seat")
+    published, row = _publish_and_ask(db)
+    decisions.answer(db, row.id, letter="a", by="jeremy")
+
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert "probably not running" in page

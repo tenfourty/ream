@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from markupsafe import escape
 
-from artifacts import decisions, store
+from artifacts import decisions, events, store
 from artifacts.db import Database
 from artifacts.store import content_domain, content_url
 
@@ -380,6 +380,25 @@ def _when(iso: str) -> str:
     return moment.strftime("%-d %b, %H:%M")
 
 
+def _has_looked_since(listening_since: str | None, answered_at: str | None) -> bool:
+    """Has this page's agent asked for its events since Jeremy answered?
+
+    Compared as moments, never as strings: both come from the same database and
+    would usually compare correctly as text, but "usually" is not a property to
+    build a message to Jeremy on. An unparseable stamp reads as "has not looked",
+    which is the safe way round -- it points at an agent that may be fine, rather
+    than staying silent about one that is gone.
+    """
+    if not listening_since or not answered_at:
+        return False
+    try:
+        return datetime.fromisoformat(listening_since) > datetime.fromisoformat(
+            answered_at
+        )
+    except ValueError:
+        return False
+
+
 def _button(option: dict, row: decisions.DecisionRow) -> str:
     """One option, carrying two independent marks whose ORDER matters.
 
@@ -407,7 +426,9 @@ def _button(option: dict, row: decisions.DecisionRow) -> str:
     )
 
 
-def _render_decisions(rows: list[decisions.DecisionRow]) -> str:
+def _render_decisions(
+    rows: list[decisions.DecisionRow], listening_since: str | None = None
+) -> str:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
     (per the "no JavaScript" rule) EVERY bit of it works with scripts off.
@@ -507,9 +528,19 @@ def _render_decisions(rows: list[decisions.DecisionRow]) -> str:
                 )
             else:
                 unread = '<span class="unread">not picked up yet</span>'
+                # Two very different situations, and saying which one costs one
+                # comparison. An agent that has not looked since he answered is
+                # not running; one that has looked and still not taken the answer
+                # is running and stuck. Telling him "uncollected" and leaving him
+                # to guess which is how an alert earns being ignored.
                 pickup = (
-                    '<p class="pickup">No agent has picked this up yet. It is waiting '
+                    '<p class="pickup">Nothing has looked for this answer since you '
+                    "gave it, so the agent is probably not running. It is waiting "
                     "for them, not for you.</p>"
+                    if not _has_looked_since(listening_since, row.answered_at)
+                    else '<p class="pickup">The agent has looked since you answered '
+                    "and still has not taken it. It is waiting for them, not for "
+                    "you.</p>"
                 )
             # <details>, not a script: it collapses and expands with scripts off,
             # costs nothing, and keeps the page as fast as Jeremy said he liked.
@@ -585,7 +616,8 @@ def gallery_router(db: Database) -> APIRouter:
         # the title is wanted on the page anyway.
         with db.connect() as conn:
             row = conn.execute(
-                "select title, read_token from artifact where id = %s", (artifact_id,)
+                "select title, read_token, agent from artifact where id = %s",
+                (artifact_id,),
             ).fetchone()
         if row is None:
             raise HTTPException(404, "no such artifact")
@@ -594,7 +626,9 @@ def gallery_router(db: Database) -> APIRouter:
         decision_rows = decisions.list_for_artifact(
             db, artifact_id, include_answered=True, include_closed=False
         )
-        decisions_html = _render_decisions(decision_rows)
+        decisions_html = _render_decisions(
+            decision_rows, listening_since=events.last_read(db, row[2])
+        )
         # The one place the capability token is rendered: a page only Jeremy's Authelia session
         # can load. The token then travels in the iframe's src, and it is the CONTENT app's own
         # Referrer-Policy: no-referrer (content.py) that keeps it out of a Referer once that

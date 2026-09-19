@@ -122,6 +122,46 @@ def list_for_agent(
     return [_row_to_event(row) for row in rows]
 
 
+def note_read(db: Database, agent: str) -> None:
+    """Record that this seat asked for its events, just now.
+
+    Called at the START of a read, before anything is looked up, because a
+    request that holds for 280 seconds is listening for every one of them --
+    recording the time it finished would make the most attentive listener look
+    like the most absent one, which is exactly backwards for the question this
+    answers.
+
+    That question is "is anybody still listening on this seat?", and it exists
+    because an answer Jeremy gave that nobody collected has two opposite causes:
+    the agent is gone, so someone else has to collect it, or the agent is alive
+    and stuck. Without this, those two are indistinguishable.
+
+    Never raises. This is bookkeeping ALONGSIDE a read, not part of it: an agent
+    asking for its events must still get them if the bookkeeping write fails, and
+    a failure here degrades the alert, which is a safety net, rather than the feed,
+    which is the feature. The cost of being wrong in the other direction is an
+    agent that cannot read its answers because a statistics table was unhappy.
+    """
+    try:
+        with db.connect() as conn:
+            conn.execute(
+                "insert into seat_read (agent, last_read_at) values (%s, now())"
+                " on conflict (agent) do update set last_read_at = now()",
+                (agent,),
+            )
+    except Exception:  # noqa: BLE001 -- see the docstring: this must never fail a read
+        return
+
+
+def last_read(db: Database, agent: str) -> str | None:
+    """When this seat last asked for its events, or None if it never has."""
+    with db.connect() as conn:
+        row = conn.execute(
+            "select last_read_at from seat_read where agent = %s", (agent,)
+        ).fetchone()
+    return row[0].isoformat() if row else None
+
+
 # How many agents may hold a waiting request at once. Each one occupies a worker
 # thread for as long as it waits, and FastAPI's thread pool is finite: without a
 # ceiling, enough waiters would starve every ordinary request in the app,

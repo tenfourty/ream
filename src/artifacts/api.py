@@ -367,6 +367,28 @@ def agent_router(db: Database) -> APIRouter:
         except store.NotFound as exc:
             raise HTTPException(404, "no such decision") from exc
 
+    @router.get("/decisions/uncollected")
+    def list_uncollected(
+        stuck_after_seconds: int = Query(
+            decisions.STUCK_AFTER_SECONDS, ge=0, le=86_400
+        ),
+        agent: str = Depends(caller),
+    ):
+        # Scoped to the caller's own seat, like every other read here. The
+        # operator's cross-seat view -- collecting an answer on behalf of an agent
+        # that is gone -- needs a key that does not exist yet, and inventing one
+        # here would be a privilege nobody asked for.
+        return [
+            {
+                "decision": row.decision.__dict__,
+                "state": row.state,
+                "last_read_at": row.last_read_at,
+            }
+            for row in decisions.uncollected(
+                db, agent=agent, stuck_after_seconds=stuck_after_seconds
+            )
+        ]
+
     @router.get("/events")
     def list_events(
         since: int = Query(0, ge=0),
@@ -398,6 +420,12 @@ def agent_router(db: Database) -> APIRouter:
         # database connection while it sleeps: each look is its own short
         # connection, so a waiting agent costs a sleeping thread, not a pooled
         # connection someone else needs.
+        # Before the look, not after: this request is listening from now until it
+        # answers, and a 280-second hold that recorded its END time would make the
+        # most attentive listener look like the most absent one. Never fails the
+        # read (events.note_read swallows its own errors) -- the feed is the
+        # feature, this is the safety net that watches over it.
+        events.note_read(db, agent)
         rows = events.list_for_agent(db, agent, since=since, limit=limit)
         if rows or not wait:
             return [row.__dict__ for row in rows]
