@@ -1,12 +1,16 @@
 """Publishing, patching, reading and listing artifacts.
 
-Every write goes through `_guard`: a body over `MAX_BODY_BYTES` is refused
-before it ever reaches the scanner (the scanner holds the GIL while it reads
-two views of the body, so an uncapped body is a way to stall the process),
-then `scan.scan` runs and any finding refuses the write. A refusal is logged
-on `artifacts.refusals` at WARNING with the agent seat, the artifact id (when
-patching), the shape names and the finding count -- never the body or a
-matched value, which `scan.Finding` never carries in the first place.
+`publish` and `patch` check the cheapest guard first, and the scanner last, so
+CPU is never spent on behalf of a caller who has no right to it. `patch` in
+particular runs: the size cap (no database round trip) -- ownership (one
+indexed query, so an unknown artifact and someone else's look identical, both
+404) -- the secret scan (the scanner holds the GIL while it reads two views of
+the body, so it always runs last and only once ownership is confirmed). Every
+refusal is logged on `artifacts.refusals` at WARNING with the agent seat and
+the artifact id (when patching) -- a size refusal adds the body's size, a
+scan refusal adds the shape names and finding count -- never the body itself
+or a matched value, which `scan.Finding` never carries in the first place. A
+404 or a stale-revision 409 is routine, not a refusal, and is never logged.
 """
 
 import hashlib
@@ -74,10 +78,19 @@ def _revision(body: str, n: int) -> str:
     return hashlib.sha256(f"{n}:{body}".encode()).hexdigest()[:16]
 
 
-def _guard(body: str, *, agent: str, artifact_id: str | None) -> None:
+def _check_size(body: str, *, agent: str, artifact_id: str | None) -> None:
     size = len(body.encode("utf-8"))
     if size > MAX_BODY_BYTES:
+        _refusals.warning(
+            "publish refused: agent=%s artifact=%s reason=body_too_large size=%d",
+            agent,
+            artifact_id or "-",
+            size,
+        )
         raise BodyTooLarge(size)
+
+
+def _check_secrets(body: str, *, agent: str, artifact_id: str | None) -> None:
     findings = scan.scan(body)
     if findings:
         shapes = sorted({finding.shape for finding in findings})
@@ -92,7 +105,8 @@ def _guard(body: str, *, agent: str, artifact_id: str | None) -> None:
 
 
 def publish(db: Database, agent: str, title: str, body: str) -> Published:
-    _guard(body, agent=agent, artifact_id=None)
+    _check_size(body, agent=agent, artifact_id=None)
+    _check_secrets(body, agent=agent, artifact_id=None)
     artifact_id, revision = ids.new_id(), _revision(body, 1)
     with db.connect() as conn:
         # Three steps, not two: `version` references `artifact`, and `artifact.current_version`
@@ -128,7 +142,7 @@ def _owned(conn, artifact_id: str, agent: str):
 def patch(
     db: Database, agent: str, artifact_id: str, body: str, expected_revision: str
 ) -> Published:
-    _guard(body, agent=agent, artifact_id=artifact_id)
+    _check_size(body, agent=agent, artifact_id=artifact_id)
     with db.connect() as conn:
         row = _owned(conn, artifact_id, agent)
         if row is None:
@@ -140,6 +154,7 @@ def patch(
         ).fetchone()
         if live is None or live[0] != expected_revision:
             raise RevisionMismatch()
+        _check_secrets(body, agent=agent, artifact_id=artifact_id)
         n = current + 1
         revision = _revision(body, n)
         conn.execute(

@@ -110,6 +110,46 @@ def test_another_agents_key_cannot_read_or_patch(client, db):
     assert mine["id"] not in client.get("/api/v1/artifacts", headers=auth(token_b)).text
 
 
+def test_patching_another_agents_artifact_over_the_cap_still_returns_413(client, db):
+    """The size cap runs before ownership, so it applies to a foreign artifact too --
+    but it never distinguishes "foreign" from "yours": either way the caller only
+    ever sees 413, never a hint that the id belongs to someone else."""
+    token_a, _ = keys.mint(db, agent="seat-a")
+    token_b, _ = keys.mint(db, agent="seat-b")
+    mine = client.post(
+        "/api/v1/artifacts",
+        json={"title": "Board", "body": PAGE},
+        headers=auth(token_a),
+    ).json()
+    body = _padded_body(store.MAX_BODY_BYTES + 1)
+    response = client.patch(
+        f"/api/v1/artifacts/{mine['id']}",
+        json={"body": body, "expected_revision": mine["revision"]},
+        headers=auth(token_b),
+    )
+    assert response.status_code == 413
+
+
+def test_patching_another_agents_artifact_with_a_secret_returns_404_not_422(client, db):
+    """Pins the ordering: ownership is checked before the scanner ever runs, so a
+    secret-laden body under the cap gets the same 404 as any other field would --
+    never a 422 that would confirm the artifact exists and belongs to someone else."""
+    token_a, _ = keys.mint(db, agent="seat-a")
+    token_b, _ = keys.mint(db, agent="seat-b")
+    mine = client.post(
+        "/api/v1/artifacts",
+        json={"title": "Board", "body": PAGE},
+        headers=auth(token_a),
+    ).json()
+    secret = "AKIA" + "IOSFODNN7EXAMPLE"
+    response = client.patch(
+        f"/api/v1/artifacts/{mine['id']}",
+        json={"body": PAGE + secret, "expected_revision": mine["revision"]},
+        headers=auth(token_b),
+    )
+    assert response.status_code == 404
+
+
 def test_no_key_and_a_forged_identity_header_are_both_refused(client, db):
     assert (
         client.post("/api/v1/artifacts", json={"title": "x", "body": PAGE}).status_code
@@ -206,3 +246,38 @@ def test_a_patch_refusal_is_logged_with_the_artifact_id(client, db, caplog):
     assert any(first["id"] in message for message in messages)
     for message in messages:
         assert secret not in message
+
+
+def test_a_size_refusal_is_logged_with_the_size_but_never_the_body(client, db, caplog):
+    token, _ = keys.mint(db, agent="ops-seat")
+    size = store.MAX_BODY_BYTES + 1
+    body = _padded_body(size)
+    with caplog.at_level(logging.WARNING, logger="artifacts.refusals"):
+        client.post(
+            "/api/v1/artifacts",
+            json={"title": "Board", "body": body},
+            headers=auth(token),
+        )
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("ops-seat" in message and str(size) in message for message in messages)
+    for message in messages:
+        assert "a" * 1000 not in message
+
+
+def test_a_patch_size_refusal_is_logged_with_the_artifact_id(client, db, caplog):
+    token, _ = keys.mint(db, agent="ops-seat")
+    first = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
+    ).json()
+    size = store.MAX_BODY_BYTES + 1
+    body = _padded_body(size)
+    with caplog.at_level(logging.WARNING, logger="artifacts.refusals"):
+        client.patch(
+            f"/api/v1/artifacts/{first['id']}",
+            json={"body": body, "expected_revision": first["revision"]},
+            headers=auth(token),
+        )
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(first["id"] in message and str(size) in message for message in messages)
+    for message in messages:
+        assert "a" * 1000 not in message
