@@ -208,6 +208,28 @@ def test_the_fast_path_finds_what_the_original_pattern_finds(monkeypatch, patter
     assert [f.shape for f in scan.scan(body)] == ["probe"]
 
 
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "(?i:password=)(?!changeme)\\S+",  # `Changeme...` is excluded once lowered, not before
+        "(?i:password=)(?<!x)\\S+",
+        "(?i:token=)(?!(?:abc|def))\\w+",
+    ],
+)
+def test_a_negative_lookaround_in_a_case_insensitive_shape_is_rejected(pattern):
+    # A negative lookaround says what must NOT be there, so text it misses
+    # on the original body but matches on the lowercased copy takes a real
+    # match away: `(?!changeme)` lets `PASSWORD=Changeme2026!Xq9fake`
+    # through on the original and excludes it once lowered.
+    with pytest.raises(scan.ShapesError):
+        scan.parse_shapes(f"lookaround\t{pattern}\n")
+
+
+def test_a_positive_lookaround_in_a_case_insensitive_shape_still_loads():
+    pattern = "(?i:token=)(?=[a-z0-9]{8})\\S+"
+    assert [name for name, _ in scan.parse_shapes(f"lookahead\t{pattern}\n")] == ["lookahead"]
+
+
 def test_the_packaged_shapes_file_passes_every_load_time_guard():
     text = (scan.resources.files("artifacts") / "secret_shapes.txt").read_text(encoding="utf-8")
     assert [name for name, _ in scan.parse_shapes(text)] == [name for name, _ in scan.SHAPES]
@@ -675,12 +697,55 @@ def test_a_placeholder_on_the_next_line_is_still_a_placeholder(body):
 
 
 @pytest.mark.parametrize(
-    "body",
-    ["password=\n\n\n\nhunter2fake", "password=\n\n\n\n\nhunter2fake"],
+    ("body", "line"),
+    [
+        # A plain-text value four lines down: round 4 accepted missing this,
+        # and the same change closes it.
+        ("password=\n\n\n\nhunter2fake", 1),
+        ("password=\n\n\n\n\n\n\n\n\n\nhunter2fake", 1),
+        # Every deleted tag leaves the blank line it stood on, so markup
+        # alone puts a value further down than any line count would allow.
+        # These five are the reviewer's table, verbatim: the first two were
+        # caught before this commit, the last three were published clean.
+        ("<tr>\n<td>DB_PASSWORD=</td>\n<td>hunter2fake</td>", 2),
+        ("<td>DB_PASSWORD=</td>\n<td>\n<code>\nhunter2fake", 1),
+        ("<td>DB_PASSWORD=</td>\n<td>\n<div>\n<code>\nhunter2fake", 1),
+        ("<dl>\n<dt>API_TOKEN=</dt>\n<dd>\n<pre>\n<code>\nfakeTOK9fakeTOK9", 2),
+        ("<td>token=</td>\n</tr>\n<tr>\n<td>\nfakeTOK9fakeTOK9", 1),
+        # Indented markup, and a run of void elements, reach the same place.
+        (
+            (
+                "<dl>\n  <dt>DB_PASSWORD=</dt>\n  <dd>\n    <code>\n"
+                "      hunter2fake\n    </code>\n  </dd>\n</dl>"
+            ),
+            2,
+        ),
+        (
+            (
+                "<table>\n<tr><td>API_TOKEN=</td></tr>\n<tr>\n<td>\n"
+                "fakeTOK9fakeTOK9\n</td>\n</tr>\n</table>"
+            ),
+            2,
+        ),
+        ("<p>password=</p>\n<br>\n<br>\n<br>\n<br>\n<span>hunter2fake</span>", 1),
+    ],
 )
-def test_a_value_4_or_more_lines_down_is_not_looked_for(body):
-    # Lines 2-4 are blank, so the value is genuinely empty and the
-    # empty-means-placeholder rule applies; line 5 onwards is never read.
+def test_a_value_any_number_of_blank_lines_down_is_still_classified(body, line):
+    # Blank lines are skipped, not counted: what ends the lookahead is the
+    # first line with something on it, not a line budget.
+    assert [f.line for f in scan.scan(body) if f.shape.endswith("_assignment")] == [line]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "password=\n\n\n\n${PASSWORD}",
+        "password=\n\n\n\n\n\n  '{{ vault_pw }}'",
+        "<td>DB_PASSWORD=</td>\n<td>\n<code>\n&lt;YOUR_PASSWORD&gt;",
+        "password=\n\n\n\n",
+    ],
+)
+def test_a_placeholder_any_number_of_blank_lines_down_is_still_a_placeholder(body):
     assert scan.scan(body) == []
 
 
@@ -703,14 +768,16 @@ def test_whitespace_or_a_quote_before_a_value_does_not_hide_it(body):
     assert any(f.shape == "password_assignment" for f in scan.scan(body))
 
 
-def test_a_flood_of_empty_assignments_each_looking_3_lines_ahead_scans_quickly():
-    # Every match takes the longest lookahead (three blank lines, then give
-    # up) in both views: the leading `&amp;` makes the text view differ.
+def test_a_flood_of_empty_assignments_each_looking_past_blank_lines_scans_quickly():
+    # Every match skips four blank lines to reach the next key, in both
+    # views: the leading `&amp;` makes the text view differ. Each blank run
+    # is skipped once, by one match, so the work stays linear however far a
+    # value sits from its key.
     body = "&amp;\n" + "pass=\n\n\n\n" * 116_000  # ~1 MiB
     start = time.perf_counter()
     findings = scan.scan(body)
     elapsed = time.perf_counter() - start
-    assert findings == []
+    assert len(findings) <= scan._MAX_FINDINGS_TOTAL
     assert elapsed < 1.0
 
 
@@ -827,3 +894,55 @@ def test_the_lowered_copy_lowers_a_to_z_and_nothing_else(text):
     lowered = scan._lower_ascii(text)
     assert lowered == text.translate(str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"))
     assert len(lowered) == len(text)
+
+
+# --- fix round 5, final commit: a space written as an HTML character
+# reference is a space, in every form. ---------------------------------------
+
+SKIPPED_REFERENCES = [
+    "&ensp;",  # every one of these refused a placeholder before this commit
+    "&emsp;",
+    "&thinsp;",
+    "&#32;",
+    "&Tab;",
+    "&MediumSpace;",
+    "&nbsp;",
+    "&nbsp",  # html.unescape reads the semicolon-less form too
+    "&#xA0;",  # hex, either case
+    "&#xa0;",
+    "&#8203;",  # a zero-width space is no more part of a value than a space is
+    "&quot;",
+    "&#39;",
+]
+
+
+@pytest.mark.parametrize("reference", SKIPPED_REFERENCES)
+@pytest.mark.parametrize(
+    ("wrap", "line"), [("{}", 1), ("<td>{}</td>", 1), ('<div data-x="{}">', 1)]
+)
+def test_an_escaped_space_before_a_placeholder_does_not_make_it_a_value(reference, wrap, line):
+    assert scan.scan(wrap.format(f"password={reference}${{DB_PASSWORD}}")) == []
+
+
+@pytest.mark.parametrize("reference", SKIPPED_REFERENCES)
+def test_an_escaped_space_before_a_real_value_does_not_hide_it(reference):
+    body = f"password={reference}hunter2fake"
+    assert [f.line for f in scan.scan(body) if f.shape == "password_assignment"] == [1]
+
+
+def test_every_html_space_or_quote_reference_is_skipped_before_a_value():
+    # Completeness, not a list someone kept up to date: every named
+    # reference in html.entities.html5 that stands for whitespace, a quote
+    # or an invisible character must behave like the character it writes.
+    import html.entities
+
+    references = {
+        f"&{name}" if name.endswith(";") else f"&{name};"
+        for name, char in html.entities.html5.items()
+        if char and all(c in scan._SKIPPABLE for c in char) and "\n" not in char
+    }
+    assert len(references) > 20
+    missed = [r for r in references if scan.scan(f"password={r}hunter2fake") == []]
+    refused = [r for r in references if scan.scan(f"password={r}${{DB_PASSWORD}}") != []]
+    assert missed == []
+    assert refused == []

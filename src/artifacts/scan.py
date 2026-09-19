@@ -304,9 +304,10 @@ def _class_survives_lowering(text: str) -> bool:
     return True
 
 
-def _survives_lowering(folded: str) -> bool:
-    """Whether a search for `folded` over the lowercased copy finds
-    everything the shape would find on the original (see above)."""
+def _survives_lowering(folded: str) -> str | None:
+    """Why a search for `folded` over the lowercased copy would not find
+    everything the shape finds on the original (see above), or None if it
+    would."""
     class_start = None
     i = 0
     while i < len(folded):
@@ -314,13 +315,13 @@ def _survives_lowering(folded: str) -> bool:
         if char == "\\":
             escaped = folded[i + 1 : i + 2]
             if not escaped or (escaped.isalnum() and escaped not in _CASE_NEUTRAL_ESCAPES):
-                return False
+                return f"the escape \\{escaped} can name an uppercase letter"
             i += 2
             continue
         if class_start is not None:
             if char == "]":
                 if not _class_survives_lowering(folded[class_start : i + 1]):
-                    return False
+                    return "a character class names a letter in one case only"
                 class_start = None
             i += 1
             continue
@@ -337,10 +338,18 @@ def _survives_lowering(folded: str) -> bool:
             if syntax:
                 i = syntax.end()
                 continue
+            if folded.startswith("(?!", i) or folded.startswith("(?<!", i):
+                # A negative lookaround says what must NOT be there, so
+                # lowering, which can only ever match MORE, takes real
+                # matches away rather than adding spurious ones:
+                # `(?i:password=)(?!changeme)\S+` lets
+                # `PASSWORD=Changeme2026!Xq9fake` through on the original and
+                # excludes it on the lowered copy. No packaged shape uses one.
+                return "a negative lookaround excludes more text once lowered"
         if char in string.ascii_uppercase:
-            return False
+            return "an uppercase letter outside a character class"
         i += 1
-    return class_start is None
+    return None if class_start is None else "an unclosed character class"
 
 
 # What ends a value once it has started: whitespace, a quote, `&`, `;`, `,`,
@@ -354,28 +363,56 @@ def _survives_lowering(folded: str) -> bool:
 _VALUE_BOUNDARY = re.compile(r"""[\s"'&;,]|<[A-Za-z/!?][^<>]*>""")
 
 # Where an assignment's value starts. Skipped first: whatever sits between
-# the operator and the value without being the value -- whitespace of any
-# kind except a line break (a non-breaking space, `&nbsp;` once unescaped,
-# hides a value no better than a plain space does) and quotes
-# (`password = "x"`), including the HTML-escaped forms the raw view reads
-# (`&quot;`, `&#x27;`, `&nbsp;` ... -- what html.escape() writes; fix round
-# 5). If that reaches the end of the line, the value is on a later line
-# (fix round 4): the match goes on through at most _VALUE_LOOKAHEAD_LINES
-# blank lines -- each a line break plus the same skippable run -- and the
-# value is the first token of the next non-blank line. Landing on a line
-# break or the end of the text after that means the value is genuinely
-# empty. The pattern is unambiguous -- the skipped units start with
-# different characters (whitespace, a quote, `&`), and each repetition
-# starts with a line break none of them matches -- so it never backtracks
-# beyond one short entity name; and the runs it skips are blank, so no two
-# matches' runs overlap and the total work over a view stays linear.
-_VALUE_LOOKAHEAD_LINES = 3
+# the operator and the value without being part of it -- whitespace of any
+# kind, quotes (`password = "x"`), the invisible characters the text view
+# strips, and every way of writing one of those as an HTML character
+# reference, which is how the raw view meets them: `&nbsp;`, `&ensp;`,
+# `&#32;`, `&Tab;`, `&quot;`, `&#x27;`. The escaped forms are derived from
+# html.entities.html5 and from the code points themselves rather than
+# listed, so no form is missed (fix round 5: `&ensp;` and friends made a
+# placeholder read as a value, and the page was refused).
+#
+# Line breaks are skipped like any other whitespace, so a value below its
+# key is found however far down it sits: what ends the search is the first
+# line with something on it, not a count of lines (fix round 5 -- a count
+# could not work, because deleting a tag leaves the blank line it stood on,
+# and `<td>DB_PASSWORD=</td>` followed by three opening tags on their own
+# lines already spends three). Landing on the end of the text means the
+# value is genuinely empty. The runs skipped hold nothing but those
+# characters, so no two matches' runs overlap and the total work over a
+# view stays linear however far a value sits from its key.
+_SKIPPABLE = frozenset(
+    {chr(code) for code in range(0x3001) if chr(code).isspace()} | set("'\"") | set(_INVISIBLE)
+)
+
+
+def _reference_forms(characters: frozenset) -> str:
+    """A regex alternation of every way to write one of `characters` as an
+    HTML character reference: the html5 named forms (with and without their
+    semicolon, both of which html.unescape reads) and the numeric forms."""
+    forms = [
+        re.escape(name)
+        for name, text in html.entities.html5.items()
+        if text and all(char in characters for char in text)
+    ]
+    forms += [rf"#0*{ord(char)};?" for char in characters]
+    forms += [
+        "#[xX]0*"
+        + "".join(f"[{digit}{digit.upper()}]" if digit.isalpha() else digit
+                  for digit in f"{ord(char):x}")
+        + ";?"
+        for char in characters
+    ]
+    # Longest first: `nbsp;` must win over `nbsp`, as html.unescape's own
+    # longest-match rule has it.
+    return "|".join(sorted(forms, key=len, reverse=True))
+
+
 _SKIPPED_BEFORE_VALUE = (
-    r"""(?:[^\S\n]|['"]|&(?:quot|apos|nbsp|#0*(?:34|39|160)|#[xX]0*(?:22|27|[aA]0));)"""
+    f"(?:[{''.join(sorted(re.escape(char) for char in _SKIPPABLE))}]"
+    f"|&(?:{_reference_forms(_SKIPPABLE)}))"
 )
-_VALUE_START = re.compile(
-    rf"{_SKIPPED_BEFORE_VALUE}*(?:\n{_SKIPPED_BEFORE_VALUE}*){{0,{_VALUE_LOOKAHEAD_LINES}}}"
-)
+_VALUE_START = re.compile(f"{_SKIPPED_BEFORE_VALUE}*")
 
 # A value that starts with `&`, `;` or `,` is a value -- a generated
 # password starts with one of the three about once in 30 -- except where the
@@ -420,12 +457,11 @@ def _check_case_insensitive(number: int, name: str, pattern: str) -> None:
             " lowercases the group and searches a lowercased copy of the body, which is"
             " only the same search for such a group"
         )
-    if not _survives_lowering(folded):
+    reason = _survives_lowering(folded)
+    if reason is not None:
         raise ShapesError(
-            f"{where}: searched over a lowercased copy of the body, where an uppercase"
-            " letter outside a class, a class naming an uppercase letter without its"
-            " lowercase one (negated: a letter in one case only), or an escape that can"
-            " name an uppercase letter would not match as it does on the original"
+            f"{where}: {reason} -- searched over a lowercased copy of the body, this"
+            " shape would not match what it matches on the original"
         )
 
 
@@ -570,11 +606,12 @@ def _value_after(text: str, start: int) -> str:
     quotes so the token itself, not its wrapper, gets classified.
 
     With nothing after the operator on its own line, the token is the first
-    one on the next non-blank line, at most `_VALUE_LOOKAHEAD_LINES` lines
-    ahead: `password=` with `hunter2` on the next line has a value, not "no
-    value" (fix round 4 -- reading it as empty made it a placeholder, and
-    the credential was dropped). With no non-blank line in reach, the value
-    is genuinely empty, and an empty value is a placeholder.
+    one on the next line that holds anything at all, however far down that
+    is: `password=` with `hunter2` below it has a value, not "no value"
+    (fix round 4 -- reading it as empty made it a placeholder, and the
+    credential was dropped -- and fix round 5's final commit, which stopped
+    counting the blank lines). With nothing below it either, the value is
+    genuinely empty, and an empty value is a placeholder.
 
     A value's FIRST character is part of it even when it is `&`, `;` or `,`
     (fix round 5: `DB_PASSWORD=&k2...` was read as empty and dropped), unless
@@ -599,13 +636,11 @@ def _value_after(text: str, start: int) -> str:
         return ""
     first = text[start]
     pos = start
-    if first.isspace() or first in "'\"&":
+    if first in _SKIPPABLE or first == "&":
         pos = _VALUE_START.match(text, start).end()
         if pos == end:
             return ""
         first = text[pos]
-    if first == "\n":
-        return ""
     limit = pos + _VALUE_WINDOW
     # Where the boundary search starts: past the first character when that
     # character is itself a boundary, so the value keeps it.
