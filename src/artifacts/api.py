@@ -22,6 +22,10 @@ class PublishBody(BaseModel):
 class PatchBody(BaseModel):
     body: str
     expected_revision: str
+    # Omitted entirely -> the page keeps the name it has. This is `None` rather
+    # than `""` so that clearing a title and not touching it stay distinguishable:
+    # an empty string is a rename to nothing, which the title guard refuses.
+    title: str | None = None
 
 
 class CommentBody(BaseModel):
@@ -113,7 +117,12 @@ def agent_router(db: Database) -> APIRouter:
     def update(artifact_id: str, payload: PatchBody, agent: str = Depends(caller)):
         try:
             return store.patch(
-                db, agent, artifact_id, payload.body, payload.expected_revision
+                db,
+                agent,
+                artifact_id,
+                payload.body,
+                payload.expected_revision,
+                title=payload.title,
             ).__dict__
         except store.BodyTooLarge as exc:
             raise HTTPException(

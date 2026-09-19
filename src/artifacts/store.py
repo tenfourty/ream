@@ -122,7 +122,9 @@ def gallery_origin() -> str:
     """Read at call time, exactly like content_domain(). A module-level
     os.environ.get() is fixed at import, so no test can override it and the
     deployment has to set it before the first import of this module."""
-    return os.environ.get("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    return os.environ.get(
+        "ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site"
+    )
 
 
 def url_for(artifact_id: str) -> str:
@@ -233,7 +235,9 @@ def publish(db: Database, agent: str, title: str, body: str) -> Published:
     _guard(title, MAX_TITLE_BYTES, "title", agent=agent, artifact_id=None)
     _guard(body, MAX_BODY_BYTES, "body", agent=agent, artifact_id=None)
     artifact_id, revision = ids.new_id(), _revision(body, 1)
-    token = secrets.token_urlsafe(24)  # 192 bits; URL-safe alphabet, so it is one path segment
+    token = secrets.token_urlsafe(
+        24
+    )  # 192 bits; URL-safe alphabet, so it is one path segment
     with db.connect() as conn, conn.transaction():
         # Three steps, not two: `version` references `artifact`, and `artifact.current_version`
         # references `version`, so the two tables point at each other. The artifact row is born
@@ -269,9 +273,26 @@ def _owned(conn, artifact_id: str, agent: str):
 
 
 def patch(
-    db: Database, agent: str, artifact_id: str, body: str, expected_revision: str
+    db: Database,
+    agent: str,
+    artifact_id: str,
+    body: str,
+    expected_revision: str,
+    title: str | None = None,
 ) -> Published:
+    """`title=None` leaves the page's name alone; a string renames it.
+
+    A page's name outlives its first version -- what a page is FOR is often only
+    clear after a few revisions, and until this existed the only way to correct a
+    name was to publish a second artifact at a second address and abandon the
+    first. The rename rides in this call rather than in one of its own so that a
+    body and the name that describes it can never disagree: they commit together
+    or not at all."""
     _check_size(body, MAX_BODY_BYTES, "body", agent=agent, artifact_id=artifact_id)
+    if title is not None:
+        _check_size(
+            title, MAX_TITLE_BYTES, "title", agent=agent, artifact_id=artifact_id
+        )
     with db.connect() as conn:
         row = _owned(conn, artifact_id, agent)
         if row is None:
@@ -284,6 +305,8 @@ def patch(
         if live is None or live[0] != expected_revision:
             raise RevisionMismatch()
         _check_secrets(body, "body", agent=agent, artifact_id=artifact_id)
+        if title is not None:
+            _check_secrets(title, "title", agent=agent, artifact_id=artifact_id)
         n = current + 1
         revision = _revision(body, n)
         try:
@@ -296,10 +319,18 @@ def patch(
                     " values (%s, %s, %s, %s, %s)",
                     (artifact_id, n, body, revision, agent),
                 )
-                conn.execute(
-                    "update artifact set current_version = %s, updated_at = now() where id = %s",
-                    (n, artifact_id),
-                )
+                if title is None:
+                    conn.execute(
+                        "update artifact set current_version = %s, updated_at = now()"
+                        " where id = %s",
+                        (n, artifact_id),
+                    )
+                else:
+                    conn.execute(
+                        "update artifact set current_version = %s, title = %s,"
+                        " updated_at = now() where id = %s",
+                        (n, title, artifact_id),
+                    )
         except UniqueViolation as exc:
             # Two patches raced the same `expected_revision`: both passed the
             # check above (nothing here takes a lock), but only one of them

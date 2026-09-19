@@ -179,7 +179,9 @@ def _read_page(file_path: str) -> str:
 
 def _publish(file_path: str, title: str, key: str) -> dict:
     body = _read_page(file_path)
-    return _request("POST", f"{_api_base()}/artifacts", key, {"title": title, "body": body})
+    return _request(
+        "POST", f"{_api_base()}/artifacts", key, {"title": title, "body": body}
+    )
 
 
 def _read_current(artifact_id: str, key: str) -> dict:
@@ -187,19 +189,27 @@ def _read_current(artifact_id: str, key: str) -> dict:
 
 
 def _patch_with_retry(
-    file_path: str, artifact_id: str, expected_revision: str, key: str
+    file_path: str,
+    artifact_id: str,
+    expected_revision: str,
+    key: str,
+    title: str | None = None,
 ) -> dict:
     """PATCH with `expected_revision`; on a 409 (someone else patched first),
     re-read the artifact's now-current revision and retry exactly once, then
-    let a second failure propagate."""
+    let a second failure propagate. `title` renames the page in the same call;
+    omitted, the page keeps the name it has."""
     body = _read_page(file_path)
+    payload = {"body": body, "expected_revision": expected_revision}
+    if title is not None:
+        payload["title"] = title
     for attempt in range(2):
         try:
             return _request(
                 "PATCH",
                 f"{_api_base()}/artifacts/{artifact_id}",
                 key,
-                {"body": body, "expected_revision": expected_revision},
+                {**payload, "expected_revision": expected_revision},
             )
         except HTTPFailure as exc:
             if exc.status == 409 and attempt == 0:
@@ -209,9 +219,11 @@ def _patch_with_retry(
     raise AssertionError("unreachable")  # pragma: no cover
 
 
-def _update(file_path: str, artifact_id: str, key: str) -> dict:
+def _update(
+    file_path: str, artifact_id: str, key: str, title: str | None = None
+) -> dict:
     expected_revision = _read_current(artifact_id, key)["revision"]
-    return _patch_with_retry(file_path, artifact_id, expected_revision, key)
+    return _patch_with_retry(file_path, artifact_id, expected_revision, key, title)
 
 
 def _list(key: str) -> list[dict]:
@@ -222,7 +234,15 @@ def _print_published(result: dict) -> None:
     """Whitelist, not passthrough: print only id/url/revision, exactly what the
     brief asks for, so a future field the server starts returning can never
     reach a caller's stdout (or a caller's own downstream parsing) unreviewed."""
-    print(json.dumps({field: result[field] for field in ("id", "url", "revision") if field in result}))
+    print(
+        json.dumps(
+            {
+                field: result[field]
+                for field in ("id", "url", "revision")
+                if field in result
+            }
+        )
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -252,13 +272,14 @@ def main(argv: list[str] | None = None) -> int:
             if not args.file:
                 print("FILE is required with --update", file=sys.stderr)
                 return 2
-            _print_published(_update(args.file, args.update, key))
+            _print_published(_update(args.file, args.update, key, args.title))
             return 0
         if args.file and args.title:
             _print_published(_publish(args.file, args.title, key))
             return 0
         print(
-            "usage: artifacts-publish FILE --title TITLE | FILE --update ID | --list",
+            "usage: artifacts-publish FILE --title TITLE"
+            " | FILE --update ID [--title TITLE] | --list",
             file=sys.stderr,
         )
         return 2

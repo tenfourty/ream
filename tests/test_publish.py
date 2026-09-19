@@ -697,7 +697,10 @@ def test_reading_an_artifact_by_api_reports_its_current_revision_and_url(client,
 
     patched = client.patch(
         f"/api/v1/artifacts/{created['id']}",
-        json={"body": PAGE.replace("hi", "hello"), "expected_revision": created["revision"]},
+        json={
+            "body": PAGE.replace("hi", "hello"),
+            "expected_revision": created["revision"],
+        },
         headers=auth(token),
     ).json()
 
@@ -706,3 +709,102 @@ def test_reading_an_artifact_by_api_reports_its_current_revision_and_url(client,
     ).json()
     assert refetched["revision"] == patched["revision"]
     assert refetched["revision"] != created["revision"]
+
+
+def _make(client, token, title="Board"):
+    return client.post(
+        "/api/v1/artifacts", json={"title": title, "body": PAGE}, headers=auth(token)
+    ).json()
+
+
+def test_an_update_can_correct_the_pages_name(client, db):
+    """A page's name outlives its first version. Until this existed, a title that
+    turned out wrong could only be corrected by publishing a second artifact at a
+    second address -- which is what happened to the first page this service hosted."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    created = _make(client, token, title="Artifacts go-live check")
+
+    client.patch(
+        f"/api/v1/artifacts/{created['id']}",
+        json={
+            "body": PAGE,
+            "expected_revision": created["revision"],
+            "title": "Artifacts: build status",
+        },
+        headers=auth(token),
+    )
+    listed = client.get("/api/v1/artifacts", headers=auth(token)).json()
+    assert listed[0]["title"] == "Artifacts: build status"
+
+
+def test_an_update_that_names_no_title_leaves_the_name_alone(client, db):
+    """The distinction that makes the field safe to add: every caller written
+    before it keeps working, and a routine body update can never blank a name."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    created = _make(client, token, title="Board")
+
+    client.patch(
+        f"/api/v1/artifacts/{created['id']}",
+        json={"body": PAGE, "expected_revision": created["revision"]},
+        headers=auth(token),
+    )
+    listed = client.get("/api/v1/artifacts", headers=auth(token)).json()
+    assert listed[0]["title"] == "Board"
+
+
+def test_a_renamed_title_passes_the_same_guards_a_new_one_does(client, db):
+    """The guards live on publish()'s title. A rename that reached the column by
+    another road would be the one unscanned, uncapped string in the service."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    created = _make(client, token)
+
+    oversize = client.patch(
+        f"/api/v1/artifacts/{created['id']}",
+        json={
+            "body": PAGE,
+            "expected_revision": created["revision"],
+            "title": "x" * (store.MAX_TITLE_BYTES + 1),
+        },
+        headers=auth(token),
+    )
+    assert oversize.status_code == 413
+    assert oversize.json()["detail"]["field"] == "title"
+
+    secret = client.patch(
+        f"/api/v1/artifacts/{created['id']}",
+        json={
+            "body": PAGE,
+            "expected_revision": created["revision"],
+            "title": "key AKIAIOSFODNN7EXAMPLE",
+        },
+        headers=auth(token),
+    )
+    assert secret.status_code == 422
+    # The refusal names the field and never the value -- a title refusal must not
+    # be the thing that puts the secret into a log or a caller's terminal.
+    assert "AKIA" not in secret.text
+
+    listed = client.get("/api/v1/artifacts", headers=auth(token)).json()
+    assert listed[0]["title"] == "Board"
+
+
+def test_a_refused_rename_does_not_write_the_body_either(client, db):
+    """Body and name commit together or not at all: a page whose body advanced
+    while its rename was refused would carry a name that describes the version
+    before it."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    created = _make(client, token)
+
+    client.patch(
+        f"/api/v1/artifacts/{created['id']}",
+        json={
+            "body": PAGE.replace("hi", "CHANGED"),
+            "expected_revision": created["revision"],
+            "title": "x" * (store.MAX_TITLE_BYTES + 1),
+        },
+        headers=auth(token),
+    )
+    fetched = client.get(
+        f"/api/v1/artifacts/{created['id']}", headers=auth(token)
+    ).json()
+    assert fetched["revision"] == created["revision"]
