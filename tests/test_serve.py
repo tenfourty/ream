@@ -11,6 +11,7 @@ just reached through the real entrypoint this time.
 import pytest
 from fastapi.testclient import TestClient
 
+from artifacts.db import Database
 from artifacts.serve import app_from_env
 
 
@@ -43,13 +44,17 @@ def test_returned_app_answers_healthz_only_on_the_gallery_host(dsn, monkeypatch)
 
 def test_app_from_env_migrates_so_the_schema_is_ready_on_first_request(dsn, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", dsn)
-    with TestClient(app_from_env()) as client:
-        response = client.get(
-            "/api/v1/artifacts",
-            headers={
-                "authorization": "Bearer nope",
-                "host": "artifacts.tenfourty.site",
-            },
-        )
-    # 401 (not 500) proves the schema exists: agent_key was queried, not missing.
-    assert response.status_code == 401
+    # Start from a schema that has nothing in it -- not just whatever a previous
+    # test in this session left behind, which `migrate()`'s own idempotency would
+    # happily paper over even if `app_from_env` never called it at all.
+    with Database(dsn).connect() as conn:
+        conn.execute("drop schema public cascade; create schema public;")
+
+    app_from_env()
+
+    with Database(dsn).connect() as conn:
+        rows = conn.execute(
+            "select table_name from information_schema.tables where table_schema = 'public'"
+        ).fetchall()
+    tables = {row[0] for row in rows}
+    assert {"agent_key", "artifact", "version"} <= tables
