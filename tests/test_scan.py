@@ -1057,3 +1057,69 @@ def test_every_shape_still_fires_zero_padded_charref_encoded(name):
     assert any(f.shape == name for f in findings), (
         f"{name} matched its plain fixture but not the zero-padded-charref encoding of it"
     )
+
+
+# --- fix round 4: the >7-significant defang branch was still `&`-initial,
+# which fooled `url_query_secret`'s own lookahead into reading "no value at
+# all". ---------------------------------------------------------------
+
+
+def test_a_query_secret_with_a_defanged_run_right_after_the_key_is_still_found():
+    """The exact reported regression: `?key=&#12345678MYREALTOKEN99` scanned
+    completely clean and published 201, while the page rendered
+    `?key=<U+FFFD>MYREALTOKEN99` -- a real token, just not the one this
+    input started with."""
+    findings = scan.scan("<p>https://example.test/p?key=&#12345678MYREALTOKEN99</p>")
+    assert any(f.shape == "url_query_secret" for f in findings)
+
+
+def test_a_defanged_run_alone_as_a_query_secrets_value_still_fires():
+    findings = scan.scan("?token=&#99999999")
+    assert any(f.shape == "url_query_secret" for f in findings)
+
+
+@pytest.mark.parametrize(
+    ("position", "body"),
+    [
+        ("before", "password=MYREALSECRET99&#12345678"),
+        ("after", "password=&#12345678MYREALSECRET99"),
+        ("beside", "note &#12345678 password=MYREALSECRET99 end"),
+        ("on its own preceding line", "&#12345678\npassword=MYREALSECRET99"),
+        ("on its own following line", "password=MYREALSECRET99\n&#12345678"),
+    ],
+)
+def test_a_defanged_run_never_suppresses_a_real_credential_near_it(position, body):
+    """The `&#` prefix the first attempt at this defang kept was the only
+    thing stopping an all-`x` filler from `fullmatch`ing the placeholder
+    valve (`_PLACEHOLDER`'s `[*xX]{3,}`) and being read as the WHOLE value
+    -- dropping a real credential that happened to sit next to one. The
+    fixed filler is plain mixed-case letters, which can never fullmatch
+    that valve alone or concatenated with a real value on either side."""
+    findings = scan.scan(body)
+    assert any(f.shape == "password_assignment" for f in findings), position
+
+
+_BIG_DEFANG_RUN = "&#12345678"  # 8 significant digits, no leading zeros -- never a real
+# code point at any padding, so this is always the >7-significant, defanged branch.
+
+
+@pytest.mark.parametrize(
+    "name", sorted(scan._ASSIGNMENT_SHAPES | {"url_query_secret"})
+)
+def test_a_shape_anchored_on_an_operator_still_fires_with_a_defang_right_after_it(name):
+    """Generalises the reported miss beyond the one shape the report used:
+    every shape whose own match depends on what character comes right
+    after an operator (`_ASSIGNMENT_SHAPES`, plus `url_query_secret`'s
+    lookahead) gets the same construction -- a >7-significant defangable
+    run sitting immediately after the operator, ahead of the rest of a
+    genuine value -- so a narrower regression than this one cannot recur
+    unnoticed. The reviewer's own sweep (4170 comparisons) found losses
+    only here and only at this position; this is that finding made
+    permanent."""
+    positive, _ = SHAPE_FIXTURES[name]
+    operator_end = positive.index("=") + 1
+    injected = positive[:operator_end] + _BIG_DEFANG_RUN + positive[operator_end:]
+    findings = scan.scan(injected)
+    assert any(f.shape == name for f in findings), (
+        f"{name} lost its match with a defanged run right after its operator"
+    )

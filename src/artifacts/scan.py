@@ -612,24 +612,37 @@ def _detag(text: str) -> str:
 # highest real code point, is `1114111`, seven digits -- so hand those
 # straight to `html.unescape` exactly as `int()` would read them, and
 # `&#00000065;` decodes precisely as `&#65;` does. More than seven
-# significant digits is never a real code point at ANY padding: defang it,
-# replacing its digits with a same-count run of a non-digit character so it
-# drops out of `html.unescape`'s own charref match entirely (neither the
-# decimal alternative, which needs digits, nor the hex one, which needs a
-# hex digit after `x`) rather than reaching its `int()` call. The ≤7 branch
-# only ever hands `int()` at most seven characters and the >7 branch hands
-# it none, so nothing here ever reaches the actual limit regardless of how
-# many digits -- leading zeros included -- the input held.
+# significant digits is never a real code point at ANY padding: defang it
+# rather than reach its `int()` call. The ≤7 branch only ever hands
+# `int()` at most seven characters and the >7 branch hands it none, so
+# nothing here ever reaches the actual limit regardless of how many digits
+# -- leading zeros included -- the input held.
 #
-# Neither branch touches a newline (digits and the placeholder character
-# are not newlines), so this holds `_detag`'s invariant regardless of how
-# much either branch shortens the text or leaves it alone.
+# The >7 branch's own defanged text must not itself become a new problem
+# (fix round 4). `&#` + a same-count run of `x` was the first attempt: it
+# is still `&`-initial, and `url_query_secret`'s
+# `[?&](api_)?(key|token|secret|password)=(?=[^&\s])` reads `&`-initial as
+# "no value at all" and never fires -- `?key=&#12345678MYREALTOKEN99`
+# scanned clean and published. An all-`x` run is also exactly
+# `_PLACEHOLDER`'s `[*xX]{3,}` alternative, and the retained `&#` prefix
+# was the only thing that had stopped it from `fullmatch`ing that valve and
+# suppressing a real, adjacent assignment-shape finding. The fixed replacement
+# below drops the `&#` entirely (so it is never `&`-initial) and is plain
+# mixed-case letters with no digit run to reinterpret and no `x`/`X`/`*`
+# run for `_PLACEHOLDER` to `fullmatch` -- alone, or concatenated with a
+# real credential's own value on either side, since the mix of letters
+# outside `{*, x, X}` can never satisfy `_PLACEHOLDER` as a whole. It is
+# also a fixed length regardless of the input's: length may change here
+# (round 3 already established that), what may not is the newline count,
+# and a string with no newline characters in it satisfies that regardless
+# of how long or short it is.
 #
 # Applied to the DETAGGED view, not the raw one: `&#1<b></b>1<b></b>1...`
 # holds no long digit run until the tags between the digits are gone, so
 # checking before `_detag` would walk straight past it.
 _MAX_LEGIT_DECIMAL_CHARREF_DIGITS = 7
 _DECIMAL_CHARREF = re.compile(r"&#([0-9]+)")
+_DEFANGED_CHARREF = "DEFANGEDCHARREF"
 
 
 def _defang_huge_decimal_charrefs(detagged: str) -> str:
@@ -638,7 +651,7 @@ def _defang_huge_decimal_charrefs(detagged: str) -> str:
         significant = digits.lstrip("0") or "0"
         if len(significant) <= _MAX_LEGIT_DECIMAL_CHARREF_DIGITS:
             return "&#" + significant
-        return "&#" + "x" * len(digits)
+        return _DEFANGED_CHARREF
 
     return _DECIMAL_CHARREF.sub(_replace, detagged)
 
