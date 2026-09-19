@@ -1,0 +1,147 @@
+name: ci
+
+# Quoted "on" deliberately: unquoted, YAML 1.1 (PyYAML, used to validate this file)
+# reads the bare word as the boolean `true`, not the string key "on" -- Forgejo's own
+# parser is YAML-1.2 and unaffected either way, but quoting removes the ambiguity for
+# every other tool that ever reads this file.
+"on":
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: artifacts-main
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: docker
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          # No password literal anywhere: trust auth is fine for a service container
+          # that exists only for the length of this job, on a network nothing else
+          # can reach.
+          POSTGRES_HOST_AUTH_METHOD: trust
+    steps:
+      - uses: actions/checkout@v4
+
+      # The postgres service container has no declared HEALTHCHECK, so Actions
+      # starts it and moves straight on -- nothing here waits for it to accept
+      # connections. This loop is that wait: plain python3 (present on this
+      # runner image; see docs/services/forge/readme.md), no extra dependency.
+      - name: wait for postgres
+        run: |
+          for i in $(seq 1 30); do
+            python3 -c "import socket; socket.create_connection(('postgres', 5432), timeout=1).close()" \
+              && exit 0
+            sleep 1
+          done
+          echo "postgres never became reachable on port 5432" >&2
+          exit 1
+
+      - name: install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/0.12.9/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - run: uv sync --frozen
+
+      - run: uv run ruff check src tests
+
+      - name: tests
+        env:
+          PG_TEST_DSN: postgresql://postgres@postgres:5432/postgres
+        run: uv run pytest -q
+
+  image:
+    needs: test
+    runs-on: docker
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    services:
+      dind:
+        image: docker:28-dind
+        options: --privileged
+        env:
+          DOCKER_TLS_CERTDIR: ""
+    env:
+      DOCKER_HOST: tcp://dind:2375
+    steps:
+      - uses: actions/checkout@v4
+
+      # Copied from ~/repos/warpgate/.forgejo/workflows/build-image.yml (first ~30
+      # lines): the job container has no docker CLI of its own, only the dind
+      # service, so install the static CLI and wait for the daemon before using it.
+      - name: docker cli
+        run: |
+          curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-28.3.3.tgz | tar xz -C /tmp
+          install /tmp/docker/docker /usr/local/bin/docker
+          for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+          docker info >/dev/null
+
+      - name: build and push
+        run: |
+          set -eu
+          sha12="${GITHUB_SHA:0:12}"
+          image="git.tenfourty.site/jeremy/artifacts:${sha12}"
+
+          # The Actions token, under the same owner as this repo -- ops asked that
+          # this be tried first for pushing the image, rather than a separate
+          # REGISTRY_TOKEN secret. If it lacks package-write permission this job
+          # fails here on its first ever run; that is expected, not worked around.
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login git.tenfourty.site \
+            -u "${{ github.actor }}" --password-stdin
+
+          docker build -t "$image" .
+          docker push "$image"
+
+  deploy:
+    needs: image
+    runs-on: docker
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: bump the deploy tag
+        run: |
+          set -eu
+          git fetch origin main
+          sha12="${GITHUB_SHA:0:12}"
+
+          # Never deploy an older build over a newer one: if origin/main already
+          # carries a commit after this run's sha that is not itself a [skip ci]
+          # deploy bump, a later run is already ahead of this one -- let it win.
+          newer=$(git log --format='%H %s' "${GITHUB_SHA}..origin/main" 2>/dev/null \
+            | grep -v '\[skip ci\]' || true)
+          if [ -n "$newer" ]; then
+            echo "origin/main already has a newer commit; that run's deploy wins:"
+            echo "$newer"
+            exit 0
+          fi
+
+          git config user.name "artifacts-ci"
+          git config user.email "ci@git.tenfourty.site"
+
+          # The whole change is one mechanical line edit with no other local commits
+          # to preserve, so "reapply the edit on top of the latest origin/main" is
+          # `git switch -C main origin/main` + sed + commit -- equivalent to a
+          # fetch-and-rebase for this one-line bump, and simpler to make idempotent
+          # across the one retry below.
+          bump_and_push() {
+            git switch -C main origin/main
+            sed -i "s#newTag: .*#newTag: ${sha12}#" deploy/kustomization.yaml
+            git add deploy/kustomization.yaml
+            git commit -m "deploy: artifacts ${sha12} [skip ci]"
+            git push origin main
+          }
+
+          if ! bump_and_push; then
+            echo "push race (a newer bump landed first) -- fetching and retrying once"
+            git fetch origin main
+            bump_and_push
+          fi
