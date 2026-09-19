@@ -120,18 +120,21 @@ def test_the_list_includes_every_agents_pages(db):
 
 
 def test_the_list_breaks_updated_at_ties_by_id(db):
-    """Two rows with the identical updated_at must still come back in one fixed order, not
-    whatever a `select` with no full ORDER BY happens to return today."""
-    a = store.publish(db, "ops-seat", "a", _PAGE)
-    b = store.publish(db, "ops-seat", "b", _PAGE)
+    """Every row with the identical updated_at must still come back in one fixed order, not
+    whatever a `select` with no full ORDER BY happens to return today. Ten rows, not two: with
+    only two, insertion order coincidentally matches id-desc about half the time (measured: a
+    mutant that removes `, id desc` was only caught 4 times in 12 runs), so a two-row sample
+    gives almost no assurance the ORDER BY clause is doing anything. Ten rows landing in
+    id-desc order by chance alone is astronomically unlikely."""
+    ids = [store.publish(db, "ops-seat", f"page {i}", _PAGE).id for i in range(10)]
     with db.connect() as conn:
         conn.execute(
-            "update artifact set updated_at = '2026-01-01T00:00:00Z' where id in (%s, %s)",
-            (a.id, b.id),
+            "update artifact set updated_at = '2026-01-01T00:00:00Z' where id = any(%s)",
+            (ids,),
         )
     page = TestClient(create_gallery_app(db)).get("/", headers={"Remote-User": "jeremy"}).text
-    order = [i for i in _ids_in_order(page) if i in (a.id, b.id)]
-    assert order == sorted([a.id, b.id], reverse=True)
+    order = [i for i in _ids_in_order(page) if i in ids]
+    assert order == sorted(ids, reverse=True)
 
 
 def test_store_module_docstring_is_encodable():
