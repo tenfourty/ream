@@ -22,6 +22,7 @@ import threading
 import time
 from dataclasses import dataclass
 
+from artifacts import text
 from artifacts.db import Database
 
 # The three kinds the design names (schema.sql's own CHECK constraint is the
@@ -50,13 +51,18 @@ class EventRow:
 
 
 def _row_to_event(row) -> EventRow:
+    # `summary` is sanitised on the way in (see `append`) AND again here. Not
+    # belt-and-braces for its own sake: rows written before that existed are
+    # still in the table, and any future writer that reaches the table another
+    # way is covered without having to remember. Sanitising is idempotent, so
+    # a clean row is unchanged by it.
     return EventRow(
         seq=row[0],
         artifact_id=row[1],
         agent=row[2],
         actor=row[3],
         kind=row[4],
-        summary=row[5],
+        summary=text.sanitize(row[5]),
         ref_id=row[6],
         created_at=row[7].isoformat(),
     )
@@ -85,10 +91,16 @@ def append(
     `event_id` only after `conn`'s transaction has actually committed: a
     nudge for a row that then rolls back would tell another agent about
     something that never happened."""
+    # The summary carries viewer-typed free text (a decision note, a comment)
+    # and it is stored FLAT: whitespace collapsed, control characters gone,
+    # length bounded. A consumer of this feed prints it into a terminal or an
+    # agent's context, where an escape sequence is not inert and a newline can
+    # fake a second line -- and there is no list of consumers to keep in step,
+    # which is why this happens here rather than at each of them.
     row = conn.execute(
         "insert into event (artifact_id, agent, actor, kind, summary, ref_id)"
         " values (%s, %s, %s, %s, %s, %s) returning seq",
-        (artifact_id, agent, actor, kind, summary, ref_id),
+        (artifact_id, agent, actor, kind, text.sanitize(summary), ref_id),
     ).fetchone()
     return row[0]
 

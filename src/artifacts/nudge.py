@@ -41,10 +41,11 @@ header on the one POST this module ever makes.
 import json
 import logging
 import os
-import re
 import threading
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+
+from artifacts import text as text_module
 
 _log = logging.getLogger("artifacts.nudge")
 
@@ -76,27 +77,12 @@ _ALERTNAMES = {
     "thread_resolved": "Jeremy resolved a thread",
 }
 
-# Every C0 control character except the ones `_sanitize` already turns into a
-# plain space by splitting on whitespace (tab, LF, CR, FF, VT), plus the C1
-# range -- an escape sequence, a bell, a NUL, anything that could reorder or
-# forge structure in a terminal or a mailbox line reading this text later.
-_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
-
-_SUMMARY_LIMIT = 200
-
-
-def _sanitize(text: str, limit: int = _SUMMARY_LIMIT) -> str:
-    """Viewer-typed text about to land in another agent's context: collapse
-    every run of whitespace (including a newline that would otherwise fake a
-    second mailbox line) to one space, strip any remaining C0/C1 control
-    character, and cap at `limit` characters with a trailing ellipsis. This is
-    data, never structure -- the operator asked for exactly this before any of
-    it reaches a receiver outside this repo."""
-    collapsed = " ".join(text.split())
-    cleaned = _CONTROL_CHARS.sub("", collapsed)
-    if len(cleaned) > limit:
-        return cleaned[: limit - 1] + "…"
-    return cleaned
+# Sanitising lives in `artifacts.text`, not here. It used to live here and
+# only here, which meant the nudge path was clean and every other way viewer
+# text leaves this service -- the event feed most of all -- was not
+# (homelab-ij8.55). A second copy of this function is how the two drift.
+_SUMMARY_LIMIT = text_module.SUMMARY_LIMIT
+_sanitize = text_module.sanitize
 
 
 def _warn_missing_token_once() -> None:
