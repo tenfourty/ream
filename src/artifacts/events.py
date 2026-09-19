@@ -22,9 +22,16 @@ from dataclasses import dataclass
 
 from artifacts.db import Database
 
+# The three kinds the design names (schema.sql's own CHECK constraint is the
+# enforced copy of this set) -- defined here even though only
+# "decision_answered" has a live producer this slice, so wiring up the other
+# two later is a line of code at a new call site, never a migration to widen
+# what this journal accepts.
+KINDS = ("decision_answered", "comment_added", "thread_resolved")
+
 _COLUMNS = (
-    "event.seq, event.artifact_id, event.agent, event.kind, event.summary,"
-    " event.ref_id, event.created_at"
+    "event.seq, event.artifact_id, event.agent, event.actor, event.kind,"
+    " event.summary, event.ref_id, event.created_at"
 )
 
 
@@ -33,6 +40,7 @@ class EventRow:
     seq: int
     artifact_id: str
     agent: str
+    actor: str
     kind: str
     summary: str
     ref_id: str | None
@@ -44,10 +52,11 @@ def _row_to_event(row) -> EventRow:
         seq=row[0],
         artifact_id=row[1],
         agent=row[2],
-        kind=row[3],
-        summary=row[4],
-        ref_id=row[5],
-        created_at=row[6].isoformat(),
+        actor=row[3],
+        kind=row[4],
+        summary=row[5],
+        ref_id=row[6],
+        created_at=row[7].isoformat(),
     )
 
 
@@ -56,19 +65,28 @@ def append(
     *,
     artifact_id: str,
     agent: str,
+    actor: str,
     kind: str,
     summary: str,
     ref_id: str | None = None,
 ) -> int:
     """Insert one event row on `conn`, inside the caller's own transaction --
-    see the module docstring. Returns the new row's `seq`, which the caller
-    passes to `nudge.emit` as `event_id` only after `conn`'s transaction has
-    actually committed: a nudge for a row that then rolls back would tell
-    another agent about something that never happened."""
+    see the module docstring. `agent` is the seat the event is FOR (the
+    artifact's owner); `actor` is WHO caused it, and the caller must always
+    say so explicitly -- this function never infers one from the other or
+    from `kind`, because an event means "something happened on your page
+    that you did not do", and inferring `actor` is exactly how that stops
+    being true the first time it's wrong (see the module docstring, and
+    `test_events.py`'s own test for this).
+
+    Returns the new row's `seq`, which the caller passes to `nudge.emit` as
+    `event_id` only after `conn`'s transaction has actually committed: a
+    nudge for a row that then rolls back would tell another agent about
+    something that never happened."""
     row = conn.execute(
-        "insert into event (artifact_id, agent, kind, summary, ref_id)"
-        " values (%s, %s, %s, %s, %s) returning seq",
-        (artifact_id, agent, kind, summary, ref_id),
+        "insert into event (artifact_id, agent, actor, kind, summary, ref_id)"
+        " values (%s, %s, %s, %s, %s, %s) returning seq",
+        (artifact_id, agent, actor, kind, summary, ref_id),
     ).fetchone()
     return row[0]
 

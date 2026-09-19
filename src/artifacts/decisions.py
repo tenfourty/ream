@@ -333,6 +333,7 @@ def answer(
                 conn,
                 artifact_id=artifact_id,
                 agent=owning_agent,
+                actor=by,
                 kind="decision_answered",
                 summary=summary,
                 ref_id=decision_id,

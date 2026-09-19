@@ -27,9 +27,7 @@ def auth(token: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "kind", ["decision_answered", "comment_added", "thread_resolved"]
-)
+@pytest.mark.parametrize("kind", events.KINDS)
 def test_appending_each_kind_records_exactly_one_row_with_the_owning_seat(db, kind):
     published = store.publish(db, "ops-seat", "Board", PAGE)
     with db.connect() as conn:
@@ -37,6 +35,7 @@ def test_appending_each_kind_records_exactly_one_row_with_the_owning_seat(db, ki
             conn,
             artifact_id=published.id,
             agent="ops-seat",
+            actor="jeremy",
             kind=kind,
             summary="s",
             ref_id="ref1",
@@ -45,9 +44,35 @@ def test_appending_each_kind_records_exactly_one_row_with_the_owning_seat(db, ki
     assert len(rows) == 1
     assert rows[0].seq == seq
     assert rows[0].agent == "ops-seat"
+    assert rows[0].actor == "jeremy"
     assert rows[0].kind == kind
     assert rows[0].artifact_id == published.id
     assert rows[0].ref_id == "ref1"
+
+
+def test_an_event_records_the_actor_who_caused_it_not_the_owner_of_the_page(db):
+    """`agent` is the seat the event is FOR (the page owner); `actor` is WHO
+    did it, and the two must never collapse into one another. Proven with two
+    distinct values -- `agent="page-owner-seat"`, `actor="some-other-seat"`
+    -- that no inference from `kind` or from `agent` could ever produce,
+    matching schema.sql's own reasoning for keeping this an explicit column:
+    an event means "something happened on your page that you did not do", and
+    inferring `actor` is exactly how that stops being true the first time a
+    future call site gets it wrong."""
+    published = store.publish(db, "page-owner-seat", "Board", PAGE)
+    with db.connect() as conn:
+        events.append(
+            conn,
+            artifact_id=published.id,
+            agent="page-owner-seat",
+            actor="some-other-seat",
+            kind="comment_added",
+            summary="s",
+        )
+    row = events.list_for_agent(db, "page-owner-seat")[0]
+    assert row.agent == "page-owner-seat"
+    assert row.actor == "some-other-seat"
+    assert row.agent != row.actor
 
 
 def test_answering_a_decision_appends_exactly_one_event_with_the_owning_seat(db):
@@ -70,6 +95,7 @@ def test_answering_a_decision_appends_exactly_one_event_with_the_owning_seat(db)
     rows = events.list_for_agent(db, "ops-seat")
     assert len(rows) == 1
     assert rows[0].agent == "ops-seat"
+    assert rows[0].actor == "jeremy"
     assert rows[0].kind == "decision_answered"
     assert rows[0].ref_id == row.id
     assert rows[0].summary == "a: yes"
@@ -149,6 +175,7 @@ def test_since_returns_only_rows_above_the_cursor_in_seq_order(db):
                 conn,
                 artifact_id=published.id,
                 agent="ops-seat",
+                actor="jeremy",
                 kind="comment_added",
                 summary=f"e{i}",
             )
@@ -167,6 +194,7 @@ def test_since_honours_limit(db):
                 conn,
                 artifact_id=published.id,
                 agent="ops-seat",
+                actor="jeremy",
                 kind="comment_added",
                 summary=f"e{i}",
             )
@@ -183,6 +211,7 @@ def test_another_agent_sees_none_of_the_first_agents_events(db):
             conn,
             artifact_id=published.id,
             agent="seat-a",
+            actor="jeremy",
             kind="decision_answered",
             summary="s",
         )

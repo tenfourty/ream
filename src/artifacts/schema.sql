@@ -142,18 +142,31 @@ create index if not exists decision_artifact_idx on decision (artifact_id, creat
 -- in the SAME transaction as the write it describes (see decisions.answer, the
 -- first caller), so an event can never exist without its cause and a cause can
 -- never be recorded without its event. `agent` is the seat the event is FOR (the
--- artifact's owner), not who performed it -- Jeremy is never a seat, so there is
--- nothing else `agent` could usefully name. `seq` is a bigserial: monotonic per
--- database, never reset, which is what lets `?since=<seq>` be a cursor an agent
--- keeps rather than a timestamp two events could tie on. This table is read from
+-- artifact's owner); `actor` is WHO did it ("jeremy" for a gallery form, a seat
+-- name for an agent-initiated write) -- kept as its own column, never inferred
+-- from `kind` or from `agent`, because an event means "something happened on
+-- your page that you did not do": collapsing actor into agent would, the moment
+-- an agent-initiated write is ever journalled, tell that same agent that Jeremy
+-- did something it did itself. `seq` is a bigserial: monotonic per database,
+-- never reset, which is what lets `?since=<seq>` be a cursor an agent keeps
+-- rather than a timestamp two events could tie on. This table is read from
 -- ANYWHERE with a key (`GET /api/v1/events`); the push to baba's ops inbox
 -- (`nudge.py`) is only an optimisation layered on top -- if it never fires,
 -- `?since=` still delivers everything.
+--
+-- All three `kind`s the design names are enumerated in the CHECK below even
+-- though only `decision_answered` has a live producer this slice
+-- (`decisions.answer`) -- `comment_added` and `thread_resolved` wait for a
+-- Jeremy-initiated comment/resolve path in a later slice (see
+-- docs/comments-design.md's own slice list). Enumerating all three now means
+-- that later slice is a line of code, never a migration to widen this CHECK.
 create table if not exists event (
     seq         bigserial primary key,
     artifact_id text not null references artifact(id) on delete cascade,
     agent       text not null,
-    kind        text not null,
+    actor       text not null,
+    kind        text not null
+        check (kind in ('decision_answered', 'comment_added', 'thread_resolved')),
     summary     text not null default '',
     ref_id      text,
     created_at  timestamptz not null default now()
