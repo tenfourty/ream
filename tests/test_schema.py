@@ -89,12 +89,16 @@ def test_deleting_artifact_with_versions_and_files_succeeds(db):
 
 def test_concurrent_migrate_calls_on_a_fresh_schema_both_succeed(dsn):
     """Two pods starting together both call migrate() against a schema that has
-    never been migrated. Without a lock serialising them, the `do $$ ... end $$`
-    block's check-then-act (query pg_constraint, then ALTER TABLE ADD CONSTRAINT)
-    is not atomic across two concurrent transactions: both can see the constraint
-    missing, and the second one's ALTER then fails with a duplicate-object error
-    once the first commits. A barrier makes both threads issue their migrate()
-    call at the same instant, giving the race the best chance to show up."""
+    never been migrated. Without a lock serialising them, `create table if not
+    exists` is not atomic across two concurrent transactions either: both check
+    `pg_type` for the table's row type, see it missing, and proceed to create
+    it, and the second one's CREATE then fails with a duplicate-key error on
+    `pg_type`'s own unique constraint once the first commits -- this is what
+    the RED evidence for the advisory lock actually showed, not the `do $$
+    ... end $$` block's ALTER TABLE ADD CONSTRAINT (a second, unrelated
+    check-then-act the same lock also happens to cover). A barrier makes both
+    threads issue their migrate() call at the same instant, giving the race
+    the best chance to show up."""
     db = Database(dsn)
     with db.connect() as conn:
         conn.execute("drop schema public cascade; create schema public;")
