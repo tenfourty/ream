@@ -1,6 +1,7 @@
 import hmac
 import json
 import re
+from datetime import datetime
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -11,7 +12,7 @@ from fastapi.responses import (
     RedirectResponse,
 )
 
-from artifacts import hosts
+from artifacts import hosts, stamp
 from artifacts.db import Database
 from artifacts.store import (
     gallery_origin,  # re-exported: artifacts.content.gallery_origin still resolves
@@ -225,7 +226,7 @@ def create_content_app(db: Database) -> FastAPI:
 
     def _load(
         artifact_id: str, token: str | None, n: int | None
-    ) -> tuple[str, int] | None:
+    ) -> tuple[str, int, datetime] | None:
         with db.connect() as conn:
             row = conn.execute(
                 "select current_version, read_token from artifact where id = %s",
@@ -242,12 +243,17 @@ def create_content_app(db: Database) -> FastAPI:
             # begin serving bodies that were written precisely because they had NOT yet
             # been cleared to be served. A filter that costs nothing now and closes a hole
             # later beats a comment in the deferral list that a future task has to notice.
+            # `created_at` comes back with the body because the page's own
+            # "updated" stamp is THIS version's publication time, not the
+            # artifact's latest -- an older version served at /v/N must say when
+            # IT was published, or an inert snapshot would claim to be as fresh
+            # as the live page.
             body = conn.execute(
-                "select body from version where artifact_id = %s and n = %s "
-                "and status = 'live'",
+                "select body, created_at from version"
+                " where artifact_id = %s and n = %s and status = 'live'",
                 (artifact_id, wanted),
             ).fetchone()
-        return (body[0], wanted) if body else None
+        return (body[0], wanted, body[1]) if body else None
 
     def _serve(request: Request, token: str | None, n: int | None) -> Response:
         artifact_id = _artifact_id(request)
@@ -266,7 +272,12 @@ def create_content_app(db: Database) -> FastAPI:
         loaded = _load(artifact_id, token, n)
         if loaded is None:
             return Response("not found", status_code=404, media_type="text/plain")
-        body, _served = loaded
+        body, _served, published_at = loaded
+        # The service fills in when this version was published, so no agent has
+        # to write a time down (homelab-ij8.70). Done here rather than at store
+        # time: the stored body is hashed to make `revision`, so folding a clock
+        # into it would mint a new revision on every identical republish.
+        body = stamp.apply(body, published_at)
         live = n is None
         # Only the LIVE page reports geometry to the gallery: an inert snapshot is
         # never framed by the gallery today (there is no route for it), and inert is

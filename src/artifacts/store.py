@@ -48,6 +48,7 @@ import logging
 import os
 import secrets
 from dataclasses import dataclass
+from datetime import datetime
 
 from psycopg.errors import UniqueViolation
 
@@ -119,6 +120,11 @@ class ArtifactRow:
     visibility: str
     current_version: int
     revision: str
+    # When this page last changed. The query has always ORDERED BY it and never
+    # returned it, so every client saw null and `artifacts-publish --list` could
+    # not say when a page last moved -- the service knew and told nobody
+    # (homelab-ij8.70).
+    updated_at: datetime
     url: str
 
 
@@ -274,8 +280,8 @@ def publish(db: Database, agent: str, title: str, body: str) -> Published:
 
 def _owned(conn, artifact_id: str, agent: str):
     return conn.execute(
-        "select id, title, agent, visibility, current_version from artifact"
-        " where id = %s and agent = %s",
+        "select id, title, agent, visibility, current_version, updated_at"
+        " from artifact where id = %s and agent = %s",
         (artifact_id, agent),
     ).fetchone()
 
@@ -377,7 +383,16 @@ def get_owned(db: Database, agent: str, artifact_id: str) -> ArtifactRow:
             "select revision from version where artifact_id = %s and n = %s",
             (row[0], row[4]),
         ).fetchone()
-    return ArtifactRow(*row, revision[0], url_for(row[0]))
+    return ArtifactRow(
+        id=row[0],
+        title=row[1],
+        agent=row[2],
+        visibility=row[3],
+        current_version=row[4],
+        revision=revision[0],
+        updated_at=row[5],
+        url=url_for(row[0]),
+    )
 
 
 def get_body(db: Database, agent: str, artifact_id: str) -> StoredBody:
@@ -413,10 +428,23 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
     with db.connect() as conn:
         rows = conn.execute(
             "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"
-            " artifact.current_version, version.revision from artifact"
+            " artifact.current_version, version.revision, artifact.updated_at"
+            " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
             " where artifact.agent = %s order by artifact.updated_at desc",
             (agent,),
         ).fetchall()
-    return [ArtifactRow(*row, url_for(row[0])) for row in rows]
+    return [
+        ArtifactRow(
+            id=row[0],
+            title=row[1],
+            agent=row[2],
+            visibility=row[3],
+            current_version=row[4],
+            revision=row[5],
+            updated_at=row[6],
+            url=url_for(row[0]),
+        )
+        for row in rows
+    ]
