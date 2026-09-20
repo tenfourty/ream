@@ -71,9 +71,10 @@ jobs:
         # the embedded resolver's forwarder -- the dind still sees `nameserver 127.0.0.11`,
         # its inner dockerd discards that loopback entry and gives ITS containers Google's
         # 8.8.8.8/8.8.4.4 (measured: run 2741 here, warpgate run 608; bead homelab-bmr).
-        # The fix is on the inner side instead: every inner `docker run` takes
-        # --dns 10.96.0.10 and `docker build` takes --network host (below); the
-        # "dns check" step proves both on every run.
+        # The fix is on the inner side instead: `docker build` takes --network host
+        # (below), so the build's containers use the dind's own embedded resolver
+        # rather than the inner bridge's fallback. The "dns check" step proves it
+        # on every run, against the configuration the build actually uses.
         options: --privileged
         env:
           DOCKER_TLS_CERTDIR: ""
@@ -92,22 +93,28 @@ jobs:
           for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
           docker info >/dev/null
 
-      # Proves inner containers never resolve through Google (bead homelab-bmr): the
-      # inner default bridge falls back to 8.8.8.8/8.8.4.4, so (1) an inner `docker run`
-      # must be given kube-dns explicitly -- 10.96.0.10 is kube-dns's ClusterIP, read from
-      # the cluster on 19 Sep 2026 -- and (2) the build runs with --network host, whose
-      # containers use the dind's own embedded resolver (127.0.0.11, forwarding to kube-dns).
-      # Checks what the build will actually use, and fails the job before any build if not.
+      # Proves the BUILD never resolves through Google (bead homelab-bmr): an inner
+      # default bridge falls back to 8.8.8.8/8.8.4.4, and `docker build --network host`
+      # avoids that by using the dind's own embedded resolver instead.
+      #
+      # This used to also assert `docker run --dns 10.96.0.10` -- kube-dns's ClusterIP,
+      # read from the cluster on 19 Sep 2026. That was correct while the runner lived
+      # IN the cluster and is wrong now: since 00:03 on 21 Sep the `docker` label is
+      # served by cibuild01, outside the cluster, which cannot reach a ClusterIP and
+      # should not be able to. The right answer was not to ask for that address to be
+      # opened up -- it was to notice the check was asserting a MECHANISM (one specific
+      # resolver) rather than the PROPERTY it exists for, on a container configuration
+      # the build does not even use.
+      #
+      # So: assert the property, against the configuration the build actually runs in.
       - name: dns check
         run: |
           set -euo pipefail
-          conf=$(docker run --rm --dns 10.96.0.10 alpine:3 cat /etc/resolv.conf)
-          printf '%s\n' "$conf"
-          grep -q '^nameserver 10\.96\.0\.10$' <<<"$conf" || { echo "an inner docker run given --dns 10.96.0.10 does not use it" >&2; exit 1; }
-          if grep -q '8\.8\.[48]\.[48]' <<<"$conf"; then echo "an inner docker run would resolve via Google" >&2; exit 1; fi
           hostconf=$(docker run --rm --network host alpine:3 cat /etc/resolv.conf)
           printf '%s\n' "$hostconf"
           if grep -q '8\.8\.[48]\.[48]' <<<"$hostconf"; then echo "a host-network build container would resolve via Google" >&2; exit 1; fi
+          if grep -q '1\.1\.1\.1' <<<"$hostconf"; then echo "a host-network build container would resolve via Cloudflare" >&2; exit 1; fi
+          grep -q '^nameserver ' <<<"$hostconf" || { echo "a host-network build container has no resolver at all" >&2; exit 1; }
           docker run --rm --network host alpine:3 getent hosts git.tenfourty.site \
             || { echo "a host-network build container cannot resolve git.tenfourty.site" >&2; exit 1; }
 
