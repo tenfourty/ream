@@ -644,3 +644,47 @@ def test_a_seat_that_stopped_looking_before_he_answered_counts_as_not_running(db
 
     page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
     assert "probably not running" in page
+
+
+def test_settled_questions_sit_below_the_page_and_open_ones_above(db):
+    """Jeremy, 20 Sep 2026: "for sure it feels odd to have the questions at the
+    top of the page". He was looking at his own status board, whose first screen
+    was four questions he had ANSWERED the day before -- the page itself started
+    underneath them, and the one question still open was below all of it.
+
+    What must be acted on goes in front of the page; what is settled is history
+    and goes after it.
+    """
+    published, settled = _publish_and_ask(db, question="Settled already?")
+    decisions.answer(db, settled.id, letter="a", by="jeremy")
+    decisions.ask(
+        db,
+        agent="ops-seat",
+        artifact_id=published.id,
+        question="Still open?",
+        options=_OPTIONS,
+    )
+
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    frame = page.index("artifact-frame")
+    assert page.index("Still open?") < frame, "an open question belongs above the page"
+    assert page.index("Settled already?") > frame, "a settled one belongs below it"
+
+
+def test_the_settled_block_is_collapsed_and_says_how_many(db):
+    published, first = _publish_and_ask(db, question="Q one?")
+    decisions.answer(db, first.id, letter="a", by="jeremy")
+    second = decisions.ask(
+        db,
+        agent="ops-seat",
+        artifact_id=published.id,
+        question="Q two?",
+        options=_OPTIONS,
+    )
+    decisions.answer(db, second.id, letter="a", by="jeremy")
+
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    assert "2 questions you have already settled" in page
+    # <details> with no `open`: closed until he asks for it.
+    assert '<details class="asks settled-list"><summary>' in page
+    assert '<details class="asks settled-list" open' not in page

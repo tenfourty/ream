@@ -150,7 +150,17 @@ a{color:var(--accent-ink)}
 
 /* Already decided: one quiet line each, newest first, opening to the full
    card. <details> so it works with scripts off. */
-.settled-list h2{margin-top:1.8rem}
+.settled-list h2{margin-top:0;display:inline}
+/* The whole settled block is one collapsed line below the page. Four questions
+   Jeremy had already answered took his entire first screen on 20 Sep 2026; the
+   page they were attached to began underneath them. */
+.settled-list{margin-top:1.8rem}
+.settled-list > summary{cursor:pointer;list-style:none;padding:.45rem 0;
+  color:var(--muted)}
+.settled-list > summary::-webkit-details-marker{display:none}
+.settled-list > summary::before{content:"\25B8";margin-right:.45rem;font-size:.7rem;
+  display:inline-block;transition:transform .12s}
+.settled-list[open] > summary::before{transform:rotate(90deg)}
 .settled{border:1px solid var(--line);border-radius:.55rem;background:var(--card);
   margin:0 0 .35rem}
 .settled summary{cursor:pointer;list-style:none;padding:.5rem .8rem;display:flex;
@@ -428,7 +438,7 @@ def _button(option: dict, row: decisions.DecisionRow) -> str:
 
 def _render_decisions(
     rows: list[decisions.DecisionRow], listening_since: str | None = None
-) -> str:
+) -> tuple[str, str]:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
     (per the "no JavaScript" rule) EVERY bit of it works with scripts off.
@@ -454,15 +464,16 @@ def _render_decisions(
     script builds its own id->element map from exactly these attributes, and a
     reported id that is not in that map (because it names no decision on THIS
     artifact) matches nothing and moves nothing. A decision the page never marks a
-    slot for is simply never moved, and stays right here, above the page -- the
-    default, not a failure.
+    slot for is simply never moved, and stays in the block above the page -- the
+    default, not a failure. Only OPEN decisions render there; settled ones are
+    returned as a second, collapsed block the caller puts AFTER the page.
 
     An answered decision still renders every button: re-answering is allowed (see
     `decisions.answer`'s docstring) precisely so Jeremy can change his mind here, on
     the page, rather than needing a terminal.
     """
     if not rows:
-        return ""
+        return "", ""
 
     open_rows = [r for r in rows if r.answer is None]
     settled_rows = [r for r in rows if r.answer is not None]
@@ -482,7 +493,14 @@ def _render_decisions(
             '<input name="note" placeholder="note (optional)"></form></div>'
         )
 
-    sections = []
+    # TWO blocks, not one, and the caller puts them either side of the page.
+    # Jeremy, 20 Sep 2026: "for sure it feels odd to have the questions at the
+    # top of the page", looking at his own status board whose first screen was
+    # four questions he had ANSWERED the day before -- the page itself began
+    # below them. What must be acted on belongs in front of the page; what is
+    # already settled is history and belongs after it.
+    above: list[str] = []
+    below: list[str] = []
 
     if open_rows:
         hint = (
@@ -490,7 +508,7 @@ def _render_decisions(
             "if the options do not fit. Your answer is the filled button &mdash; pick "
             "a different one to change it, as often as you like.</p>"
         )
-        sections.append(
+        above.append(
             '<section class="asks" id="open-asks"><h2>Waiting on you</h2>'
             + "".join(_card(row) for row in open_rows)
             + hint
@@ -553,14 +571,20 @@ def _render_decisions(
                 f'<div class="settled-body">{pickup}{note}'
                 f"{_card(row, anchorable=False)}</div></details>"
             )
-        sections.append(
-            '<section class="asks settled-list"><h2>Already decided</h2>'
+        # Collapsed, and counted in its own summary. Four settled questions took
+        # the whole first screen of a page whose point was the one still open;
+        # closed, the same four are a single line he can open when he wants them.
+        n = len(entries)
+        noun = "question" if n == 1 else "questions"
+        below.append(
+            '<details class="asks settled-list"><summary><h2>'
+            f"{n} {noun} you have already settled</h2></summary>"
             + "".join(entries)
             + '<p class="hint">Open one to see the options again, or to change your '
-            "mind &mdash; nothing here is locked.</p></section>"
+            "mind &mdash; nothing here is locked.</p></details>"
         )
 
-    return "".join(sections)
+    return "".join(above), "".join(below)
 
 
 def gallery_router(db: Database) -> APIRouter:
@@ -626,7 +650,7 @@ def gallery_router(db: Database) -> APIRouter:
         decision_rows = decisions.list_for_artifact(
             db, artifact_id, include_answered=True, include_closed=False
         )
-        decisions_html = _render_decisions(
+        asks_above, settled_below = _render_decisions(
             decision_rows, listening_since=events.last_read(db, row[2])
         )
         # The one place the capability token is rendered: a page only Jeremy's Authelia session
@@ -644,9 +668,10 @@ def gallery_router(db: Database) -> APIRouter:
         return HTMLResponse(
             _shell(
                 row[0],
-                f"{decisions_html}"
+                f"{asks_above}"
                 f'<div class="sheet" id="artifact-sheet"><iframe id="artifact-frame"'
-                f' src="{src}" sandbox="{sandbox}" title="{escape(row[0])}"></iframe></div>',
+                f' src="{src}" sandbox="{sandbox}" title="{escape(row[0])}"></iframe></div>'
+                f"{settled_below}",
                 # gallery.js reads the content origin straight off this iframe's own
                 # `src` -- fixed ids, not a class selector, so a future second iframe
                 # on this page could never be mistaken for this one.
