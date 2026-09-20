@@ -30,7 +30,17 @@ from artifacts.db import Database
 # "decision_answered" has a live producer this slice, so wiring up the other
 # two later is a line of code at a new call site, never a migration to widen
 # what this journal accepts.
-KINDS = ("decision_answered", "comment_added", "thread_resolved")
+KINDS = (
+    "decision_answered",
+    "comment_added",
+    "thread_resolved",
+    # The page holding an open question left the wall -- archived or deleted.
+    # Its own kind rather than a flavour of the others because it is the only
+    # one that means "stop waiting": an agent holding a waiter on that decision
+    # will otherwise sit until its own timeout, every time, unable to tell
+    # "not yet" from "he is never going to be shown this".
+    "decision_shelved",
+)
 
 # A note is his own words and must survive the trip whole. 1000 is the same
 # ceiling the decision itself enforces, so nothing can be stored that this

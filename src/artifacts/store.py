@@ -52,7 +52,7 @@ from datetime import UTC, datetime, timedelta
 
 from psycopg.errors import UniqueViolation
 
-from artifacts import ids, scan
+from artifacts import events, ids, scan
 from artifacts.db import Database
 
 # Measured worst clean body at 1 MiB: 484-524 ms under load, over the 0.5 s
@@ -549,6 +549,51 @@ def live_thumbnail(db: Database, artifact_id: str) -> bytes | None:
     return bytes(row[0]) if row and row[0] is not None else None
 
 
+def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int:
+    """Tell the owning agent that its open questions just left Jeremy's wall.
+
+    Called from inside the caller's transaction, on the same connection as the
+    archive or delete it describes, so the event and its cause commit together.
+    An event for a write that then rolls back would tell an agent about
+    something that never happened; a rollback that kept the event is worse.
+
+    WHY IT EXISTS: before it, an agent that armed a waiter on a decision whose
+    page was then archived waited until its own timeout, every time, with no way
+    to tell "not answered yet" from "he is never going to be shown this". A seat
+    can lose a shift to that. Found by walking the gallery as a user
+    (homelab-ij8.84.10), not by reading it.
+
+    Returns how many agents it told, so a caller can report a number.
+    """
+    rows = conn.execute(
+        "select d.id, d.question, a.agent from decision d"
+        " join artifact a on a.id = d.artifact_id"
+        " where d.artifact_id = %s and d.answer is null and d.closed_at is null",
+        (artifact_id,),
+    ).fetchall()
+    for decision_id, question, owner in rows:
+        events.append(
+            conn,
+            artifact_id=artifact_id,
+            agent=owner,
+            actor=actor,
+            kind="decision_shelved",
+            summary=f"{what}: {question}",
+            ref_id=decision_id,
+            # Said in full, because the agent reading this has to decide what to
+            # do and "shelved" alone does not tell it whether to give up. Both
+            # archiving and deleting are reversible, so neither is a reason to
+            # abandon the work -- only a reason to stop WAITING and say so.
+            note=(
+                f"The page holding this question was {what}, so Jeremy is no "
+                "longer being shown it. It is still unanswered and nothing has "
+                "been destroyed; if the page comes back, so does the question. "
+                "Stop waiting on it and say so rather than holding."
+            ),
+        )
+    return len(rows)
+
+
 def _scoped(
     artifact_id: str, agent: str | None, *, live: bool = True
 ) -> tuple[str, tuple]:
@@ -666,6 +711,8 @@ def set_deleted(
             f"update artifact set deleted_at = %s {where}",  # noqa: S608 -- see _scoped
             (datetime.now(UTC) if deleted else None, *params),
         )
+        if done.rowcount > 0 and deleted:
+            _shelve_open_questions(conn, artifact_id, "deleted", agent or "jeremy")
         return done.rowcount > 0
 
 
@@ -790,6 +837,8 @@ def set_archived(
             f"update artifact set archived_at = %s {where}",  # noqa: S608 -- _scoped emits a fixed clause with placeholders, never caller text
             (datetime.now(UTC) if archived else None, *params),
         )
+        if done.rowcount > 0 and archived:
+            _shelve_open_questions(conn, artifact_id, "archived", agent or "jeremy")
         return done.rowcount > 0
 
 

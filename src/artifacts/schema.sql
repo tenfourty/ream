@@ -340,3 +340,26 @@ alter table artifact add column if not exists deleted_at timestamptz;
 -- that grows with everything ever deleted rather than with what is live.
 create index if not exists artifact_live_idx on artifact (deleted_at)
   where deleted_at is null;
+
+-- A FOURTH EVENT KIND: the page holding an open question left the wall
+-- (homelab-ij8.84.10, 21 Sep 2026).
+--
+-- Found by walking the gallery as a user. Archive or delete a page with an
+-- unanswered question and the question stayed open, Jeremy stopped being shown
+-- it, and THE AGENT THAT ASKED WAS NEVER TOLD -- its waiter held until its own
+-- timeout, every time, unable to tell "not answered yet" from "he will not see
+-- this". A seat can lose a shift to that.
+--
+-- `decision_shelved`, not `decision_abandoned`: both archiving and deleting are
+-- reversible here, so the honest claim is "this left his wall", not "this will
+-- never be answered". The summary says which of the two happened. An agent
+-- hearing it should stop WAITING and tell its human; it should not conclude the
+-- question is dead.
+--
+-- The CHECK has to be dropped and re-added rather than widened in place, which
+-- is why this is its own migration and not a line. The three original kinds
+-- were enumerated up front precisely so that adding one would be deliberate.
+alter table event drop constraint if exists event_kind_check;
+alter table event add constraint event_kind_check
+    check (kind in ('decision_answered', 'comment_added', 'thread_resolved',
+                    'decision_shelved'));

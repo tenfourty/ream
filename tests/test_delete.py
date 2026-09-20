@@ -406,3 +406,88 @@ def _ask(db, artifact_id):
         options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
         recommended="a",
     )
+
+
+# --- and the agent that asked is told ----------------------------------------
+
+
+def test_the_asking_agent_hears_when_its_question_leaves_the_wall(db):
+    """THE POINT OF homelab-ij8.84.10. Before this, an agent that armed a waiter
+    on a decision whose page was then archived waited until its own timeout,
+    every time, with no way to tell "not answered yet" from "he is never going
+    to be shown this". A seat can lose a shift to that.
+    """
+    from artifacts import events
+
+    keys.mint(db, agent="seat")
+    for what, tidy in (
+        ("archived", lambda i: store.set_archived(db, i, True, agent="seat")),
+        ("deleted", lambda i: store.set_deleted(db, i, True, agent="seat")),
+    ):
+        page = store.publish(db, "seat", f"Asks ({what})", PAGE)
+        asked = _ask(db, page.id)
+        before = events.list_for_agent(db, "seat")
+        cursor = before[-1].seq if before else 0
+
+        tidy(page.id)
+
+        new = events.list_for_agent(db, "seat", since=cursor)
+        shelved = [e for e in new if e.kind == "decision_shelved"]
+        assert len(shelved) == 1, (
+            f"{what}: expected one event, got {[e.kind for e in new]}"
+        )
+        assert shelved[0].ref_id == asked.id, "it names WHICH question"
+        assert what in shelved[0].summary
+        assert "still unanswered" in shelved[0].note
+        assert "Stop waiting" in shelved[0].note, "it says what to do about it"
+
+
+def test_a_page_with_nothing_open_produces_no_noise(db):
+    """An event per archive regardless would train agents to ignore the feed."""
+    from artifacts import events
+
+    keys.mint(db, agent="seat")
+    quiet = store.publish(db, "seat", "Nothing open", PAGE)
+    answered = store.publish(db, "seat", "Already answered", PAGE)
+    asked = _ask(db, answered.id)
+    decisions.answer(db, asked.id, letter="a", note="", by="jeremy")
+
+    before = len(events.list_for_agent(db, "seat"))
+    store.set_archived(db, quiet.id, True, agent="seat")
+    store.set_archived(db, answered.id, True, agent="seat")
+    after = events.list_for_agent(db, "seat")
+
+    assert [e for e in after[before:] if e.kind == "decision_shelved"] == []
+
+
+def test_putting_the_page_back_does_not_announce_anything(db):
+    """Unarchiving is not news of the same kind -- the question simply becomes
+    visible again, and an agent polling its decisions will see it. Firing an
+    event here would mean two events per round trip and nothing to do with the
+    second."""
+    from artifacts import events
+
+    keys.mint(db, agent="seat")
+    page = store.publish(db, "seat", "Round trip", PAGE)
+    _ask(db, page.id)
+    store.set_archived(db, page.id, True, agent="seat")
+    mark = len(events.list_for_agent(db, "seat"))
+
+    store.set_archived(db, page.id, False, agent="seat")
+
+    assert len(events.list_for_agent(db, "seat")) == mark
+
+
+def test_the_event_and_the_archive_commit_together(db):
+    """The event is written on the caller's own connection, so a failed archive
+    cannot leave an agent told about something that did not happen."""
+    from artifacts import events
+
+    keys.mint(db, agent="seat")
+    page = store.publish(db, "seat", "Asks", PAGE)
+    _ask(db, page.id)
+
+    # An archive that matches nothing must produce no event at all.
+    before = len(events.list_for_agent(db, "seat"))
+    assert store.set_archived(db, "nosuchpage", True, agent="seat") is False
+    assert len(events.list_for_agent(db, "seat")) == before
