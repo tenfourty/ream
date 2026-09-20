@@ -76,9 +76,7 @@ def test_publish_then_update_then_list_round_trip(live, key_file, tmp_path, caps
     artifact_id = published["id"]
 
     page.write_text("<!doctype html><body>hello</body></html>")
-    rc = client.main(
-        ["--key-file", str(path), str(page), "--update", artifact_id]
-    )
+    rc = client.main(["--key-file", str(path), str(page), "--update", artifact_id])
     assert rc == 0
     updated = json.loads(capsys.readouterr().out.strip())
     assert updated["id"] == artifact_id
@@ -113,8 +111,10 @@ def test_update_retries_once_on_a_stale_revision_then_succeeds(
     req = urllib.request.Request(  # noqa: S310
         f"{live}/api/v1/artifacts/{published['id']}",
         data=json.dumps(
-            {"body": "<!doctype html><body>raced</body></html>",
-             "expected_revision": published["revision"]}
+            {
+                "body": "<!doctype html><body>raced</body></html>",
+                "expected_revision": published["revision"],
+            }
         ).encode(),
         method="PATCH",
         headers={
@@ -335,7 +335,9 @@ def test_an_http_api_to_a_loopback_host_is_allowed(host, tmp_path, monkeypatch):
     ],
     ids=["internal-newline", "internal-space", "trailing-crlf"],
 )
-def test_a_malformed_key_file_is_refused_with_no_traceback(tmp_path, bad_content, capsys):
+def test_a_malformed_key_file_is_refused_with_no_traceback(
+    tmp_path, bad_content, capsys
+):
     path = tmp_path / "key"
     path.write_bytes(bad_content.encode())
     path.chmod(0o600)
@@ -409,7 +411,9 @@ def test_a_non_json_2xx_response_is_treated_as_a_failure(tmp_path, monkeypatch, 
         server.stop()
 
 
-def test_publish_and_update_print_only_id_url_revision(live, key_file, tmp_path, capsys):
+def test_publish_and_update_print_only_id_url_revision(
+    live, key_file, tmp_path, capsys
+):
     path, _token = key_file
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>hi</body></html>")
@@ -418,9 +422,7 @@ def test_publish_and_update_print_only_id_url_revision(live, key_file, tmp_path,
     published = json.loads(capsys.readouterr().out.strip())
     assert set(published.keys()) == {"id", "url", "revision"}
 
-    client.main(
-        ["--key-file", str(path), str(page), "--update", published["id"]]
-    )
+    client.main(["--key-file", str(path), str(page), "--update", published["id"]])
     updated = json.loads(capsys.readouterr().out.strip())
     assert set(updated.keys()) == {"id", "url", "revision"}
 
@@ -431,7 +433,9 @@ def test_a_second_409_gives_up_after_exactly_two_patch_attempts(monkeypatch, tmp
     def fake_request(method, _url, _key, payload):
         if method == "PATCH":
             patch_attempts.append(payload)
-            raise client.HTTPFailure(409, "the artifact moved on; read it and patch again")
+            raise client.HTTPFailure(
+                409, "the artifact moved on; read it and patch again"
+            )
         if method == "GET":
             return {"revision": "still-not-what-you-think"}
         raise AssertionError(f"unexpected method {method}")
@@ -630,3 +634,100 @@ def test_the_services_own_refusal_is_shown_and_never_retried(monkeypatch):
 
     assert calls == [1]
     assert excinfo.value.detail == "that body looks like a secret"
+
+
+# --- housekeeping from the command line --------------------------------------
+#
+# Jeremy, 20 Sep 2026: "ideally agents can take all the same actions a human
+# can." An agent's hands are this script, so an action that exists only over
+# HTTP is an action agents do not really have. Driven here against the real app
+# for the same reason everything else in this file is: it is stdlib and a
+# socket, and that is the claim.
+
+
+def _publish_one(path, tmp_path, capsys, title="Board") -> str:
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>hi</body></html>")
+    client.main(["--key-file", str(path), str(page), "--title", title])
+    return json.loads(capsys.readouterr().out.strip())["id"]
+
+
+def test_rename_sends_no_body_and_needs_no_file(live, key_file, tmp_path, capsys):
+    path, _ = key_file
+    artifact_id = _publish_one(path, tmp_path, capsys)
+    (tmp_path / "page.html").unlink()  # the file is gone; the rename must not care
+
+    rc = client.main(
+        ["--key-file", str(path), "--rename", artifact_id, "--title", "A better name"]
+    )
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out.strip())["title"] == "A better name"
+
+
+def test_rename_without_a_title_is_a_usage_error_not_a_blank_name(
+    live, key_file, tmp_path, capsys
+):
+    path, _ = key_file
+    artifact_id = _publish_one(path, tmp_path, capsys)
+    assert client.main(["--key-file", str(path), "--rename", artifact_id]) == 2
+    assert "--title is required" in capsys.readouterr().err
+
+
+def test_archive_and_unarchive_round_trip(live, key_file, tmp_path, capsys):
+    path, _ = key_file
+    artifact_id = _publish_one(path, tmp_path, capsys)
+
+    assert client.main(["--key-file", str(path), "--archive", artifact_id]) == 0
+    assert json.loads(capsys.readouterr().out.strip())["archived_at"] is not None
+
+    assert client.main(["--key-file", str(path), "--unarchive", artifact_id]) == 0
+    assert json.loads(capsys.readouterr().out.strip())["archived_at"] is None
+
+
+def test_pin_and_unpin_round_trip(live, key_file, tmp_path, capsys):
+    path, _ = key_file
+    artifact_id = _publish_one(path, tmp_path, capsys)
+
+    assert client.main(["--key-file", str(path), "--pin", artifact_id]) == 0
+    assert json.loads(capsys.readouterr().out.strip())["pinned_at"] is not None
+
+    assert client.main(["--key-file", str(path), "--unpin", artifact_id]) == 0
+    assert json.loads(capsys.readouterr().out.strip())["pinned_at"] is None
+
+
+def test_the_listing_keeps_its_three_columns_and_adds_state_only_when_there_is_some(
+    live, key_file, tmp_path, capsys
+):
+    """Every caller of --list splits on tab and takes the first three fields.
+    A state column that were always present would change the shape for all of
+    them in order to report the common case, which is "nothing to say"."""
+    path, _ = key_file
+    artifact_id = _publish_one(path, tmp_path, capsys)
+
+    client.main(["--key-file", str(path), "--list"])
+    plain = capsys.readouterr().out.strip()
+    assert plain.count("\t") == 2, "id, title, url -- as it has always been"
+
+    client.main(["--key-file", str(path), "--pin", artifact_id])
+    capsys.readouterr()
+    client.main(["--key-file", str(path), "--list"])
+    pinned = capsys.readouterr().out.strip()
+    assert pinned.split("\t")[:3] == plain.split("\t")[:3], (
+        "the first three are unmoved"
+    )
+    assert pinned.split("\t")[3] == "pinned"
+
+
+def test_a_page_this_key_does_not_own_is_refused(live, key_file, db, tmp_path, capsys):
+    """The scope is the service's, not this script's -- but an agent has to see
+    that it failed, so the exit code and the message matter here."""
+    from artifacts import store
+
+    keys.mint(db, agent="another-seat")
+    theirs = store.publish(
+        db, "another-seat", "Not yours", "<!doctype html><body>x</body></html>"
+    )
+    path, _ = key_file
+    assert client.main(["--key-file", str(path), "--archive", theirs.id]) == 1
+    assert "404" in capsys.readouterr().err
+    assert store.get_owned(db, "another-seat", theirs.id).archived_at is None

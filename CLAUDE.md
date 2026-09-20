@@ -39,6 +39,24 @@ origin, fronted by Warpgate and authed by Authelia. Decisions are first-class,
 not a convention. **The agent that published a page gets the nudge when he
 answers, not the operator.**
 
+### Every human action has an agent equivalent
+
+Jeremy, 20 Sep 2026: *"ideally agents can take all the same actions a human
+can."* A standing acceptance criterion, not a one-off request. **A gallery
+control with no `/api/v1` twin is half a slice** — and the half that gets left
+out is always the agent's, because his is the one he asked to see. Archive,
+rename and pin all shipped as browser forms first, leaving a seat unable to fix
+the name of a page it had published itself.
+
+The one asymmetry is not an exception: an agent may not **answer** a decision as
+him. Its equivalent is `POST /decisions/{id}/record`, which stores the relay
+with its source. *Give the agent the action, never the disguise.*
+
+Scope is not symmetry. His controls are unscoped because the wall is his and
+Authelia is in front of it; the agent routes are scoped to the calling key's own
+agent, and "not yours" answers **identically** to "no such page" so a key cannot
+be walked to learn which ids are real.
+
 ## WHAT
 
 | Piece | Where |

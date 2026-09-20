@@ -265,6 +265,23 @@ def _list(key: str) -> list[dict]:
     return _request("GET", f"{_api_base()}/artifacts", key, None)
 
 
+def _shelf(action: str, artifact_id: str, key: str, payload: dict) -> dict:
+    """Archive, rename or pin -- the housekeeping a human does in the gallery.
+
+    Jeremy, 20 Sep 2026: "ideally agents can take all the same actions a human
+    can." These reach the same rows his controls do; the service scopes them to
+    this key's own seat, so a page belonging to another agent answers 404 and
+    nothing here has to know that.
+
+    None of them send the body. That is the point of having them at all: an
+    agent that published a page months ago, and no longer has the file, can
+    still fix its name or take it off the wall.
+    """
+    return _request(
+        "POST", f"{_api_base()}/artifacts/{artifact_id}/{action}", key, payload
+    )
+
+
 def _print_warnings(result: dict) -> None:
     """CSP advisories to STDERR, one line each, so stdout stays parseable JSON.
 
@@ -310,6 +327,21 @@ def _print_published(result: dict) -> None:
     _print_warnings(result)
 
 
+def _print_shelf(result: dict) -> None:
+    """Whitelisted like `_print_published`, and for the same reason. The fields
+    differ because what changed differs: nothing was published, so a revision
+    would only invite a caller to think one was."""
+    print(
+        json.dumps(
+            {
+                field: result[field]
+                for field in ("id", "title", "url", "archived_at", "pinned_at")
+                if field in result
+            }
+        )
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="artifacts-publish")
     parser.add_argument("file", nargs="?", metavar="FILE")
@@ -317,7 +349,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--update", metavar="ID")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--key-file")
+    # The gallery's housekeeping, for agents. Each takes the page id, and none
+    # of them takes a FILE -- see `_shelf`.
+    shelf = parser.add_argument_group("housekeeping (no FILE needed)")
+    shelf.add_argument("--archive", metavar="ID", help="take a page off the wall")
+    shelf.add_argument("--unarchive", metavar="ID", help="put it back")
+    shelf.add_argument(
+        "--rename", metavar="ID", help="rename a page; needs --title, sends no body"
+    )
+    shelf.add_argument("--pin", metavar="ID", help="pin a page to the front")
+    shelf.add_argument("--unpin", metavar="ID", help="unpin it")
     return parser
+
+
+# Flag -> (route, payload). One table rather than five branches in `main`, so a
+# sixth action is a row here and cannot be added to the parser and forgotten in
+# the dispatch.
+_SHELF_ACTIONS = (
+    ("archive", "archive", {"archived": True}),
+    ("unarchive", "archive", {"archived": False}),
+    ("pin", "pin", {"pinned": True}),
+    ("unpin", "pin", {"pinned": False}),
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -331,7 +384,31 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.list:
             for item in _list(key):
-                print(f"{item['id']}\t{item['title']}\t{item['url']}")
+                # A fourth column ONLY when there is something to say. Three
+                # columns is what every existing caller splits on; an always-
+                # present empty field would change the shape for everyone in
+                # order to report the common case, which is nothing.
+                shelf = ",".join(
+                    word
+                    for field, word in (
+                        ("pinned_at", "pinned"),
+                        ("archived_at", "archived"),
+                    )
+                    if item.get(field)
+                )
+                suffix = f"\t{shelf}" if shelf else ""
+                print(f"{item['id']}\t{item['title']}\t{item['url']}{suffix}")
+            return 0
+        for flag, route, payload in _SHELF_ACTIONS:
+            artifact_id = getattr(args, flag)
+            if artifact_id:
+                _print_shelf(_shelf(route, artifact_id, key, payload))
+                return 0
+        if args.rename:
+            if not args.title:
+                print("--title is required with --rename", file=sys.stderr)
+                return 2
+            _print_shelf(_shelf("rename", args.rename, key, {"title": args.title}))
             return 0
         if args.update:
             if not args.file:
@@ -344,7 +421,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         print(
             "usage: artifacts-publish FILE --title TITLE"
-            " | FILE --update ID [--title TITLE] | --list",
+            " | FILE --update ID [--title TITLE] | --list"
+            " | --rename ID --title TITLE | --archive ID | --unarchive ID"
+            " | --pin ID | --unpin ID",
             file=sys.stderr,
         )
         return 2

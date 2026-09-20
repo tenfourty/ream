@@ -433,13 +433,12 @@ _ICON = {
 
 
 def _icon(name: str) -> str:
-    return (
-        f'<svg class="mi" viewBox="0 0 16 16" aria-hidden="true">{_ICON[name]}</svg>'
-    )
+    return f'<svg class="mi" viewBox="0 0 16 16" aria-hidden="true">{_ICON[name]}</svg>'
 
 
-def _page_menu(artifact_id: str, title: str, agent: str, archived: bool,
-               updated: str) -> str:
+def _page_menu(
+    artifact_id: str, title: str, agent: str, archived: bool, updated: str
+) -> str:
     """The title's dropdown: what this page is, and what can be done to it.
 
     A <details>, not a script. Everything else in this gallery works with
@@ -461,7 +460,7 @@ def _page_menu(artifact_id: str, title: str, agent: str, archived: bool,
         ),
         (
             f'<form class="mrename" method="post" action="/a/{ident}/rename">'
-            f'{_icon("rename")}'
+            f"{_icon('rename')}"
             f'<input name="title" value="{escape(title)}" aria-label="Page name">'
             '<button type="submit">Rename</button></form>'
         ),
@@ -482,12 +481,12 @@ def _page_menu(artifact_id: str, title: str, agent: str, archived: bool,
         )
     rows.append(
         f'<a class="mrow" href="/a/{ident}" target="_blank" rel="noopener">'
-        f'{_icon("open")}Open in a new tab</a>'
+        f"{_icon('open')}Open in a new tab</a>"
     )
     rows.append(f'<a class="mrow" href="/">{_icon("all")}All pages</a>')
     return (
         '<details class="menu"><summary aria-label="Page actions">'
-        f"{escape(title)}<span class=\"chev\" aria-hidden=\"true\"></span></summary>"
+        f'{escape(title)}<span class="chev" aria-hidden="true"></span></summary>'
         f'<div class="mpanel">{"".join(rows)}</div></details>'
     )
 
@@ -832,41 +831,41 @@ def gallery_router(db: Database) -> APIRouter:
 
     def _wall(conn, archived: bool):
         return conn.execute(
-                # Bounded: an unpaginated list is fine at ten artifacts and a
-                # page nobody can load at ten thousand. `, id desc` breaks a tie
-                # on `updated_at` (two rows can share one, e.g. re-touched by
-                # the same migration) so the order is fixed, not whatever a
-                # plan with no full ORDER BY happens to return today.
-                #
-                # The live body comes back so the tile can say what the page is
-                # ABOUT, taken from the page itself. A separate agent-supplied
-                # summary would drift from the page it describes, which is the
-                # one failure this service exists to prevent.
-                #
-                # The counts are subqueries rather than joins on purpose: a join
-                # to `version` multiplies the artifact row and a second join to
-                # `decision` multiplies it again, so a page with 12 versions and
-                # 2 open questions would report 24 of each. That is the classic
-                # shape and it is silent -- the numbers merely look large.
-                "select a.id, a.title, a.updated_at, a.agent,"
-                "       (select count(*) from version v"
-                "          where v.artifact_id = a.id) as versions,"
-                "       (select count(*) from decision d"
-                "          where d.artifact_id = a.id"
-                "            and d.answer is null"
-                "            and d.closed_at is null) as waiting,"
-                "       (select v.body from version v"
-                "          where v.artifact_id = a.id and v.status = 'live'"
-                "          order by v.n desc limit 1) as body,"
-                # The boolean only. Selecting the bytes here would pull every
-                # thumbnail on the wall into memory to render a list of links.
-                "       exists (select 1 from version v"
-                "          where v.artifact_id = a.id and v.n = a.current_version"
-                "            and v.thumbnail is not null) as has_thumb"
-                "  from artifact a"
-                " where (a.archived_at is null) = %s"
-                " order by a.updated_at desc, a.id desc limit 200",
-                (not archived,),
+            # Bounded: an unpaginated list is fine at ten artifacts and a
+            # page nobody can load at ten thousand. `, id desc` breaks a tie
+            # on `updated_at` (two rows can share one, e.g. re-touched by
+            # the same migration) so the order is fixed, not whatever a
+            # plan with no full ORDER BY happens to return today.
+            #
+            # The live body comes back so the tile can say what the page is
+            # ABOUT, taken from the page itself. A separate agent-supplied
+            # summary would drift from the page it describes, which is the
+            # one failure this service exists to prevent.
+            #
+            # The counts are subqueries rather than joins on purpose: a join
+            # to `version` multiplies the artifact row and a second join to
+            # `decision` multiplies it again, so a page with 12 versions and
+            # 2 open questions would report 24 of each. That is the classic
+            # shape and it is silent -- the numbers merely look large.
+            "select a.id, a.title, a.updated_at, a.agent,"
+            "       (select count(*) from version v"
+            "          where v.artifact_id = a.id) as versions,"
+            "       (select count(*) from decision d"
+            "          where d.artifact_id = a.id"
+            "            and d.answer is null"
+            "            and d.closed_at is null) as waiting,"
+            "       (select v.body from version v"
+            "          where v.artifact_id = a.id and v.status = 'live'"
+            "          order by v.n desc limit 1) as body,"
+            # The boolean only. Selecting the bytes here would pull every
+            # thumbnail on the wall into memory to render a list of links.
+            "       exists (select 1 from version v"
+            "          where v.artifact_id = a.id and v.n = a.current_version"
+            "            and v.thumbnail is not null) as has_thumb"
+            "  from artifact a"
+            " where (a.archived_at is null) = %s"
+            " order by a.updated_at desc, a.id desc limit 200",
+            (not archived,),
         ).fetchall()
 
     @router.get("/", response_class=HTMLResponse)
@@ -998,7 +997,7 @@ def gallery_router(db: Database) -> APIRouter:
         else's page must not be able to make it.
         """
         _same_origin_write(request)
-        if not store.set_archived(db, artifact_id, archived == "1"):
+        if not store.set_archived(db, artifact_id, archived == "1", agent=None):
             raise HTTPException(404, "no such artifact")
         return RedirectResponse(f"/a/{artifact_id}", status_code=303)
 
@@ -1017,11 +1016,13 @@ def gallery_router(db: Database) -> APIRouter:
         if not cleaned:
             raise HTTPException(422, "a page needs a name")
         try:
-            found = store.rename(db, artifact_id, cleaned)
+            found = store.rename(db, artifact_id, cleaned, agent=None)
         except (store.BodyTooLarge, store.InvalidText):
             raise HTTPException(422, "that name is too long") from None
         except store.SecretFound:
-            raise HTTPException(422, "that name looks like it contains a secret") from None
+            raise HTTPException(
+                422, "that name looks like it contains a secret"
+            ) from None
         if not found:
             raise HTTPException(404, "no such artifact")
         return RedirectResponse(f"/a/{artifact_id}", status_code=303)
@@ -1066,7 +1067,11 @@ def gallery_router(db: Database) -> APIRouter:
         # page that had been designed.
         archived = row[3] is not None
         menu = _page_menu(
-            artifact_id, row[0], row[2], archived, _when(str(row[4])) if row[4] else "just now"
+            artifact_id,
+            row[0],
+            row[2],
+            archived,
+            _when(str(row[4])) if row[4] else "just now",
         )
         return HTMLResponse(
             _shell(

@@ -55,6 +55,26 @@ class PatchBody(BaseModel):
     title: str | None = None
 
 
+class ArchiveBody(BaseModel):
+    """`archived` is required and has no default.
+
+    One route both ways rather than /archive and /unarchive, because the pair
+    would drift: the day a third state appears, one of the two gets it. A
+    required boolean also makes an empty body a 422 instead of silently meaning
+    "archive it" -- a destructive-looking default nobody typed.
+    """
+
+    archived: bool
+
+
+class RenameBody(BaseModel):
+    title: str
+
+
+class PinBody(BaseModel):
+    pinned: bool
+
+
 class CommentBody(BaseModel):
     body: str
     quote: str = ""
@@ -289,6 +309,64 @@ def agent_router(db: Database) -> APIRouter:
     @router.get("/artifacts")
     def index(agent: str = Depends(caller)):
         return [row.__dict__ for row in store.list_for_agent(db, agent)]
+
+    # --- the shelf: what Jeremy can do to a page in the gallery, an agent can
+    # do to its own pages here. His rule, 20 Sep 2026: "ideally agents can take
+    # all the same actions a human can." Every one of these has a twin in
+    # gallery.py; the difference is only who is allowed to aim it. His controls
+    # are unscoped because the wall is his, and are proved by the same-origin
+    # form guard; these are scoped to the calling key's own agent and proved by
+    # the key. Neither reaches the other's pages.
+    #
+    # None of them touch the body, so none of them make a version. Archiving,
+    # renaming and pinning are all shelf state -- where a page sits and what it
+    # is called -- and folding them into the version history would put entries
+    # in it that say nothing about what the page said.
+
+    @router.post("/artifacts/{artifact_id}/archive")
+    def archive(artifact_id: str, payload: ArchiveBody, agent: str = Depends(caller)):
+        """Take one of this agent's own pages off the wall, or put it back."""
+        if not store.set_archived(db, artifact_id, payload.archived, agent=agent):
+            raise HTTPException(404, "no such artifact")
+        return store.get_owned(db, agent, artifact_id).__dict__
+
+    @router.post("/artifacts/{artifact_id}/rename")
+    def rename(artifact_id: str, payload: RenameBody, agent: str = Depends(caller)):
+        """Rename without republishing -- the whole body is not needed to fix a
+        name, and an agent that no longer holds the file should not have to."""
+        try:
+            renamed = store.rename(db, artifact_id, payload.title, agent=agent)
+        except store.BodyTooLarge as exc:
+            raise HTTPException(
+                413,
+                {
+                    "field": exc.field,
+                    "size": exc.size,
+                    "detail": f"{exc.field} exceeds the size limit",
+                },
+            ) from exc
+        except store.InvalidText as exc:
+            raise HTTPException(
+                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+            ) from exc
+        except store.SecretFound as found:
+            raise HTTPException(
+                422, _refused_detail(found.field, found.findings)
+            ) from found
+        except store.ScanFailed as exc:
+            raise HTTPException(
+                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+            ) from exc
+        if not renamed:
+            raise HTTPException(404, "no such artifact")
+        return store.get_owned(db, agent, artifact_id).__dict__
+
+    @router.post("/artifacts/{artifact_id}/pin")
+    def pin(artifact_id: str, payload: PinBody, agent: str = Depends(caller)):
+        """Pin one of this agent's own pages to the front of the wall."""
+        if not store.set_pinned(db, artifact_id, payload.pinned, agent=agent):
+            raise HTTPException(404, "no such artifact")
+        return store.get_owned(db, agent, artifact_id).__dict__
 
     @router.get("/artifacts/{artifact_id}/comments")
     def list_comments(

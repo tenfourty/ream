@@ -126,6 +126,13 @@ class ArtifactRow:
     # (homelab-ij8.70).
     updated_at: datetime
     url: str
+    # The two pieces of shelf state. They are on the row rather than behind a
+    # separate call because an agent that can archive a page has to be able to
+    # tell whether it already is -- otherwise "put it back" is a guess, and the
+    # only way to find an archived page again would be to remember its id.
+    # None means not archived / not pinned; a time means since when.
+    archived_at: datetime | None = None
+    pinned_at: datetime | None = None
 
 
 def content_domain() -> str:
@@ -280,7 +287,8 @@ def publish(db: Database, agent: str, title: str, body: str) -> Published:
 
 def _owned(conn, artifact_id: str, agent: str):
     return conn.execute(
-        "select id, title, agent, visibility, current_version, updated_at"
+        "select id, title, agent, visibility, current_version, updated_at,"
+        " archived_at, pinned_at"
         " from artifact where id = %s and agent = %s",
         (artifact_id, agent),
     ).fetchone()
@@ -428,6 +436,8 @@ def get_owned(db: Database, agent: str, artifact_id: str) -> ArtifactRow:
         revision=revision[0],
         updated_at=row[5],
         url=url_for(row[0]),
+        archived_at=row[6],
+        pinned_at=row[7],
     )
 
 
@@ -464,7 +474,8 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
     with db.connect() as conn:
         rows = conn.execute(
             "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"
-            " artifact.current_version, version.revision, artifact.updated_at"
+            " artifact.current_version, version.revision, artifact.updated_at,"
+            " artifact.archived_at, artifact.pinned_at"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
@@ -481,6 +492,8 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             revision=row[5],
             updated_at=row[6],
             url=url_for(row[0]),
+            archived_at=row[7],
+            pinned_at=row[8],
         )
         for row in rows
     ]
@@ -519,28 +532,50 @@ def live_thumbnail(db: Database, artifact_id: str) -> bytes | None:
     return bytes(row[0]) if row and row[0] is not None else None
 
 
-def set_archived(db: Database, artifact_id: str, archived: bool) -> bool:
-    """Take a page off the wall, or put it back. Returns False if no such page.
+def _scoped(artifact_id: str, agent: str | None) -> tuple[str, tuple]:
+    """The WHERE clause for a housekeeping write, and its parameters.
 
-    Not scoped to an owning agent, because this is Jeremy tidying HIS gallery
-    rather than an agent managing its own pages — the same reasoning as
-    answering a decision, which also takes no agent. The gallery is the only
-    caller, it sits behind his login, and the form guard already proves the
-    request came from a document on that origin.
+    `agent` is the owner the write is scoped to, or None for no scope. It has
+    no default anywhere it is used: every caller has to say which of the two it
+    is, because the failure mode of getting this wrong is silent and one-way --
+    a route that omitted a scope would work perfectly, on everybody's pages.
+    Two callers, two answers. The gallery passes None: it sits behind Jeremy's
+    login, it is HIS wall, and he may tidy any page on it. The API always passes
+    the calling key's agent, so a seat can only manage its own pages -- the same
+    rule `patch` has always had.
+
+    The scope is a clause in the UPDATE, never a lookup before it. A read-then-
+    write would be two statements with a gap in the middle, and the gap is where
+    the check stops meaning anything; this way a request that does not own the
+    page changes no rows and is answered 404, which is also what it gets for a
+    page that does not exist. Those two are deliberately indistinguishable: a
+    different answer for "exists but is not yours" would let any key holder
+    enumerate every id on the service.
+    """
+    if agent is None:
+        return "where id = %s", (artifact_id,)
+    return "where id = %s and agent = %s", (artifact_id, agent)
+
+
+def set_archived(
+    db: Database, artifact_id: str, archived: bool, *, agent: str | None
+) -> bool:
+    """Take a page off the wall, or put it back. False if nothing was changed.
 
     Reversible by construction: one nullable column, and nothing else in the
     page is touched. Its versions, its decisions and the answers he gave on it
     are all exactly where they were.
     """
+    where, params = _scoped(artifact_id, agent)
     with db.connect() as conn:
         done = conn.execute(
-            "update artifact set archived_at = %s where id = %s",
-            (datetime.now(UTC) if archived else None, artifact_id),
+            f"update artifact set archived_at = %s {where}",  # noqa: S608 -- _scoped emits a fixed clause with placeholders, never caller text
+            (datetime.now(UTC) if archived else None, *params),
         )
         return done.rowcount > 0
 
 
-def rename(db: Database, artifact_id: str, title: str) -> bool:
+def rename(db: Database, artifact_id: str, title: str, *, agent: str | None) -> bool:
     """Give a page a different name, without republishing it.
 
     Renaming used to mean sending the whole body again with `--title`, which is
@@ -550,19 +585,25 @@ def rename(db: Database, artifact_id: str, title: str) -> bool:
     already have.
 
     Guarded like any other text reaching storage -- size and the secret scan --
-    because "it is only a title" is how a field skips its checks.
+    because "it is only a title" is how a field skips its checks. The guards run
+    BEFORE the ownership clause does any work, so a refusal is logged against
+    whoever actually sent the title rather than against the page's owner.
     """
-    _guard(title, MAX_TITLE_BYTES, "title", agent="jeremy", artifact_id=artifact_id)
-    _check_secrets(title, "title", agent="jeremy", artifact_id=artifact_id)
+    actor = agent or "jeremy"
+    _guard(title, MAX_TITLE_BYTES, "title", agent=actor, artifact_id=artifact_id)
+    _check_secrets(title, "title", agent=actor, artifact_id=artifact_id)
+    where, params = _scoped(artifact_id, agent)
     with db.connect() as conn:
         done = conn.execute(
-            "update artifact set title = %s, updated_at = now() where id = %s",
-            (title, artifact_id),
+            f"update artifact set title = %s, updated_at = now() {where}",  # noqa: S608 -- see _scoped
+            (title, *params),
         )
         return done.rowcount > 0
 
 
-def set_pinned(db: Database, artifact_id: str, pinned: bool) -> bool:
+def set_pinned(
+    db: Database, artifact_id: str, pinned: bool, *, agent: str | None
+) -> bool:
     """Pin a page to the front of the wall, or unpin it.
 
     Its own column rather than a flag on `updated_at`, because the two orderings
@@ -570,9 +611,10 @@ def set_pinned(db: Database, artifact_id: str, pinned: bool) -> bool:
     shown, and "what I care about" is what pinning adds. A pinned page that has
     not changed in a month still leads.
     """
+    where, params = _scoped(artifact_id, agent)
     with db.connect() as conn:
         done = conn.execute(
-            "update artifact set pinned_at = %s where id = %s",
-            (datetime.now(UTC) if pinned else None, artifact_id),
+            f"update artifact set pinned_at = %s {where}",  # noqa: S608 -- see _scoped
+            (datetime.now(UTC) if pinned else None, *params),
         )
         return done.rowcount > 0

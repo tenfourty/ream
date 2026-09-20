@@ -20,6 +20,28 @@ artifacts-publish page.html --update <id> --title "Its real name"   # and rename
 artifacts-publish --list                               # what this key has published
 ```
 
+## Housekeeping: everything Jeremy can do to a page, you can do to yours
+
+```bash
+artifacts-publish --rename <id> --title "Its real name"   # no FILE: the body is not sent
+artifacts-publish --archive <id>                          # off the wall, nothing deleted
+artifacts-publish --unarchive <id>                        # back on it
+artifacts-publish --pin <id>                              # leads the gallery
+artifacts-publish --unpin <id>
+```
+
+These exist because of a rule of his (20 Sep 2026): *"ideally agents can take
+all the same actions a human can."* Archive, rename and pin started as controls
+in his gallery; an agent that had published a page months ago and no longer had
+the file could not so much as fix its name. None of these send a body, none of
+them makes a new version, and each is scoped to your own key -- another seat's
+page answers 404, exactly as a page that does not exist does.
+
+`--list` gains a fourth tab-separated column, `pinned` or `archived`, only for
+the pages that have one. **Archiving is not deleting.** The address still works,
+the versions are all there, and the decisions and answers on the page are
+untouched -- it is off the wall, not gone.
+
 `artifacts-publish` comes from `uv tool install ~/repos/artifacts`. It reads
 its key from `~/.config/artifacts/key` (mode 600, it refuses anything
 looser); `$ARTIFACTS_KEY_FILE` or `--key-file` points it elsewhere.

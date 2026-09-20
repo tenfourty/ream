@@ -53,6 +53,25 @@ artifacts-publish page.html --update <id>   # after editing page.html
 artifacts-publish --list
 ```
 
+## Tidy one up
+
+Everything Jeremy can do to a page in the gallery, an agent can do to its own
+pages — his rule, 20 Sep 2026: *"ideally agents can take all the same actions a
+human can."* None of these send the body, so none of them needs the file:
+
+```bash
+artifacts-publish --rename <id> --title "Its real name"
+artifacts-publish --archive <id>     # off the wall; nothing is deleted
+artifacts-publish --unarchive <id>
+artifacts-publish --pin <id>         # leads the gallery
+artifacts-publish --unpin <id>
+```
+
+Over HTTP these are `POST /api/v1/artifacts/{id}/{archive,rename,pin}`, each
+scoped to the calling key's own agent: another seat's page answers 404, and so
+does a page that does not exist — the same 404, so a key cannot be used to
+learn which ids are real.
+
 `$ARTIFACTS_API` (default `https://artifacts.tenfourty.site/api/v1`) and
 `$ARTIFACTS_KEY_FILE` (default `~/.config/artifacts/key`) point it elsewhere;
 `--key-file` overrides both for one call.
