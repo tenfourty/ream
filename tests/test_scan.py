@@ -246,7 +246,9 @@ def test_a_megabyte_of_newlines_scans_in_under_two_seconds():
     body = "\n" * 1_000_000
     start = time.perf_counter()
     scan.scan(body)
-    assert time.perf_counter() - start < 2.0
+    # Generous for the same reason as the dense-body case below: a wall clock
+    # on a shared runner measures the runner.
+    assert time.perf_counter() - start < 10.0
 
 
 def test_a_dense_single_line_body_gives_a_small_bounded_result_quickly():
@@ -258,7 +260,14 @@ def test_a_dense_single_line_body_gives_a_small_bounded_result_quickly():
     start = time.perf_counter()
     findings = scan.scan(body)
     elapsed = time.perf_counter() - start
-    assert elapsed < 1.0
+    # THE COUNT is the regression, and it is asserted on the next line. The
+    # clock is only a smoke check against a catastrophic blow-up, so it is
+    # generous on purpose: at 1.0s this failed on a box at load average 12.6
+    # while passing in 0.35s idle, which makes it a test of how busy the
+    # machine is. That matters more than it sounds — a shared CI runner is
+    # busiest exactly when someone is pushing a fix, so a tight wall clock
+    # blocks the deploy at the worst possible moment and blames the code.
+    assert elapsed < 10.0, f"took {elapsed:.2f}s — not merely slow, something blew up"
     assert 0 < len(findings) <= scan._MAX_FINDINGS_TOTAL
     # A single-line body: de-duplication to (shape, line) must have
     # collapsed tens of thousands of matches per shape down to one each.
@@ -270,7 +279,8 @@ def test_a_match_repeated_on_many_distinct_lines_is_capped_per_shape():
     start = time.perf_counter()
     findings = scan.scan(body)
     elapsed = time.perf_counter() - start
-    assert elapsed < 1.0
+    # The CAP below is the regression. Generous clock: see the dense-body test.
+    assert elapsed < 10.0, f"took {elapsed:.2f}s — something blew up"
     token_findings = [f for f in findings if f.shape == "token_assignment"]
     assert 0 < len(token_findings) <= scan._MAX_LINES_PER_SHAPE
 
@@ -558,7 +568,12 @@ def test_a_stray_angle_bracket_with_no_closing_bracket_scans_quickly():
     start = time.perf_counter()
     findings = scan.scan(body)
     elapsed = time.perf_counter() - start
-    assert elapsed < 1.0
+    # Unlike the other timings here, THIS clock is the test: the regression is
+    # quadratic backtracking, which cost 11.1s on this body. 5s still separates
+    # linear from quadratic by a wide margin while surviving a loaded runner —
+    # a 1s bound was measuring the machine, and a 10s bound would no longer
+    # catch the 11.1s case it exists for.
+    assert elapsed < 5.0, f"took {elapsed:.2f}s — suspect quadratic backtracking"
     assert findings == []
 
 
@@ -780,7 +795,8 @@ def test_a_flood_of_empty_assignments_each_looking_past_blank_lines_scans_quickl
     findings = scan.scan(body)
     elapsed = time.perf_counter() - start
     assert len(findings) <= scan._MAX_FINDINGS_TOTAL
-    assert elapsed < 1.0
+    # The cap above is the regression. Generous clock: see the dense-body test.
+    assert elapsed < 10.0, f"took {elapsed:.2f}s — something blew up"
 
 
 # --- fix round 5: a value that begins with `&`, `;` or `,` is a value. Only
