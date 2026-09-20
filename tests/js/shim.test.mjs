@@ -24,8 +24,18 @@ function build() {
   const slot = el({ "data-artifact-decision": "dec1" });
   const listeners = {};
   const posted = [];
+  // documentElement.scrollHeight is deliberately LARGER than the body here:
+  // that is the real situation this measures. The iframe has been sized to 1234
+  // by a previous report, so the viewport is 1234, so documentElement's
+  // scrollHeight is floored at 1234 even though the page is now only 800 tall.
+  // Reporting documentElement would pin the frame at its high-water mark for
+  // good, and the page could never shrink again.
   const doc = {
     documentElement: { scrollHeight: 1234 },
+    body: {
+      scrollHeight: 800, offsetHeight: 800,
+      getBoundingClientRect: () => ({ bottom: 800 }),
+    },
     querySelectorAll: () => [slot],
     querySelector: (sel) => sel.includes('"dec1"') ? slot : null,
   };
@@ -34,7 +44,8 @@ function build() {
     parent: { postMessage: (m, o) => posted.push([m, o]) },
     scrollX: 0, scrollY: 0,
     addEventListener: (t, fn) => (listeners[t] ||= []).push(fn),
-    Array, JSON, CSS: undefined,
+    getComputedStyle: () => ({ marginBottom: "0px" }),
+    Array, JSON, Math, CSS: undefined,
   };
   scope.window = scope;
   const names = Object.keys(scope);
@@ -61,7 +72,10 @@ const sized = (over = {}) => ({
   const [msg, origin] = g.posted[0];
   ok(origin === GALLERY, "posts only to the gallery's origin, never '*'");
   ok(msg.type === "artifact-state", "labels the message");
-  ok(msg.height === 1234, "reports the document's own height");
+  ok(msg.height === 800,
+     "reports the BODY's height (800), not documentElement's viewport-floored " +
+     "1234 -- reporting the latter makes the frame a one-way ratchet that can " +
+     "grow and never shrink, leaving dead space under every released slot");
   ok(JSON.stringify(msg.slots) === '[{"id":"dec1","top":40,"left":10,"width":300}]',
      "reports the marked slot's page-coordinate rectangle, and nothing of its contents");
 }

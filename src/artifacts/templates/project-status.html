@@ -109,6 +109,24 @@
   blockquote{margin:.8rem 0;padding:.1rem 0 .1rem 1rem;border-left:2px solid var(--line);
     color:var(--ink)}
   .muted{color:var(--muted)}
+
+  /* A fold. The count belongs in the SUMMARY: a reader must be able to see how
+     much is inside without opening it, or folding becomes a way of implying a
+     list is shorter than it is. */
+  details{margin:.6rem 0}
+  summary{cursor:pointer;font:600 .8rem/1.5 var(--mono);letter-spacing:.05em;
+    text-transform:uppercase;color:var(--accent-ink);padding:.35rem 0}
+  summary:hover{color:var(--accent)}
+  details[open] summary{margin-bottom:.3rem}
+
+  /* What waits on what. A list, not a graph: an arc whose only recorded edges
+     are each item's link to its own parent has no graph worth drawing, and
+     drawing one anyway would show a hierarchy while claiming to show an order. */
+  .blocked{list-style:none;padding:0;margin:.6rem 0}
+  .blocked li{border-left:2px solid var(--wait);padding:.1rem 0 .1rem .8rem;
+    margin:.55rem 0}
+  .waits{font:600 .72rem/1.4 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+    color:var(--wait)}
   .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
   footer{margin-top:2.8rem;padding-top:.9rem;border-top:1px solid var(--line);
     color:var(--muted);font-size:.85rem}

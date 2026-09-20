@@ -1,0 +1,321 @@
+<!doctype html>
+<!--
+  TEMPLATE · incident
+  ───────────────────
+  Publish this after something broke. Write it once the thing is fixed, not
+  while you are fixing it — a live incident wants a project-status page that you
+  update, and this one afterwards.
+
+  The shape is settled and the order is the argument: what it cost, when it
+  happened, what it was NOT, what it was, what is being done, what it taught.
+  "What it was not" is the section most write-ups skip and the one worth the
+  most later: the next person to see these symptoms starts from your ruled-out
+  list instead of re-walking it.
+
+  Blame belongs to systems. Name what let the failure through, never who typed.
+  Everything below is a worked example. Replace it.
+-->
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- REPLACE: what broke, in the words someone would search for. -->
+<title>Nightly backups silently stopped</title>
+<style>
+/* ==== shared: begin — do not edit here; edit _shared.css and re-sync ==== */
+  /* Tokens. Change values, never names — every homelab page shares these, so a
+     page that renames one stops looking like the others. Declared on :root and
+     redefined for dark; never hard-code a colour in a rule below. */
+  :root{
+    --paper:#faf9f6; --ink:#191a17; --muted:#6c6d64; --card:#fff; --line:#e4e3db;
+    --accent:#0f6f63; --accent-soft:rgba(15,111,99,.10); --accent-ink:#0b4f46;
+    --ok:#2f7a45; --now:#b06a12; --wait:#4a5b8c;
+    /* --bar is the one hue any chart on this page may use, and it is NOT
+       --accent: --accent is tuned for text and links, a fill wants more body.
+       Both values are validated against their own surface for the OKLCH
+       lightness band, the chroma floor and >=3:1 contrast. Re-run the check
+       before changing either. */
+    --bar:#067e66; --bar-soft:rgba(6,126,102,.14);
+    --shadow:0 1px 2px rgba(20,20,15,.05), 0 8px 24px -16px rgba(20,20,15,.25);
+    --display:ui-serif,"Iowan Old Style",Georgia,"Times New Roman",serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --rule:#191a17;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#141619; --ink:#e9eae4; --muted:#989a90; --card:#1c1f23; --line:#2b2e34;
+      --accent:#5ec9b8; --accent-soft:rgba(94,201,184,.12); --accent-ink:#9fe3d7;
+      --ok:#6cc48a; --now:#e0a458; --wait:#8fa6e0;
+      --bar:#069c97; --bar-soft:rgba(6,156,151,.18);
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.8);
+      --rule:#e9eae4;
+    }
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--paper);color:var(--ink);
+       font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent-ink);text-underline-offset:.15em}
+  main{max-width:52rem;margin:0 auto;padding:1.8rem 1rem 4rem}
+
+  /* Masthead. The Gallery pill MUST keep target="_blank" rel="noopener": this
+     page is framed by the gallery, the gallery refuses to be framed, and the
+     frame's sandbox forbids top-level navigation — so a same-tab link is a dead
+     link. Found by Jeremy on a real page, 19 Sep 2026. */
+  .masthead{max-width:52rem;margin:0 auto;padding:1.1rem 1rem 0}
+  .topline{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:2.6rem}
+  .topline a{color:var(--accent-ink);text-decoration:none;display:inline-flex;align-items:center;
+    gap:.4rem;border:1px solid var(--line);background:var(--card);border-radius:999px;
+    padding:.25rem .7rem;font-size:.82rem}
+  .topline a:hover{border-color:var(--accent)}
+  .topline svg{width:.9em;height:.9em;fill:currentColor}
+  .eyebrow{font:600 .78rem/1.4 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 .9rem}
+  h1{font:400 clamp(2.1rem,6vw,3.1rem)/1.05 var(--display);letter-spacing:-.015em;margin:0 0 .8rem}
+  .standfirst{margin:0;font-size:1.06rem;color:var(--ink);max-width:40rem}
+  .chips{display:flex;gap:.4rem;flex-wrap:wrap;margin:1.3rem 0 0}
+  .chip{font:.78rem/1.4 var(--mono);border-radius:999px;padding:.22rem .62rem;
+    border:1px solid var(--line);background:var(--card);color:var(--muted)}
+  .chip.on{border-color:transparent;background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+  .masthead hr{border:0;border-top:2px solid var(--rule);margin:1.6rem 0 0}
+
+  /* Shapes */
+  h2{font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+     margin:2.4rem 0 .7rem}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:.7rem;
+    padding:1rem 1.15rem;margin:.6rem 0;box-shadow:var(--shadow)}
+  .card.live{border-left:3px solid var(--ok)}
+  .card.ask{border-left:3px solid var(--now)}
+  .card > b:first-child{display:block;margin-bottom:.35rem}
+  p{margin:.5rem 0}
+  ul{margin:.4rem 0;padding-left:1.15rem} li{margin:.28rem 0}
+  table{border-collapse:collapse;width:100%;font-size:.95rem}
+  th{text-align:left;font:600 .75rem/1.4 var(--mono);letter-spacing:.06em;
+    text-transform:uppercase;color:var(--muted);padding:.35rem .5rem;
+    border-bottom:1px solid var(--line)}
+  td{padding:.45rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}
+  td.s{width:1%;white-space:nowrap}
+  .state{font-size:.75rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+    border-radius:.3rem;padding:.12rem .45rem;border:1px solid currentColor}
+  .state.done{color:var(--ok)} .state.now{color:var(--now)}
+  .state.next{color:var(--wait)} .state.held{color:var(--muted)}
+  code{background:var(--accent-soft);color:var(--accent-ink);padding:.08rem .32rem;
+    border-radius:.25rem;font-size:.88em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  blockquote{margin:.8rem 0;padding:.1rem 0 .1rem 1rem;border-left:2px solid var(--line);
+    color:var(--ink)}
+  .muted{color:var(--muted)}
+
+  /* A fold. The count belongs in the SUMMARY: a reader must be able to see how
+     much is inside without opening it, or folding becomes a way of implying a
+     list is shorter than it is. */
+  details{margin:.6rem 0}
+  summary{cursor:pointer;font:600 .8rem/1.5 var(--mono);letter-spacing:.05em;
+    text-transform:uppercase;color:var(--accent-ink);padding:.35rem 0}
+  summary:hover{color:var(--accent)}
+  details[open] summary{margin-bottom:.3rem}
+
+  /* What waits on what. A list, not a graph: an arc whose only recorded edges
+     are each item's link to its own parent has no graph worth drawing, and
+     drawing one anyway would show a hierarchy while claiming to show an order. */
+  .blocked{list-style:none;padding:0;margin:.6rem 0}
+  .blocked li{border-left:2px solid var(--wait);padding:.1rem 0 .1rem .8rem;
+    margin:.55rem 0}
+  .waits{font:600 .72rem/1.4 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+    color:var(--wait)}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  footer{margin-top:2.8rem;padding-top:.9rem;border-top:1px solid var(--line);
+    color:var(--muted);font-size:.85rem}
+
+  /* Stat tiles. A tile with no real source is DELETED, never rendered as zero —
+     a made-up number on a page Jeremy trusts is worse than a missing one. Every
+     tile says what it counted and over what window, in the tile. */
+  .tiles{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));
+    margin:.6rem 0}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:.7rem;
+    padding:.85rem .95rem;box-shadow:var(--shadow)}
+  .tile .k{font:.75rem/1.3 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);margin:0}
+  .tile .v{font:600 1.9rem/1.1 ui-sans-serif,system-ui,-apple-system,sans-serif;
+    margin:.3rem 0 .15rem;letter-spacing:-.02em}
+  .tile .w{font-size:.8rem;color:var(--muted);margin:0}
+
+  /* Chart. One series, so one hue and no legend — the caption names it.
+     Nothing legibility-critical goes inside the SVG: text in a scaled viewBox
+     scales with it, so an axis that reads on a laptop is unreadable on a phone.
+     The bars scale; the range and the reading are HTML and never do. */
+  /* Capped at the viewBox's own width so the chart never scales ABOVE 1:1:
+     stretched, a 24px bar becomes a 30px one and the spec that keeps marks
+     thin quietly stops holding. The cap covers the caption and the axis row
+     too, so all three stay aligned. */
+  figure{margin:.6rem 0;max-width:40rem}
+  figure svg{display:block;width:100%;height:7.5rem}
+  .bar{fill:var(--bar)}
+  .base{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
+  .axis{display:flex;justify-content:space-between;margin:.3rem 0 0;
+    font:.72rem var(--mono);color:var(--muted)}
+  figcaption{font-size:.82rem;color:var(--muted);margin-top:.35rem;max-width:34rem}
+
+  @media (max-width:32rem){
+    main,.masthead{padding-left:.85rem;padding-right:.85rem}
+    .tile .v{font-size:1.6rem}
+  }
+/* ==== shared: end ==== */
+
+  /* ---- page-specific: incident ------------------------------------- */
+  .tldr{background:var(--accent-soft);border-radius:.7rem;padding:1rem 1.15rem;
+    margin:.6rem 0;font-size:1.04rem}
+  .tldr b{display:block;margin-bottom:.3rem}
+  /* Timeline: a rail with a dot per entry. The dot is drawn with a border so it
+     inherits currentColor and needs no second colour token. */
+  .tl{list-style:none;margin:.6rem 0;padding:0 0 0 1.4rem;border-left:2px solid var(--line)}
+  .tl li{position:relative;margin:0 0 .9rem;padding:0}
+  .tl li::before{content:"";position:absolute;left:-1.85rem;top:.42em;width:.55rem;
+    height:.55rem;border-radius:50%;background:var(--paper);
+    border:2px solid var(--line)}
+  .tl li.hit::before{border-color:var(--now);background:var(--now)}
+  .tl li.fix::before{border-color:var(--ok);background:var(--ok)}
+  .tl .when{font:600 .78rem/1.4 var(--mono);color:var(--muted);display:block}
+  .ruled{margin:.4rem 0;padding-left:1.15rem}
+  .ruled li{margin:.35rem 0}
+  .ruled b{color:var(--ink)}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <p class="topline">
+    <a href="https://artifacts.tenfourty.site/" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg> Gallery</a>
+  </p>
+  <p class="eyebrow">INCIDENT &middot; <!--artifacts:updated--> &middot; BABA</p>
+  <!-- REPLACE: what broke, from the reader's side. "Nightly backups silently
+       stopped", never "cron unit failed to fire" — the second is the cause and
+       it belongs further down. -->
+  <h1>Nightly backups silently stopped</h1>
+  <!-- REPLACE: one sentence, and make it the honest one. -->
+  <p class="standfirst">Eleven nights with no backup at all, and nothing said so
+    — the dashboard went on showing the last successful run as though it were
+    last night's.</p>
+  <!-- REPLACE the chips: how bad, whether it is over, how long it ran. Do not
+       type a date in them; the stamp is the marker. -->
+  <p class="chips"><span class="chip on">Fixed</span><span class="chip">11 nights</span><span class="chip">No data lost</span><span class="chip">Written <!--artifacts:updated--></span></p>
+  <hr>
+</header>
+
+<main>
+  <!-- REPLACE. The whole incident in three or four sentences, written for
+       someone who will read nothing else. Cause, effect, duration, and whether
+       anything was actually lost — that last one is the question a reader has
+       from the first line, so answer it here rather than making them hunt. -->
+  <div class="tldr">
+    <b>In short</b>
+    A disk filled on the backup host, the nightly job began exiting early, and
+    because it exited cleanly nothing noticed. Eleven nights ran with no backup
+    written. Nothing was lost — the previous copies were intact and a restore
+    test from the newest of them came back whole — but for eleven days we had
+    one copy of everything instead of two.
+  </div>
+
+  <h2>What happened, in order</h2>
+  <!-- REPLACE. Timestamps and facts. Mark the moment impact STARTED (.hit) and
+       the moment it stopped (.fix) — those two dots are what a reader's eye
+       goes to. Include the wrong turns: an incident write-up that reads as a
+       straight line to the answer is a write-up nobody learns from, and the
+       wrong turns are what the ruled-out section below is built from. -->
+  <ol class="tl">
+    <li class="hit"><span class="when">Night 1</span>The backup volume reached
+      100%. The job wrote its first chunk, failed, and exited 0 — it treats a
+      write failure as "nothing to do".</li>
+    <li><span class="when">Nights 2&ndash;10</span>Same each night. The
+      dashboard read the last SUCCESSFUL run's timestamp, which never changed,
+      and rendered it as the current state.</li>
+    <li><span class="when">Day 11, morning</span>Noticed while looking for
+      something else: the backup volume's size had not moved in a week and a
+      half.</li>
+    <li><span class="when">Day 11, +20 min</span>First theory was the schedule.
+      Wrong — it had fired every night, on time, all eleven times.</li>
+    <li><span class="when">Day 11, +35 min</span>Found the exit code. The job
+      had been reporting success while writing nothing.</li>
+    <li class="fix"><span class="when">Day 11, +50 min</span>Freed space, ran
+      the job by hand, watched it write. Backups resumed that night.</li>
+    <li><span class="when">Day 12</span>Restore test from the newest good copy.
+      Came back whole, which is the claim that actually matters.</li>
+  </ol>
+
+  <h2>What it was not</h2>
+  <!-- REPLACE, and do not skip this. It is the section that pays off later:
+       the next person with these symptoms starts from your ruled-out list
+       instead of re-walking it. Each line: what you suspected, and HOW you
+       ruled it out. "Checked the schedule" is not ruling out; "the schedule
+       fired all eleven nights, in the log" is. -->
+  <ul class="ruled">
+    <li><b>Not the schedule.</b> It fired every night, on time — all eleven runs
+      are in the log with start and end times.</li>
+    <li><b>Not the network or the far end.</b> The job never got far enough to
+      open a connection, and the far end's own log shows no attempts, which is
+      consistent rather than merely silent.</li>
+    <li><b>Not corruption in the existing copies.</b> The restore test on day 12
+      came back whole.</li>
+    <li><b>Not a recent change.</b> Nothing had been deployed to that host for
+      six weeks. The disk simply filled.</li>
+  </ul>
+
+  <h2>Why it happened</h2>
+  <!-- REPLACE. The mechanism, precisely. Then the SECOND cause, which is almost
+       always the real one: not that the thing broke, but that breaking looked
+       identical to working. A write-up that stops at the first cause fixes one
+       night's outage; one that names the second fixes the class. -->
+  <div class="card">
+    <b>The disk filled, and the job reports a full disk as success.</b>
+    <p>Its write path treats "wrote zero bytes" the same as "had nothing to
+      write", and exits 0 for both. Eleven nights of total failure and eleven
+      clean exit codes.</p>
+    <p>The cause that actually cost us the eleven days is the second one: every
+      check we had asked whether the job RAN, and it ran. Nothing asked whether
+      a backup newer than yesterday existed. A monitor that watches the runner
+      instead of the result cannot see this failure, and will not see the next
+      one of its kind either.</p>
+  </div>
+
+  <h2>What it cost</h2>
+  <!-- REPLACE. Numbers, with the unit and the window. If you do not know one,
+       write that you do not know it — an unknown is a finding, and an invented
+       number here is worse than a gap. -->
+  <table>
+    <tr><th>What</th><th>How much</th></tr>
+    <tr><td>Nights with no backup</td><td>11</td></tr>
+    <tr><td>Data lost</td><td>None. Previous copies intact and restore-tested.</td></tr>
+    <tr><td>Time with only one copy</td><td>11 days</td></tr>
+    <tr><td>Time from noticing to fixed</td><td>50 minutes</td></tr>
+    <tr><td>Time from breaking to noticing</td><td>11 days &mdash; the number that matters</td></tr>
+  </table>
+
+  <h2>What is being done</h2>
+  <!-- REPLACE. One row per action with a state chip. Be honest about what is
+       not done: a remediation list where everything is already `done` on the
+       day of writing is a list that was written to look finished. -->
+  <table>
+    <tr><td class="s"><span class="state done">done</span></td><td>Space freed and the nightly job writing again.</td></tr>
+    <tr><td class="s"><span class="state done">done</span></td><td>The job now exits non-zero when it writes nothing, so a failure is a failure.</td></tr>
+    <tr><td class="s"><span class="state now">now</span></td><td>A check that asks whether a backup newer than 36 hours exists — watching the result, not the runner.</td></tr>
+    <tr><td class="s"><span class="state next">next</span></td><td>The same check for the three other jobs shaped like this one.</td></tr>
+    <tr><td class="s"><span class="state held">held</span></td><td>An alert when the volume passes 85%, which needs somewhere to send it.</td></tr>
+  </table>
+
+  <h2>What it taught</h2>
+  <!-- REPLACE with ONE lesson, generalised past this incident, in a form
+       someone could apply to a system they have not seen. If you have three,
+       you have not found the one. Resist "we should have monitored better" —
+       that is a wish, not a lesson. -->
+  <div class="card live">
+    <b>Check for the result, never for the attempt.</b>
+    <p>Every monitor here asked whether the job ran. A job that runs and does
+      nothing satisfies all of them, and that is not an unusual failure — it is
+      the ordinary one, because most things fail by doing nothing rather than by
+      crashing. The check that would have caught this in a day is "is there a
+      backup newer than yesterday", and it is the same shape for every job we
+      have: assert the positive fact, never the absence of a complaint.</p>
+  </div>
+
+  <footer>Published from BABA through the homelab artifacts service.</footer>
+</main>
+</body>
+</html>

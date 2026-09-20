@@ -1,0 +1,288 @@
+<!doctype html>
+<!--
+  TEMPLATE · implementation-plan
+  ──────────────────────────────
+  Publish this when a piece of work is big enough that its ORDER needs
+  explaining — what comes first, what is waiting on what, what is already done.
+
+  The one rule that makes this page readable to Jeremy rather than to you:
+  EVERY PHASE IS NAMED BY ITS OUTCOME, never by its coordinate. "Backups run
+  themselves", not "Phase 2". He does not read plans, and a page full of phase
+  numbers is a page he will not read either. If a phase cannot be named by what
+  becomes true when it is done, it is not a phase — it is a list of tasks, and
+  it belongs inside one.
+
+  This is the plan's CURRENT state, not the plan as written. Update it in place
+  as things move; the history is in the versions behind it.
+
+  Everything below is a worked example. Replace it.
+-->
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- REPLACE: the thing being built, not the word "plan". -->
+<title>Backups that look after themselves</title>
+<style>
+/* ==== shared: begin — do not edit here; edit _shared.css and re-sync ==== */
+  /* Tokens. Change values, never names — every homelab page shares these, so a
+     page that renames one stops looking like the others. Declared on :root and
+     redefined for dark; never hard-code a colour in a rule below. */
+  :root{
+    --paper:#faf9f6; --ink:#191a17; --muted:#6c6d64; --card:#fff; --line:#e4e3db;
+    --accent:#0f6f63; --accent-soft:rgba(15,111,99,.10); --accent-ink:#0b4f46;
+    --ok:#2f7a45; --now:#b06a12; --wait:#4a5b8c;
+    /* --bar is the one hue any chart on this page may use, and it is NOT
+       --accent: --accent is tuned for text and links, a fill wants more body.
+       Both values are validated against their own surface for the OKLCH
+       lightness band, the chroma floor and >=3:1 contrast. Re-run the check
+       before changing either. */
+    --bar:#067e66; --bar-soft:rgba(6,126,102,.14);
+    --shadow:0 1px 2px rgba(20,20,15,.05), 0 8px 24px -16px rgba(20,20,15,.25);
+    --display:ui-serif,"Iowan Old Style",Georgia,"Times New Roman",serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --rule:#191a17;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#141619; --ink:#e9eae4; --muted:#989a90; --card:#1c1f23; --line:#2b2e34;
+      --accent:#5ec9b8; --accent-soft:rgba(94,201,184,.12); --accent-ink:#9fe3d7;
+      --ok:#6cc48a; --now:#e0a458; --wait:#8fa6e0;
+      --bar:#069c97; --bar-soft:rgba(6,156,151,.18);
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.8);
+      --rule:#e9eae4;
+    }
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--paper);color:var(--ink);
+       font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent-ink);text-underline-offset:.15em}
+  main{max-width:52rem;margin:0 auto;padding:1.8rem 1rem 4rem}
+
+  /* Masthead. The Gallery pill MUST keep target="_blank" rel="noopener": this
+     page is framed by the gallery, the gallery refuses to be framed, and the
+     frame's sandbox forbids top-level navigation — so a same-tab link is a dead
+     link. Found by Jeremy on a real page, 19 Sep 2026. */
+  .masthead{max-width:52rem;margin:0 auto;padding:1.1rem 1rem 0}
+  .topline{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:2.6rem}
+  .topline a{color:var(--accent-ink);text-decoration:none;display:inline-flex;align-items:center;
+    gap:.4rem;border:1px solid var(--line);background:var(--card);border-radius:999px;
+    padding:.25rem .7rem;font-size:.82rem}
+  .topline a:hover{border-color:var(--accent)}
+  .topline svg{width:.9em;height:.9em;fill:currentColor}
+  .eyebrow{font:600 .78rem/1.4 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 .9rem}
+  h1{font:400 clamp(2.1rem,6vw,3.1rem)/1.05 var(--display);letter-spacing:-.015em;margin:0 0 .8rem}
+  .standfirst{margin:0;font-size:1.06rem;color:var(--ink);max-width:40rem}
+  .chips{display:flex;gap:.4rem;flex-wrap:wrap;margin:1.3rem 0 0}
+  .chip{font:.78rem/1.4 var(--mono);border-radius:999px;padding:.22rem .62rem;
+    border:1px solid var(--line);background:var(--card);color:var(--muted)}
+  .chip.on{border-color:transparent;background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+  .masthead hr{border:0;border-top:2px solid var(--rule);margin:1.6rem 0 0}
+
+  /* Shapes */
+  h2{font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+     margin:2.4rem 0 .7rem}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:.7rem;
+    padding:1rem 1.15rem;margin:.6rem 0;box-shadow:var(--shadow)}
+  .card.live{border-left:3px solid var(--ok)}
+  .card.ask{border-left:3px solid var(--now)}
+  .card > b:first-child{display:block;margin-bottom:.35rem}
+  p{margin:.5rem 0}
+  ul{margin:.4rem 0;padding-left:1.15rem} li{margin:.28rem 0}
+  table{border-collapse:collapse;width:100%;font-size:.95rem}
+  th{text-align:left;font:600 .75rem/1.4 var(--mono);letter-spacing:.06em;
+    text-transform:uppercase;color:var(--muted);padding:.35rem .5rem;
+    border-bottom:1px solid var(--line)}
+  td{padding:.45rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}
+  td.s{width:1%;white-space:nowrap}
+  .state{font-size:.75rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+    border-radius:.3rem;padding:.12rem .45rem;border:1px solid currentColor}
+  .state.done{color:var(--ok)} .state.now{color:var(--now)}
+  .state.next{color:var(--wait)} .state.held{color:var(--muted)}
+  code{background:var(--accent-soft);color:var(--accent-ink);padding:.08rem .32rem;
+    border-radius:.25rem;font-size:.88em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  blockquote{margin:.8rem 0;padding:.1rem 0 .1rem 1rem;border-left:2px solid var(--line);
+    color:var(--ink)}
+  .muted{color:var(--muted)}
+
+  /* A fold. The count belongs in the SUMMARY: a reader must be able to see how
+     much is inside without opening it, or folding becomes a way of implying a
+     list is shorter than it is. */
+  details{margin:.6rem 0}
+  summary{cursor:pointer;font:600 .8rem/1.5 var(--mono);letter-spacing:.05em;
+    text-transform:uppercase;color:var(--accent-ink);padding:.35rem 0}
+  summary:hover{color:var(--accent)}
+  details[open] summary{margin-bottom:.3rem}
+
+  /* What waits on what. A list, not a graph: an arc whose only recorded edges
+     are each item's link to its own parent has no graph worth drawing, and
+     drawing one anyway would show a hierarchy while claiming to show an order. */
+  .blocked{list-style:none;padding:0;margin:.6rem 0}
+  .blocked li{border-left:2px solid var(--wait);padding:.1rem 0 .1rem .8rem;
+    margin:.55rem 0}
+  .waits{font:600 .72rem/1.4 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+    color:var(--wait)}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  footer{margin-top:2.8rem;padding-top:.9rem;border-top:1px solid var(--line);
+    color:var(--muted);font-size:.85rem}
+
+  /* Stat tiles. A tile with no real source is DELETED, never rendered as zero —
+     a made-up number on a page Jeremy trusts is worse than a missing one. Every
+     tile says what it counted and over what window, in the tile. */
+  .tiles{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));
+    margin:.6rem 0}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:.7rem;
+    padding:.85rem .95rem;box-shadow:var(--shadow)}
+  .tile .k{font:.75rem/1.3 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);margin:0}
+  .tile .v{font:600 1.9rem/1.1 ui-sans-serif,system-ui,-apple-system,sans-serif;
+    margin:.3rem 0 .15rem;letter-spacing:-.02em}
+  .tile .w{font-size:.8rem;color:var(--muted);margin:0}
+
+  /* Chart. One series, so one hue and no legend — the caption names it.
+     Nothing legibility-critical goes inside the SVG: text in a scaled viewBox
+     scales with it, so an axis that reads on a laptop is unreadable on a phone.
+     The bars scale; the range and the reading are HTML and never do. */
+  /* Capped at the viewBox's own width so the chart never scales ABOVE 1:1:
+     stretched, a 24px bar becomes a 30px one and the spec that keeps marks
+     thin quietly stops holding. The cap covers the caption and the axis row
+     too, so all three stay aligned. */
+  figure{margin:.6rem 0;max-width:40rem}
+  figure svg{display:block;width:100%;height:7.5rem}
+  .bar{fill:var(--bar)}
+  .base{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
+  .axis{display:flex;justify-content:space-between;margin:.3rem 0 0;
+    font:.72rem var(--mono);color:var(--muted)}
+  figcaption{font-size:.82rem;color:var(--muted);margin-top:.35rem;max-width:34rem}
+
+  @media (max-width:32rem){
+    main,.masthead{padding-left:.85rem;padding-right:.85rem}
+    .tile .v{font-size:1.6rem}
+  }
+/* ==== shared: end ==== */
+
+  /* ---- page-specific: implementation-plan -------------------------- */
+  .phase{background:var(--card);border:1px solid var(--line);border-radius:.7rem;
+    padding:.95rem 1.1rem;margin:.6rem 0;box-shadow:var(--shadow)}
+  .phase.done{border-left:3px solid var(--ok)}
+  .phase.now{border-left:3px solid var(--now)}
+  .phase.next{border-left:3px solid var(--wait)}
+  .phase.held{border-left:3px solid var(--muted)}
+  .phase-head{display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap;margin-bottom:.35rem}
+  .phase-head b{font-size:1.05rem}
+  .phase p{margin:.35rem 0}
+  .gate{font-size:.92rem;color:var(--muted);border-top:1px dashed var(--line);
+    margin-top:.6rem;padding-top:.5rem}
+  .gate b{color:var(--ink)}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <p class="topline">
+    <a href="https://artifacts.tenfourty.site/" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg> Gallery</a>
+  </p>
+  <p class="eyebrow">PLAN &middot; <!--artifacts:updated--> &middot; BABA</p>
+  <!-- REPLACE: what will be true when all of this is done. -->
+  <h1>Backups that look after themselves</h1>
+  <!-- REPLACE: one sentence. Where this is going and roughly when. -->
+  <p class="standfirst">Getting from "backups that work when I check them" to
+    "backups that tell me when they stop", in four steps that each leave the
+    house better off than they found it.</p>
+  <p class="chips"><span class="chip on">2 of 4 done</span><span class="chip">Updated <!--artifacts:updated--></span></p>
+  <hr>
+</header>
+
+<main>
+  <!-- REPLACE. Why this order and not another. This is the part of a plan that
+       is actually worth writing down — the sequence usually encodes a real
+       constraint, and a reader who does not know the constraint will wonder why
+       the obvious thing is not first. -->
+  <div class="card">
+    <b>Why this order</b>
+    <p>Each step is useful on its own, and the order is by what would hurt most
+      if we stopped after it. Off-site storage first, because a fire is the
+      failure we could not recover from. Then knowing when it breaks, because
+      the second-worst outcome is a backup that quietly stopped. Encryption and
+      self-testing last: both are real, neither is worth delaying the first two.</p>
+  </div>
+
+  <h2>The steps</h2>
+  <!-- REPLACE. One .phase per step, in order. The class on the div and the
+       state chip must agree — done / now / next / held.
+
+       Each one gets: the OUTCOME as its name, what changes for the reader, and
+       a "done when" line. That last line is the one people skip and the one
+       that stops a step drifting: without it "mostly done" is a matter of
+       opinion for weeks. Make it something you can check, not something you
+       can feel. -->
+  <div class="phase done">
+    <p class="phase-head"><span class="state done">done</span><b>Everything is copied off-site every night</b></p>
+    <p>Documents, mail and the VM images leave the house each night. Nine clean
+      nights so far.</p>
+    <p class="gate"><b>Done when:</b> a restore from the off-site copy alone
+      comes back whole &mdash; tested, it did.</p>
+  </div>
+
+  <div class="phase done">
+    <p class="phase-head"><span class="state done">done</span><b>The photo library is included</b></p>
+    <p>The big one, and the one most likely to be missed because it lives
+      somewhere different from everything else.</p>
+    <p class="gate"><b>Done when:</b> the off-site copy's size matches the
+      library's within a few per cent &mdash; it does.</p>
+  </div>
+
+  <div class="phase now">
+    <p class="phase-head"><span class="state now">now</span><b>A backup that stops tells you</b></p>
+    <p>A check that asks whether a backup NEWER THAN YESTERDAY exists, rather
+      than whether the job ran. The job running is what every check asked last
+      time, and eleven nights went missing behind it.</p>
+    <p class="gate"><b>Done when:</b> the check is made to fail on purpose, by
+      hand, and the alert actually arrives. Not when it is written.</p>
+  </div>
+
+  <div class="phase held">
+    <p class="phase-head"><span class="state held">held</span><b>The off-site copy is unreadable without our key</b></p>
+    <p>Encrypting at rest, so the provider holds something useless to them.</p>
+    <p class="gate"><b>Blocked on:</b> where the key lives &mdash; asked on its
+      own page, not yet answered. Everything else here can proceed without it.</p>
+  </div>
+
+  <div class="phase next">
+    <p class="phase-head"><span class="state next">next</span><b>The restore is tested without anyone remembering to</b></p>
+    <p>A monthly restore into a scratch space that complains if what comes back
+      is not whole. A backup nobody has restored is a hope.</p>
+    <p class="gate"><b>Done when:</b> it has run unattended twice, and one of
+      those runs was against a deliberately corrupted copy and caught it.</p>
+  </div>
+
+  <!-- REPLACE, or delete. Only list a dependency that is REAL — something that
+       genuinely cannot start until another thing finishes. A plan whose steps
+       all depend on each other is usually one step written out four times, and
+       listing false dependencies is how work that could have run in parallel
+       ends up waiting. -->
+  <h2>What is actually waiting on what</h2>
+  <ul>
+    <li>Encryption waits on the key decision, and on nothing else.</li>
+    <li>The self-testing restore waits on encryption, because it has to test the
+      copy as it will really exist.</li>
+    <li>The alerting does not wait on anything. It is being built now alongside
+      the rest.</li>
+  </ul>
+
+  <!-- REPLACE, or DELETE the whole section when nothing genuinely needs him.
+       An empty decisions slot pulls hard, and a manufactured question costs him
+       more than an absent section. Uncomment the slot and put the real id in
+       after you POST the question. -->
+  <h2>Decisions for you</h2>
+  <div class="card ask">
+    <b>1. Where should the key for the off-site copy live?</b>
+    <p class="muted">Asked in full on its own page &mdash; this is the one thing
+      holding a step here.</p>
+  </div>
+
+  <footer>Published from BABA through the homelab artifacts service.</footer>
+</main>
+</body>
+</html>

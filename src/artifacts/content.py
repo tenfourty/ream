@@ -64,8 +64,21 @@ def _viewer_report() -> str:
     Reports two things in one message, on the same three triggers -- `load`, `resize`,
     and a `ResizeObserver` on `documentElement` (never a poll, per the design doc):
 
-    - `height`: this document's own scrollHeight, so the gallery can size the iframe to
-      it instead of leaving a second scrollbar inside the frame.
+    - `height`: this document's own CONTENT height, so the gallery can size the iframe
+      to it instead of leaving a second scrollbar inside the frame.
+
+      Measured from `body`, never from `document.documentElement.scrollHeight`, and
+      that is load-bearing: documentElement's scrollHeight is floored by the viewport
+      (measured -- a 300px page in a 900px frame reports 900). The gallery sizes the
+      iframe to whatever arrives, which makes the iframe the viewport, which makes the
+      floor the iframe's current height. So the report becomes a ONE-WAY RATCHET: the
+      frame can grow and can never shrink again. Every decision slot that releases its
+      reserved room, and every section that collapses, leaves permanent dead space
+      below the page -- which is exactly what Jeremy reported on 20 Sep 2026 ("a lot of
+      empty scroll space at the bottom of the page"). body's scrollHeight has no such
+      floor; the max() and the bottom margin cover a page whose body is positioned or
+      has margins of its own, and erring a pixel LARGE is right, because a pixel short
+      brings back the second scrollbar this is here to remove.
     - `slots`: the page-coordinate rectangle (id, top, left, width) of every element the
       agent marked with `data-artifact-decision="<id>"` -- never the element's own
       contents. What a reported id is even allowed to mean is entirely the gallery's
@@ -84,8 +97,13 @@ def _viewer_report() -> str:
         "function b(e){var r=e.getBoundingClientRect();"
         'return{id:e.getAttribute("data-artifact-decision"),'
         "top:r.top+scrollY,left:r.left+scrollX,width:r.width}}"
+        "function h(){var b=document.body,m=0;"
+        "if(!b)return document.documentElement.scrollHeight;try{"
+        "m=parseFloat(getComputedStyle(b).marginBottom)||0}catch(e){}"
+        "return Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,"
+        "b.getBoundingClientRect().bottom+scrollY)+m)}"
         'function send(){parent.postMessage({type:"artifact-state",'
-        "height:document.documentElement.scrollHeight,"
+        "height:h(),"
         'slots:Array.from(document.querySelectorAll("[data-artifact-decision]"),b)},'
         f"{origin})}}"
         'addEventListener("load",send);addEventListener("resize",send);'
