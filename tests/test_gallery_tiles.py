@@ -168,3 +168,27 @@ def test_describe_ignores_prose_inside_comments():
 def test_describe_returns_nothing_rather_than_a_fragment():
     assert text.describe("<html><body><p>Hi</p></body></html>") == ""
     assert text.describe("<html><body></body></html>") == ""
+
+
+def test_a_lifted_decision_control_gets_its_own_compositing_layer(client, db):
+    """The overlay must not share a layer with the iframe it sits on.
+
+    WebKit composites an iframe separately, and an overlay sharing a layer with
+    the page behind it can lose hit-testing to that iframe on iOS while still
+    painting on top -- the tap lands on the sandboxed page and nothing happens.
+    z-index orders painting, not touch delivery, so z-index alone does not fix
+    it and a later tidy-up that removes the transform would silently bring the
+    dead tap back with every desktop browser still passing.
+
+    Asserted on the stylesheet the gallery actually serves rather than on a
+    source file, so moving the rule elsewhere is fine and deleting it is not.
+    """
+    store.publish(db, "seat-a", "Board", STANDFIRST)
+    page = client.get("/").text
+    rule_start = page.index(".sheet .ask{")
+    rule = page[rule_start : page.index("}", rule_start)]
+    assert "position:absolute" in rule
+    assert "translateZ(0)" in rule, (
+        "the lifted control has lost its own compositing layer; on iOS the tap "
+        "goes to the iframe underneath and nothing happens"
+    )

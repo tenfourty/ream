@@ -199,8 +199,21 @@ a{color:var(--accent-ink)}
 .sheet iframe{display:block;width:100%;height:78vh;border:0;background:var(--card)}
 /* A decision block gallery.js has moved onto the sheet, positioned by its own
    inline top/left/width. Un-positioned blocks (still inside .asks) are never
-   affected by this rule at all. */
-.sheet .ask{position:absolute;margin:0;z-index:1}
+   affected by this rule at all.
+
+   `transform:translateZ(0)` is NOT a cosmetic hint and must not be tidied away.
+   It forces this block onto its own compositing layer. WebKit composites an
+   iframe separately, and an overlay that shares a layer with the page behind it
+   can lose HIT-TESTING to that iframe on iOS even while painting correctly on
+   top of it -- the tap goes to the sandboxed page underneath, which does
+   nothing at all. Jeremy, 20 Sep 2026, on his iPhone: "no feedback, nothing
+   changed it was like my tap wasn't accepted", with the buttons plainly
+   visible. Invisible on every desktop browser, which is all of them.
+
+   z-index alone is not enough here: it orders PAINTING within a stacking
+   context and does not decide which layer a touch is delivered to. */
+.sheet .ask{position:absolute;margin:0;z-index:1;
+  transform:translateZ(0);isolation:isolate}
 
 /* index */
 .tiles{list-style:none;margin:0;padding:0;display:grid;gap:.8rem;
