@@ -731,3 +731,23 @@ def test_a_page_this_key_does_not_own_is_refused(live, key_file, db, tmp_path, c
     assert client.main(["--key-file", str(path), "--archive", theirs.id]) == 1
     assert "404" in capsys.readouterr().err
     assert store.get_owned(db, "another-seat", theirs.id).archived_at is None
+
+
+def test_duplicate_makes_a_new_page_and_prints_its_address(
+    live, key_file, tmp_path, capsys
+):
+    """It prints like a publish, not like the other housekeeping flags: the
+    others change a page and hand back the same one, this makes a NEW page and
+    the caller's next move needs its id and url."""
+    path, _ = key_file
+    artifact_id = _publish_one(path, tmp_path, capsys, title="Original")
+
+    assert client.main(["--key-file", str(path), "--duplicate", artifact_id]) == 0
+    copy = json.loads(capsys.readouterr().out.strip())
+    assert copy["id"] != artifact_id
+    assert copy["url"].startswith("https://")
+
+    client.main(["--key-file", str(path), "--list"])
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert any("Original (copy)" in line for line in lines)
+    assert len(lines) == 2, "the original is still there beside it"

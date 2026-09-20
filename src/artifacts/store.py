@@ -557,6 +557,58 @@ def _scoped(artifact_id: str, agent: str | None) -> tuple[str, tuple]:
     return "where id = %s and agent = %s", (artifact_id, agent)
 
 
+MAX_COPY_TITLE_SUFFIX = " (copy)"
+
+
+def duplicate(
+    db: Database, artifact_id: str, *, agent: str | None
+) -> tuple[Published, str]:
+    """Copy a page's live body to a NEW page with its own id, address and
+    history. Raises NotFound when there is no such page for this caller.
+
+    Returns the new page AND the body it copied. The body comes back because
+    the caller's next move is to render a thumbnail of it, and the alternative
+    -- reading it again through `get_body` -- is scoped to the owning agent,
+    which the gallery is not. Handing back what was already read is cheaper
+    than the read and cannot disagree with it.
+
+    WHAT IS COPIED IS THE BODY AND NOTHING ELSE -- no versions, no decisions, no
+    answers, no thumbnail. The decisions are the part that had to be decided
+    rather than assumed, and the answer is not "it would be tidy": an answered
+    decision is a record of something JEREMY SAID about the original. Copying
+    one would manufacture a record of him answering a question he has never
+    seen, on a page he has never read. This service exists to make that class
+    of fabrication impossible, so a copy starts with none of it.
+
+    An UNANSWERED decision is not copied either, for a quieter reason: it would
+    put the same question in front of him twice, and answering one would leave
+    the other sitting there looking unanswered for ever.
+
+    The copy is owned by the ORIGINAL'S agent, not by whoever pressed the
+    button. Jeremy duplicating a page in his gallery does not make him its
+    publisher -- the seat that wrote it is still the seat that maintains it,
+    and the alternative is a page no agent can update.
+    """
+    scope = "" if agent is None else " and a.agent = %s"
+    params = (artifact_id,) if agent is None else (artifact_id, agent)
+    with db.connect() as conn:
+        row = conn.execute(
+            "select a.title, a.agent, v.body from artifact a"  # noqa: S608 -- `scope` is a fixed clause with a placeholder, never caller text
+            " join version v on v.artifact_id = a.id and v.n = a.current_version"
+            f" where a.id = %s{scope}",
+            params,
+        ).fetchone()
+    if row is None:
+        raise NotFound()
+    title, owner, body = row[0], row[1], row[2]
+    # Trimmed so the suffix always fits, rather than the publish being refused
+    # for a title the caller never typed.
+    room = MAX_TITLE_BYTES - len(MAX_COPY_TITLE_SUFFIX.encode())
+    while len(title.encode()) > room:
+        title = title[:-1]
+    return publish(db, owner, f"{title}{MAX_COPY_TITLE_SUFFIX}", body), body
+
+
 def set_archived(
     db: Database, artifact_id: str, archived: bool, *, agent: str | None
 ) -> bool:

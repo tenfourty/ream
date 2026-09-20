@@ -359,6 +359,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     shelf.add_argument("--pin", metavar="ID", help="pin a page to the front")
     shelf.add_argument("--unpin", metavar="ID", help="unpin it")
+    shelf.add_argument("--duplicate", metavar="ID", help="copy a page to a new address")
     return parser
 
 
@@ -404,6 +405,12 @@ def main(argv: list[str] | None = None) -> int:
             if artifact_id:
                 _print_shelf(_shelf(route, artifact_id, key, payload))
                 return 0
+        if args.duplicate:
+            # Its own branch rather than a row in _SHELF_ACTIONS: the others
+            # change a page and hand back the same one, this makes a NEW page
+            # and the caller wants its id and url, so it prints like a publish.
+            _print_published(_shelf("duplicate", args.duplicate, key, {}))
+            return 0
         if args.rename:
             if not args.title:
                 print("--title is required with --rename", file=sys.stderr)
@@ -423,7 +430,7 @@ def main(argv: list[str] | None = None) -> int:
             "usage: artifacts-publish FILE --title TITLE"
             " | FILE --update ID [--title TITLE] | --list"
             " | --rename ID --title TITLE | --archive ID | --unarchive ID"
-            " | --pin ID | --unpin ID",
+            " | --pin ID | --unpin ID | --duplicate ID",
             file=sys.stderr,
         )
         return 2

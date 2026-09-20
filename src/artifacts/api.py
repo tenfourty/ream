@@ -368,6 +368,21 @@ def agent_router(db: Database) -> APIRouter:
             raise HTTPException(404, "no such artifact")
         return store.get_owned(db, agent, artifact_id).__dict__
 
+    @router.post("/artifacts/{artifact_id}/duplicate", status_code=201)
+    def duplicate(artifact_id: str, agent: str = Depends(caller)):
+        """Copy one of this agent's own pages to a new address.
+
+        The body only -- no versions, no decisions, no answers. See
+        store.duplicate: copying an answered decision would manufacture a
+        record of Jeremy answering a question he has never seen.
+        """
+        try:
+            published, body = store.duplicate(db, artifact_id, agent=agent)
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such artifact") from exc
+        thumbs.render_in_background(db, published.id, published.version, body)
+        return published.__dict__
+
     @router.get("/artifacts/{artifact_id}/comments")
     def list_comments(
         artifact_id: str, include_resolved: bool = False, agent: str = Depends(caller)

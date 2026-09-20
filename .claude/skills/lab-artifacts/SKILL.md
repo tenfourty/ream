@@ -28,6 +28,7 @@ artifacts-publish --archive <id>                          # off the wall, nothin
 artifacts-publish --unarchive <id>                        # back on it
 artifacts-publish --pin <id>                              # leads the gallery
 artifacts-publish --unpin <id>
+artifacts-publish --duplicate <id>                        # a copy at a new address
 ```
 
 These exist because of a rule of his (20 Sep 2026): *"ideally agents can take
@@ -41,6 +42,13 @@ page answers 404, exactly as a page that does not exist does.
 the pages that have one. **Archiving is not deleting.** The address still works,
 the versions are all there, and the decisions and answers on the page are
 untouched -- it is off the wall, not gone.
+
+**A duplicate copies the body and nothing else** -- no versions, no comments,
+and no decisions. That last one is the point: an answered decision is a record
+of something *Jeremy* said about the original, and copying it would manufacture
+a record of him answering a question he has never seen. The copy is owned by the
+original's agent, whoever pressed the button, so the seat that wrote it can
+still update it.
 
 `artifacts-publish` comes from `uv tool install ~/repos/artifacts`. It reads
 its key from `~/.config/artifacts/key` (mode 600, it refuses anything

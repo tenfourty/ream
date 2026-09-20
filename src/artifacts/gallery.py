@@ -721,6 +721,7 @@ _ICON = {
     "unarchive": '<path d="M8 2.2 3.4 6.8h2.8v4.6h3.6V6.8h2.8L8 2.2ZM2.5 12.8h11v1.3h-11v-1.3Z"/>',
     "open": '<path d="M9.4 1.6v1.3h2.8L6.5 8.6l.9.9 5.7-5.7v2.8h1.3V1.6H9.4ZM2.8 3.3h3.9v1.3H3.3v8.1h8.1V9.3h1.3v4a.7.7 0 0 1-.7.7H2.8a.7.7 0 0 1-.7-.7V4a.7.7 0 0 1 .7-.7Z"/>',
     "all": '<path d="M2 2.5h5v5H2v-5Zm7 0h5v5H9v-5Zm-7 6h5v5H2v-5Zm7 0h5v5H9v-5Z"/>',
+    "copy": '<path d="M5.5 1.6h6.3a1.6 1.6 0 0 1 1.6 1.6v6.3h-1.3V3.2a.3.3 0 0 0-.3-.3H5.5V1.6ZM3.2 4.1h6.4a1.6 1.6 0 0 1 1.6 1.6v6.4a1.6 1.6 0 0 1-1.6 1.6H3.2a1.6 1.6 0 0 1-1.6-1.6V5.7a1.6 1.6 0 0 1 1.6-1.6Zm0 1.3a.3.3 0 0 0-.3.3v6.4c0 .17.13.3.3.3h6.4a.3.3 0 0 0 .3-.3V5.7a.3.3 0 0 0-.3-.3H3.2Z"/>',
     "pin": '<path d="M9.6 1.3 8.5 2.4l.4.4-3 2.2-1.6-.3-1.1 1.1 3 3L2 13l3.2-4.2 3 3 1.1-1.1-.3-1.6 2.2-3 .4.4 1.1-1.1-3.1-3.1Z"/>',
     "find": '<path d="M7.1 2.2a4.9 4.9 0 1 0 2.96 8.8l3 3a.7.7 0 0 0 1-1l-3-3A4.9 4.9 0 0 0 7.1 2.2Zm0 1.4a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Z"/>',
     "list": '<path d="M2 3.2h1.9v1.9H2V3.2Zm3.4 .35h8.6v1.2H5.4V3.55ZM2 7.05h1.9v1.9H2v-1.9Zm3.4 .35h8.6v1.2H5.4V7.4ZM2 10.9h1.9v1.9H2v-1.9Zm3.4 .35h8.6v1.2H5.4v-1.2Z"/>',
@@ -773,10 +774,16 @@ def _tile_menu(artifact_id: str, title: str, pinned: bool, origin: str) -> str:
         f'<input readonly value="{escape(origin)}/a/{ident}"'
         ' aria-label="Link to this page"></div>'
     )
+    duplicate_row = (
+        f'<form method="post" action="/a/{ident}/duplicate">'
+        f'<button class="mrow" type="submit">{_icon("copy")}'
+        "Duplicate</button></form>"
+    )
     return (
         '<details class="menu tmenu"><summary aria-label="Actions for '
         f'{escape(title)}"><span class="dots" aria-hidden="true"></span></summary>'
-        f'<div class="mpanel right">{pin_row}{rename_row}{link_row}</div></details>'
+        f'<div class="mpanel right">{pin_row}{rename_row}'
+        f"{duplicate_row}{link_row}</div></details>"
     )
 
 
@@ -823,6 +830,11 @@ def _page_menu(
             f'<button class="mrow" type="submit">{_icon("archive")}'
             "Archive</button></form>"
         )
+    rows.append(
+        f'<form method="post" action="/a/{ident}/duplicate">'
+        f'<button class="mrow" type="submit">{_icon("copy")}'
+        "Duplicate</button></form>"
+    )
     rows.append(
         f'<a class="mrow" href="/a/{ident}" target="_blank" rel="noopener">'
         f"{_icon('open')}Open in a new tab</a>"
@@ -1820,6 +1832,23 @@ def gallery_router(db: Database) -> APIRouter:
         if not store.set_pinned(db, artifact_id, pinned == "1", agent=None):
             raise HTTPException(404, "no such artifact")
         return RedirectResponse("/", status_code=303)
+
+    @router.post("/a/{artifact_id}/duplicate")
+    def duplicate_page(artifact_id: str, request: Request):
+        """Copy a page, and go straight to the copy.
+
+        Straight to it, not back to the wall: the only reason to duplicate a
+        page is to change the copy, so the next thing he wants is the copy in
+        front of him. Archive redirects to the page and pin to the wall for
+        the same kind of reason -- where the answer to "did that work?" is.
+        """
+        _same_origin_write(request)
+        try:
+            copy, body = store.duplicate(db, artifact_id, agent=None)
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such artifact") from exc
+        thumbs.render_in_background(db, copy.id, copy.version, body)
+        return RedirectResponse(f"/a/{copy.id}", status_code=303)
 
     @router.post("/a/{artifact_id}/rename")
     def rename_page(artifact_id: str, request: Request, title: str = Form(...)):

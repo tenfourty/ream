@@ -65,6 +65,7 @@ artifacts-publish --archive <id>     # off the wall; nothing is deleted
 artifacts-publish --unarchive <id>
 artifacts-publish --pin <id>         # leads the gallery
 artifacts-publish --unpin <id>
+artifacts-publish --duplicate <id>   # a copy at a new address
 ```
 
 Over HTTP these are `POST /api/v1/artifacts/{id}/{archive,rename,pin}`, each
