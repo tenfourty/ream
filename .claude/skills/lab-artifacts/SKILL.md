@@ -77,26 +77,44 @@ skeleton yourself is wrong, has to infer this from the template.
 
 ### Start from the template for the job you are doing
 
-`templates/` in this skill's directory holds a complete worked page per kind of
-job — real prose showing the register, a worked example of every component, and
-a `REPLACE` comment on each region saying what belongs there. Copy one and write
-over it. Do not start from a blank file, and do not start from a template for a
-different job.
+Eight complete worked pages, one per kind of job. Each is a real page with
+prose in place and a `REPLACE` comment on every region saying what belongs
+there. Copy one and write over it. Do not start from a blank file, and do not
+start from a template for a different job.
 
-| Job | Template |
+| Your job | Template |
 |---|---|
-| Where an arc stands | `project-status.html` |
+| Where an arc stands | `project-status` |
+| The page exists to ask Jeremy something | `decision-request` |
+| Something broke and is now fixed | `incident` |
+| The order of a piece of work | `implementation-plan` |
+| Two or three approaches, before a decision is asked | `comparison` |
+| How a piece of the house works | `explainer` |
+| A design still being worked out, mostly questions | `intent` |
+| The design written down | `design` |
 
-More are landing (a decision request, an incident, an implementation plan, a
-comparison, an explainer, and the intent and design stages of a piece of work).
-Until one exists for your job, start from `project-status.html` and cut what
-does not apply — its masthead, tokens and decision block are the parts every
-page shares.
+The last four chain across one piece of work: **intent → design →
+implementation-plan → project-status**. If you are running a design process,
+publish the intent page while the questions are still open — that is the page
+Jeremy's answers change the most, and it is the one the whole service exists for.
 
-Every template already obeys the constraints below, each commented with the
-failure that bought it, so you inherit them rather than remembering them: no
-typed date, no page-id placeholder, a gallery link that opens a new tab, and a
-decision slot shipped commented out.
+**Two ways to get one.** From this skill's directory, `templates/<name>.html`.
+Or from the service, which works on any machine and for an agent that has no
+skill directory at all:
+
+```bash
+akey | curl -sS -H @- "$BASE/templates"                      # the list, with what each is for
+akey | curl -sS -H @- "$BASE/templates/project-status" -o page.html
+```
+
+(`BASE` and `akey` are defined under "Check what you published" below — the key
+goes to curl on stdin, never in an argument.)
+
+Every template already obeys the constraints that have caught agents out, each
+commented with the failure that bought it, so you inherit them instead of
+remembering them: no typed date anywhere, no page-id placeholder, a gallery link
+that opens a new tab, and a decision slot shipped commented out so a made-up id
+can never render as a slot that spins for ever.
 
 Follow `design-system.md` for anything the templates do not cover, and **keep
 the token block between the `shared:` sentinels exactly as it is** — it is what

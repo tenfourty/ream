@@ -8,9 +8,10 @@ influence whose artifacts a request sees or changes.
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from artifacts import comments, csp, decisions, events, grants, keys, store
+from artifacts import comments, csp, decisions, events, grants, keys, store, templates
 from artifacts.db import Database
 
 
@@ -101,6 +102,38 @@ def agent_router(db: Database) -> APIRouter:
         every consumer it exists for already holds a key.
         """
         return request.app.openapi()
+
+    @router.get("/templates")
+    def template_index(agent: str = Depends(caller)):
+        """The templates an agent can start a page from, with what each is for.
+
+        Behind the key like everything else. Not because a template is secret --
+        it is checked into a repo -- but because an unauthenticated route on this
+        prefix is a route any device on the LAN can reach, and every consumer
+        this exists for already holds a key. Consistency here costs nothing and
+        removes a thing to reason about.
+        """
+        return {"templates": templates.index()}
+
+    @router.get("/templates/{name}", response_class=PlainTextResponse)
+    def template_body(name: str, agent: str = Depends(caller)):
+        """One template, as source.
+
+        text/plain with nosniff, never text/html. The API origin must never
+        render agent-adjacent markup: published pages get their own throwaway
+        origin precisely so that a page cannot reach anything, and serving the
+        same markup as a renderable document from here would quietly undo that.
+        The caller is saving it to a file; text/plain is what it actually is.
+        """
+        try:
+            text = templates.body(name)
+        except templates.UnknownTemplate:
+            raise HTTPException(404, "no template by that name") from None
+        return PlainTextResponse(
+            text,
+            media_type="text/plain; charset=utf-8",
+            headers={"x-content-type-options": "nosniff"},
+        )
 
     @router.post("/artifacts", status_code=201)
     def create(payload: PublishBody, agent: str = Depends(caller)):
