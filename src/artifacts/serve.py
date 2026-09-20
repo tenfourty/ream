@@ -4,8 +4,10 @@ at startup instead of importing a module-level `app` object -- the app
 cannot exist until `DATABASE_URL` has been read and the schema migrated.
 """
 
+import logging
 import os
 import signal
+import sys
 
 from artifacts import events
 from artifacts.app import create_app
@@ -64,12 +66,41 @@ def _arm_shutdown_signals(app):
     return armed
 
 
+def _arm_gallery_access_log() -> None:
+    """Give the gallery access logger a handler, at INFO, on stdout.
+
+    Required, not decorative. uvicorn runs with `--no-access-log` (a
+    content-page URL carries its capability token in the path), and its logging
+    config leaves the ROOT logger with no handlers at WARNING — so a plain
+    `logging.getLogger(...).info(...)` anywhere in this app emits absolutely
+    nothing. Measured, not assumed: applying uvicorn's own LOGGING_CONFIG and
+    asking gives `effective level: WARNING, handlers on root: []`.
+
+    That is the same shape as the bug this logging exists to fix — a thing that
+    looks present and produces silence — so it gets its own handler and its own
+    level rather than inheriting whatever the process happens to have.
+
+    `propagate = False` keeps these lines out of any root handler a future
+    change adds, so they cannot be duplicated or accidentally re-routed into a
+    file alongside content-origin logging.
+    """
+    logger = logging.getLogger("artifacts.gallery.access")
+    if logger.handlers:
+        return
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+
 def app_from_env():
     """Read `DATABASE_URL`, migrate, and return the fail-closed host router
     `create_app` builds. Never includes the DSN -- or anything else read from
     the environment -- in the SystemExit message: a DSN carries the database
     password, and this message is the one thing a broken deploy is guaranteed
     to put in a log."""
+    _arm_gallery_access_log()
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
         raise SystemExit("DATABASE_URL is not set")

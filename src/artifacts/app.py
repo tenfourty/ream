@@ -1,3 +1,6 @@
+import logging
+import time
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -47,6 +50,46 @@ def create_gallery_app(db: Database | None = None) -> FastAPI:
             {"loc": list(error["loc"]), "type": error["type"]} for error in exc.errors()
         ]
         return JSONResponse(status_code=422, content={"detail": errors})
+
+    @app.middleware("http")
+    async def _log_gallery_requests(request: Request, call_next):
+        """One line per GALLERY request. The content origin is never logged.
+
+        WHY THIS IS NARROW AND NOT `--access-log`. uvicorn runs with
+        `--no-access-log` for a real reason: a content-page URL carries its read
+        capability token in the PATH, so a blanket access log would write those
+        tokens to disk. But the gallery's paths carry no such thing -- `/a/<id>`,
+        `/d/<id>/answer`, `/api/v1/...` -- and turning logging off for the whole
+        process to protect the other app left this one unobservable.
+
+        That cost showed up on 20 Sep 2026: Jeremy reported that answering a
+        question did not work on his phone, and there was no way to tell whether
+        his request had even arrived, let alone what it answered. Two sessions
+        spent half an hour on competing theories that a single log line would
+        have settled. A service whose failures cannot be seen is a service whose
+        failures get argued about.
+
+        What is deliberately NOT here: no query string (an agent key must never
+        appear in one, and `caller` already refuses a request that puts it
+        there -- but a log is the wrong place to find out), no headers beyond
+        the two below, no bodies, and no user agent string in full.
+
+        `sec-fetch-site` IS logged, as its bare value, because the form guard
+        turns on it and a refusal is otherwise indistinguishable from a request
+        that never came. It is a fixed enum, not user data.
+        """
+        started = time.monotonic()
+        response = await call_next(request)
+        if not request.url.path.startswith("/healthz"):
+            logging.getLogger("artifacts.gallery.access").info(
+                "%s %s -> %d in %dms sec-fetch-site=%s",
+                request.method,
+                request.url.path,
+                response.status_code,
+                int((time.monotonic() - started) * 1000),
+                request.headers.get("sec-fetch-site", "-"),
+            )
+        return response
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
