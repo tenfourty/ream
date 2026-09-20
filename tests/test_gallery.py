@@ -3,7 +3,7 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, store
+from artifacts import decisions, keys, store
 from artifacts.app import create_gallery_app
 
 XSS = '"><img src=x onerror=alert(1)>'
@@ -717,26 +717,40 @@ def test_the_page_has_a_main_landmark(db):
     assert 'class="tiles"' in inside or 'class="empty"' in inside
 
 
-def test_every_control_on_the_wall_has_an_accessible_name(db):
-    """An icon-only button with no label is a button a screen reader announces
-    as "button". This wall is nearly all icon-only controls -- the dots, the
-    pin, the view toggle -- so the rule matters here more than most."""
+def _unnamed_controls(html: str) -> list[str]:
+    """Every <button> and <summary> must carry visible text or an aria-label."""
     import re
 
-    store.publish(
-        db,
-        "seat",
-        "Board",
-        "<!doctype html><html><head><title>B</title></head>"
-        "<body><p>x</p></body></html>",
-    )
-    page = TestClient(create_gallery_app(db)).get("/").text
-    unnamed = []
-    # Every <button> and <summary> must carry either visible text or an
-    # aria-label.
-    for m in re.finditer(r"<(button|summary)\b([^>]*)>(.*?)</\1>", page, re.DOTALL):
+    out = []
+    for m in re.finditer(r"<(button|summary)\b([^>]*)>(.*?)</\1>", html, re.DOTALL):
         attrs, inner = m.group(2), m.group(3)
         text = re.sub(r"<[^>]+>", "", inner).strip()
         if not text and "aria-label" not in attrs:
-            unnamed.append(m.group(0)[:70])
-    assert unnamed == [], f"controls with no accessible name: {unnamed}"
+            out.append(m.group(0)[:70])
+    return out
+
+
+def test_every_view_names_its_controls_not_just_the_wall(db):
+    """The first version of this checked the grid alone, which is the view I
+    happened to be looking at. An icon-only control with no label is announced
+    as "button", and every view here has some -- so every view is checked."""
+    keys.mint(db, agent="seat")
+    published = store.publish(
+        db,
+        "seat",
+        "Board",
+        "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>",
+    )
+    client = TestClient(create_gallery_app(db))
+
+    views = {
+        "grid": client.get("/").text,
+        "list": client.get("/?view=list").text,
+        "page": client.get(f"/a/{published.id}").text,
+    }
+    store.set_deleted(db, published.id, True, agent=None)
+    views["bin"] = client.get("/?filter=deleted").text
+
+    bad = {name: _unnamed_controls(html) for name, html in views.items()}
+    bad = {name: found for name, found in bad.items() if found}
+    assert bad == {}, f"controls with no accessible name: {bad}"
