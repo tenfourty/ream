@@ -560,3 +560,19 @@ def rename(db: Database, artifact_id: str, title: str) -> bool:
             (title, artifact_id),
         )
         return done.rowcount > 0
+
+
+def set_pinned(db: Database, artifact_id: str, pinned: bool) -> bool:
+    """Pin a page to the front of the wall, or unpin it.
+
+    Its own column rather than a flag on `updated_at`, because the two orderings
+    answer different questions: "what moved last" is what the wall has always
+    shown, and "what I care about" is what pinning adds. A pinned page that has
+    not changed in a month still leads.
+    """
+    with db.connect() as conn:
+        done = conn.execute(
+            "update artifact set pinned_at = %s where id = %s",
+            (datetime.now(UTC) if pinned else None, artifact_id),
+        )
+        return done.rowcount > 0

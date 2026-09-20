@@ -167,16 +167,18 @@ a{color:var(--accent-ink)}
 .settled-list > summary{cursor:pointer;list-style:none;padding:.45rem 0;
   color:var(--muted)}
 .settled-list > summary::-webkit-details-marker{display:none}
-.settled-list > summary::before{content:"\25B8";margin-right:.45rem;font-size:.7rem;
-  display:inline-block;transition:transform .12s}
+.settled-list > summary::before{content:"";margin-right:.5rem;display:inline-block;
+  width:0;height:0;border:.3rem solid transparent;border-left-color:currentColor;
+  vertical-align:.05em;transition:transform .12s}
 .settled-list[open] > summary::before{transform:rotate(90deg)}
 .settled{border:1px solid var(--line);border-radius:.55rem;background:var(--card);
   margin:0 0 .35rem}
 .settled summary{cursor:pointer;list-style:none;padding:.5rem .8rem;display:flex;
   gap:.6rem;align-items:baseline;flex-wrap:wrap;font-size:.92rem}
 .settled summary::-webkit-details-marker{display:none}
-.settled summary::before{content:"\25B8";color:var(--muted);font-size:.7rem;
-  transition:transform .12s}
+.settled summary::before{content:"";display:inline-block;width:0;height:0;
+  border:.28rem solid transparent;border-left-color:var(--muted);
+  vertical-align:.05em;flex:0 0 auto;transition:transform .12s}
 .settled[open] summary::before{transform:rotate(90deg)}
 .settled summary:hover{border-color:var(--accent)}
 .settled .sq{flex:1 1 14rem;color:var(--muted)}
@@ -222,6 +224,94 @@ a{color:var(--accent-ink)}
    context and does not decide which layer a touch is delivered to. */
 .sheet .ask{position:absolute;margin:0;z-index:1;
   transform:translateZ(0);isolation:isolate}
+
+/* HOUSEKEEPING: rename and archive. Quiet on purpose — a page is opened to be
+   read, and these are the controls that change or hide it, so they sit last and
+   below. Every rule here exists to match what is already on the page rather
+   than to add a new look: the same custom disclosure marker as the settled
+   list, the same input as the answer note, the same button shape as an answer
+   option but never filled, because filled means "this is your answer".
+   Shipped unstyled first and it showed — raw form controls beside a page that
+   had been designed. */
+.housekeeping{margin-top:1.8rem;border-top:1px solid var(--line);padding-top:.3rem}
+.housekeeping > summary{cursor:pointer;list-style:none;padding:.45rem 0;
+  font:600 .74rem/1.4 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--muted)}
+.housekeeping > summary::-webkit-details-marker{display:none}
+.housekeeping > summary::before{content:"";margin-right:.5rem;display:inline-block;
+  width:0;height:0;border:.3rem solid transparent;border-left-color:currentColor;
+  vertical-align:.05em;transition:transform .12s}
+.housekeeping[open] > summary::before{transform:rotate(90deg)}
+.housekeeping > summary:hover{color:var(--accent-ink)}
+.housekeeping form{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;
+  margin:.5rem 0 0}
+.housekeeping input{font:inherit;font-size:.92rem;flex:1 1 16rem;min-width:9rem;
+  padding:.42rem .6rem;border:1px solid var(--line);border-radius:.45rem;
+  background:var(--paper);color:var(--ink)}
+.housekeeping button{font:inherit;font-size:.92rem;cursor:pointer;
+  border-radius:.45rem;padding:.44rem .9rem;border:1px solid var(--line);
+  background:transparent;color:var(--ink);white-space:nowrap}
+.housekeeping button:hover{border-color:var(--accent);color:var(--accent-ink)}
+/* The one that hides a page gets a warm edge on hover — not a red button, which
+   would read as danger. Archiving is reversible and nothing is destroyed; the
+   colour says "this one changes what you see", not "be careful". */
+.housekeeping form.hide button:hover{border-color:var(--now);color:var(--now)}
+.housekeeping p{flex:1 1 100%;margin:.15rem 0 0;font-size:.85rem;color:var(--muted)}
+
+/* MENUS: the title dropdown and the per-tile dots. Modelled on the claude.ai
+   artifact bar Jeremy sent through — a compact bar whose title carries the
+   actions, rather than controls parked at the bottom of the page.
+   <details>, not script: everything else here works with scripts off. */
+.menu{position:relative;display:inline-block}
+.menu > summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;
+  gap:.35rem;border-radius:.45rem;padding:.16rem .5rem;
+  font:400 1.02rem/1.35 var(--display);color:var(--ink);white-space:nowrap;
+  max-width:min(60vw,26rem);overflow:hidden;text-overflow:ellipsis}
+.menu > summary::-webkit-details-marker{display:none}
+.menu > summary:hover{background:var(--accent-soft)}
+.menu .chev{display:inline-block;width:0;height:0;flex:0 0 auto;
+  border:.26rem solid transparent;border-top-color:currentColor;
+  margin-top:.28em;opacity:.55}
+.menu[open] > summary{background:var(--accent-soft)}
+.mpanel{position:absolute;z-index:20;top:calc(100% + .35rem);left:0;min-width:16rem;
+  background:var(--card);border:1px solid var(--line);border-radius:.6rem;
+  box-shadow:0 2px 6px rgba(20,20,15,.06),0 14px 34px -18px rgba(20,20,15,.45);
+  padding:.35rem;text-align:left}
+.mpanel.right{left:auto;right:0}
+.mhead{padding:.5rem .6rem .55rem;border-bottom:1px solid var(--line);margin-bottom:.3rem}
+.mhead b{display:block;font-weight:600;font-size:.88rem}
+.mhead span{font-size:.8rem;color:var(--muted)}
+/* One row shape for links and submit buttons alike, so a form in the menu is
+   indistinguishable from a link — the user should not be able to tell which
+   actions happen to need a POST. */
+.mrow{display:flex;align-items:center;gap:.55rem;width:100%;
+  font:inherit;font-size:.92rem;text-align:left;text-decoration:none;
+  color:var(--ink);background:transparent;border:0;border-radius:.4rem;
+  padding:.44rem .6rem;cursor:pointer}
+.mrow:hover{background:var(--accent-soft);color:var(--accent-ink)}
+.mi{width:1em;height:1em;flex:0 0 auto;fill:currentColor;opacity:.75}
+.mpanel form{margin:0}
+.mrename{display:flex;align-items:center;gap:.45rem;padding:.3rem .6rem .5rem}
+.mrename input{font:inherit;font-size:.9rem;flex:1 1 auto;min-width:5rem;
+  padding:.34rem .5rem;border:1px solid var(--line);border-radius:.4rem;
+  background:var(--paper);color:var(--ink)}
+.mrename button{font:inherit;font-size:.85rem;cursor:pointer;border-radius:.4rem;
+  padding:.34rem .6rem;border:1px solid var(--line);background:transparent;
+  color:var(--ink);white-space:nowrap}
+.mrename button:hover{border-color:var(--accent);color:var(--accent-ink)}
+
+/* The per-tile dots. Sits over the tile rather than inside its link, because an
+   interactive control nested in an <a> is invalid and behaves unpredictably. */
+.tile-wrap{position:relative}
+.tile-wrap .menu{position:absolute;top:.5rem;right:.5rem;z-index:5}
+.tile-wrap .menu > summary{background:var(--card);border:1px solid var(--line);
+  border-radius:.45rem;padding:.1rem .42rem;font:600 1rem/1.2 var(--mono);
+  color:var(--muted);opacity:0;transition:opacity .12s}
+.tile-wrap:hover .menu > summary,.tile-wrap .menu[open] > summary,
+.tile-wrap .menu > summary:focus{opacity:1}
+/* Always visible on a touch screen: there is no hover, and an invisible control
+   is an absent one. */
+@media (hover:none){.tile-wrap .menu > summary{opacity:1}}
 
 /* index */
 .tiles{list-style:none;margin:0;padding:0;display:grid;gap:.8rem;
@@ -362,8 +452,85 @@ window.addEventListener("message",function(event){
 """
 
 
+# Menu icons, inline and tiny. Stroke-based so one set works on both themes:
+# `currentColor` inherits the row's colour, including the red of a destructive
+# row, without a second copy of each path.
+_ICON = {
+    "rename": '<path d="M2 11.5V14h2.5l7.4-7.4-2.5-2.5L2 11.5Zm11.8-6.9a.7.7 0 0 0 0-1L12.4 2.2a.7.7 0 0 0-1 0l-1.2 1.2 2.5 2.5 1.1-1.3Z"/>',
+    "archive": '<path d="M1.5 3.2h13v2.6h-13V3.2Zm1 3.9h11v6.2a.7.7 0 0 1-.7.7H3.2a.7.7 0 0 1-.7-.7V7.1Zm3.2 2v1.3h4.6V9.1H5.7Z"/>',
+    "unarchive": '<path d="M8 2.2 3.4 6.8h2.8v4.6h3.6V6.8h2.8L8 2.2ZM2.5 12.8h11v1.3h-11v-1.3Z"/>',
+    "open": '<path d="M9.4 1.6v1.3h2.8L6.5 8.6l.9.9 5.7-5.7v2.8h1.3V1.6H9.4ZM2.8 3.3h3.9v1.3H3.3v8.1h8.1V9.3h1.3v4a.7.7 0 0 1-.7.7H2.8a.7.7 0 0 1-.7-.7V4a.7.7 0 0 1 .7-.7Z"/>',
+    "all": '<path d="M2 2.5h5v5H2v-5Zm7 0h5v5H9v-5Zm-7 6h5v5H2v-5Zm7 0h5v5H9v-5Z"/>',
+}
+
+
+def _icon(name: str) -> str:
+    return (
+        f'<svg class="mi" viewBox="0 0 16 16" aria-hidden="true">{_ICON[name]}</svg>'
+    )
+
+
+def _page_menu(artifact_id: str, title: str, agent: str, archived: bool,
+               updated: str) -> str:
+    """The title's dropdown: what this page is, and what can be done to it.
+
+    A <details>, not a script. Everything else in this gallery works with
+    scripts off and this is no exception -- a menu that needs JavaScript to open
+    is a menu that is missing on the one day something else on the page has
+    thrown.
+
+    Rename lives INSIDE the menu as a real input rather than opening a dialog,
+    because a dialog would need script and a second round trip to do what one
+    form already does.
+    """
+    ident = escape(artifact_id)
+    rows = [
+        (
+            '<div class="mhead">'
+            f"<b>Page by {escape(agent)}</b>"
+            f"<span>Updated {escape(updated)}</span>"
+            "</div>"
+        ),
+        (
+            f'<form class="mrename" method="post" action="/a/{ident}/rename">'
+            f'{_icon("rename")}'
+            f'<input name="title" value="{escape(title)}" aria-label="Page name">'
+            '<button type="submit">Rename</button></form>'
+        ),
+    ]
+    if archived:
+        rows.append(
+            f'<form method="post" action="/a/{ident}/archive">'
+            '<input type="hidden" name="archived" value="0">'
+            f'<button class="mrow" type="submit">{_icon("unarchive")}'
+            "Put back on the wall</button></form>"
+        )
+    else:
+        rows.append(
+            f'<form method="post" action="/a/{ident}/archive">'
+            '<input type="hidden" name="archived" value="1">'
+            f'<button class="mrow" type="submit">{_icon("archive")}'
+            "Archive</button></form>"
+        )
+    rows.append(
+        f'<a class="mrow" href="/a/{ident}" target="_blank" rel="noopener">'
+        f'{_icon("open")}Open in a new tab</a>'
+    )
+    rows.append(f'<a class="mrow" href="/">{_icon("all")}All pages</a>')
+    return (
+        '<details class="menu"><summary aria-label="Page actions">'
+        f"{escape(title)}<span class=\"chev\" aria-hidden=\"true\"></span></summary>"
+        f'<div class="mpanel">{"".join(rows)}</div></details>'
+    )
+
+
 def _shell(
-    title: str, body: str, meta: str = "", home: bool = True, scripts: str = ""
+    title: str,
+    body: str,
+    meta: str = "",
+    home: bool = True,
+    scripts: str = "",
+    title_html: str = "",
 ) -> str:
     """Every gallery page, wrapped the same way: one narrow bar carrying the way
     back, the title and a timestamp, then the body. Deliberately quiet -- the
@@ -372,14 +539,22 @@ def _shell(
     -- only `detail()` passes one, for the one page that has an iframe to size and
     decisions to place; it lands right before `</body>`, after everything it acts on
     already exists in the DOM."""
-    back = f'<a class="home" href="/">{_HOME_SVG} Gallery</a>' if home else ""
+    # The way back is an ICON on a page, a labelled pill on the index. On a
+    # page the title carries the actions and the bar has to stay narrow.
+    back = (
+        f'<a class="home" href="/" aria-label="All pages">{_HOME_SVG}</a>'
+        if home and title_html
+        else f'<a class="home" href="/">{_HOME_SVG} Gallery</a>'
+        if home
+        else ""
+    )
     meta_html = f'<span class="meta">{escape(meta)}</span>' if meta else ""
     return (
         '<!doctype html><html lang="en-GB"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{escape(title)}</title><style>{_CSS}</style></head><body>"
         f'<div class="wrap"><header class="bar">{back}'
-        f"<h1>{escape(title)}</h1>{meta_html}</header>"
+        f"{title_html or f'<h1>{escape(title)}</h1>'}{meta_html}</header>"
         f"{body}</div>{scripts}</body></html>"
     )
 
@@ -926,7 +1101,7 @@ def gallery_router(db: Database) -> APIRouter:
             f'<form method="post" action="/a/{escape(artifact_id)}/rename">'
             f'<input name="title" value="{escape(row[0])}" aria-label="Page name">'
             "<button type=\"submit\">Rename</button></form>"
-            f'<form method="post" action="/a/{escape(artifact_id)}/archive">'
+            f'<form class="hide" method="post" action="/a/{escape(artifact_id)}/archive">'
             f'<input type="hidden" name="archived" value="{"0" if archived else "1"}">'
             + (
                 '<button type="submit">Put back on the wall</button>'

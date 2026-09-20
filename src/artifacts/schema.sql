@@ -283,3 +283,9 @@ alter table version add column if not exists thumbnail bytea;
 -- gallery must not be the way that record gets destroyed. Unarchiving is a
 -- single column write.
 alter table artifact add column if not exists archived_at timestamptz;
+
+-- PINNING (Jeremy, 20 Sep 2026, from the claude.ai gallery: "you can also pin
+-- items in the gallery"). A pinned page leads the wall regardless of when it
+-- last changed, because "what I care about" and "what moved most recently" are
+-- different orderings and the gallery has only ever had the second one.
+alter table artifact add column if not exists pinned_at timestamptz;
