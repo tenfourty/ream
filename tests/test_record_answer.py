@@ -217,3 +217,54 @@ def test_the_route_is_in_the_published_contract(client, db):
     token, _ = keys.mint(db, agent="ops")
     paths = client.get("/api/v1/openapi.json", headers=auth(token)).json()["paths"]
     assert "/api/v1/decisions/{decision_id}/record" in paths
+
+
+# --- what Jeremy sees -------------------------------------------------------
+
+
+def test_the_gallery_marks_a_relayed_answer(client, db, asked):
+    """He must be able to see that a decision was closed on his behalf, and by
+    whom. That is what lets him contradict a relay he disagrees with — a relay
+    he cannot audit is worse than an open question."""
+    decisions.record_elsewhere(
+        db,
+        asked.id,
+        letter="b",
+        note="start with (b) but then (a) if we can",
+        source="telegram",
+        recorded_by="homelab-ops",
+    )
+    page = client.get(f"/a/{asked.artifact_id}").text
+    assert "via telegram" in page
+    assert "homelab-ops wrote it down" in page
+    assert "not on the page" in page
+
+
+def test_the_gallery_does_not_mark_an_answer_he_actually_gave(client, db, asked):
+    """The control arm, and the one that makes the mark mean anything. If every
+    entry carried a badge the exceptional one would be invisible."""
+    decisions.answer(db, asked.id, letter="a", note="fine", by="jeremy")
+    page = client.get(f"/a/{asked.artifact_id}").text
+    assert 'class="relayed"' not in page
+    assert "wrote it down" not in page
+
+
+def test_a_relayed_answer_cannot_smuggle_markup_onto_the_gallery(client, db, asked):
+    """`recorded_by` comes from a key and `source` from a fixed set, so neither
+    should be able to carry markup — but the gallery origin holds Jeremy's
+    session, so it is escaped here and asserted rather than reasoned about."""
+    decisions.record_elsewhere(
+        db,
+        asked.id,
+        letter="a",
+        note="<img src=x onerror=alert(1)>",
+        source="terminal",
+        recorded_by="ops",
+    )
+    page = client.get(f"/a/{asked.artifact_id}").text
+    # Assert it was ESCAPED, not that the word is absent. A bare "onerror" not
+    # in page also passes when the note is missing entirely, and fails when the
+    # note is correctly escaped and merely contains the word as text — which is
+    # what happened the first time this was written.
+    assert "&lt;img src=x onerror=alert(1)&gt;" in page, "the note should be shown, escaped"
+    assert "<img" not in page, "and never as an element"

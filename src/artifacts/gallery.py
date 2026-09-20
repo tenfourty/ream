@@ -145,6 +145,14 @@ a{color:var(--accent-ink)}
   display:flex;gap:.4rem;align-items:baseline;flex-wrap:wrap}
 .ask .answered b{font-weight:600}
 .ask .answered .when{font:.72rem/1.4 var(--mono);color:var(--muted)}
+/* A relayed answer is marked wherever it appears. Muted rather than loud: it is
+   provenance, not an alarm -- but never absent, because an unmarked entry has
+   to be readable as "he tapped this himself". */
+.relayed{font:.68rem/1.4 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--now);border:1px solid currentColor;border-radius:.3rem;
+  padding:.1rem .34rem;margin-left:.45rem;white-space:nowrap}
+.relayed-note{font-size:.88rem;color:var(--muted);border-left:2px solid var(--now);
+  padding-left:.7rem;margin:.2rem 0 .6rem}
 .ask.done{border-left-color:var(--ok)}
 .ask.done .q{font-weight:500}
 .hint{margin:.1rem 0 0;font-size:.8rem;color:var(--muted)}
@@ -420,6 +428,25 @@ def _when(iso: str) -> str:
     return moment.strftime("%-d %b, %H:%M")
 
 
+def _provenance(row) -> str:
+    """Who wrote a relayed answer down, from where, and when he said it.
+
+    Empty for a tap: the ordinary case needs no explanation, and a badge on
+    every entry would make the exceptional one invisible, which is the whole
+    point of marking it.
+    """
+    if not row.answer_source or row.answer_source == "page":
+        return ""
+    who = escape(row.recorded_by or "an agent")
+    where = escape(row.answer_source)
+    said = f" You said it {escape(_when(row.said_at))}." if row.said_at else ""
+    return (
+        f'<p class="relayed-note">You answered this on {where}, not on the page.'
+        f"{said} {who} wrote it down. If that is not what you meant, say so and "
+        "it will be corrected.</p>"
+    )
+
+
 def _has_looked_since(listening_since: str | None, answered_at: str | None) -> bool:
     """Has this page's agent asked for its events since Jeremy answered?
 
@@ -592,13 +619,28 @@ def _render_decisions(
                 )
             # <details>, not a script: it collapses and expands with scripts off,
             # costs nothing, and keeps the page as fast as Jeremy said he liked.
+            # A RELAYED ANSWER IS MARKED, ALWAYS AND VISIBLY (homelab-ij8.78).
+            # A seat recorded words Jeremy gave in a terminal or on Telegram; he
+            # did not tap this. Saying so is not a detail — it is what lets him
+            # notice a relay he disagrees with and contradict it, and what stops
+            # a later reader treating someone's transcription as his own click.
+            # `answer_source` is never null on an answered row, so an unmarked
+            # entry here genuinely means he tapped it.
+            relayed = ""
+            if row.answer_source and row.answer_source != "page":
+                where = escape(row.answer_source)
+                who = escape(row.recorded_by or "an agent")
+                relayed = (
+                    f'<span class="relayed" title="Recorded by {who} from '
+                    f'{where}; not tapped on this page">via {where}</span>'
+                )
             entries.append(
                 '<details class="settled">'
                 f'<summary><span class="when">{escape(_when(row.answered_at))}</span>'
                 f'<span class="sq">{escape(row.question)}</span>'
                 f'<span class="sa">({escape(row.answer)}) {escape(chosen)}</span>'
-                f"{unread}</summary>"
-                f'<div class="settled-body">{pickup}{note}'
+                f"{relayed}{unread}</summary>"
+                f'<div class="settled-body">{_provenance(row)}{pickup}{note}'
                 f"{_card(row, anchorable=False)}</div></details>"
             )
         # Collapsed, and counted in its own summary. Four settled questions took
