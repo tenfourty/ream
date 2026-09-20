@@ -196,6 +196,11 @@ main{display:block}
   padding:.2rem .6rem .2rem .62rem}
 .bar .waiting::after{content:"→";font-weight:400}
 .bar .waiting:hover{filter:brightness(.94)}
+/* Questions on pages he has tidied away. Deliberately quieter than the pill
+   and deliberately NOT added to its count: it is a different fact, and one
+   number covering both would send him to a wall that does not show them all. */
+.bar .hiddenq{font-size:.8125rem;color:var(--now-solid);cursor:help;
+  border-bottom:1px dotted currentColor}
 /* Landing on the tile should not put it under the top edge of the window. */
 
 /* asks */
@@ -1250,12 +1255,22 @@ def _deleted_view(rows) -> str:
     for row in rows:
         ident = escape(row.id)
         remaining = _left(row.deleted_at)
+        # The archived fold has shown this since it was built; the bin did not,
+        # so a deleted page holding an unanswered question was the one place it
+        # was completely invisible.
+        asking = (
+            f'<span class="wait">{row.open_questions} question'
+            f'{"" if row.open_questions == 1 else "s"} unanswered</span>'
+            if getattr(row, "open_questions", 0)
+            else ""
+        )
         urgent = " soon" if remaining in ("less than a day left", "1 day left") else ""
         out.append(
             f'<li class="row-wrap"><span class="row">'
             f'<span class="rshot none">{_icon("trash")}</span>'
             f'<span class="rt">{escape(row.title)}</span>'
-            f'<span class="rmeta"><span class="who">{escape(row.agent)}</span>'
+            f'<span class="rmeta">{asking}'
+            f'<span class="who">{escape(row.agent)}</span>'
             f'<span class="left{urgent}">{escape(remaining)}</span>'
             f'<form method="post" action="/a/{ident}/restore">'
             f'<button class="restore" type="submit">{_icon("restore")}'
@@ -1326,7 +1341,7 @@ def _controls_row(
     )
 
 
-def _wall_meta(waiting: int) -> str:
+def _wall_meta(waiting: int, hidden: int = 0) -> str:
     """What sits beside the title, and it is only ever one thing.
 
     "5 pages" is a fact about the service and belongs in the controls row below.
@@ -1339,13 +1354,27 @@ def _wall_meta(waiting: int) -> str:
     jumping to the first answers "where is it"; the useful question is "show me
     them", and the filtered wall answers both.
     """
-    if not waiting:
-        return ""
-    noun = "question" if waiting == 1 else "questions"
-    return (
-        f'<a class="waiting" href="/?filter=waiting">'
-        f"{waiting} {noun} waiting on you</a>"
-    )
+    out = ""
+    if waiting:
+        noun = "question" if waiting == 1 else "questions"
+        out = (
+            f'<a class="waiting" href="/?filter=waiting">'
+            f"{waiting} {noun} waiting on you</a>"
+        )
+    if hidden:
+        # A SEPARATE line, not added to the count above. "3 questions waiting"
+        # leading to a wall that shows two would be a worse lie than the
+        # silence this replaces -- and the silence was bad enough: archive or
+        # delete a page with an open question and it simply disappeared, with
+        # the question still open and the agent that asked still waiting.
+        # Found by walking the interface, not by reading it.
+        noun = "question" if hidden == 1 else "questions"
+        out += (
+            f'<span class="hiddenq" title="On pages that are archived or '
+            f'deleted. They are still unanswered, and whoever asked is still '
+            f'waiting.">{hidden} {noun} tidied away, still unanswered</span>'
+        )
+    return out
 
 
 def _shell(
@@ -2068,6 +2097,7 @@ def gallery_router(db: Database) -> APIRouter:
         chosen = request.query_params.get("filter")
         active = chosen if chosen in ("waiting", "pinned", "deleted") else "all"
         deleted_rows = store.list_deleted(db)
+        hidden_questions = store.open_questions_off_the_wall(db)
         if active == "waiting":
             rows = [r for r in rows if r[5]]
         elif active == "pinned":
@@ -2157,7 +2187,7 @@ def gallery_router(db: Database) -> APIRouter:
             _shell(
                 "Artifacts",
                 body,
-                meta_html=_wall_meta(waiting_total),
+                meta_html=_wall_meta(waiting_total, hidden_questions),
                 controls=_controls_row(
                     view,
                     query,

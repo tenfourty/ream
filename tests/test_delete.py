@@ -333,3 +333,76 @@ def test_the_sweep_is_reachable_as_a_command(db, monkeypatch, capsys):
     assert f"destroyed {page.id}" in done
     assert "1 destroyed" in done
     assert store.list_deleted(db, "seat") == []
+
+
+# --- a question on a page that gets tidied away ------------------------------
+
+
+def test_a_question_does_not_go_silent_when_its_page_is_tidied_away(client, db):
+    """FOUND BY USING THE INTERFACE, not by reading it.
+
+    Archive or delete a page holding an unanswered question and, before this,
+    three things were true at once: the question stayed open, the agent that
+    asked was still waiting on it, and the gallery stopped mentioning it
+    entirely. So he would never answer and the agent would never unblock --
+    a silent dead end in the one thing this service exists to do.
+
+    The count is kept SEPARATE from "waiting on you" rather than added to it:
+    "3 questions waiting" leading to a wall that shows two would be a worse lie
+    than the silence it replaced.
+    """
+    keys.mint(db, agent="seat")
+    for tidy in (
+        lambda i: store.set_archived(db, i, True, agent=None),
+        lambda i: store.set_deleted(db, i, True, agent=None),
+    ):
+        page = store.publish(db, "seat", "Asks something", PAGE)
+        _ask(db, page.id)
+        assert "waiting on you" in client.get("/").text
+
+        tidy(page.id)
+
+        assert decisions.list_for_artifact(db, page.id), "the question is still open"
+        wall = client.get("/").text
+        assert "still unanswered" in wall, (
+            "the gallery went silent about a question he has not answered"
+        )
+        store.destroy(db, page.id, agent=None)
+
+
+def test_a_deleted_page_shows_what_is_unanswered_on_it(client, db):
+    """The archived fold has always shown this; the bin did not, so a deleted
+    page holding a question was the one place in the gallery where that fact
+    was completely invisible."""
+    keys.mint(db, agent="seat")
+    page = store.publish(db, "seat", "Asks something", PAGE)
+    _ask(db, page.id)
+    store.set_deleted(db, page.id, True, agent=None)
+
+    assert "1 question unanswered" in client.get("/?filter=deleted").text
+
+
+def test_the_tidied_count_is_not_folded_into_the_waiting_count(client, db):
+    """Two different facts, two different numbers, and neither inflated."""
+    keys.mint(db, agent="seat")
+    live = store.publish(db, "seat", "Live", PAGE)
+    gone = store.publish(db, "seat", "Gone", PAGE)
+    _ask(db, live.id)
+    _ask(db, gone.id)
+    store.set_archived(db, gone.id, True, agent=None)
+
+    wall = client.get("/").text
+    assert "1 question waiting on you" in wall, "the wall's own count is of the wall"
+    assert "1 question tidied away" in wall
+    assert "2 questions waiting on you" not in wall
+
+
+def _ask(db, artifact_id):
+    return decisions.ask(
+        db,
+        agent="seat",
+        artifact_id=artifact_id,
+        question="Which?",
+        options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
+        recommended="a",
+    )

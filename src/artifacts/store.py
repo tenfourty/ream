@@ -136,6 +136,10 @@ class ArtifactRow:
     # Set only on a row from `list_deleted`: every other listing here excludes
     # deleted pages outright, so on those it is always None and says so.
     deleted_at: datetime | None = None
+    # Only filled by `list_deleted`: how many questions on this page he has
+    # still not answered. A deleted page holding one was the single place that
+    # fact was invisible anywhere in the gallery.
+    open_questions: int = 0
 
 
 def content_domain() -> str:
@@ -686,6 +690,26 @@ def destroy(db: Database, artifact_id: str, *, agent: str | None) -> bool:
         return done.rowcount > 0
 
 
+def open_questions_off_the_wall(db: Database) -> int:
+    """Unanswered questions on pages that are archived or deleted.
+
+    These are the ones that go quiet. The page leaves the wall, the question
+    stays open, the agent that asked is still waiting on it, and nothing on the
+    gallery mentions it again -- so he never answers and the agent never
+    unblocks. Found by walking the interface rather than by reading it.
+
+    Counted separately from the wall's own total rather than folded into it:
+    "3 questions waiting on you" that leads to a wall showing two would be a
+    worse lie than the silence it replaced.
+    """
+    with db.connect() as conn:
+        return conn.execute(
+            "select count(*) from decision d join artifact a on a.id = d.artifact_id"
+            " where d.answer is null and d.closed_at is null"
+            "   and (a.archived_at is not null or a.deleted_at is not null)"
+        ).fetchone()[0]
+
+
 def list_deleted(db: Database, agent: str | None = None) -> list[ArtifactRow]:
     """What is in the window, soonest to go first.
 
@@ -704,7 +728,9 @@ def list_deleted(db: Database, agent: str | None = None) -> list[ArtifactRow]:
             "select artifact.id, artifact.title, artifact.agent,"  # noqa: S608 -- `scope` is a fixed clause with a placeholder
             " artifact.visibility, artifact.current_version, version.revision,"
             " artifact.updated_at, artifact.archived_at, artifact.pinned_at,"
-            " artifact.deleted_at"
+            " artifact.deleted_at,"
+            " (select count(*) from decision d where d.artifact_id = artifact.id"
+            "    and d.answer is null and d.closed_at is null)"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
@@ -725,6 +751,7 @@ def list_deleted(db: Database, agent: str | None = None) -> list[ArtifactRow]:
             archived_at=row[7],
             pinned_at=row[8],
             deleted_at=row[9],
+            open_questions=row[10],
         )
         for row in rows
     ]
