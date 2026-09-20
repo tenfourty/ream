@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from artifacts import comments, csp, decisions, events, keys, store
+from artifacts import comments, csp, decisions, events, grants, keys, store
 from artifacts.db import Database
 
 
@@ -337,12 +337,37 @@ def agent_router(db: Database) -> APIRouter:
 
     @router.get("/decisions")
     def list_all_decisions(
-        include_answered: bool = False, agent: str = Depends(caller)
+        include_answered: bool = False,
+        scope: str = Query("mine", pattern="^(mine|all)$"),
+        agent: str = Depends(caller),
     ):
         # This is how an agent learns Jeremy's answer -- across every artifact it
         # owns: a plain poll of this route, with include_answered=true, works
         # everywhere a key does. `/events` (below) is the same fact told sooner,
         # for a session a nudge can actually reach.
+        if scope == "all":
+            # The operator's view, and the only way the service can answer "what
+            # is waiting on Jeremy". A seat sees its own decisions and nothing
+            # else, so before this the answer was assembled from what each agent
+            # remembered to report -- and on 20 Sep 2026 a question sat unanswered
+            # for seventeen hours because the one seat that could see it was not
+            # looking.
+            #
+            # Refused, not silently narrowed, without the grant. A caller that
+            # asked for every open question and got its own back would believe the
+            # short list, which is the same lie as an empty feed from a broken
+            # wait: it reads as "nothing is waiting".
+            if not grants.has(db, agent, grants.READ_ALL_DECISIONS):
+                raise HTTPException(403, "this key may not read other seats")
+            return [
+                {
+                    **row.decision.__dict__,
+                    "agent": row.agent,
+                    "artifact_title": row.artifact_title,
+                    "age_seconds": row.age_seconds,
+                }
+                for row in decisions.open_across_seats(db)
+            ]
         return [
             row.__dict__
             for row in decisions.list_for_agent(

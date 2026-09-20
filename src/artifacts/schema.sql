@@ -207,3 +207,24 @@ create table if not exists seat_read (
     agent        text primary key,
     last_read_at timestamptz not null
 );
+
+-- A named privilege held by a SEAT, not by one of its keys.
+--
+-- One grant exists today: `decisions:read-all`, which lets a seat read every
+-- open question across every page instead of only its own. It exists because of
+-- what 20 Sep 2026 showed -- a question posed on one agent's page sat
+-- unanswered for seventeen hours because nothing could see it except the seat
+-- that asked. An operator that can only know what each agent remembers to tell
+-- it cannot answer "what is waiting on Jeremy", and that question is the whole
+-- point of the service.
+--
+-- Held by the seat rather than the key so that rotating a key keeps the
+-- privilege, and revoking the seat's grant removes it from every key at once.
+-- Default is no grant at all: a seat has this only because someone typed
+-- `artifacts-admin grant-scope`, and `revoke-scope` takes it back.
+create table if not exists seat_grant (
+    agent      text not null,
+    scope      text not null,
+    granted_at timestamptz not null default now(),
+    primary key (agent, scope)
+);

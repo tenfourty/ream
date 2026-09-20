@@ -17,7 +17,7 @@ import re
 import secrets
 import sys
 
-from artifacts import keys
+from artifacts import grants, keys
 from artifacts.db import Database
 
 _AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
@@ -95,6 +95,36 @@ def cmd_list_keys(_args: argparse.Namespace) -> None:
         print(f"{row.id}\t{row.agent}\t{row.created_at}\t{row.revoked_at or '-'}")
 
 
+def cmd_grant_scope(args: argparse.Namespace) -> None:
+    _check_agent(args.agent)
+    db = Database(_database_url())
+    try:
+        grants.grant(db, args.agent, args.scope)
+    except grants.UnknownScope:
+        raise SystemExit(
+            f"unknown scope {args.scope!r}: this service defines {list(grants.SCOPES)}"
+        ) from None
+    print(f"granted {args.scope} to {args.agent}")
+
+
+def cmd_revoke_scope(args: argparse.Namespace) -> None:
+    _check_agent(args.agent)
+    db = Database(_database_url())
+    grants.revoke(db, args.agent, args.scope)
+    # Says what is true afterwards rather than what it did: "revoked" on a grant
+    # that was never held would read as "it used to have this", which is a
+    # different and alarming fact.
+    print(f"{args.agent} does not hold {args.scope}")
+
+
+def cmd_list_scopes(_args: argparse.Namespace) -> None:
+    rows = grants.list_all(Database(_database_url()))
+    if not rows:
+        print("no seat holds any scope")
+    for agent, scope, granted_at in rows:
+        print(f"{agent}\t{scope}\t{granted_at}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="artifacts-admin")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -119,6 +149,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_keys_parser = sub.add_parser("list-keys")
     list_keys_parser.set_defaults(func=cmd_list_keys)
+
+    grant_scope = sub.add_parser(
+        "grant-scope", help="give a seat a named privilege (needs DATABASE_URL)"
+    )
+    grant_scope.add_argument("--agent", required=True)
+    grant_scope.add_argument("--scope", required=True, choices=list(grants.SCOPES))
+    grant_scope.set_defaults(func=cmd_grant_scope)
+
+    revoke_scope = sub.add_parser("revoke-scope")
+    revoke_scope.add_argument("--agent", required=True)
+    # No `choices` here, on purpose: a privilege must be removable even after the
+    # service stops defining it, or a renamed scope leaves rows nobody can delete.
+    revoke_scope.add_argument("--scope", required=True)
+    revoke_scope.set_defaults(func=cmd_revoke_scope)
+
+    list_scopes = sub.add_parser("list-scopes")
+    list_scopes.set_defaults(func=cmd_list_scopes)
 
     return parser
 

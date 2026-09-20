@@ -527,3 +527,54 @@ def uncollected(
             )
         )
     return out
+
+
+@dataclass(frozen=True)
+class WaitingRow:
+    """One open question, described so that whoever reads the operator's queue
+    knows which page to open and how long it has been sitting there."""
+
+    decision: DecisionRow
+    agent: str
+    artifact_title: str
+    age_seconds: int
+
+
+def open_across_seats(db: Database, *, limit: int = 200) -> list[WaitingRow]:
+    """Every open question on every page, oldest first.
+
+    The operator's view, and the answer to the only question the service could
+    not previously answer: what is waiting on Jeremy? Until now a seat could see
+    its own decisions and nothing else, so "what is waiting" was assembled from
+    what each agent remembered to report -- and on 20 Sep 2026 a question sat
+    unanswered for seventeen hours because the one seat that could see it was not
+    looking.
+
+    OLDEST first, the opposite of `list_for_agent`. An agent polling its own feed
+    wants the newest answer; a queue put in front of Jeremy wants the thing that
+    has been waiting longest, because that is the one most likely to have been
+    forgotten.
+
+    `age_seconds` is computed by the database that stamped `created_at`, so a
+    consumer's own clock never disagrees with the service about how old something
+    is -- and a queue that reads "17 hours" is telling Jeremy something the
+    service is prepared to stand behind.
+    """
+    sql = (
+        f"select {_COLUMNS}, artifact.agent, artifact.title,"  # noqa: S608 -- fixed constant, not caller input
+        " extract(epoch from now() - decision.created_at)::bigint from decision"
+        " join artifact on artifact.id = decision.artifact_id"
+        " where decision.closed_at is null and decision.answer is null"
+        " order by decision.created_at asc, decision.id asc limit %s"
+    )
+    with db.connect() as conn:
+        rows = conn.execute(sql, (limit,)).fetchall()
+    return [
+        WaitingRow(
+            decision=_row_to_decision(row),
+            agent=row[-3],
+            artifact_title=row[-2],
+            age_seconds=int(row[-1]),
+        )
+        for row in rows
+    ]
