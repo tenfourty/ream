@@ -342,6 +342,12 @@ a{color:var(--accent-ink)}
      it reads as correct in the stylesheet. */
   height:auto;aspect-ratio:900/640;object-fit:cover;object-position:top center;
   border-radius:.65rem .65rem 0 0;background:var(--paper)}
+/* The same box, with nothing in it. Shares every dimension with the real one
+   so a wall of both is a grid rather than a ragged edge. */
+.tiles .shot.none{display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(160deg,var(--paper),var(--card));
+  border-bottom:1px solid var(--line)}
+.tiles .shot.none .mi{width:1.6rem;height:1.6rem;opacity:.22}
 .tiles .t{display:block;font:400 1.06rem/1.3 var(--display);margin-bottom:.3rem}
 /* What the page says it is about, taken from the page. Clamped to three lines
    so one long standfirst cannot make its tile twice the height of its
@@ -511,6 +517,7 @@ _ICON = {
     "open": '<path d="M9.4 1.6v1.3h2.8L6.5 8.6l.9.9 5.7-5.7v2.8h1.3V1.6H9.4ZM2.8 3.3h3.9v1.3H3.3v8.1h8.1V9.3h1.3v4a.7.7 0 0 1-.7.7H2.8a.7.7 0 0 1-.7-.7V4a.7.7 0 0 1 .7-.7Z"/>',
     "all": '<path d="M2 2.5h5v5H2v-5Zm7 0h5v5H9v-5Zm-7 6h5v5H2v-5Zm7 0h5v5H9v-5Z"/>',
     "pin": '<path d="M9.6 1.3 8.5 2.4l.4.4-3 2.2-1.6-.3-1.1 1.1 3 3L2 13l3.2-4.2 3 3 1.1-1.1-.3-1.6 2.2-3 .4.4 1.1-1.1-3.1-3.1Z"/>',
+    "page": '<path d="M4 1.5h5l3 3v10a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-13a.5.5 0 0 1 .5-.5Zm4.6 1.4v2.1h2.1L8.6 2.9ZM5.4 7.4h5.2v1H5.4v-1Zm0 2.3h5.2v1H5.4v-1Zm0 2.3h3.4v1H5.4v-1Z"/>',
     "link": '<path d="M6.9 9.1a2.9 2.9 0 0 0 4.3.3l1.7-1.7a2.9 2.9 0 0 0-4.1-4.1l-1 1 .9.9 1-1a1.6 1.6 0 0 1 2.3 2.3L10.3 8.5a1.6 1.6 0 0 1-2.4-.2l-1 .8Zm2.2-2.2a2.9 2.9 0 0 0-4.3-.3L3.1 8.3a2.9 2.9 0 0 0 4.1 4.1l1-1-.9-.9-1 1a1.6 1.6 0 0 1-2.3-2.3l1.7-1.7a1.6 1.6 0 0 1 2.4.2l1-.8Z"/>',
 }
 
@@ -1041,12 +1048,27 @@ def gallery_router(db: Database) -> APIRouter:
             # `loading="lazy"` so a wall of twenty does not fetch twenty images
             # before the first tile paints, and fixed dimensions so the grid does
             # not reflow as they arrive.
-            shot = ""
             if has_thumb:
                 shot = (
                     f'<img class="shot" src="/thumb/{escape(artifact_id)}.png" '
                     f'alt="" loading="lazy" width="{thumbs.WIDTH}" '
                     f'height="{thumbs.HEIGHT}">'
+                )
+            else:
+                # Every card has a preview area, even when there is nothing to
+                # put in it. Without this a row mixing pages with and without a
+                # picture came out visibly ragged -- the thumbnail-less tiles
+                # stretch to the row's height with their text stranded at the
+                # top and a hand's width of nothing under it. Seen only by
+                # rendering the LIVE wall: pages published before thumbnails
+                # existed have none, and no test fixture had that mixture.
+                #
+                # A placeholder, not a blank: it says "no picture of this one
+                # yet", which is true and temporary -- a page gets one on its
+                # next publish.
+                shot = (
+                    '<span class="shot none" aria-hidden="true">'
+                    f'{_icon("page")}</span>'
                 )
             # The <li> wraps BOTH the link and the menu; the menu is the link's
             # sibling, never its child. See _tile_menu.

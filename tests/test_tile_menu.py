@@ -23,6 +23,11 @@ from artifacts.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
+# A 1x1 PNG: the wall only asks whether a thumbnail EXISTS.
+_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+    "890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+)
 
 
 @pytest.fixture()
@@ -99,6 +104,21 @@ def test_no_inline_event_handler_anywhere_on_the_wall(client, db):
     store.publish(db, "seat", "Board", PAGE)
     page = client.get("/").text
     assert not re.search(r"\son(click|focus|change|submit)=", page)
+
+
+def test_every_tile_has_a_preview_area_even_with_no_picture(client, db):
+    """A wall mixing pages that have a thumbnail with pages that do not came
+    out visibly ragged: the ones without stretch to the row's height with their
+    text stranded at the top. Every fixture had been uniform, so it took
+    rendering the LIVE wall -- where pages published before thumbnails existed
+    sit next to pages published after -- to see it."""
+    plain = store.publish(db, "seat", "No picture", PAGE)
+    shot = store.publish(db, "seat", "Has a picture", PAGE)
+    store.save_thumbnail(db, shot.id, 1, _PNG)
+
+    page = client.get("/").text
+    assert 'class="shot none"' in _tile(page, plain.id), "a placeholder panel"
+    assert f'src="/thumb/{shot.id}.png"' in _tile(page, shot.id), "and a real one"
 
 
 # --- pinning ----------------------------------------------------------------

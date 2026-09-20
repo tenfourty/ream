@@ -11,6 +11,14 @@ from artifacts.app import create_gallery_app
 
 OUT = os.environ.get("ARTIFACTS_RENDER_TO")
 
+# A 1x1 PNG. The wall only asks whether a thumbnail EXISTS, so this is enough
+# to put a tile on the "has a picture" side of the mixture.
+_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+    "890000000a49444154789c6300010000050001"
+    "0d0a2db40000000049454e44ae426082"
+)
+
 
 @pytest.mark.skipif(not OUT, reason="set ARTIFACTS_RENDER_TO to render the wall")
 def test_render_the_wall(db, monkeypatch):
@@ -39,6 +47,10 @@ def test_render_the_wall(db, monkeypatch):
          "A worked example other agents copy. Everything here is placeholder."),
     ]
     ids = [store.publish(db, a, t, page(t, s)).id for a, t, s in rows]
+    # A MIXTURE of pages with and without a picture, because that is what the
+    # live wall is and a uniform fixture hid a ragged grid for a whole slice.
+    for artifact_id in ids[:2]:
+        store.save_thumbnail(db, artifact_id, 1, _PNG)
     store.set_pinned(db, ids[2], True, agent=None)
     for q in ("Which gate?", "And the certificate?"):
         decisions.ask(
