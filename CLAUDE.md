@@ -1,5 +1,29 @@
 # artifacts — the homelab's page-hosting service
 
+## START HERE, every session and after every compaction
+
+**The `ij8` beads are this seat's state of record** — progress, decisions, open
+questions, and which beliefs were verified rather than merely told. Not your
+memory, and not a compaction summary. Before acting on anything you think you
+know:
+
+```bash
+bd -C ~/repos/homelab prime          # the tracker, primed
+bd -C ~/repos/homelab ready          # what is actually unblocked
+ls docs/agent/handoff-*.md           # then read the newest one
+```
+
+Then separate what you have **verified this session** from what you were
+**told**. That distinction matters more in this seat than in most: the pages
+this service publishes are read as current, so a claim carried over from a
+summary and republished is a stale claim with a fresh timestamp on it — which
+is the failure the whole service exists to prevent.
+
+The `SessionStart` and `PostCompact` hooks in `.claude/settings.json` say the
+same thing mechanically. The hook is the reminder; this section is the rule,
+and the rule is what survives if the hook is ever disabled. Ruled by Jeremy,
+2026-09-20: *"It's super important we don't lose state or trust in our state."*
+
 ## WHY
 
 Jeremy wanted a place where **any** agent — Claude or not, on this machine or
@@ -70,7 +94,8 @@ content origin on one port, discriminated by `Host`.
 ## Tracking
 
 The arc's issues are `ij8.*` beads in the **homelab** workspace, with a long
-history and cross-references from other arcs. Reach them from here with:
+history and cross-references from other arcs. **They are the state of record,
+not a to-do list** — see START HERE above. Reach them from here with:
 
 ```bash
 bd -C ~/repos/homelab ready

@@ -75,15 +75,39 @@ artifacts, nothing here wraps what you send — the service stores and serves
 your file as it is. An agent arriving from claude.ai, where authoring the
 skeleton yourself is wrong, has to infer this from the template.
 
-Start from `template.html` in this skill's directory and follow
-`design-system.md`: shared tokens with light and dark, a masthead that links
-back to the gallery, cards, a state table, a decision block. Keep the token
-block as it is so every homelab page looks like one family.
+### Start from the template for the job you are doing
 
-`PAGE TITLE` appears twice -- in `<title>` and in the `<h1>`. Replace
-both: the first published board here kept the placeholder in `<title>`
-because only the visible heading was edited, and the browser tab said
-`PAGE TITLE` for two hours.
+`templates/` in this skill's directory holds a complete worked page per kind of
+job — real prose showing the register, a worked example of every component, and
+a `REPLACE` comment on each region saying what belongs there. Copy one and write
+over it. Do not start from a blank file, and do not start from a template for a
+different job.
+
+| Job | Template |
+|---|---|
+| Where an arc stands | `project-status.html` |
+
+More are landing (a decision request, an incident, an implementation plan, a
+comparison, an explainer, and the intent and design stages of a piece of work).
+Until one exists for your job, start from `project-status.html` and cut what
+does not apply — its masthead, tokens and decision block are the parts every
+page shares.
+
+Every template already obeys the constraints below, each commented with the
+failure that bought it, so you inherit them rather than remembering them: no
+typed date, no page-id placeholder, a gallery link that opens a new tab, and a
+decision slot shipped commented out.
+
+Follow `design-system.md` for anything the templates do not cover, and **keep
+the token block between the `shared:` sentinels exactly as it is** — it is what
+makes every homelab page look like one family, and a test in the artifacts repo
+fails if a copy drifts.
+
+The older `template.html` is still there as a bare skeleton. Prefer a real
+template: `template.html` carries a literal `PAGE TITLE` in both `<title>` and
+`<h1>`, and the first board published here shipped with the one in `<title>`
+unedited, so the browser tab read `PAGE TITLE` for two hours. Nobody could see
+it, because an agent cannot look at its own page.
 
 Hard limits come from the page's own CSP, not taste: one self-contained
 file, inline `<style>` and inline SVG, `data:` images, no web fonts, no
@@ -284,6 +308,35 @@ rule for everything he reads, and on a page it is the whole point of the page.
 If nothing genuinely needs a decision from him, say so and leave the decisions
 block out. A queue of manufactured questions costs him more than an empty
 section does.
+
+## After a compaction, do not trust what you remember
+
+Compaction is where a session loses state, and the dangerous part is not the
+loss — it is that the session does not know it has lost anything. It comes back
+holding a summary that reads like knowledge.
+
+That matters here more than almost anywhere, because **a page published through
+this service is read as current**. Republishing a page from a compaction
+summary puts a stale claim in front of its reader with a fresh timestamp on it,
+which is the one failure this service exists to prevent.
+
+So, after a compaction or on a fresh session, before you touch any page:
+
+- **Re-read the tracker, not your memory.** Whatever tracks your work is the
+  state of record. In this house that is beads (`bd prime`, then `bd ready`);
+  wherever you are, it is the thing that survived while your context did not.
+- **Re-read the page itself.** `GET $BASE/artifacts/$ID/body` gives you the
+  body exactly as stored, so you can see what you actually published rather
+  than what you recall publishing.
+- **Separate what you VERIFIED this session from what you were TOLD.** Say
+  which one you are relying on when you write the page. A summary flattens that
+  distinction, and it is the distinction that keeps a page honest.
+- **Re-arm the waiter.** A background `artifacts-wait` does not survive a
+  compaction, and a question whose waiter died reads to you exactly like a
+  question Jeremy has not answered.
+
+Ruled by Jeremy, 2026-09-20: *"It's super important we don't lose state or
+trust in our state."*
 
 ## Send feedback
 
