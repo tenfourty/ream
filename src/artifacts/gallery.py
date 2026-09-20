@@ -17,7 +17,7 @@ a request reaches this app, so the one subject it ever admits is named outright 
 of read from something a request could forge.
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -80,8 +80,15 @@ def gallery_headers() -> dict[str, str]:
 # style-src 'self' 'unsafe-inline'; serving it as a file from 'self' is the next
 # step (it is the same stylesheet an agent's page will be able to link).
 _CSS = """
+/* The neutral scale is claude.ai's own, read off the saved page with
+   getComputedStyle rather than sampled from a screenshot: page rgb(252,252,251),
+   ink rgb(11,11,11), muted rgb(137,135,129), hairline rgba(11,11,11,.1). The
+   ACCENT stays the homelab teal -- every template on this service shares it, and
+   swapping it here would leave the gallery and the pages it frames looking like
+   two different products. */
 :root{
-  --paper:#faf9f6; --ink:#191a17; --muted:#6c6d64; --card:#fff; --line:#e4e3db;
+  --paper:#fcfcfb; --ink:#0b0b0b; --muted:#898781; --card:#fff;
+  --line:rgba(11,11,11,.1);
   --accent:#0f6f63; --accent-soft:rgba(15,111,99,.10); --accent-ink:#0b4f46;
   --ok:#2f7a45; --now:#b06a12;
   --shadow:0 1px 2px rgba(20,20,15,.05), 0 8px 24px -16px rgba(20,20,15,.25);
@@ -101,17 +108,37 @@ html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--paper);color:var(--ink);
      font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 a{color:var(--accent-ink)}
+/* 60rem = 960px, which is the reference's column exactly: 3 x 304 + 2 x 24. */
 .wrap{max-width:60rem;margin:0 auto;padding:1rem 1rem 2.5rem}
-.bar{display:flex;align-items:baseline;gap:.7rem;flex-wrap:wrap;
-     padding:.1rem 0 .9rem;border-bottom:1px solid var(--line);margin-bottom:1.3rem}
+/* No rule under the title. Measured: the reference's header is a 48px row with
+   no border beneath it -- the wall's own top edge is the separation, and a rule
+   as well is one line too many on a page that is mostly cards. */
+.bar{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;
+     min-height:48px;padding:.1rem 0 .2rem;margin-bottom:1.1rem}
 .bar a.home{color:var(--accent-ink);text-decoration:none;display:inline-flex;align-items:center;
   gap:.4rem;border:1px solid var(--line);background:var(--card);border-radius:999px;
   padding:.22rem .66rem;font-size:.8rem;white-space:nowrap}
 .bar a.home:hover{border-color:var(--accent)}
 .bar svg{width:.9em;height:.9em;fill:currentColor}
-.bar h1{font:400 1.32rem/1.2 var(--display);margin:0;letter-spacing:-.01em;flex:1 1 12rem}
-.bar .meta{font:.74rem/1.4 var(--mono);color:var(--muted);letter-spacing:.06em;
-  text-transform:uppercase;white-space:nowrap}
+/* 24px/32px at weight 500, measured off the reference's own h1. This was a
+   clamp running up to 3.1rem, which on a page of 14px cards read as a magazine
+   masthead over a filing cabinet. */
+.bar h1{font:500 1.5rem/2rem var(--display);margin:0;letter-spacing:-.01em;
+  flex:1 1 12rem}
+.bar .meta{display:flex;align-items:center;gap:.6rem;
+  font:.8125rem/1.25rem ui-sans-serif,system-ui,-apple-system,sans-serif;
+  color:var(--muted);white-space:nowrap}
+/* What is waiting on him leads the header, and it is a link: one tap and he is
+   at the first page asking. The only coloured thing in the bar, because on a
+   wall whose whole purpose is decisions it is the only thing there that is
+   about him rather than about the service. */
+.bar .waiting{display:inline-flex;align-items:center;gap:.35rem;
+  text-decoration:none;font-weight:600;color:#fff;background:var(--now);
+  border-radius:999px;padding:.2rem .6rem .2rem .62rem}
+.bar .waiting::after{content:"→";font-weight:400}
+.bar .waiting:hover{filter:brightness(.94)}
+/* Landing on the tile should not put it under the top edge of the window. */
+.tiles li.asking{scroll-margin-top:1.5rem}
 
 /* asks */
 .asks{margin:0 0 1.3rem}
@@ -318,21 +345,33 @@ a{color:var(--accent-ink)}
   padding:.24rem .5rem;flex:0 0 auto}
 .mcopy:hover{border-color:var(--accent);color:var(--accent-ink)}
 
-/* index */
-.tiles{list-style:none;margin:0;padding:0;display:grid;gap:.8rem;
-  grid-template-columns:repeat(auto-fill,minmax(15rem,1fr))}
+/* index. Geometry measured off claude.ai's own gallery: a 304x234 card, of
+   which the preview is 160 -- so the picture is 68% of the tile and its own
+   aspect is 1.9:1, much wider than the 1.4:1 this used, and it shows more of
+   the page's first screen. Columns are 304 with a 24px gap inside a 960px
+   column, which is exactly 3 x 304 + 2 x 24. Kept responsive rather than
+   fixed at 304, because this wall is also read on a phone. */
+.tiles{list-style:none;margin:0;padding:0;display:grid;gap:1.5rem;
+  grid-template-columns:repeat(auto-fill,minmax(17rem,1fr))}
 .tiles li{margin:0}
-/* A column, so the metadata can be pushed to the bottom: without it a tile
-   carrying a "questions for you" badge sits its agent and date lower than its
-   neighbours, and the wall reads as ragged rather than as a set. */
+/* The card clips its own corners so the preview can bleed to three edges
+   without needing a radius of its own -- that is how the reference does it, and
+   it is why the picture never shows a seam.
+   NO SHADOW. Measured: box-shadow on claude.ai's card is `none`, and the card
+   is separated from the page by a 1px hairline at 10% ink and nothing else.
+   This used a two-layer shadow, which is what made the old wall feel heavy. */
 .tiles a{display:flex;flex-direction:column;background:var(--card);
-  border:1px solid var(--line);border-radius:.7rem;padding:.95rem 1.05rem;
-  text-decoration:none;color:var(--ink);box-shadow:var(--shadow);height:100%}
-.tiles a:hover{border-color:var(--accent)}
-/* The picture, when there is one. 16:9-ish and cropped to the top of the page:
-   a thumbnail is the part a reader recognises, not a squashed whole document.
-   A fixed aspect box means the grid does not reflow as lazy images arrive. */
-.tiles .shot{display:block;width:calc(100% + 2.1rem);margin:-.95rem -1.05rem .6rem;
+  border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  text-decoration:none;color:var(--ink);height:100%;
+  transition:border-color .12s}
+.tiles a:hover{border-color:rgba(11,11,11,.22)}
+/* The picture. Cropped to the top of the page: a thumbnail is the part a
+   reader recognises, not a squashed whole document. A fixed aspect box means
+   the grid does not reflow as lazy images arrive.
+   It fills the card's width outright now rather than escaping its padding with
+   negative margins -- the text block below carries the padding instead, which
+   is both the reference's structure and one fewer number to keep in step. */
+.tiles .shot{display:block;width:100%;
   /* height:auto is load-bearing. The img carries width/height ATTRIBUTES so the
      grid does not reflow as lazy images arrive, and a height attribute makes the
      used height not-auto — which stops `aspect-ratio` computing anything at all.
@@ -340,31 +379,62 @@ a{color:var(--accent-ink)}
      scaled to the full height and cropped the sides, giving a hugely magnified
      slice of each page. Rendering it and measuring the box is what found this;
      it reads as correct in the stylesheet. */
-  height:auto;aspect-ratio:900/640;object-fit:cover;object-position:top center;
-  border-radius:.65rem .65rem 0 0;background:var(--paper)}
-/* The same box, with nothing in it. Shares every dimension with the real one
-   so a wall of both is a grid rather than a ragged edge. */
-.tiles .shot.none{display:flex;align-items:center;justify-content:center;
+  height:auto;aspect-ratio:304/160;object-fit:cover;object-position:top center;
+  background:var(--paper);border-bottom:1px solid var(--line)}
+/* The same box, with no picture in it. Shares every dimension with the real
+   one so a wall of both is a grid rather than a ragged edge -- and it is not
+   empty: it carries what the page SAYS it is about, which is the one thing a
+   tile without a picture still has. The reference has no description on a tile
+   at all, because its preview always renders; here a page published before
+   thumbnails existed would otherwise be a blank rectangle with a name. */
+.tiles .shot.none{display:block;padding:.85rem .95rem;overflow:hidden;
   background:linear-gradient(160deg,var(--paper),var(--card));
   border-bottom:1px solid var(--line)}
-.tiles .shot.none .mi{width:1.6rem;height:1.6rem;opacity:.22}
-.tiles .t{display:block;font:400 1.06rem/1.3 var(--display);margin-bottom:.3rem}
-/* What the page says it is about, taken from the page. Clamped to three lines
-   so one long standfirst cannot make its tile twice the height of its
-   neighbours and break the grid's rhythm. */
-.tiles .d{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
-  overflow:hidden;font-size:.86rem;line-height:1.45;color:var(--muted);
-  margin-bottom:.5rem}
+.tiles .shot.none .d{display:-webkit-box;-webkit-line-clamp:4;
+  -webkit-box-orient:vertical;overflow:hidden;font-size:.82rem;line-height:1.5;
+  color:var(--muted);margin:0}
+.tiles .shot.none .mi{width:1.1rem;height:1.1rem;opacity:.25;display:block;
+  margin:0 0 .4rem}
+/* Everything below the picture, in one padded column. 14px padding and an 8px
+   gap are the reference's, measured. */
+.tiles .body{display:flex;flex-direction:column;gap:.5rem;padding:14px;
+  flex:1 1 auto}
+/* The title is SANS at 14/20 and weight 500, not the serif display face. On a
+   304px card the serif at 17px wrapped to three lines and fought the page's own
+   title showing through the preview right above it.
+   TWO LINES, ALWAYS RESERVED. The reference clamps to one, which works because
+   its titles are short; a homelab page is called "Warpgate: the gate Jeremy
+   comes through" and one line would cut it mid-word. Reserving the second line
+   whether or not it is used is what keeps every body exactly the same height,
+   so the grid stays a grid -- without it one two-line title stretched every
+   other card in its row and left them with a hand's width of nothing. */
+.tiles .t{font:500 .875rem/1.25rem ui-sans-serif,system-ui,
+  -apple-system,"Segoe UI",Roboto,sans-serif;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;
+  -webkit-box-orient:vertical;min-height:2.5rem}
 /* Anything waiting on Jeremy is the one thing on a tile that should interrupt
    him, so it is the only coloured element and it sits above the metadata. */
-.tiles .wait{align-self:flex-start;font:600 .72rem/1.4 var(--mono);
-  letter-spacing:.04em;color:var(--now);border:1px solid currentColor;
-  border-radius:.3rem;padding:.14rem .42rem;margin-bottom:.5rem}
-.tiles .m{display:flex;align-items:center;justify-content:space-between;gap:.5rem;
-  font:.72rem/1.4 var(--mono);color:var(--muted);
-  letter-spacing:.05em;margin:auto 0 .15rem}
-.tiles time{display:block;font:.72rem/1.4 var(--mono);color:var(--muted);
-  letter-spacing:.05em;white-space:nowrap}
+/* The preview and anything sitting on top of it. */
+.tiles .frame{position:relative;display:block}
+/* The one thing on this wall that should be legible without reading. Solid, on
+   the picture, bottom-left where the eye lands after the thumbnail -- and out
+   of the body, so it cannot make its tile taller than the row.
+   Solid rather than tinted BECAUSE it sits on a page render: a 10% wash over
+   arbitrary content is legible on some pages and invisible on others, which is
+   the one thing this badge may never be. */
+.tiles .wait{position:absolute;left:.6rem;bottom:.6rem;z-index:1;
+  font:600 .6875rem/1rem ui-sans-serif,system-ui,-apple-system,sans-serif;
+  letter-spacing:.01em;color:#fff;background:var(--now);border-radius:.3rem;
+  padding:.24rem .45rem;box-shadow:0 1px 4px rgba(20,20,15,.28)}
+/* And the card says so at its edge, so a wall scanned at arm's length still
+   sorts itself. One hairline, not a thick rule: it should register, not shout
+   over the pinned tile next to it. */
+.tiles li.asking > a{border-color:var(--now)}
+.tiles .m{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;
+  font:.75rem/1rem ui-sans-serif,system-ui,-apple-system,sans-serif;
+  color:var(--muted);margin:auto 0 0}
+.tiles time{font:inherit;color:var(--muted);white-space:nowrap}
+.tiles .dot{color:var(--muted);opacity:.6}
 /* The pin marker ends the meta row, as in the reference. It FLOWS in the row
    rather than being positioned onto it: absolutely positioned at the tile's
    bottom-right it landed below the date's baseline and rendered as a speck of
@@ -372,13 +442,13 @@ a{color:var(--accent-ink)}
    that, and it read as correct in the stylesheet.
    It carries the word as well as the glyph: at this size a lone pin is not
    recognisable as a pin, and the word is also what a screen reader gets. */
-.pinmark{display:inline-flex;align-items:center;gap:.22rem;flex:0 0 auto;
-  font:600 .68rem/1.4 var(--mono);letter-spacing:.06em;text-transform:uppercase;
-  color:var(--accent-ink);background:var(--accent-soft);border-radius:.3rem;
-  padding:.1rem .34rem}
+.pinmark{display:inline-flex;align-items:center;gap:.2rem;flex:0 0 auto;
+  margin-left:auto;font:600 .6875rem/1rem ui-sans-serif,system-ui,-apple-system,
+  sans-serif;letter-spacing:.02em;color:var(--accent-ink);
+  background:var(--accent-soft);border-radius:.3rem;padding:.1rem .34rem}
 .pinmark .mi{width:.85em;height:.85em;opacity:1}
 /* A pinned tile leads the wall; the accent edge says why, without shouting. */
-.tiles li.pinned > a{border-color:var(--accent);box-shadow:var(--shadow)}
+.tiles li.pinned > a{border-color:var(--accent)}
 .empty{color:var(--muted)}
 """
 
@@ -627,6 +697,28 @@ def _page_menu(
     )
 
 
+def _wall_meta(pages: int, waiting: int) -> str:
+    """What the header says, and it leads with him rather than with the count.
+
+    "5 pages" is a fact about the service. "3 questions waiting on you" is a
+    fact about his afternoon, and it is the whole reason this service exists --
+    his brief was to be able to "interact on decisions and not just visualise
+    progress". So when anything is waiting, that is what the header is for, and
+    it is a link: one tap and he is at the first page asking.
+
+    The page count stays, quietly, beside it. Dropping it would trade one fact
+    for another rather than ranking them.
+    """
+    pages_text = f"{pages} page" if pages == 1 else f"{pages} pages"
+    if not waiting:
+        return f'<span class="count">{pages_text}</span>'
+    noun = "question" if waiting == 1 else "questions"
+    return (
+        f'<a class="waiting" href="#waiting">{waiting} {noun} waiting on you</a>'
+        f'<span class="count">{pages_text}</span>'
+    )
+
+
 def _shell(
     title: str,
     body: str,
@@ -634,6 +726,7 @@ def _shell(
     home: bool = True,
     scripts: str = "",
     title_html: str = "",
+    meta_html: str = "",
 ) -> str:
     """Every gallery page, wrapped the same way: one narrow bar carrying the way
     back, the title and a timestamp, then the body. Deliberately quiet -- the
@@ -651,13 +744,19 @@ def _shell(
         if home
         else ""
     )
-    meta_html = f'<span class="meta">{escape(meta)}</span>' if meta else ""
+    # `meta` is TEXT and is escaped; `meta_html` is markup the caller built
+    # itself and is not. Two parameters rather than one that sometimes escapes:
+    # a single field whose safety depends on what a caller happens to pass is
+    # how escaping gets dropped by accident, and this one carries a page title
+    # via the wall's counts. Same split as `title`/`title_html` above.
+    meta_block = meta_html or (f"{escape(meta)}" if meta else "")
+    meta_block = f'<span class="meta">{meta_block}</span>' if meta_block else ""
     return (
         '<!doctype html><html lang="en-GB"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{escape(title)}</title><style>{_CSS}</style></head><body>"
         f'<div class="wrap"><header class="bar">{back}'
-        f"{title_html or f'<h1>{escape(title)}</h1>'}{meta_html}</header>"
+        f"{title_html or f'<h1>{escape(title)}</h1>'}{meta_block}</header>"
         f"{body}</div>{scripts}</body></html>"
     )
 
@@ -718,6 +817,44 @@ def _when(iso: str) -> str:
     except ValueError:
         return iso
     return moment.strftime("%-d %b, %H:%M")
+
+
+# The middot between meta items, as its own element so it can be dimmed.
+_SEP = '<span class="dot">&middot;</span>'
+
+
+def _ago(moment: datetime | None) -> str:
+    """"Edited 5h ago", the way the reference says it -- and the way a person
+    reads a wall.
+
+    A tile is glanced at, and "20 September 2026, 17:48 CEST" answers a question
+    nobody asked of a thumbnail: the useful fact is whether this moved today or
+    last week. The exact time is still one click away on the page itself, which
+    is where somebody who wants it is going anyway.
+
+    Hours up to a day, then days, then the date. Never "0h ago": under an hour
+    says "just now", because a wall that claims a page changed zero hours ago
+    reads as broken rather than as recent.
+    """
+    if moment is None:
+        return ""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    seconds = (datetime.now(UTC) - moment).total_seconds()
+    if seconds < 0:
+        # A clock disagreement, not the future. Say nothing rather than
+        # "in 3 hours", which would look like a bug in the service.
+        return "just now"
+    if seconds < 3600:
+        return "just now"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h ago"
+    days = int(seconds // 86400)
+    if days == 1:
+        return "yesterday"
+    if days < 7:
+        return f"{days}d ago"
+    return moment.strftime("%-d %b")
 
 
 def _provenance(row) -> str:
@@ -1001,12 +1138,26 @@ def gallery_router(db: Database) -> APIRouter:
             "       a.pinned_at"
             "  from artifact a"
             " where (a.archived_at is null) = %s"
-            # Pinned first, then the order the wall has always had. NULLS LAST
-            # is spelled out rather than left to the default: Postgres sorts
-            # NULLs first on DESC, which would put every UNpinned page above
-            # every pinned one -- precisely backwards, and it would look like
-            # pinning had done nothing rather than like a broken sort.
+            # THE WALL SORTS ITSELF BY WHAT NEEDS HIM. Pinned first, because
+            # that is him saying so explicitly. Then anything with an
+            # unanswered question, because this service exists so he can
+            # "interact on decisions and not just visualise progress" -- a page
+            # holding a question he has not seen outranks a page that merely
+            # changed recently. Then the order the wall has always had.
+            #
+            # The reference this gallery is modelled on has no equivalent and
+            # no reason for one: nobody is waiting on anybody there.
+            #
+            # NULLS LAST is spelled out rather than left to the default:
+            # Postgres sorts NULLs first on DESC, which would put every
+            # UNpinned page above every pinned one -- precisely backwards, and
+            # it would look like pinning had done nothing rather than like a
+            # broken sort.
             " order by a.pinned_at desc nulls last,"
+            "          (select count(*) from decision d"
+            "             where d.artifact_id = a.id"
+            "               and d.answer is null"
+            "               and d.closed_at is null) > 0 desc,"
             "          a.updated_at desc, a.id desc limit 200",
             (not archived,),
         ).fetchall()
@@ -1023,6 +1174,16 @@ def gallery_router(db: Database) -> APIRouter:
         # is (b): everything a tile can say without a browser. The thumbnail is
         # tracked separately and needs a decision about where the renderer runs,
         # because the gallery must never load an agent's HTML into this origin.
+        # The first page with an unanswered question, if any: the anchor the
+        # header jumps to. Computed over the rows in the order they will be
+        # rendered, so it is the first one he will SEE, not the first the
+        # database happened to return.
+        asking_ids = [r[0] for r in rows if r[5]]
+        waiting_total = sum(r[5] for r in rows)
+
+        def first_asking(artifact_id: str) -> bool:
+            return bool(asking_ids) and artifact_id == asking_ids[0]
+
         def tile(row) -> str:
             (
                 artifact_id,
@@ -1066,29 +1227,58 @@ def gallery_router(db: Database) -> APIRouter:
                 # A placeholder, not a blank: it says "no picture of this one
                 # yet", which is true and temporary -- a page gets one on its
                 # next publish.
-                shot = (
-                    '<span class="shot none" aria-hidden="true">'
-                    f'{_icon("page")}</span>'
-                )
+                # Not an empty box: it carries what the page says it is
+                # about. The reference never needs this because its preview
+                # always renders; here a page published before thumbnails
+                # existed would otherwise be a blank rectangle with a name.
+                inner = f'<span class="d">{escape(about)}</span>' if about else ""
+                shot = f'<span class="shot none">{_icon("page")}{inner}</span>' 
             # The <li> wraps BOTH the link and the menu; the menu is the link's
             # sibling, never its child. See _tile_menu.
-            bits = [
-                f'<li class="tile-wrap{" pinned" if pinned_at else ""}">',
-                f'<a href="/a/{escape(artifact_id)}">',
-                shot,
-                f'<span class="t">{escape(title)}</span>',
-            ]
-            if about:
-                bits.append(f'<span class="d">{escape(about)}</span>')
+            # Anything waiting on Jeremy rides ON the picture, not in the
+            # body below it. Two reasons, and the second is the real one:
+            # a badge in the body made that tile taller than its neighbours and
+            # the grid equalised the whole row to match, which is what left
+            # every other card with a hand's width of nothing in it. And a
+            # question for him is the one thing on this wall that should be
+            # legible without reading -- the reference has no equivalent,
+            # because nobody is waiting on anybody there.
+            flag = ""
             if waiting:
                 word = "question" if waiting == 1 else "questions"
-                bits.append(f'<span class="wait">{waiting} {word} for you</span>')
+                flag = f'<span class="wait">{waiting} {word} for you</span>'
+
+            bits = [
+                (
+                    f'<li class="tile-wrap{" pinned" if pinned_at else ""}'
+                    f'{" asking" if waiting else ""}"'
+                    # The header's "waiting on you" points here. Only the FIRST
+                    # such tile takes the id -- a duplicate id is invalid and
+                    # the jump lands on whichever the browser picks.
+                    f'{' id="waiting"' if waiting and first_asking(artifact_id) else ""}>'
+                ),
+                f'<a href="/a/{escape(artifact_id)}">',
+                f'<span class="frame">{shot}{flag}</span>',
+                '<span class="body">',
+                f'<span class="t">{escape(title)}</span>',
+            ]
+            # No description under the title of a tile that HAS a picture: the
+            # picture is the description, which is why the reference carries no
+            # tile description at all. Dropping it is what takes a card from
+            # ~350px to ~234px, so nine fit where three did.
+            # (the waiting badge is rendered onto the preview, above)
             # The time a reader can act on, in the reader's zone -- the same rule
             # as the page stamp (homelab-ij8.70). This used to print the raw
             # database value sliced to 16 characters, which is UTC and looked
             # like a local time: exactly the failure Jeremy caught on a page
             # ("your status time is back to UTC"), still live on the index.
-            when = stamp.format_for_display(updated) if updated else ""
+            # Relative on the face of it, exact in the attribute. "5h ago"
+            # is what a wall is read for, and it is also zone-free, which is
+            # the failure `stamp` exists to prevent (Jeremy read 08:53 UTC at
+            # 10:53 on his own clock). The precise, zone-correct moment stays
+            # one hover or long-press away rather than being thrown out.
+            when = _ago(updated)
+            exact = stamp.format_for_display(updated) if updated else ""
             # One meta row, as the reference has, but carrying what differs
             # BETWEEN pages here. The reference shows a padlock on every card
             # because some of its artifacts are shared; every page on this
@@ -1098,7 +1288,9 @@ def gallery_router(db: Database) -> APIRouter:
             # there, and the pin glyph ends the row exactly as it does in the
             # reference.
             meta_bits = [escape(agent)]
-            if versions:
+            if versions and versions > 1:
+                # "v1" on nearly every tile is a column of noise; a version
+                # COUNT only says something once there is more than one.
                 meta_bits.append(f"v{versions}")
             pin_mark = (
                 f'<span class="pinmark">{_icon("pin")}Pinned</span>' if pinned_at else ""
@@ -1109,9 +1301,15 @@ def gallery_router(db: Database) -> APIRouter:
                 # row, making every pinned tile taller than its neighbours --
                 # visible the moment the wall was rendered, invisible in the
                 # markup. The agent line is short and has the room.
-                f'<span class="m">{" &middot; ".join(meta_bits)}{pin_mark}</span>'
-                f"<time>{escape(when)}</time>"
-                "</a>"
+                f'<span class="m">{_SEP.join(meta_bits)}'
+                + (
+                    f'{_SEP}<time title="{escape(exact)}">Edited {escape(when)}'
+                    "</time>"
+                    if when
+                    else ""
+                )
+                + f"{pin_mark}</span>"
+                "</span></a>"
                 f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin())}"
                 "</li>"
             )
@@ -1141,7 +1339,12 @@ def gallery_router(db: Database) -> APIRouter:
             else '<p class="empty">No pages published yet.</p>'
         ) + archived_block
         return HTMLResponse(
-            _shell("Artifacts", body, meta=f"{len(rows)} pages", home=False),
+            _shell(
+                "Artifacts",
+                body,
+                meta_html=_wall_meta(len(rows), waiting_total),
+                home=False,
+            ),
             headers=gallery_headers(),
         )
 

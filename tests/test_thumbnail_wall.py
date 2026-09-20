@@ -4,6 +4,7 @@ homelab-ij8.22. Two properties carry this feature, and both are the kind that
 look obviously true and quietly stop being so.
 """
 
+import re
 import threading
 import time
 
@@ -13,7 +14,9 @@ from fastapi.testclient import TestClient
 from artifacts import keys, store, thumbs
 from artifacts.app import create_gallery_app
 
-PAGE = "<!doctype html><html><head><title>B</title></head><body><p>one</p></body></html>"
+PAGE = (
+    "<!doctype html><html><head><title>B</title></head><body><p>one</p></body></html>"
+)
 PNG = b"\x89PNG\r\n\x1a\n" + b"fake png bytes for a test" * 4
 
 
@@ -164,8 +167,8 @@ def test_the_wall_shows_a_picture_only_when_there_is_one(client, db):
     store.save_thumbnail(db, shot.id, shot.version, PNG)
 
     page = client.get("/").text
-    assert f'/thumb/{shot.id}.png' in page
-    assert f'/thumb/{plain.id}.png' not in page
+    assert f"/thumb/{shot.id}.png" in page
+    assert f"/thumb/{plain.id}.png" not in page
     assert "No picture" in page, "the text tile is still a complete tile"
 
 
@@ -187,5 +190,19 @@ def test_the_tile_image_keeps_height_auto(client, db):
         "without height:auto the height attribute wins and aspect-ratio is inert; "
         "the thumbnail becomes a magnified crop"
     )
-    assert "aspect-ratio:900/640" in rule
+    assert re.search(r"aspect-ratio:\d+/\d+", rule), (
+        "some fixed ratio must be set, or the box has no height for `auto` to "
+        "resolve against and the grid reflows as each lazy image lands"
+    )
     assert "object-fit:cover" in rule
+    # The RATIO ITSELF is a design choice and is not asserted here. It used to
+    # be pinned to 900/640 -- the renderer's own dimensions -- which made this a
+    # change-detector: moving the tile to the reference's 1.9:1 broke a test
+    # about `height:auto`, which had not changed. The tile's shape is covered by
+    # rendering the wall and looking at it; this test exists for the one
+    # property that is invisible when wrong.
+    #
+    # The two ratios differ ON PURPOSE. The renderer captures the page at
+    # thumbs.WIDTH x thumbs.HEIGHT and the tile shows a wider crop of it,
+    # anchored to the top -- `object-position:top center` -- because the top of
+    # a page is the part a reader recognises.

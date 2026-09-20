@@ -22,6 +22,11 @@ from artifacts import store
 from artifacts.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
+STANDFIRST = (
+    "<!doctype html><html><head><title>Board</title></head><body>"
+    '<p class="standfirst">Where the backup arc stands, updated as it moves.</p>'
+    "</body></html>"
+)
 SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
 # A 1x1 PNG: the wall only asks whether a thumbnail EXISTS.
 _PNG = bytes.fromhex(
@@ -39,7 +44,7 @@ def client(db, monkeypatch):
 
 def _tile(page: str, artifact_id: str) -> str:
     """The one <li> for this page, from the wall."""
-    tiles = re.findall(r"<li class=\"tile-wrap[^\"]*\">.*?</li>", page, re.DOTALL)
+    tiles = re.findall(r"<li class=\"tile-wrap[^>]*>.*?</li>", page, re.DOTALL)
     matching = [t for t in tiles if artifact_id in t]
     assert len(matching) == 1, f"expected exactly one tile for {artifact_id}"
     return matching[0]
@@ -121,6 +126,82 @@ def test_every_tile_has_a_preview_area_even_with_no_picture(client, db):
     assert f'src="/thumb/{shot.id}.png"' in _tile(page, shot.id), "and a real one"
 
 
+# --- what is waiting on him --------------------------------------------------
+
+
+def _ask(db, artifact_id, question="Which?"):
+    from artifacts import decisions
+
+    return decisions.ask(
+        db,
+        agent="seat",
+        artifact_id=artifact_id,
+        question=question,
+        options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
+        recommended="a",
+    )
+
+
+def test_the_header_leads_with_what_is_waiting_on_him(client, db):
+    """ "5 pages" is a fact about the service; "2 questions waiting on you" is a
+    fact about his afternoon, and it is the reason this service exists. So when
+    anything is waiting, that is what the header is for."""
+    published = store.publish(db, "seat", "Board", PAGE)
+    page = client.get("/").text
+    assert 'class="waiting"' not in page, "nothing waiting, nothing claimed"
+    assert "1 page" in page
+
+    _ask(db, published.id)
+    _ask(db, published.id, "And the other?")
+    page = client.get("/").text
+    assert "2 questions waiting on you" in page
+    assert "1 page" in page, "the page count stays, quietly, beside it"
+
+
+def test_the_indicator_is_a_link_to_the_first_page_asking(client, db):
+    """One tap and he is at it, rather than hunting the amber card."""
+    store.publish(db, "seat", "Nothing to answer", PAGE)
+    asking = store.publish(db, "seat", "Has a question", PAGE)
+    _ask(db, asking.id)
+    page = client.get("/").text
+    assert 'href="#waiting"' in page
+    assert page.count('id="waiting"') == 1, (
+        "exactly one anchor: a duplicate id is invalid"
+    )
+    assert _tile(page, asking.id).count('id="waiting"') == 1, (
+        "and it is on the right tile"
+    )
+
+
+def test_only_the_first_asking_tile_takes_the_anchor(client, db):
+    """Two pages asking, one anchor. A duplicate id is invalid HTML and the
+    jump lands on whichever the browser feels like."""
+    first = store.publish(db, "seat", "First", PAGE)
+    second = store.publish(db, "seat", "Second", PAGE)
+    _ask(db, first.id)
+    _ask(db, second.id)
+    page = client.get("/").text
+    assert page.count('id="waiting"') == 1
+    assert "3 questions" not in page, "two pages asking once each is two questions"
+    assert "2 questions waiting on you" in page
+
+
+def test_an_answered_question_stops_claiming_his_attention(client, db):
+    """The count is of what is still open. A page that goes on saying "waiting
+    on you" after he has answered is the exact failure that filled the top of
+    his own status board with things he had already settled."""
+    from artifacts import decisions
+
+    published = store.publish(db, "seat", "Board", PAGE)
+    asked = _ask(db, published.id)
+    assert "1 question waiting on you" in client.get("/").text
+
+    decisions.answer(db, asked.id, letter="a", note="", by="jeremy")
+    page = client.get("/").text
+    assert 'class="waiting"' not in page
+    assert "asking" not in _tile(page, published.id).split(">", 1)[0]
+
+
 # --- pinning ----------------------------------------------------------------
 
 
@@ -147,6 +228,108 @@ def test_unpinned_pages_sort_below_pinned_ones_not_above(client, db):
     store.publish(db, "seat", "Unpinned B", PAGE)
     store.set_pinned(db, pinned.id, True, agent=None)
     assert _order(client)[0] == "Pinned"
+
+
+# --- the tile as the reference has it ----------------------------------------
+
+
+def test_a_tile_with_a_picture_carries_no_description(client, db):
+    """The picture IS the description -- which is why the reference carries no
+    tile description at all. Dropping it is what takes a card from ~350px to
+    ~234px, so nine fit on a screen where three did."""
+    published = store.publish(db, "seat", "Board", STANDFIRST)
+    store.save_thumbnail(db, published.id, 1, _PNG)
+    tile = _tile(client.get("/").text, published.id)
+    assert "the backup arc stands" not in tile, "no standfirst under the title"
+    assert f'src="/thumb/{published.id}.png"' in tile
+
+
+def test_a_tile_with_no_picture_shows_what_the_page_is_about_instead(client, db):
+    """The one case the reference never has, because its preview always
+    renders. A placeholder that is merely blank would be a rectangle with a
+    name on it."""
+    published = store.publish(db, "seat", "Board", STANDFIRST)
+    tile = _tile(client.get("/").text, published.id)
+    assert 'class="shot none"' in tile
+    assert "the backup arc stands" in tile
+
+
+def test_the_time_is_relative_on_the_face_and_exact_in_the_attribute(client, db):
+    """ "Edited 5h ago" is what a wall is read for, and it is zone-free -- the
+    failure `stamp` exists to prevent (Jeremy read 08:53 UTC at 10:53 on his own
+    clock). The precise, zone-correct moment stays one hover away."""
+    published = store.publish(db, "seat", "Board", PAGE)
+    tile = _tile(client.get("/").text, published.id)
+    assert "Edited just now" in tile
+    assert re.search(r'<time title="[^"]*20[0-9]{2}[^"]*">', tile), (
+        "the exact stamp is still there, in the title attribute"
+    )
+
+
+def test_a_page_with_a_question_outranks_one_that_merely_changed(client, db):
+    """The wall sorts itself by what needs him. This service exists so he can
+    "interact on decisions and not just visualise progress", so a page holding
+    a question he has not answered leads one that is simply newer."""
+    from artifacts import decisions
+
+    asking = store.publish(db, "seat", "Has a question", PAGE)
+    store.publish(db, "seat", "Merely newer", PAGE)
+    assert _order(client) == ["Merely newer", "Has a question"], "newest first"
+
+    decisions.ask(
+        db,
+        agent="seat",
+        artifact_id=asking.id,
+        question="Which?",
+        options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
+        recommended="a",
+    )
+    assert _order(client)[0] == "Has a question"
+
+
+def test_a_pin_still_outranks_a_question(client, db):
+    """Two orderings that can disagree, and his explicit one wins. A pin is him
+    saying "keep this in front of me"; a question is the service guessing that
+    he will want to."""
+    from artifacts import decisions
+
+    asking = store.publish(db, "seat", "Has a question", PAGE)
+    pinned = store.publish(db, "seat", "Pinned", PAGE)
+    decisions.ask(
+        db,
+        agent="seat",
+        artifact_id=asking.id,
+        question="Which?",
+        options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
+        recommended="a",
+    )
+    store.set_pinned(db, pinned.id, True, agent=None)
+    assert _order(client) == ["Pinned", "Has a question"]
+
+
+def test_the_waiting_badge_rides_the_picture_not_the_body(client, db):
+    """In the body it made that tile taller and the grid equalised the whole
+    row to match, leaving every other card with a hand's width of nothing."""
+    from artifacts import decisions
+
+    published = store.publish(db, "seat", "Board", PAGE)
+    decisions.ask(
+        db,
+        agent="seat",
+        artifact_id=published.id,
+        question="Which?",
+        options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
+        recommended="a",
+    )
+    tile = _tile(client.get("/").text, published.id)
+    frame = re.search(
+        r'<span class="frame">.*?</span>\s*<span class="body">', tile, re.DOTALL
+    )
+    assert frame, "the preview and its overlays are one block"
+    assert 'class="wait"' in frame.group(0), "the badge is on the picture"
+    body = tile.split('<span class="body">', 1)[1]
+    assert 'class="wait"' not in body, "and not in the body below it"
+    assert "asking" in tile.split(">", 1)[0], "and the card's edge says so"
 
 
 def test_the_tile_of_a_pinned_page_says_so(client, db):
