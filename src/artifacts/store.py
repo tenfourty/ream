@@ -313,11 +313,47 @@ def patch(
             raise NotFound()
         current = row[4]
         live = conn.execute(
-            "select revision from version where artifact_id = %s and n = %s",
+            "select revision, body from version where artifact_id = %s and n = %s",
             (artifact_id, current),
         ).fetchone()
         if live is None or live[0] != expected_revision:
             raise RevisionMismatch()
+
+        # An identical body is not a new version (homelab-ij8.41). Before this,
+        # every republish inserted a row and bumped `updated_at`, so a page
+        # redrawn on a schedule LOOKED freshly updated to a reader every time
+        # and its history filled with identical copies. That matters now rather
+        # than in principle: a bd hook fires a republish after every tracker
+        # change, and most tracker changes do not change the page.
+        #
+        # Enforced HERE rather than in each client on purpose. A client-side
+        # check is one every future client has to reimplement, and the one that
+        # does not is the one that quietly fills the history.
+        #
+        # A rename with an unchanged body still renames: the name is not the
+        # body, and refusing it would make "correct the title" impossible
+        # without editing the page. It bumps `updated_at`, because to a reader
+        # the page HAS changed.
+        if live[1] == body:
+            # The TITLE is still new even when the body is not, so it still
+            # faces the secret scan. Skipping it here was a real regression
+            # caught by an existing test: a rename carrying an AWS key in the
+            # title sailed through 200 while the same title on a changed body
+            # was refused 422. The body itself needs no re-scan — it is the
+            # bytes already stored, already checked when they were.
+            if title is not None:
+                _check_secrets(title, "title", agent=agent, artifact_id=artifact_id)
+                conn.execute(
+                    "update artifact set title = %s, updated_at = now() where id = %s",
+                    (title, artifact_id),
+                )
+            return Published(
+                id=artifact_id,
+                url=url_for(artifact_id),
+                revision=expected_revision,
+                version=current,
+            )
+
         _check_secrets(body, "body", agent=agent, artifact_id=artifact_id)
         if title is not None:
             _check_secrets(title, "title", agent=agent, artifact_id=artifact_id)

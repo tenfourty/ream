@@ -96,9 +96,15 @@ def test_a_stale_revision_is_refused(client, db):
     first = client.post(
         "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
     ).json()
+    # The first patch must CHANGE the body. This used to send PAGE again and
+    # relied on an identical republish still minting a version to move the
+    # revision on -- which stopped being true when identical republishes became
+    # no-ops (homelab-ij8.41), and then the second call was holding a revision
+    # that was still current, so 200 was the right answer. The intent here is
+    # "someone else moved the page on", so the setup has to actually move it.
     client.patch(
         f"/api/v1/artifacts/{first['id']}",
-        json={"body": PAGE, "expected_revision": first["revision"]},
+        json={"body": PAGE + "<!--someone else-->", "expected_revision": first["revision"]},
         headers=auth(token),
     )
     stale = client.patch(
@@ -808,3 +814,115 @@ def test_a_refused_rename_does_not_write_the_body_either(client, db):
         f"/api/v1/artifacts/{created['id']}", headers=auth(token)
     ).json()
     assert fetched["revision"] == created["revision"]
+
+
+# --- an identical republish is not a new version (homelab-ij8.41) -----------
+
+
+def test_republishing_identical_bytes_creates_no_version(client, db):
+    """A page redrawn on a schedule must not look freshly updated every time.
+
+    This became load-bearing when a bd hook began firing a republish after every
+    tracker change: most tracker changes do not change the page, and before this
+    each one inserted a version row and bumped `updated_at`, so the page read as
+    just-updated to Jeremy and its history filled with identical copies.
+    """
+    token, _ = keys.mint(db, agent="ops-seat")
+    created = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
+    ).json()
+
+    again = client.patch(
+        f"/api/v1/artifacts/{created['id']}",
+        json={"body": PAGE, "expected_revision": created["revision"]},
+        headers=auth(token),
+    )
+    assert again.status_code == 200
+    assert again.json()["version"] == created["version"], "no new version"
+    assert again.json()["revision"] == created["revision"], "the revision is unmoved"
+
+    listed = client.get("/api/v1/artifacts", headers=auth(token)).json()
+    assert [r["id"] for r in listed] == [created["id"]]
+
+
+def test_an_unchanged_republish_does_not_bump_the_updated_time(client, db):
+    """The stamp on the page is the reader's whole basis for trusting it."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    created = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
+    ).json()
+    before = client.get(
+        f"/api/v1/artifacts/{created['id']}", headers=auth(token)
+    ).json()["updated_at"]
+
+    client.patch(
+        f"/api/v1/artifacts/{created['id']}",
+        json={"body": PAGE, "expected_revision": created["revision"]},
+        headers=auth(token),
+    )
+    after = client.get(
+        f"/api/v1/artifacts/{created['id']}", headers=auth(token)
+    ).json()["updated_at"]
+    assert after == before
+
+
+def test_a_changed_body_still_creates_a_version(client, db):
+    """The control arm. A no-op check that also swallows real changes would
+    pass every assertion above and be catastrophic."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    created = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
+    ).json()
+    changed = client.patch(
+        f"/api/v1/artifacts/{created['id']}",
+        json={
+            "body": PAGE.replace("hi", "changed"),
+            "expected_revision": created["revision"],
+        },
+        headers=auth(token),
+    ).json()
+    assert changed["version"] == created["version"] + 1
+    assert changed["revision"] != created["revision"]
+
+
+def test_a_rename_with_an_unchanged_body_still_renames(client, db):
+    """The name is not the body. Refusing this would make correcting a title
+    impossible without editing the page."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    created = client.post(
+        "/api/v1/artifacts", json={"title": "Wrong name", "body": PAGE}, headers=auth(token)
+    ).json()
+    renamed = client.patch(
+        f"/api/v1/artifacts/{created['id']}",
+        json={
+            "body": PAGE,
+            "expected_revision": created["revision"],
+            "title": "Its real name",
+        },
+        headers=auth(token),
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["version"] == created["version"], "still no new version"
+    listed = client.get("/api/v1/artifacts", headers=auth(token)).json()
+    assert listed[0]["title"] == "Its real name"
+
+
+def test_a_stale_revision_is_still_refused_on_an_identical_body(client, db):
+    """The no-op path must not become a way around the concurrency check: a
+    caller holding an old revision has not seen what is there now, and telling
+    it "fine, unchanged" would be a lie about which body it matched."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    created = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
+    ).json()
+    client.patch(
+        f"/api/v1/artifacts/{created['id']}",
+        json={"body": PAGE + "<!--moved on-->", "expected_revision": created["revision"]},
+        headers=auth(token),
+    )
+    stale = client.patch(
+        f"/api/v1/artifacts/{created['id']}",
+        json={"body": PAGE, "expected_revision": created["revision"]},
+        headers=auth(token),
+    )
+    assert stale.status_code == 409

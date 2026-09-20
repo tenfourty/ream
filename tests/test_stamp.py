@@ -118,13 +118,25 @@ def test_the_stored_body_still_holds_the_marker_not_a_frozen_time(db):
     assert stamp.MARKER in store.get_body(db, "ops-seat", artifact.id).body
 
 
-def test_an_identical_republish_still_produces_an_identical_revision(db):
+def test_an_identical_republish_is_not_a_new_version_at_all(db):
+    """The stamp changes nothing the hash can see — the point this file exists
+    to protect. Folding a clock into the STORED body would make every republish
+    of an unchanged page different bytes, and the page would look freshly
+    updated for ever after.
+
+    This used to assert the identical republish produced `_revision(MARKED, 2)`
+    — that it still made a version 2, just a predictable one. Since
+    homelab-ij8.41 an identical body makes no version at all, which is a
+    stronger form of the same guarantee and the one a scheduled republish
+    depends on. If a clock ever does creep into the stored body, this fails
+    loudly: the bodies would differ and a version 2 would appear.
+    """
     keys.mint(db, agent="ops-seat")
     first = store.publish(db, "ops-seat", "Board", MARKED)
     second = store.patch(db, "ops-seat", first.id, MARKED, first.revision)
-    # Same bytes in, same hash out: the stamp changed nothing the hash can see.
     assert store._revision(MARKED, 1) == first.revision
-    assert second.revision == store._revision(MARKED, 2)
+    assert second.version == first.version == 1, "no version 2 was created"
+    assert second.revision == first.revision, "and the revision did not move"
 
 
 def test_an_older_version_says_when_IT_was_published(db, monkeypatch, paris):
