@@ -118,11 +118,16 @@ html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--paper);color:var(--ink);
      font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 a{color:var(--accent-ink)}
-/* 60rem = 960px, which is the reference's column exactly: 3 x 304 + 2 x 24.
+/* 62rem, not 60. The CONTENT box wants to be 960px -- the reference's column
+   exactly, 3 x 304 + 2 x 24 -- and `box-sizing:border-box` means max-width
+   includes the 1rem padding either side. At 60rem the usable column was 928
+   and every card came out 293 instead of 304. Measured by rendering this wall
+   beside the reference at the same width; it reads as correct in the
+   stylesheet and is out by eleven pixels a card.
    48px above the title is measured off it too -- the old 1rem put the heading
    hard against the top of the window and made the whole page feel cramped
    before a single card had been read. */
-.wrap{max-width:60rem;margin:0 auto;padding:3rem 1rem 3.5rem}
+.wrap{max-width:62rem;margin:0 auto;padding:3rem 1rem 3.5rem}
 @media (max-width:40rem){.wrap{padding-top:1.5rem}}
 /* No rule under the title. Measured: the reference's header is a 48px row with
    no border beneath it -- the wall's own top edge is the separation, and a rule
@@ -416,16 +421,19 @@ a{color:var(--accent-ink)}
 /* The title is SANS at 14/20 and weight 500, not the serif display face. On a
    304px card the serif at 17px wrapped to three lines and fought the page's own
    title showing through the preview right above it.
-   TWO LINES, ALWAYS RESERVED. The reference clamps to one, which works because
-   its titles are short; a homelab page is called "Warpgate: the gate Jeremy
-   comes through" and one line would cut it mid-word. Reserving the second line
-   whether or not it is used is what keeps every body exactly the same height,
-   so the grid stays a grid -- without it one two-line title stretched every
-   other card in its row and left them with a hand's width of nothing. */
+   Up to TWO LINES. The reference clamps to one, which works because its titles
+   are short; a homelab page is called "Warpgate: the gate Jeremy comes through"
+   and one line would cut it mid-word.
+   The second line is NOT reserved. It was, briefly, to keep every body the
+   same height -- but the grid already equalises a row, and reserving a line
+   that is usually empty added twenty pixels of nothing to every card. Seen
+   only by putting this wall beside the reference at the same width: mine was
+   visibly looser and that was most of the reason. What made rows ragged was
+   the waiting badge sitting in the body, and that now rides the picture. */
 .tiles .t{font:500 .875rem/1.25rem ui-sans-serif,system-ui,
   -apple-system,"Segoe UI",Roboto,sans-serif;
   overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;
-  -webkit-box-orient:vertical;min-height:2.5rem}
+  -webkit-box-orient:vertical}
 /* Anything waiting on Jeremy is the one thing on a tile that should interrupt
    him, so it is the only coloured element and it sits above the metadata. */
 /* The preview and anything sitting on top of it. */
