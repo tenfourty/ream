@@ -58,6 +58,18 @@ spec:
         spec:
           restartPolicy: Never
           priorityClassName: homelab-internal
+          automountServiceAccountToken: false
+          # The same pod securityContext as the Deployment. Running this job
+          # once surfaced that it had none: PodSecurity warned "would violate
+          # restricted:latest". Only a warning, and the pod ran -- but the app
+          # satisfies `restricted` and the job that shares its image and its
+          # database should not be the one thing here that does not.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            seccompProfile:
+              type: RuntimeDefault
           containers:
             - name: purge
               image: git.tenfourty.site/jeremy/artifacts:bootstrap
@@ -71,7 +83,6 @@ spec:
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
-                runAsNonRoot: true
                 capabilities:
                   drop: ["ALL"]
               resources:
