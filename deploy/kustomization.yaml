@@ -9,6 +9,10 @@ namespace: artifacts
 resources:
   - deployment.yaml
   - service.yaml
+  # The nightly sweep that makes the thirty-day delete window real. In THIS
+  # kustomization, not the homelab one, so `images:` below rewrites its tag
+  # too and the sweep is always the same build as the app.
+  - purge-cronjob.yaml
 
 # A content-hash suffix on the name (kustomize's default -- not disabled
 # below), so an edit to artifacts-config.env produces a NEW ConfigMap name
