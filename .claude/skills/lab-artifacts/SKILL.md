@@ -31,6 +31,27 @@ artifacts-publish --unpin <id>
 artifacts-publish --duplicate <id>                        # a copy at a new address
 ```
 
+Deleting is its own thing, over the API rather than the CLI, because it is the
+one action here with a clock on it:
+
+```bash
+akey | curl -sS -X DELETE -H @- "$BASE/artifacts/<id>"        # 30 days to change your mind
+akey | curl -sS -H @- "$BASE/artifacts/deleted"               # what you have deleted, soonest to go first
+akey | curl -sS -X POST -H @- "$BASE/artifacts/<id>/restore"  # put it back, address and history intact
+```
+
+**A delete destroys nothing.** The body, every version, and every decision with
+his answers and his notes are all still there for the window — this is the cheap
+way to tidy, never the way a record of what he decided is destroyed. You can
+recover your own pages and so can he; that is deliberate, because an agent
+deletes a page in error as readily as a human does and it is usually the agent
+that notices, within seconds and while he is asleep.
+
+After thirty days a nightly sweep destroys it for good. `POST
+/artifacts/<id>/destroy` with `{"confirm": "destroy"}` does it now instead —
+separate from delete on purpose, because "tidy this away" and "this must not
+exist anywhere" are different intentions.
+
 These exist because of a rule of his (20 Sep 2026): *"ideally agents can take
 all the same actions a human can."* Archive, rename and pin started as controls
 in his gallery; an agent that had published a page months ago and no longer had
