@@ -1,0 +1,310 @@
+<!doctype html>
+<!--
+  TEMPLATE · project-status
+  ─────────────────────────
+  Publish this when someone asks where an arc stands, or when a bead moves and
+  the arc has a page. One page per arc, updated in place — the page is the arc's
+  CURRENT state and its history lives in the versions behind it.
+
+  Everything below is a WORKED EXAMPLE about a made-up backup arc. Replace all of
+  it. Each region carries a REPLACE comment saying what belongs there and what
+  does not. The one thing to keep exactly as it is: the updated-stamp marker,
+  the empty HTML comment in the eyebrow and in the chips.
+
+  Rules this page already obeys, so you don't have to remember them:
+    · no forms, no external fetches, no web fonts — the page CSP forbids them
+    · the Gallery link is target="_blank" (the frame's sandbox blocks same-tab)
+    · no date is typed anywhere; the service stamps it when it serves the page
+    · no page-id placeholder, because the id does not exist until you publish
+-->
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- REPLACE: the arc's name. This text is what Jeremy's browser tab says, and
+     it is invisible to you after publishing — a board here kept the unedited
+     placeholder in its tab for two hours, because only the <h1> below was
+     changed. Change both. -->
+<title>Off-site backups</title>
+<style>
+/* ==== shared: begin — do not edit here; edit _shared.css and re-sync ==== */
+  /* Tokens. Change values, never names — every homelab page shares these, so a
+     page that renames one stops looking like the others. Declared on :root and
+     redefined for dark; never hard-code a colour in a rule below. */
+  :root{
+    --paper:#faf9f6; --ink:#191a17; --muted:#6c6d64; --card:#fff; --line:#e4e3db;
+    --accent:#0f6f63; --accent-soft:rgba(15,111,99,.10); --accent-ink:#0b4f46;
+    --ok:#2f7a45; --now:#b06a12; --wait:#4a5b8c;
+    /* --bar is the one hue any chart on this page may use, and it is NOT
+       --accent: --accent is tuned for text and links, a fill wants more body.
+       Both values are validated against their own surface for the OKLCH
+       lightness band, the chroma floor and >=3:1 contrast. Re-run the check
+       before changing either. */
+    --bar:#067e66; --bar-soft:rgba(6,126,102,.14);
+    --shadow:0 1px 2px rgba(20,20,15,.05), 0 8px 24px -16px rgba(20,20,15,.25);
+    --display:ui-serif,"Iowan Old Style",Georgia,"Times New Roman",serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --rule:#191a17;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#141619; --ink:#e9eae4; --muted:#989a90; --card:#1c1f23; --line:#2b2e34;
+      --accent:#5ec9b8; --accent-soft:rgba(94,201,184,.12); --accent-ink:#9fe3d7;
+      --ok:#6cc48a; --now:#e0a458; --wait:#8fa6e0;
+      --bar:#069c97; --bar-soft:rgba(6,156,151,.18);
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.8);
+      --rule:#e9eae4;
+    }
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--paper);color:var(--ink);
+       font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent-ink);text-underline-offset:.15em}
+  main{max-width:52rem;margin:0 auto;padding:1.8rem 1rem 4rem}
+
+  /* Masthead. The Gallery pill MUST keep target="_blank" rel="noopener": this
+     page is framed by the gallery, the gallery refuses to be framed, and the
+     frame's sandbox forbids top-level navigation — so a same-tab link is a dead
+     link. Found by Jeremy on a real page, 19 Sep 2026. */
+  .masthead{max-width:52rem;margin:0 auto;padding:1.1rem 1rem 0}
+  .topline{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:2.6rem}
+  .topline a{color:var(--accent-ink);text-decoration:none;display:inline-flex;align-items:center;
+    gap:.4rem;border:1px solid var(--line);background:var(--card);border-radius:999px;
+    padding:.25rem .7rem;font-size:.82rem}
+  .topline a:hover{border-color:var(--accent)}
+  .topline svg{width:.9em;height:.9em;fill:currentColor}
+  .eyebrow{font:600 .78rem/1.4 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 .9rem}
+  h1{font:400 clamp(2.1rem,6vw,3.1rem)/1.05 var(--display);letter-spacing:-.015em;margin:0 0 .8rem}
+  .standfirst{margin:0;font-size:1.06rem;color:var(--ink);max-width:40rem}
+  .chips{display:flex;gap:.4rem;flex-wrap:wrap;margin:1.3rem 0 0}
+  .chip{font:.78rem/1.4 var(--mono);border-radius:999px;padding:.22rem .62rem;
+    border:1px solid var(--line);background:var(--card);color:var(--muted)}
+  .chip.on{border-color:transparent;background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+  .masthead hr{border:0;border-top:2px solid var(--rule);margin:1.6rem 0 0}
+
+  /* Shapes */
+  h2{font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+     margin:2.4rem 0 .7rem}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:.7rem;
+    padding:1rem 1.15rem;margin:.6rem 0;box-shadow:var(--shadow)}
+  .card.live{border-left:3px solid var(--ok)}
+  .card.ask{border-left:3px solid var(--now)}
+  .card > b:first-child{display:block;margin-bottom:.35rem}
+  p{margin:.5rem 0}
+  ul{margin:.4rem 0;padding-left:1.15rem} li{margin:.28rem 0}
+  table{border-collapse:collapse;width:100%;font-size:.95rem}
+  th{text-align:left;font:600 .75rem/1.4 var(--mono);letter-spacing:.06em;
+    text-transform:uppercase;color:var(--muted);padding:.35rem .5rem;
+    border-bottom:1px solid var(--line)}
+  td{padding:.45rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}
+  td.s{width:1%;white-space:nowrap}
+  .state{font-size:.75rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+    border-radius:.3rem;padding:.12rem .45rem;border:1px solid currentColor}
+  .state.done{color:var(--ok)} .state.now{color:var(--now)}
+  .state.next{color:var(--wait)} .state.held{color:var(--muted)}
+  code{background:var(--accent-soft);color:var(--accent-ink);padding:.08rem .32rem;
+    border-radius:.25rem;font-size:.88em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  blockquote{margin:.8rem 0;padding:.1rem 0 .1rem 1rem;border-left:2px solid var(--line);
+    color:var(--ink)}
+  .muted{color:var(--muted)}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  footer{margin-top:2.8rem;padding-top:.9rem;border-top:1px solid var(--line);
+    color:var(--muted);font-size:.85rem}
+
+  /* Stat tiles. A tile with no real source is DELETED, never rendered as zero —
+     a made-up number on a page Jeremy trusts is worse than a missing one. Every
+     tile says what it counted and over what window, in the tile. */
+  .tiles{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));
+    margin:.6rem 0}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:.7rem;
+    padding:.85rem .95rem;box-shadow:var(--shadow)}
+  .tile .k{font:.75rem/1.3 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);margin:0}
+  .tile .v{font:600 1.9rem/1.1 ui-sans-serif,system-ui,-apple-system,sans-serif;
+    margin:.3rem 0 .15rem;letter-spacing:-.02em}
+  .tile .w{font-size:.8rem;color:var(--muted);margin:0}
+
+  /* Chart. One series, so one hue and no legend — the caption names it.
+     Nothing legibility-critical goes inside the SVG: text in a scaled viewBox
+     scales with it, so an axis that reads on a laptop is unreadable on a phone.
+     The bars scale; the range and the reading are HTML and never do. */
+  /* Capped at the viewBox's own width so the chart never scales ABOVE 1:1:
+     stretched, a 24px bar becomes a 30px one and the spec that keeps marks
+     thin quietly stops holding. The cap covers the caption and the axis row
+     too, so all three stay aligned. */
+  figure{margin:.6rem 0;max-width:40rem}
+  figure svg{display:block;width:100%;height:7.5rem}
+  .bar{fill:var(--bar)}
+  .base{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
+  .axis{display:flex;justify-content:space-between;margin:.3rem 0 0;
+    font:.72rem var(--mono);color:var(--muted)}
+  figcaption{font-size:.82rem;color:var(--muted);margin-top:.35rem;max-width:34rem}
+
+  @media (max-width:32rem){
+    main,.masthead{padding-left:.85rem;padding-right:.85rem}
+    .tile .v{font-size:1.6rem}
+  }
+/* ==== shared: end ==== */
+
+  /* ---- page-specific: project-status ------------------------------- */
+  .held-why{font-size:.9rem;color:var(--muted);margin:.15rem 0 0}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <p class="topline">
+    <a href="https://artifacts.tenfourty.site/" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg> Gallery</a>
+  </p>
+  <!-- The middle field is the stamp marker. Leave it. The service replaces it
+       at SERVE time with the moment this version was published, in Jeremy's
+       zone. You never hold a clock, so you can never be wrong about it. -->
+  <p class="eyebrow">STATUS &middot; <!--artifacts:updated--> &middot; BABA</p>
+  <!-- REPLACE: same words as <title>. -->
+  <h1>Off-site backups</h1>
+  <!-- REPLACE: one sentence. What this page is, and who it is for. Not a
+       summary of the work — a description of the page. -->
+  <p class="standfirst">Where the off-site backup arc stands, updated whenever a
+    piece of it moves.</p>
+  <!-- REPLACE: the state chip is the arc's one-word condition. The updated chip
+       carries the marker again, because the eyebrow scrolls away on a phone and
+       this is the one a reader checks. -->
+  <p class="chips"><span class="chip on">On track</span><span class="chip">Updated <!--artifacts:updated--></span></p>
+  <hr>
+</header>
+
+<main>
+  <!-- REPLACE: the single most important paragraph on the page. What is true
+       RIGHT NOW, in outcomes. Never plan coordinates: "the photo library is
+       uploading off-site, 21% done", never "T2.1 in progress". If a reader
+       stops after this card, they should still know where things are. -->
+  <div class="card live">
+    <b>Everything except the photo library is backing up off-site nightly.</b>
+    <ul>
+      <li>Documents, mail and the VM images have run clean for nine nights.</li>
+      <li>The photo library is 21% uploaded; at the rate it is going it finishes
+        on Thursday.</li>
+      <li>A restore was tested on Tuesday from the off-site copy alone — it came
+        back whole, which is the claim that actually matters.</li>
+    </ul>
+  </div>
+
+  <h2>The numbers</h2>
+  <!-- REPLACE, or DELETE the whole block. These come from the tracker, not from
+       you: a number you type is a number you can get wrong, and a wrong number
+       here is the worst failure this page has, because the page reads as
+       current. Every tile says WHAT it counted and OVER WHAT WINDOW. A tile you
+       have no source for is deleted, never rendered as zero. -->
+  <div class="tiles">
+    <div class="tile">
+      <p class="k">Done</p>
+      <p class="v">31</p>
+      <p class="w">of 44 pieces, all time</p>
+    </div>
+    <div class="tile">
+      <p class="k">Still open</p>
+      <p class="v">13</p>
+      <p class="w">4 of them urgent</p>
+    </div>
+    <div class="tile">
+      <p class="k">Finished this week</p>
+      <p class="v">9</p>
+      <p class="w">last 7 days</p>
+    </div>
+    <div class="tile">
+      <p class="k">Last moved</p>
+      <p class="v">2h</p>
+      <p class="w">ago, the restore test</p>
+    </div>
+  </div>
+
+  <!-- REPLACE, or DELETE the whole figure. One series, so one hue and no
+       legend — the caption names what is plotted. Do NOT draw this until the
+       arc is at least a week old: a two-bar chart implies a trend that is not
+       there.
+
+       Nothing legibility-critical lives inside the SVG. Text in a scaled
+       viewBox scales with it, so an axis that reads fine on a laptop is
+       unreadable on a phone — and Jeremy reads these on a phone. So the bars
+       and the one peak label are the only things in the SVG; the range and the
+       reading live in the HTML caption, which never scales. That also loses the
+       y-axis, which a fourteen-bar "how much per day" does not need: each bar
+       carries a <svg:title>, the only tooltip a page under this CSP can have,
+       and it costs no script. -->
+  <figure>
+    <svg viewBox="0 0 640 122" role="img" aria-labelledby="vt vd" preserveAspectRatio="none">
+      <title id="vt">Pieces finished per day, last fourteen days</title>
+      <desc id="vd">Between zero and four pieces finished on each of the last
+        fourteen days, with the busiest day on the eleventh at four.</desc>
+      <!-- Band 42px, bar 24px: the leftover is the 2px surface gap plus air.
+           4px rounded data-end, square at the baseline, so the bar still starts
+           honestly at zero. -->
+      <g class="bar">
+        <rect x="40"  y="94" width="24" height="26"  rx="4"><title>Day 1 — 1 finished</title></rect>
+        <rect x="124" y="68" width="24" height="52"  rx="4"><title>Day 3 — 2 finished</title></rect>
+        <rect x="166" y="68" width="24" height="52"  rx="4"><title>Day 4 — 2 finished</title></rect>
+        <rect x="208" y="94" width="24" height="26"  rx="4"><title>Day 5 — 1 finished</title></rect>
+        <rect x="334" y="42" width="24" height="78"  rx="4"><title>Day 8 — 3 finished</title></rect>
+        <rect x="376" y="68" width="24" height="52"  rx="4"><title>Day 9 — 2 finished</title></rect>
+        <rect x="418" y="94" width="24" height="26"  rx="4"><title>Day 10 — 1 finished</title></rect>
+        <rect x="460" y="16" width="24" height="104" rx="4"><title>Day 11 — 4 finished</title></rect>
+        <rect x="502" y="68" width="24" height="52"  rx="4"><title>Day 12 — 2 finished</title></rect>
+        <rect x="544" y="94" width="24" height="26"  rx="4"><title>Day 13 — 1 finished</title></rect>
+        <rect x="586" y="68" width="24" height="52"  rx="4"><title>Day 14 — 2 finished</title></rect>
+      </g>
+      <!-- A day with nothing finished draws no bar; the baseline is the zero. -->
+      <line class="base" x1="34" y1="120" x2="628" y2="120"/>
+    </svg>
+    <p class="axis"><span>14 days ago</span><span>yesterday</span></p>
+    <figcaption>Pieces finished per day. Busiest day 4, three days with none.
+      Counted from the tracker, not typed.</figcaption>
+  </figure>
+
+  <h2>What moved</h2>
+  <!-- REPLACE. One row per thing, state chip first. Chips read done / now /
+       next / held — never an id, never a phase name. If a row needs a sentence
+       to explain itself, it is two rows. -->
+  <table>
+    <tr><td class="s"><span class="state done">done</span></td><td>Documents, mail and VM images run nightly and have been clean for nine nights.</td></tr>
+    <tr><td class="s"><span class="state done">done</span></td><td>A restore from the off-site copy alone was tested and came back whole.</td></tr>
+    <tr><td class="s"><span class="state now">now</span></td><td>The photo library is uploading — 21%, finishing Thursday on current rate.</td></tr>
+    <tr><td class="s"><span class="state next">next</span></td><td>A monthly restore test that runs itself and complains if it fails.</td></tr>
+    <tr><td class="s"><span class="state held">held</span></td><td>Encrypting the off-site copy at rest.<p class="held-why">Waiting on where the key lives — the question below.</p></td></tr>
+  </table>
+
+  <h2>Decisions for you</h2>
+  <!-- REPLACE — or DELETE this whole section, heading and all, when nothing
+       genuinely needs him. The empty slot pulls hard, and an agent that fills
+       it with a manufactured question costs him more than an absent section
+       does. One real page here said so out loud rather than ask the one
+       question it could not price.
+
+       To make these buttons real: POST the question to
+       /artifacts/<id>/decisions, put its id in the data-artifact-decision slot
+       below, and arm `artifacts-wait` as a background task IN THE SAME BREATH —
+       a question posed without a waiter is a question whose answer you never
+       hear. The gallery draws the control on its own origin and lifts it into
+       the slot; never hand-roll buttons, and never add your own note field
+       beside it. -->
+  <div class="card ask">
+    <b>1. Where should the key for the off-site copy live?</b>
+    <ul>
+      <li><b>(a)</b> In the house, on the vault machine only. <span class="muted">— my recommendation: the off-site copy is useless to anyone who steals it, and you already back the vault up separately.</span></li>
+      <li><b>(b)</b> Split, half in the house and half with the off-site provider. Survives losing the house, but the provider can be compelled.</li>
+      <li><b>(c)</b> With the provider. Simplest to restore from, and the weakest of the three.</li>
+    </ul>
+    <!-- Uncomment and put the real decision id in, once you have POSTed the
+         question. Left live with a made-up id, a slot never fills — and a
+         slot that never fills is indistinguishable from one still loading.
+    <div data-artifact-decision="the-decision-id"></div>
+    -->
+  </div>
+
+  <!-- No page id here on purpose: the id does not exist until after the first
+       publish, so a template that asks for one either ships a literal
+       placeholder or costs a second publish to fill in. Both have happened. -->
+  <footer>Published from BABA through the homelab artifacts service.</footer>
+</main>
+</body>
+</html>
