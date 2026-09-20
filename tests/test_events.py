@@ -431,3 +431,81 @@ def test_past_the_waiter_ceiling_a_caller_is_answered_instead_of_queued(db):
         for _ in range(events_module.MAX_WAITERS):
             events_module._waiters.release()
         del held
+
+
+# --- his words travel with the event ----------------------------------------
+
+
+def test_an_answer_event_carries_his_note_verbatim(db):
+    """THE DEFECT THIS EXISTS TO PREVENT, and it cost a real afternoon.
+
+    Before this the event's `summary` was "letter: option label" and nothing
+    else, so every consumer of the feed — the waiter, the operator's mailbox,
+    any future client — learned that Jeremy had answered while being told
+    nothing about what he wrote. On 20 Sep 2026 the operator worked an afternoon
+    from a letter whose note said "check all folders between the two backups,
+    then remove anything that is already elsewhere", and never saw it. Another
+    seat was handed "(a)" on a question whose note read "explain this to me
+    first, there is not enough context for me to decide on this!".
+
+    This service's own skill says in bold that the note IS the decision. The
+    notification path was stripping precisely that.
+    """
+    keys.mint(db, agent="seat")
+    art = store.publish(db, "seat", "Board", PAGE)
+    asked = decisions.ask(
+        db, agent="seat", artifact_id=art.id, question="Which?",
+        options=[{"letter": "a", "label": "Yes"}, {"letter": "b", "label": "No"}],
+        recommended="a",
+    )
+    his_words = "start with (b) but then (a) if we can"
+    decisions.answer(db, asked.id, letter="a", note=his_words, by="jeremy")
+
+    rows = events.list_for_agent(db, agent="seat", since=0)
+    assert rows, "no event at all for an answered decision"
+    assert rows[-1].note == his_words, "the note did not reach the feed"
+
+
+def test_a_relayed_answer_also_carries_the_note(db):
+    keys.mint(db, agent="seat")
+    art = store.publish(db, "seat", "Board", PAGE)
+    asked = decisions.ask(
+        db, agent="seat", artifact_id=art.id, question="Which?",
+        options=[{"letter": "a", "label": "Yes"}, {"letter": "b", "label": "No"}],
+        recommended="a",
+    )
+    decisions.record_elsewhere(
+        db, asked.id, letter="b", note="Let it go", source="telegram",
+        recorded_by="homelab-ops",
+    )
+    assert events.list_for_agent(db, agent="seat", since=0)[-1].note == "Let it go"
+
+
+def test_the_note_is_its_own_field_not_folded_into_the_summary(db):
+    """A consumer rendering the summary on one line has to be able to render the
+    note differently — longer, quoted, hard to skim past. Concatenating them
+    would take that choice away from every consumer at once."""
+    keys.mint(db, agent="seat")
+    art = store.publish(db, "seat", "Board", PAGE)
+    asked = decisions.ask(
+        db, agent="seat", artifact_id=art.id, question="Which?",
+        options=[{"letter": "a", "label": "Yes"}, {"letter": "b", "label": "No"}],
+        recommended="a",
+    )
+    decisions.answer(db, asked.id, letter="a", note="a long qualification", by="jeremy")
+    row = events.list_for_agent(db, agent="seat", since=0)[-1]
+    assert "a long qualification" not in row.summary
+    assert row.note == "a long qualification"
+
+
+def test_no_note_is_an_empty_string_not_a_missing_field(db):
+    """A consumer must not have to distinguish absent from empty."""
+    keys.mint(db, agent="seat")
+    art = store.publish(db, "seat", "Board", PAGE)
+    asked = decisions.ask(
+        db, agent="seat", artifact_id=art.id, question="Which?",
+        options=[{"letter": "a", "label": "Yes"}, {"letter": "b", "label": "No"}],
+        recommended="a",
+    )
+    decisions.answer(db, asked.id, letter="a", note="", by="jeremy")
+    assert events.list_for_agent(db, agent="seat", since=0)[-1].note == ""

@@ -390,6 +390,11 @@ def record_elsewhere(
                 artifact_id=artifact_id,
                 ref_id=decision_id,
                 summary=summary,
+                # HIS WORDS TRAVEL WITH THE EVENT. Without this the feed says
+                # only "b: Let it go" and every consumer learns the letter while
+                # losing the thing that qualifies it. That cost a real afternoon
+                # on 20 Sep 2026.
+                note=note,
             )
             refreshed = conn.execute(
                 f"select {_COLUMNS} from decision where id = %s",  # noqa: S608 -- fixed constant
@@ -467,6 +472,10 @@ def answer(
                 kind="decision_answered",
                 summary=summary,
                 ref_id=decision_id,
+                # HIS WORDS, on the event. Without this the feed says only
+                # "a: Yes" and the qualification he typed never leaves the
+                # database.
+                note=note,
             )
         updated = conn.execute(
             f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input

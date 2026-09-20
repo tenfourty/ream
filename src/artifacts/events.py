@@ -32,9 +32,14 @@ from artifacts.db import Database
 # what this journal accepts.
 KINDS = ("decision_answered", "comment_added", "thread_resolved")
 
+# A note is his own words and must survive the trip whole. 1000 is the same
+# ceiling the decision itself enforces, so nothing can be stored that this
+# cannot carry.
+MAX_NOTE_IN_EVENT = 1_000
+
 _COLUMNS = (
     "event.seq, event.artifact_id, event.agent, event.actor, event.kind,"
-    " event.summary, event.ref_id, event.created_at"
+    " event.summary, event.ref_id, event.created_at, event.note"
 )
 
 
@@ -48,6 +53,11 @@ class EventRow:
     summary: str
     ref_id: str | None
     created_at: str
+    # What Jeremy actually wrote, verbatim. Empty when he wrote nothing.
+    # Its own field, never folded into `summary`: a consumer showing the
+    # summary in one line has to be able to show this differently, and
+    # concatenating them would take that choice away from every consumer.
+    note: str
 
 
 def _row_to_event(row) -> EventRow:
@@ -65,6 +75,7 @@ def _row_to_event(row) -> EventRow:
         summary=text.sanitize(row[5]),
         ref_id=row[6],
         created_at=row[7].isoformat(),
+        note=text.sanitize(row[8], limit=MAX_NOTE_IN_EVENT),
     )
 
 
@@ -77,6 +88,7 @@ def append(
     kind: str,
     summary: str,
     ref_id: str | None = None,
+    note: str = "",
 ) -> int:
     """Insert one event row on `conn`, inside the caller's own transaction --
     see the module docstring. `agent` is the seat the event is FOR (the
@@ -97,10 +109,22 @@ def append(
     # agent's context, where an escape sequence is not inert and a newline can
     # fake a second line -- and there is no list of consumers to keep in step,
     # which is why this happens here rather than at each of them.
+    # The note is sanitised too, and for the same reason -- but with a much
+    # larger bound than the summary. A summary is a line in someone else's list;
+    # a note is the thing Jeremy actually said, and truncating it to a line is
+    # how "start with (b) but then (a) if we can" becomes "start with (b)".
     row = conn.execute(
-        "insert into event (artifact_id, agent, actor, kind, summary, ref_id)"
-        " values (%s, %s, %s, %s, %s, %s) returning seq",
-        (artifact_id, agent, actor, kind, text.sanitize(summary), ref_id),
+        "insert into event (artifact_id, agent, actor, kind, summary, ref_id, note)"
+        " values (%s, %s, %s, %s, %s, %s, %s) returning seq",
+        (
+            artifact_id,
+            agent,
+            actor,
+            kind,
+            text.sanitize(summary),
+            ref_id,
+            text.sanitize(note, limit=MAX_NOTE_IN_EVENT),
+        ),
     ).fetchone()
     return row[0]
 

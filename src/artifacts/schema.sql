@@ -289,3 +289,26 @@ alter table artifact add column if not exists archived_at timestamptz;
 -- last changed, because "what I care about" and "what moved most recently" are
 -- different orderings and the gallery has only ever had the second one.
 alter table artifact add column if not exists pinned_at timestamptz;
+
+-- THE NOTE TRAVELS WITH THE EVENT (homelab-ij8.* , 20 Sep 2026).
+--
+-- `summary` for an answered decision is "letter: option label" and nothing
+-- else, so every consumer of this feed -- the waiter, the operator's mailbox,
+-- any future client -- learned that Jeremy had answered while being told
+-- nothing about what he actually wrote. This service's stated principle, in
+-- bold in its own skill, is that HIS NOTE IS THE DECISION: every note he has
+-- written has qualified the letter it came with, and one "(a)" of his read
+-- "start with (b) but then (a) if we can".
+--
+-- It cost a real afternoon. On 20 Sep the operator worked from a letter whose
+-- note said "check all folders between the two backups, then remove anything
+-- that is already elsewhere... in particular the photo libraries from iphoto",
+-- and never saw it, because the event could not carry it. Another seat was
+-- told "(a)" on a question whose note read "explain this to me first, there is
+-- not enough context for me to decide on this!".
+--
+-- Its own column rather than appended to `summary`: a consumer that renders a
+-- summary in one line must be able to render the note differently -- longer,
+-- quoted, and impossible to skim past -- and concatenating them would make
+-- that impossible for every consumer at once.
+alter table event add column if not exists note text not null default '';
