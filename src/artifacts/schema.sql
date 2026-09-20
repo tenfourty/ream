@@ -271,3 +271,15 @@ update decision set answer_source = 'page'
 -- deployment with no browser at all. The wall falls back to its text tile,
 -- which is a complete tile in its own right and not a placeholder.
 alter table version add column if not exists thumbnail bytea;
+
+-- ARCHIVING (Jeremy, 20 Sep 2026: "I would also like the ability to archive so
+-- that they don't appear in my gallery"). A page whose work is done should stop
+-- competing for his attention without ceasing to exist: the address keeps
+-- working, the versions stay, the decisions and the answers he gave on it stay
+-- readable, and it simply leaves the wall.
+--
+-- Deliberately NOT deletion, and deliberately reversible. Pages here carry the
+-- record of what he was asked and what he decided; the cheap way to tidy a
+-- gallery must not be the way that record gets destroyed. Unarchiving is a
+-- single column write.
+alter table artifact add column if not exists archived_at timestamptz;

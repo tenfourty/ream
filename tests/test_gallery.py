@@ -228,7 +228,11 @@ def test_a_page_with_no_decisions_shows_no_decisions_block(db):
     published = store.publish(db, "ops-seat", "Board", _PAGE)
     page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
     assert "Decisions" not in page
-    assert "<form" not in page
+    # The ANSWER form specifically. "<form" alone also matches the rename and
+    # archive controls, which are page housekeeping and have nothing to do with
+    # decisions — the third time today a broad substring over a rendered page
+    # has caught the page's own furniture.
+    assert "/answer" not in page
 
 
 def test_the_decisions_block_escapes_a_hostile_question(db):

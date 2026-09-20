@@ -687,10 +687,8 @@ def gallery_router(db: Database) -> APIRouter:
             headers=gallery_headers(),
         )
 
-    @router.get("/", response_class=HTMLResponse)
-    def index() -> HTMLResponse:
-        with db.connect() as conn:
-            rows = conn.execute(
+    def _wall(conn, archived: bool):
+        return conn.execute(
                 # Bounded: an unpaginated list is fine at ten artifacts and a
                 # page nobody can load at ten thousand. `, id desc` breaks a tie
                 # on `updated_at` (two rows can share one, e.g. re-touched by
@@ -723,8 +721,16 @@ def gallery_router(db: Database) -> APIRouter:
                 "          where v.artifact_id = a.id and v.n = a.current_version"
                 "            and v.thumbnail is not null) as has_thumb"
                 "  from artifact a"
-                " order by a.updated_at desc, a.id desc limit 200"
-            ).fetchall()
+                " where (a.archived_at is null) = %s"
+                " order by a.updated_at desc, a.id desc limit 200",
+                (not archived,),
+        ).fetchall()
+
+    @router.get("/", response_class=HTMLResponse)
+    def index() -> HTMLResponse:
+        with db.connect() as conn:
+            rows = _wall(conn, archived=False)
+            archived_rows = _wall(conn, archived=True)
 
         # A tile per page rather than a line per page: a wall Jeremy recognises
         # the board he wants in. Jeremy chose a real rendered thumbnail (19 Sep)
@@ -780,11 +786,28 @@ def gallery_router(db: Database) -> APIRouter:
             return "".join(bits)
 
         items = "".join(tile(row) for row in rows)
+
+        # Archived pages, folded and counted. Jeremy asked for archiving so a
+        # page stops competing for attention, not so it becomes unreachable —
+        # the count in the summary is what keeps "out of the way" from becoming
+        # "lost", and the whole thing is one line until he opens it.
+        archived_block = ""
+        if archived_rows:
+            n = len(archived_rows)
+            noun = "page" if n == 1 else "pages"
+            archived_block = (
+                '<details class="archived-list"><summary>'
+                f"{n} archived {noun}</summary>"
+                f'<ul class="tiles">{"".join(tile(r) for r in archived_rows)}</ul>'
+                "</details>"
+            )
         body = (
             f'<ul class="tiles">{items}</ul>'
             if rows
+            else '<p class="empty">Nothing on the wall. Anything archived is below.</p>'
+            if archived_rows
             else '<p class="empty">No pages published yet.</p>'
-        )
+        ) + archived_block
         return HTMLResponse(
             _shell("Artifacts", body, meta=f"{len(rows)} pages", home=False),
             headers=gallery_headers(),
@@ -817,6 +840,49 @@ def gallery_router(db: Database) -> APIRouter:
             headers={**gallery_headers(), "cache-control": "private, max-age=60"},
         )
 
+    @router.post("/a/{artifact_id}/archive")
+    def archive_page(artifact_id: str, request: Request, archived: str = Form("1")):
+        """Take a page off the wall, or put it back.
+
+        Jeremy, 20 Sep 2026: "I would also like the ability to archive so that
+        they don't appear in my gallery." Not deletion, and reversible: the
+        address keeps working, the versions stay, and every decision and answer
+        on it stays readable. A page whose work is done should stop competing
+        for his attention without the record of it being destroyed.
+
+        Behind the same same-origin guard as answering, for the same reason —
+        this is a state change made with his session, so a form on someone
+        else's page must not be able to make it.
+        """
+        _same_origin_write(request)
+        if not store.set_archived(db, artifact_id, archived == "1"):
+            raise HTTPException(404, "no such artifact")
+        return RedirectResponse(f"/a/{artifact_id}", status_code=303)
+
+    @router.post("/a/{artifact_id}/rename")
+    def rename_page(artifact_id: str, request: Request, title: str = Form(...)):
+        """Give a page a different name, without republishing it.
+
+        Renaming has only ever been possible by sending the whole body again
+        with --title, which is fine for an agent holding the file and impossible
+        for Jeremy in a browser. What a page is FOR is often clear only after a
+        few revisions, and a name that turned out wrong should never be a reason
+        to abandon an address people already have.
+        """
+        _same_origin_write(request)
+        cleaned = title.strip()
+        if not cleaned:
+            raise HTTPException(422, "a page needs a name")
+        try:
+            found = store.rename(db, artifact_id, cleaned)
+        except (store.BodyTooLarge, store.InvalidText):
+            raise HTTPException(422, "that name is too long") from None
+        except store.SecretFound:
+            raise HTTPException(422, "that name looks like it contains a secret") from None
+        if not found:
+            raise HTTPException(404, "no such artifact")
+        return RedirectResponse(f"/a/{artifact_id}", status_code=303)
+
     @router.get("/a/{artifact_id}", response_class=HTMLResponse)
     def detail(artifact_id: str) -> HTMLResponse:
         # Look the artifact up rather than framing whatever the URL said: an
@@ -824,7 +890,8 @@ def gallery_router(db: Database) -> APIRouter:
         # the title is wanted on the page anyway.
         with db.connect() as conn:
             row = conn.execute(
-                "select title, read_token, agent from artifact where id = %s",
+                "select title, read_token, agent, archived_at from artifact"
+                " where id = %s",
                 (artifact_id,),
             ).fetchone()
         if row is None:
@@ -849,13 +916,36 @@ def gallery_router(db: Database) -> APIRouter:
         # because the frame is cross-origin to the gallery (its own <id>.<domain> origin), and it
         # needs its own origin for the content app's `connect-src 'self'`.
         sandbox = "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        # Renaming and archiving, at the bottom of the page rather than the top.
+        # They are housekeeping: a reader opens a page to read it, and a control
+        # that can make it vanish does not belong above the thing it acts on.
+        # Plain forms, so both work with scripts off, like everything else here.
+        archived = row[3] is not None
+        housekeeping = (
+            '<details class="housekeeping"><summary>Rename or archive</summary>'
+            f'<form method="post" action="/a/{escape(artifact_id)}/rename">'
+            f'<input name="title" value="{escape(row[0])}" aria-label="Page name">'
+            "<button type=\"submit\">Rename</button></form>"
+            f'<form method="post" action="/a/{escape(artifact_id)}/archive">'
+            f'<input type="hidden" name="archived" value="{"0" if archived else "1"}">'
+            + (
+                '<button type="submit">Put back on the wall</button>'
+                '<p class="muted">Archived, so it is not on the wall. The address '
+                "still works and everything you decided on it is still here.</p>"
+                if archived
+                else '<button type="submit">Archive</button>'
+                '<p class="muted">Takes it off the wall. Nothing is deleted — the '
+                "address keeps working and you can put it back.</p>"
+            )
+            + "</form></details>"
+        )
         return HTMLResponse(
             _shell(
                 row[0],
                 f"{asks_above}"
                 f'<div class="sheet" id="artifact-sheet"><iframe id="artifact-frame"'
                 f' src="{src}" sandbox="{sandbox}" title="{escape(row[0])}"></iframe></div>'
-                f"{settled_below}",
+                f"{settled_below}{housekeeping}",
                 # gallery.js reads the content origin straight off this iframe's own
                 # `src` -- fixed ids, not a class selector, so a future second iframe
                 # on this page could never be mistaken for this one.

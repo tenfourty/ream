@@ -48,7 +48,7 @@ import logging
 import os
 import secrets
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from psycopg.errors import UniqueViolation
 
@@ -517,3 +517,46 @@ def live_thumbnail(db: Database, artifact_id: str) -> bytes | None:
             (artifact_id,),
         ).fetchone()
     return bytes(row[0]) if row and row[0] is not None else None
+
+
+def set_archived(db: Database, artifact_id: str, archived: bool) -> bool:
+    """Take a page off the wall, or put it back. Returns False if no such page.
+
+    Not scoped to an owning agent, because this is Jeremy tidying HIS gallery
+    rather than an agent managing its own pages — the same reasoning as
+    answering a decision, which also takes no agent. The gallery is the only
+    caller, it sits behind his login, and the form guard already proves the
+    request came from a document on that origin.
+
+    Reversible by construction: one nullable column, and nothing else in the
+    page is touched. Its versions, its decisions and the answers he gave on it
+    are all exactly where they were.
+    """
+    with db.connect() as conn:
+        done = conn.execute(
+            "update artifact set archived_at = %s where id = %s",
+            (datetime.now(UTC) if archived else None, artifact_id),
+        )
+        return done.rowcount > 0
+
+
+def rename(db: Database, artifact_id: str, title: str) -> bool:
+    """Give a page a different name, without republishing it.
+
+    Renaming used to mean sending the whole body again with `--title`, which is
+    fine for an agent that has the file and impossible for Jeremy in a browser.
+    What a page is FOR is often only clear after a few revisions, and a name
+    that turned out wrong should never be a reason to abandon an address people
+    already have.
+
+    Guarded like any other text reaching storage -- size and the secret scan --
+    because "it is only a title" is how a field skips its checks.
+    """
+    _guard(title, MAX_TITLE_BYTES, "title", agent="jeremy", artifact_id=artifact_id)
+    _check_secrets(title, "title", agent="jeremy", artifact_id=artifact_id)
+    with db.connect() as conn:
+        done = conn.execute(
+            "update artifact set title = %s, updated_at = now() where id = %s",
+            (title, artifact_id),
+        )
+        return done.rowcount > 0
