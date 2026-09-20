@@ -456,9 +456,13 @@ def test_gallery_js_is_served_from_self_with_no_dependency(db):
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/javascript")
     text = response.text
-    # single-digit KB, per the design's own budget -- comfortably under it, not
-    # merely under some looser number that would let a regression through unnoticed.
-    assert len(text.encode()) < 4096
+    # single-digit KB, per the design's own budget -- and a ratchet well inside
+    # it, not some looser number that would let a regression through unnoticed.
+    # Moved once, deliberately: 4096 when the file only sized the frame (3050
+    # bytes), 5120 once it also drove the tile menus (4530). Moving it is a
+    # decision to be argued for in a commit, which is the whole point of having
+    # it; what it must never become is a number that follows the file upwards.
+    assert len(text.encode()) < 5120
     assert "http://" not in text and "https://" not in text  # no CDN, nothing fetched
     assert "eval(" not in text
     assert "new Function(" not in text

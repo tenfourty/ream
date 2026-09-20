@@ -14,6 +14,10 @@ import fs from "node:fs";
 const src = fs.readFileSync(process.argv[2], "utf8");
 
 let fails = 0, passes = 0;
+// Swapped per-case by the clipboard tests below. node's own global `navigator`
+// has no `clipboard`, so passing it explicitly is what lets both arms be
+// driven -- present and absent -- rather than only the one this runtime has.
+let navigatorStub = {};
 const ok = (c, m) => { c ? passes++ : (fails++, console.log("FAIL: " + m)); if (c) console.log("ok   " + m); };
 
 function el(attrs = {}, offsetHeight = 88) {
@@ -32,17 +36,44 @@ function build() {
   const asks = el();
   asks._empty = false;
   asks.querySelector = function () { return this._empty ? null : d1; };
+  // --- the menus: two tiles, each with a dots <details> and a link input ----
+  const docListeners = {};
+  const menus = [0, 1].map(() => {
+    const copy = { textContent: "Copy" };
+    const menu = { open: false, _inside: [], _copy: null,
+      contains(t) { return t === menu || menu._inside.includes(t); },
+      querySelector(sel) { return sel === ".mcopy" ? menu._copy : null; } };
+    const input = { value: "https://artifacts.tenfourty.site/a/abc",
+      _selected: 0, _focused: 0, _on: {},
+      addEventListener(t, fn) { this._on[t] = fn; },
+      select() { this._selected++; }, focus() { this._focused++; } };
+    input.parentNode = { appendChild(b) { menu._copy = b; input._button = b; } };
+    menu._inside.push(input);
+    menu._copyTemplate = copy;
+    return { menu, input };
+  });
   const doc = {
     getElementById: (id) => id === "artifact-frame" ? iframe
       : id === "artifact-sheet" ? sheet : id === "open-asks" ? asks : null,
-    querySelectorAll: () => [d1, d2],
+    // Selector-aware, because the script now asks for three different things
+    // and a querySelectorAll that ignores its argument would let a wrong
+    // selector pass this file untouched -- the exact class of bug it exists
+    // to catch.
+    querySelectorAll(sel) {
+      if (sel === "details.menu[open]") return menus.map((m) => m.menu).filter((m) => m.open);
+      if (sel === ".mlink input") return menus.map((m) => m.input);
+      return [d1, d2];
+    },
+    addEventListener(t, fn) { (docListeners[t] ||= []).push(fn); },
+    createElement: () => ({ addEventListener(t, fn) { this._on = fn; },
+                            textContent: "", type: "", className: "" }),
   };
   const win = { addEventListener: (t, fn) => t === "message" && listeners.push(fn) };
-  const ctx = { document: doc, window: win, URL, Map, Set, isFinite, console };
-  new Function("document", "window", "URL", "Map", "Set", "isFinite", src)
-    (doc, win, URL, Map, Set, isFinite);
+  new Function("document", "window", "URL", "Map", "Set", "isFinite", "navigator", src)
+    (doc, win, URL, Map, Set, isFinite, navigatorStub);
   const send = (e) => listeners.forEach((fn) => fn(e));
-  return { iframe, sheet, d1, d2, send, posted, asks };
+  const fire = (t, e) => (docListeners[t] || []).forEach((fn) => fn(e));
+  return { iframe, sheet, d1, d2, send, posted, asks, menus, fire };
 }
 
 const good = (over = {}) => ({
@@ -167,6 +198,83 @@ const good = (over = {}) => ({
   ok(g.posted.length === 1 && g.posted[0][0].sizes.length === 0,
      "but reports no height for it, so the page reserves nothing");
 }
+
+// --- the tile menus -------------------------------------------------------
+// Everything below is an upgrade to markup that already works with scripts
+// off, so what is asserted is that the upgrade behaves -- not that it exists.
+
+// 10. a click outside closes an open menu, and one inside does not
+{
+  const g = build();
+  const [a, b] = g.menus;
+  a.menu.open = true;
+  g.fire("click", { target: a.input });
+  ok(a.menu.open === true, "a click inside a menu leaves it open");
+  g.fire("click", { target: b.menu });
+  ok(a.menu.open === false, "a click outside closes it");
+}
+// 11. opening another tile's menu closes the first, without a rule for it
+{
+  const g = build();
+  const [a, b] = g.menus;
+  a.menu.open = true; b.menu.open = true;
+  g.fire("click", { target: b.menu });
+  ok(a.menu.open === false && b.menu.open === true,
+     "clicking one tile's dots is a click away from every other tile's");
+}
+// 12. Escape closes every open menu
+{
+  const g = build();
+  g.menus.forEach((m) => (m.menu.open = true));
+  g.fire("keydown", { key: "a" });
+  ok(g.menus.every((m) => m.menu.open), "an ordinary key closes nothing");
+  g.fire("keydown", { key: "Escape" });
+  ok(g.menus.every((m) => !m.menu.open), "Escape closes them all");
+}
+// 13. the link selects itself on focus, so one gesture copies it by hand
+{
+  const g = build();
+  g.menus[0].input._on.focus();
+  ok(g.menus[0].input._selected === 1, "focusing the link selects the whole address");
+}
+// 14. NO copy button where there is no clipboard
+{
+  navigatorStub = {};
+  const g = build();
+  ok(g.menus[0].input._button === undefined,
+     "no button on an origin with no clipboard -- one that silently fails is worse than none");
+}
+// 15. the copy button copies, and says so
+{
+  let copied = null;
+  navigatorStub = { clipboard: { writeText: (v) => { copied = v; return Promise.resolve(); } } };
+  const g = build();
+  const button = g.menus[0].input._button;
+  ok(button !== undefined, "a button where the clipboard exists");
+  button._on();
+  await Promise.resolve();
+  ok(copied === g.menus[0].input.value, "copies the page's address, not something else");
+  await Promise.resolve();
+  ok(button.textContent === "Copied", "and says so");
+  // The label resets when the menu is closed, not on a timer: this script
+  // must never contain one (tests/test_gallery.py asserts that), because a
+  // timer here is indistinguishable from polling.
+  g.menus[0].menu.open = true;
+  g.fire("click", { target: g.menus[1].menu });
+  ok(button.textContent === "Copy", "the label resets when the menu closes");
+}
+// 16. a refused clipboard falls back rather than lying
+{
+  navigatorStub = { clipboard: { writeText: () => Promise.reject(new Error("denied")) } };
+  const g = build();
+  const input = g.menus[0].input;
+  input._button._on();
+  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  ok(input._selected === 1 && input._focused === 1,
+     "selects the text for the reader instead of claiming it copied");
+  ok(input._button.textContent === "Copy", "and never says Copied");
+}
+navigatorStub = {};
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

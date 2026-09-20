@@ -26,7 +26,7 @@ from markupsafe import escape
 from artifacts import decisions, events, stamp, store, thumbs
 from artifacts import text as text_module
 from artifacts.db import Database
-from artifacts.store import content_domain, content_url
+from artifacts.store import content_domain, content_url, gallery_origin
 
 # Mirrors api.py's own wording for the identical fault: the scanner broke, the
 # content did not -- 503, not 422, so Jeremy is not left resubmitting a note that was
@@ -272,14 +272,51 @@ a{color:var(--accent-ink)}
    interactive control nested in an <a> is invalid and behaves unpredictably. */
 .tile-wrap{position:relative}
 .tile-wrap .menu{position:absolute;top:.5rem;right:.5rem;z-index:5}
+/* A pale chip, ALWAYS VISIBLE -- not revealed on hover. Jeremy reads this wall
+   on a phone, where there is no hover at all, and a control that only appears
+   under a pointer is a control he does not have. It used to fade in on
+   :hover with a (hover:none) escape hatch; two rules that disagree about
+   whether something exists is one rule too many. */
 .tile-wrap .menu > summary{background:var(--card);border:1px solid var(--line);
-  border-radius:.45rem;padding:.1rem .42rem;font:600 1rem/1.2 var(--mono);
-  color:var(--muted);opacity:0;transition:opacity .12s}
-.tile-wrap:hover .menu > summary,.tile-wrap .menu[open] > summary,
-.tile-wrap .menu > summary:focus{opacity:1}
-/* Always visible on a touch screen: there is no hover, and an invisible control
-   is an absent one. */
-@media (hover:none){.tile-wrap .menu > summary{opacity:1}}
+  border-radius:.45rem;padding:.28rem .4rem;line-height:0;
+  box-shadow:0 1px 3px rgba(20,20,15,.12);transition:border-color .12s}
+.tile-wrap .menu > summary:hover,.tile-wrap .menu[open] > summary,
+.tile-wrap .menu > summary:focus-visible{border-color:var(--accent)}
+/* Three dots drawn in CSS rather than as a character: the unicode vertical
+   ellipsis renders as a different width in every font on the box, and at this
+   size the difference is the whole control. */
+.dots,.dots::before,.dots::after{display:block;width:3px;height:3px;
+  border-radius:50%;background:var(--muted)}
+.dots{position:relative;margin:4px 1px}
+.dots::before,.dots::after{content:"";position:absolute;left:0}
+.dots::before{top:-5px} .dots::after{top:5px}
+/* The panel must not be clipped by the tile, and must not sit under the tile
+   next door. */
+.tile-wrap .menu[open]{z-index:30}
+/* The panel hangs left from the dots, so on the leftmost column it runs toward
+   the edge of the screen. An <input> with no `size` is 20 characters wide by
+   default -- two of them made this panel 340px, which at 390px viewport width
+   pushed it off the left of the page with the rename field unreachable.
+   Measured, not guessed: rendered at 390 and looked at.
+   So: bounded by the viewport, and the inputs are told to shrink. */
+.tmenu .mpanel{min-width:0;width:15rem;max-width:calc(100vw - 2rem)}
+/* Inside a panel this narrow the field and its button cannot share a line:
+   side by side, the rename input came out ~100px and showed "Artifacts: t",
+   which is not enough of a name to know what you are renaming. So the field
+   takes the full width and the button sits under it. A grid rather than wrap,
+   so the icon stays in its own column and the two rows line up under it. */
+.tmenu .mrename,.tmenu .mlink{display:grid;grid-template-columns:auto minmax(0,1fr);
+  gap:.35rem .55rem;align-items:center}
+.tmenu .mrename input,.tmenu .mlink input{grid-column:2;width:100%;min-width:0}
+.tmenu .mrename button,.tmenu .mcopy{grid-column:2;justify-self:end}
+.mlink{display:flex;align-items:center;gap:.55rem;padding:.35rem .6rem .5rem}
+.mlink input{font:inherit;font-size:.82rem;font-family:var(--mono);flex:1 1 auto;
+  min-width:5rem;border:1px solid var(--line);border-radius:.4rem;
+  padding:.24rem .4rem;background:var(--paper);color:var(--muted)}
+.mcopy{font:inherit;font-size:.82rem;cursor:pointer;border-radius:.4rem;
+  border:1px solid var(--line);background:var(--card);color:var(--ink);
+  padding:.24rem .5rem;flex:0 0 auto}
+.mcopy:hover{border-color:var(--accent);color:var(--accent-ink)}
 
 /* index */
 .tiles{list-style:none;margin:0;padding:0;display:grid;gap:.8rem;
@@ -304,8 +341,7 @@ a{color:var(--accent-ink)}
      slice of each page. Rendering it and measuring the box is what found this;
      it reads as correct in the stylesheet. */
   height:auto;aspect-ratio:900/640;object-fit:cover;object-position:top center;
-  border-radius:.65rem .65rem 0 0;background:var(--paper);
-  border-bottom:1px solid var(--line)}
+  border-radius:.65rem .65rem 0 0;background:var(--paper)}
 .tiles .t{display:block;font:400 1.06rem/1.3 var(--display);margin-bottom:.3rem}
 /* What the page says it is about, taken from the page. Clamped to three lines
    so one long standfirst cannot make its tile twice the height of its
@@ -318,9 +354,25 @@ a{color:var(--accent-ink)}
 .tiles .wait{align-self:flex-start;font:600 .72rem/1.4 var(--mono);
   letter-spacing:.04em;color:var(--now);border:1px solid currentColor;
   border-radius:.3rem;padding:.14rem .42rem;margin-bottom:.5rem}
-.tiles .m{display:block;font:.72rem/1.4 var(--mono);color:var(--muted);
+.tiles .m{display:flex;align-items:center;justify-content:space-between;gap:.5rem;
+  font:.72rem/1.4 var(--mono);color:var(--muted);
   letter-spacing:.05em;margin:auto 0 .15rem}
-.tiles time{font:.72rem/1.4 var(--mono);color:var(--muted);letter-spacing:.05em}
+.tiles time{display:block;font:.72rem/1.4 var(--mono);color:var(--muted);
+  letter-spacing:.05em;white-space:nowrap}
+/* The pin marker ends the meta row, as in the reference. It FLOWS in the row
+   rather than being positioned onto it: absolutely positioned at the tile's
+   bottom-right it landed below the date's baseline and rendered as a speck of
+   dirt on the screen -- rendering the wall and looking at it is what found
+   that, and it read as correct in the stylesheet.
+   It carries the word as well as the glyph: at this size a lone pin is not
+   recognisable as a pin, and the word is also what a screen reader gets. */
+.pinmark{display:inline-flex;align-items:center;gap:.22rem;flex:0 0 auto;
+  font:600 .68rem/1.4 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--accent-ink);background:var(--accent-soft);border-radius:.3rem;
+  padding:.1rem .34rem}
+.pinmark .mi{width:.85em;height:.85em;opacity:1}
+/* A pinned tile leads the wall; the accent edge says why, without shouting. */
+.tiles li.pinned > a{border-color:var(--accent);box-shadow:var(--shadow)}
 .empty{color:var(--muted)}
 """
 
@@ -417,6 +469,35 @@ window.addEventListener("message",function(event){
   }catch(e){}
 });
 })();
+
+// The menus, upgraded. All of it works with scripts off already -- they are
+// <details>, the forms submit, and the link sits in a selectable input -- so
+// nothing here is load-bearing. Separate from the frame code above, which
+// returns immediately on any page with no iframe, i.e. every gallery index.
+(function(){
+"use strict";
+function shut(e){document.querySelectorAll("details.menu[open]").forEach(function(d){
+  if(e&&d.contains(e.target))return;
+  d.open=false;
+  var b=d.querySelector(".mcopy");if(b)b.textContent="Copy";
+})}
+// Click away or Escape closes. Clicking another tile's dots is a click away
+// from this one, so "only one open at a time" comes free with it.
+document.addEventListener("click",shut);
+document.addEventListener("keydown",function(e){if(e.key==="Escape")shut(null)});
+// A copy button only where the clipboard exists: one that silently fails is
+// worse than none, because the reader believes it. The input underneath is
+// the fallback either way, and is what a scriptless reader gets.
+document.querySelectorAll(".mlink input").forEach(function(i){
+  i.addEventListener("focus",function(){i.select()});
+  if(!navigator.clipboard)return;
+  var b=document.createElement("button");
+  b.type="button";b.className="mcopy";b.textContent="Copy";
+  b.addEventListener("click",function(){navigator.clipboard.writeText(i.value).then(
+    function(){b.textContent="Copied"},function(){i.focus();i.select()})});
+  i.parentNode.appendChild(b);
+});
+})();
 """
 
 
@@ -429,11 +510,59 @@ _ICON = {
     "unarchive": '<path d="M8 2.2 3.4 6.8h2.8v4.6h3.6V6.8h2.8L8 2.2ZM2.5 12.8h11v1.3h-11v-1.3Z"/>',
     "open": '<path d="M9.4 1.6v1.3h2.8L6.5 8.6l.9.9 5.7-5.7v2.8h1.3V1.6H9.4ZM2.8 3.3h3.9v1.3H3.3v8.1h8.1V9.3h1.3v4a.7.7 0 0 1-.7.7H2.8a.7.7 0 0 1-.7-.7V4a.7.7 0 0 1 .7-.7Z"/>',
     "all": '<path d="M2 2.5h5v5H2v-5Zm7 0h5v5H9v-5Zm-7 6h5v5H2v-5Zm7 0h5v5H9v-5Z"/>',
+    "pin": '<path d="M9.6 1.3 8.5 2.4l.4.4-3 2.2-1.6-.3-1.1 1.1 3 3L2 13l3.2-4.2 3 3 1.1-1.1-.3-1.6 2.2-3 .4.4 1.1-1.1-3.1-3.1Z"/>',
+    "link": '<path d="M6.9 9.1a2.9 2.9 0 0 0 4.3.3l1.7-1.7a2.9 2.9 0 0 0-4.1-4.1l-1 1 .9.9 1-1a1.6 1.6 0 0 1 2.3 2.3L10.3 8.5a1.6 1.6 0 0 1-2.4-.2l-1 .8Zm2.2-2.2a2.9 2.9 0 0 0-4.3-.3L3.1 8.3a2.9 2.9 0 0 0 4.1 4.1l1-1-.9-.9-1 1a1.6 1.6 0 0 1-2.3-2.3l1.7-1.7a1.6 1.6 0 0 1 2.4.2l1-.8Z"/>',
 }
 
 
 def _icon(name: str) -> str:
     return f'<svg class="mi" viewBox="0 0 16 16" aria-hidden="true">{_ICON[name]}</svg>'
+
+
+def _tile_menu(artifact_id: str, title: str, pinned: bool, origin: str) -> str:
+    """The dots on a tile: the three things worth doing without opening a page.
+
+    Deliberately SHORTER than the page's own title menu. A menu on a wall of
+    twenty tiles is a thing you glance at, and the reference Jeremy sent has
+    this same split -- Pin, Rename, Copy link here, everything else once you
+    are on the page.
+
+    The caller must render this as a SIBLING of the tile's <a>, never inside
+    it: an interactive control nested in a link is invalid HTML and behaves
+    unpredictably -- on some engines the link swallows the click, which on a
+    phone means a menu that simply never opens.
+    """
+    ident = escape(artifact_id)
+    pin_row = (
+        f'<form method="post" action="/a/{ident}/pin">'
+        f'<input type="hidden" name="pinned" value="{"0" if pinned else "1"}">'
+        f'<button class="mrow" type="submit">{_icon("pin")}'
+        f'{"Unpin" if pinned else "Pin to the front"}</button></form>'
+    )
+    rename_row = (
+        f'<form class="mrename" method="post" action="/a/{ident}/rename">'
+        f"{_icon('rename')}"
+        f'<input name="title" value="{escape(title)}" aria-label="Page name">'
+        '<button type="submit">Rename</button></form>'
+    )
+    # Copy link, scriptless: the address in a readonly input you can select.
+    # There is no clipboard without script, and a menu item that silently does
+    # nothing is worse than one that hands you the text -- so this hands you
+    # the text. gallery.js selects it on focus and adds a real copy button
+    # where scripts run; the input stays underneath either way. No inline
+    # `onfocus` here: this origin's CSP is script-src 'self' with no
+    # 'unsafe-inline', so an inline handler is not a shortcut, it is a
+    # handler that never runs.
+    link_row = (
+        f'<div class="mlink">{_icon("link")}'
+        f'<input readonly value="{escape(origin)}/a/{ident}"'
+        ' aria-label="Link to this page"></div>'
+    )
+    return (
+        '<details class="menu tmenu"><summary aria-label="Actions for '
+        f'{escape(title)}"><span class="dots" aria-hidden="true"></span></summary>'
+        f'<div class="mpanel right">{pin_row}{rename_row}{link_row}</div></details>'
+    )
 
 
 def _page_menu(
@@ -861,10 +990,17 @@ def gallery_router(db: Database) -> APIRouter:
             # thumbnail on the wall into memory to render a list of links.
             "       exists (select 1 from version v"
             "          where v.artifact_id = a.id and v.n = a.current_version"
-            "            and v.thumbnail is not null) as has_thumb"
+            "            and v.thumbnail is not null) as has_thumb,"
+            "       a.pinned_at"
             "  from artifact a"
             " where (a.archived_at is null) = %s"
-            " order by a.updated_at desc, a.id desc limit 200",
+            # Pinned first, then the order the wall has always had. NULLS LAST
+            # is spelled out rather than left to the default: Postgres sorts
+            # NULLs first on DESC, which would put every UNpinned page above
+            # every pinned one -- precisely backwards, and it would look like
+            # pinning had done nothing rather than like a broken sort.
+            " order by a.pinned_at desc nulls last,"
+            "          a.updated_at desc, a.id desc limit 200",
             (not archived,),
         ).fetchall()
 
@@ -881,7 +1017,17 @@ def gallery_router(db: Database) -> APIRouter:
         # tracked separately and needs a decision about where the renderer runs,
         # because the gallery must never load an agent's HTML into this origin.
         def tile(row) -> str:
-            artifact_id, title, updated, agent, versions, waiting, body, has_thumb = row
+            (
+                artifact_id,
+                title,
+                updated,
+                agent,
+                versions,
+                waiting,
+                body,
+                has_thumb,
+                pinned_at,
+            ) = row
             # Every one of these is agent-controlled text reaching the gallery
             # origin, so every one is escaped here. `describe` strips tags but
             # makes no claim to produce safe markup -- it returns plain text and
@@ -902,8 +1048,11 @@ def gallery_router(db: Database) -> APIRouter:
                     f'alt="" loading="lazy" width="{thumbs.WIDTH}" '
                     f'height="{thumbs.HEIGHT}">'
                 )
+            # The <li> wraps BOTH the link and the menu; the menu is the link's
+            # sibling, never its child. See _tile_menu.
             bits = [
-                f'<li><a href="/a/{escape(artifact_id)}">',
+                f'<li class="tile-wrap{" pinned" if pinned_at else ""}">',
+                f'<a href="/a/{escape(artifact_id)}">',
                 shot,
                 f'<span class="t">{escape(title)}</span>',
             ]
@@ -918,12 +1067,31 @@ def gallery_router(db: Database) -> APIRouter:
             # like a local time: exactly the failure Jeremy caught on a page
             # ("your status time is back to UTC"), still live on the index.
             when = stamp.format_for_display(updated) if updated else ""
+            # One meta row, as the reference has, but carrying what differs
+            # BETWEEN pages here. The reference shows a padlock on every card
+            # because some of its artifacts are shared; every page on this
+            # service is private, so a padlock on all twenty says nothing at
+            # all. Who published it does differ -- there are a dozen seats on
+            # this machine -- so the agent keeps the slot the padlock has
+            # there, and the pin glyph ends the row exactly as it does in the
+            # reference.
             meta_bits = [escape(agent)]
             if versions:
                 meta_bits.append(f"v{versions}")
+            pin_mark = (
+                f'<span class="pinmark">{_icon("pin")}Pinned</span>' if pinned_at else ""
+            )
             bits.append(
-                f'<span class="m">{" &middot; ".join(meta_bits)}</span>'
-                f"<time>{escape(when)}</time></a></li>"
+                # The marker rides the AGENT line, not the date line. On the
+                # date line it stole enough width to wrap "CEST" onto a second
+                # row, making every pinned tile taller than its neighbours --
+                # visible the moment the wall was rendered, invisible in the
+                # markup. The agent line is short and has the room.
+                f'<span class="m">{" &middot; ".join(meta_bits)}{pin_mark}</span>'
+                f"<time>{escape(when)}</time>"
+                "</a>"
+                f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin())}"
+                "</li>"
             )
             return "".join(bits)
 
@@ -1000,6 +1168,23 @@ def gallery_router(db: Database) -> APIRouter:
         if not store.set_archived(db, artifact_id, archived == "1", agent=None):
             raise HTTPException(404, "no such artifact")
         return RedirectResponse(f"/a/{artifact_id}", status_code=303)
+
+    @router.post("/a/{artifact_id}/pin")
+    def pin_page(artifact_id: str, request: Request, pinned: str = Form("1")):
+        """Pin a page to the front of the wall, or unpin it.
+
+        Behind the same same-origin guard as the rest, for the same reason: a
+        state change made with his session.
+
+        Redirects BACK TO THE WALL, not to the page -- unlike archive and
+        rename, which are usually done while looking at the page itself. Pinning
+        is a statement about the wall's order, and the answer to "did that
+        work?" is the wall, reordered, with the page now leading it.
+        """
+        _same_origin_write(request)
+        if not store.set_pinned(db, artifact_id, pinned == "1", agent=None):
+            raise HTTPException(404, "no such artifact")
+        return RedirectResponse("/", status_code=303)
 
     @router.post("/a/{artifact_id}/rename")
     def rename_page(artifact_id: str, request: Request, title: str = Form(...)):
