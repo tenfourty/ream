@@ -346,6 +346,24 @@ def test_the_waiting_badge_rides_the_picture_not_the_body(client, db):
     assert "asking" in tile.split(">", 1)[0], "and the card's edge says so"
 
 
+def test_the_pin_button_is_not_faded_to_the_point_of_being_absent(client, db):
+    """It shipped at opacity .5, which computes to 1.76:1 against a white card.
+    An icon wants 3:1. Jeremy's report was "I still don't see the pin", and he
+    was right -- it was not subtle, it was invisible.
+
+    Asserting the absence of a fade rather than a contrast ratio, because the
+    ratio depends on the token and the token is checked where it is defined.
+    What this catches is somebody reaching for `opacity` again to make a
+    control feel secondary: past about .6 that stops meaning secondary and
+    starts meaning gone."""
+    store.publish(db, "seat", "Board", PAGE)
+    page = client.get("/").text
+    rule = re.search(r"\.pinbtn button\{[^}]*\}", page)
+    assert rule, "the pin button is styled"
+    faded = re.search(r"opacity:(0?\.\d+)", rule.group(0))
+    assert not faded, f"the resting pin is faded to {faded.group(1) if faded else ''}"
+
+
 def test_every_tile_has_a_pin_button_that_is_also_the_indicator(client, db):
     """The reference has a 24x24 pin button on every card, in the meta row.
     This wall had pinning only in the menu, so it took two clicks and a read --

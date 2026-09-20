@@ -513,11 +513,17 @@ a{color:var(--accent-ink)}
    read. A sibling of the tile's <a>, like the dots, because a button inside a
    link is invalid and the link swallows the click. */
 .pinbtn{position:absolute;right:.75rem;bottom:.7rem;margin:0;line-height:0}
+/* FULL OPACITY. This shipped at .5, which computes to 1.76:1 against a white
+   card -- an icon wants 3:1 and that is below even the text-on-decorative bar.
+   Jeremy's report was "I still don't see the pin", and he was right: it was
+   not subtle, it was invisible. At 1 it is 3.59:1 light and 5.8:1 dark.
+   Fading a control to hint that it is secondary only works while it can still
+   be seen; past that it is just absent. */
 .pinbtn button{display:flex;align-items:center;justify-content:center;
   width:24px;height:24px;padding:0;border:0;border-radius:6px;cursor:pointer;
-  background:transparent;color:var(--muted);opacity:.5;
-  transition:opacity .12s,background .12s,color .12s}
-.pinbtn button:hover{opacity:1;background:var(--chip);color:var(--ink)}
+  background:transparent;color:var(--muted);
+  transition:background .12s,color .12s}
+.pinbtn button:hover{background:var(--chip);color:var(--ink)}
 .pinbtn button .mi{width:.9rem;height:.9rem;opacity:1}
 /* Pinned: on, accented, and never faded -- it is state now, not an affordance
    waiting to be noticed. */
