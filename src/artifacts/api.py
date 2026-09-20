@@ -86,6 +86,10 @@ def agent_router(db: Database) -> APIRouter:
         key = keys.verify(db, token.strip())
         if key is None:
             raise HTTPException(401, "unknown or revoked key")
+        # The verified key's public id, for GET /me. Stashed rather than
+        # re-derived: the token itself must not be handled twice, and the id is
+        # the handle `artifacts-admin list-keys` already prints.
+        request.state.agent_key_id = key.id
         return key.agent
 
     @router.get("/openapi.json")
@@ -102,6 +106,27 @@ def agent_router(db: Database) -> APIRouter:
         every consumer it exists for already holds a key.
         """
         return request.app.openapi()
+
+    @router.get("/me")
+    def whoami(request: Request, agent: str = Depends(caller)):
+        """Which seat this key is, and what it may do.
+
+        Exists because the answer is not obvious and getting it wrong is silent.
+        Every agent on baba reads ~/.config/artifacts/key, which belongs to ONE
+        seat, so a key holder's assumption about which seat it is can be wrong
+        for weeks without anything saying so — and a seat grant is then applied
+        to an identity nobody is actually using. Proposed by the Warpgate seat
+        after exactly that cost an afternoon, and it is right: this turns a
+        multi-step database dig into one line of output.
+
+        Returns no secret. The key's own bytes are never echoed, and the id is
+        the public handle `artifacts-admin list-keys` already prints.
+        """
+        return {
+            "agent": agent,
+            "key_id": getattr(request.state, "agent_key_id", None),
+            "scopes": grants.for_agent(db, agent),
+        }
 
     @router.get("/templates")
     def template_index(agent: str = Depends(caller)):
@@ -391,7 +416,19 @@ def agent_router(db: Database) -> APIRouter:
             # short list, which is the same lie as an empty feed from a broken
             # wait: it reads as "nothing is waiting".
             if not grants.has(db, agent, grants.READ_ALL_DECISIONS):
-                raise HTTPException(403, "this key may not read other seats")
+                # NAME THE SEAT. "this key may not read other seats" sent two
+                # sessions looking for a missing grant on 20 Sep 2026; the grant
+                # existed and was on a different seat, because the caller was
+                # using the unsuffixed ~/.config/artifacts/key, which belongs to
+                # baba-operator. Every agent on that box shares that file, so the
+                # seat a key authenticates as is not the seat its holder assumes.
+                # The message is the cheapest place to end that puzzle.
+                raise HTTPException(
+                    403,
+                    f"this key authenticates as seat '{agent}', which does not "
+                    "have decisions:read-all. Check GET /api/v1/me — you may be "
+                    "using a different seat's key file than you intended.",
+                )
             return [
                 {
                     **row.decision.__dict__,

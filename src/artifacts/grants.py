@@ -67,3 +67,19 @@ def list_all(db: Database) -> list[tuple[str, str, str]]:
             " order by agent asc, scope asc"
         ).fetchall()
     return [(r[0], r[1], r[2].isoformat()) for r in rows]
+
+
+def for_agent(db: Database, agent: str) -> list[str]:
+    """One seat's scopes, for `GET /api/v1/me`.
+
+    Separate from `list_all` rather than filtered from it: this one answers a
+    request from the seat itself and must never be able to return another
+    seat's row, so the restriction is in the SQL and not in a caller's filter
+    that a later edit could drop.
+    """
+    with db.connect() as conn:
+        rows = conn.execute(
+            "select scope from seat_grant where agent = %s order by scope asc",
+            (agent,),
+        ).fetchall()
+    return [r[0] for r in rows]
