@@ -22,6 +22,17 @@ spec:
       labels:
         app.kubernetes.io/name: artifacts
     spec:
+      # Above the CI runners (homelab-internal, 500000) and below the public
+      # sites (homelab-public, 800000). Jeremy's ruling, 20 Sep 2026: "optimise
+      # for our essential services; CI is what we lose when a node dies."
+      #
+      # Without this the pod sits at priority 0, so on a node loss it cannot
+      # claim a node back from a build — the gallery would stay down while a
+      # CI job it does not depend on finished. The class is defined in the
+      # homelab repo (k8s/platform/priorityclasses.yaml); this file only names
+      # it, and naming a class that does not exist yet stops the ReplicaSet
+      # creating pods, so the two must land in that order.
+      priorityClassName: homelab-lan
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
