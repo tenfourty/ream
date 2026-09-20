@@ -45,3 +45,82 @@ def sanitize(text: str, limit: int = SUMMARY_LIMIT) -> str:
     if len(cleaned) > limit:
         return cleaned[: limit - 1] + "…"
     return cleaned
+
+
+# --- a page's own one-line description, for a gallery tile ------------------
+#
+# homelab-ij8.22. Jeremy, 19 Sep 2026: the index is bare, he wants tiles with
+# "the title and some detail". The detail has to come from the page itself --
+# asking agents to supply a separate summary would mean the summary drifts from
+# the page, which is the failure this whole service is built to avoid.
+#
+# This is TEXT EXTRACTION, never rendering. The gallery must not load an agent's
+# HTML into its own origin under any circumstances, so nothing here parses a
+# document or builds a tree: it finds one string, strips tags out of it, and
+# hands back plain text that the caller escapes like any other untrusted value.
+
+_DESCRIPTION_META = re.compile(
+    r'<meta\s[^>]*name\s*=\s*["\']description["\'][^>]*>', re.IGNORECASE
+)
+_CONTENT_ATTR = re.compile(r'content\s*=\s*["\']([^"\']*)["\']', re.IGNORECASE)
+_STANDFIRST = re.compile(
+    r'<p\s[^>]*class\s*=\s*["\'][^"\']*\bstandfirst\b[^"\']*["\'][^>]*>(.*?)</p>',
+    re.IGNORECASE | re.DOTALL,
+)
+_ANY_PARAGRAPH = re.compile(r"<p(?:\s[^>]*)?>(.*?)</p>", re.IGNORECASE | re.DOTALL)
+_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_TAG = re.compile(r"<[^>]*>")
+_ENTITIES = {
+    "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'",
+    "&mdash;": "—", "&ndash;": "–", "&nbsp;": " ", "&middot;": "·",
+    "&ldquo;": "“", "&rdquo;": "”", "&hellip;": "…",
+}
+
+DESCRIPTION_LIMIT = 150
+
+
+def _plain(fragment: str) -> str:
+    """Tags out, the handful of entities a page actually uses turned back into
+    characters, whitespace collapsed. Unknown entities are left as written
+    rather than guessed at -- a literal `&foo;` in a tile is honest, and a
+    guessed one is a quiet mistranslation of someone's prose."""
+    text = _TAG.sub(" ", fragment)
+    for entity, char in _ENTITIES.items():
+        text = text.replace(entity, char)
+    return sanitize(text, limit=DESCRIPTION_LIMIT)
+
+
+def describe(body: str) -> str:
+    """One line saying what a page is about, or "" when the page does not say.
+
+    Tried in the order a page is most likely to have meant it:
+      1. `<meta name="description">`, which is an explicit statement of intent
+      2. `<p class="standfirst">`, which every template here carries and which
+         is written to be exactly this sentence
+      3. the first paragraph with any real words in it
+
+    Returns "" rather than a guess when none of those yields anything. A tile
+    with no description is a tile with no description; inventing one from a
+    heading or a fragment of navigation would put words in an agent's mouth on
+    a page Jeremy reads as that agent's own.
+    """
+    # Comments first: a template's REPLACE notes are prose inside <!-- -->, and
+    # the first paragraph of one would otherwise become the page's description.
+    visible = _COMMENT.sub(" ", body)
+
+    meta = _DESCRIPTION_META.search(visible)
+    if meta:
+        content = _CONTENT_ATTR.search(meta.group(0))
+        if content and (text := _plain(content.group(1))):
+            return text
+
+    standfirst = _STANDFIRST.search(visible)
+    if standfirst and (text := _plain(standfirst.group(1))):
+        return text
+
+    for paragraph in _ANY_PARAGRAPH.finditer(visible):
+        text = _plain(paragraph.group(1))
+        # Two words is a caption or a chip, not a description of anything.
+        if len(text.split()) >= 4:
+            return text
+    return ""

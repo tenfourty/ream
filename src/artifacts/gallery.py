@@ -23,7 +23,8 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from markupsafe import escape
 
-from artifacts import decisions, events, store
+from artifacts import decisions, events, stamp, store
+from artifacts import text as text_module
 from artifacts.db import Database
 from artifacts.store import content_domain, content_url
 
@@ -205,11 +206,27 @@ a{color:var(--accent-ink)}
 .tiles{list-style:none;margin:0;padding:0;display:grid;gap:.8rem;
   grid-template-columns:repeat(auto-fill,minmax(15rem,1fr))}
 .tiles li{margin:0}
-.tiles a{display:block;background:var(--card);border:1px solid var(--line);
-  border-radius:.7rem;padding:.95rem 1.05rem;text-decoration:none;color:var(--ink);
-  box-shadow:var(--shadow);height:100%}
+/* A column, so the metadata can be pushed to the bottom: without it a tile
+   carrying a "questions for you" badge sits its agent and date lower than its
+   neighbours, and the wall reads as ragged rather than as a set. */
+.tiles a{display:flex;flex-direction:column;background:var(--card);
+  border:1px solid var(--line);border-radius:.7rem;padding:.95rem 1.05rem;
+  text-decoration:none;color:var(--ink);box-shadow:var(--shadow);height:100%}
 .tiles a:hover{border-color:var(--accent)}
-.tiles .t{display:block;font:400 1.06rem/1.3 var(--display);margin-bottom:.45rem}
+.tiles .t{display:block;font:400 1.06rem/1.3 var(--display);margin-bottom:.3rem}
+/* What the page says it is about, taken from the page. Clamped to three lines
+   so one long standfirst cannot make its tile twice the height of its
+   neighbours and break the grid's rhythm. */
+.tiles .d{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
+  overflow:hidden;font-size:.86rem;line-height:1.45;color:var(--muted);
+  margin-bottom:.5rem}
+/* Anything waiting on Jeremy is the one thing on a tile that should interrupt
+   him, so it is the only coloured element and it sits above the metadata. */
+.tiles .wait{align-self:flex-start;font:600 .72rem/1.4 var(--mono);
+  letter-spacing:.04em;color:var(--now);border:1px solid currentColor;
+  border-radius:.3rem;padding:.14rem .42rem;margin-bottom:.5rem}
+.tiles .m{display:block;font:.72rem/1.4 var(--mono);color:var(--muted);
+  letter-spacing:.05em;margin:auto 0 .15rem}
 .tiles time{font:.72rem/1.4 var(--mono);color:var(--muted);letter-spacing:.05em}
 .empty{color:var(--muted)}
 """
@@ -610,19 +627,69 @@ def gallery_router(db: Database) -> APIRouter:
                 # on `updated_at` (two rows can share one, e.g. re-touched by
                 # the same migration) so the order is fixed, not whatever a
                 # plan with no full ORDER BY happens to return today.
-                "select id, title, updated_at from artifact"
-                " order by updated_at desc, id desc limit 200"
+                #
+                # The live body comes back so the tile can say what the page is
+                # ABOUT, taken from the page itself. A separate agent-supplied
+                # summary would drift from the page it describes, which is the
+                # one failure this service exists to prevent.
+                #
+                # The counts are subqueries rather than joins on purpose: a join
+                # to `version` multiplies the artifact row and a second join to
+                # `decision` multiplies it again, so a page with 12 versions and
+                # 2 open questions would report 24 of each. That is the classic
+                # shape and it is silent -- the numbers merely look large.
+                "select a.id, a.title, a.updated_at, a.agent,"
+                "       (select count(*) from version v"
+                "          where v.artifact_id = a.id) as versions,"
+                "       (select count(*) from decision d"
+                "          where d.artifact_id = a.id"
+                "            and d.answer is null"
+                "            and d.closed_at is null) as waiting,"
+                "       (select v.body from version v"
+                "          where v.artifact_id = a.id and v.status = 'live'"
+                "          order by v.n desc limit 1) as body"
+                "  from artifact a"
+                " order by a.updated_at desc, a.id desc limit 200"
             ).fetchall()
-        # A tile per page rather than a line per page: a wall of titles is how
-        # Jeremy recognises the board he wants. A real preview of each page's
-        # own content is the next step (it needs a rendering the gallery can
-        # show without loading an agent's HTML into this origin).
-        items = "".join(
-            f'<li><a href="/a/{escape(row[0])}">'
-            f'<span class="t">{escape(row[1])}</span>'
-            f"<time>{escape(str(row[2])[:16])}</time></a></li>"
-            for row in rows
-        )
+
+        # A tile per page rather than a line per page: a wall Jeremy recognises
+        # the board he wants in. Jeremy chose a real rendered thumbnail (19 Sep)
+        # and qualified it -- "start with (b) but then (a) if we can" -- so this
+        # is (b): everything a tile can say without a browser. The thumbnail is
+        # tracked separately and needs a decision about where the renderer runs,
+        # because the gallery must never load an agent's HTML into this origin.
+        def tile(row) -> str:
+            artifact_id, title, updated, agent, versions, waiting, body = row
+            # Every one of these is agent-controlled text reaching the gallery
+            # origin, so every one is escaped here. `describe` strips tags but
+            # makes no claim to produce safe markup -- it returns plain text and
+            # escaping is this caller's job, as it is for the title.
+            about = text_module.describe(body or "")
+            bits = [
+                f'<li><a href="/a/{escape(artifact_id)}">',
+                f'<span class="t">{escape(title)}</span>',
+            ]
+            if about:
+                bits.append(f'<span class="d">{escape(about)}</span>')
+            if waiting:
+                word = "question" if waiting == 1 else "questions"
+                bits.append(f'<span class="wait">{waiting} {word} for you</span>')
+            # The time a reader can act on, in the reader's zone -- the same rule
+            # as the page stamp (homelab-ij8.70). This used to print the raw
+            # database value sliced to 16 characters, which is UTC and looked
+            # like a local time: exactly the failure Jeremy caught on a page
+            # ("your status time is back to UTC"), still live on the index.
+            when = stamp.format_for_display(updated) if updated else ""
+            meta_bits = [escape(agent)]
+            if versions:
+                meta_bits.append(f"v{versions}")
+            bits.append(
+                f'<span class="m">{" &middot; ".join(meta_bits)}</span>'
+                f"<time>{escape(when)}</time></a></li>"
+            )
+            return "".join(bits)
+
+        items = "".join(tile(row) for row in rows)
         body = (
             f'<ul class="tiles">{items}</ul>'
             if rows
