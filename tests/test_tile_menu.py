@@ -100,10 +100,8 @@ def test_every_row_in_the_tile_menu_is_the_same_shape(client, db):
     assert f'href="/a/{published.id}#rename"' in panel
     assert f'action="/a/{published.id}/duplicate"' in panel
     assert f'href="/a/{published.id}#link"' in panel
+    assert f'action="/a/{published.id}/archive"' in panel
     assert f'action="/a/{published.id}/delete"' in panel
-    assert f'action="/a/{published.id}/archive"' not in panel, (
-        "archive stays on the page's own menu -- the tile list is the short one"
-    )
 
 
 def test_copy_link_reaches_a_real_address_with_no_script(client, db):
@@ -344,6 +342,33 @@ def test_the_waiting_badge_rides_the_picture_not_the_body(client, db):
     body = tile.split('<span class="body">', 1)[1]
     assert 'class="wait"' not in body, "and not in the body below it"
     assert "asking" in tile.split(">", 1)[0], "and the card's edge says so"
+
+
+def test_archiving_is_reachable_from_the_wall_not_only_from_the_page(client, db):
+    """This was left off the tile menu for about an hour, with a test asserting
+    its absence, on the grounds that the tile list should be the short one.
+    True premise, wrong conclusion, and Jeremy said so: archiving is a WALL
+    action -- its whole purpose is to take a page off the wall -- so needing to
+    open the page to do it is backwards."""
+    published = store.publish(db, "seat", "Board", PAGE)
+    tile = _tile(client.get("/").text, published.id)
+    assert f'action="/a/{published.id}/archive"' in tile
+    assert 'value="1"' in tile, "and it would archive it"
+    assert ">Archive<" in tile
+
+
+def test_an_archived_tile_offers_the_way_back_not_the_way_out(client, db):
+    """The same row, reversed, so the fold is not a place things only go into.
+    A menu that still said "Archive" on an archived page would be a no-op
+    dressed as an action."""
+    published = store.publish(db, "seat", "Board", PAGE)
+    store.set_archived(db, published.id, True, agent=None)
+
+    page = client.get("/").text
+    body = page.split('<div class="archived-body">', 1)[1]
+    assert "Put back on the wall" in body
+    assert ">Archive<" not in body
+    assert 'name="archived" value="0"' in body, "and it would unarchive it"
 
 
 def test_the_pin_button_is_not_faded_to_the_point_of_being_absent(client, db):

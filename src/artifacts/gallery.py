@@ -144,6 +144,7 @@ a{color:var(--accent-ink)}
    hard against the top of the window and made the whole page feel cramped
    before a single card had been read. */
 .wrap{max-width:62rem;margin:0 auto;padding:3rem 1rem 3.5rem}
+main{display:block}
 @media (max-width:40rem){.wrap{padding-top:1.5rem}}
 /* No rule under the title. Measured: the reference's header is a 48px row with
    no border beneath it -- the wall's own top edge is the separation, and a rule
@@ -946,7 +947,9 @@ def _go(href: str, icon: str, label: str, extra: str = "") -> str:
     return f'<a class="mrow{extra}" href="{href}">{_icon(icon)}{label}</a>'
 
 
-def _tile_menu(artifact_id: str, title: str, pinned: bool, origin: str) -> str:
+def _tile_menu(
+    artifact_id: str, title: str, pinned: bool, origin: str, archived: bool = False
+) -> str:
     """The dots on a tile: the three things worth doing without opening a page.
 
     Deliberately SHORTER than the page's own title menu. A menu on a wall of
@@ -979,6 +982,19 @@ def _tile_menu(artifact_id: str, title: str, pinned: bool, origin: str) -> str:
         _go(f"/a/{ident}#rename", "rename", "Rename"),
         _act(f"/a/{ident}/duplicate", "copy", "Duplicate"),
         _go(f"/a/{ident}#link", "link", "Copy link"),
+        # ARCHIVE BELONGS HERE. It was left off on the grounds that the tile
+        # menu should be the short one -- which is true, and was the wrong
+        # conclusion: archiving is a WALL action. Its whole purpose is to take
+        # a page off the wall, so needing to open the page to do it is
+        # backwards, and Jeremy said so. (Kept out of the short list for about
+        # an hour, with a test asserting its absence. The test is now the
+        # other way round.)
+        _act(
+            f"/a/{ident}/archive",
+            "unarchive" if archived else "archive",
+            "Put back on the wall" if archived else "Archive",
+            {"archived": "0" if archived else "1"},
+        ),
         (
             '<div class="mdanger">'
             + _act(f"/a/{ident}/delete", "trash", "Delete", danger=True)
@@ -1392,7 +1408,13 @@ def _shell(
         # used to share one line with the title, which is what made the header
         # feel like a toolbar someone had run out of room on.
         f"{controls}"
-        f"{body}</div>{scripts}</body></html>"
+        # <main>. The reference has one and this had none, which a structural
+        # diff of the two documents found rather than any amount of looking at
+        # them: without it there is no landmark to skip to, so a screen-reader
+        # user arrives at the top of the chrome every time and walks the header
+        # again on every page. The controls row stays OUTSIDE it -- tabs and
+        # search are navigation, not the content they filter.
+        f"<main>{body}</main></div>{scripts}</body></html>"
     )
 
 
@@ -1829,7 +1851,7 @@ def gallery_router(db: Database) -> APIRouter:
             (not archived,),
         ).fetchall()
 
-    def _row_view(row) -> str:
+    def _row_view(row, archived: bool = False) -> str:
         """One page as a line, for the list view.
 
         The same facts as a tile in a quarter of the height: the point of the
@@ -1880,7 +1902,7 @@ def gallery_router(db: Database) -> APIRouter:
             f"{badge}<span class=\"rt\">{escape(title)}</span>"
             f'<span class="rmeta">{"".join(right)}</span></a>'
             f"{_pin_button(artifact_id, bool(pinned_at))}"
-            f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin())}"
+            f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin(), archived)}"
             "</li>"
         )
 
@@ -1896,7 +1918,7 @@ def gallery_router(db: Database) -> APIRouter:
         # is (b): everything a tile can say without a browser. The thumbnail is
         # tracked separately and needs a decision about where the renderer runs,
         # because the gallery must never load an agent's HTML into this origin.
-        def tile(row) -> str:
+        def tile(row, archived: bool = False) -> str:
             (
                 artifact_id,
                 title,
@@ -2028,7 +2050,7 @@ def gallery_router(db: Database) -> APIRouter:
                 + "</span>"
                 "</span></a>"
                 f"{pin_button}"
-                f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin())}"
+                f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin(), archived)}"
                 "</li>"
             )
             return "".join(bits)
@@ -2067,7 +2089,7 @@ def gallery_router(db: Database) -> APIRouter:
             else "grid"
         )
 
-        def listing(these) -> str:
+        def listing(these, archived: bool = False) -> str:
             """The rows, under a heading per day. The headings come from the
             data rather than from a fixed set of buckets, so a wall with a
             three-month gap in it has no empty months in the middle."""
@@ -2079,15 +2101,16 @@ def gallery_router(db: Database) -> APIRouter:
                         out.append("</ul>")
                     out.append(f'<h2 class="daygroup">{escape(group)}</h2><ul class="rows">')
                     current = group
-                out.append(_row_view(row))
+                out.append(_row_view(row, archived))
             if current is not None:
                 out.append("</ul>")
             return "".join(out)
 
-        def render(these) -> str:
+        def render(these, archived: bool = False) -> str:
             if view == "list":
-                return listing(these)
-            return f'<ul class="tiles">{"".join(tile(r) for r in these)}</ul>'
+                return listing(these, archived)
+            tiles = "".join(tile(r, archived) for r in these)
+            return f'<ul class="tiles">{tiles}</ul>'
 
         # Archived pages, folded and counted. Jeremy asked for archiving so a
         # page stops competing for attention, not so it becomes unreachable —
@@ -2103,7 +2126,8 @@ def gallery_router(db: Database) -> APIRouter:
                 f"<span>Archived</span>"
                 f'<span class="n">{n} {noun}</span>'
                 "</summary>"
-                f'<div class="archived-body">{render(archived_rows)}</div>'
+                '<div class="archived-body">'
+                f"{render(archived_rows, archived=True)}</div>"
                 "</details>"
             )
         if active == "deleted":

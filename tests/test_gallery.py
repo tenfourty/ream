@@ -622,7 +622,7 @@ def test_a_decision_still_waiting_on_him_carries_no_collection_mark(db):
 
 
 def test_an_uncollected_answer_says_whether_the_agent_is_even_running(db):
-    """"Nobody took your answer" is two situations, needing opposite responses:
+    """ "Nobody took your answer" is two situations, needing opposite responses:
     an agent that is not running (someone else has to collect it) and one that is
     running and not acting (a bug to go and look at). One comparison tells them
     apart, and a message that cannot is one he learns to skip."""
@@ -696,3 +696,47 @@ def test_the_settled_block_is_collapsed_and_says_how_many(db):
     # <details> with no `open`: closed until he asks for it.
     assert '<details class="asks settled-list"><summary>' in page
     assert '<details class="asks settled-list" open' not in page
+
+
+def test_the_page_has_a_main_landmark(db):
+    """Found by diffing the two documents' STRUCTURE rather than their pixels:
+    the reference has a <main> and this had none. Without one there is nothing
+    to skip to, so a screen-reader user arrives at the top of the chrome on
+    every page and walks the header again before reaching a single tile.
+
+    The controls row stays outside it on purpose -- tabs and search are
+    navigation, not the content they filter."""
+    client = TestClient(create_gallery_app(db))
+    page = client.get("/").text
+    assert page.count("<main>") == 1
+    assert page.count("</main>") == 1
+    # The wall is inside it; the header and the filter tabs are not.
+    before, inside = page.split("<main>", 1)
+    assert "<h1>" in before, "the title is chrome"
+    assert 'class="tabs"' in before, "so are the tabs"
+    assert 'class="tiles"' in inside or 'class="empty"' in inside
+
+
+def test_every_control_on_the_wall_has_an_accessible_name(db):
+    """An icon-only button with no label is a button a screen reader announces
+    as "button". This wall is nearly all icon-only controls -- the dots, the
+    pin, the view toggle -- so the rule matters here more than most."""
+    import re
+
+    store.publish(
+        db,
+        "seat",
+        "Board",
+        "<!doctype html><html><head><title>B</title></head>"
+        "<body><p>x</p></body></html>",
+    )
+    page = TestClient(create_gallery_app(db)).get("/").text
+    unnamed = []
+    # Every <button> and <summary> must carry either visible text or an
+    # aria-label.
+    for m in re.finditer(r"<(button|summary)\b([^>]*)>(.*?)</\1>", page, re.DOTALL):
+        attrs, inner = m.group(2), m.group(3)
+        text = re.sub(r"<[^>]+>", "", inner).strip()
+        if not text and "aria-label" not in attrs:
+            unnamed.append(m.group(0)[:70])
+    assert unnamed == [], f"controls with no accessible name: {unnamed}"
