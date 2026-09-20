@@ -170,8 +170,14 @@
     padding:.9rem 1.05rem;margin:.6rem 0;box-shadow:var(--shadow);
     display:grid;grid-template-columns:2rem 1fr;gap:.2rem .7rem}
   .opt.pick{border-left:3px solid var(--ok)}
-  .letter{grid-row:1/span 3;font:600 1.15rem/1 var(--mono);color:var(--accent-ink);
-    background:var(--accent-soft);border-radius:.4rem;padding:.35rem 0;text-align:center}
+  /* A LABEL, NOT A BUTTON. Jeremy tapped these on his phone on 20 Sep 2026 and
+     nothing happened: "I tried to click on the options on the HTML of the page
+     but that didn't work". A page cannot carry a working control — the real one
+     is drawn by the gallery on its own origin, because a button rendered inside
+     a sandboxed page could forge an answer. So these must not LOOK tappable:
+     no filled pill, no raised edge, nothing that invites a thumb. */
+  .letter{grid-row:1/span 3;font:600 1.15rem/1 var(--mono);color:var(--muted);
+    text-align:center;padding:.35rem 0}
   .opt b{align-self:center}
   .opt .buys,.opt .costs{margin:.1rem 0;font-size:.94rem}
   .opt .costs{color:var(--muted)}
@@ -254,14 +260,10 @@
        what turns a question into a decision: it tells him what he is choosing
        by NOT answering, which is the option he is most likely to take by
        accident. -->
-  <div class="card doing-nothing">
-    <b>If you say nothing</b>
-    <p>The upload finishes on Thursday unencrypted and I leave it that way rather
-      than guess. Changing it afterwards means re-uploading about 400 GB, so the
-      cost of this question goes up after Thursday and not before.</p>
-  </div>
-
   <h2>Answer here</h2>
+  <p class="muted">The options above are the explanation; the buttons are here.
+    Nothing on the page itself can be tapped &mdash; a control drawn inside the
+    page could forge an answer, so the real one is drawn by the gallery.</p>
   <!-- The slot. The gallery draws the real control on its own origin and lifts
        it in; your page is sandboxed and holds whatever HTML you published, so a
        form drawn HERE could forge an answer or imitate the real one. That is
@@ -284,6 +286,13 @@
   <p class="muted">Your answer comes straight back to me. The note beside the
     letter is read as carefully as the letter — if the right answer is "(a) but
     only once X", write that.</p>
+
+  <div class="card doing-nothing">
+    <b>If you say nothing</b>
+    <p>The upload finishes on Thursday unencrypted and I leave it that way rather
+      than guess. Changing it afterwards means re-uploading about 400 GB, so the
+      cost of this question goes up after Thursday and not before.</p>
+  </div>
 
   <!-- REPLACE. What happens the moment he answers. This is the line that makes
        answering feel worth doing, and it is also your commitment. -->
