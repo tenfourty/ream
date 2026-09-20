@@ -225,38 +225,6 @@ a{color:var(--accent-ink)}
 .sheet .ask{position:absolute;margin:0;z-index:1;
   transform:translateZ(0);isolation:isolate}
 
-/* HOUSEKEEPING: rename and archive. Quiet on purpose — a page is opened to be
-   read, and these are the controls that change or hide it, so they sit last and
-   below. Every rule here exists to match what is already on the page rather
-   than to add a new look: the same custom disclosure marker as the settled
-   list, the same input as the answer note, the same button shape as an answer
-   option but never filled, because filled means "this is your answer".
-   Shipped unstyled first and it showed — raw form controls beside a page that
-   had been designed. */
-.housekeeping{margin-top:1.8rem;border-top:1px solid var(--line);padding-top:.3rem}
-.housekeeping > summary{cursor:pointer;list-style:none;padding:.45rem 0;
-  font:600 .74rem/1.4 var(--mono);letter-spacing:.14em;text-transform:uppercase;
-  color:var(--muted)}
-.housekeeping > summary::-webkit-details-marker{display:none}
-.housekeeping > summary::before{content:"";margin-right:.5rem;display:inline-block;
-  width:0;height:0;border:.3rem solid transparent;border-left-color:currentColor;
-  vertical-align:.05em;transition:transform .12s}
-.housekeeping[open] > summary::before{transform:rotate(90deg)}
-.housekeeping > summary:hover{color:var(--accent-ink)}
-.housekeeping form{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;
-  margin:.5rem 0 0}
-.housekeeping input{font:inherit;font-size:.92rem;flex:1 1 16rem;min-width:9rem;
-  padding:.42rem .6rem;border:1px solid var(--line);border-radius:.45rem;
-  background:var(--paper);color:var(--ink)}
-.housekeeping button{font:inherit;font-size:.92rem;cursor:pointer;
-  border-radius:.45rem;padding:.44rem .9rem;border:1px solid var(--line);
-  background:transparent;color:var(--ink);white-space:nowrap}
-.housekeeping button:hover{border-color:var(--accent);color:var(--accent-ink)}
-/* The one that hides a page gets a warm edge on hover — not a red button, which
-   would read as danger. Archiving is reversible and nothing is destroyed; the
-   colour says "this one changes what you see", not "be careful". */
-.housekeeping form.hide button:hover{border-color:var(--now);color:var(--now)}
-.housekeeping p{flex:1 1 100%;margin:.15rem 0 0;font-size:.85rem;color:var(--muted)}
 
 /* MENUS: the title dropdown and the per-tile dots. Modelled on the claude.ai
    artifact bar Jeremy sent through — a compact bar whose title carries the
@@ -1065,8 +1033,8 @@ def gallery_router(db: Database) -> APIRouter:
         # the title is wanted on the page anyway.
         with db.connect() as conn:
             row = conn.execute(
-                "select title, read_token, agent, archived_at from artifact"
-                " where id = %s",
+                "select title, read_token, agent, archived_at, updated_at"
+                " from artifact where id = %s",
                 (artifact_id,),
             ).fetchone()
         if row is None:
@@ -1091,28 +1059,14 @@ def gallery_router(db: Database) -> APIRouter:
         # because the frame is cross-origin to the gallery (its own <id>.<domain> origin), and it
         # needs its own origin for the content app's `connect-src 'self'`.
         sandbox = "allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-        # Renaming and archiving, at the bottom of the page rather than the top.
-        # They are housekeeping: a reader opens a page to read it, and a control
-        # that can make it vanish does not belong above the thing it acts on.
-        # Plain forms, so both work with scripts off, like everything else here.
+        # The title carries the actions now, in a menu, the way the reference
+        # does. The previous version put a "Rename or archive" fold at the
+        # bottom of the page with unstyled form controls in it, which is what
+        # Jeremy meant by "wow that ux is ugly" -- raw browser widgets beside a
+        # page that had been designed.
         archived = row[3] is not None
-        housekeeping = (
-            '<details class="housekeeping"><summary>Rename or archive</summary>'
-            f'<form method="post" action="/a/{escape(artifact_id)}/rename">'
-            f'<input name="title" value="{escape(row[0])}" aria-label="Page name">'
-            "<button type=\"submit\">Rename</button></form>"
-            f'<form class="hide" method="post" action="/a/{escape(artifact_id)}/archive">'
-            f'<input type="hidden" name="archived" value="{"0" if archived else "1"}">'
-            + (
-                '<button type="submit">Put back on the wall</button>'
-                '<p class="muted">Archived, so it is not on the wall. The address '
-                "still works and everything you decided on it is still here.</p>"
-                if archived
-                else '<button type="submit">Archive</button>'
-                '<p class="muted">Takes it off the wall. Nothing is deleted — the '
-                "address keeps working and you can put it back.</p>"
-            )
-            + "</form></details>"
+        menu = _page_menu(
+            artifact_id, row[0], row[2], archived, _when(str(row[4])) if row[4] else "just now"
         )
         return HTMLResponse(
             _shell(
@@ -1120,11 +1074,12 @@ def gallery_router(db: Database) -> APIRouter:
                 f"{asks_above}"
                 f'<div class="sheet" id="artifact-sheet"><iframe id="artifact-frame"'
                 f' src="{src}" sandbox="{sandbox}" title="{escape(row[0])}"></iframe></div>'
-                f"{settled_below}{housekeeping}",
+                f"{settled_below}",
                 # gallery.js reads the content origin straight off this iframe's own
                 # `src` -- fixed ids, not a class selector, so a future second iframe
                 # on this page could never be mistaken for this one.
                 scripts='<script src="/gallery.js" defer></script>',
+                title_html=menu,
             ),
             headers=gallery_headers(),
         )

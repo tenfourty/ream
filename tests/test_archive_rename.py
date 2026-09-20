@@ -134,3 +134,42 @@ def test_an_unknown_page_is_a_404(client):
         got = client.post(f"/a/nope/{action}", data=data,
                           headers=SAME_ORIGIN, follow_redirects=False)
         assert got.status_code == 404
+
+
+# --- the page bar (homelab-ij8.84.1) -----------------------------------------
+
+
+def test_the_title_carries_the_actions(client, page):
+    """The reference puts the actions on the title, not at the bottom of the
+    page. The previous version was a fold of unstyled form controls below
+    everything, which is what Jeremy meant by "wow that ux is ugly"."""
+    html = client.get(f"/a/{page.id}").text
+    assert 'class="menu"' in html
+    assert "Page by seat" in html, "who published it"
+    assert "/rename" in html and "/archive" in html
+    assert "All pages" in html
+    assert "housekeeping" not in html, "the old bottom fold is gone"
+
+
+def test_the_menu_needs_no_script(client, page):
+    """A menu that opens only with JavaScript is a menu that is missing on the
+    day something else on the page has thrown. <details> opens either way."""
+    html = client.get(f"/a/{page.id}").text
+    start = html.index('<details class="menu"')
+    assert "<summary" in html[start : start + 200]
+
+
+def test_an_archived_page_offers_the_opposite_action_in_the_menu(client, page):
+    assert "Archive</button>" in client.get(f"/a/{page.id}").text
+    client.post(f"/a/{page.id}/archive", data={"archived": "1"},
+                headers=SAME_ORIGIN, follow_redirects=False)
+    assert "Put back on the wall" in client.get(f"/a/{page.id}").text
+
+
+def test_no_delete_row_until_he_has_decided(client, page):
+    """He has an open question about what deleting should do. A menu item that
+    destroys his decisions must not be built on a guess, and a test is the way
+    that stays true when someone adds the other rows later."""
+    html = client.get(f"/a/{page.id}").text
+    assert "/delete" not in html
+    assert ">Delete" not in html
