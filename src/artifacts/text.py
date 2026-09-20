@@ -90,6 +90,37 @@ def _plain(fragment: str) -> str:
     return sanitize(text, limit=DESCRIPTION_LIMIT)
 
 
+# What a search looks at. Big enough to cover a real page's prose, small enough
+# that scanning the wall stays cheap -- and it is a bound on the SOURCE, so a
+# page with 200 KB of inline data does not make every keystroke expensive.
+SEARCH_LIMIT = 40_000
+
+# Content that is in the document but is not the document's words. Searching
+# these produces hits a reader cannot see anywhere on the page, which reads as
+# the search being broken rather than as the query being odd.
+_NOT_PROSE = re.compile(
+    r"<(script|style|svg|template)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL
+)
+
+
+def searchable(body: str) -> str:
+    """A page's readable words, lowercased, for matching a query against.
+
+    NOT `describe`. That answers "what is this page about?" and returns "" when
+    the page does not say -- which is most pages, and would have made a search
+    silently miss them. This answers "what words are on it?", which is the
+    question a search is actually asking.
+
+    Script, style, inline SVG and templates come out first, then tags, so a
+    query can never match a class name, a CSS colour or an SVG path.
+    """
+    trimmed = _NOT_PROSE.sub(" ", _COMMENT.sub(" ", body[:SEARCH_LIMIT]))
+    text = _TAG.sub(" ", trimmed)
+    for entity, char in _ENTITIES.items():
+        text = text.replace(entity, char)
+    return " ".join(text.split()).lower()
+
+
 def describe(body: str) -> str:
     """One line saying what a page is about, or "" when the page does not say.
 

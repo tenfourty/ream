@@ -158,30 +158,26 @@ def test_the_header_leads_with_what_is_waiting_on_him(client, db):
     assert "1 page" in page, "the page count stays, quietly, beside it"
 
 
-def test_the_indicator_is_a_link_to_the_first_page_asking(client, db):
-    """One tap and he is at it, rather than hunting the amber card."""
+def test_the_indicator_shows_him_everything_that_is_waiting(client, db):
+    """It FILTERS rather than jumping to an anchor. With three pages asking,
+    jumping to the first answers "where is it"; the useful question is "show me
+    them", and the filtered wall answers both."""
     store.publish(db, "seat", "Nothing to answer", PAGE)
     asking = store.publish(db, "seat", "Has a question", PAGE)
     _ask(db, asking.id)
-    page = client.get("/").text
-    assert 'href="#waiting"' in page
-    assert page.count('id="waiting"') == 1, (
-        "exactly one anchor: a duplicate id is invalid"
-    )
-    assert _tile(page, asking.id).count('id="waiting"') == 1, (
-        "and it is on the right tile"
-    )
+
+    assert 'href="/?filter=waiting"' in client.get("/").text
+    shown = client.get("/?filter=waiting").text
+    assert asking.id in shown
+    assert "Nothing to answer" not in shown
 
 
-def test_only_the_first_asking_tile_takes_the_anchor(client, db):
-    """Two pages asking, one anchor. A duplicate id is invalid HTML and the
-    jump lands on whichever the browser feels like."""
+def test_the_count_is_of_questions_not_of_pages(client, db):
     first = store.publish(db, "seat", "First", PAGE)
     second = store.publish(db, "seat", "Second", PAGE)
     _ask(db, first.id)
     _ask(db, second.id)
     page = client.get("/").text
-    assert page.count('id="waiting"') == 1
     assert "3 questions" not in page, "two pages asking once each is two questions"
     assert "2 questions waiting on you" in page
 

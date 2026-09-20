@@ -118,13 +118,17 @@ html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--paper);color:var(--ink);
      font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 a{color:var(--accent-ink)}
-/* 60rem = 960px, which is the reference's column exactly: 3 x 304 + 2 x 24. */
-.wrap{max-width:60rem;margin:0 auto;padding:1rem 1rem 2.5rem}
+/* 60rem = 960px, which is the reference's column exactly: 3 x 304 + 2 x 24.
+   48px above the title is measured off it too -- the old 1rem put the heading
+   hard against the top of the window and made the whole page feel cramped
+   before a single card had been read. */
+.wrap{max-width:60rem;margin:0 auto;padding:3rem 1rem 3.5rem}
+@media (max-width:40rem){.wrap{padding-top:1.5rem}}
 /* No rule under the title. Measured: the reference's header is a 48px row with
    no border beneath it -- the wall's own top edge is the separation, and a rule
    as well is one line too many on a page that is mostly cards. */
 .bar{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;
-     min-height:48px;padding:.1rem 0 .2rem;margin-bottom:1.1rem}
+     min-height:48px;padding:0;margin:0}
 .bar a.home{color:var(--accent-ink);text-decoration:none;display:inline-flex;align-items:center;
   gap:.4rem;border:1px solid var(--line);background:var(--card);border-radius:999px;
   padding:.22rem .66rem;font-size:.8rem;white-space:nowrap}
@@ -135,7 +139,7 @@ a{color:var(--accent-ink)}
    masthead over a filing cabinet. */
 .bar h1{font:500 1.5rem/2rem var(--display);margin:0;letter-spacing:-.01em;
   flex:1 1 12rem}
-.bar .meta{display:flex;align-items:center;gap:.6rem;
+.bar .meta{display:flex;align-items:center;gap:.6rem;margin-left:auto;
   font:.8125rem/1.25rem ui-sans-serif,system-ui,-apple-system,sans-serif;
   color:var(--muted);white-space:nowrap}
 /* What is waiting on him leads the header, and it is a link: one tap and he is
@@ -149,7 +153,6 @@ a{color:var(--accent-ink)}
 .bar .waiting::after{content:"→";font-weight:400}
 .bar .waiting:hover{filter:brightness(.94)}
 /* Landing on the tile should not put it under the top edge of the window. */
-.tiles li.asking{scroll-margin-top:1.5rem}
 
 /* asks */
 .asks{margin:0 0 1.3rem}
@@ -461,7 +464,44 @@ a{color:var(--accent-ink)}
 .pinmark .mi{width:.85em;height:.85em;opacity:1}
 /* A pinned tile leads the wall; the accent edge says why, without shouting. */
 .tiles li.pinned > a{border-color:var(--accent)}
-.empty{color:var(--muted)}
+.empty{color:var(--muted);padding:2rem 0}
+.empty a{color:var(--accent-ink)}
+
+/* --- the controls row -------------------------------------------------------
+   Its own row beneath the title, 16px below it and 32px tall, which is the
+   reference's rhythm measured: title row top 48 height 48, controls top 112
+   height 32. They used to share the title's line, which is what made the
+   header read as a toolbar someone had run out of room on. */
+.controls{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;
+  min-height:32px;margin:1rem 0 2rem}
+.cright{display:flex;align-items:center;gap:.6rem;margin-left:auto}
+.tabs{display:flex;align-items:center;gap:.15rem;flex-wrap:wrap}
+.tab{display:inline-flex;align-items:center;gap:.4rem;height:32px;
+  padding:0 .75rem;border-radius:8px;text-decoration:none;color:var(--muted);
+  font:500 .875rem/1.25rem ui-sans-serif,system-ui,-apple-system,sans-serif}
+.tab:hover{color:var(--ink);background:var(--card)}
+.tab.on{color:var(--ink);background:var(--card);
+  box-shadow:inset 0 0 0 1px var(--line)}
+.tab .tn{font-size:.75rem;color:var(--muted);background:var(--paper);
+  border-radius:999px;padding:.05rem .36rem;box-shadow:inset 0 0 0 1px var(--line)}
+.tab.on .tn{background:var(--paper)}
+
+/* Search. A GET form, so a search is a URL he can keep. */
+.find{display:flex;align-items:center;gap:.4rem;height:28px;margin:0;
+  padding:0 .5rem;border:1px solid var(--line);border-radius:7px;
+  background:var(--card)}
+.find:focus-within{border-color:var(--accent)}
+.find .mi{width:.85rem;height:.85rem;opacity:.55;flex:0 0 auto}
+.find input[type=search]{font:inherit;font-size:.8125rem;border:0;outline:0;
+  background:transparent;color:var(--ink);width:9rem;min-width:0;padding:0}
+.find input[type=search]::-webkit-search-cancel-button{display:none}
+.clearq{text-decoration:none;color:var(--muted);font-size:1rem;line-height:1;
+  padding:0 .1rem}
+.clearq:hover{color:var(--ink)}
+@media (max-width:40rem){
+  .find input[type=search]{width:6rem}
+  .cright .count{display:none}
+}
 
 /* --- archived ---------------------------------------------------------------
    These were a bare <details> in the browser's own styling -- a black triangle
@@ -535,7 +575,6 @@ a{color:var(--accent-ink)}
   border-color:var(--accent)}
 .row-wrap .menu[open]{z-index:30}
 .row-wrap.asking .row{box-shadow:inset 2px 0 0 var(--now-solid)}
-.row-wrap.asking{scroll-margin-top:1.5rem}
 /* At phone width the agent name is the first thing to go: the title and when
    it moved are what a list is scanned for. */
 @media (max-width:30rem){.rmeta .who{display:none}}
@@ -683,6 +722,7 @@ _ICON = {
     "open": '<path d="M9.4 1.6v1.3h2.8L6.5 8.6l.9.9 5.7-5.7v2.8h1.3V1.6H9.4ZM2.8 3.3h3.9v1.3H3.3v8.1h8.1V9.3h1.3v4a.7.7 0 0 1-.7.7H2.8a.7.7 0 0 1-.7-.7V4a.7.7 0 0 1 .7-.7Z"/>',
     "all": '<path d="M2 2.5h5v5H2v-5Zm7 0h5v5H9v-5Zm-7 6h5v5H2v-5Zm7 0h5v5H9v-5Z"/>',
     "pin": '<path d="M9.6 1.3 8.5 2.4l.4.4-3 2.2-1.6-.3-1.1 1.1 3 3L2 13l3.2-4.2 3 3 1.1-1.1-.3-1.6 2.2-3 .4.4 1.1-1.1-3.1-3.1Z"/>',
+    "find": '<path d="M7.1 2.2a4.9 4.9 0 1 0 2.96 8.8l3 3a.7.7 0 0 0 1-1l-3-3A4.9 4.9 0 0 0 7.1 2.2Zm0 1.4a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Z"/>',
     "list": '<path d="M2 3.2h1.9v1.9H2V3.2Zm3.4 .35h8.6v1.2H5.4V3.55ZM2 7.05h1.9v1.9H2v-1.9Zm3.4 .35h8.6v1.2H5.4V7.4ZM2 10.9h1.9v1.9H2v-1.9Zm3.4 .35h8.6v1.2H5.4v-1.2Z"/>',
     "grid": '<path d="M2.2 2.2h5v5h-5v-5Zm6.6 0h5v5h-5v-5Zm-6.6 6.6h5v5h-5v-5Zm6.6 0h5v5h-5v-5Z"/>',
     "page": '<path d="M4 1.5h5l3 3v10a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-13a.5.5 0 0 1 .5-.5Zm4.6 1.4v2.1h2.1L8.6 2.9ZM5.4 7.4h5.2v1H5.4v-1Zm0 2.3h5.2v1H5.4v-1Zm0 2.3h3.4v1H5.4v-1Z"/>',
@@ -795,6 +835,56 @@ def _page_menu(
     )
 
 
+def _matches(row, needle: str) -> bool:
+    """Does this page match? Title, owning agent, and the page's own words.
+
+    The agent is in there because on a wall with a dozen seats "what has
+    warpgate-arc published" is a question worth being able to ask, and it is
+    the same keystrokes as searching for a title.
+
+    Case-insensitive substring, deliberately: this is a wall of tens of pages,
+    not a corpus. Anything cleverer -- stemming, ranking, fuzzy matching --
+    would mean a page failing to appear for a reason he cannot see, and the
+    honest answer at this size is that everything either contains the string or
+    does not.
+    """
+    artifact_id, title, _updated, agent, _v, _w, body, *_rest = row
+    haystacks = (title or "", agent or "", artifact_id or "")
+    if any(needle in h.lower() for h in haystacks):
+        return True
+    # The page's readable words. NOT `describe`, which answers "what is this
+    # page about?" and returns "" when the page does not say -- which is most
+    # pages, so searching through it silently missed them. `searchable` answers
+    # "what words are on it?", which is what a search is actually asking, and
+    # it drops script, style and inline SVG first so a query can never match a
+    # class name or a path.
+    return needle in text_module.searchable(body or "")
+
+
+def _search_box(query: str, view: str) -> str:
+    """A GET form whose result is the same gallery, filtered -- so a search is a
+    URL he can keep, and it works with scripts off.
+
+    The view travels with it in a hidden field. Without that, searching would
+    silently throw him back to the grid, which reads as the search having done
+    something odd rather than as a control losing state."""
+    value = escape(query)
+    clear = (
+        f'<a class="clearq" href="/?view={view}" aria-label="Clear the search">'
+        "&times;</a>"
+        if query
+        else ""
+    )
+    return (
+        '<form class="find" method="get" action="/" role="search">'
+        f'<input type="hidden" name="view" value="{escape(view)}">'
+        f'{_icon("find")}'
+        f'<input type="search" name="q" value="{value}" placeholder="Search"'
+        ' aria-label="Search pages">'
+        f"{clear}</form>"
+    )
+
+
 def _view_toggle(view: str) -> str:
     """The grid/list switch. The icon shows the view you would SWITCH TO, which
     is what the reference does and what every such control does -- an icon
@@ -811,26 +901,67 @@ def _view_toggle(view: str) -> str:
     )
 
 
-def _wall_meta(pages: int, waiting: int, view: str = "grid") -> str:
-    """What the header says, and it leads with him rather than with the count.
+def _tabs(active: str, waiting: int, pinned: int) -> str:
+    """All / Waiting on you / Pinned.
 
-    "5 pages" is a fact about the service. "3 questions waiting on you" is a
-    fact about his afternoon, and it is the whole reason this service exists --
-    his brief was to be able to "interact on decisions and not just visualise
-    progress". So when anything is waiting, that is what the header is for, and
-    it is a link: one tap and he is at the first page asking.
+    The reference's tabs are All / Yours / Shared with you, which do not map:
+    every page here is his. These are the questions actually worth asking of
+    this wall, and the middle one is the reason the service exists.
 
-    The page count stays, quietly, beside it. Dropping it would trade one fact
-    for another rather than ranking them.
-    """
+    A tab appears only once it has something in it. A "Pinned" tab that is
+    always empty teaches him to ignore the row it sits in, and that row is also
+    where search lives."""
+    out = []
+    for key, label, count in (
+        ("all", "All", 0),
+        ("waiting", "Waiting on you", waiting),
+        ("pinned", "Pinned", pinned),
+    ):
+        if key != "all" and not count:
+            continue
+        cls = "tab on" if key == active else "tab"
+        suffix = f'<span class="tn">{count}</span>' if count else ""
+        href = "/" if key == "all" else f"/?filter={key}"
+        out.append(f'<a class="{cls}" href="{href}">{label}{suffix}</a>')
+    return f'<nav class="tabs">{"".join(out)}</nav>'
+
+
+def _controls_row(
+    view: str, query: str, active: str, waiting: int, pinned: int, pages: int
+) -> str:
+    """The row under the title: WHAT to show on the left, how to find it and how
+    to see it on the right."""
     pages_text = f"{pages} page" if pages == 1 else f"{pages} pages"
-    toggle = _view_toggle(view)
+    return (
+        '<div class="controls">'
+        f"{_tabs(active, waiting, pinned)}"
+        '<div class="cright">'
+        f"{_search_box(query, view)}"
+        f'<span class="count">{pages_text}</span>'
+        f"{_view_toggle(view)}"
+        "</div></div>"
+    )
+
+
+def _wall_meta(waiting: int) -> str:
+    """What sits beside the title, and it is only ever one thing.
+
+    "5 pages" is a fact about the service and belongs in the controls row below.
+    "3 questions waiting on you" is a fact about his afternoon, and it is the
+    whole reason this service exists -- his brief was to be able to "interact on
+    decisions and not just visualise progress". So the title row carries that
+    and nothing else, and carries nothing at all when nothing is waiting.
+
+    It links to the FILTER rather than to an anchor. With three pages asking,
+    jumping to the first answers "where is it"; the useful question is "show me
+    them", and the filtered wall answers both.
+    """
     if not waiting:
-        return f'<span class="count">{pages_text}</span>{toggle}'
+        return ""
     noun = "question" if waiting == 1 else "questions"
     return (
-        f'<a class="waiting" href="#waiting">{waiting} {noun} waiting on you</a>'
-        f'<span class="count">{pages_text}</span>{toggle}'
+        f'<a class="waiting" href="/?filter=waiting">'
+        f"{waiting} {noun} waiting on you</a>"
     )
 
 
@@ -842,6 +973,7 @@ def _shell(
     scripts: str = "",
     title_html: str = "",
     meta_html: str = "",
+    controls: str = "",
 ) -> str:
     """Every gallery page, wrapped the same way: one narrow bar carrying the way
     back, the title and a timestamp, then the body. Deliberately quiet -- the
@@ -872,6 +1004,11 @@ def _shell(
         f"<title>{escape(title)}</title><style>{_CSS}</style></head><body>"
         f'<div class="wrap"><header class="bar">{back}'
         f"{title_html or f'<h1>{escape(title)}</h1>'}{meta_block}</header>"
+        # The controls are their OWN row beneath the title, as the reference
+        # has it: a 48px title row, 16px, then a 32px row of controls. They
+        # used to share one line with the title, which is what made the header
+        # feel like a toolbar someone had run out of room on.
+        f"{controls}"
         f"{body}</div>{scripts}</body></html>"
     )
 
@@ -1309,7 +1446,7 @@ def gallery_router(db: Database) -> APIRouter:
             (not archived,),
         ).fetchall()
 
-    def _row_view(row, first_asking) -> str:
+    def _row_view(row) -> str:
         """One page as a line, for the list view.
 
         The same facts as a tile in a quarter of the height: the point of the
@@ -1352,9 +1489,8 @@ def gallery_router(db: Database) -> APIRouter:
             exact = stamp.format_for_display(updated) if updated else ""
             right.append(f'<time title="{escape(exact)}">Edited {escape(when)}</time>')
 
-        anchor = ' id="waiting"' if waiting and first_asking(artifact_id) else ""
         return (
-            f'<li class="row-wrap{" asking" if waiting else ""}"{anchor}>'
+            f'<li class="row-wrap{" asking" if waiting else ""}">'
             f'<a class="row" href="/a/{ident}">'
             f"{badge}<span class=\"rt\">{escape(title)}</span>"
             f'<span class="rmeta">{"".join(right)}</span></a>'
@@ -1374,16 +1510,6 @@ def gallery_router(db: Database) -> APIRouter:
         # is (b): everything a tile can say without a browser. The thumbnail is
         # tracked separately and needs a decision about where the renderer runs,
         # because the gallery must never load an agent's HTML into this origin.
-        # The first page with an unanswered question, if any: the anchor the
-        # header jumps to. Computed over the rows in the order they will be
-        # rendered, so it is the first one he will SEE, not the first the
-        # database happened to return.
-        asking_ids = [r[0] for r in rows if r[5]]
-        waiting_total = sum(r[5] for r in rows)
-
-        def first_asking(artifact_id: str) -> bool:
-            return bool(asking_ids) and artifact_id == asking_ids[0]
-
         def tile(row) -> str:
             (
                 artifact_id,
@@ -1451,11 +1577,7 @@ def gallery_router(db: Database) -> APIRouter:
             bits = [
                 (
                     f'<li class="tile-wrap{" pinned" if pinned_at else ""}'
-                    f'{" asking" if waiting else ""}"'
-                    # The header's "waiting on you" points here. Only the FIRST
-                    # such tile takes the id -- a duplicate id is invalid and
-                    # the jump lands on whichever the browser picks.
-                    f'{' id="waiting"' if waiting and first_asking(artifact_id) else ""}>'
+                    f'{" asking" if waiting else ""}">'
                 ),
                 f'<a href="/a/{escape(artifact_id)}">',
                 f'<span class="frame">{shot}{flag}</span>',
@@ -1519,6 +1641,28 @@ def gallery_router(db: Database) -> APIRouter:
         # says what it shows; the cookie only supplies the default, so the view
         # he last chose is the one he gets next time without it having to be in
         # every URL.
+        # Counted BEFORE filtering: the tabs have to say how many there ARE,
+        # not how many survived the tab you are already on -- otherwise the
+        # number on a tab changes when you press it, and stops meaning anything.
+        waiting_total = sum(r[5] for r in rows)
+        pinned_total = sum(1 for r in rows if r[8])
+
+        chosen = request.query_params.get("filter")
+        active = chosen if chosen in ("waiting", "pinned") else "all"
+        if active == "waiting":
+            rows = [r for r in rows if r[5]]
+        elif active == "pinned":
+            rows = [r for r in rows if r[8]]
+
+        query = (request.query_params.get("q") or "").strip()
+        needle = query.lower()
+        if needle:
+            # Both walls are filtered. Searching only the live one would hide
+            # the archived hit AND still count it in the fold's total, which
+            # reads as the search having missed something.
+            rows = [r for r in rows if _matches(r, needle)]
+            archived_rows = [r for r in archived_rows if _matches(r, needle)]
+
         asked = request.query_params.get("view")
         view = asked if asked in ("grid", "list") else (
             request.cookies.get(_VIEW_COOKIE)
@@ -1538,7 +1682,7 @@ def gallery_router(db: Database) -> APIRouter:
                         out.append("</ul>")
                     out.append(f'<h2 class="daygroup">{escape(group)}</h2><ul class="rows">')
                     current = group
-                out.append(_row_view(row, first_asking))
+                out.append(_row_view(row))
             if current is not None:
                 out.append("</ul>")
             return "".join(out)
@@ -1565,18 +1709,35 @@ def gallery_router(db: Database) -> APIRouter:
                 f'<div class="archived-body">{render(archived_rows)}</div>'
                 "</details>"
             )
-        body = (
-            render(rows)
-            if rows
-            else '<p class="empty">Nothing on the wall. Anything archived is below.</p>'
-            if archived_rows
-            else '<p class="empty">No pages published yet.</p>'
-        ) + archived_block
+        if rows:
+            main = render(rows)
+        elif query:
+            # Never a bare empty wall: with a query in the box that looks
+            # exactly like everything having been deleted. Say what was
+            # searched for, and give him the way back in the same breath.
+            found_archived = (
+                " It is not in the archived pages either."
+                if not archived_rows
+                else " There is a match below, in the archived pages."
+            )
+            main = (
+                f'<p class="empty">Nothing here matches '
+                f"<b>{escape(query)}</b>.{found_archived} "
+                f'<a href="/?view={view}">Show everything</a>.</p>'
+            )
+        elif archived_rows:
+            main = '<p class="empty">Nothing on the wall. Anything archived is below.</p>'
+        else:
+            main = '<p class="empty">No pages published yet.</p>'
+        body = main + archived_block
         response = HTMLResponse(
             _shell(
                 "Artifacts",
                 body,
-                meta_html=_wall_meta(len(rows), waiting_total, view),
+                meta_html=_wall_meta(waiting_total),
+                controls=_controls_row(
+                    view, query, active, waiting_total, pinned_total, len(rows)
+                ),
                 home=False,
             ),
             headers=gallery_headers(),

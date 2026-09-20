@@ -164,7 +164,6 @@ def test_a_row_for_a_page_with_a_question_says_so_and_takes_the_anchor(client, d
     page = client.get("/?view=list").text
     assert "1 question for you" in page
     assert 'class="row-wrap asking"' in page
-    assert page.count('id="waiting"') == 1
 
 
 # --- archived ----------------------------------------------------------------
