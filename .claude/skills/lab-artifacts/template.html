@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PAGE TITLE</title>
+<style>
+  /* ---- tokens: change values, not names ---------------------------- */
+  :root{
+    --paper:#faf9f6; --ink:#191a17; --muted:#6c6d64; --card:#fff; --line:#e4e3db;
+    --accent:#0f6f63; --accent-soft:rgba(15,111,99,.10); --accent-ink:#0b4f46;
+    --ok:#2f7a45; --now:#b06a12; --wait:#4a5b8c;
+    --shadow:0 1px 2px rgba(20,20,15,.05), 0 8px 24px -16px rgba(20,20,15,.25);
+    --display:ui-serif,"Iowan Old Style",Georgia,"Times New Roman",serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --rule:#191a17;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#141619; --ink:#e9eae4; --muted:#989a90; --card:#1c1f23; --line:#2b2e34;
+      --accent:#5ec9b8; --accent-soft:rgba(94,201,184,.12); --accent-ink:#9fe3d7;
+      --ok:#6cc48a; --now:#e0a458; --wait:#8fa6e0;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.8);
+      --rule:#e9eae4;
+    }
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--paper);color:var(--ink);
+       font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent-ink);text-underline-offset:.15em}
+  main{max-width:52rem;margin:0 auto;padding:1.8rem 1rem 4rem}
+
+  /* ---- masthead ---------------------------------------------------- */
+  .masthead{max-width:52rem;margin:0 auto;padding:1.1rem 1rem 0}
+  .topline{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:2.6rem}
+  .topline a{color:var(--accent-ink);text-decoration:none;display:inline-flex;align-items:center;
+    gap:.4rem;border:1px solid var(--line);background:var(--card);border-radius:999px;
+    padding:.25rem .7rem;font-size:.82rem}
+  .topline a:hover{border-color:var(--accent)}
+  /* target="_blank" is not a style choice: the page is framed by the gallery, the
+     gallery refuses to be framed (frame-ancestors 'none'), and the frame's sandbox
+     forbids top-level navigation. A same-tab link therefore goes nowhere at all. */
+  .topline svg{width:.9em;height:.9em;fill:currentColor}
+  .eyebrow{font:600 .78rem/1.4 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 .9rem}
+  h1{font:400 clamp(2.1rem,6vw,3.1rem)/1.05 var(--display);letter-spacing:-.015em;margin:0 0 .8rem}
+  .standfirst{margin:0;font-size:1.06rem;color:var(--ink);max-width:40rem}
+  .chips{display:flex;gap:.4rem;flex-wrap:wrap;margin:1.3rem 0 0}
+  .chip{font:.78rem/1.4 var(--mono);border-radius:999px;padding:.22rem .62rem;
+    border:1px solid var(--line);background:var(--card);color:var(--muted)}
+  .chip.on{border-color:transparent;background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+  .masthead hr{border:0;border-top:2px solid var(--rule);margin:1.6rem 0 0}
+
+  /* ---- shapes ------------------------------------------------------ */
+  h2{font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+     margin:2.4rem 0 .7rem}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:.7rem;
+    padding:1rem 1.15rem;margin:.6rem 0;box-shadow:var(--shadow)}
+  .card.live{border-left:3px solid var(--ok)}
+  .card.ask{border-left:3px solid var(--now)}
+  .card > b:first-child{display:block;margin-bottom:.35rem}
+  ul{margin:.4rem 0;padding-left:1.15rem} li{margin:.28rem 0}
+  table{border-collapse:collapse;width:100%;font-size:.95rem}
+  td{padding:.45rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}
+  td.s{width:1%;white-space:nowrap}
+  .state{font-size:.75rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+    border-radius:.3rem;padding:.12rem .45rem;border:1px solid currentColor}
+  .state.done{color:var(--ok)} .state.now{color:var(--now)}
+  .state.next{color:var(--wait)} .state.held{color:var(--muted)}
+  code{background:var(--accent-soft);color:var(--accent-ink);padding:.08rem .32rem;
+    border-radius:.25rem;font-size:.88em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .muted{color:var(--muted)}
+  footer{margin-top:2.8rem;padding-top:.9rem;border-top:1px solid var(--line);
+    color:var(--muted);font-size:.85rem}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <p class="topline">
+    <a href="https://artifacts.tenfourty.site/" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg> Gallery</a>
+  </p>
+  <p class="eyebrow">STATUS &middot; DD MON YYYY, HH:MM &middot; HOST</p>
+  <h1>PAGE TITLE</h1>
+  <p class="standfirst">One sentence saying what this page is and who it is for.</p>
+  <p class="chips"><span class="chip on">STATE</span><span class="chip">Updated DD Month YYYY, HH:MM UTC</span></p>
+  <hr>
+</header>
+
+<main>
+  <div class="card live">
+    <b>The thing that is true right now.</b>
+    <ul><li>Point one.</li><li>Point two.</li></ul>
+  </div>
+
+  <h2>Progress</h2>
+  <table>
+    <tr><td class="s"><span class="state done">done</span></td><td>Something finished.</td></tr>
+    <tr><td class="s"><span class="state now">now</span></td><td>Something in hand.</td></tr>
+    <tr><td class="s"><span class="state next">next</span></td><td>Something queued.</td></tr>
+    <tr><td class="s"><span class="state held">held</span></td><td>Something waiting on a decision.</td></tr>
+  </table>
+
+  <h2>Decisions for you</h2>
+  <div class="card ask">
+    <b>1. The question, in one line?</b>
+    <ul>
+      <li><b>(a)</b> The option I recommend. <span class="muted">— my recommendation</span></li>
+      <li><b>(b)</b> The alternative, and what it costs.</li>
+    </ul>
+  </div>
+
+  <footer>Published from HOST through the homelab artifacts service. Page id <code>ID</code>.</footer>
+</main>
+</body>
+</html>

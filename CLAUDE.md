@@ -1,0 +1,190 @@
+# artifacts — the homelab's page-hosting service
+
+## WHY
+
+Jeremy wanted a place where **any** agent — Claude or not, on this machine or
+another — can put a page he can read, and where he can answer a question
+without opening a terminal. The brief, in his words: *"the mvp for the other
+agents is being able to interact on decisions on a page and not just visualise
+progress"*, and *"it's okay if the first version works only here and in the
+homelab but ultimately it needs to work for agents anywhere that I give access
+to — just build with the end in mind."*
+
+So: pages are published over an HTTP API with a key, served from their own
+origin, fronted by Warpgate and authed by Authelia. Decisions are first-class,
+not a convention. **The agent that published a page gets the nudge when he
+answers, not the operator.**
+
+## WHAT
+
+| Piece | Where |
+|---|---|
+| The service (FastAPI + Postgres) | `src/artifacts/` |
+| Tests | `tests/` — `uv run pytest -q` |
+| Container | `Dockerfile` |
+| Deployment values | `deploy/` |
+| CI → image → deploy | `.forgejo/workflows/ci.yml` |
+| The design this argues from | `docs/agent/design.md` |
+| The build plan and its ledger | `docs/agent/implementation-plan.md` |
+
+**Lives in the homelab repo, not here** (`~/repos/homelab`):
+
+- `k8s/apps/artifacts/**` — the GitOps manifests. **Flux watches the homelab
+  repo**, so the cluster changes only when that repo changes. A change to
+  `deploy/artifacts-config.env` here is inert until the homelab side picks it
+  up — check which of the two actually holds the value before editing.
+- `scripts/artifacts-wait.sh`, `scripts/lib/artifacts_wait_render.py` and the
+  four waiter tests — the client every homelab session runs.
+- `scripts/artifacts-status.py` + `docs/pages/artifacts-status.tmpl.html` — the
+  status page this arc publishes for Jeremy.
+- `scripts/ops-decisions-page.sh`, `scripts/lib/ops-decisions-artifacts-client.py`
+  — the operator's decisions page.
+- `docs/services/artifacts/{readme,incidents}.md` — the service's durable facts.
+  **Durable facts go there, not in agent memory and not only here.**
+
+Those stayed because other sessions run them every day; moving them would have
+broken peers mid-shift. Change them in the homelab repo, under its rules.
+
+## HOW
+
+```bash
+uv sync --frozen
+uv run ruff check src tests
+PG_TEST_DSN=postgresql://…  uv run pytest -q     # needs a real Postgres
+```
+
+Push to `main` on `git.tenfourty.site/jeremy/artifacts` runs CI, builds
+`git.tenfourty.site/jeremy/artifacts:<sha12>`, and **pushes a
+`deploy: … [skip ci]` commit back onto main**. Two consequences that have both
+bitten:
+
+- Your next push is a **non-fast-forward** unless you fetch and rebase first.
+  This is normal, not a conflict with another agent.
+- A deploy lands minutes after the push, unattended. Nothing gates it. Treat a
+  push here as a production change, because it is one.
+
+The live pod is `-n artifacts` in the homelab cluster
+(`KUBECONFIG=$HOME/.kube/config-homelab`). It serves the gallery and the
+content origin on one port, discriminated by `Host`.
+
+## Tracking
+
+The arc's issues are `ij8.*` beads in the **homelab** workspace, with a long
+history and cross-references from other arcs. Reach them from here with:
+
+```bash
+bd -C ~/repos/homelab ready
+bd -C ~/repos/homelab show ij8.69
+```
+
+Do not start a second beads workspace here without asking Jeremy — splitting
+the tracker is how an arc loses its own history.
+
+`bd update --notes` **replaces** the notes and warns only afterwards, with no
+history and no export. Always `--append-notes`.
+
+**A bead update is also a page update** (Jeremy, 19 Sep 2026): when a bead
+changes for work that has a page on this service, republish that page
+(`artifacts-publish <file> --update <id>`).
+
+## Safety Rules
+
+### Secrets
+
+- **Never read a credential file, sops file or token file into a transcript** —
+  no `cat`, `grep`, `-A/-B/-C`, `source`, `less` or `sops -d`, not even "to
+  check the format". Extract ONE key into a variable *inside a script* and
+  print counts, never content. Never put a secret on a command line.
+- **Never `Write`/`Edit`/create a credential file for a human to fill in.** A
+  file an agent writes joins Claude Code's edit-tracking, and the human's next
+  edit is injected into the transcript with no tool call at all. Give the path
+  and the key names in prose and let Jeremy create the file. Seven leaks
+  13–17 Sep 2026; the seventh needed no tool call.
+- A value that reaches context survives compaction and is re-emitted in the
+  summary.
+- **Leak policy**: a secret that never left this machine is vaulted (sops or
+  another encrypted store, never a cleartext copy) and redacted from every
+  transcript, log and scratch file (`[REDACTED…]`); no rotation. A secret that
+  left the homelab (a push, a message, an external service, a device off the
+  LAN) is rotated.
+- **This repo is not mirrored off the homelab** (only `runcove/warpgate` is,
+  measured 2026-09-20). Re-measure rather than assume it, but on that reading a
+  secret reaching a commit here is in the *vault-and-redact* case, not the
+  rotate case. A secret reaching the **image** is a different question — the
+  image is pushed to the forge registry.
+
+### Changing live infrastructure
+
+- **Claude Code runs on baba** — never SSH to baba, run commands directly.
+- **Never start VMs or make network changes** without Jeremy's explicit
+  approval.
+- **Never gate a destructive step on an untested predicate.** A broken
+  wait-loop returns empty and reads as "all clear". Assert positive counts, not
+  the absence of bad output. The homelab's
+  `agent_docs/verification-and-gating.md` is the long version and is worth
+  reading — it is a list of real failures, each with the shape that caused it.
+- **Prove each arm of a gate with the literal input the real call will pass.**
+  Proving both arms is not enough if the probe used a tidier input shape:
+  20 Sep 2026, a deploy waiter proved DEPLOYED and TIMEOUT with a full image
+  tag, then reported a false TIMEOUT on a real deploy because the real call
+  passed a short hash.
+- **An in-place edit kills every process still running the old bytes.** bash
+  reads a script incrementally by byte offset for as long as it runs, so
+  rewriting a running script makes it resume mid-token and die with a syntax
+  error on a file that passes `bash -n`. Stage `<script>.new` somewhere on the
+  same filesystem, validate it there, then one atomic `mv`. The diagnostic is
+  worth memorising: **a syntax error in a script that passes `bash -n` means
+  the file changed under a running process, not that the script is broken.**
+- **Test end-to-end, not just the port.** A function that returns the right
+  string in the container is not the same claim as a reader seeing it on the
+  page; say which one you actually checked.
+
+### This repo has no mechanical guards
+
+The homelab tree has lefthook guards that refuse cross-area commits, `--amend`,
+`git stash`, unannounced pushes and secrets on the command line. **None of them
+exist here.** Every one of those guards was written because the prose version
+had already failed to stop somebody who had read it. Until they are ported
+(ask before doing it — it is a real piece of work), the discipline here is
+manual:
+
+- Conventional commits, **no co-authored-by**.
+- Stage explicit paths; commit with a pathspec. Remember that
+  `git commit -- <paths>` commits the **working tree** of those paths, so read
+  `git status --porcelain -- <paths>` first.
+- Never `git stash` in a tree another session might share.
+- Never `git commit --amend` on anything already reachable from a remote.
+- Announce a push, with hashes, before making it. Verify what actually went out
+  against the remote (`git merge-base --is-ancestor <hash> origin/main` after a
+  fetch), never against your own announcement — the tree moves underneath it.
+
+## Language for Jeremy
+
+He does not read the plans. Anything he reads — Telegram, a page, the board,
+a terminal recap, commit subjects he skims — names the **outcome** ("the
+questions he hasn't answered are now the first thing on the page"), never plan
+coordinates (GATE 4, Phase 2, T2.1, ij8.71). Decisions go to him as ordered
+sets with lettered options, recommendation first as (a), because that is how he
+answers.
+
+Read the clock before stamping anything — including time-of-day *words*.
+"Tonight" written at 18:38 was wrong seven times in one file.
+
+## Working with Jeremy
+
+- **Stay in your lane.** This seat does artifacts. Homelab page triage, cluster
+  reads and the waiting queue belong to the operator session. If something you
+  see touches this arc, send ops one line; otherwise leave it.
+- **Don't idle.** Finishing the pushed work is not the end of the shift. Take
+  the top unblocked item off the arc's queue and announce it rather than
+  waiting to be told.
+- **No external comms.** Never post, mail or open issues anywhere. Draft the
+  text; he approves or sends it.
+- **Update by default.** Update unless there is a *named* showstopper; anything
+  held for him is asked the same day, with the risk stated.
+- **Ack with an emoji**: 👀 on receipt, ✅ when done. A pure emoji reply can be
+  the whole answer.
+- **Report health, not noise**: lead with health and real incidents (impact,
+  fix, prevention); false positives get one count line.
+- A reminder list is a claim — verify every "pending on you" line against the
+  changelog before writing it. Two such items had been done for days.
