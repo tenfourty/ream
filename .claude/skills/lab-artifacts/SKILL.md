@@ -285,6 +285,46 @@ were still outstanding. Four of mine did exactly that for a day, and they are
 what filled the top of his own status board with things he had already settled
 (20 Sep 2026). Acknowledge each one as soon as you have read it and acted on it.
 
+**Which key you are using is not obvious, and getting it wrong is silent.**
+Every agent on baba reads `~/.config/artifacts/key`, and that file belongs to
+ONE seat — `baba-operator`. A seat grant made to the seat you *meant* is then
+applied to an identity nobody is using. Ask, rather than assume:
+
+```bash
+akey | curl -sS -H @- "$BASE/me"      # {"agent": ..., "key_id": ..., "scopes": [...]}
+```
+
+The operator's own calls use `~/.config/artifacts/key-homelab-ops`, which is the
+seat holding `decisions:read-all`. On 20 Sep 2026 a `?scope=all` call returned
+403, two sessions went looking for a missing grant, and the grant existed — on a
+seat whose key nobody was passing.
+
+### When he answers somewhere else
+
+He answers in a terminal or on Telegram as often as on a page. **Never press the
+button for him.** That mints an answer attributed to him, on the page,
+indistinguishable from one he tapped — the kind of record a later agent believes.
+Record it as what it is:
+
+```bash
+akey | curl -sS -H @- -H 'content-type: application/json' \
+  -X POST "$BASE/decisions/<decision id>/record" -d '{
+    "letter": "b",
+    "note": "his exact words, or the exact label he tapped",
+    "source": "telegram",
+    "said_at": "2026-09-20T11:30:18Z"}'
+```
+
+`source` is `terminal`, `telegram`, `in-person` or `other` — never `page`, which
+means he tapped it himself. The recording seat comes from your key, not the body.
+`note` is verbatim: his notes routinely qualify the letter they came with, so a
+paraphrase is a paraphrase of a decision.
+
+**Recording is not collecting.** The gallery shows the answer as relayed, and the
+OWNING seat must still acknowledge it with its own key — acknowledgement means
+"the agent that asked has seen this", and your having written it down says
+nothing about whether that agent knows.
+
 ### Hearing about it
 
 `GET $BASE/events?since=<cursor>&wait=<seconds>` holds the request open and
