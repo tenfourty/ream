@@ -31,6 +31,32 @@ RUN uv sync --frozen --no-dev --no-editable
 
 FROM python:3.12-slim-bookworm
 
+# The headless browser that draws a page's thumbnail for the gallery wall
+# (homelab-ij8.22). Jeremy chose the renderer running inside the service over a
+# separate one, with the cost of that stated to him; `artifacts.thumbs` is where
+# the constraints on the child process live, and they are the reason this is
+# acceptable rather than merely convenient.
+#
+# BEFORE the venv COPY on purpose. This layer changes only when the base image
+# or this line does, so it is built once and pulled once: every ordinary deploy
+# invalidates the small app layer below it and re-uses this one. The image goes
+# from about 167 MB to roughly 500 MB, but the bytes moved per deploy barely
+# change, which is the number that actually matters when CI deploys on every
+# push.
+#
+# Debian's `chromium` rather than a downloaded bundle: apt resolves the
+# twenty-odd system libraries it needs, and the package keeps getting security
+# updates. `artifacts.thumbs` finds it on PATH, so nothing has to name the path.
+#
+# fonts-dejavu-core is not optional. The pages deliberately use no web fonts —
+# they ask for the reader's own sans, serif and mono — so a container with no
+# fonts at all renders every thumbnail as boxes. DejaVu supplies all three.
+# A thumbnail will therefore not be letter-for-letter what Jeremy sees in his
+# own browser, which is inherent to rendering anywhere but on his machine.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends chromium fonts-dejavu-core \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY --from=build /app/.venv /app/.venv
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
