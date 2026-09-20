@@ -105,6 +105,12 @@ _CSS = """
      2.0:1. Third time this shape has come up, so it is now a habit -- any
      token used as a FILL needs a paired ink that flips with the scheme. */
   --on-accent:#fff;
+  /* A control sitting ON a card: the dots chip, the pin's hover. It must be a
+     step AWAY from the card in whichever direction reads as lifted. In light
+     mode that is very slightly darker (the paper colour); in dark mode darker
+     is a hole, so the dark block lifts it instead. Using --paper for both made
+     the dots chip disappear into the dark card. */
+  --chip:#fcfcfb; --chip-hover:#fff;
   --shadow:0 1px 2px rgba(20,20,15,.05), 0 8px 24px -16px rgba(20,20,15,.25);
   --display:ui-serif,"Iowan Old Style",Georgia,"Times New Roman",serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
@@ -119,6 +125,7 @@ _CSS = """
     --line-hover:#5a606a;
     --danger:#f08b7f; --danger-soft:rgba(240,139,127,.12);
     --on-accent:#0b2723;  /* 7.92:1 on #5ec9b8 */
+    --chip:#2b3038; --chip-hover:#343a44;
     --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.8);
   }
 }
@@ -143,11 +150,33 @@ a{color:var(--accent-ink)}
    as well is one line too many on a page that is mostly cards. */
 .bar{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;
      min-height:48px;padding:0;margin:0}
-.bar a.home{color:var(--accent-ink);text-decoration:none;display:inline-flex;align-items:center;
-  gap:.4rem;border:1px solid var(--line);background:var(--card);border-radius:999px;
-  padding:.22rem .66rem;font-size:.8rem;white-space:nowrap}
+/* An ARTIFACT page's bar: across the window, white, pinned to the top, and no
+   rule under it -- the white against the page colour is the separation, which
+   is what the reference does and is one line fewer. Measured at 1240x48 with
+   `padding: 0 12px 0 46px`. The page below it keeps its own column, because
+   the pages this service frames are written for about 52rem and a full-width
+   frame would stretch every one of them. */
+.bar.bleed{position:sticky;top:0;z-index:40;background:var(--card);
+  padding:0 .75rem;margin:0 0 1.25rem;min-height:48px;flex-wrap:nowrap;
+  box-shadow:0 1px 0 var(--line)}
+.bar.bleed h1{font:500 .875rem/1.25rem ui-sans-serif,system-ui,-apple-system,
+  sans-serif}
+/* 14px, not the reference's 13: every other control in this interface is 14,
+   and a single 13 would be the only one. */
+.bar.bleed .menu > summary{font-size:.875rem}
+/* On an artifact page this is a plain 28x28 icon button, as in the reference:
+   a bordered pill beside a 14px title was the heaviest thing in a bar whose
+   whole job is to stay out of the way. It keeps the label on the gallery
+   index, where there is room and no title menu competing with it. */
+.bar a.home{color:var(--ink);text-decoration:none;display:inline-flex;
+  align-items:center;gap:.4rem;border:1px solid var(--line);background:var(--card);
+  border-radius:999px;padding:.22rem .66rem;font-size:.8rem;white-space:nowrap}
 .bar a.home:hover{border-color:var(--accent)}
-.bar svg{width:.9em;height:.9em;fill:currentColor}
+.bar.bleed a.home{width:28px;height:28px;padding:0;justify-content:center;
+  border:0;border-radius:7px;background:transparent;color:var(--muted)}
+.bar.bleed a.home:hover{background:var(--chip);color:var(--ink)}
+.bar.bleed a.home svg{width:1rem;height:1rem}
+.bar a.home svg{width:.9em;height:.9em;fill:currentColor}
 /* 24px/32px at weight 500, measured off the reference's own h1. This was a
    clamp running up to 3.1rem, which on a page of 14px cards read as a magazine
    masthead over a filing cabinet. */
@@ -286,9 +315,14 @@ a{color:var(--accent-ink)}
    actions, rather than controls parked at the bottom of the page.
    <details>, not script: everything else here works with scripts off. */
 .menu{position:relative;display:inline-block}
+/* SANS, not the display serif. The page bar is chrome and the reference sets
+   its title in the UI face; the serif here made a 14px control look like a
+   heading that had been shrunk. The serif belongs to the gallery's own <h1>
+   and to the pages this service frames, not to a toolbar. */
 .menu > summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;
-  gap:.35rem;border-radius:.45rem;padding:.16rem .5rem;
-  font:400 1.02rem/1.35 var(--display);color:var(--ink);white-space:nowrap;
+  gap:.35rem;border-radius:6px;padding:.22rem .5rem;
+  font:400 .875rem/1.25rem ui-sans-serif,system-ui,-apple-system,"Segoe UI",
+  Roboto,sans-serif;color:var(--ink);white-space:nowrap;
   max-width:min(60vw,26rem);overflow:hidden;text-overflow:ellipsis}
 .menu > summary::-webkit-details-marker{display:none}
 .menu > summary:hover{background:var(--accent-soft)}
@@ -307,36 +341,36 @@ a{color:var(--accent-ink)}
 /* One row shape for links and submit buttons alike, so a form in the menu is
    indistinguishable from a link — the user should not be able to tell which
    actions happen to need a POST. */
-.mrow{display:flex;align-items:center;gap:.55rem;width:100%;
+/* Every row in every menu is this: icon, label, one line, one height.
+   Rename and Copy link used to be inline forms with a text field, which made a
+   four-item menu three different shapes -- they open a dialog now instead. */
+.mrow{display:flex;align-items:center;gap:.6rem;width:100%;min-height:32px;
   font:inherit;font-size:.92rem;text-align:left;text-decoration:none;
   color:var(--ink);background:transparent;border:0;border-radius:.4rem;
   padding:.44rem .6rem;cursor:pointer}
 .mrow:hover{background:var(--accent-soft);color:var(--accent-ink)}
 .mi{width:1em;height:1em;flex:0 0 auto;fill:currentColor;opacity:.75}
 .mpanel form{margin:0}
-.mrename{display:flex;align-items:center;gap:.45rem;padding:.3rem .6rem .5rem}
-.mrename input{font:inherit;font-size:.9rem;flex:1 1 auto;min-width:5rem;
-  padding:.34rem .5rem;border:1px solid var(--line);border-radius:.4rem;
-  background:var(--paper);color:var(--ink)}
-.mrename button{font:inherit;font-size:.85rem;cursor:pointer;border-radius:.4rem;
-  padding:.34rem .6rem;border:1px solid var(--line);background:transparent;
-  color:var(--ink);white-space:nowrap}
-.mrename button:hover{border-color:var(--accent);color:var(--accent-ink)}
 
 /* The per-tile dots. Sits over the tile rather than inside its link, because an
    interactive control nested in an <a> is invalid and behaves unpredictably. */
 .tile-wrap{position:relative}
-.tile-wrap .menu{position:absolute;top:.5rem;right:.5rem;z-index:5}
+.tile-wrap .menu{position:absolute;top:12px;right:12px;z-index:5}
 /* A pale chip, ALWAYS VISIBLE -- not revealed on hover. Jeremy reads this wall
    on a phone, where there is no hover at all, and a control that only appears
    under a pointer is a control he does not have. It used to fade in on
    :hover with a (hover:none) escape hatch; two rules that disagree about
    whether something exists is one rule too many. */
-.tile-wrap .menu > summary{background:var(--card);border:1px solid var(--line);
-  border-radius:.45rem;padding:.28rem .4rem;line-height:0;
-  box-shadow:0 1px 3px rgba(20,20,15,.12);transition:border-color .12s}
+/* 32x32, radius 8, NO BORDER, on the paper colour -- measured off the
+   reference's own "More options" button. This was a bordered white chip with
+   padding-derived size, which is most of why it read as stuck on rather than
+   part of the card. */
+.tile-wrap .menu > summary{display:flex;align-items:center;justify-content:center;
+  width:32px;height:32px;background:var(--chip);border:0;border-radius:8px;
+  line-height:0;box-shadow:0 1px 3px rgba(20,20,15,.10);transition:background .12s}
 .tile-wrap .menu > summary:hover,.tile-wrap .menu[open] > summary,
-.tile-wrap .menu > summary:focus-visible{border-color:var(--accent)}
+.tile-wrap .menu > summary:focus-visible{background:var(--chip-hover);
+  box-shadow:0 2px 6px rgba(20,20,15,.16)}
 /* Three dots drawn in CSS rather than as a character: the unicode vertical
    ellipsis renders as a different width in every font on the box, and at this
    size the difference is the whole control. */
@@ -355,16 +389,9 @@ a{color:var(--accent-ink)}
    Measured, not guessed: rendered at 390 and looked at.
    So: bounded by the viewport, and the inputs are told to shrink. */
 .tmenu .mpanel{min-width:0;width:15rem;max-width:calc(100vw - 2rem)}
-/* Inside a panel this narrow the field and its button cannot share a line:
-   side by side, the rename input came out ~100px and showed "Artifacts: t",
-   which is not enough of a name to know what you are renaming. So the field
-   takes the full width and the button sits under it. A grid rather than wrap,
-   so the icon stays in its own column and the two rows line up under it. */
-.tmenu .mrename,.tmenu .mlink{display:grid;grid-template-columns:auto minmax(0,1fr);
-  gap:.35rem .55rem;align-items:center}
-.tmenu .mrename input,.tmenu .mlink input{grid-column:2;width:100%;min-width:0}
-.tmenu .mrename button,.tmenu .mcopy{grid-column:2;justify-self:end}
-.mlink{display:flex;align-items:center;gap:.55rem;padding:.35rem .6rem .5rem}
+/* No special cases left in here: the two rows that needed a text field are
+   dialogs now, so a menu panel is a plain stack of identical rows. */
+.mlink{display:flex;align-items:center;gap:.5rem;margin:0}
 .mlink input{font:inherit;font-size:.82rem;font-family:var(--mono);flex:1 1 auto;
   min-width:5rem;border:1px solid var(--line);border-radius:.4rem;
   padding:.24rem .4rem;background:var(--paper);color:var(--muted)}
@@ -388,11 +415,17 @@ a{color:var(--accent-ink)}
    NO SHADOW. Measured: box-shadow on claude.ai's card is `none`, and the card
    is separated from the page by a 1px hairline at 10% ink and nothing else.
    This used a two-layer shadow, which is what made the old wall feel heavy. */
-.tiles a{display:flex;flex-direction:column;background:var(--card);
+/* `.tiles > li > a`, NOT `.tiles a`. As a descendant selector this matched
+   every anchor inside the wall, including the menu rows -- which is why
+   Rename and Copy link rendered as bordered boxes with the icon stacked above
+   the label while the <button> rows beside them were fine. Measured, not
+   guessed: getComputedStyle on the rows showed flex-direction column and a 1px
+   border on the anchors only. */
+.tiles > li > a{display:flex;flex-direction:column;background:var(--card);
   border:1px solid var(--line);border-radius:12px;overflow:hidden;
   text-decoration:none;color:var(--ink);height:100%;
   transition:border-color .12s}
-.tiles a:hover{border-color:var(--line-hover)}
+.tiles > li > a:hover{border-color:var(--line-hover)}
 /* The picture. Cropped to the top of the page: a thumbnail is the part a
    reader recognises, not a squashed whole document. A fixed aspect box means
    the grid does not reflow as lazy images arrive.
@@ -461,7 +494,7 @@ a{color:var(--accent-ink)}
 /* And the card says so at its edge, so a wall scanned at arm's length still
    sorts itself. One hairline, not a thick rule: it should register, not shout
    over the pinned tile next to it. */
-.tiles li.asking > a{border-color:var(--now)}
+.tiles > li.asking > a{border-color:var(--now)}
 .tiles .m{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;
   font:.75rem/1rem ui-sans-serif,system-ui,-apple-system,sans-serif;
   color:var(--muted);margin:auto 0 0}
@@ -474,13 +507,32 @@ a{color:var(--accent-ink)}
    that, and it read as correct in the stylesheet.
    It carries the word as well as the glyph: at this size a lone pin is not
    recognisable as a pin, and the word is also what a screen reader gets. */
-.pinmark{display:inline-flex;align-items:center;gap:.2rem;flex:0 0 auto;
-  margin-left:auto;font:600 .6875rem/1rem ui-sans-serif,system-ui,-apple-system,
-  sans-serif;letter-spacing:.02em;color:var(--accent-ink);
-  background:var(--accent-soft);border-radius:.3rem;padding:.1rem .34rem}
-.pinmark .mi{width:.85em;height:.85em;opacity:1}
+/* The pin BUTTON on a tile -- the reference's 24x24, in the meta row. It is
+   the indicator and the control at once: this wall used to show a "Pinned"
+   label and hide the action in the menu, so pinning took two clicks and a
+   read. A sibling of the tile's <a>, like the dots, because a button inside a
+   link is invalid and the link swallows the click. */
+.pinbtn{position:absolute;right:.75rem;bottom:.7rem;margin:0;line-height:0}
+.pinbtn button{display:flex;align-items:center;justify-content:center;
+  width:24px;height:24px;padding:0;border:0;border-radius:6px;cursor:pointer;
+  background:transparent;color:var(--muted);opacity:.5;
+  transition:opacity .12s,background .12s,color .12s}
+.pinbtn button:hover{opacity:1;background:var(--chip);color:var(--ink)}
+.pinbtn button .mi{width:.9rem;height:.9rem;opacity:1}
+/* Pinned: on, accented, and never faded -- it is state now, not an affordance
+   waiting to be noticed. */
+.pinbtn.on button{opacity:1;color:var(--accent);background:var(--accent-soft)}
+.pinbtn.on button:hover{color:var(--accent-ink)}
+/* The meta row leaves room for it rather than running underneath. */
+.tiles .m{padding-right:1.9rem}
+/* In the LIST the pin is inline in the meta, where there is room for it. */
+.rows .pinmark{display:inline-flex;align-items:center;gap:.2rem;flex:0 0 auto;
+  font:600 .6875rem/1rem ui-sans-serif,system-ui,-apple-system,sans-serif;
+  letter-spacing:.02em;color:var(--accent-ink);background:var(--accent-soft);
+  border-radius:.3rem;padding:.1rem .34rem}
+.rows .pinmark .mi{width:.85em;height:.85em;opacity:1}
 /* A pinned tile leads the wall; the accent edge says why, without shouting. */
-.tiles li.pinned > a{border-color:var(--accent)}
+.tiles > li.pinned > a{border-color:var(--accent)}
 .empty{color:var(--muted);padding:2rem 0}
 
 /* --- the rename dialog -------------------------------------------------------
@@ -575,10 +627,11 @@ a{color:var(--accent-ink)}
    back on hover for anything he actually reaches for. */
 .archived-body .shot,.archived-body .rshot{opacity:.55;filter:saturate(.65)}
 .archived-body .t,.archived-body .rt{color:var(--muted)}
-.archived-body .tiles a,.archived-body .row{background:transparent}
-.archived-body .tiles a:hover .t,.archived-body .row:hover .rt{color:var(--ink)}
-.archived-body .tiles a:hover .shot,.archived-body .row:hover .rshot{
-  opacity:1;filter:none}
+.archived-body .tiles > li > a,.archived-body .row{background:transparent}
+.archived-body .tiles > li > a:hover .t,
+.archived-body .row:hover .rt{color:var(--ink)}
+.archived-body .tiles > li > a:hover .shot,
+.archived-body .row:hover .rshot{opacity:1;filter:none}
 .archived-body .daygroup:first-child{margin-top:0}
 
 /* --- the list view ---------------------------------------------------------
@@ -616,10 +669,11 @@ a{color:var(--accent-ink)}
 .rows .pinmark{margin-left:0}
 .row-wrap .menu{position:absolute;top:50%;right:.35rem;transform:translateY(-50%);
   z-index:5}
-.row-wrap .menu > summary{background:var(--card);border:1px solid var(--line);
-  border-radius:.45rem;padding:.28rem .4rem;line-height:0}
+.row-wrap .menu > summary{display:flex;align-items:center;justify-content:center;
+  width:28px;height:28px;background:transparent;border:0;border-radius:7px;
+  line-height:0}
 .row-wrap .menu > summary:hover,.row-wrap .menu[open] > summary{
-  border-color:var(--accent)}
+  background:var(--chip)}
 .row-wrap .menu[open]{z-index:30}
 .row-wrap.asking .row{box-shadow:inset 2px 0 0 var(--now-solid)}
 /* At phone width the agent name is the first thing to go: the title and when
@@ -630,7 +684,8 @@ a{color:var(--accent-ink)}
 .vtoggle{display:inline-flex;align-items:center;justify-content:center;
   width:28px;height:28px;border-radius:7px;border:1px solid var(--line);
   color:var(--ink);background:var(--card);text-decoration:none}
-.vtoggle:hover{border-color:var(--accent);color:var(--accent-ink)}
+.vtoggle:hover{border-color:var(--accent);color:var(--accent-ink);
+  background:var(--chip-hover)}
 .vtoggle .mi{width:.95rem;height:.95rem;opacity:.85}
 
 /* --- deleted, and the way back ---------------------------------------------
@@ -827,6 +882,32 @@ def _icon(name: str) -> str:
     return f'<svg class="mi" viewBox="0 0 16 16" aria-hidden="true">{_ICON[name]}</svg>'
 
 
+def _act(
+    action: str,
+    icon: str,
+    label: str,
+    hidden: dict | None = None,
+    danger: bool = False,
+) -> str:
+    """One menu row that POSTs. Uniform with `_go` below -- same height, same
+    padding, same icon slot. `danger` is the red one, and there is only ever
+    one of those in a menu."""
+    fields = "".join(
+        f'<input type="hidden" name="{k}" value="{v}">'
+        for k, v in (hidden or {}).items()
+    )
+    cls = "mrow danger" if danger else "mrow"
+    return (
+        f'<form method="post" action="{action}">{fields}'
+        f'<button class="{cls}" type="submit">{_icon(icon)}{label}</button></form>'
+    )
+
+
+def _go(href: str, icon: str, label: str, extra: str = "") -> str:
+    """One menu row that navigates."""
+    return f'<a class="mrow{extra}" href="{href}">{_icon(icon)}{label}</a>'
+
+
 def _tile_menu(artifact_id: str, title: str, pinned: bool, origin: str) -> str:
     """The dots on a tile: the three things worth doing without opening a page.
 
@@ -841,41 +922,61 @@ def _tile_menu(artifact_id: str, title: str, pinned: bool, origin: str) -> str:
     phone means a menu that simply never opens.
     """
     ident = escape(artifact_id)
-    pin_row = (
-        f'<form method="post" action="/a/{ident}/pin">'
-        f'<input type="hidden" name="pinned" value="{"0" if pinned else "1"}">'
-        f'<button class="mrow" type="submit">{_icon("pin")}'
-        f'{"Unpin" if pinned else "Pin to the front"}</button></form>'
-    )
-    rename_row = (
-        f'<form class="mrename" method="post" action="/a/{ident}/rename">'
-        f"{_icon('rename')}"
-        f'<input name="title" value="{escape(title)}" aria-label="Page name">'
-        '<button type="submit">Rename</button></form>'
-    )
-    # Copy link, scriptless: the address in a readonly input you can select.
-    # There is no clipboard without script, and a menu item that silently does
-    # nothing is worse than one that hands you the text -- so this hands you
-    # the text. gallery.js selects it on focus and adds a real copy button
-    # where scripts run; the input stays underneath either way. No inline
-    # `onfocus` here: this origin's CSP is script-src 'self' with no
-    # 'unsafe-inline', so an inline handler is not a shortcut, it is a
-    # handler that never runs.
-    link_row = (
-        f'<div class="mlink">{_icon("link")}'
-        f'<input readonly value="{escape(origin)}/a/{ident}"'
-        ' aria-label="Link to this page"></div>'
-    )
-    duplicate_row = (
-        f'<form method="post" action="/a/{ident}/duplicate">'
-        f'<button class="mrow" type="submit">{_icon("copy")}'
-        "Duplicate</button></form>"
-    )
+    # EVERY ROW IS THE SAME SHAPE: icon, label, one line. Rename and Copy link
+    # used to be inline mini-forms -- an input plus a button on its own row --
+    # which made a four-item menu three different visual weights and twice the
+    # height it needed. Jeremy's word for it was janky and he was right.
+    #
+    # The two that need a text field now open a dialog on the page instead
+    # (`#rename`, `#link`), which is the same :target mechanism the reference's
+    # own rename modal uses and needs no script. A menu is a list of actions;
+    # anything that needs typing is not a menu item.
+    rows = [
+        _act(
+            f"/a/{ident}/pin",
+            "pin",
+            "Unpin" if pinned else "Pin to the front",
+            {"pinned": "0" if pinned else "1"},
+        ),
+        _go(f"/a/{ident}#rename", "rename", "Rename"),
+        _act(f"/a/{ident}/duplicate", "copy", "Duplicate"),
+        _go(f"/a/{ident}#link", "link", "Copy link"),
+        (
+            '<div class="mdanger">'
+            + _act(f"/a/{ident}/delete", "trash", "Delete", danger=True)
+            + "</div>"
+        ),
+    ]
     return (
         '<details class="menu tmenu"><summary aria-label="Actions for '
         f'{escape(title)}"><span class="dots" aria-hidden="true"></span></summary>'
-        f'<div class="mpanel right">{pin_row}{rename_row}'
-        f"{duplicate_row}{link_row}</div></details>"
+        f'<div class="mpanel right">{"".join(rows)}</div></details>'
+    )
+
+
+def _link_dialog(artifact_id: str) -> str:
+    """The page's address, selectable, behind the menu's "Copy link".
+
+    A dialog rather than an input wedged into the menu: there is no clipboard
+    without script, so the honest scriptless answer is to show the text -- but
+    showing it INSIDE the menu made a four-item list two different shapes. Here
+    it has room to be read in full, which a 15rem menu panel never gave it.
+
+    gallery.js adds a real Copy button when navigator.clipboard exists. The
+    field underneath is what a scriptless reader gets, and is what the button
+    falls back to when the clipboard refuses.
+    """
+    ident = escape(artifact_id)
+    return (
+        '<div class="dlg" id="link">'
+        f'<a class="dlg-back" href="/a/{ident}" aria-label="Close"></a>'
+        '<div class="dlg-card"><h2>Link to this page</h2>'
+        '<div class="mlink">'
+        f'<input readonly value="{escape(gallery_origin())}/a/{ident}"'
+        ' aria-label="Link to this page">'
+        "</div>"
+        f'<p class="dlg-actions"><a class="btn" href="/a/{ident}">Close</a></p>'
+        "</div></div>"
     )
 
 
@@ -1202,6 +1303,7 @@ def _shell(
     title_html: str = "",
     meta_html: str = "",
     controls: str = "",
+    bleed: bool = False,
 ) -> str:
     """Every gallery page, wrapped the same way: one narrow bar carrying the way
     back, the title and a timestamp, then the body. Deliberately quiet -- the
@@ -1226,12 +1328,27 @@ def _shell(
     # via the wall's counts. Same split as `title`/`title_html` above.
     meta_block = meta_html or (f"{escape(meta)}" if meta else "")
     meta_block = f'<span class="meta">{meta_block}</span>' if meta_block else ""
+    heading = title_html or f"<h1>{escape(title)}</h1>"
+    # `bleed` puts the bar across the whole window with the body in a column
+    # beneath it, which is how the reference does an ARTIFACT page: the bar is
+    # chrome and should read as chrome. The gallery index keeps its header
+    # inside the column, which is also what the reference does there -- the two
+    # are different on purpose, and both were measured off the saved pages.
+    if bleed:
+        top = (
+            f'<header class="bar bleed">{back}{heading}{meta_block}</header>'
+            '<div class="wrap">'
+        )
+    else:
+        top = (
+            f'<div class="wrap"><header class="bar">{back}{heading}'
+            f"{meta_block}</header>"
+        )
     return (
         '<!doctype html><html lang="en-GB"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{escape(title)}</title><style>{_CSS}</style></head><body>"
-        f'<div class="wrap"><header class="bar">{back}'
-        f"{title_html or f'<h1>{escape(title)}</h1>'}{meta_block}</header>"
+        f"{top}"
         # The controls are their OWN row beneath the title, as the reference
         # has it: a 48px title row, 16px, then a 32px row of controls. They
         # used to share one line with the title, which is what made the header
@@ -1842,8 +1959,25 @@ def gallery_router(db: Database) -> APIRouter:
                 # "v1" on nearly every tile is a column of noise; a version
                 # COUNT only says something once there is more than one.
                 meta_bits.append(f"v{versions}")
-            pin_mark = (
-                f'<span class="pinmark">{_icon("pin")}Pinned</span>' if pinned_at else ""
+            # A PIN BUTTON, not a label. The reference has one on every card
+            # (24x24, in the meta row) and this had only the menu entry, so
+            # pinning took two clicks and a read. It is the indicator AND the
+            # control: filled and accented when pinned, quiet when not.
+            #
+            # Always visible, where the reference fades it in on hover. Same
+            # argument as the dots: he reads this wall on a phone, where there
+            # is no hover and an invisible control is an absent one.
+            #
+            # A SIBLING of the tile's <a>, like the dots -- a button inside a
+            # link is invalid and the link swallows the click.
+            pin_button = (
+                f'<form class="pinbtn{" on" if pinned_at else ""}" method="post"'
+                f' action="/a/{escape(artifact_id)}/pin">'
+                f'<input type="hidden" name="pinned" value="{"0" if pinned_at else "1"}">'
+                f'<button type="submit" aria-label='
+                f'"{"Unpin this page" if pinned_at else "Pin this page"}"'
+                f' title="{"Pinned — click to unpin" if pinned_at else "Pin to the front"}">'
+                f'{_icon("pin")}</button></form>'
             )
             bits.append(
                 # The marker rides the AGENT line, not the date line. On the
@@ -1858,8 +1992,9 @@ def gallery_router(db: Database) -> APIRouter:
                     if when
                     else ""
                 )
-                + f"{pin_mark}</span>"
+                + "</span>"
                 "</span></a>"
+                f"{pin_button}"
                 f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin())}"
                 "</li>"
             )
@@ -2192,12 +2327,14 @@ def gallery_router(db: Database) -> APIRouter:
                 f'<div class="sheet" id="artifact-sheet"><iframe id="artifact-frame"'
                 f' src="{src}" sandbox="{sandbox}" title="{escape(row[0])}"></iframe></div>'
                 f"{settled_below}"
-                f"{_rename_dialog(artifact_id, row[0])}",
+                f"{_rename_dialog(artifact_id, row[0])}"
+                f"{_link_dialog(artifact_id)}",
                 # gallery.js reads the content origin straight off this iframe's own
                 # `src` -- fixed ids, not a class selector, so a future second iframe
                 # on this page could never be mistaken for this one.
                 scripts='<script src="/gallery.js" defer></script>',
                 title_html=menu,
+                bleed=True,
             ),
             headers=gallery_headers(),
         )

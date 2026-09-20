@@ -79,27 +79,45 @@ def test_the_dots_are_visible_without_a_pointer(client, db):
     assert "opacity:0" not in dots_rule.group(0)
 
 
-def test_the_tile_menu_is_shorter_than_the_pages_own_menu(client, db):
-    """Per the reference: three things on a tile, everything else once you are
-    on the page. A menu you glance at on a wall of twenty is not the place for
-    the full list."""
+def test_every_row_in_the_tile_menu_is_the_same_shape(client, db):
+    """Rename and Copy link used to be inline mini-forms -- a text field plus a
+    button on its own line -- which made a four-item menu three different
+    visual weights and twice the height it needed. Jeremy's word was janky.
+
+    A menu is a list of actions; anything that needs typing is not a menu item,
+    so those two open a dialog on the page instead. This asserts the shape,
+    because "looks tidy" is not something a test can see but "every row is an
+    .mrow" is."""
     published = store.publish(db, "seat", "Board", PAGE)
     tile = _tile(client.get("/").text, published.id)
-    assert f'action="/a/{published.id}/pin"' in tile
-    assert f'action="/a/{published.id}/rename"' in tile
-    assert "/a/" in tile and "artifacts.tenfourty.site" in tile, "and the link"
-    assert f'action="/a/{published.id}/archive"' not in tile, (
-        "archive stays on the page's own menu"
+    panel = tile.split('<div class="mpanel right">', 1)[1]
+
+    assert 'class="mrow"' in panel
+    assert "<input name=" not in panel, "no text field wedged into the menu"
+    assert 'type="search"' not in panel
+    # Every action is reachable, as a row.
+    assert f'action="/a/{published.id}/pin"' in panel
+    assert f'href="/a/{published.id}#rename"' in panel
+    assert f'action="/a/{published.id}/duplicate"' in panel
+    assert f'href="/a/{published.id}#link"' in panel
+    assert f'action="/a/{published.id}/delete"' in panel
+    assert f'action="/a/{published.id}/archive"' not in panel, (
+        "archive stays on the page's own menu -- the tile list is the short one"
     )
 
 
-def test_copy_link_hands_over_a_real_address_with_no_script(client, db):
-    """There is no clipboard without script, so the scriptless answer is the
-    address itself, in a field you can select. A menu item that silently does
-    nothing would be worse than not having one."""
+def test_copy_link_reaches_a_real_address_with_no_script(client, db):
+    """There is no clipboard without script, so the scriptless answer is still
+    the address itself in a field you can select -- it just lives in a dialog
+    now rather than wedged into a 15rem menu panel, where it never had room to
+    show a full URL."""
     published = store.publish(db, "seat", "Board", PAGE)
     tile = _tile(client.get("/").text, published.id)
-    assert f'value="https://artifacts.tenfourty.site/a/{published.id}"' in tile
+    assert f'href="/a/{published.id}#link"' in tile
+
+    page = client.get(f"/a/{published.id}").text
+    assert '<div class="dlg" id="link">' in page
+    assert f'value="https://artifacts.tenfourty.site/a/{published.id}"' in page
 
 
 def test_no_inline_event_handler_anywhere_on_the_wall(client, db):
@@ -328,13 +346,25 @@ def test_the_waiting_badge_rides_the_picture_not_the_body(client, db):
     assert "asking" in tile.split(">", 1)[0], "and the card's edge says so"
 
 
-def test_the_tile_of_a_pinned_page_says_so(client, db):
+def test_every_tile_has_a_pin_button_that_is_also_the_indicator(client, db):
+    """The reference has a 24x24 pin button on every card, in the meta row.
+    This wall had pinning only in the menu, so it took two clicks and a read --
+    Jeremy noticed it was missing.
+
+    One control, not a control and a label: the button IS the state. Pinned and
+    it is on and offers the way back; not pinned and it offers the way in."""
     published = store.publish(db, "seat", "Board", PAGE)
-    assert "pinmark" not in _tile(client.get("/").text, published.id)
+
+    tile = _tile(client.get("/").text, published.id)
+    assert 'class="pinbtn"' in tile, "a pin button on an unpinned tile too"
+    assert 'name="pinned" value="1"' in tile, "which would pin it"
+    assert "Pin this page" in tile
+
     store.set_pinned(db, published.id, True, agent=None)
     tile = _tile(client.get("/").text, published.id)
-    assert "pinmark" in tile
-    assert "Unpin" in tile, "and its menu offers the way back"
+    assert 'class="pinbtn on"' in tile, "and it shows the state"
+    assert 'name="pinned" value="0"' in tile, "and now unpins"
+    assert "Unpin this page" in tile
 
 
 # --- the route --------------------------------------------------------------

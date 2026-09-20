@@ -142,11 +142,21 @@ def test_the_day_is_his_day_not_utc(client, db, monkeypatch):
 # --- the row -----------------------------------------------------------------
 
 
-def test_a_row_carries_the_same_actions_as_a_tile(client, db):
+def test_a_row_carries_exactly_the_same_actions_as_a_tile(client, db):
+    """Parity, asserted as parity rather than as a list of strings. The two
+    views share `_tile_menu`, and the point of that is that switching view
+    never quietly costs you an action -- so the test compares the two menus
+    instead of restating what is in them, and cannot drift when the menu does.
+    """
     published = store.publish(db, "seat", "Board", PAGE)
-    page = client.get("/?view=list").text
-    assert f'action="/a/{published.id}/pin"' in page
-    assert f'action="/a/{published.id}/rename"' in page
+
+    def actions(html: str) -> set[str]:
+        panel = html.split('<div class="mpanel right">', 1)[1]
+        panel = panel.split("</details>", 1)[0]
+        return set(re.findall(r'(?:action|href)="([^"]+)"', panel))
+
+    assert actions(client.get("/").text) == actions(client.get("/?view=list").text)
+    assert f"/a/{published.id}/pin" in actions(client.get("/?view=list").text)
 
 
 def test_a_row_for_a_page_with_a_question_says_so_and_takes_the_anchor(client, db):
