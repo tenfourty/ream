@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from markupsafe import escape
 
-from artifacts import decisions, events, stamp, store
+from artifacts import decisions, events, stamp, store, thumbs
 from artifacts import text as text_module
 from artifacts.db import Database
 from artifacts.store import content_domain, content_url
@@ -234,6 +234,20 @@ a{color:var(--accent-ink)}
   border:1px solid var(--line);border-radius:.7rem;padding:.95rem 1.05rem;
   text-decoration:none;color:var(--ink);box-shadow:var(--shadow);height:100%}
 .tiles a:hover{border-color:var(--accent)}
+/* The picture, when there is one. 16:9-ish and cropped to the top of the page:
+   a thumbnail is the part a reader recognises, not a squashed whole document.
+   A fixed aspect box means the grid does not reflow as lazy images arrive. */
+.tiles .shot{display:block;width:calc(100% + 2.1rem);margin:-.95rem -1.05rem .6rem;
+  /* height:auto is load-bearing. The img carries width/height ATTRIBUTES so the
+     grid does not reflow as lazy images arrive, and a height attribute makes the
+     used height not-auto — which stops `aspect-ratio` computing anything at all.
+     Measured: the box came out 299x640 against a 900x640 image, so `cover`
+     scaled to the full height and cropped the sides, giving a hugely magnified
+     slice of each page. Rendering it and measuring the box is what found this;
+     it reads as correct in the stylesheet. */
+  height:auto;aspect-ratio:900/640;object-fit:cover;object-position:top center;
+  border-radius:.65rem .65rem 0 0;background:var(--paper);
+  border-bottom:1px solid var(--line)}
 .tiles .t{display:block;font:400 1.06rem/1.3 var(--display);margin-bottom:.3rem}
 /* What the page says it is about, taken from the page. Clamped to three lines
    so one long standfirst cannot make its tile twice the height of its
@@ -702,7 +716,12 @@ def gallery_router(db: Database) -> APIRouter:
                 "            and d.closed_at is null) as waiting,"
                 "       (select v.body from version v"
                 "          where v.artifact_id = a.id and v.status = 'live'"
-                "          order by v.n desc limit 1) as body"
+                "          order by v.n desc limit 1) as body,"
+                # The boolean only. Selecting the bytes here would pull every
+                # thumbnail on the wall into memory to render a list of links.
+                "       exists (select 1 from version v"
+                "          where v.artifact_id = a.id and v.n = a.current_version"
+                "            and v.thumbnail is not null) as has_thumb"
                 "  from artifact a"
                 " order by a.updated_at desc, a.id desc limit 200"
             ).fetchall()
@@ -714,14 +733,30 @@ def gallery_router(db: Database) -> APIRouter:
         # tracked separately and needs a decision about where the renderer runs,
         # because the gallery must never load an agent's HTML into this origin.
         def tile(row) -> str:
-            artifact_id, title, updated, agent, versions, waiting, body = row
+            artifact_id, title, updated, agent, versions, waiting, body, has_thumb = row
             # Every one of these is agent-controlled text reaching the gallery
             # origin, so every one is escaped here. `describe` strips tags but
             # makes no claim to produce safe markup -- it returns plain text and
             # escaping is this caller's job, as it is for the title.
             about = text_module.describe(body or "")
+            # The picture leads when there is one, because recognising a board
+            # by its shape is the whole reason he asked for a wall. Everything
+            # below it stays: a thumbnail at tile size is recognisable, not
+            # readable, and the words are what make it identifiable.
+            #
+            # `loading="lazy"` so a wall of twenty does not fetch twenty images
+            # before the first tile paints, and fixed dimensions so the grid does
+            # not reflow as they arrive.
+            shot = ""
+            if has_thumb:
+                shot = (
+                    f'<img class="shot" src="/thumb/{escape(artifact_id)}.png" '
+                    f'alt="" loading="lazy" width="{thumbs.WIDTH}" '
+                    f'height="{thumbs.HEIGHT}">'
+                )
             bits = [
                 f'<li><a href="/a/{escape(artifact_id)}">',
+                shot,
                 f'<span class="t">{escape(title)}</span>',
             ]
             if about:
@@ -753,6 +788,33 @@ def gallery_router(db: Database) -> APIRouter:
         return HTMLResponse(
             _shell("Artifacts", body, meta=f"{len(rows)} pages", home=False),
             headers=gallery_headers(),
+        )
+
+    @router.get("/thumb/{artifact_id}.png")
+    def thumbnail(artifact_id: str) -> Response:
+        """The picture of the version currently being served, or a 404.
+
+        On the GALLERY origin, behind Jeremy's login like everything else here —
+        a page's content is only readable with a capability token, and a picture
+        OF that content must not be an easier way to the same thing.
+
+        404 rather than a placeholder image when there is none: the wall's text
+        tile is already a complete tile, and a broken-image icon would read as
+        the page being broken rather than the picture being absent.
+
+        Cached for a minute and no longer. A thumbnail belongs to a version, so
+        it never changes for a given one — but the URL names the PAGE, and the
+        page's live version moves. A long cache would show Jeremy last week's
+        picture of a board he republished this morning, which is the exact drift
+        this service exists to prevent.
+        """
+        png = store.live_thumbnail(db, artifact_id)
+        if png is None:
+            raise HTTPException(404, "no thumbnail for that page")
+        return Response(
+            png,
+            media_type="image/png",
+            headers={**gallery_headers(), "cache-control": "private, max-age=60"},
         )
 
     @router.get("/a/{artifact_id}", response_class=HTMLResponse)

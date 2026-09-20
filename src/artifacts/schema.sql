@@ -258,3 +258,16 @@ alter table decision add column if not exists said_at timestamptz;
 
 update decision set answer_source = 'page'
     where answer is not null and answer_source is null;
+
+-- A PAGE'S THUMBNAIL, ATTACHED TO THE VERSION IT DEPICTS (homelab-ij8.22).
+-- On `version`, not on `artifact`, and that placement is the whole correctness
+-- argument: a picture stored against the page would survive the page changing
+-- under it, and a stale thumbnail is precisely the drift this service exists to
+-- prevent -- worse than no picture, because Jeremy would read the wall as
+-- current. Keyed to the version, a thumbnail is either of that version or
+-- absent, and it goes when the version goes.
+--
+-- Null is the ordinary state: never rendered yet, rendered and failed, or a
+-- deployment with no browser at all. The wall falls back to its text tile,
+-- which is a complete tile in its own right and not a placeholder.
+alter table version add column if not exists thumbnail bytea;

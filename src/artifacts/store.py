@@ -484,3 +484,36 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
         )
         for row in rows
     ]
+
+
+def save_thumbnail(db: Database, artifact_id: str, version_n: int, png: bytes) -> bool:
+    """Attach a rendered picture to the version it depicts.
+
+    Returns False rather than raising when the version has gone -- a render runs
+    after the publish that triggered it has already returned, so the page may
+    have moved on or been deleted in between. That is an ordinary race with an
+    obvious answer: the picture is of a version nobody will serve, so drop it.
+    """
+    with db.connect() as conn:
+        done = conn.execute(
+            "update version set thumbnail = %s where artifact_id = %s and n = %s",
+            (png, artifact_id, version_n),
+        )
+        return done.rowcount > 0
+
+
+def live_thumbnail(db: Database, artifact_id: str) -> bytes | None:
+    """The picture of the version currently being served, or None.
+
+    Joined through `artifact.current_version` rather than taking the highest `n`:
+    those are the same today, and if they ever diverge the one that matters is
+    the version a reader is actually looking at.
+    """
+    with db.connect() as conn:
+        row = conn.execute(
+            "select v.thumbnail from artifact a"
+            " join version v on v.artifact_id = a.id and v.n = a.current_version"
+            " where a.id = %s",
+            (artifact_id,),
+        ).fetchone()
+    return bytes(row[0]) if row and row[0] is not None else None

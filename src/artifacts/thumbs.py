@@ -42,7 +42,10 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
+
+from artifacts import store
 
 log = logging.getLogger("artifacts.thumbs")
 
@@ -146,3 +149,35 @@ def render(html: str) -> bytes | None:
         log.warning("thumbnail render produced %d bytes that are not a PNG", len(data))
         return None
     return data
+
+
+def render_in_background(db, artifact_id: str, version_n: int, html: str) -> None:
+    """Render and store a thumbnail after the publish has already returned.
+
+    A PUBLISH MUST NEVER WAIT ON A BROWSER, and must never fail because of one.
+    A render takes the better part of a second on a good day and twenty on a bad
+    one, and an agent publishing a page is usually mid-task with a waiter armed;
+    making it pay for a decoration would be a poor trade even if the browser
+    were reliable, which is the one thing a browser is not.
+
+    So: a daemon thread, no result, no retry, everything swallowed. If it fails
+    the page simply has no picture and the wall falls back to its text tile —
+    and the next publish of that page tries again, which is the only retry this
+    needs. A thumbnail that is missing is a tile that is slightly plainer; a
+    publish that hung is an agent that stopped.
+
+    Daemon so it can never hold up shutdown: SIGTERM starts a fifteen-second
+    grace period, and a half-finished picture is worth none of it.
+    """
+    if not available():
+        return
+
+    def work() -> None:
+        try:
+            png = render(html)
+            if png is not None:
+                store.save_thumbnail(db, artifact_id, version_n, png)
+        except Exception:  # a decoration may never reach the caller
+            log.exception("thumbnail rendering failed for %s v%s", artifact_id, version_n)
+
+    threading.Thread(target=work, name=f"thumb-{artifact_id}", daemon=True).start()

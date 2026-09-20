@@ -12,7 +12,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from artifacts import comments, csp, decisions, events, grants, keys, store, templates
+from artifacts import (
+    comments,
+    csp,
+    decisions,
+    events,
+    grants,
+    keys,
+    store,
+    templates,
+    thumbs,
+)
 from artifacts.db import Database
 
 
@@ -180,6 +190,11 @@ def agent_router(db: Database) -> APIRouter:
     def create(payload: PublishBody, agent: str = Depends(caller)):
         try:
             published = store.publish(db, agent, payload.title, payload.body)
+            # After the write, never inside it: a publish must not wait on a
+            # browser, nor fail because of one. See thumbs.render_in_background.
+            thumbs.render_in_background(
+                db, published.id, published.version, payload.body
+            )
             return {**published.__dict__, "warnings": csp.as_json(payload.body)}
         except store.BodyTooLarge as exc:
             raise HTTPException(
@@ -213,6 +228,11 @@ def agent_router(db: Database) -> APIRouter:
                 payload.body,
                 payload.expected_revision,
                 title=payload.title,
+            )
+            # After the write, never inside it: a publish must not wait on a
+            # browser, nor fail because of one. See thumbs.render_in_background.
+            thumbs.render_in_background(
+                db, published.id, published.version, payload.body
             )
             return {**published.__dict__, "warnings": csp.as_json(payload.body)}
         except store.BodyTooLarge as exc:
