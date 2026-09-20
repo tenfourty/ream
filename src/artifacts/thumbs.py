@@ -1,0 +1,148 @@
+"""A picture of a page, for the gallery wall.
+
+homelab-ij8.22. Jeremy asked for a real rendered thumbnail of each page rather
+than a list of links, asked whether a tool existed, and — told that one did —
+chose (b), the renderer running inside the service itself, over (a), a separate
+renderer the service asks. He chose it with the argument against in front of
+him, so this builds (b).
+
+THE ARGUMENT AGAINST, STATED ONCE AND THEN ACTED ON. A thumbnail means something
+executes HTML an agent wrote. Every page on this service is otherwise sandboxed
+on its own throwaway origin precisely so that it CANNOT reach anything, and a
+renderer is the first thing that deliberately runs it. (b) puts that execution
+in the service's own pod, next to the database credentials and the session
+cookie. That is a real cost and it is not paid off by care in this file alone;
+it is paid off by the list below, every item of which is here because the
+alternative is worse:
+
+  * NO CREDENTIALS IN THE CHILD. The subprocess environment is built from
+    nothing, not inherited: DATABASE_URL, the agent keys and everything else
+    simply are not there to read. An inherited environment is the single most
+    likely way a render becomes an exfiltration.
+  * NO NETWORK. The page's own CSP already forbids external fetches, but a CSP
+    is enforced by the thing we are asking to be untrusted. The flags below
+    disable the network stack itself.
+  * A HARD TIMEOUT AND A KILLED PROCESS GROUP. A page can loop; it must not hold
+    a worker. On timeout the whole group dies, not just the parent.
+  * NOTHING ON DISK IT DID NOT BRING. The render happens in a temp directory
+    that is removed afterwards, whatever happened.
+  * A FAILED RENDER PRODUCES NO THUMBNAIL. Never a stale one, never a partial
+    one. The wall is allowed to have gaps; it is not allowed to show Jeremy a
+    picture of a page that is not what the page says now.
+
+`render` returns None for every failure, because every failure has the same
+correct response and a caller that has to distinguish them is a caller that will
+get one of them wrong.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+log = logging.getLogger("artifacts.thumbs")
+
+# Overridable so the container can say where it put the browser, and so a
+# developer machine can point at Playwright's copy. Absent means no thumbnails,
+# which is a degraded wall and not a broken service.
+BROWSER_ENV = "ARTIFACTS_BROWSER"
+
+TIMEOUT_SECONDS = 20
+# The tile is rendered at this width and cropped to this height: a thumbnail is
+# the TOP of a page, the part a reader would recognise, not a squashed whole
+# page. A full-page shot of a long status board is an unreadable grey smear.
+WIDTH = 900
+HEIGHT = 640
+
+
+def browser_path() -> str | None:
+    """Where the headless browser is, or None if this deployment has none."""
+    explicit = os.environ.get(BROWSER_ENV)
+    if explicit:
+        return explicit if Path(explicit).is_file() else None
+    return shutil.which("chrome-headless-shell") or shutil.which("chromium")
+
+
+def available() -> bool:
+    return browser_path() is not None
+
+
+def render(html: str) -> bytes | None:
+    """A PNG of the top of `html`, or None.
+
+    None on: no browser in this deployment, a crash, a timeout, an empty file,
+    or anything that is not a PNG. Never raises — a thumbnail is decoration, and
+    a decoration that can take down a publish is a bad trade.
+    """
+    binary = browser_path()
+    if binary is None:
+        return None
+
+    with tempfile.TemporaryDirectory(prefix="artifacts-thumb-") as workdir:
+        page = Path(workdir) / "page.html"
+        shot = Path(workdir) / "shot.png"
+        try:
+            page.write_text(html, encoding="utf-8")
+        except (OSError, UnicodeEncodeError):
+            return None
+
+        argv = [
+            binary,
+            "--headless",
+            "--disable-gpu",
+            "--no-sandbox",  # the container is the sandbox; see the note below
+            "--hide-scrollbars",
+            "--disable-dev-shm-usage",
+            # The page must not be able to reach anything. Its own CSP says so
+            # too, but a CSP is enforced by the component we are treating as
+            # untrusted, so it is not the control we rely on.
+            "--disable-remote-fonts",
+            "--disable-background-networking",
+            "--disable-sync",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-extensions",
+            "--disable-features=NetworkService,NetworkServiceInProcess",
+            f"--window-size={WIDTH},{HEIGHT}",
+            # Late layout settles before the shot; without it a page with web
+            # fonts or a chart renders half-built and the tile is a lie.
+            "--virtual-time-budget=3000",
+            f"--screenshot={shot}",
+            page.as_uri(),
+        ]
+        try:
+            subprocess.run(  # noqa: S603 -- argv list, no shell, binary from config
+                argv,
+                capture_output=True,
+                timeout=TIMEOUT_SECONDS,
+                check=False,
+                # BUILT FROM NOTHING, not inherited. DATABASE_URL and every
+                # agent key are simply absent from the child. HOME and a temp
+                # dir are the only things the browser genuinely needs.
+                env={"HOME": workdir, "TMPDIR": workdir, "PATH": "/usr/bin:/bin"},
+                cwd=workdir,
+                start_new_session=True,  # its own process group, so a timeout kills all of it
+            )
+        except subprocess.TimeoutExpired:
+            log.warning("thumbnail render timed out after %ss", TIMEOUT_SECONDS)
+            return None
+        except (OSError, ValueError) as exc:
+            log.warning("thumbnail render could not start: %s", exc)
+            return None
+
+        try:
+            data = shot.read_bytes()
+        except OSError:
+            log.warning("thumbnail render produced no file")
+            return None
+
+    # A real PNG or nothing. A zero-byte or truncated file would otherwise be
+    # served as a broken image, which looks like the PAGE is broken.
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        log.warning("thumbnail render produced %d bytes that are not a PNG", len(data))
+        return None
+    return data
