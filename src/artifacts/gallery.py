@@ -91,6 +91,13 @@ _CSS = """
   --line:rgba(11,11,11,.1);
   --accent:#0f6f63; --accent-soft:rgba(15,111,99,.10); --accent-ink:#0b4f46;
   --ok:#2f7a45; --now:#b06a12;
+  /* The waiting badge is SOLID, so its background and its text are their own
+     tokens rather than --now plus white. Computed, not chosen: white on
+     --now (#b06a12) is 4.27:1, which fails for 11px bold; #9c5e10 takes it to
+     5.22:1. In dark mode --now is a LIGHT amber and white on it is 2.18:1 --
+     a clear fail -- so the dark scheme flips the text instead of the fill. */
+  --now-solid:#9c5e10; --on-now:#fff;
+  --line-hover:rgba(11,11,11,.28);
   --shadow:0 1px 2px rgba(20,20,15,.05), 0 8px 24px -16px rgba(20,20,15,.25);
   --display:ui-serif,"Iowan Old Style",Georgia,"Times New Roman",serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
@@ -100,6 +107,9 @@ _CSS = """
     --paper:#141619; --ink:#e9eae4; --muted:#989a90; --card:#1c1f23; --line:#2b2e34;
     --accent:#5ec9b8; --accent-soft:rgba(94,201,184,.12); --accent-ink:#9fe3d7;
     --ok:#6cc48a; --now:#e0a458;
+    /* Light amber, so the text on it goes dark: #2a1d0a on #e0a458 is 7.52:1. */
+    --now-solid:#e0a458; --on-now:#2a1d0a;
+    --line-hover:#5a606a;
     --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.8);
   }
 }
@@ -133,8 +143,9 @@ a{color:var(--accent-ink)}
    wall whose whole purpose is decisions it is the only thing there that is
    about him rather than about the service. */
 .bar .waiting{display:inline-flex;align-items:center;gap:.35rem;
-  text-decoration:none;font-weight:600;color:#fff;background:var(--now);
-  border-radius:999px;padding:.2rem .6rem .2rem .62rem}
+  text-decoration:none;font-weight:600;color:var(--on-now);
+  background:var(--now-solid);border-radius:999px;
+  padding:.2rem .6rem .2rem .62rem}
 .bar .waiting::after{content:"→";font-weight:400}
 .bar .waiting:hover{filter:brightness(.94)}
 /* Landing on the tile should not put it under the top edge of the window. */
@@ -364,7 +375,7 @@ a{color:var(--accent-ink)}
   border:1px solid var(--line);border-radius:12px;overflow:hidden;
   text-decoration:none;color:var(--ink);height:100%;
   transition:border-color .12s}
-.tiles a:hover{border-color:rgba(11,11,11,.22)}
+.tiles a:hover{border-color:var(--line-hover)}
 /* The picture. Cropped to the top of the page: a thumbnail is the part a
    reader recognises, not a squashed whole document. A fixed aspect box means
    the grid does not reflow as lazy images arrive.
@@ -424,8 +435,9 @@ a{color:var(--accent-ink)}
    the one thing this badge may never be. */
 .tiles .wait{position:absolute;left:.6rem;bottom:.6rem;z-index:1;
   font:600 .6875rem/1rem ui-sans-serif,system-ui,-apple-system,sans-serif;
-  letter-spacing:.01em;color:#fff;background:var(--now);border-radius:.3rem;
-  padding:.24rem .45rem;box-shadow:0 1px 4px rgba(20,20,15,.28)}
+  letter-spacing:.01em;color:var(--on-now);background:var(--now-solid);
+  border-radius:.3rem;padding:.24rem .45rem;
+  box-shadow:0 1px 4px rgba(20,20,15,.28)}
 /* And the card says so at its edge, so a wall scanned at arm's length still
    sorts itself. One hairline, not a thick rule: it should register, not shout
    over the pinned tile next to it. */
