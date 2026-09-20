@@ -512,7 +512,10 @@ a{color:var(--accent-ink)}
    label and hide the action in the menu, so pinning took two clicks and a
    read. A sibling of the tile's <a>, like the dots, because a button inside a
    link is invalid and the link swallows the click. */
-.pinbtn{position:absolute;right:.75rem;bottom:.7rem;margin:0;line-height:0}
+.pinbtn{position:absolute;margin:0;line-height:0}
+/* On a TILE it sits in the meta row; on a ROW it sits beside the dots. */
+.tile-wrap > .pinbtn{right:.75rem;bottom:.7rem}
+.row-wrap > .pinbtn{right:2.4rem;top:50%;transform:translateY(-50%)}
 /* FULL OPACITY. This shipped at .5, which computes to 1.76:1 against a white
    card -- an icon wants 3:1 and that is below even the text-on-decorative bar.
    Jeremy's report was "I still don't see the pin", and he was right: it was
@@ -531,12 +534,7 @@ a{color:var(--accent-ink)}
 .pinbtn.on button:hover{color:var(--accent-ink)}
 /* The meta row leaves room for it rather than running underneath. */
 .tiles .m{padding-right:1.9rem}
-/* In the LIST the pin is inline in the meta, where there is room for it. */
-.rows .pinmark{display:inline-flex;align-items:center;gap:.2rem;flex:0 0 auto;
-  font:600 .6875rem/1rem ui-sans-serif,system-ui,-apple-system,sans-serif;
-  letter-spacing:.02em;color:var(--accent-ink);background:var(--accent-soft);
-  border-radius:.3rem;padding:.1rem .34rem}
-.rows .pinmark .mi{width:.85em;height:.85em;opacity:1}
+
 /* A pinned tile leads the wall; the accent edge says why, without shouting. */
 .tiles > li.pinned > a{border-color:var(--accent)}
 .empty{color:var(--muted);padding:2rem 0}
@@ -650,13 +648,16 @@ a{color:var(--accent-ink)}
 .daygroup:first-child{margin-top:0}
 .rows{list-style:none;margin:0;padding:0}
 .row-wrap{position:relative;margin:0}
-.row{display:flex;align-items:center;gap:.75rem;min-height:40px;
-  padding:.25rem 2.6rem .25rem .5rem;border-radius:.6rem;
+/* 52px, measured off the reference's own row -- the 40 this used came from an
+   inner element of theirs, not the row. Room on the right for the pin and the
+   dots, which sit over it as siblings of the link. */
+.row{display:flex;align-items:center;gap:.75rem;min-height:52px;
+  padding:.25rem 4.6rem .25rem .5rem;border-radius:.6rem;
   text-decoration:none;color:var(--ink)}
 .row:hover{background:var(--card)}
 /* The type-icon slot. Types do not exist yet, so it carries the page's own
    thumbnail -- already rendered, and more use than a generic glyph. */
-.rshot{flex:0 0 auto;width:2.125rem;height:2.125rem;border-radius:.45rem;
+.rshot{flex:0 0 auto;width:36px;height:36px;border-radius:.45rem;
   object-fit:cover;object-position:top center;background:var(--paper);
   border:1px solid var(--line)}
 .rshot.none{display:flex;align-items:center;justify-content:center}
@@ -664,27 +665,36 @@ a{color:var(--accent-ink)}
 .rt{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;font:400 .875rem/1.25rem ui-sans-serif,system-ui,
   -apple-system,sans-serif}
-.rmeta{flex:0 0 auto;display:flex;align-items:center;gap:.55rem;
+.rmeta{flex:0 1 auto;display:flex;align-items:center;gap:.55rem;
   font:.75rem/1rem ui-sans-serif,system-ui,-apple-system,sans-serif;
-  color:var(--muted)}
+  color:var(--muted);white-space:nowrap}
 /* In a row the badge is inline rather than laid over a picture, so it goes
    back to being tinted -- there is no arbitrary page render underneath it to
    be illegible against. */
 .rows .wait{position:static;box-shadow:none;background:transparent;
   color:var(--now);border:1px solid currentColor;padding:.1rem .36rem}
-.rows .pinmark{margin-left:0}
 .row-wrap .menu{position:absolute;top:50%;right:.35rem;transform:translateY(-50%);
   z-index:5}
 .row-wrap .menu > summary{display:flex;align-items:center;justify-content:center;
-  width:28px;height:28px;background:transparent;border:0;border-radius:7px;
+  width:32px;height:32px;background:transparent;border:0;border-radius:8px;
   line-height:0}
 .row-wrap .menu > summary:hover,.row-wrap .menu[open] > summary{
   background:var(--chip)}
 .row-wrap .menu[open]{z-index:30}
 .row-wrap.asking .row{box-shadow:inset 2px 0 0 var(--now-solid)}
-/* At phone width the agent name is the first thing to go: the title and when
-   it moved are what a list is scanned for. */
-@media (max-width:30rem){.rmeta .who{display:none}}
+/* WHAT GOES FIRST WHEN THERE IS NO ROOM. A list is scanned for titles, so the
+   title wins and the metadata yields -- in order: the agent, then the waiting
+   badge (the amber edge on the row still says a question is there), then the
+   time. Rendered at 390px, where the badge had pushed one row's title out
+   COMPLETELY: a row with no title is not a row.
+   `.rmeta` may also shrink now; it was flex:0 0 auto, which is what let it
+   take the whole width and leave the title nothing. */
+.rmeta{min-width:0}
+@media (max-width:46rem){.rmeta .who{display:none}}
+@media (max-width:34rem){
+  .rows .wait{display:none}
+  .rmeta time{display:none}
+}
 
 /* The view toggle. Sized to the reference's 28px control. */
 .vtoggle{display:inline-flex;align-items:center;justify-content:center;
@@ -886,6 +896,28 @@ _ICON = {
 
 def _icon(name: str) -> str:
     return f'<svg class="mi" viewBox="0 0 16 16" aria-hidden="true">{_ICON[name]}</svg>'
+
+
+def _pin_button(artifact_id: str, pinned: bool) -> str:
+    """The pin, on a tile or on a row. The indicator AND the control.
+
+    One function for both, because the two views must not drift into offering
+    different actions -- and because this is the control Jeremy noticed was
+    missing, twice: first from the card, then from the row.
+
+    A SIBLING of the tile's or row's link, never inside it: a button nested in
+    an <a> is invalid and the link swallows the click.
+    """
+    ident = escape(artifact_id)
+    label = "Unpin this page" if pinned else "Pin this page"
+    hint = "Pinned — click to unpin" if pinned else "Pin to the front"
+    return (
+        f'<form class="pinbtn{" on" if pinned else ""}" method="post"'
+        f' action="/a/{ident}/pin">'
+        f'<input type="hidden" name="pinned" value="{"0" if pinned else "1"}">'
+        f'<button type="submit" aria-label="{label}" title="{hint}">'
+        f"{_icon('pin')}</button></form>"
+    )
 
 
 def _act(
@@ -1832,19 +1864,22 @@ def gallery_router(db: Database) -> APIRouter:
         if waiting:
             word = "question" if waiting == 1 else "questions"
             right.append(f'<span class="wait">{waiting} {word} for you</span>')
-        if pinned_at:
-            right.append(f'<span class="pinmark">{_icon("pin")}Pinned</span>')
         right.append(f'<span class="who">{escape(agent)}</span>')
         when = _ago(updated)
         if when:
             exact = stamp.format_for_display(updated) if updated else ""
             right.append(f'<time title="{escape(exact)}">Edited {escape(when)}</time>')
 
+        # The same pin button the tile has -- the reference's row carries one
+        # too (24x24, and always visible where the CARD's fades in on hover).
+        # This row had only a "Pinned" label, so the list was the one view
+        # where pinning meant opening a menu.
         return (
             f'<li class="row-wrap{" asking" if waiting else ""}">'
             f'<a class="row" href="/a/{ident}">'
             f"{badge}<span class=\"rt\">{escape(title)}</span>"
             f'<span class="rmeta">{"".join(right)}</span></a>'
+            f"{_pin_button(artifact_id, bool(pinned_at))}"
             f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin())}"
             "</li>"
         )
@@ -1976,15 +2011,7 @@ def gallery_router(db: Database) -> APIRouter:
             #
             # A SIBLING of the tile's <a>, like the dots -- a button inside a
             # link is invalid and the link swallows the click.
-            pin_button = (
-                f'<form class="pinbtn{" on" if pinned_at else ""}" method="post"'
-                f' action="/a/{escape(artifact_id)}/pin">'
-                f'<input type="hidden" name="pinned" value="{"0" if pinned_at else "1"}">'
-                f'<button type="submit" aria-label='
-                f'"{"Unpin this page" if pinned_at else "Pin this page"}"'
-                f' title="{"Pinned — click to unpin" if pinned_at else "Pin to the front"}">'
-                f'{_icon("pin")}</button></form>'
-            )
+            pin_button = _pin_button(artifact_id, bool(pinned_at))
             bits.append(
                 # The marker rides the AGENT line, not the date line. On the
                 # date line it stole enough width to wrap "CEST" onto a second
