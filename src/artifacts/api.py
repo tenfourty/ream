@@ -5,6 +5,7 @@ never from a header, query parameter or body field, so nothing else can
 influence whose artifacts a request sees or changes.
 """
 
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -18,6 +19,21 @@ from artifacts.db import Database
 class PublishBody(BaseModel):
     title: str
     body: str
+
+
+class RecordBody(BaseModel):
+    """An answer Jeremy gave somewhere that is not the page.
+
+    `source` and `note` are both required and neither has a default. A default
+    source would let a relay be recorded without anyone choosing what it was,
+    and an empty note would throw away the part that usually decides things —
+    every one of his notes so far has qualified the letter it came with.
+    """
+
+    letter: str
+    note: str
+    source: str
+    said_at: str | None = None
 
 
 class PatchBody(BaseModel):
@@ -455,6 +471,52 @@ def agent_router(db: Database) -> APIRouter:
     # "Seen it" is a separate call from "done with it" on purpose: the alert that
     # catches a lost answer needs the first fact, and most answers here are acted on
     # over hours by work that happens somewhere else entirely.
+    @router.post("/decisions/{decision_id}/record")
+    def record_answer(
+        decision_id: str, payload: RecordBody, agent: str = Depends(caller)
+    ):
+        """Record an answer Jeremy gave off the page, with provenance.
+
+        homelab-ij8.78. The alternative a seat has without this is to press the
+        button for him, which mints an answer on the page indistinguishable from
+        one he tapped. Two seats refused to do that on 20 Sep 2026 and were
+        right to; this exists so refusing does not mean the answer is lost.
+
+        The recording seat is taken from the KEY, never from the body: the
+        accountable party is not something a caller gets to nominate. `source`
+        cannot be 'page' — that value means he tapped it himself.
+        """
+        said_at = None
+        if payload.said_at:
+            try:
+                said_at = datetime.fromisoformat(payload.said_at)
+            except ValueError:
+                raise HTTPException(
+                    422, "said_at must be an ISO 8601 timestamp"
+                ) from None
+        try:
+            row = decisions.record_elsewhere(
+                db,
+                decision_id,
+                letter=payload.letter,
+                note=payload.note,
+                source=payload.source,
+                recorded_by=agent,
+                said_at=said_at,
+            )
+        except decisions.InvalidSource:
+            raise HTTPException(
+                422,
+                "source must be one of "
+                f"{', '.join(decisions.ANSWER_SOURCES)} — 'page' is refused, "
+                "because it means Jeremy answered on the page himself",
+            ) from None
+        except decisions.InvalidAnswer:
+            raise HTTPException(422, "that letter is not one of the options") from None
+        except store.NotFound:
+            raise HTTPException(404, "no such open decision") from None
+        return row.__dict__
+
     @router.post("/decisions/{decision_id}/acknowledge")
     def acknowledge_decision(decision_id: str, agent: str = Depends(caller)):
         try:

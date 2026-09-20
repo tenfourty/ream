@@ -34,6 +34,7 @@ value that is actually about to be stored.
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from psycopg.types.json import Jsonb
 
@@ -69,7 +70,8 @@ _COLUMNS = (
     "decision.id, decision.artifact_id, decision.version_n, decision.question,"
     " decision.options, decision.recommended, decision.answer, decision.answer_note,"
     " decision.answered_at, decision.answered_by, decision.created_at, decision.closed_at,"
-    " decision.acknowledged_at, decision.acknowledged_by"
+    " decision.acknowledged_at, decision.acknowledged_by,"
+    " decision.answer_source, decision.recorded_by, decision.said_at"
 )
 
 
@@ -89,6 +91,14 @@ class DecisionRow:
     closed_at: str | None
     acknowledged_at: str | None
     acknowledged_by: str | None
+    # 'page' when Jeremy tapped it; 'terminal'/'telegram'/'in-person'/'other'
+    # when a seat recorded words he gave elsewhere. Never null once `answer` is
+    # set, so no reader has to guess what a missing value means.
+    answer_source: str | None
+    # The seat that wrote a relayed answer down. Null for a page tap.
+    recorded_by: str | None
+    # When HE said it, which is not when it was recorded.
+    said_at: str | None
 
 
 class InvalidOptions(Exception):
@@ -176,6 +186,9 @@ def _row_to_decision(row) -> DecisionRow:
         closed_at=row[11].isoformat() if row[11] is not None else None,
         acknowledged_at=row[12].isoformat() if row[12] is not None else None,
         acknowledged_by=row[13],
+        answer_source=row[14],
+        recorded_by=row[15],
+        said_at=row[16].isoformat() if row[16] is not None else None,
     )
 
 
@@ -280,6 +293,111 @@ def list_for_agent(
     return [_row_to_decision(row) for row in rows]
 
 
+# Where an answer can have come from. 'page' is a tap in the gallery; the rest
+# are places Jeremy actually says things. Enumerated rather than free text so a
+# reader can switch on it, and so a seat cannot invent a source that sounds more
+# authoritative than it is.
+ANSWER_SOURCES = ("terminal", "telegram", "in-person", "other")
+
+
+class InvalidSource(Exception):
+    """A relay named a source that is not one of ANSWER_SOURCES, or named 'page'.
+
+    'page' is refused deliberately: it is the one value that means "he tapped
+    this himself", and a relay claiming it would be indistinguishable from the
+    real thing — which is the entire failure this call exists to prevent.
+    """
+
+
+def record_elsewhere(
+    db: Database,
+    decision_id: str,
+    *,
+    letter: str,
+    note: str,
+    source: str,
+    recorded_by: str,
+    said_at: datetime | None = None,
+) -> DecisionRow:
+    """Record an answer Jeremy gave somewhere that is not the page.
+
+    homelab-ij8.78. He answers in a terminal or on Telegram as often as on a
+    page. Before this there was nothing honest a seat could do with those words:
+    pressing the button for him mints an answer attributed to him, ON THE PAGE,
+    indistinguishable from one he tapped — the kind of record that gets believed
+    later by an agent that was not there. Two seats hit exactly this on 20 Sep
+    2026 and both refused, correctly, leaving four real answers stranded.
+
+    So the answer is recorded and the decision closes honestly, but it is
+    recorded as WHAT IT IS. Three things make that true rather than merely
+    intended:
+
+      * `source` is a value from a fixed set and 'page' is refused. A relay
+        cannot claim to be a tap, by accident or otherwise.
+      * `recorded_by` is required. An anonymous relay is the same forgery
+        wearing a different hat; the accountable seat is part of the record.
+      * `note` carries HIS WORDS, and the caller is expected to paste them
+        verbatim. Every one of his notes so far has qualified the letter it came
+        with — one "(a)" read "start with (b) but then (a) if we can" — so a
+        paraphrase here is a paraphrase of a decision.
+
+    `said_at` is when he said it; `answered_at` stays "when this row gained its
+    answer", so the uncollected alert and the event journal need no special case.
+
+    Refuses a closed decision, like `answer` does, and for the same reason: the
+    agent that closed it said it no longer needs one.
+    """
+    if source not in ANSWER_SOURCES:
+        raise InvalidSource(source)
+    if not recorded_by:
+        raise InvalidSource("a relayed answer must name the seat recording it")
+    store._check_size(note, MAX_NOTE_BYTES, "note", agent=recorded_by, artifact_id=None)
+
+    with db.connect() as conn:
+        row = conn.execute(
+            f"select {_COLUMNS}, artifact.title, artifact.agent from decision"  # noqa: S608 -- fixed constant, not caller input
+            " join artifact on artifact.id = decision.artifact_id"
+            " where decision.id = %s and decision.closed_at is null",
+            (decision_id,),
+        ).fetchone()
+        if row is None:
+            raise store.NotFound()
+        artifact_id, options, owning_agent = row[1], row[4], row[-1]
+
+        if letter not in {option["letter"] for option in options}:
+            raise InvalidAnswer()
+        store._check_secrets(note, "note", agent=recorded_by, artifact_id=artifact_id)
+
+        label = next(o["label"] for o in options if o["letter"] == letter)
+        summary = f"{letter}: {label} (relayed from {source})"[:200]
+        with conn.transaction():
+            conn.execute(
+                "update decision set answer = %s, answer_note = %s,"
+                " answered_at = now(), answered_by = 'jeremy',"
+                " answer_source = %s, recorded_by = %s, said_at = %s"
+                " where id = %s",
+                (letter, note, source, recorded_by, said_at, decision_id),
+            )
+            # Journalled like a tapped answer, because to the OWNING agent the
+            # fact is the same one it has been waiting for: Jeremy decided. The
+            # summary names the relay so a reader of the feed is not misled, and
+            # the row itself carries the full provenance for anyone who looks.
+            events.append(
+                conn,
+                agent=owning_agent,
+                actor=recorded_by,
+                kind="decision_answered",
+                artifact_id=artifact_id,
+                ref_id=decision_id,
+                summary=summary,
+            )
+            refreshed = conn.execute(
+                f"select {_COLUMNS} from decision where id = %s",  # noqa: S608 -- fixed constant
+                (decision_id,),
+            ).fetchone()
+    return _row_to_decision(refreshed)
+
+
 def answer(
     db: Database, decision_id: str, *, letter: str, note: str = "", by: str
 ) -> DecisionRow:
@@ -337,7 +455,8 @@ def answer(
         with conn.transaction():
             conn.execute(
                 "update decision set answer = %s, answer_note = %s, answered_at = now(),"
-                " answered_by = %s where id = %s",
+                " answered_by = %s, answer_source = 'page', recorded_by = null,"
+                " said_at = null where id = %s",
                 (letter, note, by, decision_id),
             )
             event_seq = events.append(

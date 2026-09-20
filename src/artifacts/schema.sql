@@ -228,3 +228,33 @@ create table if not exists seat_grant (
     granted_at timestamptz not null default now(),
     primary key (agent, scope)
 );
+
+-- AN ANSWER JEREMY GAVE SOMEWHERE ELSE (homelab-ij8.78). He answers in a terminal
+-- or on Telegram as often as on a page, and before this there was nothing honest a
+-- seat could do with those words: pressing the button on his behalf mints an answer
+-- attributed to him, on the page, INDISTINGUISHABLE from one he tapped -- the kind
+-- of record that gets believed later by an agent that was not there. Two seats hit
+-- this on 20 Sep 2026 and both correctly refused, leaving four real answers stranded
+-- with the decisions still open.
+--
+-- `answer_source` is a VALUE, never a boolean and never a null-means-tapped: an
+-- unaware reader must not be able to mistake a relayed answer for a tapped one, and
+-- the way to guarantee that is to make every answered row say which it was. Existing
+-- answers are backfilled to 'page' below, so `answer is not null and answer_source
+-- is null` is never a state anyone has to interpret.
+--
+-- `recorded_by` is the SEAT that wrote it down, and it is required for a relay. An
+-- anonymous relay is the same forgery wearing a different hat: the accountable party
+-- is part of the record, not metadata about it. It stays null for a page tap, where
+-- `answered_by` already says jeremy and no seat was involved.
+--
+-- `said_at` is when HE said it, which is not when a seat got round to recording it.
+-- `answered_at` keeps meaning "when this row gained its answer" so the uncollected
+-- alert and the event journal need no special case.
+alter table decision add column if not exists answer_source text
+    check (answer_source in ('page', 'terminal', 'telegram', 'in-person', 'other'));
+alter table decision add column if not exists recorded_by text;
+alter table decision add column if not exists said_at timestamptz;
+
+update decision set answer_source = 'page'
+    where answer is not null and answer_source is null;
