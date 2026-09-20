@@ -52,7 +52,11 @@ class TrackerUnavailable(Exception):
 def _bd(repo: str, status: str) -> list[dict]:
     try:
         done = subprocess.run(  # noqa: S603
-            ["bd", "-C", repo, "list", f"--status={status}", "--json"],
+            # Resolved from PATH rather than pinned to a path: bd is installed
+            # per-user (uv tool / ~/.local/bin) and an absolute path here would
+            # be wrong on the next machine. A caller that cannot see bd gets a
+            # loud TrackerUnavailable, which is the correct outcome anyway.
+            ["bd", "-C", repo, "list", f"--status={status}", "--json"],  # noqa: S607
             capture_output=True,
             text=True,
             check=False,
@@ -80,7 +84,7 @@ def _day(stamp: str | None) -> date | None:
     if not stamp:
         return None
     try:
-        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).astimezone().date()
+        return datetime.fromisoformat(stamp).astimezone().date()
     except ValueError:
         return None
 
@@ -182,7 +186,8 @@ def _velocity(closed: list[dict], today: date, age: int | None) -> dict | None:
         "peak": max(counts),
         "quiet_days": sum(1 for n in counts if n == 0),
         "days": [
-            {"date": d.isoformat(), "closed": n} for d, n in zip(days, counts)
+            {"date": d.isoformat(), "closed": n}
+            for d, n in zip(days, counts, strict=True)
         ],
     }
 
