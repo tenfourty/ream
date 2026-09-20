@@ -1,14 +1,62 @@
-# The claude.ai artifacts UI, as read off Jeremy's screenshots
+# The claude.ai artifacts UI
 
-*20 September 2026. He sent fifteen screenshots and said "lets try to replicate
-all of this". This file is what I read off them.*
+*20 September 2026. Jeremy sent fifteen screenshots and said "lets try to
+replicate all of this", then later sent the **saved HTML of the real pages**.
+This file is both: the measured numbers first, then what was read off the
+screenshots for the parts the save does not cover.*
 
 **Why this file exists.** The screenshots live only in one session's context and
-are lost at a compaction; I have no way to write image bytes out to disk. So
-everything worth knowing from them is written down here instead, in enough
-detail to build from without seeing them again. If something below is vague, it
-is vague because the screenshot was — say so and ask him rather than inventing
-it. Tracked by `homelab-ij8.84`.
+are lost at a compaction. The saved pages are a file on disk and survive — but
+they are 7 MB of somebody else's product, so they are NOT committed here. The
+facts taken from them are.
+
+---
+
+## The archive, and how to read it
+
+`~/Archive 2.zip` — three saved pages (the grid gallery, the list gallery, and a
+single artifact) plus the full CSS bundle. Not in this repo and should not be:
+it is claude.ai's own markup and stylesheets.
+
+Two things will waste an hour each if you do not know them:
+
+1. **Serve it over HTTP; do not open it with `file://`.** Every stylesheet link
+   carries `crossorigin=""`, which over `file://` is a CORS failure, so the page
+   renders completely unstyled and looks like a broken save. `python3 -m
+   http.server` in the unpacked directory and load `http://127.0.0.1:<port>/`
+   and it renders exactly.
+2. **Scan it before reading it.** Two files tripped this service's own scanner
+   (`secret_assignment`, `token_assignment`), both in the framed-artifact shell.
+   They were deleted from the working copy unread. Anything taken from this
+   archive should be gallery markup and CSS, nothing from the frame shell.
+
+And then **measure, do not sample**: `getComputedStyle` in a headless render
+gives the real numbers. Everything in the next section came out that way.
+
+## Measured, not estimated
+
+| | |
+|---|---|
+| page background | `rgb(252,252,251)` |
+| ink | `rgb(11,11,11)` |
+| muted text | `rgb(137,135,129)` |
+| hairline | `rgba(11,11,11,.1)` |
+| type-icon accent | `rgb(113,97,224)` |
+| card | 304×234, radius **12px**, **no box-shadow at all** |
+| preview | 304×**160** — 68% of the card — `object-fit:cover` |
+| card body | padding **14px**, `flex column`, gap **8px** |
+| card title | **14px/20px, weight 500, sans**, clamped to ONE line |
+| card meta | **12px**, weight 400, muted |
+| grid | `3 × 304px`, gap **24px**, column **960px** (= 3×304 + 2×24) |
+| page h1 | serif, **24px/32px, weight 500** |
+| header row | 48px min-height, **no rule beneath it** |
+| tab button | 32px tall, padding 0 12px, 14px/500; active ink, inactive muted |
+| "All types" | 28px tall, radius 7px, padding 0 10px, 14px/400 |
+
+**What this service did with them** is in `homelab-ij8.84`'s notes and in
+artifacts `2774647`. The five deliberate divergences are recorded there; the
+short version is that this wall has to show whose page it is and what is waiting
+on him, and the reference has neither problem.
 
 ---
 
