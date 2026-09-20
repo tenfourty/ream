@@ -52,6 +52,9 @@ function build() {
     menu._copyTemplate = copy;
     return { menu, input };
   });
+  // The open rename dialog, or nothing. `el` is null when it is closed, which
+  // is what `.dlg:target` returns in a real document.
+  const dlg = { el: null, replaced: 0, pushed: 0 };
   const doc = {
     getElementById: (id) => id === "artifact-frame" ? iframe
       : id === "artifact-sheet" ? sheet : id === "open-asks" ? asks : null,
@@ -65,15 +68,26 @@ function build() {
       return [d1, d2];
     },
     addEventListener(t, fn) { (docListeners[t] ||= []).push(fn); },
+    // The rename dialog is a :target, so closing it is a navigation. Only the
+    // one selector the script asks for; anything else returns null, so a wrong
+    // selector shows up here rather than silently matching.
+    querySelector(sel) { return sel === ".dlg:target" ? dlg.el : null; },
     createElement: () => ({ addEventListener(t, fn) { this._on = fn; },
                             textContent: "", type: "", className: "" }),
   };
   const win = { addEventListener: (t, fn) => t === "message" && listeners.push(fn) };
-  new Function("document", "window", "URL", "Map", "Set", "isFinite", "navigator", src)
-    (doc, win, URL, Map, Set, isFinite, navigatorStub);
+  const history = {
+    replaceState() { dlg.replaced++; },
+    pushState() { dlg.pushed++; },
+  };
+  const location = { pathname: "/a/abc", search: "" };
+  new Function(
+    "document", "window", "URL", "Map", "Set", "isFinite", "navigator",
+    "history", "location", src,
+  )(doc, win, URL, Map, Set, isFinite, navigatorStub, history, location);
   const send = (e) => listeners.forEach((fn) => fn(e));
   const fire = (t, e) => (docListeners[t] || []).forEach((fn) => fn(e));
-  return { iframe, sheet, d1, d2, send, posted, asks, menus, fire };
+  return { iframe, sheet, d1, d2, send, posted, asks, menus, fire, dlg };
 }
 
 const good = (over = {}) => ({
@@ -275,6 +289,25 @@ const good = (over = {}) => ({
   ok(input._button.textContent === "Copy", "and never says Copied");
 }
 navigatorStub = {};
+
+// 17. Escape closes the rename dialog WITHOUT leaving a history entry
+{
+  const g = build();
+  g.dlg.el = { id: "rename" };
+  g.fire("keydown", { key: "Escape" });
+  ok(g.dlg.el.id === "", "Escape closes the dialog");
+  ok(g.dlg.replaced === 1 && g.dlg.pushed === 0,
+     "by REPLACING the history entry, so Back does not reopen it");
+}
+// 18. and does nothing at all when no dialog is open
+{
+  const g = build();
+  g.fire("keydown", { key: "Escape" });
+  ok(g.dlg.replaced === 0, "no navigation when there is nothing to close");
+}
+// 19. the dialog needs no script to exist -- this is an upgrade, not a
+//     requirement. Asserted in tests/test_gallery.py against the served HTML,
+//     because it is a fact about the markup rather than about this file.
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

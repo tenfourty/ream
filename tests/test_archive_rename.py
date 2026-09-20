@@ -247,3 +247,50 @@ def test_delete_is_offered_and_destroys_nothing(client, db, page):
         ).fetchone()[0]
     assert versions == 1, "the body is still stored"
     assert [row.title for row in store.list_deleted(db)] == ["Original name"]
+
+
+# --- the rename dialog (homelab-ij8.84.7) ------------------------------------
+
+
+def test_rename_opens_a_dialog_that_needs_no_script(client, page):
+    """The reference renames in a modal. A real <dialog> needs showModal(), and
+    this gallery works with scripts off -- a rename that exists only when
+    JavaScript ran is a rename that is missing on the day something else on the
+    page threw. So it is a :target, and the whole thing is in the served HTML.
+    """
+    html = client.get(f"/a/{page.id}").text
+    assert '<div class="dlg" id="rename">' in html, "the dialog is in the markup"
+    assert 'href="#rename"' in html, "and the menu opens it with a plain link"
+    assert f'action="/a/{page.id}/rename"' in html, "with the real form inside"
+    assert "Original name" in html, "the current name, ready to edit"
+
+
+def test_the_dialog_can_be_dismissed_without_script(client, page):
+    """The backdrop and Cancel are both links back to the page. Escape is the
+    only part that needs script, and it is an upgrade rather than the way out.
+    """
+    html = client.get(f"/a/{page.id}").text
+    dialog = html.split('<div class="dlg" id="rename">', 1)[1].split("</div>", 1)[0]
+    assert html.count(f'href="/a/{page.id}"') >= 2, "backdrop and Cancel"
+    assert 'class="dlg-back"' in dialog
+
+
+def test_the_dialog_does_not_collide_with_the_iframe_wrapper(client, page):
+    """`.sheet` is this page's iframe wrapper. The dialog used that class for
+    an afternoon; a fixed-position overlay on the artifact frame is not a
+    subtle bug, but it is one nothing would have failed on."""
+    html = client.get(f"/a/{page.id}").text
+    assert '<div class="sheet" id="artifact-sheet">' in html
+    assert '<div class="dlg" id="rename">' in html
+    assert 'class="sheet" id="rename"' not in html
+
+
+def test_renaming_still_works_from_the_dialogs_form(client, db, page):
+    out = client.post(
+        f"/a/{page.id}/rename",
+        data={"title": "A better name"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert out.status_code == 303
+    assert store.get_owned(db, "seat", page.id).title == "A better name"

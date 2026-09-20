@@ -100,6 +100,11 @@ _CSS = """
   --line-hover:rgba(11,11,11,.28);
   /* The only red in the interface, and it is used for exactly one thing. */
   --danger:#a8271b; --danger-soft:rgba(168,39,27,.08);
+  /* Text on a SOLID accent fill. Its own token for the same reason --on-now
+     is: --accent is a light teal in dark mode, where white on it measures
+     2.0:1. Third time this shape has come up, so it is now a habit -- any
+     token used as a FILL needs a paired ink that flips with the scheme. */
+  --on-accent:#fff;
   --shadow:0 1px 2px rgba(20,20,15,.05), 0 8px 24px -16px rgba(20,20,15,.25);
   --display:ui-serif,"Iowan Old Style",Georgia,"Times New Roman",serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
@@ -113,6 +118,7 @@ _CSS = """
     --now-solid:#e0a458; --on-now:#2a1d0a;
     --line-hover:#5a606a;
     --danger:#f08b7f; --danger-soft:rgba(240,139,127,.12);
+    --on-accent:#0b2723;  /* 7.92:1 on #5ec9b8 */
     --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.8);
   }
 }
@@ -476,6 +482,36 @@ a{color:var(--accent-ink)}
 /* A pinned tile leads the wall; the accent edge says why, without shouting. */
 .tiles li.pinned > a{border-color:var(--accent)}
 .empty{color:var(--muted);padding:2rem 0}
+
+/* --- the rename dialog -------------------------------------------------------
+   :target, not <dialog>. A real dialog needs showModal() and this gallery works
+   with scripts off -- a rename that exists only when JavaScript ran is a rename
+   that is missing on the day something else on the page threw. The fragment
+   does the whole job and costs nothing in gallery.js, which has a size budget.
+   Hidden by default and shown when the URL names it; the backdrop is a link
+   back to the page, so clicking away closes it exactly as it should. */
+.dlg{display:none}
+.dlg:target{display:block;position:fixed;inset:0;z-index:100}
+.dlg-back{position:absolute;inset:0;background:rgba(11,11,11,.45);
+  backdrop-filter:blur(2px)}
+.dlg-card{position:relative;margin:12vh auto 0;max-width:26rem;
+  width:calc(100% - 2rem);background:var(--card);border:1px solid var(--line);
+  border-radius:12px;box-shadow:0 12px 40px -12px rgba(11,11,11,.4);
+  padding:1.15rem 1.25rem 1rem}
+.dlg-card h2{margin:0 0 .8rem;font:500 1rem/1.4 ui-sans-serif,system-ui,
+  -apple-system,sans-serif;color:var(--ink);letter-spacing:0;text-transform:none}
+.dlg-card input{font:inherit;font-size:.95rem;width:100%;padding:.5rem .6rem;
+  border:1px solid var(--line);border-radius:.5rem;background:var(--paper);
+  color:var(--ink)}
+.dlg-card input:focus{outline:2px solid var(--accent);outline-offset:1px}
+.dlg-actions{display:flex;justify-content:flex-end;gap:.5rem;margin:1rem 0 0}
+.btn{font:inherit;font-size:.875rem;cursor:pointer;text-decoration:none;
+  display:inline-flex;align-items:center;border:1px solid var(--line);
+  border-radius:.5rem;padding:.4rem .8rem;background:var(--card);color:var(--ink)}
+.btn:hover{border-color:var(--line-hover)}
+.btn.primary{background:var(--accent);border-color:var(--accent);
+  color:var(--on-accent)}
+.btn.primary:hover{filter:brightness(1.06)}
 .empty a{color:var(--accent-ink)}
 
 /* --- the controls row -------------------------------------------------------
@@ -741,7 +777,15 @@ function shut(e){document.querySelectorAll("details.menu[open]").forEach(functio
 // Click away or Escape closes. Clicking another tile's dots is a click away
 // from this one, so "only one open at a time" comes free with it.
 document.addEventListener("click",shut);
-document.addEventListener("keydown",function(e){if(e.key==="Escape")shut(null)});
+document.addEventListener("keydown",function(e){
+  if(e.key!=="Escape")return;
+  shut(null);
+  // The rename dialog is a :target, so closing it is a navigation. Replace
+  // rather than push, or Escape leaves a history entry that Back reopens.
+  var d=document.querySelector(".dlg:target");
+  if(d)history.replaceState(null,"",location.pathname+location.search);
+  if(d)d.id="";
+});
 // A copy button only where the clipboard exists: one that silently fails is
 // worse than none, because the reader believes it. The input underneath is
 // the fallback either way, and is what a scriptless reader gets.
@@ -835,6 +879,41 @@ def _tile_menu(artifact_id: str, title: str, pinned: bool, origin: str) -> str:
     )
 
 
+def _rename_dialog(artifact_id: str, title: str) -> str:
+    """The rename dialog the reference has: dimmed background, the current name
+    ready to edit, Cancel and Save.
+
+    :target, not a <dialog>. A real dialog needs `showModal()` to open, and this
+    gallery works with scripts off -- a rename that only exists when JavaScript
+    ran is a rename that is missing on the day something else on the page threw.
+    The fragment does the whole job: the panel appears when the URL matches,
+    the backdrop is a link back to the page so clicking away closes it, and
+    Cancel is the same link. It costs nothing in gallery.js, which has a size
+    budget and better things to spend it on.
+
+    What :target does not give is Escape-to-close, so gallery.js adds that one
+    line as an upgrade rather than a requirement.
+
+    `autofocus` puts the cursor in the field when it opens. Not `select()` --
+    that needs script; the field is small enough that a reader can select it,
+    and the common edit is appending or fixing a word rather than replacing the
+    whole name.
+    """
+    ident = escape(artifact_id)
+    return (
+        f'<div class="dlg" id="rename">'
+        f'<a class="dlg-back" href="/a/{ident}" aria-label="Cancel"></a>'
+        f'<form class="dlg-card" method="post" action="/a/{ident}/rename">'
+        "<h2>Rename page</h2>"
+        f'<input name="title" value="{escape(title)}" aria-label="Page name"'
+        ' autofocus autocomplete="off">'
+        '<p class="dlg-actions">'
+        f'<a class="btn" href="/a/{ident}">Cancel</a>'
+        '<button class="btn primary" type="submit">Save</button>'
+        "</p></form></div>"
+    )
+
+
 def _page_menu(
     artifact_id: str, title: str, agent: str, archived: bool, updated: str
 ) -> str:
@@ -858,10 +937,7 @@ def _page_menu(
             "</div>"
         ),
         (
-            f'<form class="mrename" method="post" action="/a/{ident}/rename">'
-            f"{_icon('rename')}"
-            f'<input name="title" value="{escape(title)}" aria-label="Page name">'
-            '<button type="submit">Rename</button></form>'
+            f'<a class="mrow" href="#rename">{_icon("rename")}Rename</a>'
         ),
     ]
     if archived:
@@ -2115,7 +2191,8 @@ def gallery_router(db: Database) -> APIRouter:
                 f"{asks_above}"
                 f'<div class="sheet" id="artifact-sheet"><iframe id="artifact-frame"'
                 f' src="{src}" sandbox="{sandbox}" title="{escape(row[0])}"></iframe></div>'
-                f"{settled_below}",
+                f"{settled_below}"
+                f"{_rename_dialog(artifact_id, row[0])}",
                 # gallery.js reads the content origin straight off this iframe's own
                 # `src` -- fixed ids, not a class selector, so a future second iframe
                 # on this page could never be mistaken for this one.
