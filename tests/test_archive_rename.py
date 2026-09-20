@@ -35,10 +35,17 @@ def page(db):
 
 def test_an_archived_page_leaves_the_wall(client, page):
     assert page.id in client.get("/").text
-    client.post(f"/a/{page.id}/archive", data={"archived": "1"},
-                headers=SAME_ORIGIN, follow_redirects=False)
+    client.post(
+        f"/a/{page.id}/archive",
+        data={"archived": "1"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
     wall = client.get("/").text
-    assert "1 archived page" in wall, "counted, so out of the way never becomes lost"
+    assert "<span>Archived</span>" in wall
+    assert '<span class="n">1 page</span>' in wall, (
+        "counted, so out of the way never becomes lost"
+    )
 
 
 def test_archiving_deletes_nothing(client, db, page):
@@ -48,13 +55,20 @@ def test_archiving_deletes_nothing(client, db, page):
     from artifacts import decisions
 
     asked = decisions.ask(
-        db, agent="seat", artifact_id=page.id, question="Which?",
+        db,
+        agent="seat",
+        artifact_id=page.id,
+        question="Which?",
         options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
         recommended="a",
     )
     decisions.answer(db, asked.id, letter="a", note="his words", by="jeremy")
-    client.post(f"/a/{page.id}/archive", data={"archived": "1"},
-                headers=SAME_ORIGIN, follow_redirects=False)
+    client.post(
+        f"/a/{page.id}/archive",
+        data={"archived": "1"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
 
     assert client.get(f"/a/{page.id}").status_code == 200, "the address still works"
     assert store.get_body(db, "seat", page.id).body == PAGE
@@ -64,10 +78,18 @@ def test_archiving_deletes_nothing(client, db, page):
 
 
 def test_archiving_is_reversible(client, page):
-    client.post(f"/a/{page.id}/archive", data={"archived": "1"},
-                headers=SAME_ORIGIN, follow_redirects=False)
-    client.post(f"/a/{page.id}/archive", data={"archived": "0"},
-                headers=SAME_ORIGIN, follow_redirects=False)
+    client.post(
+        f"/a/{page.id}/archive",
+        data={"archived": "1"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    client.post(
+        f"/a/{page.id}/archive",
+        data={"archived": "0"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
     wall = client.get("/").text
     assert "archived page" not in wall
     assert page.id in wall
@@ -75,8 +97,12 @@ def test_archiving_is_reversible(client, page):
 
 def test_the_page_offers_the_opposite_action_once_archived(client, page):
     assert "Archive</button>" in client.get(f"/a/{page.id}").text
-    client.post(f"/a/{page.id}/archive", data={"archived": "1"},
-                headers=SAME_ORIGIN, follow_redirects=False)
+    client.post(
+        f"/a/{page.id}/archive",
+        data={"archived": "1"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
     assert "Put back on the wall" in client.get(f"/a/{page.id}").text
 
 
@@ -84,8 +110,12 @@ def test_the_page_offers_the_opposite_action_once_archived(client, page):
 
 
 def test_renaming_changes_the_name_and_nothing_else(client, db, page):
-    client.post(f"/a/{page.id}/rename", data={"title": "Its real name"},
-                headers=SAME_ORIGIN, follow_redirects=False)
+    client.post(
+        f"/a/{page.id}/rename",
+        data={"title": "Its real name"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
     assert "Its real name" in client.get("/").text
     assert store.get_body(db, "seat", page.id).body == PAGE, "the body is untouched"
 
@@ -94,22 +124,33 @@ def test_renaming_does_not_move_the_address(client, page):
     """A name that turned out wrong must never be a reason to abandon an address
     people already have."""
     before = page.id
-    client.post(f"/a/{page.id}/rename", data={"title": "Something else"},
-                headers=SAME_ORIGIN, follow_redirects=False)
+    client.post(
+        f"/a/{page.id}/rename",
+        data={"title": "Something else"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
     assert client.get(f"/a/{before}").status_code == 200
 
 
 def test_an_empty_name_is_refused(client, page):
-    got = client.post(f"/a/{page.id}/rename", data={"title": "   "},
-                      headers=SAME_ORIGIN, follow_redirects=False)
+    got = client.post(
+        f"/a/{page.id}/rename",
+        data={"title": "   "},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
     assert got.status_code == 422
 
 
 def test_a_name_that_looks_like_a_secret_is_refused(client, page):
-    """"It is only a title" is how a field skips its checks."""
-    got = client.post(f"/a/{page.id}/rename",
-                      data={"title": "key AKIAIOSFODNN7EXAMPLE"},
-                      headers=SAME_ORIGIN, follow_redirects=False)
+    """ "It is only a title" is how a field skips its checks."""
+    got = client.post(
+        f"/a/{page.id}/rename",
+        data={"title": "key AKIAIOSFODNN7EXAMPLE"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
     assert got.status_code == 422
 
 
@@ -131,8 +172,9 @@ def test_a_cross_site_form_cannot_do_either(client, page, action):
 
 def test_an_unknown_page_is_a_404(client):
     for action, data in (("archive", {"archived": "1"}), ("rename", {"title": "x"})):
-        got = client.post(f"/a/nope/{action}", data=data,
-                          headers=SAME_ORIGIN, follow_redirects=False)
+        got = client.post(
+            f"/a/nope/{action}", data=data, headers=SAME_ORIGIN, follow_redirects=False
+        )
         assert got.status_code == 404
 
 
@@ -161,8 +203,12 @@ def test_the_menu_needs_no_script(client, page):
 
 def test_an_archived_page_offers_the_opposite_action_in_the_menu(client, page):
     assert "Archive</button>" in client.get(f"/a/{page.id}").text
-    client.post(f"/a/{page.id}/archive", data={"archived": "1"},
-                headers=SAME_ORIGIN, follow_redirects=False)
+    client.post(
+        f"/a/{page.id}/archive",
+        data={"archived": "1"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
     assert "Put back on the wall" in client.get(f"/a/{page.id}").text
 
 

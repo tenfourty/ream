@@ -462,6 +462,90 @@ a{color:var(--accent-ink)}
 /* A pinned tile leads the wall; the accent edge says why, without shouting. */
 .tiles li.pinned > a{border-color:var(--accent)}
 .empty{color:var(--muted)}
+
+/* --- archived ---------------------------------------------------------------
+   These were a bare <details> in the browser's own styling -- a black triangle
+   and unstyled text under a wall that had been designed -- which is exactly how
+   it looked. It is a real section now: a rule to separate it from the live
+   wall, a summary that behaves like the other controls here, and contents that
+   read as SECONDARY, because a page off the wall should not compete with one on
+   it. Still counted and still one line until opened: out of the way must never
+   become lost. */
+.archived-list{margin:2.5rem 0 0;border-top:1px solid var(--line);padding-top:1rem}
+.archived-list > summary{cursor:pointer;list-style:none;display:inline-flex;
+  align-items:center;gap:.5rem;border-radius:.5rem;padding:.3rem .6rem .3rem .45rem;
+  font:500 .8125rem/1.25rem ui-sans-serif,system-ui,-apple-system,sans-serif;
+  color:var(--muted);user-select:none}
+.archived-list > summary::-webkit-details-marker{display:none}
+.archived-list > summary:hover{background:var(--card);color:var(--ink)}
+.archived-list > summary .n{color:var(--muted);font-weight:400;opacity:.85}
+.archived-list > summary .chev{display:inline-block;width:0;height:0;flex:0 0 auto;
+  border-left:5px solid currentColor;border-top:4px solid transparent;
+  border-bottom:4px solid transparent;transition:transform .12s}
+.archived-list[open] > summary .chev{transform:rotate(90deg)}
+.archived-body{padding-top:.9rem}
+/* Off the wall, so: quieter. The pictures recede, the type greys, and it comes
+   back on hover for anything he actually reaches for. */
+.archived-body .shot,.archived-body .rshot{opacity:.55;filter:saturate(.65)}
+.archived-body .t,.archived-body .rt{color:var(--muted)}
+.archived-body .tiles a,.archived-body .row{background:transparent}
+.archived-body .tiles a:hover .t,.archived-body .row:hover .rt{color:var(--ink)}
+.archived-body .tiles a:hover .shot,.archived-body .row:hover .rshot{
+  opacity:1;filter:none}
+.archived-body .daygroup:first-child{margin-top:0}
+
+/* --- the list view ---------------------------------------------------------
+   Measured off the reference's own list: a 12px/17px weight-500 muted heading
+   with 6px 12px padding, and a 40px row whose title is 14/20 at weight 400 --
+   LIGHTER than the card title, because in a list the title is the only thing
+   and does not need to win against anything. */
+.daygroup{font:500 .75rem/1.0625rem ui-sans-serif,system-ui,-apple-system,
+  sans-serif;color:var(--muted);margin:1.3rem 0 .15rem;padding:.375rem .75rem}
+.daygroup:first-child{margin-top:0}
+.rows{list-style:none;margin:0;padding:0}
+.row-wrap{position:relative;margin:0}
+.row{display:flex;align-items:center;gap:.75rem;min-height:40px;
+  padding:.25rem 2.6rem .25rem .5rem;border-radius:.6rem;
+  text-decoration:none;color:var(--ink)}
+.row:hover{background:var(--card)}
+/* The type-icon slot. Types do not exist yet, so it carries the page's own
+   thumbnail -- already rendered, and more use than a generic glyph. */
+.rshot{flex:0 0 auto;width:2.125rem;height:2.125rem;border-radius:.45rem;
+  object-fit:cover;object-position:top center;background:var(--paper);
+  border:1px solid var(--line)}
+.rshot.none{display:flex;align-items:center;justify-content:center}
+.rshot.none .mi{width:1rem;height:1rem;opacity:.3}
+.rt{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font:400 .875rem/1.25rem ui-sans-serif,system-ui,
+  -apple-system,sans-serif}
+.rmeta{flex:0 0 auto;display:flex;align-items:center;gap:.55rem;
+  font:.75rem/1rem ui-sans-serif,system-ui,-apple-system,sans-serif;
+  color:var(--muted)}
+/* In a row the badge is inline rather than laid over a picture, so it goes
+   back to being tinted -- there is no arbitrary page render underneath it to
+   be illegible against. */
+.rows .wait{position:static;box-shadow:none;background:transparent;
+  color:var(--now);border:1px solid currentColor;padding:.1rem .36rem}
+.rows .pinmark{margin-left:0}
+.row-wrap .menu{position:absolute;top:50%;right:.35rem;transform:translateY(-50%);
+  z-index:5}
+.row-wrap .menu > summary{background:var(--card);border:1px solid var(--line);
+  border-radius:.45rem;padding:.28rem .4rem;line-height:0}
+.row-wrap .menu > summary:hover,.row-wrap .menu[open] > summary{
+  border-color:var(--accent)}
+.row-wrap .menu[open]{z-index:30}
+.row-wrap.asking .row{box-shadow:inset 2px 0 0 var(--now-solid)}
+.row-wrap.asking{scroll-margin-top:1.5rem}
+/* At phone width the agent name is the first thing to go: the title and when
+   it moved are what a list is scanned for. */
+@media (max-width:30rem){.rmeta .who{display:none}}
+
+/* The view toggle. Sized to the reference's 28px control. */
+.vtoggle{display:inline-flex;align-items:center;justify-content:center;
+  width:28px;height:28px;border-radius:7px;border:1px solid var(--line);
+  color:var(--ink);background:var(--card);text-decoration:none}
+.vtoggle:hover{border-color:var(--accent);color:var(--accent-ink)}
+.vtoggle .mi{width:.95rem;height:.95rem;opacity:.85}
 """
 
 _HOME_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg>'
@@ -599,6 +683,8 @@ _ICON = {
     "open": '<path d="M9.4 1.6v1.3h2.8L6.5 8.6l.9.9 5.7-5.7v2.8h1.3V1.6H9.4ZM2.8 3.3h3.9v1.3H3.3v8.1h8.1V9.3h1.3v4a.7.7 0 0 1-.7.7H2.8a.7.7 0 0 1-.7-.7V4a.7.7 0 0 1 .7-.7Z"/>',
     "all": '<path d="M2 2.5h5v5H2v-5Zm7 0h5v5H9v-5Zm-7 6h5v5H2v-5Zm7 0h5v5H9v-5Z"/>',
     "pin": '<path d="M9.6 1.3 8.5 2.4l.4.4-3 2.2-1.6-.3-1.1 1.1 3 3L2 13l3.2-4.2 3 3 1.1-1.1-.3-1.6 2.2-3 .4.4 1.1-1.1-3.1-3.1Z"/>',
+    "list": '<path d="M2 3.2h1.9v1.9H2V3.2Zm3.4 .35h8.6v1.2H5.4V3.55ZM2 7.05h1.9v1.9H2v-1.9Zm3.4 .35h8.6v1.2H5.4V7.4ZM2 10.9h1.9v1.9H2v-1.9Zm3.4 .35h8.6v1.2H5.4v-1.2Z"/>',
+    "grid": '<path d="M2.2 2.2h5v5h-5v-5Zm6.6 0h5v5h-5v-5Zm-6.6 6.6h5v5h-5v-5Zm6.6 0h5v5h-5v-5Z"/>',
     "page": '<path d="M4 1.5h5l3 3v10a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-13a.5.5 0 0 1 .5-.5Zm4.6 1.4v2.1h2.1L8.6 2.9ZM5.4 7.4h5.2v1H5.4v-1Zm0 2.3h5.2v1H5.4v-1Zm0 2.3h3.4v1H5.4v-1Z"/>',
     "link": '<path d="M6.9 9.1a2.9 2.9 0 0 0 4.3.3l1.7-1.7a2.9 2.9 0 0 0-4.1-4.1l-1 1 .9.9 1-1a1.6 1.6 0 0 1 2.3 2.3L10.3 8.5a1.6 1.6 0 0 1-2.4-.2l-1 .8Zm2.2-2.2a2.9 2.9 0 0 0-4.3-.3L3.1 8.3a2.9 2.9 0 0 0 4.1 4.1l1-1-.9-.9-1 1a1.6 1.6 0 0 1-2.3-2.3l1.7-1.7a1.6 1.6 0 0 1 2.4.2l1-.8Z"/>',
 }
@@ -709,7 +795,23 @@ def _page_menu(
     )
 
 
-def _wall_meta(pages: int, waiting: int) -> str:
+def _view_toggle(view: str) -> str:
+    """The grid/list switch. The icon shows the view you would SWITCH TO, which
+    is what the reference does and what every such control does -- an icon
+    showing the state you are already in reads as a label and gets ignored.
+
+    A link, not a button: it changes what you are looking at, not the world, so
+    it should be shareable, bookmarkable and reachable with scripts off."""
+    to_list = view != "list"
+    target = "list" if to_list else "grid"
+    label = "Show as a list" if to_list else "Show as a grid"
+    return (
+        f'<a class="vtoggle" href="/?view={target}" title="{label}"'
+        f' aria-label="{label}">{_icon("list" if to_list else "grid")}</a>'
+    )
+
+
+def _wall_meta(pages: int, waiting: int, view: str = "grid") -> str:
     """What the header says, and it leads with him rather than with the count.
 
     "5 pages" is a fact about the service. "3 questions waiting on you" is a
@@ -722,12 +824,13 @@ def _wall_meta(pages: int, waiting: int) -> str:
     for another rather than ranking them.
     """
     pages_text = f"{pages} page" if pages == 1 else f"{pages} pages"
+    toggle = _view_toggle(view)
     if not waiting:
-        return f'<span class="count">{pages_text}</span>'
+        return f'<span class="count">{pages_text}</span>{toggle}'
     noun = "question" if waiting == 1 else "questions"
     return (
         f'<a class="waiting" href="#waiting">{waiting} {noun} waiting on you</a>'
-        f'<span class="count">{pages_text}</span>'
+        f'<span class="count">{pages_text}</span>{toggle}'
     )
 
 
@@ -833,6 +936,38 @@ def _when(iso: str) -> str:
 
 # The middot between meta items, as its own element so it can be dimmed.
 _SEP = '<span class="dot">&middot;</span>'
+
+# How long the chosen view is remembered. A display preference, so a long life
+# and nothing to clean up; it carries no identity and no state beyond "list".
+_VIEW_COOKIE = "artifacts_view"
+_VIEW_MAX_AGE = 60 * 60 * 24 * 365
+
+
+def _date_group(moment: datetime | None) -> str:
+    """The heading a page sits under in the list: Today, Yesterday, a day, or a
+    month.
+
+    Grouped in HIS day, not UTC. A page published at 00:40 CEST is 22:40 the
+    previous day in UTC, so grouping on the raw timestamp would file this
+    morning's work under yesterday -- the same class of error as the 08:53 UTC
+    stamp he caught on a board, and harder to spot because a heading looks
+    authoritative.
+    """
+    if moment is None:
+        return "Undated"
+    zone = stamp.display_timezone()
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    local = moment.astimezone(zone) if zone else moment
+    today = datetime.now(zone or UTC).date()
+    day = local.date()
+    if day == today:
+        return "Today"
+    if (today - day).days == 1:
+        return "Yesterday"
+    if day.year == today.year:
+        return local.strftime("%-d %b")
+    return local.strftime("%B %Y")
 
 
 def _ago(moment: datetime | None) -> str:
@@ -1174,8 +1309,61 @@ def gallery_router(db: Database) -> APIRouter:
             (not archived,),
         ).fetchall()
 
+    def _row_view(row, first_asking) -> str:
+        """One page as a line, for the list view.
+
+        The same facts as a tile in a quarter of the height: the point of the
+        list is that twenty pages fit on a screen, so anything that does not
+        earn its width is left to the tile.
+        """
+        (
+            artifact_id,
+            title,
+            updated,
+            agent,
+            _versions,
+            waiting,
+            _body,
+            has_thumb,
+            pinned_at,
+        ) = row
+        ident = escape(artifact_id)
+        # The reference puts a coloured per-type icon here. Types do not exist
+        # yet (homelab-ij8.83), so the slot carries the page's own thumbnail
+        # instead -- which is more use than a generic glyph would be, and is
+        # already rendered. A page without one falls back to the glyph.
+        if has_thumb:
+            badge = (
+                f'<img class="rshot" src="/thumb/{ident}.png" alt=""'
+                f' loading="lazy" width="{thumbs.WIDTH}" height="{thumbs.HEIGHT}">'
+            )
+        else:
+            badge = f'<span class="rshot none">{_icon("page")}</span>'
+
+        right = []
+        if waiting:
+            word = "question" if waiting == 1 else "questions"
+            right.append(f'<span class="wait">{waiting} {word} for you</span>')
+        if pinned_at:
+            right.append(f'<span class="pinmark">{_icon("pin")}Pinned</span>')
+        right.append(f'<span class="who">{escape(agent)}</span>')
+        when = _ago(updated)
+        if when:
+            exact = stamp.format_for_display(updated) if updated else ""
+            right.append(f'<time title="{escape(exact)}">Edited {escape(when)}</time>')
+
+        anchor = ' id="waiting"' if waiting and first_asking(artifact_id) else ""
+        return (
+            f'<li class="row-wrap{" asking" if waiting else ""}"{anchor}>'
+            f'<a class="row" href="/a/{ident}">'
+            f"{badge}<span class=\"rt\">{escape(title)}</span>"
+            f'<span class="rmeta">{"".join(right)}</span></a>'
+            f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin())}"
+            "</li>"
+        )
+
     @router.get("/", response_class=HTMLResponse)
-    def index() -> HTMLResponse:
+    def index(request: Request) -> HTMLResponse:
         with db.connect() as conn:
             rows = _wall(conn, archived=False)
             archived_rows = _wall(conn, archived=True)
@@ -1327,7 +1515,38 @@ def gallery_router(db: Database) -> APIRouter:
             )
             return "".join(bits)
 
-        items = "".join(tile(row) for row in rows)
+        # Which view. The query parameter wins so a link is shareable and
+        # says what it shows; the cookie only supplies the default, so the view
+        # he last chose is the one he gets next time without it having to be in
+        # every URL.
+        asked = request.query_params.get("view")
+        view = asked if asked in ("grid", "list") else (
+            request.cookies.get(_VIEW_COOKIE)
+            if request.cookies.get(_VIEW_COOKIE) in ("grid", "list")
+            else "grid"
+        )
+
+        def listing(these) -> str:
+            """The rows, under a heading per day. The headings come from the
+            data rather than from a fixed set of buckets, so a wall with a
+            three-month gap in it has no empty months in the middle."""
+            out, current = [], None
+            for row in these:
+                group = _date_group(row[2])
+                if group != current:
+                    if current is not None:
+                        out.append("</ul>")
+                    out.append(f'<h2 class="daygroup">{escape(group)}</h2><ul class="rows">')
+                    current = group
+                out.append(_row_view(row, first_asking))
+            if current is not None:
+                out.append("</ul>")
+            return "".join(out)
+
+        def render(these) -> str:
+            if view == "list":
+                return listing(these)
+            return f'<ul class="tiles">{"".join(tile(r) for r in these)}</ul>'
 
         # Archived pages, folded and counted. Jeremy asked for archiving so a
         # page stops competing for attention, not so it becomes unreachable —
@@ -1339,26 +1558,44 @@ def gallery_router(db: Database) -> APIRouter:
             noun = "page" if n == 1 else "pages"
             archived_block = (
                 '<details class="archived-list"><summary>'
-                f"{n} archived {noun}</summary>"
-                f'<ul class="tiles">{"".join(tile(r) for r in archived_rows)}</ul>'
+                '<span class="chev" aria-hidden="true"></span>'
+                f"<span>Archived</span>"
+                f'<span class="n">{n} {noun}</span>'
+                "</summary>"
+                f'<div class="archived-body">{render(archived_rows)}</div>'
                 "</details>"
             )
         body = (
-            f'<ul class="tiles">{items}</ul>'
+            render(rows)
             if rows
             else '<p class="empty">Nothing on the wall. Anything archived is below.</p>'
             if archived_rows
             else '<p class="empty">No pages published yet.</p>'
         ) + archived_block
-        return HTMLResponse(
+        response = HTMLResponse(
             _shell(
                 "Artifacts",
                 body,
-                meta_html=_wall_meta(len(rows), waiting_total),
+                meta_html=_wall_meta(len(rows), waiting_total, view),
                 home=False,
             ),
             headers=gallery_headers(),
         )
+        # Remember the choice only when he MADE one. Writing the cookie on
+        # every load would mean the first visit silently pins a default, and a
+        # shared link carrying ?view=list would change what the recipient sees
+        # everywhere afterwards rather than just on that page.
+        if asked in ("grid", "list"):
+            response.set_cookie(
+                _VIEW_COOKIE,
+                asked,
+                max_age=_VIEW_MAX_AGE,
+                httponly=True,
+                samesite="lax",
+                secure=True,
+                path="/",
+            )
+        return response
 
     @router.get("/thumb/{artifact_id}.png")
     def thumbnail(artifact_id: str) -> Response:

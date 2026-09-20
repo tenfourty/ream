@@ -60,6 +60,7 @@ def test_render_the_wall(db, monkeypatch):
         )
     store.set_archived(db, ids[5], True, agent=None)
 
-    html = TestClient(create_gallery_app(db=db)).get("/").text
+    client = TestClient(create_gallery_app(db=db))
+    html = client.get("/" + os.environ.get("ARTIFACTS_RENDER_QUERY", "")).text
     pathlib.Path(OUT).write_text(html)
     print(f"\nwrote {OUT} ({len(html)} bytes)")
