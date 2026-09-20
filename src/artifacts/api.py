@@ -75,6 +75,16 @@ class PinBody(BaseModel):
     pinned: bool
 
 
+class DestroyBody(BaseModel):
+    """`confirm` must be the word "destroy", spelled out.
+
+    Not a boolean. A boolean is one character away from being sent by a client
+    that meant the opposite, and this is the only call in the service that can
+    lose something Jeremy said."""
+
+    confirm: str
+
+
 class CommentBody(BaseModel):
     body: str
     quote: str = ""
@@ -283,6 +293,15 @@ def agent_router(db: Database) -> APIRouter:
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
 
+    # DECLARED BEFORE /artifacts/{artifact_id}, and it has to be. FastAPI
+    # matches in declaration order, so with the parameterised route first this
+    # would resolve as artifact_id="deleted" and answer 404 -- a route that
+    # exists, is tested in isolation, and is unreachable in the running app.
+    @router.get("/artifacts/deleted")
+    def deleted(agent: str = Depends(caller)):
+        """This agent's own deleted pages, soonest to expire first."""
+        return [row.__dict__ for row in store.list_deleted(db, agent)]
+
     @router.get("/artifacts/{artifact_id}")
     def read(artifact_id: str, agent: str = Depends(caller)):
         try:
@@ -382,6 +401,46 @@ def agent_router(db: Database) -> APIRouter:
             raise HTTPException(404, "no such artifact") from exc
         thumbs.render_in_background(db, published.id, published.version, body)
         return published.__dict__
+
+    @router.delete("/artifacts/{artifact_id}")
+    def delete(artifact_id: str, agent: str = Depends(caller)):
+        """Delete one of this agent's own pages. Recoverable for thirty days.
+
+        Destroys nothing: the body, every version and every decision with his
+        answers and his notes all survive the window. An agent deletes a page
+        in error as readily as a human does, and it is usually the agent that
+        notices -- within seconds, and while Jeremy is asleep -- which is why
+        the recovery below is an agent-facing route and not only a button in
+        his gallery.
+        """
+        if not store.set_deleted(db, artifact_id, True, agent=agent):
+            raise HTTPException(404, "no such artifact")
+        return {"id": artifact_id, "deleted": True}
+
+    @router.post("/artifacts/{artifact_id}/restore")
+    def restore(artifact_id: str, agent: str = Depends(caller)):
+        """Put one of this agent's deleted pages back, address and history
+        intact."""
+        if not store.set_deleted(db, artifact_id, False, agent=agent):
+            raise HTTPException(404, "no such artifact")
+        return store.get_owned(db, agent, artifact_id).__dict__
+
+    @router.post("/artifacts/{artifact_id}/destroy")
+    def destroy(artifact_id: str, payload: DestroyBody, agent: str = Depends(caller)):
+        """Remove a page and everything under it, for good. No window, no undo.
+
+        Requires `confirm: "destroy"` spelled out. Separate from DELETE rather
+        than a flag on it, because "tidy this away" and "this must not exist
+        anywhere" are different intentions and an interface where the second is
+        a parameter of the first is one where it happens by accident.
+        """
+        if payload.confirm.strip().lower() != "destroy":
+            raise HTTPException(
+                422, {"detail": 'confirm must be the word "destroy"'}
+            )
+        if not store.destroy(db, artifact_id, agent=agent):
+            raise HTTPException(404, "no such artifact")
+        return {"id": artifact_id, "destroyed": True}
 
     @router.get("/artifacts/{artifact_id}/comments")
     def list_comments(

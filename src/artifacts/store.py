@@ -48,7 +48,7 @@ import logging
 import os
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from psycopg.errors import UniqueViolation
 
@@ -133,6 +133,9 @@ class ArtifactRow:
     # None means not archived / not pinned; a time means since when.
     archived_at: datetime | None = None
     pinned_at: datetime | None = None
+    # Set only on a row from `list_deleted`: every other listing here excludes
+    # deleted pages outright, so on those it is always None and says so.
+    deleted_at: datetime | None = None
 
 
 def content_domain() -> str:
@@ -161,7 +164,11 @@ def content_url(artifact_id: str, read_token: str) -> str:
 def read_token(db: Database, artifact_id: str) -> str | None:
     with db.connect() as conn:
         row = conn.execute(
-            "select read_token from artifact where id = %s", (artifact_id,)
+            # A deleted page's address stops working. Leaving it live would
+            # mean "deleted" was only a change to a listing, and anyone holding
+            # the link would never know.
+            "select read_token from artifact where id = %s and deleted_at is null",
+            (artifact_id,),
         ).fetchone()
     return row[0] if row else None
 
@@ -287,9 +294,14 @@ def publish(db: Database, agent: str, title: str, body: str) -> Published:
 
 def _owned(conn, artifact_id: str, agent: str):
     return conn.execute(
+        # `deleted_at is null` is here rather than at each caller BECAUSE
+        # every caller is here: get_owned, get_body, patch and the
+        # housekeeping verbs all resolve a page through this one function. A
+        # deleted page must be invisible to all of them, and the way to be
+        # sure of that is for there to be one place it can be forgotten.
         "select id, title, agent, visibility, current_version, updated_at,"
         " archived_at, pinned_at"
-        " from artifact where id = %s and agent = %s",
+        " from artifact where id = %s and agent = %s and deleted_at is null",
         (artifact_id, agent),
     ).fetchone()
 
@@ -479,7 +491,8 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
-            " where artifact.agent = %s order by artifact.updated_at desc",
+            " where artifact.agent = %s and artifact.deleted_at is null"
+            " order by artifact.updated_at desc",
             (agent,),
         ).fetchall()
     return [
@@ -526,13 +539,15 @@ def live_thumbnail(db: Database, artifact_id: str) -> bytes | None:
         row = conn.execute(
             "select v.thumbnail from artifact a"
             " join version v on v.artifact_id = a.id and v.n = a.current_version"
-            " where a.id = %s",
+            " where a.id = %s and a.deleted_at is null",
             (artifact_id,),
         ).fetchone()
     return bytes(row[0]) if row and row[0] is not None else None
 
 
-def _scoped(artifact_id: str, agent: str | None) -> tuple[str, tuple]:
+def _scoped(
+    artifact_id: str, agent: str | None, *, live: bool = True
+) -> tuple[str, tuple]:
     """The WHERE clause for a housekeeping write, and its parameters.
 
     `agent` is the owner the write is scoped to, or None for no scope. It has
@@ -552,9 +567,15 @@ def _scoped(artifact_id: str, agent: str | None) -> tuple[str, tuple]:
     different answer for "exists but is not yours" would let any key holder
     enumerate every id on the service.
     """
-    if agent is None:
-        return "where id = %s", (artifact_id,)
-    return "where id = %s and agent = %s", (artifact_id, agent)
+    # `live` False is for the two operations that act ON a deleted page --
+    # recovering it and destroying it. Everything else must not see one, and
+    # the default is therefore the safe direction: a new caller that forgets to
+    # think about deletion gets the behaviour that cannot resurrect a page.
+    clause = "where id = %s" if agent is None else "where id = %s and agent = %s"
+    params = (artifact_id,) if agent is None else (artifact_id, agent)
+    if live:
+        clause += " and deleted_at is null"
+    return clause, params
 
 
 MAX_COPY_TITLE_SUFFIX = " (copy)"
@@ -595,7 +616,7 @@ def duplicate(
         row = conn.execute(
             "select a.title, a.agent, v.body from artifact a"  # noqa: S608 -- `scope` is a fixed clause with a placeholder, never caller text
             " join version v on v.artifact_id = a.id and v.n = a.current_version"
-            f" where a.id = %s{scope}",
+            f" where a.id = %s and a.deleted_at is null{scope}",
             params,
         ).fetchone()
     if row is None:
@@ -607,6 +628,124 @@ def duplicate(
     while len(title.encode()) > room:
         title = title[:-1]
     return publish(db, owner, f"{title}{MAX_COPY_TITLE_SUFFIX}", body), body
+
+
+# How long a deleted page can be recovered. Jeremy chose thirty days, and chose
+# it partly because it is honest about eventually being gone -- so the number
+# living here, where the sweep reads it, matters: a window nothing enforces is
+# not a window, it is a hidden row for ever.
+DELETE_WINDOW = timedelta(days=30)
+
+
+def set_deleted(
+    db: Database, artifact_id: str, deleted: bool, *, agent: str | None
+) -> bool:
+    """Delete a page, or put it back. False if nothing changed.
+
+    A DELETE HERE DESTROYS NOTHING. The body, every version, and every decision
+    with his answers and his notes are all still exactly where they were -- one
+    nullable column moves. Deleting is the cheap way to tidy a gallery and it
+    must not be the way the record of what he decided is destroyed; that is
+    homelab-ij8.44's lesson and it bit twice in one day.
+
+    `deleted` False is the recovery, and it is deliberately the same call with
+    the flag flipped rather than a separate `restore`: two functions would be
+    two places for the scoping rule to drift apart, and recovery has to be
+    available to exactly whoever could delete it.
+    """
+    # `live=False`: recovery has to be able to FIND a deleted page, and so does
+    # deleting an already-deleted one (a no-op that should report False rather
+    # than 404). The default clause excludes exactly the rows this call is for.
+    where, params = _scoped(artifact_id, agent, live=False)
+    with db.connect() as conn:
+        done = conn.execute(
+            f"update artifact set deleted_at = %s {where}",  # noqa: S608 -- see _scoped
+            (datetime.now(UTC) if deleted else None, *params),
+        )
+        return done.rowcount > 0
+
+
+def destroy(db: Database, artifact_id: str, *, agent: str | None) -> bool:
+    """Remove a page and everything under it, for good. No window, no undo.
+
+    The rare one. Separate from `set_deleted` on purpose and not reachable by
+    passing a flag to it: "tidy this away" and "this must not exist anywhere"
+    are different intentions, and an interface where the second is a parameter
+    of the first is an interface where it happens by accident.
+
+    The versions, decisions, comments and events go with the row via their
+    foreign keys. That is the point of it, and it is why this is the only
+    operation in this module that can lose something he said.
+    """
+    # `live=False`: the usual thing being destroyed is a page already in the
+    # window. Destroying a live page is allowed too -- "this must not exist
+    # anywhere" does not require deleting it first.
+    where, params = _scoped(artifact_id, agent, live=False)
+    with db.connect() as conn:
+        done = conn.execute(f"delete from artifact {where}", params)  # noqa: S608 -- see _scoped
+        return done.rowcount > 0
+
+
+def list_deleted(db: Database, agent: str | None = None) -> list[ArtifactRow]:
+    """What is in the window, soonest to go first.
+
+    Ordered by when it was deleted, OLDEST first, so the one about to expire is
+    the one at the top -- the opposite of every other listing here, and right
+    for the same reason they are wrong for this: the useful question about a
+    recycle bin is not "what did I just delete" but "what am I about to lose".
+
+    `agent` None is his gallery, which sees every seat's. An agent sees only
+    its own.
+    """
+    scope = "" if agent is None else " and artifact.agent = %s"
+    params = () if agent is None else (agent,)
+    with db.connect() as conn:
+        rows = conn.execute(
+            "select artifact.id, artifact.title, artifact.agent,"  # noqa: S608 -- `scope` is a fixed clause with a placeholder
+            " artifact.visibility, artifact.current_version, version.revision,"
+            " artifact.updated_at, artifact.archived_at, artifact.pinned_at,"
+            " artifact.deleted_at"
+            " from artifact"
+            " join version on version.artifact_id = artifact.id"
+            " and version.n = artifact.current_version"
+            f" where artifact.deleted_at is not null{scope}"
+            " order by artifact.deleted_at asc, artifact.id asc",
+            params,
+        ).fetchall()
+    return [
+        ArtifactRow(
+            id=row[0],
+            title=row[1],
+            agent=row[2],
+            visibility=row[3],
+            current_version=row[4],
+            revision=row[5],
+            updated_at=row[6],
+            url=url_for(row[0]),
+            archived_at=row[7],
+            pinned_at=row[8],
+            deleted_at=row[9],
+        )
+        for row in rows
+    ]
+
+
+def purge_expired(db: Database, *, window: timedelta = DELETE_WINDOW) -> list[str]:
+    """Destroy everything whose window has run out. Returns the ids it removed.
+
+    Returns the IDS, not a count, and that is not decoration: the caller logs
+    them, and a destroy that reports "3" gives whoever reads that log no way to
+    find out afterwards what went. This is the one operation here that cannot
+    be undone, so it says exactly what it did.
+    """
+    cutoff = datetime.now(UTC) - window
+    with db.connect() as conn:
+        rows = conn.execute(
+            "delete from artifact where deleted_at is not null and deleted_at < %s"
+            " returning id",
+            (cutoff,),
+        ).fetchall()
+    return [row[0] for row in rows]
 
 
 def set_archived(

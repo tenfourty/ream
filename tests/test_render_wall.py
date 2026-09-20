@@ -59,6 +59,18 @@ def test_render_the_wall(db, monkeypatch):
             recommended="a",
         )
     store.set_archived(db, ids[5], True, agent=None)
+    # Two in the bin, one of them nearly out of time, so the countdown and its
+    # "soon" state both render.
+    if os.environ.get("ARTIFACTS_RENDER_QUERY", "").endswith("deleted"):
+        from datetime import UTC, datetime, timedelta
+
+        for artifact_id, days in ((ids[3], 29), (ids[4], 3)):
+            store.set_deleted(db, artifact_id, True, agent=None)
+            with db.connect() as conn:
+                conn.execute(
+                    "update artifact set deleted_at = %s where id = %s",
+                    (datetime.now(UTC) - timedelta(days=days), artifact_id),
+                )
 
     client = TestClient(create_gallery_app(db=db))
     html = client.get("/" + os.environ.get("ARTIFACTS_RENDER_QUERY", "")).text

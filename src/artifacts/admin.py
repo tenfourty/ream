@@ -16,8 +16,9 @@ import os
 import re
 import secrets
 import sys
+from datetime import UTC, datetime
 
-from artifacts import grants, keys
+from artifacts import grants, keys, store
 from artifacts.db import Database
 
 _AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
@@ -167,7 +168,53 @@ def build_parser() -> argparse.ArgumentParser:
     list_scopes = sub.add_parser("list-scopes")
     list_scopes.set_defaults(func=cmd_list_scopes)
 
+    purge = sub.add_parser(
+        "purge-deleted",
+        help="destroy pages whose thirty-day recovery window has run out",
+    )
+    purge.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="list what would go, and remove nothing",
+    )
+    purge.set_defaults(func=cmd_purge_deleted)
+
     return parser
+
+
+def cmd_purge_deleted(args) -> None:
+    """Make the thirty days real.
+
+    Jeremy chose a recoverable delete partly because it is honest about
+    eventually being gone. A soft delete that nothing ever sweeps is not a
+    thirty-day window, it is a hidden row for ever -- and this service already
+    has one feature that is built, tested and called by nothing at all, which
+    is exactly the failure this command exists not to repeat.
+
+    Prints the id of everything it destroyed, one per line, because this is the
+    only operation here that cannot be undone and a log line saying "3" gives
+    whoever reads it no way to find out afterwards what went.
+    """
+    database = Database(_database_url())
+    if args.dry_run:
+        # The same cutoff the real run uses, read the same way, so the rehearsal
+        # cannot disagree with the performance.
+        due = [
+            row
+            for row in store.list_deleted(database)
+            if row.deleted_at is not None
+            and row.deleted_at.replace(tzinfo=row.deleted_at.tzinfo or UTC)
+            + store.DELETE_WINDOW
+            <= datetime.now(UTC)
+        ]
+        for row in due:
+            print(f"would destroy {row.id}\t{row.agent}\t{row.title}")
+        print(f"{len(due)} due")
+        return
+    gone = store.purge_expired(database)
+    for artifact_id in gone:
+        print(f"destroyed {artifact_id}")
+    print(f"{len(gone)} destroyed")
 
 
 def main(argv: list[str] | None = None) -> None:

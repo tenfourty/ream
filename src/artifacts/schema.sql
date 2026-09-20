@@ -312,3 +312,31 @@ alter table artifact add column if not exists pinned_at timestamptz;
 -- quoted, and impossible to skim past -- and concatenating them would make
 -- that impossible for every consumer at once.
 alter table event add column if not exists note text not null default '';
+
+-- DELETION, WITH THIRTY DAYS TO CHANGE YOUR MIND (Jeremy, 20 Sep 2026, answering
+-- on page mwfspjce6vgtbsifil5kngpglx: (a) "Delete it, but keep it recoverable
+-- for thirty days -- plus a separate destroy-it-now", and in chat immediately
+-- after: "ideally the user and the agent can both recover deleted pages").
+--
+-- A nullable column, exactly like `archived_at`, and for the same reason: what
+-- must survive the window is the body, every version, and every decision with
+-- his answers and his notes. Deleting is the cheap way to tidy and it must not
+-- be the way the record of what he decided is destroyed -- which is
+-- homelab-ij8.44's lesson, and that one bit twice in a single day.
+--
+-- Archiving and deleting are SEPARATE columns rather than one state field. A
+-- page can be archived and then deleted, and restoring it should put it back
+-- where it was rather than onto the wall; one field would have to encode that
+-- and would lose it.
+--
+-- DESTROY is not a column. It is an actual DELETE of the artifact row, and the
+-- foreign keys take the versions, decisions and comments with it. There is no
+-- flag for "really gone", because a flag for it is exactly the hidden row this
+-- window is supposed to stop being permanent.
+alter table artifact add column if not exists deleted_at timestamptz;
+
+-- Every listing filters on this, so it is worth an index even at this size:
+-- the common query is "not deleted", which without one is a sequential scan
+-- that grows with everything ever deleted rather than with what is live.
+create index if not exists artifact_live_idx on artifact (deleted_at)
+  where deleted_at is null;

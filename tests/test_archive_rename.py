@@ -212,10 +212,38 @@ def test_an_archived_page_offers_the_opposite_action_in_the_menu(client, page):
     assert "Put back on the wall" in client.get(f"/a/{page.id}").text
 
 
-def test_no_delete_row_until_he_has_decided(client, page):
-    """He has an open question about what deleting should do. A menu item that
-    destroys his decisions must not be built on a guess, and a test is the way
-    that stays true when someone adds the other rows later."""
+def test_delete_is_offered_and_destroys_nothing(client, db, page):
+    """This test used to assert the OPPOSITE -- that no delete row existed --
+    because he had an open question about what deleting should do and a menu
+    item that destroys his decisions must not be built on a guess.
+
+    He answered on 20 Sep 2026: (a) recoverable for thirty days, plus a
+    separate destroy-it-now. So the guard has done its job and becomes a test
+    of what he actually chose. The claim it defends is the same one: the row
+    exists, and pressing it destroys nothing."""
+    from artifacts import decisions
+
+    asked = decisions.ask(
+        db,
+        agent="seat",
+        artifact_id=page.id,
+        question="Which?",
+        options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
+        recommended="a",
+    )
+    decisions.answer(db, asked.id, letter="a", note="his words", by="jeremy")
+
     html = client.get(f"/a/{page.id}").text
-    assert "/delete" not in html
-    assert ">Delete" not in html
+    assert f'action="/a/{page.id}/delete"' in html
+    assert ">Delete<" in html
+
+    client.post(f"/a/{page.id}/delete", headers=SAME_ORIGIN, follow_redirects=False)
+
+    kept = decisions.list_for_artifact(db, page.id, include_answered=True)
+    assert len(kept) == 1 and kept[0].answer_note == "his words"
+    with db.connect() as conn:
+        versions = conn.execute(
+            "select count(*) from version where artifact_id = %s", (page.id,)
+        ).fetchone()[0]
+    assert versions == 1, "the body is still stored"
+    assert [row.title for row in store.list_deleted(db)] == ["Original name"]

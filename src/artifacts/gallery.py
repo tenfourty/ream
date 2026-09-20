@@ -98,6 +98,8 @@ _CSS = """
      a clear fail -- so the dark scheme flips the text instead of the fill. */
   --now-solid:#9c5e10; --on-now:#fff;
   --line-hover:rgba(11,11,11,.28);
+  /* The only red in the interface, and it is used for exactly one thing. */
+  --danger:#a8271b; --danger-soft:rgba(168,39,27,.08);
   --shadow:0 1px 2px rgba(20,20,15,.05), 0 8px 24px -16px rgba(20,20,15,.25);
   --display:ui-serif,"Iowan Old Style",Georgia,"Times New Roman",serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
@@ -110,6 +112,7 @@ _CSS = """
     /* Light amber, so the text on it goes dark: #2a1d0a on #e0a458 is 7.52:1. */
     --now-solid:#e0a458; --on-now:#2a1d0a;
     --line-hover:#5a606a;
+    --danger:#f08b7f; --danger-soft:rgba(240,139,127,.12);
     --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.8);
   }
 }
@@ -593,6 +596,41 @@ a{color:var(--accent-ink)}
   color:var(--ink);background:var(--card);text-decoration:none}
 .vtoggle:hover{border-color:var(--accent);color:var(--accent-ink)}
 .vtoggle .mi{width:.95rem;height:.95rem;opacity:.85}
+
+/* --- deleted, and the way back ---------------------------------------------
+   Its own view, not a fold under the wall: the wall answers "what is there",
+   this answers "what am I about to lose", and a deleted page sitting anywhere
+   near the live ones is how "deleted" stops meaning anything. */
+.binnote{color:var(--muted);font-size:.8125rem;margin:0 0 1rem;max-width:40rem}
+.rows.bin .rshot.none .mi{opacity:.4}
+.left{font-variant-numeric:tabular-nums}
+/* The one about to go says so. Counted DOWN, not up: "deleted 4 days ago" is a
+   fact about the past, and this list is read for a decision about the future. */
+.left.soon{color:var(--now-solid);font-weight:600}
+.restore{display:inline-flex;align-items:center;gap:.3rem;font:inherit;
+  font-size:.75rem;cursor:pointer;border:1px solid var(--line);border-radius:.4rem;
+  background:var(--card);color:var(--ink);padding:.2rem .45rem}
+.restore:hover{border-color:var(--accent);color:var(--accent-ink)}
+.restore .mi{width:.8rem;height:.8rem}
+.rows.bin form{margin:0}
+
+/* Destroy. The only red in the interface, and the only control that asks you
+   to type something -- not because a second click is meaningful, he clicks
+   through those, but because this is the one operation in the service that can
+   lose something he said, and the words have to be in front of him at the
+   moment he commits to it. */
+.mdanger{border-top:1px solid var(--line);margin-top:.3rem;padding-top:.3rem}
+.mrow.danger{color:var(--danger)}
+.mrow.danger:hover{background:var(--danger-soft);color:var(--danger)}
+.destroyform{padding:.6rem;display:flex;flex-direction:column;gap:.5rem}
+.destroyform p{margin:0;font-size:.8125rem;color:var(--muted);line-height:1.45}
+.destroyform input{font:inherit;font-size:.8125rem;padding:.3rem .45rem;
+  border:1px solid var(--line);border-radius:.4rem;background:var(--paper);
+  color:var(--ink);width:100%}
+.destroyform .danger{font:inherit;font-size:.8125rem;font-weight:600;
+  cursor:pointer;border:1px solid var(--danger);border-radius:.4rem;
+  background:transparent;color:var(--danger);padding:.3rem .5rem}
+.destroyform .danger:hover{background:var(--danger);color:#fff}
 """
 
 _HOME_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg>'
@@ -729,6 +767,8 @@ _ICON = {
     "unarchive": '<path d="M8 2.2 3.4 6.8h2.8v4.6h3.6V6.8h2.8L8 2.2ZM2.5 12.8h11v1.3h-11v-1.3Z"/>',
     "open": '<path d="M9.4 1.6v1.3h2.8L6.5 8.6l.9.9 5.7-5.7v2.8h1.3V1.6H9.4ZM2.8 3.3h3.9v1.3H3.3v8.1h8.1V9.3h1.3v4a.7.7 0 0 1-.7.7H2.8a.7.7 0 0 1-.7-.7V4a.7.7 0 0 1 .7-.7Z"/>',
     "all": '<path d="M2 2.5h5v5H2v-5Zm7 0h5v5H9v-5Zm-7 6h5v5H2v-5Zm7 0h5v5H9v-5Z"/>',
+    "trash": '<path d="M6.4 1.6h3.2a.8.8 0 0 1 .8.8v.8h2.8a.65.65 0 0 1 0 1.3h-.5l-.7 8.2a1.6 1.6 0 0 1-1.6 1.5H5.6a1.6 1.6 0 0 1-1.6-1.5l-.7-8.2h-.5a.65.65 0 0 1 0-1.3h2.8v-.8a.8.8 0 0 1 .8-.8Zm.5 1.6h2.2v-.3H6.9v.3ZM4.6 4.5l.7 8.1a.3.3 0 0 0 .3.3h4.8a.3.3 0 0 0 .3-.3l.7-8.1H4.6Zm2 1.5h1.2v5.4H6.6V6Zm2.6 0h1.2v5.4H9.2V6Z"/>',
+    "restore": '<path d="M8 2.4a5.6 5.6 0 1 0 5.4 7.1.7.7 0 0 0-1.34-.38A4.2 4.2 0 1 1 8 3.8c1.1 0 2.1.42 2.85 1.1l-1.6.02a.65.65 0 0 0 .01 1.3l3.2-.04a.65.65 0 0 0 .64-.66l-.04-3.2a.65.65 0 1 0-1.3.02l.01 1.35A5.58 5.58 0 0 0 8 2.4Z"/>',
     "copy": '<path d="M5.5 1.6h6.3a1.6 1.6 0 0 1 1.6 1.6v6.3h-1.3V3.2a.3.3 0 0 0-.3-.3H5.5V1.6ZM3.2 4.1h6.4a1.6 1.6 0 0 1 1.6 1.6v6.4a1.6 1.6 0 0 1-1.6 1.6H3.2a1.6 1.6 0 0 1-1.6-1.6V5.7a1.6 1.6 0 0 1 1.6-1.6Zm0 1.3a.3.3 0 0 0-.3.3v6.4c0 .17.13.3.3.3h6.4a.3.3 0 0 0 .3-.3V5.7a.3.3 0 0 0-.3-.3H3.2Z"/>',
     "pin": '<path d="M9.6 1.3 8.5 2.4l.4.4-3 2.2-1.6-.3-1.1 1.1 3 3L2 13l3.2-4.2 3 3 1.1-1.1-.3-1.6 2.2-3 .4.4 1.1-1.1-3.1-3.1Z"/>',
     "find": '<path d="M7.1 2.2a4.9 4.9 0 1 0 2.96 8.8l3 3a.7.7 0 0 0 1-1l-3-3A4.9 4.9 0 0 0 7.1 2.2Zm0 1.4a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Z"/>',
@@ -848,6 +888,14 @@ def _page_menu(
         f"{_icon('open')}Open in a new tab</a>"
     )
     rows.append(f'<a class="mrow" href="/">{_icon("all")}All pages</a>')
+    # Last, under a divider, and the only red thing in the menu -- as in the
+    # reference, and for the reason the reference has it there: it is the one
+    # entry whose misfire costs something.
+    rows.append(
+        f'<form class="mdanger" method="post" action="/a/{ident}/delete">'
+        f'<button class="mrow danger" type="submit">{_icon("trash")}'
+        "Delete</button></form>"
+    )
     return (
         '<details class="menu"><summary aria-label="Page actions">'
         f'{escape(title)}<span class="chev" aria-hidden="true"></span></summary>'
@@ -921,7 +969,84 @@ def _view_toggle(view: str) -> str:
     )
 
 
-def _tabs(active: str, waiting: int, pinned: int) -> str:
+def _left(deleted_at: datetime | None) -> str:
+    """How long is left on a deleted page, in his words.
+
+    Counted down rather than up: "deleted 4 days ago" is a fact about the past
+    and this list is read for a decision about the future. The one that matters
+    is the one about to go, and it should say so in the words that make that
+    obvious.
+    """
+    if deleted_at is None:
+        return ""
+    if deleted_at.tzinfo is None:
+        deleted_at = deleted_at.replace(tzinfo=UTC)
+    left = (deleted_at + store.DELETE_WINDOW) - datetime.now(UTC)
+    days = left.days
+    if left.total_seconds() <= 0:
+        # Past the window and not yet swept. Honest about which of the two it
+        # is: the row is still recoverable until something actually removes it,
+        # and saying "gone" about a page that is still here would be wrong.
+        return "due to be destroyed"
+    if days == 0:
+        return "less than a day left"
+    if days == 1:
+        return "1 day left"
+    return f"{days} days left"
+
+
+def _deleted_view(rows) -> str:
+    """The recycle bin: what is deleted, how long it has, and the way back.
+
+    Its own view rather than a fold at the bottom of the wall, because it is
+    read for a different reason -- the wall answers "what is there", this
+    answers "what am I about to lose" -- and because a deleted page appearing
+    anywhere near the live ones is how "deleted" stops meaning anything.
+    """
+    if not rows:
+        return (
+            '<p class="empty">Nothing is deleted. Anything you delete waits '
+            "here for thirty days before it goes for good.</p>"
+        )
+    out = [
+        (
+            '<p class="binnote">Deleted pages keep their address, their history '
+            "and every answer on them. They are destroyed thirty days after "
+            "deletion, soonest first.</p>"
+        ),
+        '<ul class="rows bin">',
+    ]
+    for row in rows:
+        ident = escape(row.id)
+        remaining = _left(row.deleted_at)
+        urgent = " soon" if remaining in ("less than a day left", "1 day left") else ""
+        out.append(
+            f'<li class="row-wrap"><span class="row">'
+            f'<span class="rshot none">{_icon("trash")}</span>'
+            f'<span class="rt">{escape(row.title)}</span>'
+            f'<span class="rmeta"><span class="who">{escape(row.agent)}</span>'
+            f'<span class="left{urgent}">{escape(remaining)}</span>'
+            f'<form method="post" action="/a/{ident}/restore">'
+            f'<button class="restore" type="submit">{_icon("restore")}'
+            "Put back</button></form>"
+            '<details class="menu tmenu"><summary aria-label="Destroy this page">'
+            '<span class="dots" aria-hidden="true"></span></summary>'
+            '<div class="mpanel right">'
+            f'<form class="mdanger destroyform" method="post" '
+            f'action="/a/{ident}/destroy">'
+            '<p>Destroy for good? Its versions and every answer on it go too. '
+            "This cannot be undone.</p>"
+            '<input name="confirm" placeholder="type destroy" '
+            'aria-label="Type destroy to confirm" autocomplete="off">'
+            '<button class="danger" type="submit">Destroy</button>'
+            "</form></div></details>"
+            "</span></span></li>"
+        )
+    out.append("</ul>")
+    return "".join(out)
+
+
+def _tabs(active: str, waiting: int, pinned: int, deleted: int = 0) -> str:
     """All / Waiting on you / Pinned.
 
     The reference's tabs are All / Yours / Shared with you, which do not map:
@@ -936,6 +1061,7 @@ def _tabs(active: str, waiting: int, pinned: int) -> str:
         ("all", "All", 0),
         ("waiting", "Waiting on you", waiting),
         ("pinned", "Pinned", pinned),
+        ("deleted", "Deleted", deleted),
     ):
         if key != "all" and not count:
             continue
@@ -947,14 +1073,20 @@ def _tabs(active: str, waiting: int, pinned: int) -> str:
 
 
 def _controls_row(
-    view: str, query: str, active: str, waiting: int, pinned: int, pages: int
+    view: str,
+    query: str,
+    active: str,
+    waiting: int,
+    pinned: int,
+    pages: int,
+    deleted: int = 0,
 ) -> str:
     """The row under the title: WHAT to show on the left, how to find it and how
     to see it on the right."""
     pages_text = f"{pages} page" if pages == 1 else f"{pages} pages"
     return (
         '<div class="controls">'
-        f"{_tabs(active, waiting, pinned)}"
+        f"{_tabs(active, waiting, pinned, deleted)}"
         '<div class="cright">'
         f"{_search_box(query, view)}"
         f'<span class="count">{pages_text}</span>'
@@ -1441,7 +1573,7 @@ def gallery_router(db: Database) -> APIRouter:
             "            and v.thumbnail is not null) as has_thumb,"
             "       a.pinned_at"
             "  from artifact a"
-            " where (a.archived_at is null) = %s"
+            " where (a.archived_at is null) = %s and a.deleted_at is null"
             # THE WALL SORTS ITSELF BY WHAT NEEDS HIM. Pinned first, because
             # that is him saying so explicitly. Then anything with an
             # unanswered question, because this service exists so he can
@@ -1668,7 +1800,8 @@ def gallery_router(db: Database) -> APIRouter:
         pinned_total = sum(1 for r in rows if r[8])
 
         chosen = request.query_params.get("filter")
-        active = chosen if chosen in ("waiting", "pinned") else "all"
+        active = chosen if chosen in ("waiting", "pinned", "deleted") else "all"
+        deleted_rows = store.list_deleted(db)
         if active == "waiting":
             rows = [r for r in rows if r[5]]
         elif active == "pinned":
@@ -1717,7 +1850,7 @@ def gallery_router(db: Database) -> APIRouter:
         # the count in the summary is what keeps "out of the way" from becoming
         # "lost", and the whole thing is one line until he opens it.
         archived_block = ""
-        if archived_rows:
+        if archived_rows and active != "deleted":
             n = len(archived_rows)
             noun = "page" if n == 1 else "pages"
             archived_block = (
@@ -1729,7 +1862,9 @@ def gallery_router(db: Database) -> APIRouter:
                 f'<div class="archived-body">{render(archived_rows)}</div>'
                 "</details>"
             )
-        if rows:
+        if active == "deleted":
+            main = _deleted_view(deleted_rows)
+        elif rows:
             main = render(rows)
         elif query:
             # Never a bare empty wall: with a query in the box that looks
@@ -1756,7 +1891,13 @@ def gallery_router(db: Database) -> APIRouter:
                 body,
                 meta_html=_wall_meta(waiting_total),
                 controls=_controls_row(
-                    view, query, active, waiting_total, pinned_total, len(rows)
+                    view,
+                    query,
+                    active,
+                    waiting_total,
+                    pinned_total,
+                    len(deleted_rows) if active == "deleted" else len(rows),
+                    len(deleted_rows),
                 ),
                 home=False,
             ),
@@ -1857,6 +1998,44 @@ def gallery_router(db: Database) -> APIRouter:
             raise HTTPException(404, "no such artifact") from exc
         thumbs.render_in_background(db, copy.id, copy.version, body)
         return RedirectResponse(f"/a/{copy.id}", status_code=303)
+
+    @router.post("/a/{artifact_id}/delete")
+    def delete_page(artifact_id: str, request: Request):
+        """Delete a page. Recoverable for thirty days.
+
+        Destroys nothing: the body, every version and every decision with his
+        answers and his notes are all still there. Redirects to the wall,
+        because the page he was looking at is no longer somewhere to be.
+        """
+        _same_origin_write(request)
+        if not store.set_deleted(db, artifact_id, True, agent=None):
+            raise HTTPException(404, "no such artifact")
+        return RedirectResponse("/?filter=deleted", status_code=303)
+
+    @router.post("/a/{artifact_id}/restore")
+    def restore_page(artifact_id: str, request: Request):
+        """Put a deleted page back, with its address and its history intact."""
+        _same_origin_write(request)
+        if not store.set_deleted(db, artifact_id, False, agent=None):
+            raise HTTPException(404, "no such artifact")
+        return RedirectResponse(f"/a/{artifact_id}", status_code=303)
+
+    @router.post("/a/{artifact_id}/destroy")
+    def destroy_page(artifact_id: str, request: Request, confirm: str = Form("")):
+        """Remove a page and everything under it, for good.
+
+        Takes a typed confirmation. Not because a second click is meaningful --
+        he clicks through those -- but because this is the ONE operation in the
+        service that can lose something he said, and the words have to be in
+        front of him at the moment he commits to it. The form asks for the
+        word "destroy"; anything else is refused without doing anything.
+        """
+        _same_origin_write(request)
+        if confirm.strip().lower() != "destroy":
+            raise HTTPException(400, "type destroy to confirm")
+        if not store.destroy(db, artifact_id, agent=None):
+            raise HTTPException(404, "no such artifact")
+        return RedirectResponse("/?filter=deleted", status_code=303)
 
     @router.post("/a/{artifact_id}/rename")
     def rename_page(artifact_id: str, request: Request, title: str = Form(...)):
