@@ -370,6 +370,19 @@ cursor durably (the script keeps it in a file, written only after the rows are
 in hand, so a crash replays rather than loses). An empty answer means "nothing
 yet, ask again" — never an error.
 
+**The event carries his note, but the decision row is still the authority.**
+Since 20 Sep 2026 each event has its own `note` field holding what he actually
+typed, verbatim, up to 1000 characters — before that the feed carried only a
+one-line `summary` and his words were simply not in it, which is how the
+operator session missed a note of his that afternoon. `note` is a separate
+field from `summary` on purpose: do not read one expecting the other.
+
+Even so, the event is a nudge, not the record. Go and read the decision
+(`?include_answered=true` above) before you act: the row is what the gallery
+shows him, it is what a later agent will find, and `summary` is flattened for
+safe printing in a terminal. Treat the event as "something happened on page X",
+then go and look at X.
+
 ## Keep it current
 
 Jeremy reads the gallery to see where work stands, so a page that is right
