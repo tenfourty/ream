@@ -38,6 +38,17 @@ class UsageError(Exception):
     """A problem with how the command was invoked or its key file -- exit 2."""
 
 
+class Conflict(Exception):
+    """Somebody else published between this caller's read and its write -- exit 1.
+
+    NOT a UsageError: the command was invoked correctly and nothing about it was
+    wrong; the world changed underneath it. Exit 2 would tell a calling script
+    "you used this tool wrong", which is untrue and the wrong thing to branch
+    on -- a wrapper retrying after a genuine conflict is sensible, a wrapper
+    retrying after a usage error is a loop.
+    """
+
+
 class HTTPFailure(Exception):
     """The server answered with a non-2xx status, or a redirect was refused --
     exit 1. `detail` is whatever the server's JSON body carried under "detail"
@@ -224,42 +235,62 @@ def _read_current(artifact_id: str, key: str) -> dict:
     return _request("GET", f"{_api_base()}/artifacts/{artifact_id}", key, None)
 
 
-def _patch_with_retry(
+def _patch(
     file_path: str,
     artifact_id: str,
     expected_revision: str,
     key: str,
     title: str | None = None,
 ) -> dict:
-    """PATCH with `expected_revision`; on a 409 (someone else patched first),
-    re-read the artifact's now-current revision and retry exactly once, then
-    let a second failure propagate. `title` renames the page in the same call;
-    omitted, the page keeps the name it has."""
+    """PATCH with `expected_revision`, and REFUSE on a conflict rather than
+    retrying.
+
+    This used to catch the 409, re-read the artifact's now-current revision,
+    and retry once with THE SAME BODY. The server's expected_revision check is
+    correct optimistic concurrency and the client defeated it: whoever patched
+    second silently overwrote the version that landed in between, and the
+    losing agent was never told its page had been replaced. Verified in source
+    19 Sep 2026, still true 21 Sep, fixed here.
+
+    A blind retry cannot be right, because the body being sent was composed
+    against a page that no longer exists. Merging is not this tool's job -- it
+    has no idea what the other writer meant. So it refuses, and says exactly
+    how to recover, which is cheap now that the body can be fetched in one
+    command:
+
+        artifacts-publish --fetch <id> page.html   # what is there now
+        ...re-apply your change...
+        artifacts-publish page.html --update <id>
+
+    This only bites where two writers share a page, which is where the service
+    is heading -- a board an arc's lead and its workers all update.
+    """
     body = _read_page(file_path)
     payload = {"body": body, "expected_revision": expected_revision}
     if title is not None:
         payload["title"] = title
-    for attempt in range(2):
-        try:
-            return _request(
-                "PATCH",
-                f"{_api_base()}/artifacts/{artifact_id}",
-                key,
-                {**payload, "expected_revision": expected_revision},
-            )
-        except HTTPFailure as exc:
-            if exc.status == 409 and attempt == 0:
-                expected_revision = _read_current(artifact_id, key)["revision"]
-                continue
+    try:
+        return _request(
+            "PATCH", f"{_api_base()}/artifacts/{artifact_id}", key, payload
+        )
+    except HTTPFailure as exc:
+        if exc.status != 409:
             raise
-    raise AssertionError("unreachable")  # pragma: no cover
+        raise Conflict(
+            f"{artifact_id} changed while you were writing it -- somebody else "
+            "published a version after you last read it. Your update was NOT "
+            "applied, and nothing was overwritten.\n"
+            f"  artifacts-publish --fetch {artifact_id} page.html\n"
+            "  ...re-apply your change to that file...\n"
+            f"  artifacts-publish page.html --update {artifact_id}"
+        ) from exc
 
 
 def _update(
     file_path: str, artifact_id: str, key: str, title: str | None = None
 ) -> dict:
     expected_revision = _read_current(artifact_id, key)["revision"]
-    return _patch_with_retry(file_path, artifact_id, expected_revision, key, title)
+    return _patch(file_path, artifact_id, expected_revision, key, title)
 
 
 def _fetch(artifact_id: str, key: str) -> str:
@@ -483,6 +514,9 @@ def main(argv: list[str] | None = None) -> int:
     except HTTPFailure as exc:
         detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
         print(f"{exc.status} {detail}", file=sys.stderr)
+        return 1
+    except Conflict as exc:
+        print(str(exc), file=sys.stderr)
         return 1
     except UsageError as exc:
         print(str(exc), file=sys.stderr)

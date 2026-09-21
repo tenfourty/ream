@@ -89,16 +89,22 @@ def test_publish_then_update_then_list_round_trip(live, key_file, tmp_path, caps
     assert any(artifact_id in line and "Board" in line for line in lines)
 
 
-def test_update_retries_once_on_a_stale_revision_then_succeeds(
+def test_a_raced_update_is_refused_rather_than_overwriting_the_other_writer(
     live, key_file, tmp_path, capsys
 ):
-    """A concurrent patch lands between a caller's read and its own patch attempt:
-    the first PATCH gets 409, `_patch_with_retry` re-reads and retries once, and
-    that retry succeeds against the now-current revision. `_update` (what `main`
-    calls) always reads its own starting revision first, so the only way to hand
-    it a deliberately STALE one -- and so force the 409 this test is about -- is
-    to drive `_patch_with_retry` directly, the same helper `_update` delegates to
-    after its own fresh read.
+    """THIS TEST USED TO ASSERT THE BUG.
+
+    It was called "retries once on a stale revision then succeeds", and that is
+    exactly what was wrong: the client caught the 409, re-read only the
+    REVISION, and retried with the same body -- so whoever patched second
+    silently destroyed the version that landed in between, and the losing agent
+    was never told. The server's optimistic concurrency was correct; the client
+    defeated it (homelab-ij8.54, found 19 Sep, fixed 21 Sep).
+
+    A blind retry cannot be right: the body being sent was composed against a
+    page that no longer exists. Merging is not the CLI's job -- it has no idea
+    what the other writer meant. So it refuses and says how to recover, which
+    is cheap now that `--fetch` exists.
     """
     path, token = key_file
     page = tmp_path / "page.html"
@@ -127,14 +133,21 @@ def test_update_retries_once_on_a_stale_revision_then_succeeds(
         raced = json.loads(resp.read())
     assert raced["revision"] != published["revision"]
 
-    # This caller still thinks `published["revision"]` is current -- the retry
-    # helper must notice the 409, re-read, and land its own retry.
+    # This caller still thinks `published["revision"]` is current. It must be
+    # refused, and the raced writer's version must survive untouched.
     page.write_text("<!doctype html><body>mine</body></html>")
-    result = client._patch_with_retry(
-        str(page), published["id"], published["revision"], token
-    )
-    assert result["id"] == published["id"]
-    assert result["revision"] not in (published["revision"], raced["revision"])
+    with pytest.raises(client.Conflict) as refused:
+        client._patch(str(page), published["id"], published["revision"], token)
+
+    said = str(refused.value)
+    assert "was NOT" in said and "nothing was overwritten" in said
+    assert "--fetch" in said, "it says how to recover"
+    assert published["id"] in said
+
+    # The other writer's page is still theirs.
+    current = client._fetch(published["id"], token)
+    assert "raced" in current
+    assert "mine" not in current
 
 
 def test_a_refused_secret_shaped_body_shows_the_422_detail_and_exits_1(
@@ -428,7 +441,13 @@ def test_publish_and_update_print_only_id_url_revision(
     assert set(updated.keys()) == {"id", "url", "revision"}
 
 
-def test_a_second_409_gives_up_after_exactly_two_patch_attempts(monkeypatch, tmp_path):
+def test_a_409_costs_exactly_one_patch_attempt_and_no_silent_second(
+    monkeypatch, tmp_path
+):
+    """The old version of this asserted TWO attempts and called that giving up.
+    Two attempts was the bug: the second one carried the same body and, when it
+    happened to win, destroyed whatever had landed in between. One attempt, then
+    a refusal the caller can act on."""
     patch_attempts = []
 
     def fake_request(method, _url, _key, payload):
@@ -437,19 +456,16 @@ def test_a_second_409_gives_up_after_exactly_two_patch_attempts(monkeypatch, tmp
             raise client.HTTPFailure(
                 409, "the artifact moved on; read it and patch again"
             )
-        if method == "GET":
-            return {"revision": "still-not-what-you-think"}
-        raise AssertionError(f"unexpected method {method}")
+        raise AssertionError(f"unexpected {method}: a refusal must not re-read")
 
     monkeypatch.setattr(client, "_request", fake_request)
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>x</body></html>")
 
-    with pytest.raises(client.HTTPFailure) as excinfo:
-        client._patch_with_retry(str(page), "some-id", "stale-revision", "key")
+    with pytest.raises(client.Conflict):
+        client._patch(str(page), "some-id", "stale-revision", "key")
 
-    assert excinfo.value.status == 409
-    assert len(patch_attempts) == 2
+    assert len(patch_attempts) == 1, "no second write, blind or otherwise"
 
 
 def test_key_absence_also_covers_401_and_a_double_409_and_a_usage_error(
