@@ -92,6 +92,10 @@ def test_the_refusal_is_a_named_422_over_the_api(client, db):
     detail = response.json()["detail"]
     assert detail["field"] == "body"
     assert "doctype" in detail["detail"]
+    assert "no HTML tag anywhere" in detail["detail"], (
+        "the refusal describes the rule as it actually is -- it said "
+        '"no <html>, <head> or <body>" for an hour after the rule widened'
+    )
     assert "wrote /tmp" not in str(detail), "and it never echoes what was sent"
 
 

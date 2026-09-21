@@ -340,7 +340,7 @@ def agent_router(db: Database) -> APIRouter:
                     "field": exc.field,
                     "detail": (
                         "body does not look like an HTML page: no doctype and "
-                        "no <html>, <head> or <body>. If a command's output "
+                        "no HTML tag anywhere in it. If a command's output "
                         "reached this call instead of your file, that is the "
                         "usual cause."
                     ),
@@ -405,7 +405,7 @@ def agent_router(db: Database) -> APIRouter:
                     "field": exc.field,
                     "detail": (
                         "body does not look like an HTML page: no doctype and "
-                        "no <html>, <head> or <body>. If a command's output "
+                        "no HTML tag anywhere in it. If a command's output "
                         "reached this call instead of your file, that is the "
                         "usual cause."
                     ),
@@ -550,7 +550,7 @@ def agent_router(db: Database) -> APIRouter:
                     "field": exc.field,
                     "detail": (
                         "body does not look like an HTML page: no doctype and "
-                        "no <html>, <head> or <body>. If a command's output "
+                        "no HTML tag anywhere in it. If a command's output "
                         "reached this call instead of your file, that is the "
                         "usual cause."
                     ),
@@ -685,7 +685,7 @@ def agent_router(db: Database) -> APIRouter:
                     "field": exc.field,
                     "detail": (
                         "body does not look like an HTML page: no doctype and "
-                        "no <html>, <head> or <body>. If a command's output "
+                        "no HTML tag anywhere in it. If a command's output "
                         "reached this call instead of your file, that is the "
                         "usual cause."
                     ),
@@ -779,7 +779,7 @@ def agent_router(db: Database) -> APIRouter:
                     "field": exc.field,
                     "detail": (
                         "body does not look like an HTML page: no doctype and "
-                        "no <html>, <head> or <body>. If a command's output "
+                        "no HTML tag anywhere in it. If a command's output "
                         "reached this call instead of your file, that is the "
                         "usual cause."
                     ),
@@ -1015,7 +1015,7 @@ def agent_router(db: Database) -> APIRouter:
                     "field": exc.field,
                     "detail": (
                         "body does not look like an HTML page: no doctype and "
-                        "no <html>, <head> or <body>. If a command's output "
+                        "no HTML tag anywhere in it. If a command's output "
                         "reached this call instead of your file, that is the "
                         "usual cause."
                     ),
