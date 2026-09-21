@@ -145,11 +145,14 @@ _SHAPES: tuple[tuple[str, re.Pattern[str], str], ...] = (
 )
 
 
-def _newline_offsets(body: str) -> list[int]:
+def newline_offsets(body: str) -> list[int]:
+    """Public because `traps.py` reports in the same shape and must count lines
+    the same way -- two copies of "which line is this offset on" is how two
+    checks on one page start disagreeing about where a problem is."""
     return [m.start() for m in re.finditer("\n", body)]
 
 
-def _line_of(offset: int, newline_offsets: list[int]) -> int:
+def line_of(offset: int, newline_offsets: list[int]) -> int:
     return bisect.bisect_right(newline_offsets, offset) + 1
 
 
@@ -182,12 +185,12 @@ def check(body: str) -> list[CspWarning]:
     Nothing inside an HTML comment is examined.
     """
     body = outside_comments(body)
-    newlines = _newline_offsets(body)
+    newlines = newline_offsets(body)
     warnings: list[CspWarning] = []
     for shape, pattern, hint in _SHAPES:
         lines: list[int] = []
         for examined, match in enumerate(pattern.finditer(body), start=1):
-            line = _line_of(match.start(), newlines)
+            line = line_of(match.start(), newlines)
             if line not in lines:
                 lines.append(line)
             if (

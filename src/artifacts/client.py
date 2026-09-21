@@ -26,7 +26,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from artifacts import csp
+from artifacts import csp, traps
 
 _DEFAULT_API = "https://artifacts.tenfourty.site/api/v1"
 _DEFAULT_KEY_FILE = "~/.config/artifacts/key"
@@ -605,8 +605,17 @@ def _syntax_findings(body: str) -> list[str]:
 
 
 def check_page(body: str) -> tuple[list, list[str], bool]:
-    """(csp findings, syntax findings, whether node ran). No network, no key."""
-    return csp.check(body), _syntax_findings(body), shutil.which("node") is not None
+    """(findings, syntax findings, whether node ran). No network, no key.
+
+    The findings are the serving policy's (`csp`) and the page-level traps
+    (`traps`) in one list, sorted by line: they are one question to whoever
+    runs this -- what is wrong with this file? -- and which module noticed is
+    not their business (homelab-ij8.36).
+    """
+    findings = sorted(
+        csp.check(body) + traps.check(body), key=lambda w: (w.line, w.shape)
+    )
+    return findings, _syntax_findings(body), shutil.which("node") is not None
 
 
 def _check_page(file_path: str) -> int:
@@ -654,12 +663,15 @@ def _check_page(file_path: str) -> int:
         )
     total = len(findings) + len(syntax)
     if total == 0:
-        print(f"{file_path}: nothing the serving policy will refuse")
+        print(
+            f"{file_path}: nothing the serving policy refuses, and no trap "
+            "the templates warn about"
+        )
         return 0
     thing = "problem" if total == 1 else "problems"
     print(
-        f"{file_path}: {total} {thing} -- this page would publish and then "
-        "half-render, with nothing in any log you can see",
+        f"{file_path}: {total} {thing} -- published as it stands, this page "
+        "would half-render or read wrong, with nothing in any log you can see",
         file=sys.stderr,
     )
     return 1

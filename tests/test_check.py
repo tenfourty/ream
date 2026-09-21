@@ -33,7 +33,7 @@ def _write(tmp_path, body, name="page.html"):
 
 def test_a_clean_page_passes_and_says_so(tmp_path, capsys):
     assert client.main(["--check", _write(tmp_path, CLEAN)]) == 0
-    assert "nothing the serving policy will refuse" in capsys.readouterr().out
+    assert "nothing the serving policy refuses" in capsys.readouterr().out
 
 
 def test_a_page_the_policy_would_break_is_REFUSED(tmp_path, capsys):
@@ -135,3 +135,40 @@ def test_it_uses_the_services_own_shape_table_not_a_copy(tmp_path):
             '<html><body><iframe src="https://x.example"></iframe></body></html>'
         )
     ]
+
+
+# --- the traps a directive does not cover (homelab-ij8.36) --------------------
+
+
+def test_a_placeholder_title_is_refused_here_too(tmp_path, capsys):
+    """The page renders perfectly and is still wrong: the first board
+    published here read PAGE TITLE in the browser tab for two hours, because
+    an agent cannot look at its own page."""
+    body = '<!doctype html>\n<html><head><title>PAGE TITLE</title></head>\n<body><p>x</p></body></html>\n'
+    assert client.main(["--check", _write(tmp_path, body)]) == 1
+    err = capsys.readouterr().err
+    assert "placeholder_title" in err, "the specific trap is named"
+    assert ":2:" in err, "on its own line"
+
+
+def test_a_gallery_link_that_would_go_nowhere_is_refused(tmp_path, capsys):
+    body = (
+        '<!doctype html>\n<html><head><title>Board</title></head>\n'
+        '<body><a href="https://artifacts.tenfourty.site/a/abc">Wall</a></body></html>\n'
+    )
+    assert client.main(["--check", _write(tmp_path, body)]) == 1
+    assert "gallery_link_same_tab" in capsys.readouterr().err
+
+
+def test_the_two_kinds_of_problem_are_counted_together(tmp_path, capsys):
+    """One question -- what is wrong with this file? -- so one list and one
+    count. Which module noticed is not the reader's business."""
+    body = (
+        '<!doctype html>\n<html><head><title>PAGE TITLE</title>\n'
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">\n'
+        '</head><body><p>x</p></body></html>\n'
+    )
+    assert client.main(["--check", _write(tmp_path, body)]) == 1
+    err = capsys.readouterr().err
+    assert "2 problems" in err
+    assert "placeholder_title" in err and "remote_stylesheet" in err

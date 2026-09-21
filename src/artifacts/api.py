@@ -23,6 +23,7 @@ from artifacts import (
     templates,
     text,
     thumbs,
+    traps,
 )
 from artifacts.db import Database
 
@@ -213,7 +214,7 @@ def agent_router(db: Database) -> APIRouter:
         given (homelab-ij8.35). Publish time is the one moment the author is
         definitely looking (homelab-ij8.50).
         """
-        out = csp.as_json(body)
+        out = csp.as_json(body) + traps.as_json(body)
         for slot, line in decisions.unresolved_slots(db, artifact_id, body):
             out.append(
                 {
