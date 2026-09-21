@@ -46,6 +46,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from artifacts import text as text_module
+from artifacts.events import MAX_NOTE_IN_EVENT
 
 _log = logging.getLogger("artifacts.nudge")
 
@@ -83,6 +84,12 @@ _ALERTNAMES = {
 # (homelab-ij8.55). A second copy of this function is how the two drift.
 _SUMMARY_LIMIT = text_module.SUMMARY_LIMIT
 _sanitize = text_module.sanitize
+
+# His note travels at the same size it travels on the journal row, imported
+# rather than restated: two opinions about how much of what Jeremy wrote is
+# worth carrying is how a consumer ends up with a differently-truncated copy of
+# the same sentence.
+_NOTE_LIMIT = MAX_NOTE_IN_EVENT
 
 
 def _warn_missing_token_once() -> None:
@@ -140,6 +147,9 @@ def emit(
     agent: str,
     summary: str,
     event_id: str,
+    note: str = "",
+    letter: str | None = None,
+    recommended: str | None = None,
 ) -> None:
     """Record that something worth telling the operator about happened.
     `event_id` must be the journal row's `seq` (as a string) -- the receiver on
@@ -149,6 +159,25 @@ def emit(
     text and are sanitised again here (see `_sanitize`) regardless of what the
     caller already did to them -- this function's "never forge structure"
     guarantee is made once, here, not trusted to every future call site.
+
+    `note` IS WHAT JEREMY WROTE, VERBATIM, AND IT TRAVELS IN ITS OWN FIELD.
+    Never folded into `summary`, for the reason `events.EventRow` gives for the
+    same field: a receiver showing the summary as one line has to be able to
+    show this differently, and concatenating them takes that choice away from
+    every consumer. It cost a real afternoon on 20 Sep 2026 (homelab-873): an
+    answer of "(a)" reached the operator's mailbox as "a: <label>" while the
+    244 words qualifying it stayed in the database, and four and a half hours
+    of work ran on the letter alone.
+
+    `has_note` is sent beside it so a receiver can raise the line's prominence
+    without parsing prose, and `letter`/`recommended`/`differs_from_recommended`
+    so it can say "he did NOT take the recommendation" -- the other half of the
+    same failure, where a letter reads as agreement until someone checks.
+
+    A receiver that does not know these fields ignores them; today the
+    operator's inbox rebuilds its payload from a fixed list of keys, so these
+    arrive and are dropped until that list grows. That is the right order: the
+    data has to be at the boundary before the other side can choose to keep it.
     """
     try:
         url = os.environ.get("ARTIFACTS_NUDGE_URL", "")
@@ -189,6 +218,19 @@ def emit(
             "title": _sanitize(title),
             "agent": agent,
             "summary": _sanitize(summary),
+            "note": _sanitize(note, limit=_NOTE_LIMIT),
+            # A boolean, not "is the note field truthy", because that is the
+            # question a receiver is actually asking and the answer must not
+            # change with how the note sanitises.
+            "has_note": bool(_sanitize(note, limit=_NOTE_LIMIT)),
+            "answer": letter,
+            "recommended": recommended,
+            # Only ever true when there WAS a recommendation to depart from. A
+            # decision posed without one has nothing to disagree with, and a
+            # receiver told otherwise would flag every answer on such a page.
+            "differs_from_recommended": bool(
+                recommended and letter and letter != recommended
+            ),
         }
 
         if not _slots.acquire(blocking=False):

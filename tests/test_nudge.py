@@ -469,3 +469,167 @@ def test_the_only_push_goes_to_one_named_seats_mailbox(monkeypatch):
         summary="s", event_id="1",
     )
     assert len(sent) == 1, "the named seat's own page did not nudge its own mailbox"
+
+
+# ---------------------------------------------------------------------------
+# What he WROTE, not just which letter he tapped (homelab-873).
+#
+# 20 Sep 2026: a decision was answered (a) with a 244-character note that
+# qualified the letter -- "check all folders between the two backups ... only
+# keep what is left behind that is unique". The mailbox row that woke the
+# operator carried `summary = "a: <label>"` and nothing else. It acted on the
+# letter for four and a half hours and found the note by a hand sweep. The
+# journal had carried the note the whole time; the thing that does the waking
+# did not.
+# ---------------------------------------------------------------------------
+
+
+def _answer_through_the_gallery(db, monkeypatch, origin, *, note, recommended=None,
+                                letter="a"):
+    """The real path: Jeremy taps an option in the gallery. Going through the
+    route rather than calling `decisions.answer` directly is deliberate -- the
+    bug was in what reached the mailbox from a REAL answer, and a test that
+    calls the emitter itself can only prove the emitter."""
+    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("ARTIFACTS_NUDGE_URL", f"{origin}/v1/events/artifacts")
+    monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "test-token-fake")
+
+    published = store.publish(db, "ops-seat", "Board", PAGE)
+    row = decisions.ask(
+        db,
+        agent="ops-seat",
+        artifact_id=published.id,
+        question="ship it?",
+        options=_OPTIONS,
+        recommended=recommended,
+    )
+    response = TestClient(create_gallery_app(db)).post(
+        f"/d/{row.id}/answer",
+        data={"letter": letter, "note": note},
+        headers={"origin": store.gallery_origin(), "sec-fetch-site": "same-origin"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    return published, row
+
+
+def test_the_mailbox_row_carries_his_note_byte_for_byte(db, monkeypatch):
+    receiver = _Receiver()
+    origin = receiver.start()
+    try:
+        note = (
+            "check all folders between the two backups, then remove anything "
+            "that is already elsewhere - only keep what is left behind that is "
+            "unique so we can do forensics on it"
+        )
+        _answer_through_the_gallery(db, monkeypatch, origin, note=note)
+
+        assert receiver.wait(), "the receiver never got a request"
+        body = json.loads(receiver.bodies[0])
+        assert body["note"] == note
+        assert body["has_note"] is True
+        # In its OWN field. A receiver showing the summary as one line has to
+        # be able to show this differently, and a concatenation would take that
+        # choice away from every consumer.
+        assert note not in body["summary"]
+    finally:
+        receiver.stop()
+
+
+def test_an_empty_note_says_so_instead_of_sending_a_clause(db, monkeypatch):
+    receiver = _Receiver()
+    origin = receiver.start()
+    try:
+        _answer_through_the_gallery(db, monkeypatch, origin, note="")
+
+        assert receiver.wait()
+        body = json.loads(receiver.bodies[0])
+        assert body["note"] == ""
+        assert body["has_note"] is False
+    finally:
+        receiver.stop()
+
+
+def test_his_note_is_not_squeezed_into_the_summary_limit(db, monkeypatch):
+    """The note that caused this was 244 characters. A cap of 200 -- the right
+    size for a one-line summary -- would have cut the qualification off mid
+    sentence and the row would still have LOOKED complete."""
+    receiver = _Receiver()
+    origin = receiver.start()
+    try:
+        note = "w" * 600
+        _answer_through_the_gallery(db, monkeypatch, origin, note=note)
+
+        assert receiver.wait()
+        assert json.loads(receiver.bodies[0])["note"] == note
+    finally:
+        receiver.stop()
+
+
+def test_a_hostile_note_is_sanitised_like_every_other_field(db, monkeypatch):
+    receiver = _Receiver()
+    origin = receiver.start()
+    try:
+        _answer_through_the_gallery(
+            db, monkeypatch, origin, note="line one\nline two\x1b[31m"
+        )
+
+        assert receiver.wait()
+        note = json.loads(receiver.bodies[0])["note"]
+        assert "\n" not in note
+        assert "\x1b" not in note
+        assert "line one" in note and "line two" in note
+    finally:
+        receiver.stop()
+
+
+def test_the_mailbox_row_says_when_he_did_not_take_the_recommendation(db, monkeypatch):
+    """The other half of the same failure: a letter reads as agreement until
+    somebody checks what was recommended."""
+    receiver = _Receiver()
+    origin = receiver.start()
+    try:
+        _answer_through_the_gallery(
+            db, monkeypatch, origin, note="", recommended="a", letter="b"
+        )
+
+        assert receiver.wait()
+        body = json.loads(receiver.bodies[0])
+        assert body["answer"] == "b"
+        assert body["recommended"] == "a"
+        assert body["differs_from_recommended"] is True
+    finally:
+        receiver.stop()
+
+
+def test_taking_the_recommendation_is_not_flagged_as_departing_from_it(db, monkeypatch):
+    receiver = _Receiver()
+    origin = receiver.start()
+    try:
+        _answer_through_the_gallery(
+            db, monkeypatch, origin, note="", recommended="a", letter="a"
+        )
+
+        assert receiver.wait()
+        body = json.loads(receiver.bodies[0])
+        assert body["differs_from_recommended"] is False
+    finally:
+        receiver.stop()
+
+
+def test_a_question_posed_without_a_recommendation_never_reads_as_a_departure(
+    db, monkeypatch
+):
+    """There is nothing to depart from. A receiver told otherwise would flag
+    every answer on every page that simply did not recommend anything."""
+    receiver = _Receiver()
+    origin = receiver.start()
+    try:
+        _answer_through_the_gallery(db, monkeypatch, origin, note="", letter="b")
+
+        assert receiver.wait()
+        body = json.loads(receiver.bodies[0])
+        assert body["recommended"] is None
+        assert body["differs_from_recommended"] is False
+    finally:
+        receiver.stop()

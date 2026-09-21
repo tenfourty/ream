@@ -524,6 +524,12 @@ def answer(
             (decision_id,),
         ).fetchone()
 
+    # Read back as a row rather than indexed by position, because the fields
+    # below are exactly the ones a positional read gets wrong: the comment above
+    # about row[12] silently becoming `acknowledged_by` is the same mistake one
+    # column earlier, and this one would mis-send what Jeremy wrote.
+    answered = _row_to_decision(updated)
+
     # Fire-and-forget, after the transaction above has actually committed: a nudge
     # that fails must never be mistaken for an answer that failed (see nudge.py's
     # own docstring), and `event_seq` must name a row that is durable before any
@@ -535,8 +541,18 @@ def answer(
         agent=owning_agent,
         summary=summary,
         event_id=str(event_seq),
+        # HIS WORDS REACH THE MAILBOX TOO, not only the journal (homelab-873).
+        # The journal has carried the note since the day it was needed, and the
+        # nudge -- the thing that actually wakes a seat -- carried "a: <label>"
+        # and nothing else, so a session woken by it and acting immediately
+        # acted on the letter alone. The recommendation travels for the same
+        # reason: a letter that departs from it reads as agreement until
+        # somebody checks.
+        note=answered.answer_note,
+        letter=answered.answer,
+        recommended=answered.recommended,
     )
-    return _row_to_decision(updated)
+    return answered
 
 
 def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
