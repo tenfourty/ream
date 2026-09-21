@@ -425,20 +425,69 @@ def test_a_non_json_2xx_response_is_treated_as_a_failure(tmp_path, monkeypatch, 
         server.stop()
 
 
-def test_publish_and_update_print_only_id_url_revision(
+def test_stdout_is_a_whitelist_and_the_set_is_deliberate(
     live, key_file, tmp_path, capsys
 ):
+    """The point of this test is not the particular fields -- it is that stdout
+    is a WHITELIST, so a field the server starts returning can never reach a
+    caller's parsing unreviewed. The set grew on 21 Sep and it grew on purpose.
+
+    `page_url` because `url` is the page's own origin and 303s to the gallery,
+    so the one field that looked pasteable was the one that did not take a
+    reader to the page (homelab-ij8.42). `title` and `bytes` because the
+    publisher cannot see what it published: a substitution that silently did
+    nothing looked identical to one that worked (homelab-ij8.43).
+    """
     path, _token = key_file
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>hi</body></html>")
+    expected = {"id", "page_url", "url", "revision", "title", "bytes"}
 
     client.main(["--key-file", str(path), str(page), "--title", "Board"])
     published = json.loads(capsys.readouterr().out.strip())
-    assert set(published.keys()) == {"id", "url", "revision"}
+    assert set(published.keys()) == expected
 
     client.main(["--key-file", str(path), str(page), "--update", published["id"]])
     updated = json.loads(capsys.readouterr().out.strip())
-    assert set(updated.keys()) == {"id", "url", "revision"}
+    assert set(updated.keys()) == expected
+
+
+def test_the_two_addresses_are_not_the_same_and_one_is_for_a_person(
+    live, key_file, tmp_path, capsys
+):
+    """An agent nearly pasted the content origin into a report to another
+    session. It 303s, so it is not wrong exactly -- it is the address that
+    looks right and is not the one to share."""
+    path, _token = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>hi</body></html>")
+    client.main(["--key-file", str(path), str(page), "--title", "Board"])
+    published = json.loads(capsys.readouterr().out.strip())
+
+    assert published["page_url"] != published["url"]
+    assert published["page_url"].endswith(f"/a/{published['id']}")
+    assert published["id"] in published["url"], "the origin still names the page"
+
+
+def test_the_echo_says_what_was_actually_stored(
+    live, key_file, tmp_path, capsys
+):
+    """The reported case: an agent replaced two timestamp placeholders with sed
+    and realised that had the sed failed, the response would have been
+    identical and the page would have shown the raw placeholder to Jeremy."""
+    path, _token = key_file
+    page = tmp_path / "page.html"
+    body = "<!doctype html><body>a real page, not a placeholder</body></html>"
+    page.write_text(body)
+
+    client.main(["--key-file", str(path), str(page), "--title", "Board"])
+    seen = capsys.readouterr()
+    published = json.loads(seen.out.strip())
+    assert published["title"] == "Board"
+    assert published["bytes"] == len(body.encode())
+    # And in words, on stderr, where a person reads it.
+    assert 'stored "Board"' in seen.err
+    assert f"{len(body.encode())} bytes" in seen.err
 
 
 def test_a_409_costs_exactly_one_patch_attempt_and_no_silent_second(
@@ -729,7 +778,12 @@ def test_the_listing_keeps_its_three_columns_and_adds_state_only_when_there_is_s
     # each -- and that is why this asserts a prefix rather than a column count,
     # which is what it used to do and what broke when the date arrived.
     assert plain.split("\t")[:3] == [artifact_id, "Board", plain.split("\t")[2]]
-    assert plain.split("\t")[2].startswith("https://")
+    # The GALLERY address, not the page's own origin: this column is read by a
+    # person and the origin 303s (homelab-ij8.42). Asserted as "the address of
+    # this page in the gallery" rather than as "starts with https", which was
+    # only ever true because `url_for` hardcodes the scheme -- the gallery
+    # origin is whatever the deployment sets, and http on a loopback in tests.
+    assert plain.split("\t")[2].endswith(f"/a/{artifact_id}")
     assert re.match(r"\d{4}-\d{2}-\d{2}$", plain.split("\t")[3]), "then the date"
 
     client.main(["--key-file", str(path), "--pin", artifact_id])

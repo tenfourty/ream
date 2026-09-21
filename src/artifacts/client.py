@@ -660,7 +660,12 @@ def _print_published(result: dict) -> None:
         json.dumps(
             {
                 field: result[field]
-                for field in ("id", "url", "revision")
+                # `page_url` is the address a person can follow; `url` is the
+                # page's own origin, which 303s to the gallery, and was the one
+                # field that looked pasteable and was not (homelab-ij8.42).
+                # Both are here: `url` because callers already read it, and
+                # `page_url` because it is the one to put in a message.
+                for field in ("id", "page_url", "url", "revision", "title", "bytes")
                 if field in result
             }
         )
@@ -668,6 +673,15 @@ def _print_published(result: dict) -> None:
     # ON STDERR, not in the JSON: stdout is a contract every existing caller
     # already parses, and a new key there is a change to it. This is a note to
     # the person or agent running the command, which is where it belongs.
+    # WHAT WAS ACTUALLY STORED, in words (homelab-ij8.43). The publisher cannot
+    # see its own page, so a substitution that silently did nothing looks
+    # exactly like one that worked -- the title and the byte count are the
+    # cheapest thing that catches it.
+    if result.get("title") and result.get("bytes"):
+        print(
+            f'stored "{result["title"]}", {result["bytes"]} bytes',
+            file=sys.stderr,
+        )
     if result.get("unchanged"):
         print(
             "unchanged -- the body was identical, so no new version was minted. "
@@ -875,7 +889,11 @@ def main(argv: list[str] | None = None) -> int:
                 when = (item.get("updated_at") or "")[:10]
                 extra = "\t".join(x for x in (when, shelf) if x)
                 suffix = f"\t{extra}" if extra else ""
-                print(f"{item['id']}\t{item['title']}\t{item['url']}{suffix}")
+                # The GALLERY address, which is the one a reader can open.
+                # This column used to print the page's own origin, which 303s
+                # -- a table of links none of which went anywhere useful.
+                where = item.get("page_url") or item["url"]
+                print(f"{item['id']}\t{item['title']}\t{where}{suffix}")
             return 0
         for flag, route, payload in _SHELF_ACTIONS:
             artifact_id = getattr(args, flag)

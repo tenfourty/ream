@@ -116,6 +116,23 @@ class Published:
     # Always False from `publish` and `duplicate`: a page that did not exist a
     # moment ago has not failed to change.
     unchanged: bool = False
+    # THE ADDRESS A HUMAN CAN ACTUALLY FOLLOW (homelab-ij8.42). `url` is the
+    # page's own origin, which 303s to the gallery by design -- so the one
+    # field that looks like the thing to paste into a message is the one field
+    # that does not take the reader to the page. An agent nearly pasted it into
+    # a report to another session, and agents that cannot find the right shape
+    # invent one.
+    page_url: str = ""
+    # WHAT WAS ACTUALLY STORED (homelab-ij8.43). The publisher cannot see its
+    # own page -- the content origin only answers a framed request holding a
+    # capability token no agent is given -- so a substitution that silently did
+    # nothing looks exactly like one that worked. An agent that had just
+    # replaced two timestamp placeholders with sed pointed this out: had the
+    # sed failed, the response would have been identical and the page would
+    # have shown the raw placeholder to Jeremy. A title echo and a byte count
+    # catch a whole class of that for the price of two fields.
+    title: str = ""
+    bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -140,6 +157,10 @@ class ArtifactRow:
     # (homelab-ij8.70).
     updated_at: datetime
     url: str
+    # The gallery address, for the same reason `Published` carries one: `url`
+    # is the page's own origin and 303s, so a listing printed for a person was
+    # a column of links none of which went anywhere useful (homelab-ij8.42).
+    page_url: str = ""
     # The two pieces of shelf state. They are on the row rather than behind a
     # separate call because an agent that can archive a page has to be able to
     # tell whether it already is -- otherwise "put it back" is a guess, and the
@@ -171,6 +192,14 @@ def gallery_origin() -> str:
 
 def url_for(artifact_id: str) -> str:
     return f"https://{artifact_id}.{content_domain()}/"
+
+
+def page_url_for(artifact_id: str) -> str:
+    """Where a person opens this page: the gallery, behind Jeremy's login.
+
+    `url_for` is the page's own origin and 303s here anyway, so this is the
+    address to put in a message, a report or a bead (homelab-ij8.42)."""
+    return f"{gallery_origin().rstrip('/')}/a/{artifact_id}"
 
 
 def content_url(artifact_id: str, read_token: str) -> str:
@@ -322,7 +351,13 @@ def publish(
             (artifact_id,),
         )
     return Published(
-        id=artifact_id, version=1, revision=revision, url=url_for(artifact_id)
+        id=artifact_id,
+        version=1,
+        revision=revision,
+        url=url_for(artifact_id),
+        page_url=page_url_for(artifact_id),
+        title=title,
+        bytes=len(body.encode()),
     )
 
 
@@ -408,9 +443,15 @@ def patch(
             return Published(
                 id=artifact_id,
                 url=url_for(artifact_id),
+                page_url=page_url_for(artifact_id),
                 revision=expected_revision,
                 version=current,
                 unchanged=True,
+                # The title AFTER this call, which is the new one on a rename
+                # and the stored one otherwise -- the echo is only worth having
+                # if it reflects what a reader will now see.
+                title=title if title is not None else row[1],
+                bytes=len(body.encode()),
             )
 
         _check_secrets(body, "body", agent=agent, artifact_id=artifact_id)
@@ -468,7 +509,13 @@ def patch(
             # before adding any such write path.
             raise RevisionMismatch() from exc
     return Published(
-        id=artifact_id, version=n, revision=revision, url=url_for(artifact_id)
+        id=artifact_id,
+        version=n,
+        revision=revision,
+        url=url_for(artifact_id),
+        page_url=page_url_for(artifact_id),
+        title=title if title is not None else row[1],
+        bytes=len(body.encode()),
     )
 
 
@@ -493,6 +540,7 @@ def get_owned(db: Database, agent: str, artifact_id: str) -> ArtifactRow:
         revision=revision[0],
         updated_at=row[5],
         url=url_for(row[0]),
+        page_url=page_url_for(row[0]),
         archived_at=row[6],
         pinned_at=row[7],
     )
@@ -550,6 +598,7 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             revision=row[5],
             updated_at=row[6],
             url=url_for(row[0]),
+            page_url=page_url_for(row[0]),
             archived_at=row[7],
             pinned_at=row[8],
         )
@@ -893,6 +942,7 @@ def list_deleted(db: Database, agent: str | None = None) -> list[ArtifactRow]:
             revision=row[5],
             updated_at=row[6],
             url=url_for(row[0]),
+            page_url=page_url_for(row[0]),
             archived_at=row[7],
             pinned_at=row[8],
             deleted_at=row[9],
