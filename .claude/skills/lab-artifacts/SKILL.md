@@ -399,6 +399,23 @@ artifacts-decide ack <decision id>    # "I have seen it"
 artifacts-decide close <decision id>  # withdraw a question you no longer need
 ```
 
+**Say what it caused, and what moved under it.**
+
+```bash
+artifacts-decide outcome <decision id> "PR #14 opened; the job was smaller than I claimed"
+```
+
+Append-only, and allowed **while the question is still open** &mdash; which is
+the case that matters most. If you correct the framing of a page after posing a
+question on it, say so here: a question whose premise moved after he read it is
+one he can answer wrongly through no fault of his own. On an open question it
+appears above the buttons, headed *Since you were asked*, so he reads it before
+choosing. On an answered one it is *What it led to*.
+
+There is no edit and no delete. Several accumulate and none replaces another,
+because the thing this exists to end is a summary somebody keeps rewriting until
+what actually happened is gone. If you were wrong, append the correction.
+
 <details><summary>the same reads as curl</summary>
 
 ```bash
