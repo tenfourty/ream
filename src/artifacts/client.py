@@ -15,13 +15,18 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import stat
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from artifacts import csp
 
 _DEFAULT_API = "https://artifacts.tenfourty.site/api/v1"
 _DEFAULT_KEY_FILE = "~/.config/artifacts/key"
@@ -388,6 +393,136 @@ def _shelf(action: str, artifact_id: str, key: str, payload: dict) -> dict:
     )
 
 
+def _inline_scripts(body: str) -> list[tuple[int, str]]:
+    """Every inline <script> in the page, as (first line number, source).
+
+    A script with a `src` is skipped: it is somebody else's file, the CSP will
+    refuse it anyway, and `csp.check` already reports it as remote_script.
+    """
+    out: list[tuple[int, str]] = []
+    for match in re.finditer(
+        r"<script\b(?![^>]*\bsrc=)[^>]*>(.*?)</script\s*>",
+        body,
+        re.IGNORECASE | re.DOTALL,
+    ):
+        source = match.group(1)
+        if source.strip():
+            out.append((body.count("\n", 0, match.start(1)) + 1, source))
+    return out
+
+
+def _syntax_findings(body: str) -> list[str]:
+    """Run `node --check` over each inline script. Empty when node is absent.
+
+    From the cove seat's own note on homelab-ij8.29: "it catches a
+    trailing-comma typo for nothing, in a validator that already parses the
+    file." A page whose script does not parse renders as a page with no script
+    at all -- the same silent half-failure the CSP shapes are about, reached by
+    a different route.
+
+    SKIPPED, NOT FAILED, where node is missing. A checker that refuses to run
+    is not evidence of a problem, and saying so is the caller's job, not this
+    function's -- see `_check_page`, which reports the skip out loud rather
+    than letting a clean result mean two different things.
+    """
+    node = shutil.which("node")
+    if node is None:
+        return []
+    findings: list[str] = []
+    for line, source in _inline_scripts(body):
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".js", delete=False, encoding="utf-8"
+        ) as handle:
+            handle.write(source)
+            path = handle.name
+        try:
+            done = subprocess.run(  # noqa: S603 -- node from which(), path we just wrote
+                [node, "--check", path],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            if done.returncode != 0:
+                # node names OUR temporary file, which tells the author
+                # nothing. The line it reports is relative to the script, so
+                # it is offset back onto the page.
+                detail = (done.stderr or "").strip().splitlines()
+                first = next(
+                    (
+                        ln.strip()
+                        for ln in detail
+                        if "SyntaxError" in ln or "Error" in ln
+                    ),
+                    "does not parse",
+                )
+                findings.append(f"inline script at line {line}: {first}")
+        finally:
+            pathlib.Path(path).unlink(missing_ok=True)
+    return findings
+
+
+def check_page(body: str) -> tuple[list, list[str], bool]:
+    """(csp findings, syntax findings, whether node ran). No network, no key."""
+    return csp.check(body), _syntax_findings(body), shutil.which("node") is not None
+
+
+def _check_page(file_path: str) -> int:
+    """`--check`: the REFUSING half of the CSP advisory, run before publishing.
+
+    homelab-ij8.29, first reported by the cove seat on 19 Sep: a page that
+    violates the CSP does not error, it silently loses its styling or its
+    images -- "the worst failure mode for something you publish and walk away
+    from". That agent hand-rolled its own grep for `<form`, `src=`, `<link`,
+    `@import` and any non-gallery URL, and observed that every agent would
+    rediscover it.
+
+    They will not now. The shapes here are the SAME table the service uses
+    (`artifacts.csp`), derived from the real directives in the served policy,
+    so this cannot drift from what the browser will actually do -- which a
+    hand-rolled grep in each agent's own repo certainly would.
+
+    Refuses where the server only warns, deliberately, and the reasoning is
+    csp.py's own: the server cannot refuse a page that is 95 % right over a
+    literal `<form` inside an escaped code sample, because the author cannot
+    see the page and so cannot see what upset it. Here the author IS looking,
+    at a file in front of them, and may simply publish anyway.
+
+    Needs no key and makes no request: it reads a file. That matters for the
+    case it exists for -- run it in CI, run it before you have a key, run it
+    on a page you have not decided to publish yet.
+    """
+    body = _read_page(file_path)
+    findings, syntax, node_ran = check_page(body)
+    for warning in findings:
+        print(
+            f"{file_path}:{warning.line}: {warning.shape} -- {warning.hint}",
+            file=sys.stderr,
+        )
+    for problem in syntax:
+        print(f"{file_path}: {problem}", file=sys.stderr)
+    if not node_ran:
+        # SAID OUT LOUD. A clean result that quietly skipped half the checks is
+        # the shape this whole repo keeps meeting: a green signal that does not
+        # mean what it reads as.
+        print(
+            f"{file_path}: note -- node is not installed here, so inline "
+            "scripts were NOT syntax-checked",
+            file=sys.stderr,
+        )
+    total = len(findings) + len(syntax)
+    if total == 0:
+        print(f"{file_path}: nothing the serving policy will refuse")
+        return 0
+    thing = "problem" if total == 1 else "problems"
+    print(
+        f"{file_path}: {total} {thing} -- this page would publish and then "
+        "half-render, with nothing in any log you can see",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def _print_warnings(result: dict) -> None:
     """CSP advisories to STDERR, one line each, so stdout stays parseable JSON.
 
@@ -536,6 +671,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--key-file")
     parser.add_argument(
+        "--check",
+        metavar="FILE",
+        help=(
+            "refuse a page the serving policy would half-render, before "
+            "publishing it. Reads a file; needs no key and makes no request."
+        ),
+    )
+    parser.add_argument(
         "--session",
         metavar="LABEL",
         help=(
@@ -576,6 +719,16 @@ _SHELF_ACTIONS = (
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv if argv is not None else sys.argv[1:])
     use_session(declared_session(args.session))
+    # BEFORE the key is read, because this is the one thing here that needs
+    # none. Half the value of a pre-publish check is being able to run it in
+    # CI, or on a machine that has never been given a key, or on a page nobody
+    # has decided to publish yet.
+    if args.check:
+        try:
+            return _check_page(args.check)
+        except UsageError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     try:
         key = _read_key(_key_file_path(args.key_file))
     except UsageError as exc:

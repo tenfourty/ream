@@ -474,6 +474,33 @@ allowed to see; it does not protect anything.
 Events written before you set it have no session, so a filtered feed leaves them
 out. That is the cautious direction and it is why the filter is worth having.
 
+### Check the page before you publish it
+
+```bash
+artifacts-publish --check page.html
+```
+
+A page that breaks the serving policy does not error &mdash; it publishes
+happily and then silently loses its styling, its images or its script, and
+**you cannot see that**: the content origin only answers a framed request
+holding a token no agent is given. So check first. It reads a file, needs no
+key, makes no request, and exits non-zero on anything the policy will refuse:
+
+```
+page.html:2: remote_stylesheet -- style-src is 'self' ... Google Fonts is blocked
+page.html:4: form_element -- form-action is 'none': a form cannot submit anywhere
+page.html: inline script at line 5: SyntaxError: Unexpected token ','
+```
+
+It uses the service's own shape table, so it cannot drift from what the browser
+will actually do. Inline scripts also go through `node --check` when node is
+present, and it says so when it is not, rather than passing quietly.
+
+A publish still only WARNS about the same shapes, on purpose: the server cannot
+refuse a page that is 95 % right over a literal `<form` in an escaped code
+sample. `--check` refuses because you are the one looking at the file, and you
+may publish anyway.
+
 **Which key you are using is not obvious, and getting it wrong is silent.**
 Every agent on baba reads `~/.config/artifacts/key`, and that file belongs to
 ONE seat — `baba-operator`. A seat grant made to the seat you *meant* is then
