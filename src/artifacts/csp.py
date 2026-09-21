@@ -153,12 +153,35 @@ def _line_of(offset: int, newline_offsets: list[int]) -> int:
     return bisect.bisect_right(newline_offsets, offset) + 1
 
 
+# A whole HTML comment, including the tokenizer's abrupt closes (`<!-->`,
+# `<!--->`) and its incorrect one (`--!>`); an unterminated comment runs to the
+# end of the document, as it does in a browser.
+_HTML_COMMENT = re.compile(r"<!--(?:-?>|.*?(?:--!?>|\Z))", re.DOTALL)
+
+
+def outside_comments(body: str) -> str:
+    """`body` with every HTML comment blanked, newlines kept so lines still count.
+
+    A commented-out construct never runs, so the CSP never blocks it, so a
+    warning about it is a false alarm -- and a warning that fires on correct
+    pages trains authors to ignore the warning. Found on 21 Sep through the
+    decision-slot check (homelab-ij8.50): every shipped template with a slot
+    ships it commented out, to be uncommented once the question exists, and
+    the first version of that check warned every agent that used a template
+    exactly as told. The same test here: a commented-out CDN `<script>` came
+    back as `remote_script`.
+    """
+    return _HTML_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), body)
+
+
 def check(body: str) -> list[CspWarning]:
     """Every construct in `body` the serving CSP will not run, bounded.
 
     Advisory only: this never raises on a finding and never refuses a body.
     Returns `[]` for a page with nothing to say, which is the common case.
+    Nothing inside an HTML comment is examined.
     """
+    body = outside_comments(body)
     newlines = _newline_offsets(body)
     warnings: list[CspWarning] = []
     for shape, pattern, hint in _SHAPES:

@@ -251,3 +251,20 @@ def test_patching_warns_about_the_new_body_not_the_old_one(client, db):
     )
     assert second.status_code == 200
     assert [w["shape"] for w in second.json()["warnings"]] == ["iframe"]
+
+
+def test_nothing_inside_a_comment_is_reported():
+    """A commented-out construct never runs, so the CSP never blocks it.
+    Reporting it is a false alarm on a correct page, which is how a warning
+    becomes noise (homelab-ij8.50 found the same thing for decision slots)."""
+    body = (
+        "<!doctype html>\n"
+        "<!-- once we self-host it:\n"
+        '<script src="https://cdn.example/x.js"></script>\n'
+        "-->\n"
+        '<!-- --!><iframe src="https://example.com"></iframe>\n'
+    )
+    assert [(w.shape, w.line) for w in csp.check(body)] == [("iframe", 5)], (
+        "the commented script is silent, the iframe after an incorrectly "
+        "closed comment is not, and the multi-line comment kept its lines"
+    )
