@@ -343,3 +343,36 @@ def test_open_only_still_leaves_a_withdrawn_question_out(
 
     assert _run(["answers", page.id, "--open-only"], path) == 0
     assert "no questions on that page are still open" in capsys.readouterr().out
+
+
+def test_a_global_flag_after_the_command_says_so_rather_than_blaming_the_install(
+    capsys,
+):
+    """I walked into this myself four minutes after installing the tool.
+
+    `artifacts-decide ask <id> ... --session X` is a POSITION error -- --session
+    is declared on the top-level parser -- but argparse refuses it with the same
+    "unrecognized arguments" wording an absent flag gets. The stale-install hint
+    then told me to refresh an install I had just made, which is the diagnostic
+    misdiagnosing, and the worst kind: confidently, at the one moment the reader
+    is paying attention.
+    """
+    with pytest.raises(SystemExit):
+        decide.main(["ask", "x", "--question", "q", "--option", "a=1",
+                     "--session", "seat/1"])
+    err = capsys.readouterr().err
+    assert "goes BEFORE the command" in err
+    assert "ARTIFACTS_SESSION" in err, "and names the way that avoids the trap"
+    assert "uv tool install" not in err, (
+        "it blamed the install for a flag that is present and merely misplaced"
+    )
+
+
+def test_the_hint_names_the_command_you_actually_ran(capsys):
+    """It said "this copy of artifacts-publish" when run as artifacts-decide,
+    because the message was a module constant in the other tool's file. Small,
+    and exactly the kind of thing that makes a reader distrust the rest of it.
+    """
+    with pytest.raises(SystemExit):
+        decide.main(["list", "--no-such-flag"])
+    assert "this copy of artifacts-decide" in capsys.readouterr().err

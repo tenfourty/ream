@@ -478,11 +478,18 @@ def installed_stamp() -> str:
 # So the age of the running code is stated at the only moment anybody is
 # looking: when a flag they expected was refused.
 _STALE_HINT = (
-    "\nthis copy of artifacts-publish was installed {stamp}. A flag added to the"
-    "\nrepo after that is not in it -- committed and installed are different"
-    "\nstates. If you expected this flag to exist, refresh the install:"
+    "\nthis copy of {prog} was installed {stamp}. A flag added to the repo after"
+    "\nthat is not in it -- committed and installed are different states. If you"
+    "\nexpected this flag to exist, refresh the install:"
     "\n  uv tool install <path to the artifacts checkout> --force"
 )
+
+# A global flag placed AFTER a subcommand is refused by argparse with the same
+# "unrecognized arguments" wording an absent flag gets, which sends the reader
+# to reinstall a tool that is perfectly current. Caught by walking into it:
+# `artifacts-decide ask <id> ... --session X` told me to refresh an install I
+# had made four minutes earlier.
+_GLOBAL_FLAGS = ("--session", "--key-file", "--version")
 
 
 class _Parser(argparse.ArgumentParser):
@@ -495,7 +502,22 @@ class _Parser(argparse.ArgumentParser):
         # them would train the reader to skip it, which is how the hint stops
         # working on the day it is right.
         if "unrecognized arguments" in message or "invalid choice" in message:
-            message += _STALE_HINT.format(stamp=installed_stamp())
+            # The likelier explanation first, when it applies. A global flag
+            # after a subcommand is a position error, not a missing feature,
+            # and telling somebody to reinstall a current tool wastes the one
+            # moment they are paying attention.
+            misplaced = [f for f in _GLOBAL_FLAGS if f in message]
+            if misplaced:
+                message += (
+                    f"\n{misplaced[0]} is a global flag: it goes BEFORE the "
+                    f"command, not after.\n  {self.prog.split()[0]} "
+                    f"{misplaced[0]} VALUE <command> ...\n"
+                    f"or set $ARTIFACTS_SESSION once for the whole session."
+                )
+            else:
+                message += _STALE_HINT.format(
+                    prog=self.prog.split()[0], stamp=installed_stamp()
+                )
         super().error(message)
 
 
