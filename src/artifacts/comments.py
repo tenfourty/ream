@@ -23,11 +23,11 @@ An unknown artifact and someone else's look identical either way (both `NotFound
 matching `store.publish`/`store.patch`.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from psycopg.types.json import Jsonb
 
-from artifacts import events, ids, nudge, store
+from artifacts import events, ids, nudge, store, text
 from artifacts.db import Database
 
 # A comment is a remark about a page, not a page in itself -- 8 KB is generous for
@@ -80,6 +80,11 @@ class CommentRow:
     created_at: str  # isoformat
     resolved_at: str | None
     resolved_by: str | None
+    # "" when the comment quotes nothing, else "current" or "changed" -- see
+    # `quote_state`. Not stored: it is a fact about the page as it is NOW, and
+    # storing it would make it a fact about the page as it was when somebody
+    # last looked.
+    quote_state: str = ""
 
 
 class InvalidAnchor(Exception):
@@ -322,6 +327,59 @@ def add(
     return _row_to_comment(created)
 
 
+def quote_state(quote: str, current_body: str) -> str:
+    """Is the text this comment quotes still on the page? "", "current" or
+    "changed".
+
+    homelab-ij8.18's re-anchoring rule, and the reason it is a rule: a comment
+    is words about OTHER words. Republish the page and the words it was about
+    can be gone, while the comment sits there looking like it is about
+    whatever is in that spot now. The design says it plainly -- never silently
+    move a comment onto text it was not about -- so when the quote no longer
+    matches, the comment stays attached to the version it was made on and says
+    so.
+
+    Compared on the page's READABLE WORDS, via `text.searchable`, not on its
+    HTML: a quote is what a reader selected, so it never carries the tags that
+    may sit inside it, and an untouched sentence that gained an <em> must not
+    read as changed. Whitespace collapsed and case folded on both sides for
+    the same reason -- neither is something a reader chose.
+
+    "" for a comment that quotes nothing: most of them, today. A whole-page
+    comment cannot go stale in this sense, and claiming otherwise would put a
+    warning on a comment that is perfectly fine.
+    """
+    words = text.searchable(current_body)
+    return _state_against(quote, words, _tight(words))
+
+
+def _tight(value: str) -> str:
+    """Lowercased with every space removed.
+
+    Tag stripping turns `<em>midnight</em>.` into `midnight .`, so a sentence
+    that only gained emphasis would read as changed against a quote taken
+    before it -- the exact false alarm this must not raise, since the words
+    the reader selected have not moved at all. Neither side's spacing is
+    something a reader chose, so neither side keeps it.
+    """
+    return "".join(value.split()).lower()
+
+
+def _state_against(quote: str, words: str, tight_words: str) -> str:
+    """`quote_state`'s comparison, against words already extracted.
+
+    Separate because `text.searchable` walks the whole page: a thread of
+    twenty comments would walk it twenty times if each row called
+    `quote_state` itself. Same rule, one reading of the page.
+    """
+    needle = " ".join(quote.split()).lower()
+    if not needle:
+        return ""
+    if needle in words or _tight(quote) in tight_words:
+        return "current"
+    return "changed"
+
+
 def list_for_artifact(
     db: Database, artifact_id: str, *, include_resolved: bool = False
 ) -> list[CommentRow]:
@@ -337,7 +395,27 @@ def list_for_artifact(
     sql += " order by comment.created_at asc, comment.id asc"
     with db.connect() as conn:
         rows = conn.execute(sql, (artifact_id,)).fetchall()
-    return [_row_to_comment(row) for row in rows]
+        found = [_row_to_comment(row) for row in rows]
+        # The page as it is NOW, read once, and only when something actually
+        # quotes it: most comments quote nothing, and loading a 40 KB body to
+        # tell them all "" would be a query per page view for no answer.
+        if any(row.quote for row in found):
+            body = conn.execute(
+                "select v.body from artifact a"
+                " join version v on v.artifact_id = a.id and v.n = a.current_version"
+                " where a.id = %s",
+                (artifact_id,),
+            ).fetchone()
+            words = text.searchable(body[0]) if body else ""
+            tight_words = _tight(words)
+            # `replace`, not assignment: CommentRow is frozen, which is right --
+            # a row read out of the database is a record, and code that can
+            # edit one in place is code that can silently disagree with it.
+            found = [
+                replace(row, quote_state=_state_against(row.quote, words, tight_words))
+                for row in found
+            ]
+    return found
 
 
 def list_for_agent(

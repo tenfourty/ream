@@ -358,6 +358,16 @@ main{display:block}
   border-radius:.6rem;padding:.7rem .85rem;margin:0 0 .7rem}
 .thread.settled{background:transparent}
 .bubbles{list-style:none;margin:0;padding:0}
+/* What a thread is ABOUT, above what was said about it -- the passage is the
+   subject of the conversation, so it reads first, set apart and quieter. */
+.cquote{margin:0 0 .5rem;padding:.35rem 0 .35rem .7rem;
+  border-left:3px solid var(--chip);font-size:.8125rem;line-height:1.5;
+  color:var(--muted);font-style:italic;overflow-wrap:anywhere}
+/* Said plainly rather than in a warning colour: the comment is not wrong and
+   nothing is broken -- the page moved on, and he is being told which version
+   the words were on. */
+.cmoved{display:block;margin-top:.3rem;font-style:normal;font-size:.75rem;
+  color:var(--muted)}
 .cmt{padding:.35rem 0;border-left:2px solid var(--line);padding-left:.7rem;
   margin:0 0 .35rem}
 .cmt.human{border-left-color:var(--accent)}
@@ -1671,6 +1681,30 @@ def _render_comments(rows: list, artifact_id: str) -> str:
             f'<p>{escape(row.body)}</p></li>'
         )
 
+    def quoted(root) -> str:
+        """What the thread is about, when it is about a particular passage.
+
+        The drawer used to show only the reply, so an agent that anchored a
+        comment to a sentence sent Jeremy a remark with no subject. And a page
+        is republished constantly here -- this one has had forty-odd versions
+        in two days -- so the quoted words can be gone while the comment sits
+        there looking like it is about whatever now occupies that spot. When
+        they are gone the thread says so and names the version it was made on,
+        rather than silently re-attaching to text it was never about
+        (homelab-ij8.18's re-anchoring rule).
+        """
+        if not root.quote:
+            return ""
+        note = (
+            ""
+            if root.quote_state != "changed"
+            else (
+                '<span class="cmoved">This text is no longer on the page &mdash; '
+                f"it was there in version {int(root.version_n)}.</span>"
+            )
+        )
+        return f'<blockquote class="cquote">{escape(root.quote)}{note}</blockquote>'
+
     def thread(root) -> str:
         kids = "".join(bubble(r) for r in replies.get(root.id, []))
         resolved = root.resolved_at is not None
@@ -1694,6 +1728,7 @@ def _render_comments(rows: list, artifact_id: str) -> str:
         )
         return (
             f'<li class="thread{" settled" if resolved else ""}">'
+            f"{quoted(root)}"
             f"<ul class=\"bubbles\">{bubble(root)}{kids}</ul>{reply}{action}</li>"
         )
 

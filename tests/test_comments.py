@@ -562,3 +562,154 @@ def test_the_gallery_resolves_for_jeremy_who_owns_nothing(db):
     done = comments.resolve(db, thread.id, by="jeremy", agent=None)
     assert done.resolved_at is not None
     assert done.resolved_by == "jeremy"
+
+
+# --- the text a comment is about, and whether it is still there ---------------
+#
+# homelab-ij8.18's re-anchoring rule. A comment is words about OTHER words, and
+# a page here is republished constantly -- so the words it was about can be
+# gone while the comment sits where they used to be. The design says it
+# plainly: never silently move a comment onto text it was not about.
+
+
+QUOTED = (
+    "<!doctype html><html><head><title>Board</title></head><body>"
+    "<p>The backups run at midnight.</p></body></html>"
+)
+
+
+def test_a_quote_still_on_the_page_reads_as_current(client, db):
+    art = store.publish(db, "seat", "Board", QUOTED)
+    comments.add(
+        db,
+        artifact_id=art.id,
+        author_kind="human",
+        author="jeremy",
+        body="Why then?",
+        anchor={"kind": "range", "path": "/p[1]", "start": 0, "end": 29},
+        quote="The backups run at midnight.",
+    )
+    [row] = comments.list_for_artifact(db, art.id)
+    assert row.quote_state == "current"
+
+
+def test_a_quote_the_page_has_moved_past_says_so(client, db):
+    art = store.publish(db, "seat", "Board", QUOTED)
+    comments.add(
+        db,
+        artifact_id=art.id,
+        author_kind="human",
+        author="jeremy",
+        body="Why then?",
+        quote="The backups run at midnight.",
+    )
+    store.patch(
+        db,
+        "seat",
+        art.id,
+        QUOTED.replace("run at midnight", "run at four"),
+        art.revision,
+    )
+    [row] = comments.list_for_artifact(db, art.id)
+    assert row.quote_state == "changed"
+    assert row.version_n == 1, "and it stays attached to the version it was made on"
+
+
+def test_markup_around_a_quote_does_not_make_it_stale(client, db):
+    """A quote is what a reader selected, so it never carries the tags that may
+    sit inside it. Comparing HTML would call an untouched sentence changed the
+    moment a word in it was emphasised."""
+    art = store.publish(db, "seat", "Board", QUOTED)
+    comments.add(
+        db,
+        artifact_id=art.id,
+        author_kind="human",
+        author="jeremy",
+        body="Why then?",
+        quote="The backups run at midnight.",
+    )
+    store.patch(
+        db,
+        "seat",
+        art.id,
+        QUOTED.replace("midnight", "<em>midnight</em>"),
+        art.revision,
+    )
+    assert comments.list_for_artifact(db, art.id)[0].quote_state == "current"
+
+
+def test_whitespace_and_case_are_not_changes_either(client, db):
+    art = store.publish(db, "seat", "Board", QUOTED)
+    comments.add(
+        db,
+        artifact_id=art.id,
+        author_kind="human",
+        author="jeremy",
+        body="Why then?",
+        quote="the   BACKUPS\n run at midnight.",
+    )
+    assert comments.list_for_artifact(db, art.id)[0].quote_state == "current"
+
+
+def test_a_whole_page_comment_is_never_called_stale(client, db):
+    """Most comments quote nothing. A whole-page remark cannot go stale this
+    way, and marking one would put a warning on a comment that is fine."""
+    art = store.publish(db, "seat", "Board", QUOTED)
+    comments.add(
+        db, artifact_id=art.id, author_kind="human", author="jeremy", body="Nice page."
+    )
+    assert comments.list_for_artifact(db, art.id)[0].quote_state == ""
+
+
+def test_a_reply_carries_the_same_state_as_its_thread(client, db):
+    """A reply inherits the root's quote, so it must inherit its verdict --
+    one conversation cannot be half stale."""
+    art = store.publish(db, "seat", "Board", QUOTED)
+    root = comments.add(
+        db,
+        artifact_id=art.id,
+        author_kind="human",
+        author="jeremy",
+        body="Why then?",
+        quote="The backups run at midnight.",
+    )
+    comments.add(
+        db,
+        artifact_id=art.id,
+        author_kind="agent",
+        author="seat",
+        body="Because the disks are quiet.",
+        thread_root=root.id,
+        agent="seat",
+    )
+    store.patch(db, "seat", art.id, "<!doctype html><body>gone</body>", art.revision)
+    assert [r.quote_state for r in comments.list_for_artifact(db, art.id)] == [
+        "changed",
+        "changed",
+    ]
+
+
+def test_the_state_reaches_an_agent_through_the_api(client, db):
+    """An agent reading its comments has the same problem Jeremy does: it
+    cannot see the page either (homelab-ij8.35), so it must be told."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    published = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": QUOTED}, headers=auth(token)
+    ).json()
+    client.post(
+        f"/api/v1/artifacts/{published['id']}/comments",
+        json={"body": "Why then?", "quote": "The backups run at midnight."},
+        headers=auth(token),
+    )
+    client.patch(
+        f"/api/v1/artifacts/{published['id']}",
+        json={
+            "body": QUOTED.replace("midnight", "four"),
+            "expected_revision": published["revision"],
+        },
+        headers=auth(token),
+    )
+    got = client.get(
+        f"/api/v1/artifacts/{published['id']}/comments", headers=auth(token)
+    ).json()
+    assert [c["quote_state"] for c in got] == ["changed"]
