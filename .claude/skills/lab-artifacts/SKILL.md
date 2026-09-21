@@ -296,6 +296,24 @@ opposite of ephemeral.
 1. Pose the question. Lettered options, because that is how he answers.
 
 ```bash
+artifacts-decide ask "$ID" \
+  --question "How should sharing work?" \
+  --option a="Secret link" \
+  --option b="Named people only"
+```
+
+   **The first option is the recommendation** unless you pass `--recommend`.
+   That is his house style — the recommendation first, as (a), because that is
+   how he answers — so the common case needs no flag.
+
+   The key is read from the file exactly as `artifacts-publish` reads it, so it
+   never crosses a command line. Prefer this to curl: the curl form below still
+   works and is what this command sends, but every hand-rolled variant of it is
+   a fresh chance to put a token in a transcript.
+
+<details><summary>the same call as curl, if you need to vary something</summary>
+
+```bash
 akey | curl -sS -H @- -H 'content-type: application/json' \
   -X POST "$BASE/artifacts/$ID/decisions" -d '{
     "question": "How should sharing work?",
@@ -303,6 +321,8 @@ akey | curl -sS -H @- -H 'content-type: application/json' \
                 {"letter":"b","label":"Named people only"}],
     "recommended": "a"}'
 ```
+
+</details>
 
 2. In your page, put an empty element where the buttons should appear:
    `<div data-artifact-decision="<the decision id>"></div>`.
@@ -341,7 +361,7 @@ needs a decision id, a decision needs an artifact id, so the only sequence that
 works is:
 
 1. `artifacts-publish page.html --title "..."` — get the page's id
-2. `POST $BASE/artifacts/<id>/decisions` — get each decision's id
+2. `artifacts-decide ask <id> --question ... --option a=...` — get each decision's id
 3. put the slots in the page and `artifacts-publish page.html --update <id>`
 
 Write the slots first and you publish a page of empty divs with no error and no
@@ -362,6 +382,26 @@ your own note field beside the control.
 ### Reading his answer
 
 ```bash
+artifacts-decide answers "$ID"     # one page, answered ones included
+artifacts-decide list              # every page this key owns, open only
+artifacts-decide list --answered   # ...including the ones he has answered
+```
+
+An answered row leads with the letter, says whether he **tapped it** or a seat
+**relayed** it, and prints his note in full. An answer you have not collected
+yet says so and gives you the `ack` command. Nothing to report prints a
+sentence saying so rather than printing nothing — an empty result and a broken
+call look identical when both are silent, and this service has already lost a
+shift to that.
+
+```bash
+artifacts-decide ack <decision id>    # "I have seen it"
+artifacts-decide close <decision id>  # withdraw a question you no longer need
+```
+
+<details><summary>the same reads as curl</summary>
+
+```bash
 akey | curl -sS -H @- "$BASE/artifacts/$ID/decisions?include_answered=true"
 ```
 
@@ -370,11 +410,14 @@ decisions only, so a plain call after he has answered comes back empty — which
 reads exactly like the answers went nowhere. Each row carries `answer`,
 `answer_note`, `answered_at` and `answered_by` alongside the original question.
 
-**Then say you have it.** Reading an answer is not collecting it:
-
 ```bash
 akey | curl -sS -X POST -H @- "$BASE/decisions/<decision id>/acknowledge"
 ```
+
+</details>
+
+**Then say you have it.** Reading an answer is not collecting it —
+`artifacts-decide ack <decision id>`, or the curl above.
 
 Until you do, the gallery shows Jeremy that question marked *not picked up yet*,
 so one he answered correctly goes on sitting at the top of his page as though it
@@ -404,6 +447,19 @@ indistinguishable from one he tapped — the kind of record a later agent believ
 Record it as what it is:
 
 ```bash
+artifacts-decide record <decision id> \
+  --letter b \
+  --note "his exact words, or the exact label he tapped" \
+  --source telegram \
+  --said-at 2026-09-20T11:30:18Z
+```
+
+The command does not offer `--source page` at all, so the one thing you must
+never claim cannot be typed by accident.
+
+<details><summary>the same call as curl</summary>
+
+```bash
 akey | curl -sS -H @- -H 'content-type: application/json' \
   -X POST "$BASE/decisions/<decision id>/record" -d '{
     "letter": "b",
@@ -411,6 +467,8 @@ akey | curl -sS -H @- -H 'content-type: application/json' \
     "source": "telegram",
     "said_at": "2026-09-20T11:30:18Z"}'
 ```
+
+</details>
 
 `source` is `terminal`, `telegram`, `in-person` or `other` — never `page`, which
 means he tapped it himself. The recording seat comes from your key, not the body.
