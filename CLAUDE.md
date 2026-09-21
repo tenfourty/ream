@@ -183,6 +183,11 @@ changes for work that has a page on this service, republish that page
   same filesystem, validate it there, then one atomic `mv`. The diagnostic is
   worth memorising: **a syntax error in a script that passes `bash -n` means
   the file changed under a running process, not that the script is broken.**
+- **`pkill -f <pattern>` matches the shell that is running it.** Three times on
+  21 Sep a `pkill -f "port-forward…"` killed this session's own shell (exit
+  144), losing a heredoc and a written bead note with it: the tool's command
+  line contains the pattern, so the pattern matches itself. Kill by PID from
+  `pgrep`, skipping `$$`, or start the process with a job id you keep.
 - **Test end-to-end, not just the port.** A function that returns the right
   string in the container is not the same claim as a reader seeing it on the
   page; say which one you actually checked.
