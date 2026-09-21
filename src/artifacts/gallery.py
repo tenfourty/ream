@@ -315,6 +315,34 @@ main{display:block}
 .sheet .ask{position:absolute;margin:0;z-index:1;
   transform:translateZ(0);isolation:isolate}
 
+/* AND, below 56rem, the overlap does not happen in the first place.
+   translateZ(0) above is a MITIGATION: it asks the compositor for a separate
+   layer so the tap lands on the control instead of the iframe. It works, and
+   it can only ever be confirmed on a real iPhone, and a later layout change
+   can undo it without a single desktop browser noticing. ij8.82's acceptance
+   criterion asks for better than that -- "the fix does not depend on a z-index
+   that a later layout change can silently undo".
+
+   This is the structural half. Lifting a control onto the frame exists to put
+   it beside the part of the page it is about; below 56rem there is no beside,
+   so the lift buys nothing and costs the whole class of risk. gallery.js
+   therefore never lifts below this width, and this rule un-lifts anything that
+   already was -- a window narrowed, or a phone rotated back to portrait after
+   landscape put it over 896. An overlap that does not exist cannot lose a
+   hit-test, in any engine, and that is checkable without an iPhone.
+
+   56rem = 896px, which is above every iPhone in either orientation (852 is the
+   widest in landscape) and above an iPad in portrait (820); an iPad in
+   landscape is 1180 and still lifts, with the mitigation above covering it. */
+   `width` carries !important and the others do not, deliberately. gallery.js
+   writes top, left and width as INLINE styles, and an inline style beats a
+   stylesheet rule whatever its specificity -- so a plain `width:auto` here
+   would lose and the block would keep its lifted pixel width. `top` and `left`
+   need no such help: a static box ignores them. */
+@media (max-width:56rem){
+  .sheet .ask{position:static;margin:0 0 .8rem;width:auto !important}
+}
+
 
 /* MENUS: the title dropdown and the per-tile dots. Modelled on the claude.ai
    artifact bar Jeremy sent through — a compact bar whose title carries the
@@ -798,7 +826,11 @@ window.addEventListener("message",function(event){
     }
     if(Array.isArray(data.slots)&&data.slots.length<=64){
       var seen=new Set();var sizes=[];
-      data.slots.forEach(function(slot){
+      // Never lift below 896 -- see the stylesheet's ".sheet .ask" comment.
+      // Leaving `sizes` empty is the whole change: the send below then tells
+      // the page to reserve nothing, and the section stays visible, both
+      // already handled.
+      if(window.innerWidth>=896)data.slots.forEach(function(slot){
         if(!slot||typeof slot.id!=="string"||seen.has(slot.id))return;
         seen.add(slot.id);
         var el=decisionEls.get(slot.id);

@@ -192,3 +192,48 @@ def test_a_lifted_decision_control_gets_its_own_compositing_layer(client, db):
         "the lifted control has lost its own compositing layer; on iOS the tap "
         "goes to the iframe underneath and nothing happens"
     )
+
+
+def test_below_the_phone_breakpoint_nothing_is_lifted_over_the_frame(client, db):
+    """The structural half of the same bug, and the half that can be checked
+    without an iPhone.
+
+    translateZ(0) above is a mitigation: it asks the compositor for a separate
+    layer so the tap reaches the control. ij8.82's acceptance criterion asks for
+    more than that -- "the fix does not depend on a z-index that a later layout
+    change can silently undo" -- and a mitigation is exactly what a later layout
+    change can undo, invisibly, because confirming it needs the phone.
+
+    So below 56rem the overlap does not happen at all: gallery.js does not lift
+    (proved by running it, in tests/js/viewer.test.mjs) and this rule un-lifts
+    anything that already was, for the window that is narrowed after the fact.
+    An overlap that never happens cannot lose a hit-test in any engine.
+    """
+    store.publish(db, "seat-a", "Board", STANDFIRST)
+    page = client.get("/").text
+
+    start = page.index("@media (max-width:56rem){")
+    block = page[start : page.index("}", page.index(".sheet .ask", start))]
+    assert "position:static" in block, (
+        "a control already lifted onto the frame stays absolutely positioned "
+        "over it when the window narrows -- which is the iOS dead tap"
+    )
+    # !important is load-bearing and its absence is silent: gallery.js writes
+    # `width` as an INLINE style, and an inline style beats a stylesheet rule at
+    # any specificity, so a plain `width:auto` loses and the block keeps its
+    # lifted pixel width inside a static box.
+    assert "width:auto !important" in block
+
+
+def test_the_two_halves_of_the_ios_fix_do_not_replace_each_other(client, db):
+    """Belt AND braces, asserted together so neither is removed as redundant.
+
+    An iPad in landscape is 1180px, over the breakpoint, so it still lifts and
+    still needs the compositing layer. Deleting the mitigation because the
+    breakpoint exists would leave every wide touch device exactly where Jeremy
+    was on 20 September.
+    """
+    store.publish(db, "seat-a", "Board", STANDFIRST)
+    page = client.get("/").text
+    assert "translateZ(0)" in page
+    assert "@media (max-width:56rem){" in page

@@ -25,7 +25,11 @@ function el(attrs = {}, offsetHeight = 88) {
            getAttribute(k) { return this._attrs[k] ?? null; } };
 }
 
-function build() {
+// `innerWidth` defaults to a desktop width because every case written before
+// 21 Sep assumed one implicitly. The script now refuses to lift a control onto
+// the frame below 896, so a stub with no innerWidth would silently turn every
+// placement case into a narrow-screen case and pass for the wrong reason.
+function build(innerWidth = 1280) {
   const iframe = el(); iframe.src = "https://abc.tenfourty.com/";
   const posted = [];
   iframe.contentWindow = { NAME: "frame", postMessage: (m, o) => posted.push([m, o]) };
@@ -75,7 +79,7 @@ function build() {
     createElement: () => ({ addEventListener(t, fn) { this._on = fn; },
                             textContent: "", type: "", className: "" }),
   };
-  const win = { addEventListener: (t, fn) => t === "message" && listeners.push(fn) };
+  const win = { innerWidth, addEventListener: (t, fn) => t === "message" && listeners.push(fn) };
   const history = {
     replaceState() { dlg.replaced++; },
     pushState() { dlg.pushed++; },
@@ -308,6 +312,50 @@ navigatorStub = {};
 // 19. the dialog needs no script to exist -- this is an upgrade, not a
 //     requirement. Asserted in tests/test_gallery.py against the served HTML,
 //     because it is a fact about the markup rather than about this file.
+
+// 20. NARROW SCREEN: the control is never lifted onto the frame at all.
+//
+//     ij8.82, Jeremy on his iPhone 20 Sep: "no feedback, nothing changed it was
+//     like my tap wasn't accepted", with the buttons plainly visible. WebKit
+//     composites an iframe separately and an overlay above it can lose HIT-
+//     TESTING while still painting correctly, so the tap went to the sandboxed
+//     page underneath, which does nothing. The first fix asked the compositor
+//     for a separate layer (transform:translateZ(0)); it works, and it can only
+//     ever be confirmed on a real iPhone, and a later layout change can undo it
+//     with every desktop browser still passing.
+//
+//     This is the structural half, and the reason it is worth having: an
+//     overlap that never happens cannot lose a hit-test in ANY engine, which
+//     makes it checkable here, in node, with no phone involved.
+{
+  for (const w of [390, 852, 895]) {
+    const g = build(w);
+    g.send(good({ source: g.iframe.contentWindow }));
+    ok(g.d1.parentNode === null, `at ${w}px the control is not moved onto the frame`);
+    ok(g.d1.style.top === undefined, `at ${w}px it is not positioned over the frame`);
+  }
+  const g = build(896);
+  g.send(good({ source: g.iframe.contentWindow }));
+  ok(g.d1.parentNode === g.sheet, "at 896px -- the boundary -- it lifts as before");
+}
+// 21. and the page is told to reserve nothing, or it holds a gap for a control
+//     that is staying exactly where the server rendered it.
+{
+  const g = build(390);
+  g.send(good({ source: g.iframe.contentWindow }));
+  const sizes = g.posted.filter(([m]) => m.type === "artifact-slot-sizes");
+  ok(sizes.length === 1, "the page is still told, rather than left guessing");
+  ok(JSON.stringify(sizes[0][0].sizes) === "[]", "and told to reserve nothing");
+  ok(g.iframe.style.height === "1200px", "the frame is still sized -- only the lift is skipped");
+}
+// 22. the heading above the frame must NOT be hidden when nothing was lifted.
+//     Hiding it is right when every question has moved onto the page; here
+//     none has, so hiding it would strand the only copy of the control.
+{
+  const g = build(390);
+  g.send(good({ source: g.iframe.contentWindow }));
+  ok(g.asks.style.display === "", "\"Waiting on you\" stays visible on a phone");
+}
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
