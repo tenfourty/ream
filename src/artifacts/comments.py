@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 from psycopg.types.json import Jsonb
 
-from artifacts import ids, store
+from artifacts import events, ids, nudge, store
 from artifacts.db import Database
 
 # A comment is a remark about a page, not a page in itself -- 8 KB is generous for
@@ -249,27 +249,76 @@ def add(
             effective_quote, "quote", agent=author, artifact_id=artifact_id
         )
 
-        comment_id = ids.new_id()
-        conn.execute(
-            "insert into comment (id, artifact_id, version_n, thread_root, anchor,"
-            " quote, author_kind, author, body)"
-            " values (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (
-                comment_id,
-                artifact_id,
-                version_n,
-                thread_root,
-                Jsonb(effective_anchor),
-                effective_quote,
-                author_kind,
-                author,
-                body,
-            ),
-        )
+        owning_agent = owned[2]
+        title = owned[1]
+        # Which SESSION published the page, so the seat that wrote it can pick
+        # its own work out of a shared feed (homelab-ij8.32). A label on the
+        # event, never a scope.
+        page_session = conn.execute(
+            "select session from artifact where id = %s", (artifact_id,)
+        ).fetchone()[0]
+        with conn.transaction():
+            comment_id = ids.new_id()
+            conn.execute(
+                "insert into comment (id, artifact_id, version_n, thread_root, anchor,"
+                " quote, author_kind, author, body)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    comment_id,
+                    artifact_id,
+                    version_n,
+                    thread_root,
+                    Jsonb(effective_anchor),
+                    effective_quote,
+                    author_kind,
+                    author,
+                    body,
+                ),
+            )
+            # THE HALF THAT WAS MISSING. The comment table, the anchor
+            # validator and the agent API have existed since 19 Sep; what did
+            # not exist was anything that TOLD the agent. Jeremy ruled (a) on
+            # 19 Sep: the agent that owns the page hears while it is still
+            # working, and anything unanswered turns up in his digest.
+            #
+            # Not when the owner comments on its own page: an event means
+            # "something happened on your page that you did not do", and a
+            # seat woken by its own reply is a watcher crying wolf.
+            event_seq = None
+            if author != owning_agent:
+                event_seq = events.append(
+                    conn,
+                    artifact_id=artifact_id,
+                    agent=owning_agent,
+                    actor=author,
+                    kind="comment_added",
+                    summary=body,
+                    # The comment itself, so the agent can read the thread, the
+                    # quote and where on the page it was anchored.
+                    ref_id=comment_id,
+                    # His words in full. The summary is one line in a list; the
+                    # comment is the thing he actually said.
+                    note=body,
+                    session=page_session,
+                )
         created = conn.execute(
             f"select {_COLUMNS} from comment where comment.id = %s",  # noqa: S608 -- _COLUMNS is a fixed module constant, never caller input
             (comment_id,),
         ).fetchone()
+    # Fire-and-forget, and only once the transaction above has committed: a
+    # nudge for a row that then rolled back would send an agent to read
+    # something that never happened. `emit` never raises and never blocks --
+    # commenting is what Jeremy came to do, and telling a seat about it is a
+    # courtesy on top of a journal that already has the comment durably.
+    if event_seq is not None:
+        nudge.emit(
+            kind="comment_added",
+            artifact_id=artifact_id,
+            title=title,
+            agent=owning_agent,
+            summary=body,
+            event_id=str(event_seq),
+        )
     return _row_to_comment(created)
 
 
@@ -310,6 +359,19 @@ def list_for_agent(
     with db.connect() as conn:
         rows = conn.execute(sql, (agent, limit)).fetchall()
     return [_row_to_comment(row) for row in rows]
+
+
+def _settled_summary(quote: str, body: str) -> str:
+    """Which conversation was settled, in words.
+
+    The quote first when the thread was anchored to something on the page --
+    that is how the reader remembers it ("the bit about the backups"), not by
+    the reply it opened with. The body when there is no quote. Bounded here
+    only to keep the join short; `events.append` does the real flattening and
+    truncation, on every field, for every caller.
+    """
+    about = (quote or "").strip() or (body or "").strip()
+    return f"settled: {about[:160]}" if about else "settled"
 
 
 def resolve(
@@ -356,15 +418,54 @@ def resolve(
         ).fetchone()[0]
 
         if root_resolved_at is None:
+            # The owner of the page, and what the thread was about -- read
+            # before the update so the event can say which conversation was
+            # settled, in words, rather than only by id.
+            owner = conn.execute(
+                "select artifact.agent, artifact.title, artifact.session,"
+                " root.body, root.quote"
+                " from comment root join artifact on artifact.id = root.artifact_id"
+                " where root.id = %s",
+                (root_id,),
+            ).fetchone()
+            owning_agent, title, page_session, root_body, root_quote = owner
             with conn.transaction():
                 conn.execute(
                     "update comment set resolved_at = now(), resolved_by = %s"
                     " where id = %s or thread_root = %s",
                     (by, root_id, root_id),
                 )
+                # Settling a thread is one of the interactions Jeremy widened
+                # this to on 19 Sep: EVERY interaction he has with a page
+                # nudges the agent that owns it. A seat that is mid-reply
+                # needs to know the conversation is over as much as it needed
+                # to know it had started -- and it must not be woken by its
+                # own tidying up, so an owner settling its own thread is
+                # silent, exactly as its own comment is.
+                event_seq = None
+                if by != owning_agent:
+                    event_seq = events.append(
+                        conn,
+                        artifact_id=row[1],
+                        agent=owning_agent,
+                        actor=by,
+                        kind="thread_resolved",
+                        summary=_settled_summary(root_quote, root_body),
+                        ref_id=root_id,
+                        session=page_session,
+                    )
             row = conn.execute(
                 f"select {_COLUMNS} from comment where comment.id = %s",  # noqa: S608 -- fixed constant, not caller input
                 (comment_id,),
             ).fetchone()
+            if event_seq is not None:
+                nudge.emit(
+                    kind="thread_resolved",
+                    artifact_id=row[1],
+                    title=title,
+                    agent=owning_agent,
+                    summary=_settled_summary(root_quote, root_body),
+                    event_id=str(event_seq),
+                )
 
     return _row_to_comment(row)
