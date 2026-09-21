@@ -311,16 +311,19 @@ def test_the_answer_round_trip_is_visible_over_the_agent_api(client, db):
     assert answered.answered_at is not None
     assert answered.answered_by == "jeremy"
 
-    # Hidden by default -- an agent asking "what's still open" must not see
-    # something already answered, mirroring comments.py's include_resolved.
-    still_open = client.get("/api/v1/decisions", headers=auth(token)).json()
+    # An agent asking "what's still open" must not see something already
+    # answered -- but it has to ASK for that now (homelab-ij8.33). This test
+    # asserted the opposite until 21 Sep, when the default was flipped: a
+    # plain read that hid the answer read as the answer having gone nowhere.
+    still_open = client.get(
+        "/api/v1/decisions?open_only=true", headers=auth(token)
+    ).json()
     assert still_open == []
 
-    with_answer = client.get(
-        "/api/v1/decisions?include_answered=true", headers=auth(token)
-    ).json()
-    assert [row["id"] for row in with_answer] == [created["id"]]
-    assert with_answer[0]["answer"] == "a"
+    for where in ("/api/v1/decisions", "/api/v1/decisions?include_answered=true"):
+        with_answer = client.get(where, headers=auth(token)).json()
+        assert [row["id"] for row in with_answer] == [created["id"]], where
+        assert with_answer[0]["answer"] == "a"
 
 
 def test_reanswering_replaces_the_answer_and_moves_answered_at(client, db):
@@ -413,3 +416,97 @@ def test_the_answer_event_is_addressed_to_the_agent_that_owns_the_page(client, d
     answered = [row for row in rows if row.kind == "decision_answered"]
     assert len(answered) == 1
     assert answered[0].artifact_id == artifact["id"]
+
+
+# --- what a plain read returns ------------------------------------------------
+#
+# homelab-ij8.33. Both decision reads used to hide an answered decision, so an
+# agent reading back after Jeremy had answered got an empty list -- which reads
+# exactly like "the answers went nowhere". The first outside agent to use this
+# service was about to conclude answers were write-only on the strength of it.
+
+
+def _answer(db, decision_id: str, letter: str = "a", note: str = "") -> None:
+    decisions.answer(db, decision_id, letter=letter, note=note, by="jeremy")
+
+
+def test_a_plain_read_of_a_page_returns_his_answer(client, db):
+    token, _ = keys.mint(db, agent="ops-seat")
+    page = _publish(client, token)
+    asked = _ask(client, token, page["id"])
+    _answer(db, asked["id"], "b", "but only after the backups move")
+
+    [row] = client.get(
+        f"/api/v1/artifacts/{page['id']}/decisions", headers=auth(token)
+    ).json()
+    assert row["answer"] == "b"
+    assert row["answer_note"] == "but only after the backups move", (
+        "his words come back with it -- the note is usually what qualifies the letter"
+    )
+
+
+def test_a_plain_read_across_pages_returns_his_answer(client, db):
+    token, _ = keys.mint(db, agent="ops-seat")
+    page = _publish(client, token)
+    asked = _ask(client, token, page["id"])
+    _answer(db, asked["id"])
+    rows = client.get("/api/v1/decisions", headers=auth(token)).json()
+    assert [r["answer"] for r in rows] == ["a"]
+
+
+def test_open_only_is_the_explicit_ask(client, db):
+    """"What still needs him" is a real question; it is just not the common
+    one, so it says so at the call site now."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    page = _publish(client, token)
+    settled = _ask(client, token, page["id"], question="settled?")
+    _ask(client, token, page["id"], question="still open?")
+    _answer(db, settled["id"])
+
+    rows = client.get(
+        f"/api/v1/artifacts/{page['id']}/decisions?open_only=true", headers=auth(token)
+    ).json()
+    assert [r["question"] for r in rows] == ["still open?"]
+    across = client.get("/api/v1/decisions?open_only=true", headers=auth(token)).json()
+    assert [r["question"] for r in across] == ["still open?"]
+
+
+def test_the_old_spelling_still_means_what_it_meant(client, db):
+    """Every caller that existed had already learned to pass
+    include_answered=true, and two of them are in another repo on another
+    seat's schedule. Changing a default must not break them either way."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    page = _publish(client, token)
+    settled = _ask(client, token, page["id"], question="settled?")
+    _ask(client, token, page["id"], question="still open?")
+    _answer(db, settled["id"])
+
+    both = client.get(
+        f"/api/v1/artifacts/{page['id']}/decisions?include_answered=true",
+        headers=auth(token),
+    ).json()
+    assert len(both) == 2
+    open_only = client.get(
+        f"/api/v1/artifacts/{page['id']}/decisions?include_answered=false",
+        headers=auth(token),
+    ).json()
+    assert [r["question"] for r in open_only] == ["still open?"]
+
+
+def test_a_withdrawn_decision_still_needs_asking_for(client, db):
+    """Flipping one default must not quietly flip the other: a withdrawn
+    question is a different thing from an answered one, and ij8.44's route in
+    to it is still explicit."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    page = _publish(client, token)
+    asked = _ask(client, token, page["id"])
+    decisions.close(db, "ops-seat", asked["id"])
+
+    assert client.get(
+        f"/api/v1/artifacts/{page['id']}/decisions", headers=auth(token)
+    ).json() == []
+    with_closed = client.get(
+        f"/api/v1/artifacts/{page['id']}/decisions?include_closed=true",
+        headers=auth(token),
+    ).json()
+    assert len(with_closed) == 1

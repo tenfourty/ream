@@ -478,13 +478,15 @@ what actually happened is gone. If you were wrong, append the correction.
 <details><summary>the same reads as curl</summary>
 
 ```bash
-akey | curl -sS -H @- "$BASE/artifacts/$ID/decisions?include_answered=true"
+akey | curl -sS -H @- "$BASE/artifacts/$ID/decisions"
 ```
 
-**`include_answered=true` is not optional.** The default returns open
-decisions only, so a plain call after he has answered comes back empty — which
-reads exactly like the answers went nowhere. Each row carries `answer`,
-`answer_note`, `answered_at` and `answered_by` alongside the original question.
+Each row carries `answer`, `answer_note`, `answered_at` and `answered_by`
+alongside the original question. **Answered decisions come back by default**
+since 21 Sep 2026 — before that a plain call after he had answered came back
+empty, which reads exactly like the answers went nowhere. Add
+`?open_only=true` for what still needs him, and `?include_closed=true` to
+include a question that was withdrawn.
 
 ```bash
 akey | curl -sS -X POST -H @- "$BASE/decisions/<decision id>/acknowledge"
@@ -740,7 +742,7 @@ operator session missed a note of his that afternoon. `note` is a separate
 field from `summary` on purpose: do not read one expecting the other.
 
 Even so, the event is a nudge, not the record. Go and read the decision
-(`?include_answered=true` above) before you act: the row is what the gallery
+(the plain read above) before you act: the row is what the gallery
 shows him, it is what a later agent will find, and `summary` is flattened for
 safe printing in a terminal. Treat the event as "something happened on page X",
 then go and look at X.

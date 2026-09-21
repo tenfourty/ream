@@ -727,10 +727,24 @@ def agent_router(db: Database) -> APIRouter:
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
 
+    # ANSWERED DECISIONS COME BACK BY DEFAULT (homelab-ij8.33). This route used
+    # to hide them, so an agent reading its page back after Jeremy had answered
+    # got an EMPTY LIST -- which reads exactly like "the answers went nowhere",
+    # and the first outside agent to use this service was about to conclude
+    # answers were write-only on the strength of it. "What still needs him" is
+    # a real question, but "what did he say" is the commoner one, and a default
+    # that silently hides the thing you came for is the wrong default. Every
+    # caller that existed had already learned to pass include_answered=true,
+    # and the skill carried a paragraph insisting it was "not optional" --
+    # documentation patching over a default rather than fixing it.
+    #
+    # Open-only is now the explicit ask: ?open_only=true. include_answered
+    # stays accepted so the callers that learned the hard way keep working.
     @router.get("/artifacts/{artifact_id}/decisions")
     def list_decisions(
         artifact_id: str,
-        include_answered: bool = False,
+        include_answered: bool = True,
+        open_only: bool = False,
         # A withdrawn question is part of a page's record and was unreadable on
         # every route an agent could reach (homelab-ij8.44). It matters more
         # since 21 Sep, when archiving or deleting a page started withdrawing
@@ -754,21 +768,24 @@ def agent_router(db: Database) -> APIRouter:
             for row in decisions.list_for_artifact(
                 db,
                 artifact_id,
-                include_answered=include_answered,
+                include_answered=include_answered and not open_only,
                 include_closed=include_closed,
             )
         ]
 
     @router.get("/decisions")
     def list_all_decisions(
-        include_answered: bool = False,
+        include_answered: bool = True,
+        open_only: bool = False,
         include_closed: bool = False,
         scope: str = Query("mine", pattern="^(mine|all)$"),
         agent: str = Depends(caller),
     ):
-        # This is how an agent learns Jeremy's answer -- across every artifact it
-        # owns: a plain poll of this route, with include_answered=true, works
-        # everywhere a key does. `/events` (below) is the same fact told sooner,
+        # This is how an agent learns Jeremy's answer -- across every artifact
+        # it owns: a plain poll of this route works everywhere a key does, and
+        # since homelab-ij8.33 a plain poll is enough (answers come back by
+        # default; ?open_only=true is the explicit ask for what still needs
+        # him). `/events` (below) is the same fact told sooner,
         # for a session a nudge can actually reach.
         if scope == "all":
             # The operator's view, and the only way the service can answer "what
@@ -810,7 +827,7 @@ def agent_router(db: Database) -> APIRouter:
             for row in decisions.list_for_agent(
                 db,
                 agent,
-                include_answered=include_answered,
+                include_answered=include_answered and not open_only,
                 include_closed=include_closed,
             )
         ]
