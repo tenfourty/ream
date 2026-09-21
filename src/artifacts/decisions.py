@@ -657,7 +657,18 @@ def uncollected(
         f"select {_COLUMNS}, artifact.agent, artifact.title,"  # noqa: S608 -- fixed constant, not caller input
         " seat_read.last_read_at from decision"
         " join artifact on artifact.id = decision.artifact_id"
+        # Joined on the ASKING SESSION as well as the seat. The question is not
+        # "has anything on that machine read the feed" but "has the session
+        # that raised THIS question read it since it was answered" -- three
+        # sessions share one key, so the first answers yes while the asker is
+        # long gone, which is the wrong answer in the case this exists for.
+        #
+        # `is not distinct from` rather than `=`, because a decision asked
+        # before sessions existed has NULL here and must match the row for the
+        # unlabelled reader, which also has NULL. Plain `=` is never true for
+        # NULL, so every pre-session decision would read as no_reader for ever.
         " left join seat_read on seat_read.agent = artifact.agent"
+        "   and seat_read.session is not distinct from decision.session"
         " where decision.answered_at is not null"
         " and decision.acknowledged_at is null"
         " and decision.answered_at < now() - make_interval(secs => %s)"

@@ -835,6 +835,7 @@ def agent_router(db: Database) -> APIRouter:
         # these."
         session_filter: str | None = Query(None, alias="session", max_length=120),
         agent: str = Depends(caller),
+        seat_session: str | None = Depends(session),
     ):
         # The mechanism a nudge is only ever an optimisation on top of (see
         # nudge.py's own docstring): an agent anywhere with a key -- not just one
@@ -865,7 +866,12 @@ def agent_router(db: Database) -> APIRouter:
         # most attentive listener look like the most absent one. Never fails the
         # read (events.note_read swallows its own errors) -- the feed is the
         # feature, this is the safety net that watches over it.
-        events.note_read(db, agent)
+        # The SESSION the caller declared, not just the seat: "is anybody
+        # listening" has to mean "is the session that asked listening", or the
+        # stranded-answer alert reports a live reader while the asker is gone.
+        # Recorded for whatever the caller declared, including nothing -- an
+        # unlabelled reader is a real reader and shares one row.
+        events.note_read(db, agent, seat_session)
         rows = events.list_for_agent(
             db, agent, since=since, limit=limit, session=session_filter
         )

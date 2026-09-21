@@ -413,3 +413,32 @@ alter table event    add column if not exists session text;
 -- The filter homelab-31 asked for, and the only index needed: a feed read is
 -- already (agent, seq) and this narrows within it.
 create index if not exists event_session_idx on event (agent, session, seq);
+
+-- WHICH SESSION LAST READ THE FEED, not merely which machine (homelab-ij8.64).
+--
+-- seat_read answers "is anybody still listening on this seat?", and the alert
+-- for a stranded answer is built entirely on it: a decision answered but never
+-- acknowledged is `no_reader` if nothing has read since, and `stuck` if
+-- something has. Those need opposite responses -- collect it on the agent's
+-- behalf, or go and look at a live agent that is not acting.
+--
+-- Keyed on `agent` alone, it answered for whichever of the three sessions
+-- sharing baba's one key read most recently. So the alert could report a live
+-- listener while the session that actually asked had been gone for hours --
+-- exactly the wrong answer in the one case the feature exists for. Until
+-- sessions landed this morning there was no way to tell them apart.
+--
+-- NULLS NOT DISTINCT (Postgres 15+; 16.2 in tests, 18.1 in the cluster) so that
+-- every caller which declares no session shares ONE row rather than inserting a
+-- new one on every read. Without it, `on conflict` never fires for them --
+-- two NULLs are normally distinct to a unique index -- and this table grows a
+-- row per request for ever.
+--
+-- The primary key goes because a primary key cannot hold NULL, and NULL is the
+-- honest value for "this caller did not say". Dropping it costs nothing: the
+-- unique index below is what `on conflict` needs, and nothing references this
+-- table.
+alter table seat_read add column if not exists session text;
+alter table seat_read drop constraint if exists seat_read_pkey;
+create unique index if not exists seat_read_seat_session_idx
+    on seat_read (agent, session) nulls not distinct;

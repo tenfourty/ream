@@ -261,3 +261,82 @@ def _stranded(db, *, agent: str, title: str):
     )
     decisions.answer(db, asked.id, letter="a", note="", by="jeremy")
     return asked
+
+
+# --- per session, not per machine -------------------------------------------
+
+
+def test_another_session_reading_does_not_make_the_asker_look_alive(client, db):
+    """THE CASE THIS FEATURE EXISTS FOR, and the one it used to get wrong.
+
+    Three sessions on baba share one key. seat_read was keyed on the agent, so
+    ANY of them reading the feed marked the seat as listening -- and a stranded
+    answer would report `stuck` ("a live agent is not acting; go and look")
+    when the truth was `no_reader` ("the asker is gone; collect it for them").
+    Those need opposite responses, which is the whole reason the two states
+    exist, so getting it backwards is worse than not labelling at all.
+    """
+    from artifacts import events
+
+    keys.mint(db, agent="seat-a")
+    page = store.publish(db, "seat-a", "Asks something", PAGE)
+    asked = decisions.ask(
+        db, agent="seat-a", artifact_id=page.id, question="Which?",
+        options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
+        recommended="a", session="asker/aaa",
+    )
+    decisions.answer(db, asked.id, letter="a", note="", by="jeremy")
+
+    # A DIFFERENT session on the same key reads the feed, after the answer.
+    events.note_read(db, "seat-a", "someone-else/bbb")
+
+    rows = decisions.uncollected(db, agent="seat-a", stuck_after_seconds=0)
+    assert len(rows) == 1
+    assert rows[0].state == "no_reader", (
+        "another session's read made the absent asker look alive -- this is "
+        "the per-machine answer the session column was added to end"
+    )
+
+    # Now the ASKER reads. Only that turns it into a live agent not acting.
+    events.note_read(db, "seat-a", "asker/aaa")
+    rows = decisions.uncollected(db, agent="seat-a", stuck_after_seconds=0)
+    assert rows[0].state == "stuck"
+
+
+def test_a_decision_from_before_sessions_matches_the_unlabelled_reader(client, db):
+    """A decision asked before sessions existed has NULL, and so does the row
+    for a caller that declares nothing. `is not distinct from` matches them; a
+    plain `=` is never true for NULL, which would have made every pre-session
+    decision read as no_reader for ever, including ones being actively worked.
+    """
+    from artifacts import events
+
+    keys.mint(db, agent="seat-a")
+    page = store.publish(db, "seat-a", "Asks something", PAGE)
+    asked = decisions.ask(
+        db, agent="seat-a", artifact_id=page.id, question="Which?",
+        options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
+        recommended="a",
+    )
+    decisions.answer(db, asked.id, letter="a", note="", by="jeremy")
+
+    events.note_read(db, "seat-a")  # no session declared, as before today
+    rows = decisions.uncollected(db, agent="seat-a", stuck_after_seconds=0)
+    assert rows[0].state == "stuck", "the unlabelled reader stopped counting"
+
+
+def test_an_unlabelled_reader_keeps_one_row_however_often_it_reads(db):
+    """NULLS NOT DISTINCT on the unique index. Without it `on conflict` never
+    fires for a caller that declares nothing -- two NULLs are normally distinct
+    to a unique index -- and this table grows a row per request for ever."""
+    from artifacts import events
+
+    keys.mint(db, agent="seat-a")
+    for _ in range(4):
+        events.note_read(db, "seat-a")
+    events.note_read(db, "seat-a", "labelled/xyz")
+    with db.connect() as conn:
+        total = conn.execute(
+            "select count(*) from seat_read where agent = %s", ("seat-a",)
+        ).fetchone()[0]
+    assert total == 2, "one row for the unlabelled reader, one for the labelled"

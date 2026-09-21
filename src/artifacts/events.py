@@ -194,14 +194,20 @@ def list_for_agent(
     return [_row_to_event(row) for row in rows]
 
 
-def note_read(db: Database, agent: str) -> None:
-    """Record that this seat asked for its events, just now.
+def note_read(db: Database, agent: str, session: str | None = None) -> None:
+    """Record that this seat -- and this SESSION -- asked for its events, just now.
 
     Called at the START of a read, before anything is looked up, because a
     request that holds for 280 seconds is listening for every one of them --
     recording the time it finished would make the most attentive listener look
     like the most absent one, which is exactly backwards for the question this
     answers.
+
+    Per SESSION, not merely per seat. Three sessions on this machine share one
+    key, so a row keyed on the agent alone answered for whichever of them read
+    most recently -- and the alert built on it could report a live listener
+    while the session that actually asked had been gone for hours, which is the
+    wrong answer in the one case it exists for (homelab-ij8.64).
 
     That question is "is anybody still listening on this seat?", and it exists
     because an answer Jeremy gave that nobody collected has two opposite causes:
@@ -216,22 +222,36 @@ def note_read(db: Database, agent: str) -> None:
     """
     try:
         with db.connect() as conn:
+            # `on conflict (agent, session)` matches the unique index in
+            # schema.sql, which is NULLS NOT DISTINCT -- so every caller that
+            # declares no session shares one row instead of inserting a new one
+            # on every single read.
             conn.execute(
-                "insert into seat_read (agent, last_read_at) values (%s, now())"
-                " on conflict (agent) do update set last_read_at = now()",
-                (agent,),
+                "insert into seat_read (agent, session, last_read_at)"
+                " values (%s, %s, now())"
+                " on conflict (agent, session) do update set last_read_at = now()",
+                (agent, session),
             )
     except Exception:  # noqa: BLE001 -- see the docstring: this must never fail a read
         return
 
 
-def last_read(db: Database, agent: str) -> str | None:
-    """When this seat last asked for its events, or None if it never has."""
+def last_read(db: Database, agent: str, session: str | None = None) -> str | None:
+    """When this seat last asked for its events, or None if it never has.
+
+    With `session`, when THAT session last did -- which is the question the
+    stranded-answer alert actually needs. Without it, the most recent read by
+    any session on the seat, which is the older and weaker fact and is still
+    what a human asking "is that box alive at all" wants.
+    """
+    sql = "select max(last_read_at) from seat_read where agent = %s"
+    params: tuple = (agent,)
+    if session is not None:
+        sql += " and session = %s"
+        params += (session,)
     with db.connect() as conn:
-        row = conn.execute(
-            "select last_read_at from seat_read where agent = %s", (agent,)
-        ).fetchone()
-    return row[0].isoformat() if row else None
+        row = conn.execute(sql, params).fetchone()
+    return row[0].isoformat() if row and row[0] else None
 
 
 # How many agents may hold a waiting request at once. Each one occupies a worker
