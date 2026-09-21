@@ -200,3 +200,165 @@ def test_the_panel_needs_no_script(client, db, page):
     # And the toggle is a link to a fragment, which is what makes it work with
     # scripts off at all.
     assert 'href="#comments"' in body
+
+
+# --- this page / all pages ----------------------------------------------------
+#
+# The reference's comments panel carries a filter menu reading "This page /
+# All pages" and a "Show resolved" checkbox. The fold above has always been the
+# second one; this is the first. Until now a conversation could only be found
+# by remembering which page it was on, which is exactly the shape that let a
+# question sit unseen for seventeen hours on the decisions side.
+
+
+@pytest.fixture()
+def other(db):
+    return store.publish(db, "other-seat", "Forge migration", PAGE)
+
+
+def test_the_drawer_offers_both_scopes_and_says_which_one_is_on(client, db, page):
+    body = client.get(f"/a/{page.id}").text
+    assert f'href="/a/{page.id}#comments">This page' in body
+    assert f'href="/a/{page.id}?comments=all#comments">All pages' in body
+    # The one you are looking at is marked, the same way a wall tab is.
+    drawer = body[body.index('id="comments"') :][:900]
+    assert '<a class="tab on" href="/a/' in drawer
+
+    everywhere = client.get(f"/a/{page.id}?comments=all").text
+    drawer = everywhere[everywhere.index('id="comments"') :][:900]
+    assert f'class="tab on" href="/a/{page.id}?comments=all#comments"' in drawer
+
+
+def test_all_pages_shows_a_conversation_from_another_page(client, db, page, other):
+    comments.add(
+        db, artifact_id=other.id, author_kind="agent", author="other-seat",
+        body="the runner token expired",
+    )
+
+    here = client.get(f"/a/{page.id}").text
+    everywhere = client.get(f"/a/{page.id}?comments=all").text
+
+    # The pin that matters: "this page" must actually mean this page, or the
+    # filter is decoration.
+    assert "the runner token expired" not in here
+    assert "the runner token expired" in everywhere
+    # And it says which page it is about, with a way to get there.
+    assert "Forge migration" in everywhere
+    assert f'href="/a/{other.id}#comments"' in everywhere
+
+
+def test_a_reply_in_the_all_pages_view_goes_to_its_own_page(client, db, page, other):
+    """The bug this shape invites: every reply form posting to the page you
+    happen to be looking at, so a remark about the forge lands on the board."""
+    root = comments.add(
+        db, artifact_id=other.id, author_kind="agent", author="other-seat", body="hi"
+    )
+
+    everywhere = client.get(f"/a/{page.id}?comments=all").text
+
+    # Sliced around the root id rather than forward from it: the id first
+    # appears in the reply form's hidden thread_root value, which is AFTER the
+    # action attribute this test is about.
+    at = everywhere.index(root.id)
+    around = everywhere[max(0, at - 600) : at + 600]
+    assert f'action="/c/{other.id}"' in around
+    # And nothing in this view posts a comment at the page being looked at:
+    # the composer belongs to a page, so the all-pages view does not carry one.
+    assert f'action="/c/{page.id}"' not in everywhere
+
+
+def test_a_deleted_pages_conversations_are_not_dragged_back(client, db, page, other):
+    """Deleting is how he tidies the wall. A view that kept talking about a
+    page he deleted would undo that."""
+    comments.add(
+        db, artifact_id=other.id, author_kind="agent", author="other-seat",
+        body="about the deleted one",
+    )
+    store.set_deleted(db, other.id, True, agent="other-seat")
+
+    everywhere = client.get(f"/a/{page.id}?comments=all").text
+
+    assert "about the deleted one" not in everywhere
+
+
+def test_an_archived_pages_conversations_are_here_and_flagged(client, db, page, other):
+    """Archiving is "not now", not "gone" -- and a question waiting in an
+    archived page's thread is exactly the kind that gets lost."""
+    comments.add(
+        db, artifact_id=other.id, author_kind="agent", author="other-seat",
+        body="still waiting on you",
+    )
+    store.set_archived(db, other.id, True, agent="other-seat")
+
+    everywhere = client.get(f"/a/{page.id}?comments=all").text
+
+    assert "still waiting on you" in everywhere
+    assert 'class="carch"' in everywhere
+
+
+def test_settled_conversations_stay_folded_in_the_all_pages_view(client, db, page, other):
+    root = comments.add(
+        db, artifact_id=other.id, author_kind="human", author="jeremy",
+        body="settled elsewhere",
+    )
+    comments.resolve(db, root.id, by="jeremy", agent=None)
+
+    everywhere = client.get(f"/a/{page.id}?comments=all").text
+
+    assert "settled elsewhere" in everywhere
+    assert 'class="settled-cmts"' in everywhere
+    assert "1 conversation" in everywhere
+
+
+def test_the_all_pages_view_says_so_when_there_is_nothing_anywhere(client, db, page):
+    everywhere = client.get(f"/a/{page.id}?comments=all").text
+
+    assert "No conversations on any page yet" in everywhere
+
+
+def test_a_scope_this_drawer_does_not_know_is_refused_at_the_edge(client, db, page):
+    assert client.get(f"/a/{page.id}?comments=everything").status_code == 422
+
+
+def test_the_page_you_are_looking_at_is_not_shown_twice_over(client, db, page):
+    """FOUND IN A RENDER, not by the tests, which were perfectly happy. The
+    page being viewed is also in the all-pages list, so a replies map built for
+    it and then appended to again showed every reply twice -- a conversation
+    that read as if the agent had said the same thing twice."""
+    root = comments.add(
+        db, artifact_id=page.id, author_kind="human", author="jeremy", body="ask"
+    )
+    comments.add(
+        db, artifact_id=page.id, author_kind="agent", author="seat",
+        thread_root=root.id, body="the one and only reply",
+    )
+
+    everywhere = client.get(f"/a/{page.id}?comments=all").text
+
+    assert everywhere.count("the one and only reply") == 1
+
+
+def test_a_page_with_something_open_comes_before_one_that_is_all_settled(
+    client, db, page, other
+):
+    """Also found in the render: an archived page whose every thread was
+    settled sat at the top showing nothing but a closed fold, pushing two live
+    conversations down. Recency alone is the wrong sort for a view whose
+    question is "where is something being said"."""
+    live = comments.add(
+        db, artifact_id=page.id, author_kind="agent", author="seat", body="still open"
+    )
+    assert live.resolved_at is None
+    done = comments.add(
+        db, artifact_id=other.id, author_kind="human", author="jeremy", body="finished"
+    )
+    comments.resolve(db, done.id, by="jeremy", agent=None)
+
+    everywhere = client.get(f"/a/{page.id}?comments=all").text
+
+    # Compared on the GROUP HEADINGS, not on the titles: "Board" is also the
+    # page's own title in the bar above the drawer, so a looser search would
+    # pass whatever the order was.
+    live_at = everywhere.index(f'class="cpage"><a href="/a/{page.id}#comments">')
+    done_at = everywhere.index(f'class="cpage"><a href="/a/{other.id}#comments">')
+    assert live_at < done_at, "the page with an open conversation must come first"

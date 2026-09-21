@@ -439,6 +439,100 @@ def list_for_agent(
     return [_row_to_comment(row) for row in rows]
 
 
+@dataclass(frozen=True)
+class PageComments:
+    """One page's conversations, for the view that spans every page."""
+
+    artifact_id: str
+    artifact_title: str
+    archived: bool
+    rows: list[CommentRow]
+
+
+def across_pages(
+    db: Database, *, include_resolved: bool = False, limit: int = 500
+) -> list[PageComments]:
+    """Every page's conversations, grouped by page, most recently active page
+    first (homelab-ij8.18's "all pages" filter).
+
+    TWO ORDERINGS, on purpose, and both are already argued elsewhere in this
+    service: the PAGES come newest-active first, because this view answers
+    "where is something being said", and the comments WITHIN a page come oldest
+    first, because a conversation is read forwards.
+
+    Unscoped, unlike `list_for_agent`. This serves Jeremy's own gallery, which
+    is his whole wall behind Authelia -- the scoping argument that applies to a
+    key does not apply to him. No route hands this to a key.
+
+    A DELETED page's conversations are not here: deleting is how he tidies the
+    wall, and a view that kept talking about a page he has deleted would undo
+    that. An ARCHIVED one's are, flagged, because archiving is "not now", not
+    "gone" -- and a question waiting in an archived page's thread is exactly
+    the kind of thing that gets lost.
+    """
+    sql = (
+        f"select {_COLUMNS}, artifact.title, artifact.archived_at from comment"  # noqa: S608
+        " join artifact on artifact.id = comment.artifact_id"
+        " where artifact.deleted_at is null"
+    )
+    if not include_resolved:
+        sql += f" and {_ROOT_RESOLVED_AT} is null"
+    sql += " order by comment.created_at asc, comment.id asc limit %s"
+
+    with db.connect() as conn:
+        rows = conn.execute(sql, (limit,)).fetchall()
+        found = [(_row_to_comment(row), row[-2], row[-1]) for row in rows]
+        # One query for every page that actually has a quoting comment, rather
+        # than one per page or a body per comment: `list_for_artifact` reads a
+        # body only when something quotes it, and this view has to hold that
+        # line harder, since it can span every page on the wall.
+        quoting = sorted({row.artifact_id for row, _title, _arch in found if row.quote})
+        words_by_page: dict[str, tuple[str, str]] = {}
+        if quoting:
+            bodies = conn.execute(
+                "select a.id, v.body from artifact a"
+                " join version v on v.artifact_id = a.id and v.n = a.current_version"
+                " where a.id = any(%s)",
+                (quoting,),
+            ).fetchall()
+            for artifact_id, body in bodies:
+                words = text.searchable(body)
+                words_by_page[artifact_id] = (words, _tight(words))
+
+    grouped: dict[str, PageComments] = {}
+    for row, title, archived_at in found:
+        if row.quote and row.artifact_id in words_by_page:
+            words, tight_words = words_by_page[row.artifact_id]
+            row = replace(row, quote_state=_state_against(row.quote, words, tight_words))
+        group = grouped.get(row.artifact_id)
+        if group is None:
+            group = PageComments(
+                artifact_id=row.artifact_id,
+                artifact_title=title,
+                archived=archived_at is not None,
+                rows=[],
+            )
+            grouped[row.artifact_id] = group
+        group.rows.append(row)
+
+    # A PAGE WITH SOMETHING STILL OPEN COMES FIRST, whatever the clock says.
+    # Sorting on recency alone put a page whose every thread was settled -- an
+    # archived one, showing nothing but a closed fold -- above two live
+    # conversations, which is the opposite of what this view is for. Seen in a
+    # render; the tests were happy.
+    #
+    # Within each half, most recently talked about first. `created_at` is an
+    # ISO string and every one of them was stamped by the same database in the
+    # same zone, so a lexical max is a chronological one.
+    def _rank(page: PageComments) -> tuple[bool, str]:
+        has_open = any(
+            row.thread_root is None and row.resolved_at is None for row in page.rows
+        )
+        return (has_open, max(row.created_at for row in page.rows))
+
+    return sorted(grouped.values(), key=_rank, reverse=True)
+
+
 def _settled_summary(quote: str, body: str) -> str:
     """Which conversation was settled, in words.
 

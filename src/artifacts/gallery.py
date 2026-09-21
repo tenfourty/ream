@@ -371,6 +371,19 @@ main{display:block}
 .cdrawer-card h2{font:600 .74rem/1.4 var(--mono);letter-spacing:.14em;
   text-transform:uppercase;color:var(--muted);margin:0 0 .9rem}
 .cempty{font-size:.875rem;line-height:1.55;color:var(--muted);margin:0 0 .9rem}
+/* This page / All pages. The wall's own .tab, so the two switches in this
+   product read as one idea; only the spacing is local to the drawer. */
+.cscope{margin:0 0 .9rem}
+/* Which page a conversation belongs to, in the all-pages view. Quieter than
+   the thread itself: it is a label on the group, not the thing being read. */
+.cpage{font:600 .7rem/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);margin:1.1rem 0 .5rem;display:flex;align-items:center;gap:.5rem}
+.cpage:first-of-type{margin-top:0}
+.cpage a{color:var(--muted);text-decoration:none}
+.cpage a:hover{color:var(--ink)}
+.carch{font:500 .62rem/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.06em;
+  color:var(--muted);background:var(--paper);border-radius:999px;
+  padding:.16rem .4rem;box-shadow:inset 0 0 0 1px var(--line)}
 .threads{list-style:none;margin:0 0 1rem;padding:0}
 .thread{background:var(--card);border:1px solid var(--line);
   border-radius:.6rem;padding:.7rem .85rem;margin:0 0 .7rem}
@@ -1740,8 +1753,9 @@ def _wall_meta(waiting: int, hidden: int = 0) -> str:
     return out
 
 
-def _render_comments(rows: list, artifact_id: str) -> str:
-    """The conversation on a page: threads, replies, and a box to start one.
+def _render_comments(rows: list, artifact_id: str, everywhere: list | None = None) -> str:
+    """The conversation on a page: threads, replies, and a box to start one --
+    and, with `everywhere`, every page's conversations in the same drawer.
 
     homelab-ij8.18. Jeremy wanted the conversation with the agent to happen on
     the page rather than in a terminal. The storage and the agent's side of it
@@ -1819,7 +1833,11 @@ def _render_comments(rows: list, artifact_id: str) -> str:
             ""
             if resolved
             else (
-                f'<form class="creply" method="post" action="/c/{escape(artifact_id)}">'
+                # The thread's OWN page, not the page being looked at. They are
+                # the same in the ordinary case and they are NOT in the
+                # all-pages view, where a reply typed under one page's heading
+                # must not land on another page.
+                f'<form class="creply" method="post" action="/c/{escape(root.artifact_id)}">'
                 f'<input type="hidden" name="thread_root" value="{escape(root.id)}">'
                 '<input name="body" placeholder="Reply" aria-label="Reply">'
                 "<button type=\"submit\">Send</button></form>"
@@ -1831,10 +1849,36 @@ def _render_comments(rows: list, artifact_id: str) -> str:
             f"<ul class=\"bubbles\">{bubble(root)}{kids}</ul>{reply}{action}</li>"
         )
 
+    def settled_fold(settled_roots: list) -> str:
+        noun = "conversation" if len(settled_roots) == 1 else "conversations"
+        return (
+            f'<details class="settled-cmts"><summary>'
+            '<span class="chev" aria-hidden="true"></span>Settled'
+            f'<span class="n">{len(settled_roots)} {noun}</span></summary>'
+            '<ul class="threads">'
+            + "".join(thread(r) for r in settled_roots)
+            + "</ul></details>"
+        )
+
     open_roots = [r for r in roots if r.resolved_at is None]
     settled = [r for r in roots if r.resolved_at is not None]
 
     ident = escape(artifact_id)
+    # THIS PAGE / ALL PAGES, the filter the reference's comments panel carries
+    # ("This page / All pages", plus a Show resolved checkbox -- which this
+    # drawer has always had as the Settled fold, so it is not repeated here).
+    # Links, not a script and not a checkbox: the same two-state switch the
+    # wall's tabs are, wearing the same .tab class so it reads as one idea, and
+    # the `#comments` fragment on both keeps the drawer open across the round
+    # trip.
+    on_all = everywhere is not None
+    scope = (
+        f'<nav class="tabs cscope">'
+        f'<a class="tab{"" if on_all else " on"}" href="/a/{ident}#comments">This page</a>'
+        f'<a class="tab{" on" if on_all else ""}"'
+        f' href="/a/{ident}?comments=all#comments">All pages</a>'
+        f"</nav>"
+    )
     # A PANEL OPENED FROM THE BAR, which is the shape the reference uses: its
     # page bar carries a ButtonGroup labelled "Comments" holding a Comment
     # toggle and a "More comment options" menu, and the conversation lives in
@@ -1849,9 +1893,45 @@ def _render_comments(rows: list, artifact_id: str) -> str:
         (
             f'<div class="cdrawer" id="comments">'
             f'<a class="dlg-back" href="/a/{ident}" aria-label="Close comments"></a>'
-            f'<div class="cdrawer-card"><h2>Comments</h2>'
+            f'<div class="cdrawer-card"><h2>Comments</h2>{scope}'
         )
     ]
+    if on_all:
+        # Grouped by page, most recently active first, each group naming the
+        # page it belongs to and linking to it -- a remark with no page is as
+        # unreadable as the anchored comment with no quote was.
+        for page in everywhere:
+            page_roots = [r for r in page.rows if r.thread_root is None]
+            # REBUILT per page, never appended to. `replies` was already filled
+            # from the page being looked at, and that page is in this list too,
+            # so appending showed every one of its replies twice. Invisible to
+            # the tests, obvious in the render.
+            replies.clear()
+            for child in page.rows:
+                if child.thread_root:
+                    replies.setdefault(child.thread_root, []).append(child)
+            page_open = [r for r in page_roots if r.resolved_at is None]
+            page_settled = [r for r in page_roots if r.resolved_at is not None]
+            flag = '<span class="carch">archived</span>' if page.archived else ""
+            out.append(
+                f'<h3 class="cpage"><a href="/a/{escape(page.artifact_id)}#comments">'
+                f"{escape(page.artifact_title)}</a>{flag}</h3>"
+            )
+            if page_open:
+                out.append(
+                    '<ul class="threads">'
+                    + "".join(thread(r) for r in page_open)
+                    + "</ul>"
+                )
+            if page_settled:
+                out.append(settled_fold(page_settled))
+        if not everywhere:
+            out.append(
+                '<p class="cempty">No conversations on any page yet. Open a page '
+                "and say something; the agent that published it will read it.</p>"
+            )
+        out.append("</div></div>")
+        return "".join(out)
     if open_roots:
         out.append('<ul class="threads">' + "".join(thread(r) for r in open_roots) + "</ul>")
     elif not settled:
@@ -1864,13 +1944,7 @@ def _render_comments(rows: list, artifact_id: str) -> str:
         "<button type=\"submit\">Send</button></form>"
     )
     if settled:
-        noun = "conversation" if len(settled) == 1 else "conversations"
-        out.append(
-            f'<details class="settled-cmts"><summary>'
-            '<span class="chev" aria-hidden="true"></span>Settled'
-            f'<span class="n">{len(settled)} {noun}</span></summary>'
-            f'<ul class="threads">' + "".join(thread(r) for r in settled) + "</ul></details>"
-        )
+        out.append(settled_fold(settled))
     out.append("</div></div>")
     return "".join(out)
 
@@ -2988,7 +3062,15 @@ def gallery_router(db: Database) -> APIRouter:
         return {"n": int(row[0]) if row else since}
 
     @router.get("/a/{artifact_id}", response_class=HTMLResponse)
-    def detail(artifact_id: str) -> HTMLResponse:
+    def detail(
+        artifact_id: str,
+        # "This page" or "All pages" in the comments drawer (homelab-ij8.18).
+        # A query parameter rather than a separate route, because it is a
+        # filter on a panel that is already open: the fragment #comments keeps
+        # the drawer open across the round trip, and the result is a URL he can
+        # keep, which a script-driven toggle would not be.
+        comments_scope: str = Query("this", alias="comments", pattern="^(this|all)$"),
+    ) -> HTMLResponse:
         # Look the artifact up rather than framing whatever the URL said: an
         # unchecked id renders a frame pointing at an invented subdomain, and
         # the title is wanted on the page anyway.
@@ -3033,6 +3115,15 @@ def gallery_router(db: Database) -> APIRouter:
         open_threads = sum(
             1 for c in comment_rows if c.thread_root is None and c.resolved_at is None
         )
+        # Only when he asks for it. `across_pages` reads the CURRENT BODY of
+        # every page that has a quoting comment, to say whether each quote is
+        # still there, and doing that on every page view to render a drawer
+        # nobody opened would be a real cost for no answer.
+        everywhere = (
+            comments.across_pages(db, include_resolved=True)
+            if comments_scope == "all"
+            else None
+        )
         menu = _page_menu(
             artifact_id,
             row[0],
@@ -3055,7 +3146,7 @@ def gallery_router(db: Database) -> APIRouter:
                 # about a page is read once you have read the page; putting it
                 # above would be the mistake Jeremy already named about the
                 # questions -- "it feels odd to have the questions at the top".
-                f"{_render_comments(comment_rows, artifact_id)}"
+                f"{_render_comments(comment_rows, artifact_id, everywhere)}"
                 f"{_rename_dialog(artifact_id, row[0])}"
                 f"{_link_dialog(artifact_id)}",
                 # gallery.js reads the content origin straight off this iframe's own

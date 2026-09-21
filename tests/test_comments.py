@@ -713,3 +713,75 @@ def test_the_state_reaches_an_agent_through_the_api(client, db):
         f"/api/v1/artifacts/{published['id']}/comments", headers=auth(token)
     ).json()
     assert [c["quote_state"] for c in got] == ["changed"]
+
+
+# --- every page's conversations, in one list ----------------------------------
+
+
+def test_across_pages_puts_the_most_recently_talked_about_page_first(db):
+    """Two orderings in one function, both already argued elsewhere here: the
+    PAGES answer "where is something being said" so they come newest-active
+    first, and the comments WITHIN a page are a conversation, so they read
+    forwards."""
+    quiet = store.publish(db, "seat", "Quiet board", PAGE)
+    busy = store.publish(db, "seat", "Busy board", PAGE)
+    comments.add(db, artifact_id=quiet.id, author_kind="agent", author="seat", body="first")
+    comments.add(db, artifact_id=busy.id, author_kind="agent", author="seat", body="second")
+    comments.add(db, artifact_id=busy.id, author_kind="agent", author="seat", body="third")
+
+    pages = comments.across_pages(db)
+
+    assert [p.artifact_id for p in pages] == [busy.id, quiet.id]
+    assert [c.body for c in pages[0].rows] == ["second", "third"]
+
+
+def test_across_pages_leaves_out_a_deleted_page_and_flags_an_archived_one(db):
+    gone = store.publish(db, "seat", "Deleted board", PAGE)
+    shelved = store.publish(db, "seat", "Archived board", PAGE)
+    comments.add(db, artifact_id=gone.id, author_kind="agent", author="seat", body="x")
+    comments.add(db, artifact_id=shelved.id, author_kind="agent", author="seat", body="y")
+    store.set_deleted(db, gone.id, True, agent="seat")
+    store.set_archived(db, shelved.id, True, agent="seat")
+
+    pages = comments.across_pages(db)
+
+    assert [p.artifact_id for p in pages] == [shelved.id]
+    assert pages[0].archived is True
+
+
+def test_across_pages_answers_whether_each_quote_is_still_there(db):
+    """The same promise `list_for_artifact` makes, kept across every page at
+    once: a quote that has been edited away must say so rather than sit next to
+    whatever now occupies that spot."""
+    art = store.publish(db, "seat", "Board", QUOTED)
+    comments.add(
+        db, artifact_id=art.id, author_kind="agent", author="seat",
+        body="Why then?", quote="The backups run at midnight.",
+    )
+    other = store.publish(db, "seat", "Other", QUOTED)
+    comments.add(
+        db, artifact_id=other.id, author_kind="agent", author="seat",
+        body="Still right", quote="The backups run at midnight.",
+    )
+    current = store.get_owned(db, "seat", art.id)
+    store.patch(
+        db, "seat", art.id, QUOTED.replace("midnight", "four"), current.revision
+    )
+
+    by_page = {p.artifact_id: p for p in comments.across_pages(db)}
+
+    assert [c.quote_state for c in by_page[art.id].rows] == ["changed"]
+    assert [c.quote_state for c in by_page[other.id].rows] == ["current"]
+
+
+def test_across_pages_hides_settled_threads_unless_asked(db):
+    art = store.publish(db, "seat", "Board", PAGE)
+    root = comments.add(
+        db, artifact_id=art.id, author_kind="human", author="jeremy", body="done"
+    )
+    comments.resolve(db, root.id, by="jeremy", agent=None)
+
+    assert comments.across_pages(db) == []
+    assert [p.artifact_id for p in comments.across_pages(db, include_resolved=True)] == [
+        art.id
+    ]
