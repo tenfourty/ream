@@ -285,19 +285,37 @@ def list_for_artifact(
 
 
 def list_for_agent(
-    db: Database, agent: str, *, include_answered: bool = False, limit: int = 200
+    db: Database,
+    agent: str,
+    *,
+    include_answered: bool = False,
+    include_closed: bool = False,
+    limit: int = 200,
 ) -> list[DecisionRow]:
     """Newest first -- this is the polling surface an agent uses to learn Jeremy's
     answer, so newest matters more than oldest, exactly as `comments.list_for_agent`
-    is ordered for the same reason. Always excludes a closed decision, with no
-    `include_closed` escape hatch at all: the agent withdrew it, so there is nothing
-    left here for that agent to learn. `limit` protects an agent with a long history
-    from pulling its entire back catalogue on every poll."""
+    is ordered for the same reason. `limit` protects an agent with a long history
+    from pulling its entire back catalogue on every poll.
+
+    `include_closed` exists as of 21 Sep 2026 and did not before. The reason it
+    did not was written here in full -- "the agent withdrew it, so there is
+    nothing left here for that agent to learn" -- and that reason STOPPED BEING
+    TRUE the same morning, when Jeremy ruled that archiving or deleting a page
+    withdraws its open questions. The SERVICE withdraws them now, not the agent,
+    so the agent did not know and there is a great deal left to learn. A
+    withdrawn question was then unreadable on every route a polling agent could
+    reach: not wrong, not redacted, simply no longer listed (homelab-ij8.44,
+    reported independently by two seats on 19 Sep for a different route).
+
+    Still excluded by DEFAULT, because a withdrawn question is not waiting on
+    anybody and a poll asking "what is outstanding" should not be handed it."""
     sql = (
         f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
         " join artifact on artifact.id = decision.artifact_id"
-        " where artifact.agent = %s and decision.closed_at is null"
+        " where artifact.agent = %s"
     )
+    if not include_closed:
+        sql += " and decision.closed_at is null"
     if not include_answered:
         sql += " and decision.answer is null"
     sql += " order by decision.created_at desc, decision.id desc limit %s"

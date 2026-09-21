@@ -254,10 +254,18 @@ def main(argv: list[str] | None = None) -> int:
             print(_fmt(row))
             return 0
         if args.cmd == "answers":
+            # WITHDRAWN ONES INCLUDED. A question withdrawn because its page
+            # was archived is part of that page's record, and since 21 Sep the
+            # service withdraws them rather than the agent -- so hiding them
+            # here would mean a seat could be told "your question is gone" by
+            # an event and then find no trace of it anywhere (homelab-ij8.44).
+            # --open-only is the one case that excludes them, because a
+            # withdrawn question is not waiting on anybody.
+            keep = "false" if args.open_only else "true"
             rows = _request(
                 "GET",
                 f"{base}/artifacts/{args.artifact}/decisions"
-                f"?include_answered={'false' if args.open_only else 'true'}",
+                f"?include_answered={keep}&include_closed={keep}",
                 key,
                 None,
             )

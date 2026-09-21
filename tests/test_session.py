@@ -263,3 +263,41 @@ def test_scoping_still_uses_the_agent_from_the_key(client, key, db):
     theirs = store.publish(db, "another-seat", "Not yours", PAGE)
     got = client.get(f"/api/v1/artifacts/{theirs.id}", headers=_h(key, SEAT_A))
     assert got.status_code == 404
+
+
+# --- a withdrawn question stays readable on the polling route ----------------
+
+
+def test_the_polling_route_can_see_a_withdrawn_question(client, key, db):
+    """homelab-ij8.44's second report: decisions.list_for_agent excluded closed
+    rows with NO escape hatch, so the cross-artifact poll -- the surface an
+    agent actually uses -- could never show one.
+
+    The reason written in its docstring was "the agent withdrew it, so there is
+    nothing left to learn". That stopped being true on 21 Sep, when the SERVICE
+    started withdrawing questions whose page was archived or deleted.
+    """
+    page = client.post(
+        "/api/v1/artifacts", json={"title": "Mine", "body": PAGE}, headers=_h(key, SEAT_A)
+    ).json()
+    asked = decisions.ask(
+        db, agent="baba-operator", artifact_id=page["id"], question="Mine?",
+        options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
+        recommended="a", session=SEAT_A,
+    )
+    store.set_archived(db, page["id"], True, agent=None)
+
+    plain = client.get("/api/v1/decisions", headers=_h(key)).json()
+    assert asked.id not in [d["id"] for d in plain], (
+        "a withdrawn question is not waiting on anybody and must not be in the "
+        "default poll"
+    )
+
+    withdrawn = client.get(
+        "/api/v1/decisions?include_closed=true&include_answered=true",
+        headers=_h(key),
+    ).json()
+    assert asked.id in [d["id"] for d in withdrawn]
+    row = next(d for d in withdrawn if d["id"] == asked.id)
+    assert row["closed_at"] is not None
+    assert row["answer"] is None, "withdrawn, not answered -- different events"

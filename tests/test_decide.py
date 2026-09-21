@@ -300,3 +300,46 @@ def test_a_withdrawn_question_does_not_read_as_one_still_waiting(
     out = capsys.readouterr().out
     assert "WITHDRAWN" in out
     assert "unanswered" not in out, "withdrawn and still-waiting must not look alike"
+
+
+def test_a_question_withdrawn_with_its_page_is_still_readable(
+    live, key_file, page, db, capsys  # noqa: F811
+):
+    """homelab-ij8.44, and this morning made it sharper.
+
+    Jeremy ruled on 21 Sep that archiving or deleting a page withdraws its open
+    questions. So most withdrawals are now the SERVICE\'s doing and the agent
+    never chose them -- and a withdrawn question used to be unreadable on every
+    route an agent could reach. Not wrong, not redacted: simply no longer
+    listed. A seat would be told "your question is gone" by an event and then
+    find no trace of it anywhere.
+    """
+    path, _ = key_file
+    asked = decisions.ask(
+        db, agent="ops-seat", artifact_id=page.id, question="Gone with the page?",
+        options=[{"letter": "a", "label": "One"}, {"letter": "b", "label": "Two"}],
+        recommended="a",
+    )
+    store.set_archived(db, page.id, True, agent=None)
+
+    assert _run(["answers", page.id], path) == 0
+    out = capsys.readouterr().out
+    assert asked.id in out, "the withdrawn question vanished from its own page"
+    assert "WITHDRAWN" in out, "and it must not look like one still waiting"
+
+
+def test_open_only_still_leaves_a_withdrawn_question_out(
+    live, key_file, page, db, capsys  # noqa: F811
+):
+    """Because it is not waiting on anybody. The two readings are different
+    questions and get different answers."""
+    path, _ = key_file
+    decisions.ask(
+        db, agent="ops-seat", artifact_id=page.id, question="Gone with the page?",
+        options=[{"letter": "a", "label": "One"}, {"letter": "b", "label": "Two"}],
+        recommended="a",
+    )
+    store.set_archived(db, page.id, True, agent=None)
+
+    assert _run(["answers", page.id, "--open-only"], path) == 0
+    assert "no questions on that page are still open" in capsys.readouterr().out

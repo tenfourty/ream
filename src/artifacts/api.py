@@ -644,7 +644,15 @@ def agent_router(db: Database) -> APIRouter:
 
     @router.get("/artifacts/{artifact_id}/decisions")
     def list_decisions(
-        artifact_id: str, include_answered: bool = False, agent: str = Depends(caller)
+        artifact_id: str,
+        include_answered: bool = False,
+        # A withdrawn question is part of a page's record and was unreadable on
+        # every route an agent could reach (homelab-ij8.44). It matters more
+        # since 21 Sep, when archiving or deleting a page started withdrawing
+        # its open questions -- so most withdrawals are now the service's doing
+        # and the agent never chose them.
+        include_closed: bool = False,
+        agent: str = Depends(caller),
     ):
         try:
             store.get_owned(db, agent, artifact_id)
@@ -653,13 +661,17 @@ def agent_router(db: Database) -> APIRouter:
         return [
             row.__dict__
             for row in decisions.list_for_artifact(
-                db, artifact_id, include_answered=include_answered
+                db,
+                artifact_id,
+                include_answered=include_answered,
+                include_closed=include_closed,
             )
         ]
 
     @router.get("/decisions")
     def list_all_decisions(
         include_answered: bool = False,
+        include_closed: bool = False,
         scope: str = Query("mine", pattern="^(mine|all)$"),
         agent: str = Depends(caller),
     ):
@@ -705,7 +717,10 @@ def agent_router(db: Database) -> APIRouter:
         return [
             row.__dict__
             for row in decisions.list_for_agent(
-                db, agent, include_answered=include_answered
+                db,
+                agent,
+                include_answered=include_answered,
+                include_closed=include_closed,
             )
         ]
 
