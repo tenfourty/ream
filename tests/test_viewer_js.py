@@ -46,3 +46,28 @@ def test_the_gallery_script_behaves_when_actually_run(tmp_path):
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
     assert passed >= 58, result.stdout
+
+
+_NEWER = Path(__file__).parent / "js" / "newer.test.mjs"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node runtime here")
+def test_the_newer_version_offer_behaves_when_actually_run(tmp_path, monkeypatch):
+    """homelab-ij8.74. What matters is what it must NOT do -- reload by itself,
+    re-ask about a version he dismissed, or keep asking while nobody is
+    looking -- and none of that can be read off the source text."""
+    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    node = shutil.which("node")
+    script = tmp_path / "gallery.js"
+    script.write_text(_GALLERY_JS)
+    result = subprocess.run(  # noqa: S603
+        [node, str(_NEWER), str(script)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "0 failed" in result.stdout
+    passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
+    assert passed >= 14, result.stdout

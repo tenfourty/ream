@@ -17,10 +17,12 @@ a request reaches this app, so the one subject it ever admits is named outright 
 of read from something a request could forge.
 """
 
+import threading
+import time
 from datetime import UTC, datetime
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from markupsafe import escape
 
@@ -36,6 +38,17 @@ _SCAN_FAILED_DETAIL = (
     "the secret scanner failed -- this is a fault on our side, not yours. "
     "Nothing was saved. Tell the operator."
 )
+
+
+# How long the gallery will hold a "has this page changed" read, and how many
+# it will hold at once. Twenty-five seconds sits under every proxy timeout in
+# front of this service and under the browser's own patience; sixteen is the
+# same bound the agent-facing waiter uses, and one person's open tabs will
+# never approach it. Past it, the read answers immediately -- which is
+# ordinary polling, and correct, just chattier.
+_MAX_WATCH_SECONDS = 25.0
+_MAX_WATCHERS = 16
+_watchers = threading.BoundedSemaphore(_MAX_WATCHERS)
 
 
 def gallery_headers() -> dict[str, str]:
@@ -54,6 +67,11 @@ def gallery_headers() -> dict[str, str]:
             # that reaches this attribute frame anything on the internet,
             # inside the one page that IS logged in.
             f"frame-src https://*.{content_domain()}; frame-ancestors 'none'; "
+            # connect-src 'self' and nothing else: gallery.js asks THIS origin
+            # whether the page in front of him has been republished
+            # (homelab-ij8.74). It is the narrowest thing that lets the wall
+            # notice, and it can reach nowhere but here.
+            "connect-src 'self'; "
             "base-uri 'none'; form-action 'self'"
         ),
         "referrer-policy": "no-referrer",
@@ -775,6 +793,23 @@ main{display:block}
 .archived-body .row:hover .rshot{opacity:1;filter:none}
 .archived-body .daygroup:first-child{margin-top:0}
 
+/* --- a newer version is ready ------------------------------------------------
+   FIXED, not inserted into the flow: the page must not move under his cursor
+   while he is reading it, and a button that slides as he reaches for it is the
+   same fault as the refresh he rejected. Bottom centre, out of the way of the
+   page bar and the comments drawer, and it only ever appears because something
+   actually changed. */
+.newer{position:fixed;left:50%;transform:translateX(-50%);bottom:1.1rem;z-index:40;
+  display:flex;align-items:center;gap:.6rem;max-width:min(92vw,34rem);
+  padding:.55rem .6rem .55rem .9rem;border:1px solid var(--line);
+  border-radius:.7rem;background:var(--card);color:var(--ink);
+  box-shadow:0 6px 24px rgba(0,0,0,.14);
+  font:.8125rem/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif}
+.newer button{padding:.35rem .65rem;cursor:pointer;border-radius:.45rem;
+  border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);
+  font:500 .8125rem/1.25 ui-sans-serif,system-ui,-apple-system,sans-serif}
+.newer button.ghost{background:var(--chip);color:var(--ink);border-color:var(--line)}
+
 /* --- the list view ---------------------------------------------------------
    Measured off the reference's own list: a 12px/17px weight-500 muted heading
    with 6px 12px padding, and a 40px row whose title is 14/20 at weight 400 --
@@ -925,6 +960,21 @@ _HOME_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6
 #    block.
 #  - The whole handler is one try/catch: a malformed message must never throw into
 #    Jeremy's own signed-in tab, whatever an agent's page sends.
+#  - Asks this origin every twenty seconds whether the page in front of him has
+#    been republished, and if it has, OFFERS the new one (homelab-ij8.74).
+#
+#    His own ruling, 19 Sep, choosing (b) over refreshing under him: tell him a
+#    newer version exists and wait for him to say when. A page that changes
+#    mid-sentence is worse than a stale one, and much worse with a question on
+#    it. So nothing here ever reloads by itself; the bar is `position:fixed`,
+#    so the page never moves under the cursor while he is reaching for a
+#    button; and `told` remembers what has been offered, so dismissing is final
+#    for that version while a newer one still speaks up.
+#
+#    It does not poll while the tab is hidden -- a wall of forgotten tabs
+#    polling in the background is exactly the "hard enough to matter" the bead
+#    rules out -- and the route it asks returns one integer from one indexed
+#    row, no body and no join.
 _GALLERY_JS = """(function(){
 "use strict";
 var iframe=document.getElementById("artifact-frame");
@@ -1029,6 +1079,46 @@ document.querySelectorAll(".mlink input").forEach(function(i){
     function(){b.textContent="Copied"},function(){i.focus();i.select()})});
   i.parentNode.appendChild(b);
 });
+// A newer version, offered and never applied (homelab-ij8.74; the reasoning is
+// in the note above this string). No timer anywhere: the server holds the
+// read, so the answer arrives when something happens, and a hidden tab simply
+// stops asking until it is looked at again.
+// `window.fetch` guarded, not assumed: a browser without it simply never
+// learns about a republish, which is where this started, rather than throwing
+// on page load and taking the frame sizing down with it.
+var sheetEl=document.getElementById("artifact-sheet");
+if(sheetEl&&window.fetch){
+  var told=+sheetEl.getAttribute("data-version")||0,bar=null,watching=false;
+  var offer=function(){
+    if(bar&&bar.parentNode)bar.parentNode.removeChild(bar);
+    bar=document.createElement("div");bar.className="newer";
+    var t=document.createElement("span");
+    t.textContent="A newer version of this page has been published.";
+    var go=document.createElement("button");go.type="button";
+    go.textContent="Show it";
+    go.addEventListener("click",function(){location.reload()});
+    var no=document.createElement("button");no.type="button";
+    no.className="ghost";no.textContent="Not now";
+    no.addEventListener("click",function(){
+      if(bar&&bar.parentNode)bar.parentNode.removeChild(bar);bar=null});
+    bar.appendChild(t);bar.appendChild(go);bar.appendChild(no);
+    document.body.appendChild(bar);
+  };
+  var watch=function(){
+    if(watching||document.hidden)return;
+    watching=true;
+    window.fetch(location.pathname+"/current?since="+told+"&wait=25",
+          {credentials:"same-origin"})
+      .then(function(r){return r.ok?r.json():null})
+      .then(function(d){
+        watching=false;
+        if(d&&typeof d.n==="number"&&d.n>told){told=d.n;offer()}
+        watch();
+      }).catch(function(){watching=false});
+  };
+  document.addEventListener("visibilitychange",watch);
+  watch();
+}
 })();
 """
 
@@ -2843,6 +2933,60 @@ def gallery_router(db: Database) -> APIRouter:
             raise HTTPException(404, "no such artifact")
         return RedirectResponse(f"/a/{artifact_id}", status_code=303)
 
+    def conn_current(artifact_id: str):
+        with db.connect() as conn:
+            return conn.execute(
+                "select current_version from artifact"
+                " where id = %s and deleted_at is null",
+                (artifact_id,),
+            ).fetchone()
+
+    @router.get("/a/{artifact_id}/current")
+    def current_version(
+        artifact_id: str,
+        since: int = -1,
+        wait: float = Query(0, ge=0, le=_MAX_WATCH_SECONDS),
+    ) -> dict:
+        """Which version of this page is live, HELD until it is not `since`.
+
+        homelab-ij8.74, Jeremy's own ruling on 19 Sep: a page republished while
+        he is reading it should TELL him and wait, not refresh under him. This
+        is the fact his open tab watches; the offer, and the waiting for his
+        word, are gallery.js's.
+
+        A HELD REQUEST, not a poll, and the bead says so: "the event feed
+        already carries a held request that answers the moment something
+        changes, and this is a reader-side use of the same machinery agents
+        use". A tab therefore learns within a second of a republish while
+        costing one row read every half second it is actually open, and
+        gallery.js keeps its own rule of having no timer in it at all.
+
+        Returns as soon as the version differs, when the hold runs out (the
+        caller simply asks again), or the instant the pod is asked to stop --
+        a rollout must never wait out somebody's browser.
+
+        Bounded like the agent-facing waiter: past `_MAX_WATCHERS` held reads
+        this answers at once rather than queueing, because an answer now is
+        always better than a thread later.
+        """
+        row = conn_current(artifact_id)
+        if row is None:
+            raise HTTPException(404, "no such artifact")
+        if wait <= 0 or int(row[0]) != since or not _watchers.acquire(blocking=False):
+            return {"n": int(row[0])}
+        try:
+            deadline = time.monotonic() + wait
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or events.wait_for_shutdown(min(0.5, remaining)):
+                    break
+                row = conn_current(artifact_id)
+                if row is None or int(row[0]) != since:
+                    break
+        finally:
+            _watchers.release()
+        return {"n": int(row[0]) if row else since}
+
     @router.get("/a/{artifact_id}", response_class=HTMLResponse)
     def detail(artifact_id: str) -> HTMLResponse:
         # Look the artifact up rather than framing whatever the URL said: an
@@ -2850,7 +2994,8 @@ def gallery_router(db: Database) -> APIRouter:
         # the title is wanted on the page anyway.
         with db.connect() as conn:
             row = conn.execute(
-                "select title, read_token, agent, archived_at, updated_at"
+                "select title, read_token, agent, archived_at, updated_at,"
+                " current_version"
                 " from artifact where id = %s",
                 (artifact_id,),
             ).fetchone()
@@ -2899,7 +3044,11 @@ def gallery_router(db: Database) -> APIRouter:
             _shell(
                 row[0],
                 f"{asks_above}"
-                f'<div class="sheet" id="artifact-sheet"><iframe id="artifact-frame"'
+                f'<div class="sheet" id="artifact-sheet"'
+                # WHICH VERSION IS IN FRONT OF HIM. gallery.js compares this
+                # with what the server says is current and offers the new one
+                # rather than swapping it (homelab-ij8.74, his own ruling).
+                f' data-version="{int(row[5])}"><iframe id="artifact-frame"'
                 f' src="{src}" sandbox="{sandbox}" title="{escape(row[0])}"></iframe></div>'
                 f"{settled_below}"
                 # AFTER the page, with the settled decisions. A conversation

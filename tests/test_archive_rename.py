@@ -283,7 +283,7 @@ def test_the_dialog_does_not_collide_with_the_iframe_wrapper(client, page):
     an afternoon; a fixed-position overlay on the artifact frame is not a
     subtle bug, but it is one nothing would have failed on."""
     html = client.get(f"/a/{page.id}").text
-    assert '<div class="sheet" id="artifact-sheet">' in html
+    assert '<div class="sheet" id="artifact-sheet"' in html
     assert '<div class="dlg" id="rename">' in html
     assert 'class="sheet" id="rename"' not in html
 

@@ -458,11 +458,17 @@ def test_gallery_js_is_served_from_self_with_no_dependency(db):
     text = response.text
     # single-digit KB, per the design's own budget -- and a ratchet well inside
     # it, not some looser number that would let a regression through unnoticed.
-    # Moved once, deliberately: 4096 when the file only sized the frame (3050
-    # bytes), 5120 once it also drove the tile menus (4530). Moving it is a
-    # decision to be argued for in a commit, which is the whole point of having
-    # it; what it must never become is a number that follows the file upwards.
-    assert len(text.encode()) < 5120
+    # Moved deliberately, each time with its reason: 4096 when the file only
+    # sized the frame (3050 bytes), 5120 once it also drove the tile menus
+    # (4530), and 7168 on 21 Sep when it began telling him a page had been
+    # republished under him (7003) -- homelab-ij8.74, which he ruled on
+    # himself. That last move paid for its bytes twice over by keeping the
+    # PROSE out of the served file: the argument for the feature lives in the
+    # Python comment above `_GALLERY_JS`, which no browser ever downloads.
+    # Moving it is a decision to be argued for in a commit, which is the whole
+    # point of having it; what it must never become is a number that follows
+    # the file upwards.
+    assert len(text.encode()) < 7168
     assert "http://" not in text and "https://" not in text  # no CDN, nothing fetched
     assert "eval(" not in text
     assert "new Function(" not in text
@@ -485,10 +491,17 @@ def test_gallery_js_clamps_height_to_the_documented_range(db):
 
 
 def test_gallery_js_never_polls(db):
+    """No timer of any kind, still. The "has this page been republished" watch
+    added on 21 Sep (homelab-ij8.74) is a HELD request -- the server waits, so
+    the browser does not have to wake up and ask, and a hidden tab stops asking
+    until it is looked at again. A `setInterval` here would be the "poll hard
+    enough to matter" the bead rules out, arriving by the back door."""
     text = TestClient(create_gallery_app(db)).get("/gallery.js").text
     assert "ResizeObserver" not in text  # that lives in the content shim, not here
     assert "setInterval" not in text
     assert "setTimeout" not in text
+    assert "wait=25" in text, "it holds rather than polls"
+    assert "visibilitychange" in text, "and resumes on an event, not a timer"
 
 
 @pytest.mark.parametrize("which", ["list", "detail"])
@@ -517,7 +530,11 @@ def test_the_detail_page_loads_gallery_js_and_inlines_no_script(db):
 def test_the_detail_page_ids_the_frame_and_sheet_gallery_js_looks_for(db):
     published = store.publish(db, "ops-seat", "Board", _PAGE)
     page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
-    assert '<div class="sheet" id="artifact-sheet">' in page
+    assert '<div class="sheet" id="artifact-sheet"' in page
+    assert 'data-version="1"' in page, (
+        "and says which version is in front of him, which is what the watcher "
+        "compares against (homelab-ij8.74)"
+    )
     assert 'id="artifact-frame"' in page
 
 

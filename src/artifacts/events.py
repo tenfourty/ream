@@ -316,6 +316,20 @@ def clear_shutdown() -> None:
     _shutdown.clear()
 
 
+def wait_for_shutdown(timeout: float) -> bool:
+    """Sleep up to `timeout` seconds, returning True the instant this process is
+    asked to stop.
+
+    The one way anything in this service is allowed to wait. A plain
+    `time.sleep` in a held request is what turns a rollout into a pod that
+    lingers for its whole grace period and then has its connections cut --
+    `begin_shutdown` exists so a hold ends the moment SIGTERM lands, and every
+    loop that waits has to honour it. Used by `wait_for_agent` below and by the
+    gallery's "has this page been republished" hold (homelab-ij8.74).
+    """
+    return _shutdown.wait(timeout=timeout)
+
+
 def wait_for_agent(
     db: Database,
     agent: str,
