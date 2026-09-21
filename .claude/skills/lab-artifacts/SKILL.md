@@ -11,6 +11,30 @@ own login at <https://artifacts.tenfourty.site/>. Nothing leaves the LAN, no
 claude.ai account is involved, and any agent with a key can publish —
 Claude or not.
 
+## Which machine are you on?
+
+**Everything here works from any machine with a key and a route to the
+service.** That is the design: Jeremy's brief was *"ultimately it needs to work
+for agents anywhere that I give access to"*, so the commands, the page rules,
+the decisions and the event feed make no assumption about where you are.
+
+A few things are true only on **baba**, the homelab box where the operator seat
+and today's other seats run. Those are marked like this:
+
+> **On baba.** Whatever only applies there.
+>
+> **Anywhere else.** What to do instead.
+
+**If you are not on baba, skip the baba blocks entirely.** They describe a
+shared key file, a sops vault and an operator you can hand a message to, and
+none of those exist for you. Nothing in them is required to use the service.
+
+**Can you reach it?** The service is on the LAN only today, so an agent outside
+the house cannot reach `artifacts.tenfourty.site` at all. That is expected, not
+a fault of your setup — public exposure is deliberately gated on a security
+pass that is not finished (homelab-ij8.2). If the address does not resolve or
+does not answer, you are outside; say so rather than working around it.
+
 ## Publish
 
 ```bash
@@ -32,8 +56,10 @@ whole document, so rewriting from scratch silently drops whatever the last
 version promised — a row someone added, a caveat, a number you no longer
 remember. Fetch, edit, publish.
 
-**Put the source in `~/.local/state`, never in the session scratchpad.** The
-scratchpad is tmpfs: the page outlives your session and its source does not.
+**Keep the source somewhere that outlives the session** — `~/.local/state` or
+wherever your machine keeps durable per-user state — and never in the session
+scratchpad. A scratchpad is temporary by design: the page outlives your session
+and its source does not.
 On 21 Sep 2026 a seat lost a page's source that way, guessed six URLs for a
 read-back route, got 404 from all of them and concluded a live page it owned
 could never be updated again. Nothing was actually lost — `--fetch` recovered
@@ -144,10 +170,22 @@ kubectl -n artifacts exec deploy/artifacts -- \
 ```
 
 `new-key --out` **refuses to overwrite an existing key file** — it exits 1 and
-leaves the file untouched, so you cannot destroy a working key by re-running the
-command. If `~/.config/artifacts/key` already exists, that is the shared
-`baba-operator` key and not yours; see "which key you are using" below before
-publishing under it.
+leaves the file untouched, so you cannot destroy a working key by re-running
+the command. If the file already exists, find out whose key it is before
+publishing under it: `GET /api/v1/me` answers in one call, and a page published
+under somebody else's identity is somebody else's page.
+
+The second command needs `kubectl` against the cluster. If you have no cluster
+access, mint the key locally, send the **SHA-256 only** to whoever does, and
+have them register it — the token itself never has to travel, which is the
+whole point of registering a hash.
+
+> **On baba.** `~/.config/artifacts/key` already exists and belongs to the
+> shared `baba-operator` seat, not to you. See "which key you are using" below.
+> The keys there are also vaulted — see the sops block further down.
+>
+> **Anywhere else.** There is no shared key and no vault. Mint your own with
+> the command above, keep it mode 600, and that is the whole story.
 
 Never print, cat or paste the key file itself. If a key is lost or leaks,
 `artifacts-admin revoke-key <key_id>` in the pod, then mint a new one.
@@ -444,9 +482,10 @@ what filled the top of his own status board with things he had already settled
 
 ### Say which session you are
 
-Every agent on baba authenticates as the same seat, so the service can tell you
-WHICH MACHINE published a page and, without this, nothing tells you which of us.
-Set it once, at the top of your session, and every command carries it:
+A key identifies a SEAT, not a session — so without this, nothing says which
+run of which agent did a thing, and two sessions sharing one key are
+indistinguishable in the record. Set it once, at the top of your session, and
+every command carries it:
 
 ```bash
 export ARTIFACTS_SESSION="artifacts-seat/$(date +%s | tail -c 7)"   # <seat>/<short id>
@@ -454,7 +493,16 @@ export ARTIFACTS_SESSION="artifacts-seat/$(date +%s | tail -c 7)"   # <seat>/<sh
 
 Or pass `--session LABEL` to a single command. `GET /api/v1/me` echoes back what
 you declared, so one call tells you whether your plumbing works; `null` means
-your writes are indistinguishable from the other seats sharing the key.
+your writes carry no session at all and nothing later can say which run made
+them.
+
+> **On baba.** Four seats share one key file, so this is the ONLY thing
+> separating them: without it the service can say which machine published a
+> page and nothing can say which of us.
+>
+> **Anywhere else.** Your key is probably yours alone, so the seat name already
+> identifies you — but set it anyway. It is what lets you filter your own
+> answers out of a shared feed later, and it costs one line.
 
 It rides on the page, on each version, on the decision you ask and on the events
 your work produces &mdash; which is what makes this possible:
@@ -463,26 +511,6 @@ your work produces &mdash; which is what makes this possible:
 artifacts-wait --session "$ARTIFACTS_SESSION"   # only YOUR answers wake you
 akey | curl -sS -H @- "$BASE/events?session=$ARTIFACTS_SESSION&wait=280"
 ```
-
-### The key comes from the vault, not a file
-
-On baba the four agent keys live in sops, and a wrapper hands one to a command
-on a file descriptor so it never touches disk:
-
-```bash
-ARTIFACTS_SEAT=homelab_ops artifacts-key -- artifacts-publish page.html
-ARTIFACTS_SEAT=homelab_ops artifacts-key -- artifacts-wait
-```
-
-Seats are `baba_operator`, `homelab_ops`, `warpgate_arc`, `cove_seat`. There is
-**no default** — on a machine where four seats share a box, a forgotten seat
-would publish as somebody else's work.
-
-`artifacts-key` is on your PATH, like `artifacts-wait`: **never write a relative
-path to either.** `scripts/artifacts-key.sh` resolves only inside the homelab
-repo, and an agent working anywhere else reads "does not exist" and writes a
-stand-in of its own — which is exactly what happened to the waiter
-(homelab-ij8.67).
 
 **It is a label, not a credential and not a permission.** It travels in the
 clear, anyone with the key can send any value, and nothing verifies it. Never
@@ -493,6 +521,43 @@ allowed to see; it does not protect anything.
 
 Events written before you set it have no session, so a filtered feed leaves them
 out. That is the cautious direction and it is why the filter is worth having.
+
+### Where the key lives at rest
+
+A key on disk is a bearer token on disk. Mode 600 protects it from another
+user and from nothing else — not a stray read, not a shell trace, not a
+process that logs its own config.
+
+> **On baba.** The four keys live in sops and a wrapper hands one to a command
+> on a file descriptor, so the plaintext never touches disk:
+>
+> ```bash
+> ARTIFACTS_SEAT=homelab_ops artifacts-key -- artifacts-publish page.html
+> ARTIFACTS_SEAT=homelab_ops artifacts-key -- artifacts-wait
+> ```
+>
+> Seats there are `baba_operator`, `homelab_ops`, `warpgate_arc`, `cove_seat`,
+> and there is **no default**: on a box four seats share, a forgotten seat
+> publishes as somebody else's work.
+>
+> **Anywhere else.** There is no vault and no wrapper. Keep the key in a 0600
+> file, or hand it to the tools the same way the wrapper does if your machine
+> has a secret store of its own:
+>
+> ```bash
+> artifacts-publish --key-fd 3 page.html 3< <(your-secret-store read artifacts-key)
+> ```
+>
+> `--key-fd` is part of the tool, not of baba. Anything that can write a key to
+> a descriptor can use it, and then you have no plaintext file either.
+
+**Never write a relative path to a helper.** `artifacts-key` and
+`artifacts-wait` are command names on your PATH. `scripts/artifacts-key.sh`
+resolves only inside one repo on one machine, and an agent working anywhere
+else reads "does not exist", concludes the tool is missing, and writes a
+stand-in of its own — which is exactly what happened to the waiter
+(homelab-ij8.67), and then again to the key wrapper six hours after that bead
+was read.
 
 ### Check the page before you publish it
 
@@ -522,18 +587,24 @@ sample. `--check` refuses because you are the one looking at the file, and you
 may publish anyway.
 
 **Which key you are using is not obvious, and getting it wrong is silent.**
-Every agent on baba reads `~/.config/artifacts/key`, and that file belongs to
-ONE seat — `baba-operator`. A seat grant made to the seat you *meant* is then
-applied to an identity nobody is using. Ask, rather than assume:
+The default key file is a path, not an identity: whose key is in it is a
+separate question, and a seat grant made to the seat you *meant* is applied to
+an identity nobody is using. Ask, rather than assume — one call, from anywhere:
 
 ```bash
 akey | curl -sS -H @- "$BASE/me"      # {"agent": ..., "key_id": ..., "scopes": [...]}
 ```
 
-The operator's own calls use `~/.config/artifacts/key-homelab-ops`, which is the
-seat holding `decisions:read-all`. On 20 Sep 2026 a `?scope=all` call returned
-403, two sessions went looking for a missing grant, and the grant existed — on a
-seat whose key nobody was passing.
+> **On baba.** Every agent reads `~/.config/artifacts/key` and it belongs to
+> ONE seat, `baba-operator`. The operator's own calls use a different file,
+> `~/.config/artifacts/key-homelab-ops`, which is the seat holding
+> `decisions:read-all`. On 20 Sep 2026 a `?scope=all` call returned 403, two
+> sessions went looking for a missing grant, and the grant existed — on a seat
+> whose key nobody was passing.
+>
+> **Anywhere else.** Your key file is probably yours alone, which makes this
+> cheap rather than unnecessary: run `/me` once when you set the seat up and
+> you never wonder again.
 
 ### When he answers somewhere else
 
@@ -593,9 +664,15 @@ So:
   not through a script you found. It is one channel belonging to one seat, and
   four agents each deciding their thing is urgent is how a channel becomes
   noise he stops reading.
-- **If he genuinely needs to know while he is away** and you are on baba, ask
-  the operator seat to relay it. That is a request to a colleague with a
-  reason attached, not a mechanism you invoke.
+- **If he genuinely needs to know while he is away**, and there is an operator
+  seat you can reach, ask it to relay — a request to a colleague with a reason
+  attached, not a mechanism you invoke. If there is no such seat, there is no
+  route, and the honest thing is to leave the answer where he will find it and
+  say in your session that you are waiting.
+
+> **On baba.** The operator seat is the one holding Telegram; ask it.
+>
+> **Anywhere else.** You have no relay. Do not go looking for one.
 
 **Nothing you publish here can message him.** The service has no Telegram code
 at all; its one outbound push goes to a single seat's own mailbox for that
