@@ -155,3 +155,33 @@ def describe(body: str) -> str:
         if len(text.split()) >= 4:
             return text
     return ""
+
+
+# An optional BOM, then leading whitespace and whole HTML comments, then the leading
+# doctype -- everything up to and including it is one match, so the shim can be spliced
+# in right after it. The comment alternative is not a lazy `.*?-->`: under backtracking
+# that can span from the first `<!--` all the way to the LAST `-->` before a later
+# doctype, treating a genuine `<script>` (and anything else) in between as if it were
+# commented out, and landing the shim after it, or inside it.
+#
+# The WHATWG HTML tokenizer ends a comment at more than plain `-->`: also at `<!-->` and
+# `<!--->` (abrupt closing of an empty comment) and at `--!>` (incorrectly closed
+# comment). Missing those lets a comment appear to "end" only at the FIRST real `-->`
+# that follows, which can be well past a page's own `<script>` -- so the alternative
+# below is `-?>` (the abrupt-close forms, immediately after `<!--`) or a body that
+# contains neither `-->` nor `--!>`, terminated by either. The negative lookahead right
+# after `<!--` is load-bearing: without it, backtracking can still reopen `<!-->`.
+LEADING_DOCTYPE = re.compile(
+    r"^(﻿?\s*(?:<!--(?:-?>|(?!-?>)(?:(?!--!?>).)*--!?>)\s*)*<!doctype[^>]*>)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Public, and living here rather than in `content.py`, because TWO callers need
+# the same answer to "does this document declare a doctype, and where does it
+# end?": the shim injector splices after it, and `store` refuses a body that
+# never claims to be HTML at all (homelab-ij8.28). `store` cannot import
+# `content` -- content imports hosts imports store -- and a second copy of a
+# regex this carefully argued is how two parts of one service start disagreeing
+# about what a page is.
+
+

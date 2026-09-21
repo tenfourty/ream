@@ -179,33 +179,36 @@ def test_a_row_for_a_page_with_a_question_says_so_and_takes_the_anchor(client, d
 # --- archived ----------------------------------------------------------------
 
 
-def test_archived_pages_are_counted_folded_and_visibly_secondary(client, db):
-    """Out of the way must never become lost, so it is counted; and a page off
-    the wall must not compete with one on it, so its contents are recessed."""
+def test_archived_pages_are_counted_and_visibly_secondary(client, db):
+    """Out of the way must never become lost, so it is counted on its tab; and
+    a page off the wall must not compete with one on it, so its contents are
+    recessed. It was a fold at the foot of the wall until Jeremy asked for it
+    up in the tab row on 21 Sep -- the count and the skin came with it."""
     live = store.publish(db, "seat", "Live", PAGE)
     gone = store.publish(db, "seat", "Archived", PAGE)
     store.set_archived(db, gone.id, True, agent=None)
 
-    page = client.get("/").text
-    assert "<span>Archived</span>" in page
-    assert '<span class="n">1 page</span>' in page
+    wall = client.get("/").text
+    assert 'href="/?filter=archived">Archived<span class="tn">1</span>' in wall
+
+    page = client.get("/?filter=archived").text
     assert '<div class="archived-body">' in page
     body = page.split('<div class="archived-body">', 1)[1]
     assert gone.id in body
-    assert live.id not in body, "a live page is never in the archived fold"
+    assert live.id not in body, "a live page is never on the archived tab"
 
 
-def test_the_archived_fold_works_in_either_view(client, db):
+def test_the_archived_tab_works_in_either_view(client, db):
     gone = store.publish(db, "seat", "Archived", PAGE)
     store.set_archived(db, gone.id, True, agent=None)
-    grid = client.get("/").text
-    listed = client.get("/?view=list").text
+    grid = client.get("/?filter=archived").text
+    listed = client.get("/?filter=archived&view=list").text
     assert '<ul class="tiles">' in grid.split('<div class="archived-body">', 1)[1]
     assert '<ul class="rows">' in listed.split('<div class="archived-body">', 1)[1]
 
 
-def test_no_archived_pages_means_no_fold_at_all(client, db):
+def test_no_archived_pages_means_no_tab_at_all(client, db):
     store.publish(db, "seat", "Live", PAGE)
-    # The ELEMENT, not the string: "archived-list" on its own also matches the
+    # The LINK, not the word: "archived" on its own also matches the
     # stylesheet, which is in the page whether or not anything is archived.
-    assert '<details class="archived-list">' not in client.get("/").text
+    assert 'href="/?filter=archived"' not in client.get("/").text

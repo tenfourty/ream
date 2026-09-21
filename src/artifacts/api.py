@@ -329,6 +329,23 @@ def agent_router(db: Database) -> APIRouter:
                 **published.__dict__,
                 "warnings": _warnings_for(published.id, payload.body),
             }
+        except store.NotAPage as exc:
+            # 422, not 413: the body is not too much, it is not a page. Named
+            # like every other refusal so a caller can tell them apart without
+            # reading prose (homelab-ij8.28 -- a builder script's "wrote
+            # <path>" log line was published as a status page).
+            raise HTTPException(
+                422,
+                {
+                    "field": exc.field,
+                    "detail": (
+                        "body does not look like an HTML page: no doctype and "
+                        "no <html>, <head> or <body>. If a command's output "
+                        "reached this call instead of your file, that is the "
+                        "usual cause."
+                    ),
+                },
+            ) from exc
         except store.BodyTooLarge as exc:
             raise HTTPException(
                 413,
@@ -377,6 +394,23 @@ def agent_router(db: Database) -> APIRouter:
                 **published.__dict__,
                 "warnings": _warnings_for(published.id, payload.body),
             }
+        except store.NotAPage as exc:
+            # 422, not 413: the body is not too much, it is not a page. Named
+            # like every other refusal so a caller can tell them apart without
+            # reading prose (homelab-ij8.28 -- a builder script's "wrote
+            # <path>" log line was published as a status page).
+            raise HTTPException(
+                422,
+                {
+                    "field": exc.field,
+                    "detail": (
+                        "body does not look like an HTML page: no doctype and "
+                        "no <html>, <head> or <body>. If a command's output "
+                        "reached this call instead of your file, that is the "
+                        "usual cause."
+                    ),
+                },
+            ) from exc
         except store.BodyTooLarge as exc:
             raise HTTPException(
                 413,
@@ -505,6 +539,23 @@ def agent_router(db: Database) -> APIRouter:
         name, and an agent that no longer holds the file should not have to."""
         try:
             renamed = store.rename(db, artifact_id, payload.title, agent=agent)
+        except store.NotAPage as exc:
+            # 422, not 413: the body is not too much, it is not a page. Named
+            # like every other refusal so a caller can tell them apart without
+            # reading prose (homelab-ij8.28 -- a builder script's "wrote
+            # <path>" log line was published as a status page).
+            raise HTTPException(
+                422,
+                {
+                    "field": exc.field,
+                    "detail": (
+                        "body does not look like an HTML page: no doctype and "
+                        "no <html>, <head> or <body>. If a command's output "
+                        "reached this call instead of your file, that is the "
+                        "usual cause."
+                    ),
+                },
+            ) from exc
         except store.BodyTooLarge as exc:
             raise HTTPException(
                 413,
@@ -623,6 +674,23 @@ def agent_router(db: Database) -> APIRouter:
                 thread_root=payload.thread_root,
                 agent=agent,
             ).__dict__
+        except store.NotAPage as exc:
+            # 422, not 413: the body is not too much, it is not a page. Named
+            # like every other refusal so a caller can tell them apart without
+            # reading prose (homelab-ij8.28 -- a builder script's "wrote
+            # <path>" log line was published as a status page).
+            raise HTTPException(
+                422,
+                {
+                    "field": exc.field,
+                    "detail": (
+                        "body does not look like an HTML page: no doctype and "
+                        "no <html>, <head> or <body>. If a command's output "
+                        "reached this call instead of your file, that is the "
+                        "usual cause."
+                    ),
+                },
+            ) from exc
         except store.BodyTooLarge as exc:
             raise HTTPException(
                 413,
@@ -700,6 +768,23 @@ def agent_router(db: Database) -> APIRouter:
                 recommended=payload.recommended,
                 session=seat_session,
             ).__dict__
+        except store.NotAPage as exc:
+            # 422, not 413: the body is not too much, it is not a page. Named
+            # like every other refusal so a caller can tell them apart without
+            # reading prose (homelab-ij8.28 -- a builder script's "wrote
+            # <path>" log line was published as a status page).
+            raise HTTPException(
+                422,
+                {
+                    "field": exc.field,
+                    "detail": (
+                        "body does not look like an HTML page: no doctype and "
+                        "no <html>, <head> or <body>. If a command's output "
+                        "reached this call instead of your file, that is the "
+                        "usual cause."
+                    ),
+                },
+            ) from exc
         except store.BodyTooLarge as exc:
             raise HTTPException(
                 413,
@@ -919,6 +1004,23 @@ def agent_router(db: Database) -> APIRouter:
                 body=payload.body,
                 session=seat_session,
             ).__dict__
+        except store.NotAPage as exc:
+            # 422, not 413: the body is not too much, it is not a page. Named
+            # like every other refusal so a caller can tell them apart without
+            # reading prose (homelab-ij8.28 -- a builder script's "wrote
+            # <path>" log line was published as a status page).
+            raise HTTPException(
+                422,
+                {
+                    "field": exc.field,
+                    "detail": (
+                        "body does not look like an HTML page: no doctype and "
+                        "no <html>, <head> or <body>. If a command's output "
+                        "reached this call instead of your file, that is the "
+                        "usual cause."
+                    ),
+                },
+            ) from exc
         except store.BodyTooLarge as exc:
             raise HTTPException(
                 413,

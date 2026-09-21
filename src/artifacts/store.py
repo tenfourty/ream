@@ -46,6 +46,7 @@ the loser sees 409, not a raw database error.
 import hashlib
 import logging
 import os
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -54,6 +55,7 @@ from psycopg.errors import UniqueViolation
 
 from artifacts import events, ids, scan
 from artifacts.db import Database
+from artifacts.text import LEADING_DOCTYPE
 
 # Measured worst clean body at 1 MiB: 484-524 ms under load, over the 0.5 s
 # bar, and tuning only moves the worst case to the next shape -- so 512 KiB,
@@ -81,6 +83,11 @@ class BodyTooLarge(Exception):
 
 
 class InvalidText(Exception):
+    def __init__(self, field: str):
+        self.field = field
+
+
+class NotAPage(Exception):
     def __init__(self, field: str):
         self.field = field
 
@@ -293,6 +300,41 @@ def _check_secrets(
         raise SecretFound(field, findings)
 
 
+# Is this a page at all? Anything that declares itself HTML counts: a doctype
+# (after an optional BOM, whitespace and whole leading comments -- the shim
+# injector already knows how to find one, so this reuses its regex rather than
+# growing a second opinion about where a doctype may sit), or an <html>,
+# <head> or <body> tag anywhere in the body.
+#
+# WHY IT EXISTS (homelab-ij8.28, 19 Sep 2026). A builder script printed
+# "wrote <path>" to stdout, that LOG LINE was piped into a publish, and a
+# 145-byte body with no doctype, no html and no head was accepted, stored as a
+# new version, and served at an address Jeremy has. The publish path guarded
+# size and scanned for secrets and never asked the first question.
+#
+# DELIBERATELY GENEROUS, and it must never become a validator: a page that is
+# odd, or minimal, or a fragment somebody meant, is the author's business and
+# gets published. It refuses exactly one thing -- a body that never claims to
+# be HTML -- because that is the shape the mistake takes. `<html` rather than
+# `<html>` so `<html lang="en">` counts.
+_DECLARES_HTML = re.compile(r"<(?:html|head|body)\b", re.IGNORECASE)
+
+
+def _check_is_a_page(
+    body: str, field: str, *, agent: str, artifact_id: str | None
+) -> None:
+    if LEADING_DOCTYPE.match(body) or _DECLARES_HTML.search(body):
+        return
+    _refusals.warning(
+        "publish refused: agent=%s artifact=%s field=%s reason=not_a_page bytes=%d",
+        agent,
+        artifact_id or "-",
+        field,
+        len(body.encode("utf-8", "replace")),
+    )
+    raise NotAPage(field)
+
+
 def _guard(
     value: str, limit: int, field: str, *, agent: str, artifact_id: str | None
 ) -> None:
@@ -303,6 +345,8 @@ def _guard(
     and each scan finding -- so a title refusal is never reported, logged, or
     even measured as a body refusal."""
     _check_size(value, limit, field, agent=agent, artifact_id=artifact_id)
+    if field == "body":
+        _check_is_a_page(value, field, agent=agent, artifact_id=artifact_id)
     _check_secrets(value, field, agent=agent, artifact_id=artifact_id)
 
 
@@ -396,6 +440,7 @@ def patch(
     body and the name that describes it can never disagree: they commit together
     or not at all."""
     _check_size(body, MAX_BODY_BYTES, "body", agent=agent, artifact_id=artifact_id)
+    _check_is_a_page(body, "body", agent=agent, artifact_id=artifact_id)
     if title is not None:
         _check_size(
             title, MAX_TITLE_BYTES, "title", agent=agent, artifact_id=artifact_id

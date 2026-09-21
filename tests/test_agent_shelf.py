@@ -53,8 +53,10 @@ def test_an_agent_archives_its_own_page_and_puts_it_back(client, db, mine):
     assert on.status_code == 200
     assert on.json()["archived_at"] is not None, "the answer says what it now is"
     wall = client.get("/").text
-    assert "<span>Archived</span>" in wall
-    assert '<span class="n">1 page</span>' in wall, "counted, so it is not lost"
+    assert 'href="/?filter=archived">Archived<span class="tn">1</span>' in wall, (
+        "counted on its own tab, so it is not lost"
+    )
+    assert page.id in client.get("/?filter=archived").text
 
     off = client.post(
         f"/api/v1/artifacts/{page.id}/archive",

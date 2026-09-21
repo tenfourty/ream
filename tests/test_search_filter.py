@@ -117,17 +117,6 @@ def test_a_search_keeps_the_view_it_was_made_in(client, db):
     assert 'name="view" value="list"' in out.text, "and the box carries it onward"
 
 
-def test_a_search_filters_the_archived_fold_too(client, db):
-    """Searching only the live wall would hide the archived hit and still count
-    it in the fold's total, which reads as the search having missed something."""
-    gone = store.publish(db, "seat", "Archived thing", PAGE)
-    other = store.publish(db, "seat", "Unrelated", PAGE)
-    store.set_archived(db, gone.id, True, agent=None)
-    store.set_archived(db, other.id, True, agent=None)
-    out = client.get("/?q=archived").text
-    assert '<span class="n">1 page</span>' in out, "the fold counts only the match"
-
-
 # --- the tabs ----------------------------------------------------------------
 
 
@@ -192,3 +181,85 @@ def test_a_nonsense_filter_shows_everything_rather_than_failing(client, db):
     out = client.get("/?filter=../../etc/passwd")
     assert out.status_code == 200
     assert "Board" in out.text
+
+
+def test_a_search_reaches_the_archived_tab_too(client, db):
+    """Searching only the live wall would hide the archived hit, which reads as
+    the search having missed something. The empty live wall says where the
+    match is and links straight to it."""
+    gone = store.publish(db, "seat", "Archived thing", PAGE)
+    other = store.publish(db, "seat", "Unrelated", PAGE)
+    store.set_archived(db, gone.id, True, agent=None)
+    store.set_archived(db, other.id, True, agent=None)
+
+    live = client.get("/?q=archived").text
+    assert "is a match in the archived pages" in live
+    assert 'href="/?filter=archived&q=archived&view=grid"' in live, "and a way to it"
+
+    on_tab = client.get("/?filter=archived&q=archived").text
+    assert _tile_titles(on_tab) == {"Archived thing"}, "the tab shows only the match"
+    assert "1 page" in on_tab, "and the count follows the tab it is beside"
+
+
+# --- archived is a tab, not a fold at the foot of the page --------------------
+#
+# Jeremy, 21 Sep 2026: "can you move the archived toggle that is at the bottom
+# of the page to be one of the tabs at the top alongside All, Waiting on you
+# and Deleted? same look and feel."
+
+
+def test_the_archived_tab_appears_only_once_something_is_archived(client, db):
+    kept = store.publish(db, "seat", "Board", PAGE)
+    assert ">Archived<" not in client.get("/").text
+    store.set_archived(db, kept.id, True, agent=None)
+    assert 'href="/?filter=archived">Archived<span class="tn">1</span>' in (
+        client.get("/").text
+    )
+
+
+def test_the_archived_tab_shows_only_archived_pages(client, db):
+    gone = store.publish(db, "seat", "Put away", PAGE)
+    store.publish(db, "seat", "On the wall", PAGE)
+    store.set_archived(db, gone.id, True, agent=None)
+    titles = _tile_titles(client.get("/?filter=archived").text)
+    assert titles == {"Put away"}
+
+
+def test_an_archived_page_still_looks_archived_on_its_tab(client, db):
+    """The skin is what survived the move: a page off the wall must not look
+    like one on it, whichever tab reached it."""
+    gone = store.publish(db, "seat", "Put away", PAGE)
+    store.set_archived(db, gone.id, True, agent=None)
+    assert '<div class="archived-body">' in client.get("/?filter=archived").text
+
+
+def test_the_count_beside_the_search_follows_the_tab(client, db):
+    """"9 pages" next to an Archived tab showing two is the count contradicting
+    what is under it."""
+    for n in range(3):
+        store.publish(db, "seat", f"Live {n}", PAGE)
+    gone = store.publish(db, "seat", "Put away", PAGE)
+    store.set_archived(db, gone.id, True, agent=None)
+    assert "3 pages" in client.get("/").text
+    assert "1 page<" in client.get("/?filter=archived").text
+
+
+def test_an_empty_archived_tab_says_so_rather_than_showing_nothing(client, db):
+    store.publish(db, "seat", "Board", PAGE)
+    assert "Nothing is archived" in client.get("/?filter=archived").text
+
+
+def test_the_wall_with_everything_archived_points_at_the_tab(client, db):
+    """It used to say "anything archived is below", which stops being true the
+    moment the fold is a tab."""
+    gone = store.publish(db, "seat", "Put away", PAGE)
+    store.set_archived(db, gone.id, True, agent=None)
+    out = client.get("/").text
+    assert 'href="/?filter=archived&view=grid">1 archived</a>' in out
+    assert "below" not in out.split("<style>")[0] + out.split("</style>")[-1]
+
+
+def test_the_archived_tab_keeps_the_view_it_was_asked_for(client, db):
+    gone = store.publish(db, "seat", "Put away", PAGE)
+    store.set_archived(db, gone.id, True, agent=None)
+    assert '<ul class="rows">' in client.get("/?filter=archived&view=list").text

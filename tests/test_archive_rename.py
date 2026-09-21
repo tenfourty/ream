@@ -42,10 +42,13 @@ def test_an_archived_page_leaves_the_wall(client, page):
         follow_redirects=False,
     )
     wall = client.get("/").text
-    assert "<span>Archived</span>" in wall
-    assert '<span class="n">1 page</span>' in wall, (
-        "counted, so out of the way never becomes lost"
+    assert page.id not in wall, "off the live wall"
+    assert 'href="/?filter=archived">Archived<span class="tn">1</span>' in wall, (
+        "and on its own tab, counted -- out of the way never becomes lost. "
+        "It was a fold at the foot of the wall until Jeremy asked for it up "
+        "in the tab row on 21 Sep."
     )
+    assert page.id in client.get("/?filter=archived").text, "and reachable there"
 
 
 def test_archiving_deletes_nothing(client, db, page):

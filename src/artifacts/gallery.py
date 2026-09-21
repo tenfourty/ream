@@ -321,7 +321,7 @@ main{display:block}
    --ok and this inherits the quieter treatment. */
 /* THE CONVERSATION ON A PAGE (homelab-ij8.18). Quiet by construction: it sits
    after the page, it borrows the card surface rather than inventing one, and a
-   settled thread folds into a <details> exactly as the archived wall does --
+   settled thread folds into a <details> --
    out of the way must never become gone, so the count is on the summary.
 
    An agent bubble and a human bubble differ by a left rule and nothing else.
@@ -391,7 +391,8 @@ main{display:block}
 .settled-cmts > summary::-webkit-details-marker{display:none}
 .settled-cmts > summary:hover{color:var(--ink)}
 .settled-cmts .n{font-size:.75rem;color:var(--muted)}
-/* The same triangle the archived fold uses, and for the same reason: without
+/* The same triangle the settled-comments fold uses, and for the same reason:
+   without
    a marker the summary reads as a caption and nobody presses it. Rendered
    once and looked at -- "Settled  1 conversation" sat there looking inert. */
 .settled-cmts > summary .chev{display:inline-block;width:0;height:0;flex:0 0 auto;
@@ -757,28 +758,14 @@ main{display:block}
 }
 
 /* --- archived ---------------------------------------------------------------
-   These were a bare <details> in the browser's own styling -- a black triangle
-   and unstyled text under a wall that had been designed -- which is exactly how
-   it looked. It is a real section now: a rule to separate it from the live
-   wall, a summary that behaves like the other controls here, and contents that
-   read as SECONDARY, because a page off the wall should not compete with one on
-   it. Still counted and still one line until opened: out of the way must never
-   become lost. */
-.archived-list{margin:2.5rem 0 0;border-top:1px solid var(--line);padding-top:1rem}
-.archived-list > summary{cursor:pointer;list-style:none;display:inline-flex;
-  align-items:center;gap:.5rem;border-radius:.5rem;padding:.3rem .6rem .3rem .45rem;
-  font:500 .8125rem/1.25rem ui-sans-serif,system-ui,-apple-system,sans-serif;
-  color:var(--muted);user-select:none}
-.archived-list > summary::-webkit-details-marker{display:none}
-.archived-list > summary:hover{background:var(--card);color:var(--ink)}
-.archived-list > summary .n{color:var(--muted);font-weight:400;opacity:.85}
-.archived-list > summary .chev{display:inline-block;width:0;height:0;flex:0 0 auto;
-  border-left:5px solid currentColor;border-top:4px solid transparent;
-  border-bottom:4px solid transparent;transition:transform .12s}
-.archived-list[open] > summary .chev{transform:rotate(90deg)}
-.archived-body{padding-top:.9rem}
-/* Off the wall, so: quieter. The pictures recede, the type greys, and it comes
-   back on hover for anything he actually reaches for. */
+   A tab of its own since 21 Sep, on Jeremy's word: it was a <details> fold at
+   the foot of the wall, under everything else, which is where you put things
+   you would rather were not read. The three states a page can be in -- on the
+   wall, archived, deleted -- are three tabs in one row now.
+
+   What survived the move is the SKIN. A page off the wall must not look like
+   one on it, whichever tab reached it: the pictures recede, the type greys,
+   and both come back on hover for anything he actually reaches for. */
 .archived-body .shot,.archived-body .rshot{opacity:.55;filter:saturate(.65)}
 .archived-body .t,.archived-body .rt{color:var(--muted)}
 .archived-body .tiles > li > a,.archived-body .row{background:transparent}
@@ -1463,21 +1450,31 @@ def _deleted_view(rows) -> str:
     return "".join(out)
 
 
-def _tabs(active: str, waiting: int, pinned: int, deleted: int = 0) -> str:
-    """All / Waiting on you / Pinned.
+def _tabs(
+    active: str, waiting: int, pinned: int, deleted: int = 0, archived: int = 0
+) -> str:
+    """All / Waiting on you / Pinned / Archived / Deleted.
 
     The reference's tabs are All / Yours / Shared with you, which do not map:
     every page here is his. These are the questions actually worth asking of
-    this wall, and the middle one is the reason the service exists.
+    this wall, and the second one is the reason the service exists.
 
     A tab appears only once it has something in it. A "Pinned" tab that is
     always empty teaches him to ignore the row it sits in, and that row is also
-    where search lives."""
+    where search lives.
+
+    ARCHIVED IS A TAB, not a fold at the foot of the wall. It was a
+    <details> under everything else until 21 Sep, when Jeremy asked for it up
+    here with the others. The three states a page can be in -- on the wall,
+    archived, deleted -- now read as three tabs in one row rather than as one
+    row plus something you scroll to, and the count keeps doing the job the
+    fold's count did: "out of the way" never becomes "lost"."""
     out = []
     for key, label, count in (
         ("all", "All", 0),
         ("waiting", "Waiting on you", waiting),
         ("pinned", "Pinned", pinned),
+        ("archived", "Archived", archived),
         ("deleted", "Deleted", deleted),
     ):
         if key != "all" and not count:
@@ -1537,6 +1534,17 @@ def _agent_pick(agents: list[str], chosen: str, view: str, query: str) -> str:
     )
 
 
+def _visible_count(active: str, rows: list, archived: list, deleted: list) -> int:
+    """How many pages the tab you are on is showing -- the number beside the
+    search box. It has to follow the tab, not the live wall: "9 pages" next to
+    an Archived tab showing two is the count contradicting what is under it."""
+    if active == "archived":
+        return len(archived)
+    if active == "deleted":
+        return len(deleted)
+    return len(rows)
+
+
 def _controls_row(
     view: str,
     query: str,
@@ -1547,13 +1555,14 @@ def _controls_row(
     deleted: int = 0,
     agents: list[str] | None = None,
     agent: str = "",
+    archived: int = 0,
 ) -> str:
     """The row under the title: WHAT to show on the left, how to find it and how
     to see it on the right."""
     pages_text = f"{pages} page" if pages == 1 else f"{pages} pages"
     return (
         '<div class="controls">'
-        f"{_tabs(active, waiting, pinned, deleted)}"
+        f"{_tabs(active, waiting, pinned, deleted, archived)}"
         '<div class="cright">'
         f"{_agent_pick(agents or [], agent, view, query)}"
         f"{_search_box(query, view)}"
@@ -2543,7 +2552,11 @@ def gallery_router(db: Database) -> APIRouter:
         pinned_total = sum(1 for r in rows if r[8])
 
         chosen = request.query_params.get("filter")
-        active = chosen if chosen in ("waiting", "pinned", "deleted") else "all"
+        active = (
+            chosen
+            if chosen in ("waiting", "pinned", "deleted", "archived")
+            else "all"
+        )
         deleted_rows = store.list_deleted(db)
         hidden_questions = store.open_questions_off_the_wall(db)
         if active == "waiting":
@@ -2602,25 +2615,23 @@ def gallery_router(db: Database) -> APIRouter:
             tiles = "".join(tile(r, archived) for r in these)
             return f'<ul class="tiles">{tiles}</ul>'
 
-        # Archived pages, folded and counted. Jeremy asked for archiving so a
-        # page stops competing for attention, not so it becomes unreachable —
-        # the count in the summary is what keeps "out of the way" from becoming
-        # "lost", and the whole thing is one line until he opens it.
-        archived_block = ""
-        if archived_rows and active != "deleted":
-            n = len(archived_rows)
-            noun = "page" if n == 1 else "pages"
-            archived_block = (
-                '<details class="archived-list"><summary>'
-                '<span class="chev" aria-hidden="true"></span>'
-                f"<span>Archived</span>"
-                f'<span class="n">{n} {noun}</span>'
-                "</summary>"
-                '<div class="archived-body">'
-                f"{render(archived_rows, archived=True)}</div>"
-                "</details>"
+        # Archived pages are their own tab (Jeremy, 21 Sep: put it up with the
+        # others). Still rendered in the archived skin -- dimmed thumbnails,
+        # quieter titles -- so a page that is off the wall never looks like one
+        # that is on it, whichever tab you reached it through.
+        if active == "archived":
+            main = (
+                f'<div class="archived-body">{render(archived_rows, archived=True)}</div>'
+                if archived_rows
+                else (
+                    f'<p class="empty">Nothing archived matches <b>{escape(query)}</b>. '
+                    f'<a href="/?filter=archived&view={view}">Show everything '
+                    "archived</a>.</p>"
+                    if query
+                    else '<p class="empty">Nothing is archived.</p>'
+                )
             )
-        if active == "deleted":
+        elif active == "deleted":
             main = _deleted_view(deleted_rows)
         elif rows:
             main = render(rows)
@@ -2631,7 +2642,11 @@ def gallery_router(db: Database) -> APIRouter:
             found_archived = (
                 " It is not in the archived pages either."
                 if not archived_rows
-                else " There is a match below, in the archived pages."
+                else (
+                    ' There <a href="/?filter=archived&q='
+                    + quote(query)
+                    + f'&view={view}">is a match in the archived pages</a>.'
+                )
             )
             main = (
                 f'<p class="empty">Nothing here matches '
@@ -2639,10 +2654,14 @@ def gallery_router(db: Database) -> APIRouter:
                 f'<a href="/?view={view}">Show everything</a>.</p>'
             )
         elif archived_rows:
-            main = '<p class="empty">Nothing on the wall. Anything archived is below.</p>'
+            main = (
+                '<p class="empty">Nothing on the wall. '
+                f'<a href="/?filter=archived&view={view}">'
+                f"{len(archived_rows)} archived</a>.</p>"
+            )
         else:
             main = '<p class="empty">No pages published yet.</p>'
-        body = main + archived_block
+        body = main
         response = HTMLResponse(
             _shell(
                 "Artifacts",
@@ -2654,10 +2673,11 @@ def gallery_router(db: Database) -> APIRouter:
                     active,
                     waiting_total,
                     pinned_total,
-                    len(deleted_rows) if active == "deleted" else len(rows),
+                    _visible_count(active, rows, archived_rows, deleted_rows),
                     len(deleted_rows),
                     agents,
                     chosen_agent,
+                    len(archived_rows),
                 ),
                 home=False,
             ),

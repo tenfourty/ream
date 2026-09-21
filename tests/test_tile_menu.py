@@ -358,13 +358,13 @@ def test_archiving_is_reachable_from_the_wall_not_only_from_the_page(client, db)
 
 
 def test_an_archived_tile_offers_the_way_back_not_the_way_out(client, db):
-    """The same row, reversed, so the fold is not a place things only go into.
-    A menu that still said "Archive" on an archived page would be a no-op
-    dressed as an action."""
+    """The same row, reversed, so the archived tab is not a place things only
+    go into. A menu that still said "Archive" on an archived page would be a
+    no-op dressed as an action."""
     published = store.publish(db, "seat", "Board", PAGE)
     store.set_archived(db, published.id, True, agent=None)
 
-    page = client.get("/").text
+    page = client.get("/?filter=archived").text
     body = page.split('<div class="archived-body">', 1)[1]
     assert "Put back on the wall" in body
     assert ">Archive<" not in body
