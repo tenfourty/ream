@@ -32,9 +32,8 @@ from artifacts.client import (
     HTTPFailure,
     UsageError,
     _api_base,
-    _key_file_path,
-    _read_key,
     _request,
+    _resolve_key,
     declared_session,
     installed_stamp,
     use_session,
@@ -160,6 +159,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="ask Jeremy a lettered question on a page, and read the answer",
     )
     parser.add_argument("--key-file")
+    # Same as artifacts-publish: a key from an open descriptor never touches
+    # disk. See client._read_key_fd.
+    parser.add_argument("--key-fd", type=int, metavar="N")
     # Which session raised the question, when several share one key. It rides on
     # the decision row, so a shared feed can be narrowed to your own -- see
     # artifacts.client._SESSION_ENV.
@@ -264,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv if argv is not None else sys.argv[1:])
     use_session(declared_session(args.session))
     try:
-        key = _read_key(_key_file_path(args.key_file))
+        key = _resolve_key(args)
     except UsageError as exc:
         print(str(exc), file=sys.stderr)
         return 2

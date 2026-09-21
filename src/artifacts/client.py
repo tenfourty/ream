@@ -163,6 +163,106 @@ def _key_file_path(explicit: str | None) -> Path:
     return Path(_DEFAULT_KEY_FILE).expanduser()
 
 
+# Set by the key wrapper to the descriptor it opened. It carries the NUMBER,
+# never the key, so it is not a secret and /proc/<pid>/environ tells a reader
+# nothing they could use. This exists so one wrapper can serve a command it
+# does not have to know the argument order of -- `artifacts-key -- <anything>`.
+_KEY_FD_ENV = "ARTIFACTS_KEY_FD"
+
+
+def _resolve_key(args) -> str:
+    """The key, from a descriptor or a file -- never quietly from both.
+
+    Refusing the combination rather than preferring one: a caller that passed
+    both meant something, and silently honouring the other is how a wrapper
+    ends up reading the cleartext file it was written to stop using, with
+    everything appearing to work. That is the whole failure ij8.34 is about,
+    so it fails loudly instead.
+    """
+    env_fd = os.environ.get(_KEY_FD_ENV, "").strip()
+    if args.key_fd is not None and args.key_file:
+        raise UsageError(
+            "--key-fd and --key-file are two answers to the same question; "
+            "pass one. (A wrapper that sets both is probably still falling "
+            "back to the file it meant to replace.)"
+        )
+    if env_fd and args.key_file:
+        raise UsageError(
+            f"${_KEY_FD_ENV} is set (a wrapper opened a key for this command) "
+            "but --key-file was passed too. Pass one: honouring the file here "
+            "would read the cleartext key the wrapper exists to stop using."
+        )
+    if args.key_fd is not None:
+        return _read_key_fd(args.key_fd)
+    if env_fd:
+        try:
+            number = int(env_fd)
+        except ValueError:
+            raise UsageError(
+                f"${_KEY_FD_ENV} is {env_fd!r}, which is not a descriptor number"
+            ) from None
+        return _read_key_fd(number)
+    return _read_key(_key_file_path(args.key_file))
+
+
+def _read_key_fd(number: int) -> str:
+    """The key from an already-open file descriptor, so it is never on disk.
+
+    homelab-ij8.34. Four bearer tokens sat in cleartext in ~/.config/artifacts/,
+    and mode 600 is real protection against another user and none at all
+    against a stray read. The vaulted key lives in sops; a wrapper on the
+    machine that holds the age recipient extracts ONE entry and hands it
+    straight here:
+
+        artifacts-publish --key-fd 3 page.html 3< <(sops -d --extract ... FILE)
+
+    A DESCRIPTOR RATHER THAN A TEMPORARY FILE, which was my first proposal and
+    the operator's improvement on it: with no file there is nothing to shred,
+    no window in which the plaintext exists on disk, and no trap that has to
+    fire to clean up. It beats an environment variable for the older reason --
+    /proc/<pid>/environ and `ps e` are readable, and an exported variable
+    outlives the command it was meant for.
+
+    THE MODE CHECK HAS NO EQUIVALENT HERE and its absence is not an oversight:
+    a descriptor has no permissions of its own, and whoever opened it decided
+    who may read it. That is the wrapper's job and it is a smaller thing to get
+    right than a file's lifetime. Everything else -- the shape check, never
+    printing the value, never putting it in an exception -- is identical.
+    """
+    # 1 and 2 are where this process WRITES. Reading a key from a stream meant
+    # for output is always a mistake, and a silent one: it would block, or read
+    # nothing, and the shape check would then blame the key.
+    if number in (1, 2):
+        raise UsageError(
+            f"--key-fd {number} is this process's own output stream; "
+            "pass a descriptor you opened for reading (3 is conventional)"
+        )
+    if number < 0:
+        raise UsageError("--key-fd must be a file descriptor number")
+    try:
+        # closefd=False: the descriptor belongs to the caller, which may have
+        # its own plans for it. Reading it to the end is enough.
+        with os.fdopen(number, encoding="utf-8", newline="", closefd=False) as handle:
+            raw = handle.read()
+    except OSError as exc:
+        raise UsageError(
+            f"cannot read --key-fd {number}: {exc.strerror}. Nothing was opened "
+            "on that descriptor -- with bash, `3< <(...)` opens 3 for the "
+            "command it is attached to."
+        ) from None
+    except UnicodeDecodeError as exc:
+        raise UsageError(f"--key-fd {number} did not carry valid text") from exc
+    content = raw.removesuffix("\n")
+    if not _KEY_SHAPE.fullmatch(content):
+        # Never the content. A truncated read and a wrong key look the same
+        # from here, and saying which would mean showing it.
+        raise UsageError(
+            f"--key-fd {number} did not carry a valid agent key "
+            f"({len(content)} characters read)"
+        )
+    return content
+
+
 def _read_key(path: Path) -> str:
     try:
         mode = stat.S_IMODE(path.stat().st_mode)
@@ -671,6 +771,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--key-file")
     parser.add_argument(
+        "--key-fd",
+        type=int,
+        metavar="N",
+        help=(
+            "read the key from an already-open descriptor instead of a file, "
+            "so it never touches disk: `--key-fd 3 ... 3< <(sops -d ...)`"
+        ),
+    )
+    parser.add_argument(
         "--check",
         metavar="FILE",
         help=(
@@ -730,7 +839,7 @@ def main(argv: list[str] | None = None) -> int:
             print(str(exc), file=sys.stderr)
             return 2
     try:
-        key = _read_key(_key_file_path(args.key_file))
+        key = _resolve_key(args)
     except UsageError as exc:
         print(str(exc), file=sys.stderr)
         return 2
