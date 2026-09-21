@@ -19,10 +19,15 @@ this service publishes are read as current, so a claim carried over from a
 summary and republished is a stale claim with a fresh timestamp on it — which
 is the failure the whole service exists to prevent.
 
-The `SessionStart` and `PostCompact` hooks in `.claude/settings.json` say the
-same thing mechanically. The hook is the reminder; this section is the rule,
-and the rule is what survives if the hook is ever disabled. Ruled by Jeremy,
-2026-09-20: *"It's super important we don't lose state or trust in our state."*
+The `SessionStart` hook in `.claude/settings.json` says the same thing
+mechanically, and it is the ONLY one that can: measured in Claude Code 2.1.278
+on 21 Sep, a `PostCompact` hook has no path into a session's context at all
+(its output is displayed at the human and discarded), while SessionStart fires
+again with `source=compact` at every compaction and its context is injected.
+A PostCompact hook was wired here for a day and every firing was rejected. The
+hook is the reminder; this section is the rule, and the rule is what survives
+if the hook is ever disabled. Ruled by Jeremy, 2026-09-20: *"It's super
+important we don't lose state or trust in our state."*
 
 ## WHY
 

@@ -22,18 +22,6 @@
           }
         ]
       }
-    ],
-    "PostCompact": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR/scripts/session-start-context.sh\" --event PostCompact 2>/dev/null || true",
-            "timeout": 5
-          }
-        ]
-      }
     ]
   }
 }
