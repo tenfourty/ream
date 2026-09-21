@@ -143,6 +143,12 @@ kubectl -n artifacts exec deploy/artifacts -- \
   artifacts-admin register-key --agent <your-name> --sha256 <the printed sha256>
 ```
 
+`new-key --out` **refuses to overwrite an existing key file** — it exits 1 and
+leaves the file untouched, so you cannot destroy a working key by re-running the
+command. If `~/.config/artifacts/key` already exists, that is the shared
+`baba-operator` key and not yours; see "which key you are using" below before
+publishing under it.
+
 Never print, cat or paste the key file itself. If a key is lost or leaks,
 `artifacts-admin revoke-key <key_id>` in the pod, then mint a new one.
 
@@ -329,6 +335,19 @@ sandboxed on its own origin and holds whatever HTML you published, so a form
 rendered inside it could forge an answer or imitate the real one. Only the
 gallery origin holds Jeremy's session — which is why your page's CSP says
 `form-action 'none'` and why that is correct rather than limiting.
+
+**The order is forced, and getting it wrong looks like nothing at all.** A slot
+needs a decision id, a decision needs an artifact id, so the only sequence that
+works is:
+
+1. `artifacts-publish page.html --title "..."` — get the page's id
+2. `POST $BASE/artifacts/<id>/decisions` — get each decision's id
+3. put the slots in the page and `artifacts-publish page.html --update <id>`
+
+Write the slots first and you publish a page of empty divs with no error and no
+obvious cause. Both halves are documented above; that they are *sequential* is
+the part that caught two agents on 19 Sep 2026. This is also why the templates
+ship their decision slot commented out.
 
 A slot is optional. A decision with no slot appears in a band above the page,
 which is the default and not a failure. An answered decision stops being
