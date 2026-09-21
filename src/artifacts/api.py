@@ -21,6 +21,7 @@ from artifacts import (
     keys,
     store,
     templates,
+    text,
     thumbs,
 )
 from artifacts.db import Database
@@ -148,6 +149,54 @@ def agent_router(db: Database) -> APIRouter:
         request.state.agent_key_id = key.id
         return key.agent
 
+    # How long a declared session label may be. Generous enough for the shape
+    # the skill recommends -- "<seat>/<short id>" -- and short enough that it
+    # cannot become a place to smuggle prose into a column meant for a name.
+    SESSION_MAX = 120
+
+    def session(request: Request) -> str | None:
+        """Which SESSION is calling, as a label it declares about itself.
+
+        homelab-ij8.32. Three seats on this machine share one key, so `agent`
+        answers "which machine" and nothing answers "which of you". Jeremy,
+        20 Sep: "a key per machine/host plus some sort of uuid for the agent
+        sessions". This is that second part.
+
+        A HEADER rather than a body field, deliberately: it applies to reads as
+        well as writes, it needs no change to seven request models, and a
+        client sets it once for every call it will ever make. A body field
+        would have arrived on publish and nowhere else, which is how half a
+        feature ships.
+
+        NOT A CREDENTIAL AND NOT A PERMISSION. The caller declares it, so any
+        key holder can send any value, and nothing here tries to verify it --
+        there is nothing to verify against. It is a label for reading back
+        ("which of us did this?") and for a caller narrowing its own feed.
+        Anything that scopes access must keep using `agent`, which is derived
+        from a token this service holds the hash of. A check built on this
+        would be defeated by editing an environment variable, and a check that
+        can be defeated that easily is worse than none, because it reads like
+        one.
+
+        Absent, blank or whitespace is None, never "" -- so "this caller did
+        not say" has exactly one representation in the column, and a reader
+        never has to decide whether an empty string means unknown or means a
+        session that named itself nothing.
+        """
+        raw = (request.headers.get("x-artifacts-session") or "").strip()
+        if not raw:
+            return None
+        if len(raw) > SESSION_MAX:
+            raise HTTPException(
+                422,
+                f"x-artifacts-session must be at most {SESSION_MAX} characters",
+            )
+        # Sanitised like every other caller-supplied string that reaches
+        # storage and then somebody's terminal: control characters gone,
+        # whitespace collapsed. text.sanitize is idempotent, so a clean label
+        # is unchanged.
+        return text.sanitize(raw) or None
+
     @router.get("/openapi.json")
     def schema(request: Request, agent: str = Depends(caller)):
         """The machine-readable contract, behind the same key as the data.
@@ -164,7 +213,11 @@ def agent_router(db: Database) -> APIRouter:
         return request.app.openapi()
 
     @router.get("/me")
-    def whoami(request: Request, agent: str = Depends(caller)):
+    def whoami(
+        request: Request,
+        agent: str = Depends(caller),
+        seat_session: str | None = Depends(session),
+    ):
         """Which seat this key is, and what it may do.
 
         Exists because the answer is not obvious and getting it wrong is silent.
@@ -182,6 +235,13 @@ def agent_router(db: Database) -> APIRouter:
             "agent": agent,
             "key_id": getattr(request.state, "agent_key_id", None),
             "scopes": grants.for_agent(db, agent),
+            # ECHOED BACK, not looked up: this is what the caller just told us
+            # it was, so a seat can check its own plumbing in one call. null
+            # means "you are not declaring a session", which on this machine
+            # means your writes are indistinguishable from the other two seats
+            # sharing this key. That is exactly the question /me exists to
+            # answer, one layer further in than the one it was built for.
+            "session": seat_session,
         }
 
     @router.get("/templates")
@@ -217,9 +277,15 @@ def agent_router(db: Database) -> APIRouter:
         )
 
     @router.post("/artifacts", status_code=201)
-    def create(payload: PublishBody, agent: str = Depends(caller)):
+    def create(
+        payload: PublishBody,
+        agent: str = Depends(caller),
+        seat_session: str | None = Depends(session),
+    ):
         try:
-            published = store.publish(db, agent, payload.title, payload.body)
+            published = store.publish(
+                db, agent, payload.title, payload.body, session=seat_session
+            )
             # After the write, never inside it: a publish must not wait on a
             # browser, nor fail because of one. See thumbs.render_in_background.
             thumbs.render_in_background(
@@ -249,7 +315,12 @@ def agent_router(db: Database) -> APIRouter:
             ) from exc
 
     @router.patch("/artifacts/{artifact_id}")
-    def update(artifact_id: str, payload: PatchBody, agent: str = Depends(caller)):
+    def update(
+        artifact_id: str,
+        payload: PatchBody,
+        agent: str = Depends(caller),
+        seat_session: str | None = Depends(session),
+    ):
         try:
             published = store.patch(
                 db,
@@ -258,6 +329,7 @@ def agent_router(db: Database) -> APIRouter:
                 payload.body,
                 payload.expected_revision,
                 title=payload.title,
+                session=seat_session,
             )
             # After the write, never inside it: a publish must not wait on a
             # browser, nor fail because of one. See thumbs.render_in_background.
@@ -527,7 +599,10 @@ def agent_router(db: Database) -> APIRouter:
 
     @router.post("/artifacts/{artifact_id}/decisions", status_code=201)
     def create_decision(
-        artifact_id: str, payload: DecisionBody, agent: str = Depends(caller)
+        artifact_id: str,
+        payload: DecisionBody,
+        agent: str = Depends(caller),
+        seat_session: str | None = Depends(session),
     ):
         try:
             return decisions.ask(
@@ -537,6 +612,7 @@ def agent_router(db: Database) -> APIRouter:
                 question=payload.question,
                 options=payload.options,
                 recommended=payload.recommended,
+                session=seat_session,
             ).__dict__
         except store.BodyTooLarge as exc:
             raise HTTPException(
@@ -723,6 +799,18 @@ def agent_router(db: Database) -> APIRouter:
         since: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=1000),
         wait: float = Query(0.0, ge=0.0, le=300.0),
+        # Narrow the feed to one session's own work. A CONVENIENCE, not a
+        # boundary -- every row it hides was already visible to this key, and
+        # omitting it still returns all of them. Taken from the QUERY here, not
+        # from the header: a caller may legitimately poll for a session other
+        # than the one it is declaring itself to be, and conflating "who I am"
+        # with "what I want to see" would remove that for no gain.
+        #
+        # homelab-31, 21 Sep, after two false wakes in ten minutes on another
+        # seat's decisions: "a watcher which cries wolf trains its reader to
+        # stop looking, and the one wake that matters is indistinguishable from
+        # these."
+        session_filter: str | None = Query(None, alias="session", max_length=120),
         agent: str = Depends(caller),
     ):
         # The mechanism a nudge is only ever an optimisation on top of (see
@@ -755,13 +843,20 @@ def agent_router(db: Database) -> APIRouter:
         # read (events.note_read swallows its own errors) -- the feed is the
         # feature, this is the safety net that watches over it.
         events.note_read(db, agent)
-        rows = events.list_for_agent(db, agent, since=since, limit=limit)
+        rows = events.list_for_agent(
+            db, agent, since=since, limit=limit, session=session_filter
+        )
         if rows or not wait:
             return [row.__dict__ for row in rows]
         return [
             row.__dict__
             for row in events.wait_for_agent(
-                db, agent, since=since, limit=limit, seconds=wait
+                db,
+                agent,
+                since=since,
+                limit=limit,
+                seconds=wait,
+                session=session_filter,
             )
         ]
 

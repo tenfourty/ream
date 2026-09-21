@@ -263,7 +263,22 @@ def _guard(
     _check_secrets(value, field, agent=agent, artifact_id=artifact_id)
 
 
-def publish(db: Database, agent: str, title: str, body: str) -> Published:
+def publish(
+    db: Database,
+    agent: str,
+    title: str,
+    body: str,
+    *,
+    session: str | None = None,
+) -> Published:
+    """`session` is a LABEL the caller declared about itself, not a credential --
+    see `api.session`. It is stored on the artifact (who first published it) and
+    on the version (who published THAT one), because a page three sessions have
+    edited has three answers to "who did this" and only the per-version one is
+    ever right. Keyword-only and defaulted so every existing caller -- the
+    gallery, the tests, the republisher -- keeps working and simply stores NULL,
+    which is the honest value for "did not say".
+    """
     _guard(title, MAX_TITLE_BYTES, "title", agent=agent, artifact_id=None)
     _guard(body, MAX_BODY_BYTES, "body", agent=agent, artifact_id=None)
     artifact_id, revision = ids.new_id(), _revision(body, 1)
@@ -278,14 +293,15 @@ def publish(db: Database, agent: str, title: str, body: str) -> Published:
         # one transaction: a failure partway through (a NUL byte Postgres refuses, or anything
         # else) must leave no row behind, not an artifact with no version.
         conn.execute(
-            "insert into artifact (id, title, agent, read_token, current_version)"
-            " values (%s, %s, %s, %s, null)",
-            (artifact_id, title, agent, token),
+            "insert into artifact"
+            " (id, title, agent, read_token, current_version, session)"
+            " values (%s, %s, %s, %s, null, %s)",
+            (artifact_id, title, agent, token, session),
         )
         conn.execute(
-            "insert into version (artifact_id, n, body, revision, created_by)"
-            " values (%s, 1, %s, %s, %s)",
-            (artifact_id, body, revision, agent),
+            "insert into version (artifact_id, n, body, revision, created_by, session)"
+            " values (%s, 1, %s, %s, %s, %s)",
+            (artifact_id, body, revision, agent, session),
         )
         conn.execute(
             "update artifact set current_version = 1, updated_at = now() where id = %s",
@@ -317,8 +333,12 @@ def patch(
     body: str,
     expected_revision: str,
     title: str | None = None,
+    *,
+    session: str | None = None,
 ) -> Published:
     """`title=None` leaves the page's name alone; a string renames it.
+
+    `session` labels the VERSION this call writes -- see `publish`.
 
     A page's name outlives its first version -- what a page is FOR is often only
     clear after a few revisions, and until this existed the only way to correct a
@@ -388,10 +408,16 @@ def patch(
             # artifact exactly as it was, not pointing at a version that was
             # never written.
             with conn.transaction():
+                # The version carries the session that wrote IT. The artifact's
+                # own `session` is deliberately NOT updated here: it records who
+                # first published the page, and overwriting it on every edit
+                # would turn "who made this" into "who touched it last", which
+                # the version rows already say and say better.
                 conn.execute(
-                    "insert into version (artifact_id, n, body, revision, created_by)"
-                    " values (%s, %s, %s, %s, %s)",
-                    (artifact_id, n, body, revision, agent),
+                    "insert into version"
+                    " (artifact_id, n, body, revision, created_by, session)"
+                    " values (%s, %s, %s, %s, %s, %s)",
+                    (artifact_id, n, body, revision, agent, session),
                 )
                 if title is None:
                     conn.execute(
@@ -587,7 +613,11 @@ def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int
     Returns how many questions it dropped, so a caller can report a number.
     """
     rows = conn.execute(
-        "select d.id, d.question, a.agent from decision d"
+        # `d.session` comes along so the withdrawal lands in the feed of the
+        # session that ASKED, not merely of the machine it ran on. Without it,
+        # three seats sharing a key would each be woken by the other two's
+        # withdrawals -- the precise noise the filter exists to remove.
+        "select d.id, d.question, a.agent, d.session from decision d"
         " join artifact a on a.id = d.artifact_id"
         " where d.artifact_id = %s and d.answer is null and d.closed_at is null",
         (artifact_id,),
@@ -606,7 +636,7 @@ def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int
             " where artifact_id = %s and answer is null and closed_at is null",
             (artifact_id,),
         )
-    for decision_id, question, owner in rows:
+    for decision_id, question, owner, asked_by_session in rows:
         events.append(
             conn,
             artifact_id=artifact_id,
@@ -632,6 +662,7 @@ def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int
                 "still need one, ASK IT AGAIN on a page that is on his wall. "
                 "Stop waiting on this one."
             ),
+            session=asked_by_session,
         )
     return len(rows)
 

@@ -33,6 +33,46 @@ _KEY_SHAPE = re.compile(r"^art_[A-Za-z0-9_-]{20,}$")
 
 _REQUEST_TIMEOUT = 30
 
+# The environment variable a seat sets to say WHICH SESSION it is, when several
+# seats on one machine share one key (homelab-ij8.32).
+#
+# The service cannot work this out and neither can this file. In Claude Code the
+# real session id reaches a HOOK as `session_id` on stdin; the environment
+# variable CLAUDE_CODE_SESSION_ID is NOT equivalent, because a forked subagent
+# inherits its parent's and attribution taken from it would credit a parent for
+# its children's work. So the caller declares it, and this only carries it.
+#
+# The shape worth using is "<seat>/<short id>" -- e.g. artifacts-seat/5ed2e1c5.
+# Jeremy asked for "some sort of uuid", and a uuid alone is unique but unreadable
+# on a page; a name alone is readable but not unique. Both costs nothing.
+#
+# NOT A CREDENTIAL. It is sent in the clear as an ordinary header, anyone holding
+# the key can send any value, and nothing on the far side verifies it. Never put
+# anything in here that would matter if it were read.
+_SESSION_ENV = "ARTIFACTS_SESSION"
+_SESSION_HEADER = "X-Artifacts-Session"
+
+
+def declared_session(explicit: str | None = None) -> str | None:
+    """What this invocation calls itself, or None. `--session` beats the
+    environment, and neither being set is a perfectly ordinary answer."""
+    value = (explicit or os.environ.get(_SESSION_ENV, "") or "").strip()
+    return value or None
+
+
+# Set once, by `main`, from `--session` or the environment. A module-level value
+# rather than an argument threaded through eleven helpers: this is a one-shot
+# process whose identity does not change halfway through, and the alternative was
+# touching every call site for a header none of them cares about -- which is how
+# one of them gets missed and a single route silently stops attributing.
+_session: str | None = None
+
+
+def use_session(value: str | None) -> None:
+    # Process-wide identity, set once at startup -- see `_session` above.
+    global _session
+    _session = value
+
 
 class UsageError(Exception):
     """A problem with how the command was invoked or its key file -- exit 2."""
@@ -171,7 +211,15 @@ def _detail(raw: bytes) -> str:
     return f"the service answered with {len(raw)} bytes of JSON carrying no detail"
 
 
-def _request(method: str, url: str, key: str, payload: dict | None) -> dict:
+def _request(
+    method: str,
+    url: str,
+    key: str,
+    payload: dict | None,
+    session: str | None = None,
+) -> dict:
+    # The process-wide declaration, unless a caller overrides it deliberately.
+    session = session or _session
     _check_url_scheme(url)
     data = json.dumps(payload).encode() if payload is not None else None
     # `url` is always `{_api_base()}/...` -- an https address the operator configures
@@ -184,6 +232,11 @@ def _request(method: str, url: str, key: str, payload: dict | None) -> dict:
     # refuses to follow any redirect at all -- this is the second, independent
     # reason the key can never leave on one.
     request.add_unredirected_header("Authorization", f"Bearer {key}")
+    # `add_unredirected_header` for the same reason as the key above, though the
+    # stake is far lower: this is a label, not a secret. Consistency here means
+    # there is one rule about headers on this request rather than two.
+    if session:
+        request.add_unredirected_header(_SESSION_HEADER, session)
     if data is not None:
         request.add_header("Content-Type", "application/json")
     for attempt in range(_ROLLING_ATTEMPTS):
@@ -460,6 +513,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--update", metavar="ID")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--key-file")
+    parser.add_argument(
+        "--session",
+        metavar="LABEL",
+        help=(
+            "which session this is, when several share one key; defaults to "
+            f"${_SESSION_ENV}. A label, never a secret."
+        ),
+    )
     # The gallery's housekeeping, for agents. Each takes the page id, and none
     # of them takes a FILE -- see `_shelf`.
     shelf = parser.add_argument_group("housekeeping (no FILE needed)")
@@ -492,6 +553,7 @@ _SHELF_ACTIONS = (
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv if argv is not None else sys.argv[1:])
+    use_session(declared_session(args.session))
     try:
         key = _read_key(_key_file_path(args.key_file))
     except UsageError as exc:

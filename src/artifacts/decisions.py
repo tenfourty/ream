@@ -71,7 +71,8 @@ _COLUMNS = (
     " decision.options, decision.recommended, decision.answer, decision.answer_note,"
     " decision.answered_at, decision.answered_by, decision.created_at, decision.closed_at,"
     " decision.acknowledged_at, decision.acknowledged_by,"
-    " decision.answer_source, decision.recorded_by, decision.said_at"
+    " decision.answer_source, decision.recorded_by, decision.said_at,"
+    " decision.session"
 )
 
 
@@ -99,6 +100,10 @@ class DecisionRow:
     recorded_by: str | None
     # When HE said it, which is not when it was recorded.
     said_at: str | None
+    # Which SESSION raised this question. A caller-declared label, never a
+    # permission -- see api.session. None for anything asked before sessions
+    # existed, and for a caller that did not declare one.
+    session: str | None
 
 
 class InvalidOptions(Exception):
@@ -189,6 +194,7 @@ def _row_to_decision(row) -> DecisionRow:
         answer_source=row[14],
         recorded_by=row[15],
         said_at=row[16].isoformat() if row[16] is not None else None,
+        session=row[17],
     )
 
 
@@ -200,6 +206,7 @@ def ask(
     question: str,
     options: list[dict],
     recommended: str | None = None,
+    session: str | None = None,
 ) -> DecisionRow:
     """Pose a lettered question on `artifact_id`. Refuses (`store.NotFound`) an
     artifact `agent` does not own, exactly as `store.patch` does -- someone else's
@@ -228,8 +235,13 @@ def ask(
 
         decision_id = ids.new_id()
         conn.execute(
-            "insert into decision (id, artifact_id, version_n, question, options, recommended)"
-            " values (%s, %s, %s, %s, %s, %s)",
+            # `session` is which SESSION raised the question -- a label the
+            # caller declared, never a permission (see api.session). It is what
+            # lets a seat sharing a key with two others recognise its own
+            # question in a feed, and what lets the answer wake the right one.
+            "insert into decision"
+            " (id, artifact_id, version_n, question, options, recommended, session)"
+            " values (%s, %s, %s, %s, %s, %s, %s)",
             (
                 decision_id,
                 artifact_id,
@@ -237,6 +249,7 @@ def ask(
                 question,
                 Jsonb(validated_options),
                 recommended,
+                session,
             ),
         )
         created = conn.execute(
@@ -442,6 +455,12 @@ def answer(
         # turned `owning_agent` into `acknowledged_by` -- always None -- and every
         # answer then tried to write an event with no agent.
         artifact_id, options, title, owning_agent = row[1], row[4], row[-2], row[-1]
+        # The session that ASKED, taken from inside _COLUMNS (last entry) rather
+        # than from the end of the row, which is where the two joined columns
+        # live. The event carries this so the seat that raised the question can
+        # recognise its own answer in a feed three seats share -- see
+        # events.list_for_agent's `session`.
+        asking_session = row[len(_COLUMNS.split(",")) - 1]
 
         letters = {option["letter"] for option in options}
         if letter not in letters:
@@ -476,6 +495,10 @@ def answer(
                 # "a: Yes" and the qualification he typed never leaves the
                 # database.
                 note=note,
+                # The session that ASKED, not the one that answered: Jeremy has
+                # no session, and the whole point is that the seat which raised
+                # the question can pick its own answer out of a shared feed.
+                session=asking_session,
             )
         updated = conn.execute(
             f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input

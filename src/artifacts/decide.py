@@ -35,7 +35,9 @@ from artifacts.client import (
     _key_file_path,
     _read_key,
     _request,
+    declared_session,
     installed_stamp,
+    use_session,
 )
 from artifacts.client import (
     _Parser as _StaleAwareParser,
@@ -152,6 +154,10 @@ def build_parser() -> argparse.ArgumentParser:
         description="ask Jeremy a lettered question on a page, and read the answer",
     )
     parser.add_argument("--key-file")
+    # Which session raised the question, when several share one key. It rides on
+    # the decision row, so a shared feed can be narrowed to your own -- see
+    # artifacts.client._SESSION_ENV.
+    parser.add_argument("--session", metavar="LABEL")
     parser.add_argument(
         "--version",
         action="version",
@@ -234,6 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv if argv is not None else sys.argv[1:])
+    use_session(declared_session(args.session))
     try:
         key = _read_key(_key_file_path(args.key_file))
     except UsageError as exc:

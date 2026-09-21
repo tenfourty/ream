@@ -49,7 +49,7 @@ MAX_NOTE_IN_EVENT = 1_000
 
 _COLUMNS = (
     "event.seq, event.artifact_id, event.agent, event.actor, event.kind,"
-    " event.summary, event.ref_id, event.created_at, event.note"
+    " event.summary, event.ref_id, event.created_at, event.note, event.session"
 )
 
 
@@ -68,6 +68,10 @@ class EventRow:
     # summary in one line has to be able to show this differently, and
     # concatenating them would take that choice away from every consumer.
     note: str
+    # Which session this event is ABOUT, when the thing it happened to carried
+    # one. None for everything written before sessions existed, and for any
+    # caller that did not declare one -- see `api.session`.
+    session: str | None
 
 
 def _row_to_event(row) -> EventRow:
@@ -86,6 +90,7 @@ def _row_to_event(row) -> EventRow:
         ref_id=row[6],
         created_at=row[7].isoformat(),
         note=text.sanitize(row[8], limit=MAX_NOTE_IN_EVENT),
+        session=row[9],
     )
 
 
@@ -99,6 +104,7 @@ def append(
     summary: str,
     ref_id: str | None = None,
     note: str = "",
+    session: str | None = None,
 ) -> int:
     """Insert one event row on `conn`, inside the caller's own transaction --
     see the module docstring. `agent` is the seat the event is FOR (the
@@ -123,9 +129,15 @@ def append(
     # larger bound than the summary. A summary is a line in someone else's list;
     # a note is the thing Jeremy actually said, and truncating it to a line is
     # how "start with (b) but then (a) if we can" becomes "start with (b)".
+    # `session` is which SESSION this event concerns -- the one that raised the
+    # decision, or published the page -- not who caused it. It exists so a seat
+    # sharing a key with two others can narrow its feed to its own work
+    # (homelab-ij8.32). A label, never a scope: `agent` remains the only thing
+    # that decides which rows a key may see.
     row = conn.execute(
-        "insert into event (artifact_id, agent, actor, kind, summary, ref_id, note)"
-        " values (%s, %s, %s, %s, %s, %s, %s) returning seq",
+        "insert into event"
+        " (artifact_id, agent, actor, kind, summary, ref_id, note, session)"
+        " values (%s, %s, %s, %s, %s, %s, %s, %s) returning seq",
         (
             artifact_id,
             agent,
@@ -134,25 +146,51 @@ def append(
             text.sanitize(summary),
             ref_id,
             text.sanitize(note, limit=MAX_NOTE_IN_EVENT),
+            session,
         ),
     ).fetchone()
     return row[0]
 
 
 def list_for_agent(
-    db: Database, agent: str, *, since: int = 0, limit: int = 100
+    db: Database,
+    agent: str,
+    *,
+    since: int = 0,
+    limit: int = 100,
+    session: str | None = None,
 ) -> list[EventRow]:
     """Every event recorded for `agent`, strictly above `since`, oldest first --
     the order a cursor needs: a caller that stores the last `seq` it saw and asks
     again with `since=<that seq>` sees each row exactly once, in the order it was
     written. `limit` protects an agent that has been away a long time from
-    pulling an unbounded backlog in one call."""
-    sql = (
-        f"select {_COLUMNS} from event where event.agent = %s and event.seq > %s"  # noqa: S608 -- _COLUMNS is a fixed module constant, never caller input
-        " order by event.seq asc limit %s"
-    )
+    pulling an unbounded backlog in one call.
+
+    `session` narrows to one session's own work. IT IS A CONVENIENCE, NOT A
+    BOUNDARY -- every row it hides was already visible to this key, and asking
+    without it still returns all of them. The distinction matters because the
+    value is caller-declared: treating it as a scope would be a check any key
+    holder defeats by sending a different string.
+
+    WHY IT EXISTS. homelab-31, 21 Sep 2026, after two false wakes in ten minutes
+    on another seat's decisions: "a watcher which cries wolf trains its reader
+    to stop looking, and the one wake that matters is indistinguishable from
+    these." Three seats on this machine share one key, so `agent` cannot
+    separate them and this can.
+
+    A row with no session is EXCLUDED when filtering. The cautious direction, on
+    purpose: everything written before sessions existed has NULL here, and
+    folding those into every filtered feed would reproduce exactly the noise the
+    filter is for. A caller that wants them omits the filter."""
+    sql = f"select {_COLUMNS} from event where event.agent = %s and event.seq > %s"  # noqa: S608 -- _COLUMNS is a fixed module constant, never caller input
+    params: tuple = (agent, since)
+    if session is not None:
+        sql += " and event.session = %s"
+        params += (session,)
+    sql += " order by event.seq asc limit %s"
+    params += (limit,)
     with db.connect() as conn:
-        rows = conn.execute(sql, (agent, since, limit)).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return [_row_to_event(row) for row in rows]
 
 
@@ -252,6 +290,7 @@ def wait_for_agent(
     since: int = 0,
     limit: int = 100,
     seconds: float,
+    session: str | None = None,
 ) -> list[EventRow]:
     """Hold until an event lands for `agent` above `since`, or `seconds` pass.
 
@@ -272,21 +311,21 @@ def wait_for_agent(
         # Too many agents already waiting. Answer now with whatever is there
         # rather than queueing behind them: a caller that gets an empty answer
         # early simply asks again, which is ordinary polling.
-        return list_for_agent(db, agent, since=since, limit=limit)
+        return list_for_agent(db, agent, since=since, limit=limit, session=session)
     try:
         deadline = time.monotonic() + seconds
         while True:
             if _shutdown.is_set():
                 # Asked to stop before this hold even began: answer at once
                 # rather than opening a request that cannot be honoured.
-                return list_for_agent(db, agent, since=since, limit=limit)
+                return list_for_agent(db, agent, since=since, limit=limit, session=session)
             # The deadline is checked BEFORE the look as well as after. A look
             # is a database round trip, not a free operation, and the caller was
             # promised an answer by a wall-clock moment: starting one more look
             # after the deadline has passed spends time nobody agreed to.
             if time.monotonic() >= deadline:
                 return []
-            rows = list_for_agent(db, agent, since=since, limit=limit)
+            rows = list_for_agent(db, agent, since=since, limit=limit, session=session)
             if rows:
                 return rows
             remaining = deadline - time.monotonic()
@@ -299,6 +338,6 @@ def wait_for_agent(
             # it -- one last look first, so a row that landed in the same
             # moment is not thrown away.
             if _shutdown.wait(timeout=min(_LOOK_EVERY, remaining)):
-                return list_for_agent(db, agent, since=since, limit=limit)
+                return list_for_agent(db, agent, since=since, limit=limit, session=session)
     finally:
         _waiters.release()
