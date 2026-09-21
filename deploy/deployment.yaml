@@ -34,6 +34,13 @@ spec:
       # creating pods, so the two must land in that order.
       priorityClassName: homelab-lan
       automountServiceAccountToken: false
+      # 10s of preStop drain, then SIGTERM, then a generous margin for the
+      # process to go. See the container's `lifecycle` below for why the drain
+      # exists; this only has to be comfortably larger than it, because the
+      # shutdown itself is immediate -- begin_shutdown() releases every held
+      # poll the moment SIGTERM lands (artifacts/serve.py wires it), it does
+      # not wait any of them out.
+      terminationGracePeriodSeconds: 40
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
@@ -63,6 +70,34 @@ spec:
                 secretKeyRef:
                   name: artifacts-db-app
                   key: uri
+          # WHY A POD THAT IS GOING AWAY KEEPS SERVING FOR TEN SECONDS.
+          #
+          # Operator's waiter, 21 Sep 05:52-06:35: 3 of 13 long-polls returned
+          # 502, lining up exactly with a rollout. begin_shutdown() was already
+          # correct and was not the gap -- it ends every poll ALREADY HELD when
+          # SIGTERM lands, at once, with a 200. The gap is a poll that ARRIVES
+          # while the pod is terminating: marking a pod Terminating withdraws
+          # its endpoint asynchronously, and for the moment before the ingress
+          # has caught up it still routes there, to a socket that is closing.
+          #
+          # preStop runs BEFORE SIGTERM, so sleeping here keeps the pod a valid
+          # backend across exactly that window. A poll arriving inside the ten
+          # seconds is served normally and then released with a 200 at SIGTERM;
+          # one arriving after is only ever routed to the new pod.
+          #
+          # Ten seconds, not 300. It is scaled to endpoint propagation, not to
+          # the longest wait= we accept -- the holds do not need waiting out,
+          # they are released instantly. Draining for the full poll length
+          # would add five minutes to every deploy and buy nothing.
+          #
+          # The NATIVE sleep action, not exec: ["sleep","10"]. An exec preStop
+          # whose binary is missing fails with a warning and the pod terminates
+          # immediately, so the drain silently buys nothing -- a broken guard
+          # that reads as a working one. This form depends on no binary at all.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 10
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
