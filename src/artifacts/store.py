@@ -429,6 +429,32 @@ def _owned(conn, artifact_id: str, agent: str):
     ).fetchone()
 
 
+def exists(db: Database, artifact_id: str) -> bool:
+    """Whether this page exists at all, whoever owns it.
+
+    The ONE read in this module that ignores ownership, and it exists for the
+    one caller allowed to: a key holding `decisions:read-all` reading another
+    seat's questions (homelab-9gj). Everywhere else "not yours" answers
+    identically to "no such page", so that a key cannot be walked to learn
+    which ids are real -- this function does not weaken that, because a caller
+    without the grant never reaches it.
+
+    Says nothing about the page but yes or no: a granted key is entitled to
+    that page's DECISIONS, which is not the same authority as reading its body,
+    its title or its version history.
+
+    `deleted_at is null` for the same reason `_owned` carries it: a deleted
+    page is invisible to every read in this module, and the way to be sure of
+    that is for there to be one place per shape it can be forgotten.
+    """
+    with db.connect() as conn:
+        row = conn.execute(
+            "select 1 from artifact where id = %s and deleted_at is null",
+            (artifact_id,),
+        ).fetchone()
+    return row is not None
+
+
 def patch(
     db: Database,
     agent: str,

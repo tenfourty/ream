@@ -639,7 +639,7 @@ class UncollectedRow:
     # about itself and both are the whole point when the OPERATOR asks about
     # everyone: an alert that says "one answer is stranded" without saying whose
     # or on what sends its reader back to the database to find out, which is how
-    # an alert stops being read. `WaitingRow` below carries the same two for the
+    # an alert stops being read. `CrossSeatRow` below carries the same two for the
     # same reason.
     agent: str
     artifact_title: str
@@ -723,9 +723,16 @@ def uncollected(
 
 
 @dataclass(frozen=True)
-class WaitingRow:
-    """One open question, described so that whoever reads the operator's queue
-    knows which page to open and how long it has been sitting there."""
+class CrossSeatRow:
+    """One question from any seat, described so that whoever reads it knows
+    which page to open, whose page it is, and how long it has been sitting
+    there.
+
+    Called `WaitingRow` until 21 Sep 2026, when this view stopped being only
+    about what is waiting: a granted key can now ask for answered and withdrawn
+    questions too (homelab-9gj), and a row carrying Jeremy's answer is not
+    waiting on anybody.
+    """
 
     decision: DecisionRow
     agent: str
@@ -733,8 +740,32 @@ class WaitingRow:
     age_seconds: int
 
 
-def open_across_seats(db: Database, *, limit: int = 200) -> list[WaitingRow]:
-    """Every open question on every page, oldest first.
+def across_seats(
+    db: Database,
+    *,
+    include_answered: bool = False,
+    include_closed: bool = False,
+    limit: int = 200,
+) -> list[CrossSeatRow]:
+    """Every question on every page, oldest first -- by default only the ones
+    still waiting on Jeremy.
+
+    THE DEFAULTS ARE LOAD-BEARING, and not merely conservative. The operator's
+    queue (`ops-waiting-feed.sh` in the homelab repo) reconciles itself against
+    this feed by DISAPPEARANCE: a decision it has a row for that is no longer
+    returned is taken as proof the decision is no longer open, and the row is
+    closed. An answered decision that kept showing up here would therefore
+    never be closed in that queue, and one that vanished for any other reason
+    would be closed wrongly. So "what is waiting" stays the default, and
+    answered and withdrawn rows are an explicit ask.
+
+    `include_answered` is that explicit ask (homelab-9gj, reported by the
+    operator on 20 Sep 2026 consuming this feature): the read-all grant let a
+    granted seat see a cross-seat question while it was open, and infer from
+    its disappearance that it had been answered, but never read the letter or
+    the note Jeremy wrote -- so two of that day's three live decisions were
+    closed in the operator's queue with a generic "answered on its page"
+    instead of his actual answer. Two of three is the common case, not an edge.
 
     The operator's view, and the answer to the only question the service could
     not previously answer: what is waiting on Jeremy? Until now a seat could see
@@ -757,13 +788,17 @@ def open_across_seats(db: Database, *, limit: int = 200) -> list[WaitingRow]:
         f"select {_COLUMNS}, artifact.agent, artifact.title,"  # noqa: S608 -- fixed constant, not caller input
         " extract(epoch from now() - decision.created_at)::bigint from decision"
         " join artifact on artifact.id = decision.artifact_id"
-        " where decision.closed_at is null and decision.answer is null"
-        " order by decision.created_at asc, decision.id asc limit %s"
+        " where true"
     )
+    if not include_closed:
+        sql += " and decision.closed_at is null"
+    if not include_answered:
+        sql += " and decision.answer is null"
+    sql += " order by decision.created_at asc, decision.id asc limit %s"
     with db.connect() as conn:
         rows = conn.execute(sql, (limit,)).fetchall()
     return [
-        WaitingRow(
+        CrossSeatRow(
             decision=_row_to_decision(row),
             agent=row[-3],
             artifact_title=row[-2],

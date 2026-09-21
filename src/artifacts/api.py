@@ -842,7 +842,23 @@ def agent_router(db: Database) -> APIRouter:
         try:
             store.get_owned(db, agent, artifact_id)
         except store.NotFound as exc:
-            raise HTTPException(404, "no such artifact") from exc
+            # A key holding decisions:read-all reads any seat's questions HERE
+            # too, not only on /decisions?scope=all (homelab-9gj). The operator
+            # consumed the grant on 20 Sep and found it half a feature: it could
+            # see a cross-seat question while it was open, and infer from its
+            # disappearance that Jeremy had answered, but the enrichment step
+            # that fetches the actual letter and note comes through this route
+            # and answered 404 -- so two of that day's three live decisions were
+            # closed in the operator's queue with "answered on its page" instead
+            # of what he actually said.
+            #
+            # Still 404 without the grant, and 404 for a page that does not
+            # exist, so "not yours" and "no such page" stay indistinguishable to
+            # every caller that has not been granted the difference.
+            if not grants.has(db, agent, grants.READ_ALL_DECISIONS) or not store.exists(
+                db, artifact_id
+            ):
+                raise HTTPException(404, "no such artifact") from exc
         # Outcomes come back WITH the decisions, in one extra query for the
         # whole page rather than one per question. A caller reading "what
         # happened here" should not have to know to ask twice, and the one
@@ -861,7 +877,19 @@ def agent_router(db: Database) -> APIRouter:
 
     @router.get("/decisions")
     def list_all_decisions(
-        include_answered: bool = True,
+        # None, not True, because the right default DIFFERS BY SCOPE and both
+        # defaults were set by a consumer getting hurt.
+        #
+        # scope=mine defaults to True (homelab-ij8.33): an agent polling its own
+        # feed is asking "what did he say", and a plain poll that hid his answer
+        # taught agents to pass a flag to see the thing they came for.
+        #
+        # scope=all defaults to False, and that is load-bearing rather than
+        # merely cautious: the operator's queue reconciles against this feed by
+        # DISAPPEARANCE -- a row it is holding that stops being returned is
+        # taken as proof the decision is no longer open, and closed. Answered
+        # rows appearing here by default would leave those rows open forever.
+        include_answered: bool | None = None,
         open_only: bool = False,
         include_closed: bool = False,
         scope: str = Query("mine", pattern="^(mine|all)$"),
@@ -899,6 +927,12 @@ def agent_router(db: Database) -> APIRouter:
                     "have decisions:read-all. Check GET /api/v1/me — you may be "
                     "using a different seat's key file than you intended.",
                 )
+            # The grant now covers what he SAID, not only that he was asked
+            # (homelab-9gj): ?scope=all&include_answered=true carries answer,
+            # answer_note and answered_at for every seat, and
+            # &include_closed=true carries the withdrawn ones. Both stay off
+            # unless asked for -- see the signature for why that matters more
+            # than it looks.
             return [
                 {
                     **row.decision.__dict__,
@@ -906,14 +940,21 @@ def agent_router(db: Database) -> APIRouter:
                     "artifact_title": row.artifact_title,
                     "age_seconds": row.age_seconds,
                 }
-                for row in decisions.open_across_seats(db)
+                for row in decisions.across_seats(
+                    db,
+                    include_answered=bool(include_answered) and not open_only,
+                    # Deliberately NOT suppressed by open_only, because the
+                    # per-artifact route above does not suppress it either and
+                    # one flag pair must mean one thing on every route.
+                    include_closed=include_closed,
+                )
             ]
         return [
             row.__dict__
             for row in decisions.list_for_agent(
                 db,
                 agent,
-                include_answered=include_answered and not open_only,
+                include_answered=(include_answered is not False) and not open_only,
                 include_closed=include_closed,
             )
         ]
