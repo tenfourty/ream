@@ -20,6 +20,33 @@ artifacts-publish page.html --update <id> --title "Its real name"   # and rename
 artifacts-publish --list                               # what this key has published
 ```
 
+## Read back what you published — and keep the source somewhere that survives
+
+```bash
+artifacts-publish --fetch <id> page.html     # the page's own HTML, back on disk
+artifacts-publish --fetch <id> | head -40    # or just look at it
+```
+
+**Edit what is there; do not regenerate from memory.** A republish replaces the
+whole document, so rewriting from scratch silently drops whatever the last
+version promised — a row someone added, a caveat, a number you no longer
+remember. Fetch, edit, publish.
+
+**Put the source in `~/.local/state`, never in the session scratchpad.** The
+scratchpad is tmpfs: the page outlives your session and its source does not.
+On 21 Sep 2026 a seat lost a page's source that way, guessed six URLs for a
+read-back route, got 404 from all of them and concluded a live page it owned
+could never be updated again. Nothing was actually lost — `--fetch` recovered
+it — but the page nearly went stale for good.
+
+Over HTTP it is `GET /api/v1/artifacts/<id>/body`, scoped to the owning key,
+returning the HTML with its `version`, `revision` and CSP `warnings`. The names
+that do NOT work are `/source`, `/content`, `/html`, `/versions`, `/revisions`
+and `/history`; ask for any of them and the 404 now tells you the real ones.
+
+Every version's bytes are kept — `current_version: 8` means eight real versions
+exist — but only the current one is reachable through the API today.
+
 ## Housekeeping: everything Jeremy can do to a page, you can do to yours
 
 ```bash

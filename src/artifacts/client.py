@@ -13,6 +13,7 @@ import argparse
 import ipaddress
 import json
 import os
+import pathlib
 import re
 import stat
 import sys
@@ -261,6 +262,27 @@ def _update(
     return _patch_with_retry(file_path, artifact_id, expected_revision, key, title)
 
 
+def _fetch(artifact_id: str, key: str) -> str:
+    """The page's own HTML, back to the agent that published it.
+
+    `GET /artifacts/{id}/body` has existed since 19 Sep and nobody could find
+    it. On 21 Sep a seat lost a page's source to a tmpfs scratchpad, guessed
+    /source, /content, /html, /versions, /revisions and /history, got 404 from
+    every one, and concluded a live page was permanently un-updatable. Its own
+    diagnosis afterwards is the reason this flag exists rather than a longer
+    paragraph in the skill: "the failure mode of guessing is indistinguishable
+    from the failure mode of a missing capability -- every wrong guess returns
+    exactly what a missing feature returns."
+
+    A flag removes the guessing. A paragraph only helps whoever reads it first.
+    """
+    got = _request("GET", f"{_api_base()}/artifacts/{artifact_id}/body", key, None)
+    body = got.get("body")
+    if not isinstance(body, str):
+        raise UsageError("the service returned no body for that page")
+    return body
+
+
 def _list(key: str) -> list[dict]:
     return _request("GET", f"{_api_base()}/artifacts", key, None)
 
@@ -360,6 +382,11 @@ def build_parser() -> argparse.ArgumentParser:
     shelf.add_argument("--pin", metavar="ID", help="pin a page to the front")
     shelf.add_argument("--unpin", metavar="ID", help="unpin it")
     shelf.add_argument("--duplicate", metavar="ID", help="copy a page to a new address")
+    shelf.add_argument(
+        "--fetch",
+        metavar="ID",
+        help="write the page's current HTML back out, to FILE or stdout",
+    )
     return parser
 
 
@@ -397,7 +424,13 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     if item.get(field)
                 )
-                suffix = f"\t{shelf}" if shelf else ""
+                # WHEN it last moved, as a plain date, in the fourth column.
+                # Without it, finding which of nine pages were stale took one
+                # API call per page (reported 21 Sep). The service has always
+                # returned `updated_at` here; only this printer ignored it.
+                when = (item.get("updated_at") or "")[:10]
+                extra = "\t".join(x for x in (when, shelf) if x)
+                suffix = f"\t{extra}" if extra else ""
                 print(f"{item['id']}\t{item['title']}\t{item['url']}{suffix}")
             return 0
         for flag, route, payload in _SHELF_ACTIONS:
@@ -405,6 +438,19 @@ def main(argv: list[str] | None = None) -> int:
             if artifact_id:
                 _print_shelf(_shelf(route, artifact_id, key, payload))
                 return 0
+        if args.fetch:
+            # To FILE when one is given, else stdout, so it composes either way:
+            # `--fetch ID page.html` to edit, `--fetch ID | grep` to look. The
+            # file is written whole and only on success -- a half-written one
+            # would be the worst outcome for a command whose entire job is not
+            # losing the source.
+            html = _fetch(args.fetch, key)
+            if args.file:
+                pathlib.Path(args.file).write_text(html, encoding="utf-8")
+                print(f"{len(html.encode())} bytes -> {args.file}", file=sys.stderr)
+            else:
+                sys.stdout.write(html)
+            return 0
         if args.duplicate:
             # Its own branch rather than a row in _SHELF_ACTIONS: the others
             # change a page and hand back the same one, this makes a NEW page
@@ -430,7 +476,7 @@ def main(argv: list[str] | None = None) -> int:
             "usage: artifacts-publish FILE --title TITLE"
             " | FILE --update ID [--title TITLE] | --list"
             " | --rename ID --title TITLE | --archive ID | --unarchive ID"
-            " | --pin ID | --unpin ID | --duplicate ID",
+            " | --pin ID | --unpin ID | --duplicate ID | --fetch ID [FILE]",
             file=sys.stderr,
         )
         return 2

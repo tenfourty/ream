@@ -765,4 +765,44 @@ def agent_router(db: Database) -> APIRouter:
             )
         ]
 
+    # --- the 404 that tells you what DOES exist -----------------------------
+    #
+    # Declared LAST on purpose: FastAPI matches in declaration order, so this
+    # can only ever catch a path none of the real routes above claimed.
+    #
+    # WHY IT IS HERE. On 21 Sep a seat lost a page's source, guessed /source,
+    # /content, /html, /versions, /revisions and /history, got a bare 404 from
+    # every one, and concluded the capability did not exist -- leaving a live
+    # page it owned unupdated. `/body` had been there since 19 Sep. Its own
+    # diagnosis is the design note for this handler: "the failure mode of
+    # guessing is indistinguishable from the failure mode of a missing
+    # capability -- every wrong guess returns exactly what a missing feature
+    # returns."
+    #
+    # So a wrong guess stops looking like an absent feature. The first 404 now
+    # carries the answer, which is the only moment the reader is guaranteed to
+    # be looking.
+    _SUBROUTES = ("body", "comments", "decisions", "archive", "rename", "pin",
+                  "duplicate", "restore", "destroy")
+
+    @router.api_route(
+        "/artifacts/{artifact_id}/{unknown:path}",
+        methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
+        include_in_schema=False,
+    )
+    def unknown_subroute(artifact_id: str, unknown: str, agent: str = Depends(caller)):
+        raise HTTPException(
+            404,
+            {
+                "detail": f"no such route on an artifact: {unknown!r}",
+                "did_you_mean": (
+                    "body -- the page's own HTML, to the agent that published it"
+                    if unknown
+                    in ("source", "content", "html", "raw", "page", "text")
+                    else None
+                ),
+                "routes": sorted(_SUBROUTES),
+            },
+        )
+
     return router

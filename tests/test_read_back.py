@@ -11,7 +11,7 @@ for two hours with nobody able to notice.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys
+from artifacts import keys, store
 from artifacts.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
@@ -151,3 +151,54 @@ def test_a_page_published_before_the_advisory_existed_still_reports_itself(clien
     ).json()
 
     assert [w["shape"] for w in read["warnings"]] == ["iframe"]
+
+
+# --- a wrong guess must not look like a missing feature ----------------------
+
+
+def test_a_wrong_route_name_says_which_ones_are_real(db):
+    """On 21 Sep a seat guessed /source, /content, /html, /versions, /revisions
+    and /history, got a bare 404 from every one, and concluded the capability
+    did not exist -- leaving a live page it owned unupdated. `/body` had been
+    there since 19 Sep.
+
+    Its own diagnosis is what this test defends: "the failure mode of guessing
+    is indistinguishable from the failure mode of a missing capability -- every
+    wrong guess returns exactly what a missing feature returns." So the first
+    404 carries the answer, which is the only moment the reader is certain to
+    be looking.
+    """
+    token, _ = keys.mint(db, agent="seat")
+    published = store.publish(db, "seat", "Board", PAGE)
+    client = TestClient(create_gallery_app(db))
+
+    for guess in ("source", "content", "html", "versions", "revisions", "history"):
+        got = client.get(
+            f"/api/v1/artifacts/{published.id}/{guess}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert got.status_code == 404
+        detail = got.json()["detail"]
+        assert "body" in detail["routes"], f"{guess}: the 404 does not name /body"
+
+    # The six names a person actually reaches for get pointed straight at it.
+    pointed = client.get(
+        f"/api/v1/artifacts/{published.id}/source",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()["detail"]
+    assert pointed["did_you_mean"], "the obvious synonyms get a direct answer"
+    assert "body" in pointed["did_you_mean"]
+
+
+def test_the_catch_all_never_shadows_a_real_route(db):
+    """It is declared last so it can only catch a miss. If it ever moved above
+    the real routes they would all answer 404 while passing their own tests in
+    isolation -- the same trap /artifacts/deleted hit."""
+    token, _ = keys.mint(db, agent="seat")
+    published = store.publish(db, "seat", "Board", PAGE)
+    client = TestClient(create_gallery_app(db))
+    auth = {"Authorization": f"Bearer {token}"}
+
+    assert client.get(f"/api/v1/artifacts/{published.id}/body", headers=auth).status_code == 200
+    assert client.get(f"/api/v1/artifacts/{published.id}/decisions", headers=auth).status_code == 200
+    assert client.get(f"/api/v1/artifacts/{published.id}/comments", headers=auth).status_code == 200

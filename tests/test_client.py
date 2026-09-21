@@ -10,6 +10,7 @@ environment-driven read `create_app`'s router already uses in `test_router.py`.
 
 import http.server
 import json
+import re
 import threading
 import time
 import urllib.request
@@ -706,7 +707,14 @@ def test_the_listing_keeps_its_three_columns_and_adds_state_only_when_there_is_s
 
     client.main(["--key-file", str(path), "--list"])
     plain = capsys.readouterr().out.strip()
-    assert plain.count("\t") == 2, "id, title, url -- as it has always been"
+    # The FIRST THREE fields are the contract: every existing caller splits on
+    # tab and takes id, title, url. Columns may be added after them -- a date
+    # was, on 21 Sep, because finding stale pages otherwise cost an API call
+    # each -- and that is why this asserts a prefix rather than a column count,
+    # which is what it used to do and what broke when the date arrived.
+    assert plain.split("\t")[:3] == [artifact_id, "Board", plain.split("\t")[2]]
+    assert plain.split("\t")[2].startswith("https://")
+    assert re.match(r"\d{4}-\d{2}-\d{2}$", plain.split("\t")[3]), "then the date"
 
     client.main(["--key-file", str(path), "--pin", artifact_id])
     capsys.readouterr()
@@ -715,7 +723,10 @@ def test_the_listing_keeps_its_three_columns_and_adds_state_only_when_there_is_s
     assert pinned.split("\t")[:3] == plain.split("\t")[:3], (
         "the first three are unmoved"
     )
-    assert pinned.split("\t")[3] == "pinned"
+    # Date then state: the date is always there, the state only when there is
+    # one, so state is the LAST field rather than a fixed index.
+    assert pinned.split("\t")[-1] == "pinned"
+    assert re.match(r"\d{4}-\d{2}-\d{2}$", pinned.split("\t")[3])
 
 
 def test_a_page_this_key_does_not_own_is_refused(live, key_file, db, tmp_path, capsys):
