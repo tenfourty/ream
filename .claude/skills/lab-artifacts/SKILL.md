@@ -262,6 +262,12 @@ template: `template.html` carries a literal `PAGE TITLE` in both `<title>` and
 unedited, so the browser tab read `PAGE TITLE` for two hours. Nobody could see
 it, because an agent cannot look at its own page.
 
+**Never write the page id into a page.** It does not exist until the publish
+call returns, so a page that prints it is either wrong or costs a second
+publish that changes nothing else — one seat's first revision was exactly
+that and nothing more. The gallery shows the id beside the page, and
+`--list` prints it. No template here carries one any more.
+
 Hard limits come from the page's own CSP, not taste: one self-contained
 file, inline `<style>` and inline SVG, `data:` images, no web fonts, no
 CDNs, no forms. Scripts run, but only inline and only inside the page.
