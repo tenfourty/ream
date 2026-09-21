@@ -169,3 +169,95 @@ def test_bookkeeping_that_fails_never_fails_the_read(db, monkeypatch):
     monkeypatch.setattr(db, "connect", _boom)
 
     events.note_read(db, "seat-one")  # must not raise
+
+
+# --- the operator's view, which sat unbuilt behind a stale comment -----------
+
+
+def test_the_operator_sees_every_seat_s_stranded_answers(client, db):
+    """homelab-ij8.64's second half. It was blocked on "a key that does not
+    exist yet"; decisions:read-all was added for /decisions?scope=all a day
+    later and nobody came back here. The blocker had been gone for a day and
+    the comment saying otherwise was the only thing still enforcing it.
+    """
+    from artifacts import grants
+
+    ops_token, _ = keys.mint(db, agent="ops")
+    grants.grant(db, "ops", grants.READ_ALL_DECISIONS)
+    mine = _stranded(db, agent="seat-a", title="Seat A's page")
+    theirs = _stranded(db, agent="seat-b", title="Seat B's page")
+
+    got = client.get(
+        "/api/v1/decisions/uncollected?scope=all&stuck_after_seconds=0",
+        headers={"Authorization": f"Bearer {ops_token}"},
+    )
+    assert got.status_code == 200
+    ids = {row["decision"]["id"] for row in got.json()}
+    assert ids == {mine.id, theirs.id}
+
+
+def test_each_row_says_whose_it_is_and_on_what(client, db):
+    """An alert that says "one answer is stranded" without saying whose or on
+    what page sends its reader back to the database, which is how an alert
+    stops being read."""
+    from artifacts import grants
+
+    ops_token, _ = keys.mint(db, agent="ops")
+    grants.grant(db, "ops", grants.READ_ALL_DECISIONS)
+    _stranded(db, agent="seat-a", title="The page it is on")
+
+    row = client.get(
+        "/api/v1/decisions/uncollected?scope=all&stuck_after_seconds=0",
+        headers={"Authorization": f"Bearer {ops_token}"},
+    ).json()[0]
+    assert row["agent"] == "seat-a"
+    assert row["artifact_title"] == "The page it is on"
+    assert row["state"] in ("no_reader", "stuck")
+
+
+def test_without_the_grant_it_is_refused_and_not_quietly_narrowed(client, db):
+    """A caller that asked about every seat and got its own back would believe
+    the short list -- the same lie as an empty feed from a broken wait. And the
+    403 names the seat, because every agent on baba shares one key file and the
+    seat a key authenticates as is not the seat its holder assumes."""
+    plain_token, _ = keys.mint(db, agent="no-grant-seat")
+    _stranded(db, agent="seat-a", title="Somebody else's")
+
+    got = client.get(
+        "/api/v1/decisions/uncollected?scope=all&stuck_after_seconds=0",
+        headers={"Authorization": f"Bearer {plain_token}"},
+    )
+    assert got.status_code == 403
+    assert "no-grant-seat" in got.json()["detail"]
+    assert "decisions:read-all" in got.json()["detail"]
+
+
+def test_the_default_is_still_only_your_own(client, db):
+    """`scope` defaults to mine, so nothing a seat already runs starts seeing
+    other seats' answers because this shipped."""
+    from artifacts import grants
+
+    ops_token, _ = keys.mint(db, agent="ops")
+    grants.grant(db, "ops", grants.READ_ALL_DECISIONS)
+    _stranded(db, agent="seat-a", title="Not ops'")
+
+    assert (
+        client.get(
+            "/api/v1/decisions/uncollected?stuck_after_seconds=0",
+            headers={"Authorization": f"Bearer {ops_token}"},
+        ).json()
+        == []
+    )
+
+
+def _stranded(db, *, agent: str, title: str):
+    """One answered-and-never-acknowledged decision on `agent`'s page."""
+    keys.mint(db, agent=agent)
+    page = store.publish(db, agent, title, PAGE)
+    asked = decisions.ask(
+        db, agent=agent, artifact_id=page.id, question="Which?",
+        options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
+        recommended="a",
+    )
+    decisions.answer(db, asked.id, letter="a", note="", by="jeremy")
+    return asked

@@ -777,20 +777,43 @@ def agent_router(db: Database) -> APIRouter:
         stuck_after_seconds: int = Query(
             decisions.STUCK_AFTER_SECONDS, ge=0, le=86_400
         ),
+        scope: str = Query("mine", pattern="^(mine|all)$"),
         agent: str = Depends(caller),
     ):
-        # Scoped to the caller's own seat, like every other read here. The
-        # operator's cross-seat view -- collecting an answer on behalf of an agent
-        # that is gone -- needs a key that does not exist yet, and inventing one
-        # here would be a privilege nobody asked for.
+        # `scope=all` is the operator's view, and it is the half of ij8.64 that
+        # sat unbuilt since 19 Sep behind the note "needs a key that does not
+        # exist yet". IT EXISTS NOW: decisions:read-all was added for
+        # /decisions?scope=all and nobody came back to this route. The blocker
+        # had been gone for a day and the comment saying otherwise was the only
+        # thing still enforcing it -- which is its own small lesson about
+        # comments that record a state of the world rather than a reason.
+        #
+        # Gated identically to /decisions, deliberately: two spellings of the
+        # same privilege is how one of them ends up laxer than the other.
+        if scope == "all" and not grants.has(db, agent, grants.READ_ALL_DECISIONS):
+            # Name the seat -- see /decisions for why. Every agent on baba
+            # shares one key file, so the seat a key authenticates as is not
+            # the seat its holder assumes.
+            raise HTTPException(
+                403,
+                f"this key authenticates as seat '{agent}', which does not "
+                "have decisions:read-all. Check GET /api/v1/me — you may be "
+                "using a different seat's key file than you intended.",
+            )
         return [
             {
                 "decision": row.decision.__dict__,
                 "state": row.state,
                 "last_read_at": row.last_read_at,
+                # Whose, and on what. Redundant when a seat asks about itself
+                # and the entire point when the operator asks about everyone.
+                "agent": row.agent,
+                "artifact_title": row.artifact_title,
             }
             for row in decisions.uncollected(
-                db, agent=agent, stuck_after_seconds=stuck_after_seconds
+                db,
+                agent=None if scope == "all" else agent,
+                stuck_after_seconds=stuck_after_seconds,
             )
         ]
 

@@ -616,6 +616,14 @@ class UncollectedRow:
     decision: DecisionRow
     state: str  # "no_reader" | "stuck"
     last_read_at: str | None
+    # WHOSE answer this is, and which page. Both are redundant when a seat asks
+    # about itself and both are the whole point when the OPERATOR asks about
+    # everyone: an alert that says "one answer is stranded" without saying whose
+    # or on what sends its reader back to the database to find out, which is how
+    # an alert stops being read. `WaitingRow` below carries the same two for the
+    # same reason.
+    agent: str
+    artifact_title: str
 
 
 def uncollected(
@@ -646,7 +654,8 @@ def uncollected(
     every seat, which is the operator's view.
     """
     sql = (
-        f"select {_COLUMNS}, artifact.agent, seat_read.last_read_at from decision"  # noqa: S608 -- fixed constant, not caller input
+        f"select {_COLUMNS}, artifact.agent, artifact.title,"  # noqa: S608 -- fixed constant, not caller input
+        " seat_read.last_read_at from decision"
         " join artifact on artifact.id = decision.artifact_id"
         " left join seat_read on seat_read.agent = artifact.agent"
         " where decision.answered_at is not null"
@@ -665,6 +674,7 @@ def uncollected(
     out = []
     for row in rows:
         answered_at, last_read_at = row[8], row[-1]
+        owning_agent, artifact_title = row[-3], row[-2]
         # "Since the answer" is the comparison, not "recently": a seat read an
         # hour before the answer and never again is exactly as absent as one that
         # has never been read at all, and saying otherwise would send someone
@@ -675,6 +685,8 @@ def uncollected(
                 decision=_row_to_decision(row),
                 state="stuck" if listening else "no_reader",
                 last_read_at=last_read_at.isoformat() if last_read_at else None,
+                agent=owning_agent,
+                artifact_title=artifact_title,
             )
         )
     return out
