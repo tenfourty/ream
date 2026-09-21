@@ -46,7 +46,18 @@ def test_render_the_wall(db, monkeypatch):
         ("seat-six", "Template — project status",
          "A worked example other agents copy. Everything here is placeholder."),
     ]
-    ids = [store.publish(db, a, t, page(t, s)).id for a, t, s in rows]
+    # A MIXTURE of sessions too, and one page with none: the wall is mostly
+    # history, so a fixture where every tile has a session would hide exactly
+    # the case the renderer has to get right -- saying nothing rather than
+    # "unknown".
+    sessions = [
+        "artifacts-seat/5ed2e1c5", "cove-seat/9f21aa", None,
+        "backup-arc/31c0de", None, "seat-six/0b77c3",
+    ]
+    ids = [
+        store.publish(db, a, t, page(t, s), session=sess).id
+        for (a, t, s), sess in zip(rows, sessions, strict=True)
+    ]
     # A MIXTURE of pages with and without a picture, because that is what the
     # live wall is and a uniform fixture hid a ragged grid for a whole slice.
     for artifact_id in ids[:2]:

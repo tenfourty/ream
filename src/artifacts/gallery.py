@@ -18,6 +18,7 @@ of read from something a request could forge.
 """
 
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -363,6 +364,27 @@ main{display:block}
    actions, rather than controls parked at the bottom of the page.
    <details>, not script: everything else here works with scripts off. */
 .menu{position:relative;display:inline-block}
+/* The agent filter. It borrows .menu wholesale -- same <details>, same panel,
+   same rows as the tile dots -- so it is one mechanism rather than a second
+   one that merely looks similar. Only the summary is dressed, and it is
+   dressed to match the search box it stands beside rather than to stand out
+   from it: same height, same radius, same hairline, no fill.
+
+   When a filter IS on, the summary carries the ink colour and the accent rule
+   instead of shouting with a background. Something is being hidden from the
+   wall and that must be visible at a glance -- but it is a state, not an
+   alarm. */
+.pick > summary{display:inline-flex;align-items:center;gap:.35rem;
+  height:1.75rem;padding:0 .5rem;border:1px solid var(--line);
+  border-radius:.45rem;cursor:pointer;list-style:none;
+  font:.8125rem/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
+  color:var(--muted);max-width:10rem;overflow:hidden;white-space:nowrap}
+.pick > summary::-webkit-details-marker{display:none}
+.pick > summary:hover{color:var(--ink);border-color:var(--muted)}
+.pick.on > summary{color:var(--ink);border-color:var(--accent)}
+.pick .mpanel{right:auto;left:0;min-width:11rem}
+.pick .mrow[aria-current]{color:var(--ink);font-weight:600}
+@media (max-width:40rem){.pick{display:none}}
 /* SANS, not the display serif. The page bar is chrome and the reference sets
    its title in the UI face; the serif here made a 14px control look like a
    heading that had been shrunk. The serif belongs to the gallery's own <h1>
@@ -738,6 +760,25 @@ main{display:block}
    `.rmeta` may also shrink now; it was flex:0 0 auto, which is what let it
    take the whole width and leave the title nothing. */
 .rmeta{min-width:0}
+/* WHICH SESSION, and the brief for it was "make it subtle in the design and
+   look good" (Jeremy, 21 Sep). So: the monospace face, because it is an
+   identifier and reads as one; a step smaller than the meta row it sits in;
+   and --muted, the token the meta row already uses, NOT something fainter.
+   Hierarchy here comes from size and face, never from dropping contrast: I
+   made the pin invisible on this same wall by taking --muted to .5 opacity,
+   which measures 1.76:1, and called it "subtle". Subtle is a smaller,
+   different-looking thing you can still read. No border, no chip, no fill.
+
+   NO SEPARATOR OF ITS OWN. The meta row already joins its parts with _SEP,
+   and the ::before middot I first wrote here both duplicated that and was
+   malformed -- "\00b7" with no terminating space, so CSS swallowed the next
+   characters and every tile rendered a literal glyph-and-"b7". Invisible to
+   the whole suite; obvious the moment the wall was rendered and looked at. */
+.sess{font:.6875rem/1 var(--mono);color:var(--muted);letter-spacing:.02em}
+/* First to go when the row narrows: the seat name answers "whose" and this
+   only answers "which of theirs", which is the finer question and the one a
+   phone has no room for. */
+@media (max-width:52rem){.rmeta .sess{display:none}}
 @media (max-width:46rem){.rmeta .who{display:none}}
 @media (max-width:34rem){
   .rows .wait{display:none}
@@ -1364,6 +1405,54 @@ def _tabs(active: str, waiting: int, pinned: int, deleted: int = 0) -> str:
     return f'<nav class="tabs">{"".join(out)}</nav>'
 
 
+def _agent_pick(agents: list[str], chosen: str, view: str, query: str) -> str:
+    """Filter the wall by who published. Jeremy, 21 Sep: "ideally we can filter
+    on the gallery by agent as well as search", and then "make it subtle in the
+    design and look good".
+
+    SO: NOTHING NEW WHEN THERE IS NOTHING TO CHOOSE. One seat on the wall means
+    no control at all -- a dropdown whose only entry is the answer you already
+    have is furniture, and this wall is read by one person who will see it every
+    day.
+
+    A <details> menu, which is how every other menu here works and therefore
+    needs no script: the tile dots, the page bar and the rename dialog are all
+    the same mechanism. It is also the shape the reference uses for its "All
+    types" filter, in the same slot beside the search.
+
+    LINKS, not a form. Changing what you are looking at should be shareable and
+    bookmarkable, and a GET form with a <select> needs either a submit button
+    beside it -- two controls where one will do -- or a script, and this wall
+    works with scripts off.
+
+    Every link carries the CURRENT view and search, so filtering does not
+    silently drop the other two things the reader has set.
+    """
+    if len(agents) < 2:
+        return ""
+
+    def link(value: str, label: str) -> str:
+        bits = []
+        if value:
+            bits.append(f"agent={quote(value)}")
+        if query:
+            bits.append(f"q={quote(query)}")
+        if view and view != "grid":
+            bits.append(f"view={quote(view)}")
+        href = "/?" + "&amp;".join(bits) if bits else "/"
+        mark = " aria-current=\"true\"" if value == chosen else ""
+        return f'<a class="mrow" href="{href}"{mark}>{escape(label)}</a>'
+
+    rows = link("", "Everyone") + "".join(link(a, a) for a in agents)
+    summary = escape(chosen) if chosen else "Everyone"
+    return (
+        f'<details class="menu pick{" on" if chosen else ""}">'
+        f'<summary title="Filter by who published">{summary}'
+        '<span class="chev" aria-hidden="true"></span></summary>'
+        f'<div class="mpanel">{rows}</div></details>'
+    )
+
+
 def _controls_row(
     view: str,
     query: str,
@@ -1372,6 +1461,8 @@ def _controls_row(
     pinned: int,
     pages: int,
     deleted: int = 0,
+    agents: list[str] | None = None,
+    agent: str = "",
 ) -> str:
     """The row under the title: WHAT to show on the left, how to find it and how
     to see it on the right."""
@@ -1380,10 +1471,43 @@ def _controls_row(
         '<div class="controls">'
         f"{_tabs(active, waiting, pinned, deleted)}"
         '<div class="cright">'
+        f"{_agent_pick(agents or [], agent, view, query)}"
         f"{_search_box(query, view)}"
         f'<span class="count">{pages_text}</span>'
         f"{_view_toggle(view)}"
         "</div></div>"
+    )
+
+
+def _session_tag(session: str | None) -> str:
+    """Which session, as quietly as it can be said and still be there.
+
+    Jeremy asked for this on every tile (21 Sep, choosing (b) over my
+    recommendation of the page only) and then: "make it subtle in the design
+    and look good." So it is the SHORT half of the label and nothing else --
+    the agent name is already in the slot beside it, and repeating
+    "artifacts-seat" next to "artifacts-seat" is noise rather than information.
+    The full label is one hover away in the title attribute.
+
+    A label is "<seat>/<short id>" by convention, so the part after the slash
+    is the part that distinguishes two sessions of the same seat, which is the
+    entire question this answers. With no slash, the whole thing, bounded --
+    a caller is free to send anything and a wall must not be pushed about by it.
+
+    Empty for a page with no session, which is every page published before
+    21 Sep and any publish by a caller that declared nothing. No placeholder,
+    no "unknown": a tile that says nothing is correct, and a column of
+    "unknown" would be a column of noise on a wall that is mostly history.
+    """
+    if not session:
+        return ""
+    # Six characters. Long enough to tell two of a seat's sessions apart on a
+    # wall that holds a dozen pages, short enough that the meta row stays on
+    # ONE line in a 304px card -- at eight it wrapped, which made those tiles
+    # taller than the rest and the grid ragged. Subtle has a width.
+    short = session.rsplit("/", 1)[-1][:6] or session[:6]
+    return (
+        f'<span class="sess" title="{escape(session)}">{escape(short)}</span>'
     )
 
 
@@ -1931,7 +2055,15 @@ def gallery_router(db: Database) -> APIRouter:
             "       exists (select 1 from version v"
             "          where v.artifact_id = a.id and v.n = a.current_version"
             "            and v.thumbnail is not null) as has_thumb,"
-            "       a.pinned_at"
+            "       a.pinned_at,"
+            # WHICH SESSION last changed it, not which first published it: the
+            # tile already says "Edited 5h ago" beside this, and the question a
+            # reader is asking at that moment is who did THAT. Jeremy, 21 Sep,
+            # choosing (b) over my recommendation: on every tile, "so you can
+            # see it without opening anything".
+            "       (select v.session from version v"
+            "          where v.artifact_id = a.id"
+            "            and v.n = a.current_version) as session"
             "  from artifact a"
             " where (a.archived_at is null) = %s and a.deleted_at is null"
             # THE WALL SORTS ITSELF BY WHAT NEEDS HIM. Pinned first, because
@@ -1975,6 +2107,7 @@ def gallery_router(db: Database) -> APIRouter:
             _body,
             has_thumb,
             pinned_at,
+            session,
         ) = row
         ident = escape(artifact_id)
         # The reference puts a coloured per-type icon here. Types do not exist
@@ -1994,6 +2127,7 @@ def gallery_router(db: Database) -> APIRouter:
             word = "question" if waiting == 1 else "questions"
             right.append(f'<span class="wait">{waiting} {word} for you</span>')
         right.append(f'<span class="who">{escape(agent)}</span>')
+        right.append(_session_tag(session))
         when = _ago(updated)
         if when:
             exact = stamp.format_for_display(updated) if updated else ""
@@ -2036,6 +2170,7 @@ def gallery_router(db: Database) -> APIRouter:
                 body,
                 has_thumb,
                 pinned_at,
+                session,
             ) = row
             # Every one of these is agent-controlled text reaching the gallery
             # origin, so every one is escaped here. `describe` strips tags but
@@ -2125,6 +2260,9 @@ def gallery_router(db: Database) -> APIRouter:
             # there, and the pin glyph ends the row exactly as it does in the
             # reference.
             meta_bits = [escape(agent)]
+            tag = _session_tag(session)
+            if tag:
+                meta_bits.append(tag)
             if versions and versions > 1:
                 # "v1" on nearly every tile is a column of noise; a version
                 # COUNT only says something once there is more than one.
@@ -2180,6 +2318,18 @@ def gallery_router(db: Database) -> APIRouter:
             rows = [r for r in rows if r[5]]
         elif active == "pinned":
             rows = [r for r in rows if r[8]]
+
+        # WHO published, as a filter. The list of choices is taken from the
+        # LIVE wall before any filtering, so picking a seat never empties the
+        # menu you picked it from -- a control that removes its own other
+        # options is a control you cannot get out of without editing the URL.
+        # Archived pages do not add names of their own: a seat whose only pages
+        # are archived is not somebody you filter the wall by.
+        agents = sorted({r[3] for r in rows})
+        chosen_agent = (request.query_params.get("agent") or "").strip()
+        if chosen_agent:
+            rows = [r for r in rows if r[3] == chosen_agent]
+            archived_rows = [r for r in archived_rows if r[3] == chosen_agent]
 
         query = (request.query_params.get("q") or "").strip()
         needle = query.lower()
@@ -2274,6 +2424,8 @@ def gallery_router(db: Database) -> APIRouter:
                     pinned_total,
                     len(deleted_rows) if active == "deleted" else len(rows),
                     len(deleted_rows),
+                    agents,
+                    chosen_agent,
                 ),
                 home=False,
             ),
