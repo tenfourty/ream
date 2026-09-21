@@ -12,7 +12,7 @@ from fastapi.responses import (
     RedirectResponse,
 )
 
-from artifacts import decisions, hosts, stamp
+from artifacts import decisions, hosts, stamp, templates
 from artifacts.db import Database
 from artifacts.store import (
     gallery_origin,  # re-exported: artifacts.content.gallery_origin still resolves
@@ -351,6 +351,45 @@ def create_content_app(db: Database) -> FastAPI:
             shim = INERT_SHIM
         html = inject(body, shim)
         return HTMLResponse(html, headers=headers_for(live))
+
+    # THE SHARED LOOK, AS A REAL STYLESHEET (homelab-ij8.21). Jeremy, 19 Sep:
+    # serve it instead of 150 lines pasted into every page, while agents stay
+    # free to design a page however they like. It is 7.9 KB -- 42% of the
+    # project-status template -- and a page links it with one line:
+    #
+    #     <link rel="stylesheet" href="/_shared.css">
+    #
+    # ON THE PAGE'S OWN ORIGIN, which is the whole reason this route lives
+    # here and not on the gallery: the page CSP is `style-src 'self'`, and
+    # 'self' for a published page is <id>.tenfourty.com. A stylesheet served
+    # from the gallery would be blocked, silently, in the way this service
+    # exists to stop.
+    #
+    # NO TOKEN, and that is deliberate rather than an oversight: this is the
+    # same constant on every page host, it says nothing about any page, and it
+    # is fetched by the BROWSER as a subresource -- which arrives with
+    # sec-fetch-dest: style and no capability token, because a <link> cannot
+    # carry one. Making it token-only would mean no page could ever use it.
+    #
+    # Not linking it stays a supported choice: every shipped template still
+    # carries the block inline, because a template's own promise is that you
+    # can open the file in a browser with nothing installed and see the page.
+    @app.get("/_shared.css")
+    def shared_css(request: Request) -> Response:
+        css, etag = templates.shared_css()
+        # Revalidate rather than guess: the ETag is content-derived, so a pod
+        # serving new CSS answers a stale conditional with 200 and every other
+        # one with an empty 304. Five minutes of cache on top of that keeps a
+        # reload from asking at all, which matters on a wall of framed pages.
+        headers = {
+            "content-type": "text/css; charset=utf-8",
+            "etag": etag,
+            "cache-control": "public, max-age=300",
+            **base_headers(),
+        }
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        return Response(css, media_type="text/css; charset=utf-8", headers=headers)
 
     @app.get("/")
     def bare(request: Request) -> Response:

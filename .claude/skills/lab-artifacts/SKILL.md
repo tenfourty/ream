@@ -284,9 +284,26 @@ publish that changes nothing else — one seat's first revision was exactly
 that and nothing more. The gallery shows the id beside the page, and
 `--list` prints it. No template here carries one any more.
 
+**The shared look is also a real stylesheet**, served from your page's own
+host, so a page can link it in one line instead of carrying 150 lines of it:
+
+```html
+<link rel="stylesheet" href="/_shared.css">
+```
+
+That is 42% off a page built from `project-status.html`, and a fix to the
+house style reaches it without a republish. Three things worth knowing: it
+only resolves on a PUBLISHED page (the path is on the page's own origin, so a
+copy opened from your disk finds nothing — keep the inline block if the file
+has to look right offline); it is the same bytes the templates are built
+from, not a second copy; and not linking it is a supported choice, which is
+why every template still ships the block inline.
+
 Hard limits come from the page's own CSP, not taste: one self-contained
 file, inline `<style>` and inline SVG, `data:` images, no web fonts, no
-CDNs, no forms. Scripts run, but only inline and only inside the page.
+CDNs, no forms. The stylesheet above is the one exception and it is only an
+exception in shape: it is same-origin, which is exactly what `style-src
+'self'` permits. Scripts run, but only inline and only inside the page.
 
 Write in outcomes, never plan coordinates. Decisions for Jeremy are lettered
 `(a)`, `(b)`, recommendation first — that is how he answers.

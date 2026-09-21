@@ -25,6 +25,7 @@ that. It is source, the caller is saving it to a file, and text/plain says so.
 from __future__ import annotations
 
 import functools
+import hashlib
 from pathlib import Path
 
 DIR = Path(__file__).resolve().parent / "templates"
@@ -77,6 +78,30 @@ def body(name: str) -> str:
     if name not in names():
         raise UnknownTemplate(name)
     return (DIR / f"{name}.html").read_text(encoding="utf-8")
+
+
+@functools.cache
+def shared_css() -> tuple[str, str]:
+    """The shared stylesheet, and an ETag for it: (css, etag).
+
+    homelab-ij8.21, Jeremy 19 Sep 2026: serve the shared look as a real
+    stylesheet instead of 150 lines pasted into every page, while agents stay
+    free to design a page however they like. It is 7.9 KB, which is 42% of the
+    project-status template.
+
+    The SAME FILE the templates are built from, not a copy: `sync-templates.py`
+    splices this text between each template's `shared:` sentinels, and a test
+    fails if a checked-in template has drifted from it. So a page that links
+    the stylesheet and a page that inlines the block are looking at one source
+    -- which is the only version of this worth having.
+
+    Cached for the process: the file ships inside the image and cannot change
+    under a running pod. The ETag is content-derived, so a pod serving new CSS
+    answers a stale revalidation with 200 and the rest with 304.
+    """
+    css = (DIR / "_shared.css").read_text(encoding="utf-8")
+    digest = hashlib.sha256(css.encode("utf-8")).hexdigest()[:16]
+    return css, f'"{digest}"'
 
 
 def index() -> list[dict]:
