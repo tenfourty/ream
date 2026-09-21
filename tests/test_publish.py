@@ -926,3 +926,84 @@ def test_a_stale_revision_is_still_refused_on_an_identical_body(client, db):
         headers=auth(token),
     )
     assert stale.status_code == 409
+
+
+# --- homelab-ij8.53: the service says when nothing changed --------------------
+
+
+def test_an_identical_republish_says_so_rather_than_leaving_it_to_be_inferred(
+    client, db
+):
+    """The no-op itself has existed since ij8.41 -- an identical body mints no
+    version. What did not exist was the service SAYING so.
+
+    `artifacts-republish` worked it out by holding the revision from before and
+    comparing after, which is correct and is a thing every future client has to
+    reimplement. The one that does not is the one that reports an hourly timer
+    as having updated a page every hour, which is this bead's own last line:
+    "an agent asking 'did my update change anything' has no answer available".
+    """
+    token, _ = keys.mint(db, agent="seat")
+    headers = auth(token)
+    made = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=headers
+    ).json()
+    assert made.get("unchanged") is False, "a brand new page has not failed to change"
+
+    same = client.patch(
+        f"/api/v1/artifacts/{made['id']}",
+        json={"body": PAGE, "expected_revision": made["revision"]},
+        headers=headers,
+    ).json()
+    assert same["unchanged"] is True
+    assert same["version"] == made["version"], "and it minted no version"
+    assert same["revision"] == made["revision"]
+
+    different = client.patch(
+        f"/api/v1/artifacts/{made['id']}",
+        json={"body": PAGE.replace("hi", "changed"), "expected_revision": made["revision"]},
+        headers=headers,
+    ).json()
+    assert different["unchanged"] is False
+    assert different["version"] == made["version"] + 1
+
+
+def test_the_concurrency_token_still_separates_two_versions_with_the_same_bytes(
+    client, db
+):
+    """The other half of the acceptance criterion, and the reason the fix was
+    NOT "drop the version number from the revision hash": the revision doubles
+    as the optimistic-concurrency token, so two versions sharing content must
+    still be distinguishable or a stale write stops being rejected.
+
+    A -> B -> A. The third version has the same bytes as the first and must not
+    share its revision, and the first revision must no longer be accepted.
+    """
+    token, _ = keys.mint(db, agent="seat")
+    headers = auth(token)
+    other = PAGE.replace("hi", "other")
+    v1 = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=headers
+    ).json()
+    v2 = client.patch(
+        f"/api/v1/artifacts/{v1['id']}",
+        json={"body": other, "expected_revision": v1["revision"]},
+        headers=headers,
+    ).json()
+    v3 = client.patch(
+        f"/api/v1/artifacts/{v1['id']}",
+        json={"body": PAGE, "expected_revision": v2["revision"]},
+        headers=headers,
+    ).json()
+
+    assert v3["version"] == 3
+    assert v3["revision"] != v1["revision"], (
+        "two versions with identical bytes shared a revision -- expected_revision "
+        "can no longer tell a stale write from a current one"
+    )
+    stale = client.patch(
+        f"/api/v1/artifacts/{v1['id']}",
+        json={"body": other, "expected_revision": v1["revision"]},
+        headers=headers,
+    )
+    assert stale.status_code == 409, "a write against the first revision was accepted"

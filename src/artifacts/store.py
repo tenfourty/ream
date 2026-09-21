@@ -102,6 +102,20 @@ class Published:
     version: int
     revision: str
     url: str
+    # True when a PATCH changed nothing: the body was byte-identical to the
+    # live version, so no version was minted (homelab-ij8.41).
+    #
+    # SAID BY THE SERVICE rather than inferred by each client (homelab-ij8.53).
+    # `artifacts-republish` worked this out by holding the revision from before
+    # and comparing, which is correct and is also a thing every future client
+    # has to reimplement -- and the one that does not reimplement it is the one
+    # that reports an hourly timer as having updated a page every hour. The
+    # same argument `patch` already makes for enforcing the no-op server-side
+    # applies to reporting it.
+    #
+    # Always False from `publish` and `duplicate`: a page that did not exist a
+    # moment ago has not failed to change.
+    unchanged: bool = False
 
 
 @dataclass(frozen=True)
@@ -396,6 +410,7 @@ def patch(
                 url=url_for(artifact_id),
                 revision=expected_revision,
                 version=current,
+                unchanged=True,
             )
 
         _check_secrets(body, "body", agent=agent, artifact_id=artifact_id)

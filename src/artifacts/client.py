@@ -665,6 +665,15 @@ def _print_published(result: dict) -> None:
             }
         )
     )
+    # ON STDERR, not in the JSON: stdout is a contract every existing caller
+    # already parses, and a new key there is a change to it. This is a note to
+    # the person or agent running the command, which is where it belongs.
+    if result.get("unchanged"):
+        print(
+            "unchanged -- the body was identical, so no new version was minted. "
+            "The page is exactly as it was.",
+            file=sys.stderr,
+        )
     _print_warnings(result)
 
 

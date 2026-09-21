@@ -190,3 +190,51 @@ async def test_a_request_with_no_host_header_at_all_gets_the_router_404(db):
     assert start["status"] == 404
     assert body == b"not found"
     assert dict(start["headers"])[b"x-content-type-options"] == b"nosniff"
+
+
+# --- homelab-ij8.4: a caller's own key names must not come back in a 422 ------
+
+
+def test_a_caller_chosen_key_name_never_returns_in_a_validation_error(db):
+    """Written as a forward-looking note on 19 Sep: the validation handler
+    returns {loc, type}, which is safe only while no request model has a
+    dict-typed or aliased field. Two now do -- CommentBody.anchor is
+    `dict | None` and DecisionBody.options is `Any` -- so the condition the
+    bead was waiting for has been met and this is the test it asked for.
+
+    WHY IT MATTERS: `loc` on a dict field is the caller's OWN key, and the
+    error lands in an agent's transcript. A field named after something the
+    caller would rather not repeat is then repeated, by us, in a durable log.
+    """
+    import os
+
+    from fastapi.testclient import TestClient
+
+    from artifacts import keys, store
+    from artifacts.app import create_gallery_app
+
+    os.environ["ARTIFACTS_CONTENT_DOMAIN"] = "tenfourty.com"
+    token, _ = keys.mint(db, agent="seat")
+    page = store.publish(
+        db, "seat", "B",
+        "<!doctype html><html><head><title>t</title></head><body><p>x</p></body></html>",
+    )
+    client = TestClient(create_gallery_app(db=db))
+    headers = {"Authorization": f"Bearer {token}"}
+    # A key name that is unmistakable if it ever comes back.
+    caller_key = "A_NAME_THE_CALLER_WOULD_NOT_WANT_REPEATED"
+
+    attempts = [
+        (f"/api/v1/artifacts/{page.id}/comments", {"body": "x", "anchor": {caller_key: 1}}),
+        (f"/api/v1/artifacts/{page.id}/comments", {"body": "x", "anchor": "not-a-dict"}),
+        (
+            f"/api/v1/artifacts/{page.id}/decisions",
+            {"question": "q", "options": {caller_key: 1}},
+        ),
+    ]
+    for path, payload in attempts:
+        got = client.post(path, json=payload, headers=headers)
+        assert got.status_code == 422, (path, got.status_code)
+        assert caller_key not in got.text, (
+            f"{path} handed the caller's own key name back in a 422"
+        )
