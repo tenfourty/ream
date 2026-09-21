@@ -550,7 +550,7 @@ def live_thumbnail(db: Database, artifact_id: str) -> bytes | None:
 
 
 def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int:
-    """Tell the owning agent that its open questions just left Jeremy's wall.
+    """Close the page's open questions, and tell the owning agent they are gone.
 
     Called from inside the caller's transaction, on the same connection as the
     archive or delete it describes, so the event and its cause commit together.
@@ -563,7 +563,28 @@ def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int
     can lose a shift to that. Found by walking the gallery as a user
     (homelab-ij8.84.10), not by reading it.
 
-    Returns how many agents it told, so a caller can report a number.
+    WHY IT NOW CLOSES THEM. Jeremy, 21 Sep 2026, answering the question of where
+    a question on a tidied-away page should live -- he tapped (a) "leave the UI
+    as it is" and wrote: "Drop the question if the page is archived or deleted
+    the agent needs to ask it again."
+
+    So the limbo state is gone rather than displayed better. It was a real state
+    with real cost: on 21 Sep the operator's waiting list registered a question
+    at 06:30 on a page that had been archived at 06:06, and put it in front of
+    Jeremy twenty-four minutes after it left his wall. His rule removes the
+    whole class -- a question that is not on the wall is not open.
+
+    It does NOT come back if the page is unarchived. That is his instruction
+    read literally ("the agent needs to ask it again") and it is also the only
+    honest option: a question reopened after days is a question whose context
+    has moved, and an agent that re-asks says so in the asking.
+
+    The UI he voted to keep stays exactly where it was. Because the count it
+    reports is now always zero, it simply never renders -- which turns a feature
+    into a silent consistency check, and if it ever DOES render, something here
+    has stopped working.
+
+    Returns how many questions it dropped, so a caller can report a number.
     """
     rows = conn.execute(
         "select d.id, d.question, a.agent from decision d"
@@ -571,6 +592,20 @@ def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int
         " where d.artifact_id = %s and d.answer is null and d.closed_at is null",
         (artifact_id,),
     ).fetchall()
+    # Closed in the SAME transaction as the archive or delete that caused it, on
+    # the caller's connection -- exactly like the events below. A close that
+    # committed while its cause rolled back would withdraw a question from a
+    # page that is still on the wall, which is worse than either outcome alone.
+    #
+    # `acknowledged_at` is coalesced rather than set, matching decisions.close:
+    # an earlier and truer "seen at" must never be overwritten by this.
+    if rows:
+        conn.execute(
+            "update decision set closed_at = now(),"
+            " acknowledged_at = coalesce(acknowledged_at, now())"
+            " where artifact_id = %s and answer is null and closed_at is null",
+            (artifact_id,),
+        )
     for decision_id, question, owner in rows:
         events.append(
             conn,
@@ -581,14 +616,21 @@ def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int
             summary=f"{what}: {question}",
             ref_id=decision_id,
             # Said in full, because the agent reading this has to decide what to
-            # do and "shelved" alone does not tell it whether to give up. Both
-            # archiving and deleting are reversible, so neither is a reason to
-            # abandon the work -- only a reason to stop WAITING and say so.
+            # do and "shelved" alone does not tell it whether to give up.
+            #
+            # This note USED TO SAY "if the page comes back, so does the
+            # question", which was true until Jeremy ruled on 21 Sep that the
+            # question is dropped. A note that outlives the behaviour it
+            # describes is worse than no note: an agent would wait for a return
+            # that is never coming, which is the exact failure this event was
+            # created to end.
             note=(
-                f"The page holding this question was {what}, so Jeremy is no "
-                "longer being shown it. It is still unanswered and nothing has "
-                "been destroyed; if the page comes back, so does the question. "
-                "Stop waiting on it and say so rather than holding."
+                f"The page holding this question was {what}, so it has been "
+                "WITHDRAWN -- Jeremy will not be shown it and it will not come "
+                "back on its own, even if the page does. Nothing he said has "
+                "been lost; the question simply never got an answer. If you "
+                "still need one, ASK IT AGAIN on a page that is on his wall. "
+                "Stop waiting on this one."
             ),
         )
     return len(rows)
@@ -740,14 +782,24 @@ def destroy(db: Database, artifact_id: str, *, agent: str | None) -> bool:
 def open_questions_off_the_wall(db: Database) -> int:
     """Unanswered questions on pages that are archived or deleted.
 
-    These are the ones that go quiet. The page leaves the wall, the question
-    stays open, the agent that asked is still waiting on it, and nothing on the
-    gallery mentions it again -- so he never answers and the agent never
-    unblocks. Found by walking the interface rather than by reading it.
+    SHOULD ALWAYS BE ZERO, and is kept for the day it is not.
 
-    Counted separately from the wall's own total rather than folded into it:
-    "3 questions waiting on you" that leads to a wall showing two would be a
-    worse lie than the silence it replaced.
+    It was a feature. The page left the wall, the question stayed open, the
+    agent that asked was still waiting, and nothing on the gallery mentioned it
+    again -- so this counted them and the header said how many. Found by
+    walking the interface rather than by reading it.
+
+    Jeremy ruled on 21 Sep 2026 that the limbo state should not exist at all:
+    "Drop the question if the page is archived or deleted the agent needs to
+    ask it again." `_shelve_open_questions` now closes them, so nothing can be
+    in this set.
+
+    He also voted to keep the display as it was, and keeping both is not a
+    contradiction -- the line only renders above zero, so it now never renders,
+    and what was a feature has become a self-check. If the gallery ever DOES
+    show "N tidied away", something has stopped closing questions and the wall
+    is the thing telling us. Deleting this would be deleting the alarm because
+    the fire is out.
     """
     with db.connect() as conn:
         return conn.execute(

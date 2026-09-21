@@ -1394,12 +1394,22 @@ def _wall_meta(waiting: int, hidden: int = 0) -> str:
             f"{waiting} {noun} waiting on you</a>"
         )
     if hidden:
-        # A SEPARATE line, not added to the count above. "3 questions waiting"
-        # leading to a wall that shows two would be a worse lie than the
-        # silence this replaces -- and the silence was bad enough: archive or
-        # delete a page with an open question and it simply disappeared, with
-        # the question still open and the agent that asked still waiting.
-        # Found by walking the interface, not by reading it.
+        # THIS SHOULD NEVER RENDER ANY MORE, and it stays for the day it does.
+        #
+        # It was a feature: archive or delete a page with an open question and
+        # it simply disappeared, question still open, asking agent still
+        # waiting, and the gallery silent. This line was the fix, deliberately
+        # SEPARATE from the count above, because "3 questions waiting" leading
+        # to a wall that shows two would be a worse lie than the silence.
+        #
+        # Jeremy then ruled (21 Sep 2026) that the state itself should not
+        # exist -- "Drop the question if the page is archived or deleted the
+        # agent needs to ask it again" -- and store._shelve_open_questions now
+        # closes them. So `hidden` is zero by construction and this branch is
+        # dead in the ordinary case. He voted in the same breath to leave the
+        # display as it was, which is what makes keeping it right rather than
+        # merely harmless: it is now the alarm on the mechanism that closes
+        # them. If he ever sees this line, that mechanism has stopped.
         noun = "question" if hidden == 1 else "questions"
         out += (
             f'<span class="hiddenq" title="On pages that are archived or '

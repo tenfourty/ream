@@ -338,18 +338,20 @@ def test_the_sweep_is_reachable_as_a_command(db, monkeypatch, capsys):
 # --- a question on a page that gets tidied away ------------------------------
 
 
-def test_a_question_does_not_go_silent_when_its_page_is_tidied_away(client, db):
-    """FOUND BY USING THE INTERFACE, not by reading it.
+def test_a_question_is_WITHDRAWN_when_its_page_leaves_the_wall(client, db):
+    """JEREMY RULED, 21 Sep 2026, answering this exact question on his own
+    status page: he tapped (a) "leave the UI as it is" and wrote "Drop the
+    question if the page is archived or deleted the agent needs to ask it
+    again."
 
-    Archive or delete a page holding an unanswered question and, before this,
-    three things were true at once: the question stayed open, the agent that
-    asked was still waiting on it, and the gallery stopped mentioning it
-    entirely. So he would never answer and the agent would never unblock --
-    a silent dead end in the one thing this service exists to do.
+    So the limbo state this test used to defend is gone. It was a real state
+    with a real cost: on 21 Sep the operator's waiting list registered a
+    question at 06:30 on a page archived at 06:06, putting it in front of him
+    twenty-four minutes after it had left his wall.
 
-    The count is kept SEPARATE from "waiting on you" rather than added to it:
-    "3 questions waiting" leading to a wall that shows two would be a worse lie
-    than the silence it replaced.
+    Withdrawn, not deleted. `closed_at` is set and the row, the question and
+    anything he ever said on it stay exactly where they were -- this service
+    does not erase the record, it stops pretending the question is live.
     """
     keys.mint(db, agent="seat")
     for tidy in (
@@ -357,33 +359,57 @@ def test_a_question_does_not_go_silent_when_its_page_is_tidied_away(client, db):
         lambda i: store.set_deleted(db, i, True, agent=None),
     ):
         page = store.publish(db, "seat", "Asks something", PAGE)
-        _ask(db, page.id)
+        asked = _ask(db, page.id)
         assert "waiting on you" in client.get("/").text
 
         tidy(page.id)
 
-        assert decisions.list_for_artifact(db, page.id), "the question is still open"
-        wall = client.get("/").text
-        assert "still unanswered" in wall, (
-            "the gallery went silent about a question he has not answered"
+        rows = decisions.list_for_artifact(
+            db, page.id, include_answered=True, include_closed=True
         )
+        assert len(rows) == 1, "the record is kept -- withdrawn is not deleted"
+        assert not decisions.list_for_artifact(db, page.id), (
+            "and it no longer shows as an open question anywhere"
+        )
+        assert rows[0].closed_at is not None, "the question is still open"
+        assert rows[0].answer is None, "and it was never answered"
+        assert rows[0].id == asked.id
         store.destroy(db, page.id, agent=None)
 
 
-def test_a_deleted_page_shows_what_is_unanswered_on_it(client, db):
-    """The archived fold has always shown this; the bin did not, so a deleted
-    page holding a question was the one place in the gallery where that fact
-    was completely invisible."""
+def test_nothing_is_left_off_the_wall_to_count(client, db):
+    """The UI he voted to keep is kept, and now never fires.
+
+    "N tidied away, still unanswered" only renders when the count is above
+    zero, and after his ruling that count is zero by construction. So the line
+    stays in place as a silent consistency check: if it ever DOES appear,
+    something has stopped closing questions and the wall says so itself.
+    """
+    keys.mint(db, agent="seat")
+    page = store.publish(db, "seat", "Asks something", PAGE)
+    _ask(db, page.id)
+    store.set_archived(db, page.id, True, agent=None)
+
+    assert store.open_questions_off_the_wall(db) == 0
+    assert "tidied away, still unanswered<" not in client.get("/").text, (
+        "the count line rendered, so something has stopped closing questions"
+    )
+
+
+def test_a_deleted_page_has_nothing_unanswered_left_on_it(client, db):
+    """The bin used to count open questions on a deleted page. There are none
+    to count any more, so it says nothing rather than saying zero."""
     keys.mint(db, agent="seat")
     page = store.publish(db, "seat", "Asks something", PAGE)
     _ask(db, page.id)
     store.set_deleted(db, page.id, True, agent=None)
 
-    assert "1 question unanswered" in client.get("/?filter=deleted").text
+    assert "question unanswered" not in client.get("/?filter=deleted").text
 
 
-def test_the_tidied_count_is_not_folded_into_the_waiting_count(client, db):
-    """Two different facts, two different numbers, and neither inflated."""
+def test_the_wall_counts_only_what_is_actually_on_it(client, db):
+    """The live page's question is waiting on him; the archived page's has been
+    withdrawn. One number, and it is not inflated by the other."""
     keys.mint(db, agent="seat")
     live = store.publish(db, "seat", "Live", PAGE)
     gone = store.publish(db, "seat", "Gone", PAGE)
@@ -392,9 +418,26 @@ def test_the_tidied_count_is_not_folded_into_the_waiting_count(client, db):
     store.set_archived(db, gone.id, True, agent=None)
 
     wall = client.get("/").text
-    assert "1 question waiting on you" in wall, "the wall's own count is of the wall"
-    assert "1 question tidied away" in wall
+    assert "1 question waiting on you" in wall
     assert "2 questions waiting on you" not in wall
+    assert "tidied away, still unanswered<" not in wall
+
+
+def test_an_unarchived_page_does_not_get_its_question_back(client, db):
+    """"the agent needs to ask it again" -- read literally, and it is also the
+    only honest option. A question reopened after days is a question whose
+    context has moved, and an agent re-asking says so in the asking."""
+    keys.mint(db, agent="seat")
+    page = store.publish(db, "seat", "Asks something", PAGE)
+    _ask(db, page.id)
+    store.set_archived(db, page.id, True, agent=None)
+    store.set_archived(db, page.id, False, agent=None)
+
+    rows = decisions.list_for_artifact(
+        db, page.id, include_answered=True, include_closed=True
+    )
+    assert rows[0].closed_at is not None, "it came back from the dead"
+    assert "waiting on you" not in client.get("/").text
 
 
 def _ask(db, artifact_id):
@@ -438,8 +481,15 @@ def test_the_asking_agent_hears_when_its_question_leaves_the_wall(db):
         )
         assert shelved[0].ref_id == asked.id, "it names WHICH question"
         assert what in shelved[0].summary
-        assert "still unanswered" in shelved[0].note
-        assert "Stop waiting" in shelved[0].note, "it says what to do about it"
+        # The note must not promise a return. It used to say "if the page comes
+        # back, so does the question", which was true until Jeremy ruled on
+        # 21 Sep that the question is dropped -- and a note that outlives the
+        # behaviour it describes is worse than no note, because an agent would
+        # wait for something that is never coming.
+        assert "WITHDRAWN" in shelved[0].note
+        assert "ASK IT AGAIN" in shelved[0].note, "it says what to do about it"
+        assert "Stop waiting" in shelved[0].note
+        assert "so does the question" not in shelved[0].note
 
 
 def test_a_page_with_nothing_open_produces_no_noise(db):
