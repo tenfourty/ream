@@ -493,7 +493,7 @@ def _fetch(artifact_id: str, key: str, version: int | None = None) -> str:
 
     A flag removes the guessing. A paragraph only helps whoever reads it first.
     """
-    # `--version N` reads THAT version; without it, the live one. Rolling back
+    # `--at-version N` reads THAT version; without it, the live one. Rolling back
     # is then this plus an ordinary update -- no new verb, and the roll-back
     # lands as a new version rather than rewriting history.
     where = (
@@ -505,6 +505,12 @@ def _fetch(artifact_id: str, key: str, version: int | None = None) -> str:
     body = got.get("body")
     if not isinstance(body, str):
         raise UsageError("the service returned no body for that page")
+    # The service re-runs its checks on every read-back, and this is where a
+    # seat comes to find out what is wrong with a page it cannot see. Dropping
+    # them here meant "no warnings" on a fetch proved nothing -- found on 21
+    # Sep by trusting exactly that silence for a moment. Stderr, so a fetch to
+    # stdout is still byte-for-byte the page.
+    _print_warnings(got)
     return body
 
 

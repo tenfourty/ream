@@ -874,3 +874,23 @@ def test_the_stamp_is_a_real_timestamp_not_a_version_string():
     """`artifacts` is 0.1.0 and always will be, so a version string cannot tell a
     fresh install from a six-day-old one. A date can."""
     assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", client.installed_stamp())
+
+
+def test_fetch_reports_the_pages_warnings_and_keeps_stdout_the_page(
+    live, key_file, tmp_path, capsys
+):
+    """Read-back is where a seat finds out what is wrong with a page it cannot
+    see. The service sends the warnings; the client used to drop them, so a
+    fetch that printed nothing proved nothing."""
+    path, _token = key_file
+    body = '<!doctype html>\n<script src="https://cdn.example/x.js"></script>\n'
+    page = tmp_path / "page.html"
+    page.write_text(body)
+    assert client.main(["--key-file", str(path), str(page), "--title", "Board"]) == 0
+    published = json.loads(capsys.readouterr().out.strip())
+
+    assert client.main(["--key-file", str(path), "--fetch", published["id"]]) == 0
+    out, err = capsys.readouterr()
+    assert "warning: remote_script at line 2" in err
+    assert "warning" not in out, "stdout is the page and nothing else"
+    assert body in out
