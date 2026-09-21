@@ -357,8 +357,46 @@ def test_shape_catches_its_fake_and_ignores_its_near_miss(name):
     assert not any(f.shape == name for f in missed), f"{name} fired on its near-miss"
 
 
-def test_url_query_secret_stays_case_sensitive():
-    assert scan.scan("https://example.test/page?Key=FAKETOKEN123") == []
+def test_url_query_secret_is_case_insensitive_like_every_other_key_name():
+    """CHANGED 21 Sep 2026, and the old assertion is worth explaining because
+    it was the opposite.
+
+    This test used to read `... ?Key=FAKETOKEN123") == []` with no stated
+    reason -- a bare line, unlike its neighbour below, which carries a
+    measured paragraph about why bearer_token is NOT blanket
+    case-insensitive. That difference turned out to be the whole story: the
+    shapes file says key-name shapes are wrapped `(?i:...)` because the
+    commonest way a credential reaches a page is an environment dump, which
+    is uppercase by convention -- and this shape, which matches four key
+    names, was simply missed in that pass.
+
+    THE GAP IT LEFT. An uppercase KEY parameter in a URL query was caught by
+    NOTHING. Its three siblings were still caught by their assignment shapes,
+    so only one of the four fell through, which is how it survived review.
+
+    MEASURED BEFORE CHANGING IT, to the standard bearer_token's comment sets
+    (blanket insensitivity there fired on 32 of 214 homelab docs, and that
+    measurement is why it was refused). Across 1,393 files of this repo and
+    the homelab docs, the case-insensitive form fires on FOUR lines the
+    case-sensitive one did not, and all four were inside this change itself:
+    this test and the shape file's own comment about it, since then reworded.
+    Zero in real content. So the case-sensitivity was protecting against
+    nothing that exists here.
+
+    (The shape file trips its own shapes regardless, and always has: a line
+    defining `password_assignment` necessarily contains that literal. That is
+    expected and is not what this measurement was about.)
+
+    Found by the shape-by-transformation matrix on its first run.
+    """
+    for spelling in ("key", "Key", "KEY", "aPi_KeY"):
+        assert scan.scan(f"https://example.test/page?{spelling}=FAKETOKEN123"), (
+            f"?{spelling}= went undetected"
+        )
+    # The near-miss still does not fire: a query key that merely CONTAINS one
+    # of the names is not one of them, and an empty value is a placeholder.
+    assert scan.scan("https://example.test/page?monKey=FAKETOKEN123") == []
+    assert scan.scan("https://example.test/page?KEY=") == []
 
 
 def test_bearer_token_requires_a_token_shaped_value_not_just_the_word():
@@ -1239,3 +1277,112 @@ def test_the_defang_matches_unescape_with_the_limit_lifted_over_random_bodies(mo
         if real != control:
             mismatches.append((body, real, control))
     assert not mismatches, mismatches[:5]
+
+
+# --- homelab-ij8.7: the matrix, every shape against every transformation ------
+#
+# The 19 Sep fail-open (24 lost detections across 8 shapes) got through because
+# the unit test used ONE hand-picked encoding, which happened to be the single
+# form the broken threshold could not touch. The two differentials above made
+# that one encoding permanent. This makes the AXIS permanent.
+#
+# The reviewer's finding, and the reason this is a matrix rather than a bigger
+# corpus: all three bugs lived in the rewrite-before-matching layer, and none
+# would have been found by better inputs. The variable that finds them is which
+# TRANSFORMATION the credential arrives wrapped in.
+#
+# Every rewrite `_text_view` performs gets a column here, plus the lowered view
+# `scan` matches against. A shape found in plain form and lost through any one
+# of them fails, by name, saying which transformation lost it.
+
+
+def _wrap_in_tags(text: str) -> str:
+    """Tag deletion. A tag between every character, which is what a rich-text
+    editor or a diff view does to a pasted credential."""
+    return "<b>" + "</b><i>".join(text) + "</i>"
+
+
+def _entity_encode(text: str) -> str:
+    """Entity unescaping. Named entities where they exist, numeric otherwise --
+    the form a page gets from escaping user input twice."""
+    named = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}
+    return "".join(named.get(c, f"&#{ord(c)};") if not c.isalnum() else c for c in text)
+
+
+def _sprinkle_invisibles(text: str) -> str:
+    """The zero-width / soft-hyphen strip. One invisible between every pair of
+    characters, cycling through the whole set rather than picking one -- a
+    strip that dropped a single member is exactly the shape of the bug this
+    guards, and one hand-picked character would not have seen it."""
+    out = []
+    for index, char in enumerate(text):
+        out.append(char)
+        out.append(scan._INVISIBLE[index % len(scan._INVISIBLE)])
+    return "".join(out)
+
+
+def _upper_ascii(text: str) -> str:
+    """The length-preserving ASCII lowercase view. Shouting the credential is
+    what exercises it; a fixture that is already lowercase proves nothing about
+    a view whose whole job is case."""
+    return text.upper()
+
+
+_TRANSFORMATIONS = {
+    "tag_deletion": _wrap_in_tags,
+    "entity_unescaping": _entity_encode,
+    "invisible_strip": _sprinkle_invisibles,
+    "ascii_lowercase_view": _upper_ascii,
+    "zero_padded_charrefs": _charref_encode,
+}
+
+
+@pytest.mark.parametrize("transformation", sorted(_TRANSFORMATIONS))
+@pytest.mark.parametrize("name", sorted(SHAPE_FIXTURES))
+def test_every_shape_survives_every_transformation(name, transformation):
+    positive, _near_miss = SHAPE_FIXTURES[name]
+    wrapped = _TRANSFORMATIONS[transformation](positive)
+    findings = scan.scan(wrapped)
+    assert any(f.shape == name for f in findings), (
+        f"{name} matched its plain fixture but was LOST through "
+        f"{transformation} -- the scanner rewrites before it matches, and this "
+        "is the layer all three of the 19 Sep fail-opens lived in"
+    )
+
+
+def test_the_matrix_covers_every_shape_and_is_not_vacuous():
+    """A positive count, so the matrix cannot pass by testing nothing.
+
+    The regression this whole file exists for was invisible to a green suite.
+    A parametrised test that silently enumerated an empty set would be green
+    in exactly the same way, so the sizes are asserted rather than assumed --
+    and against `scan.SHAPES`, the loaded table, not against a second list
+    here that could drift from it.
+    """
+    assert set(SHAPE_FIXTURES) == {n for n, _ in scan.SHAPES}
+    assert len(SHAPE_FIXTURES) >= 8, "the fixture table emptied out"
+    assert len(_TRANSFORMATIONS) >= 5, "a transformation column disappeared"
+    # Every rewrite `_text_view` performs has a column. Named explicitly: the
+    # point of this bead is that a NEW rewrite added later without a column
+    # here reopens the exact hole, and a reader adding one should find this
+    # list and notice.
+    assert {"tag_deletion", "entity_unescaping", "invisible_strip"} <= set(
+        _TRANSFORMATIONS
+    )
+
+
+def test_each_transformation_actually_changes_the_text():
+    """A transformation that returned its input would make its whole column a
+    re-run of the plain test -- green, and proving nothing. This is the
+    vacuous-pass guard for the columns themselves."""
+    sample = "Authorization: Bearer FAKETOKEN123"
+    for label, transform in sorted(_TRANSFORMATIONS.items()):
+        assert transform(sample) != sample, f"{label} left the text untouched"
+
+
+def test_the_invisible_column_uses_every_invisible_the_scanner_strips():
+    """A column that exercised one member of `_INVISIBLE` would be the same
+    mistake as the one hand-picked encoding that started all this."""
+    wrapped = _sprinkle_invisibles("Authorization: Bearer FAKETOKEN123")
+    for char in scan._INVISIBLE:
+        assert char in wrapped, f"{char!r} is stripped by the scanner but never tested"
