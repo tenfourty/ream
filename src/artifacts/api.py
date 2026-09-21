@@ -1005,6 +1005,49 @@ def agent_router(db: Database) -> APIRouter:
     _SUBROUTES = ("body", "comments", "decisions", "archive", "rename", "pin",
                   "duplicate", "restore", "destroy")
 
+    # The same treatment for a decision's sub-routes, added 21 Sep after the
+    # operator's first `artifacts-decide outcome` answered a bare 404 and could
+    # not tell which of two things it meant: the route was not deployed yet
+    # (it was not -- the push was four minutes old), or the key did not own the
+    # decision. Those need opposite responses and looked identical.
+    #
+    # They are in fact distinguishable by BODY -- FastAPI's own {"detail":
+    # "Not Found"} against this module's "no such decision" -- but only to
+    # someone who already knows that, which is folklore rather than a feature.
+    # Naming the real sub-routes turns it into something the first 404 says
+    # out loud, at the only moment the reader is guaranteed to be looking.
+    _DECISION_SUBROUTES = ("outcome", "outcomes", "record", "acknowledge", "close")
+
+    @router.api_route(
+        "/decisions/{decision_id}/{unknown:path}",
+        methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
+        include_in_schema=False,
+    )
+    def unknown_decision_subroute(
+        decision_id: str, unknown: str, agent: str = Depends(caller)
+    ):
+        raise HTTPException(
+            404,
+            {
+                "detail": f"no such route on a decision: {unknown!r}",
+                "did_you_mean": (
+                    "outcome -- append what this decision caused, or what "
+                    "changed under it"
+                    if unknown in ("outcomes/", "result", "results", "caused", "note")
+                    else None
+                ),
+                "routes": sorted(_DECISION_SUBROUTES),
+                # The distinction that cost the operator two turns. A route that
+                # exists but is not yours answers "no such decision"; a route
+                # that does not exist answers THIS.
+                "note": (
+                    "this names the routes THIS BUILD serves. If the one you "
+                    "want is missing, the service may be older than the client "
+                    "-- check GET /api/v1/me against the version you expect."
+                ),
+            },
+        )
+
     @router.api_route(
         "/artifacts/{artifact_id}/{unknown:path}",
         methods=["GET", "POST", "PATCH", "PUT", "DELETE"],

@@ -226,3 +226,66 @@ def test_there_is_no_way_to_edit_or_delete_one(db, asked, client):
             f"/api/v1/decisions/{decision.id}/outcomes/{made['id']}", headers=h
         )
         assert got.status_code in (404, 405), f"{method} reached something"
+
+
+# --- the 404 that says which of two things went wrong -------------------------
+
+
+def test_an_unknown_decision_route_names_the_real_ones(db, asked, client):
+    """The operator's first `artifacts-decide outcome` answered a bare 404 and
+    could not distinguish "the route is not deployed yet" (it was not; the push
+    was four minutes old) from "this key does not own that decision". Those need
+    opposite responses and looked identical.
+    """
+    _page, decision = asked
+    token, _ = keys.mint(db, agent="seat")
+    got = client.post(
+        f"/api/v1/decisions/{decision.id}/result",
+        json={"body": "x"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert got.status_code == 404
+    detail = got.json()["detail"]
+    assert "outcome" in detail["routes"]
+    assert "outcome" in (detail["did_you_mean"] or "")
+    assert "older than the client" in detail["note"], (
+        "the one thing the reader needs to know when a route is simply absent"
+    )
+
+
+def test_the_catch_all_has_not_swallowed_the_real_routes(db, asked, client):
+    """It is declared last on purpose -- FastAPI matches in declaration order,
+    so a path route above it wins. Asserted because getting this wrong breaks
+    every decision verb at once and the tests for each would all fail with the
+    same confusing 404."""
+    _page, decision = asked
+    token, _ = keys.mint(db, agent="seat")
+    h = {"Authorization": f"Bearer {token}"}
+
+    assert client.post(
+        f"/api/v1/decisions/{decision.id}/outcome", json={"body": "real"}, headers=h
+    ).status_code == 201
+    assert client.get(
+        f"/api/v1/decisions/{decision.id}/outcomes", headers=h
+    ).status_code == 200
+    assert client.post(
+        f"/api/v1/decisions/{decision.id}/acknowledge", headers=h
+    ).status_code == 200
+
+
+def test_not_yours_still_reads_differently_from_no_such_route(db, asked, client):
+    """The two 404s a caller has to tell apart. Same status, different bodies,
+    and now the absent-route one says so in words."""
+    _page, decision = asked
+    other, _ = keys.mint(db, agent="other-seat")
+    h = {"Authorization": f"Bearer {other}"}
+
+    not_yours = client.post(
+        f"/api/v1/decisions/{decision.id}/outcome", json={"body": "x"}, headers=h
+    )
+    no_route = client.post(
+        f"/api/v1/decisions/{decision.id}/nonsense", json={"body": "x"}, headers=h
+    )
+    assert not_yours.status_code == no_route.status_code == 404
+    assert not_yours.json()["detail"] == "no such decision"
+    assert isinstance(no_route.json()["detail"], dict)
