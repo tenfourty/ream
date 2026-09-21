@@ -80,10 +80,12 @@ usage() {
 # non-deletion line, each capped at 30 lines).
 read_pushed_range() {
   TOTAL=0
+  LINES=0
   RANGE_TEXT=""
   local local_ref local_sha remote_ref remote_sha n
   while read -r local_ref local_sha remote_ref remote_sha; do
     [ -z "${local_ref:-}" ] && continue
+    LINES=$((LINES + 1))
     if is_zero "$local_sha"; then
       continue # deletion — pushes zero commits
     fi
@@ -112,6 +114,19 @@ check() {
   local input
   input=$(cat)
   read_pushed_range <<< "$input"
+
+  # No ref lines at all. Measured 22 Sep 2026 on a real non-fast-forward push:
+  # git still runs the hook, but hands it nothing, so the guard read "0
+  # commits" and asked for PUSH_COUNT=0 — advice that is both useless and
+  # impossible to satisfy, since the remote rejects the push anyway. Say what
+  # is actually wrong instead.
+  if [ "${LINES:-0}" -eq 0 ]; then
+    echo "push-count-guard: REFUSED -- git passed this hook no refs at all." >&2
+    echo "That is what a non-fast-forward push looks like from in here: fetch and" >&2
+    echo "rebase (CI pushes a 'deploy: … [skip ci]' commit onto main after every" >&2
+    echo "build), then re-count and push again." >&2
+    return 1
+  fi
 
   if [ -z "${PUSH_COUNT:-}" ]; then
     echo "push-count-guard: REFUSED -- PUSH_COUNT is not set." >&2
@@ -245,6 +260,21 @@ selftest() {
     echo "PASS (h) tag on an already-pushed commit, PUSH_COUNT=0 allowed"
   else
     echo "FAIL (h) tag on already-pushed commit: code=$CODE"; printf '%s\n' "$OUT" | sed 's/^/    /'; rc=1
+  fi
+
+  # (i) no ref lines at all (a non-fast-forward push, measured live) -> refused
+  # with the real reason, whatever PUSH_COUNT says.
+  run_guard "" PUSH_COUNT=1
+  if [ "$CODE" -ne 0 ] && echo "$OUT" | grep -q "no refs at all"; then
+    echo "PASS (i) empty stdin refused, and names the non-fast-forward cause"
+  else
+    echo "FAIL (i) empty stdin: code=$CODE"; printf '%s\n' "$OUT" | sed 's/^/    /'; rc=1
+  fi
+  run_guard "" PUSH_COUNT=0
+  if [ "$CODE" -ne 0 ]; then
+    echo "PASS (i2) empty stdin refused even with PUSH_COUNT=0"
+  else
+    echo "FAIL (i2) empty stdin wrongly allowed with PUSH_COUNT=0"; printf '%s\n' "$OUT" | sed 's/^/    /'; rc=1
   fi
 
   # (e) PUSH_COUNT=abc -> usage refusal
