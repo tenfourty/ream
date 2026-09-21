@@ -885,6 +885,26 @@ _SLOT_IN_BODY = re.compile(
 )
 
 
+# A whole HTML comment, including the tokenizer's abrupt closes (`<!-->`,
+# `<!--->`) and its incorrect one (`--!>`); an unterminated comment runs to the
+# end of the document, as it does in a browser.
+_HTML_COMMENT = re.compile(r"<!--(?:-?>|.*?(?:--!?>|\Z))", re.DOTALL)
+
+
+def _outside_comments(body: str) -> str:
+    """`body` with every HTML comment blanked, newlines kept so lines still count.
+
+    Every shipped template that has a slot ships it COMMENTED OUT, to be
+    uncommented once the question exists -- so counting a commented slot
+    warned every agent that used a template exactly as told. Found on 21 Sep
+    by sweeping the live pages minutes after the first version of this check
+    shipped: the one "dead" slot on the wall was inside a comment, where no
+    browser ever sees it. A warning that fires on correct pages trains authors
+    to ignore the warning.
+    """
+    return _HTML_COMMENT.sub(lambda m: "\n" * m.group(0).count("\n"), body)
+
+
 def unresolved_slots(
     db: Database, artifact_id: str, body: str
 ) -> list[tuple[str, int]]:
@@ -913,6 +933,7 @@ def unresolved_slots(
     ORDER IS THE BODY'S, de-duplicated: a slot repeated twice is one mistake,
     and reporting it twice invites fixing it once and believing it is done.
     """
+    body = _outside_comments(body)
     first: dict[str, int] = {}
     for match in _SLOT_IN_BODY.finditer(body):
         slot = match.group(1) or match.group(2)

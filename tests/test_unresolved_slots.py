@@ -13,6 +13,8 @@ ANSWERED decision still resolves, because releasing its room is correct and
 must stay distinguishable from a slot that never had a question.
 """
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -21,6 +23,7 @@ from artifacts.app import create_gallery_app
 from artifacts.content import create_content_app
 
 FRAMED = {"sec-fetch-dest": "iframe"}
+TEMPLATES = Path(decisions.__file__).parent / "templates"
 OPTIONS = [{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}]
 
 
@@ -87,6 +90,36 @@ def test_a_repeated_slot_is_reported_once_at_its_first_line(db):
     """Twice would invite fixing one and believing it was done."""
     art = store.publish(db, "ops-seat", "Board", page())
     assert decisions.unresolved_slots(db, art.id, page("nope", "nope")) == [("nope", 3)]
+
+
+def test_a_slot_inside_a_comment_is_not_a_slot(db):
+    """No browser builds an element from a comment, so the shim never sees it
+    and the gallery never fills it. Every shipped template that has a slot
+    ships it commented out, to be uncommented once the question exists."""
+    art = store.publish(db, "ops-seat", "Board", page())
+    body = (
+        "<!doctype html>\n<body>\n<!-- once asked:\n"
+        '<div data-artifact-decision="the-decision-id"></div>\n-->\n'
+        '<!----><!-->x<div data-artifact-decision="after-abrupt"></div>\n'
+        '<!-- incorrectly closed --!><div data-artifact-decision="after-bang"></div>\n'
+        '<!-- never closed <div data-artifact-decision="in-open-comment"></div>\n'
+    )
+    assert decisions.unresolved_slots(db, art.id, body) == [
+        ("after-abrupt", 6),
+        ("after-bang", 7),
+    ], "a multi-line comment before a slot must not shift its line"
+
+
+@pytest.mark.parametrize(
+    "name", sorted(p.stem for p in TEMPLATES.glob("*.html"))
+)
+def test_every_shipped_template_publishes_without_a_slot_warning(db, name):
+    """Published exactly as shipped, before its author has asked anything.
+    A template that warns on day one teaches every seat that this warning
+    is noise, which is the one thing it must never be."""
+    art = store.publish(db, "ops-seat", "Board", page())
+    body = (TEMPLATES / f"{name}.html").read_text()
+    assert decisions.unresolved_slots(db, art.id, body) == []
 
 
 def test_a_page_with_no_slots_costs_no_query(db, monkeypatch):
