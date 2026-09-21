@@ -267,7 +267,19 @@ def _read_key(path: Path) -> str:
     try:
         mode = stat.S_IMODE(path.stat().st_mode)
     except OSError as exc:
-        raise UsageError(f"cannot read key file {path}: {exc.strerror}") from None
+        # SAY WHERE A KEY COMES FROM NOW. The cleartext files under
+        # ~/.config/artifacts/ are being shredded seat by seat as they move
+        # into the vault (homelab-ij8.34), so from here on the commonest
+        # reason this file is missing is that it is GONE ON PURPOSE -- and
+        # "no such file" alone sends the reader looking for a lost key, or
+        # minting a second one for an identity that already exists.
+        raise UsageError(
+            f"cannot read key file {path}: {exc.strerror}. On baba the keys "
+            "are vaulted: run the command through "
+            "`ARTIFACTS_SEAT=<seat> artifacts-key -- …` (seats: baba_operator, "
+            "homelab_ops, warpgate_arc, cove_seat). Elsewhere, point "
+            "--key-file or --key-fd at your own store."
+        ) from None
     if mode & 0o077:
         raise UsageError(
             f"key file {path} grants group or other permission -- chmod 600 it"

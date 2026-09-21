@@ -137,9 +137,23 @@ a record of him answering a question he has never seen. The copy is owned by the
 original's agent, whoever pressed the button, so the seat that wrote it can
 still update it.
 
-`artifacts-publish` comes from `uv tool install ~/repos/artifacts`. It reads
-its key from `~/.config/artifacts/key` (mode 600, it refuses anything
-looser); `$ARTIFACTS_KEY_FILE` or `--key-file` points it elsewhere.
+`artifacts-publish` comes from `uv tool install ~/repos/artifacts`.
+
+> **On baba.** Run it through the vault wrapper, which hands it the key on a
+> file descriptor so no cleartext copy has to exist:
+>
+> ```bash
+> ARTIFACTS_SEAT=baba_operator artifacts-key -- artifacts-publish page.html --title "…"
+> ```
+>
+> Seats: `baba_operator`, `homelab_ops`, `warpgate_arc`, `cove_seat`. The old
+> cleartext files under `~/.config/artifacts/` are being shredded as each seat
+> moves across, so a command that reads one is a command that stops working.
+>
+> **Anywhere else.** `--key-fd N` takes the key from a descriptor your own
+> secret store opens; `--key-file` or `$ARTIFACTS_KEY_FILE` reads a file (mode
+> 600, it refuses anything looser), which is the whole story where there is no
+> vault.
 
 ### Never type a date on a page
 
@@ -177,7 +191,7 @@ The token is generated where it will be used and never crosses a terminal,
 a transcript or the network — only its SHA-256 is registered:
 
 ```bash
-artifacts-admin new-key --agent <your-name> --out ~/.config/artifacts/key
+artifacts-admin new-key --agent <your-name> --out <your key file>
 kubectl -n artifacts exec deploy/artifacts -- \
   artifacts-admin register-key --agent <your-name> --sha256 <the printed sha256>
 ```
@@ -193,9 +207,11 @@ access, mint the key locally, send the **SHA-256 only** to whoever does, and
 have them register it — the token itself never has to travel, which is the
 whole point of registering a hash.
 
-> **On baba.** `~/.config/artifacts/key` already exists and belongs to the
-> shared `baba-operator` seat, not to you. See "which key you are using" below.
-> The keys there are also vaulted — see the sops block further down.
+> **On baba.** You almost certainly need no new key: four seats already exist
+> and are vaulted, reached with `ARTIFACTS_SEAT=<seat> artifacts-key -- <cmd>`.
+> The cleartext copies under `~/.config/artifacts/` are on their way out. See
+> "which key you are using" below before you mint anything: a page published
+> under somebody else's identity is somebody else's page.
 >
 > **Anywhere else.** There is no shared key and no vault. Mint your own with
 > the command above, keep it mode 600, and that is the whole story.
@@ -285,8 +301,17 @@ a script:
 
 ```bash
 BASE=https://artifacts.tenfourty.site/api/v1
-akey() { printf 'Authorization: Bearer %s\n' "$(< ~/.config/artifacts/key)"; }
+# On baba: run the whole script under the wrapper, which puts the key on fd 3.
+#   ARTIFACTS_SEAT=baba_operator artifacts-key -- ./your-script.sh
+akey() { printf 'Authorization: Bearer %s\n' "$(cat <&3)"; }
+# Anywhere else, read your own key file instead:
+#   akey() { printf 'Authorization: Bearer %s\n' "$(< "$ARTIFACTS_KEY_FILE")"; }
 ```
+
+`cat <&3` drains the descriptor, so a script that makes several calls reads it
+**once** into a variable and reuses that. The descriptor is a pipe: the second
+read comes back empty, and an empty bearer token is a 401 that looks like a
+revoked key.
 
 You cannot see your own page render — the gallery holds Jeremy's login and the
 page itself only answers a framed request with a token you are never given. So
@@ -624,12 +649,13 @@ an identity nobody is using. Ask, rather than assume — one call, from anywhere
 akey | curl -sS -H @- "$BASE/me"      # {"agent": ..., "key_id": ..., "scopes": [...]}
 ```
 
-> **On baba.** Every agent reads `~/.config/artifacts/key` and it belongs to
-> ONE seat, `baba-operator`. The operator's own calls use a different file,
-> `~/.config/artifacts/key-homelab-ops`, which is the seat holding
-> `decisions:read-all`. On 20 Sep 2026 a `?scope=all` call returned 403, two
-> sessions went looking for a missing grant, and the grant existed — on a seat
-> whose key nobody was passing.
+> **On baba.** The seat you name is the identity you get:
+> `ARTIFACTS_SEAT=baba_operator` is the shared publishing seat most pages
+> belong to, and `homelab_ops` is the one holding `decisions:read-all`. On
+> 20 Sep 2026 a `?scope=all` call returned 403, two sessions went looking for
+> a missing grant, and the grant existed — on a seat nobody was passing. The
+> seat name is now the whole of that decision, which is the point of the
+> wrapper: no file to pick the wrong one of.
 >
 > **Anywhere else.** Your key file is probably yours alone, which makes this
 > cheap rather than unnecessary: run `/me` once when you set the seat up and

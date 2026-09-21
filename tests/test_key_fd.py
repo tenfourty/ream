@@ -144,3 +144,18 @@ def test_the_decisions_tool_takes_it_too(tmp_path):
 def test_a_bad_key_fd_exits_as_a_usage_error_not_a_crash(capsys):
     assert client.main(["--key-fd", "19", "--list"]) == 2
     assert "cannot read --key-fd 19" in capsys.readouterr().err
+
+
+def test_a_missing_key_file_says_where_a_key_comes_from_now(tmp_path, monkeypatch, capsys):
+    """The cleartext key files are being shredded seat by seat as they move
+    into the vault (homelab-ij8.34). From here on, the commonest reason this
+    file is missing is that it is gone ON PURPOSE -- and "no such file" alone
+    sends the reader hunting for a lost key, or minting a second one for an
+    identity that already exists."""
+    monkeypatch.setenv("ARTIFACTS_KEY_FILE", str(tmp_path / "shredded"))
+    monkeypatch.delenv("ARTIFACTS_KEY_FD", raising=False)
+    assert client.main(["--list"]) == 2
+    err = capsys.readouterr().err
+    assert "artifacts-key" in err, "it names the wrapper"
+    assert "baba_operator" in err, "and the seats it takes"
+    assert "--key-fd" in err, "and what to do somewhere that has no vault"

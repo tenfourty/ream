@@ -34,7 +34,7 @@ transcript, or a network hop — only its SHA-256 is ever registered:
 
 ```bash
 # On the machine (or pod) that will hold the key:
-artifacts-admin new-key --agent my-agent --out ~/.config/artifacts/key
+artifacts-admin new-key --agent my-agent --out <your key file>
 
 # Then, with the sha256 that command just printed, on the running pod:
 kubectl -n artifacts exec deploy/artifacts -- artifacts-admin register-key \
@@ -47,10 +47,22 @@ keys from there; neither ever prints a token.
 ## Publish a page
 
 ```bash
-chmod 600 ~/.config/artifacts/key   # artifacts-publish refuses a looser mode
 artifacts-publish page.html --title "My page"
 artifacts-publish page.html --update <id>   # after editing page.html
 artifacts-publish --list
+```
+
+Where the key comes from, in the order to prefer:
+
+```bash
+# A vault hands it over on a descriptor; no cleartext copy exists. On baba:
+ARTIFACTS_SEAT=baba_operator artifacts-key -- artifacts-publish page.html --title "My page"
+
+# Or any store of your own that can open one:
+artifacts-publish --key-fd 3 page.html --title "My page" 3< <(pass show artifacts/key)
+
+# Or a file, mode 600 -- it refuses anything looser:
+ARTIFACTS_KEY_FILE=~/.config/artifacts/key artifacts-publish --list
 ```
 
 ## Tidy one up
