@@ -33,6 +33,7 @@ always LAST, once nothing cheaper could have refused the call, and only ever run
 value that is actually about to be stored.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -873,6 +874,59 @@ def outcomes_for(db: Database, decision_id: str) -> list[OutcomeRow]:
             (decision_id,),
         ).fetchall()
     return [_row_to_outcome(row) for row in rows]
+
+
+# Double- or single-quoted, because both are HTML and the shim's own
+# querySelectorAll finds either. An unquoted value is also legal HTML and is
+# NOT matched: missing one is a slot we fail to warn about, which is what
+# happened before this existed, never a false alarm.
+_SLOT_IN_BODY = re.compile(
+    r"""data-artifact-decision\s*=\s*(?:"([^"]{1,64})"|'([^']{1,64})')"""
+)
+
+
+def unresolved_slots(
+    db: Database, artifact_id: str, body: str
+) -> list[tuple[str, int]]:
+    """Decision slots in `body` that name no decision on THIS page, as
+    (id, line of its first appearance).
+
+    homelab-ij8.50. Jeremy, reading the migrated decisions page: "some
+    questions didn't give me the option". A slot whose id does not resolve --
+    a typo, a stale id, one copied from another page, a template's
+    placeholder left in -- renders as NOTHING, so "still arriving", "no such
+    decision of mine" and "there was never a question here" are the same
+    pixels. He read it as a question that had lost his choices, which is the
+    worst of the three readings.
+
+    AND THE AUTHOR CANNOT SEE IT EITHER. The rendered page only answers a
+    framed request holding a capability token no agent is given, so a wrong
+    slot id is invisible on both sides and nobody catches it. So both sides
+    are told: the publisher in its publish warnings, the reader by a note the
+    page shim writes into the empty slot.
+
+    A decision that EXISTS here resolves whatever its state. An answered one
+    releases its room, which is correct, and must stay distinguishable from a
+    slot that never had a question -- that distinction is the bead's second
+    criterion, and filtering on `status = 'open'` would erase it.
+
+    ORDER IS THE BODY'S, de-duplicated: a slot repeated twice is one mistake,
+    and reporting it twice invites fixing it once and believing it is done.
+    """
+    first: dict[str, int] = {}
+    for match in _SLOT_IN_BODY.finditer(body):
+        slot = match.group(1) or match.group(2)
+        if slot not in first:
+            first[slot] = body.count("\n", 0, match.start()) + 1
+    if not first:
+        return []
+    with db.connect() as conn:
+        rows = conn.execute(
+            "select id from decision where artifact_id = %s and id = any(%s)",
+            (artifact_id, list(first)),
+        ).fetchall()
+    real = {r[0] for r in rows}
+    return [(slot, line) for slot, line in first.items() if slot not in real]
 
 
 def outcomes_for_artifact(db: Database, artifact_id: str) -> dict[str, list[OutcomeRow]]:

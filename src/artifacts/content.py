@@ -1,6 +1,7 @@
 import hmac
 import json
 import re
+from collections.abc import Sequence
 from datetime import datetime
 
 from fastapi import FastAPI, Request, Response
@@ -12,7 +13,7 @@ from fastapi.responses import (
     RedirectResponse,
 )
 
-from artifacts import hosts, stamp
+from artifacts import decisions, hosts, stamp
 from artifacts.db import Database
 from artifacts.store import (
     gallery_origin,  # re-exported: artifacts.content.gallery_origin still resolves
@@ -51,7 +52,7 @@ SHIM = "<script>window.claude={use:async(n)=>null};</script>"  # replaced in Tas
 INERT_SHIM = "<script>window.claude={use:async(n)=>null};window.storage=null;</script>"
 
 
-def _viewer_report() -> str:
+def _viewer_report(missing: Sequence[str] = ()) -> str:
     """The other half of what gets injected on a LIVE page -- unrelated to the
     `window.claude` contract above, so it is a separate `<script>`, concatenated onto
     `SHIM` only in `_serve` below, never folded into the `SHIM` constant itself: `SHIM`
@@ -94,7 +95,8 @@ def _viewer_report() -> str:
     origin = json.dumps(gallery_origin())
     return (
         "<script>try{(function(){"
-        "function b(e){var r=e.getBoundingClientRect();"
+        + _missing_notes(missing)
+        + "function b(e){var r=e.getBoundingClientRect();"
         'return{id:e.getAttribute("data-artifact-decision"),'
         "top:r.top+scrollY,left:r.left+scrollX,width:r.width}}"
         "function h(){var b=document.body,m=0;"
@@ -140,6 +142,66 @@ def _viewer_report() -> str:
         'var id=el.getAttribute("data-artifact-decision");'
         'el.style.minHeight=(want[id]||0)+"px"})});'
         "})()}catch(e){}</script>"
+    )
+
+
+def _script_json(value: object) -> str:
+    """JSON that is safe to splice into an inline `<script>`.
+
+    `json.dumps` leaves `<`, `>` and `&` alone, and a slot id is the agent's
+    own string -- `</script>` inside one would end the shim early and hand the
+    rest of it to the HTML parser. `ensure_ascii` already covers U+2028/9.
+    """
+    return (
+        json.dumps(value, ensure_ascii=True)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+
+
+# What a reader sees where the control should have been. Written for Jeremy,
+# who read the blank version as "the service lost my choices" (homelab-ij8.50):
+# so it says what is wrong, that nothing of his is gone, and whose fix it is.
+_MISSING_BEFORE = "There should be a question here, but the page points to one that doesn\u2019t exist (\u201c"
+_MISSING_AFTER = "\u201d). Nothing has been lost; whoever published the page needs to fix it."
+
+
+def _missing_notes(missing: Sequence[str]) -> str:
+    """Shim code that writes a note into each slot naming no decision here.
+
+    Empty -- not a no-op script -- when there are none, so an ordinary page is
+    served exactly the bytes it was before this existed.
+
+    The ids come from the SERVER, computed from the body at serve time
+    (`decisions.unresolved_slots`), because only the server knows which ids are
+    real: the shim deliberately has no idea, and the gallery only knows the
+    OPEN ones, which would make an answered question -- correctly released --
+    indistinguishable from one that never existed. Responses are `no-store`,
+    so the list cannot outlive the state it was computed from.
+
+    Only an EMPTY slot is written to. An agent that put its own fallback
+    inside the element has already said something there, and overwriting the
+    page's own words is not this shim's call. Styles go through `el.style`,
+    the same CSSOM path the size leg already uses; `currentColor` and an
+    opacity rather than a colour, so it reads on a dark page as well as a light
+    one. Runs at DOMContentLoaded because the shim is injected right after the
+    doctype, before any slot has been parsed.
+    """
+    if not missing:
+        return ""
+    return (
+        f"var gone={_script_json(list(missing)[:64])};"
+        'addEventListener("DOMContentLoaded",function(){try{'
+        "gone.forEach(function(id){"
+        "var el=document.querySelector("
+        "'[data-artifact-decision=\"'+(window.CSS&&CSS.escape?CSS.escape(id):id)+'\"]');"
+        "if(!el||el.textContent.trim())return;"
+        f"el.textContent={_script_json(_MISSING_BEFORE)}+id+{_script_json(_MISSING_AFTER)};"
+        "var s=el.style;s.display=\"block\";s.padding=\".75em 1em\";"
+        "s.border=\"1px dashed currentColor\";s.borderRadius=\"8px\";"
+        "s.opacity=\".75\";s.fontSize=\".875em\";s.lineHeight=\"1.45\"})"
+        "}catch(e){}});"
     )
 
 
@@ -300,7 +362,13 @@ def create_content_app(db: Database) -> FastAPI:
         # Only the LIVE page reports geometry to the gallery: an inert snapshot is
         # never framed by the gallery today (there is no route for it), and inert is
         # meant to mean "read-only", not "read-only except for a viewer channel".
-        shim = (SHIM + _viewer_report()) if live else INERT_SHIM
+        if live:
+            missing = [
+                slot for slot, _line in decisions.unresolved_slots(db, artifact_id, body)
+            ]
+            shim = SHIM + _viewer_report(missing)
+        else:
+            shim = INERT_SHIM
         html = inject(body, shim)
         return HTMLResponse(html, headers=headers_for(live))
 

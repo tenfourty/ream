@@ -293,6 +293,10 @@ its line, and what the browser will actually do. `artifacts-publish` prints them
 to stderr, so stdout stays the one-line JSON you can pipe. They are advisory: the
 publish succeeded. An empty list means the page is clean.
 
+The same list carries `unresolved_decision_slot`: a `data-artifact-decision`
+slot whose id names no decision on this page — a typo, an id from another page,
+a template's `the-decision-id` left in. It comes with the slot's line and id.
+
 Read them. Before they existed, a page with a Google Fonts link published 201
 and looked fine until Jeremy opened it and half of it silently did not render.
 
@@ -377,6 +381,10 @@ akey | curl -sS -H @- -H 'content-type: application/json' \
 
 2. In your page, put an empty element where the buttons should appear:
    `<div data-artifact-decision="<the decision id>"></div>`.
+   The id must be one step 1 returned **for this page**. Anything else comes
+   back as an `unresolved_decision_slot` warning, and Jeremy sees a sentence
+   in the slot saying the question does not exist. Before 21 Sep 2026 he saw
+   blank space, and read it as a question that had lost its options.
 
 3. **Arm the waiter, in the same breath.** This is a step of asking, not an
    optional extra afterwards: an agent that poses a question and stops will

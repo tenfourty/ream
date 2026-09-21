@@ -46,3 +46,31 @@ def test_the_page_shim_behaves_when_actually_run(tmp_path, monkeypatch):
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
     assert passed >= 26, result.stdout
+
+
+_NOTES = Path(__file__).parent / "js" / "notes.test.mjs"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node runtime here")
+def test_the_missing_question_note_behaves_when_actually_run(tmp_path, monkeypatch):
+    """homelab-ij8.50: the sentence a reader sees where a slot names nothing."""
+    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    node = shutil.which("node")
+    served = _viewer_report(["gone1", 'a"b'])
+    body = served.removeprefix("<script>try{(function(){").removesuffix(
+        "})()}catch(e){}</script>"
+    )
+    assert body != served, "the shim's wrapper is not the shape this test strips"
+    script = tmp_path / "notes.js"
+    script.write_text(body)
+    result = subprocess.run(  # noqa: S603
+        [node, str(_NOTES), str(script)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "0 failed" in result.stdout
+    passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
+    assert passed >= 13, result.stdout
