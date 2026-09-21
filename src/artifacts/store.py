@@ -314,10 +314,20 @@ def _check_secrets(
 #
 # DELIBERATELY GENEROUS, and it must never become a validator: a page that is
 # odd, or minimal, or a fragment somebody meant, is the author's business and
-# gets published. It refuses exactly one thing -- a body that never claims to
-# be HTML -- because that is the shape the mistake takes. `<html` rather than
-# `<html>` so `<html lang="en">` counts.
-_DECLARES_HTML = re.compile(r"<(?:html|head|body)\b", re.IGNORECASE)
+# gets published. It refuses exactly one thing -- a body with NO HTML IN IT AT
+# ALL -- because that is the shape the mistake takes.
+#
+# WIDENED BEFORE IT EVER REFUSED ANYTHING, 21 Sep. The first version asked for
+# a doctype or an <html>/<head>/<body>, which is what the bead asked for, and
+# then I swept the live wall: the operator's "Homelab decisions and status" --
+# 83 KB, published daily, perfectly good -- begins `<title>` and has none of
+# them. A guard that refuses a working page on somebody else's daily schedule
+# is not a guard, it is an outage I would have caused by reading an acceptance
+# line more carefully than the wall it was about.
+#
+# So: any element-looking tag counts. The shapes this exists to catch -- a log
+# line, a JSON blob, a markdown file, an empty string -- contain none.
+_DECLARES_HTML = re.compile(r"<[a-z][a-z0-9-]*(?:[\s/>]|$)", re.IGNORECASE)
 
 
 def _check_is_a_page(
