@@ -414,3 +414,58 @@ def test_with_no_seat_named_the_mailbox_is_never_used(monkeypatch):
         assert receiver.received == []
     finally:
         receiver.stop()
+
+
+# --- homelab-ij8.27: the service cannot reach Jeremy directly ----------------
+
+
+def test_the_service_carries_no_telegram_capability_at_all():
+    """Jeremy, 19 Sep 2026: "telegram is only for the ops agent, it is not for
+    all agents." The acceptance criterion is that no artifacts-originated event
+    can produce a Telegram message except by the operator deciding to relay it.
+
+    Asserted as an ABSENCE across the whole package, not as a property of the
+    nudge path alone: the point is that there is no code here to reach him
+    with, so a future call site cannot acquire one by accident. A grep is a
+    weak test in general and the right one here -- the claim IS "this string
+    appears nowhere that could send".
+    """
+    import pathlib
+
+    import artifacts
+
+    root = pathlib.Path(artifacts.__file__).parent
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            lowered = line.lower()
+            if "tell_jeremy" in lowered or "api.telegram.org" in lowered:
+                offenders.append(f"{path.name}:{number}")
+    assert offenders == [], (
+        "the service acquired a way to message Jeremy directly: " + ", ".join(offenders)
+    )
+
+
+def test_the_only_push_goes_to_one_named_seats_mailbox(monkeypatch):
+    """And it is inert for every other seat. An event on ANY page firing the
+    operator's mailbox is what made the operator the recipient of everyone's
+    answers and the owning agent the recipient of none."""
+    sent = []
+    monkeypatch.setenv("ARTIFACTS_NUDGE_URL", "http://127.0.0.1:1/v1/events/artifacts")
+    monkeypatch.setenv("ARTIFACTS_NUDGE_AGENT", "homelab-ops")
+    monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "x" * 20)
+    # The send is handed to a thread pool; intercepting the SUBMIT is how the
+    # rest of this file observes it, and it keeps the test off the network.
+    monkeypatch.setattr(nudge._executor, "submit", lambda *a, **k: sent.append(a))
+
+    nudge.emit(
+        "decision_answered", artifact_id="a1", title="T", agent="some-other-seat",
+        summary="s", event_id="1",
+    )
+    assert sent == [], "a page belonging to another seat nudged the operator"
+
+    nudge.emit(
+        "decision_answered", artifact_id="a1", title="T", agent="homelab-ops",
+        summary="s", event_id="1",
+    )
+    assert len(sent) == 1, "the named seat's own page did not nudge its own mailbox"

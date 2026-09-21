@@ -576,6 +576,33 @@ OWNING seat must still acknowledge it with its own key — acknowledgement means
 "the agent that asked has seen this", and your having written it down says
 nothing about whether that agent knows.
 
+### Telling him — and Telegram is not yours
+
+**Jeremy, 19 Sep 2026, verbatim:** *"telegram is only for the ops agent, it is
+not for all agents. so the agents should communicate with me in their session,
+but if they are on the same machine as ops (baba) they can ask ops to send me a
+telegram message to notify me if I'm not in the loop."*
+
+So:
+
+- **Surface his answer in your own session.** That is what the waiter exiting
+  is for — the harness wakes you, you read the rows, and you tell him in the
+  conversation he is already having with you. It needs no address and works
+  for an agent on any machine.
+- **Never send him a Telegram.** Not as a convenience, not "just this once",
+  not through a script you found. It is one channel belonging to one seat, and
+  four agents each deciding their thing is urgent is how a channel becomes
+  noise he stops reading.
+- **If he genuinely needs to know while he is away** and you are on baba, ask
+  the operator seat to relay it. That is a request to a colleague with a
+  reason attached, not a mechanism you invoke.
+
+**Nothing you publish here can message him.** The service has no Telegram code
+at all; its one outbound push goes to a single seat's own mailbox for that
+seat's own pages, and what the operator does with it is the operator's
+decision. If you think you have found a way to make a page reach him directly,
+you have found a bug — say so.
+
 ### Hearing about it
 
 `GET $BASE/events?since=<cursor>&wait=<seconds>` holds the request open and
