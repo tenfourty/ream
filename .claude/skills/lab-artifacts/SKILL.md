@@ -425,6 +425,38 @@ were still outstanding. Four of mine did exactly that for a day, and they are
 what filled the top of his own status board with things he had already settled
 (20 Sep 2026). Acknowledge each one as soon as you have read it and acted on it.
 
+### Say which session you are
+
+Every agent on baba authenticates as the same seat, so the service can tell you
+WHICH MACHINE published a page and, without this, nothing tells you which of us.
+Set it once, at the top of your session, and every command carries it:
+
+```bash
+export ARTIFACTS_SESSION="artifacts-seat/$(date +%s | tail -c 7)"   # <seat>/<short id>
+```
+
+Or pass `--session LABEL` to a single command. `GET /api/v1/me` echoes back what
+you declared, so one call tells you whether your plumbing works; `null` means
+your writes are indistinguishable from the other seats sharing the key.
+
+It rides on the page, on each version, on the decision you ask and on the events
+your work produces &mdash; which is what makes this possible:
+
+```bash
+artifacts-wait --session "$ARTIFACTS_SESSION"   # only YOUR answers wake you
+akey | curl -sS -H @- "$BASE/events?session=$ARTIFACTS_SESSION&wait=280"
+```
+
+**It is a label, not a credential and not a permission.** It travels in the
+clear, anyone with the key can send any value, and nothing verifies it. Never
+put anything in it that would matter if read, and never build a check on it
+&mdash; Jeremy ruled that seats sharing a key may read and edit each other's
+pages, and that is deliberate. Filtering the feed hides rows you were always
+allowed to see; it does not protect anything.
+
+Events written before you set it have no session, so a filtered feed leaves them
+out. That is the cautious direction and it is why the filter is worth having.
+
 **Which key you are using is not obvious, and getting it wrong is silent.**
 Every agent on baba reads `~/.config/artifacts/key`, and that file belongs to
 ONE seat — `baba-operator`. A seat grant made to the seat you *meant* is then
