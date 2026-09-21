@@ -10,6 +10,7 @@ store happens to call it today.
 import threading
 import time
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -509,3 +510,75 @@ def test_no_note_is_an_empty_string_not_a_missing_field(db):
     )
     decisions.answer(db, asked.id, letter="a", note="", by="jeremy")
     assert events.list_for_agent(db, agent="seat", since=0)[-1].note == ""
+
+
+# --- a held wait and a database that blinks -----------------------------------
+#
+# Measured 21 Sep 2026 from the ingress log: the only two 500s this route
+# served all day were one look failing to resolve the database's service name,
+# each after 90-120s of holding, with requests either side succeeding. A hold
+# looks every half second, so it is the request most exposed to a blip, and
+# one failed look threw the whole hold away.
+
+
+def _looks(*results):
+    """A stand-in for `list_for_agent` that plays the given script, one per
+    look: an exception instance is raised, a list is returned, and the last
+    entry repeats for ever."""
+    calls = []
+
+    def look(_db, _agent, **_kw):
+        calls.append(1)
+        result = results[min(len(calls), len(results)) - 1]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    look.calls = calls
+    return look
+
+
+def test_a_blink_during_a_hold_is_ridden_out(monkeypatch):
+    """The hold survives it and still answers with the event, rather than
+    turning a resolver hiccup into a 500 on a request that was 100s in."""
+    blink = psycopg.OperationalError("failed to resolve host")
+    look = _looks([], blink, [], [{"n": 7}])
+    monkeypatch.setattr(events, "list_for_agent", look)
+    monkeypatch.setattr(events, "_LOOK_EVERY", 0.01)
+    assert events.wait_for_agent(object(), "seat", seconds=5) == [{"n": 7}]
+    assert len(look.calls) >= 4
+
+
+def test_a_database_that_is_down_when_the_request_arrives_is_an_error(monkeypatch):
+    """The FIRST look is never excused. A hold that swallowed it would answer
+    "nothing yet" for its whole duration, which reads as Jeremy being silent
+    while the service is in fact unreachable."""
+    look = _looks(psycopg.OperationalError("down"))
+    monkeypatch.setattr(events, "list_for_agent", look)
+    monkeypatch.setattr(events, "_LOOK_EVERY", 0.01)
+    with pytest.raises(psycopg.OperationalError):
+        events.wait_for_agent(object(), "seat", seconds=5)
+    assert len(look.calls) == 1, "and it fails at once, not after the hold"
+
+
+def test_a_blink_that_does_not_stop_is_reported(monkeypatch):
+    """Tolerating it for ever would disguise an outage as silence."""
+    look = _looks([], psycopg.OperationalError("still down"))
+    monkeypatch.setattr(events, "list_for_agent", look)
+    monkeypatch.setattr(events, "_LOOK_EVERY", 0.01)
+    monkeypatch.setattr(events, "_TOLERATE_FAILED_LOOKS_FOR", 0.1)
+    began = time.monotonic()
+    with pytest.raises(psycopg.OperationalError):
+        events.wait_for_agent(object(), "seat", seconds=30)
+    waited = time.monotonic() - began
+    assert 0.1 <= waited < 5, "it gives up on the blink, not on the whole wait"
+
+
+def test_a_programming_error_is_never_ridden_out(monkeypatch):
+    """Only a connection failure is a blink. A bug in a query is a bug, and
+    retrying it for ten seconds would hide it."""
+    look = _looks([], psycopg.ProgrammingError("bad sql"))
+    monkeypatch.setattr(events, "list_for_agent", look)
+    monkeypatch.setattr(events, "_LOOK_EVERY", 0.01)
+    with pytest.raises(psycopg.ProgrammingError):
+        events.wait_for_agent(object(), "seat", seconds=5)

@@ -22,6 +22,8 @@ import threading
 import time
 from dataclasses import dataclass
 
+import psycopg
+
 from artifacts import text
 from artifacts.db import Database
 
@@ -269,6 +271,17 @@ MAX_WAITERS = 16
 # same one an ordinary poll uses.
 _LOOK_EVERY = 0.5
 
+# How long a HELD wait rides out looks that cannot reach the database, before
+# it gives up and says so. Measured 21 Sep 2026 from the ingress log: the only
+# two 500s this route served all day were a single look failing to resolve
+# the database's service name (04:59 and 12:59 UTC), each after 90-120s of
+# holding, with requests either side of them succeeding. A held request makes
+# a look every half second, so it is the request most exposed to a DNS blip,
+# and one failed look threw away the whole hold. Long enough for a resolver
+# hiccup; short enough that a database that is really gone is reported as an
+# error within one hold rather than disguised as silence.
+_TOLERATE_FAILED_LOOKS_FOR = 10.0
+
 _waiters = threading.BoundedSemaphore(MAX_WAITERS)
 
 # Set when the process has been asked to stop. A held request must END when
@@ -334,6 +347,8 @@ def wait_for_agent(
         return list_for_agent(db, agent, since=since, limit=limit, session=session)
     try:
         deadline = time.monotonic() + seconds
+        looked_once = False
+        failing_since: float | None = None
         while True:
             if _shutdown.is_set():
                 # Asked to stop before this hold even began: answer at once
@@ -345,7 +360,28 @@ def wait_for_agent(
             # after the deadline has passed spends time nobody agreed to.
             if time.monotonic() >= deadline:
                 return []
-            rows = list_for_agent(db, agent, since=since, limit=limit, session=session)
+            try:
+                rows = list_for_agent(
+                    db, agent, since=since, limit=limit, session=session
+                )
+                failing_since = None
+            except psycopg.OperationalError:
+                # The FIRST look is never excused: a database that is down
+                # when the request arrives is an error now, not after a hold.
+                # A later one is "nothing seen this time" and is retried, which
+                # loses nothing -- an empty answer means "ask again from the
+                # same cursor" -- until it has failed for long enough to be an
+                # outage, and then the outage is raised, never reported as
+                # nobody having answered.
+                now = time.monotonic()
+                if not looked_once:
+                    raise
+                if failing_since is None:
+                    failing_since = now
+                if now - failing_since >= _TOLERATE_FAILED_LOOKS_FOR:
+                    raise
+                rows = []
+            looked_once = True
             if rows:
                 return rows
             remaining = deadline - time.monotonic()
