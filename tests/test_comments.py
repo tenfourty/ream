@@ -505,3 +505,60 @@ def test_agent_none_only_checks_existence_not_ownership(db):
             body="a note",
             agent=None,
         )
+
+
+# --- who may resolve, and the default that must never widen -------------------
+
+
+def test_a_key_cannot_resolve_another_seats_thread(db):
+    """`resolve` grew an `agent=None` path so the GALLERY can settle a thread
+    for Jeremy, who owns nothing in the agent column's sense. None means "skip
+    the ownership check", which is right there and is a privilege escalation
+    anywhere else.
+
+    This test exists because I nearly shipped that: the keyed API called
+    `resolve(by=agent)` and, the moment the parameter was added with a None
+    default, that call silently stopped checking ownership. It now passes
+    `agent=` explicitly and this asserts the behaviour rather than the spelling.
+    """
+    keys.mint(db, agent="seat-a")
+    keys.mint(db, agent="seat-b")
+    page = store.publish(db, "seat-a", "A's page", PAGE)
+    mine = comments.add(
+        db, artifact_id=page.id, author_kind="agent", author="seat-a", body="ours"
+    )
+
+    with pytest.raises(store.NotFound):
+        comments.resolve(db, mine.id, by="seat-b", agent="seat-b")
+
+    still = comments.list_for_artifact(db, page.id, include_resolved=True)[0]
+    assert still.resolved_at is None, "another seat settled a thread it does not own"
+
+
+def test_the_owning_seat_can_resolve_its_own(db):
+    keys.mint(db, agent="seat-a")
+    page = store.publish(db, "seat-a", "A's page", PAGE)
+    mine = comments.add(
+        db, artifact_id=page.id, author_kind="agent", author="seat-a", body="ours"
+    )
+    done = comments.resolve(db, mine.id, by="seat-a", agent="seat-a")
+    assert done.resolved_at is not None
+
+
+def test_the_gallery_resolves_for_jeremy_who_owns_nothing(db):
+    """No artifact is owned by "jeremy", so an ownership-checking resolve can
+    never succeed for him. Every press of Mark settled would 404 -- which is
+    exactly what happened, and was found by rendering the page rather than by
+    a test."""
+    keys.mint(db, agent="seat-a")
+    page = store.publish(db, "seat-a", "A's page", PAGE)
+    thread = comments.add(
+        db, artifact_id=page.id, author_kind="human", author="jeremy", body="a question"
+    )
+
+    with pytest.raises(store.NotFound):
+        comments.resolve(db, thread.id, by="jeremy", agent="jeremy")
+
+    done = comments.resolve(db, thread.id, by="jeremy", agent=None)
+    assert done.resolved_at is not None
+    assert done.resolved_by == "jeremy"

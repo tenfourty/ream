@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from markupsafe import escape
 
-from artifacts import decisions, events, stamp, store, thumbs
+from artifacts import comments, decisions, events, stamp, store, thumbs
 from artifacts import text as text_module
 from artifacts.db import Database
 from artifacts.store import content_domain, content_url, gallery_origin
@@ -319,6 +319,76 @@ main{display:block}
    read it before choosing. The left rule is --now on an open card for the same
    reason the card itself carries one; on a settled card the parent is already
    --ok and this inherits the quieter treatment. */
+/* THE CONVERSATION ON A PAGE (homelab-ij8.18). Quiet by construction: it sits
+   after the page, it borrows the card surface rather than inventing one, and a
+   settled thread folds into a <details> exactly as the archived wall does --
+   out of the way must never become gone, so the count is on the summary.
+
+   An agent bubble and a human bubble differ by a left rule and nothing else.
+   Colouring whole bubbles would turn a two-line exchange into a decorated
+   thing; the only question a reader has is "who said this", and the name
+   answers it. */
+/* The bar control, sized and shaped like the other bar buttons rather than
+   like a new kind of thing. `.has` is the only state: there is something to
+   read. A count with no unread is a number for its own sake. */
+.cbtn{display:inline-flex;align-items:center;gap:.3rem;height:1.75rem;
+  padding:0 .5rem;border-radius:.45rem;color:var(--muted);text-decoration:none}
+.cbtn:hover{background:var(--chip-hover);color:var(--ink)}
+.cbtn.has{color:var(--ink)}
+.cn{font:600 .6875rem/1 var(--mono);color:var(--on-accent);
+  background:var(--accent);border-radius:.6rem;padding:.1rem .3rem}
+
+/* A PANEL, opened from the bar -- the reference keeps the conversation beside
+   the page rather than under it. `:target`, like the rename and link dialogs,
+   so it needs no script. Hidden until targeted; a drawer on the right at width
+   and a full-width sheet on a phone, because a 22rem drawer on a 390px screen
+   is a column of two-word lines. */
+.cdrawer{display:none}
+.cdrawer:target{display:block;position:fixed;inset:0;z-index:40}
+.cdrawer .dlg-back{position:absolute;inset:0;background:rgba(11,11,11,.28)}
+.cdrawer-card{position:absolute;top:0;right:0;bottom:0;width:min(24rem,100%);
+  background:var(--paper);border-left:1px solid var(--line);
+  box-shadow:var(--shadow);padding:1.1rem 1.1rem 1.6rem;overflow-y:auto}
+@media (max-width:34rem){.cdrawer-card{width:100%;border-left:0}}
+.cdrawer-card h2{font:600 .74rem/1.4 var(--mono);letter-spacing:.14em;
+  text-transform:uppercase;color:var(--muted);margin:0 0 .9rem}
+.cempty{font-size:.875rem;line-height:1.55;color:var(--muted);margin:0 0 .9rem}
+.threads{list-style:none;margin:0 0 1rem;padding:0}
+.thread{background:var(--card);border:1px solid var(--line);
+  border-radius:.6rem;padding:.7rem .85rem;margin:0 0 .7rem}
+.thread.settled{background:transparent}
+.bubbles{list-style:none;margin:0;padding:0}
+.cmt{padding:.35rem 0;border-left:2px solid var(--line);padding-left:.7rem;
+  margin:0 0 .35rem}
+.cmt.human{border-left-color:var(--accent)}
+.cwho{font:600 .8125rem/1.4 ui-sans-serif,system-ui,sans-serif;color:var(--ink)}
+.cwhen{margin-left:.5rem;font-size:.75rem;color:var(--muted)}
+.cmt p{margin:.15rem 0 0;font-size:.875rem;line-height:1.55;color:var(--ink);
+  white-space:pre-wrap;overflow-wrap:anywhere}
+.cnew,.creply{display:flex;gap:.4rem;margin:.5rem 0 0}
+.cnew input,.creply input{flex:1 1 auto;min-width:0;padding:.4rem .6rem;
+  border:1px solid var(--line);border-radius:.45rem;background:var(--paper);
+  color:var(--ink);font:.875rem/1.4 ui-sans-serif,system-ui,sans-serif}
+.cnew button,.creply button,.cresolve button{padding:.4rem .7rem;cursor:pointer;
+  border:1px solid var(--line);border-radius:.45rem;background:var(--chip);
+  color:var(--ink);font:.8125rem/1.4 ui-sans-serif,system-ui,sans-serif}
+.cnew button{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.cresolve{margin:.5rem 0 0}
+.settled-cmts{margin:.6rem 0 0}
+.settled-cmts > summary{cursor:pointer;list-style:none;display:inline-flex;
+  align-items:center;gap:.5rem;font:.8125rem/1.4 ui-sans-serif,system-ui,sans-serif;
+  color:var(--muted)}
+.settled-cmts > summary::-webkit-details-marker{display:none}
+.settled-cmts > summary:hover{color:var(--ink)}
+.settled-cmts .n{font-size:.75rem;color:var(--muted)}
+/* The same triangle the archived fold uses, and for the same reason: without
+   a marker the summary reads as a caption and nobody presses it. Rendered
+   once and looked at -- "Settled  1 conversation" sat there looking inert. */
+.settled-cmts > summary .chev{display:inline-block;width:0;height:0;flex:0 0 auto;
+  border-left:5px solid currentColor;border-top:4px solid transparent;
+  border-bottom:4px solid transparent;transition:transform .12s}
+.settled-cmts[open] > summary .chev{transform:rotate(90deg)}
+
 .since{margin:.5rem 0 .75rem;padding:.45rem .7rem;border-left:2px solid var(--line);
   background:var(--bg);border-radius:.3rem}
 .since b{display:block;font:600 .7rem/1.5 var(--mono);letter-spacing:.1em;
@@ -982,6 +1052,10 @@ _ICON = {
     "find": '<path d="M7.1 2.2a4.9 4.9 0 1 0 2.96 8.8l3 3a.7.7 0 0 0 1-1l-3-3A4.9 4.9 0 0 0 7.1 2.2Zm0 1.4a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Z"/>',
     "list": '<path d="M2 3.2h1.9v1.9H2V3.2Zm3.4 .35h8.6v1.2H5.4V3.55ZM2 7.05h1.9v1.9H2v-1.9Zm3.4 .35h8.6v1.2H5.4V7.4ZM2 10.9h1.9v1.9H2v-1.9Zm3.4 .35h8.6v1.2H5.4v-1.2Z"/>',
     "grid": '<path d="M2.2 2.2h5v5h-5v-5Zm6.6 0h5v5h-5v-5Zm-6.6 6.6h5v5h-5v-5Zm6.6 0h5v5h-5v-5Z"/>',
+    # A speech bubble with a tail, at the same 16-square weight as the rest of
+    # the set -- the reference uses one here too; its own glyph is a sprite we
+    # cannot lift, so this is drawn to match our own icons rather than theirs.
+    "comment": '<path d="M3 2.5h10a1.5 1.5 0 0 1 1.5 1.5v6A1.5 1.5 0 0 1 13 11.5H7.9l-3 2.6a.5.5 0 0 1-.83-.38V11.5H3A1.5 1.5 0 0 1 1.5 10V4A1.5 1.5 0 0 1 3 2.5Zm0 1.2a.3.3 0 0 0-.3.3v6c0 .17.13.3.3.3h1.87c.33 0 .6.27.6.6v1.3l2.1-1.77a.6.6 0 0 1 .39-.14H13a.3.3 0 0 0 .3-.3V4a.3.3 0 0 0-.3-.3H3Z"/>',
     "page": '<path d="M4 1.5h5l3 3v10a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-13a.5.5 0 0 1 .5-.5Zm4.6 1.4v2.1h2.1L8.6 2.9ZM5.4 7.4h5.2v1H5.4v-1Zm0 2.3h5.2v1H5.4v-1Zm0 2.3h3.4v1H5.4v-1Z"/>',
     "link": '<path d="M6.9 9.1a2.9 2.9 0 0 0 4.3.3l1.7-1.7a2.9 2.9 0 0 0-4.1-4.1l-1 1 .9.9 1-1a1.6 1.6 0 0 1 2.3 2.3L10.3 8.5a1.6 1.6 0 0 1-2.4-.2l-1 .8Zm2.2-2.2a2.9 2.9 0 0 0-4.3-.3L3.1 8.3a2.9 2.9 0 0 0 4.1 4.1l1-1-.9-.9-1 1a1.6 1.6 0 0 1-2.3-2.3l1.7-1.7a1.6 1.6 0 0 1 2.4.2l1-.8Z"/>',
 }
@@ -1555,6 +1629,129 @@ def _wall_meta(waiting: int, hidden: int = 0) -> str:
             f'waiting.">{hidden} {noun} tidied away, still unanswered</span>'
         )
     return out
+
+
+def _render_comments(rows: list, artifact_id: str) -> str:
+    """The conversation on a page: threads, replies, and a box to start one.
+
+    homelab-ij8.18. Jeremy wanted the conversation with the agent to happen on
+    the page rather than in a terminal. The storage and the agent's side of it
+    have existed since 19 Sep; this is the half he uses.
+
+    ORDERED OLDEST FIRST, unlike the wall. A conversation is read forwards --
+    newest-first is right for a list of pages, where you want what changed, and
+    wrong for a thread, where you want what was said.
+
+    A RESOLVED THREAD IS FOLDED, NOT HIDDEN. It is the record of something that
+    was settled, and this service loses nothing: the count is on the summary so
+    "out of the way" never becomes "gone", exactly as the archived fold works.
+
+    Always renders the composer, even with nothing to show -- an empty section
+    with a box is an invitation; an empty section with no box is a fault.
+    """
+    roots = [r for r in rows if r.thread_root is None]
+    replies: dict[str, list] = {}
+    for row in rows:
+        if row.thread_root:
+            replies.setdefault(row.thread_root, []).append(row)
+
+    def bubble(row) -> str:
+        who = "Jeremy" if row.author_kind == "human" else escape(row.author)
+        # CommentRow.created_at is an ISO STRING, not a datetime -- `_ago` takes
+        # the latter, and handing it the former raises on .tzinfo. Caught by
+        # rendering the page; the whole comment section would have 500'd on
+        # first use.
+        when = _ago(datetime.fromisoformat(row.created_at)) if row.created_at else ""
+        # Agent-written text landing in Jeremy's own signed-in origin, so it is
+        # escaped here like everything else that crosses that boundary.
+        return (
+            f'<li class="cmt {escape(row.author_kind)}">'
+            f'<span class="cwho">{who}</span>'
+            f'<span class="cwhen">{escape(when)}</span>'
+            f'<p>{escape(row.body)}</p></li>'
+        )
+
+    def thread(root) -> str:
+        kids = "".join(bubble(r) for r in replies.get(root.id, []))
+        resolved = root.resolved_at is not None
+        action = (
+            ""
+            if resolved
+            else (
+                f'<form class="cresolve" method="post" action="/c/{escape(root.id)}/resolve">'
+                '<button type="submit">Mark settled</button></form>'
+            )
+        )
+        reply = (
+            ""
+            if resolved
+            else (
+                f'<form class="creply" method="post" action="/c/{escape(artifact_id)}">'
+                f'<input type="hidden" name="thread_root" value="{escape(root.id)}">'
+                '<input name="body" placeholder="Reply" aria-label="Reply">'
+                "<button type=\"submit\">Send</button></form>"
+            )
+        )
+        return (
+            f'<li class="thread{" settled" if resolved else ""}">'
+            f"<ul class=\"bubbles\">{bubble(root)}{kids}</ul>{reply}{action}</li>"
+        )
+
+    open_roots = [r for r in roots if r.resolved_at is None]
+    settled = [r for r in roots if r.resolved_at is not None]
+
+    ident = escape(artifact_id)
+    # A PANEL OPENED FROM THE BAR, which is the shape the reference uses: its
+    # page bar carries a ButtonGroup labelled "Comments" holding a Comment
+    # toggle and a "More comment options" menu, and the conversation lives in
+    # a panel rather than in the document flow. Read off the saved claude.ai
+    # HTML Jeremy gave us, not guessed from the screenshots.
+    #
+    # `:target` rather than script, exactly as the rename and link dialogs
+    # work: the bar link is href="#comments", the panel is #comments, and
+    # closing is a link back to the page. Everything here works with scripts
+    # off and a conversation is a poor place to start making exceptions.
+    out = [
+        (
+            f'<div class="cdrawer" id="comments">'
+            f'<a class="dlg-back" href="/a/{ident}" aria-label="Close comments"></a>'
+            f'<div class="cdrawer-card"><h2>Comments</h2>'
+        )
+    ]
+    if open_roots:
+        out.append('<ul class="threads">' + "".join(thread(r) for r in open_roots) + "</ul>")
+    elif not settled:
+        out.append('<p class="cempty">Nothing yet. Say something and the agent that '
+                   "published this page will read it.</p>")
+    out.append(
+        f'<form class="cnew" method="post" action="/c/{ident}">'
+        '<input name="body" placeholder="Comment on this page" '
+        'aria-label="Comment on this page">'
+        "<button type=\"submit\">Send</button></form>"
+    )
+    if settled:
+        noun = "conversation" if len(settled) == 1 else "conversations"
+        out.append(
+            f'<details class="settled-cmts"><summary>'
+            '<span class="chev" aria-hidden="true"></span>Settled'
+            f'<span class="n">{len(settled)} {noun}</span></summary>'
+            f'<ul class="threads">' + "".join(thread(r) for r in settled) + "</ul></details>"
+        )
+    out.append("</div></div>")
+    return "".join(out)
+
+
+def _comments_button(artifact_id: str, open_count: int) -> str:
+    """The bar control. The reference groups a Comment toggle and a menu under
+    an aria-label of "Comments" in the page bar; this is the half that has
+    something to open, and it carries the count because a control that does not
+    say whether there is anything behind it gets pressed once and then never
+    again."""
+    count = f'<span class="cn">{open_count}</span>' if open_count else ""
+    return (
+        f'<a class="cbtn{" has" if open_count else ""}" href="#comments"'
+        f' aria-label="Comments">{_icon("comment")}{count}</a>'
+    )
 
 
 def _shell(
@@ -2632,6 +2829,10 @@ def gallery_router(db: Database) -> APIRouter:
         # Jeremy meant by "wow that ux is ugly" -- raw browser widgets beside a
         # page that had been designed.
         archived = row[3] is not None
+        comment_rows = comments.list_for_artifact(db, artifact_id, include_resolved=True)
+        open_threads = sum(
+            1 for c in comment_rows if c.thread_root is None and c.resolved_at is None
+        )
         menu = _page_menu(
             artifact_id,
             row[0],
@@ -2646,13 +2847,22 @@ def gallery_router(db: Database) -> APIRouter:
                 f'<div class="sheet" id="artifact-sheet"><iframe id="artifact-frame"'
                 f' src="{src}" sandbox="{sandbox}" title="{escape(row[0])}"></iframe></div>'
                 f"{settled_below}"
+                # AFTER the page, with the settled decisions. A conversation
+                # about a page is read once you have read the page; putting it
+                # above would be the mistake Jeremy already named about the
+                # questions -- "it feels odd to have the questions at the top".
+                f"{_render_comments(comment_rows, artifact_id)}"
                 f"{_rename_dialog(artifact_id, row[0])}"
                 f"{_link_dialog(artifact_id)}",
                 # gallery.js reads the content origin straight off this iframe's own
                 # `src` -- fixed ids, not a class selector, so a future second iframe
                 # on this page could never be mistaken for this one.
                 scripts='<script src="/gallery.js" defer></script>',
-                title_html=menu,
+                # The bar carries the title menu AND the comments control, which
+                # is how the reference groups them: its page bar holds the title
+                # with its chevron on the left and a ButtonGroup labelled
+                # "Comments" among the controls on the right.
+                title_html=menu + _comments_button(artifact_id, open_threads),
                 bleed=True,
             ),
             headers=gallery_headers(),
@@ -2688,5 +2898,67 @@ def gallery_router(db: Database) -> APIRouter:
         except store.NotFound as exc:
             raise HTTPException(404, "no such open decision") from exc
         return RedirectResponse(f"/a/{row.artifact_id}", status_code=303)
+
+    # --- comments: the conversation happens on the page --------------------
+    #
+    # homelab-ij8.18. Jeremy, 19 Sep, after reading the first status page: he
+    # wants the conversation with the agent to happen ON the page rather than
+    # in a terminal. The storage and the agent-facing API have existed since
+    # then; what did not exist is any way for HIM to write one, which made
+    # "agents read the comments and reply" a loop with no beginning.
+    #
+    # THIS IS THE HALF THAT NEEDS NO REFERENCE DESIGN: a thread against the
+    # page as a whole. Selecting text and anchoring a comment to it is the
+    # other half, it is what he actually described, and the bead says to ask
+    # him for the claude.ai screenshots before building that UI -- so it is
+    # asked for rather than guessed at.
+    #
+    # Same shape as the answer form above and for the same reasons: a plain
+    # POST with the same-origin guard, `author="jeremy"` hardcoded rather than
+    # read from any header, and a 303 back to the page so a refresh does not
+    # repost.
+    @router.post("/c/{artifact_id}")
+    def add_comment(
+        artifact_id: str,
+        body: str = Form(...),
+        thread_root: str = Form(""),
+        _guard: None = Depends(_same_origin_write),
+    ):
+        try:
+            comments.add(
+                db,
+                artifact_id=artifact_id,
+                author_kind="human",
+                author="jeremy",
+                body=body,
+                thread_root=thread_root or None,
+            )
+        except store.BodyTooLarge as exc:
+            raise HTTPException(413, f"{exc.field} exceeds the size limit") from exc
+        except store.InvalidText as exc:
+            raise HTTPException(422, f"{exc.field} is not valid UTF-8") from exc
+        except store.SecretFound as exc:
+            raise HTTPException(
+                422, f"{exc.field} looks like it contains a secret"
+            ) from exc
+        except store.ScanFailed as exc:
+            raise HTTPException(503, _SCAN_FAILED_DETAIL) from exc
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such artifact") from exc
+        return RedirectResponse(f"/a/{artifact_id}#comments", status_code=303)
+
+    @router.post("/c/{comment_id}/resolve")
+    def resolve_comment(
+        comment_id: str,
+        _guard: None = Depends(_same_origin_write),
+    ):
+        try:
+            # agent=None: the gallery owns nothing in the `agent` column's
+            # sense, and Jeremy owns everything in the sense that matters. Same
+            # call `add` already makes for writing.
+            row = comments.resolve(db, comment_id, by="jeremy", agent=None)
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such comment") from exc
+        return RedirectResponse(f"/a/{row.artifact_id}#comments", status_code=303)
 
     return router

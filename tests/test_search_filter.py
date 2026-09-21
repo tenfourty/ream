@@ -9,6 +9,8 @@ Both are GET: a search and a filter are each a URL he can keep, and both work
 with scripts off.
 """
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -144,22 +146,34 @@ def test_a_tab_appears_only_once_it_has_something_in_it(client, db):
     assert "Pinned" in both
 
 
+def _tile_titles(out: str) -> set[str]:
+    """The titles actually rendered as tiles or rows.
+
+    Asserting a bare word is absent from a 40 KB document is a test that fails
+    on prose: on 21 Sep a CSS comment containing the word "Quiet" broke this,
+    and the page under test was entirely correct. Match the element instead.
+    """
+    return set(re.findall(r'<span class="t">([^<]*)</span>', out)) | set(
+        re.findall(r'<span class="rt">([^<]*)</span>', out)
+    )
+
+
 def test_the_waiting_tab_shows_only_pages_with_a_question(client, db):
     asking = store.publish(db, "seat", "Has a question", PAGE)
     store.publish(db, "seat", "Quiet", PAGE)
     _ask(db, asking.id)
-    out = client.get("/?filter=waiting").text
-    assert "Has a question" in out
-    assert "Quiet" not in out
+    titles = _tile_titles(client.get("/?filter=waiting").text)
+    assert "Has a question" in titles
+    assert "Quiet" not in titles
 
 
 def test_the_pinned_tab_shows_only_pinned_pages(client, db):
     pinned = store.publish(db, "seat", "Kept", PAGE)
     store.publish(db, "seat", "Ordinary", PAGE)
     store.set_pinned(db, pinned.id, True, agent=None)
-    out = client.get("/?filter=pinned").text
-    assert "Kept" in out
-    assert "Ordinary" not in out
+    titles = _tile_titles(client.get("/?filter=pinned").text)
+    assert "Kept" in titles
+    assert "Ordinary" not in titles
 
 
 def test_the_tab_counts_do_not_change_when_you_press_them(client, db):

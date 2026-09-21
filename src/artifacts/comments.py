@@ -312,28 +312,41 @@ def list_for_agent(
     return [_row_to_comment(row) for row in rows]
 
 
-def resolve(db: Database, comment_id: str, *, by: str) -> CommentRow:
+def resolve(
+    db: Database, comment_id: str, *, by: str, agent: str | None = None
+) -> CommentRow:
     """Resolve the thread `comment_id` belongs to (its root, if `comment_id` names a
     reply, and every reply alongside it -- one thread is one conversation, resolved
-    or not as a whole). `by` is who resolved it AND, in the same query, the artifact
-    owner `comment_id` must belong to: this is only ever reached from the agent API
-    in this slice, where the caller and the resolver are the same identity, so one
-    join does both jobs at once and gives the usual `NotFound` for "no such comment"
-    and "someone else's comment" alike. A future path for Jeremy resolving through
-    the gallery (which owns nothing, in the `agent` column's sense) will need its
-    own route in -- not this one, unchanged -- exactly as `add()`'s `agent=None`
-    already does for writing.
+    or not as a whole). `by` is who resolved it and is what gets stored. `agent` is the
+    identity the artifact must be owned by, and defaults to `by` -- right for
+    the agent API, where the caller and the resolver are the same identity, and
+    giving the usual `NotFound` for "no such comment" and "someone else's
+    comment" alike.
+
+    `agent=None` is the GALLERY, acting for Jeremy, exactly as `add()`'s
+    `agent=None` already means for writing: only the comment's existence is
+    checked. This docstring used to predict that such a path "will need its own
+    route in -- not this one, unchanged". It needed a parameter, not a route,
+    and it needed it the moment the gallery grew a Mark settled button -- every
+    press 404'd, because no artifact is owned by "jeremy". Found by rendering
+    the page, not by a test, which is its own small lesson.
 
     Idempotent: if the thread is already resolved, the row named by `comment_id` is
     returned exactly as it stands, and `resolved_at` does not move -- a second
     resolve is a no-op, not a fresh timestamp."""
     with db.connect() as conn:
-        row = conn.execute(
-            f"select {_COLUMNS} from comment"  # noqa: S608 -- fixed constant, not caller input
-            " join artifact on artifact.id = comment.artifact_id"
-            " where comment.id = %s and artifact.agent = %s",
-            (comment_id, by),
-        ).fetchone()
+        if agent is None:
+            row = conn.execute(
+                f"select {_COLUMNS} from comment where comment.id = %s",  # noqa: S608 -- fixed constant, not caller input
+                (comment_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                f"select {_COLUMNS} from comment"  # noqa: S608 -- fixed constant, not caller input
+                " join artifact on artifact.id = comment.artifact_id"
+                " where comment.id = %s and artifact.agent = %s",
+                (comment_id, agent),
+            ).fetchone()
         if row is None:
             raise store.NotFound()
 

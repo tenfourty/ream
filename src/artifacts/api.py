@@ -591,7 +591,15 @@ def agent_router(db: Database) -> APIRouter:
     @router.post("/comments/{comment_id}/resolve")
     def resolve_comment(comment_id: str, agent: str = Depends(caller)):
         try:
-            return comments.resolve(db, comment_id, by=agent).__dict__
+            # `agent=` EXPLICITLY, never left to the default. The default is
+            # None, which means "the gallery, acting for Jeremy" and skips the
+            # ownership check entirely -- correct there, and a privilege
+            # escalation here, where any key could then resolve any seat's
+            # threads. Spelled out so the keyed path cannot acquire the
+            # gallery's authority by someone changing a default.
+            return comments.resolve(
+                db, comment_id, by=agent, agent=agent
+            ).__dict__
         except store.NotFound as exc:
             raise HTTPException(404, "no such comment") from exc
 
