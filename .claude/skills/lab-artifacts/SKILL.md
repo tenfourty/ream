@@ -399,6 +399,14 @@ cursor durably (the script keeps it in a file, written only after the rows are
 in hand, so a crash replays rather than loses). An empty answer means "nothing
 yet, ask again" — never an error.
 
+**An event can also tell you a question has gone quiet.** Since 21 Sep 2026 a
+fourth kind, `decision_shelved`, fires when the page holding one of your open
+questions is archived or deleted. It means Jeremy is no longer being shown that
+question — not that it is dead: nothing is destroyed, and it comes back if the
+page does. **Stop waiting on it and say so**, rather than holding a waiter that
+will now only ever time out. The `note` on the event says all of this, and
+`ref_id` is the decision it concerns.
+
 **The event carries his note, but the decision row is still the authority.**
 Since 20 Sep 2026 each event has its own `note` field holding what he actually
 typed, verbatim, up to 1000 characters — before that the feed carried only a
