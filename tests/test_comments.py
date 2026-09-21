@@ -785,3 +785,34 @@ def test_across_pages_hides_settled_threads_unless_asked(db):
     assert [p.artifact_id for p in comments.across_pages(db, include_resolved=True)] == [
         art.id
     ]
+
+
+def test_an_agents_whole_feed_says_whether_each_quote_is_still_there(client, db):
+    """The per-page route has answered this since 21 Sep and the cross-page
+    feed returned "" for every row, so the same comment read two ways gave an
+    agent two different answers and one of them was always wrong."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    published = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": QUOTED}, headers=auth(token)
+    ).json()
+    client.post(
+        f"/api/v1/artifacts/{published['id']}/comments",
+        json={"body": "Why then?", "quote": "The backups run at midnight."},
+        headers=auth(token),
+    )
+    client.patch(
+        f"/api/v1/artifacts/{published['id']}",
+        json={
+            "body": QUOTED.replace("midnight", "four"),
+            "expected_revision": published["revision"],
+        },
+        headers=auth(token),
+    )
+
+    feed = client.get("/api/v1/comments", headers=auth(token)).json()
+    per_page = client.get(
+        f"/api/v1/artifacts/{published['id']}/comments", headers=auth(token)
+    ).json()
+
+    assert [c["quote_state"] for c in feed] == ["changed"]
+    assert [c["quote_state"] for c in feed] == [c["quote_state"] for c in per_page]

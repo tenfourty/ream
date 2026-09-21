@@ -380,6 +380,38 @@ def _state_against(quote: str, words: str, tight_words: str) -> str:
     return "changed"
 
 
+def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
+    """Every quoting row told whether its quote is still on its page.
+
+    ONE query for every page that has a quoting comment, never one per comment
+    and never one per page: a body here is tens of kilobytes, most comments
+    quote nothing, and this runs on a listing that can span the whole wall.
+    Pages with no quoting comment are not read at all.
+
+    `replace`, not assignment: CommentRow is frozen, which is right -- a row
+    read out of the database is a record, and code that can edit one in place
+    is code that can silently disagree with it.
+    """
+    quoting = sorted({row.artifact_id for row in rows if row.quote})
+    if not quoting:
+        return rows
+    words_by_page: dict[str, tuple[str, str]] = {}
+    for artifact_id, body in conn.execute(
+        "select a.id, v.body from artifact a"
+        " join version v on v.artifact_id = a.id and v.n = a.current_version"
+        " where a.id = any(%s)",
+        (quoting,),
+    ).fetchall():
+        words = text.searchable(body)
+        words_by_page[artifact_id] = (words, _tight(words))
+    return [
+        replace(row, quote_state=_state_against(row.quote, *words_by_page[row.artifact_id]))
+        if row.quote and row.artifact_id in words_by_page
+        else row
+        for row in rows
+    ]
+
+
 def list_for_artifact(
     db: Database, artifact_id: str, *, include_resolved: bool = False
 ) -> list[CommentRow]:
@@ -395,27 +427,11 @@ def list_for_artifact(
     sql += " order by comment.created_at asc, comment.id asc"
     with db.connect() as conn:
         rows = conn.execute(sql, (artifact_id,)).fetchall()
-        found = [_row_to_comment(row) for row in rows]
-        # The page as it is NOW, read once, and only when something actually
-        # quotes it: most comments quote nothing, and loading a 40 KB body to
-        # tell them all "" would be a query per page view for no answer.
-        if any(row.quote for row in found):
-            body = conn.execute(
-                "select v.body from artifact a"
-                " join version v on v.artifact_id = a.id and v.n = a.current_version"
-                " where a.id = %s",
-                (artifact_id,),
-            ).fetchone()
-            words = text.searchable(body[0]) if body else ""
-            tight_words = _tight(words)
-            # `replace`, not assignment: CommentRow is frozen, which is right --
-            # a row read out of the database is a record, and code that can
-            # edit one in place is code that can silently disagree with it.
-            found = [
-                replace(row, quote_state=_state_against(row.quote, words, tight_words))
-                for row in found
-            ]
-    return found
+        # The page as it is NOW, read only when something actually quotes it --
+        # see `_with_quote_state`, which every listing in this module shares so
+        # that an agent is never told "this quote is gone" on one route and
+        # nothing at all on another.
+        return _with_quote_state(conn, [_row_to_comment(row) for row in rows])
 
 
 def list_for_agent(
@@ -436,7 +452,12 @@ def list_for_agent(
     sql += " order by comment.created_at desc, comment.id desc limit %s"
     with db.connect() as conn:
         rows = conn.execute(sql, (agent, limit)).fetchall()
-    return [_row_to_comment(row) for row in rows]
+        # THE SAME FIELD THE PER-PAGE ROUTE GIVES IT. This one returned "" for
+        # every row until 21 Sep, so an agent polling its whole feed was told
+        # nothing about quotes that had been edited away, while the same
+        # comment read through /artifacts/<id>/comments said "changed". One of
+        # those two answers was always wrong.
+        return _with_quote_state(conn, [_row_to_comment(row) for row in rows])
 
 
 @dataclass(frozen=True)
@@ -481,29 +502,13 @@ def across_pages(
 
     with db.connect() as conn:
         rows = conn.execute(sql, (limit,)).fetchall()
-        found = [(_row_to_comment(row), row[-2], row[-1]) for row in rows]
-        # One query for every page that actually has a quoting comment, rather
-        # than one per page or a body per comment: `list_for_artifact` reads a
-        # body only when something quotes it, and this view has to hold that
-        # line harder, since it can span every page on the wall.
-        quoting = sorted({row.artifact_id for row, _title, _arch in found if row.quote})
-        words_by_page: dict[str, tuple[str, str]] = {}
-        if quoting:
-            bodies = conn.execute(
-                "select a.id, v.body from artifact a"
-                " join version v on v.artifact_id = a.id and v.n = a.current_version"
-                " where a.id = any(%s)",
-                (quoting,),
-            ).fetchall()
-            for artifact_id, body in bodies:
-                words = text.searchable(body)
-                words_by_page[artifact_id] = (words, _tight(words))
+        stated = _with_quote_state(conn, [_row_to_comment(row) for row in rows])
+        found = [
+            (comment, row[-2], row[-1]) for comment, row in zip(stated, rows, strict=True)
+        ]
 
     grouped: dict[str, PageComments] = {}
     for row, title, archived_at in found:
-        if row.quote and row.artifact_id in words_by_page:
-            words, tight_words = words_by_page[row.artifact_id]
-            row = replace(row, quote_state=_state_against(row.quote, words, tight_words))
         group = grouped.get(row.artifact_id)
         if group is None:
             group = PageComments(
