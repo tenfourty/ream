@@ -451,7 +451,35 @@ def _update(
     return _patch(file_path, artifact_id, expected_revision, key, title)
 
 
-def _fetch(artifact_id: str, key: str) -> str:
+def _versions(artifact_id: str, key: str) -> list[dict]:
+    return _request("GET", f"{_api_base()}/artifacts/{artifact_id}/versions", key, None)
+
+
+def _print_versions(rows: list[dict]) -> None:
+    """One line per version, newest first, and never a body.
+
+    homelab-ij8.30: publish returned a revision hash and nothing could list,
+    show or roll back -- so the hash was a number the agent was told and could
+    do nothing with. The `live` marker is the column that makes the rest
+    actionable: without it you can read a history and still not know which one
+    is on the wall.
+    """
+    if not rows:
+        # Not silence. An empty result and a broken call print the same nothing.
+        print("no versions -- which should be impossible for a page that exists")
+        return
+    for row in rows:
+        mark = "*" if row.get("live") else " "
+        who = row.get("session") or row.get("created_by") or ""
+        when = (row.get("created_at") or "")[:19].replace("T", " ")
+        print(
+            f"{mark} v{row['n']}\t{row.get('revision','')}\t"
+            f"{row.get('bytes', 0)}\t{when}\t{who}"
+        )
+    print("* is the version on the wall now", file=sys.stderr)
+
+
+def _fetch(artifact_id: str, key: str, version: int | None = None) -> str:
     """The page's own HTML, back to the agent that published it.
 
     `GET /artifacts/{id}/body` has existed since 19 Sep and nobody could find
@@ -465,7 +493,15 @@ def _fetch(artifact_id: str, key: str) -> str:
 
     A flag removes the guessing. A paragraph only helps whoever reads it first.
     """
-    got = _request("GET", f"{_api_base()}/artifacts/{artifact_id}/body", key, None)
+    # `--version N` reads THAT version; without it, the live one. Rolling back
+    # is then this plus an ordinary update -- no new verb, and the roll-back
+    # lands as a new version rather than rewriting history.
+    where = (
+        f"/artifacts/{artifact_id}/versions/{version}"
+        if version is not None
+        else f"/artifacts/{artifact_id}/body"
+    )
+    got = _request("GET", f"{_api_base()}{where}", key, None)
     body = got.get("body")
     if not isinstance(body, str):
         raise UsageError("the service returned no body for that page")
@@ -830,6 +866,20 @@ def build_parser() -> argparse.ArgumentParser:
     shelf.add_argument("--unpin", metavar="ID", help="unpin it")
     shelf.add_argument("--duplicate", metavar="ID", help="copy a page to a new address")
     shelf.add_argument(
+        "--versions",
+        metavar="ID",
+        help="the page's history: which versions exist, when, and how big",
+    )
+    shelf.add_argument(
+        # NOT `--version`: that is already the install stamp, and argparse
+        # refuses the clash outright -- which is the good outcome. A quieter
+        # library would have let one silently shadow the other.
+        "--at-version",
+        type=int,
+        metavar="N",
+        help="with --fetch, read THAT version instead of the live one",
+    )
+    shelf.add_argument(
         "--fetch",
         metavar="ID",
         help="write the page's current HTML back out, to FILE or stdout",
@@ -900,13 +950,21 @@ def main(argv: list[str] | None = None) -> int:
             if artifact_id:
                 _print_shelf(_shelf(route, artifact_id, key, payload))
                 return 0
+        if args.versions:
+            _print_versions(_versions(args.versions, key))
+            return 0
+        if args.at_version is not None and not args.fetch:
+            raise UsageError(
+                "--at-version only means something with --fetch: "
+                "artifacts-publish --fetch <id> --at-version 3 old.html"
+            )
         if args.fetch:
             # To FILE when one is given, else stdout, so it composes either way:
             # `--fetch ID page.html` to edit, `--fetch ID | grep` to look. The
             # file is written whole and only on success -- a half-written one
             # would be the worst outcome for a command whose entire job is not
             # losing the source.
-            html = _fetch(args.fetch, key)
+            html = _fetch(args.fetch, key, args.at_version)
             if args.file:
                 pathlib.Path(args.file).write_text(html, encoding="utf-8")
                 print(f"{len(html.encode())} bytes -> {args.file}", file=sys.stderr)

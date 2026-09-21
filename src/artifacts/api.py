@@ -404,6 +404,38 @@ def agent_router(db: Database) -> APIRouter:
             raise HTTPException(404, "no such artifact") from exc
         return {**stored.__dict__, "warnings": csp.as_json(stored.body)}
 
+    @router.get("/artifacts/{artifact_id}/versions")
+    def read_versions(artifact_id: str, agent: str = Depends(caller)):
+        """A page's history: what versions exist, when, and who wrote each.
+
+        homelab-ij8.30. Publish returns a revision hash and the skill says a
+        page keeps its history, but nothing listed one -- so the hash was a
+        number the agent was told and could do nothing with.
+
+        NEVER the bodies. A history is read to choose a version, and shipping
+        every body would make this the largest response the service produces.
+        `bytes` is what a reader actually compares.
+        """
+        try:
+            return [row.__dict__ for row in store.list_versions(db, agent, artifact_id)]
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such artifact") from exc
+
+    @router.get("/artifacts/{artifact_id}/versions/{n}")
+    def read_version_body(artifact_id: str, n: int, agent: str = Depends(caller)):
+        """One version's stored body (homelab-50ze).
+
+        Rolling back is this plus an ordinary update: fetch the old bytes,
+        publish them. No new verb, and the roll-back lands as a NEW version
+        rather than rewriting history -- the only honest shape for a service
+        whose argument is that the record is not edited.
+        """
+        try:
+            stored = store.get_version_body(db, agent, artifact_id, n)
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such artifact or version") from exc
+        return {**stored.__dict__, "warnings": csp.as_json(stored.body)}
+
     @router.get("/artifacts")
     def index(agent: str = Depends(caller)):
         return [row.__dict__ for row in store.list_for_agent(db, agent)]
@@ -1010,8 +1042,8 @@ def agent_router(db: Database) -> APIRouter:
     # So a wrong guess stops looking like an absent feature. The first 404 now
     # carries the answer, which is the only moment the reader is guaranteed to
     # be looking.
-    _SUBROUTES = ("body", "comments", "decisions", "archive", "rename", "pin",
-                  "duplicate", "restore", "destroy")
+    _SUBROUTES = ("body", "versions", "comments", "decisions", "archive",
+                  "rename", "pin", "duplicate", "restore", "destroy")
 
     # The same treatment for a decision's sub-routes, added 21 Sep after the
     # operator's first `artifacts-decide outcome` answered a bare 404 and could

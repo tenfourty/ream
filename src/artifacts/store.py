@@ -575,6 +575,93 @@ def get_body(db: Database, agent: str, artifact_id: str) -> StoredBody:
     )
 
 
+@dataclass(frozen=True)
+class VersionRow:
+    """One entry in a page's history. NEVER the body.
+
+    A history listing is read to decide which version to look at; carrying
+    every body would make it the largest response this service produces and
+    would hand a caller bytes it did not ask for. `bytes` is the size, which
+    is what a reader actually compares.
+    """
+
+    n: int
+    revision: str
+    created_at: str
+    created_by: str
+    session: str | None
+    bytes: int
+    live: bool
+
+
+def list_versions(db: Database, agent: str, artifact_id: str) -> list[VersionRow]:
+    """A page's history, newest first, to its own agent.
+
+    homelab-ij8.30, first-user feedback from the cove seat on 19 Sep: publish
+    returns a revision hash and the skill says a page keeps its history, but
+    nothing listed one, showed an old one or rolled back -- so the hash was a
+    number the agent was told and could do nothing with.
+
+    NEWEST FIRST, unlike a conversation: the question asked of a history is
+    almost always "what happened recently", and the version somebody wants is
+    usually the last one or the one before it.
+
+    Ownership checked exactly as every other owning read checks it, and
+    another agent's page is a plain 404 rather than a 403.
+    """
+    with db.connect() as conn:
+        row = _owned(conn, artifact_id, agent)
+        if row is None:
+            raise NotFound()
+        rows = conn.execute(
+            # octet_length, not length: `length` counts CHARACTERS, and a page
+            # with any non-ASCII in it would report fewer bytes than it has --
+            # which is the one number this row exists to give honestly.
+            "select n, revision, created_at, created_by, session,"
+            "       octet_length(body) from version"
+            " where artifact_id = %s order by n desc",
+            (artifact_id,),
+        ).fetchall()
+    return [
+        VersionRow(
+            n=r[0],
+            revision=r[1],
+            created_at=r[2].isoformat(),
+            created_by=r[3],
+            session=r[4],
+            bytes=r[5],
+            live=r[0] == row[4],
+        )
+        for r in rows
+    ]
+
+
+def get_version_body(
+    db: Database, agent: str, artifact_id: str, n: int
+) -> StoredBody:
+    """The body of ONE version, to its own agent (homelab-50ze, homelab-ij8.30).
+
+    Strictly less exposure than `get_body` already grants: the same page, to
+    the same agent, at a version it wrote itself. Rolling back is then this
+    plus an ordinary update -- no new verb, and the roll-back lands as a NEW
+    version rather than rewriting history, which is the only honest way for a
+    service whose whole argument is that the record is not edited.
+    """
+    with db.connect() as conn:
+        row = _owned(conn, artifact_id, agent)
+        if row is None:
+            raise NotFound()
+        version = conn.execute(
+            "select n, revision, body from version where artifact_id = %s and n = %s",
+            (artifact_id, n),
+        ).fetchone()
+        if version is None:
+            raise NotFound()
+    return StoredBody(
+        id=artifact_id, version=version[0], revision=version[1], body=version[2]
+    )
+
+
 def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
     with db.connect() as conn:
         rows = conn.execute(

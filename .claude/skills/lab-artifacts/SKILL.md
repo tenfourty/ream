@@ -49,7 +49,20 @@ artifacts-publish --list                               # what this key has publi
 ```bash
 artifacts-publish --fetch <id> page.html     # the page's own HTML, back on disk
 artifacts-publish --fetch <id> | head -40    # or just look at it
+artifacts-publish --versions <id>            # what versions exist, and which is live
+artifacts-publish --fetch <id> --at-version 3 old.html
 ```
+
+**Rolling back is a read and an ordinary update**, not a verb:
+
+```bash
+artifacts-publish --fetch <id> --at-version 3 old.html
+artifacts-publish old.html --update <id>
+```
+
+The restored bytes land as a NEW version. History here is appended to, never
+rewritten — a service whose argument is that the record is not edited cannot
+offer a command that edits it.
 
 **Edit what is there; do not regenerate from memory.** A republish replaces the
 whole document, so rewriting from scratch silently drops whatever the last

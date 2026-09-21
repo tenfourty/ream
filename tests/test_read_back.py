@@ -172,7 +172,11 @@ def test_a_wrong_route_name_says_which_ones_are_real(db):
     published = store.publish(db, "seat", "Board", PAGE)
     client = TestClient(create_gallery_app(db))
 
-    for guess in ("source", "content", "html", "versions", "revisions", "history"):
+    # "versions" has since been removed from this list because it became a REAL
+    # route (homelab-ij8.30): one of the six things that seat reached for now
+    # exists, which is the better way to answer a wrong guess. The other five
+    # still get pointed at /body.
+    for guess in ("source", "content", "html", "revisions", "history"):
         got = client.get(
             f"/api/v1/artifacts/{published.id}/{guess}",
             headers={"Authorization": f"Bearer {token}"},
@@ -188,6 +192,14 @@ def test_a_wrong_route_name_says_which_ones_are_real(db):
     ).json()["detail"]
     assert pointed["did_you_mean"], "the obvious synonyms get a direct answer"
     assert "body" in pointed["did_you_mean"]
+
+    # And the guess that turned out to be a real capability answers as one.
+    real = client.get(
+        f"/api/v1/artifacts/{published.id}/versions",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert real.status_code == 200
+    assert [row["n"] for row in real.json()] == [1]
 
 
 def test_the_catch_all_never_shadows_a_real_route(db):
