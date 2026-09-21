@@ -38,7 +38,7 @@ from datetime import datetime
 
 from psycopg.types.json import Jsonb
 
-from artifacts import events, ids, nudge, store
+from artifacts import events, ids, nudge, store, text
 from artifacts.db import Database
 
 # A decision's question is a single line Jeremy reads on a card, not a page body -- 500
@@ -770,3 +770,128 @@ def open_across_seats(db: Database, *, limit: int = 200) -> list[WaitingRow]:
         )
         for row in rows
     ]
+
+
+# What an outcome note may carry. The same ceiling as an answer note, and for
+# the same reason: this is somebody explaining what happened, not a label, and
+# truncating it to a line is how "we shipped (a), but the framing was wrong and
+# he should look again" becomes "we shipped (a)".
+MAX_OUTCOME_BYTES = 1_000
+
+
+@dataclass(frozen=True)
+class OutcomeRow:
+    id: str
+    decision_id: str
+    body: str
+    agent: str
+    session: str | None
+    created_at: str
+
+
+def _row_to_outcome(row) -> OutcomeRow:
+    return OutcomeRow(
+        id=row[0],
+        decision_id=row[1],
+        # Sanitised on the way out as well as in. An outcome is written by an
+        # agent and read into a terminal and into Jeremy's page, and `sanitize`
+        # is idempotent, so a clean row costs nothing.
+        body=text.sanitize(row[2], limit=MAX_OUTCOME_BYTES),
+        agent=row[3],
+        session=row[4],
+        created_at=row[5].isoformat(),
+    )
+
+
+def record_outcome(
+    db: Database,
+    decision_id: str,
+    *,
+    agent: str,
+    body: str,
+    session: str | None = None,
+) -> OutcomeRow:
+    """Append what a decision caused, or what changed under it.
+
+    homelab-ij8.44. The model stopped at the answer, so the durable record of
+    what a decision PRODUCED -- a PR, a closed bead, a correction to the agent's
+    own framing -- lived only in prose somebody happened to rewrite.
+
+    NOT GATED ON THE DECISION BEING ANSWERED, deliberately. The operator's case,
+    21 Sep 2026: they corrected two promises on a page while the question was
+    still open. That is the one with teeth -- a question whose premise moved
+    after Jeremy read it and before he answered is one he can answer wrongly
+    through no fault of his own, and until now nothing on the page said so.
+
+    Append only. There is no update and no delete, and no "current outcome"
+    field anywhere, because the failure this fixes IS a summary that keeps being
+    rewritten until what actually happened is gone.
+
+    Scoped like every other write here: the decision must be on a page this
+    agent owns, and `NotFound` covers both "no such decision" and "not yours",
+    which are deliberately indistinguishable.
+    """
+    store._check_size(body, MAX_OUTCOME_BYTES, "outcome", agent=agent, artifact_id=None)
+    with db.connect() as conn:
+        owned = conn.execute(
+            "select decision.artifact_id from decision"
+            " join artifact on artifact.id = decision.artifact_id"
+            " where decision.id = %s and artifact.agent = %s"
+            "   and artifact.deleted_at is null",
+            (decision_id, agent),
+        ).fetchone()
+        if owned is None:
+            raise store.NotFound()
+        # The same guard every other text reaching storage gets. "It is only a
+        # note" is how a field skips its checks.
+        store._check_secrets(body, "outcome", agent=agent, artifact_id=owned[0])
+        outcome_id = ids.new_id()
+        conn.execute(
+            "insert into decision_outcome (id, decision_id, body, agent, session)"
+            " values (%s, %s, %s, %s, %s)",
+            (outcome_id, decision_id, body, agent, session),
+        )
+        row = conn.execute(
+            "select id, decision_id, body, agent, session, created_at"
+            " from decision_outcome where id = %s",
+            (outcome_id,),
+        ).fetchone()
+    return _row_to_outcome(row)
+
+
+def outcomes_for(db: Database, decision_id: str) -> list[OutcomeRow]:
+    """Every outcome on one decision, oldest first -- the order they happened.
+
+    Trusts `decision_id` outright, exactly as this module's other listing
+    helpers do; ownership is the caller's job.
+    """
+    with db.connect() as conn:
+        rows = conn.execute(
+            "select id, decision_id, body, agent, session, created_at"
+            " from decision_outcome where decision_id = %s"
+            " order by created_at asc, id asc",
+            (decision_id,),
+        ).fetchall()
+    return [_row_to_outcome(row) for row in rows]
+
+
+def outcomes_for_artifact(db: Database, artifact_id: str) -> dict[str, list[OutcomeRow]]:
+    """Every outcome on every decision of one page, keyed by decision id.
+
+    One query rather than one per decision: the gallery renders a page with
+    several questions on it, and a per-decision read there is a round trip per
+    question on every load.
+    """
+    out: dict[str, list[OutcomeRow]] = {}
+    with db.connect() as conn:
+        rows = conn.execute(
+            "select o.id, o.decision_id, o.body, o.agent, o.session, o.created_at"
+            " from decision_outcome o"
+            " join decision d on d.id = o.decision_id"
+            " where d.artifact_id = %s"
+            " order by o.created_at asc, o.id asc",
+            (artifact_id,),
+        ).fetchall()
+    for row in rows:
+        out.setdefault(row[1], []).append(_row_to_outcome(row))
+    return out

@@ -133,6 +133,12 @@ def _fmt(row: dict) -> str:
             if row.get("closed_at")
             else "  unanswered"
         )
+    # WHAT HAPPENED SINCE, under answered and unanswered alike. An outcome on an
+    # OPEN question is the one with teeth: if the framing was corrected after it
+    # was posed, Jeremy could answer the old question by accident.
+    for outcome in row.get("outcomes") or []:
+        who = outcome.get("session") or outcome.get("agent")
+        lines.append(f"  SINCE ({outcome['created_at'][:16]}, {who}): {outcome['body']}")
     return "\n".join(lines)
 
 
@@ -229,6 +235,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     record.add_argument("--said-at", metavar="ISO8601", help="when HE said it")
 
+    outcome = subs.add_parser(
+        "outcome",
+        help="append what this decision caused, or what changed under it",
+    )
+    outcome.add_argument("decision", metavar="DECISION-ID")
+    outcome.add_argument(
+        "note",
+        metavar="TEXT",
+        help=(
+            "what happened -- a PR, a closed bead, a correction to your own "
+            "framing. Allowed while the question is still open, and that is "
+            "the case that matters most: if the framing moved after he read "
+            "it, he can answer the old question by accident."
+        ),
+    )
+
     ack = subs.add_parser("ack", help="say you have seen an answer")
     ack.add_argument("decision", metavar="DECISION-ID")
 
@@ -296,6 +318,15 @@ def main(argv: list[str] | None = None) -> int:
                 "POST", f"{base}/decisions/{args.decision}/record", key, payload
             )
             print(_fmt(row))
+            return 0
+        if args.cmd == "outcome":
+            written = _request(
+                "POST",
+                f"{base}/decisions/{args.decision}/outcome",
+                key,
+                {"body": args.note},
+            )
+            print(f"recorded on {written['decision_id']}: {written['body']}")
             return 0
         if args.cmd in ("ack", "close"):
             route = "acknowledge" if args.cmd == "ack" else "close"

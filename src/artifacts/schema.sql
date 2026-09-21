@@ -442,3 +442,42 @@ alter table seat_read add column if not exists session text;
 alter table seat_read drop constraint if exists seat_read_pkey;
 create unique index if not exists seat_read_seat_session_idx
     on seat_read (agent, session) nulls not distinct;
+
+-- WHAT A DECISION CAUSED, and what changed under it (homelab-ij8.44).
+--
+-- The model was question -> options -> answer -> answer_note, and stopped. The
+-- interesting part arrives later: Jeremy chose (a), and what that PRODUCED was
+-- a PR, a closed bead and a correction to the agent's own framing. There was
+-- nowhere to put that, so an agent hand-edited its page's HTML to say
+-- "Done - PR #14, and the job was smaller than I claimed" -- the durable record
+-- of what a decision caused living only in prose somebody happened to rewrite.
+--
+-- A TABLE, NOT A COLUMN, and not gated on the decision being answered. The
+-- operator's case, 21 Sep: they corrected two promises on a page WHILE THE
+-- QUESTION WAS STILL OPEN. That one has teeth -- a question whose premise moved
+-- after Jeremy read it and before he answered is one he can answer wrongly
+-- through no fault of his own, and nothing on the page said so.
+--
+-- APPEND ONLY. No update, no delete, and deliberately no "current outcome"
+-- field anywhere. Several notes accumulate, none replaces another, because the
+-- failure this fixes is exactly a summary that somebody keeps rewriting until
+-- what actually happened is gone. Deleting the page still cascades; nothing
+-- else removes one.
+--
+-- `session` alongside `agent` because sessions landed this morning: three seats
+-- share one key, so "who recorded this" is otherwise answerable only as "that
+-- machine". Nullable like every other session column -- NULL means the writer
+-- did not say.
+create table if not exists decision_outcome (
+    id          text primary key,
+    decision_id text not null references decision(id) on delete cascade,
+    body        text not null,
+    agent       text not null,
+    session     text,
+    created_at  timestamptz not null default now()
+);
+
+-- Read path is always "every outcome for this decision, oldest first", which is
+-- the order they happened and the order they are read.
+create index if not exists decision_outcome_decision_idx
+    on decision_outcome (decision_id, created_at);

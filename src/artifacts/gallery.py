@@ -312,6 +312,20 @@ main{display:block}
 
    z-index alone is not enough here: it orders PAINTING within a stacking
    context and does not decide which layer a touch is delivered to. */
+/* What has happened to a question since it was asked (homelab-ij8.44).
+   Set apart from the question above it and the buttons below, because on an
+   OPEN card it is a warning -- something moved under this question and he must
+   read it before choosing. The left rule is --now on an open card for the same
+   reason the card itself carries one; on a settled card the parent is already
+   --ok and this inherits the quieter treatment. */
+.since{margin:.5rem 0 .75rem;padding:.45rem .7rem;border-left:2px solid var(--line);
+  background:var(--bg);border-radius:.3rem}
+.since b{display:block;font:600 .7rem/1.5 var(--mono);letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted)}
+.since ul{margin:.25rem 0 0;padding-left:1.1rem}
+.since li{font-size:.875rem;line-height:1.5;color:var(--ink)}
+.since li + li{margin-top:.3rem}
+
 .sheet .ask{position:absolute;margin:0;z-index:1;
   transform:translateZ(0);isolation:isolate}
 
@@ -1683,7 +1697,9 @@ def _button(option: dict, row: decisions.DecisionRow) -> str:
 
 
 def _render_decisions(
-    rows: list[decisions.DecisionRow], listening_since: str | None = None
+    rows: list[decisions.DecisionRow],
+    listening_since: str | None = None,
+    outcomes: dict[str, list] | None = None,
 ) -> tuple[str, str]:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
@@ -1724,6 +1740,25 @@ def _render_decisions(
     open_rows = [r for r in rows if r.answer is None]
     settled_rows = [r for r in rows if r.answer is not None]
 
+    def _since(row: decisions.DecisionRow) -> str:
+        """What has happened to this question since it was asked.
+
+        THE OPEN CASE IS WHY THIS IS HERE. An outcome on a question he has not
+        answered means something moved under it -- the operator corrected two
+        promises on a page while its question was still open (21 Sep 2026) --
+        and a question whose premise changed after he read it is one he can
+        answer wrongly through no fault of his own. So it renders ABOVE the
+        buttons on an open card: he must see it before he chooses, not after.
+        """
+        mine = (outcomes or {}).get(row.id) or []
+        if not mine:
+            return ""
+        items = "".join(
+            f"<li>{escape(o.body)}</li>" for o in mine
+        )
+        label = "Since you were asked" if row.answer is None else "What it led to"
+        return f'<div class="since"><b>{label}</b><ul>{items}</ul></div>'
+
     def _card(row: decisions.DecisionRow, anchorable: bool = True) -> str:
         """`anchorable` carries the id the page's script matches a slot against.
         Only an OPEN decision gets one: a settled decision lives inside a collapsed
@@ -1734,6 +1769,7 @@ def _render_decisions(
         return (
             f'<div class="ask"{anchor}>'
             f'<p class="q">{escape(row.question)}</p>'
+            f"{_since(row)}"
             f'<form method="post" action="/d/{escape(row.id)}/answer">'
             f"{buttons}"
             '<input name="note" placeholder="note (optional)"></form></div>'
@@ -2422,7 +2458,9 @@ def gallery_router(db: Database) -> APIRouter:
             db, artifact_id, include_answered=True, include_closed=False
         )
         asks_above, settled_below = _render_decisions(
-            decision_rows, listening_since=events.last_read(db, row[2])
+            decision_rows,
+            listening_since=events.last_read(db, row[2]),
+            outcomes=decisions.outcomes_for_artifact(db, artifact_id),
         )
         # The one place the capability token is rendered: a page only Jeremy's Authelia session
         # can load. The token then travels in the iframe's src, and it is the CONTENT app's own

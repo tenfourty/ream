@@ -86,6 +86,13 @@ class DestroyBody(BaseModel):
     confirm: str
 
 
+class OutcomeBody(BaseModel):
+    """What a decision caused, or what changed under it. One field, because an
+    outcome is a sentence somebody writes, not a form."""
+
+    body: str
+
+
 class CommentBody(BaseModel):
     body: str
     quote: str = ""
@@ -658,8 +665,14 @@ def agent_router(db: Database) -> APIRouter:
             store.get_owned(db, agent, artifact_id)
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
+        # Outcomes come back WITH the decisions, in one extra query for the
+        # whole page rather than one per question. A caller reading "what
+        # happened here" should not have to know to ask twice, and the one
+        # thing an outcome is for is being read next to the decision it is
+        # about.
+        outcomes = decisions.outcomes_for_artifact(db, artifact_id)
         return [
-            row.__dict__
+            {**row.__dict__, "outcomes": [o.__dict__ for o in outcomes.get(row.id, [])]}
             for row in decisions.list_for_artifact(
                 db,
                 artifact_id,
@@ -779,6 +792,74 @@ def agent_router(db: Database) -> APIRouter:
         except store.NotFound:
             raise HTTPException(404, "no such open decision") from None
         return row.__dict__
+
+    @router.post("/decisions/{decision_id}/outcome", status_code=201)
+    def add_outcome(
+        decision_id: str,
+        payload: OutcomeBody,
+        agent: str = Depends(caller),
+        seat_session: str | None = Depends(session),
+    ):
+        """Append what this decision caused, or what changed under it.
+
+        homelab-ij8.44. Answering was the end of the model, so what a decision
+        PRODUCED -- a PR, a closed bead, a correction to the agent's own
+        framing -- lived only in prose somebody happened to rewrite.
+
+        Deliberately allowed on an UNANSWERED decision. The operator corrected
+        two promises on a page while its question was still open, and that is
+        the case with teeth: a question whose premise moved after Jeremy read
+        it and before he answered is one he can answer wrongly through no fault
+        of his own.
+
+        Append only -- there is no PUT and no DELETE here, and that is the
+        point rather than an omission.
+        """
+        try:
+            return decisions.record_outcome(
+                db,
+                decision_id,
+                agent=agent,
+                body=payload.body,
+                session=seat_session,
+            ).__dict__
+        except store.BodyTooLarge as exc:
+            raise HTTPException(
+                413,
+                {
+                    "field": exc.field,
+                    "size": exc.size,
+                    "detail": f"{exc.field} exceeds the size limit",
+                },
+            ) from exc
+        except store.SecretFound as found:
+            raise HTTPException(
+                422, _refused_detail(found.field, found.findings)
+            ) from found
+        except store.ScanFailed as exc:
+            raise HTTPException(
+                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+            ) from exc
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such decision") from exc
+
+    @router.get("/decisions/{decision_id}/outcomes")
+    def list_outcomes(decision_id: str, agent: str = Depends(caller)):
+        # Ownership checked here rather than in the listing helper, which
+        # trusts its id like every other listing helper in that module. Same
+        # join as the write, so "not yours" and "no such decision" answer
+        # identically.
+        with db.connect() as conn:
+            owned = conn.execute(
+                "select 1 from decision join artifact"
+                " on artifact.id = decision.artifact_id"
+                " where decision.id = %s and artifact.agent = %s"
+                "   and artifact.deleted_at is null",
+                (decision_id, agent),
+            ).fetchone()
+        if owned is None:
+            raise HTTPException(404, "no such decision")
+        return [row.__dict__ for row in decisions.outcomes_for(db, decision_id)]
 
     @router.post("/decisions/{decision_id}/acknowledge")
     def acknowledge_decision(decision_id: str, agent: str = Depends(caller)):
