@@ -778,3 +778,45 @@ def test_duplicate_makes_a_new_page_and_prints_its_address(
     lines = capsys.readouterr().out.strip().splitlines()
     assert any("Original (copy)" in line for line in lines)
     assert len(lines) == 2, "the original is still there beside it"
+
+
+# --- how old is the copy you are running -------------------------------------
+
+
+def test_an_unknown_flag_says_how_old_this_build_is(capsys):
+    """homelab-31, 21 Sep: `--fetch` was committed on the 20th and the installed
+    copy predated it, so a flag that exists answered `unrecognized arguments`,
+    which "reads exactly like 'this feature does not exist'". Exactly the
+    ambiguity the API's catch-all 404 was written to end, one layer out."""
+    with pytest.raises(SystemExit) as exit_:
+        client.main(["--no-such-flag"])
+    assert exit_.value.code == 2
+
+    err = capsys.readouterr().err
+    assert "unrecognized arguments" in err, "argparse's own wording is kept"
+    assert "installed" in err and client.installed_stamp() in err
+    assert "uv tool install" in err, "and the command that fixes it"
+
+
+def test_an_ordinary_usage_error_is_left_alone(capsys):
+    """The hint is worth reading only because it is rare. Put it on every usage
+    error -- a missing value, a bad path -- and it becomes furniture, which is
+    how it stops being read on the one day it is the answer."""
+    with pytest.raises(SystemExit):
+        client.main(["--update"])  # expects a value, got none
+    err = capsys.readouterr().err
+    assert "expected one argument" in err
+    assert "uv tool install" not in err
+
+
+def test_the_age_can_be_asked_for_before_it_is_a_surprise(capsys):
+    with pytest.raises(SystemExit) as exit_:
+        client.main(["--version"])
+    assert exit_.value.code == 0
+    assert client.installed_stamp() in capsys.readouterr().out
+
+
+def test_the_stamp_is_a_real_timestamp_not_a_version_string():
+    """`artifacts` is 0.1.0 and always will be, so a version string cannot tell a
+    fresh install from a six-day-old one. A date can."""
+    assert re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$", client.installed_stamp())

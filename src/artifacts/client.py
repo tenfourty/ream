@@ -395,9 +395,67 @@ def _print_shelf(result: dict) -> None:
     )
 
 
+def installed_stamp() -> str:
+    """When the copy of the code that is RUNNING was put on disk.
+
+    Not the package version: `artifacts` has been 0.1.0 since the first commit
+    and will stay there, so a version string cannot distinguish a fresh install
+    from a six-day-old one. The module file's mtime can, and it is the same
+    answer for every way this gets run -- a `uv tool install` stamps it with the
+    install, an editable checkout stamps it with the last edit.
+    """
+    try:
+        when = time.localtime(Path(__file__).stat().st_mtime)
+    except OSError:  # pragma: no cover -- the module we are executing from
+        return "unknown"
+    return time.strftime("%Y-%m-%d %H:%M", when)
+
+
+# The line an unrecognised flag gets, on top of argparse's own usage.
+#
+# WHY. On 21 Sep a seat reached for `--fetch`, which had been committed the day
+# before, and got argparse's bare `unrecognized arguments: --fetch`. The flag
+# was real; the INSTALLED copy predated it, because `uv tool install` had not
+# been re-run. Its own words: that message "reads exactly like 'this feature
+# does not exist'" -- the identical failure the API's catch-all 404 was written
+# to end a day earlier, one layer out. For a uv-installed CLI, committed and
+# installed are different states, and the gap is invisible from the side that
+# did the committing.
+#
+# So the age of the running code is stated at the only moment anybody is
+# looking: when a flag they expected was refused.
+_STALE_HINT = (
+    "\nthis copy of artifacts-publish was installed {stamp}. A flag added to the"
+    "\nrepo after that is not in it -- committed and installed are different"
+    "\nstates. If you expected this flag to exist, refresh the install:"
+    "\n  uv tool install <path to the artifacts checkout> --force"
+)
+
+
+class _Parser(argparse.ArgumentParser):
+    """argparse, except that a refused flag says how old this build is."""
+
+    def error(self, message: str) -> None:  # type: ignore[override]
+        # Only for the one message that is ambiguous with a missing feature.
+        # A missing value or a bad choice is a real usage error and gets
+        # argparse's wording unchanged -- adding an install hint to every one of
+        # them would train the reader to skip it, which is how the hint stops
+        # working on the day it is right.
+        if "unrecognized arguments" in message or "invalid choice" in message:
+            message += _STALE_HINT.format(stamp=installed_stamp())
+        super().error(message)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="artifacts-publish")
+    parser = _Parser(prog="artifacts-publish")
     parser.add_argument("file", nargs="?", metavar="FILE")
+    # So the question can be asked BEFORE it becomes a surprise: a seat about to
+    # rely on a recent flag can check what it is running in one command.
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"artifacts-publish, installed {installed_stamp()}",
+    )
     parser.add_argument("--title")
     parser.add_argument("--update", metavar="ID")
     parser.add_argument("--list", action="store_true")
