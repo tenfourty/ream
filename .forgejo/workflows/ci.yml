@@ -55,6 +55,16 @@ jobs:
 
       - run: uv run ruff check src tests
 
+      # The commit guards (lefthook.yml, scripts/guards/) only protect a clone
+      # that ran `lefthook install`, so a guard nobody installed is no guard at
+      # all for an agent on another machine. Their selftests run here, and the
+      # secret-on-argv scan runs over the WHOLE tree — the pre-commit hook only
+      # ever sees a staged diff. --no-lefthook because this runner has no
+      # lefthook binary: it prints a loud NOT PROVEN line for the dispatch
+      # regression rather than passing silently. Needs nothing but bash and git.
+      - name: guard selftests
+        run: scripts/guards/run-selftests.sh --no-lefthook
+
       - name: tests
         env:
           PG_TEST_DSN: postgresql://postgres@postgres:5432/postgres

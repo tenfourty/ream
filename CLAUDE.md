@@ -192,24 +192,47 @@ changes for work that has a page on this service, republish that page
   string in the container is not the same claim as a reader seeing it on the
   page; say which one you actually checked.
 
-### This repo has no mechanical guards
+### The guards this repo enforces
 
-The homelab tree has lefthook guards that refuse cross-area commits, `--amend`,
-`git stash`, unannounced pushes and secrets on the command line. **None of them
-exist here.** Every one of those guards was written because the prose version
-had already failed to stop somebody who had read it. Until they are ported
-(ask before doing it — it is a real piece of work), the discipline here is
-manual:
+Jeremy asked for the homelab's guards here on 22 Sep 2026, and they are
+installed. **They only protect a clone that has run `lefthook install`** — do
+that first in any new checkout, and `scripts/guards/run-selftests.sh` will tell
+you whether this one is protected. Every rule below used to be a paragraph in
+this file that somebody who had read it broke anyway.
 
-- Conventional commits, **no co-authored-by**.
+| When | What is refused | Override |
+|---|---|---|
+| pre-commit | a secret in the staged diff (ggshield) | `GGSHIELD_SKIP=1` |
+| pre-commit | a credential handed to a process as an argument | none — fix the call |
+| pre-commit | ruff and shellcheck findings in staged files | none |
+| prepare-commit-msg | `--amend` / `-c` / `-C` / `--fixup` / `--squash` | `AMEND_OVERRIDE=1` |
+| prepare-commit-msg | …of a commit already on a remote | **also** `AMEND_PUSHED_OVERRIDE=1` |
+| commit-msg | a non-conventional subject; a `Co-Authored-By` or "Generated with Claude Code" line | `COMMIT_MSG_OVERRIDE=1` |
+| pre-push | an outgoing range that is not the count you announced | none: `PUSH_COUNT=N git push` |
+| pre-push | ruff findings anywhere in `src`/`tests` | none |
+
+Each guard degrades to a clean SKIP when its tool is missing, so a machine
+without ggshield can still commit — and says loudly that nothing was scanned,
+because a gate that fails closed on a missing external service is a gate
+somebody deletes. Each has a `--selftest`; CI runs all of them, plus the
+whole-tree secret scan, on every push.
+
+What is NOT mechanical here, and still yours to hold:
+
 - Stage explicit paths; commit with a pathspec. Remember that
   `git commit -- <paths>` commits the **working tree** of those paths, so read
   `git status --porcelain -- <paths>` first.
 - Never `git stash` in a tree another session might share.
-- Never `git commit --amend` on anything already reachable from a remote.
-- Announce a push, with hashes, before making it. Verify what actually went out
-  against the remote (`git merge-base --is-ancestor <hash> origin/main` after a
-  fetch), never against your own announcement — the tree moves underneath it.
+- **`git reset --hard` discards uncommitted work in tracked files.** 22 Sep
+  2026: a `--hard` used to tidy up after a detached-HEAD experiment silently
+  took an unrelated, uncommitted CI change with it. Prefer `git checkout <ref>`
+  or reset a single path.
+- Announce a push, with hashes, before making it, and verify what actually went
+  out against the remote (`git merge-base --is-ancestor <hash> origin/main`
+  after a fetch), never against your own announcement. `PUSH_COUNT` mechanises
+  the count; it cannot mechanise the hashes, and a rebase (which CI's
+  `deploy: … [skip ci]` commit forces on you) keeps the count and changes every
+  hash.
 
 ## Language for Jeremy
 

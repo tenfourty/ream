@@ -1,0 +1,121 @@
+# lefthook.yml — git hook orchestration for the artifacts repo.
+#
+# Ported from the homelab's guards on 22 Sep 2026 (ij8.76), after Jeremy asked
+# for them: until now every rule in CLAUDE.md here was prose, and each one had
+# already failed to stop somebody who had read it. What is enforced now:
+#
+#   pre-commit         ggshield on the staged diff; no credential on an argv;
+#                      ruff; shellcheck
+#   prepare-commit-msg no --amend/-c/-C/--fixup/--squash, and never on a
+#                      commit that is already on a remote
+#   commit-msg         conventional subject; no attribution trailers
+#   pre-push           the outgoing range is the one you announced; ruff again
+#
+# Install once per clone:  lefthook install
+# (Nothing installs it for you. `scripts/guards/run-selftests.sh` will tell
+# you whether this clone is actually protected.)
+#
+# CONTRACT, inherited from the homelab and worth keeping: every job degrades
+# to a clean SKIP when a tool is absent, so any host can still commit — with
+# one exception, the guards that need nothing but bash and git, which never
+# skip. A gate that fails closed on a missing external service is a gate that
+# gets deleted within a week.
+#
+# NO AUTOFIX JOBS, deliberately. lefthook only manipulates the working tree
+# (its partial stash) for commands that restage files, and homelab-8yg is an
+# open question about exactly that: a `git stash` appeared in a shared tree on
+# 19 Sep with no agent transcript issuing it, suspected to be lefthook
+# stashing around a refused pre-commit. Measured here on 22 Sep with lefthook
+# 2.1.12 and no `stage_fixed:` job: a refused pre-commit left `git stash list`
+# empty and the unstaged work untouched. Keep it that way — if a formatter is
+# ever wanted, it runs in CI, not as a commit-time rewrite of the tree.
+# (ij8.25 is the standing reason not to let `ruff format` near this repo.)
+#
+# TESTING A GLOB: `lefthook run pre-commit --command <name> --file <path>`,
+# and NEVER with --force. --force means "run regardless of glob", so every job
+# fires on every file and the output cannot distinguish a correct glob from
+# one that matches everything. Without it, a non-matching job prints
+# "(skip) no matching staged files", which is the line you are looking for.
+
+pre-commit:
+  parallel: true
+  commands:
+    ggshield:
+      # Secret scan on the staged diff. The wrapper maps ggshield's exit code:
+      # 0 clean, 1 blocks, anything else (not installed, no key, no network,
+      # quota) allows the commit and says loudly that NOTHING was scanned.
+      # Measured rc behaviour and the fabricated-token trap are in its header.
+      run: 'scripts/guards/ggshield-gate.sh'
+    secret-on-cmdline:
+      # Refuses a credential handed to a process as an argument, where every
+      # local process can read it from /proc for the life of the call. Needs
+      # nothing but bash and git, so it never skips.
+      run: 'scripts/guards/secret-on-cmdline-guard.sh'
+    ruff:
+      glob: "*.py"
+      # The repo's own venv first (it is what CI installs and what `uv run`
+      # would reach anyway), then a ruff on PATH, then a clean skip.
+      run: |
+        if [ -x .venv/bin/ruff ]; then .venv/bin/ruff check {staged_files};
+        elif command -v ruff >/dev/null 2>&1; then ruff check {staged_files};
+        else echo "ruff: SKIP (not installed)"; fi
+    shellcheck:
+      glob: "*.sh"
+      run: 'if command -v shellcheck >/dev/null 2>&1; then shellcheck -S warning {staged_files}; else echo "shellcheck: SKIP (not installed)"; fi'
+    # DELIBERATELY ABSENT: typos. Run against this tree on 22 Sep it objected
+    # to "mis-send" and to "unparseable" in four files — British and
+    # compound usages this repo writes on purpose. A gate the existing history
+    # fails is a gate somebody disables. Revisit with a _typos.toml allowlist
+    # if anyone wants it back.
+
+prepare-commit-msg:
+  commands:
+    amend-guard:
+      # Refuses --amend / -c / -C / --fixup / --squash (AMEND_OVERRIDE=1), and
+      # refuses outright when the target is already on a remote
+      # (AMEND_PUSHED_OVERRIDE=1 as well). Replaces the untracked
+      # .git/hooks/prepare-commit-msg that has been doing half of this since
+      # 19 Sep (ij8.5).
+      run: 'scripts/guards/amend-guard.sh {1} {2} {3}'
+
+commit-msg:
+  commands:
+    message-guard:
+      # Conventional subject, and no Co-Authored-By / "Generated with Claude
+      # Code" trailer — five commits on 19 Sep carry one. COMMIT_MSG_OVERRIDE=1.
+      run: 'scripts/guards/commit-msg-guard.sh {1}'
+
+pre-push:
+  commands:
+    # Both commands below carry `files: 'echo lefthook.yml'` and a `{files}`
+    # reference at the front of `run:`. This closes homelab trap 48: lefthook
+    # hard-codes every pre-push command to skip ("(skip) no matching push
+    # files") whenever `git diff --name-only HEAD @{push}` is empty — a
+    # deletion-only push, an all-`--allow-empty` push, or a non-HEAD ref push —
+    # with no per-command YAML option to turn it off. That check is reached
+    # only after an earlier, unconditional one: if `run` references `{files}`
+    # and the `files:` command names at least one path that exists on disk,
+    # lefthook substitutes it and returns immediately. `lefthook.yml` itself
+    # always exists (lefthook could not be running otherwise), and `: {files}`
+    # is a no-op that consumes the substituted path. Durable regression:
+    # scripts/tests/prepush-hooks-fire.sh, which drives a real `lefthook
+    # install` and a real `git push` — a guard's own --selftest invokes the
+    # script directly and cannot see a lefthook-level skip at all.
+    push-count:
+      # Refuse a push whose outgoing range is not the N commits announced.
+      # PUSH_COUNT=N git push. No override: there is no emergency case for
+      # pushing an unknown number of commits to a branch that deploys itself.
+      # use_stdin is required — lefthook does not forward git's pre-push ref
+      # lines to a command's stdin without it.
+      files: 'echo lefthook.yml'
+      use_stdin: true
+      run: ': {files}; scripts/guards/push-count-guard.sh'
+    ruff:
+      # A push here becomes a production image minutes later. CI rejects a
+      # lint failure after the build; this rejects it in 20 ms, before.
+      files: 'echo lefthook.yml'
+      run: |
+        : {files}
+        if [ -x .venv/bin/ruff ]; then .venv/bin/ruff check src tests;
+        elif command -v ruff >/dev/null 2>&1; then ruff check src tests;
+        else echo "ruff: SKIP (not installed)"; fi
