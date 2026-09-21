@@ -363,3 +363,53 @@ alter table event drop constraint if exists event_kind_check;
 alter table event add constraint event_kind_check
     check (kind in ('decision_answered', 'comment_added', 'thread_resolved',
                     'decision_shelved'));
+
+-- WHO, when three seats share one key (homelab-ij8.32, 21 Sep 2026).
+--
+-- Every page on this service is owned by 'baba-operator', because that is the
+-- one key on this machine and every session on it reads the same file. So the
+-- service is not confused about whose work it is -- it is correct, and we are
+-- one agent with three heads. Measured 21 Sep: 4 seat names exist, 1 live key
+-- for baba-operator, 10 of the 13 live pages under it.
+--
+-- What that costs, in the order it bites:
+--   * A waiter is woken by another seat's decision and cannot tell. Reported
+--     twice in ten minutes by homelab-31 on 21 Sep; both wakes were this seat's
+--     own test probe. "A watcher which cries wolf trains its reader to stop
+--     looking, and the one wake that matters is indistinguishable from these."
+--   * seat_read is keyed by agent, so "is anybody still listening on this
+--     seat?" answers for whichever of the three read most recently. The alert
+--     that catches a lost answer is built on a fact that is not true yet.
+--   * A bead claim cannot name who holds it (homelab-6t4) -- the same bug one
+--     layer up.
+--
+-- JEREMY RULED, 20 Sep 2026, verbatim: "(a) one key per agent session -- maybe
+-- something like a key per machine/host plus some sort of uuid for the agent
+-- sessions? any agent with a key could theoretically edit another agents
+-- artifact or read it but that is okay if they are authenticated."
+--
+-- So the three things come apart and only the middle one is new:
+--   AUTHENTICATION stays per key, at one key per machine. Not per session.
+--   ATTRIBUTION is this column. A label the caller declares, nothing more.
+--   AUTHORISATION stays OPEN across seats sharing a key. He said so explicitly.
+--
+-- THIS COLUMN IS NOT A PERMISSION AND MUST NEVER BECOME ONE. It is declared by
+-- the caller, so it is unforgeable by nobody at all -- any key holder can send
+-- any value. Scoping a read or a write to it would be a check that a one-word
+-- change to an environment variable defeats, which is worse than no check
+-- because it reads like one. `_scoped` stays keyed on `agent`. Filtering
+-- /events by session is a CONVENIENCE for the caller filtering its own feed,
+-- not a boundary: the rows were already all visible to that key.
+--
+-- Nullable, with no default, and every existing row keeps NULL. A page
+-- published before this cannot say which session made it, and inventing an
+-- answer for those rows would be exactly the fabrication this service exists
+-- to prevent.
+alter table artifact add column if not exists session text;
+alter table version  add column if not exists session text;
+alter table decision add column if not exists session text;
+alter table event    add column if not exists session text;
+
+-- The filter homelab-31 asked for, and the only index needed: a feed read is
+-- already (agent, seq) and this narrows within it.
+create index if not exists event_session_idx on event (agent, session, seq);
