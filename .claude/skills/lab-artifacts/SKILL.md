@@ -464,6 +464,26 @@ artifacts-wait --session "$ARTIFACTS_SESSION"   # only YOUR answers wake you
 akey | curl -sS -H @- "$BASE/events?session=$ARTIFACTS_SESSION&wait=280"
 ```
 
+### The key comes from the vault, not a file
+
+On baba the four agent keys live in sops, and a wrapper hands one to a command
+on a file descriptor so it never touches disk:
+
+```bash
+ARTIFACTS_SEAT=homelab_ops artifacts-key -- artifacts-publish page.html
+ARTIFACTS_SEAT=homelab_ops artifacts-key -- artifacts-wait
+```
+
+Seats are `baba_operator`, `homelab_ops`, `warpgate_arc`, `cove_seat`. There is
+**no default** — on a machine where four seats share a box, a forgotten seat
+would publish as somebody else's work.
+
+`artifacts-key` is on your PATH, like `artifacts-wait`: **never write a relative
+path to either.** `scripts/artifacts-key.sh` resolves only inside the homelab
+repo, and an agent working anywhere else reads "does not exist" and writes a
+stand-in of its own — which is exactly what happened to the waiter
+(homelab-ij8.67).
+
 **It is a label, not a credential and not a permission.** It travels in the
 clear, anyone with the key can send any value, and nothing verifies it. Never
 put anything in it that would matter if read, and never build a check on it
