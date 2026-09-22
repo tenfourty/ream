@@ -495,7 +495,14 @@ def test_gallery_js_checks_both_source_and_origin_before_trusting_a_message(db):
 def test_gallery_js_clamps_height_to_the_documented_range(db):
     text = TestClient(create_gallery_app(db)).get("/gallery.js").text
     assert "200" in text
-    assert "20000" in text
+    # 100000, not 20000, since 22 Sep 2026: the operator's board is roughly
+    # 25,000px of aggregated decisions, and REFUSING its height left the frame
+    # at its 78vh floor -- a small scrolling window, with every lifted control
+    # clipped outside the sheet and a reserved hole where each should have been.
+    # It is clamped now rather than refused, and `fits` stops the lift when the
+    # clamp bites, because a page coordinate past the clamp points at nothing.
+    assert "100000" in text
+    assert "fits" in text
     assert "isFinite" in text
 
 

@@ -970,7 +970,8 @@ _HOME_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6
 #  - Accepts a message only from `iframe.contentWindow` at that exact origin: both
 #    `event.source` and `event.origin`, not either alone.
 #  - Sizes the iframe to a reported height, but ONLY when it is a finite number
-#    between 200 and 20000 -- anything else is dropped and the last good height (or
+#    at least 200 and at most 100000 (clamped, not dropped, above that; below 200
+#    the scripts-off floor stands) -- anything else is ignored and the last good height (or
 #    the CSS default, .sheet iframe{height:78vh}, before the first one ever arrives)
 #    stands. A page that reports a billion pixels gets nothing.
 #  - Moves an already-rendered `[data-decision-id]` block onto the sheet, absolutely
@@ -1022,6 +1023,28 @@ _HOME_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6
 #    Two rules now, and they cannot drift apart: the query above, and a
 #    stylesheet media query at `max-width:55.99rem` that is its exact
 #    complement, so the boundary width belongs to one of them and not both.
+#  - Lifts NOTHING while the frame is not showing the whole page, and clamps an
+#    over-tall page instead of refusing its height outright.
+#
+#    22 Sep 2026, the second half of the same morning's fault and the one that
+#    actually bit the operator's board. A lifted control is positioned at the
+#    slot's PAGE coordinate, inside `.sheet`, which is `overflow:hidden`. That is
+#    sound only while the frame is as tall as the page -- which is the normal
+#    case, because this handler sizes it to the height the page reports. It used
+#    to refuse any height over 20000px outright: the frame then kept its
+#    scripts-off `78vh` floor and became a small scrolling window, every slot
+#    coordinate below it pointed outside the sheet's box, and the controls were
+#    clipped away -- while their measured heights were still reported, so the
+#    page reserved a hole for each one. Jeremy saw a question with an empty
+#    six-hundred-pixel void under it, and an INNER SCROLLBAR on the frame, which
+#    is the tell: this handler sizes the frame so the outer page scrolls, so a
+#    scrollbar inside it means the height was refused. The operator's board is
+#    about 25,000px of aggregated decisions, and the ceiling was 20,000.
+#
+#    So: clamp rather than refuse (more of the page is visible either way), and
+#    carry `fits` into the lift, because coordinates past the clamp point at
+#    nothing. When it does not fit, the controls stay above the page where the
+#    scripts-off layout keeps them -- readable, answerable, and no hole.
 #  - And a net under that coupling: a block that reports `position:static` once
 #    it is on the sheet was un-lifted by some rule anyway, so it goes back to
 #    the parent it came from and NO size is reported for it. A control in the
@@ -1040,7 +1063,7 @@ document.querySelectorAll("[data-decision-id]").forEach(function(el){
   decisionEls.set(el.getAttribute("data-decision-id"),el);
 });
 function isNum(v){return typeof v==="number"&&isFinite(v)}
-var homes=new Map();
+var homes=new Map();var fits=true;
 function liftsHere(){try{if(window.matchMedia)return window.matchMedia("(min-width:56rem)").matches}catch(e){}return window.innerWidth>=896}
 function isStatic(el){try{return window.getComputedStyle(el).position==="static"}catch(e){return false}}
 window.addEventListener("message",function(event){
@@ -1048,14 +1071,16 @@ window.addEventListener("message",function(event){
     if(event.source!==iframe.contentWindow||event.origin!==contentOrigin)return;
     var data=event.data;
     if(!data||typeof data!=="object"||data.type!=="artifact-state")return;
-    if(isNum(data.height)&&data.height>=200&&data.height<=20000){
-      iframe.style.height=data.height+"px";
+    if(isNum(data.height)&&data.height>0){
+      fits=data.height<=100000;
+      if(data.height>=200)iframe.style.height=(fits?data.height:100000)+"px";
     }
     if(Array.isArray(data.slots)&&data.slots.length<=64){
       var seen=new Set();var sizes=[];
       // The stylesheet's breakpoint, in the stylesheet's unit -- never a pixel
       // number of our own. See the Python comment above this file's source.
-      if(liftsHere())data.slots.forEach(function(slot){
+      // `fits` too: a slot coordinate points nowhere while the frame is clipped.
+      if(fits&&liftsHere())data.slots.forEach(function(slot){
         if(!slot||typeof slot.id!=="string"||seen.has(slot.id))return;
         seen.add(slot.id);
         var el=decisionEls.get(slot.id);

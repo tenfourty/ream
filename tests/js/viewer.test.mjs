@@ -140,7 +140,7 @@ const good = (over = {}) => ({
 }
 // 4. height clamp
 {
-  for (const [h, why] of [[1e9, "absurdly tall"], [10, "absurdly short"], ["900", "a string"], [NaN, "NaN"], [Infinity, "Infinity"]]) {
+  for (const [h, why] of [[10, "absurdly short"], ["900", "a string"], [NaN, "NaN"], [Infinity, "Infinity"]]) {
     const g = build();
     const m = good({ source: g.iframe.contentWindow });
     m.data.height = h;
@@ -149,7 +149,35 @@ const good = (over = {}) => ({
   }
   const g = build(); const m = good({ source: g.iframe.contentWindow });
   m.data.height = 20000; g.send(m);
-  ok(g.iframe.style.height === "20000px", "accepts the top of the allowed range");
+  ok(g.iframe.style.height === "20000px", "sizes the frame to a tall page");
+}
+// 4a. A PAGE TALLER THAN THE CLAMP (22 Sep 2026, the operator's board).
+// A lifted control is positioned at the slot's PAGE coordinate inside a sheet
+// that is overflow:hidden. Refusing an over-tall page's height left the frame
+// at its 78vh floor -- a small scrolling window -- so every slot coordinate
+// below it pointed outside the box and the control was clipped away, while its
+// measured height was still reported and the page reserved a hole for it.
+// Jeremy saw a question with an empty void under it and an inner scrollbar on
+// the frame, which is the tell: this handler sizes the frame so the OUTER page
+// scrolls, so a scrollbar inside it means the height was refused.
+{
+  const g = build();
+  const m = good({ source: g.iframe.contentWindow });
+  m.data.height = 250000;
+  g.send(m);
+  ok(g.iframe.style.height === "100000px", "clamps an over-tall page instead of refusing its height");
+  ok(g.d1.parentNode === g.home, "lifts nothing while the frame cannot show the whole page");
+  ok(g.posted.length === 1 && JSON.stringify(g.posted[0][0].sizes) === "[]",
+     "and reserves no room for a control it did not place");
+}
+{
+  // Just inside the clamp, everything works as before.
+  const g = build();
+  const m = good({ source: g.iframe.contentWindow });
+  m.data.height = 100000;
+  g.send(m);
+  ok(g.iframe.style.height === "100000px", "accepts the top of the allowed range");
+  ok(g.d1.parentNode === g.sheet, "and still lifts there");
 }
 // 5. unknown / duplicate / malformed slots
 {
