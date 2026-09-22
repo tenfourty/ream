@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from artifacts import hosts
+from artifacts import hosts, onboarding
 from artifacts.api import agent_router
 from artifacts.content import create_content_app
 from artifacts.db import Database
@@ -101,6 +101,51 @@ def create_gallery_app(db: Database | None = None) -> FastAPI:
     return app
 
 
+def create_api_app(db: Database | None = None) -> FastAPI:
+    """The face an agent outside the house arrives at: the agent API, the
+    onboarding document, the health check, and nothing else.
+
+    NOT the gallery, and that is the whole point of it being a separate app
+    rather than a path rule on an ingress. The gallery is Jeremy's — his wall,
+    his answers, every seat's questions — and it is protected by Authelia
+    annotations on the INTERNAL ingress. A public route to this service need not
+    repeat those annotations, and if it does not, a gallery served on that name
+    would be open to anyone who found it. Deciding it HERE means no ingress can
+    get it wrong: on the API host the gallery routes do not exist.
+
+    /agents.txt is the one unauthenticated document, and the URL Jeremy hands to
+    an agent he wants onboarded (22 Sep 2026). Everything else here needs a key,
+    exactly as it does on the gallery host.
+    """
+    app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
+
+    @app.get("/healthz")
+    def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/agents.txt", response_class=PlainTextResponse)
+    def agents_txt(request: Request) -> PlainTextResponse:
+        # The address is taken from the request, never from configuration: an
+        # onboarding document that names a host out of a config file is how a
+        # new machine is sent at a name that only resolves inside the house.
+        host = hosts.first_host_header(request.scope) or "artifacts.invalid"
+        base = f"{request.url.scheme}://{host}"
+        return PlainTextResponse(
+            onboarding.agents_txt(base),
+            headers={
+                "x-content-type-options": "nosniff",
+                # Cacheable, because it is the same bytes for everyone and it is
+                # the first thing a stranger fetches; short, because it is also
+                # the document that tells them how to reach a moving service.
+                "cache-control": "public, max-age=300",
+            },
+        )
+
+    if db is not None:
+        app.include_router(agent_router(db))
+    return app
+
+
 def create_app(db: Database):
     """Fail CLOSED, not open: the content hostname is never behind Authelia (it is
     agent-published HTML), and the gallery app trusts Authelia at ITS ingress instead of
@@ -112,14 +157,20 @@ def create_app(db: Database):
     and the content app can never disagree about what the Host header was.
     """
     gallery, content = create_gallery_app(db), create_content_app(db)
+    api = create_api_app(db)
 
     async def router(scope, receive, send):
         if scope["type"] == "lifespan":
             await gallery(scope, receive, send)
             return
         host = hosts.normalise(hosts.first_host_header(scope))
+        # The GALLERY IS CHECKED FIRST and that order is load-bearing: if the
+        # two names are ever configured the same by mistake, the request goes to
+        # the app that sits behind Authelia, not the one that does not.
         if hosts.is_gallery(host):
             chosen = gallery
+        elif hosts.is_api(host):
+            chosen = api
         elif hosts.artifact_id(host) is not None:
             chosen = content
         else:

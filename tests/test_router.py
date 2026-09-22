@@ -238,3 +238,99 @@ def test_a_caller_chosen_key_name_never_returns_in_a_validation_error(db):
         assert caller_key not in got.text, (
             f"{path} handed the caller's own key name back in a 422"
         )
+
+
+# --- the face an agent outside the house arrives at --------------------------
+#
+# Jeremy, 22 Sep 2026, making external access the priority: "ideally to onboard
+# an agent I want to give it a url to you and it will get everything it needs
+# and then ask me for an access key for it's machine".
+#
+# The door is a Cloudflare Tunnel route, which points a public hostname at
+# something in the cluster. Point it at the gallery's hostname and his wall is
+# on the internet behind whatever that route happens to carry -- Authelia is
+# applied by the INTERNAL ingress's annotations, and a new route need not repeat
+# them. So the public face is its own name, and the app, not an ingress, decides
+# what lives there.
+
+API_HOST = "agents.tenfourty.site"
+
+
+@pytest.fixture()
+def api_host(monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_API_HOST", API_HOST)
+    return API_HOST
+
+
+def test_the_api_host_serves_the_agent_api(client, api_host, db):
+    token, _ = keys.mint(db, agent="outside-seat")
+    response = client.get(
+        "/api/v1/artifacts",
+        headers={"host": api_host, "Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+
+
+def test_the_api_host_does_not_serve_the_gallery(client, api_host, published_id):
+    """The one that matters. His wall must not exist on the public name, whatever
+    an ingress is or is not carrying."""
+    for path in ("/", f"/a/{published_id}", f"/d/{published_id}/answer", "/gallery.js"):
+        response = client.get(path, headers={"host": api_host})
+        assert response.status_code == 404, f"{path} answered {response.status_code}"
+
+
+def test_the_gallery_host_still_serves_the_gallery_when_an_api_host_exists(
+    client, api_host
+):
+    assert client.get("/healthz", headers={"host": GALLERY_HOST}).status_code == 200
+    assert client.get("/", headers={"host": GALLERY_HOST}).status_code == 200
+
+
+def test_the_same_name_for_both_resolves_to_the_gallery(client, monkeypatch, db):
+    """If the two are ever configured identically by mistake, the request must go
+    to the app that sits BEHIND Authelia, not the one that does not."""
+    monkeypatch.setenv("ARTIFACTS_API_HOST", GALLERY_HOST)
+    assert client.get("/", headers={"host": GALLERY_HOST}).status_code == 200
+
+
+def test_no_api_host_configured_leaves_every_other_name_404(client, monkeypatch):
+    monkeypatch.delenv("ARTIFACTS_API_HOST", raising=False)
+    response = client.get("/healthz", headers={"host": API_HOST})
+    assert response.status_code == 404
+    assert response.text == "not found"
+
+
+def test_the_onboarding_document_is_open_and_names_the_address_it_was_asked_on(
+    client, api_host
+):
+    """The one unauthenticated document on the public face. It must work with no
+    key at all -- that is its whole job -- and it must point at the address the
+    caller already found, not at one out of a config file that may only resolve
+    inside the house."""
+    response = client.get("/agents.txt", headers={"host": api_host})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    body = response.text
+    assert f"://{api_host}/api/v1" in body, "the API base, at the name it was asked on"
+    assert "artifacts.tenfourty.site" not in body, "and never the internal name"
+    assert "ARTIFACTS_SESSION" in body, "how to name yourself once you have a key"
+    assert "Ask him" in body, "how to get a key: by asking Jeremy, not from here"
+
+
+def test_the_onboarding_document_carries_no_key_and_no_secret(client, api_host, db):
+    keys.mint(db, agent="outside-seat")
+    body = client.get("/agents.txt", headers={"host": api_host}).text
+    assert "art_" not in body.replace("`art_`", ""), "no token, not even an example one"
+    assert "Bearer " not in body
+
+
+def test_an_agent_on_the_lan_can_read_the_onboarding_document_without_a_key(client):
+    """The gallery's hostname is behind Authelia for everything except /api/v1,
+    and an agent holds no Authelia session and never will. So the one prefix it
+    can reach has to carry the document too, or the only agents that can read
+    how to join are the ones that have already joined."""
+    response = client.get("/api/v1/agents.txt", headers={"host": GALLERY_HOST})
+    assert response.status_code == 200, "no key, and it must still answer"
+    assert "artifacts" in response.text
+    assert f"://{GALLERY_HOST}/api/v1" in response.text

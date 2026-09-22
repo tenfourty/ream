@@ -6,6 +6,7 @@ to. `first_host_header` is the shared read of the raw ASGI scope that feeds `nor
 in both places.
 """
 
+import os
 import re
 from urllib.parse import urlsplit
 
@@ -47,6 +48,33 @@ def is_gallery(host: str | None) -> bool:
     if host is None:
         return False
     return host == urlsplit(gallery_origin()).hostname
+
+
+def is_api(host: str | None) -> bool:
+    """True only when `host` (already normalised) equals $ARTIFACTS_API_HOST.
+
+    THE NAME AN AGENT OUTSIDE THE HOUSE ARRIVES AT, and the reason it is a
+    separate name rather than a path on the gallery's. Jeremy, 22 Sep 2026, made
+    external access the priority; the door itself is a Cloudflare Tunnel route,
+    which points a public hostname at something in the cluster. Point it at the
+    gallery's hostname and his wall — his answers, every seat's questions,
+    every page — is on the internet behind whatever that route happens to carry,
+    because Authelia is applied by the INTERNAL ingress's annotations and a new
+    route need not repeat them.
+
+    So the public face is its own name, and on that name this service serves the
+    agent API, the onboarding document and the health check, and nothing else.
+    The gallery is not reachable there at all, whatever an ingress says, because
+    the app itself decides. Unset (the default) means no API host exists and
+    every host but the gallery and a page origin 404s exactly as before.
+
+    Read at call time, like content_domain() and gallery_origin(), so a
+    deployment can set it without a rebuild and a test can set it per case.
+    """
+    if host is None:
+        return False
+    configured = normalise(os.environ.get("ARTIFACTS_API_HOST"))
+    return configured is not None and host == configured
 
 
 def first_host_header(scope: dict) -> str | None:

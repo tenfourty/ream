@@ -18,7 +18,9 @@ from artifacts import (
     decisions,
     events,
     grants,
+    hosts,
     keys,
+    onboarding,
     store,
     templates,
     text,
@@ -230,6 +232,32 @@ def agent_router(db: Database) -> APIRouter:
                 }
             )
         return out
+
+    @router.get("/agents.txt", response_class=PlainTextResponse)
+    def onboarding_doc(request: Request):
+        """The onboarding document, and the ONE route here that takes no key.
+
+        Deliberately unauthenticated, and deliberately under /api/v1 as well as
+        at /agents.txt on the public API host: /api/v1 is the only prefix
+        Authelia bypasses, so this is the only way an agent on the LAN — which
+        holds no Authelia session and never will — can read it at all. Asking
+        for it anywhere else on the gallery's hostname answers a login page.
+
+        It is safe to hand to anybody: no key, no token, no database read, no
+        per-caller variation, no side effect. That is a property of the text
+        (see onboarding.py), not of who is allowed to ask for it, which is why
+        this route can afford to be open when its neighbour serving the schema
+        cannot: the schema describes what a key can do here, this tells a
+        stranger how to ask Jeremy for one.
+        """
+        host = hosts.first_host_header(request.scope) or "artifacts.invalid"
+        return PlainTextResponse(
+            onboarding.agents_txt(f"{request.url.scheme}://{host}"),
+            headers={
+                "x-content-type-options": "nosniff",
+                "cache-control": "public, max-age=300",
+            },
+        )
 
     @router.get("/openapi.json")
     def schema(request: Request, agent: str = Depends(caller)):
