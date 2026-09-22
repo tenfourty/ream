@@ -50,8 +50,9 @@ def test_the_detail_page_frames_the_content_origin_and_inlines_nothing(db):
         .get(f"/a/{published.id}", headers={"Remote-User": "jeremy"})
         .text
     )
-    token = store.read_token(db, published.id)
-    assert f'src="{store.content_url(published.id, token)}"' in page
+    # A fresh single-use pass, never the page's permanent token (homelab-ij8.101).
+    assert re.search(rf'src="https://{published.id}\.[^/"]+/p/[A-Za-z0-9_-]{{43}}/"', page)
+    assert store.read_token(db, published.id) not in page
     assert "secret-body" not in page
 
 
@@ -325,9 +326,8 @@ def test_answering_works_with_no_sec_fetch_site_header_at_all(db):
 
 def test_the_framed_page_and_its_tokenised_src_are_unchanged_by_decisions(db):
     published, _row = _publish_and_ask(db)
-    token = store.read_token(db, published.id)
     page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
-    assert f'src="{store.content_url(published.id, token)}"' in page
+    assert re.search(rf'src="https://{published.id}\.[^/"]+/p/[A-Za-z0-9_-]{{43}}/"', page)
 
 
 def test_firefoxs_null_origin_is_accepted_when_fetch_metadata_proves_same_origin(db):
@@ -477,7 +477,14 @@ def test_gallery_js_is_served_from_self_with_no_dependency(db):
     # costs to make them one number and to make the failure visible if it ever
     # happens again. The argument for it lives in the Python comment above
     # `_GALLERY_JS`, which no browser downloads.
-    assert len(text.encode()) < 7680
+    #
+    # 8192 on 23 Sep 2026 (8000): a page's frame is now opened with a pass that
+    # works once (homelab-ij8.101, Jeremy's ruling that a private page needs his
+    # login to read), and browsers re-request a frame's last URL on reload and
+    # back/forward. 396 bytes ask the gallery for a fresh pass when the frame
+    # says its pass is spent -- without them, every reload in Firefox would
+    # leave a page reading "expired". The argument lives above `_GALLERY_JS`.
+    assert len(text.encode()) < 8192
     assert "http://" not in text and "https://" not in text  # no CDN, nothing fetched
     assert "eval(" not in text
     assert "new Function(" not in text

@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys, stamp, store
+from artifacts import frame_pass, keys, stamp, store
 from artifacts.content import create_content_app
 
 FRAMED = {"sec-fetch-dest": "iframe"}
@@ -102,8 +102,7 @@ def test_the_zone_is_read_at_call_time_so_a_deployment_can_set_it(monkeypatch):
 def test_a_served_page_carries_the_time_the_service_recorded(db, monkeypatch, paris):
     keys.mint(db, agent="ops-seat")
     artifact = store.publish(db, "ops-seat", "Board", MARKED)
-    token = store.read_token(db, artifact.id)
-    page = _content(db, artifact, monkeypatch).get(f"/t/{token}/", headers=FRAMED)
+    page = _content(db, artifact, monkeypatch).get(f"/p/{frame_pass.mint(db, artifact.id)}/", headers=FRAMED)
     assert page.status_code == 200
     assert stamp.MARKER not in page.text
     assert "Updated 2" in page.text  # a day-of-month, not an empty gap
@@ -156,12 +155,11 @@ def test_an_older_version_says_when_IT_was_published(db, monkeypatch, paris):
         MARKED.replace("Board", "Board 2"),
         artifact.revision,
     )
-    token = store.read_token(db, artifact.id)
     content = _content(db, artifact, monkeypatch)
-    old = content.get(f"/t/{token}/v/1", headers=FRAMED)
+    old = content.get(f"/p/{frame_pass.mint(db, artifact.id, 1)}/", headers=FRAMED)
     assert old.status_code == 200
     assert "2 January 2026" in old.text
-    live = content.get(f"/t/{token}/", headers=FRAMED)
+    live = content.get(f"/p/{frame_pass.mint(db, artifact.id)}/", headers=FRAMED)
     assert "2 January 2026" not in live.text
 
 

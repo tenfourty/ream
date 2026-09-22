@@ -481,3 +481,31 @@ create table if not exists decision_outcome (
 -- the order they happened and the order they are read.
 create index if not exists decision_outcome_decision_idx
     on decision_outcome (decision_id, created_at);
+
+-- A PASS TO READ ONE PAGE, ONCE, SOON (homelab-ij8.101, 22 Sep 2026).
+--
+-- Jeremy's ruling, confirmed: a private page is readable only by him, from
+-- anywhere, after his normal login. Until now the thing that let a browser read
+-- a page body was `artifact.read_token`, rendered into the gallery's iframe and
+-- valid for ever -- so once page origins face the internet, one leaked frame URL
+-- would be a permanent public read of that page.
+--
+-- Now the gallery, which is behind his login, mints one of these each time it
+-- shows a page, and the content origin accepts it ONCE, within minutes. Modelled
+-- on how claude.ai frames artifacts (inspected on his request the same day),
+-- minus its measured weakness: its pass reads the page, reusable, for an hour.
+--
+-- Hashed at rest like agent keys: a database dump must not be a stack of
+-- working passes, however short-lived. `version` NULL means "the live page".
+-- Rows are swept by `frame_pass.mint` itself, so the table stays the size of
+-- the last few minutes' page views without a job of its own.
+create table if not exists frame_pass (
+    token_sha256 text primary key,
+    artifact_id  text not null references artifact(id) on delete cascade,
+    version      integer,
+    expires_at   timestamptz not null,
+    used_at      timestamptz,
+    created_at   timestamptz not null default now()
+);
+
+create index if not exists frame_pass_expires_idx on frame_pass (expires_at);

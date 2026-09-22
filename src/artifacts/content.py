@@ -1,4 +1,4 @@
-import hmac
+import html as _html
 import json
 from collections.abc import Sequence
 from datetime import datetime
@@ -12,7 +12,7 @@ from fastapi.responses import (
     RedirectResponse,
 )
 
-from artifacts import decisions, hosts, stamp, templates
+from artifacts import decisions, frame_pass, hosts, stamp, templates
 from artifacts.db import Database
 from artifacts.store import (
     gallery_origin,  # re-exported: artifacts.content.gallery_origin still resolves
@@ -228,10 +228,28 @@ def _artifact_id(request: Request) -> str | None:
     return hosts.artifact_id(hosts.normalise(hosts.first_host_header(request.scope)))
 
 
-def _token_matches(expected: str, given: str | None) -> bool:
-    """hmac.compare_digest raises TypeError on a non-ASCII str, and `given` is whatever the
-    request path carried, so compare bytes: a crafted path is a mismatch, never a 500."""
-    return given is not None and hmac.compare_digest(expected.encode(), given.encode())
+def expired_page() -> HTMLResponse:
+    """What a frame gets for a pass that is spent, expired, for another page, or
+    unknown -- one answer for all four, so a pass cannot be used to learn which
+    ids exist (homelab-ij8.101).
+
+    The ordinary way to arrive here is not an attack but a browser restoring a
+    frame's last URL: Firefox does it on reload, Chrome on back/forward, and a
+    pass is good once. So the page tells the gallery, which asks its own origin
+    for a fresh pass and re-points the frame (gallery.js, `artifact-expired`).
+    It posts only to the gallery's origin and says nothing but its type. The
+    words are for a browser with scripts off, and name what to do.
+    """
+    origin = json.dumps(gallery_origin())
+    body = (
+        "<!doctype html><meta charset=utf-8><title>Expired</title>"
+        '<p style="font:15px/1.5 system-ui,sans-serif;margin:2em;opacity:.8">'
+        "This view of the page has expired. Open it again from "
+        f'<a href="{_html.escape(gallery_origin())}" target="_top">the gallery</a>.</p>'
+        "<script>try{parent.postMessage({type:\"artifact-expired\"},"
+        f"{origin})}}catch(e){{}}</script>"
+    )
+    return HTMLResponse(body, status_code=403, headers=headers_for(False))
 
 
 def base_headers() -> dict[str, str]:
@@ -284,17 +302,14 @@ def create_content_app(db: Database) -> FastAPI:
             "internal error", status_code=500, headers=base_headers()
         )
 
-    def _load(
-        artifact_id: str, token: str | None, n: int | None
-    ) -> tuple[str, int, datetime] | None:
+    def _load(artifact_id: str, n: int | None) -> tuple[str, int, datetime] | None:
         with db.connect() as conn:
             row = conn.execute(
-                "select current_version, read_token from artifact where id = %s",
+                "select current_version from artifact"
+                " where id = %s and deleted_at is null",
                 (artifact_id,),
             ).fetchone()
-            # A wrong token and a missing artifact are the same answer: nothing here may confirm
-            # that an id exists.
-            if row is None or not _token_matches(row[1], token):
+            if row is None:
                 return None
             wanted = n if n is not None else row[0]
             # `and status = 'live'` is a no-op today -- nothing in this arc writes a
@@ -315,7 +330,7 @@ def create_content_app(db: Database) -> FastAPI:
             ).fetchone()
         return (body[0], wanted, body[1]) if body else None
 
-    def _serve(request: Request, token: str | None, n: int | None) -> Response:
+    def _serve(request: Request, token: str | None) -> Response:
         artifact_id = _artifact_id(request)
         if artifact_id is None:
             return Response("not found", status_code=404, media_type="text/plain")
@@ -329,7 +344,16 @@ def create_content_app(db: Database) -> FastAPI:
             return RedirectResponse(
                 f"{gallery_origin()}/a/{artifact_id}", status_code=303
             )
-        loaded = _load(artifact_id, token, n)
+        # Spent only AFTER the framed-only check above: a pass opened as a page
+        # of its own is redirected to the gallery with the pass still unused,
+        # never burned by a request that was never going to be shown it.
+        if token is None:
+            return Response("not found", status_code=404, media_type="text/plain")
+        spent = frame_pass.spend(db, token, artifact_id)
+        if spent is None:
+            return expired_page()
+        n = spent.version
+        loaded = _load(artifact_id, n)
         if loaded is None:
             return Response("not found", status_code=404, media_type="text/plain")
         body, _served, published_at = loaded
@@ -396,14 +420,13 @@ def create_content_app(db: Database) -> FastAPI:
         # The address an agent is handed (`Published.url`). Unframed, it is sent to the
         # gallery like any other unframed request; framed, it carries no token and so
         # opens nothing.
-        return _serve(request, None, None)
+        return _serve(request, None)
 
-    @app.get("/t/{token}/")
-    def current(request: Request, token: str) -> Response:
-        return _serve(request, token, None)
-
-    @app.get("/t/{token}/v/{n}")
-    def version(request: Request, token: str, n: int) -> Response:
-        return _serve(request, token, n)
+    # The only way in to a page body (homelab-ij8.101). Which version the pass
+    # reads is part of the pass, so there is no version path for a caller to
+    # choose: the gallery decided that when it minted it.
+    @app.get("/p/{token}/")
+    def framed(request: Request, token: str) -> Response:
+        return _serve(request, token)
 
     return app

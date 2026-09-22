@@ -71,3 +71,28 @@ def test_the_newer_version_offer_behaves_when_actually_run(tmp_path, monkeypatch
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
     assert passed >= 14, result.stdout
+
+
+_RENEW = Path(__file__).parent / "js" / "renew.test.mjs"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node runtime here")
+def test_a_spent_frame_pass_is_renewed_when_actually_run(tmp_path, monkeypatch):
+    """homelab-ij8.101. A frame's pass works once; a reload re-requests it. The
+    gallery must fetch a fresh one, only for its own frame, only onto the same
+    origin, and never in a loop."""
+    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    node = shutil.which("node")
+    script = tmp_path / "gallery.js"
+    script.write_text(_GALLERY_JS)
+    result = subprocess.run(  # noqa: S603
+        [node, str(_RENEW), str(script)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "0 failed" in result.stdout
+    passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
+    assert passed >= 7, result.stdout

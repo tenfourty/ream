@@ -16,7 +16,7 @@ import logging
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys, serve, store
+from artifacts import frame_pass, keys, serve, store
 from artifacts.app import create_gallery_app
 from artifacts.content import create_content_app
 
@@ -75,12 +75,12 @@ def test_the_content_origin_is_never_logged(db, monkeypatch, caplog):
     off and must stay off."""
     keys.mint(db, agent="seat")
     art = store.publish(db, "seat", "Board", PAGE)
-    token = store.read_token(db, art.id)
+    token = frame_pass.mint(db, art.id)
     monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
     content = TestClient(create_content_app(db))
     content.headers.update({"host": f"{art.id}.tenfourty.com"})
     with caplog.at_level(logging.INFO):
-        content.get(f"/t/{token}/", headers={"sec-fetch-dest": "iframe"})
+        content.get(f"/p/{token}/", headers={"sec-fetch-dest": "iframe"})
 
     # This service's OWN loggers only. The first version of this assertion swept
     # up every record at root INFO and caught httpx logging its request line —

@@ -11,7 +11,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys, store
+from artifacts import frame_pass, keys, store
 from artifacts.app import create_app
 
 GALLERY_HOST = "artifacts.tenfourty.site"
@@ -50,7 +50,8 @@ def published_id(db, monkeypatch):
 
 @pytest.fixture()
 def token(db, published_id):
-    return store.read_token(db, published_id)
+    # A pass, good once (homelab-ij8.101); each test gets its own.
+    return frame_pass.mint(db, published_id)
 
 
 @pytest.fixture()
@@ -70,7 +71,7 @@ def test_router_dispatch(client, published_id, token, host_template, expected):
         assert response.json() == {"status": "ok"}
     elif expected == "content":
         # A framed GET of the tokenised path answers the real page only from the content app.
-        response = client.get(f"/t/{token}/", headers={"host": host, **FRAMED})
+        response = client.get(f"/p/{token}/", headers={"host": host, **FRAMED})
         assert response.status_code == 200
         assert "hi" in response.text
     else:
@@ -143,7 +144,7 @@ async def test_duplicate_host_headers_are_resolved_the_same_way_by_router_and_co
 
     # content host FIRST -> the content app answers the tokenised path
     status, body = await _raw_get(
-        app, [(b"host", content_host), (b"host", gallery_host), *framed], f"/t/{token}/"
+        app, [(b"host", content_host), (b"host", gallery_host), *framed], f"/p/{token}/"
     )
     assert status == 200
     assert b"hi" in body

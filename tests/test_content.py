@@ -3,7 +3,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys, store
+from artifacts import frame_pass, keys, store
 from artifacts.content import SHIM, create_content_app, inject
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
@@ -32,11 +32,17 @@ def content(db, published, monkeypatch):
 
 @pytest.fixture()
 def token(db, published):
-    return store.read_token(db, published.id)
+    """A fresh path each call: a pass is good once (homelab-ij8.101), so a test
+    that loads the page twice needs two of them. `token(n)` reads version n."""
+
+    def at(n=None):
+        return f"/p/{frame_pass.mint(db, published.id, n)}/"
+
+    return at
 
 
 def test_a_framed_request_gets_the_page(content, token):
-    response = content.get(f"/t/{token}/", headers=FRAMED)
+    response = content.get(token(), headers=FRAMED)
     assert response.status_code == 200
     assert "Board" in response.text
 
@@ -53,8 +59,8 @@ def test_the_header_set_is_on_every_page_response(content, token):
     versa. `connect-src` differs by design (live vs inert), so it is parametrised; every
     other directive and header applies identically to both."""
     for path, connect in (
-        (f"/t/{token}/", "connect-src 'self'"),
-        (f"/t/{token}/v/1", "connect-src 'none'"),
+        (token(), "connect-src 'self'"),
+        (token(1), "connect-src 'none'"),
     ):
         headers = content.get(path, headers=FRAMED).headers
         csp = headers["content-security-policy"]
@@ -81,7 +87,7 @@ def test_an_older_version_is_inert_but_still_answers_the_contract(content, token
     """Inert is not the same as absent. A page written to the contract does
     `await window.claude.use("db")` and branches on null; strip window.claude
     and that page throws instead of degrading."""
-    response = content.get(f"/t/{token}/v/1", headers=FRAMED)
+    response = content.get(token(1), headers=FRAMED)
     assert response.status_code == 200
     assert "hi</body>" in response.text and "hi again" not in response.text
     csp = response.headers["content-security-policy"]
@@ -96,7 +102,7 @@ def test_the_current_version_by_number_is_inert_too(content, token):
     """Liveness comes from the route, not from the number. Asking for version 2
     explicitly asks for a snapshot, and a snapshot gets the inert runtime --
     otherwise the number the gallery happens to link becomes a privilege."""
-    response = content.get(f"/t/{token}/v/2", headers=FRAMED)
+    response = content.get(token(2), headers=FRAMED)
     assert response.status_code == 200
     assert "hi again" in response.text
     csp = response.headers["content-security-policy"]
@@ -110,7 +116,7 @@ def test_the_current_version_carries_the_runtime_shim(content, token):
     """The reverse of the two inert tests above: the live page has egress open and no
     inert marker, so a mutant that served the inert shim (or inert headers) everywhere
     is caught here just as the inert tests catch the opposite mutant."""
-    response = content.get(f"/t/{token}/", headers=FRAMED)
+    response = content.get(token(), headers=FRAMED)
     assert "window.claude" in response.text
     assert "window.storage=null" not in response.text
     csp = response.headers["content-security-policy"]
@@ -127,7 +133,7 @@ def test_the_live_page_reports_height_and_decision_slots_to_the_gallery(content,
     """Only the LIVE route gets the viewer half of the shim -- the three triggers the
     design calls for (load, resize, mutation via ResizeObserver -- never a poll), and
     the one attribute a page marks a decision slot with."""
-    text = content.get(f"/t/{token}/", headers=FRAMED).text
+    text = content.get(token(), headers=FRAMED).text
     assert "data-artifact-decision" in text
     assert "ResizeObserver" in text
     assert "setInterval" not in text  # never a poll
@@ -140,7 +146,7 @@ def test_the_live_page_reports_height_and_decision_slots_to_the_gallery(content,
 def test_the_viewer_report_posts_only_to_the_gallery_origin_never_to_star(
     content, token
 ):
-    text = content.get(f"/t/{token}/", headers=FRAMED).text
+    text = content.get(token(), headers=FRAMED).text
     assert "postMessage" in text
     assert f",{json.dumps(store.gallery_origin())})" in text
     assert '"*")' not in text
@@ -150,7 +156,7 @@ def test_the_viewer_report_origin_is_read_at_call_time(content, token, monkeypat
     """Exactly like headers_for and the redirect target: a module-level constant
     computed once at import would never see this monkeypatch."""
     monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://elsewhere.example")
-    text = content.get(f"/t/{token}/", headers=FRAMED).text
+    text = content.get(token(), headers=FRAMED).text
     assert f",{json.dumps('https://elsewhere.example')})" in text
     assert f",{json.dumps(GALLERY)})" not in text
 
@@ -159,7 +165,7 @@ def test_an_older_version_carries_no_viewer_report(content, token):
     """Inert means read-only, not read-only except for a viewer channel: an old
     snapshot is never framed by the gallery today, and must not start reporting
     geometry back to it."""
-    for path in (f"/t/{token}/v/1", f"/t/{token}/v/2"):
+    for path in (token(1), token(2)):
         text = content.get(path, headers=FRAMED).text
         assert "ResizeObserver" not in text
         assert "data-artifact-decision" not in text
@@ -183,8 +189,7 @@ def test_a_page_with_no_head_still_gets_the_runtime(db, monkeypatch):
     monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
     client = TestClient(create_content_app(db))
     client.headers.update({"host": f"{artifact.id}.tenfourty.com"})
-    token = store.read_token(db, artifact.id)
-    text = client.get(f"/t/{token}/", headers=FRAMED).text
+    text = client.get(f"/p/{frame_pass.mint(db, artifact.id)}/", headers=FRAMED).text
     assert "window.claude" in text
     assert text.index("window.claude") < text.index("hi")
 
@@ -200,7 +205,8 @@ def test_an_unknown_artifact_host_is_not_found(content, token):
     token on a missing host is 404", not just "bare / with no token is 404" -- which
     cannot tell a missing artifact apart from a missing token at all."""
     content.headers.update({"host": "aaaaaaaaaaaaaaaaaaaaaaaaaa.tenfourty.com"})
-    assert content.get(f"/t/{token}/", headers=FRAMED).status_code == 404
+    response = content.get(token(), headers=FRAMED)
+    assert response.status_code == 403 and "has expired" in response.text
 
 
 def test_a_pending_version_is_never_served(db, content, published, token):
@@ -216,22 +222,24 @@ def test_a_pending_version_is_never_served(db, content, published, token):
             "values (%s, %s, %s, %s, 'pending', %s)",
             (published.id, 99, "<!doctype html><body>not cleared</body>", "r99", "ops-seat"),
         )
-    assert content.get(f"/t/{token}/v/99", headers=FRAMED).status_code == 404
+    assert content.get(token(99), headers=FRAMED).status_code == 404
     # and the live current version is still served, so the filter has not just broken reads
-    assert content.get(f"/t/{token}/", headers=FRAMED).status_code == 200
+    assert content.get(token(), headers=FRAMED).status_code == 200
 
 
 def test_every_content_response_carries_the_base_headers(content, token):
     """The global constraint is "every content response", not "every page response":
     the 303, FastAPI's own route-404 (no such route at all), the app's own 404 for a
-    right-token-wrong-version and for a wrong token, and the 422 all count. Each must
-    carry nosniff and a CSP, and the 422 must never echo the value that triggered it."""
+    right-pass-wrong-version, and the expired page for a wrong pass all count. Each must
+    carry nosniff and a CSP, and none may echo a value the request carried. (There
+    was a 422 here while a version number was a path parameter; since passes name
+    their own version, homelab-ij8.101, no content route takes one.)"""
     responses = [
         content.get("/", headers={"sec-fetch-dest": "document"}, follow_redirects=False),
         content.get("/v/999999", headers=FRAMED),  # no such route any more -> FastAPI's 404
-        content.get(f"/t/{token}/v/999999", headers=FRAMED),  # right token, no such version
-        content.get("/t/not-the-token/", headers=FRAMED),  # wrong token
-        content.get(f"/t/{token}/v/<script>alert(1)<", headers=FRAMED),  # not an int -> 422
+        content.get(token(999999), headers=FRAMED),  # right token, no such version
+        content.get("/p/not-a-pass/", headers=FRAMED),  # wrong pass
+        content.get("/p/x/<script>alert(1)<", headers=FRAMED),  # no such route
     ]
     for response in responses:
         assert response.headers["x-content-type-options"] == "nosniff"
@@ -239,7 +247,7 @@ def test_every_content_response_carries_the_base_headers(content, token):
         csp = response.headers["content-security-policy"]
         assert "default-src 'none'" in csp
         assert f"frame-ancestors {GALLERY}" in csp
-    assert responses[-1].status_code == 422
+    assert responses[-1].status_code == 404
     assert "<script>" not in responses[-1].text
     assert "alert(1)" not in responses[-1].text
 
@@ -261,7 +269,7 @@ def test_an_unhandled_error_still_carries_the_base_headers(monkeypatch):
     monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
     client = TestClient(create_content_app(ExplodingDB()), raise_server_exceptions=False)
     client.headers.update({"host": "aaaaaaaaaaaaaaaaaaaaaaaaaa.tenfourty.com"})
-    response = client.get("/t/whatever/", headers=FRAMED)
+    response = client.get("/p/whatever/", headers=FRAMED)
     assert response.status_code == 500
     assert response.headers["x-content-type-options"] == "nosniff"
     csp = response.headers["content-security-policy"]

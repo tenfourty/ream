@@ -225,10 +225,12 @@ def page_url_for(artifact_id: str) -> str:
     return f"{gallery_origin().rstrip('/')}/a/{artifact_id}"
 
 
-def content_url(artifact_id: str, read_token: str) -> str:
-    """The address the GALLERY frames. Never handed to an agent: the token in its path is the
-    capability for reading the page (design D2), and `Published.url` stays token-free."""
-    return f"https://{artifact_id}.{content_domain()}/t/{read_token}/"
+def content_url(artifact_id: str, frame_pass: str) -> str:
+    """The address the GALLERY frames, carrying a pass from `frame_pass.mint`: good
+    once, for minutes (homelab-ij8.101). Never handed to an agent, and
+    `Published.url` stays pass-free. Until 22 Sep 2026 this carried the page's
+    permanent `read_token`, which made any leaked frame URL a read for ever."""
+    return f"https://{artifact_id}.{content_domain()}/p/{frame_pass}/"
 
 
 def read_token(db: Database, artifact_id: str) -> str | None:

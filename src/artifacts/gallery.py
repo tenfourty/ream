@@ -17,6 +17,7 @@ a request reaches this app, so the one subject it ever admits is named outright 
 of read from something a request could forge.
 """
 
+import json
 import threading
 import time
 from datetime import UTC, datetime
@@ -26,7 +27,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from markupsafe import escape
 
-from artifacts import comments, decisions, events, stamp, store, thumbs
+from artifacts import comments, decisions, events, frame_pass, stamp, store, thumbs
 from artifacts import text as text_module
 from artifacts.db import Database
 from artifacts.store import content_domain, content_url, gallery_origin
@@ -1050,6 +1051,16 @@ _HOME_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6
 #    the parent it came from and NO size is reported for it. A control in the
 #    wrong place is readable and answerable; an invisible one over a reserved
 #    hole is the failure this whole arc exists to prevent.
+#  - A frame whose pass is spent says so (`content.expired_page`), and this asks
+#    the gallery's own origin for a fresh one and re-points the frame
+#    (homelab-ij8.101). A pass is good once, and browsers re-request a frame's
+#    last URL on reload (Firefox) and back/forward (Chrome), so this is the
+#    ordinary path, not an error path. Capped at three in a row -- reset by the
+#    first real state message -- so a pass that can never work (a deleted page,
+#    a clock gone wrong) cannot turn into a loop against the server; the frame
+#    then shows the expired page's own words, which name what to do. The new
+#    src must be on the SAME content origin the frame already has, so nothing
+#    this fetch returns can point the frame anywhere else.
 _GALLERY_JS = """(function(){
 "use strict";
 var iframe=document.getElementById("artifact-frame");
@@ -1066,11 +1077,21 @@ function isNum(v){return typeof v==="number"&&isFinite(v)}
 var homes=new Map();var fits=true;
 function liftsHere(){try{if(window.matchMedia)return window.matchMedia("(min-width:56rem)").matches}catch(e){}return window.innerWidth>=896}
 function isStatic(el){try{return window.getComputedStyle(el).position==="static"}catch(e){return false}}
+var renewals=0;
+function renew(){
+  if(++renewals>3)return;
+  window.fetch(location.pathname+"/frame",{credentials:"same-origin"})
+    .then(function(r){return r.ok?r.json():null})
+    .then(function(d){if(d&&typeof d.src==="string"&&new URL(d.src).origin===contentOrigin)iframe.src=d.src})
+    .catch(function(){});
+}
 window.addEventListener("message",function(event){
   try{
     if(event.source!==iframe.contentWindow||event.origin!==contentOrigin)return;
     var data=event.data;
+    if(data&&data.type==="artifact-expired"){renew();return}
     if(!data||typeof data!=="object"||data.type!=="artifact-state")return;
+    renewals=0;
     if(isNum(data.height)&&data.height>0){
       fits=data.height<=100000;
       if(data.height>=200)iframe.style.height=(fits?data.height:100000)+"px";
@@ -3176,12 +3197,12 @@ def gallery_router(db: Database) -> APIRouter:
             listening_since=events.last_read(db, row[2]),
             outcomes=decisions.outcomes_for_artifact(db, artifact_id),
         )
-        # The one place the capability token is rendered: a page only Jeremy's Authelia session
-        # can load. The token then travels in the iframe's src, and it is the CONTENT app's own
-        # Referrer-Policy: no-referrer (content.py) that keeps it out of a Referer once that
-        # framed page makes requests of its own -- this gallery's no-referrer header covers only
-        # this page's own, tokenless /a/<id> URL.
-        src = escape(content_url(artifact_id, row[1]))
+        # A fresh pass per view, good once and for minutes (homelab-ij8.101), minted only
+        # on a page Jeremy's Authelia session can load. It travels in the iframe's src, and
+        # the CONTENT app's Referrer-Policy: no-referrer keeps it out of a Referer; spent on
+        # first load, it is worthless afterwards anyway. The response is no-store (below):
+        # an HTML page carrying a single-use pass must never be replayed from a cache.
+        src = escape(content_url(artifact_id, frame_pass.mint(db, artifact_id)))
         # Sandboxed with no allow-top-navigation*, no allow-forms, no allow-modals: an agent's
         # page must never be able to navigate Jeremy's signed-in gallery tab out from under him
         # (e.g. to a fake sign-in page) or pop a dialog over it. allow-same-origin is safe here
@@ -3243,7 +3264,26 @@ def gallery_router(db: Database) -> APIRouter:
                 title_html=menu + _comments_button(artifact_id, open_threads),
                 bleed=True,
             ),
-            headers=gallery_headers(),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.get("/a/{artifact_id}/frame")
+    def fresh_frame(artifact_id: str) -> Response:
+        """A new pass for the page in front of him, for gallery.js to re-point a
+        frame whose pass was spent (homelab-ij8.101). Behind Authelia like every
+        gallery route, and JSON a cross-origin page cannot read. A deleted or
+        unknown page gets 404 and no pass."""
+        with db.connect() as conn:
+            row = conn.execute(
+                "select 1 from artifact where id = %s and deleted_at is null",
+                (artifact_id,),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(404, "no such artifact")
+        return Response(
+            json.dumps({"src": content_url(artifact_id, frame_pass.mint(db, artifact_id))}),
+            media_type="application/json",
+            headers={**gallery_headers(), "cache-control": "no-store"},
         )
 
     @router.post("/d/{decision_id}/answer")

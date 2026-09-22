@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, keys, store
+from artifacts import decisions, frame_pass, keys, store
 from artifacts.app import create_gallery_app
 from artifacts.content import create_content_app
 
@@ -196,8 +196,7 @@ def _serve(db, monkeypatch, body: str, asks: int = 0) -> tuple[str, list[str]]:
     store.patch(db, "ops-seat", art.id, body, art.revision)
     client = TestClient(create_content_app(db))
     client.headers.update({"host": f"{art.id}.tenfourty.com"})
-    token = store.read_token(db, art.id)
-    return client.get(f"/t/{token}/", headers=FRAMED).text, real
+    return client.get(f"/p/{frame_pass.mint(db, art.id)}/", headers=FRAMED).text, real
 
 
 def test_the_page_names_a_dead_slot_to_its_shim(db, monkeypatch):
@@ -236,6 +235,5 @@ def test_an_older_version_carries_no_note(db, monkeypatch):
     store.patch(db, "ops-seat", art.id, page(), art.revision)
     client = TestClient(create_content_app(db))
     client.headers.update({"host": f"{art.id}.tenfourty.com"})
-    token = store.read_token(db, art.id)
-    served = client.get(f"/t/{token}/v/1", headers=FRAMED).text
+    served = client.get(f"/p/{frame_pass.mint(db, art.id, 1)}/", headers=FRAMED).text
     assert "var gone=" not in served
