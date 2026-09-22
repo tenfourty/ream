@@ -787,3 +787,32 @@ def test_every_view_names_its_controls_not_just_the_wall(db):
     bad = {name: _unnamed_controls(html) for name, html in views.items()}
     bad = {name: found for name, found in bad.items() if found}
     assert bad == {}, f"controls with no accessible name: {bad}"
+
+
+def test_a_settled_card_says_on_itself_that_it_can_be_changed(db):
+    """Jeremy, 22 Sep 2026: "at least the ability to change the answer if we
+    press a button."
+
+    It has worked since 19 September, and was proved again on the live service
+    the same morning -- tapping a second letter replaces the answer and its
+    note. What was missing was anything SAYING so where the hand is. The section
+    carries "nothing here is locked", but that sits at the foot of the whole
+    collapsed list, after every other entry, so the card you have actually
+    opened reads as a record rather than a control.
+    """
+    published, settled = _publish_and_ask(db, question="Settled already?")
+    decisions.answer(db, settled.id, letter="a", by="jeremy")
+
+    page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+
+    body = page[page.index('<div class="settled-body">') :]
+    card = body[: body.index("</details>")]
+    assert "Tap a different letter to change this" in card, (
+        "the affordance belongs inside the opened card, not only under the list"
+    )
+    assert card.index("Tap a different letter") < card.index("<button"), (
+        "and above the buttons it describes"
+    )
+    # The section-level line stays: it is what tells him before he opens
+    # anything that none of this is final.
+    assert "nothing here is locked" in page

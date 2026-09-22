@@ -2466,6 +2466,18 @@ def _render_decisions(
                 f'<span class="sa">({escape(row.answer)}) {escape(chosen)}</span>'
                 f"{relayed}{unread}</summary>"
                 f'<div class="settled-body">{_provenance(row)}{pickup}{note}'
+                # SAID WHERE THE HAND IS. The section already carries "nothing
+                # here is locked", but that sits at the foot of the whole list,
+                # after every other entry -- so the card you have actually
+                # opened says nothing about being changeable, and the buttons
+                # below read as a record rather than a control. Jeremy,
+                # 22 Sep 2026: "at least the ability to change the answer if we
+                # press a button." It has worked since 19 September and was
+                # proved again on the live service that morning; what was
+                # missing was anything on screen saying so at the moment of
+                # looking.
+                '<p class="hint">Tap a different letter to change this &mdash; '
+                "it replaces your answer, and the note with it.</p>"
                 f"{_card(row, anchorable=False)}</div></details>"
             )
         # Collapsed, and counted in its own summary. Four settled questions took
