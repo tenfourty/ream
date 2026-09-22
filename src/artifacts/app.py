@@ -5,14 +5,16 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from artifacts import hosts, onboarding
+from artifacts import hosts, onboarding, ratelimit
 from artifacts.api import agent_router
 from artifacts.content import create_content_app
 from artifacts.db import Database
 from artifacts.gallery import gallery_router
 
 
-def create_gallery_app(db: Database | None = None) -> FastAPI:
+def create_gallery_app(
+    db: Database | None = None, limiter: ratelimit.FailedAuthLimiter | None = None
+) -> FastAPI:
     # openapi_url=None turns OFF FastAPI's own unauthenticated schema route.
     # The schema is served instead by the agent router at
     # /api/v1/openapi.json, BEHIND the same agent key as every other route
@@ -96,12 +98,14 @@ def create_gallery_app(db: Database | None = None) -> FastAPI:
         return {"status": "ok"}
 
     if db is not None:
-        app.include_router(agent_router(db))
+        app.include_router(agent_router(db, limiter))
         app.include_router(gallery_router(db))
     return app
 
 
-def create_api_app(db: Database | None = None) -> FastAPI:
+def create_api_app(
+    db: Database | None = None, limiter: ratelimit.FailedAuthLimiter | None = None
+) -> FastAPI:
     """The face an agent outside the house arrives at: the agent API, the
     onboarding document, the health check, and nothing else.
 
@@ -144,7 +148,7 @@ def create_api_app(db: Database | None = None) -> FastAPI:
         )
 
     if db is not None:
-        app.include_router(agent_router(db))
+        app.include_router(agent_router(db, limiter))
     return app
 
 
@@ -158,8 +162,11 @@ def create_app(db: Database):
     meant. `hosts.first_host_header` is reused rather than re-read here, so the router
     and the content app can never disagree about what the Host header was.
     """
-    gallery, content = create_gallery_app(db), create_content_app(db)
-    api = create_api_app(db)
+    # One failed-key count for both faces the agent API is served on, so a
+    # caller cannot double its allowance by switching hostnames.
+    limiter = ratelimit.FailedAuthLimiter()
+    gallery, content = create_gallery_app(db, limiter), create_content_app(db)
+    api = create_api_app(db, limiter)
 
     async def router(scope, receive, send):
         if scope["type"] == "lifespan":

@@ -5,6 +5,7 @@ never from a header, query parameter or body field, so nothing else can
 influence whose artifacts a request sees or changes.
 """
 
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -21,6 +22,7 @@ from artifacts import (
     hosts,
     keys,
     onboarding,
+    ratelimit,
     store,
     templates,
     text,
@@ -28,6 +30,11 @@ from artifacts import (
     traps,
 )
 from artifacts.db import Database
+
+# Failed and refused authentications, one line each: the address and the count,
+# never the key. Armed with its own handler in `serve` for the same reason the
+# access log is -- an unarmed logger in this process prints nothing.
+_auth_log = logging.getLogger("artifacts.auth")
 
 
 class PublishBody(BaseModel):
@@ -140,19 +147,54 @@ def _refused_detail(field: str, findings) -> dict:
     }
 
 
-def agent_router(db: Database) -> APIRouter:
+def agent_router(
+    db: Database, limiter: ratelimit.FailedAuthLimiter | None = None
+) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
 
+    # One limiter per app, SHARED when `create_app` mounts this router on both
+    # the gallery host and the API host: otherwise switching names would double
+    # a caller's budget. homelab-ij8.100; the reasoning is in `ratelimit`.
+    limiter = limiter or ratelimit.FailedAuthLimiter()
+
+    def _refuse(request: Request, address: str, detail: str) -> None:
+        count, blocked, newly = limiter.failed(address)
+        if blocked:
+            wait = int(limiter.retry_after(address)) + 1
+            if newly:
+                _auth_log.warning(
+                    "auth failed from %s on %s %s (%d in window) -- refusing "
+                    "bad keys from this address for %ds",
+                    address, request.method, request.url.path, count, wait,
+                )
+            # 429 and words that say it is a refusal: a client that prints this
+            # where rows go must not read as "nothing there" (homelab-ij8.99).
+            raise HTTPException(
+                429,
+                f"REFUSED: too many failed keys from this address. {detail}. "
+                f"Stop and fix the key; a working key is still accepted. "
+                f"Retry in {wait}s.",
+                headers={"retry-after": str(wait)},
+            )
+        _auth_log.warning(
+            "auth failed from %s on %s %s (%d in window)",
+            address, request.method, request.url.path, count,
+        )
+        raise HTTPException(401, detail)
+
     def caller(request: Request) -> str:
+        address = ratelimit.client_address(
+            request.headers, request.client.host if request.client else None
+        )
         if "key" in request.query_params:
-            raise HTTPException(401, "a key must not be sent in a query parameter")
+            _refuse(request, address, "a key must not be sent in a query parameter")
         header = request.headers.get("authorization", "")
         scheme, _, token = header.partition(" ")
         if scheme.lower() != "bearer" or not token:
-            raise HTTPException(401, "an agent key is required")
+            _refuse(request, address, "an agent key is required")
         key = keys.verify(db, token.strip())
         if key is None:
-            raise HTTPException(401, "unknown or revoked key")
+            _refuse(request, address, "unknown or revoked key")
         # The verified key's public id, for GET /me. Stashed rather than
         # re-derived: the token itself must not be handled twice, and the id is
         # the handle `artifacts-admin list-keys` already prints.

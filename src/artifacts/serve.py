@@ -84,14 +84,18 @@ def _arm_gallery_access_log() -> None:
     change adds, so they cannot be duplicated or accidentally re-routed into a
     file alongside content-origin logging.
     """
-    logger = logging.getLogger("artifacts.gallery.access")
-    if logger.handlers:
-        return
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
+    # `artifacts.auth` rides along: failed agent keys, one line each, never the
+    # key (homelab-ij8.100). A burst of them is the thing worth seeing after the
+    # fact, and it must not depend on logging's last-resort stderr handler.
+    for name in ("artifacts.gallery.access", "artifacts.auth"):
+        logger = logging.getLogger(name)
+        if logger.handlers:
+            continue
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
 
 
 def app_from_env():
