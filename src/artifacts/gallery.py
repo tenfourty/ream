@@ -458,15 +458,28 @@ main{display:block}
    landscape put it over 896. An overlap that does not exist cannot lose a
    hit-test, in any engine, and that is checkable without an iPhone.
 
-   56rem = 896px, which is above every iPhone in either orientation (852 is the
-   widest in landscape) and above an iPad in portrait (820); an iPad in
-   landscape is 1180 and still lifts, with the mitigation above covering it. */
+   56rem is 896px AT A 16px ROOT FONT SIZE, which is above every iPhone in
+   either orientation (852 is the widest in landscape) and above an iPad in
+   portrait (820); an iPad in landscape is 1180 and still lifts, with the
+   mitigation above covering it.
+
+   THAT EQUALITY IS NOT A CONSTANT, and reading it as one cost Jeremy two
+   answerable questions on 22 Sep 2026. gallery.js used to compare
+   `innerWidth>=896` against this `rem` breakpoint; at any root font size above
+   16px the two disagree over a whole band of window widths (Chrome's "Font
+   size: Large" is 20px, which puts this breakpoint at 1120px), and in that band
+   the script lifts a control that this rule immediately un-positions -- leaving
+   the block below the frame and a control-sized hole in the page where it
+   should have been. The script now asks `matchMedia("(min-width:56rem)")`, and
+   this query is its exact complement (55.99, not 56, so the boundary width
+   belongs to exactly one of them). Change one and you must change the other;
+   better, change neither without checking both. */
    `width` carries !important and the others do not, deliberately. gallery.js
    writes top, left and width as INLINE styles, and an inline style beats a
    stylesheet rule whatever its specificity -- so a plain `width:auto` here
    would lose and the block would keep its lifted pixel width. `top` and `left`
    need no such help: a static box ignores them. */
-@media (max-width:56rem){
+@media (max-width:55.99rem){
   .sheet .ask{position:static;margin:0 0 .8rem;width:auto !important}
 }
 
@@ -988,6 +1001,32 @@ _HOME_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6
 #    polling in the background is exactly the "hard enough to matter" the bead
 #    rules out -- and the route it asks returns one integer from one indexed
 #    row, no body and no join.
+#  - Lifts a control ONLY where the stylesheet leaves it positioned, and asks
+#    that question with `matchMedia("(min-width:56rem)")` -- the stylesheet's
+#    own query, in the stylesheet's own unit.
+#
+#    22 Sep 2026, and it cost Jeremy two answerable questions. This script used
+#    to compare `window.innerWidth>=896` against a stylesheet that un-lifts
+#    below `56rem`, on the strength of "56rem = 896px" -- true only while the
+#    root font size is 16px. Chrome's own "Font size: Large" is 20px, which puts
+#    that breakpoint at 1120px, and for every window width in the band between
+#    the two the script lifted a control that the stylesheet immediately forced
+#    back to `position:static;width:auto`. The block fell out below the framed
+#    page, and the height measured for it was still reported, so the page
+#    reserved exactly that much room in the slot: a control-sized hole with the
+#    control somewhere else. On the operator's board he saw a question, its
+#    "asked at" line, and then blank white space where the buttons belong --
+#    and a question whose buttons silently do not appear is worse than one that
+#    says it cannot show them.
+#
+#    Two rules now, and they cannot drift apart: the query above, and a
+#    stylesheet media query at `max-width:55.99rem` that is its exact
+#    complement, so the boundary width belongs to one of them and not both.
+#  - And a net under that coupling: a block that reports `position:static` once
+#    it is on the sheet was un-lifted by some rule anyway, so it goes back to
+#    the parent it came from and NO size is reported for it. A control in the
+#    wrong place is readable and answerable; an invisible one over a reserved
+#    hole is the failure this whole arc exists to prevent.
 _GALLERY_JS = """(function(){
 "use strict";
 var iframe=document.getElementById("artifact-frame");
@@ -1001,6 +1040,9 @@ document.querySelectorAll("[data-decision-id]").forEach(function(el){
   decisionEls.set(el.getAttribute("data-decision-id"),el);
 });
 function isNum(v){return typeof v==="number"&&isFinite(v)}
+var homes=new Map();
+function liftsHere(){try{if(window.matchMedia)return window.matchMedia("(min-width:56rem)").matches}catch(e){}return window.innerWidth>=896}
+function isStatic(el){try{return window.getComputedStyle(el).position==="static"}catch(e){return false}}
 window.addEventListener("message",function(event){
   try{
     if(event.source!==iframe.contentWindow||event.origin!==contentOrigin)return;
@@ -1011,19 +1053,23 @@ window.addEventListener("message",function(event){
     }
     if(Array.isArray(data.slots)&&data.slots.length<=64){
       var seen=new Set();var sizes=[];
-      // Never lift below 896 -- see the stylesheet's ".sheet .ask" comment.
-      // Leaving `sizes` empty is the whole change: the send below then tells
-      // the page to reserve nothing, and the section stays visible, both
-      // already handled.
-      if(window.innerWidth>=896)data.slots.forEach(function(slot){
+      // The stylesheet's breakpoint, in the stylesheet's unit -- never a pixel
+      // number of our own. See the Python comment above this file's source.
+      if(liftsHere())data.slots.forEach(function(slot){
         if(!slot||typeof slot.id!=="string"||seen.has(slot.id))return;
         seen.add(slot.id);
         var el=decisionEls.get(slot.id);
         if(!el||!isNum(slot.top)||!isNum(slot.left)||!isNum(slot.width))return;
+        if(!homes.has(el))homes.set(el,el.parentNode);
         if(el.parentNode!==sheet)sheet.appendChild(el);
         el.style.top=slot.top+"px";
         el.style.left=slot.left+"px";
         el.style.width=slot.width+"px";
+        // Un-lifted by some rule anyway: put it back, report no size.
+        if(isStatic(el)){var hm=homes.get(el);
+          if(hm&&hm!==sheet){hm.appendChild(el);
+            el.style.top=el.style.left=el.style.width=""}
+          return}
         var h=el.offsetHeight;if(isNum(h))sizes.push({id:slot.id,height:h});
       });
       // Tell the page how tall each control it asked for actually turned out,

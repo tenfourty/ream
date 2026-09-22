@@ -29,12 +29,22 @@ function el(attrs = {}, offsetHeight = 88) {
 // 21 Sep assumed one implicitly. The script now refuses to lift a control onto
 // the frame below 896, so a stub with no innerWidth would silently turn every
 // placement case into a narrow-screen case and pass for the wrong reason.
-function build(innerWidth = 1280) {
+// `media` and `position` are how the two halves of the 22 Sep 2026 fault are
+// driven: the stylesheet's breakpoint is in `rem`, so at any root font size
+// above 16px it sits at a different pixel width than `innerWidth` -- a fake DOM
+// can only show that by letting the media query and the pixel width disagree.
+// `position` is what `getComputedStyle` reports for a block once it is on the
+// sheet, which is how the script notices a rule un-lifted it anyway.
+function build(innerWidth = 1280, { media = null, position = "absolute" } = {}) {
   const iframe = el(); iframe.src = "https://abc.tenfourty.com/";
   const posted = [];
   iframe.contentWindow = { NAME: "frame", postMessage: (m, o) => posted.push([m, o]) };
   const sheet = el(); sheet.appendChild = function (c) { c.parentNode = sheet; };
   const d1 = el({ "data-decision-id": "dec1" });
+  // A real original parent, so "put it back where it came from" is observable
+  // rather than silently doing nothing against a null.
+  const home = el(); home.appendChild = function (c) { c.parentNode = home; };
+  d1.parentNode = home;
   const d2 = el({ "data-decision-id": "dec2" });
   const listeners = [];
   const asks = el();
@@ -79,7 +89,14 @@ function build(innerWidth = 1280) {
     createElement: () => ({ addEventListener(t, fn) { this._on = fn; },
                             textContent: "", type: "", className: "" }),
   };
-  const win = { innerWidth, addEventListener: (t, fn) => t === "message" && listeners.push(fn) };
+  const queried = [];
+  const win = { innerWidth, addEventListener: (t, fn) => t === "message" && listeners.push(fn),
+                getComputedStyle: () => ({ position }) };
+  // `media === null` means "this browser has no matchMedia", which is the
+  // fallback path; otherwise it is the answer the stylesheet's own query gives.
+  if (media !== null) {
+    win.matchMedia = (q) => { queried.push(q); return { matches: media }; };
+  }
   const history = {
     replaceState() { dlg.replaced++; },
     pushState() { dlg.pushed++; },
@@ -91,7 +108,7 @@ function build(innerWidth = 1280) {
   )(doc, win, URL, Map, Set, isFinite, navigatorStub, history, location);
   const send = (e) => listeners.forEach((fn) => fn(e));
   const fire = (t, e) => (docListeners[t] || []).forEach((fn) => fn(e));
-  return { iframe, sheet, d1, d2, send, posted, asks, menus, fire, dlg };
+  return { iframe, sheet, d1, d2, send, posted, asks, menus, fire, dlg, queried, home };
 }
 
 const good = (over = {}) => ({
@@ -113,13 +130,13 @@ const good = (over = {}) => ({
 {
   const g = build();
   g.send(good({ source: { NAME: "evil" } }));
-  ok(g.iframe.style.height === undefined && g.d1.parentNode === null, "ignores a message from another window");
+  ok(g.iframe.style.height === undefined && g.d1.parentNode === g.home, "ignores a message from another window");
 }
 // 3. wrong origin
 {
   const g = build();
   g.send(good({ source: g.iframe.contentWindow, origin: "https://evil.example" }));
-  ok(g.iframe.style.height === undefined && g.d1.parentNode === null, "ignores a message from another origin");
+  ok(g.iframe.style.height === undefined && g.d1.parentNode === g.home, "ignores a message from another origin");
 }
 // 4. height clamp
 {
@@ -329,9 +346,11 @@ navigatorStub = {};
 //     makes it checkable here, in node, with no phone involved.
 {
   for (const w of [390, 852, 895]) {
-    const g = build(w);
+    // `media` is what the stylesheet's own (min-width:56rem) query answers at
+    // this width with a 16px root font; the script asks that, not the number.
+    const g = build(w, { media: false });
     g.send(good({ source: g.iframe.contentWindow }));
-    ok(g.d1.parentNode === null, `at ${w}px the control is not moved onto the frame`);
+    ok(g.d1.parentNode === g.home, `at ${w}px the control is not moved onto the frame`);
     ok(g.d1.style.top === undefined, `at ${w}px it is not positioned over the frame`);
   }
   const g = build(896);
@@ -355,6 +374,53 @@ navigatorStub = {};
   const g = build(390);
   g.send(good({ source: g.iframe.contentWindow }));
   ok(g.asks.style.display === "", "\"Waiting on you\" stays visible on a phone");
+}
+
+
+// 12. THE BREAKPOINT IS ASKED IN THE STYLESHEET'S UNIT (22 Sep 2026).
+// The stylesheet un-lifts below 56rem; the script used to compare 896 PIXELS.
+// At a 20px root font size 56rem is 1120px, so a 1000px-wide window lifted a
+// control that the stylesheet immediately forced back to position:static --
+// the block fell out below the framed page and the size reported for it left a
+// control-sized hole where the control should have been. Jeremy read that hole
+// as a question with no buttons, twice, on the operator's board.
+{
+  const g = build(1000, { media: false });
+  g.send(good({ source: g.iframe.contentWindow }));
+  ok(g.d1.parentNode === g.home,
+     "does not lift when the stylesheet's own query says narrow, whatever innerWidth says");
+  ok(g.posted.length === 1 && JSON.stringify(g.posted[0][0].sizes) === "[]",
+     "and reserves no room in the page for a control it did not place");
+  ok(g.queried.some((q) => q.indexOf("56rem") !== -1),
+     "asks the breakpoint in rem, the unit the stylesheet is written in");
+}
+{
+  // The other direction: a narrow pixel width but a query that says wide (a
+  // small root font size). The pixel number must not veto the stylesheet.
+  const g = build(400, { media: true });
+  g.send(good({ source: g.iframe.contentWindow }));
+  ok(g.d1.parentNode === g.sheet, "lifts when the stylesheet's query says wide, at any pixel width");
+}
+{
+  // No matchMedia at all: the pixel fallback still works, unchanged.
+  const g = build(1280, { media: null });
+  g.send(good({ source: g.iframe.contentWindow }));
+  ok(g.d1.parentNode === g.sheet, "falls back to innerWidth where matchMedia is absent");
+  const narrow = build(500, { media: null });
+  narrow.send(good({ source: narrow.iframe.contentWindow }));
+  ok(narrow.d1.parentNode === narrow.home, "and still refuses below 896 on that fallback");
+}
+// 13. THE NET UNDER IT: if some rule un-lifts the block anyway, put it back and
+// reserve nothing. A visible control in the wrong place beats an invisible one,
+// and a reserved hole with nothing in it is worse than both.
+{
+  const g = build(1280, { media: true, position: "static" });
+  g.send(good({ source: g.iframe.contentWindow }));
+  ok(g.d1.parentNode === g.home, "returns a block the stylesheet un-positioned to where it came from");
+  ok(g.d1.style.top === "" && g.d1.style.left === "" && g.d1.style.width === "",
+     "and drops the inline position it had been given");
+  ok(g.posted.length === 1 && JSON.stringify(g.posted[0][0].sizes) === "[]",
+     "and tells the page to reserve nothing for it");
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

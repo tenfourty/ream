@@ -468,7 +468,16 @@ def test_gallery_js_is_served_from_self_with_no_dependency(db):
     # Moving it is a decision to be argued for in a commit, which is the whole
     # point of having it; what it must never become is a number that follows
     # the file upwards.
-    assert len(text.encode()) < 7168
+    #
+    # 7680 on 22 Sep 2026 (7459): the lift threshold stopped being a pixel
+    # number of the script's own and became the stylesheet's own media query,
+    # plus a net that puts a block back where it came from if some rule
+    # un-lifts it anyway. Two of Jeremy's questions rendered as blank white
+    # space because those two numbers had drifted apart; 291 bytes is what it
+    # costs to make them one number and to make the failure visible if it ever
+    # happens again. The argument for it lives in the Python comment above
+    # `_GALLERY_JS`, which no browser downloads.
+    assert len(text.encode()) < 7680
     assert "http://" not in text and "https://" not in text  # no CDN, nothing fetched
     assert "eval(" not in text
     assert "new Function(" not in text

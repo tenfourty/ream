@@ -6,6 +6,8 @@ title and some detail. He chose a real rendered thumbnail and qualified it --
 carry without a browser.
 """
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -212,7 +214,7 @@ def test_below_the_phone_breakpoint_nothing_is_lifted_over_the_frame(client, db)
     store.publish(db, "seat-a", "Board", STANDFIRST)
     page = client.get("/").text
 
-    start = page.index("@media (max-width:56rem){")
+    start = page.index("@media (max-width:55.99rem){")
     block = page[start : page.index("}", page.index(".sheet .ask", start))]
     assert "position:static" in block, (
         "a control already lifted onto the frame stays absolutely positioned "
@@ -236,4 +238,35 @@ def test_the_two_halves_of_the_ios_fix_do_not_replace_each_other(client, db):
     store.publish(db, "seat-a", "Board", STANDFIRST)
     page = client.get("/").text
     assert "translateZ(0)" in page
-    assert "@media (max-width:56rem){" in page
+    assert "@media (max-width:55.99rem){" in page
+
+
+def test_the_script_and_the_stylesheet_agree_on_where_a_control_is_lifted(client, db):
+    """One breakpoint, asked twice, in the same unit -- or Jeremy gets a hole.
+
+    22 Sep 2026: the stylesheet un-lifted below `56rem` while gallery.js lifted
+    at `innerWidth>=896`, on the strength of "56rem = 896px". That holds only at
+    a 16px root font size; at Chrome's own "Font size: Large" (20px) the
+    stylesheet's breakpoint is 1120px, and every window width in between lifted
+    a control the stylesheet then forced back to `position:static`. The block
+    left the frame, the size measured for it was still reported, and the page
+    reserved a control-sized hole where the buttons should have been. Two
+    questions on the operator's board read as unanswerable.
+
+    So the two must name the SAME number, and must be exact complements at the
+    boundary -- 55.99 and 56, so the boundary width belongs to one of them and
+    not to both. A pixel fallback may remain for a browser without matchMedia;
+    what must never come back is a pixel number DECIDING it.
+    """
+    store.publish(db, "seat-a", "Board", STANDFIRST)
+    page = client.get("/").text
+    script = client.get("/gallery.js").text
+
+    css_rem = re.search(r"@media \(max-width:([\d.]+)rem\)\{\s*\.sheet \.ask", page)
+    js_rem = re.search(r'matchMedia\("\(min-width:([\d.]+)rem\)"\)', script)
+    assert css_rem, "the stylesheet no longer names a rem breakpoint for the lifted control"
+    assert js_rem, "gallery.js no longer asks the stylesheet's question in rem"
+    assert float(js_rem.group(1)) == pytest.approx(float(css_rem.group(1)) + 0.01), (
+        f"the script lifts at {js_rem.group(1)}rem while the stylesheet un-lifts "
+        f"below {css_rem.group(1)}rem -- they must be exact complements"
+    )
