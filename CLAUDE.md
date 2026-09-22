@@ -100,6 +100,20 @@ uv run ruff check src tests
 PG_TEST_DSN=postgresql://…  uv run pytest -q     # needs a real Postgres
 ```
 
+**Declare which session you are, on every publish.** A key is shared by every
+session on the machine, so without this a page says only which KEY published it
+— and on 22 Sep 2026 that produced a wrong attribution and four of Jeremy's
+answers read as belonging to a departed seat. Set it once per shell:
+
+```bash
+export ARTIFACTS_SESSION="artifacts-seat/<this session's ref>"
+```
+
+`artifacts-publish --list` then marks your own pages `(you)`, and every question
+you pose says who asked it. A page whose live version was published without it
+stays unattributed until its next real change — an identical republish mints no
+version, so this arrives as pages move, never retroactively.
+
 Push to `main` on `git.tenfourty.site/jeremy/artifacts` runs CI, builds
 `git.tenfourty.site/jeremy/artifacts:<sha12>`, and **pushes a
 `deploy: … [skip ci]` commit back onto main**. Two consequences that have both
