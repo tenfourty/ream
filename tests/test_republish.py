@@ -6,6 +6,7 @@ properties make that safe, and each has a test here because each is the kind of
 thing that is true on the day it is written and quietly stops being true.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -161,3 +162,86 @@ def test_several_pages_all_run_even_when_one_fails(tmp_path, logged, monkeypatch
     )
     assert republish.main(["--config", str(cfg)]) == 1
     assert calls == ["first", "broken", "third"]
+
+
+# --- the key reaches BOTH halves, and the descriptor is read-once ------------
+#
+# 22 Sep 2026 (ij8.81 follow-up). This command read the key FILE and nothing
+# else, so the day the seat keys were vaulted it stopped working entirely: run
+# under `artifacts-key`, with a good key on fd 3, it logged "cannot read key
+# file" and published nothing — silently, because it must never fail its
+# caller. And a render command usually needs the key itself, so handing the
+# same read-once pipe to both halves gives one of them an empty string.
+
+
+def _fd_with(key: str) -> int:
+    """A read end holding `key`, the way the key wrapper hands one over."""
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(write_fd, "w", encoding="utf-8") as handle:
+        handle.write(key + "\n")
+    return read_fd
+
+
+def test_the_render_can_read_the_key_even_though_the_parent_already_did(tmp_path):
+    """The service-backed half of a board is only there if the render gets a key."""
+    seen = tmp_path / "seen.txt"
+    script = tmp_path / "render.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf %s "$(cat <&"$ARTIFACTS_KEY_FD")" > {seen}\n'
+        "printf '<html><body>page</body></html>\\n'\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    body = republish.render(str(script), "art_the-one-key-4d1a7e2b9c")
+    assert body is not None and "page" in body
+    assert seen.read_text() == "art_the-one-key-4d1a7e2b9c"
+
+
+def test_a_render_with_no_key_is_not_handed_a_drained_descriptor(tmp_path, monkeypatch):
+    """A descriptor number left pointing at an already-read pipe is worse than
+    none: the renderer reads nothing and the page publishes with its
+    service-backed sections quietly missing."""
+    monkeypatch.setenv("ARTIFACTS_KEY_FD", "3")
+    seen = tmp_path / "seen.txt"
+    script = tmp_path / "render.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf %s "${{ARTIFACTS_KEY_FD:-unset}}" > {seen}\n'
+        "printf '<html><body>page</body></html>\\n'\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    assert republish.render(str(script)) is not None
+    assert seen.read_text() == "unset"
+
+
+def test_the_key_comes_from_the_descriptor_when_there_is_no_key_file(
+    tmp_path, logged, monkeypatch
+):
+    """Under `artifacts-key` there IS no key file — that is the point of it."""
+    monkeypatch.setenv("ARTIFACTS_KEY_FILE", str(tmp_path / "no-such-key"))
+    monkeypatch.setenv("ARTIFACTS_KEY_FD", str(_fd_with("art_from-the-descriptor-9f3b2c")))
+    monkeypatch.setenv(
+        "ARTIFACTS_PAGES_FILE",
+        str(config(tmp_path, {"id": "abc", "render": "echo '<html>x</html>'"})),
+    )
+    got: list[str] = []
+    monkeypatch.setattr(republish, "republish_one", lambda e, k: got.append(k) is None)
+    assert republish.main([]) == 0
+    assert got == ["art_from-the-descriptor-9f3b2c"]
+    assert not logged.exists()
+
+
+def test_no_key_anywhere_is_logged_and_publishes_nothing(tmp_path, logged, monkeypatch):
+    monkeypatch.delenv("ARTIFACTS_KEY_FD", raising=False)
+    monkeypatch.setenv("ARTIFACTS_KEY_FILE", str(tmp_path / "no-such-key"))
+    monkeypatch.setenv(
+        "ARTIFACTS_PAGES_FILE",
+        str(config(tmp_path, {"id": "abc", "render": "echo '<html>x</html>'"})),
+    )
+    published: list[dict] = []
+    monkeypatch.setattr(republish, "republish_one", lambda e, k: published.append(e))
+    assert republish.main([]) == 1
+    assert not published
+    assert "no usable key" in logged.read_text()

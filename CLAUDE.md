@@ -132,8 +132,19 @@ the tracker is how an arc loses its own history.
 history and no export. Always `--append-notes`.
 
 **A bead update is also a page update** (Jeremy, 19 Sep 2026): when a bead
-changes for work that has a page on this service, republish that page
-(`artifacts-publish <file> --update <id>`).
+changes for work that has a page on this service, republish that page. For this
+seat's own board that is now one command, which redraws every page listed in
+`~/.config/artifacts/pages.toml` from the tracker and mints nothing when
+nothing changed:
+
+```bash
+ARTIFACTS_SEAT=baba_operator artifacts-key -- artifacts-republish
+```
+
+For any other page: `artifacts-publish <file> --update <id>`. Until 22 Sep the
+first of those could not authenticate at all (it read the cleartext key file,
+which was vaulted on the 21st) and said so only to its own log — which is how
+the board silently went a day stale.
 
 ## Safety Rules
 

@@ -48,6 +48,8 @@ from pathlib import Path
 
 from artifacts import client
 
+_KEY_FD_ENV = client._KEY_FD_ENV
+
 RENDER_TIMEOUT = 120
 
 
@@ -99,13 +101,45 @@ def pages(path: Path) -> list[dict]:
     return out
 
 
-def render(command: str) -> str | None:
+def render(command: str, key: str | None = None) -> str | None:
     """The page's HTML, or None with the reason logged.
 
     None covers every way this can go wrong — non-zero exit, a timeout, nothing
     on stdout, or something that is plainly not a page — because every one of
     them has the same correct response: publish nothing.
+
+    THE RENDER NEEDS THE KEY TOO, AND THE DESCRIPTOR IS READ-ONCE. A seat's
+    render command is usually not a pure function of the tracker: this seat's
+    status board asks the service what is still waiting on Jeremy and what he
+    has answered, with the same key this command publishes under. `artifacts-key`
+    hands that key over on a PIPE, which yields it exactly once — so whichever
+    of the two halves reads $ARTIFACTS_KEY_FD first wins, and the other gets an
+    empty string. Publishing with an empty bearer token is a 401 that reads
+    exactly like a revoked key; rendering without one is worse, because the
+    board still renders — with "I could not check what is waiting on you" where
+    his open questions belong, and "I could not list what you have settled"
+    where his own words belong. Measured 22 Sep 2026: that is precisely the page
+    a bare render produces.
+
+    So the key is resolved ONCE by main and each render gets its own private
+    pipe carrying a copy: never a command-line argument, never an environment
+    variable holding the key itself, only a descriptor number — the same
+    discipline `artifacts-key` follows.
     """
+    child_env = dict(os.environ)
+    read_fd: int | None = None
+    if key:
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(write_fd, "w", encoding="utf-8") as handle:
+            handle.write(key + "\n")
+        os.set_inheritable(read_fd, True)
+        child_env[_KEY_FD_ENV] = str(read_fd)
+    else:
+        # Never leave a descriptor number pointing at a pipe this process has
+        # already drained: the renderer would read nothing and quietly publish
+        # a page with its service-backed sections missing.
+        child_env.pop(_KEY_FD_ENV, None)
+
     try:
         done = subprocess.run(  # noqa: S602 -- the command is the seat's own config
             command,
@@ -114,10 +148,15 @@ def render(command: str) -> str | None:
             text=True,
             timeout=RENDER_TIMEOUT,
             check=False,
+            env=child_env,
+            pass_fds=() if read_fd is None else (read_fd,),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         _log(f"render failed to start: {command!r}: {exc}")
         return None
+    finally:
+        if read_fd is not None:
+            os.close(read_fd)
     if done.returncode != 0:
         _log(f"render exited {done.returncode}: {command!r}: {done.stderr.strip()[:300]}")
         return None
@@ -135,7 +174,7 @@ def render(command: str) -> str | None:
 
 
 def republish_one(entry: dict, key: str) -> bool:
-    body = render(entry["render"])
+    body = render(entry["render"], key)
     if body is None:
         return False
     # _update reads from a path, so the rendered body goes to a temporary file
@@ -166,6 +205,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--config", help="override ~/.config/artifacts/pages.toml", default=None
     )
+    # The same two the other commands take, for the same reason: this one read
+    # the key FILE and nothing else until 22 Sep 2026, so the day the keys were
+    # vaulted (21 Sep) it stopped working on this machine altogether — under
+    # `artifacts-key`, with a perfectly good key on fd 3, it logged "cannot read
+    # key file ~/.config/artifacts/key" and published nothing. It is called by a
+    # hook that must never fail its caller, so the failure was silent, and this
+    # seat's board simply went stale.
+    parser.add_argument("--key-file", default=None)
+    parser.add_argument("--key-fd", type=int, default=None)
     args = parser.parse_args(argv)
 
     path = Path(args.config) if args.config else config_path()
@@ -178,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0  # nothing configured: silent, so a machine-wide hook costs nothing
 
     try:
-        key = client._read_key(client._key_file_path(None))
+        key = client._resolve_key(args)
     except Exception as exc:  # noqa: BLE001
         _log(f"no usable key: {type(exc).__name__}: {exc}")
         return 1
