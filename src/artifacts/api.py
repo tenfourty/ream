@@ -251,8 +251,11 @@ def agent_router(db: Database) -> APIRouter:
         stranger how to ask Jeremy for one.
         """
         host = hosts.first_host_header(request.scope) or "artifacts.invalid"
+        base = onboarding.base_url(
+            request.url.scheme, host, request.headers.get("x-forwarded-proto")
+        )
         return PlainTextResponse(
-            onboarding.agents_txt(f"{request.url.scheme}://{host}"),
+            onboarding.agents_txt(base),
             headers={
                 "x-content-type-options": "nosniff",
                 "cache-control": "public, max-age=300",

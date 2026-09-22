@@ -334,3 +334,34 @@ def test_an_agent_on_the_lan_can_read_the_onboarding_document_without_a_key(clie
     assert response.status_code == 200, "no key, and it must still answer"
     assert "artifacts" in response.text
     assert f"://{GALLERY_HOST}/api/v1" in response.text
+
+
+def test_the_onboarding_document_never_tells_a_stranger_to_use_plain_http(
+    client, api_host
+):
+    """Caught on the running pod rather than here, and it would have shipped.
+
+    The scheme comes from the connection, and this app sits behind a
+    TLS-terminating ingress that speaks plain HTTP to it — so the document
+    advertised `http://` for a real hostname. An onboarding document is the one
+    place that must never say that to a stranger: an agent following it
+    literally puts its key on the wire in clear.
+    """
+    body = client.get("/agents.txt", headers={"host": api_host}).text
+    assert f"https://{api_host}/api/v1" in body
+    assert "http://" not in body, "not once, anywhere in it"
+
+    # The proxy's own word wins when it has one, because that is the scheme the
+    # CALLER used, not the one the ingress used to reach us.
+    forwarded = client.get(
+        "/agents.txt", headers={"host": api_host, "x-forwarded-proto": "https"}
+    ).text
+    assert f"https://{api_host}" in forwarded
+
+
+def test_a_loopback_caller_is_told_the_truth(client, monkeypatch):
+    """http is both true and harmless for localhost, and pretending otherwise
+    would send someone developing against it at a port that is not listening."""
+    monkeypatch.setenv("ARTIFACTS_API_HOST", "localhost")
+    body = client.get("/agents.txt", headers={"host": "localhost:8000"}).text
+    assert "http://localhost:8000/api/v1" in body

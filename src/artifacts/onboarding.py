@@ -106,3 +106,28 @@ Nothing else is served on this address.
 def agents_txt(base: str, forge: str = "https://git.tenfourty.site") -> str:
     """The document, with the address it was asked on written into it."""
     return _TEXT.format(base=base.rstrip("/"), forge=forge.rstrip("/"))
+
+
+_LOOPBACK = ("localhost", "127.0.0.1", "[::1]", "testserver")
+
+
+def base_url(scheme: str, host: str, forwarded_proto: str | None = None) -> str:
+    """The address to print in the document, which is NEVER plain http for a
+    real host.
+
+    Measured on the running pod, 22 Sep 2026, and it would have shipped: fetched
+    through a port-forward the document advertised `http://artifacts...`, because
+    the scheme comes from the connection and the app sits behind a TLS-
+    terminating ingress that speaks plain HTTP to it. An onboarding document is
+    the one place that must never say http to a stranger — an agent that follows
+    it literally puts its key on the wire in clear.
+
+    So: an `x-forwarded-proto` from the proxy wins, because that is the scheme
+    the CALLER used; otherwise https, unless the host is a loopback name, where
+    http is both true and harmless.
+    """
+    proto = (forwarded_proto or "").split(",")[0].strip().lower()
+    if proto not in ("http", "https"):
+        bare = host.split(":", 1)[0] if not host.startswith("[") else host
+        proto = "http" if bare in _LOOPBACK else "https"
+    return f"{proto}://{host}"

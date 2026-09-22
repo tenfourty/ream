@@ -129,7 +129,9 @@ def create_api_app(db: Database | None = None) -> FastAPI:
         # onboarding document that names a host out of a config file is how a
         # new machine is sent at a name that only resolves inside the house.
         host = hosts.first_host_header(request.scope) or "artifacts.invalid"
-        base = f"{request.url.scheme}://{host}"
+        base = onboarding.base_url(
+            request.url.scheme, host, request.headers.get("x-forwarded-proto")
+        )
         return PlainTextResponse(
             onboarding.agents_txt(base),
             headers={
