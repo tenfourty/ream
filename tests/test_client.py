@@ -894,3 +894,52 @@ def test_fetch_reports_the_pages_warnings_and_keeps_stdout_the_page(
     assert "warning: remote_script at line 2" in err
     assert "warning" not in out, "stdout is the page and nothing else"
     assert body in out
+
+
+def test_the_listing_names_the_session_that_published_each_page(
+    live, key_file, tmp_path, capsys
+):
+    """A key is shared by every session on its machine, so a listing under one
+    says nothing about who published what -- which on 22 Sep 2026 produced a
+    wrong attribution, a page another seat nearly rewrote on Jeremy's
+    instruction, and four answers of his left uncollected because a departed
+    session and a live one were indistinguishable.
+
+    The service has recorded the session on every version since 20 September.
+    This is the printer finally saying it.
+    """
+    path, _ = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>hi</body></html>")
+    client.main(
+        ["--key-file", str(path), str(page), "--title", "Board", "--session", "mine/111"]
+    )
+    artifact_id = json.loads(capsys.readouterr().out.strip())["id"]
+
+    client.main(["--key-file", str(path), "--list", "--session", "mine/111"])
+    ours = capsys.readouterr().out.strip().split("\t")
+    assert ours[:3] == [artifact_id, "Board", ours[2]], "the first three are unmoved"
+    assert re.match(r"\d{4}-\d{2}-\d{2}$", ours[3]), "then the date"
+    assert ours[4] == "mine/111 (you)", (
+        "the session, marked as this caller's own -- the whole question being "
+        "answered is 'is this mine?'"
+    )
+
+    # The SAME page, listed by a different session behind the SAME key. It is
+    # still listed -- Jeremy ruled that a shared key may read and edit
+    # everything it can reach -- but it must no longer read as this caller's.
+    client.main(["--key-file", str(path), "--list", "--session", "theirs/999"])
+    theirs = capsys.readouterr().out.strip().split("\t")
+    assert theirs[:3] == ours[:3], "the same page to both"
+    assert theirs[4] == "mine/111", "named, and NOT marked as the reader's own"
+
+
+def test_a_page_with_no_recorded_session_adds_no_column(live, key_file, tmp_path, capsys):
+    """Unknown is not the same fact as nobody, and an empty column would be a
+    fifth field every caller has to learn about in order to report nothing."""
+    path, _ = key_file
+    artifact_id = _publish_one(path, tmp_path, capsys)
+    client.main(["--key-file", str(path), "--list"])
+    fields = capsys.readouterr().out.strip().split("\t")
+    assert fields[0] == artifact_id
+    assert len(fields) == 4, "id, title, address, date -- and nothing invented"

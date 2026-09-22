@@ -315,3 +315,84 @@ def test_a_deleted_page_is_gone_even_for_a_granted_seat(db, client):
     )
 
     assert response.status_code == 404
+
+
+# --- who owes Jeremy a reply, across every seat ------------------------------
+#
+# 22 Sep 2026, asked for by the operator seat and approved by Jeremy the same
+# morning. "What is waiting on Jeremy" has been answerable since the grant
+# landed; the mirror question -- what has he ANSWERED that nobody has collected
+# -- could not be asked at all, on any scope. Four of his answers sat up to
+# eighteen hours because of it, and one explanation he asked for on 20 September
+# was never given, because the seat name in every listing cannot tell a
+# departed asking session from a stuck one.
+
+
+def test_the_uncollected_answers_are_askable_across_seats(db, client):
+    grants.grant(db, "ops-seat", grants.READ_ALL_DECISIONS)
+    token, _ = keys.mint(db, agent="ops-seat")
+    _p1, collected = _asks(db, "seat-a", question="he answered, we took it")
+    _p2, stranded = _asks(db, "seat-b", question="he answered, nobody took it")
+    _p3, _open = _asks(db, "seat-c", question="still waiting on him")
+    decisions.answer(db, collected.id, letter="a", by="jeremy")
+    decisions.answer(db, stranded.id, letter="b", by="jeremy")
+    decisions.acknowledge(db, "seat-a", collected.id)
+
+    rows = client.get(
+        "/api/v1/decisions?scope=all&unacknowledged=true", headers=auth(token)
+    ).json()
+
+    assert [r["id"] for r in rows] == [stranded.id], (
+        "not the one already collected, and not the one still waiting on him -- "
+        "this question is about what an AGENT owes, not what he does"
+    )
+    assert rows[0]["agent"] == "seat-b", "and it names whose page it is on"
+
+
+def test_acknowledging_takes_it_off_that_list(db, client):
+    grants.grant(db, "ops-seat", grants.READ_ALL_DECISIONS)
+    token, _ = keys.mint(db, agent="ops-seat")
+    _p, decision = _asks(db, "seat-a")
+    decisions.answer(db, decision.id, letter="a", by="jeremy")
+
+    url = "/api/v1/decisions?scope=all&unacknowledged=true"
+    assert [r["id"] for r in client.get(url, headers=auth(token)).json()] == [decision.id]
+    decisions.acknowledge(db, "seat-a", decision.id)
+    assert client.get(url, headers=auth(token)).json() == []
+
+
+def test_a_seat_can_ask_it_of_its_own_pages_without_the_grant(db, client):
+    """The same question one page inwards, and the commonest way to notice you
+    are the one who owes something."""
+    token, _ = keys.mint(db, agent="seat-a")
+    _p1, mine = _asks(db, "seat-a", question="mine, answered, uncollected")
+    # Two decoys on the SAME seat, or this passes without the filter existing:
+    # one already collected, one he has not answered at all.
+    _p2, collected = _asks(db, "seat-a", question="mine, answered, collected")
+    _p3, _waiting = _asks(db, "seat-a", question="mine, still waiting on him")
+    _p4, theirs = _asks(db, "seat-b", question="not mine")
+    decisions.answer(db, mine.id, letter="a", by="jeremy")
+    decisions.answer(db, collected.id, letter="a", by="jeremy")
+    decisions.answer(db, theirs.id, letter="a", by="jeremy")
+    decisions.acknowledge(db, "seat-a", collected.id)
+
+    rows = client.get(
+        "/api/v1/decisions?unacknowledged=true", headers=auth(token)
+    ).json()
+
+    assert [r["id"] for r in rows] == [mine.id]
+
+
+def test_the_default_feed_is_untouched_by_the_new_question(db, client):
+    """The operator's queue reconciles by DISAPPEARANCE, so anything that
+    changes what the default feed returns closes rows wrongly. The new filter
+    must be invisible unless it is asked for."""
+    grants.grant(db, "ops-seat", grants.READ_ALL_DECISIONS)
+    token, _ = keys.mint(db, agent="ops-seat")
+    _p1, answered = _asks(db, "seat-a", question="answered, uncollected")
+    _p2, open_one = _asks(db, "seat-b", question="still open")
+    decisions.answer(db, answered.id, letter="a", by="jeremy")
+
+    rows = client.get("/api/v1/decisions?scope=all", headers=auth(token)).json()
+
+    assert [r["id"] for r in rows] == [open_one.id]

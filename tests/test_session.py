@@ -301,3 +301,84 @@ def test_the_polling_route_can_see_a_withdrawn_question(client, key, db):
     row = next(d for d in withdrawn if d["id"] == asked.id)
     assert row["closed_at"] is not None
     assert row["answer"] is None, "withdrawn, not answered -- different events"
+
+
+# --- the listing says WHICH SESSION, because a shared key cannot -------------
+#
+# 22 Sep 2026, brought by the operator seat and ruled on by Jeremy the same
+# morning. Everything above records the session; none of it was ever SURFACED,
+# and what a listing cannot say, nobody checks. The cost was concrete: the cove
+# seat's listing grew a page published by a different session under the same
+# key, Jeremy attributed it to the wrong seat and nearly had it rewritten, and
+# four of his answers sat uncollected for days because a departed session and a
+# live one looked identical through a seat name.
+#
+# The rule these tests hold to, in the operator's words: a 404 under a key is a
+# strong negative, a successful listing under a shared key is NOT a strong
+# positive.
+
+
+def test_a_listing_says_which_session_published_the_live_version(client, key, db):
+    made = client.post(
+        "/api/v1/artifacts",
+        json={"title": "Board", "body": PAGE},
+        headers=_h(key, SEAT_A),
+    ).json()
+    rows = client.get("/api/v1/artifacts", headers=_h(key, SEAT_A)).json()
+    mine = next(r for r in rows if r["id"] == made["id"])
+    assert mine["last_session"] == SEAT_A
+
+
+def test_two_sessions_behind_one_key_are_told_apart_in_the_listing(client, key, db):
+    """The failure itself: one key, two sessions, and a listing that used to
+    show ten indistinguishable pages."""
+    first = client.post(
+        "/api/v1/artifacts", json={"title": "Mine", "body": PAGE}, headers=_h(key, SEAT_A)
+    ).json()
+    second = client.post(
+        "/api/v1/artifacts", json={"title": "Theirs", "body": PAGE}, headers=_h(key, SEAT_B)
+    ).json()
+    rows = {r["id"]: r for r in client.get("/api/v1/artifacts", headers=_h(key, SEAT_A)).json()}
+    assert rows[first["id"]]["last_session"] == SEAT_A
+    assert rows[second["id"]]["last_session"] == SEAT_B, (
+        "both pages are listed to either session -- that is deliberate and "
+        "Jeremy ruled on it -- so the listing has to say which is whose"
+    )
+
+
+def test_the_listing_follows_the_LIVE_version_not_the_first_one(client, key, db):
+    """'Who owes Jeremy an answer about this page' is about whoever published
+    what he is reading now, not whoever started it a week ago."""
+    made = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=_h(key, SEAT_A)
+    ).json()
+    client.patch(
+        f"/api/v1/artifacts/{made['id']}",
+        json={"body": PAGE + "<!--2-->", "expected_revision": made["revision"]},
+        headers=_h(key, SEAT_B),
+    )
+    rows = client.get("/api/v1/artifacts", headers=_h(key, SEAT_A)).json()
+    assert next(r for r in rows if r["id"] == made["id"])["last_session"] == SEAT_B
+
+
+def test_a_page_published_before_sessions_existed_says_nothing_not_nobody(
+    client, key, db
+):
+    """Unknown and unattributed are different facts, and printing one as the
+    other is how a stale attribution gets believed."""
+    made = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=_h(key, None)
+    ).json()
+    rows = client.get("/api/v1/artifacts", headers=_h(key, SEAT_A)).json()
+    assert next(r for r in rows if r["id"] == made["id"])["last_session"] is None
+
+
+def test_the_deleted_listing_says_it_too(client, key, db):
+    """The bin is where 'whose was this?' is hardest and matters most: nobody
+    remembers, and restoring someone else's page is the mistake available."""
+    made = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=_h(key, SEAT_B)
+    ).json()
+    assert client.delete(f"/api/v1/artifacts/{made['id']}", headers=_h(key, SEAT_B)).status_code == 200
+    binned = client.get("/api/v1/artifacts/deleted", headers=_h(key, SEAT_A)).json()
+    assert next(r for r in binned if r["id"] == made["id"])["last_session"] == SEAT_B

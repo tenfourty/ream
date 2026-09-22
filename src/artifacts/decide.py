@@ -100,6 +100,26 @@ def _fmt(row: dict) -> str:
     letters = {o["letter"]: o.get("label", "") for o in row.get("options") or []}
     lines = [f"{row['id']}  {row['question']}"]
 
+    # WHOSE PAGE, AND WHICH SESSION ASKED. A seat name is not a session: one key
+    # is shared by every session on its machine, so "the cove seat's questions"
+    # and "that session's questions" are different sets, and on 22 Sep 2026 that
+    # produced a wrong attribution and four answers nobody collected -- one of
+    # them an explanation Jeremy asked for on 20 September and never received,
+    # because the reader could not tell a departed asker from a stuck one.
+    # Said plainly here, including when it is unknown, because unknown is the
+    # case that needs a human to decide what to do.
+    where = []
+    if row.get("artifact_title") or row.get("agent"):
+        title = row.get("artifact_title") or row.get("artifact_id") or "?"
+        seat = row.get("agent")
+        where.append(f'on "{title}"' + (f" [{seat}]" if seat else ""))
+    asked_by = row.get("session")
+    where.append(f"asked by {asked_by}" if asked_by else "asked by an unlabelled session")
+    age = row.get("age_seconds")
+    if isinstance(age, int):
+        where.append(f"waiting {age // 3600}h" if age >= 3600 else f"waiting {age // 60}m")
+    lines.append("  " + " · ".join(where))
+
     if row.get("answer"):
         chosen = row["answer"]
         source = row.get("answer_source") or "?"
@@ -217,6 +237,16 @@ def build_parser() -> argparse.ArgumentParser:
     listing.add_argument(
         "--answered", action="store_true", help="include ones he has answered"
     )
+    listing.add_argument(
+        "--all",
+        action="store_true",
+        help="every seat's decisions, not just this key's (needs decisions:read-all)",
+    )
+    listing.add_argument(
+        "--stranded",
+        action="store_true",
+        help="only answers nobody has collected yet -- who owes Jeremy a reply",
+    )
 
     record = subs.add_parser(
         "record",
@@ -301,13 +331,29 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
         if args.cmd == "list":
-            rows = _request(
-                "GET",
-                f"{base}/decisions?include_answered={'true' if args.answered else 'false'}",
-                key,
-                None,
+            # --stranded is "he answered and nobody picked it up": the question
+            # that says an AGENT owes something, rather than Jeremy. Asked for
+            # by the operator on 22 Sep 2026, after four of his answers sat
+            # uncollected for up to eighteen hours because no route could ask
+            # it. With --all it spans every seat, which is the only way to
+            # notice one whose asking session has gone away.
+            query = (
+                f"include_answered={'true' if args.answered or args.stranded else 'false'}"
+                f"&unacknowledged={'true' if args.stranded else 'false'}"
+                f"&scope={'all' if args.all else 'mine'}"
             )
-            return _print_rows(rows, empty="nothing waiting on Jeremy from this seat")
+            rows = _request("GET", f"{base}/decisions?{query}", key, None)
+            if args.stranded:
+                empty = (
+                    "no uncollected answers"
+                    + ("" if args.all else " on this seat's pages")
+                )
+            else:
+                empty = (
+                    "nothing waiting on Jeremy"
+                    + ("" if args.all else " from this seat")
+                )
+            return _print_rows(rows, empty=empty)
         if args.cmd == "record":
             payload = {
                 "letter": args.letter.strip().lower(),

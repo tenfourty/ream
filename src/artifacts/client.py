@@ -967,7 +967,26 @@ def main(argv: list[str] | None = None) -> int:
                 # API call per page (reported 21 Sep). The service has always
                 # returned `updated_at` here; only this printer ignored it.
                 when = (item.get("updated_at") or "")[:10]
-                extra = "\t".join(x for x in (when, shelf) if x)
+                # WHO published the version now live, and whether that is you.
+                #
+                # 22 Sep 2026: a key is shared by every session on its machine,
+                # so a successful listing under a key says nothing about which
+                # session published what. Jeremy attributed a page to the wrong
+                # seat, another seat nearly rewrote it, and four of his answers
+                # sat uncollected because a departed session and a live one were
+                # indistinguishable. A 404 under a key is a strong negative; a
+                # listing under a shared key is not a strong positive. This
+                # column is what makes it one.
+                #
+                # Printed only when the service knows it: a page published
+                # before sessions existed says nothing rather than claiming
+                # nobody. "(you)" is computed here, from this process's own
+                # declared session, and never sent by the service -- the service
+                # has no business deciding who the reader is.
+                who = item.get("last_session") or ""
+                if who and _session and who == _session:
+                    who = f"{who} (you)"
+                extra = "\t".join(x for x in (when, who, shelf) if x)
                 suffix = f"\t{extra}" if extra else ""
                 # The GALLERY address, which is the one a reader can open.
                 # This column used to print the page's own origin, which 303s

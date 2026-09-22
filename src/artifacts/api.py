@@ -892,6 +892,14 @@ def agent_router(db: Database) -> APIRouter:
         include_answered: bool | None = None,
         open_only: bool = False,
         include_closed: bool = False,
+        # ANSWERED, AND NOBODY HAS COLLECTED IT. The one shape that means an
+        # agent owes something rather than Jeremy does, asked for by the
+        # operator on 22 Sep 2026 after four of his answers sat up to eighteen
+        # hours and one explanation he asked for on 20 September was never
+        # given. It works on both scopes -- a seat asking which of ITS OWN
+        # answers it has not taken is the same question one page inwards -- and
+        # it implies answered rows, because an uncollected answer is an answer.
+        unacknowledged: bool = False,
         scope: str = Query("mine", pattern="^(mine|all)$"),
         agent: str = Depends(caller),
     ):
@@ -947,6 +955,7 @@ def agent_router(db: Database) -> APIRouter:
                     # per-artifact route above does not suppress it either and
                     # one flag pair must mean one thing on every route.
                     include_closed=include_closed,
+                    unacknowledged=unacknowledged,
                 )
             ]
         return [
@@ -956,6 +965,7 @@ def agent_router(db: Database) -> APIRouter:
                 agent,
                 include_answered=(include_answered is not False) and not open_only,
                 include_closed=include_closed,
+                unacknowledged=unacknowledged,
             )
         ]
 

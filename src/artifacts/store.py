@@ -182,6 +182,22 @@ class ArtifactRow:
     # still not answered. A deleted page holding one was the single place that
     # fact was invisible anywhere in the gallery.
     open_questions: int = 0
+    # WHICH SESSION published the version that is live right now.
+    #
+    # A SEAT IS NOT A SESSION, and on 22 Sep 2026 that cost a wrong attribution:
+    # a key is shared by every session on its machine, so `agent` above answers
+    # "which key published this" and nothing at all about who was behind it. The
+    # operator's seat listed ten pages under `baba_operator` and could not tell
+    # which were its own; the cove seat's listing grew a page published by a
+    # different session under the same key, and Jeremy attributed it to the
+    # wrong one. Worse, four of his answers sat uncollected for days because the
+    # seat name made a departed session and a live one look identical.
+    #
+    # The service has recorded this on every version since 20 Sep and surfaced
+    # it nowhere, which is the whole gap: what a listing cannot say, nobody
+    # checks. None means a version published before sessions existed -- unknown,
+    # which is not the same as "nobody" and must never be printed as one.
+    last_session: str | None = None
 
 
 def content_domain() -> str:
@@ -609,7 +625,7 @@ def get_owned(db: Database, agent: str, artifact_id: str) -> ArtifactRow:
         # route returns the body's current hash, never the body. `get_body()`
         # below is the route that hands the body itself back to its owner.
         revision = conn.execute(
-            "select revision from version where artifact_id = %s and n = %s",
+            "select revision, session from version where artifact_id = %s and n = %s",
             (row[0], row[4]),
         ).fetchone()
     return ArtifactRow(
@@ -619,6 +635,7 @@ def get_owned(db: Database, agent: str, artifact_id: str) -> ArtifactRow:
         visibility=row[3],
         current_version=row[4],
         revision=revision[0],
+        last_session=revision[1],
         updated_at=row[5],
         url=url_for(row[0]),
         page_url=page_url_for(row[0]),
@@ -748,7 +765,7 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
         rows = conn.execute(
             "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"
             " artifact.current_version, version.revision, artifact.updated_at,"
-            " artifact.archived_at, artifact.pinned_at"
+            " artifact.archived_at, artifact.pinned_at, version.session"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
@@ -769,6 +786,7 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             page_url=page_url_for(row[0]),
             archived_at=row[7],
             pinned_at=row[8],
+            last_session=row[9],
         )
         for row in rows
     ]
@@ -1090,7 +1108,7 @@ def list_deleted(db: Database, agent: str | None = None) -> list[ArtifactRow]:
             "select artifact.id, artifact.title, artifact.agent,"  # noqa: S608 -- `scope` is a fixed clause with a placeholder
             " artifact.visibility, artifact.current_version, version.revision,"
             " artifact.updated_at, artifact.archived_at, artifact.pinned_at,"
-            " artifact.deleted_at,"
+            " artifact.deleted_at, version.session,"
             " (select count(*) from decision d where d.artifact_id = artifact.id"
             "    and d.answer is null and d.closed_at is null)"
             " from artifact"
@@ -1114,7 +1132,8 @@ def list_deleted(db: Database, agent: str | None = None) -> list[ArtifactRow]:
             archived_at=row[7],
             pinned_at=row[8],
             deleted_at=row[9],
-            open_questions=row[10],
+            last_session=row[10],
+            open_questions=row[11],
         )
         for row in rows
     ]
