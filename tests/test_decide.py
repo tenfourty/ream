@@ -376,3 +376,32 @@ def test_the_hint_names_the_command_you_actually_ran(capsys):
     with pytest.raises(SystemExit):
         decide.main(["list", "--no-such-flag"])
     assert "this copy of artifacts-decide" in capsys.readouterr().err
+
+
+def test_a_refused_cross_seat_check_does_not_look_like_nothing_stranded(
+    live, key_file, page, db, capsys  # noqa: F811
+):
+    """Reported by the operator seat from a real terminal, 22 Sep 2026: it ran
+    the stranded check across seats under a key without the grant, and got one
+    line -- `HTTP 403` -- where rows would have been. Its words: a caller "sees
+    no rows and can conclude nothing stranded".
+
+    That is the failure this house has already paid for: a refusal parsed as
+    zero rows and read as "he never answered". An emptiness claim and an
+    authorisation failure must not look alike at a glance. So the refusal says
+    REFUSED, says it is not an empty result, and carries the service's own
+    explanation -- which names the seat the key authenticates as, because every
+    session on the machine shares one key file and the seat is rarely the one
+    the caller assumed.
+    """
+    path, _ = key_file  # ops-seat, which holds no grant
+
+    rc = _run(["list", "--all", "--stranded"], path)
+
+    out, err = capsys.readouterr()
+    assert rc != 0, "a refusal must not exit 0"
+    assert "no uncollected answers" not in out, "and must never print the empty line"
+    assert "REFUSED" in err
+    assert "not an empty result" in err.lower()
+    assert "decisions:read-all" in err, "the service's own explanation, carried"
+    assert "403" in err, "and the status, which callers grep for"

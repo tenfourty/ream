@@ -98,12 +98,32 @@ class HTTPFailure(Exception):
     """The server answered with a non-2xx status, or a redirect was refused --
     exit 1. `detail` is whatever the server's JSON body carried under "detail"
     (a string, or a structured refusal like `{"refused": [...]}`); the server
-    never echoes submitted content back, so this is always safe to print."""
+    never echoes submitted content back, so this is always safe to print.
+
+    THE TEXT MATTERS AS MUCH AS THE EXIT CODE. Until 22 Sep 2026 this stringified
+    to a bare "HTTP 403" and the detail -- which the service writes carefully,
+    naming the seat the key authenticates as and the grant it lacks -- was
+    carried and never printed. The operator ran a cross-seat "what is stranded"
+    check, got that line and no rows, and correctly observed that it reads as an
+    empty queue: a refusal printed where rows would be is indistinguishable from
+    "I looked and found nothing", which is the failure this house has already
+    paid for once. So a 401 or 403 says REFUSED in words, says it is not an
+    empty result, and carries the server's explanation with it. The status
+    number stays in the string: callers grep for it."""
 
     def __init__(self, status: int, detail) -> None:
         super().__init__(f"HTTP {status}")
         self.status = status
         self.detail = detail
+
+    def __str__(self) -> str:
+        head = f"HTTP {self.status}"
+        if self.status in (401, 403):
+            head = (
+                f"REFUSED (HTTP {self.status}) -- this is NOT an empty result, "
+                "it is a refusal to look"
+            )
+        return f"{head}: {self.detail}" if self.detail else head
 
 
 class _RefuseRedirects(urllib.request.HTTPRedirectHandler):

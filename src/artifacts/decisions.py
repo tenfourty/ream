@@ -291,7 +291,6 @@ def list_for_agent(
     *,
     include_answered: bool = False,
     include_closed: bool = False,
-    unacknowledged: bool = False,
     limit: int = 200,
 ) -> list[DecisionRow]:
     """Newest first -- this is the polling surface an agent uses to learn Jeremy's
@@ -310,16 +309,7 @@ def list_for_agent(
     reported independently by two seats on 19 Sep for a different route).
 
     Still excluded by DEFAULT, because a withdrawn question is not waiting on
-    anybody and a poll asking "what is outstanding" should not be handed it.
-
-    `unacknowledged` narrows to the one shape that means somebody is owed
-    something: Jeremy has ANSWERED and no agent has collected it. That is a
-    different question from "what is open" and it belongs to whoever published
-    the page, not to him -- and until 22 Sep 2026 nothing could ask it across
-    seats, which is why four of his answers sat for up to eighteen hours and one
-    explanation he asked for on 20 September was never given at all. It implies
-    answered rows whatever `include_answered` says, since an unacknowledged
-    answer is an answer."""
+    anybody and a poll asking "what is outstanding" should not be handed it."""
     sql = (
         f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
         " join artifact on artifact.id = decision.artifact_id"
@@ -327,9 +317,7 @@ def list_for_agent(
     )
     if not include_closed:
         sql += " and decision.closed_at is null"
-    if unacknowledged:
-        sql += " and decision.answer is not null and decision.acknowledged_at is null"
-    elif not include_answered:
+    if not include_answered:
         sql += " and decision.answer is null"
     sql += " order by decision.created_at desc, decision.id desc limit %s"
     with db.connect() as conn:
@@ -773,7 +761,6 @@ def across_seats(
     *,
     include_answered: bool = False,
     include_closed: bool = False,
-    unacknowledged: bool = False,
     limit: int = 200,
 ) -> list[CrossSeatRow]:
     """Every question on every page, oldest first -- by default only the ones
@@ -813,21 +800,6 @@ def across_seats(
     is -- and a queue that reads "17 hours" is telling Jeremy something the
     service is prepared to stand behind.
 
-    `unacknowledged` narrows to the one shape that means somebody is owed
-    something: Jeremy has ANSWERED and no agent has collected it. That is a
-    different question from "what is open" and it belongs to whoever published
-    the page, not to him -- and until 22 Sep 2026 nothing could ask it across
-    seats, which is why four of his answers sat for up to eighteen hours and one
-    explanation he asked for on 20 September was never given at all. It implies
-    answered rows whatever `include_answered` says, since an unacknowledged
-    answer is an answer.
-
-    ACROSS SEATS it is the question the operator asked for on 22 Sep 2026 and
-    the one a seat name cannot answer: an answer is owed by the SESSION that
-    asked, and a session that has gone away leaves no trace in the seat name
-    every listing shows. `decision.session` rides along on every row here, so
-    the reader can tell "the asker is gone" from "the asker is stuck", which
-    need opposite responses.
     """
     sql = (
         f"select {_COLUMNS}, artifact.agent, artifact.title,"  # noqa: S608 -- fixed constant, not caller input
@@ -837,9 +809,7 @@ def across_seats(
     )
     if not include_closed:
         sql += " and decision.closed_at is null"
-    if unacknowledged:
-        sql += " and decision.answer is not null and decision.acknowledged_at is null"
-    elif not include_answered:
+    if not include_answered:
         sql += " and decision.answer is null"
     sql += " order by decision.created_at asc, decision.id asc limit %s"
     with db.connect() as conn:

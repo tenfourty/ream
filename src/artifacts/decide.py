@@ -139,6 +139,20 @@ def _fmt(row: dict) -> str:
             lines.append(f"  when: {when}")
         if not row.get("acknowledged_at"):
             lines.append("  NOT YET ACKNOWLEDGED -- artifacts-decide ack " + row["id"])
+            # Two states, opposite responses: an asker that never came back is
+            # not the same as one that is reading its feed and still not acting.
+            state = row.get("collect_state")
+            if state == "no_reader":
+                lines.append(
+                    "  NOBODY HAS READ THIS SEAT'S FEED SINCE HE ANSWERED -- the asker "
+                    "is not running; somebody else has to take this one"
+                )
+            elif state == "stuck":
+                seen = (row.get("last_read_at") or "")[:16]
+                lines.append(
+                    f"  the asker HAS read its feed since he answered ({seen}) and has "
+                    "still not taken it -- something is alive and not acting"
+                )
     else:
         for letter, label in letters.items():
             mark = " <- recommended" if letter == row.get("recommended") else ""
@@ -331,18 +345,36 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
         if args.cmd == "list":
-            # --stranded is "he answered and nobody picked it up": the question
-            # that says an AGENT owes something, rather than Jeremy. Asked for
-            # by the operator on 22 Sep 2026, after four of his answers sat
-            # uncollected for up to eighteen hours because no route could ask
-            # it. With --all it spans every seat, which is the only way to
-            # notice one whose asking session has gone away.
-            query = (
-                f"include_answered={'true' if args.answered or args.stranded else 'false'}"
-                f"&unacknowledged={'true' if args.stranded else 'false'}"
-                f"&scope={'all' if args.all else 'mine'}"
-            )
-            rows = _request("GET", f"{base}/decisions?{query}", key, None)
+            # --stranded is "he answered and nobody picked it up", and it asks
+            # the route that has answered that since 19 Sep: /decisions/
+            # uncollected. It carries what a second spelling of the filter
+            # could not -- `state`, which separates an asker that is GONE from
+            # one that is STUCK, and those need opposite responses.
+            #
+            # 22 Sep 2026: I built that second spelling before finding this
+            # route, and it returned strictly less. The comment on the route
+            # itself had already said why that is a bad idea -- "two spellings
+            # of the same privilege is how one of them ends up laxer than the
+            # other" -- which is a reason to read the routes you are about to
+            # add to.
+            scope = "all" if args.all else "mine"
+            if args.stranded:
+                rows = _request(
+                    "GET", f"{base}/decisions/uncollected?scope={scope}", key, None
+                )
+                rows = [
+                    {**r["decision"], "agent": r.get("agent"),
+                     "artifact_title": r.get("artifact_title"),
+                     "collect_state": r.get("state"),
+                     "last_read_at": r.get("last_read_at")}
+                    for r in rows
+                ]
+            else:
+                query = (
+                    f"include_answered={'true' if args.answered else 'false'}"
+                    f"&scope={scope}"
+                )
+                rows = _request("GET", f"{base}/decisions?{query}", key, None)
             if args.stranded:
                 empty = (
                     "no uncollected answers"
