@@ -33,6 +33,7 @@ from artifacts import (
     decisions,
     events,
     frame_pass,
+    keys,
     stamp,
     store,
     thumbs,
@@ -560,6 +561,7 @@ main{display:block}
 /* The per-tile dots. Sits over the tile rather than inside its link, because an
    interactive control nested in an <a> is invalid and behaves unpredictably. */
 .tile-wrap{position:relative}
+.bar .profile{margin-left:auto}.bar .profile .mpanel{right:0;left:auto}
 [data-unread] .t::before,[data-unread] .rt::before{content:"";display:inline-block;
   width:.55em;height:.55em;border-radius:50%;background:var(--accent);
   margin-right:.4em;vertical-align:.1em}
@@ -1520,6 +1522,66 @@ boxes[Math.min(pre.length,7)].focus();
 """
 
 
+def _machines_page(machines, confirm: str = "", note: str = "") -> str:
+    """Every connected machine: its name (his to change), when it connected,
+    when it was last used, which sessions have published with it, and how many
+    pages it has -- and revoke, which asks once more before it acts
+    (homelab-ij8.103)."""
+    parts = [_CONNECT_CSS, '<div class="cx">']
+    if note:
+        parts.append(f'<section><p class="ok">{escape(note)}</p></section>')
+    working = [m for m in machines if m.revoked_at is None]
+    gone = [m for m in machines if m.revoked_at is not None]
+    parts.append(
+        "<section><h2>Connected machines</h2>"
+        f"<p>{len(working)} with a working key. "
+        '<a href="/connect">Connect another</a>.</p></section>'
+    )
+    for m in working:
+        ident = escape(m.id)
+        used = _ago(m.last_used_at) if m.last_used_at else ""
+        facts = [
+            f"<dt>Connected</dt><dd>{escape(_ago(m.created_at) or 'just now')}</dd>",
+            f"<dt>Last used</dt><dd>{escape(used or 'not since it connected')}</dd>",
+            f"<dt>Pages</dt><dd>{m.pages}</dd>",
+            "<dt>Sessions</dt><dd>"
+            + (escape(", ".join(m.sessions)) if m.sessions else "none labelled yet")
+            + "</dd>",
+        ]
+        if m.label and m.label != m.agent:
+            facts.insert(0, f"<dt>Files pages as</dt><dd>{escape(m.agent)}</dd>")
+        if confirm == m.id:
+            action = (
+                f'<p class="err">Revoke {escape(m.name)}? Its key stops working at once, '
+                "for every agent on that machine. Its pages stay. It can connect again "
+                "later with a new code.</p>"
+                f'<form method="post" action="/machines/{ident}/revoke" class="row">'
+                '<button class="btn primary" type="submit">Revoke</button>'
+                '<a class="btn" href="/machines">Cancel</a></form>'
+            )
+        else:
+            action = (
+                f'<form method="post" action="/machines/{ident}/rename" class="row">'
+                f'<input name="label" value="{escape(m.name)}" aria-label="Name" autocomplete="off">'
+                '<button class="btn" type="submit">Rename</button>'
+                f'<a class="btn" href="/machines?revoke={ident}">Revoke</a></form>'
+            )
+        parts.append(
+            f"<section><h2>{escape(m.name)}</h2><dl>{''.join(facts)}</dl>{action}</section>"
+        )
+    if gone:
+        rows = "".join(
+            f"<li>{escape(m.name)} &middot; revoked {escape(_ago(m.revoked_at) or '')}</li>"
+            for m in gone
+        )
+        parts.append(
+            f"<section><details><summary>Revoked ({len(gone)})</summary><ul>{rows}</ul>"
+            "</details></section>"
+        )
+    parts.append("</div>")
+    return "".join(parts)
+
+
 def starter_prompt() -> str:
     """What he pastes into a new agent. It carries NO secret -- only where to
     read and what to tell him -- so it is safe in any chat and any transcript
@@ -2234,6 +2296,20 @@ def _comments_button(artifact_id: str, open_count: int) -> str:
     )
 
 
+# His menu, top right on every gallery page (homelab-ij8.103, his ask: "a little
+# profile area on the top right for my user"). A <details>, like the page menu,
+# so it opens with scripts off. Named outright: Authelia admits exactly one
+# subject here, and the app does not trust an identity header it cannot prove
+# was set by the ingress (see the module docstring).
+_PROFILE = (
+    '<details class="menu profile"><summary aria-label="Your account">Jeremy'
+    '<span class="chev" aria-hidden="true"></span></summary><div class="mpanel">'
+    '<a class="mrow" href="/machines">Machines and keys</a>'
+    '<a class="mrow" href="/connect">Connect a machine</a>'
+    "</div></details>"
+)
+
+
 def _shell(
     title: str,
     body: str,
@@ -2276,13 +2352,13 @@ def _shell(
     # are different on purpose, and both were measured off the saved pages.
     if bleed:
         top = (
-            f'<header class="bar bleed">{back}{heading}{meta_block}</header>'
+            f'<header class="bar bleed">{back}{heading}{meta_block}{_PROFILE}</header>'
             '<div class="wrap">'
         )
     else:
         top = (
             f'<div class="wrap"><header class="bar">{back}{heading}'
-            f"{meta_block}</header>"
+            f"{meta_block}{_PROFILE}</header>"
         )
     return (
         '<!doctype html><html lang="en-GB"><head><meta charset="utf-8">'
@@ -3125,8 +3201,7 @@ def gallery_router(db: Database) -> APIRouter:
             _shell(
                 "Artifacts",
                 body,
-                meta_html=_wall_meta(waiting_total, hidden_questions)
-                + ' <a class="connect-link" href="/connect">Connect a machine</a>',
+                meta_html=_wall_meta(waiting_total, hidden_questions),
                 controls=_controls_row(
                     view,
                     query,
@@ -3470,6 +3545,33 @@ def gallery_router(db: Database) -> APIRouter:
                 title_html=menu + _comments_button(artifact_id, open_threads),
                 bleed=True,
             ),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.get("/machines", response_class=HTMLResponse)
+    def machines_page(revoke: str = "") -> HTMLResponse:
+        return HTMLResponse(
+            _shell("Machines and keys", _machines_page(keys.machines(db), confirm=revoke)),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.post("/machines/{key_id}/rename")
+    def machine_rename(key_id: str, request: Request, label: str = Form("")):
+        _same_origin_write(request)
+        cleaned = " ".join(label.split())[:60]
+        if not keys.set_label(db, key_id, cleaned):
+            raise HTTPException(404, "no such machine")
+        return RedirectResponse("/machines", status_code=303)
+
+    @router.post("/machines/{key_id}/revoke", response_class=HTMLResponse)
+    def machine_revoke(key_id: str, request: Request) -> HTMLResponse:
+        """Immediate and permanent for that key; the machine can connect again
+        with a new code. His pages and its pages are untouched."""
+        _same_origin_write(request)
+        done = keys.revoke(db, key_id)
+        note = "Revoked. That key no longer works." if done else "That key was already revoked."
+        return HTMLResponse(
+            _shell("Machines and keys", _machines_page(keys.machines(db), note=note)),
             headers={**gallery_headers(), "cache-control": "no-store"},
         )
 

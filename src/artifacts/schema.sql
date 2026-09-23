@@ -572,3 +572,11 @@ alter table artifact add column if not exists agents_can_read boolean;
 update artifact set agents_can_read = false where agents_can_read is null;
 alter table artifact alter column agents_can_read set default true;
 alter table artifact alter column agents_can_read set not null;
+
+-- THE MACHINES PAGE (homelab-ij8.103, 23 Sep 2026). Jeremy's confirmed ask: see
+-- every connected machine, rename it, revoke it. `label` is the name he gives a
+-- machine on that page; `agent` stays the identity its pages and questions are
+-- filed under, so renaming never rewrites history. `last_used_at` is touched by
+-- a successful key check at most every few minutes (keys.touch).
+alter table agent_key add column if not exists label text;
+alter table agent_key add column if not exists last_used_at timestamptz;

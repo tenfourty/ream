@@ -90,3 +90,57 @@ def list_keys(db: Database) -> list[KeyRow]:
             "select id, agent, created_at, revoked_at from agent_key order by created_at"
         ).fetchall()
     return [KeyRow(*row) for row in rows]
+
+
+def touch(db: Database, key_id: str) -> None:
+    """Record that a key was just used -- at most once every five minutes, so a
+    busy agent costs an update that matches nothing, not a write per request
+    (homelab-ij8.103)."""
+    with db.connect() as conn:
+        conn.execute(
+            "update agent_key set last_used_at = now() where id = %s"
+            " and (last_used_at is null or last_used_at < now() - interval '5 minutes')",
+            (key_id,),
+        )
+
+
+@dataclass(frozen=True)
+class Machine:
+    id: str
+    agent: str
+    label: str | None
+    created_at: datetime
+    revoked_at: datetime | None
+    last_used_at: datetime | None
+    pages: int
+    sessions: list[str]
+
+    @property
+    def name(self) -> str:
+        return self.label or self.agent
+
+
+def machines(db: Database) -> list[Machine]:
+    """Every key, as the machines page shows it: working ones first, newest
+    first. Never the token or its hash."""
+    with db.connect() as conn:
+        rows = conn.execute(
+            "select k.id, k.agent, k.label, k.created_at, k.revoked_at, k.last_used_at,"
+            " (select count(*) from artifact a where a.agent = k.agent"
+            "   and a.deleted_at is null),"
+            " array(select s from (select v.session as s, max(v.created_at) as at"
+            "   from version v join artifact a on a.id = v.artifact_id"
+            "   where a.agent = k.agent and v.session is not null"
+            "   group by v.session order by at desc limit 5) recent)"
+            " from agent_key k"
+            " order by k.revoked_at is not null, k.created_at desc"
+        ).fetchall()
+    return [Machine(*row[:7], sessions=list(row[7] or [])) for row in rows]
+
+
+def set_label(db: Database, key_id: str, label: str) -> bool:
+    with db.connect() as conn:
+        done = conn.execute(
+            "update agent_key set label = %s where id = %s", (label or None, key_id)
+        )
+        return done.rowcount > 0

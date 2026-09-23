@@ -220,6 +220,8 @@ def agent_router(
         # re-derived: the token itself must not be handled twice, and the id is
         # the handle `artifacts-admin list-keys` already prints.
         request.state.agent_key_id = key.id
+        # For the machines page's "last used" (homelab-ij8.103).
+        keys.touch(db, key.id)
         return key.agent
 
     # How long a declared session label may be. Generous enough for the shape
