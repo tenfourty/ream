@@ -38,6 +38,13 @@ from artifacts.db import Database
 _auth_log = logging.getLogger("artifacts.auth")
 
 
+class AgentsBody(BaseModel):
+    """`can_read` is required: True opens the page to every agent in his space,
+    False closes it to him and its publisher (homelab-ij8.105)."""
+
+    can_read: bool
+
+
 class ConnectBody(BaseModel):
     name: str | None = None
 
@@ -599,8 +606,10 @@ def agent_router(
 
     @router.get("/artifacts/{artifact_id}")
     def read(artifact_id: str, agent: str = Depends(caller)):
+        # Any agent may READ a page open to agents (homelab-ij8.105); a closed
+        # page, and one that does not exist, still answer the same 404.
         try:
-            return store.get_owned(db, agent, artifact_id).__dict__
+            return store.get_owned(db, agent, artifact_id, as_reader=True).__dict__
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
 
@@ -615,7 +624,7 @@ def agent_router(
         published before that check existed still reports its own problems.
         """
         try:
-            stored = store.get_body(db, agent, artifact_id)
+            stored = store.get_body(db, agent, artifact_id, as_reader=True)
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
         return {
@@ -636,7 +645,10 @@ def agent_router(
         `bytes` is what a reader actually compares.
         """
         try:
-            return [row.__dict__ for row in store.list_versions(db, agent, artifact_id)]
+            return [
+                row.__dict__
+                for row in store.list_versions(db, agent, artifact_id, as_reader=True)
+            ]
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
 
@@ -650,7 +662,7 @@ def agent_router(
         whose argument is that the record is not edited.
         """
         try:
-            stored = store.get_version_body(db, agent, artifact_id, n)
+            stored = store.get_version_body(db, agent, artifact_id, n, as_reader=True)
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact or version") from exc
         return {
@@ -659,8 +671,24 @@ def agent_router(
         }
 
     @router.get("/artifacts")
-    def index(agent: str = Depends(caller)):
-        return [row.__dict__ for row in store.list_for_agent(db, agent)]
+    def index(
+        agent: str = Depends(caller),
+        scope: str = Query("mine", pattern="^(mine|all)$"),
+    ):
+        """This agent's pages, or with `scope=all` every page it may read: its
+        own plus every other agent's page open to agents (homelab-ij8.105).
+        `mine` stays the default so no existing caller's listing changes."""
+        rows = store.list_readable(db, agent) if scope == "all" else store.list_for_agent(db, agent)
+        return [row.__dict__ for row in rows]
+
+    @router.post("/artifacts/{artifact_id}/agents")
+    def agents_can_read(artifact_id: str, payload: AgentsBody, agent: str = Depends(caller)):
+        """Open this agent's own page to every agent in his space, or close it to
+        just him and this agent (homelab-ij8.105). The publisher's twin of his
+        control in the gallery; nobody else's page can be changed from here."""
+        if not store.set_agents_can_read(db, artifact_id, payload.can_read, agent=agent):
+            raise HTTPException(404, "no such artifact")
+        return store.get_owned(db, agent, artifact_id).__dict__
 
     # --- the shelf: what Jeremy can do to a page in the gallery, an agent can
     # do to its own pages here. His rule, 20 Sep 2026: "ideally agents can take
@@ -989,7 +1017,9 @@ def agent_router(
         agent: str = Depends(caller),
     ):
         try:
-            store.get_owned(db, agent, artifact_id)
+            # A page open to agents shows its questions and his answers to any
+            # agent reading it -- Jeremy's choice (4b), homelab-ij8.105.
+            store.get_owned(db, agent, artifact_id, as_reader=True)
         except store.NotFound as exc:
             # A key holding decisions:read-all reads any seat's questions HERE
             # too, not only on /decisions?scope=all (homelab-9gj). The operator
@@ -1241,7 +1271,8 @@ def agent_router(
             owned = conn.execute(
                 "select 1 from decision join artifact"
                 " on artifact.id = decision.artifact_id"
-                " where decision.id = %s and artifact.agent = %s"
+                " where decision.id = %s"
+                "   and (artifact.agent = %s or artifact.agents_can_read)"
                 "   and artifact.deleted_at is null",
                 (decision_id, agent),
             ).fetchone()

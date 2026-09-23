@@ -278,6 +278,7 @@ def test_without_the_grant_another_seats_page_answers_exactly_like_a_missing_one
     Granting one seat the difference must not leak it to every other seat."""
     token, _ = keys.mint(db, agent="nosy-seat")
     published, _asked = _asks(db, "warpgate-seat")
+    store.set_agents_can_read(db, published.id, False, agent=None)  # closed to other agents: homelab-ij8.105 made pages readable by default
 
     theirs = client.get(
         f"/api/v1/artifacts/{published.id}/decisions", headers=auth(token)

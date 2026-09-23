@@ -142,6 +142,7 @@ def test_both_routes_answer_for_the_owning_key(client, db, three_versions):
 def test_another_key_gets_the_same_404_for_both(client, db, three_versions):
     other, _ = keys.mint(db, agent="other")
     headers = {"Authorization": f"Bearer {other}"}
+    store.set_agents_can_read(db, three_versions, False, agent=None)  # closed to other agents: homelab-ij8.105 made pages readable by default
     assert (
         client.get(
             f"/api/v1/artifacts/{three_versions}/versions", headers=headers

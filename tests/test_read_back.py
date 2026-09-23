@@ -93,6 +93,7 @@ def test_another_agents_page_is_a_plain_404(client, db):
     published = client.post(
         "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(mine)
     ).json()
+    store.set_agents_can_read(db, published["id"], False, agent=None)  # closed to other agents: homelab-ij8.105 made pages readable by default
 
     response = client.get(
         f"/api/v1/artifacts/{published['id']}/body", headers=auth(theirs)

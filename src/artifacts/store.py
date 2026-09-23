@@ -205,6 +205,9 @@ class ArtifactRow:
     # `current_version` means he has not opened the latest change.
     seen_version: int | None = None
     seen_at: datetime | None = None
+    # Whether other agents in his space may read it (homelab-ij8.105): True by
+    # default, False when he or the publisher has closed it to the two of them.
+    agents_can_read: bool = True
 
 
 def content_domain() -> str:
@@ -440,7 +443,19 @@ def publish(
     )
 
 
-def _owned(conn, artifact_id: str, agent: str):
+def _owned(conn, artifact_id: str, agent: str, as_reader: bool = False):
+    """The page, if `agent` may act on it. `as_reader` widens that to READING
+    a page another agent published, when the page is open to agents
+    (homelab-ij8.105). Only read routes may pass it; every write stays scoped
+    to the publisher. A closed page and a missing one still look the same."""
+    if as_reader:
+        return conn.execute(
+            "select id, title, agent, visibility, current_version, updated_at,"
+            " archived_at, pinned_at, agents_can_read"
+            " from artifact where id = %s and deleted_at is null"
+            " and (agent = %s or agents_can_read)",
+            (artifact_id, agent),
+        ).fetchone()
     return conn.execute(
         # `deleted_at is null` is here rather than at each caller BECAUSE
         # every caller is here: get_owned, get_body, patch and the
@@ -448,7 +463,7 @@ def _owned(conn, artifact_id: str, agent: str):
         # deleted page must be invisible to all of them, and the way to be
         # sure of that is for there to be one place it can be forgotten.
         "select id, title, agent, visibility, current_version, updated_at,"
-        " archived_at, pinned_at"
+        " archived_at, pinned_at, agents_can_read"
         " from artifact where id = %s and agent = %s and deleted_at is null",
         (artifact_id, agent),
     ).fetchone()
@@ -625,9 +640,11 @@ def patch(
     )
 
 
-def get_owned(db: Database, agent: str, artifact_id: str) -> ArtifactRow:
+def get_owned(
+    db: Database, agent: str, artifact_id: str, *, as_reader: bool = False
+) -> ArtifactRow:
     with db.connect() as conn:
-        row = _owned(conn, artifact_id, agent)
+        row = _owned(conn, artifact_id, agent, as_reader)
         if row is None:
             raise NotFound()
         # The client's only way to learn the expected_revision for a PATCH: this
@@ -637,10 +654,15 @@ def get_owned(db: Database, agent: str, artifact_id: str) -> ArtifactRow:
             "select revision, session from version where artifact_id = %s and n = %s",
             (row[0], row[4]),
         ).fetchone()
-        seen = conn.execute(
-            "select read_version, read_at from page_read where artifact_id = %s",
-            (row[0],),
-        ).fetchone() or (None, None)
+        # Whether HE has read it is the publisher's to know, not every reader's.
+        seen = (
+            conn.execute(
+                "select read_version, read_at from page_read where artifact_id = %s",
+                (row[0],),
+            ).fetchone()
+            if row[2] == agent
+            else None
+        ) or (None, None)
     return ArtifactRow(
         id=row[0],
         title=row[1],
@@ -656,10 +678,13 @@ def get_owned(db: Database, agent: str, artifact_id: str) -> ArtifactRow:
         pinned_at=row[7],
         seen_version=seen[0],
         seen_at=seen[1],
+        agents_can_read=row[8],
     )
 
 
-def get_body(db: Database, agent: str, artifact_id: str) -> StoredBody:
+def get_body(
+    db: Database, agent: str, artifact_id: str, *, as_reader: bool = False
+) -> StoredBody:
     """The current version's stored body, to its own agent.
 
     An author cannot otherwise see what it published. The rendered page is
@@ -676,7 +701,7 @@ def get_body(db: Database, agent: str, artifact_id: str) -> StoredBody:
     an agent learns nothing about what it does not own.
     """
     with db.connect() as conn:
-        row = _owned(conn, artifact_id, agent)
+        row = _owned(conn, artifact_id, agent, as_reader)
         if row is None:
             raise NotFound()
         version = conn.execute(
@@ -707,7 +732,9 @@ class VersionRow:
     live: bool
 
 
-def list_versions(db: Database, agent: str, artifact_id: str) -> list[VersionRow]:
+def list_versions(
+    db: Database, agent: str, artifact_id: str, *, as_reader: bool = False
+) -> list[VersionRow]:
     """A page's history, newest first, to its own agent.
 
     homelab-ij8.30, first-user feedback from the cove seat on 19 Sep: publish
@@ -723,7 +750,7 @@ def list_versions(db: Database, agent: str, artifact_id: str) -> list[VersionRow
     another agent's page is a plain 404 rather than a 403.
     """
     with db.connect() as conn:
-        row = _owned(conn, artifact_id, agent)
+        row = _owned(conn, artifact_id, agent, as_reader)
         if row is None:
             raise NotFound()
         rows = conn.execute(
@@ -750,7 +777,7 @@ def list_versions(db: Database, agent: str, artifact_id: str) -> list[VersionRow
 
 
 def get_version_body(
-    db: Database, agent: str, artifact_id: str, n: int
+    db: Database, agent: str, artifact_id: str, n: int, *, as_reader: bool = False
 ) -> StoredBody:
     """The body of ONE version, to its own agent (homelab-50ze, homelab-ij8.30).
 
@@ -761,7 +788,7 @@ def get_version_body(
     service whose whole argument is that the record is not edited.
     """
     with db.connect() as conn:
-        row = _owned(conn, artifact_id, agent)
+        row = _owned(conn, artifact_id, agent, as_reader)
         if row is None:
             raise NotFound()
         version = conn.execute(
@@ -781,7 +808,7 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"
             " artifact.current_version, version.revision, artifact.updated_at,"
             " artifact.archived_at, artifact.pinned_at, version.session,"
-            " page_read.read_version, page_read.read_at"
+            " page_read.read_version, page_read.read_at, artifact.agents_can_read"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
@@ -806,9 +833,67 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             last_session=row[9],
             seen_version=row[10],
             seen_at=row[11],
+            agents_can_read=row[12],
         )
         for row in rows
     ]
+
+
+def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
+    """Every page `agent` may READ: its own, and every other agent's page that
+    is open to agents (homelab-ij8.105; Jeremy chose that agents can browse
+    their colleagues' open work, 5a). Whether he has read a page is reported
+    only on the caller's own rows."""
+    with db.connect() as conn:
+        rows = conn.execute(
+            "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"
+            " artifact.current_version, version.revision, artifact.updated_at,"
+            " artifact.archived_at, artifact.pinned_at, version.session,"
+            " page_read.read_version, page_read.read_at, artifact.agents_can_read"
+            " from artifact"
+            " join version on version.artifact_id = artifact.id"
+            " and version.n = artifact.current_version"
+            " left join page_read on page_read.artifact_id = artifact.id"
+            " where artifact.deleted_at is null"
+            " and (artifact.agent = %s or artifact.agents_can_read)"
+            " order by artifact.updated_at desc",
+            (agent,),
+        ).fetchall()
+    return [
+        ArtifactRow(
+            id=row[0],
+            title=row[1],
+            agent=row[2],
+            visibility=row[3],
+            current_version=row[4],
+            revision=row[5],
+            updated_at=row[6],
+            url=url_for(row[0]),
+            page_url=page_url_for(row[0]),
+            archived_at=row[7],
+            pinned_at=row[8],
+            last_session=row[9],
+            seen_version=row[10] if row[2] == agent else None,
+            seen_at=row[11] if row[2] == agent else None,
+            agents_can_read=row[12],
+        )
+        for row in rows
+    ]
+
+
+def set_agents_can_read(
+    db: Database, artifact_id: str, can_read: bool, *, agent: str | None
+) -> bool:
+    """Open a page to every agent in his space, or close it to him and its
+    publisher (homelab-ij8.105). `agent` None is the gallery (his wall, any
+    page); an agent may only change its own. False if nothing matched."""
+    where, params = _scoped(artifact_id, agent)
+    with db.connect() as conn:
+        done = conn.execute(
+            f"update artifact set agents_can_read = %s {where}",  # noqa: S608 -- _scoped emits a fixed clause with placeholders, never caller text
+            (can_read, *params),
+        )
+        return done.rowcount > 0
 
 
 def save_thumbnail(db: Database, artifact_id: str, version_n: int, png: bytes) -> bool:

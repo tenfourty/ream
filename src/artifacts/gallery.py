@@ -1250,6 +1250,7 @@ _ICON = {
     "unarchive": '<path d="M8 2.2 3.4 6.8h2.8v4.6h3.6V6.8h2.8L8 2.2ZM2.5 12.8h11v1.3h-11v-1.3Z"/>',
     "open": '<path d="M9.4 1.6v1.3h2.8L6.5 8.6l.9.9 5.7-5.7v2.8h1.3V1.6H9.4ZM2.8 3.3h3.9v1.3H3.3v8.1h8.1V9.3h1.3v4a.7.7 0 0 1-.7.7H2.8a.7.7 0 0 1-.7-.7V4a.7.7 0 0 1 .7-.7Z"/>',
     "all": '<path d="M2 2.5h5v5H2v-5Zm7 0h5v5H9v-5Zm-7 6h5v5H2v-5Zm7 0h5v5H9v-5Z"/>',
+    "lock": '<path d="M4.5 7V5a3.5 3.5 0 0 1 7 0v2h.7c.4 0 .8.4.8.8v6.4c0 .4-.4.8-.8.8H3.8a.8.8 0 0 1-.8-.8V7.8c0-.4.4-.8.8-.8h.7Zm1.4 0h4.2V5a2.1 2.1 0 0 0-4.2 0v2Z"/>',
     "trash": '<path d="M6.4 1.6h3.2a.8.8 0 0 1 .8.8v.8h2.8a.65.65 0 0 1 0 1.3h-.5l-.7 8.2a1.6 1.6 0 0 1-1.6 1.5H5.6a1.6 1.6 0 0 1-1.6-1.5l-.7-8.2h-.5a.65.65 0 0 1 0-1.3h2.8v-.8a.8.8 0 0 1 .8-.8Zm.5 1.6h2.2v-.3H6.9v.3ZM4.6 4.5l.7 8.1a.3.3 0 0 0 .3.3h4.8a.3.3 0 0 0 .3-.3l.7-8.1H4.6Zm2 1.5h1.2v5.4H6.6V6Zm2.6 0h1.2v5.4H9.2V6Z"/>',
     "restore": '<path d="M8 2.4a5.6 5.6 0 1 0 5.4 7.1.7.7 0 0 0-1.34-.38A4.2 4.2 0 1 1 8 3.8c1.1 0 2.1.42 2.85 1.1l-1.6.02a.65.65 0 0 0 .01 1.3l3.2-.04a.65.65 0 0 0 .64-.66l-.04-3.2a.65.65 0 1 0-1.3.02l.01 1.35A5.58 5.58 0 0 0 8 2.4Z"/>',
     "copy": '<path d="M5.5 1.6h6.3a1.6 1.6 0 0 1 1.6 1.6v6.3h-1.3V3.2a.3.3 0 0 0-.3-.3H5.5V1.6ZM3.2 4.1h6.4a1.6 1.6 0 0 1 1.6 1.6v6.4a1.6 1.6 0 0 1-1.6 1.6H3.2a1.6 1.6 0 0 1-1.6-1.6V5.7a1.6 1.6 0 0 1 1.6-1.6Zm0 1.3a.3.3 0 0 0-.3.3v6.4c0 .17.13.3.3.3h6.4a.3.3 0 0 0 .3-.3V5.7a.3.3 0 0 0-.3-.3H3.2Z"/>',
@@ -1584,7 +1585,12 @@ def _connect_page(
 
 
 def _page_menu(
-    artifact_id: str, title: str, agent: str, archived: bool, updated: str
+    artifact_id: str,
+    title: str,
+    agent: str,
+    archived: bool,
+    updated: str,
+    agents_can_read: bool = True,
 ) -> str:
     """The title's dropdown: what this page is, and what can be done to it.
 
@@ -1603,7 +1609,14 @@ def _page_menu(
             '<div class="mhead">'
             f"<b>Page by {escape(agent)}</b>"
             f"<span>Updated {escape(updated)}</span>"
-            "</div>"
+            # Who else can read it, said where he looks for what a page is
+            # (homelab-ij8.105).
+            + (
+                "<span>All your agents can read it</span>"
+                if agents_can_read
+                else f"<span>Only you and {escape(agent)} can read it</span>"
+            )
+            + "</div>"
         ),
         (
             f'<a class="mrow" href="#rename">{_icon("rename")}Rename</a>'
@@ -1623,6 +1636,17 @@ def _page_menu(
             f'<button class="mrow" type="submit">{_icon("archive")}'
             "Archive</button></form>"
         )
+    rows.append(
+        f'<form method="post" action="/a/{ident}/agents">'
+        f'<input type="hidden" name="can_read" value="{"0" if agents_can_read else "1"}">'
+        f'<button class="mrow" type="submit">{_icon("lock")}'
+        + (
+            f"Close to just you and {escape(agent)}"
+            if agents_can_read
+            else "Let all your agents read it"
+        )
+        + "</button></form>"
+    )
     rows.append(
         f'<form method="post" action="/a/{ident}/duplicate">'
         f'<button class="mrow" type="submit">{_icon("copy")}'
@@ -3181,6 +3205,16 @@ def gallery_router(db: Database) -> APIRouter:
             raise HTTPException(404, "no such artifact")
         return RedirectResponse(f"/a/{artifact_id}", status_code=303)
 
+    @router.post("/a/{artifact_id}/agents")
+    def agents_page(artifact_id: str, request: Request, can_read: str = Form("1")):
+        """Open a page to every agent in his space, or close it to him and its
+        publisher (homelab-ij8.105, his ruling). Same guard as every other state
+        change made with his session."""
+        _same_origin_write(request)
+        if not store.set_agents_can_read(db, artifact_id, can_read == "1", agent=None):
+            raise HTTPException(404, "no such artifact")
+        return RedirectResponse(f"/a/{artifact_id}", status_code=303)
+
     @router.post("/a/{artifact_id}/pin")
     def pin_page(artifact_id: str, request: Request, pinned: str = Form("1")):
         """Pin a page to the front of the wall, or unpin it.
@@ -3349,7 +3383,7 @@ def gallery_router(db: Database) -> APIRouter:
         with db.connect() as conn:
             row = conn.execute(
                 "select title, read_token, agent, archived_at, updated_at,"
-                " current_version"
+                " current_version, agents_can_read"
                 " from artifact where id = %s",
                 (artifact_id,),
             ).fetchone()
@@ -3405,6 +3439,7 @@ def gallery_router(db: Database) -> APIRouter:
             row[2],
             archived,
             _when(str(row[4])) if row[4] else "just now",
+            agents_can_read=row[6],
         )
         return HTMLResponse(
             _shell(

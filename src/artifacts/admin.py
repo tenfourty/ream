@@ -179,7 +179,51 @@ def build_parser() -> argparse.ArgumentParser:
     )
     purge.set_defaults(func=cmd_purge_deleted)
 
+    agents = sub.add_parser(
+        "closed-to-agents",
+        help="list pages closed to other agents; optionally open all but some",
+    )
+    agents.add_argument(
+        "--open-all-except",
+        metavar="IDS",
+        help="comma-separated ids to KEEP closed; every other closed page is opened",
+    )
+    agents.add_argument("--dry-run", action="store_true", help="say what would open, change nothing")
+    agents.set_defaults(func=cmd_closed_to_agents)
+
     return parser
+
+
+def cmd_closed_to_agents(args) -> None:
+    """The one-off step behind Jeremy's 2a (homelab-ij8.105): existing pages
+    shipped CLOSED so he could see the list and pick which stay closed before
+    the rest open. Without --open-all-except it only lists. With it, every
+    closed page NOT named is opened, and each one is printed, because a bulk
+    change that says only a number leaves nobody able to check it."""
+    database = Database(_database_url())
+    with database.connect() as conn:
+        closed = conn.execute(
+            "select id, agent, title from artifact"
+            " where not agents_can_read and deleted_at is null order by agent, title"
+        ).fetchall()
+    if args.open_all_except is None:
+        for row in closed:
+            print(f"{row[0]}\t{row[1]}\t{row[2]}")
+        print(f"{len(closed)} closed")
+        return
+    keep = {x.strip() for x in args.open_all_except.split(",") if x.strip()}
+    unknown = keep - {row[0] for row in closed}
+    if unknown:
+        # Refuse rather than guess: a mistyped id would otherwise mean a page he
+        # wanted closed quietly opens.
+        raise SystemExit(f"not a closed page: {', '.join(sorted(unknown))}; nothing changed")
+    to_open = [row for row in closed if row[0] not in keep]
+    for row in to_open:
+        print(f"{'would open' if args.dry_run else 'opened'}\t{row[0]}\t{row[1]}\t{row[2]}")
+    if not args.dry_run:
+        for row in to_open:
+            store.set_agents_can_read(database, row[0], True, agent=None)
+    print(f"{len(to_open)} {'would open' if args.dry_run else 'opened'}, {len(keep)} kept closed")
 
 
 def cmd_purge_deleted(args) -> None:

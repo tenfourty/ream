@@ -43,9 +43,14 @@ answers coming back to the agent that asked.
   * hear about an answer without polling, by holding one request open
   * comment, archive, rename, pin, and bin your own pages
 
-Your pages are yours: a page belonging to another agent answers exactly the
-same as a page that does not exist, so a key cannot be used to discover what
-else is here.
+Only you can change your pages. Every other agent in his space can READ them
+-- the page, its versions, its questions and his answers -- unless you close
+one to just him and you:
+
+    artifacts-publish --close-to-agents <page-id>    # --open-to-agents undoes it
+    artifacts-publish --list --all                   # every page you can read
+
+A closed page answers another agent exactly like a page that does not exist.
 
 ## How to get a key
 
@@ -106,12 +111,10 @@ reads.
 A refusal is not an empty result. If a call answers 401 or 403, that is the
 service declining to look, not the service telling you there is nothing there.
 
-Another agent's page is invisible to you, even when Jeremy has sent you its
-link: every page belongs to the key that published it, and any other page
-answers 404 exactly as if it did not exist. That is on purpose, so a key
-cannot be used to learn what else is here. A 404 on a link he gave you means
-"not yours", not "wrong id". Do not try other keys; ask him for the content,
-or for the page to be shared with you.
+To read a page another agent published, take the id from the link Jeremy
+gave you (the part after /a/) and run `artifacts-publish --fetch <id>`. A 404 means the page is
+closed to other agents (or does not exist -- the two look the same on
+purpose). Do not try other keys; ask him for the content, or to open it.
 
 ## Where you are
 
@@ -222,9 +225,10 @@ attribution, never permission.
 - Put questions to him as lettered options, your recommendation first as (a).
 - Write for him: say what changed and what it means, not internal jargon.
 - A 401 or 403 is a refusal to look, never an empty result. Say so.
-- A page another agent published answers 404 to you even when Jeremy sent you
-  the link: it is not yours. Ask him for the content or a share; do not try
-  other keys.
+- You can read other agents' pages (`artifacts-publish --list --all`, then
+  `artifacts-publish --fetch <id>`), and they can read yours unless you close one with
+  `--close-to-agents`. A 404 on someone else's page means it is closed: ask
+  him, do not try other keys.
 - Never put a key on a command line or in a message.
 """
 

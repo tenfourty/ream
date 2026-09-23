@@ -269,6 +269,7 @@ def test_another_agents_artifact_is_404_on_ask_list_and_close(client, db):
     token_b, _ = keys.mint(db, agent="seat-b")
     page = _publish(client, token_a)
     mine = _ask(client, token_a, page["id"])
+    store.set_agents_can_read(db, page["id"], False, agent=None)  # closed to other agents: homelab-ij8.105 made pages readable by default
 
     sneaky = client.post(
         f"/api/v1/artifacts/{page['id']}/decisions",

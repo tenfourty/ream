@@ -77,7 +77,10 @@ def test_only_the_owner_sees_it(db, gallery):
     other, _ = keys.mint(db, agent="other")
     page = _publish(db, "One")
     gallery.get(f"/a/{page.id}")
+    # Other agents may READ an open page (homelab-ij8.105), but whether he has
+    # read it is the publisher's alone to know.
     response = gallery.get(
         f"/api/v1/artifacts/{page.id}", headers={"Authorization": f"Bearer {other}"}
     )
-    assert response.status_code == 404
+    assert response.status_code == 200
+    assert response.json()["seen_version"] is None and response.json()["seen_at"] is None

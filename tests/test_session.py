@@ -261,6 +261,7 @@ def test_scoping_still_uses_the_agent_from_the_key(client, key, db):
     to learn which ids are real."""
     keys.mint(db, agent="another-seat")
     theirs = store.publish(db, "another-seat", "Not yours", PAGE)
+    store.set_agents_can_read(db, theirs.id, False, agent=None)  # closed to other agents: homelab-ij8.105 made pages readable by default
     got = client.get(f"/api/v1/artifacts/{theirs.id}", headers=_h(key, SEAT_A))
     assert got.status_code == 404
 

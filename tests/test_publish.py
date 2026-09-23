@@ -139,6 +139,7 @@ def test_another_agents_key_cannot_read_or_patch(client, db):
         json={"title": "Board", "body": PAGE},
         headers=auth(token_a),
     ).json()
+    store.set_agents_can_read(db, mine["id"], False, agent=None)  # closed to other agents: homelab-ij8.105 made pages readable by default
     assert (
         client.get(f"/api/v1/artifacts/{mine['id']}", headers=auth(token_b)).status_code
         == 404

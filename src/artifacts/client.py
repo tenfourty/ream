@@ -572,8 +572,11 @@ def _fetch(artifact_id: str, key: str, version: int | None = None) -> str:
     return body
 
 
-def _list(key: str) -> list[dict]:
-    return _request("GET", f"{_api_base()}/artifacts", key, None)
+def _list(key: str, everyone: bool = False) -> list[dict]:
+    # `everyone`: every page this key may read, other agents' open pages
+    # included (homelab-ij8.105), not only its own.
+    scope = "?scope=all" if everyone else ""
+    return _request("GET", f"{_api_base()}/artifacts{scope}", key, None)
 
 
 def _shelf(action: str, artifact_id: str, key: str, payload: dict) -> dict:
@@ -811,7 +814,7 @@ def _print_shelf(result: dict) -> None:
         json.dumps(
             {
                 field: result[field]
-                for field in ("id", "title", "url", "archived_at", "pinned_at")
+                for field in ("id", "title", "url", "archived_at", "pinned_at", "agents_can_read")
                 if field in result
             }
         )
@@ -904,6 +907,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--title")
     parser.add_argument("--update", metavar="ID")
     parser.add_argument("--list", action="store_true")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="with --list: every page you can read, other agents' open pages included",
+    )
     parser.add_argument("--key-file")
     parser.add_argument(
         "--key-fd",
@@ -942,6 +950,14 @@ def build_parser() -> argparse.ArgumentParser:
     shelf.add_argument("--unpin", metavar="ID", help="unpin it")
     shelf.add_argument("--duplicate", metavar="ID", help="copy a page to a new address")
     shelf.add_argument(
+        "--close-to-agents",
+        metavar="ID",
+        help="only Jeremy and you can read this page (other agents can by default)",
+    )
+    shelf.add_argument(
+        "--open-to-agents", metavar="ID", help="let every agent in his space read it again"
+    )
+    shelf.add_argument(
         "--versions",
         metavar="ID",
         help="the page's history: which versions exist, when, and how big",
@@ -971,6 +987,8 @@ _SHELF_ACTIONS = (
     ("unarchive", "archive", {"archived": False}),
     ("pin", "pin", {"pinned": True}),
     ("unpin", "pin", {"pinned": False}),
+    ("close_to_agents", "agents", {"can_read": False}),
+    ("open_to_agents", "agents", {"can_read": True}),
 )
 
 
@@ -995,7 +1013,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.list:
-            for item in _list(key):
+            for item in _list(key, everyone=args.all):
                 # A fourth column ONLY when there is something to say. Three
                 # columns is what every existing caller splits on; an always-
                 # present empty field would change the shape for everyone in
@@ -1008,6 +1026,10 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     if item.get(field)
                 )
+                # Closed to other agents (homelab-ij8.105): said, because the
+                # default is open and the exception is what a reader needs.
+                if item.get("agents_can_read") is False:
+                    shelf = ",".join(x for x in (shelf, "closed") if x)
                 # WHEN it last moved, as a plain date, in the fourth column.
                 # Without it, finding which of nine pages were stale took one
                 # API call per page (reported 21 Sep). The service has always
@@ -1032,6 +1054,9 @@ def main(argv: list[str] | None = None) -> int:
                 who = item.get("last_session") or ""
                 if who and _session and who == _session:
                     who = f"{who} (you)"
+                # With --all, a page from ANOTHER agent says whose it is.
+                if args.all and item.get("agent") and not who:
+                    who = f"by {item['agent']}"
                 extra = "\t".join(x for x in (when, who, shelf) if x)
                 suffix = f"\t{extra}" if extra else ""
                 # The GALLERY address, which is the one a reader can open.

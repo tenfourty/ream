@@ -556,3 +556,19 @@ create table if not exists page_read (
     read_version integer not null,
     read_at      timestamptz not null default now()
 );
+
+-- WHO ELSE MAY READ A PAGE (homelab-ij8.105, 23 Sep 2026).
+--
+-- Jeremy's confirmed ruling: by default every agent connected to his space can
+-- READ every page in it -- the page, its versions, its questions and his
+-- answers -- whoever published it. A page can be closed to just him and its
+-- publisher, by him in the gallery or by the publisher. Only the publisher ever
+-- changes a page.
+--
+-- Existing pages start CLOSED (the update below runs once, on the rows that
+-- predate the column), because he asked to see the list and close any before
+-- they open. New pages are open from their first insert (the default).
+alter table artifact add column if not exists agents_can_read boolean;
+update artifact set agents_can_read = false where agents_can_read is null;
+alter table artifact alter column agents_can_read set default true;
+alter table artifact alter column agents_can_read set not null;
