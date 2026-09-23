@@ -405,3 +405,15 @@ def test_a_refused_cross_seat_check_does_not_look_like_nothing_stranded(
     assert "not an empty result" in err.lower()
     assert "decisions:read-all" in err, "the service's own explanation, carried"
     assert "403" in err, "and the status, which callers grep for"
+
+
+def test_writing_without_a_session_label_says_so_on_stderr(live, key_file, page, capsys, monkeypatch):  # noqa: F811
+    """homelab-ij8.106: an unlabelled write is allowed but never silent."""
+    monkeypatch.delenv("ARTIFACTS_SESSION", raising=False)
+    path, _ = key_file
+    assert _run(["ask", page.id, "--question", "q?", "--option", "a=x", "--option", "b=y"], path) == 0
+    out = capsys.readouterr()
+    assert "carries no session label" in out.err
+    assert "carries no session label" not in out.out
+    assert _run(["--session", "me/1", "ask", page.id, "--question", "q2?", "--option", "a=x", "--option", "b=y"], path) == 0
+    assert "carries no session label" not in capsys.readouterr().err

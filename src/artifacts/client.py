@@ -86,6 +86,20 @@ def use_session(value: str | None) -> None:
     _session = value
 
 
+def warn_if_unlabelled(what: str) -> None:
+    """One line on stderr when something is written with no session label
+    (homelab-ij8.106). The first outside agent lost its label between Claude
+    Code shell calls and got "no attribution, with no warning". stderr only, so
+    no caller that parses stdout is affected; never refuses."""
+    if _session is None:
+        print(
+            f"note: this {what} carries no session label, so his record will not say "
+            f"which session did it. Set {_SESSION_ENV} (in Claude Code, in "
+            '~/.claude/settings.json under "env") or pass --session.',
+            file=sys.stderr,
+        )
+
+
 class UsageError(Exception):
     """A problem with how the command was invoked or its key file -- exit 2."""
 
@@ -714,6 +728,19 @@ def _check_page(file_path: str) -> int:
     """
     body = _read_page(file_path)
     findings, syntax, node_ran = check_page(body)
+    # THE SERVICE'S OWN SECRET SCAN, run here too (homelab-ij8.106). The first
+    # outside agent's page passed --check and was then refused on publish with
+    # a 422: this ran only the CSP half, never the scan that actually refuses.
+    # Same module, same shapes file, so it cannot disagree with the service.
+    from artifacts import scan  # stdlib-only; imported here to keep startup light
+
+    secrets_found = scan.scan(body)
+    for found in secrets_found:
+        print(
+            f"{file_path}:{found.line}: {found.shape} -- the service REFUSES a page "
+            "carrying something shaped like a secret; remove or reword that line",
+            file=sys.stderr,
+        )
     for warning in findings:
         print(
             f"{file_path}:{warning.line}: {warning.shape} -- {warning.hint}",
@@ -730,11 +757,11 @@ def _check_page(file_path: str) -> int:
             "scripts were NOT syntax-checked",
             file=sys.stderr,
         )
-    total = len(findings) + len(syntax)
+    total = len(findings) + len(syntax) + len(secrets_found)
     if total == 0:
         print(
-            f"{file_path}: nothing the serving policy refuses, and no trap "
-            "the templates warn about"
+            f"{file_path}: nothing the serving policy refuses, nothing shaped like "
+            "a secret, and no trap the templates warn about"
         )
         return 0
     thing = "problem" if total == 1 else "problems"
@@ -1116,9 +1143,11 @@ def main(argv: list[str] | None = None) -> int:
             if not args.file:
                 print("FILE is required with --update", file=sys.stderr)
                 return 2
+            warn_if_unlabelled("update")
             _print_published(_update(args.file, args.update, key, args.title))
             return 0
         if args.file and args.title:
+            warn_if_unlabelled("publish")
             _print_published(_publish(args.file, args.title, key))
             return 0
         print(

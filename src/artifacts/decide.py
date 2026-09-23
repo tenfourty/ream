@@ -39,6 +39,7 @@ from artifacts.client import (
     declared_session,
     installed_stamp,
     use_session,
+    warn_if_unlabelled,
 )
 from artifacts.client import (
     _Parser as _StaleAwareParser,
@@ -417,6 +418,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     base = _api_base()
+    if args.cmd in ("ask", "record", "outcome", "ack", "close"):
+        warn_if_unlabelled(args.cmd)
     try:
         if args.cmd == "ask":
             row = _ask(args, key)

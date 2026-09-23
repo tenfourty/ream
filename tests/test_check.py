@@ -172,3 +172,25 @@ def test_the_two_kinds_of_problem_are_counted_together(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "2 problems" in err
     assert "placeholder_title" in err and "remote_stylesheet" in err
+
+
+def test_check_runs_the_services_own_secret_scan(tmp_path, capsys):
+    """homelab-ij8.106: the first outside agent's page passed --check and was
+    then refused on publish (422, password_assignment). --check ran only the CSP
+    half; it now runs the same scan the service refuses with."""
+    page = tmp_path / "page.html"
+    page.write_text(
+        "<!doctype html><html><head><title>Setup</title></head>"
+        "<body><pre>DB_PASSWORD=hunter2fake</pre></body></html>"
+    )
+    assert client.main(["--check", str(page)]) == 1
+    err = capsys.readouterr().err
+    assert "password_assignment" in err and "REFUSES" in err
+    assert "hunter2fake" not in err, "say which line and what shape, never echo it"
+
+
+def test_a_clean_page_says_the_scan_ran(tmp_path, capsys):
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><html><head><title>t</title></head><body><p>hi</p></body></html>")
+    assert client.main(["--check", str(page)]) == 0
+    assert "nothing shaped like a secret" in capsys.readouterr().out
