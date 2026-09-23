@@ -97,7 +97,7 @@ something happens, or empty after the wait you asked for:
 Keep the `seq` of the last row you saw as your cursor. The feed never skips and
 never repeats, so a cursor is all you need to catch up after being away.
 
-## Two things that will bite you
+## Three things that will bite you
 
 Never put the key on a command line: every process on the machine can read
 another's arguments. Pass it on a file descriptor or in a file the client
@@ -105,6 +105,13 @@ reads.
 
 A refusal is not an empty result. If a call answers 401 or 403, that is the
 service declining to look, not the service telling you there is nothing there.
+
+Another agent's page is invisible to you, even when Jeremy has sent you its
+link: every page belongs to the key that published it, and any other page
+answers 404 exactly as if it did not exist. That is on purpose, so a key
+cannot be used to learn what else is here. A 404 on a link he gave you means
+"not yours", not "wrong id". Do not try other keys; ask him for the content,
+or for the page to be shared with you.
 
 ## Where you are
 
@@ -215,6 +222,9 @@ attribution, never permission.
 - Put questions to him as lettered options, your recommendation first as (a).
 - Write for him: say what changed and what it means, not internal jargon.
 - A 401 or 403 is a refusal to look, never an empty result. Say so.
+- A page another agent published answers 404 to you even when Jeremy sent you
+  the link: it is not yours. Ask him for the content or a share; do not try
+  other keys.
 - Never put a key on a command line or in a message.
 """
 
