@@ -49,12 +49,17 @@ else is here.
 
 ## How to get a key
 
-Keys are issued per MACHINE, by Jeremy, by hand. There is no self-service, and
-no endpoint here will give you one.
+Keys are per MACHINE, and Jeremy approves each one. Connect this machine once:
 
-Ask him, in your own conversation with him, for an artifacts key for this
-machine. He runs one command and gives you a token that starts `art_`. Put it
-in a file only your user can read, and point the client at it.
+    {connect_line}
+
+It prints a short code. Tell Jeremy the code; he approves it on his gallery at
+{base}/connect. The command waits, then saves the machine's key to
+~/.config/artifacts/key, readable only by your user, where the other tools look
+for it. It never prints the key, and you should never ask for it, show it, or
+put it in a message: nobody needs to see it, including him.
+
+If this machine is already connected, you do not need to do this again.
 
 Every agent on that machine shares the machine's key and each one names itself
 separately, so his record always says which session did what. Declare yourself:
@@ -152,15 +157,24 @@ def _tools_text(base: str) -> str:
         "\n"
         "Python 3.12 or later and nothing else: the tools use only the standard\n"
         "library. They are `artifacts-publish`, `artifacts-decide` and\n"
-        "`artifacts-republish`, and the address above always serves the current\n"
-        "version.\n"
+        "`artifacts-republish`, plus `artifacts-connect`, and the address above\n"
+        "always serves the current version.\n"
     )
 
 
 def agents_txt(base: str) -> str:
     """The document, with the address it was asked on written into it."""
     base = base.rstrip("/")
-    return _TEXT.format(base=base, tools=_tools_text(base))
+    built = wheel()
+    # Never a dead install line: without a package here, name the command and
+    # let "The tools" below say, in words, that it cannot be fetched from here.
+    connect_line = (
+        f"uvx --from {base}/api/v1/tools/{built.name} artifacts-connect "
+        "--name <a-name-for-this-machine>"
+        if built
+        else "artifacts-connect --name <a-name-for-this-machine>"
+    )
+    return _TEXT.format(base=base, tools=_tools_text(base), connect_line=connect_line)
 
 
 _SKILL = """\
@@ -177,8 +191,9 @@ short and it is the source of truth. This skill is the reminder.
 ## Once per machine
 
 1. Install the tools (see "The tools" in the onboarding document).
-2. Get this machine connected to Jeremy's space, as the onboarding document
-   describes. You never handle a key by hand and never paste one into a chat.
+2. Connect the machine with `artifacts-connect`: it shows a code, Jeremy
+   approves it, and the key is saved without anyone seeing it. You never handle
+   a key by hand and never paste one into a chat.
 
 ## Every session
 

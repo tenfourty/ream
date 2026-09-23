@@ -27,7 +27,16 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from markupsafe import escape
 
-from artifacts import comments, decisions, events, frame_pass, stamp, store, thumbs
+from artifacts import (
+    comments,
+    connect,
+    decisions,
+    events,
+    frame_pass,
+    stamp,
+    store,
+    thumbs,
+)
 from artifacts import text as text_module
 from artifacts.db import Database
 from artifacts.store import content_domain, content_url, gallery_origin
@@ -1425,6 +1434,86 @@ def _rename_dialog(artifact_id: str, title: str) -> str:
         '<button class="btn primary" type="submit">Save</button>'
         "</p></form></div>"
     )
+
+
+# The connect page's own look: a narrow column of plain cards. Inline because
+# the gallery CSP allows style 'unsafe-inline' and nothing else uses it.
+_CONNECT_CSS = (
+    "<style>.cx{max-width:40rem;margin:1.5rem auto;display:grid;gap:1.25rem}"
+    ".cx section{border:1px solid var(--line,#ddd);border-radius:12px;padding:1.1rem 1.25rem}"
+    ".cx h2{margin:0 0 .5rem;font-size:1.05rem}.cx p{margin:.4rem 0;line-height:1.5}"
+    ".cx input{font:inherit;padding:.5rem .6rem;border:1px solid var(--line,#ccc);"
+    "border-radius:8px;width:100%;box-sizing:border-box;margin:.35rem 0 .75rem}"
+    ".cx .code{font:600 1.4rem/1.2 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase}"
+    ".cx pre{white-space:pre-wrap;background:var(--soft,#f5f5f4);padding:.75rem;border-radius:8px;"
+    "font-size:.9rem;user-select:all}.cx .err{color:#b42318}.cx .ok{color:#067647}"
+    ".cx dl{display:grid;grid-template-columns:auto 1fr;gap:.25rem .75rem;margin:.5rem 0}"
+    ".cx dt{opacity:.7}.cx .row{display:flex;gap:.5rem;flex-wrap:wrap}</style>"
+)
+
+
+def starter_prompt() -> str:
+    """What he pastes into a new agent. It carries NO secret -- only where to
+    read and what to tell him -- so it is safe in any chat and any transcript
+    (homelab-ij8.102)."""
+    return (
+        "Connect this machine to my artifacts space, so you can publish pages "
+        "for me and ask me questions on them. Read "
+        f"{gallery_origin().rstrip('/')}/api/v1/agents.txt and follow it. When it "
+        "gives you a code, tell me the code and wait while I approve it. Never "
+        "show me or anyone the key it saves."
+    )
+
+
+def _connect_page(
+    typed: str = "", pending=None, message: str = "", ok: str = "", name: str = ""
+) -> str:
+    """The page he approves a machine on. Step one asks for the code his agent
+    is showing; step two shows that one request, lets him name the machine,
+    and approves or denies it. He TYPES the code rather than picking from a
+    list: anyone can create a request, so only the code in front of him is
+    trustworthy."""
+    parts = [_CONNECT_CSS, '<div class="cx">']
+    if ok:
+        parts.append(f'<section><p class="ok">{escape(ok)}</p></section>')
+    if pending is None:
+        parts.append(
+            "<section><h2>Connect a machine</h2>"
+            "<p>Type the code your agent is showing you.</p>"
+            + (f'<p class="err">{escape(message)}</p>' if message else "")
+            + '<form method="get" action="/connect">'
+            f'<input class="code" name="code" value="{escape(typed)}" autocomplete="off"'
+            ' autocapitalize="characters" placeholder="ABCD-EFGH" aria-label="Code" autofocus>'
+            '<button class="btn primary" type="submit">Continue</button></form></section>'
+            "<section><h2>Starting a new agent?</h2>"
+            "<p>Paste this into it. It holds no key, so it is safe in any chat.</p>"
+            f"<pre>{escape(starter_prompt())}</pre></section>"
+        )
+    else:
+        suggested = name or pending.suggested_name or ""
+        parts.append(
+            f"<section><h2>Approve this machine?</h2>"
+            f'<p class="code">{escape(pending.code)}</p>'
+            "<dl>"
+            f"<dt>It calls itself</dt><dd>{escape(pending.suggested_name or 'nothing')}</dd>"
+            f"<dt>Asked from</dt><dd>{escape(pending.from_address)}</dd>"
+            f"<dt>Asked at</dt><dd>{escape(_when(str(pending.created_at)))}</dd>"
+            "</dl>"
+            "<p>Only approve if this is the code your own agent showed you. The machine "
+            "gets its key directly; you will not see it.</p>"
+            + (f'<p class="err">{escape(message)}</p>' if message else "")
+            + '<form method="post" action="/connect/approve">'
+            f'<input type="hidden" name="request_id" value="{escape(pending.id)}">'
+            f'<input type="hidden" name="code" value="{escape(pending.code)}">'
+            "<label>Name this machine"
+            f'<input name="name" value="{escape(suggested)}" autocomplete="off"'
+            ' placeholder="e.g. laptop" required></label>'
+            '<div class="row"><button class="btn primary" type="submit">Approve</button>'
+            f'<button class="btn" type="submit" formaction="/connect/deny">Deny</button>'
+            '<a class="btn" href="/connect">Cancel</a></div></form></section>'
+        )
+    parts.append("</div>")
+    return "".join(parts)
 
 
 def _page_menu(
@@ -2934,7 +3023,8 @@ def gallery_router(db: Database) -> APIRouter:
             _shell(
                 "Artifacts",
                 body,
-                meta_html=_wall_meta(waiting_total, hidden_questions),
+                meta_html=_wall_meta(waiting_total, hidden_questions)
+                + ' <a class="connect-link" href="/connect">Connect a machine</a>',
                 controls=_controls_row(
                     view,
                     query,
@@ -3264,6 +3354,71 @@ def gallery_router(db: Database) -> APIRouter:
                 title_html=menu + _comments_button(artifact_id, open_threads),
                 bleed=True,
             ),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.get("/connect", response_class=HTMLResponse)
+    def connect_page(code: str = "") -> HTMLResponse:
+        """Step one (no code) and step two (a code he typed). homelab-ij8.102."""
+        pending, message = None, ""
+        if code.strip():
+            pending = connect.find(db, code)
+            if pending is None:
+                message = (
+                    "No machine is waiting with that code. Check it against your "
+                    "agent's screen; codes expire after 15 minutes."
+                )
+        return HTMLResponse(
+            _shell("Connect a machine", _connect_page(code, pending, message)),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.post("/connect/approve", response_class=HTMLResponse)
+    def connect_approve(
+        request_id: str = Form(...),
+        code: str = Form(...),
+        name: str = Form(""),
+        _guard: None = Depends(_same_origin_write),
+    ) -> HTMLResponse:
+        pending = connect.find(db, code)
+        if pending is None or pending.id != request_id:
+            body = _connect_page(code, None, "That request has expired or was already decided.")
+        else:
+            agent = connect.clean_name(name)
+            if agent is None:
+                body = _connect_page(
+                    code, pending,
+                    "Use 2 to 40 letters, digits or hyphens for the name.", name=name,
+                )
+            elif connect.name_in_use(db, agent):
+                body = _connect_page(
+                    code, pending,
+                    f"{agent} is already the name of a connected machine. Pick another.",
+                    name=name,
+                )
+            elif connect.approve(db, pending.id, agent):
+                body = _connect_page(
+                    ok=f"Approved. {agent} will pick up its key in a few seconds; "
+                    "your agent will say when it has."
+                )
+            else:
+                body = _connect_page(code, None, "That request has expired or was already decided.")
+        return HTMLResponse(
+            _shell("Connect a machine", body),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.post("/connect/deny", response_class=HTMLResponse)
+    def connect_deny(
+        request_id: str = Form(...),
+        code: str = Form(...),
+        _guard: None = Depends(_same_origin_write),
+    ) -> HTMLResponse:
+        pending = connect.find(db, code)
+        if pending is not None and pending.id == request_id:
+            connect.deny(db, pending.id)
+        return HTMLResponse(
+            _shell("Connect a machine", _connect_page(ok="Denied. That machine gets nothing.")),
             headers={**gallery_headers(), "cache-control": "no-store"},
         )
 

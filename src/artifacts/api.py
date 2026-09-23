@@ -10,11 +10,12 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from artifacts import (
     comments,
+    connect,
     csp,
     decisions,
     events,
@@ -35,6 +36,14 @@ from artifacts.db import Database
 # never the key. Armed with its own handler in `serve` for the same reason the
 # access log is -- an unarmed logger in this process prints nothing.
 _auth_log = logging.getLogger("artifacts.auth")
+
+
+class ConnectBody(BaseModel):
+    name: str | None = None
+
+
+class PollBody(BaseModel):
+    poll_token: str
 
 
 class PublishBody(BaseModel):
@@ -334,6 +343,41 @@ def agent_router(
             # cache must ask again every time (FileResponse sends an ETag) or an
             # agent's uvx would keep running yesterday's tools.
             headers={"x-content-type-options": "nosniff", "cache-control": "no-cache"},
+        )
+
+    @router.post("/connect", status_code=201)
+    def connect_request(request: Request, body: ConnectBody):
+        """A machine asks to join (homelab-ij8.102). Open, because a stranger has
+        nothing yet; limited, because it is open. Returns a code for Jeremy to
+        type and a poll token for the machine to collect its key with. Nothing
+        here grants anything until he approves the code in the gallery."""
+        address = ratelimit.client_address(
+            request.headers, request.client.host if request.client else None
+        )
+        try:
+            started = connect.request(db, body.name, address)
+        except connect.Refused as refused:
+            raise HTTPException(429, f"REFUSED: {refused}") from None
+        return JSONResponse(
+            {
+                "code": started.code,
+                "poll_token": started.poll_token,
+                "expires_in": started.expires_in,
+                "interval": 5,
+                "approve_at": f"{_base(request)}/connect",
+            },
+            status_code=201,
+            headers={"cache-control": "no-store"},
+        )
+
+    @router.post("/connect/poll")
+    def connect_poll(body: PollBody):
+        """The asking machine, waiting. `approved` carries the key, ONCE; every
+        later poll says `delivered`. An unknown token says `expired`, exactly
+        like a real one that ran out, so a token cannot be tested for being
+        real."""
+        return JSONResponse(
+            connect.collect(db, body.poll_token), headers={"cache-control": "no-store"}
         )
 
     @router.get("/openapi.json")

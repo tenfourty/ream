@@ -316,7 +316,9 @@ def test_the_onboarding_document_is_open_and_names_the_address_it_was_asked_on(
     assert f"://{api_host}/api/v1" in body, "the API base, at the name it was asked on"
     assert "artifacts.tenfourty.site" not in body, "and never the internal name"
     assert "ARTIFACTS_SESSION" in body, "how to name yourself once you have a key"
-    assert "Ask him" in body, "how to get a key: by asking Jeremy, not from here"
+    # how to get a key: Jeremy approves a code; no key is ever handed out here
+    # (homelab-ij8.102 replaced "ask him for one by hand")
+    assert "artifacts-connect" in body and "approves" in body
 
 
 def test_the_onboarding_document_carries_no_key_and_no_secret(client, api_host, db):

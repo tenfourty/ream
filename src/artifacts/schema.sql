@@ -509,3 +509,36 @@ create table if not exists frame_pass (
 );
 
 create index if not exists frame_pass_expires_idx on frame_pass (expires_at);
+
+-- A MACHINE ASKING TO JOIN (homelab-ij8.102, 23 Sep 2026).
+--
+-- Jeremy's confirmed ruling: an arriving agent asks for access and shows him a
+-- short code; he types that code into the gallery, names the machine, and
+-- approves; the key goes straight to the machine and is never shown to him,
+-- never in a prompt, never in a chat. The TV sign-in pattern.
+--
+-- NO KEY IS STORED HERE, EVER. Approval records only the name he chose; the
+-- key is minted at the moment the machine next polls, returned in that one
+-- response, and only its hash exists anywhere after that (agent_key). A dump
+-- of this table is a list of names and codes, not of credentials.
+--
+-- `poll_sha256`: the machine holds a random poll token; only its hash is kept,
+-- so the code on his screen (short, typed by a human) is never itself enough
+-- to collect the key -- the collector must also hold the poll token.
+create table if not exists connect_request (
+    id             text primary key,
+    code           text not null unique,
+    poll_sha256    text not null unique,
+    suggested_name text,
+    from_address   text not null,
+    created_at     timestamptz not null default now(),
+    expires_at     timestamptz not null,
+    approved_at    timestamptz,
+    agent          text,
+    denied_at      timestamptz,
+    delivered_at   timestamptz,
+    key_id         text
+);
+
+create index if not exists connect_request_pending_idx
+    on connect_request (from_address, expires_at);

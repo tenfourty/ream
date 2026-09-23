@@ -30,6 +30,7 @@ artifacts-publish = "artifacts.client:run"
 artifacts-decide = "artifacts.decide:run"
 artifacts-bead-metrics = "artifacts.beadmetrics:main"
 artifacts-republish = "artifacts.republish:main"
+artifacts-connect = "artifacts.connect_cli:run"
 
 [build-system]
 requires = ["uv_build>=0.12.9,<0.13.0"]
