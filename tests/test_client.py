@@ -996,3 +996,32 @@ def test_any_other_cloudflare_page_is_attributed_to_cloudflare(monkeypatch):
         client._request("GET", "https://example.invalid/api/v1/artifacts", "k", None)
     assert "Cloudflare answered" in str(excinfo.value.detail)
     assert "blocked" not in str(excinfo.value.detail)
+
+
+def test_every_request_names_itself_never_as_urllib(monkeypatch):
+    """23 Sep 2026: Cloudflare's Browser Integrity Check refuses urllib's default
+    `Python-urllib/*` agent (403, error 1010), measured at the real edge. Every
+    outside agent using these commands was turned away until they named
+    themselves."""
+    seen = []
+
+    class _Records:
+        def open(self, request, timeout=None):
+            seen.append(request.get_header("User-agent"))
+
+            class _R:
+                def __enter__(s):
+                    return s
+
+                def __exit__(s, *exc):
+                    return False
+
+                def read(s):
+                    return b"{}"
+
+            return _R()
+
+    monkeypatch.setattr(client, "_opener", _Records())
+    client._request("GET", "https://example.invalid/api/v1/artifacts", "k", None)
+    assert seen and seen[0].startswith("artifacts-client/")
+    assert "urllib" not in seen[0].lower()

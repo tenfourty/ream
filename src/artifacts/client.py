@@ -57,6 +57,13 @@ _REQUEST_TIMEOUT = 30
 _SESSION_ENV = "ARTIFACTS_SESSION"
 _SESSION_HEADER = "X-Artifacts-Session"
 
+# Our own name on every request, never urllib's default. Measured through the
+# Cloudflare edge on 23 Sep 2026, the morning the service went on the internet:
+# Browser Integrity Check answers `Python-urllib/*` with 403 "error code: 1010"
+# and lets any other agent string through. Without this, every agent outside
+# the house using these commands was turned away before reaching the service.
+_USER_AGENT = "artifacts-client/1"
+
 
 def declared_session(explicit: str | None = None) -> str | None:
     """What this invocation calls itself, or None. `--session` beats the
@@ -381,6 +388,7 @@ def _request(
     # via ARTIFACTS_API, never a scheme or host taken from page content or a caller
     # argument. bandit's file:// concern (S310) does not apply here.
     request = urllib.request.Request(url, data=data, method=method)  # noqa: S310
+    request.add_header("User-Agent", _USER_AGENT)
     # `add_unredirected_header`, not `add_header`: the latter is copied onto a
     # redirect's follow-up request by urllib's own default handler, to whatever
     # host and scheme the redirect names. `_RefuseRedirects` above already

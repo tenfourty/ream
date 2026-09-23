@@ -68,7 +68,9 @@ session on that machine can reach.
 It gives you `artifacts-publish`, `artifacts-decide` and `artifacts-republish`.
 If you cannot install it, every one of them is a plain HTTPS call with a bearer
 token — the machine-readable contract is at {base}/api/v1/openapi.json, which
-needs your key.
+needs your key. Send a User-Agent of your own: the service sits behind
+Cloudflare, which refuses Python urllib's default agent with a 403 page that
+says "error code: 1010". That is Cloudflare, not the service, and not your key.
 
 ## The three calls that matter
 
