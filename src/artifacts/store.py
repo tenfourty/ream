@@ -1338,3 +1338,72 @@ def mark_read(db: Database, artifact_id: str) -> None:
             " set read_version = excluded.read_version, read_at = now()",
             (artifact_id,),
         )
+
+
+def share_url(artifact_id: str, token: str) -> str:
+    """The address a shared page is read at: its own origin, top level, no
+    login (homelab-ij8.101)."""
+    return f"https://{artifact_id}.{content_domain()}/s/{token}/"
+
+
+def share_token(db: Database, artifact_id: str) -> str | None:
+    with db.connect() as conn:
+        row = conn.execute(
+            "select token from artifact_share where artifact_id = %s", (artifact_id,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def start_sharing(db: Database, artifact_id: str) -> str | None:
+    """His deliberate act: the page's link, created if it has none. Returns the
+    token, or None for a page that does not exist or is deleted. `visibility`
+    becomes 'link', the switch public and email sharing will extend."""
+    token = secrets.token_urlsafe(24)
+    with db.connect() as conn, conn.transaction():
+        exists = conn.execute(
+            "update artifact set visibility = 'link' where id = %s and deleted_at is null"
+            " returning id",
+            (artifact_id,),
+        ).fetchone()
+        if exists is None:
+            return None
+        conn.execute(
+            "insert into artifact_share (artifact_id, token) values (%s, %s)"
+            " on conflict (artifact_id) do nothing",
+            (artifact_id, token),
+        )
+        row = conn.execute(
+            "select token from artifact_share where artifact_id = %s", (artifact_id,)
+        ).fetchone()
+    return row[0]
+
+
+def stop_sharing(db: Database, artifact_id: str) -> bool:
+    """Withdraw the link. It stops working at once: the row is gone, and the
+    content origin looks it up on every request. Sharing again mints a NEW
+    link, so the old one can never come back to life."""
+    with db.connect() as conn, conn.transaction():
+        gone = conn.execute(
+            "delete from artifact_share where artifact_id = %s", (artifact_id,)
+        ).rowcount
+        conn.execute(
+            "update artifact set visibility = 'private' where id = %s", (artifact_id,)
+        )
+    return gone > 0
+
+
+def shared_page(db: Database, artifact_id: str, token: str) -> tuple[str, datetime] | None:
+    """The live body and its publication time, if `token` is this page's live
+    share link and the page is not deleted; otherwise None."""
+    if not token or len(token) > 128:
+        return None
+    with db.connect() as conn:
+        row = conn.execute(
+            "select v.body, v.created_at from artifact_share s"
+            " join artifact a on a.id = s.artifact_id"
+            " join version v on v.artifact_id = a.id and v.n = a.current_version"
+            " where s.artifact_id = %s and s.token = %s and a.deleted_at is null"
+            " and v.status = 'live'",
+            (artifact_id, token),
+        ).fetchone()
+    return (row[0], row[1]) if row else None

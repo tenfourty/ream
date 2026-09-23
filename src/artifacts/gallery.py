@@ -1582,6 +1582,42 @@ def _machines_page(machines, confirm: str = "", note: str = "") -> str:
     return "".join(parts)
 
 
+def _share_page(artifact_id: str, title: str, token: str | None, note: str = "") -> str:
+    """Sharing one page with people outside his space (homelab-ij8.101). The
+    link shows the latest version, just the page; he can stop it at any time.
+    The link sits in a `pre.prompt` so /connect.js gives it the same Copy
+    button as the starter prompt."""
+    ident = escape(artifact_id)
+    parts = [_CONNECT_CSS, '<div class="cx">']
+    if note:
+        parts.append(f'<section><p class="ok">{escape(note)}</p></section>')
+    if token:
+        parts.append(
+            f"<section><h2>{escape(title)} is shared</h2>"
+            "<p>Anyone with this link can read the page, always its latest version. "
+            "They see just the page: not your questions, not your answers, not the "
+            "gallery.</p>"
+            f'<pre class="prompt">{escape(store.share_url(artifact_id, token))}</pre>'
+            f'<form method="post" action="/a/{ident}/share/stop" class="row">'
+            '<button class="btn" type="submit">Stop sharing</button>'
+            f'<a class="btn" href="/a/{ident}">Back to the page</a></form>'
+            "<p>Stopping kills this link at once. Sharing again makes a new one.</p>"
+            "</section>"
+        )
+    else:
+        parts.append(
+            f"<section><h2>Share {escape(title)}</h2>"
+            "<p>Create a link anyone can open without logging in. It shows the "
+            "latest version of this page, and nothing else from your space. You can "
+            "stop it at any time.</p>"
+            f'<form method="post" action="/a/{ident}/share" class="row">'
+            '<button class="btn primary" type="submit">Create link</button>'
+            f'<a class="btn" href="/a/{ident}">Cancel</a></form></section>'
+        )
+    parts.append("</div>")
+    return "".join(parts)
+
+
 def starter_prompt() -> str:
     """What he pastes into a new agent. It carries NO secret -- only where to
     read and what to tell him -- so it is safe in any chat and any transcript
@@ -1653,6 +1689,7 @@ def _page_menu(
     archived: bool,
     updated: str,
     agents_can_read: bool = True,
+    shared: bool = False,
 ) -> str:
     """The title's dropdown: what this page is, and what can be done to it.
 
@@ -1678,6 +1715,7 @@ def _page_menu(
                 if agents_can_read
                 else f"<span>Only you and {escape(agent)} can read it</span>"
             )
+            + ("<span>Shared by link</span>" if shared else "")
             + "</div>"
         ),
         (
@@ -1698,6 +1736,11 @@ def _page_menu(
             f'<button class="mrow" type="submit">{_icon("archive")}'
             "Archive</button></form>"
         )
+    rows.append(
+        f'<a class="mrow" href="/a/{ident}/share">{_icon("open")}'
+        + ("Shared by link" if shared else "Share a link")
+        + "</a>"
+    )
     rows.append(
         f'<form method="post" action="/a/{ident}/agents">'
         f'<input type="hidden" name="can_read" value="{"0" if agents_can_read else "1"}">'
@@ -3515,6 +3558,7 @@ def gallery_router(db: Database) -> APIRouter:
             archived,
             _when(str(row[4])) if row[4] else "just now",
             agents_can_read=row[6],
+            shared=store.share_token(db, artifact_id) is not None,
         )
         return HTMLResponse(
             _shell(
@@ -3546,6 +3590,44 @@ def gallery_router(db: Database) -> APIRouter:
                 bleed=True,
             ),
             headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    def _share_response(artifact_id: str, note: str = "") -> HTMLResponse:
+        with db.connect() as conn:
+            row = conn.execute(
+                "select title from artifact where id = %s and deleted_at is null",
+                (artifact_id,),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(404, "no such artifact")
+        return HTMLResponse(
+            _shell(
+                "Share a page",
+                _share_page(artifact_id, row[0], store.share_token(db, artifact_id), note),
+                scripts='<script src="/connect.js" defer></script>',
+            ),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.get("/a/{artifact_id}/share", response_class=HTMLResponse)
+    def share_page(artifact_id: str) -> HTMLResponse:
+        return _share_response(artifact_id)
+
+    @router.post("/a/{artifact_id}/share", response_class=HTMLResponse)
+    def share_start(artifact_id: str, request: Request) -> HTMLResponse:
+        """His deliberate act, and only his: there is no agent route for it."""
+        _same_origin_write(request)
+        if store.start_sharing(db, artifact_id) is None:
+            raise HTTPException(404, "no such artifact")
+        return _share_response(artifact_id, note="Link created. Copy it and send it to whoever should read the page.")
+
+    @router.post("/a/{artifact_id}/share/stop", response_class=HTMLResponse)
+    def share_stop(artifact_id: str, request: Request) -> HTMLResponse:
+        _same_origin_write(request)
+        stopped = store.stop_sharing(db, artifact_id)
+        return _share_response(
+            artifact_id,
+            note="Stopped. The link no longer works." if stopped else "It was not shared.",
         )
 
     @router.get("/machines", response_class=HTMLResponse)

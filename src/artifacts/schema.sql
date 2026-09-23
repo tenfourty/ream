@@ -580,3 +580,15 @@ alter table artifact alter column agents_can_read set not null;
 -- a successful key check at most every few minutes (keys.touch).
 alter table agent_key add column if not exists label text;
 alter table agent_key add column if not exists last_used_at timestamptz;
+
+-- A PAGE SHARED BY LINK (homelab-ij8.101, 23 Sep 2026). Jeremy's rulings: a
+-- deliberate act per page, his alone; the link shows the LATEST version, just
+-- the page, full screen on its own address; he can withdraw it at any time and
+-- it dies at once (the row is deleted). One live link per page. The token is
+-- kept in plaintext because he needs to see and copy the link again -- it is a
+-- capability he hands out on purpose, not a credential anyone logs in with.
+create table if not exists artifact_share (
+    artifact_id text primary key references artifact(id) on delete cascade,
+    token       text not null unique,
+    created_at  timestamptz not null default now()
+);

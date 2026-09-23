@@ -12,7 +12,7 @@ from fastapi.responses import (
     RedirectResponse,
 )
 
-from artifacts import decisions, frame_pass, hosts, stamp, templates
+from artifacts import decisions, frame_pass, hosts, stamp, store, templates
 from artifacts.db import Database
 from artifacts.store import (
     gallery_origin,  # re-exported: artifacts.content.gallery_origin still resolves
@@ -421,6 +421,29 @@ def create_content_app(db: Database) -> FastAPI:
         # gallery like any other unframed request; framed, it carries no token and so
         # opens nothing.
         return _serve(request, None)
+
+    # A PAGE SHARED BY LINK (homelab-ij8.101, Jeremy's rulings): the latest
+    # version, just the page, full screen -- a top-level document, so no
+    # framed-only check. Still on the page's own origin, which holds no session
+    # of his, and inert: no runtime, no questions, no viewer channel. Every
+    # failure -- wrong token, withdrawn link, deleted page, no such page --
+    # gets one answer, so a link cannot be probed for which pages exist.
+    @app.get("/s/{token}/")
+    def shared(request: Request, token: str) -> Response:
+        artifact_id = _artifact_id(request)
+        found = store.shared_page(db, artifact_id, token) if artifact_id else None
+        if found is None:
+            return PlainTextResponse(
+                "This link isn't valid, or it has been withdrawn.",
+                status_code=404,
+                headers={**base_headers(), "cache-control": "no-store"},
+            )
+        body, published_at = found
+        html = inject(stamp.apply(body, published_at), INERT_SHIM)
+        return HTMLResponse(
+            html,
+            headers={**headers_for(False), "x-robots-tag": "noindex, nofollow"},
+        )
 
     # The only way in to a page body (homelab-ij8.101). Which version the pass
     # reads is part of the pass, so there is no version path for a caller to
