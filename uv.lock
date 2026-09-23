@@ -37,7 +37,9 @@ wheels = [
 name = "artifacts"
 version = "0.1.0"
 source = { editable = "." }
-dependencies = [
+
+[package.optional-dependencies]
+server = [
     { name = "fastapi" },
     { name = "markupsafe" },
     { name = "psycopg", extra = ["binary"] },
@@ -56,12 +58,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", specifier = ">=0.141.1" },
-    { name = "markupsafe", specifier = ">=3.0.3" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
-    { name = "python-multipart", specifier = ">=0.0.32" },
-    { name = "uvicorn", specifier = ">=0.53.0" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.141.1" },
+    { name = "markupsafe", marker = "extra == 'server'", specifier = ">=3.0.3" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'server'", specifier = ">=3.3.6" },
+    { name = "python-multipart", marker = "extra == 'server'", specifier = ">=0.0.32" },
+    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.53.0" },
 ]
+provides-extras = ["server"]
 
 [package.metadata.requires-dev]
 dev = [

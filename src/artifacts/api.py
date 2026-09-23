@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from artifacts import (
@@ -292,16 +292,48 @@ def agent_router(
         cannot: the schema describes what a key can do here, this tells a
         stranger how to ask Jeremy for one.
         """
-        host = hosts.first_host_header(request.scope) or "artifacts.invalid"
-        base = onboarding.base_url(
-            request.url.scheme, host, request.headers.get("x-forwarded-proto")
-        )
         return PlainTextResponse(
-            onboarding.agents_txt(base),
+            onboarding.agents_txt(_base(request)),
             headers={
                 "x-content-type-options": "nosniff",
                 "cache-control": "public, max-age=300",
             },
+        )
+
+    def _base(request: Request) -> str:
+        host = hosts.first_host_header(request.scope) or "artifacts.invalid"
+        return onboarding.base_url(
+            request.url.scheme, host, request.headers.get("x-forwarded-proto")
+        )
+
+    @router.get("/skill.md", response_class=PlainTextResponse)
+    def skill(request: Request):
+        """A skill file in the open SKILL.md format, for any agent (homelab-ij8.68,
+        Jeremy 23 Sep: "a generic skill that could work for any agent"). Open for
+        the same reason as agents.txt and carrying the same promises: no key, no
+        database, the same text for everyone at a given address."""
+        return PlainTextResponse(
+            onboarding.skill_md(_base(request)),
+            media_type="text/markdown",
+            headers={"x-content-type-options": "nosniff", "cache-control": "public, max-age=300"},
+        )
+
+    @router.get("/tools/{name}")
+    def tools(name: str):
+        """The tool package, open: an agent on another machine installs it before
+        it has any key (homelab-ij8.68). Only the one file the image built, by
+        exact name -- never a path, never a listing. It contains no secret: it is
+        this repository's code, which is also in the image."""
+        built = onboarding.wheel()
+        if built is None or name != built.name:
+            raise HTTPException(404, "no such file")
+        return FileResponse(
+            built,
+            media_type="application/zip",
+            # no-cache, not max-age: the filename carries a fixed version, so a
+            # cache must ask again every time (FileResponse sends an ETag) or an
+            # agent's uvx would keep running yesterday's tools.
+            headers={"x-content-type-options": "nosniff", "cache-control": "no-cache"},
         )
 
     @router.get("/openapi.json")

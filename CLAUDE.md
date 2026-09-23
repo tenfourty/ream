@@ -95,7 +95,7 @@ broken peers mid-shift. Change them in the homelab repo, under its rules.
 ## HOW
 
 ```bash
-uv sync --frozen
+uv sync --frozen --all-extras   # the server stack is the `server` extra
 uv run ruff check src tests
 PG_TEST_DSN=postgresql://…  uv run pytest -q     # needs a real Postgres
 ```

@@ -7,7 +7,16 @@ authors = [
     { name = "Jeremy Brown", email = "jeremy@tenfourty.com" }
 ]
 requires-python = ">=3.12"
-dependencies = [
+# NOTHING by default, on purpose (homelab-ij8.68, 23 Sep 2026). The agent tools
+# -- artifacts-publish, -decide, -republish -- use only the standard library, and
+# the service hands this package to agents on other machines from an open
+# address. An agent that wants to publish a page must not have to install a web
+# framework and a database driver to do it. The service itself installs the
+# `server` extra (Dockerfile, CI); for local work: `uv sync --all-extras`.
+dependencies = []
+
+[project.optional-dependencies]
+server = [
     "fastapi>=0.141.1",
     "markupsafe>=3.0.3",
     "psycopg[binary]>=3.3.6",

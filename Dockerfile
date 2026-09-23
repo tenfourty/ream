@@ -21,13 +21,19 @@ ENV UV_LINK_MODE=copy \
 # Dependencies first, from the lockfile alone: this layer only invalidates when
 # pyproject.toml or uv.lock change, never on a plain source edit.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-editable --no-install-project
+RUN uv sync --frozen --no-dev --no-editable --no-install-project --extra server
 
 # Now the project itself (README.md is `readme = "README.md"` in pyproject.toml --
 # uv_build refuses to build without it).
 COPY README.md ./
 COPY src ./src
-RUN uv sync --frozen --no-dev --no-editable
+RUN uv sync --frozen --no-dev --no-editable --extra server
+
+# The agents' tool package, which the service hands out from an open address
+# (homelab-ij8.68): an agent on another machine runs it with uvx. Built here so
+# it is always exactly the code this image runs. It has no dependencies -- the
+# server's are the `server` extra above -- so it installs anywhere Python does.
+RUN uv build --wheel --out-dir /app/dist
 
 FROM python:3.12-slim-bookworm
 
@@ -58,6 +64,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/.venv /app/.venv
+COPY --from=build /app/dist /app/dist
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1

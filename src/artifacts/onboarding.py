@@ -25,6 +25,9 @@ new machine at a name that only resolves inside the house.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 _TEXT = """\
 # artifacts — self-hosted pages for agents
 
@@ -61,16 +64,19 @@ separately, so his record always says which session did what. Declare yourself:
 That label is attribution, never permission. Anything the key can reach, every
 session on that machine can reach.
 
-## The client
+## The tools
 
-    uv tool install artifacts --from git+{forge}/jeremy/artifacts
+{tools}
+If you would rather not install anything, every one of them is a plain HTTPS
+call with a bearer token — the machine-readable contract is at
+{base}/api/v1/openapi.json, which needs your key. Send a User-Agent of your
+own: the service sits behind Cloudflare, which refuses Python urllib's default
+agent with a 403 page that says "error code: 1010". That is Cloudflare, not
+the service, and not your key.
 
-It gives you `artifacts-publish`, `artifacts-decide` and `artifacts-republish`.
-If you cannot install it, every one of them is a plain HTTPS call with a bearer
-token — the machine-readable contract is at {base}/api/v1/openapi.json, which
-needs your key. Send a User-Agent of your own: the service sits behind
-Cloudflare, which refuses Python urllib's default agent with a 403 page that
-says "error code: 1010". That is Cloudflare, not the service, and not your key.
+A skill file that teaches any agent to use this service, in the open SKILL.md
+format, is at {base}/api/v1/skill.md — save it wherever your agent keeps
+skills.
 
 ## The three calls that matter
 
@@ -98,16 +104,108 @@ service declining to look, not the service telling you there is nothing there.
 ## Where you are
 
     API base      {base}/api/v1
-    this document {base}/agents.txt
-    health        {base}/healthz
+    this document {base}/api/v1/agents.txt
+    the skill     {base}/api/v1/skill.md
 
-Nothing else is served on this address.
+Everything under /api/v1 except these documents and the tools needs a key.
 """
 
 
-def agents_txt(base: str, forge: str = "https://git.tenfourty.site") -> str:
+def tools_dir() -> Path:
+    """Where the image puts the tool package it built (Dockerfile). Read at
+    call time, so a test can point it somewhere else."""
+    return Path(os.environ.get("ARTIFACTS_TOOLS_DIR", "/app/dist"))
+
+
+def wheel() -> Path | None:
+    """The one tool package this service hands out, or None where there is
+    none (a development checkout, or an image that failed to build one)."""
+    try:
+        found = sorted(tools_dir().glob("artifacts-*-py3-none-any.whl"))
+    except OSError:
+        return None
+    return found[-1] if found else None
+
+
+def _tools_text(base: str) -> str:
+    built = wheel()
+    if built is None:
+        # Said in words rather than printing an install line that 404s: a
+        # stranger following this document literally is exactly who reads it.
+        return (
+            "The tools are not available from this address right now.\n"
+        )
+    url = f"{base}/api/v1/tools/{built.name}"
+    # uvx first, because it needs no install step and no PATH change (Jeremy, 23
+    # Sep: "ideally our helper script for agents is just a uvx command"). Served
+    # from here rather than PyPI: PyPI would make the code public, and the plain
+    # name is not ours to take.
+    return (
+        "Nothing to install. With uv, run any of them straight from here:\n"
+        "\n"
+        f"    uvx --from {url} artifacts-publish --help\n"
+        "\n"
+        "or install them once and call them by name:\n"
+        "\n"
+        f"    uv tool install --force {url}\n"
+        f"    pipx install --force {url}      # without uv\n"
+        "\n"
+        "Python 3.12 or later and nothing else: the tools use only the standard\n"
+        "library. They are `artifacts-publish`, `artifacts-decide` and\n"
+        "`artifacts-republish`, and the address above always serves the current\n"
+        "version.\n"
+    )
+
+
+def agents_txt(base: str) -> str:
     """The document, with the address it was asked on written into it."""
-    return _TEXT.format(base=base.rstrip("/"), forge=forge.rstrip("/"))
+    base = base.rstrip("/")
+    return _TEXT.format(base=base, tools=_tools_text(base))
+
+
+_SKILL = """\
+---
+name: artifacts
+description: Publish HTML pages for Jeremy to read at stable addresses, ask him lettered questions on them and read his answers back, using his self-hosted artifacts service at {base}. Use when you need to show him progress, a report, or a decision to make.
+---
+
+# Publishing to Jeremy's artifacts service
+
+The full onboarding document is {base}/api/v1/agents.txt — read it once; it is
+short and it is the source of truth. This skill is the reminder.
+
+## Once per machine
+
+1. Install the tools (see "The tools" in the onboarding document).
+2. Get this machine connected to Jeremy's space, as the onboarding document
+   describes. You never handle a key by hand and never paste one into a chat.
+
+## Every session
+
+    export ARTIFACTS_SESSION="<your-name>/<a-short-id>"
+
+This labels everything you publish with which session did it. It is
+attribution, never permission.
+
+## The calls
+
+    artifacts-publish page.html --title "What it is"      # prints the page id
+    artifacts-publish page.html --update <page-id>         # a new version
+    artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
+    artifacts-decide list                                  # his answers
+
+## Rules that save you
+
+- A page is one self-contained HTML file: no external scripts or stylesheets.
+- Put questions to him as lettered options, your recommendation first as (a).
+- Write for him: say what changed and what it means, not internal jargon.
+- A 401 or 403 is a refusal to look, never an empty result. Say so.
+- Never put a key on a command line or in a message.
+"""
+
+
+def skill_md(base: str) -> str:
+    return _SKILL.format(base=base.rstrip("/"))
 
 
 _LOOPBACK = ("localhost", "127.0.0.1", "[::1]", "testserver")
