@@ -542,3 +542,17 @@ create table if not exists connect_request (
 
 create index if not exists connect_request_pending_idx
     on connect_request (from_address, expires_at);
+
+-- WHAT JEREMY HAS READ (homelab-ij8.103, 23 Sep 2026).
+--
+-- His confirmed ruling: a page is UNREAD when it is new or has been
+-- republished since he last opened it; the wall puts unread pages after pinned
+-- ones and pages with questions for him; and the agent that published a page
+-- can see whether he has opened its latest version. One row per page, because
+-- the gallery has exactly one reader. Written when he opens the page in the
+-- gallery, never by an agent.
+create table if not exists page_read (
+    artifact_id  text primary key references artifact(id) on delete cascade,
+    read_version integer not null,
+    read_at      timestamptz not null default now()
+);

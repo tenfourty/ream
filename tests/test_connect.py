@@ -135,7 +135,7 @@ def test_the_starter_prompt_holds_no_secret_and_points_at_the_document(gallery):
     page = gallery.get("/connect").text
     assert "/api/v1/agents.txt" in page
     assert "art_" not in page
-    assert page.count("<pre>") == 1
+    assert page.count('<pre class="prompt">') == 1
 
 
 def test_the_names_are_made_readable():
@@ -189,3 +189,13 @@ def test_a_denied_request_saves_nothing(tmp_path, monkeypatch):
     key_file = tmp_path / "key"
     assert connect_cli.main(["--key-file", str(key_file)]) == 1
     assert not key_file.exists()
+
+
+def test_the_code_boxes_are_an_upgrade_the_plain_field_still_works(gallery):
+    page = gallery.get("/connect").text
+    assert '<script src="/connect.js" defer></script>' in page
+    assert 'name="code"' in page, "without scripts, the single field still submits"
+    script = gallery.get("/connect.js")
+    assert script.status_code == 200
+    assert script.headers["content-type"].startswith("text/javascript")
+    assert "http" not in script.text

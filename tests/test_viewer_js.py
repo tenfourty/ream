@@ -96,3 +96,27 @@ def test_a_spent_frame_pass_is_renewed_when_actually_run(tmp_path, monkeypatch):
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
     assert passed >= 7, result.stdout
+
+
+_CODEBOXES = Path(__file__).parent / "js" / "codeboxes.test.mjs"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node runtime here")
+def test_the_code_boxes_behave_when_actually_run(tmp_path):
+    """One box per character: advance, backspace, paste, and a full code
+    continues once -- Jeremy's ask of 23 Sep 2026, run rather than read."""
+    from artifacts.gallery import _CONNECT_JS
+
+    script = tmp_path / "connect.js"
+    script.write_text(_CONNECT_JS)
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("node"), str(_CODEBOXES), str(script)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "0 failed" in result.stdout
+    passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
+    assert passed >= 19, result.stdout

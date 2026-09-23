@@ -198,6 +198,13 @@ class ArtifactRow:
     # checks. None means a version published before sessions existed -- unknown,
     # which is not the same as "nobody" and must never be printed as one.
     last_session: str | None = None
+    # WHETHER JEREMY HAS SEEN IT (homelab-ij8.103). The version he last opened
+    # in the gallery and when; None for a page he has never opened. His ruling:
+    # the agent that published a page can see this, for its own pages only --
+    # the agent's twin of the wall's unread marker. `seen_version` below
+    # `current_version` means he has not opened the latest change.
+    seen_version: int | None = None
+    seen_at: datetime | None = None
 
 
 def content_domain() -> str:
@@ -630,6 +637,10 @@ def get_owned(db: Database, agent: str, artifact_id: str) -> ArtifactRow:
             "select revision, session from version where artifact_id = %s and n = %s",
             (row[0], row[4]),
         ).fetchone()
+        seen = conn.execute(
+            "select read_version, read_at from page_read where artifact_id = %s",
+            (row[0],),
+        ).fetchone() or (None, None)
     return ArtifactRow(
         id=row[0],
         title=row[1],
@@ -643,6 +654,8 @@ def get_owned(db: Database, agent: str, artifact_id: str) -> ArtifactRow:
         page_url=page_url_for(row[0]),
         archived_at=row[6],
         pinned_at=row[7],
+        seen_version=seen[0],
+        seen_at=seen[1],
     )
 
 
@@ -767,10 +780,12 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
         rows = conn.execute(
             "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"
             " artifact.current_version, version.revision, artifact.updated_at,"
-            " artifact.archived_at, artifact.pinned_at, version.session"
+            " artifact.archived_at, artifact.pinned_at, version.session,"
+            " page_read.read_version, page_read.read_at"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
+            " left join page_read on page_read.artifact_id = artifact.id"
             " where artifact.agent = %s and artifact.deleted_at is null"
             " order by artifact.updated_at desc",
             (agent,),
@@ -789,6 +804,8 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             archived_at=row[7],
             pinned_at=row[8],
             last_session=row[9],
+            seen_version=row[10],
+            seen_at=row[11],
         )
         for row in rows
     ]
@@ -1222,3 +1239,17 @@ def set_pinned(
             (datetime.now(UTC) if pinned else None, *params),
         )
         return done.rowcount > 0
+
+
+def mark_read(db: Database, artifact_id: str) -> None:
+    """Jeremy opened this page in the gallery: record the version he saw
+    (homelab-ij8.103). Only ever called from the gallery, behind his login."""
+    with db.connect() as conn:
+        conn.execute(
+            "insert into page_read (artifact_id, read_version)"
+            " select id, current_version from artifact"
+            " where id = %s and current_version is not null"
+            " on conflict (artifact_id) do update"
+            " set read_version = excluded.read_version, read_at = now()",
+            (artifact_id,),
+        )

@@ -560,6 +560,10 @@ main{display:block}
 /* The per-tile dots. Sits over the tile rather than inside its link, because an
    interactive control nested in an <a> is invalid and behaves unpredictably. */
 .tile-wrap{position:relative}
+[data-unread] .t::before,[data-unread] .rt::before{content:"";display:inline-block;
+  width:.55em;height:.55em;border-radius:50%;background:var(--accent);
+  margin-right:.4em;vertical-align:.1em}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .tile-wrap .menu{position:absolute;top:12px;right:12px;z-index:5}
 /* A pale chip, ALWAYS VISIBLE -- not revealed on hover. Jeremy reads this wall
    on a phone, where there is no hover at all, and a control that only appears
@@ -1266,6 +1270,15 @@ def _icon(name: str) -> str:
     return f'<svg class="mi" viewBox="0 0 16 16" aria-hidden="true">{_ICON[name]}</svg>'
 
 
+# The unread marker (homelab-ij8.103): an ATTRIBUTE on the tile or row, drawn
+# as a dot before the title by the stylesheet, and a word for a screen reader
+# in the meta line. Not markup inside the title: other readers of this page
+# (and its tests) take the title text as it is, and a marker spliced into it
+# would change every page's name as far as they are concerned.
+_UNREAD_ATTR = ' data-unread="1" title="Not opened since it changed"'
+_UNREAD_WORD = '<span class="sr">Unread. </span>'
+
+
 def _pin_button(artifact_id: str, pinned: bool) -> str:
     """The pin, on a tile or on a row. The indicator AND the control.
 
@@ -1448,8 +1461,62 @@ _CONNECT_CSS = (
     ".cx pre{white-space:pre-wrap;background:var(--soft,#f5f5f4);padding:.75rem;border-radius:8px;"
     "font-size:.9rem;user-select:all}.cx .err{color:#b42318}.cx .ok{color:#067647}"
     ".cx dl{display:grid;grid-template-columns:auto 1fr;gap:.25rem .75rem;margin:.5rem 0}"
-    ".cx dt{opacity:.7}.cx .row{display:flex;gap:.5rem;flex-wrap:wrap}</style>"
+    ".cx dt{opacity:.7}.cx .row{display:flex;gap:.5rem;flex-wrap:wrap}"
+    ".cx .boxes{display:flex;gap:.35rem;align-items:center;margin:.35rem 0 .9rem}"
+    ".cx .boxes input{width:2.4rem;height:2.9rem;margin:0;padding:0;text-align:center;"
+    "font:600 1.35rem ui-monospace,monospace;text-transform:uppercase}"
+    ".cx .boxes .dash{padding:0 .2rem;opacity:.5}</style>"
 )
+
+
+# One box per character on the connect page, advancing as he types and
+# accepting a paste of the whole code anywhere (Jeremy, 23 Sep 2026; he chose
+# that a full code continues on its own -- approving still needs a press).
+# PROGRESSIVE: the page is a plain one-field form, and this only swaps the
+# field for boxes, so with scripts off it works exactly as before. The boxes
+# write back into that same field, so the server sees one value either way.
+_CONNECT_JS = """(function(){
+"use strict";
+var prompt=document.querySelector("pre.prompt");
+if(prompt&&navigator.clipboard){var c=document.createElement("button");
+  c.type="button";c.className="btn";c.textContent="Copy";
+  c.addEventListener("click",function(){
+    navigator.clipboard.writeText(prompt.textContent).then(function(){
+      c.textContent="Copied";setTimeout(function(){c.textContent="Copy"},2000)},
+      function(){c.textContent="Select the text and copy it"})});
+  prompt.parentNode.insertBefore(c,prompt.nextSibling)}
+var form=document.querySelector("form.code-form");if(!form)return;
+var single=form.querySelector("input[name=code]");if(!single)return;
+var wrap=document.createElement("div");wrap.className="boxes";var boxes=[];var sent=false;
+function clean(t){return String(t||"").toUpperCase().replace(/[^0-9A-Z]/g,"")}
+function sync(){var v=boxes.map(function(b){return b.value}).join("");
+  single.value=v.length===8?v.slice(0,4)+"-"+v.slice(4):v;
+  if(v.length===8&&!sent){sent=true;form.submit()}}
+function fill(from,text){var t=clean(text);var i=from;
+  for(;i<8&&t;i++){boxes[i].value=t.charAt(0);t=t.slice(1)}
+  boxes[Math.min(i,7)].focus();sync()}
+function make(i){var b=document.createElement("input");
+  b.type="text";b.maxLength=1;b.autocomplete="off";b.className="box";
+  b.setAttribute("autocapitalize","characters");b.setAttribute("inputmode","text");
+  b.setAttribute("aria-label","Character "+(i+1)+" of 8");
+  b.addEventListener("focus",function(){b.select&&b.select()});
+  b.addEventListener("input",function(){var v=clean(b.value);
+    if(v.length>1){b.value="";fill(i,v);return}
+    b.value=v;if(v&&i<7)boxes[i+1].focus();sync()});
+  b.addEventListener("keydown",function(e){
+    if(e.key==="Backspace"&&!b.value&&i>0){e.preventDefault();boxes[i-1].value="";boxes[i-1].focus();sent=false}
+    else if(e.key==="ArrowLeft"&&i>0)boxes[i-1].focus();
+    else if(e.key==="ArrowRight"&&i<7)boxes[i+1].focus()});
+  b.addEventListener("paste",function(e){var d=e.clipboardData||window.clipboardData;
+    if(!d)return;e.preventDefault();fill(0,d.getData("text"))});
+  return b}
+for(var i=0;i<8;i++){var b=make(i);boxes.push(b);wrap.appendChild(b);
+  if(i===3){var s=document.createElement("span");s.className="dash";s.textContent="-";wrap.appendChild(s)}}
+var pre=clean(single.value);single.type="hidden";single.parentNode.insertBefore(wrap,single);
+for(var j=0;j<pre.length&&j<8;j++)boxes[j].value=pre.charAt(j);
+boxes[Math.min(pre.length,7)].focus();
+})();
+"""
 
 
 def starter_prompt() -> str:
@@ -1481,13 +1548,13 @@ def _connect_page(
             "<section><h2>Connect a machine</h2>"
             "<p>Type the code your agent is showing you.</p>"
             + (f'<p class="err">{escape(message)}</p>' if message else "")
-            + '<form method="get" action="/connect">'
+            + '<form class="code-form" method="get" action="/connect">'
             f'<input class="code" name="code" value="{escape(typed)}" autocomplete="off"'
             ' autocapitalize="characters" placeholder="ABCD-EFGH" aria-label="Code" autofocus>'
             '<button class="btn primary" type="submit">Continue</button></form></section>'
             "<section><h2>Starting a new agent?</h2>"
             "<p>Paste this into it. It holds no key, so it is safe in any chat.</p>"
-            f"<pre>{escape(starter_prompt())}</pre></section>"
+            f'<pre class="prompt">{escape(starter_prompt())}</pre></section>'
         )
     else:
         suggested = name or pending.suggested_name or ""
@@ -2661,7 +2728,10 @@ def gallery_router(db: Database) -> APIRouter:
             # see it without opening anything".
             "       (select v.session from version v"
             "          where v.artifact_id = a.id"
-            "            and v.n = a.current_version) as session"
+            "            and v.n = a.current_version) as session,"
+            # UNREAD: new, or changed since he last opened it (homelab-ij8.103).
+            "       a.current_version > coalesce((select r.read_version"
+            "          from page_read r where r.artifact_id = a.id), 0) as unread"
             "  from artifact a"
             " where (a.archived_at is null) = %s and a.deleted_at is null"
             # THE WALL SORTS ITSELF BY WHAT NEEDS HIM. Pinned first, because
@@ -2684,6 +2754,10 @@ def gallery_router(db: Database) -> APIRouter:
             "             where d.artifact_id = a.id"
             "               and d.answer is null"
             "               and d.closed_at is null) > 0 desc,"
+            # Then what he has not read yet, newest first; once he opens a page
+            # it drops back into the order below (homelab-ij8.103, his ruling).
+            "          a.current_version > coalesce((select r.read_version"
+            "             from page_read r where r.artifact_id = a.id), 0) desc,"
             "          a.updated_at desc, a.id desc limit 200",
             (not archived,),
         ).fetchall()
@@ -2706,6 +2780,7 @@ def gallery_router(db: Database) -> APIRouter:
             has_thumb,
             pinned_at,
             session,
+            unread,
         ) = row
         ident = escape(artifact_id)
         # The reference puts a coloured per-type icon here. Types do not exist
@@ -2724,6 +2799,8 @@ def gallery_router(db: Database) -> APIRouter:
         if waiting:
             word = "question" if waiting == 1 else "questions"
             right.append(f'<span class="wait">{waiting} {word} for you</span>')
+        if unread:
+            right.insert(0, _UNREAD_WORD)
         right.append(f'<span class="who">{escape(agent)}</span>')
         right.append(_session_tag(session))
         when = _ago(updated)
@@ -2736,7 +2813,7 @@ def gallery_router(db: Database) -> APIRouter:
         # This row had only a "Pinned" label, so the list was the one view
         # where pinning meant opening a menu.
         return (
-            f'<li class="row-wrap{" asking" if waiting else ""}">'
+            f'<li class="row-wrap{" asking" if waiting else ""}"{_UNREAD_ATTR if unread else ""}>'
             f'<a class="row" href="/a/{ident}">'
             f"{badge}<span class=\"rt\">{escape(title)}</span>"
             f'<span class="rmeta">{"".join(right)}</span></a>'
@@ -2769,6 +2846,7 @@ def gallery_router(db: Database) -> APIRouter:
                 has_thumb,
                 pinned_at,
                 session,
+                unread,
             ) = row
             # Every one of these is agent-controlled text reaching the gallery
             # origin, so every one is escaped here. `describe` strips tags but
@@ -2825,7 +2903,7 @@ def gallery_router(db: Database) -> APIRouter:
             bits = [
                 (
                     f'<li class="tile-wrap{" pinned" if pinned_at else ""}'
-                    f'{" asking" if waiting else ""}">'
+                    f'{" asking" if waiting else ""}"{_UNREAD_ATTR if unread else ""}>'
                 ),
                 f'<a href="/a/{escape(artifact_id)}">',
                 f'<span class="frame">{shot}{flag}</span>',
@@ -2883,7 +2961,7 @@ def gallery_router(db: Database) -> APIRouter:
                 # row, making every pinned tile taller than its neighbours --
                 # visible the moment the wall was rendered, invisible in the
                 # markup. The agent line is short and has the room.
-                f'<span class="m">{_SEP.join(meta_bits)}'
+                f'<span class="m">{_UNREAD_WORD if unread else ""}{_SEP.join(meta_bits)}'
                 + (
                     f'{_SEP}<time title="{escape(exact)}">Edited {escape(when)}'
                     "</time>"
@@ -3277,6 +3355,9 @@ def gallery_router(db: Database) -> APIRouter:
             ).fetchone()
         if row is None:
             raise HTTPException(404, "no such artifact")
+        # He has opened it: the wall stops calling it unread, and its agent can
+        # see that he has (homelab-ij8.103).
+        store.mark_read(db, artifact_id)
         # Open or answered-but-not-closed decisions only: a closed one is the agent
         # saying it no longer needs an answer, so it has nothing left to show here.
         decision_rows = decisions.list_for_artifact(
@@ -3357,6 +3438,12 @@ def gallery_router(db: Database) -> APIRouter:
             headers={**gallery_headers(), "cache-control": "no-store"},
         )
 
+    @router.get("/connect.js")
+    def connect_script() -> Response:
+        return Response(
+            _CONNECT_JS, media_type="text/javascript; charset=utf-8", headers=gallery_headers()
+        )
+
     @router.get("/connect", response_class=HTMLResponse)
     def connect_page(code: str = "") -> HTMLResponse:
         """Step one (no code) and step two (a code he typed). homelab-ij8.102."""
@@ -3369,7 +3456,11 @@ def gallery_router(db: Database) -> APIRouter:
                     "agent's screen; codes expire after 15 minutes."
                 )
         return HTMLResponse(
-            _shell("Connect a machine", _connect_page(code, pending, message)),
+            _shell(
+                "Connect a machine",
+                _connect_page(code, pending, message),
+                scripts='<script src="/connect.js" defer></script>' if pending is None else "",
+            ),
             headers={**gallery_headers(), "cache-control": "no-store"},
         )
 
