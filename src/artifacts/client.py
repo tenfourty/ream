@@ -330,7 +330,7 @@ _ROLLING_ATTEMPTS = 4
 _ROLLING_BACKOFF = 1.5
 
 
-def _detail(raw: bytes) -> str:
+def _detail(raw: bytes, headers=None) -> str:
     """What to SAY about an error body, which is not the same as showing it.
 
     An error from the service is JSON with a `detail` a person should read. An
@@ -338,10 +338,28 @@ def _detail(raw: bytes) -> str:
     to an agent, and decoding it into a message puts bytes from the network --
     including any control characters in them -- straight into a terminal and a
     transcript. Say what it was, not what it contained.
+
+    WHO answered matters as much (23 Sep 2026). With the service on the
+    internet behind Cloudflare's bot protection, an agent can be stopped before
+    its request ever reaches the service, and "the service answered" would send
+    whoever reads it looking in the wrong place. Cloudflare marks a challenge
+    with `cf-mitigated`, and signs its own pages with `server: cloudflare`.
     """
+    headers = headers or {}
+    if (headers.get("cf-mitigated") or "").lower() == "challenge":
+        return (
+            "Cloudflare's bot protection challenged this request before it reached "
+            "the service -- nothing was looked up. An agent cannot pass a browser "
+            "challenge: ask Jeremy to exempt agent calls to /api/v1/"
+        )
     try:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError):
+        if (headers.get("server") or "").lower() == "cloudflare":
+            return (
+                f"Cloudflare answered with {len(raw)} bytes that are not JSON -- "
+                "the request may never have reached the service"
+            )
         return f"the service answered with {len(raw)} bytes that are not JSON"
     if isinstance(parsed, dict) and "detail" in parsed:
         return str(parsed["detail"])
@@ -394,7 +412,7 @@ def _request(
                 # would spend every attempt inside the same second.
                 time.sleep(_ROLLING_BACKOFF * (attempt + 1))
                 continue
-            raise HTTPFailure(exc.code, _detail(raw)) from None
+            raise HTTPFailure(exc.code, _detail(raw, exc.headers)) from None
         except urllib.error.URLError as exc:
             raise HTTPFailure(0, str(exc.reason)) from None
     if not raw:

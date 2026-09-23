@@ -943,3 +943,56 @@ def test_a_page_with_no_recorded_session_adds_no_column(live, key_file, tmp_path
     fields = capsys.readouterr().out.strip().split("\t")
     assert fields[0] == artifact_id
     assert len(fields) == 4, "id, title, address, date -- and nothing invented"
+
+
+def _raises_with(status, headers, body):
+    """An opener whose one answer is an HTTPError carrying REAL message headers
+    (case-insensitive, as urllib hands them over), not a dict."""
+    import email.message
+    import io
+
+    message = email.message.Message()
+    for name, value in headers.items():
+        message[name] = value
+
+    class _O:
+        def open(self, request, timeout=None):
+            raise urllib.error.HTTPError(
+                request.full_url, status, "x", message, io.BytesIO(body)
+            )
+
+    return _O()
+
+
+def test_a_cloudflare_challenge_is_named_as_one_not_blamed_on_the_service(monkeypatch):
+    """23 Sep 2026: with the service behind Cloudflare's bot protection, an agent
+    can be stopped before its request reaches the service. It must be told that,
+    in words, as a refusal -- never as an empty result, and never as the
+    service's own answer, which would send the reader looking in the wrong place."""
+    monkeypatch.setattr(
+        client,
+        "_opener",
+        _raises_with(
+            403,
+            {"Server": "cloudflare", "CF-Mitigated": "challenge"},
+            b"<!DOCTYPE html><title>Just a moment...</title>",
+        ),
+    )
+    with pytest.raises(client.HTTPFailure) as excinfo:
+        client._request("GET", "https://example.invalid/api/v1/artifacts", "k", None)
+    said = str(excinfo.value)
+    assert said.startswith("REFUSED (HTTP 403)")
+    assert "Cloudflare's bot protection challenged this request" in said
+    assert "Just a moment" not in said  # say what it was, never what it contained
+
+
+def test_any_other_cloudflare_page_is_attributed_to_cloudflare(monkeypatch):
+    monkeypatch.setattr(
+        client,
+        "_opener",
+        _raises_with(403, {"Server": "cloudflare"}, b"<html>blocked</html>"),
+    )
+    with pytest.raises(client.HTTPFailure) as excinfo:
+        client._request("GET", "https://example.invalid/api/v1/artifacts", "k", None)
+    assert "Cloudflare answered" in str(excinfo.value.detail)
+    assert "blocked" not in str(excinfo.value.detail)
