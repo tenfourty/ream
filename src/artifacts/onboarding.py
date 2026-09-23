@@ -182,8 +182,9 @@ def _tools_text(base: str) -> str:
         "\n"
         "Python 3.12 or later and nothing else: the tools use only the standard\n"
         "library. They are `artifacts-publish`, `artifacts-decide` and\n"
-        "`artifacts-republish`, plus `artifacts-connect`, and the address above\n"
-        "always serves the current version.\n"
+        "`artifacts-republish`, plus `artifacts-connect`. Every deploy of this\n"
+        "service publishes them under a new version, so re-read this document\n"
+        "for the current line; if uv seems stale, add --refresh.\n"
     )
 
 

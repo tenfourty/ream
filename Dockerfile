@@ -33,7 +33,16 @@ RUN uv sync --frozen --no-dev --no-editable --extra server
 # (homelab-ij8.68): an agent on another machine runs it with uvx. Built here so
 # it is always exactly the code this image runs. It has no dependencies -- the
 # server's are the `server` extra above -- so it installs anywhere Python does.
-RUN uv build --wheel --out-dir /app/dist
+#
+# A NEW VERSION EVERY BUILD, stamped into pyproject.toml just before this step
+# (after the sync, so the lockfile is never consulted). Measured 23 Sep 2026:
+# uv reused its cached copy of a package from the same URL despite no-cache,
+# so agents kept running yesterday's tools. A version per build means a new
+# filename, hence a new URL, on every deploy -- and agents.txt always prints
+# whatever file is here.
+RUN sed -i "0,/^version = \"\([0-9.]*\)\"/s//version = \"\1.post$(date -u +%Y%m%d%H%M%S)\"/" pyproject.toml \
+ && grep -m1 '^version' pyproject.toml \
+ && uv build --wheel --out-dir /app/dist
 
 FROM python:3.12-slim-bookworm
 
