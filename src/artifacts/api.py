@@ -38,6 +38,11 @@ from artifacts.db import Database
 _auth_log = logging.getLogger("artifacts.auth")
 
 
+# The longest a held /events request is kept when it arrived through Cloudflare
+# (see list_events). Under nginx's 60 s and Cloudflare's ~100 s, with room.
+PUBLIC_MAX_WAIT = 50.0
+
+
 class AgentsBody(BaseModel):
     """`can_read` is required: True opens the page to every agent in his space,
     False closes it to him and its publisher (homelab-ij8.105)."""
@@ -1334,6 +1339,7 @@ def agent_router(
 
     @router.get("/events")
     def list_events(
+        request: Request,
         since: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=1000),
         wait: float = Query(0.0, ge=0.0, le=300.0),
@@ -1349,6 +1355,8 @@ def agent_router(
         # stop looking, and the one wake that matters is indistinguishable from
         # these."
         session_filter: str | None = Query(None, alias="session", max_length=120),
+        # Leave out this agent's own actions (homelab-ij8.106).
+        exclude_self: bool = False,
         agent: str = Depends(caller),
         seat_session: str | None = Depends(session),
     ):
@@ -1387,22 +1395,38 @@ def agent_router(
         # Recorded for whatever the caller declared, including nothing -- an
         # unlabelled reader is a real reader and shares one row.
         events.note_read(db, agent, seat_session)
+        # THROUGH CLOUDFLARE, NEVER HOLD PAST 50 SECONDS (homelab-ij8.106).
+        # Measured 23 Sep 2026: wait=60 came back as Cloudflare's 524 after 125 s.
+        # The public ingress gives up on an upstream after nginx's default 60 s
+        # and retries once; this service answered each copy at 60.08 s, so both
+        # were cut and Cloudflare's own ~100 s limit fired. Inside the house the
+        # ingress allows an hour, which is why no waiter here ever saw it.
+        # `cf-ray` is set by Cloudflare on every request it forwards.
+        if request.headers.get("cf-ray"):
+            wait = min(wait, PUBLIC_MAX_WAIT)
+        exclude = agent if exclude_self else None
         rows = events.list_for_agent(
-            db, agent, since=since, limit=limit, session=session_filter
+            db, agent, since=since, limit=limit, session=session_filter,
+            exclude_actor=exclude,
         )
-        if rows or not wait:
-            return [row.__dict__ for row in rows]
-        return [
-            row.__dict__
-            for row in events.wait_for_agent(
+        if not rows and wait:
+            rows = events.wait_for_agent(
                 db,
                 agent,
                 since=since,
                 limit=limit,
                 seconds=wait,
                 session=session_filter,
+                exclude_actor=exclude,
             )
-        ]
+        return JSONResponse(
+            [row.__dict__ for row in rows],
+            headers={
+                # "From now" is this number; see events.latest_seq.
+                "x-artifacts-cursor": str(events.latest_seq(db, agent)),
+                "x-artifacts-max-wait": str(int(PUBLIC_MAX_WAIT)),
+            },
+        )
 
     # --- the 404 that tells you what DOES exist -----------------------------
     #

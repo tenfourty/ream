@@ -161,6 +161,7 @@ def list_for_agent(
     since: int = 0,
     limit: int = 100,
     session: str | None = None,
+    exclude_actor: str | None = None,
 ) -> list[EventRow]:
     """Every event recorded for `agent`, strictly above `since`, oldest first --
     the order a cursor needs: a caller that stores the last `seq` it saw and asks
@@ -189,6 +190,12 @@ def list_for_agent(
     if session is not None:
         sql += " and event.session = %s"
         params += (session,)
+    # An agent's OWN actions, left out when it asks (homelab-ij8.106): the first
+    # outside agent's listener woke on its own `record` of an answer he gave in
+    # the terminal. A convenience like `session`, never a boundary.
+    if exclude_actor is not None:
+        sql += " and event.actor <> %s"
+        params += (exclude_actor,)
     sql += " order by event.seq asc limit %s"
     params += (limit,)
     with db.connect() as conn:
@@ -338,6 +345,7 @@ def wait_for_agent(
     limit: int = 100,
     seconds: float,
     session: str | None = None,
+    exclude_actor: str | None = None,
 ) -> list[EventRow]:
     """Hold until an event lands for `agent` above `since`, or `seconds` pass.
 
@@ -358,7 +366,7 @@ def wait_for_agent(
         # Too many agents already waiting. Answer now with whatever is there
         # rather than queueing behind them: a caller that gets an empty answer
         # early simply asks again, which is ordinary polling.
-        return list_for_agent(db, agent, since=since, limit=limit, session=session)
+        return list_for_agent(db, agent, since=since, limit=limit, session=session, exclude_actor=exclude_actor)
     try:
         deadline = time.monotonic() + seconds
         looked_once = False
@@ -367,7 +375,7 @@ def wait_for_agent(
             if _shutdown.is_set():
                 # Asked to stop before this hold even began: answer at once
                 # rather than opening a request that cannot be honoured.
-                return list_for_agent(db, agent, since=since, limit=limit, session=session)
+                return list_for_agent(db, agent, since=since, limit=limit, session=session, exclude_actor=exclude_actor)
             # The deadline is checked BEFORE the look as well as after. A look
             # is a database round trip, not a free operation, and the caller was
             # promised an answer by a wall-clock moment: starting one more look
@@ -376,7 +384,8 @@ def wait_for_agent(
                 return []
             try:
                 rows = list_for_agent(
-                    db, agent, since=since, limit=limit, session=session
+                    db, agent, since=since, limit=limit, session=session,
+                    exclude_actor=exclude_actor,
                 )
                 failing_since = None
             except psycopg.OperationalError:
@@ -408,6 +417,17 @@ def wait_for_agent(
             # it -- one last look first, so a row that landed in the same
             # moment is not thrown away.
             if _shutdown.wait(timeout=min(_LOOK_EVERY, remaining)):
-                return list_for_agent(db, agent, since=since, limit=limit, session=session)
+                return list_for_agent(db, agent, since=since, limit=limit, session=session, exclude_actor=exclude_actor)
     finally:
         _waiters.release()
+
+
+def latest_seq(db: Database, agent: str) -> int:
+    """The newest event number for `agent`, or 0: the cursor that means "from
+    now". The first outside agent had to page the whole feed from 0 to find it
+    (homelab-ij8.106); every /events answer now carries it in a header."""
+    with db.connect() as conn:
+        row = conn.execute(
+            "select coalesce(max(seq), 0) from event where agent = %s", (agent,)
+        ).fetchone()
+    return int(row[0])

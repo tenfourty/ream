@@ -88,19 +88,34 @@ A skill file that teaches any agent to use this service, in the open SKILL.md
 format, is at {base}/api/v1/skill.md — save it wherever your agent keeps
 skills.
 
-## The three calls that matter
+## The loop
 
-    artifacts-publish page.html --title "What it is"     # returns the page id
+    artifacts-publish --check page.html                  # what the service would refuse
+    artifacts-publish page.html --title "What it is"     # prints the page id
     artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
-    artifacts-decide list                                 # his answers, as they arrive
+    artifacts-decide wait --page <page-id>               # blocks until he answers
+    artifacts-decide list                                # NEW ANSWERS first, then open ones
+    artifacts-decide ack <decision-id>                   # say you have seen it
+    artifacts-decide outcome <decision-id> "what you did about it"
 
-To be TOLD rather than to poll, hold a request open — it returns the moment
-something happens, or empty after the wait you asked for:
+AFTER YOU ASK, LISTEN. He often answers within minutes, and an answer nobody
+collects is the failure this service exists to prevent. If your agent can run
+a background task, start `artifacts-decide wait` in the background straight
+after asking: it exits 0 printing his answer the moment one lands (3 if
+nothing arrives by its --timeout, default 55m; 1 if the key is refused). If it
+cannot, run `artifacts-decide list` at the start of every turn.
 
-    GET {base}/api/v1/events?since=<cursor>&wait=60
+Writing your own listener instead: GET {base}/api/v1/events?since=<cursor>&wait=50
+holds until something happens. Never ask for more than 50 seconds -- requests
+from outside pass through Cloudflare, which cuts anything held past about 100,
+and the service caps holds there at 50. Every answer carries the current cursor
+in the X-Artifacts-Cursor header (ask with a huge `since` to learn "now"), and
+`exclude_self=true` leaves out your own actions. Use a client timeout of
+wait + 30 seconds, and after a 5xx pause and ask again from the same cursor.
 
-Keep the `seq` of the last row you saw as your cursor. The feed never skips and
-never repeats, so a cursor is all you need to catch up after being away.
+Your session label must reach every call. In Claude Code each Bash call is a
+fresh shell, so an `export` does not carry over: set ARTIFACTS_SESSION in
+~/.claude/settings.json under "env", or pass --session on each command.
 
 ## Three things that will bite you
 
@@ -210,14 +225,23 @@ short and it is the source of truth. This skill is the reminder.
     export ARTIFACTS_SESSION="<your-name>/<a-short-id>"
 
 This labels everything you publish with which session did it. It is
-attribution, never permission.
+attribution, never permission. In Claude Code each Bash call is a new shell:
+put it in ~/.claude/settings.json under "env", or pass --session every time.
 
-## The calls
+## The loop
 
-    artifacts-publish page.html --title "What it is"      # prints the page id
+    artifacts-publish --check page.html                    # before publishing
+    artifacts-publish page.html --title "What it is"       # prints the page id
     artifacts-publish page.html --update <page-id>         # a new version
     artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
-    artifacts-decide list                                  # his answers
+    artifacts-decide wait --page <page-id>                 # run in the BACKGROUND
+    artifacts-decide list                                  # new answers first
+    artifacts-decide ack <decision-id>                     # you have seen it
+    artifacts-decide outcome <decision-id> "what you did"
+
+After you ask, start `artifacts-decide wait` in the background so you are woken
+when he answers; without background tasks, run `artifacts-decide list` at the
+start of every turn. An unread answer is a broken promise.
 
 ## Rules that save you
 

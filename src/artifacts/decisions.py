@@ -395,6 +395,11 @@ def record_elsewhere(
         if row is None:
             raise store.NotFound()
         artifact_id, options, owning_agent = row[1], row[4], row[-1]
+        # The session that ASKED, exactly as a tapped answer carries it (see
+        # `answer`). Missing until 23 Sep 2026: a relayed answer's event had no
+        # session, so a waiter listening for its own session never heard it --
+        # found by the first outside agent (homelab-ij8.106).
+        asking_session = row[len(_COLUMNS.split(",")) - 1]
 
         if letter not in {option["letter"] for option in options}:
             raise InvalidAnswer()
@@ -427,6 +432,7 @@ def record_elsewhere(
                 # losing the thing that qualifies it. That cost a real afternoon
                 # on 20 Sep 2026.
                 note=note,
+                session=asking_session,
             )
             refreshed = conn.execute(
                 f"select {_COLUMNS} from decision where id = %s",  # noqa: S608 -- fixed constant

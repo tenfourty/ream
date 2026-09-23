@@ -25,7 +25,9 @@ this never offers it.
 """
 
 import argparse
+import re
 import sys
+import time
 
 from artifacts.client import (
     Conflict,
@@ -187,6 +189,94 @@ def _print_rows(rows: list[dict], *, empty: str) -> int:
     return 0
 
 
+def _new_answers(rows: list[dict]) -> list[dict]:
+    """Answered and not yet acknowledged: what an agent must act on."""
+    return [r for r in rows if r.get("answer") and not r.get("acknowledged_at")]
+
+
+def _duration(text: str) -> float:
+    """'55m', '90s', '2h', or plain seconds."""
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([smh]?)\s*", text or "")
+    if not match:
+        raise UsageError(f"--timeout must look like 55m, 90s or 2h, got {text!r}")
+    return float(match.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[match.group(2)]
+
+
+# How long each held request asks for. The service never holds a request that
+# came through Cloudflare past 50 s (api.PUBLIC_MAX_WAIT); asking for exactly
+# that keeps one code path inside the house and out.
+_HOLD = 50
+
+
+def _wait(args, key: str, base: str) -> int:
+    """Block until Jeremy answers, print the answer(s), exit 0.
+
+    homelab-ij8.106, from the first outside agent: it asked nine questions,
+    ended its turn, and three answers sat unseen until he asked whether it had
+    read them -- and every agent was left to hand-write its own listener.
+
+    Exit codes a caller can branch on: 0 answers printed; 3 nothing by the
+    timeout (ask again); 1 refused (the key); 2 usage. Built to run as a
+    background task that wakes its agent when it exits.
+
+    STARTS BY LOOKING, not by listening: an answer that landed before this ran
+    is printed at once, so starting the waiter late never loses one."""
+    timeout = _duration(args.timeout)
+    deadline = time.monotonic() + timeout
+    page = args.page
+
+    def current() -> list[dict]:
+        url = (
+            f"{base}/artifacts/{page}/decisions?include_answered=true"
+            if page
+            else f"{base}/decisions?include_answered=true&scope=mine"
+        )
+        return _new_answers(_request("GET", url, key, None))
+
+    found = current()
+    if found:
+        return _print_rows(found, empty="")
+    headers: dict = {}
+    _request("GET", f"{base}/events?since=999999999999", key, None, headers_out=headers)
+    cursor = int(headers.get("x-artifacts-cursor", "0"))
+    print(
+        f"waiting for Jeremy's answer{f' on {page}' if page else ''} "
+        f"(up to {int(timeout // 60)}m)...",
+        file=sys.stderr,
+        flush=True,
+    )
+    while time.monotonic() < deadline:
+        hold = int(max(1, min(_HOLD, deadline - time.monotonic())))
+        try:
+            rows = _request(
+                "GET",
+                f"{base}/events?since={cursor}&wait={hold}&exclude_self=true",
+                key,
+                None,
+                timeout=hold + 30,
+            )
+        except HTTPFailure as exc:
+            if exc.status in (401, 403):
+                raise
+            # A deploy, a dropped connection, Cloudflare blinking: pause and ask
+            # again from the same cursor, which loses nothing.
+            time.sleep(5)
+            continue
+        if not isinstance(rows, list):
+            rows = []
+        for row in rows:
+            cursor = max(cursor, int(row.get("seq", cursor)))
+        if any(
+            r.get("kind") == "decision_answered" and (not page or r.get("artifact_id") == page)
+            for r in rows
+        ):
+            found = current()
+            if found:
+                return _print_rows(found, empty="")
+    print("nothing yet: no answer before the timeout. Run it again.", file=sys.stderr)
+    return 3
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _StaleAwareParser(
         prog="artifacts-decide",
@@ -246,10 +336,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     listing = subs.add_parser(
-        "list", help="your open decisions across every page you own"
+        "list",
+        help="NEW ANSWERS first (answered, not yet acknowledged), then open questions",
     )
     listing.add_argument(
-        "--answered", action="store_true", help="include ones he has answered"
+        "--answered", action="store_true", help="also answers you have already acknowledged"
+    )
+    listing.add_argument(
+        "--open-only", action="store_true", help="only questions still waiting on him"
     )
     listing.add_argument(
         "--all",
@@ -302,6 +396,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     close = subs.add_parser("close", help="withdraw a question you no longer need")
     close.add_argument("decision", metavar="DECISION-ID")
+
+    waiting = subs.add_parser(
+        "wait",
+        help="block until he answers, print the answer, exit 0 (3 if nothing by --timeout)",
+    )
+    waiting.add_argument("--page", metavar="ARTIFACT-ID", help="only answers on this page")
+    waiting.add_argument("--timeout", default="55m", help="how long to wait (default 55m)")
 
     return parser
 
@@ -369,20 +470,33 @@ def main(argv: list[str] | None = None) -> int:
                      "last_read_at": r.get("last_read_at")}
                     for r in rows
                 ]
-            else:
-                query = (
-                    f"include_answered={'true' if args.answered else 'false'}"
-                    f"&scope={scope}"
+            elif args.open_only:
+                rows = _request(
+                    "GET", f"{base}/decisions?include_answered=false&scope={scope}", key, None
                 )
-                rows = _request("GET", f"{base}/decisions?{query}", key, None)
+            else:
+                # NEW ANSWERS FIRST (homelab-ij8.106): the first outside agent
+                # ran `list`, saw only open questions, and missed three of his
+                # answers and their notes. Answered-and-unacknowledged is what an
+                # agent must act on, so it leads; acknowledged answers only with
+                # --answered.
+                rows = _request(
+                    "GET", f"{base}/decisions?include_answered=true&scope={scope}", key, None
+                )
+                fresh = _new_answers(rows)
+                still_open = [r for r in rows if not r.get("answer")]
+                done = [r for r in rows if r.get("answer") and r.get("acknowledged_at")]
+                rows = fresh + still_open + (done if args.answered else [])
             if args.stranded:
                 empty = (
                     "no uncollected answers"
                     + ("" if args.all else " on this seat's pages")
                 )
+            elif args.open_only:
+                empty = "nothing waiting on Jeremy" + ("" if args.all else " from this seat")
             else:
                 empty = (
-                    "nothing waiting on Jeremy"
+                    "no new answers, and nothing waiting on Jeremy"
                     + ("" if args.all else " from this seat")
                 )
             return _print_rows(rows, empty=empty)
@@ -408,6 +522,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"recorded on {written['decision_id']}: {written['body']}")
             return 0
+        if args.cmd == "wait":
+            return _wait(args, key, base)
         if args.cmd in ("ack", "close"):
             route = "acknowledge" if args.cmd == "ack" else "close"
             row = _request(

@@ -379,7 +379,13 @@ def _request(
     key: str,
     payload: dict | None,
     session: str | None = None,
+    *,
+    timeout: float | None = None,
+    headers_out: dict | None = None,
 ) -> dict:
+    # `timeout`: a held /events request needs longer than the default 30 s.
+    # `headers_out`: filled with the response headers, for the one caller that
+    # reads one (the event cursor, homelab-ij8.106).
     # The process-wide declaration, unless a caller overrides it deliberately.
     session = session or _session
     _check_url_scheme(url)
@@ -404,8 +410,10 @@ def _request(
         request.add_header("Content-Type", "application/json")
     for attempt in range(_ROLLING_ATTEMPTS):
         try:
-            with _opener.open(request, timeout=_REQUEST_TIMEOUT) as response:
+            with _opener.open(request, timeout=timeout or _REQUEST_TIMEOUT) as response:
                 raw = response.read()
+                if headers_out is not None:
+                    headers_out.update({k.lower(): v for k, v in response.headers.items()})
             break
         except urllib.error.HTTPError as exc:
             raw = exc.read()
@@ -1054,9 +1062,10 @@ def main(argv: list[str] | None = None) -> int:
                 who = item.get("last_session") or ""
                 if who and _session and who == _session:
                     who = f"{who} (you)"
-                # With --all, a page from ANOTHER agent says whose it is.
-                if args.all and item.get("agent") and not who:
-                    who = f"by {item['agent']}"
+                # With --all, every row says whose page it is -- the session
+                # label alone (e.g. claude/d7f3a6fc) does not name the machine.
+                if args.all and item.get("agent"):
+                    who = f"{who} by {item['agent']}" if who else f"by {item['agent']}"
                 extra = "\t".join(x for x in (when, who, shelf) if x)
                 suffix = f"\t{extra}" if extra else ""
                 # The GALLERY address, which is the one a reader can open.
