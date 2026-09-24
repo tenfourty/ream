@@ -250,7 +250,7 @@ def test_the_packaged_shapes_file_passes_every_load_time_guard():
     assert [name for name, _ in scan.parse_shapes(text)] == [
         name for name, _ in scan.SHAPES
     ]
-    assert len(scan.SHAPES) == 22
+    assert len(scan.SHAPES) == 24  # +2 Mailgun shapes, 24 Sep 2026 (homelab-ij8.16)
 
 
 # --- performance: each view is scanned once per shape, not once per line
@@ -364,6 +364,14 @@ SHAPE_FIXTURES: dict[str, tuple[str, str]] = {
         "https://example.test/path",
     ),
     "aws_access_key_id": (FAKE_AWS, "AKIA" + "SHORT"),
+    "mailgun_sending_key": (
+        "MAILGUN_SENDING_KEY: 0123456789abcdef0123456789abcdef-01234567-89abcdef",
+        "request id 123e4567-e89b-12d3-a456-426614174000",
+    ),
+    "mailgun_private_key": (
+        "api key-0123456789abcdef0123456789abcdef",
+        "the monkey-business report",
+    ),
     "private_key_header": (
         "-----BEGIN DSA PRIVATE KEY-----\nFAKE\n-----END DSA PRIVATE KEY-----",
         "-----BEGIN CERTIFICATE-----",
