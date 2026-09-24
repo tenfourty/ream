@@ -223,13 +223,16 @@ def agent_router(
             _refuse(request, address, "an agent key is required")
         key = keys.verify(db, token.strip())
         if key is None:
-            _refuse(request, address, "unknown or revoked key")
+            _refuse(request, address, keys.refusal_reason(db, token.strip()))
         # The verified key's public id, for GET /me. Stashed rather than
         # re-derived: the token itself must not be handled twice, and the id is
         # the handle `artifacts-admin list-keys` already prints.
         request.state.agent_key_id = key.id
         # For the machines page's "last used" (homelab-ij8.103).
         keys.touch(db, key.id)
+        # A rotated key's first use kills the key it replaced (homelab-ij8.34).
+        keys.first_use(db, key)
+        request.state.agent_key = key
         return key.agent
 
     # How long a declared session label may be. Generous enough for the shape
@@ -420,6 +423,22 @@ def agent_router(
         """
         return request.app.openapi()
 
+    @router.post("/keys/rotate")
+    def rotate_key(request: Request, agent: str = Depends(caller)):
+        """Swap this machine's key for a new one (homelab-ij8.34, his (3a)). The
+        tools call it weekly. The old key keeps working until the new one is
+        first used, then dies. House seats' vaulted keys are not rotated here."""
+        try:
+            token, key_id = keys.rotate(db, request.state.agent_key)
+        except keys.NotRotating:
+            raise HTTPException(
+                409, "this key is not a rotating key (a house seat's vaulted key)"
+            ) from None
+        return JSONResponse(
+            {"key": token, "key_id": key_id, "agent": agent},
+            headers={"cache-control": "no-store"},
+        )
+
     @router.get("/me")
     def whoami(
         request: Request,
@@ -439,9 +458,17 @@ def agent_router(
         Returns no secret. The key's own bytes are never echoed, and the id is
         the public handle `artifacts-admin list-keys` already prints.
         """
+        key = getattr(request.state, "agent_key", None)
         return {
             "agent": agent,
             "key_id": getattr(request.state, "agent_key_id", None),
+            # Whether this key replaces itself, and from when (homelab-ij8.34).
+            "rotating": bool(key and key.rotating),
+            "rotate_after": (
+                (key.created_at + keys.ROTATE_AFTER).isoformat()
+                if key and key.rotating and key.created_at
+                else None
+            ),
             "scopes": grants.for_agent(db, agent),
             # ECHOED BACK, not looked up: this is what the caller just told us
             # it was, so a seat can check its own plumbing in one call. null

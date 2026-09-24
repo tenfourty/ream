@@ -66,6 +66,12 @@ put it in a message: nobody needs to see it, including him.
 
 If this machine is already connected, you do not need to do this again.
 
+The key renews itself: about once a week the tools swap it for a new one in
+the same file and say so on stderr, and the old one stops working. A key that
+is never renewed stops after two weeks; connect again. If a call is refused
+because the key "was replaced by a newer one" and you did not renew it,
+someone else has had it: tell Jeremy.
+
 Every agent on that machine shares the machine's key and each one names itself
 separately, so his record always says which session did what. Declare yourself:
 

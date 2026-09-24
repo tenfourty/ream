@@ -592,3 +592,16 @@ create table if not exists artifact_share (
     token       text not null unique,
     created_at  timestamptz not null default now()
 );
+
+-- KEYS THAT REPLACE THEMSELVES (homelab-ij8.34, Jeremy's (3a), 24 Sep 2026).
+-- `rotating`: a key a machine received by connecting (artifacts-connect). Its
+-- tools swap it weekly; one never swapped is refused after ROTATING_MAX_AGE.
+-- House seats' keys (vaulted, encrypted at rest) are not rotating.
+-- `replaces`: the key this one succeeds. The old key dies when the new one is
+-- FIRST USED (`first_used_at`), so a lost rotate response never locks a machine
+-- out -- and a thief who rotates first kills the real machine's key, loudly.
+-- `revoked_reason`: 'replaced' tells a machine locked out that way what it means.
+alter table agent_key add column if not exists rotating boolean not null default false;
+alter table agent_key add column if not exists replaces text;
+alter table agent_key add column if not exists first_used_at timestamptz;
+alter table agent_key add column if not exists revoked_reason text;

@@ -14,10 +14,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import socket
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -47,18 +45,7 @@ def _post(url: str, body: dict) -> dict:
 
 
 def _save_key(path: Path, key: str) -> None:
-    """Owner-only from the first byte, then one atomic rename: there is never a
-    moment when the key sits in a file someone else can read, or half-written."""
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".key-")
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w") as handle:
-            handle.write(key + "\n")
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    client.save_key_file(path, key)
 
 
 def main(argv: list[str] | None = None) -> int:

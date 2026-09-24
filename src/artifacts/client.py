@@ -246,6 +246,73 @@ def _resolve_key(args) -> str:
     return _read_key(_key_file_path(args.key_file))
 
 
+# Checked against the key FILE's own age, so an ordinary command costs nothing:
+# only a file older than this asks the service whether it is time to rotate.
+_ROTATE_CHECK_AFTER_SECONDS = 7 * 24 * 3600
+
+
+def _key_file_in_use(args) -> Path | None:
+    """The key file this invocation read, or None when the key came from a
+    descriptor (a vaulted house key the tools must never try to rewrite)."""
+    if args.key_fd is not None or os.environ.get(_KEY_FD_ENV, "").strip():
+        return None
+    return _key_file_path(args.key_file)
+
+
+def save_key_file(path: Path, key: str) -> None:
+    """Owner-only from the first byte, then one atomic rename."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".key-")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(key + "\n")
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def maybe_rotate(args, key: str) -> str:
+    """Replace this machine's key if it is due (homelab-ij8.34, Jeremy's (3a)):
+    keys from artifacts-connect swap themselves weekly, and one never swapped is
+    refused after two weeks. Returns the key to use from here on. Never prints a
+    key. A failure to rotate never fails the command the agent actually ran --
+    the old key still works until the new one is first used."""
+    path = _key_file_in_use(args)
+    if path is None:
+        return key
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return key
+    if age < _ROTATE_CHECK_AFTER_SECONDS:
+        return key
+    base = _api_base()
+    try:
+        me = _request("GET", f"{base}/me", key, None)
+        if not me.get("rotating"):
+            return key
+        fresh = _request("POST", f"{base}/keys/rotate", key, {})
+        new_key = fresh.get("key")
+        if not isinstance(new_key, str) or not new_key.startswith("art_"):
+            return key
+        save_key_file(path, new_key)
+    except (HTTPFailure, UsageError, OSError) as exc:
+        print(
+            f"note: this machine's weekly key swap did not happen ({exc}); "
+            "the current key still works, and it will try again",
+            file=sys.stderr,
+        )
+        return key
+    print(
+        "note: this machine's key was replaced, as it is every week; the new one "
+        f"is in {path} and was not shown",
+        file=sys.stderr,
+    )
+    return new_key
+
+
 def _read_key_fd(number: int) -> str:
     """The key from an already-open file descriptor, so it is never on disk.
 
@@ -1065,6 +1132,7 @@ def main(argv: list[str] | None = None) -> int:
     except UsageError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    key = maybe_rotate(args, key)
 
     try:
         if args.list:

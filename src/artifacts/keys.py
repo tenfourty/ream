@@ -1,15 +1,22 @@
 import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from artifacts.db import Database
+
+# A rotating key is swapped once it is this old (by the tools), and refused
+# once it is this much older without having been (homelab-ij8.34).
+ROTATE_AFTER = timedelta(days=7)
+ROTATING_MAX_AGE = timedelta(days=14)
 
 
 @dataclass(frozen=True)
 class AgentKey:
     id: str
     agent: str
+    created_at: datetime | None = None
+    rotating: bool = False
 
 
 @dataclass(frozen=True)
@@ -53,10 +60,96 @@ def verify(db: Database, token: str) -> AgentKey | None:
         return None
     with db.connect() as conn:
         row = conn.execute(
-            "select id, agent from agent_key where token_sha256 = %s and revoked_at is null",
+            "select id, agent, created_at, rotating from agent_key"
+            " where token_sha256 = %s and revoked_at is null",
             (_hash(token),),
         ).fetchone()
-    return AgentKey(id=row[0], agent=row[1]) if row else None
+    if row is None:
+        return None
+    key = AgentKey(id=row[0], agent=row[1], created_at=row[2], rotating=row[3])
+    if key.rotating and datetime.now(UTC) - key.created_at > ROTATING_MAX_AGE:
+        return None
+    return key
+
+
+def refusal_reason(db: Database, token: str) -> str:
+    """Why a key that did NOT verify was refused, in words for its holder. Only
+    ever shown to whoever presented that exact key, so saying it existed tells
+    them nothing they did not already hold (homelab-ij8.34)."""
+    if not token.startswith("art_"):
+        return "unknown or revoked key"
+    with db.connect() as conn:
+        row = conn.execute(
+            "select revoked_at, revoked_reason, rotating, created_at from agent_key"
+            " where token_sha256 = %s",
+            (_hash(token),),
+        ).fetchone()
+    if row is None:
+        return "unknown or revoked key"
+    revoked_at, reason, rotating, created_at = row
+    if revoked_at is not None and reason == "replaced":
+        return (
+            "this key was replaced by a newer one. If this machine did not replace "
+            "it, someone else has held its key: tell Jeremy, and connect again with "
+            "artifacts-connect"
+        )
+    if (
+        revoked_at is None
+        and rotating
+        and datetime.now(UTC) - created_at > ROTATING_MAX_AGE
+    ):
+        return (
+            "this key expired: machine keys replace themselves weekly and this one "
+            "was not replaced in two weeks. Connect again with artifacts-connect"
+        )
+    return "unknown or revoked key"
+
+
+def first_use(db: Database, key: AgentKey) -> None:
+    """The first time a rotated key is used, the key it replaced dies. Until
+    then both work, so a rotate whose response was lost cannot lock a machine
+    out; after it, a copy of the old key is worthless."""
+    if not key.rotating:
+        return
+    with db.connect() as conn, conn.transaction():
+        row = conn.execute(
+            "update agent_key set first_used_at = now()"
+            " where id = %s and first_used_at is null and replaces is not null"
+            " returning replaces",
+            (key.id,),
+        ).fetchone()
+        if row:
+            conn.execute(
+                "update agent_key set revoked_at = now(), revoked_reason = 'replaced'"
+                " where id = %s and revoked_at is null",
+                (row[0],),
+            )
+
+
+class NotRotating(Exception):
+    """A house seat's key: vaulted and encrypted at rest, not swapped by tools."""
+
+
+def rotate(db: Database, key: AgentKey) -> tuple[str, str]:
+    """Mint this key's successor: same machine, same name. Returns (token,
+    key_id); the plaintext is returned once. A pending successor from an earlier
+    rotate that was never used is revoked, so there is only ever one."""
+    if not key.rotating:
+        raise NotRotating()
+    token = "art_" + secrets.token_urlsafe(32)
+    key_id = secrets.token_hex(8)
+    with db.connect() as conn, conn.transaction():
+        conn.execute(
+            "update agent_key set revoked_at = now(), revoked_reason = 'superseded'"
+            " where replaces = %s and first_used_at is null and revoked_at is null",
+            (key.id,),
+        )
+        conn.execute(
+            "insert into agent_key (id, agent, token_sha256, rotating, replaces, label)"
+            " select %s, agent, %s, true, id, label from agent_key where id = %s",
+            (key_id, _hash(token), key.id),
+        )
+    return token, key_id
 
 
 def revoke(db: Database, key_id: str) -> int:
@@ -114,6 +207,7 @@ class Machine:
     last_used_at: datetime | None
     pages: int
     sessions: list[str]
+    rotating: bool = False
 
     @property
     def name(self) -> str:
@@ -132,10 +226,17 @@ def machines(db: Database) -> list[Machine]:
             "   from version v join artifact a on a.id = v.artifact_id"
             "   where a.agent = k.agent and v.session is not null"
             "   group by v.session order by at desc limit 5) recent)"
+            " , k.rotating"
             " from agent_key k"
+            # A key retired by its own weekly swap is not a revocation, and
+            # listing one per week per machine would bury the real ones.
+            " where coalesce(k.revoked_reason, '') not in ('replaced', 'superseded')"
             " order by k.revoked_at is not null, k.created_at desc"
         ).fetchall()
-    return [Machine(*row[:7], sessions=list(row[7] or [])) for row in rows]
+    return [
+        Machine(*row[:7], sessions=list(row[7] or []), rotating=bool(row[8]))
+        for row in rows
+    ]
 
 
 def set_label(db: Database, key_id: str, label: str) -> bool:

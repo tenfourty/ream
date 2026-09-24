@@ -1546,7 +1546,12 @@ def _machines_page(machines, confirm: str = "", note: str = "") -> str:
         ident = escape(m.id)
         used = _ago(m.last_used_at) if m.last_used_at else ""
         facts = [
-            f"<dt>Connected</dt><dd>{escape(_ago(m.created_at) or 'just now')}</dd>",
+            (
+                f"<dt>Key</dt><dd>renews itself weekly; this one issued "
+                f"{escape(_ago(m.created_at) or 'just now')}</dd>"
+                if m.rotating
+                else f"<dt>Connected</dt><dd>{escape(_ago(m.created_at) or 'just now')}</dd>"
+            ),
             f"<dt>Last used</dt><dd>{escape(used or 'not since it connected')}</dd>",
             f"<dt>Pages</dt><dd>{m.pages}</dd>",
             "<dt>Sessions</dt><dd>"

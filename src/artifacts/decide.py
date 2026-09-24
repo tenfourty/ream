@@ -38,6 +38,7 @@ from artifacts.client import (
     _resolve_key,
     declared_session,
     installed_stamp,
+    maybe_rotate,
     use_session,
     warn_if_unlabelled,
 )
@@ -508,6 +509,7 @@ def main(argv: list[str] | None = None) -> int:
     except UsageError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    key = maybe_rotate(args, key)
 
     base = _api_base()
     if args.cmd in ("ask", "record", "outcome", "ack", "close", "reply", "settle"):

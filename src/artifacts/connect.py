@@ -194,7 +194,9 @@ def collect(db: Database, poll_token: str) -> dict:
         token = "art_" + secrets.token_urlsafe(32)
         key_id = secrets.token_hex(8)
         conn.execute(
-            "insert into agent_key (id, agent, token_sha256) values (%s, %s, %s)",
+            # rotating: a connected machine's key replaces itself weekly
+            # (homelab-ij8.34, his (3a)).
+            "insert into agent_key (id, agent, token_sha256, rotating) values (%s, %s, %s, true)",
             (key_id, agent, keys._hash(token)),
         )
         conn.execute(
