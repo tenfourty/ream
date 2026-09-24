@@ -22,7 +22,9 @@ def tools_dir(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def gallery(db):
-    return TestClient(create_gallery_app(db), base_url="https://artifacts.tenfourty.site")
+    return TestClient(
+        create_gallery_app(db), base_url="https://artifacts.tenfourty.site"
+    )
 
 
 def test_the_package_is_served_openly_by_its_exact_name(gallery, tools_dir):
@@ -45,7 +47,9 @@ def test_no_package_means_a_plain_404_not_a_crash(gallery, tmp_path, monkeypatch
     assert gallery.get(f"/api/v1/tools/{WHEEL}").status_code == 404
 
 
-def test_the_onboarding_document_gives_the_uvx_line_for_this_address(gallery, tools_dir):
+def test_the_onboarding_document_gives_the_uvx_line_for_this_address(
+    gallery, tools_dir
+):
     text = gallery.get("/api/v1/agents.txt").text
     url = f"https://artifacts.tenfourty.site/api/v1/tools/{WHEEL}"
     assert f"uvx --from {url} artifacts-publish" in text

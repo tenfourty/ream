@@ -469,9 +469,7 @@ def test_the_two_addresses_are_not_the_same_and_one_is_for_a_person(
     assert published["id"] in published["url"], "the origin still names the page"
 
 
-def test_the_echo_says_what_was_actually_stored(
-    live, key_file, tmp_path, capsys
-):
+def test_the_echo_says_what_was_actually_stored(live, key_file, tmp_path, capsys):
     """The reported case: an agent replaced two timestamp placeholders with sed
     and realised that had the sed failed, the response would have been
     identical and the page would have shown the raw placeholder to Jeremy."""
@@ -912,7 +910,15 @@ def test_the_listing_names_the_session_that_published_each_page(
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>hi</body></html>")
     client.main(
-        ["--key-file", str(path), str(page), "--title", "Board", "--session", "mine/111"]
+        [
+            "--key-file",
+            str(path),
+            str(page),
+            "--title",
+            "Board",
+            "--session",
+            "mine/111",
+        ]
     )
     artifact_id = json.loads(capsys.readouterr().out.strip())["id"]
 
@@ -934,7 +940,9 @@ def test_the_listing_names_the_session_that_published_each_page(
     assert theirs[4] == "mine/111", "named, and NOT marked as the reader's own"
 
 
-def test_a_page_with_no_recorded_session_adds_no_column(live, key_file, tmp_path, capsys):
+def test_a_page_with_no_recorded_session_adds_no_column(
+    live, key_file, tmp_path, capsys
+):
     """Unknown is not the same fact as nobody, and an empty column would be a
     fifth field every caller has to learn about in order to report nothing."""
     path, _ = key_file

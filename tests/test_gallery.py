@@ -51,7 +51,9 @@ def test_the_detail_page_frames_the_content_origin_and_inlines_nothing(db):
         .text
     )
     # A fresh single-use pass, never the page's permanent token (homelab-ij8.101).
-    assert re.search(rf'src="https://{published.id}\.[^/"]+/p/[A-Za-z0-9_-]{{43}}/"', page)
+    assert re.search(
+        rf'src="https://{published.id}\.[^/"]+/p/[A-Za-z0-9_-]{{43}}/"', page
+    )
     assert store.read_token(db, published.id) not in page
     assert "secret-body" not in page
 
@@ -327,7 +329,9 @@ def test_answering_works_with_no_sec_fetch_site_header_at_all(db):
 def test_the_framed_page_and_its_tokenised_src_are_unchanged_by_decisions(db):
     published, _row = _publish_and_ask(db)
     page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
-    assert re.search(rf'src="https://{published.id}\.[^/"]+/p/[A-Za-z0-9_-]{{43}}/"', page)
+    assert re.search(
+        rf'src="https://{published.id}\.[^/"]+/p/[A-Za-z0-9_-]{{43}}/"', page
+    )
 
 
 def test_firefoxs_null_origin_is_accepted_when_fetch_metadata_proves_same_origin(db):

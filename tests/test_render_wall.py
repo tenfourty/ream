@@ -1,5 +1,6 @@
 """Not a test: a one-shot that renders the real wall to a file so I can look at
 it. Skipped unless ARTIFACTS_RENDER_TO is set, so it never runs in CI."""
+
 import os
 import pathlib
 
@@ -33,26 +34,48 @@ def test_render_the_wall(db, monkeypatch):
         )
 
     rows = [
-        ("warpgate-arc", "Warpgate: the gate Jeremy comes through",
-         "Where the reverse proxy arc stands, and what is still waiting on him."),
-        ("homelab-ops", "Homelab status",
-         "Every node, every service, and the three that are not happy today."),
-        ("artifacts-agent", "Artifacts: the page-hosting service",
-         "What this service does, what shipped today, and what is still open."),
-        ("cove-seat", "Forty-One Days on Cove",
-         "A write-up of the first six weeks, for reading rather than scanning."),
-        ("backup-arc", "Photo library, going off-site",
-         "The upload is 21 % done and finishes Tuesday at the current rate."),
-        ("seat-six", "Template — project status",
-         "A worked example other agents copy. Everything here is placeholder."),
+        (
+            "warpgate-arc",
+            "Warpgate: the gate Jeremy comes through",
+            "Where the reverse proxy arc stands, and what is still waiting on him.",
+        ),
+        (
+            "homelab-ops",
+            "Homelab status",
+            "Every node, every service, and the three that are not happy today.",
+        ),
+        (
+            "artifacts-agent",
+            "Artifacts: the page-hosting service",
+            "What this service does, what shipped today, and what is still open.",
+        ),
+        (
+            "cove-seat",
+            "Forty-One Days on Cove",
+            "A write-up of the first six weeks, for reading rather than scanning.",
+        ),
+        (
+            "backup-arc",
+            "Photo library, going off-site",
+            "The upload is 21 % done and finishes Tuesday at the current rate.",
+        ),
+        (
+            "seat-six",
+            "Template — project status",
+            "A worked example other agents copy. Everything here is placeholder.",
+        ),
     ]
     # A MIXTURE of sessions too, and one page with none: the wall is mostly
     # history, so a fixture where every tile has a session would hide exactly
     # the case the renderer has to get right -- saying nothing rather than
     # "unknown".
     sessions = [
-        "artifacts-seat/5ed2e1c5", "cove-seat/9f21aa", None,
-        "backup-arc/31c0de", None, "seat-six/0b77c3",
+        "artifacts-seat/5ed2e1c5",
+        "cove-seat/9f21aa",
+        None,
+        "backup-arc/31c0de",
+        None,
+        "seat-six/0b77c3",
     ]
     ids = [
         store.publish(db, a, t, page(t, s), session=sess).id
@@ -65,7 +88,10 @@ def test_render_the_wall(db, monkeypatch):
     store.set_pinned(db, ids[2], True, agent=None)
     for q in ("Which gate?", "And the certificate?"):
         decisions.ask(
-            db, agent="warpgate-arc", artifact_id=ids[0], question=q,
+            db,
+            agent="warpgate-arc",
+            artifact_id=ids[0],
+            question=q,
             options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
             recommended="a",
         )

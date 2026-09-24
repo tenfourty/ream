@@ -32,7 +32,10 @@ def asked(db):
     keys.mint(db, agent="seat")
     page = store.publish(db, "seat", "Board", PAGE)
     return page, decisions.ask(
-        db, agent="seat", artifact_id=page.id, question="Which way?",
+        db,
+        agent="seat",
+        artifact_id=page.id,
+        question="Which way?",
         options=[{"letter": "a", "label": "One"}, {"letter": "b", "label": "Two"}],
         recommended="a",
     )
@@ -47,7 +50,9 @@ def test_an_outcome_can_be_recorded_on_a_question_he_has_not_answered(db, asked)
     own, and until this there was nowhere to say so."""
     _, decision = asked
     written = decisions.record_outcome(
-        db, decision.id, agent="seat",
+        db,
+        decision.id,
+        agent="seat",
         body="Framing corrected: the second promise was wrong.",
     )
     assert written.decision_id == decision.id
@@ -88,11 +93,13 @@ def test_another_agents_decision_is_not_writable(db, asked):
 
 
 def test_an_outcome_is_scanned_like_everything_else_that_is_stored(db, asked):
-    """"It is only a note" is how a field skips its checks."""
+    """ "It is only a note" is how a field skips its checks."""
     _, decision = asked
     with pytest.raises(store.SecretFound):
         decisions.record_outcome(
-            db, decision.id, agent="seat",
+            db,
+            decision.id,
+            agent="seat",
             body="deployed with AKIA" + "IOSFODNN7EXAMPLE",
         )
     assert decisions.outcomes_for(db, decision.id) == []
@@ -117,12 +124,16 @@ def test_destroying_the_page_takes_its_outcomes_with_it(db, asked):
 # --- what Jeremy sees ----------------------------------------------------------
 
 
-def test_an_open_question_shows_what_moved_under_it_BEFORE_the_buttons(db, asked, client):
+def test_an_open_question_shows_what_moved_under_it_BEFORE_the_buttons(
+    db, asked, client
+):
     """He must read it before he chooses, not after. Asserted as an ORDER,
     because a warning below the thing it warns about is not a warning."""
     page, decision = asked
     decisions.record_outcome(
-        db, decision.id, agent="seat",
+        db,
+        decision.id,
+        agent="seat",
         body="Framing corrected: the second promise was wrong.",
     )
     body = client.get(f"/a/{page.id}").text
@@ -262,15 +273,22 @@ def test_the_catch_all_has_not_swallowed_the_real_routes(db, asked, client):
     token, _ = keys.mint(db, agent="seat")
     h = {"Authorization": f"Bearer {token}"}
 
-    assert client.post(
-        f"/api/v1/decisions/{decision.id}/outcome", json={"body": "real"}, headers=h
-    ).status_code == 201
-    assert client.get(
-        f"/api/v1/decisions/{decision.id}/outcomes", headers=h
-    ).status_code == 200
-    assert client.post(
-        f"/api/v1/decisions/{decision.id}/acknowledge", headers=h
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/api/v1/decisions/{decision.id}/outcome", json={"body": "real"}, headers=h
+        ).status_code
+        == 201
+    )
+    assert (
+        client.get(f"/api/v1/decisions/{decision.id}/outcomes", headers=h).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/v1/decisions/{decision.id}/acknowledge", headers=h
+        ).status_code
+        == 200
+    )
 
 
 def test_not_yours_still_reads_differently_from_no_such_route(db, asked, client):

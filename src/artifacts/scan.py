@@ -191,7 +191,9 @@ def _lower_ascii(view: str) -> str:
 # alternation, nested group or quantifier inside the group matches
 # something else once lowered. The group's own closing `)` is where this
 # grammar stops, never the first `)` in the text -- the body can hold `\)`.
-_INLINE_CASE_INSENSITIVE = re.compile(r"\(\?i:((?:[^\\.^$*+?{}\[\]()|]|\\[^A-Za-z0-9])*)\)")
+_INLINE_CASE_INSENSITIVE = re.compile(
+    r"\(\?i:((?:[^\\.^$*+?{}\[\]()|]|\\[^A-Za-z0-9])*)\)"
+)
 
 # A shape with a `(?i:...)` group is searched, in full, over an ASCII-
 # lowercased copy of the body, with each group folded into a non-capturing
@@ -296,7 +298,9 @@ def _class_survives_lowering(text: str) -> bool:
         return False
     negated = text.startswith("[^")
     named = {c for c in string.ascii_letters if bool(admits(c)) != negated}
-    for upper, lower in zip(string.ascii_uppercase, string.ascii_lowercase, strict=True):
+    for upper, lower in zip(
+        string.ascii_uppercase, string.ascii_lowercase, strict=True
+    ):
         if upper in named and lower not in named:
             return False
         if negated and lower in named and upper not in named:
@@ -314,7 +318,9 @@ def _survives_lowering(folded: str) -> str | None:
         char = folded[i]
         if char == "\\":
             escaped = folded[i + 1 : i + 2]
-            if not escaped or (escaped.isalnum() and escaped not in _CASE_NEUTRAL_ESCAPES):
+            if not escaped or (
+                escaped.isalnum() and escaped not in _CASE_NEUTRAL_ESCAPES
+            ):
                 return f"the escape \\{escaped} can name an uppercase letter"
             i += 2
             continue
@@ -382,7 +388,9 @@ _VALUE_BOUNDARY = re.compile(r"""[\s"'&;,]|<[A-Za-z/!?][^<>]*>""")
 # characters, so no two matches' runs overlap and the total work over a
 # view stays linear however far a value sits from its key.
 _SKIPPABLE = frozenset(
-    {chr(code) for code in range(0x3001) if chr(code).isspace()} | set("'\"") | set(_INVISIBLE)
+    {chr(code) for code in range(0x3001) if chr(code).isspace()}
+    | set("'\"")
+    | set(_INVISIBLE)
 )
 
 
@@ -398,8 +406,10 @@ def _reference_forms(characters: frozenset) -> str:
     forms += [rf"#0*{ord(char)};?" for char in characters]
     forms += [
         "#[xX]0*"
-        + "".join(f"[{digit}{digit.upper()}]" if digit.isalpha() else digit
-                  for digit in f"{ord(char):x}")
+        + "".join(
+            f"[{digit}{digit.upper()}]" if digit.isalpha() else digit
+            for digit in f"{ord(char):x}"
+        )
         + ";?"
         for char in characters
     ]
@@ -486,12 +496,16 @@ def parse_shapes(text: str) -> list[tuple[str, re.Pattern]]:
             continue
         name, sep, pattern = line.partition("\t")
         if not sep:
-            raise ShapesError(f"secret shape line {number}: no <TAB> between name and pattern")
+            raise ShapesError(
+                f"secret shape line {number}: no <TAB> between name and pattern"
+            )
         name = name.strip()
         if not name or not pattern:
             raise ShapesError(f"secret shape line {number}: empty name or pattern")
         if name in seen:
-            raise ShapesError(f"secret shape line {number}: duplicate shape name {name!r}")
+            raise ShapesError(
+                f"secret shape line {number}: duplicate shape name {name!r}"
+            )
         if any(token in pattern for token in _FORBIDDEN_ANCHORS):
             raise ShapesError(
                 f"secret shape line {number} ({name}): \\A/\\Z anchor the whole body -- use"
@@ -502,7 +516,9 @@ def parse_shapes(text: str) -> list[tuple[str, re.Pattern]]:
         try:
             compiled = re.compile(pattern, re.MULTILINE)
         except re.error as exc:
-            raise ShapesError(f"secret shape line {number} ({name}): invalid pattern") from exc
+            raise ShapesError(
+                f"secret shape line {number} ({name}): invalid pattern"
+            ) from exc
         if compiled.search(""):
             raise ShapesError(
                 f"secret shape line {number} ({name}): pattern matches the empty string --"
@@ -511,12 +527,18 @@ def parse_shapes(text: str) -> list[tuple[str, re.Pattern]]:
         shapes.append((name, compiled))
         seen.add(name)
     if not shapes:
-        raise ShapesError("no secret shapes parsed -- refusing to scan with zero shapes")
+        raise ShapesError(
+            "no secret shapes parsed -- refusing to scan with zero shapes"
+        )
     return shapes
 
 
 def _load_shapes() -> list[tuple[str, re.Pattern]]:
-    text = resources.files("artifacts").joinpath("secret_shapes.txt").read_text(encoding="utf-8")
+    text = (
+        resources.files("artifacts")
+        .joinpath("secret_shapes.txt")
+        .read_text(encoding="utf-8")
+    )
     return parse_shapes(text)
 
 
@@ -844,9 +866,15 @@ def _shape_lines(
                 continue
             real_examined += 1
             lines.setdefault(_line_of(match.start(), offsets_for(index)), None)
-            if len(lines) >= _MAX_LINES_PER_SHAPE or real_examined >= _MAX_RAW_MATCHES_PER_SHAPE:
+            if (
+                len(lines) >= _MAX_LINES_PER_SHAPE
+                or real_examined >= _MAX_RAW_MATCHES_PER_SHAPE
+            ):
                 break
-        if len(lines) >= _MAX_LINES_PER_SHAPE or real_examined >= _MAX_RAW_MATCHES_PER_SHAPE:
+        if (
+            len(lines) >= _MAX_LINES_PER_SHAPE
+            or real_examined >= _MAX_RAW_MATCHES_PER_SHAPE
+        ):
             break
     return list(lines)
 

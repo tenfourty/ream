@@ -455,7 +455,10 @@ def test_an_answer_event_carries_his_note_verbatim(db):
     keys.mint(db, agent="seat")
     art = store.publish(db, "seat", "Board", PAGE)
     asked = decisions.ask(
-        db, agent="seat", artifact_id=art.id, question="Which?",
+        db,
+        agent="seat",
+        artifact_id=art.id,
+        question="Which?",
         options=[{"letter": "a", "label": "Yes"}, {"letter": "b", "label": "No"}],
         recommended="a",
     )
@@ -471,12 +474,19 @@ def test_a_relayed_answer_also_carries_the_note(db):
     keys.mint(db, agent="seat")
     art = store.publish(db, "seat", "Board", PAGE)
     asked = decisions.ask(
-        db, agent="seat", artifact_id=art.id, question="Which?",
+        db,
+        agent="seat",
+        artifact_id=art.id,
+        question="Which?",
         options=[{"letter": "a", "label": "Yes"}, {"letter": "b", "label": "No"}],
         recommended="a",
     )
     decisions.record_elsewhere(
-        db, asked.id, letter="b", note="Let it go", source="telegram",
+        db,
+        asked.id,
+        letter="b",
+        note="Let it go",
+        source="telegram",
         recorded_by="homelab-ops",
     )
     assert events.list_for_agent(db, agent="seat", since=0)[-1].note == "Let it go"
@@ -489,7 +499,10 @@ def test_the_note_is_its_own_field_not_folded_into_the_summary(db):
     keys.mint(db, agent="seat")
     art = store.publish(db, "seat", "Board", PAGE)
     asked = decisions.ask(
-        db, agent="seat", artifact_id=art.id, question="Which?",
+        db,
+        agent="seat",
+        artifact_id=art.id,
+        question="Which?",
         options=[{"letter": "a", "label": "Yes"}, {"letter": "b", "label": "No"}],
         recommended="a",
     )
@@ -504,7 +517,10 @@ def test_no_note_is_an_empty_string_not_a_missing_field(db):
     keys.mint(db, agent="seat")
     art = store.publish(db, "seat", "Board", PAGE)
     asked = decisions.ask(
-        db, agent="seat", artifact_id=art.id, question="Which?",
+        db,
+        agent="seat",
+        artifact_id=art.id,
+        question="Which?",
         options=[{"letter": "a", "label": "Yes"}, {"letter": "b", "label": "No"}],
         recommended="a",
     )

@@ -57,7 +57,11 @@ def config_path() -> Path:
     override = os.environ.get("ARTIFACTS_PAGES_FILE")
     if override:
         return Path(override)
-    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "artifacts" / "pages.toml"
+    return (
+        Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        / "artifacts"
+        / "pages.toml"
+    )
 
 
 def log_path() -> Path:
@@ -158,7 +162,9 @@ def render(command: str, key: str | None = None) -> str | None:
         if read_fd is not None:
             os.close(read_fd)
     if done.returncode != 0:
-        _log(f"render exited {done.returncode}: {command!r}: {done.stderr.strip()[:300]}")
+        _log(
+            f"render exited {done.returncode}: {command!r}: {done.stderr.strip()[:300]}"
+        )
         return None
     body = done.stdout
     if not body.strip():

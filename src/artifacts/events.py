@@ -366,7 +366,14 @@ def wait_for_agent(
         # Too many agents already waiting. Answer now with whatever is there
         # rather than queueing behind them: a caller that gets an empty answer
         # early simply asks again, which is ordinary polling.
-        return list_for_agent(db, agent, since=since, limit=limit, session=session, exclude_actor=exclude_actor)
+        return list_for_agent(
+            db,
+            agent,
+            since=since,
+            limit=limit,
+            session=session,
+            exclude_actor=exclude_actor,
+        )
     try:
         deadline = time.monotonic() + seconds
         looked_once = False
@@ -375,7 +382,14 @@ def wait_for_agent(
             if _shutdown.is_set():
                 # Asked to stop before this hold even began: answer at once
                 # rather than opening a request that cannot be honoured.
-                return list_for_agent(db, agent, since=since, limit=limit, session=session, exclude_actor=exclude_actor)
+                return list_for_agent(
+                    db,
+                    agent,
+                    since=since,
+                    limit=limit,
+                    session=session,
+                    exclude_actor=exclude_actor,
+                )
             # The deadline is checked BEFORE the look as well as after. A look
             # is a database round trip, not a free operation, and the caller was
             # promised an answer by a wall-clock moment: starting one more look
@@ -384,7 +398,11 @@ def wait_for_agent(
                 return []
             try:
                 rows = list_for_agent(
-                    db, agent, since=since, limit=limit, session=session,
+                    db,
+                    agent,
+                    since=since,
+                    limit=limit,
+                    session=session,
                     exclude_actor=exclude_actor,
                 )
                 failing_since = None
@@ -417,7 +435,14 @@ def wait_for_agent(
             # it -- one last look first, so a row that landed in the same
             # moment is not thrown away.
             if _shutdown.wait(timeout=min(_LOOK_EVERY, remaining)):
-                return list_for_agent(db, agent, since=since, limit=limit, session=session, exclude_actor=exclude_actor)
+                return list_for_agent(
+                    db,
+                    agent,
+                    since=since,
+                    limit=limit,
+                    session=session,
+                    exclude_actor=exclude_actor,
+                )
     finally:
         _waiters.release()
 

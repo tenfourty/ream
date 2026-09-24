@@ -56,4 +56,7 @@ extend-select = ["S", "B"]
 # S311 flags `random.Random` as unfit for cryptographic use -- true, and
 # irrelevant to a seeded fuzz corpus for a property test, which wants
 # reproducible pseudo-randomness, never secrecy.
-"tests/**" = ["S101", "S311"]
+# F811 flags a pytest fixture imported from test_client and then taken as a
+# parameter -- how pytest works, not a mistake. Per-line noqa stopped covering
+# it once the formatter wrapped long signatures (homelab-ij8.25).
+"tests/**" = ["S101", "S311", "F811"]

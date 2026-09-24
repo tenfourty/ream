@@ -107,10 +107,17 @@ def test_a_case_insensitive_group_that_is_not_a_plain_literal_is_rejected(patter
 
 @pytest.mark.parametrize(
     "pattern",
-    ["(?i:X-Api-Key:)", "(?i:client_secret=)", "(?i:api\\.key=)", "(?i:bearer)\\s+[A-Za-z0-9]{16,}"],
+    [
+        "(?i:X-Api-Key:)",
+        "(?i:client_secret=)",
+        "(?i:api\\.key=)",
+        "(?i:bearer)\\s+[A-Za-z0-9]{16,}",
+    ],
 )
 def test_a_case_insensitive_group_of_plain_literal_text_still_loads(pattern):
-    assert [name for name, _ in scan.parse_shapes(f"safe_fold\t{pattern}\n")] == ["safe_fold"]
+    assert [name for name, _ in scan.parse_shapes(f"safe_fold\t{pattern}\n")] == [
+        "safe_fold"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -202,7 +209,9 @@ def test_the_rest_of_the_pattern_is_read_as_re_reads_it_not_textually(pattern):
         ("(?i:token=)[^A-Za-z]", "token=\u0130"),
     ],
 )
-def test_the_fast_path_finds_what_the_original_pattern_finds(monkeypatch, pattern, body):
+def test_the_fast_path_finds_what_the_original_pattern_finds(
+    monkeypatch, pattern, body
+):
     shapes = scan.parse_shapes(f"probe\t{pattern}\n")
     [(_, compiled)] = shapes
     assert compiled.search(body)
@@ -229,12 +238,18 @@ def test_a_negative_lookaround_in_a_case_insensitive_shape_is_rejected(pattern):
 
 def test_a_positive_lookaround_in_a_case_insensitive_shape_still_loads():
     pattern = "(?i:token=)(?=[a-z0-9]{8})\\S+"
-    assert [name for name, _ in scan.parse_shapes(f"lookahead\t{pattern}\n")] == ["lookahead"]
+    assert [name for name, _ in scan.parse_shapes(f"lookahead\t{pattern}\n")] == [
+        "lookahead"
+    ]
 
 
 def test_the_packaged_shapes_file_passes_every_load_time_guard():
-    text = (scan.resources.files("artifacts") / "secret_shapes.txt").read_text(encoding="utf-8")
-    assert [name for name, _ in scan.parse_shapes(text)] == [name for name, _ in scan.SHAPES]
+    text = (scan.resources.files("artifacts") / "secret_shapes.txt").read_text(
+        encoding="utf-8"
+    )
+    assert [name for name, _ in scan.parse_shapes(text)] == [
+        name for name, _ in scan.SHAPES
+    ]
     assert len(scan.SHAPES) == 22
 
 
@@ -304,7 +319,10 @@ SHAPE_FIXTURES: dict[str, tuple[str, str]] = {
     "apikey_literal": ("apikey=FAKEKEY123", "the API key rotation policy"),
     "token_assignment": ("token=FAKETOKEN123", "tokenize the input string"),
     "secret_assignment": ("secret=FAKESECRET123", "secretary meeting notes"),
-    "x_auth_token_header": ("X-Auth-Token: FAKEVALUE123", "X Auth Token missing entirely"),
+    "x_auth_token_header": (
+        "X-Auth-Token: FAKEVALUE123",
+        "X Auth Token missing entirely",
+    ),
     "age_encrypted_header": (
         "-----BEGIN AGE ENCRYPTED FILE-----\nFAKE\n-----END AGE ENCRYPTED FILE-----",
         "beginning age-encrypted formats are old news",
@@ -313,7 +331,10 @@ SHAPE_FIXTURES: dict[str, tuple[str, str]] = {
         "-----BEGIN PGP PRIVATE KEY BLOCK-----\nFAKE\n-----END PGP PRIVATE KEY BLOCK-----",
         "begin pgp private conversation",
     ),
-    "openssh_private_key_header": (FAKE_PRIVATE_KEY, "openssh private key rotation guide"),
+    "openssh_private_key_header": (
+        FAKE_PRIVATE_KEY,
+        "openssh private key rotation guide",
+    ),
     "rsa_private_key_header": (
         "-----BEGIN RSA PRIVATE KEY-----\nFAKE\n-----END RSA PRIVATE KEY-----",
         "rsa private key rotation guide",
@@ -322,8 +343,14 @@ SHAPE_FIXTURES: dict[str, tuple[str, str]] = {
         "-----BEGIN EC PRIVATE KEY-----\nFAKE\n-----END EC PRIVATE KEY-----",
         "ec private key rotation guide",
     ),
-    "private_key_field": ("PrivateKey = FAKEBASE64KEYDATA", "PrivateKeystore uses AES-256"),
-    "preshared_key_field": ("PresharedKey = FAKEBASE64KEYDATA", "PresharedKeys rotate weekly"),
+    "private_key_field": (
+        "PrivateKey = FAKEBASE64KEYDATA",
+        "PrivateKeystore uses AES-256",
+    ),
+    "preshared_key_field": (
+        "PresharedKey = FAKEBASE64KEYDATA",
+        "PresharedKeys rotate weekly",
+    ),
     "credential_set_literal": (
         "the credential-set fake-creds-01 was rotated",
         "credentials are set nightly by the job",
@@ -352,7 +379,9 @@ def test_every_shape_name_has_a_fixture():
 def test_shape_catches_its_fake_and_ignores_its_near_miss(name):
     positive, near_miss = SHAPE_FIXTURES[name]
     caught = scan.scan(positive)
-    assert any(f.shape == name for f in caught), f"{name} did not fire on its own positive fake"
+    assert any(f.shape == name for f in caught), (
+        f"{name} did not fire on its own positive fake"
+    )
     missed = scan.scan(near_miss)
     assert not any(f.shape == name for f in missed), f"{name} fired on its near-miss"
 
@@ -417,7 +446,9 @@ def test_bearer_token_requires_a_token_shaped_value_not_just_the_word():
 # not just claimed. -----------------------------------------------------
 
 
-def test_pasting_either_untranslated_bre_source_back_in_would_go_undetected(monkeypatch):
+def test_pasting_either_untranslated_bre_source_back_in_would_go_undetected(
+    monkeypatch,
+):
     bre_sources = {
         "url_query_secret": r"[?&]\(api_\)\?\(key\|token\|secret\|password\)=[^&[:space:]]",
         "url_inline_credentials": r"://[^/[:space:]:]\+:[^/[:space:]@]\+@",
@@ -533,12 +564,18 @@ def test_a_value_merely_starting_like_a_placeholder_is_not_excluded(value):
         (f"<code>{FAKE_AWS}</code>", "aws_access_key_id"),
         (f"{FAKE_AWS}<br>", "aws_access_key_id"),
         (f"key id: {FAKE_AWS} <span>", "aws_access_key_id"),
-        ("<pre>-----BEGIN PRIVATE KEY-----<br>MIIEfakebase64data", "private_key_header"),
+        (
+            "<pre>-----BEGIN PRIVATE KEY-----<br>MIIEfakebase64data",
+            "private_key_header",
+        ),
         ("<pre>-----BEGIN PRIVATE KEY-----</pre>", "private_key_header"),
         ("<p>password=<b>hunter2fake</b></p>", "password_assignment"),
         ("api_key<br>sk-proj-fakekey123", "api_key_literal"),
         ("X-Auth-Token: <code>fakevalue123</code>", "x_auth_token_header"),
-        ("Authorization: <code>Basic ZmFrZWJhc2ljZmFrZQ==</code>", "authorization_header"),
+        (
+            "Authorization: <code>Basic ZmFrZWJhc2ljZmFrZQ==</code>",
+            "authorization_header",
+        ),
         ("<td>DB_PASSWORD=</td><td>hunter2fake</td>", "password_assignment"),
         ("<dt>OPENAI_API_KEY</dt><dd>sk-proj-fake123</dd>", "api_key_literal"),
         ("password=<PASSWORD> actually it is hunter2fake", "password_assignment"),
@@ -555,18 +592,25 @@ def test_a_credential_next_to_or_split_by_markup_is_still_caught(body, expected_
 @pytest.mark.parametrize(
     ("body", "expected_shape"),
     [
-        ("redis://default:changeme-prod-fake@db.example.test:6379", "url_inline_credentials"),
+        (
+            "redis://default:changeme-prod-fake@db.example.test:6379",
+            "url_inline_credentials",
+        ),
         ("redis://default:xxxYfakeZ@db.example.test:6379", "url_inline_credentials"),
         ("?token=example_live_fake123", "url_query_secret"),
     ],
 )
-def test_a_placeholder_look_alike_url_value_with_a_real_suffix_still_fires(body, expected_shape):
+def test_a_placeholder_look_alike_url_value_with_a_real_suffix_still_fires(
+    body, expected_shape
+):
     findings = scan.scan(body)
     assert any(f.shape == expected_shape for f in findings)
 
 
 def test_a_pkcs8_header_split_across_html_elements_is_still_caught():
-    findings = scan.scan("<pre>-----BEGIN PRIVATE KEY-----</pre><pre>MIIEfakebase64</pre>")
+    findings = scan.scan(
+        "<pre>-----BEGIN PRIVATE KEY-----</pre><pre>MIIEfakebase64</pre>"
+    )
     assert any(f.shape == "private_key_header" for f in findings)
 
 
@@ -578,7 +622,9 @@ def test_a_text_view_only_hit_is_placed_with_the_text_views_own_newlines():
     # `Authorization:` hit (the first shape scanned) makes the raw table the
     # first one built, so a shared table would be the wrong one.
     long_tag = '<p class="' + "x" * 200 + '">'
-    body = f"{long_tag}Authorization: a</p>\n{long_tag}b</p>\n<b>password</b>=hunter2fake"
+    body = (
+        f"{long_tag}Authorization: a</p>\n{long_tag}b</p>\n<b>password</b>=hunter2fake"
+    )
     findings = scan.scan(body)
     assert [f.line for f in findings if f.shape == "password_assignment"] == [3]
 
@@ -649,7 +695,9 @@ def test_a_real_secret_behind_500_placeholder_lines_is_still_caught():
         ("redis://u:<b>pw</b>@h", "url_inline_credentials"),
     ],
 )
-def test_a_token_split_through_its_middle_by_markup_is_still_caught(body, expected_shape):
+def test_a_token_split_through_its_middle_by_markup_is_still_caught(
+    body, expected_shape
+):
     findings = scan.scan(body)
     assert any(f.shape == expected_shape for f in findings), (
         f"expected {expected_shape} to fire on a token split by markup"
@@ -745,7 +793,11 @@ def test_a_value_on_the_next_line_is_classified_not_dropped(body, expected_shape
 
 @pytest.mark.parametrize(
     "body",
-    ["password=\n${PASSWORD}", "password=\n{{ vault_pw }}", "password=\n\n  '${PASSWORD}'"],
+    [
+        "password=\n${PASSWORD}",
+        "password=\n{{ vault_pw }}",
+        "password=\n\n  '${PASSWORD}'",
+    ],
 )
 def test_a_placeholder_on_the_next_line_is_still_a_placeholder(body):
     assert scan.scan(body) == []
@@ -788,7 +840,9 @@ def test_a_placeholder_on_the_next_line_is_still_a_placeholder(body):
 def test_a_value_any_number_of_blank_lines_down_is_still_classified(body, line):
     # Blank lines are skipped, not counted: what ends the lookahead is the
     # first line with something on it, not a line budget.
-    assert [f.line for f in scan.scan(body) if f.shape.endswith("_assignment")] == [line]
+    assert [f.line for f in scan.scan(body) if f.shape.endswith("_assignment")] == [
+        line
+    ]
 
 
 @pytest.mark.parametrize(
@@ -944,11 +998,20 @@ def test_a_non_ascii_body_is_scanned_the_same(body):
 
 @pytest.mark.parametrize(
     "text",
-    ["PASSWORD=Xy", "\u0130STANBUL", "\u212aEY=", "\ud800A\udfffB", "\U0001f600Z\n", "CAF\u00c9"],
+    [
+        "PASSWORD=Xy",
+        "\u0130STANBUL",
+        "\u212aEY=",
+        "\ud800A\udfffB",
+        "\U0001f600Z\n",
+        "CAF\u00c9",
+    ],
 )
 def test_the_lowered_copy_lowers_a_to_z_and_nothing_else(text):
     lowered = scan._lower_ascii(text)
-    assert lowered == text.translate(str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"))
+    assert lowered == text.translate(
+        str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+    )
     assert len(lowered) == len(text)
 
 
@@ -976,7 +1039,9 @@ SKIPPED_REFERENCES = [
 @pytest.mark.parametrize(
     ("wrap", "line"), [("{}", 1), ("<td>{}</td>", 1), ('<div data-x="{}">', 1)]
 )
-def test_an_escaped_space_before_a_placeholder_does_not_make_it_a_value(reference, wrap, line):
+def test_an_escaped_space_before_a_placeholder_does_not_make_it_a_value(
+    reference, wrap, line
+):
     assert scan.scan(wrap.format(f"password={reference}${{DB_PASSWORD}}")) == []
 
 
@@ -999,7 +1064,9 @@ def test_every_html_space_or_quote_reference_is_skipped_before_a_value():
     }
     assert len(references) > 20
     missed = [r for r in references if scan.scan(f"password={r}hunter2fake") == []]
-    refused = [r for r in references if scan.scan(f"password={r}${{DB_PASSWORD}}") != []]
+    refused = [
+        r for r in references if scan.scan(f"password={r}${{DB_PASSWORD}}") != []
+    ]
     assert missed == []
     assert refused == []
 
@@ -1159,9 +1226,7 @@ _BIG_DEFANG_RUN = "&#12345678"  # 8 significant digits, no leading zeros -- neve
 # code point at any padding, so this is always the >7-significant, defanged branch.
 
 
-@pytest.mark.parametrize(
-    "name", sorted(scan._ASSIGNMENT_SHAPES | {"url_query_secret"})
-)
+@pytest.mark.parametrize("name", sorted(scan._ASSIGNMENT_SHAPES | {"url_query_secret"}))
 def test_a_shape_anchored_on_an_operator_still_fires_with_a_defang_right_after_it(name):
     """Generalises the reported miss beyond the one shape the report used:
     every shape whose own match depends on what character comes right
@@ -1197,7 +1262,9 @@ def _control_scan(text, monkeypatch):
     never had a limit to hit. Only ever used here: lifting the limit
     process-wide is exactly the exposure this module exists to avoid in
     production, which is why the real fix cannot be "lift the limit"."""
-    monkeypatch.setattr(scan, "_defang_huge_decimal_charrefs", lambda detagged: detagged)
+    monkeypatch.setattr(
+        scan, "_defang_huge_decimal_charrefs", lambda detagged: detagged
+    )
     original_limit = sys.get_int_max_str_digits()
     sys.set_int_max_str_digits(0)
     try:
@@ -1261,7 +1328,9 @@ def test_the_defang_matches_unescape_with_the_limit_lifted_over_the_corpus(monke
     assert not mismatches, mismatches
 
 
-def test_the_defang_matches_unescape_with_the_limit_lifted_over_random_bodies(monkeypatch):
+def test_the_defang_matches_unescape_with_the_limit_lifted_over_random_bodies(
+    monkeypatch,
+):
     """Fuzzed rather than fixture-driven, over the alphabet a rewriting bug
     like fix round 2's or fix round 3's hides in: digits, `&#;`, markup and
     whitespace. Seeded so a failure is reproducible."""

@@ -79,7 +79,10 @@ def test_a_seat_with_the_grant_is_not_refused(client, db):
     """The control arm: a message change must not become a permission change."""
     token, _ = keys.mint(db, agent="homelab-ops")
     grants.grant(db, "homelab-ops", grants.READ_ALL_DECISIONS)
-    assert client.get("/api/v1/decisions?scope=all", headers=auth(token)).status_code == 200
+    assert (
+        client.get("/api/v1/decisions?scope=all", headers=auth(token)).status_code
+        == 200
+    )
 
 
 def test_me_is_in_the_published_contract(client, db):

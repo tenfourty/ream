@@ -202,7 +202,9 @@ def test_arming_works_on_what_create_app_actually_returns(db, monkeypatch):
     armed = serve._arm_shutdown_signals(create_app(db))
     _start_lifespan(armed)  # would raise AttributeError against the first version
 
-    response = TestClient(armed, base_url="https://artifacts.tenfourty.site").get("/healthz")
+    response = TestClient(armed, base_url="https://artifacts.tenfourty.site").get(
+        "/healthz"
+    )
     assert response.status_code == 200, "arming must not change how the app routes"
 
 

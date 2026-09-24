@@ -1718,9 +1718,7 @@ def _page_menu(
             + ("<span>Shared by link</span>" if shared else "")
             + "</div>"
         ),
-        (
-            f'<a class="mrow" href="#rename">{_icon("rename")}Rename</a>'
-        ),
+        (f'<a class="mrow" href="#rename">{_icon("rename")}Rename</a>'),
     ]
     if archived:
         rows.append(
@@ -1820,7 +1818,7 @@ def _search_box(query: str, view: str) -> str:
     return (
         '<form class="find" method="get" action="/" role="search">'
         f'<input type="hidden" name="view" value="{escape(view)}">'
-        f'{_icon("find")}'
+        f"{_icon('find')}"
         f'<input type="search" name="q" value="{value}" placeholder="Search"'
         ' aria-label="Search pages">'
         f"{clear}</form>"
@@ -1898,7 +1896,7 @@ def _deleted_view(rows) -> str:
         # was completely invisible.
         asking = (
             f'<span class="wait">{row.open_questions} question'
-            f'{"" if row.open_questions == 1 else "s"} unanswered</span>'
+            f"{'' if row.open_questions == 1 else 's'} unanswered</span>"
             if getattr(row, "open_questions", 0)
             else ""
         )
@@ -1918,7 +1916,7 @@ def _deleted_view(rows) -> str:
             '<div class="mpanel right">'
             f'<form class="mdanger destroyform" method="post" '
             f'action="/a/{ident}/destroy">'
-            '<p>Destroy for good? Its versions and every answer on it go too. '
+            "<p>Destroy for good? Its versions and every answer on it go too. "
             "This cannot be undone.</p>"
             '<input name="confirm" placeholder="type destroy" '
             'aria-label="Type destroy to confirm" autocomplete="off">'
@@ -2001,7 +1999,7 @@ def _agent_pick(agents: list[str], chosen: str, view: str, query: str) -> str:
         if view and view != "grid":
             bits.append(f"view={quote(view)}")
         href = "/?" + "&amp;".join(bits) if bits else "/"
-        mark = " aria-current=\"true\"" if value == chosen else ""
+        mark = ' aria-current="true"' if value == chosen else ""
         return f'<a class="mrow" href="{href}"{mark}>{escape(label)}</a>'
 
     rows = link("", "Everyone") + "".join(link(a, a) for a in agents)
@@ -2079,9 +2077,7 @@ def _session_tag(session: str | None) -> str:
     # ONE line in a 304px card -- at eight it wrapped, which made those tiles
     # taller than the rest and the grid ragged. Subtle has a width.
     short = session.rsplit("/", 1)[-1][:6] or session[:6]
-    return (
-        f'<span class="sess" title="{escape(session)}">{escape(short)}</span>'
-    )
+    return f'<span class="sess" title="{escape(session)}">{escape(short)}</span>'
 
 
 def _wall_meta(waiting: int, hidden: int = 0) -> str:
@@ -2124,13 +2120,15 @@ def _wall_meta(waiting: int, hidden: int = 0) -> str:
         noun = "question" if hidden == 1 else "questions"
         out += (
             f'<span class="hiddenq" title="On pages that are archived or '
-            f'deleted. They are still unanswered, and whoever asked is still '
+            f"deleted. They are still unanswered, and whoever asked is still "
             f'waiting.">{hidden} {noun} tidied away, still unanswered</span>'
         )
     return out
 
 
-def _render_comments(rows: list, artifact_id: str, everywhere: list | None = None) -> str:
+def _render_comments(
+    rows: list, artifact_id: str, everywhere: list | None = None
+) -> str:
     """The conversation on a page: threads, replies, and a box to start one --
     and, with `everywhere`, every page's conversations in the same drawer.
 
@@ -2168,7 +2166,7 @@ def _render_comments(rows: list, artifact_id: str, everywhere: list | None = Non
             f'<li class="cmt {escape(row.author_kind)}">'
             f'<span class="cwho">{who}</span>'
             f'<span class="cwhen">{escape(when)}</span>'
-            f'<p>{escape(row.body)}</p></li>'
+            f"<p>{escape(row.body)}</p></li>"
         )
 
     def quoted(root) -> str:
@@ -2209,21 +2207,21 @@ def _render_comments(rows: list, artifact_id: str, everywhere: list | None = Non
         reply = (
             ""
             if resolved
+            # The thread's OWN page, not the page being looked at. They are
+            # the same in the ordinary case and they are NOT in the
+            # all-pages view, where a reply typed under one page's heading
+            # must not land on another page.
             else (
-                # The thread's OWN page, not the page being looked at. They are
-                # the same in the ordinary case and they are NOT in the
-                # all-pages view, where a reply typed under one page's heading
-                # must not land on another page.
                 f'<form class="creply" method="post" action="/c/{escape(root.artifact_id)}">'
                 f'<input type="hidden" name="thread_root" value="{escape(root.id)}">'
                 '<input name="body" placeholder="Reply" aria-label="Reply">'
-                "<button type=\"submit\">Send</button></form>"
+                '<button type="submit">Send</button></form>'
             )
         )
         return (
             f'<li class="thread{" settled" if resolved else ""}">'
             f"{quoted(root)}"
-            f"<ul class=\"bubbles\">{bubble(root)}{kids}</ul>{reply}{action}</li>"
+            f'<ul class="bubbles">{bubble(root)}{kids}</ul>{reply}{action}</li>'
         )
 
     def settled_fold(settled_roots: list) -> str:
@@ -2310,15 +2308,19 @@ def _render_comments(rows: list, artifact_id: str, everywhere: list | None = Non
         out.append("</div></div>")
         return "".join(out)
     if open_roots:
-        out.append('<ul class="threads">' + "".join(thread(r) for r in open_roots) + "</ul>")
+        out.append(
+            '<ul class="threads">' + "".join(thread(r) for r in open_roots) + "</ul>"
+        )
     elif not settled:
-        out.append('<p class="cempty">Nothing yet. Say something and the agent that '
-                   "published this page will read it.</p>")
+        out.append(
+            '<p class="cempty">Nothing yet. Say something and the agent that '
+            "published this page will read it.</p>"
+        )
     out.append(
         f'<form class="cnew" method="post" action="/c/{ident}">'
         '<input name="body" placeholder="Comment on this page" '
         'aria-label="Comment on this page">'
-        "<button type=\"submit\">Send</button></form>"
+        '<button type="submit">Send</button></form>'
     )
     if settled:
         out.append(settled_fold(settled))
@@ -2518,7 +2520,7 @@ def _date_group(moment: datetime | None) -> str:
 
 
 def _ago(moment: datetime | None) -> str:
-    """"Edited 5h ago", the way the reference says it -- and the way a person
+    """ "Edited 5h ago", the way the reference says it -- and the way a person
     reads a wall.
 
     A tile is glanced at, and "20 September 2026, 17:48 CEST" answers a question
@@ -2673,9 +2675,7 @@ def _render_decisions(
         mine = (outcomes or {}).get(row.id) or []
         if not mine:
             return ""
-        items = "".join(
-            f"<li>{escape(o.body)}</li>" for o in mine
-        )
+        items = "".join(f"<li>{escape(o.body)}</li>" for o in mine)
         label = "Since you were asked" if row.answer is None else "What it led to"
         return f'<div class="since"><b>{label}</b><ul>{items}</ul></div>'
 
@@ -2960,7 +2960,7 @@ def gallery_router(db: Database) -> APIRouter:
         return (
             f'<li class="row-wrap{" asking" if waiting else ""}"{_UNREAD_ATTR if unread else ""}>'
             f'<a class="row" href="/a/{ident}">'
-            f"{badge}<span class=\"rt\">{escape(title)}</span>"
+            f'{badge}<span class="rt">{escape(title)}</span>'
             f'<span class="rmeta">{"".join(right)}</span></a>'
             f"{_pin_button(artifact_id, bool(pinned_at))}"
             f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin(), archived)}"
@@ -3029,7 +3029,7 @@ def gallery_router(db: Database) -> APIRouter:
                 # always renders; here a page published before thumbnails
                 # existed would otherwise be a blank rectangle with a name.
                 inner = f'<span class="d">{escape(about)}</span>' if about else ""
-                shot = f'<span class="shot none">{_icon("page")}{inner}</span>' 
+                shot = f'<span class="shot none">{_icon("page")}{inner}</span>'
             # The <li> wraps BOTH the link and the menu; the menu is the link's
             # sibling, never its child. See _tile_menu.
             # Anything waiting on Jeremy rides ON the picture, not in the
@@ -3108,8 +3108,7 @@ def gallery_router(db: Database) -> APIRouter:
                 # markup. The agent line is short and has the room.
                 f'<span class="m">{_UNREAD_WORD if unread else ""}{_SEP.join(meta_bits)}'
                 + (
-                    f'{_SEP}<time title="{escape(exact)}">Edited {escape(when)}'
-                    "</time>"
+                    f'{_SEP}<time title="{escape(exact)}">Edited {escape(when)}</time>'
                     if when
                     else ""
                 )
@@ -3133,9 +3132,7 @@ def gallery_router(db: Database) -> APIRouter:
 
         chosen = request.query_params.get("filter")
         active = (
-            chosen
-            if chosen in ("waiting", "pinned", "deleted", "archived")
-            else "all"
+            chosen if chosen in ("waiting", "pinned", "deleted", "archived") else "all"
         )
         deleted_rows = store.list_deleted(db)
         hidden_questions = store.open_questions_off_the_wall(db)
@@ -3166,10 +3163,14 @@ def gallery_router(db: Database) -> APIRouter:
             archived_rows = [r for r in archived_rows if _matches(r, needle)]
 
         asked = request.query_params.get("view")
-        view = asked if asked in ("grid", "list") else (
-            request.cookies.get(_VIEW_COOKIE)
-            if request.cookies.get(_VIEW_COOKIE) in ("grid", "list")
-            else "grid"
+        view = (
+            asked
+            if asked in ("grid", "list")
+            else (
+                request.cookies.get(_VIEW_COOKIE)
+                if request.cookies.get(_VIEW_COOKIE) in ("grid", "list")
+                else "grid"
+            )
         )
 
         def listing(these, archived: bool = False) -> str:
@@ -3182,7 +3183,9 @@ def gallery_router(db: Database) -> APIRouter:
                 if group != current:
                     if current is not None:
                         out.append("</ul>")
-                    out.append(f'<h2 class="daygroup">{escape(group)}</h2><ul class="rows">')
+                    out.append(
+                        f'<h2 class="daygroup">{escape(group)}</h2><ul class="rows">'
+                    )
                     current = group
                 out.append(_row_view(row, archived))
             if current is not None:
@@ -3540,7 +3543,9 @@ def gallery_router(db: Database) -> APIRouter:
         # Jeremy meant by "wow that ux is ugly" -- raw browser widgets beside a
         # page that had been designed.
         archived = row[3] is not None
-        comment_rows = comments.list_for_artifact(db, artifact_id, include_resolved=True)
+        comment_rows = comments.list_for_artifact(
+            db, artifact_id, include_resolved=True
+        )
         open_threads = sum(
             1 for c in comment_rows if c.thread_root is None and c.resolved_at is None
         )
@@ -3605,7 +3610,9 @@ def gallery_router(db: Database) -> APIRouter:
         return HTMLResponse(
             _shell(
                 "Share a page",
-                _share_page(artifact_id, row[0], store.share_token(db, artifact_id), note),
+                _share_page(
+                    artifact_id, row[0], store.share_token(db, artifact_id), note
+                ),
                 scripts='<script src="/connect.js" defer></script>',
             ),
             headers={**gallery_headers(), "cache-control": "no-store"},
@@ -3621,7 +3628,10 @@ def gallery_router(db: Database) -> APIRouter:
         _same_origin_write(request)
         if store.start_sharing(db, artifact_id) is None:
             raise HTTPException(404, "no such artifact")
-        return _share_response(artifact_id, note="Link created. Copy it and send it to whoever should read the page.")
+        return _share_response(
+            artifact_id,
+            note="Link created. Copy it and send it to whoever should read the page.",
+        )
 
     @router.post("/a/{artifact_id}/share/stop", response_class=HTMLResponse)
     def share_stop(artifact_id: str, request: Request) -> HTMLResponse:
@@ -3629,13 +3639,17 @@ def gallery_router(db: Database) -> APIRouter:
         stopped = store.stop_sharing(db, artifact_id)
         return _share_response(
             artifact_id,
-            note="Stopped. The link no longer works." if stopped else "It was not shared.",
+            note="Stopped. The link no longer works."
+            if stopped
+            else "It was not shared.",
         )
 
     @router.get("/machines", response_class=HTMLResponse)
     def machines_page(revoke: str = "") -> HTMLResponse:
         return HTMLResponse(
-            _shell("Machines and keys", _machines_page(keys.machines(db), confirm=revoke)),
+            _shell(
+                "Machines and keys", _machines_page(keys.machines(db), confirm=revoke)
+            ),
             headers={**gallery_headers(), "cache-control": "no-store"},
         )
 
@@ -3653,7 +3667,11 @@ def gallery_router(db: Database) -> APIRouter:
         with a new code. His pages and its pages are untouched."""
         _same_origin_write(request)
         done = keys.revoke(db, key_id)
-        note = "Revoked. That key no longer works." if done else "That key was already revoked."
+        note = (
+            "Revoked. That key no longer works."
+            if done
+            else "That key was already revoked."
+        )
         return HTMLResponse(
             _shell("Machines and keys", _machines_page(keys.machines(db), note=note)),
             headers={**gallery_headers(), "cache-control": "no-store"},
@@ -3682,7 +3700,9 @@ def gallery_router(db: Database) -> APIRouter:
             _shell(
                 "Connect a machine",
                 _connect_page(code, pending, message),
-                scripts='<script src="/connect.js" defer></script>' if pending is None else "",
+                scripts='<script src="/connect.js" defer></script>'
+                if pending is None
+                else "",
             ),
             headers={**gallery_headers(), "cache-control": "no-store"},
         )
@@ -3696,17 +3716,22 @@ def gallery_router(db: Database) -> APIRouter:
     ) -> HTMLResponse:
         pending = connect.find(db, code)
         if pending is None or pending.id != request_id:
-            body = _connect_page(code, None, "That request has expired or was already decided.")
+            body = _connect_page(
+                code, None, "That request has expired or was already decided."
+            )
         else:
             agent = connect.clean_name(name)
             if agent is None:
                 body = _connect_page(
-                    code, pending,
-                    "Use 2 to 40 letters, digits or hyphens for the name.", name=name,
+                    code,
+                    pending,
+                    "Use 2 to 40 letters, digits or hyphens for the name.",
+                    name=name,
                 )
             elif connect.name_in_use(db, agent):
                 body = _connect_page(
-                    code, pending,
+                    code,
+                    pending,
                     f"{agent} is already the name of a connected machine. Pick another.",
                     name=name,
                 )
@@ -3716,7 +3741,9 @@ def gallery_router(db: Database) -> APIRouter:
                     "your agent will say when it has."
                 )
             else:
-                body = _connect_page(code, None, "That request has expired or was already decided.")
+                body = _connect_page(
+                    code, None, "That request has expired or was already decided."
+                )
         return HTMLResponse(
             _shell("Connect a machine", body),
             headers={**gallery_headers(), "cache-control": "no-store"},
@@ -3732,7 +3759,10 @@ def gallery_router(db: Database) -> APIRouter:
         if pending is not None and pending.id == request_id:
             connect.deny(db, pending.id)
         return HTMLResponse(
-            _shell("Connect a machine", _connect_page(ok="Denied. That machine gets nothing.")),
+            _shell(
+                "Connect a machine",
+                _connect_page(ok="Denied. That machine gets nothing."),
+            ),
             headers={**gallery_headers(), "cache-control": "no-store"},
         )
 
@@ -3750,7 +3780,9 @@ def gallery_router(db: Database) -> APIRouter:
         if row is None:
             raise HTTPException(404, "no such artifact")
         return Response(
-            json.dumps({"src": content_url(artifact_id, frame_pass.mint(db, artifact_id))}),
+            json.dumps(
+                {"src": content_url(artifact_id, frame_pass.mint(db, artifact_id))}
+            ),
             media_type="application/json",
             headers={**gallery_headers(), "cache-control": "no-store"},
         )

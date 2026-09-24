@@ -89,7 +89,9 @@ def test_a_publish_failure_never_propagates(tmp_path, logged, monkeypatch):
     assert "the service is down" in logged.read_text()
 
 
-def test_an_unchanged_page_is_reported_as_minting_no_version(tmp_path, logged, monkeypatch):
+def test_an_unchanged_page_is_reported_as_minting_no_version(
+    tmp_path, logged, monkeypatch
+):
     """`revision` is a hash of the stored body, so a debounced hook firing on a
     bead that did not change the page must create nothing. Asserted on the
     reported outcome rather than trusted."""
@@ -221,7 +223,9 @@ def test_the_key_comes_from_the_descriptor_when_there_is_no_key_file(
 ):
     """Under `artifacts-key` there IS no key file — that is the point of it."""
     monkeypatch.setenv("ARTIFACTS_KEY_FILE", str(tmp_path / "no-such-key"))
-    monkeypatch.setenv("ARTIFACTS_KEY_FD", str(_fd_with("art_from-the-descriptor-9f3b2c")))
+    monkeypatch.setenv(
+        "ARTIFACTS_KEY_FD", str(_fd_with("art_from-the-descriptor-9f3b2c"))
+    )
     monkeypatch.setenv(
         "ARTIFACTS_PAGES_FILE",
         str(config(tmp_path, {"id": "abc", "render": "echo '<html>x</html>'"})),

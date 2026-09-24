@@ -234,7 +234,7 @@ def test_an_archived_page_still_looks_archived_on_its_tab(client, db):
 
 
 def test_the_count_beside_the_search_follows_the_tab(client, db):
-    """"9 pages" next to an Archived tab showing two is the count contradicting
+    """ "9 pages" next to an Archived tab showing two is the count contradicting
     what is under it."""
     for n in range(3):
         store.publish(db, "seat", f"Live {n}", PAGE)

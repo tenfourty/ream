@@ -42,7 +42,9 @@ def test_returned_app_answers_healthz_only_on_the_gallery_host(dsn, monkeypatch)
     assert other.status_code == 404
 
 
-def test_app_from_env_migrates_so_the_schema_is_ready_on_first_request(dsn, monkeypatch):
+def test_app_from_env_migrates_so_the_schema_is_ready_on_first_request(
+    dsn, monkeypatch
+):
     monkeypatch.setenv("DATABASE_URL", dsn)
     # Start from a schema that has nothing in it -- not just whatever a previous
     # test in this session left behind, which `migrate()`'s own idempotency would

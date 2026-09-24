@@ -178,6 +178,8 @@ def render_in_background(db, artifact_id: str, version_n: int, html: str) -> Non
             if png is not None:
                 store.save_thumbnail(db, artifact_id, version_n, png)
         except Exception:  # a decoration may never reach the caller
-            log.exception("thumbnail rendering failed for %s v%s", artifact_id, version_n)
+            log.exception(
+                "thumbnail rendering failed for %s v%s", artifact_id, version_n
+            )
 
     threading.Thread(target=work, name=f"thumb-{artifact_id}", daemon=True).start()

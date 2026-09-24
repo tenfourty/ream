@@ -141,8 +141,12 @@ def test_the_route_takes_the_recording_seat_from_the_key(client, db, asked):
     token, _ = keys.mint(db, agent="homelab-ops")
     got = client.post(
         f"/api/v1/decisions/{asked.id}/record",
-        json={"letter": "b", "note": "his words", "source": "telegram",
-              "recorded_by": "someone-else"},
+        json={
+            "letter": "b",
+            "note": "his words",
+            "source": "telegram",
+            "recorded_by": "someone-else",
+        },
         headers=auth(token),
     )
     assert got.status_code == 200
@@ -266,5 +270,7 @@ def test_a_relayed_answer_cannot_smuggle_markup_onto_the_gallery(client, db, ask
     # in page also passes when the note is missing entirely, and fails when the
     # note is correctly escaped and merely contains the word as text — which is
     # what happened the first time this was written.
-    assert "&lt;img src=x onerror=alert(1)&gt;" in page, "the note should be shown, escaped"
+    assert "&lt;img src=x onerror=alert(1)&gt;" in page, (
+        "the note should be shown, escaped"
+    )
     assert "<img" not in page, "and never as an element"

@@ -264,7 +264,9 @@ def test_the_script_and_the_stylesheet_agree_on_where_a_control_is_lifted(client
 
     css_rem = re.search(r"@media \(max-width:([\d.]+)rem\)\{\s*\.sheet \.ask", page)
     js_rem = re.search(r'matchMedia\("\(min-width:([\d.]+)rem\)"\)', script)
-    assert css_rem, "the stylesheet no longer names a rem breakpoint for the lifted control"
+    assert css_rem, (
+        "the stylesheet no longer names a rem breakpoint for the lifted control"
+    )
     assert js_rem, "gallery.js no longer asks the stylesheet's question in rem"
     assert float(js_rem.group(1)) == pytest.approx(float(css_rem.group(1)) + 0.01), (
         f"the script lifts at {js_rem.group(1)}rem while the stylesheet un-lifts "

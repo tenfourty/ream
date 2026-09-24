@@ -17,14 +17,18 @@ OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
 
 
 @pytest.fixture()
-def page(db, key_file):  # noqa: F811
+def page(db, key_file):
     return store.publish(db, "ops-seat", "Board", PAGE)
 
 
 def _ask(db, page, question="ship?", session=None):
     return decisions.ask(
-        db, agent="ops-seat", artifact_id=page.id, question=question,
-        options=OPTIONS, session=session,
+        db,
+        agent="ops-seat",
+        artifact_id=page.id,
+        question=question,
+        options=OPTIONS,
+        session=session,
     )
 
 
@@ -69,18 +73,30 @@ def test_every_answer_carries_the_cursor_for_now(db, client, auth):
     assert first.headers["x-artifacts-cursor"] == "0"
     page = store.publish(db, "seat", "Board", PAGE)
     decisions.ask(db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS)
-    asked = decisions.list_for_artifact(db, page.id, include_answered=True, include_closed=False)[0]
+    asked = decisions.list_for_artifact(
+        db, page.id, include_answered=True, include_closed=False
+    )[0]
     decisions.answer(db, asked.id, letter="a", by="jeremy")
-    now = int(client.get("/api/v1/events?since=999999", headers=auth).headers["x-artifacts-cursor"])
+    now = int(
+        client.get("/api/v1/events?since=999999", headers=auth).headers[
+            "x-artifacts-cursor"
+        ]
+    )
     assert now > 0
     assert client.get(f"/api/v1/events?since={now}", headers=auth).json() == []
 
 
 def test_an_agent_can_leave_out_its_own_actions(db, client, auth):
     page = store.publish(db, "seat", "Board", PAGE)
-    asked = decisions.ask(db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS)
+    asked = decisions.ask(
+        db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS
+    )
     decisions.record_elsewhere(
-        db, asked.id, letter="a", note="said in the terminal", source="terminal",
+        db,
+        asked.id,
+        letter="a",
+        note="said in the terminal",
+        source="terminal",
         recorded_by="seat",
     )
     everything = client.get("/api/v1/events?since=0", headers=auth).json()
@@ -93,7 +109,11 @@ def test_a_relayed_answer_carries_the_session_that_asked(db):
     keys.mint(db, agent="seat")
     page = store.publish(db, "seat", "Board", PAGE)
     asked = decisions.ask(
-        db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS,
+        db,
+        agent="seat",
+        artifact_id=page.id,
+        question="q?",
+        options=OPTIONS,
         session="claude/abc",
     )
     decisions.record_elsewhere(
@@ -113,7 +133,11 @@ def test_a_relayed_answer_carries_the_session_that_asked(db):
 
 
 def test_list_puts_new_answers_first_and_hides_acknowledged_ones(
-    db, live, key_file, page, capsys  # noqa: F811
+    db,
+    live,
+    key_file,
+    page,
+    capsys,
 ):
     path, _ = key_file
     open_one = _ask(db, page, "still open?")
@@ -136,7 +160,11 @@ def test_list_puts_new_answers_first_and_hides_acknowledged_ones(
 
 
 def test_wait_prints_an_answer_that_arrived_before_it_started(
-    db, live, key_file, page, capsys  # noqa: F811
+    db,
+    live,
+    key_file,
+    page,
+    capsys,
 ):
     path, _ = key_file
     asked = _ask(db, page)
@@ -147,7 +175,7 @@ def test_wait_prints_an_answer_that_arrived_before_it_started(
     assert "early" in capsys.readouterr().out
 
 
-def test_wait_wakes_when_he_answers(db, live, key_file, page, capsys):  # noqa: F811
+def test_wait_wakes_when_he_answers(db, live, key_file, page, capsys):
     path, _ = key_file
     asked = _ask(db, page)
 
@@ -163,14 +191,14 @@ def test_wait_wakes_when_he_answers(db, live, key_file, page, capsys):  # noqa: 
     assert "later" in capsys.readouterr().out
 
 
-def test_wait_says_nothing_yet_at_the_timeout(db, live, key_file, page, capsys):  # noqa: F811
+def test_wait_says_nothing_yet_at_the_timeout(db, live, key_file, page, capsys):
     path, _ = key_file
     _ask(db, page)
     assert _run(["wait", "--page", page.id, "--timeout", "2s"], path) == 3
     assert "nothing yet" in capsys.readouterr().err
 
 
-def test_wait_refuses_loudly_on_a_bad_key(live, tmp_path, capsys):  # noqa: F811
+def test_wait_refuses_loudly_on_a_bad_key(live, tmp_path, capsys):
     bad = tmp_path / "key"
     bad.write_text("art_" + "x" * 43)
     bad.chmod(0o600)

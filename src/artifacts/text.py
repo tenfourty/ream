@@ -86,9 +86,18 @@ _ANY_PARAGRAPH = re.compile(r"<p(?:\s[^>]*)?>(.*?)</p>", re.IGNORECASE | re.DOTA
 _COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 _TAG = re.compile(r"<[^>]*>")
 _ENTITIES = {
-    "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'",
-    "&mdash;": "—", "&ndash;": "–", "&nbsp;": " ", "&middot;": "·",
-    "&ldquo;": "“", "&rdquo;": "”", "&hellip;": "…",
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&quot;": '"',
+    "&#39;": "'",
+    "&mdash;": "—",
+    "&ndash;": "–",
+    "&nbsp;": " ",
+    "&middot;": "·",
+    "&ldquo;": "“",
+    "&rdquo;": "”",
+    "&hellip;": "…",
 }
 
 DESCRIPTION_LIMIT = 150
@@ -198,5 +207,3 @@ LEADING_DOCTYPE = re.compile(
 # `content` -- content imports hosts imports store -- and a second copy of a
 # regex this carefully argued is how two parts of one service start disagreeing
 # about what a page is.
-
-

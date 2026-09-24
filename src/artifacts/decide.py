@@ -117,10 +117,14 @@ def _fmt(row: dict) -> str:
         seat = row.get("agent")
         where.append(f'on "{title}"' + (f" [{seat}]" if seat else ""))
     asked_by = row.get("session")
-    where.append(f"asked by {asked_by}" if asked_by else "asked by an unlabelled session")
+    where.append(
+        f"asked by {asked_by}" if asked_by else "asked by an unlabelled session"
+    )
     age = row.get("age_seconds")
     if isinstance(age, int):
-        where.append(f"waiting {age // 3600}h" if age >= 3600 else f"waiting {age // 60}m")
+        where.append(
+            f"waiting {age // 3600}h" if age >= 3600 else f"waiting {age // 60}m"
+        )
     lines.append("  " + " · ".join(where))
 
     if row.get("answer"):
@@ -174,7 +178,9 @@ def _fmt(row: dict) -> str:
     # was posed, Jeremy could answer the old question by accident.
     for outcome in row.get("outcomes") or []:
         who = outcome.get("session") or outcome.get("agent")
-        lines.append(f"  SINCE ({outcome['created_at'][:16]}, {who}): {outcome['body']}")
+        lines.append(
+            f"  SINCE ({outcome['created_at'][:16]}, {who}): {outcome['body']}"
+        )
     return "\n".join(lines)
 
 
@@ -268,7 +274,8 @@ def _wait(args, key: str, base: str) -> int:
         for row in rows:
             cursor = max(cursor, int(row.get("seq", cursor)))
         if any(
-            r.get("kind") == "decision_answered" and (not page or r.get("artifact_id") == page)
+            r.get("kind") == "decision_answered"
+            and (not page or r.get("artifact_id") == page)
             for r in rows
         ):
             found = current()
@@ -306,7 +313,9 @@ def build_parser() -> argparse.ArgumentParser:
     # cost a seat an hour on 21 Sep by reading as "this feature does not exist"
     # when the truth was an install six days old.
     subs = parser.add_subparsers(
-        dest="cmd", required=True, metavar="COMMAND",
+        dest="cmd",
+        required=True,
+        metavar="COMMAND",
         parser_class=_StaleAwareParser,
     )
 
@@ -341,7 +350,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="NEW ANSWERS first (answered, not yet acknowledged), then open questions",
     )
     listing.add_argument(
-        "--answered", action="store_true", help="also answers you have already acknowledged"
+        "--answered",
+        action="store_true",
+        help="also answers you have already acknowledged",
     )
     listing.add_argument(
         "--open-only", action="store_true", help="only questions still waiting on him"
@@ -402,8 +413,12 @@ def build_parser() -> argparse.ArgumentParser:
         "wait",
         help="block until he answers, print the answer, exit 0 (3 if nothing by --timeout)",
     )
-    waiting.add_argument("--page", metavar="ARTIFACT-ID", help="only answers on this page")
-    waiting.add_argument("--timeout", default="55m", help="how long to wait (default 55m)")
+    waiting.add_argument(
+        "--page", metavar="ARTIFACT-ID", help="only answers on this page"
+    )
+    waiting.add_argument(
+        "--timeout", default="55m", help="how long to wait (default 55m)"
+    )
 
     return parser
 
@@ -467,15 +482,21 @@ def main(argv: list[str] | None = None) -> int:
                     "GET", f"{base}/decisions/uncollected?scope={scope}", key, None
                 )
                 rows = [
-                    {**r["decision"], "agent": r.get("agent"),
-                     "artifact_title": r.get("artifact_title"),
-                     "collect_state": r.get("state"),
-                     "last_read_at": r.get("last_read_at")}
+                    {
+                        **r["decision"],
+                        "agent": r.get("agent"),
+                        "artifact_title": r.get("artifact_title"),
+                        "collect_state": r.get("state"),
+                        "last_read_at": r.get("last_read_at"),
+                    }
                     for r in rows
                 ]
             elif args.open_only:
                 rows = _request(
-                    "GET", f"{base}/decisions?include_answered=false&scope={scope}", key, None
+                    "GET",
+                    f"{base}/decisions?include_answered=false&scope={scope}",
+                    key,
+                    None,
                 )
             else:
                 # NEW ANSWERS FIRST (homelab-ij8.106): the first outside agent
@@ -484,23 +505,26 @@ def main(argv: list[str] | None = None) -> int:
                 # agent must act on, so it leads; acknowledged answers only with
                 # --answered.
                 rows = _request(
-                    "GET", f"{base}/decisions?include_answered=true&scope={scope}", key, None
+                    "GET",
+                    f"{base}/decisions?include_answered=true&scope={scope}",
+                    key,
+                    None,
                 )
                 fresh = _new_answers(rows)
                 still_open = [r for r in rows if not r.get("answer")]
                 done = [r for r in rows if r.get("answer") and r.get("acknowledged_at")]
                 rows = fresh + still_open + (done if args.answered else [])
             if args.stranded:
-                empty = (
-                    "no uncollected answers"
-                    + ("" if args.all else " on this seat's pages")
+                empty = "no uncollected answers" + (
+                    "" if args.all else " on this seat's pages"
                 )
             elif args.open_only:
-                empty = "nothing waiting on Jeremy" + ("" if args.all else " from this seat")
+                empty = "nothing waiting on Jeremy" + (
+                    "" if args.all else " from this seat"
+                )
             else:
-                empty = (
-                    "no new answers, and nothing waiting on Jeremy"
-                    + ("" if args.all else " from this seat")
+                empty = "no new answers, and nothing waiting on Jeremy" + (
+                    "" if args.all else " from this seat"
                 )
             return _print_rows(rows, empty=empty)
         if args.cmd == "record":
@@ -529,9 +553,7 @@ def main(argv: list[str] | None = None) -> int:
             return _wait(args, key, base)
         if args.cmd in ("ack", "close"):
             route = "acknowledge" if args.cmd == "ack" else "close"
-            row = _request(
-                "POST", f"{base}/decisions/{args.decision}/{route}", key, {}
-            )
+            row = _request("POST", f"{base}/decisions/{args.decision}/{route}", key, {})
             print(_fmt(row))
             return 0
     except UsageError as exc:

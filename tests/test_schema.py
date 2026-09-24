@@ -73,7 +73,9 @@ def test_deleting_artifact_with_versions_and_files_succeeds(db):
             ("a1", 1, "index.html", "text/html", b"hi"),
         )
         # current_version now points at a real, existing version row.
-        conn.execute("update artifact set current_version = %s where id = %s", (1, "a1"))
+        conn.execute(
+            "update artifact set current_version = %s where id = %s", (1, "a1")
+        )
 
         conn.execute("delete from artifact where id = %s", ("a1",))
 

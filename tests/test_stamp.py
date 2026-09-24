@@ -102,7 +102,9 @@ def test_the_zone_is_read_at_call_time_so_a_deployment_can_set_it(monkeypatch):
 def test_a_served_page_carries_the_time_the_service_recorded(db, monkeypatch, paris):
     keys.mint(db, agent="ops-seat")
     artifact = store.publish(db, "ops-seat", "Board", MARKED)
-    page = _content(db, artifact, monkeypatch).get(f"/p/{frame_pass.mint(db, artifact.id)}/", headers=FRAMED)
+    page = _content(db, artifact, monkeypatch).get(
+        f"/p/{frame_pass.mint(db, artifact.id)}/", headers=FRAMED
+    )
     assert page.status_code == 200
     assert stamp.MARKER not in page.text
     assert "Updated 2" in page.text  # a day-of-month, not an empty gap

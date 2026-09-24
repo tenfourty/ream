@@ -459,14 +459,22 @@ def test_the_only_push_goes_to_one_named_seats_mailbox(monkeypatch):
     monkeypatch.setattr(nudge._executor, "submit", lambda *a, **k: sent.append(a))
 
     nudge.emit(
-        "decision_answered", artifact_id="a1", title="T", agent="some-other-seat",
-        summary="s", event_id="1",
+        "decision_answered",
+        artifact_id="a1",
+        title="T",
+        agent="some-other-seat",
+        summary="s",
+        event_id="1",
     )
     assert sent == [], "a page belonging to another seat nudged the operator"
 
     nudge.emit(
-        "decision_answered", artifact_id="a1", title="T", agent="homelab-ops",
-        summary="s", event_id="1",
+        "decision_answered",
+        artifact_id="a1",
+        title="T",
+        agent="homelab-ops",
+        summary="s",
+        event_id="1",
     )
     assert len(sent) == 1, "the named seat's own page did not nudge its own mailbox"
 
@@ -484,8 +492,9 @@ def test_the_only_push_goes_to_one_named_seats_mailbox(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _answer_through_the_gallery(db, monkeypatch, origin, *, note, recommended=None,
-                                letter="a"):
+def _answer_through_the_gallery(
+    db, monkeypatch, origin, *, note, recommended=None, letter="a"
+):
     """The real path: Jeremy taps an option in the gallery. Going through the
     route rather than calling `decisions.answer` directly is deliberate -- the
     bug was in what reached the mailbox from a REAL answer, and a test that

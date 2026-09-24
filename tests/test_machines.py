@@ -39,7 +39,11 @@ def test_the_page_lists_machines_with_what_he_needs_and_no_secret(db, gallery):
 
 def test_he_renames_a_machine_and_its_pages_keep_their_identity(db, gallery):
     _t, key_id = keys.mint(db, agent="laptop")
-    gallery.post(f"/machines/{key_id}/rename", data={"label": "Jeremy's MacBook"}, headers=SAME_ORIGIN)
+    gallery.post(
+        f"/machines/{key_id}/rename",
+        data={"label": "Jeremy's MacBook"},
+        headers=SAME_ORIGIN,
+    )
     page = gallery.get("/machines").text
     assert "<h2>Jeremy&#39;s MacBook</h2>" in page
     assert "<dt>Files pages as</dt><dd>laptop</dd>" in page
@@ -61,8 +65,18 @@ def test_another_site_cannot_revoke_or_rename_with_his_session(db, gallery):
     token, key_id = keys.mint(db, agent="laptop")
     cross = {"sec-fetch-site": "cross-site"}
     assert gallery.post(f"/machines/{key_id}/revoke", headers=cross).status_code == 403
-    assert gallery.post(f"/machines/{key_id}/rename", data={"label": "x"}, headers=cross).status_code == 403
-    assert gallery.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+    assert (
+        gallery.post(
+            f"/machines/{key_id}/rename", data={"label": "x"}, headers=cross
+        ).status_code
+        == 403
+    )
+    assert (
+        gallery.get(
+            "/api/v1/me", headers={"Authorization": f"Bearer {token}"}
+        ).status_code
+        == 200
+    )
 
 
 def test_last_used_is_not_written_on_every_request(db, gallery):
@@ -70,8 +84,12 @@ def test_last_used_is_not_written_on_every_request(db, gallery):
     auth = {"Authorization": f"Bearer {token}"}
     gallery.get("/api/v1/me", headers=auth)
     with db.connect() as conn:
-        first = conn.execute("select last_used_at from agent_key where id = %s", (key_id,)).fetchone()[0]
+        first = conn.execute(
+            "select last_used_at from agent_key where id = %s", (key_id,)
+        ).fetchone()[0]
     gallery.get("/api/v1/me", headers=auth)
     with db.connect() as conn:
-        second = conn.execute("select last_used_at from agent_key where id = %s", (key_id,)).fetchone()[0]
+        second = conn.execute(
+            "select last_used_at from agent_key where id = %s", (key_id,)
+        ).fetchone()[0]
     assert first is not None and first == second

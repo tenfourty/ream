@@ -39,7 +39,9 @@ def _post(url: str, body: dict) -> dict:
         with client._opener.open(request, timeout=client._REQUEST_TIMEOUT) as response:
             return json.loads(response.read() or b"{}")
     except urllib.error.HTTPError as exc:
-        raise client.HTTPFailure(exc.code, client._detail(exc.read(), exc.headers)) from None
+        raise client.HTTPFailure(
+            exc.code, client._detail(exc.read(), exc.headers)
+        ) from None
     except urllib.error.URLError as exc:
         raise client.HTTPFailure(0, str(exc.reason)) from None
 
@@ -64,9 +66,15 @@ def main(argv: list[str] | None = None) -> int:
         prog="artifacts-connect",
         description="connect this machine to Jeremy's artifacts space; he approves a code",
     )
-    parser.add_argument("--name", help="what to call this machine (default: its hostname)")
-    parser.add_argument("--key-file", help=f"where to save the key (default {client._DEFAULT_KEY_FILE})")
-    parser.add_argument("--force", action="store_true", help="replace a key this machine already has")
+    parser.add_argument(
+        "--name", help="what to call this machine (default: its hostname)"
+    )
+    parser.add_argument(
+        "--key-file", help=f"where to save the key (default {client._DEFAULT_KEY_FILE})"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="replace a key this machine already has"
+    )
     args = parser.parse_args(argv)
 
     key_path = client._key_file_path(args.key_file)
@@ -97,7 +105,9 @@ def main(argv: list[str] | None = None) -> int:
     while time.monotonic() < deadline:
         time.sleep(interval)
         try:
-            answer = _post(f"{base}/connect/poll", {"poll_token": started["poll_token"]})
+            answer = _post(
+                f"{base}/connect/poll", {"poll_token": started["poll_token"]}
+            )
         except client.HTTPFailure as exc:
             if exc.status in (0, 502, 503, 504):
                 continue  # the network or a deploy blinked; keep waiting
@@ -123,7 +133,9 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 1
-        print("the code expired before it was approved. Run this again.", file=sys.stderr)
+        print(
+            "the code expired before it was approved. Run this again.", file=sys.stderr
+        )
         return 1
     print("gave up waiting. Run this again for a fresh code.", file=sys.stderr)
     return 1

@@ -184,7 +184,10 @@ def test_the_log_names_the_address_and_never_the_key(db, auth_log):
     for _ in range(5):
         client.get(
             "/api/v1/artifacts",
-            headers={"Authorization": f"Bearer {secretish}", "x-real-ip": "203.0.113.9"},
+            headers={
+                "Authorization": f"Bearer {secretish}",
+                "x-real-ip": "203.0.113.9",
+            },
         )
     lines = [r.getMessage() for r in auth_log.records if r.name == "artifacts.auth"]
     # Two plain failures, then the one that blocked -- and silence after it.

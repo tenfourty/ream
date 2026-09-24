@@ -61,7 +61,9 @@ def test_the_service_finds_nothing_it_will_break(path: Path):
 @pytest.mark.parametrize("path", TEMPLATES, ids=lambda p: p.stem)
 def test_it_is_a_whole_document(path: Path):
     body = _body(path)
-    assert body.startswith("<!doctype html>"), f"{path.name} does not open with a doctype"
+    assert body.startswith("<!doctype html>"), (
+        f"{path.name} does not open with a doctype"
+    )
     assert "</html>" in body, f"{path.name} has no closing html"
 
 
@@ -136,7 +138,9 @@ def test_no_placeholder_a_reader_would_see(path: Path):
     # A slot with a made-up id renders as a slot that never fills, which looks
     # exactly like one still loading (homelab-ij8.50). Templates ship the slot
     # commented out instead.
-    live_slots = re.findall(r'<div data-artifact-decision="([^"]*)"', _strip_comments(body))
+    live_slots = re.findall(
+        r'<div data-artifact-decision="([^"]*)"', _strip_comments(body)
+    )
     assert not live_slots, (
         f"{path.name} ships a live decision slot with id(s) {live_slots}; "
         "comment the slot out so a real id has to be put in deliberately"
@@ -152,7 +156,9 @@ def test_the_gallery_link_opens_a_new_tab(path: Path):
     """
     visible = _strip_comments(_body(path))
     for link in re.findall(r"<a\b[^>]*artifacts\.tenfourty\.site[^>]*>", visible):
-        assert 'target="_blank"' in link, f"{path.name}: gallery link is not target=_blank"
+        assert 'target="_blank"' in link, (
+            f"{path.name}: gallery link is not target=_blank"
+        )
         assert "noopener" in link, f"{path.name}: gallery link has no rel=noopener"
 
 
@@ -169,7 +175,9 @@ def test_the_shared_block_is_the_shared_block(path: Path):
     start = body.index(BEGIN) + len(BEGIN)
     end = body.index(END)
     assert end > start, f"{path.name}: the sentinels are in the wrong order"
-    assert body[start:end].strip("\n") == SHARED.read_text(encoding="utf-8").strip("\n"), (
+    assert body[start:end].strip("\n") == SHARED.read_text(encoding="utf-8").strip(
+        "\n"
+    ), (
         f"{path.name}: the shared block has drifted from _shared.css — "
         "run scripts/sync-templates.py"
     )

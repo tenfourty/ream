@@ -51,16 +51,18 @@ def test_a_real_title_says_nothing():
 
 
 def test_a_title_that_merely_contains_the_word_is_not_a_placeholder():
-    """"Untitled" is a placeholder; "Untitled drafts and what to do with them"
+    """ "Untitled" is a placeholder; "Untitled drafts and what to do with them"
     is a page about them. A check that fires on a correct page is how a
     warning becomes noise."""
-    assert traps.check(page(head="<title>Untitled drafts, and what to do</title>")) == []
+    assert (
+        traps.check(page(head="<title>Untitled drafts, and what to do</title>")) == []
+    )
 
 
 def test_markup_inside_the_title_does_not_hide_a_placeholder():
-    assert [w.shape for w in traps.check(page(head="<title> PAGE  TITLE </title>"))] == [
-        "placeholder_title"
-    ]
+    assert [
+        w.shape for w in traps.check(page(head="<title> PAGE  TITLE </title>"))
+    ] == ["placeholder_title"]
 
 
 # --- the link that goes nowhere -----------------------------------------------

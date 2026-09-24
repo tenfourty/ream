@@ -188,7 +188,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="IDS",
         help="comma-separated ids to KEEP closed; every other closed page is opened",
     )
-    agents.add_argument("--dry-run", action="store_true", help="say what would open, change nothing")
+    agents.add_argument(
+        "--dry-run", action="store_true", help="say what would open, change nothing"
+    )
     agents.set_defaults(func=cmd_closed_to_agents)
 
     return parser
@@ -216,14 +218,20 @@ def cmd_closed_to_agents(args) -> None:
     if unknown:
         # Refuse rather than guess: a mistyped id would otherwise mean a page he
         # wanted closed quietly opens.
-        raise SystemExit(f"not a closed page: {', '.join(sorted(unknown))}; nothing changed")
+        raise SystemExit(
+            f"not a closed page: {', '.join(sorted(unknown))}; nothing changed"
+        )
     to_open = [row for row in closed if row[0] not in keep]
     for row in to_open:
-        print(f"{'would open' if args.dry_run else 'opened'}\t{row[0]}\t{row[1]}\t{row[2]}")
+        print(
+            f"{'would open' if args.dry_run else 'opened'}\t{row[0]}\t{row[1]}\t{row[2]}"
+        )
     if not args.dry_run:
         for row in to_open:
             store.set_agents_can_read(database, row[0], True, agent=None)
-    print(f"{len(to_open)} {'would open' if args.dry_run else 'opened'}, {len(keep)} kept closed")
+    print(
+        f"{len(to_open)} {'would open' if args.dry_run else 'opened'}, {len(keep)} kept closed"
+    )
 
 
 def cmd_purge_deleted(args) -> None:

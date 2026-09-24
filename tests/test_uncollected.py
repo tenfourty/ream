@@ -255,7 +255,10 @@ def _stranded(db, *, agent: str, title: str):
     keys.mint(db, agent=agent)
     page = store.publish(db, agent, title, PAGE)
     asked = decisions.ask(
-        db, agent=agent, artifact_id=page.id, question="Which?",
+        db,
+        agent=agent,
+        artifact_id=page.id,
+        question="Which?",
         options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
         recommended="a",
     )
@@ -281,9 +284,13 @@ def test_another_session_reading_does_not_make_the_asker_look_alive(client, db):
     keys.mint(db, agent="seat-a")
     page = store.publish(db, "seat-a", "Asks something", PAGE)
     asked = decisions.ask(
-        db, agent="seat-a", artifact_id=page.id, question="Which?",
+        db,
+        agent="seat-a",
+        artifact_id=page.id,
+        question="Which?",
         options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
-        recommended="a", session="asker/aaa",
+        recommended="a",
+        session="asker/aaa",
     )
     decisions.answer(db, asked.id, letter="a", note="", by="jeremy")
 
@@ -314,7 +321,10 @@ def test_a_decision_from_before_sessions_matches_the_unlabelled_reader(client, d
     keys.mint(db, agent="seat-a")
     page = store.publish(db, "seat-a", "Asks something", PAGE)
     asked = decisions.ask(
-        db, agent="seat-a", artifact_id=page.id, question="Which?",
+        db,
+        agent="seat-a",
+        artifact_id=page.id,
+        question="Which?",
         options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
         recommended="a",
     )

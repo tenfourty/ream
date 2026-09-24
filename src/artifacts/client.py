@@ -427,7 +427,9 @@ def _request(
             with _opener.open(request, timeout=timeout or _REQUEST_TIMEOUT) as response:
                 raw = response.read()
                 if headers_out is not None:
-                    headers_out.update({k.lower(): v for k, v in response.headers.items()})
+                    headers_out.update(
+                        {k.lower(): v for k, v in response.headers.items()}
+                    )
             break
         except urllib.error.HTTPError as exc:
             raw = exc.read()
@@ -508,9 +510,7 @@ def _patch(
     if title is not None:
         payload["title"] = title
     try:
-        return _request(
-            "PATCH", f"{_api_base()}/artifacts/{artifact_id}", key, payload
-        )
+        return _request("PATCH", f"{_api_base()}/artifacts/{artifact_id}", key, payload)
     except HTTPFailure as exc:
         if exc.status != 409:
             raise
@@ -553,7 +553,7 @@ def _print_versions(rows: list[dict]) -> None:
         who = row.get("session") or row.get("created_by") or ""
         when = (row.get("created_at") or "")[:19].replace("T", " ")
         print(
-            f"{mark} v{row['n']}\t{row.get('revision','')}\t"
+            f"{mark} v{row['n']}\t{row.get('revision', '')}\t"
             f"{row.get('bytes', 0)}\t{when}\t{who}"
         )
     print("* is the version on the wall now", file=sys.stderr)
@@ -849,7 +849,14 @@ def _print_shelf(result: dict) -> None:
         json.dumps(
             {
                 field: result[field]
-                for field in ("id", "title", "url", "archived_at", "pinned_at", "agents_can_read")
+                for field in (
+                    "id",
+                    "title",
+                    "url",
+                    "archived_at",
+                    "pinned_at",
+                    "agents_can_read",
+                )
                 if field in result
             }
         )
@@ -991,7 +998,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     shelf.add_argument("--restore", metavar="ID", help="bring a binned page back")
     shelf.add_argument(
-        "--deleted", action="store_true", help="list your binned pages, soonest to go first"
+        "--deleted",
+        action="store_true",
+        help="list your binned pages, soonest to go first",
     )
     shelf.add_argument(
         "--close-to-agents",
@@ -999,7 +1008,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="only Jeremy and you can read this page (other agents can by default)",
     )
     shelf.add_argument(
-        "--open-to-agents", metavar="ID", help="let every agent in his space read it again"
+        "--open-to-agents",
+        metavar="ID",
+        help="let every agent in his space read it again",
     )
     shelf.add_argument(
         "--versions",
@@ -1118,7 +1129,13 @@ def main(argv: list[str] | None = None) -> int:
         # The bin, which the gallery has always had and agents did not
         # (homelab-ij8.93): two seats hand-rolled a DELETE with their key.
         if args.delete:
-            print(json.dumps(_request("DELETE", f"{_api_base()}/artifacts/{args.delete}", key, None)))
+            print(
+                json.dumps(
+                    _request(
+                        "DELETE", f"{_api_base()}/artifacts/{args.delete}", key, None
+                    )
+                )
+            )
             print(
                 f"binned; recoverable for thirty days: artifacts-publish --restore {args.delete}",
                 file=sys.stderr,
@@ -1126,7 +1143,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.restore:
             _print_shelf(
-                _request("POST", f"{_api_base()}/artifacts/{args.restore}/restore", key, {})
+                _request(
+                    "POST", f"{_api_base()}/artifacts/{args.restore}/restore", key, {}
+                )
             )
             return 0
         if args.deleted:

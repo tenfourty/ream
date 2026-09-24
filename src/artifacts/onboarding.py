@@ -162,9 +162,7 @@ def _tools_text(base: str) -> str:
     if built is None:
         # Said in words rather than printing an install line that 404s: a
         # stranger following this document literally is exactly who reads it.
-        return (
-            "The tools are not available from this address right now.\n"
-        )
+        return "The tools are not available from this address right now.\n"
     url = f"{base}/api/v1/tools/{built.name}"
     # uvx first, because it needs no install step and no PATH change (Jeremy, 23
     # Sep: "ideally our helper script for agents is just a uvx command"). Served

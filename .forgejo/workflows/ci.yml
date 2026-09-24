@@ -54,6 +54,7 @@ jobs:
       - run: uv sync --frozen --all-extras
 
       - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
 
       # The commit guards (lefthook.yml, scripts/guards/) only protect a clone
       # that ran `lefthook install`, so a guard nobody installed is no guard at

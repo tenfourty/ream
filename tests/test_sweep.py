@@ -25,22 +25,35 @@ def auth(db):
 
 def test_ij8_97_an_answer_on_a_deleted_page_is_not_owed_to_anyone(db, api, auth):
     page = store.publish(db, "seat", "Gone", PAGE)
-    asked = decisions.ask(db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS)
+    asked = decisions.ask(
+        db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS
+    )
     decisions.answer(db, asked.id, letter="a", by="jeremy")
-    assert [d.decision.id for d in decisions.uncollected(db, agent="seat", stuck_after_seconds=0)] == [asked.id]
+    assert [
+        d.decision.id
+        for d in decisions.uncollected(db, agent="seat", stuck_after_seconds=0)
+    ] == [asked.id]
     store.set_deleted(db, page.id, True, agent="seat")
     assert decisions.uncollected(db, agent="seat", stuck_after_seconds=0) == []
     store.set_deleted(db, page.id, False, agent="seat")
-    assert len(decisions.uncollected(db, agent="seat", stuck_after_seconds=0)) == 1, "restoring brings it back"
+    assert len(decisions.uncollected(db, agent="seat", stuck_after_seconds=0)) == 1, (
+        "restoring brings it back"
+    )
 
 
 def test_ij8_45_an_open_only_view_says_how_many_answers_it_left_out(db, api, auth):
     page = store.publish(db, "seat", "Board", PAGE)
     for q in ("one?", "two?"):
-        asked = decisions.ask(db, agent="seat", artifact_id=page.id, question=q, options=OPTIONS)
+        asked = decisions.ask(
+            db, agent="seat", artifact_id=page.id, question=q, options=OPTIONS
+        )
         decisions.answer(db, asked.id, letter="a", by="jeremy")
-    decisions.ask(db, agent="seat", artifact_id=page.id, question="open?", options=OPTIONS)
-    only_open = api.get(f"/api/v1/artifacts/{page.id}/decisions?open_only=true", headers=auth)
+    decisions.ask(
+        db, agent="seat", artifact_id=page.id, question="open?", options=OPTIONS
+    )
+    only_open = api.get(
+        f"/api/v1/artifacts/{page.id}/decisions?open_only=true", headers=auth
+    )
     assert len(only_open.json()) == 1
     assert only_open.headers["x-artifacts-answered-omitted"] == "2"
     everything = api.get(f"/api/v1/artifacts/{page.id}/decisions", headers=auth)
@@ -49,8 +62,12 @@ def test_ij8_45_an_open_only_view_says_how_many_answers_it_left_out(db, api, aut
 
 def test_ij8_55_the_event_feed_carries_no_terminal_control_characters(db, api, auth):
     page = store.publish(db, "seat", "Board", PAGE)
-    asked = decisions.ask(db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS)
-    decisions.answer(db, asked.id, letter="a", note="line one\nline two\x1b[2Jcleared", by="jeremy")
+    asked = decisions.ask(
+        db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS
+    )
+    decisions.answer(
+        db, asked.id, letter="a", note="line one\nline two\x1b[2Jcleared", by="jeremy"
+    )
     rows = api.get("/api/v1/events?since=0", headers=auth).json()
     note = next(r["note"] for r in rows if r["kind"] == "decision_answered")
     assert "\x1b" not in note
@@ -64,7 +81,10 @@ def test_ij8_94_the_gallery_scripts_are_revalidated(api):
 
 
 def test_ij8_93_an_agent_can_bin_list_and_restore_with_the_tool(
-    db, live, key_file, capsys  # noqa: F811
+    db,
+    live,
+    key_file,
+    capsys,
 ):
     path, _ = key_file
     page = store.publish(db, "ops-seat", "Binnable", PAGE)
@@ -82,11 +102,15 @@ def test_ij8_93_an_agent_can_bin_list_and_restore_with_the_tool(
     assert "nothing in the bin" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("encoded", ["&#10;", "&#x0a;", "&#X0A", "&NewLine;", "&#0010;"])
+@pytest.mark.parametrize(
+    "encoded", ["&#10;", "&#x0a;", "&#X0A", "&NewLine;", "&#0010;"]
+)
 def test_ij8_8_an_encoded_line_break_does_not_shift_line_numbers(encoded):
     from artifacts import scan
 
-    body = f"<p>first{encoded}still the first line</p>\n<p>DB_PASSWORD=hunter2fake</p>\n"
+    body = (
+        f"<p>first{encoded}still the first line</p>\n<p>DB_PASSWORD=hunter2fake</p>\n"
+    )
     found = scan.scan(body)
     assert [f.line for f in found] == [2], found
 

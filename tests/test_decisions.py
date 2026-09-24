@@ -269,7 +269,9 @@ def test_another_agents_artifact_is_404_on_ask_list_and_close(client, db):
     token_b, _ = keys.mint(db, agent="seat-b")
     page = _publish(client, token_a)
     mine = _ask(client, token_a, page["id"])
-    store.set_agents_can_read(db, page["id"], False, agent=None)  # closed to other agents: homelab-ij8.105 made pages readable by default
+    store.set_agents_can_read(
+        db, page["id"], False, agent=None
+    )  # closed to other agents: homelab-ij8.105 made pages readable by default
 
     sneaky = client.post(
         f"/api/v1/artifacts/{page['id']}/decisions",
@@ -456,7 +458,7 @@ def test_a_plain_read_across_pages_returns_his_answer(client, db):
 
 
 def test_open_only_is_the_explicit_ask(client, db):
-    """"What still needs him" is a real question; it is just not the common
+    """ "What still needs him" is a real question; it is just not the common
     one, so it says so at the call site now."""
     token, _ = keys.mint(db, agent="ops-seat")
     page = _publish(client, token)
@@ -503,9 +505,12 @@ def test_a_withdrawn_decision_still_needs_asking_for(client, db):
     asked = _ask(client, token, page["id"])
     decisions.close(db, "ops-seat", asked["id"])
 
-    assert client.get(
-        f"/api/v1/artifacts/{page['id']}/decisions", headers=auth(token)
-    ).json() == []
+    assert (
+        client.get(
+            f"/api/v1/artifacts/{page['id']}/decisions", headers=auth(token)
+        ).json()
+        == []
+    )
     with_closed = client.get(
         f"/api/v1/artifacts/{page['id']}/decisions?include_closed=true",
         headers=auth(token),

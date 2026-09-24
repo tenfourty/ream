@@ -83,7 +83,9 @@ def test_an_answered_decision_still_resolves(db):
 
 def test_a_single_quoted_slot_is_checked_too(db):
     art = store.publish(db, "ops-seat", "Board", page())
-    assert decisions.unresolved_slots(db, art.id, page("nope", quote="'")) == [("nope", 3)]
+    assert decisions.unresolved_slots(db, art.id, page("nope", quote="'")) == [
+        ("nope", 3)
+    ]
 
 
 def test_a_repeated_slot_is_reported_once_at_its_first_line(db):
@@ -110,9 +112,7 @@ def test_a_slot_inside_a_comment_is_not_a_slot(db):
     ], "a multi-line comment before a slot must not shift its line"
 
 
-@pytest.mark.parametrize(
-    "name", sorted(p.stem for p in TEMPLATES.glob("*.html"))
-)
+@pytest.mark.parametrize("name", sorted(p.stem for p in TEMPLATES.glob("*.html")))
 def test_every_shipped_template_publishes_without_a_slot_warning(db, name):
     """Published exactly as shipped, before its author has asked anything.
     A template that warns on day one teaches every seat that this warning
@@ -160,7 +160,9 @@ def test_the_ordinary_flow_warns_once_and_then_not_again(api):
     """Publish, ask, republish with the returned id: the only way a slot can
     be right, since a decision needs its page to exist first. The republish is
     the one that must come back clean."""
-    first = api.post("/api/v1/artifacts", json={"title": "Board", "body": page()}).json()
+    first = api.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": page()}
+    ).json()
     assert first["warnings"] == []
     asked = api.post(
         f"/api/v1/artifacts/{first['id']}/decisions",

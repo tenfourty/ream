@@ -46,13 +46,19 @@ def shapes(body: str) -> list[str]:
 @pytest.mark.parametrize(
     ("shape", "body"),
     [
-        ("remote_script", '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>'),
+        (
+            "remote_script",
+            '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>',
+        ),
         ("remote_script", '<script defer src="//cdn.example.com/x.js"></script>'),
         (
             "remote_stylesheet",
             '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">',
         ),
-        ("remote_css_url", "@font-face { src: url('https://fonts.gstatic.com/s/i.woff2') }"),
+        (
+            "remote_css_url",
+            "@font-face { src: url('https://fonts.gstatic.com/s/i.woff2') }",
+        ),
         ("css_import", '@import url("https://example.com/base.css");'),
         ("remote_image", '<img src="https://example.com/logo.png" alt="">'),
         ("media_element", "<video controls></video>"),

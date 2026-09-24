@@ -196,8 +196,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="An arc's counts and velocity from the beads tracker, as JSON."
     )
-    parser.add_argument("--prefix", required=True, help="bead id prefix, e.g. homelab-ij8.")
-    parser.add_argument("--repo", required=True, help="the repo holding the beads workspace")
+    parser.add_argument(
+        "--prefix", required=True, help="bead id prefix, e.g. homelab-ij8."
+    )
+    parser.add_argument(
+        "--repo", required=True, help="the repo holding the beads workspace"
+    )
     args = parser.parse_args(argv)
     try:
         print(json.dumps(collect(args.repo, args.prefix), indent=2))

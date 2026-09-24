@@ -234,7 +234,7 @@ this file that somebody who had read it broke anyway.
 | prepare-commit-msg | …of a commit already on a remote | **also** `AMEND_PUSHED_OVERRIDE=1` |
 | commit-msg | a non-conventional subject; a `Co-Authored-By` or "Generated with Claude Code" line | `COMMIT_MSG_OVERRIDE=1` |
 | pre-push | an outgoing range that is not the count you announced | none: `PUSH_COUNT=N git push` |
-| pre-push | ruff findings anywhere in `src`/`tests` | none |
+| pre-push | ruff findings, or unformatted files, anywhere in `src`/`tests` | none — `uv run ruff format <files>` |
 
 Each guard degrades to a clean SKIP when its tool is missing, so a machine
 without ggshield can still commit — and says loudly that nothing was scanned,

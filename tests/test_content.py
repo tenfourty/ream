@@ -18,7 +18,9 @@ def published(db):
     is inert" then proves nothing about older versions."""
     keys.mint(db, agent="ops-seat")
     artifact = store.publish(db, "ops-seat", "Board", PAGE)
-    store.patch(db, "ops-seat", artifact.id, PAGE.replace("hi", "hi again"), artifact.revision)
+    store.patch(
+        db, "ops-seat", artifact.id, PAGE.replace("hi", "hi again"), artifact.revision
+    )
     return artifact
 
 
@@ -48,7 +50,9 @@ def test_a_framed_request_gets_the_page(content, token):
 
 
 def test_a_top_level_request_is_sent_to_the_gallery_instead(content, published):
-    response = content.get("/", headers={"sec-fetch-dest": "document"}, follow_redirects=False)
+    response = content.get(
+        "/", headers={"sec-fetch-dest": "document"}, follow_redirects=False
+    )
     assert response.status_code == 303
     assert response.headers["location"] == f"{GALLERY}/a/{published.id}"
 
@@ -79,7 +83,10 @@ def test_the_header_set_is_on_every_page_response(content, token):
         assert headers["cross-origin-opener-policy"] == "same-origin"
         assert headers["cross-origin-resource-policy"] == "same-origin"
         assert headers["x-content-type-options"] == "nosniff"
-        assert headers["permissions-policy"] == "geolocation=(), camera=(), microphone=(), payment=()"
+        assert (
+            headers["permissions-policy"]
+            == "geolocation=(), camera=(), microphone=(), payment=()"
+        )
         assert headers["cache-control"] == "no-store"
 
 
@@ -172,7 +179,9 @@ def test_an_older_version_carries_no_viewer_report(content, token):
         assert "postMessage" not in text
 
 
-@pytest.mark.parametrize("sent", [{}, {"sec-fetch-dest": "empty"}, {"sec-fetch-dest": ""}])
+@pytest.mark.parametrize(
+    "sent", [{}, {"sec-fetch-dest": "empty"}, {"sec-fetch-dest": ""}]
+)
 def test_a_request_that_does_not_say_it_is_framed_never_gets_the_page(content, sent):
     """curl, a script's fetch and an old browser all send no Sec-Fetch-Dest.
     Denying only "document" would serve every one of them the page."""
@@ -185,7 +194,9 @@ def test_a_page_with_no_head_still_gets_the_runtime(db, monkeypatch):
     """`<!doctype html><body>...` is ordinary agent-written HTML. Injecting only
     at `</head>` leaves that page with no runtime and reports nothing."""
     keys.mint(db, agent="headless-seat")
-    artifact = store.publish(db, "headless-seat", "Bare", "<!doctype html><body>hi</body>")
+    artifact = store.publish(
+        db, "headless-seat", "Bare", "<!doctype html><body>hi</body>"
+    )
     monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
     client = TestClient(create_content_app(db))
     client.headers.update({"host": f"{artifact.id}.tenfourty.com"})
@@ -196,7 +207,9 @@ def test_a_page_with_no_head_still_gets_the_runtime(db, monkeypatch):
 
 def test_the_gallery_origin_is_read_at_call_time(content, published, monkeypatch):
     monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://elsewhere.example")
-    response = content.get("/", headers={"sec-fetch-dest": "document"}, follow_redirects=False)
+    response = content.get(
+        "/", headers={"sec-fetch-dest": "document"}, follow_redirects=False
+    )
     assert response.headers["location"] == f"https://elsewhere.example/a/{published.id}"
 
 
@@ -220,7 +233,13 @@ def test_a_pending_version_is_never_served(db, content, published, token):
         conn.execute(
             "insert into version (artifact_id, n, body, revision, status, created_by) "
             "values (%s, %s, %s, %s, 'pending', %s)",
-            (published.id, 99, "<!doctype html><body>not cleared</body>", "r99", "ops-seat"),
+            (
+                published.id,
+                99,
+                "<!doctype html><body>not cleared</body>",
+                "r99",
+                "ops-seat",
+            ),
         )
     assert content.get(token(99), headers=FRAMED).status_code == 404
     # and the live current version is still served, so the filter has not just broken reads
@@ -235,8 +254,12 @@ def test_every_content_response_carries_the_base_headers(content, token):
     was a 422 here while a version number was a path parameter; since passes name
     their own version, homelab-ij8.101, no content route takes one.)"""
     responses = [
-        content.get("/", headers={"sec-fetch-dest": "document"}, follow_redirects=False),
-        content.get("/v/999999", headers=FRAMED),  # no such route any more -> FastAPI's 404
+        content.get(
+            "/", headers={"sec-fetch-dest": "document"}, follow_redirects=False
+        ),
+        content.get(
+            "/v/999999", headers=FRAMED
+        ),  # no such route any more -> FastAPI's 404
         content.get(token(999999), headers=FRAMED),  # right token, no such version
         content.get("/p/not-a-pass/", headers=FRAMED),  # wrong pass
         content.get("/p/x/<script>alert(1)<", headers=FRAMED),  # no such route
@@ -267,7 +290,9 @@ def test_an_unhandled_error_still_carries_the_base_headers(monkeypatch):
             raise RuntimeError("boom")
 
     monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    client = TestClient(create_content_app(ExplodingDB()), raise_server_exceptions=False)
+    client = TestClient(
+        create_content_app(ExplodingDB()), raise_server_exceptions=False
+    )
     client.headers.update({"host": "aaaaaaaaaaaaaaaaaaaaaaaaaa.tenfourty.com"})
     response = client.get("/p/whatever/", headers=FRAMED)
     assert response.status_code == 500
@@ -280,7 +305,12 @@ def test_an_unhandled_error_still_carries_the_base_headers(monkeypatch):
 def test_inject_places_the_shim_right_after_the_leading_doctype():
     page = "<!doctype html><html><head><title>t</title></head><body>hi</body></html>"
     result = inject(page, SHIM)
-    assert result == "<!doctype html>" + SHIM + "<html><head><title>t</title></head><body>hi</body></html>"
+    assert (
+        result
+        == "<!doctype html>"
+        + SHIM
+        + "<html><head><title>t</title></head><body>hi</body></html>"
+    )
 
 
 def test_inject_is_not_fooled_by_a_head_close_hidden_in_a_comment():

@@ -41,7 +41,7 @@ def test_a_page_the_policy_would_break_is_REFUSED(tmp_path, capsys):
     The server cannot refuse -- the author cannot see the page and so cannot
     see what upset it. Here the author is looking at the file."""
     body = (
-        '<!doctype html><html><head><title>Bad</title>'
+        "<!doctype html><html><head><title>Bad</title>"
         '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">'
         "</head><body><p>x</p></body></html>"
     )
@@ -82,7 +82,7 @@ def test_a_missing_file_is_a_usage_error_not_a_pass(tmp_path, capsys):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node runtime here")
 def test_a_script_that_does_not_parse_is_caught(tmp_path, capsys):
-    """"it catches a trailing-comma typo for nothing, in a validator that
+    """ "it catches a trailing-comma typo for nothing, in a validator that
     already parses the file." A page whose script does not parse renders as a
     page with no script -- the same silent half-failure, by another route."""
     body = (
@@ -100,7 +100,7 @@ def test_a_script_with_a_src_is_left_to_the_csp_shapes(tmp_path, capsys):
     """It is somebody else's file, it is already reported as remote_script,
     and there is nothing local to parse."""
     body = (
-        '<!doctype html><html><head><title>T</title>'
+        "<!doctype html><html><head><title>T</title>"
         '<script src="https://cdn.example/x.js"></script>'
         "</head><body><p>x</p></body></html>"
     )
@@ -131,7 +131,8 @@ def test_it_uses_the_services_own_shape_table_not_a_copy(tmp_path):
         '<html><body><iframe src="https://x.example"></iframe></body></html>'
     )
     assert [f.shape for f in findings] == [
-        f.shape for f in csp.check(
+        f.shape
+        for f in csp.check(
             '<html><body><iframe src="https://x.example"></iframe></body></html>'
         )
     ]
@@ -144,7 +145,7 @@ def test_a_placeholder_title_is_refused_here_too(tmp_path, capsys):
     """The page renders perfectly and is still wrong: the first board
     published here read PAGE TITLE in the browser tab for two hours, because
     an agent cannot look at its own page."""
-    body = '<!doctype html>\n<html><head><title>PAGE TITLE</title></head>\n<body><p>x</p></body></html>\n'
+    body = "<!doctype html>\n<html><head><title>PAGE TITLE</title></head>\n<body><p>x</p></body></html>\n"
     assert client.main(["--check", _write(tmp_path, body)]) == 1
     err = capsys.readouterr().err
     assert "placeholder_title" in err, "the specific trap is named"
@@ -153,7 +154,7 @@ def test_a_placeholder_title_is_refused_here_too(tmp_path, capsys):
 
 def test_a_gallery_link_that_would_go_nowhere_is_refused(tmp_path, capsys):
     body = (
-        '<!doctype html>\n<html><head><title>Board</title></head>\n'
+        "<!doctype html>\n<html><head><title>Board</title></head>\n"
         '<body><a href="https://artifacts.tenfourty.site/a/abc">Wall</a></body></html>\n'
     )
     assert client.main(["--check", _write(tmp_path, body)]) == 1
@@ -164,9 +165,9 @@ def test_the_two_kinds_of_problem_are_counted_together(tmp_path, capsys):
     """One question -- what is wrong with this file? -- so one list and one
     count. Which module noticed is not the reader's business."""
     body = (
-        '<!doctype html>\n<html><head><title>PAGE TITLE</title>\n'
+        "<!doctype html>\n<html><head><title>PAGE TITLE</title>\n"
         '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">\n'
-        '</head><body><p>x</p></body></html>\n'
+        "</head><body><p>x</p></body></html>\n"
     )
     assert client.main(["--check", _write(tmp_path, body)]) == 1
     err = capsys.readouterr().err
@@ -191,6 +192,8 @@ def test_check_runs_the_services_own_secret_scan(tmp_path, capsys):
 
 def test_a_clean_page_says_the_scan_ran(tmp_path, capsys):
     page = tmp_path / "page.html"
-    page.write_text("<!doctype html><html><head><title>t</title></head><body><p>hi</p></body></html>")
+    page.write_text(
+        "<!doctype html><html><head><title>t</title></head><body><p>hi</p></body></html>"
+    )
     assert client.main(["--check", str(page)]) == 0
     assert "nothing shaped like a secret" in capsys.readouterr().out

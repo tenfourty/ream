@@ -107,8 +107,9 @@ def test_the_flags_disable_the_network(monkeypatch):
     monkeypatch.setattr(
         thumbs.subprocess,
         "run",
-        lambda argv, **kw: seen.setdefault("argv", argv)
-        or subprocess.CompletedProcess(argv, 0),
+        lambda argv, **kw: (
+            seen.setdefault("argv", argv) or subprocess.CompletedProcess(argv, 0)
+        ),
     )
     thumbs.render(PAGE)
     flags = " ".join(str(a) for a in seen["argv"])

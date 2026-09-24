@@ -33,7 +33,9 @@ def test_the_body_comes_back_byte_for_byte(client, db):
         "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
     ).json()
 
-    response = client.get(f"/api/v1/artifacts/{published['id']}/body", headers=auth(token))
+    response = client.get(
+        f"/api/v1/artifacts/{published['id']}/body", headers=auth(token)
+    )
 
     assert response.status_code == 200
     read = response.json()
@@ -78,7 +80,10 @@ def test_the_revision_it_returns_is_one_a_patch_accepts(client, db):
 
     response = client.patch(
         f"/api/v1/artifacts/{published['id']}",
-        json={"body": read["body"] + "<!-- checked -->", "expected_revision": read["revision"]},
+        json={
+            "body": read["body"] + "<!-- checked -->",
+            "expected_revision": read["revision"],
+        },
         headers=auth(token),
     )
 
@@ -93,7 +98,9 @@ def test_another_agents_page_is_a_plain_404(client, db):
     published = client.post(
         "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(mine)
     ).json()
-    store.set_agents_can_read(db, published["id"], False, agent=None)  # closed to other agents: homelab-ij8.105 made pages readable by default
+    store.set_agents_can_read(
+        db, published["id"], False, agent=None
+    )  # closed to other agents: homelab-ij8.105 made pages readable by default
 
     response = client.get(
         f"/api/v1/artifacts/{published['id']}/body", headers=auth(theirs)
@@ -130,7 +137,9 @@ def test_a_revoked_key_cannot_read_a_body_back(client, db):
     ).json()
     keys.revoke(db, key_id)
 
-    response = client.get(f"/api/v1/artifacts/{published['id']}/body", headers=auth(token))
+    response = client.get(
+        f"/api/v1/artifacts/{published['id']}/body", headers=auth(token)
+    )
 
     assert response.status_code == 401
     assert PAGE not in response.text
@@ -212,6 +221,19 @@ def test_the_catch_all_never_shadows_a_real_route(db):
     client = TestClient(create_gallery_app(db))
     auth = {"Authorization": f"Bearer {token}"}
 
-    assert client.get(f"/api/v1/artifacts/{published.id}/body", headers=auth).status_code == 200
-    assert client.get(f"/api/v1/artifacts/{published.id}/decisions", headers=auth).status_code == 200
-    assert client.get(f"/api/v1/artifacts/{published.id}/comments", headers=auth).status_code == 200
+    assert (
+        client.get(f"/api/v1/artifacts/{published.id}/body", headers=auth).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            f"/api/v1/artifacts/{published.id}/decisions", headers=auth
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            f"/api/v1/artifacts/{published.id}/comments", headers=auth
+        ).status_code
+        == 200
+    )

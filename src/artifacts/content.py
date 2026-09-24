@@ -164,7 +164,9 @@ def _script_json(value: object) -> str:
 # who read the blank version as "the service lost my choices" (homelab-ij8.50):
 # so it says what is wrong, that nothing of his is gone, and whose fix it is.
 _MISSING_BEFORE = "There should be a question here, but the page points to one that doesn\u2019t exist (\u201c"
-_MISSING_AFTER = "\u201d). Nothing has been lost; whoever published the page needs to fix it."
+_MISSING_AFTER = (
+    "\u201d). Nothing has been lost; whoever published the page needs to fix it."
+)
 
 
 def _missing_notes(missing: Sequence[str]) -> str:
@@ -198,9 +200,9 @@ def _missing_notes(missing: Sequence[str]) -> str:
         "'[data-artifact-decision=\"'+(window.CSS&&CSS.escape?CSS.escape(id):id)+'\"]');"
         "if(!el||el.textContent.trim())return;"
         f"el.textContent={_script_json(_MISSING_BEFORE)}+id+{_script_json(_MISSING_AFTER)};"
-        "var s=el.style;s.display=\"block\";s.padding=\".75em 1em\";"
-        "s.border=\"1px dashed currentColor\";s.borderRadius=\"8px\";"
-        "s.opacity=\".75\";s.fontSize=\".875em\";s.lineHeight=\"1.45\"})"
+        'var s=el.style;s.display="block";s.padding=".75em 1em";'
+        's.border="1px dashed currentColor";s.borderRadius="8px";'
+        's.opacity=".75";s.fontSize=".875em";s.lineHeight="1.45"})'
         "}catch(e){}});"
     )
 
@@ -246,7 +248,7 @@ def expired_page() -> HTMLResponse:
         '<p style="font:15px/1.5 system-ui,sans-serif;margin:2em;opacity:.8">'
         "This view of the page has expired. Open it again from "
         f'<a href="{_html.escape(gallery_origin())}" target="_top">the gallery</a>.</p>'
-        "<script>try{parent.postMessage({type:\"artifact-expired\"},"
+        '<script>try{parent.postMessage({type:"artifact-expired"},'
         f"{origin})}}catch(e){{}}</script>"
     )
     return HTMLResponse(body, status_code=403, headers=headers_for(False))
@@ -368,7 +370,8 @@ def create_content_app(db: Database) -> FastAPI:
         # meant to mean "read-only", not "read-only except for a viewer channel".
         if live:
             missing = [
-                slot for slot, _line in decisions.unresolved_slots(db, artifact_id, body)
+                slot
+                for slot, _line in decisions.unresolved_slots(db, artifact_id, body)
             ]
             shim = SHIM + _viewer_report(missing)
         else:

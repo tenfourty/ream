@@ -43,35 +43,47 @@ def test_in_progress_is_counted_and_is_not_open(fake_bd):
     """`bd list --status=open` does not include in_progress. A caller that asks
     only for open sees neither, which is how a status page ended up unable to
     show what was being worked on at all."""
-    fake_bd([
-        row("a.1", "open", created="2026-09-01"),
-        row("a.2", "in_progress", created="2026-09-01"),
-        row("a.3", "closed", created="2026-09-01", closed="2026-09-19"),
-    ])
+    fake_bd(
+        [
+            row("a.1", "open", created="2026-09-01"),
+            row("a.2", "in_progress", created="2026-09-01"),
+            row("a.3", "closed", created="2026-09-01", closed="2026-09-19"),
+        ]
+    )
     out = beadmetrics.collect("/repo", "a.", today=TODAY)
     assert out["totals"] == {
-        "all": 3, "done": 1, "open": 1, "in_progress": 1, "urgent_open": 0,
+        "all": 3,
+        "done": 1,
+        "open": 1,
+        "in_progress": 1,
+        "urgent_open": 0,
     }
 
 
 def test_urgent_counts_live_work_only_and_includes_in_progress(fake_bd):
-    fake_bd([
-        row("a.1", "open", created="2026-09-01", priority=1),
-        row("a.2", "in_progress", created="2026-09-01", priority=0),
-        row("a.3", "open", created="2026-09-01", priority=2),
-        row("a.4", "closed", created="2026-09-01", closed="2026-09-19", priority=1),
-    ])
+    fake_bd(
+        [
+            row("a.1", "open", created="2026-09-01", priority=1),
+            row("a.2", "in_progress", created="2026-09-01", priority=0),
+            row("a.3", "open", created="2026-09-01", priority=2),
+            row("a.4", "closed", created="2026-09-01", closed="2026-09-19", priority=1),
+        ]
+    )
     out = beadmetrics.collect("/repo", "a.", today=TODAY)
-    assert out["totals"]["urgent_open"] == 2, "P0 and P1 that are still live, not the closed one"
+    assert out["totals"]["urgent_open"] == 2, (
+        "P0 and P1 that are still live, not the closed one"
+    )
 
 
 def test_a_young_arc_gets_no_chart_and_says_why(fake_bd):
     """The caller cannot draw a misleading chart because there is nothing to
     draw — a stronger guarantee than asking every caller to check an age first."""
-    fake_bd([
-        row("a.1", "closed", created="2026-09-19", closed="2026-09-19"),
-        row("a.2", "closed", created="2026-09-19", closed="2026-09-20"),
-    ])
+    fake_bd(
+        [
+            row("a.1", "closed", created="2026-09-19", closed="2026-09-19"),
+            row("a.2", "closed", created="2026-09-19", closed="2026-09-20"),
+        ]
+    )
     out = beadmetrics.collect("/repo", "a.", today=TODAY)
     assert out["arc_age_days"] == 1
     assert out["velocity"]["drawable"] is False
@@ -97,10 +109,12 @@ def test_an_old_enough_arc_gets_a_real_series(fake_bd):
 def test_an_old_arc_with_nothing_finished_still_refuses(fake_bd):
     """Fourteen empty bars is a chart that says 'this project is dead' by
     accident. Say it in words or not at all."""
-    fake_bd([
-        row("a.1", "open", created="2026-01-01"),
-        row("a.2", "closed", created="2026-01-01", closed="2026-02-01"),
-    ])
+    fake_bd(
+        [
+            row("a.1", "open", created="2026-01-01"),
+            row("a.2", "closed", created="2026-01-01", closed="2026-02-01"),
+        ]
+    )
     out = beadmetrics.collect("/repo", "a.", today=TODAY)
     assert out["velocity"]["drawable"] is False
     assert "nothing has finished" in out["velocity"]["why"]
@@ -125,14 +139,18 @@ def test_an_unparseable_timestamp_is_not_counted_into_a_window(fake_bd):
 
 
 def test_only_the_prefix_is_counted(fake_bd):
-    fake_bd([
-        row("homelab-ij8.1", "open", created="2026-09-01"),
-        row("homelab-ij8.2", "open", created="2026-09-01"),
-        row("homelab-tay.1", "open", created="2026-09-01"),
-        row("homelab-ij8", "open", created="2026-09-01"),
-    ])
+    fake_bd(
+        [
+            row("homelab-ij8.1", "open", created="2026-09-01"),
+            row("homelab-ij8.2", "open", created="2026-09-01"),
+            row("homelab-tay.1", "open", created="2026-09-01"),
+            row("homelab-ij8", "open", created="2026-09-01"),
+        ]
+    )
     out = beadmetrics.collect("/repo", "homelab-ij8.", today=TODAY)
-    assert out["totals"]["all"] == 2, "the epic itself has no trailing dot and is not a child"
+    assert out["totals"]["all"] == 2, (
+        "the epic itself has no trailing dot and is not a child"
+    )
 
 
 def test_a_prefix_that_matches_nothing_is_an_error_not_an_empty_arc(fake_bd):
@@ -152,11 +170,15 @@ def test_a_tracker_that_cannot_be_reached_raises(monkeypatch):
         beadmetrics.collect("/repo", "a.", today=TODAY)
 
 
-def test_the_command_exits_non_zero_when_the_tracker_is_unavailable(monkeypatch, capsys):
+def test_the_command_exits_non_zero_when_the_tracker_is_unavailable(
+    monkeypatch, capsys
+):
     monkeypatch.setattr(
         beadmetrics,
         "_bd",
-        lambda repo, status: (_ for _ in ()).throw(beadmetrics.TrackerUnavailable("nope")),
+        lambda repo, status: (_ for _ in ()).throw(
+            beadmetrics.TrackerUnavailable("nope")
+        ),
     )
     code = beadmetrics.main(["--prefix", "a.", "--repo", "/repo"])
     assert code == 1

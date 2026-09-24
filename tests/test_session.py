@@ -93,7 +93,7 @@ def test_each_version_records_the_session_that_wrote_THAT_one(client, key, db):
 
 
 def test_a_caller_that_declares_nothing_stores_null_not_empty_string(client, key, db):
-    """"did not say" needs exactly one representation, or every reader has to
+    """ "did not say" needs exactly one representation, or every reader has to
     decide whether "" means unknown or means a session that named itself
     nothing."""
     for header in (None, "   "):
@@ -132,20 +132,32 @@ def test_an_answer_wakes_the_session_that_asked_not_the_machine(client, key, db)
     looking, and the one wake that matters is indistinguishable from these."
     """
     mine = client.post(
-        "/api/v1/artifacts", json={"title": "Mine", "body": PAGE}, headers=_h(key, SEAT_A)
+        "/api/v1/artifacts",
+        json={"title": "Mine", "body": PAGE},
+        headers=_h(key, SEAT_A),
     ).json()
     theirs = client.post(
-        "/api/v1/artifacts", json={"title": "Theirs", "body": PAGE}, headers=_h(key, SEAT_B)
+        "/api/v1/artifacts",
+        json={"title": "Theirs", "body": PAGE},
+        headers=_h(key, SEAT_B),
     ).json()
     asked_a = decisions.ask(
-        db, agent="baba-operator", artifact_id=mine["id"], question="Mine?",
+        db,
+        agent="baba-operator",
+        artifact_id=mine["id"],
+        question="Mine?",
         options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
-        recommended="a", session=SEAT_A,
+        recommended="a",
+        session=SEAT_A,
     )
     asked_b = decisions.ask(
-        db, agent="baba-operator", artifact_id=theirs["id"], question="Theirs?",
+        db,
+        agent="baba-operator",
+        artifact_id=theirs["id"],
+        question="Theirs?",
         options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
-        recommended="a", session=SEAT_B,
+        recommended="a",
+        session=SEAT_B,
     )
     decisions.answer(db, asked_a.id, letter="a", note="", by="jeremy")
     decisions.answer(db, asked_b.id, letter="b", note="", by="jeremy")
@@ -163,12 +175,18 @@ def test_a_withdrawal_reaches_the_session_that_asked(client, key, db):
     to be filterable too, or the one wake that means "stop waiting" is the one
     lost in another seat's noise."""
     page = client.post(
-        "/api/v1/artifacts", json={"title": "Mine", "body": PAGE}, headers=_h(key, SEAT_A)
+        "/api/v1/artifacts",
+        json={"title": "Mine", "body": PAGE},
+        headers=_h(key, SEAT_A),
     ).json()
     decisions.ask(
-        db, agent="baba-operator", artifact_id=page["id"], question="Mine?",
+        db,
+        agent="baba-operator",
+        artifact_id=page["id"],
+        question="Mine?",
         options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
-        recommended="a", session=SEAT_A,
+        recommended="a",
+        session=SEAT_A,
     )
     store.set_archived(db, page["id"], True, agent=None)
 
@@ -178,12 +196,18 @@ def test_a_withdrawal_reaches_the_session_that_asked(client, key, db):
 
 def test_the_filter_is_reachable_over_http(client, key, db):
     page = client.post(
-        "/api/v1/artifacts", json={"title": "Mine", "body": PAGE}, headers=_h(key, SEAT_A)
+        "/api/v1/artifacts",
+        json={"title": "Mine", "body": PAGE},
+        headers=_h(key, SEAT_A),
     ).json()
     asked = decisions.ask(
-        db, agent="baba-operator", artifact_id=page["id"], question="Mine?",
+        db,
+        agent="baba-operator",
+        artifact_id=page["id"],
+        question="Mine?",
         options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
-        recommended="a", session=SEAT_A,
+        recommended="a",
+        session=SEAT_A,
     )
     decisions.answer(db, asked.id, letter="a", note="", by="jeremy")
 
@@ -202,7 +226,10 @@ def test_rows_with_no_session_are_left_out_of_a_filtered_feed(client, key, db):
         "/api/v1/artifacts", json={"title": "Old", "body": PAGE}, headers=_h(key)
     ).json()
     asked = decisions.ask(
-        db, agent="baba-operator", artifact_id=page["id"], question="Old?",
+        db,
+        agent="baba-operator",
+        artifact_id=page["id"],
+        question="Old?",
         options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
         recommended="a",
     )
@@ -224,7 +251,9 @@ def test_a_different_session_can_still_read_and_edit_the_same_pages(client, key,
     a scope was added on `session`, the scope is the bug.
     """
     made = client.post(
-        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=_h(key, SEAT_A)
+        "/api/v1/artifacts",
+        json={"title": "Board", "body": PAGE},
+        headers=_h(key, SEAT_A),
     ).json()
 
     seen = client.get(f"/api/v1/artifacts/{made['id']}", headers=_h(key, SEAT_B))
@@ -261,7 +290,9 @@ def test_scoping_still_uses_the_agent_from_the_key(client, key, db):
     to learn which ids are real."""
     keys.mint(db, agent="another-seat")
     theirs = store.publish(db, "another-seat", "Not yours", PAGE)
-    store.set_agents_can_read(db, theirs.id, False, agent=None)  # closed to other agents: homelab-ij8.105 made pages readable by default
+    store.set_agents_can_read(
+        db, theirs.id, False, agent=None
+    )  # closed to other agents: homelab-ij8.105 made pages readable by default
     got = client.get(f"/api/v1/artifacts/{theirs.id}", headers=_h(key, SEAT_A))
     assert got.status_code == 404
 
@@ -279,12 +310,18 @@ def test_the_polling_route_can_see_a_withdrawn_question(client, key, db):
     started withdrawing questions whose page was archived or deleted.
     """
     page = client.post(
-        "/api/v1/artifacts", json={"title": "Mine", "body": PAGE}, headers=_h(key, SEAT_A)
+        "/api/v1/artifacts",
+        json={"title": "Mine", "body": PAGE},
+        headers=_h(key, SEAT_A),
     ).json()
     asked = decisions.ask(
-        db, agent="baba-operator", artifact_id=page["id"], question="Mine?",
+        db,
+        agent="baba-operator",
+        artifact_id=page["id"],
+        question="Mine?",
         options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
-        recommended="a", session=SEAT_A,
+        recommended="a",
+        session=SEAT_A,
     )
     store.set_archived(db, page["id"], True, agent=None)
 
@@ -334,12 +371,19 @@ def test_two_sessions_behind_one_key_are_told_apart_in_the_listing(client, key, 
     """The failure itself: one key, two sessions, and a listing that used to
     show ten indistinguishable pages."""
     first = client.post(
-        "/api/v1/artifacts", json={"title": "Mine", "body": PAGE}, headers=_h(key, SEAT_A)
+        "/api/v1/artifacts",
+        json={"title": "Mine", "body": PAGE},
+        headers=_h(key, SEAT_A),
     ).json()
     second = client.post(
-        "/api/v1/artifacts", json={"title": "Theirs", "body": PAGE}, headers=_h(key, SEAT_B)
+        "/api/v1/artifacts",
+        json={"title": "Theirs", "body": PAGE},
+        headers=_h(key, SEAT_B),
     ).json()
-    rows = {r["id"]: r for r in client.get("/api/v1/artifacts", headers=_h(key, SEAT_A)).json()}
+    rows = {
+        r["id"]: r
+        for r in client.get("/api/v1/artifacts", headers=_h(key, SEAT_A)).json()
+    }
     assert rows[first["id"]]["last_session"] == SEAT_A
     assert rows[second["id"]]["last_session"] == SEAT_B, (
         "both pages are listed to either session -- that is deliberate and "
@@ -351,7 +395,9 @@ def test_the_listing_follows_the_LIVE_version_not_the_first_one(client, key, db)
     """'Who owes Jeremy an answer about this page' is about whoever published
     what he is reading now, not whoever started it a week ago."""
     made = client.post(
-        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=_h(key, SEAT_A)
+        "/api/v1/artifacts",
+        json={"title": "Board", "body": PAGE},
+        headers=_h(key, SEAT_A),
     ).json()
     client.patch(
         f"/api/v1/artifacts/{made['id']}",
@@ -368,7 +414,9 @@ def test_a_page_published_before_sessions_existed_says_nothing_not_nobody(
     """Unknown and unattributed are different facts, and printing one as the
     other is how a stale attribution gets believed."""
     made = client.post(
-        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=_h(key, None)
+        "/api/v1/artifacts",
+        json={"title": "Board", "body": PAGE},
+        headers=_h(key, None),
     ).json()
     rows = client.get("/api/v1/artifacts", headers=_h(key, SEAT_A)).json()
     assert next(r for r in rows if r["id"] == made["id"])["last_session"] is None
@@ -378,8 +426,15 @@ def test_the_deleted_listing_says_it_too(client, key, db):
     """The bin is where 'whose was this?' is hardest and matters most: nobody
     remembers, and restoring someone else's page is the mistake available."""
     made = client.post(
-        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=_h(key, SEAT_B)
+        "/api/v1/artifacts",
+        json={"title": "Board", "body": PAGE},
+        headers=_h(key, SEAT_B),
     ).json()
-    assert client.delete(f"/api/v1/artifacts/{made['id']}", headers=_h(key, SEAT_B)).status_code == 200
+    assert (
+        client.delete(
+            f"/api/v1/artifacts/{made['id']}", headers=_h(key, SEAT_B)
+        ).status_code
+        == 200
+    )
     binned = client.get("/api/v1/artifacts/deleted", headers=_h(key, SEAT_A)).json()
     assert next(r for r in binned if r["id"] == made["id"])["last_session"] == SEAT_B

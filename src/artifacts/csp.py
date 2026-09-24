@@ -57,28 +57,36 @@ _SHAPES: tuple[tuple[str, re.Pattern[str], str], ...] = (
     (
         "remote_script",
         re.compile(r"<script\b[^>]*\bsrc\s*=\s*[\"']?" + _REMOTE, re.IGNORECASE),
-        ("script-src is 'self' 'unsafe-inline': a script loaded from another "
-        "origin (a CDN) is blocked and never runs. Inline the code instead."),
+        (
+            "script-src is 'self' 'unsafe-inline': a script loaded from another "
+            "origin (a CDN) is blocked and never runs. Inline the code instead."
+        ),
     ),
     (
         "remote_stylesheet",
         re.compile(r"<link\b[^>]*\bhref\s*=\s*[\"']?" + _REMOTE, re.IGNORECASE),
-        ("style-src is 'self' 'unsafe-inline' and font-src is 'self': a "
-        "stylesheet or web font from another origin (Google Fonts) is "
-        "blocked. Use an inline <style> and the system font stack."),
+        (
+            "style-src is 'self' 'unsafe-inline' and font-src is 'self': a "
+            "stylesheet or web font from another origin (Google Fonts) is "
+            "blocked. Use an inline <style> and the system font stack."
+        ),
     ),
     (
         "remote_css_url",
         re.compile(r"url\(\s*[\"']?" + _REMOTE, re.IGNORECASE),
-        ("A CSS url() pointing at another origin -- a @font-face source or a "
-        "background image -- is blocked by font-src/img-src 'self'. Inline "
-        "the asset as a data: URI, or drop it."),
+        (
+            "A CSS url() pointing at another origin -- a @font-face source or a "
+            "background image -- is blocked by font-src/img-src 'self'. Inline "
+            "the asset as a data: URI, or drop it."
+        ),
     ),
     (
         "css_import",
         re.compile(r"@import\b[^;]*" + _REMOTE, re.IGNORECASE),
-        ("@import from another origin is blocked by style-src 'self'. Put the "
-        "rules directly in the page's own <style>."),
+        (
+            "@import from another origin is blocked by style-src 'self'. Put the "
+            "rules directly in the page's own <style>."
+        ),
     ),
     (
         "remote_image",
@@ -86,41 +94,53 @@ _SHAPES: tuple[tuple[str, re.Pattern[str], str], ...] = (
             r"<(?:img|source)\b[^>]*\bsrc(?:set)?\s*=\s*[\"']?" + _REMOTE,
             re.IGNORECASE,
         ),
-        ("img-src is 'self' data:: an image hotlinked from another origin is "
-        "blocked. Inline it as a data: URI, or use inline SVG."),
+        (
+            "img-src is 'self' data:: an image hotlinked from another origin is "
+            "blocked. Inline it as a data: URI, or use inline SVG."
+        ),
     ),
     (
         "media_element",
         re.compile(r"<(?:video|audio)\b", re.IGNORECASE),
-        ("There is no media-src directive, so <video>/<audio> falls back to "
-        "default-src 'none' and no media plays at all -- not even same-origin "
-        "or data:. A page cannot carry audio or video here."),
+        (
+            "There is no media-src directive, so <video>/<audio> falls back to "
+            "default-src 'none' and no media plays at all -- not even same-origin "
+            "or data:. A page cannot carry audio or video here."
+        ),
     ),
     (
         "iframe",
         re.compile(r"<iframe\b", re.IGNORECASE),
-        ("There is no frame-src directive, so it falls back to default-src "
-        "'none': a nested iframe never loads. The page is itself already "
-        "framed by the gallery."),
+        (
+            "There is no frame-src directive, so it falls back to default-src "
+            "'none': a nested iframe never loads. The page is itself already "
+            "framed by the gallery."
+        ),
     ),
     (
         "form_element",
         re.compile(r"<form\b", re.IGNORECASE),
-        ("form-action is 'none': a form cannot submit anywhere. This is the "
-        "trust boundary that stops a page forging an answer -- use the "
-        "decisions API and a data-artifact-decision slot instead."),
+        (
+            "form-action is 'none': a form cannot submit anywhere. This is the "
+            "trust boundary that stops a page forging an answer -- use the "
+            "decisions API and a data-artifact-decision slot instead."
+        ),
     ),
     (
         "base_element",
         re.compile(r"<base\b", re.IGNORECASE),
-        ("base-uri is 'none': a <base> tag is ignored, so relative URLs will "
-        "not resolve the way the page expects."),
+        (
+            "base-uri is 'none': a <base> tag is ignored, so relative URLs will "
+            "not resolve the way the page expects."
+        ),
     ),
     (
         "web_worker",
         re.compile(r"new\s+(?:Shared)?Worker\s*\(", re.IGNORECASE),
-        ("worker-src is 'none': a Web Worker cannot start. Do the work on the "
-        "main thread, or precompute it before publishing."),
+        (
+            "worker-src is 'none': a Web Worker cannot start. Do the work on the "
+            "main thread, or precompute it before publishing."
+        ),
     ),
     (
         "remote_connect",
@@ -131,16 +151,20 @@ _SHAPES: tuple[tuple[str, re.Pattern[str], str], ...] = (
             + _REMOTE,
             re.IGNORECASE,
         ),
-        ("connect-src is 'self' at most, and 'none' for a page with no live "
-        "features: a request to another origin is blocked. Put the data in "
-        "the page at publish time, and republish to update it."),
+        (
+            "connect-src is 'self' at most, and 'none' for a page with no live "
+            "features: a request to another origin is blocked. Put the data in "
+            "the page at publish time, and republish to update it."
+        ),
     ),
     (
         "window_claude",
         re.compile(r"\bwindow\s*\.\s*claude\b|\bclaude\s*\.\s*use\s*\("),
-        ("window.claude is the claude.ai artifact runtime. It does not exist "
-        "here -- this service serves your file as-is -- so the call resolves "
-        "to nothing and any feature behind it is silently missing."),
+        (
+            "window.claude is the claude.ai artifact runtime. It does not exist "
+            "here -- this service serves your file as-is -- so the call resolves "
+            "to nothing and any feature behind it is silently missing."
+        ),
     ),
 )
 
@@ -193,10 +217,7 @@ def check(body: str) -> list[CspWarning]:
             line = line_of(match.start(), newlines)
             if line not in lines:
                 lines.append(line)
-            if (
-                len(lines) >= _MAX_LINES_PER_SHAPE
-                or examined >= _MAX_MATCHES_PER_SHAPE
-            ):
+            if len(lines) >= _MAX_LINES_PER_SHAPE or examined >= _MAX_MATCHES_PER_SHAPE:
                 break
         warnings.extend(CspWarning(shape=shape, line=line, hint=hint) for line in lines)
         if len(warnings) >= _MAX_WARNINGS_TOTAL:

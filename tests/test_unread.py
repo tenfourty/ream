@@ -49,7 +49,10 @@ def test_the_wall_order_is_pinned_then_questions_then_unread_then_the_rest(db, g
     for page in (read_old, asking, pinned, read_new):
         gallery.get(f"/a/{page.id}")
     decisions.ask(
-        db, agent="seat", artifact_id=asking.id, question="ship?",
+        db,
+        agent="seat",
+        artifact_id=asking.id,
+        question="ship?",
         options=[{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}],
     )
     store.set_pinned(db, pinned.id, True, agent=None)
@@ -83,4 +86,6 @@ def test_only_the_owner_sees_it(db, gallery):
         f"/api/v1/artifacts/{page.id}", headers={"Authorization": f"Bearer {other}"}
     )
     assert response.status_code == 200
-    assert response.json()["seen_version"] is None and response.json()["seen_at"] is None
+    assert (
+        response.json()["seen_version"] is None and response.json()["seen_at"] is None
+    )

@@ -53,7 +53,10 @@ def test_the_link_always_shows_the_latest_version(db, gallery, page):
 
 def test_just_the_page_no_questions_no_answers_no_runtime(db, gallery, page):
     asked = decisions.ask(
-        db, agent="seat", artifact_id=page.id, question="secret question?",
+        db,
+        agent="seat",
+        artifact_id=page.id,
+        question="secret question?",
         options=[{"letter": "a", "label": "x"}, {"letter": "b", "label": "y"}],
     )
     decisions.answer(db, asked.id, letter="a", note="private note", by="jeremy")
@@ -62,7 +65,9 @@ def test_just_the_page_no_questions_no_answers_no_runtime(db, gallery, page):
     assert "artifact-state" not in text, "no viewer channel to the gallery"
 
 
-def test_stopping_kills_the_link_at_once_and_sharing_again_makes_a_new_one(db, gallery, page):
+def test_stopping_kills_the_link_at_once_and_sharing_again_makes_a_new_one(
+    db, gallery, page
+):
     old = _share(gallery, page)
     stopped = gallery.post(f"/a/{page.id}/share/stop", headers=SAME_ORIGIN)
     assert "Stopped. The link no longer works." in stopped.text
@@ -87,8 +92,12 @@ def test_every_failure_looks_the_same(db, gallery, page):
 def test_only_he_can_share_there_is_no_agent_route(db, gallery, page):
     token, _ = keys.mint(db, agent="seat")
     auth = {"Authorization": f"Bearer {token}"}
-    assert gallery.post(f"/api/v1/artifacts/{page.id}/share", headers=auth).status_code in (404, 405)
-    cross = gallery.post(f"/a/{page.id}/share", headers={"sec-fetch-site": "cross-site"})
+    assert gallery.post(
+        f"/api/v1/artifacts/{page.id}/share", headers=auth
+    ).status_code in (404, 405)
+    cross = gallery.post(
+        f"/a/{page.id}/share", headers={"sec-fetch-site": "cross-site"}
+    )
     assert cross.status_code == 403
     assert store.share_token(db, page.id) is None
 

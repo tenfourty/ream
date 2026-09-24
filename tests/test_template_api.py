@@ -43,7 +43,9 @@ def test_every_listed_template_says_what_it_is_for(client, db):
     blank = [r["name"] for r in rows if not r["use_when"].strip()]
     assert not blank, f"listed with nothing saying when to use them: {blank}"
     assert all(r["title"].strip() for r in rows)
-    assert all(r["bytes"] > 1000 for r in rows), "a template that small is not a worked page"
+    assert all(r["bytes"] > 1000 for r in rows), (
+        "a template that small is not a worked page"
+    )
 
 
 @pytest.mark.parametrize("name", templates.names())

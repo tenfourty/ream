@@ -694,7 +694,9 @@ def test_the_state_reaches_an_agent_through_the_api(client, db):
     cannot see the page either (homelab-ij8.35), so it must be told."""
     token, _ = keys.mint(db, agent="ops-seat")
     published = client.post(
-        "/api/v1/artifacts", json={"title": "Board", "body": QUOTED}, headers=auth(token)
+        "/api/v1/artifacts",
+        json={"title": "Board", "body": QUOTED},
+        headers=auth(token),
     ).json()
     client.post(
         f"/api/v1/artifacts/{published['id']}/comments",
@@ -725,9 +727,15 @@ def test_across_pages_puts_the_most_recently_talked_about_page_first(db):
     forwards."""
     quiet = store.publish(db, "seat", "Quiet board", PAGE)
     busy = store.publish(db, "seat", "Busy board", PAGE)
-    comments.add(db, artifact_id=quiet.id, author_kind="agent", author="seat", body="first")
-    comments.add(db, artifact_id=busy.id, author_kind="agent", author="seat", body="second")
-    comments.add(db, artifact_id=busy.id, author_kind="agent", author="seat", body="third")
+    comments.add(
+        db, artifact_id=quiet.id, author_kind="agent", author="seat", body="first"
+    )
+    comments.add(
+        db, artifact_id=busy.id, author_kind="agent", author="seat", body="second"
+    )
+    comments.add(
+        db, artifact_id=busy.id, author_kind="agent", author="seat", body="third"
+    )
 
     pages = comments.across_pages(db)
 
@@ -739,7 +747,9 @@ def test_across_pages_leaves_out_a_deleted_page_and_flags_an_archived_one(db):
     gone = store.publish(db, "seat", "Deleted board", PAGE)
     shelved = store.publish(db, "seat", "Archived board", PAGE)
     comments.add(db, artifact_id=gone.id, author_kind="agent", author="seat", body="x")
-    comments.add(db, artifact_id=shelved.id, author_kind="agent", author="seat", body="y")
+    comments.add(
+        db, artifact_id=shelved.id, author_kind="agent", author="seat", body="y"
+    )
     store.set_deleted(db, gone.id, True, agent="seat")
     store.set_archived(db, shelved.id, True, agent="seat")
 
@@ -755,13 +765,21 @@ def test_across_pages_answers_whether_each_quote_is_still_there(db):
     whatever now occupies that spot."""
     art = store.publish(db, "seat", "Board", QUOTED)
     comments.add(
-        db, artifact_id=art.id, author_kind="agent", author="seat",
-        body="Why then?", quote="The backups run at midnight.",
+        db,
+        artifact_id=art.id,
+        author_kind="agent",
+        author="seat",
+        body="Why then?",
+        quote="The backups run at midnight.",
     )
     other = store.publish(db, "seat", "Other", QUOTED)
     comments.add(
-        db, artifact_id=other.id, author_kind="agent", author="seat",
-        body="Still right", quote="The backups run at midnight.",
+        db,
+        artifact_id=other.id,
+        author_kind="agent",
+        author="seat",
+        body="Still right",
+        quote="The backups run at midnight.",
     )
     current = store.get_owned(db, "seat", art.id)
     store.patch(
@@ -782,9 +800,9 @@ def test_across_pages_hides_settled_threads_unless_asked(db):
     comments.resolve(db, root.id, by="jeremy", agent=None)
 
     assert comments.across_pages(db) == []
-    assert [p.artifact_id for p in comments.across_pages(db, include_resolved=True)] == [
-        art.id
-    ]
+    assert [
+        p.artifact_id for p in comments.across_pages(db, include_resolved=True)
+    ] == [art.id]
 
 
 def test_an_agents_whole_feed_says_whether_each_quote_is_still_there(client, db):
@@ -793,7 +811,9 @@ def test_an_agents_whole_feed_says_whether_each_quote_is_still_there(client, db)
     agent two different answers and one of them was always wrong."""
     token, _ = keys.mint(db, agent="ops-seat")
     published = client.post(
-        "/api/v1/artifacts", json={"title": "Board", "body": QUOTED}, headers=auth(token)
+        "/api/v1/artifacts",
+        json={"title": "Board", "body": QUOTED},
+        headers=auth(token),
     ).json()
     client.post(
         f"/api/v1/artifacts/{published['id']}/comments",

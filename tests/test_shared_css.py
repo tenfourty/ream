@@ -110,6 +110,7 @@ def test_a_page_that_links_it_is_not_a_csp_warning(db):
         "</head><body>hi</body></html>"
     )
     assert csp.check(body) == []
-    assert content.headers_for(True)["content-security-policy"].count(
-        "style-src 'self'"
-    ) == 1, "and the policy it relies on is still the one being served"
+    assert (
+        content.headers_for(True)["content-security-policy"].count("style-src 'self'")
+        == 1
+    ), "and the policy it relies on is still the one being served"

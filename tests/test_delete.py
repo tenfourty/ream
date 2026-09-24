@@ -424,7 +424,7 @@ def test_the_wall_counts_only_what_is_actually_on_it(client, db):
 
 
 def test_an_unarchived_page_does_not_get_its_question_back(client, db):
-    """"the agent needs to ask it again" -- read literally, and it is also the
+    """ "the agent needs to ask it again" -- read literally, and it is also the
     only honest option. A question reopened after days is a question whose
     context has moved, and an agent re-asking says so in the asking."""
     keys.mint(db, agent="seat")

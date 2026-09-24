@@ -16,17 +16,23 @@ SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
 
 @pytest.fixture()
 def gallery(db):
-    return TestClient(create_gallery_app(db), base_url="https://artifacts.tenfourty.site")
+    return TestClient(
+        create_gallery_app(db), base_url="https://artifacts.tenfourty.site"
+    )
 
 
 def _ask(gallery, name="laptop", address="203.0.113.5"):
-    response = gallery.post("/api/v1/connect", json={"name": name}, headers={"x-real-ip": address})
+    response = gallery.post(
+        "/api/v1/connect", json={"name": name}, headers={"x-real-ip": address}
+    )
     assert response.status_code == 201, response.text
     return response.json()
 
 
 def _poll(gallery, started):
-    return gallery.post("/api/v1/connect/poll", json={"poll_token": started["poll_token"]}).json()
+    return gallery.post(
+        "/api/v1/connect/poll", json={"poll_token": started["poll_token"]}
+    ).json()
 
 
 def _approve(gallery, code, name="laptop", headers=SAME_ORIGIN):
@@ -69,7 +75,9 @@ def test_no_key_is_ever_stored_in_plaintext(db, gallery):
 def test_he_can_type_the_code_loosely(db, gallery):
     started = _ask(gallery)
     loose = started["code"].replace("-", " ").lower()
-    assert "Approve this machine?" in gallery.get("/connect", params={"code": loose}).text
+    assert (
+        "Approve this machine?" in gallery.get("/connect", params={"code": loose}).text
+    )
 
 
 def test_a_wrong_code_finds_nothing_and_says_so(gallery):
@@ -93,9 +101,14 @@ def test_denied_means_nothing_is_delivered(db, gallery):
 def test_an_unapproved_request_expires(db, gallery):
     started = _ask(gallery)
     with db.connect() as conn:
-        conn.execute("update connect_request set expires_at = now() - interval '1 second'")
+        conn.execute(
+            "update connect_request set expires_at = now() - interval '1 second'"
+        )
     assert _poll(gallery, started) == {"status": "expired"}
-    assert "No machine is waiting" in gallery.get("/connect", params={"code": started["code"]}).text
+    assert (
+        "No machine is waiting"
+        in gallery.get("/connect", params={"code": started["code"]}).text
+    )
 
 
 def test_an_unknown_poll_token_looks_like_an_expired_one(gallery):
@@ -126,7 +139,9 @@ def test_a_name_already_connected_is_refused_until_its_key_is_revoked(db, galler
 
 def test_approving_needs_his_own_page_not_another_site(gallery):
     started = _ask(gallery)
-    forged = _approve(gallery, started["code"], headers={"sec-fetch-site": "cross-site"})
+    forged = _approve(
+        gallery, started["code"], headers={"sec-fetch-site": "cross-site"}
+    )
     assert forged.status_code == 403
     assert _poll(gallery, started) == {"status": "pending"}
 
@@ -147,11 +162,18 @@ def test_the_names_are_made_readable():
 # --- the command an agent runs ----------------------------------------------
 
 
-def test_the_command_saves_the_key_owner_only_and_never_prints_it(tmp_path, monkeypatch, capsys):
+def test_the_command_saves_the_key_owner_only_and_never_prints_it(
+    tmp_path, monkeypatch, capsys
+):
     answers = iter(
         [
-            {"code": "ACDE-FGHJ", "poll_token": "p", "expires_in": 900, "interval": 2,
-             "approve_at": "https://a.example/connect"},
+            {
+                "code": "ACDE-FGHJ",
+                "poll_token": "p",
+                "expires_in": 900,
+                "interval": 2,
+                "approve_at": "https://a.example/connect",
+            },
             {"status": "pending"},
             {"status": "approved", "agent": "laptop", "key": "art_SECRETSECRET"},
         ]
@@ -167,7 +189,9 @@ def test_the_command_saves_the_key_owner_only_and_never_prints_it(tmp_path, monk
     assert stat.S_IMODE(os.stat(key_file).st_mode) == 0o600
 
 
-def test_the_command_will_not_overwrite_a_key_without_force(tmp_path, monkeypatch, capsys):
+def test_the_command_will_not_overwrite_a_key_without_force(
+    tmp_path, monkeypatch, capsys
+):
     key_file = tmp_path / "key"
     key_file.write_text("art_existing\n")
     monkeypatch.setattr(connect_cli, "_post", lambda *a: pytest.fail("must not ask"))
@@ -179,8 +203,13 @@ def test_the_command_will_not_overwrite_a_key_without_force(tmp_path, monkeypatc
 def test_a_denied_request_saves_nothing(tmp_path, monkeypatch):
     answers = iter(
         [
-            {"code": "ACDE-FGHJ", "poll_token": "p", "expires_in": 900, "interval": 2,
-             "approve_at": "https://a.example/connect"},
+            {
+                "code": "ACDE-FGHJ",
+                "poll_token": "p",
+                "expires_in": 900,
+                "interval": 2,
+                "approve_at": "https://a.example/connect",
+            },
             {"status": "denied"},
         ]
     )

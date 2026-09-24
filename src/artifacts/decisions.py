@@ -599,7 +599,7 @@ def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
 
 
 def acknowledge(db: Database, agent: str, decision_id: str) -> DecisionRow:
-    """"I have seen this answer" -- a different fact from "the work is done".
+    """ "I have seen this answer" -- a different fact from "the work is done".
 
     The alert that catches a lost answer keys on answered-and-not-acknowledged, and it
     has to tell a slow owner from a dead one. Neither of the facts already in this
@@ -993,7 +993,9 @@ def unresolved_slots(
     return [(slot, line) for slot, line in first.items() if slot not in real]
 
 
-def outcomes_for_artifact(db: Database, artifact_id: str) -> dict[str, list[OutcomeRow]]:
+def outcomes_for_artifact(
+    db: Database, artifact_id: str
+) -> dict[str, list[OutcomeRow]]:
     """Every outcome on every decision of one page, keyed by decision id.
 
     One query rather than one per decision: the gallery renders a page with

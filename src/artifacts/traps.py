@@ -128,8 +128,8 @@ def check(body: str) -> list[CspWarning]:
                 shape="gallery_link_same_tab",
                 line=line_of(match.start(), newlines),
                 hint=(
-                    "a link to the gallery needs target=\"_blank\" "
-                    "rel=\"noopener\". This page is served in a sandboxed "
+                    'a link to the gallery needs target="_blank" '
+                    'rel="noopener". This page is served in a sandboxed '
                     "frame that forbids top-level navigation, and the gallery "
                     "refuses to be framed, so in the same tab the link does "
                     "nothing at all."

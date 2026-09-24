@@ -34,11 +34,19 @@ def three_versions(db):
     keys.mint(db, agent="seat")
     first = store.publish(db, "seat", "Board", PAGE, session="seat/aaa")
     second = store.patch(
-        db, "seat", first.id, PAGE.replace("one", "two"), first.revision,
+        db,
+        "seat",
+        first.id,
+        PAGE.replace("one", "two"),
+        first.revision,
         session="seat/bbb",
     )
     store.patch(
-        db, "seat", first.id, PAGE.replace("one", "three"), second.revision,
+        db,
+        "seat",
+        first.id,
+        PAGE.replace("one", "three"),
+        second.revision,
         session="seat/ccc",
     )
     return first.id
@@ -99,7 +107,12 @@ def test_rolling_back_lands_as_a_new_version(db, three_versions):
 
     assert back.version == 4
     assert store.get_body(db, "seat", three_versions).body == old.body
-    assert [r.n for r in store.list_versions(db, "seat", three_versions)] == [4, 3, 2, 1]
+    assert [r.n for r in store.list_versions(db, "seat", three_versions)] == [
+        4,
+        3,
+        2,
+        1,
+    ]
 
 
 # --- scope --------------------------------------------------------------------
@@ -132,9 +145,7 @@ def test_both_routes_answer_for_the_owning_key(client, db, three_versions):
     assert [r["n"] for r in listing.json()] == [3, 2, 1]
     assert "body" not in listing.json()[0]
 
-    one = client.get(
-        f"/api/v1/artifacts/{three_versions}/versions/1", headers=headers
-    )
+    one = client.get(f"/api/v1/artifacts/{three_versions}/versions/1", headers=headers)
     assert one.status_code == 200
     assert "one" in one.json()["body"]
 
@@ -142,7 +153,9 @@ def test_both_routes_answer_for_the_owning_key(client, db, three_versions):
 def test_another_key_gets_the_same_404_for_both(client, db, three_versions):
     other, _ = keys.mint(db, agent="other")
     headers = {"Authorization": f"Bearer {other}"}
-    store.set_agents_can_read(db, three_versions, False, agent=None)  # closed to other agents: homelab-ij8.105 made pages readable by default
+    store.set_agents_can_read(
+        db, three_versions, False, agent=None
+    )  # closed to other agents: homelab-ij8.105 made pages readable by default
     assert (
         client.get(
             f"/api/v1/artifacts/{three_versions}/versions", headers=headers

@@ -11,7 +11,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
-_SCRIPT = Path(__file__).resolve().parents[1] / ".forgejo" / "scripts" / "deploy-guard.sh"
+_SCRIPT = (
+    Path(__file__).resolve().parents[1] / ".forgejo" / "scripts" / "deploy-guard.sh"
+)
 # Resolved once to full paths -- bandit's S607 objects to a bare "git"/"bash"
 # (a $PATH lookup an attacker could redirect); every argument list below is
 # otherwise fixed by this file, never built from external input (S603).
@@ -87,7 +89,9 @@ def test_nothing_ahead_at_all_proceeds(tmp_path):
     assert result.returncode == 0
 
 
-def test_a_skip_ci_subject_that_is_not_the_exact_bump_format_still_counts_as_newer(tmp_path):
+def test_a_skip_ci_subject_that_is_not_the_exact_bump_format_still_counts_as_newer(
+    tmp_path,
+):
     # A `[skip ci]` SUBSTRING anywhere in the subject is not enough to call a
     # commit "our own bump" -- only the exact `deploy: artifacts <12 hex>
     # [skip ci]` subject does. A looser substring check would let a human
@@ -103,7 +107,9 @@ def test_a_skip_ci_subject_that_is_not_the_exact_bump_format_still_counts_as_new
     assert result.returncode == 1
 
 
-def test_an_unknown_base_revision_fails_loudly_instead_of_reading_as_nothing_newer(tmp_path):
+def test_an_unknown_base_revision_fails_loudly_instead_of_reading_as_nothing_newer(
+    tmp_path,
+):
     repo = tmp_path / "repo"
     _init_repo(repo)
 

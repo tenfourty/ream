@@ -39,7 +39,9 @@ def artifact_id(host: str | None) -> str | None:
     [a-z2-7]{26}\\.<content_domain()>, else None. content_domain() is read at call time."""
     if host is None:
         return None
-    match = re.fullmatch(rf"({_ARTIFACT_ID.pattern})\.{re.escape(content_domain())}", host)
+    match = re.fullmatch(
+        rf"({_ARTIFACT_ID.pattern})\.{re.escape(content_domain())}", host
+    )
     return match.group(1) if match else None
 
 

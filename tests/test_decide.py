@@ -9,7 +9,6 @@ point of this client is that it works with nothing but the standard library and
 a socket.
 """
 
-
 import pytest
 
 # Reuses test_client's fixtures rather than restating them -- same app, same
@@ -23,7 +22,7 @@ PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body><
 
 
 @pytest.fixture()
-def page(db, key_file):  # noqa: F811
+def page(db, key_file):
     """A page owned by the same seat the key names, so the scope lines up."""
     return store.publish(db, "ops-seat", "Board", PAGE)
 
@@ -35,15 +34,19 @@ def _run(args, key_path) -> int:
 # --- posing one -------------------------------------------------------------
 
 
-def test_a_seat_poses_a_question_and_reads_it_back(live, key_file, page, capsys):  # noqa: F811
+def test_a_seat_poses_a_question_and_reads_it_back(live, key_file, page, capsys):
     path, _ = key_file
     assert (
         _run(
             [
-                "ask", page.id,
-                "--question", "Where should the renderer run?",
-                "--option", "a=In the app pod",
-                "--option", "b=Its own deployment",
+                "ask",
+                page.id,
+                "--question",
+                "Where should the renderer run?",
+                "--option",
+                "a=In the app pod",
+                "--option",
+                "b=Its own deployment",
             ],
             path,
         )
@@ -59,21 +62,38 @@ def test_a_seat_poses_a_question_and_reads_it_back(live, key_file, page, capsys)
 
 
 def test_the_first_option_is_the_recommendation_unless_told_otherwise(
-    live, key_file, page, db, capsys  # noqa: F811
+    live,
+    key_file,
+    page,
+    db,
+    capsys,
 ):
     """His house style, from CLAUDE.md: "recommendation first as (a), because
     that is how he answers." A question posed with no recommendation at all is
     one he has to reverse-engineer, so the common case must not require the
     flag."""
     path, _ = key_file
-    _run(["ask", page.id, "--question", "Q?", "--option", "a=One", "--option", "b=Two"], path)
+    _run(
+        ["ask", page.id, "--question", "Q?", "--option", "a=One", "--option", "b=Two"],
+        path,
+    )
     capsys.readouterr()
     rows = decisions.list_for_artifact(db, page.id)
     assert rows[0].recommended == "a"
 
     _run(
-        ["ask", page.id, "--question", "R?", "--option", "a=One", "--option",
-         "b=Two", "--recommend", "b"],
+        [
+            "ask",
+            page.id,
+            "--question",
+            "R?",
+            "--option",
+            "a=One",
+            "--option",
+            "b=Two",
+            "--recommend",
+            "b",
+        ],
         path,
     )
     capsys.readouterr()
@@ -82,7 +102,10 @@ def test_the_first_option_is_the_recommendation_unless_told_otherwise(
 
 
 def test_an_option_without_a_label_is_refused_with_the_shape_to_use(
-    live, key_file, page, capsys  # noqa: F811
+    live,
+    key_file,
+    page,
+    capsys,
 ):
     path, _ = key_file
     assert _run(["ask", page.id, "--question", "Q?", "--option", "a"], path) == 2
@@ -96,7 +119,10 @@ def test_a_label_may_contain_an_equals_sign():
 
 
 def test_a_page_this_key_does_not_own_is_a_404_not_a_different_answer(
-    live, key_file, db, capsys  # noqa: F811
+    live,
+    key_file,
+    db,
+    capsys,
 ):
     """The service answers "not yours" and "no such page" identically so a key
     cannot be walked to learn which ids are real. The CLI must not undo that by
@@ -105,10 +131,39 @@ def test_a_page_this_key_does_not_own_is_a_404_not_a_different_answer(
     keys.mint(db, agent="another-seat")
     theirs = store.publish(db, "another-seat", "Not yours", PAGE)
 
-    assert _run(["ask", theirs.id, "--question", "Q?", "--option", "a=One", "--option", "b=Two"], path) == 1
+    assert (
+        _run(
+            [
+                "ask",
+                theirs.id,
+                "--question",
+                "Q?",
+                "--option",
+                "a=One",
+                "--option",
+                "b=Two",
+            ],
+            path,
+        )
+        == 1
+    )
     mine_err = capsys.readouterr().err
-    assert _run(["ask", "zzzzzzzzzzzzzzzzzzzzzzzzzz", "--question", "Q?",
-                 "--option", "a=One", "--option", "b=Two"], path) == 1
+    assert (
+        _run(
+            [
+                "ask",
+                "zzzzzzzzzzzzzzzzzzzzzzzzzz",
+                "--question",
+                "Q?",
+                "--option",
+                "a=One",
+                "--option",
+                "b=Two",
+            ],
+            path,
+        )
+        == 1
+    )
     missing_err = capsys.readouterr().err
     assert "404" in mine_err and "404" in missing_err
     assert mine_err == missing_err, (
@@ -120,14 +175,21 @@ def test_a_page_this_key_does_not_own_is_a_404_not_a_different_answer(
 
 
 def test_an_answered_decision_leads_with_the_answer_and_his_whole_note(
-    live, key_file, page, db, capsys  # noqa: F811
+    live,
+    key_file,
+    page,
+    db,
+    capsys,
 ):
     """The note is never truncated. Every note he has written so far qualified
     the letter it came with, and "start with (b) but then (a) if we can" cut to
     "start with (b)" is the exact fabrication this service exists to prevent."""
     path, _ = key_file
     asked = decisions.ask(
-        db, agent="ops-seat", artifact_id=page.id, question="Which?",
+        db,
+        agent="ops-seat",
+        artifact_id=page.id,
+        question="Which?",
         options=[{"letter": "a", "label": "First"}, {"letter": "b", "label": "Second"}],
         recommended="a",
     )
@@ -140,16 +202,22 @@ def test_an_answered_decision_leads_with_the_answer_and_his_whole_note(
     assert note in out, "his words in full"
 
 
-def test_open_only_hides_the_answered_ones(live, key_file, page, db, capsys):  # noqa: F811
+def test_open_only_hides_the_answered_ones(live, key_file, page, db, capsys):
     path, _ = key_file
     answered = decisions.ask(
-        db, agent="ops-seat", artifact_id=page.id, question="Answered one?",
+        db,
+        agent="ops-seat",
+        artifact_id=page.id,
+        question="Answered one?",
         options=[{"letter": "a", "label": "Yes"}, {"letter": "b", "label": "No"}],
         recommended="a",
     )
     decisions.answer(db, answered.id, letter="a", note="", by="jeremy")
     decisions.ask(
-        db, agent="ops-seat", artifact_id=page.id, question="Still open?",
+        db,
+        agent="ops-seat",
+        artifact_id=page.id,
+        question="Still open?",
         options=[{"letter": "a", "label": "Yes"}, {"letter": "b", "label": "No"}],
         recommended="a",
     )
@@ -165,7 +233,10 @@ def test_open_only_hides_the_answered_ones(live, key_file, page, db, capsys):  #
 
 
 def test_nothing_to_report_says_so_rather_than_printing_nothing(
-    live, key_file, page, capsys  # noqa: F811
+    live,
+    key_file,
+    page,
+    capsys,
 ):
     """An empty result and a broken call look identical when both print
     nothing. ij8.51 lost a shift to exactly that shape."""
@@ -178,11 +249,18 @@ def test_nothing_to_report_says_so_rather_than_printing_nothing(
 
 
 def test_an_uncollected_answer_says_how_to_collect_it(
-    live, key_file, page, db, capsys  # noqa: F811
+    live,
+    key_file,
+    page,
+    db,
+    capsys,
 ):
     path, _ = key_file
     asked = decisions.ask(
-        db, agent="ops-seat", artifact_id=page.id, question="Which?",
+        db,
+        agent="ops-seat",
+        artifact_id=page.id,
+        question="Which?",
         options=[{"letter": "a", "label": "First"}, {"letter": "b", "label": "Second"}],
         recommended="a",
     )
@@ -201,21 +279,36 @@ def test_an_uncollected_answer_says_how_to_collect_it(
 
 
 def test_a_relayed_answer_is_stored_as_a_relay_and_never_as_a_tap(
-    live, key_file, page, db, capsys  # noqa: F811
+    live,
+    key_file,
+    page,
+    db,
+    capsys,
 ):
     """Give the agent the action, never the disguise. The whole point of
     `record` is that the resulting row cannot be mistaken for something Jeremy
     pressed, so the output has to say so too."""
     path, _ = key_file
     asked = decisions.ask(
-        db, agent="ops-seat", artifact_id=page.id, question="Which?",
+        db,
+        agent="ops-seat",
+        artifact_id=page.id,
+        question="Which?",
         options=[{"letter": "a", "label": "First"}, {"letter": "b", "label": "Second"}],
         recommended="a",
     )
     assert (
         _run(
-            ["record", asked.id, "--letter", "a", "--source", "telegram",
-             "--note", "yes but only after the migration"],
+            [
+                "record",
+                asked.id,
+                "--letter",
+                "a",
+                "--source",
+                "telegram",
+                "--note",
+                "yes but only after the migration",
+            ],
             path,
         )
         == 0
@@ -230,7 +323,7 @@ def test_a_relayed_answer_is_stored_as_a_relay_and_never_as_a_tap(
     assert stored.recorded_by == "ops-seat", "the key names the seat, not the body"
 
 
-def test_the_command_cannot_claim_he_tapped_it(live, key_file):  # noqa: F811
+def test_the_command_cannot_claim_he_tapped_it(live, key_file):
     """`--source page` is not offered at all -- argparse refuses it before a
     request exists. The service refuses it too; this is the near guard."""
     with pytest.raises(SystemExit):
@@ -243,25 +336,42 @@ def test_the_command_cannot_claim_he_tapped_it(live, key_file):  # noqa: F811
 
 
 def test_the_key_appears_in_nothing_the_command_prints(
-    live, key_file, page, db, capsys  # noqa: F811
+    live,
+    key_file,
+    page,
+    db,
+    capsys,
 ):
     """ij8.24's acceptance criterion names this explicitly. Checked on the
     failure path as well as the happy one, because an error is where a naive
     client dumps the request it just made."""
     path, token = key_file
-    _run(["ask", page.id, "--question", "Q?", "--option", "a=One",
-          "--option", "b=Two"], path)
+    _run(
+        ["ask", page.id, "--question", "Q?", "--option", "a=One", "--option", "b=Two"],
+        path,
+    )
     _run(["answers", page.id], path)
     _run(["ack", "nosuchdecision"], path)
-    _run(["record", "nosuchdecision", "--letter", "a", "--note", "x",
-          "--source", "other"], path)
+    _run(
+        [
+            "record",
+            "nosuchdecision",
+            "--letter",
+            "a",
+            "--note",
+            "x",
+            "--source",
+            "other",
+        ],
+        path,
+    )
     seen = capsys.readouterr()
     assert token not in seen.out
     assert token not in seen.err
     assert "art_" not in seen.out and "art_" not in seen.err
 
 
-def test_a_missing_key_file_is_a_usage_error_not_a_crash(live, tmp_path, capsys):  # noqa: F811
+def test_a_missing_key_file_is_a_usage_error_not_a_crash(live, tmp_path, capsys):
     assert decide.main(["--key-file", str(tmp_path / "nope"), "list"]) == 2
     assert "cannot read key file" in capsys.readouterr().err
 
@@ -284,7 +394,11 @@ def test_an_unknown_flag_here_also_says_how_old_the_build_is(capsys):
 
 
 def test_a_withdrawn_question_does_not_read_as_one_still_waiting(
-    live, key_file, page, db, capsys  # noqa: F811
+    live,
+    key_file,
+    page,
+    db,
+    capsys,
 ):
     """`close` used to answer with the word "unanswered", which is true and
     reads as "nothing happened". Found by running the command against the live
@@ -292,7 +406,10 @@ def test_a_withdrawn_question_does_not_read_as_one_still_waiting(
     where a closed row is filtered out and never formatted."""
     path, _ = key_file
     asked = decisions.ask(
-        db, agent="ops-seat", artifact_id=page.id, question="Never mind?",
+        db,
+        agent="ops-seat",
+        artifact_id=page.id,
+        question="Never mind?",
         options=[{"letter": "a", "label": "One"}, {"letter": "b", "label": "Two"}],
         recommended="a",
     )
@@ -303,7 +420,11 @@ def test_a_withdrawn_question_does_not_read_as_one_still_waiting(
 
 
 def test_a_question_withdrawn_with_its_page_is_still_readable(
-    live, key_file, page, db, capsys  # noqa: F811
+    live,
+    key_file,
+    page,
+    db,
+    capsys,
 ):
     """homelab-ij8.44, and this morning made it sharper.
 
@@ -316,7 +437,10 @@ def test_a_question_withdrawn_with_its_page_is_still_readable(
     """
     path, _ = key_file
     asked = decisions.ask(
-        db, agent="ops-seat", artifact_id=page.id, question="Gone with the page?",
+        db,
+        agent="ops-seat",
+        artifact_id=page.id,
+        question="Gone with the page?",
         options=[{"letter": "a", "label": "One"}, {"letter": "b", "label": "Two"}],
         recommended="a",
     )
@@ -329,13 +453,20 @@ def test_a_question_withdrawn_with_its_page_is_still_readable(
 
 
 def test_open_only_still_leaves_a_withdrawn_question_out(
-    live, key_file, page, db, capsys  # noqa: F811
+    live,
+    key_file,
+    page,
+    db,
+    capsys,
 ):
     """Because it is not waiting on anybody. The two readings are different
     questions and get different answers."""
     path, _ = key_file
     decisions.ask(
-        db, agent="ops-seat", artifact_id=page.id, question="Gone with the page?",
+        db,
+        agent="ops-seat",
+        artifact_id=page.id,
+        question="Gone with the page?",
         options=[{"letter": "a", "label": "One"}, {"letter": "b", "label": "Two"}],
         recommended="a",
     )
@@ -358,8 +489,9 @@ def test_a_global_flag_after_the_command_says_so_rather_than_blaming_the_install
     is paying attention.
     """
     with pytest.raises(SystemExit):
-        decide.main(["ask", "x", "--question", "q", "--option", "a=1",
-                     "--session", "seat/1"])
+        decide.main(
+            ["ask", "x", "--question", "q", "--option", "a=1", "--session", "seat/1"]
+        )
     err = capsys.readouterr().err
     assert "goes BEFORE the command" in err
     assert "ARTIFACTS_SESSION" in err, "and names the way that avoids the trap"
@@ -379,7 +511,11 @@ def test_the_hint_names_the_command_you_actually_ran(capsys):
 
 
 def test_a_refused_cross_seat_check_does_not_look_like_nothing_stranded(
-    live, key_file, page, db, capsys  # noqa: F811
+    live,
+    key_file,
+    page,
+    db,
+    capsys,
 ):
     """Reported by the operator seat from a real terminal, 22 Sep 2026: it ran
     the stranded check across seats under a key without the grant, and got one
@@ -407,13 +543,38 @@ def test_a_refused_cross_seat_check_does_not_look_like_nothing_stranded(
     assert "403" in err, "and the status, which callers grep for"
 
 
-def test_writing_without_a_session_label_says_so_on_stderr(live, key_file, page, capsys, monkeypatch):  # noqa: F811
+def test_writing_without_a_session_label_says_so_on_stderr(
+    live, key_file, page, capsys, monkeypatch
+):
     """homelab-ij8.106: an unlabelled write is allowed but never silent."""
     monkeypatch.delenv("ARTIFACTS_SESSION", raising=False)
     path, _ = key_file
-    assert _run(["ask", page.id, "--question", "q?", "--option", "a=x", "--option", "b=y"], path) == 0
+    assert (
+        _run(
+            ["ask", page.id, "--question", "q?", "--option", "a=x", "--option", "b=y"],
+            path,
+        )
+        == 0
+    )
     out = capsys.readouterr()
     assert "carries no session label" in out.err
     assert "carries no session label" not in out.out
-    assert _run(["--session", "me/1", "ask", page.id, "--question", "q2?", "--option", "a=x", "--option", "b=y"], path) == 0
+    assert (
+        _run(
+            [
+                "--session",
+                "me/1",
+                "ask",
+                page.id,
+                "--question",
+                "q2?",
+                "--option",
+                "a=x",
+                "--option",
+                "b=y",
+            ],
+            path,
+        )
+        == 0
+    )
     assert "carries no session label" not in capsys.readouterr().err

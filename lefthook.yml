@@ -29,7 +29,8 @@
 # 2.1.12 and no `stage_fixed:` job: a refused pre-commit left `git stash list`
 # empty and the unstaged work untouched. Keep it that way — if a formatter is
 # ever wanted, it runs in CI, not as a commit-time rewrite of the tree.
-# (ij8.25 is the standing reason not to let `ruff format` near this repo.)
+# (ij8.25 was the reason not to let `ruff format` near this repo; since the
+# one-off format of 24 Sep 2026 the format is checked, never applied.)
 #
 # TESTING A GLOB: `lefthook run pre-commit --command <name> --file <path>`,
 # and NEVER with --force. --force means "run regardless of glob", so every job
@@ -116,6 +117,11 @@ pre-push:
       files: 'echo lefthook.yml'
       run: |
         : {files}
-        if [ -x .venv/bin/ruff ]; then .venv/bin/ruff check src tests;
-        elif command -v ruff >/dev/null 2>&1; then ruff check src tests;
-        else echo "ruff: SKIP (not installed)"; fi
+        if [ -x .venv/bin/ruff ]; then R=.venv/bin/ruff;
+        elif command -v ruff >/dev/null 2>&1; then R=ruff;
+        else echo "ruff: SKIP (not installed)"; exit 0; fi
+        # Format is CHECKED, never applied (see the header: no autofix jobs).
+        # The tree was formatted once on 24 Sep 2026 (homelab-ij8.25); this keeps
+        # it that way, so running the formatter never sweeps in files nobody
+        # touched. Fix a refusal with: uv run ruff format <the files it names>.
+        "$R" check src tests && "$R" format --check src tests

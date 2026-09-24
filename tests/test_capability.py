@@ -75,12 +75,16 @@ def test_passes_are_stored_hashed(db, published):
 def test_a_deleted_page_is_not_served_even_with_a_fresh_pass(db, content, published):
     fresh = _pass(db, published.id)
     with db.connect() as conn:
-        conn.execute("update artifact set deleted_at = now() where id = %s", (published.id,))
+        conn.execute(
+            "update artifact set deleted_at = now() where id = %s", (published.id,)
+        )
     assert content.get(f"/p/{fresh}/", headers=FRAMED).status_code == 404
 
 
 def test_a_pass_can_name_a_version(db, content, published):
-    store.patch(db, "ops-seat", published.id, PAGE.replace("hi", "hello"), published.revision)
+    store.patch(
+        db, "ops-seat", published.id, PAGE.replace("hi", "hello"), published.revision
+    )
     old = content.get(f"/p/{_pass(db, published.id, 1)}/", headers=FRAMED)
     live = content.get(f"/p/{_pass(db, published.id)}/", headers=FRAMED)
     assert ">hi<" in old.text and ">hello<" in live.text
@@ -138,7 +142,10 @@ def test_the_agent_api_never_returns_the_token(db):
     read = store.read_token(db, artifact_id)
     patched = client.patch(
         f"/api/v1/artifacts/{artifact_id}",
-        json={"body": PAGE.replace("hi", "hello"), "expected_revision": created.json()["revision"]},
+        json={
+            "body": PAGE.replace("hi", "hello"),
+            "expected_revision": created.json()["revision"],
+        },
         headers=headers,
     )
     listed = client.get("/api/v1/artifacts", headers=headers)
@@ -151,12 +158,17 @@ def test_the_agent_api_never_returns_the_token(db):
 
 def test_the_token_survives_a_patch(db, published):
     before = store.read_token(db, published.id)
-    store.patch(db, "ops-seat", published.id, PAGE.replace("hi", "hello"), published.revision)
+    store.patch(
+        db, "ops-seat", published.id, PAGE.replace("hi", "hello"), published.revision
+    )
     assert store.read_token(db, published.id) == before
 
 
 def test_every_artifact_gets_its_own_unguessable_token(db):
-    tokens = {store.read_token(db, store.publish(db, "ops-seat", "t", PAGE).id) for _ in range(20)}
+    tokens = {
+        store.read_token(db, store.publish(db, "ops-seat", "t", PAGE).id)
+        for _ in range(20)
+    }
     assert len(tokens) == 20
     assert all(len(token) >= 32 for token in tokens)
 
@@ -165,9 +177,13 @@ def test_a_public_page_still_needs_a_pass_in_this_part(db, content, published):
     """Fail-closed by ruling: sharing is a deliberate per-page act that has not
     been built yet, so `visibility` opens nothing on its own."""
     with db.connect() as conn:
-        conn.execute("update artifact set visibility = 'public' where id = %s", (published.id,))
+        conn.execute(
+            "update artifact set visibility = 'public' where id = %s", (published.id,)
+        )
     assert content.get("/", headers=FRAMED).status_code == 404
-    assert content.get(f"/p/{_pass(db, published.id)}/", headers=FRAMED).status_code == 200
+    assert (
+        content.get(f"/p/{_pass(db, published.id)}/", headers=FRAMED).status_code == 200
+    )
 
 
 def test_content_url_is_what_the_gallery_frames(db, published, monkeypatch):

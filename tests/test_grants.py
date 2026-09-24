@@ -183,7 +183,9 @@ def test_a_granted_seat_reads_the_answer_he_gave_another_seat(db, client):
     grants.grant(db, "ops-seat", grants.READ_ALL_DECISIONS)
     token, _ = keys.mint(db, agent="ops-seat")
     _published, asked = _asks(db, "warpgate-seat", question="skip the phase?")
-    decisions.answer(db, asked.id, letter="b", note="not until the DNS lands", by="jeremy")
+    decisions.answer(
+        db, asked.id, letter="b", note="not until the DNS lands", by="jeremy"
+    )
 
     rows = client.get(
         "/api/v1/decisions?scope=all&include_answered=true", headers=auth(token)
@@ -258,7 +260,9 @@ def test_a_granted_seat_reads_another_seats_page_decisions(db, client):
     grants.grant(db, "ops-seat", grants.READ_ALL_DECISIONS)
     token, _ = keys.mint(db, agent="ops-seat")
     published, asked = _asks(db, "warpgate-seat", question="skip the phase?")
-    decisions.answer(db, asked.id, letter="a", note="yes, but keep the flag", by="jeremy")
+    decisions.answer(
+        db, asked.id, letter="a", note="yes, but keep the flag", by="jeremy"
+    )
 
     response = client.get(
         f"/api/v1/artifacts/{published.id}/decisions?include_answered=true",
@@ -278,7 +282,9 @@ def test_without_the_grant_another_seats_page_answers_exactly_like_a_missing_one
     Granting one seat the difference must not leak it to every other seat."""
     token, _ = keys.mint(db, agent="nosy-seat")
     published, _asked = _asks(db, "warpgate-seat")
-    store.set_agents_can_read(db, published.id, False, agent=None)  # closed to other agents: homelab-ij8.105 made pages readable by default
+    store.set_agents_can_read(
+        db, published.id, False, agent=None
+    )  # closed to other agents: homelab-ij8.105 made pages readable by default
 
     theirs = client.get(
         f"/api/v1/artifacts/{published.id}/decisions", headers=auth(token)

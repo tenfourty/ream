@@ -184,7 +184,9 @@ def create_app(db: Database):
             chosen = content
         else:
             response = PlainTextResponse(
-                "not found", status_code=404, headers={"x-content-type-options": "nosniff"}
+                "not found",
+                status_code=404,
+                headers={"x-content-type-options": "nosniff"},
             )
             await response(scope, receive, send)
             return

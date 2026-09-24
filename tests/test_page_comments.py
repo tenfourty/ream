@@ -78,9 +78,7 @@ def test_the_author_is_hardcoded_and_not_taken_from_a_header(client, db, page):
 
 
 def test_a_write_without_the_same_origin_header_is_refused(client, db, page):
-    got = client.post(
-        f"/c/{page.id}", data={"body": "x"}, follow_redirects=False
-    )
+    got = client.post(f"/c/{page.id}", data={"body": "x"}, follow_redirects=False)
     assert got.status_code in (403, 400)
     assert comments.list_for_artifact(db, page.id) == []
 
@@ -162,7 +160,10 @@ def test_the_fold_looks_like_something_you_can_open(client, db, page):
 
 def test_agent_text_is_escaped_into_his_signed_in_origin(client, db, page):
     comments.add(
-        db, artifact_id=page.id, author_kind="agent", author="seat",
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="seat",
         body="<script>alert(1)</script>",
     )
     body = client.get(f"/a/{page.id}").text
@@ -181,9 +182,7 @@ def test_an_empty_page_still_offers_the_box(client, db, page):
 def test_the_panel_needs_no_script(client, db, page):
     """Everything else in this gallery works with scripts off and a
     conversation is a poor place to start making exceptions."""
-    comments.add(
-        db, artifact_id=page.id, author_kind="agent", author="seat", body="hi"
-    )
+    comments.add(db, artifact_id=page.id, author_kind="agent", author="seat", body="hi")
     body = client.get(f"/a/{page.id}").text
     # Scoped to the drawer element, not "everything after it" -- the page's own
     # <script src="/gallery.js"> lives further down the shell and a slice to the
@@ -231,7 +230,10 @@ def test_the_drawer_offers_both_scopes_and_says_which_one_is_on(client, db, page
 
 def test_all_pages_shows_a_conversation_from_another_page(client, db, page, other):
     comments.add(
-        db, artifact_id=other.id, author_kind="agent", author="other-seat",
+        db,
+        artifact_id=other.id,
+        author_kind="agent",
+        author="other-seat",
         body="the runner token expired",
     )
 
@@ -271,7 +273,10 @@ def test_a_deleted_pages_conversations_are_not_dragged_back(client, db, page, ot
     """Deleting is how he tidies the wall. A view that kept talking about a
     page he deleted would undo that."""
     comments.add(
-        db, artifact_id=other.id, author_kind="agent", author="other-seat",
+        db,
+        artifact_id=other.id,
+        author_kind="agent",
+        author="other-seat",
         body="about the deleted one",
     )
     store.set_deleted(db, other.id, True, agent="other-seat")
@@ -285,7 +290,10 @@ def test_an_archived_pages_conversations_are_here_and_flagged(client, db, page, 
     """Archiving is "not now", not "gone" -- and a question waiting in an
     archived page's thread is exactly the kind that gets lost."""
     comments.add(
-        db, artifact_id=other.id, author_kind="agent", author="other-seat",
+        db,
+        artifact_id=other.id,
+        author_kind="agent",
+        author="other-seat",
         body="still waiting on you",
     )
     store.set_archived(db, other.id, True, agent="other-seat")
@@ -296,9 +304,14 @@ def test_an_archived_pages_conversations_are_here_and_flagged(client, db, page, 
     assert 'class="carch"' in everywhere
 
 
-def test_settled_conversations_stay_folded_in_the_all_pages_view(client, db, page, other):
+def test_settled_conversations_stay_folded_in_the_all_pages_view(
+    client, db, page, other
+):
     root = comments.add(
-        db, artifact_id=other.id, author_kind="human", author="jeremy",
+        db,
+        artifact_id=other.id,
+        author_kind="human",
+        author="jeremy",
         body="settled elsewhere",
     )
     comments.resolve(db, root.id, by="jeremy", agent=None)
@@ -329,8 +342,12 @@ def test_the_page_you_are_looking_at_is_not_shown_twice_over(client, db, page):
         db, artifact_id=page.id, author_kind="human", author="jeremy", body="ask"
     )
     comments.add(
-        db, artifact_id=page.id, author_kind="agent", author="seat",
-        thread_root=root.id, body="the one and only reply",
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="seat",
+        thread_root=root.id,
+        body="the one and only reply",
     )
 
     everywhere = client.get(f"/a/{page.id}?comments=all").text

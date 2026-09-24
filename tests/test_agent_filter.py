@@ -49,7 +49,7 @@ def test_the_wall_can_be_narrowed_to_one_agent(client, db):
 
 
 def test_no_control_at_all_when_there_is_nothing_to_choose(client, db):
-    """"Subtle" starts with not being there. A dropdown whose only entry is the
+    """ "Subtle" starts with not being there. A dropdown whose only entry is the
     answer you already have is furniture, and this wall is read every day by one
     person."""
     _publish(db, "seat-a", "Only page")
@@ -148,7 +148,11 @@ def test_it_is_the_session_that_last_changed_it_not_the_one_that_made_it(client,
     reader is asking at that moment is who did THAT."""
     made = _publish(db, "seat-a", "Board", session="first/aaaaaa")
     store.patch(
-        db, "seat-a", made.id, PAGE + "<!--2-->", made.revision,
+        db,
+        "seat-a",
+        made.id,
+        PAGE + "<!--2-->",
+        made.revision,
         session="second/bbbbbb",
     )
     page = client.get("/").text

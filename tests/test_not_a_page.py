@@ -85,7 +85,8 @@ def test_an_update_is_refused_too(db):
 def test_the_refusal_is_a_named_422_over_the_api(client, db):
     token, _ = keys.mint(db, agent="seat")
     response = client.post(
-        "/api/v1/artifacts", json={"title": "Board", "body": THE_LOG_LINE},
+        "/api/v1/artifacts",
+        json={"title": "Board", "body": THE_LOG_LINE},
         headers=auth(token),
     )
     assert response.status_code == 422
@@ -102,7 +103,8 @@ def test_the_refusal_is_a_named_422_over_the_api(client, db):
 def test_nothing_is_stored_by_a_refused_publish(client, db):
     token, _ = keys.mint(db, agent="seat")
     client.post(
-        "/api/v1/artifacts", json={"title": "Board", "body": THE_LOG_LINE},
+        "/api/v1/artifacts",
+        json={"title": "Board", "body": THE_LOG_LINE},
         headers=auth(token),
     )
     assert client.get("/api/v1/artifacts", headers=auth(token)).json() == []
@@ -127,10 +129,17 @@ def test_nothing_is_stored_by_a_refused_publish(client, db):
         "<main><h1>Just a fragment somebody meant</h1></main>",
     ],
     ids=[
-        "an ordinary page", "an upper-case doctype", "a BOM", "a leading comment",
-        "several leading comments", "html with no doctype", "only a body",
-        "only a head", "a doctype and nothing else",
-        "a real live page that starts with <title>", "a deliberate fragment",
+        "an ordinary page",
+        "an upper-case doctype",
+        "a BOM",
+        "a leading comment",
+        "several leading comments",
+        "html with no doctype",
+        "only a body",
+        "only a head",
+        "a doctype and nothing else",
+        "a real live page that starts with <title>",
+        "a deliberate fragment",
     ],
 )
 def test_the_shapes_that_must_still_publish_do(db, body):

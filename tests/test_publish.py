@@ -104,7 +104,10 @@ def test_a_stale_revision_is_refused(client, db):
     # "someone else moved the page on", so the setup has to actually move it.
     client.patch(
         f"/api/v1/artifacts/{first['id']}",
-        json={"body": PAGE + "<!--someone else-->", "expected_revision": first["revision"]},
+        json={
+            "body": PAGE + "<!--someone else-->",
+            "expected_revision": first["revision"],
+        },
         headers=auth(token),
     )
     stale = client.patch(
@@ -139,7 +142,9 @@ def test_another_agents_key_cannot_read_or_patch(client, db):
         json={"title": "Board", "body": PAGE},
         headers=auth(token_a),
     ).json()
-    store.set_agents_can_read(db, mine["id"], False, agent=None)  # closed to other agents: homelab-ij8.105 made pages readable by default
+    store.set_agents_can_read(
+        db, mine["id"], False, agent=None
+    )  # closed to other agents: homelab-ij8.105 made pages readable by default
     assert (
         client.get(f"/api/v1/artifacts/{mine['id']}", headers=auth(token_b)).status_code
         == 404
@@ -891,7 +896,9 @@ def test_a_rename_with_an_unchanged_body_still_renames(client, db):
     impossible without editing the page."""
     token, _ = keys.mint(db, agent="ops-seat")
     created = client.post(
-        "/api/v1/artifacts", json={"title": "Wrong name", "body": PAGE}, headers=auth(token)
+        "/api/v1/artifacts",
+        json={"title": "Wrong name", "body": PAGE},
+        headers=auth(token),
     ).json()
     renamed = client.patch(
         f"/api/v1/artifacts/{created['id']}",
@@ -918,7 +925,10 @@ def test_a_stale_revision_is_still_refused_on_an_identical_body(client, db):
     ).json()
     client.patch(
         f"/api/v1/artifacts/{created['id']}",
-        json={"body": PAGE + "<!--moved on-->", "expected_revision": created["revision"]},
+        json={
+            "body": PAGE + "<!--moved on-->",
+            "expected_revision": created["revision"],
+        },
         headers=auth(token),
     )
     stale = client.patch(
@@ -962,7 +972,10 @@ def test_an_identical_republish_says_so_rather_than_leaving_it_to_be_inferred(
 
     different = client.patch(
         f"/api/v1/artifacts/{made['id']}",
-        json={"body": PAGE.replace("hi", "changed"), "expected_revision": made["revision"]},
+        json={
+            "body": PAGE.replace("hi", "changed"),
+            "expected_revision": made["revision"],
+        },
         headers=headers,
     ).json()
     assert different["unchanged"] is False

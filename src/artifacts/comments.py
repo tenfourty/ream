@@ -405,7 +405,9 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
         words = text.searchable(body)
         words_by_page[artifact_id] = (words, _tight(words))
     return [
-        replace(row, quote_state=_state_against(row.quote, *words_by_page[row.artifact_id]))
+        replace(
+            row, quote_state=_state_against(row.quote, *words_by_page[row.artifact_id])
+        )
         if row.quote and row.artifact_id in words_by_page
         else row
         for row in rows
@@ -504,7 +506,8 @@ def across_pages(
         rows = conn.execute(sql, (limit,)).fetchall()
         stated = _with_quote_state(conn, [_row_to_comment(row) for row in rows])
         found = [
-            (comment, row[-2], row[-1]) for comment, row in zip(stated, rows, strict=True)
+            (comment, row[-2], row[-1])
+            for comment, row in zip(stated, rows, strict=True)
         ]
 
     grouped: dict[str, PageComments] = {}

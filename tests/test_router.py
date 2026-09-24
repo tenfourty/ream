@@ -44,7 +44,9 @@ ROWS = [
 def published_id(db, monkeypatch):
     monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
     keys.mint(db, agent="ops-seat")
-    artifact = store.publish(db, "ops-seat", "Board", "<!doctype html><body>hi</body></html>")
+    artifact = store.publish(
+        db, "ops-seat", "Board", "<!doctype html><body>hi</body></html>"
+    )
     return artifact.id
 
 
@@ -217,7 +219,9 @@ def test_a_caller_chosen_key_name_never_returns_in_a_validation_error(db):
     os.environ["ARTIFACTS_CONTENT_DOMAIN"] = "tenfourty.com"
     token, _ = keys.mint(db, agent="seat")
     page = store.publish(
-        db, "seat", "B",
+        db,
+        "seat",
+        "B",
         "<!doctype html><html><head><title>t</title></head><body><p>x</p></body></html>",
     )
     client = TestClient(create_gallery_app(db=db))
@@ -226,8 +230,14 @@ def test_a_caller_chosen_key_name_never_returns_in_a_validation_error(db):
     caller_key = "A_NAME_THE_CALLER_WOULD_NOT_WANT_REPEATED"
 
     attempts = [
-        (f"/api/v1/artifacts/{page.id}/comments", {"body": "x", "anchor": {caller_key: 1}}),
-        (f"/api/v1/artifacts/{page.id}/comments", {"body": "x", "anchor": "not-a-dict"}),
+        (
+            f"/api/v1/artifacts/{page.id}/comments",
+            {"body": "x", "anchor": {caller_key: 1}},
+        ),
+        (
+            f"/api/v1/artifacts/{page.id}/comments",
+            {"body": "x", "anchor": "not-a-dict"},
+        ),
         (
             f"/api/v1/artifacts/{page.id}/decisions",
             {"question": "q", "options": {caller_key: 1}},

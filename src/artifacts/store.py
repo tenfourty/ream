@@ -1392,7 +1392,9 @@ def stop_sharing(db: Database, artifact_id: str) -> bool:
     return gone > 0
 
 
-def shared_page(db: Database, artifact_id: str, token: str) -> tuple[str, datetime] | None:
+def shared_page(
+    db: Database, artifact_id: str, token: str
+) -> tuple[str, datetime] | None:
     """The live body and its publication time, if `token` is this page's live
     share link and the page is not deleted; otherwise None."""
     if not token or len(token) > 128:

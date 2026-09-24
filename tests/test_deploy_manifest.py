@@ -28,7 +28,8 @@ def _yaml() -> str:
     cost an hour in the gallery walkthrough on 20 Sep.
     """
     return "\n".join(
-        line for line in MANIFEST.read_text().splitlines()
+        line
+        for line in MANIFEST.read_text().splitlines()
         if not line.lstrip().startswith("#")
     )
 

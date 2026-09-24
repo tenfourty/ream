@@ -145,7 +145,9 @@ def test_revoke_key_on_an_unknown_id_fails_loudly(db, monkeypatch):
     assert "no active key with id no-such-id" in str(excinfo.value)
 
 
-def test_revoke_key_a_second_time_fails_loudly_instead_of_a_silent_no_op(db, monkeypatch):
+def test_revoke_key_a_second_time_fails_loudly_instead_of_a_silent_no_op(
+    db, monkeypatch
+):
     monkeypatch.setenv("DATABASE_URL", db.dsn)
     _token, key_id = keys.mint(db, agent=AGENT)
     main(["revoke-key", key_id])

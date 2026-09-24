@@ -146,7 +146,9 @@ def test_a_bad_key_fd_exits_as_a_usage_error_not_a_crash(capsys):
     assert "cannot read --key-fd 19" in capsys.readouterr().err
 
 
-def test_a_missing_key_file_says_where_a_key_comes_from_now(tmp_path, monkeypatch, capsys):
+def test_a_missing_key_file_says_where_a_key_comes_from_now(
+    tmp_path, monkeypatch, capsys
+):
     """The cleartext key files are being shredded seat by seat as they move
     into the vault (homelab-ij8.34). From here on, the commonest reason this
     file is missing is that it is gone ON PURPOSE -- and "no such file" alone

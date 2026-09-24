@@ -187,7 +187,11 @@ def agent_router(
                 _auth_log.warning(
                     "auth failed from %s on %s %s (%d in window) -- refusing "
                     "bad keys from this address for %ds",
-                    address, request.method, request.url.path, count, wait,
+                    address,
+                    request.method,
+                    request.url.path,
+                    count,
+                    wait,
                 )
             # 429 and words that say it is a refusal: a client that prints this
             # where rows go must not read as "nothing there" (homelab-ij8.99).
@@ -200,7 +204,10 @@ def agent_router(
             )
         _auth_log.warning(
             "auth failed from %s on %s %s (%d in window)",
-            address, request.method, request.url.path, count,
+            address,
+            request.method,
+            request.url.path,
+            count,
         )
         raise HTTPException(401, detail)
 
@@ -339,7 +346,10 @@ def agent_router(
         return PlainTextResponse(
             onboarding.skill_md(_base(request)),
             media_type="text/markdown",
-            headers={"x-content-type-options": "nosniff", "cache-control": "public, max-age=300"},
+            headers={
+                "x-content-type-options": "nosniff",
+                "cache-control": "public, max-age=300",
+            },
         )
 
     @router.get("/tools/{name}")
@@ -686,15 +696,23 @@ def agent_router(
         """This agent's pages, or with `scope=all` every page it may read: its
         own plus every other agent's page open to agents (homelab-ij8.105).
         `mine` stays the default so no existing caller's listing changes."""
-        rows = store.list_readable(db, agent) if scope == "all" else store.list_for_agent(db, agent)
+        rows = (
+            store.list_readable(db, agent)
+            if scope == "all"
+            else store.list_for_agent(db, agent)
+        )
         return [row.__dict__ for row in rows]
 
     @router.post("/artifacts/{artifact_id}/agents")
-    def agents_can_read(artifact_id: str, payload: AgentsBody, agent: str = Depends(caller)):
+    def agents_can_read(
+        artifact_id: str, payload: AgentsBody, agent: str = Depends(caller)
+    ):
         """Open this agent's own page to every agent in his space, or close it to
         just him and this agent (homelab-ij8.105). The publisher's twin of his
         control in the gallery; nobody else's page can be changed from here."""
-        if not store.set_agents_can_read(db, artifact_id, payload.can_read, agent=agent):
+        if not store.set_agents_can_read(
+            db, artifact_id, payload.can_read, agent=agent
+        ):
             raise HTTPException(404, "no such artifact")
         return store.get_owned(db, agent, artifact_id).__dict__
 
@@ -821,9 +839,7 @@ def agent_router(
         a parameter of the first is one where it happens by accident.
         """
         if payload.confirm.strip().lower() != "destroy":
-            raise HTTPException(
-                422, {"detail": 'confirm must be the word "destroy"'}
-            )
+            raise HTTPException(422, {"detail": 'confirm must be the word "destroy"'})
         if not store.destroy(db, artifact_id, agent=agent):
             raise HTTPException(404, "no such artifact")
         return {"id": artifact_id, "destroyed": True}
@@ -921,9 +937,7 @@ def agent_router(
             # escalation here, where any key could then resolve any seat's
             # threads. Spelled out so the keyed path cannot acquire the
             # gallery's authority by someone changing a default.
-            return comments.resolve(
-                db, comment_id, by=agent, agent=agent
-            ).__dict__
+            return comments.resolve(db, comment_id, by=agent, agent=agent).__dict__
         except store.NotFound as exc:
             raise HTTPException(404, "no such comment") from exc
 
@@ -1067,12 +1081,19 @@ def agent_router(
             every = decisions.list_for_artifact(
                 db, artifact_id, include_answered=True, include_closed=include_closed
             )
-            omitted = sum(1 for d in every if d.answer) - sum(1 for d in shown if d.answer)
+            omitted = sum(1 for d in every if d.answer) - sum(
+                1 for d in shown if d.answer
+            )
         return JSONResponse(
-            jsonable_encoder([
-                {**row.__dict__, "outcomes": [o.__dict__ for o in outcomes.get(row.id, [])]}
-                for row in shown
-            ]),
+            jsonable_encoder(
+                [
+                    {
+                        **row.__dict__,
+                        "outcomes": [o.__dict__ for o in outcomes.get(row.id, [])],
+                    }
+                    for row in shown
+                ]
+            ),
             headers={"x-artifacts-answered-omitted": str(omitted)},
         )
 
@@ -1423,7 +1444,11 @@ def agent_router(
             wait = min(wait, PUBLIC_MAX_WAIT)
         exclude = agent if exclude_self else None
         rows = events.list_for_agent(
-            db, agent, since=since, limit=limit, session=session_filter,
+            db,
+            agent,
+            since=since,
+            limit=limit,
+            session=session_filter,
             exclude_actor=exclude,
         )
         if not rows and wait:
@@ -1472,8 +1497,18 @@ def agent_router(
     # So a wrong guess stops looking like an absent feature. The first 404 now
     # carries the answer, which is the only moment the reader is guaranteed to
     # be looking.
-    _SUBROUTES = ("body", "versions", "comments", "decisions", "archive",
-                  "rename", "pin", "duplicate", "restore", "destroy")
+    _SUBROUTES = (
+        "body",
+        "versions",
+        "comments",
+        "decisions",
+        "archive",
+        "rename",
+        "pin",
+        "duplicate",
+        "restore",
+        "destroy",
+    )
 
     # The same treatment for a decision's sub-routes, added 21 Sep after the
     # operator's first `artifacts-decide outcome` answered a bare 404 and could
@@ -1530,8 +1565,7 @@ def agent_router(
                 "detail": f"no such route on an artifact: {unknown!r}",
                 "did_you_mean": (
                     "body -- the page's own HTML, to the agent that published it"
-                    if unknown
-                    in ("source", "content", "html", "raw", "page", "text")
+                    if unknown in ("source", "content", "html", "raw", "page", "text")
                     else None
                 ),
                 "routes": sorted(_SUBROUTES),

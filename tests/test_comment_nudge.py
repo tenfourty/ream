@@ -159,7 +159,9 @@ def test_he_settles_a_thread_and_the_seat_is_told_which(db, page):
     comments.resolve(db, root.id, by="jeremy")
     settled = _feed(db)[-1]
     assert settled.kind == "thread_resolved"
-    assert settled.ref_id == root.id, "the root, so a reply id still resolves the thread"
+    assert settled.ref_id == root.id, (
+        "the root, so a reply id still resolves the thread"
+    )
     assert "the velocity chart" in settled.summary, (
         "the quote is how a reader remembers which conversation it was"
     )
@@ -168,7 +170,11 @@ def test_he_settles_a_thread_and_the_seat_is_told_which(db, page):
 
 def test_a_thread_with_no_quote_is_named_by_what_it_said(db, page):
     root = comments.add(
-        db, artifact_id=page.id, author_kind="human", author="jeremy", body="Move it up."
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="Move it up.",
     )
     comments.resolve(db, root.id, by="jeremy")
     assert "Move it up." in _feed(db)[-1].summary
@@ -261,7 +267,8 @@ def test_a_held_waiter_is_answered_the_moment_he_comments(client, db, page):
         started.set()
         began = time.monotonic()
         got = client.get(
-            "/api/v1/events?since=0&wait=20", headers={"Authorization": f"Bearer {token}"}
+            "/api/v1/events?since=0&wait=20",
+            headers={"Authorization": f"Bearer {token}"},
         )
         answer["rows"] = got.json()
         answer["waited"] = time.monotonic() - began
