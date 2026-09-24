@@ -1409,3 +1409,21 @@ def shared_page(
             (artifact_id, token),
         ).fetchone()
     return (row[0], row[1]) if row else None
+
+
+def shared_page_body(db: Database, artifact_id: str) -> tuple[str, datetime] | None:
+    """The live body and its time, for a reader already let in by an email
+    share (homelab-ij8.16); the caller has checked the share and the device."""
+    with db.connect() as conn:
+        row = conn.execute(
+            "select v.body, v.created_at from artifact a"
+            " join version v on v.artifact_id = a.id and v.n = a.current_version"
+            " where a.id = %s and a.deleted_at is null and v.status = 'live'",
+            (artifact_id,),
+        ).fetchone()
+    return (row[0], row[1]) if row else None
+
+
+def email_share_url(artifact_id: str, token: str) -> str:
+    """One person's own link to a page (homelab-ij8.16)."""
+    return f"https://{artifact_id}.{content_domain()}/e/{token}/"

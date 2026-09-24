@@ -3,7 +3,7 @@ import json
 from collections.abc import Sequence
 from datetime import datetime
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Form, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import (
     HTMLResponse,
@@ -12,7 +12,16 @@ from fastapi.responses import (
     RedirectResponse,
 )
 
-from artifacts import decisions, frame_pass, hosts, stamp, store, templates
+from artifacts import (
+    decisions,
+    email_share,
+    frame_pass,
+    hosts,
+    mail,
+    stamp,
+    store,
+    templates,
+)
 from artifacts.db import Database
 from artifacts.store import (
     gallery_origin,  # re-exported: artifacts.content.gallery_origin still resolves
@@ -476,6 +485,150 @@ def create_content_app(db: Database) -> FastAPI:
             html,
             headers={**headers_for(False), "x-robots-tag": "noindex, nofollow"},
         )
+
+    # SHARED WITH ONE PERSON BY EMAIL (homelab-ij8.16, Jeremy's (1a)). Their
+    # personal link opens the page once this device has been confirmed with a
+    # one-time code sent to their inbox; until then it shows the confirm step.
+    # Every failure -- wrong link, withdrawn, page deleted -- is the same 404.
+    _GONE = "This link isn't valid, or it has been withdrawn."
+
+    def _gone() -> Response:
+        return PlainTextResponse(
+            _GONE,
+            status_code=404,
+            headers={**base_headers(), "cache-control": "no-store"},
+        )
+
+    def _small_page(title: str, inner: str, status: int = 200) -> HTMLResponse:
+        body = (
+            "<!doctype html><html lang=en><meta charset=utf-8>"
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f"<title>{_html.escape(title)}</title>"
+            "<style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:3rem auto;"
+            "padding:0 1rem;color:#1f1f1f}input,button{font:inherit;padding:.55rem .7rem;"
+            "border-radius:8px;border:1px solid #bbb}button{cursor:pointer;background:#1f1f1f;"
+            "color:#fff;border-color:#1f1f1f}.err{color:#b42318}.muted{opacity:.7}</style>"
+            f"{inner}</html>"
+        )
+        return HTMLResponse(
+            body,
+            status_code=status,
+            headers={
+                "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; "
+                "form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+                "referrer-policy": "no-referrer",
+                "x-content-type-options": "nosniff",
+                "cache-control": "no-store",
+                "x-robots-tag": "noindex, nofollow",
+            },
+        )
+
+    def _title(artifact_id: str) -> str:
+        with db.connect() as conn:
+            row = conn.execute(
+                "select title from artifact where id = %s", (artifact_id,)
+            ).fetchone()
+        return row[0] if row else "a page"
+
+    def _confirm_page(
+        token: str, share, note: str = "", sent: bool = False
+    ) -> HTMLResponse:
+        title = _title(share.artifact_id)
+        where = _html.escape(email_share.mask(share.email))
+        err = f'<p class="err">{_html.escape(note)}</p>' if note else ""
+        if sent:
+            inner = (
+                f"<h1>Enter your code</h1><p>We sent a six-digit code to {where}. "
+                f"It works for {email_share.CODE_MINUTES} minutes.</p>{err}"
+                f'<form method="post" action="/e/{_html.escape(token)}/verify">'
+                '<input name="code" inputmode="numeric" autocomplete="one-time-code" '
+                'maxlength="6" required autofocus> <button type="submit">Open the page</button>'
+                "</form>"
+                f'<form method="post" action="/e/{_html.escape(token)}/code">'
+                '<p class="muted">No code? <button type="submit">Send another</button></p></form>'
+            )
+        else:
+            inner = (
+                f"<h1>{_html.escape(title)}</h1><p>Jeremy shared this page with {where}. "
+                "To open it on this device, confirm it's you: we'll email a code to that "
+                f"address.</p>{err}"
+                f'<form method="post" action="/e/{_html.escape(token)}/code">'
+                '<button type="submit">Email me a code</button></form>'
+            )
+        return _small_page(title, inner)
+
+    def _cookie_name(share) -> str:
+        return f"artifacts_share_{share.id}"
+
+    @app.get("/e/{token}/")
+    def emailed(request: Request, token: str) -> Response:
+        artifact_id = _artifact_id(request)
+        share = email_share.find(db, artifact_id, token) if artifact_id else None
+        if share is None:
+            return _gone()
+        if not email_share.device_ok(
+            db, share, request.cookies.get(_cookie_name(share))
+        ):
+            return _confirm_page(token, share)
+        found = store.shared_page_body(db, artifact_id)
+        if found is None:
+            return _gone()
+        body, published_at = found
+        html = inject(stamp.apply(body, published_at), INERT_SHIM)
+        return HTMLResponse(
+            html, headers={**headers_for(False), "x-robots-tag": "noindex, nofollow"}
+        )
+
+    @app.post("/e/{token}/code")
+    def emailed_code(request: Request, token: str) -> Response:
+        artifact_id = _artifact_id(request)
+        share = email_share.find(db, artifact_id, token) if artifact_id else None
+        if share is None:
+            return _gone()
+        try:
+            code = email_share.new_code(db, share)
+        except email_share.Refused as refused:
+            return _confirm_page(token, share, note=str(refused))
+        try:
+            mail.send(
+                share.email,
+                f"Your code for \u201c{_title(share.artifact_id)}\u201d",
+                f"Your code is {code}. It works for {email_share.CODE_MINUTES} minutes.\n\n"
+                "If you did not ask for it, you can ignore this email.",
+            )
+        except mail.MailFailed:
+            return _confirm_page(
+                token,
+                share,
+                note="The code could not be sent just now. Try again shortly.",
+            )
+        return _confirm_page(token, share, sent=True)
+
+    @app.post("/e/{token}/verify")
+    def emailed_verify(request: Request, token: str, code: str = Form("")) -> Response:
+        artifact_id = _artifact_id(request)
+        share = email_share.find(db, artifact_id, token) if artifact_id else None
+        if share is None:
+            return _gone()
+        cookie = email_share.check_code(db, share, code)
+        if cookie is None:
+            return _confirm_page(
+                token,
+                share,
+                sent=True,
+                note="That code didn't work. Check it, or send another.",
+            )
+        response = RedirectResponse(f"/e/{token}/", status_code=303)
+        response.set_cookie(
+            _cookie_name(share),
+            cookie,
+            max_age=email_share.DEVICE_DAYS * 24 * 3600,
+            path=f"/e/{token}/",
+            secure=True,
+            httponly=True,
+            samesite="lax",
+        )
+        return response
 
     # The only way in to a page body (homelab-ij8.101). Which version the pass
     # reads is part of the pass, so there is no version path for a caller to

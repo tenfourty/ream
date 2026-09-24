@@ -31,9 +31,11 @@ from artifacts import (
     comments,
     connect,
     decisions,
+    email_share,
     events,
     frame_pass,
     keys,
+    mail,
     stamp,
     store,
     thumbs,
@@ -1592,7 +1594,49 @@ def _machines_page(machines, confirm: str = "", note: str = "") -> str:
     return "".join(parts)
 
 
-def _share_page(artifact_id: str, title: str, token: str | None, note: str = "") -> str:
+def _people_section(artifact_id: str, people: list, mail_on: bool) -> str:
+    """Sharing with one person by email (homelab-ij8.16, his (1a)): their own
+    link, confirmed on each new device by a code sent to their inbox; he sees
+    who has access and withdraws each person separately."""
+    ident = escape(artifact_id)
+    rows = "".join(
+        f"<li>{escape(p.email)} &middot; shared {escape(_ago(p.created_at) or 'just now')}"
+        + (
+            f" &middot; last opened {escape(_ago(p.last_opened_at))}"
+            if p.last_opened_at
+            else " &middot; not opened yet"
+        )
+        + f'<form method="post" action="/a/{ident}/share/email/{escape(p.id)}/withdraw" '
+        'style="display:inline"> <button class="btn" type="submit">Withdraw</button></form></li>'
+        for p in people
+    )
+    listing = f"<ul>{rows}</ul>" if people else "<p>Nobody yet.</p>"
+    if not mail_on:
+        form = '<p class="err">Email isn\'t set up on this service yet, so nobody can be added.</p>'
+    else:
+        form = (
+            f'<form method="post" action="/a/{ident}/share/email" class="row">'
+            '<input name="email" type="email" placeholder="name@example.com" '
+            'aria-label="Email address" required autocomplete="email">'
+            '<button class="btn primary" type="submit">Send them a link</button></form>'
+        )
+    return (
+        "<section><h2>Share with a person</h2>"
+        "<p>They get their own link by email. The first time they open it on a "
+        "device, they confirm with a code sent to the same address, so forwarding "
+        "the email doesn't let anyone else in.</p>"
+        f"{form}<h2>Who has access</h2>{listing}</section>"
+    )
+
+
+def _share_page(
+    artifact_id: str,
+    title: str,
+    token: str | None,
+    note: str = "",
+    people: list | None = None,
+    mail_on: bool = False,
+) -> str:
     """Sharing one page with people outside his space (homelab-ij8.101). The
     link shows the latest version, just the page; he can stop it at any time.
     The link sits in a `pre.prompt` so /connect.js gives it the same Copy
@@ -1624,6 +1668,7 @@ def _share_page(artifact_id: str, title: str, token: str | None, note: str = "")
             '<button class="btn primary" type="submit">Create link</button>'
             f'<a class="btn" href="/a/{ident}">Cancel</a></form></section>'
         )
+    parts.append(_people_section(artifact_id, people or [], mail_on))
     parts.append("</div>")
     return "".join(parts)
 
@@ -3660,7 +3705,12 @@ def gallery_router(db: Database) -> APIRouter:
             _shell(
                 "Share a page",
                 _share_page(
-                    artifact_id, row[0], store.share_token(db, artifact_id), note
+                    artifact_id,
+                    row[0],
+                    store.share_token(db, artifact_id),
+                    note,
+                    people=email_share.people(db, artifact_id),
+                    mail_on=mail.enabled(),
                 ),
                 scripts='<script src="/connect.js" defer></script>',
             ),
@@ -3680,6 +3730,65 @@ def gallery_router(db: Database) -> APIRouter:
         return _share_response(
             artifact_id,
             note="Link created. Copy it and send it to whoever should read the page.",
+        )
+
+    @router.post("/a/{artifact_id}/share/email", response_class=HTMLResponse)
+    def share_email(
+        artifact_id: str, request: Request, email: str = Form("")
+    ) -> HTMLResponse:
+        """His act only: send one person their own link (homelab-ij8.16)."""
+        _same_origin_write(request)
+        address = email_share.clean_email(email)
+        if address is None:
+            return _share_response(
+                artifact_id, note="That doesn't look like an email address."
+            )
+        with db.connect() as conn:
+            row = conn.execute(
+                "select title from artifact where id = %s and deleted_at is null",
+                (artifact_id,),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(404, "no such artifact")
+        if not mail.enabled():
+            return _share_response(artifact_id, note="Email isn't set up yet.")
+        share, token = email_share.create(db, artifact_id, address)
+        link = store.email_share_url(artifact_id, token)
+        try:
+            mail.send(
+                address,
+                f"Jeremy shared \u201c{row[0]}\u201d with you",
+                f"Jeremy has shared a page with you: {row[0]}\n\n"
+                f"Open it here: {link}\n\n"
+                "The first time you open it on a device, you'll be asked for a code "
+                "we email to this address. The link is yours: forwarding this email "
+                "won't let anyone else open it.",
+            )
+        except mail.MailFailed:
+            email_share.withdraw(db, artifact_id, share.id)
+            return _share_response(
+                artifact_id,
+                note="The email could not be sent, so nothing was shared. Try again.",
+            )
+        return _share_response(
+            artifact_id, note=f"Sent. {address} has their own link now."
+        )
+
+    @router.post(
+        "/a/{artifact_id}/share/email/{share_id}/withdraw", response_class=HTMLResponse
+    )
+    def share_email_withdraw(
+        artifact_id: str, share_id: str, request: Request
+    ) -> HTMLResponse:
+        _same_origin_write(request)
+        done = email_share.withdraw(db, artifact_id, share_id)
+        return _share_response(
+            artifact_id,
+            note=(
+                "Withdrawn. Their link and every device they confirmed stop working now."
+                if done
+                else "They no longer had access."
+            ),
         )
 
     @router.post("/a/{artifact_id}/share/stop", response_class=HTMLResponse)

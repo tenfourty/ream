@@ -70,6 +70,16 @@ spec:
                 secretKeyRef:
                   name: artifacts-db-app
                   key: uri
+            # Mailgun domain sending key for sharing pages by email
+            # (homelab-ij8.16). optional: without it mail is simply off -- the
+            # share page says so -- never a pod that cannot start. The Secret is
+            # the homelab repo's (artifacts-mail.sops.yaml), created by Jeremy.
+            - name: ARTIFACTS_MAILGUN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: artifacts-mail
+                  key: MAILGUN_SENDING_KEY
+                  optional: true
           # WHY A POD THAT IS GOING AWAY KEEPS SERVING FOR TEN SECONDS.
           #
           # Operator's waiter, 21 Sep 05:52-06:35: 3 of 13 long-polls returned

@@ -605,3 +605,36 @@ alter table agent_key add column if not exists rotating boolean not null default
 alter table agent_key add column if not exists replaces text;
 alter table agent_key add column if not exists first_used_at timestamptz;
 alter table agent_key add column if not exists revoked_reason text;
+
+-- SHARING A PAGE WITH ONE PERSON BY EMAIL (homelab-ij8.16, Jeremy's (1a),
+-- 24 Sep 2026). Each person gets their own link; the first time they open it
+-- on a device they confirm with a one-time code sent to the same inbox, so a
+-- forwarded email lets nobody else in. He sees who has access and withdraws
+-- each person separately. Only HASHES of the link token, the codes and the
+-- device cookies are stored.
+create table if not exists email_share (
+    id             text primary key,
+    artifact_id    text not null references artifact(id) on delete cascade,
+    email          text not null,
+    token_sha256   text not null unique,
+    created_at     timestamptz not null default now(),
+    revoked_at     timestamptz,
+    last_opened_at timestamptz
+);
+
+create table if not exists email_share_code (
+    id          text primary key,
+    share_id    text not null references email_share(id) on delete cascade,
+    code_sha256 text not null,
+    created_at  timestamptz not null default now(),
+    expires_at  timestamptz not null,
+    attempts    integer not null default 0,
+    used_at     timestamptz
+);
+
+create table if not exists email_share_device (
+    cookie_sha256 text primary key,
+    share_id      text not null references email_share(id) on delete cascade,
+    created_at    timestamptz not null default now(),
+    expires_at    timestamptz not null
+);
