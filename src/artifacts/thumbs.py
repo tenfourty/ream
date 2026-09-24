@@ -75,9 +75,13 @@ def available() -> bool:
     return browser_path() is not None
 
 
-# A console line the browser prints with --enable-logging=stderr, e.g.
-#   [9:9:0924/120000.1:INFO:CONSOLE(12)] "Uncaught ReferenceError: x is not defined", source: file:///t/page.html (12)
-_CONSOLE = re.compile(r':CONSOLE\((\d+)\)\] "(.*)", source: ')
+# A console line the browser prints with --enable-logging=stderr. Debian's
+# chromium 153 (the one in the image) writes, measured in the pod 24 Sep 2026:
+#   [382:382:0924/111411.634413:INFO:CONSOLE:1] "Uncaught ReferenceError: chart is not defined", source: file:///tmp/p.html (1)
+# Older builds wrote CONSOLE(1)]. Both are accepted. The first version of this
+# pattern knew only the older shape and was proved against a tidied sample --
+# it returned nothing from the real browser.
+_CONSOLE = re.compile(r':CONSOLE(?:\((\d+)\)|:(\d+))\] "(.*)", source: ')
 _MAX_ERRORS = 10
 
 
@@ -88,7 +92,7 @@ def console_errors(stderr: str) -> list[str]:
     author in an API response (homelab-ij8.72)."""
     found = []
     for match in _CONSOLE.finditer(stderr or ""):
-        line, message = match.group(1), match.group(2)
+        line, message = match.group(1) or match.group(2), match.group(3)
         if "Uncaught" in message or "Error" in message.split(":", 1)[0]:
             found.append(f"line {line}: {message[:300]}")
         if len(found) >= _MAX_ERRORS:

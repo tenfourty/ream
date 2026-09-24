@@ -19,6 +19,22 @@ LOG = (
 )
 
 
+# Captured from the real browser in the pod (chromium 153, 24 Sep 2026), not
+# tidied: the first pattern was proved only against the older shape below and
+# found nothing in real output.
+REAL = (
+    '[382:382:0924/111411.633292:INFO:CONSOLE:1] "E-TEST", source: file:///tmp/p.html (1)\n'
+    '[382:382:0924/111411.634413:INFO:CONSOLE:1] "Uncaught ReferenceError: chart is not '
+    'defined", source: file:///tmp/p.html (1)\n'
+)
+
+
+def test_the_real_browsers_log_shape_is_read():
+    assert thumbs.console_errors(REAL) == [
+        "line 1: Uncaught ReferenceError: chart is not defined"
+    ]
+
+
 def test_only_errors_are_taken_from_the_browser_log():
     assert thumbs.console_errors(LOG) == [
         "line 12: Uncaught ReferenceError: chart is not defined",
