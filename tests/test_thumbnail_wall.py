@@ -89,10 +89,12 @@ def test_publishing_does_not_wait_for_the_render(client, db, monkeypatch):
     def slow_render(html):
         started.set()
         release.wait(timeout=10)
-        return PNG
+        return PNG, []
 
     monkeypatch.setattr(thumbs, "available", lambda: True)
-    monkeypatch.setattr(thumbs, "render", slow_render)
+    # render_report: the background job's entry point since it also collects
+    # the page's script errors (homelab-ij8.72).
+    monkeypatch.setattr(thumbs, "render_report", slow_render)
 
     token, _ = keys.mint(db, agent="seat")
     began = time.monotonic()
@@ -111,7 +113,9 @@ def test_a_render_that_explodes_never_reaches_the_publisher(client, db, monkeypa
     """A decoration may not take down a publish."""
     monkeypatch.setattr(thumbs, "available", lambda: True)
     monkeypatch.setattr(
-        thumbs, "render", lambda html: (_ for _ in ()).throw(RuntimeError("boom"))
+        thumbs,
+        "render_report",
+        lambda html: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     token, _ = keys.mint(db, agent="seat")
     got = client.post(

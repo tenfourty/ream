@@ -638,3 +638,10 @@ create table if not exists email_share_device (
     created_at    timestamptz not null default now(),
     expires_at    timestamptz not null
 );
+
+-- WHAT THE PAGE DID WHEN IT WAS RENDERED (homelab-ij8.72). The thumbnail render
+-- also collects the page's uncaught script errors from the browser's console;
+-- they are stored with the version they came from and reported to its author.
+-- NULL render_errors with a NULL rendered_at means "not rendered (yet)".
+alter table version add column if not exists render_errors jsonb;
+alter table version add column if not exists rendered_at timestamptz;

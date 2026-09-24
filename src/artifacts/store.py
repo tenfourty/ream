@@ -1427,3 +1427,73 @@ def shared_page_body(db: Database, artifact_id: str) -> tuple[str, datetime] | N
 def email_share_url(artifact_id: str, token: str) -> str:
     """One person's own link to a page (homelab-ij8.16)."""
     return f"https://{artifact_id}.{content_domain()}/e/{token}/"
+
+
+class NoSuchAgent(Exception):
+    """The destination is not a machine with a working key."""
+
+
+def transfer(
+    db: Database, artifact_id: str, to_agent: str, *, agent: str | None
+) -> str | None:
+    """Give a page to another agent without changing its address
+    (homelab-ij8.87). `agent` is the owner giving it away -- an agent can only
+    give what it owns -- or None for the gallery (his wall, any page). The
+    page's own events move with it, so the new owner sees its history and the
+    old one stops being woken; decisions and comments follow through the page;
+    who wrote each version is history and is NOT rewritten. Returns the old
+    owner, or None when nothing matched."""
+    with db.connect() as conn, conn.transaction():
+        live = conn.execute(
+            "select 1 from agent_key where agent = %s and revoked_at is null",
+            (to_agent,),
+        ).fetchone()
+        if live is None:
+            raise NoSuchAgent()
+        where, params = _scoped(artifact_id, agent)
+        row = conn.execute(
+            f"select agent from artifact {where} for update",  # noqa: S608 -- fixed clause from _scoped
+            params,
+        ).fetchone()
+        if row is None:
+            return None
+        old = row[0]
+        if old == to_agent:
+            return old
+        conn.execute(
+            "update artifact set agent = %s where id = %s", (to_agent, artifact_id)
+        )
+        conn.execute(
+            "update event set agent = %s where artifact_id = %s and agent = %s",
+            (to_agent, artifact_id, old),
+        )
+    return old
+
+
+def save_render_errors(
+    db: Database, artifact_id: str, version_n: int, errors: list[str]
+) -> None:
+    """The page's script errors from its render, kept with that version
+    (homelab-ij8.72). An empty list means it rendered cleanly."""
+    import json
+
+    with db.connect() as conn:
+        conn.execute(
+            "update version set render_errors = %s::jsonb, rendered_at = now()"
+            " where artifact_id = %s and n = %s",
+            (json.dumps(errors), artifact_id, version_n),
+        )
+
+
+def render_report(db: Database, artifact_id: str) -> dict:
+    """For the live version: {"rendered": bool, "errors": [...]}. Not rendered
+    means the render has not finished, or this deployment has no browser."""
+    with db.connect() as conn:
+        row = conn.execute(
+            "select v.render_errors, v.rendered_at from artifact a join version v"
+            " on v.artifact_id = a.id and v.n = a.current_version where a.id = %s",
+            (artifact_id,),
+        ).fetchone()
+    if row is None or row[1] is None:
+        return {"rendered": False, "errors": []}
+    return {"rendered": True, "errors": list(row[0] or [])}

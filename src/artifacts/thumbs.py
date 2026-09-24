@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -74,6 +75,27 @@ def available() -> bool:
     return browser_path() is not None
 
 
+# A console line the browser prints with --enable-logging=stderr, e.g.
+#   [9:9:0924/120000.1:INFO:CONSOLE(12)] "Uncaught ReferenceError: x is not defined", source: file:///t/page.html (12)
+_CONSOLE = re.compile(r':CONSOLE\((\d+)\)\] "(.*)", source: ')
+_MAX_ERRORS = 10
+
+
+def console_errors(stderr: str) -> list[str]:
+    """The page's uncaught script errors, from the browser's own log, as
+    "line N: message". Only errors: an ordinary console.log is the author's
+    business. Capped, and each line bounded, because this goes back to the
+    author in an API response (homelab-ij8.72)."""
+    found = []
+    for match in _CONSOLE.finditer(stderr or ""):
+        line, message = match.group(1), match.group(2)
+        if "Uncaught" in message or "Error" in message.split(":", 1)[0]:
+            found.append(f"line {line}: {message[:300]}")
+        if len(found) >= _MAX_ERRORS:
+            break
+    return found
+
+
 def render(html: str) -> bytes | None:
     """A PNG of the top of `html`, or None.
 
@@ -81,9 +103,14 @@ def render(html: str) -> bytes | None:
     or anything that is not a PNG. Never raises — a thumbnail is decoration, and
     a decoration that can take down a publish is a bad trade.
     """
+    return render_report(html)[0]
+
+
+def render_report(html: str) -> tuple[bytes | None, list[str] | None]:
+    """(PNG or None, the page's script errors or None when it did not run)."""
     binary = browser_path()
     if binary is None:
-        return None
+        return None, None
 
     with tempfile.TemporaryDirectory(prefix="artifacts-thumb-") as workdir:
         page = Path(workdir) / "page.html"
@@ -91,7 +118,7 @@ def render(html: str) -> bytes | None:
         try:
             page.write_text(html, encoding="utf-8")
         except (OSError, UnicodeEncodeError):
-            return None
+            return None, None
 
         argv = [
             binary,
@@ -111,6 +138,10 @@ def render(html: str) -> bytes | None:
             "--disable-extensions",
             "--disable-features=NetworkService,NetworkServiceInProcess",
             f"--window-size={WIDTH},{HEIGHT}",
+            # The page's console to stderr, so its script errors can be reported
+            # to its author (homelab-ij8.72).
+            "--enable-logging=stderr",
+            "--v=0",
             # Late layout settles before the shot; without it a page with web
             # fonts or a chart renders half-built and the tile is a lie.
             "--virtual-time-budget=3000",
@@ -118,7 +149,7 @@ def render(html: str) -> bytes | None:
             page.as_uri(),
         ]
         try:
-            subprocess.run(  # noqa: S603 -- argv list, no shell, binary from config
+            done = subprocess.run(  # noqa: S603 -- argv list, no shell, binary from config
                 argv,
                 capture_output=True,
                 timeout=TIMEOUT_SECONDS,
@@ -132,23 +163,27 @@ def render(html: str) -> bytes | None:
             )
         except subprocess.TimeoutExpired:
             log.warning("thumbnail render timed out after %ss", TIMEOUT_SECONDS)
-            return None
+            return None, None
         except (OSError, ValueError) as exc:
             log.warning("thumbnail render could not start: %s", exc)
-            return None
+            return None, None
+        raw = getattr(done, "stderr", b"") or b""
+        errors = console_errors(
+            raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+        )
 
         try:
             data = shot.read_bytes()
         except OSError:
             log.warning("thumbnail render produced no file")
-            return None
+            return None, errors
 
     # A real PNG or nothing. A zero-byte or truncated file would otherwise be
     # served as a broken image, which looks like the PAGE is broken.
     if not data.startswith(b"\x89PNG\r\n\x1a\n"):
         log.warning("thumbnail render produced %d bytes that are not a PNG", len(data))
-        return None
-    return data
+        return None, errors
+    return data, errors
 
 
 def render_in_background(db, artifact_id: str, version_n: int, html: str) -> None:
@@ -174,9 +209,11 @@ def render_in_background(db, artifact_id: str, version_n: int, html: str) -> Non
 
     def work() -> None:
         try:
-            png = render(html)
+            png, errors = render_report(html)
             if png is not None:
                 store.save_thumbnail(db, artifact_id, version_n, png)
+            if errors is not None:
+                store.save_render_errors(db, artifact_id, version_n, errors)
         except Exception:  # a decoration may never reach the caller
             log.exception(
                 "thumbnail rendering failed for %s v%s", artifact_id, version_n

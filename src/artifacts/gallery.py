@@ -1826,6 +1826,9 @@ def _page_menu(
             "Archive</button></form>"
         )
     rows.append(
+        f'<a class="mrow" href="/a/{ident}/move">{_icon("copy")}Move to another agent</a>'
+    )
+    rows.append(
         f'<a class="mrow" href="/a/{ident}/share">{_icon("open")}'
         + ("Shared by link" if shared else "Share a link")
         + "</a>"
@@ -3801,6 +3804,64 @@ def gallery_router(db: Database) -> APIRouter:
             if stopped
             else "It was not shared.",
         )
+
+    def _move_page(artifact_id: str, note: str = "") -> HTMLResponse:
+        with db.connect() as conn:
+            row = conn.execute(
+                "select title, agent from artifact where id = %s and deleted_at is null",
+                (artifact_id,),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(404, "no such artifact")
+        title, owner = row
+        names = sorted(
+            {m.agent for m in keys.machines(db) if m.revoked_at is None} - {owner}
+        )
+        ident = escape(artifact_id)
+        options = "".join(
+            f'<option value="{escape(n)}">{escape(n)}</option>' for n in names
+        )
+        body = (
+            _CONNECT_CSS
+            + '<div class="cx">'
+            + (f'<section><p class="ok">{escape(note)}</p></section>' if note else "")
+            + f"<section><h2>Move {escape(title)}</h2>"
+            f"<p>It belongs to {escape(owner)}. Moving it keeps its address, its "
+            "versions, its questions and its comments; the new agent is woken about "
+            "it from now on and the old one stops being. Who wrote each version is "
+            "kept as it was.</p>"
+            + (
+                f'<form method="post" action="/a/{ident}/move" class="row">'
+                f'<select name="to" aria-label="Agent">{options}</select>'
+                '<button class="btn primary" type="submit">Move it</button>'
+                f'<a class="btn" href="/a/{ident}">Cancel</a></form>'
+                if names
+                else "<p>There is no other connected agent to move it to.</p>"
+            )
+            + "</section></div>"
+        )
+        return HTMLResponse(
+            _shell("Move a page", body),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.get("/a/{artifact_id}/move", response_class=HTMLResponse)
+    def move_page(artifact_id: str) -> HTMLResponse:
+        return _move_page(artifact_id)
+
+    @router.post("/a/{artifact_id}/move", response_class=HTMLResponse)
+    def move_page_do(
+        artifact_id: str, request: Request, to: str = Form("")
+    ) -> HTMLResponse:
+        """His wall, any page (homelab-ij8.87): same operation the agents have."""
+        _same_origin_write(request)
+        try:
+            old = store.transfer(db, artifact_id, to.strip(), agent=None)
+        except store.NoSuchAgent:
+            return _move_page(artifact_id, note=f"{to} is not a connected agent.")
+        if old is None:
+            raise HTTPException(404, "no such artifact")
+        return _move_page(artifact_id, note=f"Moved from {old} to {to}.")
 
     @router.get("/machines", response_class=HTMLResponse)
     def machines_page(revoke: str = "") -> HTMLResponse:

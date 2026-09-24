@@ -840,6 +840,40 @@ def _check_page(file_path: str) -> int:
     return 1
 
 
+# How long a publish waits for the service's render before saying nothing.
+_RENDER_WAIT_SECONDS = 10
+
+
+def _report_render(artifact_id: str, key: str) -> None:
+    """After a publish, wait briefly for the service to render the page, and
+    say LOUDLY if its scripts threw (homelab-ij8.72): an error in a page the
+    author cannot see is otherwise found by Jeremy. Silent when the render does
+    not finish in time -- that is not the same as clean, so it claims nothing.
+    Never fails the publish."""
+    deadline = time.monotonic() + _RENDER_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            report = _request(
+                "GET", f"{_api_base()}/artifacts/{artifact_id}/render", key, None
+            )
+        except HTTPFailure:
+            return
+        if report.get("renderer") is False:
+            return
+        if report.get("rendered"):
+            errors = report.get("errors") or []
+            if errors:
+                print(
+                    f"WARNING: rendered, the page's scripts threw {len(errors)} "
+                    "error(s) -- a reader sees whatever they broke:",
+                    file=sys.stderr,
+                )
+                for line in errors:
+                    print(f"  {line}", file=sys.stderr)
+            return
+        time.sleep(1)
+
+
 def _print_warnings(result: dict) -> None:
     """CSP advisories to STDERR, one line each, so stdout stays parseable JSON.
 
@@ -1070,6 +1104,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="list your binned pages, soonest to go first",
     )
     shelf.add_argument(
+        "--give",
+        metavar="ID",
+        help="give one of your pages to another agent (needs --to); one-way",
+    )
+    shelf.add_argument(
+        "--to", metavar="AGENT", help="with --give: the agent receiving it"
+    )
+    shelf.add_argument(
         "--close-to-agents",
         metavar="ID",
         help="only Jeremy and you can read this page (other agents can by default)",
@@ -1209,6 +1251,23 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 0
+        if args.give:
+            if not args.to:
+                print("--give needs --to AGENT", file=sys.stderr)
+                return 2
+            moved = _request(
+                "POST",
+                f"{_api_base()}/artifacts/{args.give}/transfer",
+                key,
+                {"to": args.to},
+            )
+            print(json.dumps(moved))
+            print(
+                f"gave page {moved['id']} from {moved['from']} to {moved['to']}; "
+                "you can no longer change it",
+                file=sys.stderr,
+            )
+            return 0
         if args.restore:
             _print_shelf(
                 _request(
@@ -1262,11 +1321,16 @@ def main(argv: list[str] | None = None) -> int:
                 print("FILE is required with --update", file=sys.stderr)
                 return 2
             warn_if_unlabelled("update")
-            _print_published(_update(args.file, args.update, key, args.title))
+            updated = _update(args.file, args.update, key, args.title)
+            _print_published(updated)
+            if not updated.get("unchanged"):
+                _report_render(updated["id"], key)
             return 0
         if args.file and args.title:
             warn_if_unlabelled("publish")
-            _print_published(_publish(args.file, args.title, key))
+            published = _publish(args.file, args.title, key)
+            _print_published(published)
+            _report_render(published["id"], key)
             return 0
         print(
             "usage: artifacts-publish FILE --title TITLE"

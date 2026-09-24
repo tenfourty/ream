@@ -44,6 +44,10 @@ _auth_log = logging.getLogger("artifacts.auth")
 PUBLIC_MAX_WAIT = 50.0
 
 
+class TransferBody(BaseModel):
+    to: str
+
+
 class AgentsBody(BaseModel):
     """`can_read` is required: True opens the page to every agent in his space,
     False closes it to him and its publisher (homelab-ij8.105)."""
@@ -677,6 +681,20 @@ def agent_router(
             "warnings": _warnings_for(artifact_id, stored.body),
         }
 
+    @router.get("/artifacts/{artifact_id}/render")
+    def read_render(artifact_id: str, agent: str = Depends(caller)):
+        """What the live version did when the service rendered it: its uncaught
+        script errors, which its author cannot otherwise see (homelab-ij8.72).
+        `rendered: false` means not finished, or no browser here -- never
+        "clean"."""
+        try:
+            store.get_owned(db, agent, artifact_id, as_reader=True)
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such artifact") from exc
+        # `renderer`: whether this deployment renders at all, so a client never
+        # waits for a render that cannot come.
+        return {**store.render_report(db, artifact_id), "renderer": thumbs.available()}
+
     @router.get("/artifacts/{artifact_id}/versions")
     def read_versions(artifact_id: str, agent: str = Depends(caller)):
         """A page's history: what versions exist, when, and who wrote each.
@@ -729,6 +747,21 @@ def agent_router(
             else store.list_for_agent(db, agent)
         )
         return [row.__dict__ for row in rows]
+
+    @router.post("/artifacts/{artifact_id}/transfer")
+    def transfer(artifact_id: str, payload: TransferBody, agent: str = Depends(caller)):
+        """Give this agent's own page to another agent, same address
+        (homelab-ij8.87). One-way: afterwards this key cannot see it to give it
+        back, unless the page is open to agents -- and even then only to read."""
+        try:
+            old = store.transfer(db, artifact_id, payload.to.strip(), agent=agent)
+        except store.NoSuchAgent:
+            raise HTTPException(
+                422, f"{payload.to!r} is not a connected machine with a working key"
+            ) from None
+        if old is None:
+            raise HTTPException(404, "no such artifact")
+        return {"id": artifact_id, "from": old, "to": payload.to.strip()}
 
     @router.post("/artifacts/{artifact_id}/agents")
     def agents_can_read(
