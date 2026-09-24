@@ -255,6 +255,7 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
     artifacts-publish page.html --title "What it is"       # prints the page id
     artifacts-publish page.html --update <page-id>         # a new version
     artifacts-publish --matches <page-id> page.html        # exit 0 if already live
+    artifacts-beads-page --parent <epic> --title "..."     # a status page drawn from beads
     artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
     artifacts-decide wait --page <page-id>                 # run in the BACKGROUND
     artifacts-decide list                                  # new answers first

@@ -18,6 +18,15 @@ from pathlib import Path
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-09-24c",
+        (
+            "artifacts-beads-page --parent <epic> --title NAME prints a status page "
+            "drawn from your beads (titles and states, never ids). Put it in "
+            "~/.config/artifacts/pages.toml as a render line and artifacts-republish "
+            "keeps the page current after every bead change."
+        ),
+    ),
+    (
         "2026-09-24b",
         (
             "artifacts-publish page.html --preview shot.png renders your page at "
