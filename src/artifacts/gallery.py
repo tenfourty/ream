@@ -561,6 +561,11 @@ main{display:block}
 /* The per-tile dots. Sits over the tile rather than inside its link, because an
    interactive control nested in an <a> is invalid and behaves unpredictably. */
 .tile-wrap{position:relative}
+.selbtn{position:absolute;z-index:60;font:500 .8rem/1 ui-sans-serif,system-ui,sans-serif;
+  padding:.45rem .7rem;border-radius:8px;border:1px solid var(--accent);
+  background:var(--card);color:var(--ink);box-shadow:0 2px 8px rgba(0,0,0,.18);cursor:pointer}
+.cquote{margin:0 0 .4rem;padding:.3rem .6rem;border-left:3px solid var(--accent);opacity:.85;
+  font-size:.85rem;white-space:pre-wrap}
 .bar .profile{margin-left:auto}.bar .profile .mpanel{right:0;left:auto}
 [data-unread] .t::before,[data-unread] .rt::before{content:"";display:inline-block;
   width:.55em;height:.55em;border-radius:50%;background:var(--accent);
@@ -1616,6 +1621,42 @@ def _share_page(artifact_id: str, title: str, token: str | None, note: str = "")
         )
     parts.append("</div>")
     return "".join(parts)
+
+
+# SELECT TEXT, THEN COMMENT ON IT (homelab-ij8.18). The page reports a
+# selection (content._viewer_report); this puts a Comment button under it and,
+# pressed, opens the comments drawer with the quote shown and the anchor ready
+# to save with the comment. Its own file, not gallery.js, which is at its size
+# budget. Only its own frame, on its own origin, is listened to, and nothing
+# the page sends is ever put into the document as markup: the quote goes in via
+# textContent, the anchor into a hidden field the service validates.
+_COMMENTS_JS = """(function(){
+"use strict";
+var f=document.getElementById("artifact-frame");if(!f)return;
+var o;try{o=new URL(f.src).origin}catch(e){return}
+var form=document.querySelector("form.cnew");if(!form)return;
+var btn=document.createElement("button");btn.type="button";btn.className="selbtn";
+btn.textContent="Comment";btn.hidden=true;document.body.appendChild(btn);
+var last=null;
+function num(v){return typeof v==="number"&&isFinite(v)}
+function field(n,v){var x=form.querySelector("input[name="+n+"]");
+  if(!x){x=document.createElement("input");x.type="hidden";x.name=n;form.appendChild(x)}x.value=v}
+window.addEventListener("message",function(e){
+  if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
+  if(!d||typeof d!=="object"||d.type!=="artifact-selection")return;
+  if(typeof d.quote!=="string"||!d.quote||!d.anchor||!d.rect||!num(d.rect.top)||!num(d.rect.left)||!num(d.rect.height)){
+    btn.hidden=true;last=null;return}
+  last=d;var r=f.getBoundingClientRect();
+  btn.style.top=(r.top+window.scrollY+d.rect.top+d.rect.height+6)+"px";
+  btn.style.left=(r.left+window.scrollX+Math.max(0,d.rect.left))+"px";btn.hidden=false});
+btn.addEventListener("click",function(){if(!last)return;
+  field("quote",last.quote.slice(0,500));field("anchor",JSON.stringify(last.anchor));
+  var q=form.querySelector(".cquote");
+  if(!q){q=document.createElement("blockquote");q.className="cquote";form.insertBefore(q,form.firstChild)}
+  q.textContent=last.quote.slice(0,500);btn.hidden=true;location.hash="comments";
+  var i=form.querySelector("input[name=body]");if(i){i.placeholder="Comment on the selected text";i.focus()}});
+})();
+"""
 
 
 def starter_prompt() -> str:
@@ -3588,7 +3629,10 @@ def gallery_router(db: Database) -> APIRouter:
                 # gallery.js reads the content origin straight off this iframe's own
                 # `src` -- fixed ids, not a class selector, so a future second iframe
                 # on this page could never be mistaken for this one.
-                scripts='<script src="/gallery.js" defer></script>',
+                scripts=(
+                    '<script src="/gallery.js" defer></script>'
+                    '<script src="/comments.js" defer></script>'
+                ),
                 # The bar carries the title menu AND the comments control, which
                 # is how the reference groups them: its page bar holds the title
                 # with its chevron on the left and a ButtonGroup labelled
@@ -3675,6 +3719,14 @@ def gallery_router(db: Database) -> APIRouter:
         return HTMLResponse(
             _shell("Machines and keys", _machines_page(keys.machines(db), note=note)),
             headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.get("/comments.js")
+    def comments_script() -> Response:
+        return Response(
+            _COMMENTS_JS,
+            media_type="text/javascript; charset=utf-8",
+            headers={**gallery_headers(), "cache-control": "no-cache"},
         )
 
     @router.get("/connect.js")
@@ -3841,8 +3893,17 @@ def gallery_router(db: Database) -> APIRouter:
         artifact_id: str,
         body: str = Form(...),
         thread_root: str = Form(""),
+        # Set by /comments.js when he commented on selected text (homelab-ij8.18).
+        quote: str = Form(""),
+        anchor: str = Form(""),
         _guard: None = Depends(_same_origin_write),
     ):
+        parsed_anchor = None
+        if anchor:
+            try:
+                parsed_anchor = json.loads(anchor)
+            except ValueError:
+                raise HTTPException(422, "not a valid anchor") from None
         try:
             comments.add(
                 db,
@@ -3851,6 +3912,8 @@ def gallery_router(db: Database) -> APIRouter:
                 author="jeremy",
                 body=body,
                 thread_root=thread_root or None,
+                quote=quote[:500],
+                anchor=parsed_anchor,
             )
         except store.BodyTooLarge as exc:
             raise HTTPException(413, f"{exc.field} exceeds the size limit") from exc
@@ -3862,6 +3925,8 @@ def gallery_router(db: Database) -> APIRouter:
             ) from exc
         except store.ScanFailed as exc:
             raise HTTPException(503, _SCAN_FAILED_DETAIL) from exc
+        except comments.InvalidAnchor:
+            raise HTTPException(422, "not a valid anchor") from None
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
         return RedirectResponse(f"/a/{artifact_id}#comments", status_code=303)

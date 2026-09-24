@@ -120,3 +120,26 @@ def test_the_code_boxes_behave_when_actually_run(tmp_path):
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
     assert passed >= 19, result.stdout
+
+
+_COMMENTSJS = Path(__file__).parent / "js" / "comments.test.mjs"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node runtime here")
+def test_the_comment_on_selection_button_behaves_when_actually_run(tmp_path):
+    """homelab-ij8.18: select text, press Comment, the drawer opens with it."""
+    from artifacts.gallery import _COMMENTS_JS
+
+    script = tmp_path / "comments.js"
+    script.write_text(_COMMENTS_JS)
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("node"), str(_COMMENTSJS), str(script)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "0 failed" in result.stdout
+    passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
+    assert passed >= 11, result.stdout

@@ -98,6 +98,15 @@ skills.
     artifacts-decide ack <decision-id>                   # say you have seen it
     artifacts-decide outcome <decision-id> "what you did about it"
 
+He can also COMMENT on your page, on the whole page or on text he selected.
+`artifacts-decide wait` wakes for his comments as well as his answers, and
+`artifacts-decide comments` lists your threads, marking the ones where the
+last word is his:
+
+    artifacts-decide comments                            # NEEDS YOUR REPLY first
+    artifacts-decide reply <thread-id> "your answer"     # he sees it on the page
+    artifacts-decide settle <thread-id>                  # when it is dealt with
+
 AFTER YOU ASK, LISTEN. He often answers within minutes, and an answer nobody
 collects is the failure this service exists to prevent. If your agent can run
 a background task, start `artifacts-decide wait` in the background straight
@@ -239,8 +248,13 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
     artifacts-decide outcome <decision-id> "what you did"
 
 After you ask, start `artifacts-decide wait` in the background so you are woken
-when he answers; without background tasks, run `artifacts-decide list` at the
-start of every turn. An unread answer is a broken promise.
+when he answers or comments; without background tasks, run `artifacts-decide
+list` and `artifacts-decide comments` at the start of every turn. An unread
+answer is a broken promise, and so is an unanswered comment:
+
+    artifacts-decide comments                              # his comments, NEEDS YOUR REPLY first
+    artifacts-decide reply <thread-id> "your answer"
+    artifacts-decide settle <thread-id>
 
 ## Rules that save you
 

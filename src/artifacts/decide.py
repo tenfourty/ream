@@ -209,6 +209,49 @@ def _duration(text: str) -> float:
     return float(match.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[match.group(2)]
 
 
+def _threads(rows: list[dict]) -> list[dict]:
+    """Comments grouped into threads, oldest first, each marked with whether the
+    agent owes a reply: the last word is his, not the agent's (homelab-ij8.18)."""
+    roots: dict[str, dict] = {}
+    for row in sorted(rows, key=lambda r: r.get("created_at") or ""):
+        root = row.get("thread_root") or row["id"]
+        thread = roots.setdefault(root, {"id": root, "messages": []})
+        thread["messages"].append(row)
+    out = []
+    for thread in roots.values():
+        first, last = thread["messages"][0], thread["messages"][-1]
+        thread["artifact_id"] = first.get("artifact_id")
+        thread["quote"] = first.get("quote") or ""
+        thread["needs_reply"] = last.get("author_kind") == "human"
+        out.append(thread)
+    return out
+
+
+def _fmt_thread(thread: dict) -> str:
+    head = "NEEDS YOUR REPLY" if thread["needs_reply"] else "replied"
+    lines = [
+        f"{thread['id']}  comment thread on page {thread['artifact_id']}  [{head}]"
+    ]
+    if thread["quote"]:
+        lines.append(f'  on: "{thread["quote"]}"')
+    for m in thread["messages"]:
+        who = (
+            "HE SAID" if m.get("author_kind") == "human" else f"{m.get('author')} said"
+        )
+        lines.append(f"  {who}: {m.get('body', '')}")
+    if thread["needs_reply"]:
+        lines.append(
+            f'  reply: artifacts-decide reply {thread["id"]} "..."'
+            f"   · done: artifacts-decide settle {thread['id']}"
+        )
+    return "\n".join(lines)
+
+
+def _open_threads(key: str, base: str, page: str | None = None) -> list[dict]:
+    url = f"{base}/artifacts/{page}/comments" if page else f"{base}/comments"
+    return _threads(_request("GET", url, key, None))
+
+
 # How long each held request asks for. The service never holds a request that
 # came through Cloudflare past 50 s (api.PUBLIC_MAX_WAIT); asking for exactly
 # that keeps one code path inside the house and out.
@@ -240,9 +283,25 @@ def _wait(args, key: str, base: str) -> int:
         )
         return _new_answers(_request("GET", url, key, None))
 
-    found = current()
-    if found:
-        return _print_rows(found, empty="")
+    def owed() -> list[dict]:
+        # His comments waiting for this agent's reply wake it too, unless it
+        # asked for answers only (homelab-ij8.18: comments that reach the agent).
+        if args.answers_only:
+            return []
+        return [t for t in _open_threads(key, base, page) if t["needs_reply"]]
+
+    def report(answers: list[dict], threads: list[dict]) -> int:
+        if answers:
+            _print_rows(answers, empty="")
+        if threads:
+            if answers:
+                print()
+            print("\n\n".join(_fmt_thread(t) for t in threads))
+        return 0
+
+    found, waiting_threads = current(), owed()
+    if found or waiting_threads:
+        return report(found, waiting_threads)
     headers: dict = {}
     _request("GET", f"{base}/events?since=999999999999", key, None, headers_out=headers)
     cursor = int(headers.get("x-artifacts-cursor", "0"))
@@ -273,14 +332,16 @@ def _wait(args, key: str, base: str) -> int:
             rows = []
         for row in rows:
             cursor = max(cursor, int(row.get("seq", cursor)))
+        kinds = {"decision_answered"}
+        if not args.answers_only:
+            kinds.add("comment_added")
         if any(
-            r.get("kind") == "decision_answered"
-            and (not page or r.get("artifact_id") == page)
+            r.get("kind") in kinds and (not page or r.get("artifact_id") == page)
             for r in rows
         ):
-            found = current()
-            if found:
-                return _print_rows(found, empty="")
+            found, waiting_threads = current(), owed()
+            if found or waiting_threads:
+                return report(found, waiting_threads)
     print("nothing yet: no answer before the timeout. Run it again.", file=sys.stderr)
     return 3
 
@@ -419,6 +480,22 @@ def build_parser() -> argparse.ArgumentParser:
     waiting.add_argument(
         "--timeout", default="55m", help="how long to wait (default 55m)"
     )
+    waiting.add_argument(
+        "--answers-only", action="store_true", help="do not wake for his comments"
+    )
+
+    threads = subs.add_parser(
+        "comments",
+        help="comment threads on your pages; NEEDS YOUR REPLY marks his last word",
+    )
+    threads.add_argument("--page", metavar="ARTIFACT-ID", help="only this page")
+    reply = subs.add_parser(
+        "reply", help="answer a comment thread on one of your pages"
+    )
+    reply.add_argument("thread", metavar="THREAD-ID")
+    reply.add_argument("text", metavar="TEXT")
+    settle = subs.add_parser("settle", help="mark a comment thread done")
+    settle.add_argument("thread", metavar="THREAD-ID")
 
     return parser
 
@@ -433,7 +510,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     base = _api_base()
-    if args.cmd in ("ask", "record", "outcome", "ack", "close"):
+    if args.cmd in ("ask", "record", "outcome", "ack", "close", "reply", "settle"):
         warn_if_unlabelled(args.cmd)
     try:
         if args.cmd == "ask":
@@ -551,6 +628,36 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.cmd == "wait":
             return _wait(args, key, base)
+        if args.cmd == "comments":
+            found = _open_threads(key, base, args.page)
+            if not found:
+                print(
+                    "no open comment threads" + (" on that page" if args.page else "")
+                )
+                return 0
+            found.sort(key=lambda t: not t["needs_reply"])
+            print("\n\n".join(_fmt_thread(t) for t in found))
+            return 0
+        if args.cmd in ("reply", "settle"):
+            mine = {t["id"]: t for t in _open_threads(key, base)}
+            thread = mine.get(args.thread)
+            if thread is None:
+                raise UsageError(
+                    f"no open comment thread {args.thread} on your pages "
+                    "(artifacts-decide comments lists them)"
+                )
+            if args.cmd == "settle":
+                _request("POST", f"{base}/comments/{args.thread}/resolve", key, {})
+                print(f"settled {args.thread}")
+                return 0
+            _request(
+                "POST",
+                f"{base}/artifacts/{thread['artifact_id']}/comments",
+                key,
+                {"body": args.text, "thread_root": args.thread},
+            )
+            print(f"replied on {args.thread}; he sees it in the page's comments")
+            return 0
         if args.cmd in ("ack", "close"):
             route = "acknowledge" if args.cmd == "ack" else "close"
             row = _request("POST", f"{base}/decisions/{args.decision}/{route}", key, {})

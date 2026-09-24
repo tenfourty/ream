@@ -141,6 +141,35 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         'document.querySelectorAll("[data-artifact-decision]"),function(el){'
         'var id=el.getAttribute("data-artifact-decision");'
         'el.style.minHeight=(want[id]||0)+"px"})});'
+        # SELECTING TEXT TO COMMENT ON IT (homelab-ij8.18). The gallery cannot
+        # read inside this cross-origin page, by design, so the page reports a
+        # selection: the quoted text (capped), an anchor the service already
+        # validates -- an element path plus character offsets within that
+        # element's text -- and where it sits, so the gallery can put a Comment
+        # button under it. Nothing else from the page is ever sent, and only to
+        # the gallery's origin. An empty selection says so, so the button goes.
+        "var st=0;function sel(){var s=getSelection(),"
+        't=s&&s.rangeCount?String(s).trim():"";'
+        'if(!t){parent.postMessage({type:"artifact-selection",quote:""},'
+        f"{origin});return}}"
+        "var r=s.getRangeAt(0),n=r.commonAncestorContainer;"
+        "if(n.nodeType!==1)n=n.parentElement;if(!n)return;"
+        "var p=[],e=n;while(e&&e!==document.body&&e.nodeType===1){"
+        "var i=1,x=e;while((x=x.previousElementSibling))if(x.tagName===e.tagName)i++;"
+        'p.unshift(e.tagName.toLowerCase()+":nth-of-type("+i+")");e=e.parentElement}'
+        'var path=("body"+(p.length?">"+p.join(">"):"")).slice(0,512);'
+        "var pre=document.createRange();pre.selectNodeContents(n);"
+        "pre.setEnd(r.startContainer,r.startOffset);"
+        "var a=String(pre).length,z=a+String(r).length;if(z<=a)return;"
+        "var b=r.getBoundingClientRect();"
+        'parent.postMessage({type:"artifact-selection",quote:t.slice(0,500),'
+        'anchor:{kind:"range",path:path,start:a,end:z},'
+        "rect:{top:b.top+scrollY,left:b.left+scrollX,width:b.width,height:b.height}},"
+        f"{origin})}}"
+        # Guarded: registering this listener must never be what stops the rest
+        # of the shim, whatever document it finds itself in.
+        'if(document.addEventListener)document.addEventListener("selectionchange",function(){'
+        "clearTimeout(st);st=setTimeout(function(){try{sel()}catch(e){}},350)});"
         "})()}catch(e){}</script>"
     )
 
