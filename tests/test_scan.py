@@ -250,7 +250,7 @@ def test_the_packaged_shapes_file_passes_every_load_time_guard():
     assert [name for name, _ in scan.parse_shapes(text)] == [
         name for name, _ in scan.SHAPES
     ]
-    assert len(scan.SHAPES) == 24  # +2 Mailgun shapes, 24 Sep 2026 (homelab-ij8.16)
+    assert len(scan.SHAPES) == 25  # +1 Slack token, 24 Sep 2026 (homelab-ij8.2)
 
 
 # --- performance: each view is scanned once per shape, not once per line
@@ -371,6 +371,10 @@ SHAPE_FIXTURES: dict[str, tuple[str, str]] = {
     "mailgun_private_key": (
         "api key-0123456789abcdef0123456789abcdef",
         "the monkey-business report",
+    ),
+    "slack_token": (
+        "const slack = 'xoxb-111111111111-FAKEFAKEFAKEFAKE';",
+        "the xoxb- prefix on its own",
     ),
     "private_key_header": (
         "-----BEGIN DSA PRIVATE KEY-----\nFAKE\n-----END DSA PRIVATE KEY-----",
@@ -1463,3 +1467,11 @@ def test_the_invisible_column_uses_every_invisible_the_scanner_strips():
     wrapped = _sprinkle_invisibles("Authorization: Bearer FAKETOKEN123")
     for char in scan._INVISIBLE:
         assert char in wrapped, f"{char!r} is stripped by the scanner but never tested"
+
+
+def test_a_slack_token_in_a_script_string_is_caught_here_too():
+    """24 Sep 2026: ggshield refused one that no local shape matched."""
+    tok = "xoxb-" + "1" * 12 + "-" + "2" * 13 + "-" + "aB3" * 8
+    body = f'<!doctype html>\n<script>const slack = "{tok}";</script>\n'
+    assert [f.shape for f in scan.scan(body)] == ["slack_token"]
+    assert scan.scan("<p>the xoxb- prefix alone is not a token</p>") == []
