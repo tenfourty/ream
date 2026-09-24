@@ -25,6 +25,7 @@ this is the only moment it learns).
 """
 
 import re
+from pathlib import Path
 
 from artifacts.csp import CspWarning, line_of, newline_offsets, outside_comments
 
@@ -69,8 +70,46 @@ _PLACEHOLDERS = (
 )
 
 
+# A template's guidance marker, `<!-- REPLACE ... -->`, sits above each block of
+# worked example. The comment itself never renders -- which is the point: the
+# cove seat, 24 Sep 2026, migrated a page from the explainer template, left one
+# at line 25, and `--check` said "no trap the templates warn about". A marker
+# still in the file is the only trace an author can see of a block that may
+# still be the example. So this looks INSIDE comments, unlike everything else
+# here, and matches only the templates' exact spelling.
+_REPLACE_MARKER = re.compile(r"<!--\s*REPLACE\b")
+
+
+def _load_templates() -> tuple[frozenset[str], frozenset[str]]:
+    """(each shipped template's whole text, stripped; each one's example title).
+
+    A template published EXACTLY as shipped is a specimen -- the wall carries
+    one of each on purpose -- and must stay clean, or the check teaches every
+    seat that it is noise (tests/test_traps.py). So the two template traps
+    fire only on a page that has been started and not finished, which is the
+    one that ships an example as though it were a report.
+    """
+    bodies, titles = set(), set()
+    for path in (Path(__file__).resolve().parent / "templates").glob("*.html"):
+        text = path.read_text(encoding="utf-8")
+        bodies.add(text.strip())
+        match = _TITLE.search(text)
+        if match:
+            titles.add(_plain(match.group(1)).lower())
+    return frozenset(bodies), frozenset(titles)
+
+
 def _plain(fragment: str) -> str:
     return " ".join(_TAGS.sub(" ", fragment).split()).strip()
+
+
+_TEMPLATES: list[tuple[frozenset[str], frozenset[str]]] = []
+
+
+def _templates() -> tuple[frozenset[str], frozenset[str]]:
+    if not _TEMPLATES:
+        _TEMPLATES.append(_load_templates())
+    return _TEMPLATES[0]
 
 
 def check(body: str) -> list[CspWarning]:
@@ -86,13 +125,27 @@ def check(body: str) -> list[CspWarning]:
     visible = outside_comments(body)
     newlines = newline_offsets(visible)
     found: list[CspWarning] = []
+    specimens, examples = _templates()
+    started = body.strip() not in specimens
 
     for pattern, where in ((_TITLE, "<title>"), (_H1, "the page's <h1>")):
         match = pattern.search(visible)
         if not match:
             continue
         text = _plain(match.group(1))
-        if text.lower() in _PLACEHOLDERS:
+        if started and text.lower() in examples:
+            found.append(
+                CspWarning(
+                    shape="template_example_title",
+                    line=line_of(match.start(), newlines),
+                    hint=(
+                        f"{where} is still the template's worked example "
+                        f"({text!r}). The rest of the page probably is too: "
+                        "every block under a REPLACE marker is example content."
+                    ),
+                )
+            )
+        elif text.lower() in _PLACEHOLDERS:
             found.append(
                 CspWarning(
                     shape="placeholder_title",
@@ -105,6 +158,23 @@ def check(body: str) -> list[CspWarning]:
                     ),
                 )
             )
+
+    # The raw body, not `visible`: the marker IS a comment. Its line numbers are
+    # the author's, so count them against the body.
+    raw_newlines = newline_offsets(body)
+    for match in _REPLACE_MARKER.finditer(body if started else ""):
+        found.append(
+            CspWarning(
+                shape="template_marker_left",
+                line=line_of(match.start(), raw_newlines),
+                hint=(
+                    "a template's REPLACE marker is still here. It never "
+                    "renders, so nobody reading the page will see that the "
+                    "block under it may still be the worked example. Rewrite "
+                    "the block, then delete the marker."
+                ),
+            )
+        )
 
     for match in _PAGE_ID_PLACEHOLDER.finditer(visible):
         found.append(

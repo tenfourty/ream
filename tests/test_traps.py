@@ -11,6 +11,7 @@ so nothing else catches it.
 """
 
 import pathlib
+import re
 
 import pytest
 
@@ -150,3 +151,45 @@ def test_the_skeleton_is_caught_because_it_is_the_one_that_bit(tmp_path):
         pytest.skip("the skill's skeleton is not in this tree")
     found = traps.check(skeleton.read_text())
     assert [w.shape for w in found] == ["placeholder_title", "placeholder_title"]
+
+
+# --- a page started from a template and not finished (the cove seat, 24 Sep) --
+
+
+def _explainer() -> str:
+    return (TEMPLATES / "explainer.html").read_text()
+
+
+def test_a_leftover_replace_marker_is_caught_once_the_page_is_started():
+    page = _explainer().replace(
+        "How the nightly backup works", "Two galleries, one login"
+    )
+    found = [w for w in traps.check(page) if w.shape == "template_marker_left"]
+    assert found, "an edited page still carrying markers must say so"
+    # The author's line numbers: the marker is a comment, so it cannot be
+    # counted against the comment-blanked text without drifting.
+    first = next(
+        n for n, line in enumerate(page.splitlines(), 1) if "<!-- REPLACE" in line
+    )
+    assert found[0].line == first
+
+
+def test_the_example_title_left_in_an_edited_page_is_caught():
+    page = _explainer().replace("Three copies, two of them", "Two of them")
+    shapes = {w.shape for w in traps.check(page)}
+    assert "template_example_title" in shapes
+
+
+def test_a_finished_page_is_clean():
+    page = re.sub(r"<!--\s*REPLACE.*?-->", "", _explainer(), flags=re.DOTALL)
+    page = page.replace("How the nightly backup works", "Two galleries, one login")
+    assert traps.check(page) == []
+
+
+def test_a_lowercase_replace_in_prose_is_not_a_marker():
+    page = _explainer().replace(
+        "How the nightly backup works", "Two galleries, one login"
+    )
+    page = re.sub(r"<!--\s*REPLACE.*?-->", "", page, flags=re.DOTALL)
+    page = page.replace("</main>", "<p>We replace the key weekly.</p></main>")
+    assert traps.check(page) == []
