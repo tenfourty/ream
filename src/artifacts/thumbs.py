@@ -44,9 +44,10 @@ import shutil
 import subprocess
 import tempfile
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 
-from artifacts import store
+from artifacts import stamp, store
 
 log = logging.getLogger("artifacts.thumbs")
 
@@ -119,6 +120,11 @@ def render_report(
     binary = browser_path()
     if binary is None:
         return None, None
+    # Stamped as a reader would see it. The marker is filled in when a page is
+    # SERVED, not stored, so an unstamped render showed "DECISION · · BABA" --
+    # found by the first live preview, 24 Sep 2026, and true of every tile on
+    # the wall. A render happens at publish or preview time, so now is the date.
+    html = stamp.apply(html, datetime.now(UTC))
 
     with tempfile.TemporaryDirectory(prefix="artifacts-thumb-") as workdir:
         page = Path(workdir) / "page.html"

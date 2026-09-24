@@ -140,3 +140,20 @@ def test_a_page_that_never_settles_still_returns(monkeypatch):
     )
     png = thumbs.render(spinning)
     assert png is None or png.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_the_browser_sees_the_page_stamped_as_a_reader_would(monkeypatch):
+    """The first live preview (24 Sep 2026) read "DECISION · · BABA": the date
+    marker is filled in when a page is served, and the renderer was handed the
+    stored body. Every wall tile had the same gap."""
+    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    seen = {}
+
+    def read_page(argv, **kw):
+        seen["html"] = Path(argv[-1].removeprefix("file://")).read_text()
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(thumbs.subprocess, "run", read_page)
+    thumbs.render_report("<p>DECISION · <!--artifacts:updated--> · BABA</p>")
+    assert "<!--artifacts:updated-->" not in seen["html"]
+    assert "· ·" not in seen["html"]
