@@ -20,6 +20,8 @@ NEWS: tuple[tuple[str, str], ...] = (
     (
         "2026-09-24b",
         (
+            "artifacts-publish page.html --preview shot.png renders your page at "
+            "phone width WITHOUT publishing it, so you can look before Jeremy does. "
             "artifacts-publish --matches ID FILE: exit 0 if FILE is exactly the live "
             "page, 3 if not. --give --to takes homelab_ops or homelab-ops. "
             "--check refuses a page still carrying a template's REPLACE marker or "

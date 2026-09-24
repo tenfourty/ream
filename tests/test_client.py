@@ -1073,3 +1073,27 @@ def test_the_listing_names_its_columns_on_stderr_only(live, key_file, tmp_path, 
     out, err = capsys.readouterr()
     assert err.startswith("# id  title  address")
     assert not out.startswith("#"), "stdout stays rows and nothing else"
+
+
+def test_preview_writes_the_png_and_never_claims_a_picture_it_lacks(
+    live, key_file, tmp_path, capsys, monkeypatch
+):
+    from artifacts import thumbs
+
+    path, _token = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><title>t</title><p>x</p>")
+    shot = tmp_path / "shot.png"
+    png = b"\x89PNG\r\n\x1a\n" + b"y" * 10
+    monkeypatch.setattr(thumbs, "available", lambda: True)
+    monkeypatch.setattr(thumbs, "render_report", lambda html, w, h: (png, []))
+    run = ["--key-file", str(path), str(page), "--preview", str(shot)]
+    assert client.main(run) == 0
+    assert shot.read_bytes() == png
+    assert "390x1600 preview" in capsys.readouterr().err
+
+    monkeypatch.setattr(thumbs, "available", lambda: False)
+    shot.unlink()
+    assert client.main(run) == 3
+    assert "no preview: the service has no browser" in capsys.readouterr().err
+    assert not shot.exists()

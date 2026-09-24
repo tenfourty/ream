@@ -251,6 +251,7 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
 ## The loop
 
     artifacts-publish --check page.html                    # before publishing
+    artifacts-publish page.html --preview shot.png         # LOOK at it: a phone-width render
     artifacts-publish page.html --title "What it is"       # prints the page id
     artifacts-publish page.html --update <page-id>         # a new version
     artifacts-publish --matches <page-id> page.html        # exit 0 if already live

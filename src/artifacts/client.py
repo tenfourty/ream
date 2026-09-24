@@ -702,6 +702,41 @@ def _matches(artifact_id: str, file_path: str | None, key: str) -> int:
     return 3
 
 
+def _preview(file_path: str | None, out: str, width: int, key: str) -> int:
+    """What a reader would see, before anyone can (homelab-ij8.107).
+
+    Exit 0 with a PNG written; 3 when the service could not render (no browser
+    there, or the render failed) -- never 0 without a picture, because "I
+    previewed it" with nothing to look at is the claim this exists to stop.
+    """
+    if not file_path:
+        raise UsageError(
+            "--preview needs a FILE: artifacts-publish page.html --preview shot.png"
+        )
+    body = pathlib.Path(file_path).read_text(encoding="utf-8")
+    got = _request(
+        "POST", f"{_api_base()}/preview", key, {"body": body, "width": width}
+    )
+    for error in got.get("errors") or []:
+        print(f"script error: {error}", file=sys.stderr)
+    if not got.get("rendered") or not got.get("png_base64"):
+        why = "has no browser" if not got.get("renderer") else "could not render it"
+        print(f"no preview: the service {why}", file=sys.stderr)
+        return 3
+    import base64
+
+    pathlib.Path(out).write_bytes(base64.b64decode(got["png_base64"]))
+    errors = got.get("errors")
+    tail = (
+        "no script errors" if errors == [] else f"{len(errors or [])} script error(s)"
+    )
+    print(
+        f"{got['width']}x{got['height']} preview -> {out}; {tail}. Open it and look.",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _list(key: str, everyone: bool = False) -> list[dict]:
     # `everyone`: every page this key may read, other agents' open pages
     # included (homelab-ij8.105), not only its own.
@@ -1115,6 +1150,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--preview",
+        metavar="PNG",
+        help=(
+            "render FILE on the service WITHOUT publishing it and write what a "
+            "reader sees to PNG (a phone, 390px wide, unless --width); prints "
+            "the page's script errors. Look at the PNG before you publish."
+        ),
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=390,
+        metavar="PX",
+        help="with --preview: the viewport width (320-1600; default 390, a phone)",
+    )
+    parser.add_argument(
         "--session",
         metavar="LABEL",
         help=(
@@ -1379,6 +1430,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             _print_shelf(_shelf("rename", args.rename, key, {"title": args.title}))
             return 0
+        if args.preview:
+            return _preview(args.file, args.preview, args.width, key)
         if args.update:
             if not args.file:
                 print("FILE is required with --update", file=sys.stderr)

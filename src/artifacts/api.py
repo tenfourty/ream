@@ -5,8 +5,10 @@ never from a header, query parameter or body field, so nothing else can
 influence whose artifacts a request sees or changes.
 """
 
+import base64
 import html
 import logging
+import threading
 from datetime import datetime
 from typing import Any
 
@@ -67,6 +69,20 @@ class ConnectBody(BaseModel):
 
 class PollBody(BaseModel):
     poll_token: str
+
+
+class PreviewBody(BaseModel):
+    body: str
+    # A phone by default: the width Jeremy reads most pages at, and the one an
+    # author on a desktop never sees.
+    width: int = 390
+    height: int = 1600
+
+
+# One preview render at a time. Each is a whole headless browser; a burst from
+# one confused agent must queue, not take the pod's memory with it.
+_PREVIEW_SLOT = threading.Semaphore(1)
+PREVIEW_WAIT_SECONDS = 30
 
 
 class PublishBody(BaseModel):
@@ -702,6 +718,43 @@ def agent_router(
         return {
             **stored.__dict__,
             "warnings": _warnings_for(artifact_id, stored.body),
+        }
+
+    @router.post("/preview")
+    def preview(payload: PreviewBody, agent: str = Depends(caller)):
+        """Render a page that is NOT published and hand back what a reader would
+        see: a screenshot at the given viewport and the page's script errors.
+
+        The service's own origin rule means an agent can never open its own
+        page (homelab-ij8.35), and every trap in `traps.py` exists because of
+        that. Asked for by the seats on 24 Sep 2026 (homelab-ij8.107): look
+        before publishing, at phone width. Nothing is stored and nothing is
+        published; the same size limit as a publish applies. `rendered: false`
+        means this deployment has no browser or the render failed -- never
+        "clean"."""
+        if len(payload.body.encode()) > store.MAX_BODY_BYTES:
+            raise HTTPException(
+                413, f"body is larger than {store.MAX_BODY_BYTES} bytes"
+            )
+        width = max(320, min(payload.width, 1600))
+        height = max(320, min(payload.height, 4000))
+        if not thumbs.available():
+            return {"rendered": False, "renderer": False, "errors": None}
+        if not _PREVIEW_SLOT.acquire(timeout=PREVIEW_WAIT_SECONDS):
+            raise HTTPException(
+                503, "another preview is rendering; try again in a few seconds"
+            )
+        try:
+            png, errors = thumbs.render_report(payload.body, width, height)
+        finally:
+            _PREVIEW_SLOT.release()
+        return {
+            "rendered": png is not None,
+            "renderer": True,
+            "width": width,
+            "height": height,
+            "errors": errors,
+            "png_base64": base64.b64encode(png).decode() if png else None,
         }
 
     @router.get("/artifacts/{artifact_id}/render")

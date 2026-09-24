@@ -110,8 +110,12 @@ def render(html: str) -> bytes | None:
     return render_report(html)[0]
 
 
-def render_report(html: str) -> tuple[bytes | None, list[str] | None]:
-    """(PNG or None, the page's script errors or None when it did not run)."""
+def render_report(
+    html: str, width: int = WIDTH, height: int = HEIGHT
+) -> tuple[bytes | None, list[str] | None]:
+    """(PNG or None, the page's script errors or None when it did not run).
+    `width`/`height` are the viewport, and so the shot: the tile's by default,
+    a phone's for a preview (homelab-ij8.107)."""
     binary = browser_path()
     if binary is None:
         return None, None
@@ -141,7 +145,7 @@ def render_report(html: str) -> tuple[bytes | None, list[str] | None]:
             "--no-default-browser-check",
             "--disable-extensions",
             "--disable-features=NetworkService,NetworkServiceInProcess",
-            f"--window-size={WIDTH},{HEIGHT}",
+            f"--window-size={int(width)},{int(height)}",
             # The page's console to stderr, so its script errors can be reported
             # to its author (homelab-ij8.72).
             "--enable-logging=stderr",
