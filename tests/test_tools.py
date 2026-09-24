@@ -35,8 +35,10 @@ def test_the_package_is_served_openly_by_its_exact_name(gallery, tools_dir):
     assert response.headers["cache-control"] == "no-cache"
 
 
+# The bare directory is no longer here: since 24 Sep it is the one-link page
+# uv's --find-links reads, and its own test below holds it to one link.
 @pytest.mark.parametrize(
-    "name", ["artifacts-9.9.9-py3-none-any.whl", "..%2fetc%2fpasswd", "x", ""]
+    "name", ["artifacts-9.9.9-py3-none-any.whl", "..%2fetc%2fpasswd", "x"]
 )
 def test_nothing_else_is_served_from_there(gallery, tools_dir, name):
     assert gallery.get(f"/api/v1/tools/{name}").status_code == 404
@@ -72,3 +74,28 @@ def test_the_skill_is_open_and_in_the_skill_format(gallery):
     assert response.text.startswith("---\nname: artifacts\ndescription: ")
     assert "https://artifacts.tenfourty.site/api/v1/agents.txt" in response.text
     assert "art_" not in response.text
+
+
+def test_one_page_links_the_one_package_for_find_links(gallery, tools_dir):
+    """The stable install line: uv reads this page and picks the package
+    (the homelab ops seat, 24 Sep 2026). Only the one file, never a listing."""
+    page = gallery.get("/api/v1/tools/")
+    assert page.status_code == 200
+    assert page.headers["cache-control"] == "no-cache"
+    assert page.text.count("<a ") == 1
+    assert f'href="{WHEEL}"' in page.text
+
+
+def test_no_package_means_no_find_links_page(gallery, tmp_path, monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_TOOLS_DIR", str(tmp_path / "missing"))
+    assert gallery.get("/api/v1/tools/").status_code == 404
+
+
+def test_the_document_carries_a_stable_line_and_a_machine_readable_one(
+    gallery, tools_dir
+):
+    text = gallery.get("/api/v1/agents.txt").text
+    base = "https://artifacts.tenfourty.site/api/v1/tools/"
+    assert f"--find-links {base} artifacts" in text
+    wheel_lines = [line for line in text.splitlines() if line.startswith("wheel: ")]
+    assert wheel_lines == [f"wheel: {base}{WHEEL}"]

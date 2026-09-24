@@ -1433,6 +1433,37 @@ class NoSuchAgent(Exception):
     """The destination is not a machine with a working key."""
 
 
+def owner(db: Database, artifact_id: str) -> str | None:
+    """The agent a page belongs to now, whatever spelling it was given as."""
+    with db.connect() as conn:
+        row = conn.execute(
+            "select agent from artifact where id = %s", (artifact_id,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def _spelling(name: str) -> str:
+    return name.lower().replace("_", "-")
+
+
+def _live_agent(conn, name: str) -> str:
+    """The live agent `name` means. Exact first; failing that, the one live
+    agent whose name differs only in case or `_`/`-`. The page list shows
+    `homelab-ops` and the vault's seat is `homelab_ops`, and the homelab ops
+    seat's first give (24 Sep 2026) was refused as though the agent did not
+    exist. Two candidates is ambiguous, and nothing is guessed."""
+    rows = conn.execute(
+        "select distinct agent from agent_key where revoked_at is null"
+    ).fetchall()
+    live = [r[0] for r in rows]
+    if name in live:
+        return name
+    near = [a for a in live if _spelling(a) == _spelling(name)]
+    if len(near) == 1:
+        return near[0]
+    raise NoSuchAgent()
+
+
 def transfer(
     db: Database, artifact_id: str, to_agent: str, *, agent: str | None
 ) -> str | None:
@@ -1444,12 +1475,7 @@ def transfer(
     who wrote each version is history and is NOT rewritten. Returns the old
     owner, or None when nothing matched."""
     with db.connect() as conn, conn.transaction():
-        live = conn.execute(
-            "select 1 from agent_key where agent = %s and revoked_at is null",
-            (to_agent,),
-        ).fetchone()
-        if live is None:
-            raise NoSuchAgent()
+        to_agent = _live_agent(conn, to_agent)
         where, params = _scoped(artifact_id, agent)
         row = conn.execute(
             f"select agent from artifact {where} for update",  # noqa: S608 -- fixed clause from _scoped

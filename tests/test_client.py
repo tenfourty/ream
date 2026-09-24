@@ -1033,3 +1033,43 @@ def test_every_request_names_itself_never_as_urllib(monkeypatch):
     client._request("GET", "https://example.invalid/api/v1/artifacts", "k", None)
     assert seen and seen[0].startswith("artifacts-client/")
     assert "urllib" not in seen[0].lower()
+
+
+def test_matches_answers_same_differs_and_refused_with_three_codes(
+    live, key_file, tmp_path, capsys
+):
+    """The warpgate seat, 24 Sep 2026: comparing through `jq -r` added a newline
+    and read as a mismatch. Exact bytes, and a refusal is never an answer."""
+    path, _token = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html>\n<title>Board</title>\n<p>one</p>\n")
+    assert client.main(["--key-file", str(path), str(page), "--title", "Board"]) == 0
+    pid = json.loads(capsys.readouterr().out.strip())["id"]
+    run = ["--key-file", str(path), "--matches", pid]
+
+    assert client.main([*run, str(page)]) == 0
+    assert "is the live version" in capsys.readouterr().err
+
+    padded = tmp_path / "padded.html"
+    padded.write_text(page.read_text() + "\n")
+    assert client.main([*run, str(padded)]) == 3
+    assert "only in trailing whitespace" in capsys.readouterr().err
+
+    changed = tmp_path / "changed.html"
+    changed.write_text(page.read_text().replace("one", "two"))
+    assert client.main([*run, str(changed)]) == 3
+    assert "first at line 3" in capsys.readouterr().err
+
+    assert client.main([*run.copy()[:-1], "nosuchpage", str(page)]) == 1
+
+
+def test_the_listing_names_its_columns_on_stderr_only(live, key_file, tmp_path, capsys):
+    path, _token = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html>\n<title>Board</title>\n<p>x</p>\n")
+    assert client.main(["--key-file", str(path), str(page), "--title", "Board"]) == 0
+    capsys.readouterr()
+    assert client.main(["--key-file", str(path), "--list"]) == 0
+    out, err = capsys.readouterr()
+    assert err.startswith("# id  title  address")
+    assert not out.startswith("#"), "stdout stays rows and nothing else"

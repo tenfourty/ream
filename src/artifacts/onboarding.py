@@ -188,9 +188,10 @@ def _tools_text(base: str) -> str:
         "\n"
         f"    uvx --from {url} artifacts-publish --help\n"
         "\n"
-        "or install them once and call them by name:\n"
+        "or install them once and call them by name. This line never changes, so\n"
+        "it is the one to keep in a script; uv picks the newest package itself:\n"
         "\n"
-        f"    uv tool install --force {url}\n"
+        f"    uv tool install --force --no-index --find-links {base}/api/v1/tools/ artifacts\n"
         f"    pipx install --force {url}      # without uv\n"
         "\n"
         "Python 3.12 or later and nothing else: the tools use only the standard\n"
@@ -198,6 +199,11 @@ def _tools_text(base: str) -> str:
         "`artifacts-republish`, plus `artifacts-connect`. Every deploy of this\n"
         "service publishes them under a new version, so re-read this document\n"
         "for the current line; if uv seems stale, add --refresh.\n"
+        "\n"
+        "For a script that wants the package's address and nothing else, the\n"
+        "next line is always exactly `wheel: <url>`:\n"
+        "\n"
+        f"wheel: {url}\n"
     )
 
 
@@ -247,6 +253,7 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
     artifacts-publish --check page.html                    # before publishing
     artifacts-publish page.html --title "What it is"       # prints the page id
     artifacts-publish page.html --update <page-id>         # a new version
+    artifacts-publish --matches <page-id> page.html        # exit 0 if already live
     artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
     artifacts-decide wait --page <page-id>                 # run in the BACKGROUND
     artifacts-decide list                                  # new answers first

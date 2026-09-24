@@ -5,13 +5,19 @@ never from a header, query parameter or body field, so nothing else can
 influence whose artifacts a request sees or changes.
 """
 
+import html
 import logging
 from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+)
 from pydantic import BaseModel
 
 from artifacts import (
@@ -357,6 +363,23 @@ def agent_router(
                 "x-content-type-options": "nosniff",
                 "cache-control": "public, max-age=300",
             },
+        )
+
+    @router.get("/tools/")
+    def tools_index():
+        """One link, to the one package: the page uv's `--find-links` reads, so
+        an install line never changes between deploys (the homelab ops seat, 24
+        Sep 2026: "a stable alias would make uv tool install --force a
+        one-liner"). A redirect or a fixed filename cannot do this -- measured:
+        uv refuses a URL without `.whl`, and a wheel filename without a version.
+        Still never a directory listing: it names only what `wheel()` names."""
+        built = onboarding.wheel()
+        if built is None:
+            raise HTTPException(404, "no tools are available from this address")
+        name = html.escape(built.name)
+        return HTMLResponse(
+            f'<!doctype html><title>tools</title><a href="{name}">{name}</a>\n',
+            headers={"x-content-type-options": "nosniff", "cache-control": "no-cache"},
         )
 
     @router.get("/tools/{name}")
@@ -757,11 +780,14 @@ def agent_router(
             old = store.transfer(db, artifact_id, payload.to.strip(), agent=agent)
         except store.NoSuchAgent:
             raise HTTPException(
-                422, f"{payload.to!r} is not a connected machine with a working key"
+                422,
+                f"{payload.to!r} is not a connected machine with a working key. "
+                "Use the agent's name as the page list shows it (homelab-ops); "
+                "the vault's seat name (homelab_ops) is also accepted.",
             ) from None
         if old is None:
             raise HTTPException(404, "no such artifact")
-        return {"id": artifact_id, "from": old, "to": payload.to.strip()}
+        return {"id": artifact_id, "from": old, "to": store.owner(db, artifact_id)}
 
     @router.post("/artifacts/{artifact_id}/agents")
     def agents_can_read(

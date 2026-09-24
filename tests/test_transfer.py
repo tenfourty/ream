@@ -88,3 +88,35 @@ def test_he_can_move_any_page_from_its_menu(db, api, seats):
         headers={"sec-fetch-site": "cross-site"},
     )
     assert cross.status_code == 403
+
+
+def test_the_vault_spelling_of_an_agent_reaches_the_same_agent(db, api):
+    """The homelab ops seat, 24 Sep 2026: the page list says homelab-ops, the
+    vault says homelab_ops, and the second was refused as though the agent did
+    not exist."""
+    a, _ = keys.mint(db, agent="baba-operator")
+    keys.mint(db, agent="homelab-ops")
+    page = store.publish(db, "baba-operator", "Board", PAGE)
+    moved = api.post(
+        f"/api/v1/artifacts/{page.id}/transfer",
+        json={"to": "homelab_ops"},
+        headers={"Authorization": f"Bearer {a}"},
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["to"] == "homelab-ops", "the real name, not the spelling"
+    assert store.get_owned(db, "homelab-ops", page.id).id == page.id
+
+
+def test_two_agents_one_spelling_apart_are_never_guessed_between(db, api):
+    a, _ = keys.mint(db, agent="giver")
+    keys.mint(db, agent="seat-one")
+    keys.mint(db, agent="Seat_One")
+    page = store.publish(db, "giver", "Board", PAGE)
+    refused = api.post(
+        f"/api/v1/artifacts/{page.id}/transfer",
+        json={"to": "seat_one"},
+        headers={"Authorization": f"Bearer {a}"},
+    )
+    assert refused.status_code == 422
+    assert "page list" in refused.json()["detail"]
+    assert store.get_owned(db, "giver", page.id).agent == "giver"

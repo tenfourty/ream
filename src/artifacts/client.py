@@ -661,6 +661,47 @@ def _fetch(artifact_id: str, key: str, version: int | None = None) -> str:
     return body
 
 
+def _matches(artifact_id: str, file_path: str | None, key: str) -> int:
+    """Whether a local file is what the page is serving -- the question behind
+    "is my republish going to change anything?".
+
+    The warpgate seat, 24 Sep 2026, compared a file with `--fetch` piped
+    through `jq -r`, got a mismatch from the newline jq adds, and could not
+    compare against the revision either: the revision hashes the version
+    number with the body, so no file alone can reproduce it. Exact bytes are
+    the only honest comparison -- an identical republish mints no version, and
+    one extra newline mints one -- so a difference that is only trailing
+    whitespace is still "differs", and says so in words.
+    """
+    if not file_path:
+        raise UsageError(
+            "--matches needs a FILE: artifacts-publish --matches ID page.html"
+        )
+    local = pathlib.Path(file_path).read_text(encoding="utf-8")
+    live = _fetch(artifact_id, key)
+    if local == live:
+        print(f"{file_path} is the live version of {artifact_id}", file=sys.stderr)
+        return 0
+    if local.rstrip() == live.rstrip():
+        print(
+            f"{file_path} differs from {artifact_id} only in trailing whitespace "
+            "-- publishing it would still mint a new version",
+            file=sys.stderr,
+        )
+        return 3
+    a, b = local.splitlines(), live.splitlines()
+    first = next(
+        (n for n, (x, y) in enumerate(zip(a, b, strict=False), 1) if x != y),
+        min(len(a), len(b)) + 1,
+    )
+    print(
+        f"{file_path} differs from the live version of {artifact_id}, first at "
+        f"line {first} ({len(a)} lines here, {len(b)} live)",
+        file=sys.stderr,
+    )
+    return 3
+
+
 def _list(key: str, everyone: bool = False) -> list[dict]:
     # `everyone`: every page this key may read, other agents' open pages
     # included (homelab-ij8.105), not only its own.
@@ -1106,10 +1147,14 @@ def build_parser() -> argparse.ArgumentParser:
     shelf.add_argument(
         "--give",
         metavar="ID",
-        help="give one of your pages to another agent (needs --to); one-way",
+        help="give one of your pages to another agent (needs --to). One-way and "
+        "immediate: your next --update of it answers 404",
     )
     shelf.add_argument(
-        "--to", metavar="AGENT", help="with --give: the agent receiving it"
+        "--to",
+        metavar="AGENT",
+        help="with --give: the agent receiving it, as the page list names it "
+        "(homelab-ops; homelab_ops also works)",
     )
     shelf.add_argument(
         "--close-to-agents",
@@ -1134,6 +1179,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         metavar="N",
         help="with --fetch, read THAT version instead of the live one",
+    )
+    shelf.add_argument(
+        "--matches",
+        metavar="ID",
+        help="is FILE byte-for-byte the page's live version? exit 0 yes, 3 no "
+        "(1 is a refusal, never an answer)",
     )
     shelf.add_argument(
         "--fetch",
@@ -1178,7 +1229,17 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.list:
-            for item in _list(key, everyone=args.all):
+            # The column names, on stderr so stdout stays exactly the rows every
+            # caller splits on. Asked for by a seat on 24 Sep 2026 after reading
+            # a date column as a version and a session label as an agent.
+            # After the fetch, so a failure is the only thing on stderr.
+            rows = _list(key, everyone=args.all)
+            print(
+                "# id  title  address  [updated  session  pinned,archived,closed]"
+                "  (tab-separated; the bracketed columns appear only when set)",
+                file=sys.stderr,
+            )
+            for item in rows:
                 # A fourth column ONLY when there is something to say. Three
                 # columns is what every existing caller splits on; an always-
                 # present empty field would change the shape for everyone in
@@ -1264,7 +1325,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(moved))
             print(
                 f"gave page {moved['id']} from {moved['from']} to {moved['to']}; "
-                "you can no longer change it",
+                "you can no longer change it (--update of it now answers 404)",
                 file=sys.stderr,
             )
             return 0
@@ -1291,6 +1352,8 @@ def main(argv: list[str] | None = None) -> int:
                 "--at-version only means something with --fetch: "
                 "artifacts-publish --fetch <id> --at-version 3 old.html"
             )
+        if args.matches:
+            return _matches(args.matches, args.file, key)
         if args.fetch:
             # To FILE when one is given, else stdout, so it composes either way:
             # `--fetch ID page.html` to edit, `--fetch ID | grep` to look. The
