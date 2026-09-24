@@ -64,6 +64,13 @@ spec:
             - secretRef:
                 name: artifacts-nudge
                 optional: true
+            # ARTIFACTS_GGSHIELD_TOKEN, for baba's ggshield relay (homelab-ij8.2).
+            # Optional for the same reason: without it (or without
+            # ARTIFACTS_GGSHIELD_URL in artifacts-config.env) pages get the
+            # built-in scan only, never a pod that cannot start.
+            - secretRef:
+                name: artifacts-ggshield
+                optional: true
           env:
             - name: DATABASE_URL
               valueFrom:

@@ -53,7 +53,7 @@ from datetime import UTC, datetime, timedelta
 
 from psycopg.errors import UniqueViolation
 
-from artifacts import events, ids, scan
+from artifacts import events, ggscan, ids, scan
 from artifacts.db import Database
 from artifacts.text import LEADING_DOCTYPE
 
@@ -287,6 +287,13 @@ def _check_size(
         raise BodyTooLarge(field, size)
 
 
+def check_body(body: str, *, agent: str) -> None:
+    """Both scanners on a body that is not being stored -- a preview. Raises
+    `SecretFound` exactly as a publish would (Jeremy, 24 Sep 2026: previews
+    are scanned too)."""
+    _check_secrets(body, "body", agent=agent, artifact_id=None)
+
+
 def _check_secrets(
     value: str, field: str, *, agent: str, artifact_id: str | None
 ) -> None:
@@ -315,6 +322,21 @@ def _check_secrets(
             type(exc).__name__,
         )
         raise ScanFailed(field) from exc
+    if not findings and field == "body":
+        # The second opinion, on the ORIGINAL body (homelab-ij8.2; see ggscan).
+        # Only once the built-in scan is clean: an obvious secret is refused
+        # here without ever leaving the house.
+        second = ggscan.scan(value)
+        if second is None:
+            if ggscan.configured():
+                _refusals.warning(
+                    "published on the built-in scan only: agent=%s artifact=%s "
+                    "reason=ggshield_unavailable",
+                    agent,
+                    artifact_id or "-",
+                )
+        else:
+            findings = second
     if findings:
         shapes = sorted({finding.shape for finding in findings})
         _refusals.warning(

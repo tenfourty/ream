@@ -736,6 +736,16 @@ def agent_router(
             raise HTTPException(
                 413, f"body is larger than {store.MAX_BODY_BYTES} bytes"
             )
+        try:
+            store.check_body(payload.body, agent=agent)
+        except store.SecretFound as found:
+            raise HTTPException(
+                422, _refused_detail(found.field, found.findings)
+            ) from found
+        except store.ScanFailed as exc:
+            raise HTTPException(
+                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+            ) from exc
         width = max(320, min(payload.width, 1600))
         height = max(320, min(payload.height, 4000))
         if not thumbs.available():
