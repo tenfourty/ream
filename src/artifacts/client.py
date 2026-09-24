@@ -26,7 +26,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from artifacts import csp, traps
+from artifacts import csp, news, traps
 
 _DEFAULT_API = "https://artifacts.tenfourty.site/api/v1"
 _DEFAULT_KEY_FILE = "~/.config/artifacts/key"
@@ -1421,6 +1421,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run() -> None:
+    # In run(), not main(): the console script only, so tests never touch
+    # this machine's state file.
+    news.announce()
     sys.exit(main())
 
 

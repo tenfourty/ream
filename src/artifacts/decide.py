@@ -29,6 +29,7 @@ import re
 import sys
 import time
 
+from artifacts import news
 from artifacts.client import (
     Conflict,
     HTTPFailure,
@@ -678,6 +679,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run() -> None:
+    news.announce()  # the console script only; see news.py
     raise SystemExit(main())
 
 
