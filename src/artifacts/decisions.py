@@ -713,6 +713,11 @@ def uncollected(
         " where decision.answered_at is not null"
         " and decision.acknowledged_at is null"
         " and decision.answered_at < now() - make_interval(secs => %s)"
+        # A DELETED page's answers owe nobody anything (homelab-ij8.97): the page
+        # is gone and nothing on it can be acted on, so reporting it here for
+        # ever made the one queue meant to be empty never empty. Restoring the
+        # page brings it back, because the answer itself is untouched.
+        " and artifact.deleted_at is null"
     )
     params: list[object] = [stuck_after_seconds]
     if agent is not None:

@@ -674,6 +674,13 @@ def _defang_huge_decimal_charrefs(detagged: str) -> str:
     return _DECIMAL_CHARREF.sub(_replace, detagged)
 
 
+# `&#10;`, `&#x0a;` (with or without the semicolon, but never the prefix of a
+# longer number such as `&#100`) and the named `&NewLine;`.
+_ENCODED_NEWLINE = re.compile(
+    r"&#0*10(?:;|(?![0-9]))|&#[xX]0*[aA](?:;|(?![0-9a-fA-F]))|&NewLine;"
+)
+
+
 def _text_view(raw_view: str) -> str:
     """The raw view with tags deleted, entities unescaped, and soft-hyphen/
     zero-width characters removed -- what exposes a credential that markup,
@@ -682,6 +689,11 @@ def _text_view(raw_view: str) -> str:
     such as `&shy;` decodes TO a zero-width character in the first place.
     """
     detagged = _defang_huge_decimal_charrefs(_detag(raw_view))
+    # An ENCODED line break becomes a space, not a line (homelab-ij8.8):
+    # unescaped to a real "\n" it gave the text view a line the raw body does
+    # not have, and every finding after it was reported one line too far down.
+    # A space separates exactly as the newline would, so nothing hides behind it.
+    detagged = _ENCODED_NEWLINE.sub(" ", detagged)
     text_view = html.unescape(detagged)
     if not text_view.isascii():
         for char in _INVISIBLE:

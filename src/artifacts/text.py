@@ -30,6 +30,21 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 SUMMARY_LIMIT = 200
 
 
+# Control characters with no business in an agent's terminal, KEEPING newline
+# and tab: his notes are multi-line and must arrive as he wrote them.
+_CONTROL_EXCEPT_LINES = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def strip_controls(text: str | None) -> str | None:
+    """Remove terminal-steering control characters (an escape sequence in a
+    comment could rewrite what an agent's terminal shows), keep the words, the
+    newlines and the length exactly (homelab-ij8.55). For the /events feed,
+    which went out raw while only the nudge was cleaned."""
+    if text is None:
+        return None
+    return _CONTROL_EXCEPT_LINES.sub("", text)
+
+
 def sanitize(text: str, limit: int = SUMMARY_LIMIT) -> str:
     """Collapse every run of whitespace to one space, strip any remaining
     C0/C1 control character, and cap at `limit` characters with a trailing

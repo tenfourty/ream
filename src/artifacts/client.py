@@ -985,6 +985,15 @@ def build_parser() -> argparse.ArgumentParser:
     shelf.add_argument("--unpin", metavar="ID", help="unpin it")
     shelf.add_argument("--duplicate", metavar="ID", help="copy a page to a new address")
     shelf.add_argument(
+        "--delete",
+        metavar="ID",
+        help="bin a page: recoverable for thirty days with --restore",
+    )
+    shelf.add_argument("--restore", metavar="ID", help="bring a binned page back")
+    shelf.add_argument(
+        "--deleted", action="store_true", help="list your binned pages, soonest to go first"
+    )
+    shelf.add_argument(
         "--close-to-agents",
         metavar="ID",
         help="only Jeremy and you can read this page (other agents can by default)",
@@ -1106,6 +1115,28 @@ def main(argv: list[str] | None = None) -> int:
             if artifact_id:
                 _print_shelf(_shelf(route, artifact_id, key, payload))
                 return 0
+        # The bin, which the gallery has always had and agents did not
+        # (homelab-ij8.93): two seats hand-rolled a DELETE with their key.
+        if args.delete:
+            print(json.dumps(_request("DELETE", f"{_api_base()}/artifacts/{args.delete}", key, None)))
+            print(
+                f"binned; recoverable for thirty days: artifacts-publish --restore {args.delete}",
+                file=sys.stderr,
+            )
+            return 0
+        if args.restore:
+            _print_shelf(
+                _request("POST", f"{_api_base()}/artifacts/{args.restore}/restore", key, {})
+            )
+            return 0
+        if args.deleted:
+            rows = _request("GET", f"{_api_base()}/artifacts/deleted", key, None)
+            if not rows:
+                print("nothing in the bin")
+            for item in rows:
+                gone = (item.get("deleted_at") or "")[:10]
+                print(f"{item['id']}\t{item['title']}\tbinned {gone}")
+            return 0
         if args.versions:
             _print_versions(_versions(args.versions, key))
             return 0

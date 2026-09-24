@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
@@ -1051,15 +1052,29 @@ def agent_router(
         # thing an outcome is for is being read next to the decision it is
         # about.
         outcomes = decisions.outcomes_for_artifact(db, artifact_id)
-        return [
-            {**row.__dict__, "outcomes": [o.__dict__ for o in outcomes.get(row.id, [])]}
-            for row in decisions.list_for_artifact(
-                db,
-                artifact_id,
-                include_answered=include_answered and not open_only,
-                include_closed=include_closed,
+        shown = decisions.list_for_artifact(
+            db,
+            artifact_id,
+            include_answered=include_answered and not open_only,
+            include_closed=include_closed,
+        )
+        # SAY WHAT WAS LEFT OUT (homelab-ij8.45): two agents in one day read an
+        # empty open-only answer as "my answers went nowhere". The count of
+        # answered questions this view omitted rides in a header, so the body
+        # keeps its shape for every existing caller.
+        omitted = 0
+        if not (include_answered and not open_only):
+            every = decisions.list_for_artifact(
+                db, artifact_id, include_answered=True, include_closed=include_closed
             )
-        ]
+            omitted = sum(1 for d in every if d.answer) - sum(1 for d in shown if d.answer)
+        return JSONResponse(
+            jsonable_encoder([
+                {**row.__dict__, "outcomes": [o.__dict__ for o in outcomes.get(row.id, [])]}
+                for row in shown
+            ]),
+            headers={"x-artifacts-answered-omitted": str(omitted)},
+        )
 
     @router.get("/decisions")
     def list_all_decisions(
@@ -1421,8 +1436,18 @@ def agent_router(
                 session=session_filter,
                 exclude_actor=exclude,
             )
+        # Free text goes out without terminal control characters (homelab-ij8.55):
+        # a comment body is anybody's words, and it lands in an agent's terminal.
+        cleaned = [
+            {
+                **row.__dict__,
+                "summary": text.strip_controls(row.summary),
+                "note": text.strip_controls(row.note),
+            }
+            for row in rows
+        ]
         return JSONResponse(
-            [row.__dict__ for row in rows],
+            jsonable_encoder(cleaned),
             headers={
                 # "From now" is this number; see events.latest_seq.
                 "x-artifacts-cursor": str(events.latest_seq(db, agent)),

@@ -2824,10 +2824,12 @@ def gallery_router(db: Database) -> APIRouter:
         # Same header set as every other gallery response (gallery_headers() is cheap
         # and read at call time) -- one hardened profile for the whole origin, rather
         # than a script route that is the one response nobody checked.
+        # no-cache (homelab-ij8.94): revalidate every time, so a fix to the
+        # decision control is never stuck behind a heuristically cached copy.
         return Response(
             _GALLERY_JS,
             media_type="text/javascript; charset=utf-8",
-            headers=gallery_headers(),
+            headers={**gallery_headers(), "cache-control": "no-cache"},
         )
 
     def _wall(conn, archived: bool):
@@ -3660,7 +3662,9 @@ def gallery_router(db: Database) -> APIRouter:
     @router.get("/connect.js")
     def connect_script() -> Response:
         return Response(
-            _CONNECT_JS, media_type="text/javascript; charset=utf-8", headers=gallery_headers()
+            _CONNECT_JS,
+            media_type="text/javascript; charset=utf-8",
+            headers={**gallery_headers(), "cache-control": "no-cache"},
         )
 
     @router.get("/connect", response_class=HTMLResponse)
