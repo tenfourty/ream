@@ -18,6 +18,14 @@ from pathlib import Path
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-09-24d",
+        (
+            "Every publish, update and preview is now also checked by GitGuardian's "
+            "ggshield. A refusal names the kind (shape ggshield_<kind>) and the "
+            "line, never the value."
+        ),
+    ),
+    (
         "2026-09-24c",
         (
             "artifacts-beads-page --parent <epic> --title NAME prints a status page "
