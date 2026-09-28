@@ -224,6 +224,7 @@ def _threads(rows: list[dict]) -> list[dict]:
         first, last = thread["messages"][0], thread["messages"][-1]
         thread["artifact_id"] = first.get("artifact_id")
         thread["quote"] = first.get("quote") or ""
+        thread["kind"] = first.get("kind") or "comment"
         thread["needs_reply"] = last.get("author_kind") == "human"
         out.append(thread)
     return out
@@ -235,7 +236,10 @@ def _fmt_thread(thread: dict) -> str:
         f"{thread['id']}  comment thread on page {thread['artifact_id']}  [{head}]"
     ]
     if thread["quote"]:
-        lines.append(f'  on: "{thread["quote"]}"')
+        label = {"remove": "REMOVE THIS", "looks_good": "LOOKS GOOD"}.get(
+            thread.get("kind"), "on"
+        )
+        lines.append(f'  {label}: "{thread["quote"]}"')
     for m in thread["messages"]:
         who = (
             "HE SAID" if m.get("author_kind") == "human" else f"{m.get('author')} said"

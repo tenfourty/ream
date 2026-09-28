@@ -18,6 +18,10 @@ from pathlib import Path
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-09-29a",
+        "Jeremy can now mark text on any page as 'Remove this' or 'Looks good' as well as comment; artifacts-decide comments shows which, and comment rows carry a kind.",
+    ),
+    (
         "2026-09-28a",
         "A page may now be up to 3 MB (it was 512 KB).",
     ),

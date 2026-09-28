@@ -4,7 +4,7 @@ good' (page review step 1, homelab-ij8.108)."""
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, events, keys, store
+from artifacts import comments, decide, events, keys, store
 from artifacts.app import create_gallery_app
 
 PAGE = "<!doctype html><title>t</title><p>Rotate the keys every 90 days.</p>"
@@ -272,3 +272,22 @@ def test_the_page_view_embeds_the_marks_and_never_the_note(client, db):
     assert "</script><b>" not in block and "\\u003c/script\\u003e" in block
     assert "private note" not in block
     assert 'id="marks-unplaced"' in html, "the line the shim's report fills"
+
+
+def test_the_agent_sees_what_kind_of_mark_it_was():
+    thread = decide._threads(
+        [
+            {
+                "id": "c1",
+                "artifact_id": "p1",
+                "quote": "Rotate the keys",
+                "kind": "remove",
+                "author_kind": "human",
+                "author": "jeremy",
+                "body": "",
+                "created_at": "2026-09-28T10:00:00Z",
+                "thread_root": None,
+            }
+        ]
+    )[0]
+    assert '  REMOVE THIS: "Rotate the keys"' in decide._fmt_thread(thread)
