@@ -40,6 +40,12 @@ MAX_COMMENT_BYTES = 8_000
 # still refusing someone pasting the whole page back in as its own "quote".
 MAX_QUOTE_BYTES = 2_000
 
+# A comment can be a remark, or one of two marks that carry no note of their own:
+# "remove this" and "looks good" (page review step 1, homelab-ij8.108). A reply is
+# always 'comment' -- see `add()` -- so a thread's own back-and-forth is never
+# mistaken for a fresh mark on the page.
+KINDS = ("comment", "remove", "looks_good")
+
 # Every read of a comment row, in the fixed column order `_row_to_comment` expects.
 # Qualified with `comment.` throughout -- `list_for_agent` joins `artifact`, which
 # also has an `id` and a `created_at`, and an unqualified name there is ambiguous to
@@ -48,7 +54,8 @@ MAX_QUOTE_BYTES = 2_000
 _COLUMNS = (
     "comment.id, comment.artifact_id, comment.version_n, comment.thread_root,"
     " comment.anchor, comment.quote, comment.author_kind, comment.author,"
-    " comment.body, comment.created_at, comment.resolved_at, comment.resolved_by"
+    " comment.body, comment.created_at, comment.resolved_at, comment.resolved_by,"
+    " comment.kind"
 )
 
 # Correlated subquery, not a join: for the comment a given row names -- itself, if it
@@ -80,6 +87,10 @@ class CommentRow:
     created_at: str  # isoformat
     resolved_at: str | None
     resolved_by: str | None
+    # A remark, "remove this" or "looks good" -- see `KINDS`. Defaulted, like
+    # `quote_state` below it, so a caller that only ever wrote plain comments
+    # before this existed is unaffected.
+    kind: str = "comment"
     # "" when the comment quotes nothing, else "current" or "changed" -- see
     # `quote_state`. Not stored: it is a fact about the page as it is NOW, and
     # storing it would make it a fact about the page as it was when somebody
@@ -91,6 +102,12 @@ class InvalidAnchor(Exception):
     def __init__(self) -> None:
         super().__init__("anchor")
         self.field = "anchor"
+
+
+class InvalidKind(Exception):
+    def __init__(self) -> None:
+        super().__init__("kind")
+        self.field = "kind"
 
 
 class NoSuchThread(Exception): ...
@@ -175,6 +192,7 @@ def _row_to_comment(row) -> CommentRow:
         created_at=row[9].isoformat(),
         resolved_at=row[10].isoformat() if row[10] is not None else None,
         resolved_by=row[11],
+        kind=row[12],
     )
 
 
@@ -189,6 +207,7 @@ def add(
     quote: str = "",
     thread_root: str | None = None,
     agent: str | None = None,
+    kind: str = "comment",
 ) -> CommentRow:
     """Write a comment. `agent`, when given, is the identity the artifact must be
     owned by -- an agent answering comments on its OWN pages, via the keyed API.
@@ -211,7 +230,13 @@ def add(
     store._check_size(
         body, MAX_COMMENT_BYTES, "body", agent=author, artifact_id=artifact_id
     )
+    if kind not in KINDS:
+        raise InvalidKind()
     if is_reply:
+        # A thread is one conversation; letting a reply carry its own mark
+        # would put a second, independent "remove this" or "looks good" on
+        # the same spot the root already marked. A reply is always talk.
+        kind = "comment"
         effective_anchor = None  # resolved from the root below
         effective_quote = None
     else:
@@ -220,6 +245,14 @@ def add(
         )
         effective_anchor = validate_anchor(anchor)
         effective_quote = quote
+        # A mark says something by ITSELF -- "remove this", "looks good" -- only
+        # when it is pinned to an exact quote: a whole-page "remove this" with no
+        # quote does not say what to remove. A plain comment carries no such
+        # requirement; it is free-form, exactly as before.
+        if kind != "comment" and (
+            effective_anchor.get("kind") != "range" or not quote.strip()
+        ):
+            raise InvalidKind()
 
     with db.connect() as conn:
         if agent is not None:
@@ -262,12 +295,21 @@ def add(
         page_session = conn.execute(
             "select session from artifact where id = %s", (artifact_id,)
         ).fetchone()[0]
+        # What the event should say. A mark carries no note of its own, so
+        # "body" -- empty for a mark, per the test above -- would tell the
+        # agent nothing happened at all. Naming the mark and quoting what it
+        # is about says the same thing a human reading the page sees.
+        label = {"remove": "Remove this", "looks_good": "Looks good"}.get(kind)
+        said = body
+        if label:
+            short = " ".join(effective_quote.split())[:120]
+            said = f'{label}: "{short}"' + (f" — {body}" if body.strip() else "")
         with conn.transaction():
             comment_id = ids.new_id()
             conn.execute(
                 "insert into comment (id, artifact_id, version_n, thread_root, anchor,"
-                " quote, author_kind, author, body)"
-                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                " quote, author_kind, author, body, kind)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     comment_id,
                     artifact_id,
@@ -278,6 +320,7 @@ def add(
                     author_kind,
                     author,
                     body,
+                    kind,
                 ),
             )
             # THE HALF THAT WAS MISSING. The comment table, the anchor
@@ -297,13 +340,13 @@ def add(
                     agent=owning_agent,
                     actor=author,
                     kind="comment_added",
-                    summary=body,
+                    summary=said,
                     # The comment itself, so the agent can read the thread, the
                     # quote and where on the page it was anchored.
                     ref_id=comment_id,
                     # His words in full. The summary is one line in a list; the
                     # comment is the thing he actually said.
-                    note=body,
+                    note=said,
                     session=page_session,
                 )
         created = conn.execute(
@@ -321,7 +364,7 @@ def add(
             artifact_id=artifact_id,
             title=title,
             agent=owning_agent,
-            summary=body,
+            summary=said,
             event_id=str(event_seq),
         )
     return _row_to_comment(created)

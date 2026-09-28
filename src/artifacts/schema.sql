@@ -107,6 +107,11 @@ create table if not exists comment (
 create index if not exists comment_artifact_idx on comment (artifact_id, created_at);
 create index if not exists comment_thread_idx on comment (thread_root);
 
+-- What kind of mark a comment is (page review, homelab-ij8.108, 28 Sep 2026):
+-- a remark, "remove this", or "looks good". A reply is always 'comment'.
+alter table comment add column if not exists kind text not null default 'comment'
+    check (kind in ('comment', 'remove', 'looks_good'));
+
 -- A decision is an agent's lettered question, not free-form prose: `options` is a JSON
 -- array of {"letter": "a", "label": "..."} in the order the agent gave them, so the
 -- page can render them as a fixed sequence of buttons rather than re-sorting an object's
