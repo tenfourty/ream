@@ -39,7 +39,9 @@ message and an exit code it can act on without reading prose.
   - four verdict buttons.
 
   *Approved with notes* and *Changes requested* send the held marks with the verdict.
-  *Approved* sends any held marks as notes, and *Dismissed* sends only the dismissal.
+  *Approved* with marks still held is recorded as *approved with notes*, so a note is never
+  lost behind a plain approval. *Dismissed* sends only the dismissal; held marks are kept and
+  shown to the agent as context.
 - **Held marks** are visible to him (dotted outline) and invisible to the agent until the
   verdict. Switching to *live* releases them at once.
 - **Round 2 and later** open the page in its *changes* view:
@@ -71,9 +73,10 @@ are unaffected.
 | 5 | changes requested |
 | 6 | dismissed |
 | 7 | live marks arrived, no verdict yet |
+| 8 | another session on this seat has claimed the round |
 | 3 | timeout · 1 refused · 2 usage |
 
-`--require-approval` collapses the verdicts: 0 and 4 become 0, and 5, 6 and 7 become 1. Errors
+`--require-approval` collapses the verdicts: 0 and 4 become 0, and 5, 6, 7 and 8 become 1. Errors
 stay 1 or 2 as today, but print `REFUSED`, so a typo never reads as a rejection.
 
 **The message** is built by a new `review.py`, which is also exposed as
@@ -177,8 +180,8 @@ today.
 - **One session acts on a verdict.**
   - `wait --review` *claims* the round with a five-minute lease, renewed while the process
     lives.
-  - A second waiter on the same seat sees "claimed by <session>" and exits 7-style with that
-    information rather than both revising.
+  - A second waiter on the same seat sees "claimed by <session>" and exits with that
+    information (exit 8), rather than both revising.
   - An expired lease is requeued.
 - **"Addressed" is inferred:** every carried mark is resolved, or its quote is gone. It is never
   a flag.
