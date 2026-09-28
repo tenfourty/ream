@@ -202,14 +202,27 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "if(tie)return null;"
         "var e=best+q.length-1,r=document.createRange();"
         "r.setStart(x.n[best],x.k[best]);r.setEnd(x.n[e],x.k[e]+1);return r}"
-        # A quote at the 500-character cap the selection leg applies is the
-        # START of what was selected, so the stored range may be longer.
+        # A quote at the 500-character cap the selection leg applies is only
+        # the START of what was selected, so the stored range may be longer.
+        # Only the part the quote verifies is painted: the range's end is
+        # moved back to the character that completes the quote (counted the
+        # way `tight` counts, one kept character per non-whitespace one), so
+        # a tail past the cap -- which nothing checked, and which may have
+        # been edited since -- is never painted. Painting the whole stored
+        # range would be a partial guess.
+        "function cut(el,r,n){var w=document.createTreeWalker(el,4),t,v,i,go=0,c=0;"
+        "while((t=w.nextNode())){if(t===r.startContainer)go=1;if(!go)continue;v=t.nodeValue;"
+        "for(i=t===r.startContainer?r.startOffset:0;i<v.length;i++){"
+        "if(/\\s/.test(v.charAt(i)))continue;if(++c===n){r.setEnd(t,i+1);return r}}}"
+        "return null}"
         "function place(m,ix){var a=m.anchor,el=null;"
         "if(a.path){try{el=document.querySelector(a.path)}catch(x){el=null}}"
         "if(el&&isn(a.start)&&isn(a.end)&&a.end>a.start){var r=null;"
         "try{r=rangeAt(el,a.start,a.end)}catch(x){r=null}"
         "if(r){var got=tight(String(r)),want=tight(m.quote);"
-        "if(want&&(got===want||(m.quote.length>=500&&got.indexOf(want)===0)))return r}}"
+        "if(want&&got===want)return r;"
+        "if(want&&m.quote.length>=500&&got.indexOf(want)===0){"
+        "try{r=cut(el,r,want.length)}catch(x){r=null}if(r)return r}}}"
         "return search(m,ix)}"
         "function paint(list){var G={comment:new Highlight(),remove:new Highlight(),"
         "looks_good:new Highlight()},placed=[],unplaced=[],ix={v:null};"

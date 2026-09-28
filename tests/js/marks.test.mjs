@@ -47,6 +47,7 @@ function build(body, paths, { highlights = true, readyState = "complete" } = {})
     setStart(n, o) { if (n.nodeType !== 3 || o < 0 || o > n.nodeValue.length) throw new Error("IndexSizeError"); this.sc = n; this.so = o; }
     setEnd(n, o) { if (n.nodeType !== 3 || o < 0 || o > n.nodeValue.length) throw new Error("IndexSizeError"); this.ec = n; this.eo = o; }
     get startContainer() { return this.sc; }
+    get startOffset() { return this.so; }
     toString() {
       const ts = all(), i = ts.indexOf(this.sc), j = ts.indexOf(this.ec);
       if (i < 0 || j < 0 || j < i) return "";
@@ -211,6 +212,23 @@ const mark = (over = {}) => ({ id: "m1", kind: "remove", quote: QUOTE,
   g.doc.readyState = "complete";
   g.fire("load");
   ok(g.reports().length === 1 && g.reports()[0][0].placed.join() === "m1", "and the latest set is painted once, on load");
+}
+// 11b. a long selection (past the 500-character quote cap) whose tail changed:
+// only the verified quote is painted, never the unchecked tail
+{
+  const head = "Keys rotate on a schedule. ".repeat(19).slice(0, 500);
+  const quote = head;                                   // the selection leg's slice(0,500)
+  const oldTail = " and the old tail that was selected".padEnd(300, ".");
+  const newTail = " BUT THIS TAIL WAS EDITED AFTERWARDS".padEnd(300, "!");
+  const b = E("b", newTail.slice(0, 20));
+  const p = E("p", head, b, newTail.slice(20));        // the tail also crosses an element
+  const g = build(E("body", p), { "body>p:nth-of-type(1)": p });
+  g.send([mark({ quote, anchor: { start: 0, end: head.length + oldTail.length } })]);
+  const [[msg]] = g.reports();
+  ok(msg.placed.join() === "m1", "a long selection is still placed on its stored position");
+  const r = g.registry.get("ar-remove").ranges[0];
+  ok(String(r) === head, "painting stops at the end of the verified quote");
+  ok(!String(r).includes("EDITED"), "and the edited tail nobody checked is never painted");
 }
 // 12. hostile payloads never throw into the page, and the list is capped
 {

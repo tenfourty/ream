@@ -1711,7 +1711,9 @@ def _share_page(
 # MARKS ON THE PAGE (page review step 1, homelab-ij8.108). The page embeds its
 # open marks (comments.marks_for_page: id, kind, quote, anchor -- never a note)
 # as JSON; once the frame reports its state they are posted into it, once per
-# load of the frame and only to its own origin, and the shim paints them. Its
+# load of the frame and only to its own origin, and the shim paints them. A new
+# document in the frame is sent them on its `load` too, without waiting for a
+# state report it may already have sent; repainting is idempotent. Its
 # reply names the marks it could not place, and that becomes one line in the
 # comments drawer -- counted against this page's OWN mark ids, each once, so a
 # page cannot make the line say anything but a true count of Jeremy's marks.
@@ -1728,7 +1730,7 @@ function unplacedLine(ids){var p=document.getElementById("marks-unplaced");if(!p
   var n=0,seen=Object.create(null);
   ids.slice(0,200).forEach(function(id){if(typeof id==="string"&&known[id]&&!seen[id]){seen[id]=1;n++}});
   p.textContent=n?n+(n===1?" mark":" marks")+" could not be placed on this version of the page.":"";p.hidden=!n}
-if(f.addEventListener)f.addEventListener("load",function(){sent=false});
+if(f.addEventListener)f.addEventListener("load",function(){sent=false;sendMarks()});
 window.addEventListener("message",function(e){try{
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
   if(!d||typeof d!=="object")return;

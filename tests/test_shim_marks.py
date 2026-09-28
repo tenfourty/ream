@@ -82,4 +82,4 @@ def test_the_shim_places_marks_when_actually_run(tmp_path, monkeypatch):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
-    assert passed >= 38, result.stdout
+    assert passed >= 41, result.stdout

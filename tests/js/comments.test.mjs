@@ -126,8 +126,10 @@ const STATE = { type: "artifact-state", height: 400, slots: [] };
   ok(msg.type === "artifact-marks" && msg.marks.map((m) => m.id).join() === "m1,m2", "carrying the embedded marks");
   g.send(STATE); g.send(STATE);
   ok(g.framePosts.length === 1, "and only once per load, however often the page resizes");
-  g.reload(); g.send(STATE);
-  ok(g.framePosts.length === 2, "a new load of the frame gets them again"); }
+  g.reload();
+  ok(g.framePosts.length === 2, "a new load of the frame gets them again, at once, without waiting for a state report");
+  g.send(STATE);
+  ok(g.framePosts.length === 2, "and not a second time when that document then reports its state"); }
 { const g = build({ marks: MARKS });
   g.send(STATE, { origin: "https://evil.example" });
   g.send(STATE, { source: {} });
