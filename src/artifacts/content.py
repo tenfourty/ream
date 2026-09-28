@@ -224,6 +224,23 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "if(want&&m.quote.length>=500&&got.indexOf(want)===0){"
         "try{r=cut(el,r,want.length)}catch(x){r=null}if(r)return r}}}"
         "return search(m,ix)}"
+        # TEST-ONLY HOOK (page review step 1, Task 6). A page served for real is
+        # never file://, so production never takes this branch -- it exists only
+        # so a browser test can drive real placement (a real Range, a real
+        # TreeWalker, real text search) without going through `postMessage`,
+        # which a file:// page cannot send to satisfy the origin check just
+        # above. It mirrors the same field checks `paint()` applies before ever
+        # calling `place()`, so the hook cannot place a mark production's own
+        # message handler would have refused. `typeof location` first: the
+        # node fake-DOM harness in tests/js/marks.test.mjs runs this same
+        # source with no `location` global at all, and a bare reference to an
+        # undeclared name throws, not just reads as undefined.
+        'if(typeof location!=="undefined"&&location.protocol==="file:"){'
+        "window.__arPlace=function(m){"
+        'if(!m||typeof m!=="object"||typeof m.quote!=="string"||!m.quote||'
+        '!m.anchor||typeof m.anchor!=="object"||typeof m.anchor.path!=="string")'
+        "return null;"
+        "try{return place(m,{v:null})}catch(x){return null}}}"
         "function paint(list){var G={comment:new Highlight(),remove:new Highlight(),"
         "looks_good:new Highlight()},placed=[],unplaced=[],ix={v:null};"
         "list.slice(0,200).forEach(function(m){"
