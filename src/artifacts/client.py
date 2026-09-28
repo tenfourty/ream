@@ -470,7 +470,13 @@ def _request(
     # The process-wide declaration, unless a caller overrides it deliberately.
     session = session or _session
     _check_url_scheme(url)
-    data = json.dumps(payload).encode() if payload is not None else None
+    # UTF-8, not \u-escapes: an escaped non-ASCII character is six bytes, and a
+    # 3 MiB page must still fit the ingress's 4m body limit as JSON.
+    data = (
+        json.dumps(payload, ensure_ascii=False).encode()
+        if payload is not None
+        else None
+    )
     # `url` is always `{_api_base()}/...` -- an https address the operator configures
     # via ARTIFACTS_API, never a scheme or host taken from page content or a caller
     # argument. bandit's file:// concern (S310) does not apply here.

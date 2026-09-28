@@ -18,6 +18,10 @@ from pathlib import Path
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-09-28a",
+        "A page may now be up to 3 MB (it was 512 KB).",
+    ),
+    (
         "2026-09-24d",
         (
             "Every publish, update and preview is now also checked by GitGuardian's "

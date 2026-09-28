@@ -84,7 +84,7 @@ def _post(url: str, token: str, body: str) -> object:
         conn.request(
             "POST",
             parts.path or "/",
-            body=json.dumps({"body": body}).encode(),
+            body=json.dumps({"body": body}, ensure_ascii=False).encode(),
             headers={
                 "content-type": "application/json",
                 "authorization": f"Bearer {token}",

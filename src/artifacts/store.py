@@ -57,14 +57,17 @@ from artifacts import events, ggscan, ids, scan
 from artifacts.db import Database
 from artifacts.text import LEADING_DOCTYPE
 
-# Measured worst clean body at 1 MiB: 484-524 ms under load, over the 0.5 s
-# bar, and tuning only moves the worst case to the next shape -- so 512 KiB,
-# not the 4 MiB or 1 MiB first proposed. The largest real page today is
-# ~41 KB: 12x headroom. Raise this only when a real page needs it.
-MAX_BODY_BYTES = 512 * 1024
+# 3 MiB since 28 Sep 2026: an agent's real page hit the old 512 KiB, and
+# Jeremy chose 3 MiB, the most that fits under the ingresses' 4m
+# proxy-body-size with room for JSON escaping (the tools send UTF-8, not
+# \u-escapes, for that reason). Measured on baba at 3 MiB: ordinary HTML
+# scans in about 0.3 s, and the worst bodies found (dense entity references,
+# dense hits) take about 1.2 s. ggshield was shown to find a token at the end
+# of a 3 MiB page. It was 512 KiB from 19 Sep, when the bar was 0.5 s at 1 MiB.
+MAX_BODY_BYTES = 3 * 1024 * 1024
 
 # A title is a page name shown in a gallery list, not prose -- 512 bytes, not
-# the body's 512 KiB.
+# the body's megabytes.
 MAX_TITLE_BYTES = 512
 
 _refusals = logging.getLogger("artifacts.refusals")

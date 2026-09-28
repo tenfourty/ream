@@ -1097,3 +1097,21 @@ def test_preview_writes_the_png_and_never_claims_a_picture_it_lacks(
     assert client.main(run) == 3
     assert "no preview: the service has no browser" in capsys.readouterr().err
     assert not shot.exists()
+
+
+def test_a_page_goes_over_the_wire_as_utf8_not_escapes(
+    live, key_file, tmp_path, capsys
+):
+    """A \\u-escaped character is six bytes; a 3 MiB page must still fit the
+    ingress's 4m limit as JSON (28 Sep 2026)."""
+    path, _token = key_file
+    page = tmp_path / "page.html"
+    body = "<!doctype html>\n<title>Café</title>\n<p>naïve — 日本</p>\n"
+    page.write_text(body, encoding="utf-8")
+    assert client.main(["--key-file", str(path), str(page), "--title", "Café"]) == 0
+    pid = json.loads(capsys.readouterr().out.strip())["id"]
+    assert client.main(["--key-file", str(path), "--fetch", pid]) == 0
+    assert capsys.readouterr().out == body
+    import inspect
+
+    assert "ensure_ascii=False" in inspect.getsource(client._request)

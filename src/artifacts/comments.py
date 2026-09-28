@@ -32,7 +32,7 @@ from artifacts.db import Database
 
 # A comment is a remark about a page, not a page in itself -- 8 KB is generous for
 # prose and small enough that a thread of hundreds never becomes its own storage
-# problem. Well below MAX_BODY_BYTES (512 KiB): nobody pastes a page into a comment.
+# problem. Well below MAX_BODY_BYTES (3 MiB): nobody pastes a page into a comment.
 MAX_COMMENT_BYTES = 8_000
 
 # A quote is a short excerpt Jeremy selected, not the passage it came from -- 2 KB
