@@ -170,9 +170,17 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "var pre=document.createRange();pre.selectNodeContents(n);"
         "pre.setEnd(r.startContainer,r.startOffset);"
         "var a=String(pre).length,z=a+String(r).length;if(z<=a)return;"
+        # Text either side of the quote, so validate_anchor's text-quote-selector
+        # can tell two identical quotes on the same page apart (homelab-ij8.108,
+        # Task 2). `a`/`z` are already offsets into `n`'s own text, so
+        # `n.textContent` -- not the range's stringified text -- is the right
+        # string to slice, and `Math.max(0,...)` covers a selection near the
+        # start of `n` without a negative `slice` start wrapping from the end.
+        'var all=n.textContent||"",prefix=all.slice(Math.max(0,a-32),a),'
+        "suffix=all.slice(z,z+32);"
         "var b=r.getBoundingClientRect();"
         'parent.postMessage({type:"artifact-selection",quote:t.slice(0,500),'
-        'anchor:{kind:"range",path:path,start:a,end:z},'
+        'anchor:{kind:"range",path:path,start:a,end:z,prefix:prefix,suffix:suffix},'
         "rect:{top:b.top+scrollY,left:b.left+scrollX,width:b.width,height:b.height}},"
         f"{origin})}}"
         # Guarded: registering this listener must never be what stops the rest

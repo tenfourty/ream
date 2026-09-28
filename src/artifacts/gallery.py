@@ -566,8 +566,17 @@ main{display:block}
 .selbtn{position:absolute;z-index:60;font:500 .8rem/1 ui-sans-serif,system-ui,sans-serif;
   padding:.45rem .7rem;border-radius:8px;border:1px solid var(--accent);
   background:var(--card);color:var(--ink);box-shadow:0 2px 8px rgba(0,0,0,.18);cursor:pointer}
+/* The three-action bar that replaced the single .selbtn (page review step 1,
+   homelab-ij8.108): same look, laid out as a row with gaps. */
+.selbar{position:absolute;z-index:60;display:flex;gap:.4rem}
+.selbar button{font:500 .8rem/1 ui-sans-serif,system-ui,sans-serif;
+  padding:.45rem .7rem;border-radius:8px;border:1px solid var(--accent);
+  background:var(--card);color:var(--ink);box-shadow:0 2px 8px rgba(0,0,0,.18);cursor:pointer}
 .cquote{margin:0 0 .4rem;padding:.3rem .6rem;border-left:3px solid var(--accent);opacity:.85;
   font-size:.85rem;white-space:pre-wrap}
+.ckind{font:600 .75rem var(--mono);text-transform:uppercase}
+.ckind-remove{color:var(--bad, #c0392b)}
+.ckind-looks_good{color:var(--ok, #2e9d57)}
 .bar .profile{margin-left:auto}.bar .profile .mpanel{right:0;left:auto}
 [data-unread] .t::before,[data-unread] .rt::before{content:"";display:inline-block;
   width:.55em;height:.55em;border-radius:50%;background:var(--accent);
@@ -1685,8 +1694,11 @@ _COMMENTS_JS = """(function(){
 var f=document.getElementById("artifact-frame");if(!f)return;
 var o;try{o=new URL(f.src).origin}catch(e){return}
 var form=document.querySelector("form.cnew");if(!form)return;
-var btn=document.createElement("button");btn.type="button";btn.className="selbtn";
-btn.textContent="Comment";btn.hidden=true;document.body.appendChild(btn);
+var bar=document.createElement("div");bar.className="selbar";bar.hidden=true;
+[["comment","Comment"],["remove","Remove this"],["looks_good","Looks good"]].forEach(function(k){
+  var b=document.createElement("button");b.type="button";b.textContent=k[1];b.dataset.kind=k[0];
+  bar.appendChild(b)});
+document.body.appendChild(bar);
 var last=null;
 function num(v){return typeof v==="number"&&isFinite(v)}
 function field(n,v){var x=form.querySelector("input[name="+n+"]");
@@ -1695,16 +1707,24 @@ window.addEventListener("message",function(e){
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
   if(!d||typeof d!=="object"||d.type!=="artifact-selection")return;
   if(typeof d.quote!=="string"||!d.quote||!d.anchor||!d.rect||!num(d.rect.top)||!num(d.rect.left)||!num(d.rect.height)){
-    btn.hidden=true;last=null;return}
+    bar.hidden=true;last=null;return}
   last=d;var r=f.getBoundingClientRect();
-  btn.style.top=(r.top+window.scrollY+d.rect.top+d.rect.height+6)+"px";
-  btn.style.left=(r.left+window.scrollX+Math.max(0,d.rect.left))+"px";btn.hidden=false});
-btn.addEventListener("click",function(){if(!last)return;
+  bar.style.top=(r.top+window.scrollY+d.rect.top+d.rect.height+6)+"px";
+  bar.style.left=(r.left+window.scrollX+Math.max(0,d.rect.left))+"px";bar.hidden=false});
+bar.addEventListener("click",function(e){
+  var b=e.target&&e.target.closest?e.target.closest("button"):null;
+  if(!b||!last)return;
   field("quote",last.quote.slice(0,500));field("anchor",JSON.stringify(last.anchor));
+  field("kind",b.dataset.kind);
   var q=form.querySelector(".cquote");
   if(!q){q=document.createElement("blockquote");q.className="cquote";form.insertBefore(q,form.firstChild)}
-  q.textContent=last.quote.slice(0,500);btn.hidden=true;location.hash="comments";
-  var i=form.querySelector("input[name=body]");if(i){i.placeholder="Comment on the selected text";i.focus()}});
+  q.textContent=last.quote.slice(0,500);bar.hidden=true;location.hash="comments";
+  var i=form.querySelector("input[name=body]");
+  if(b.dataset.kind==="comment"){
+    if(i){i.placeholder="Comment on the selected text";i.focus()}
+  }else{
+    if(i){i.placeholder="Add a note (optional)";if(!i.value){form.requestSubmit()}}
+  }});
 })();
 """
 
@@ -2285,7 +2305,17 @@ def _render_comments(
                 f"it was there in version {int(root.version_n)}.</span>"
             )
         )
-        return f'<blockquote class="cquote">{escape(root.quote)}{note}</blockquote>'
+        label = {"remove": "Remove this", "looks_good": "Looks good"}.get(
+            getattr(root, "kind", "comment"), ""
+        )
+        tag = (
+            f'<span class="ckind ckind-{escape(root.kind)}">{label}</span> '
+            if label
+            else ""
+        )
+        return (
+            f'<blockquote class="cquote">{tag}{escape(root.quote)}{note}</blockquote>'
+        )
 
     def thread(root) -> str:
         kids = "".join(bubble(r) for r in replies.get(root.id, []))
