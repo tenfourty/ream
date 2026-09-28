@@ -2,15 +2,24 @@
 good' (page review step 1, homelab-ij8.108)."""
 
 import pytest
+from fastapi.testclient import TestClient
 
-from artifacts import comments, events, store
+from artifacts import comments, events, keys, store
+from artifacts.app import create_gallery_app
 
 PAGE = "<!doctype html><title>t</title><p>Rotate the keys every 90 days.</p>"
 RANGE = {"kind": "range", "path": "body>p:nth-of-type(1)", "start": 0, "end": 29}
+SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
 
 
 def _page(db):
     return store.publish(db, "seat", "Board", PAGE)
+
+
+@pytest.fixture()
+def client(db, monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    return TestClient(create_gallery_app(db=db))
 
 
 def test_a_plain_comment_is_kind_comment(db):
@@ -118,3 +127,59 @@ def test_a_range_anchor_may_carry_context_either_side():
 def test_context_is_validated_like_the_rest_of_the_anchor(bad):
     with pytest.raises(comments.InvalidAnchor):
         comments.validate_anchor({**RANGE, **bad})
+
+
+def test_the_gallery_form_takes_a_mark_with_no_note(client, db):
+    page = _page(db)
+    r = client.post(
+        f"/c/{page.id}",
+        data={
+            "kind": "remove",
+            "body": "",
+            "quote": "Rotate the keys every 90 days.",
+            "anchor": '{"kind":"range","path":"body>p:nth-of-type(1)","start":0,"end":29}',
+        },
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    token, _ = keys.mint(db, agent="seat")
+    rows = client.get(
+        f"/api/v1/artifacts/{page.id}/comments",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    assert [row["kind"] for row in rows] == ["remove"]
+
+
+def test_an_empty_plain_comment_is_still_refused(client, db):
+    page = _page(db)
+    r = client.post(
+        f"/c/{page.id}",
+        data={"body": "  "},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert r.status_code == 422
+
+
+def test_an_agent_can_mark_its_own_page_and_a_bad_kind_names_the_field(client, db):
+    token, _ = keys.mint(db, agent="seat")
+    page = _page(db)
+    h = {"Authorization": f"Bearer {token}"}
+    ok = client.post(
+        f"/api/v1/artifacts/{page.id}/comments",
+        headers=h,
+        json={
+            "kind": "looks_good",
+            "body": "",
+            "quote": "Rotate the keys every 90 days.",
+            "anchor": RANGE,
+        },
+    )
+    assert ok.status_code == 201 and ok.json()["kind"] == "looks_good"
+    bad = client.post(
+        f"/api/v1/artifacts/{page.id}/comments",
+        headers=h,
+        json={"kind": "nope", "body": "x"},
+    )
+    assert bad.status_code == 422 and bad.json()["detail"]["field"] == "kind"

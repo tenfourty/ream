@@ -4071,13 +4071,19 @@ def gallery_router(db: Database) -> APIRouter:
     @router.post("/c/{artifact_id}")
     def add_comment(
         artifact_id: str,
-        body: str = Form(...),
+        # Default "": a mark ("remove"/"looks_good") needs no note, and it is
+        # `kind`, not the form itself, that decides whether an empty body is
+        # allowed -- see the check below.
+        body: str = Form(""),
         thread_root: str = Form(""),
         # Set by /comments.js when he commented on selected text (homelab-ij8.18).
         quote: str = Form(""),
         anchor: str = Form(""),
+        kind: str = Form("comment"),
         _guard: None = Depends(_same_origin_write),
     ):
+        if kind == "comment" and not body.strip():
+            raise HTTPException(422, "a comment needs some words")
         parsed_anchor = None
         if anchor:
             try:
@@ -4094,6 +4100,7 @@ def gallery_router(db: Database) -> APIRouter:
                 thread_root=thread_root or None,
                 quote=quote[:500],
                 anchor=parsed_anchor,
+                kind=kind,
             )
         except store.BodyTooLarge as exc:
             raise HTTPException(413, f"{exc.field} exceeds the size limit") from exc
@@ -4107,6 +4114,12 @@ def gallery_router(db: Database) -> APIRouter:
             raise HTTPException(503, _SCAN_FAILED_DETAIL) from exc
         except comments.InvalidAnchor:
             raise HTTPException(422, "not a valid anchor") from None
+        except comments.InvalidKind:
+            raise HTTPException(
+                422,
+                "kind must be comment, remove or looks_good, with a quoted "
+                "range for the last two",
+            ) from None
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
         return RedirectResponse(f"/a/{artifact_id}#comments", status_code=303)

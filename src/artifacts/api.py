@@ -156,6 +156,7 @@ class CommentBody(BaseModel):
     quote: str = ""
     anchor: dict | None = None
     thread_root: str | None = None
+    kind: str = "comment"
 
 
 class DecisionBody(BaseModel):
@@ -1023,6 +1024,7 @@ def agent_router(
                 quote=payload.quote,
                 thread_root=payload.thread_root,
                 agent=agent,
+                kind=payload.kind,
             ).__dict__
         except store.NotAPage as exc:
             # 422, not 413: the body is not too much, it is not a page. Named
@@ -1065,6 +1067,17 @@ def agent_router(
         except comments.InvalidAnchor as exc:
             raise HTTPException(
                 422, {"field": exc.field, "detail": "not a valid anchor"}
+            ) from exc
+        except comments.InvalidKind as exc:
+            raise HTTPException(
+                422,
+                {
+                    "field": exc.field,
+                    "detail": (
+                        "kind must be comment, remove or looks_good, with a "
+                        "quoted range for the last two"
+                    ),
+                },
             ) from exc
         except comments.NoSuchThread as exc:
             raise HTTPException(
