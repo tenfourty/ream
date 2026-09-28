@@ -130,7 +130,10 @@ _CSS = """
      a clear fail -- so the dark scheme flips the text instead of the fill. */
   --now-solid:#9c5e10; --on-now:#fff;
   --line-hover:rgba(11,11,11,.28);
-  /* The only red in the interface, and it is used for exactly one thing. */
+  /* The only red in the interface: destructive actions and marks -- the
+     archive/destroy controls below, and the "Remove this" mark label
+     (page review step 1, homelab-ij8.108) reuse it rather than mint a
+     second, uncalibrated red. */
   --danger:#a8271b; --danger-soft:rgba(168,39,27,.08);
   /* Text on a SOLID accent fill. Its own token for the same reason --on-now
      is: --accent is a light teal in dark mode, where white on it measures
@@ -569,14 +572,27 @@ main{display:block}
 /* The three-action bar that replaced the single .selbtn (page review step 1,
    homelab-ij8.108): same look, laid out as a row with gaps. */
 .selbar{position:absolute;z-index:60;display:flex;gap:.4rem}
+/* The author-origin `display:flex` above always beats the user-agent
+   stylesheet's `[hidden]{display:none}` -- origin, not specificity, decides
+   that fight, and author rules win it regardless of selector weight. Without
+   this rule `bar.hidden=true` is a no-op in every real browser: the bar
+   renders on every gallery page from the first paint and never goes away.
+   The fake-DOM node harness (tests/js/comments.test.mjs) only ever reads the
+   `hidden` property, never applies a stylesheet, so it cannot catch this --
+   caught in review instead (page review step 1, homelab-ij8.108). */
+.selbar[hidden]{display:none}
 .selbar button{font:500 .8rem/1 ui-sans-serif,system-ui,sans-serif;
   padding:.45rem .7rem;border-radius:8px;border:1px solid var(--accent);
   background:var(--card);color:var(--ink);box-shadow:0 2px 8px rgba(0,0,0,.18);cursor:pointer}
 .cquote{margin:0 0 .4rem;padding:.3rem .6rem;border-left:3px solid var(--accent);opacity:.85;
   font-size:.85rem;white-space:pre-wrap}
 .ckind{font:600 .75rem var(--mono);text-transform:uppercase}
-.ckind-remove{color:var(--bad, #c0392b)}
-.ckind-looks_good{color:var(--ok, #2e9d57)}
+/* --danger already IS the interface's one red (see its own comment, :root
+   above) -- a "Remove this" mark is exactly that meaning, so it reuses the
+   token rather than invent a second, uncalibrated red with no dark-mode
+   counterpart. --ok already covers "fine as it is" the same way. */
+.ckind-remove{color:var(--danger)}
+.ckind-looks_good{color:var(--ok)}
 .bar .profile{margin-left:auto}.bar .profile .mpanel{right:0;left:auto}
 [data-unread] .t::before,[data-unread] .rt::before{content:"";display:inline-block;
   width:.55em;height:.55em;border-radius:50%;background:var(--accent);
