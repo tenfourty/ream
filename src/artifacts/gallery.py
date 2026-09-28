@@ -41,6 +41,7 @@ from artifacts import (
     thumbs,
 )
 from artifacts import text as text_module
+from artifacts.content import _script_json
 from artifacts.db import Database
 from artifacts.store import content_domain, content_url, gallery_origin
 
@@ -593,6 +594,7 @@ main{display:block}
    counterpart. --ok already covers "fine as it is" the same way. */
 .ckind-remove{color:var(--danger)}
 .ckind-looks_good{color:var(--ok)}
+.cunplaced{margin:0 0 .6rem;font-size:.8rem;opacity:.8}
 .bar .profile{margin-left:auto}.bar .profile .mpanel{right:0;left:auto}
 [data-unread] .t::before,[data-unread] .rt::before{content:"";display:inline-block;
   width:.55em;height:.55em;border-radius:50%;background:var(--accent);
@@ -1705,10 +1707,34 @@ def _share_page(
 # budget. Only its own frame, on its own origin, is listened to, and nothing
 # the page sends is ever put into the document as markup: the quote goes in via
 # textContent, the anchor into a hidden field the service validates.
+#
+# MARKS ON THE PAGE (page review step 1, homelab-ij8.108). The page embeds its
+# open marks (comments.marks_for_page: id, kind, quote, anchor -- never a note)
+# as JSON; once the frame reports its state they are posted into it, once per
+# load of the frame and only to its own origin, and the shim paints them. Its
+# reply names the marks it could not place, and that becomes one line in the
+# comments drawer -- counted against this page's OWN mark ids, each once, so a
+# page cannot make the line say anything but a true count of Jeremy's marks.
 _COMMENTS_JS = """(function(){
 "use strict";
 var f=document.getElementById("artifact-frame");if(!f)return;
 var o;try{o=new URL(f.src).origin}catch(e){return}
+var mk=document.getElementById("artifact-marks"),marks=[],known=Object.create(null),sent=false;
+try{marks=JSON.parse(mk?mk.textContent:"[]");if(!Array.isArray(marks))marks=[]}catch(e){marks=[]}
+marks.forEach(function(m){if(m&&typeof m.id==="string")known[m.id]=1});
+function sendMarks(){if(sent||!marks.length)return;sent=true;
+  try{f.contentWindow.postMessage({type:"artifact-marks",marks:marks},o)}catch(e){}}
+function unplacedLine(ids){var p=document.getElementById("marks-unplaced");if(!p)return;
+  var n=0,seen=Object.create(null);
+  ids.slice(0,200).forEach(function(id){if(typeof id==="string"&&known[id]&&!seen[id]){seen[id]=1;n++}});
+  p.textContent=n?n+(n===1?" mark":" marks")+" could not be placed on this version of the page.":"";p.hidden=!n}
+if(f.addEventListener)f.addEventListener("load",function(){sent=false});
+window.addEventListener("message",function(e){try{
+  if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
+  if(!d||typeof d!=="object")return;
+  if(d.type==="artifact-state")sendMarks();
+  else if(d.type==="artifact-marks-placed"&&Array.isArray(d.unplaced))unplacedLine(d.unplaced)
+}catch(x){}});
 var form=document.querySelector("form.cnew");if(!form)return;
 var bar=document.createElement("div");bar.className="selbar";bar.hidden=true;
 [["comment","Comment"],["remove","Remove this"],["looks_good","Looks good"]].forEach(function(k){
@@ -2408,7 +2434,11 @@ def _render_comments(
         (
             f'<div class="cdrawer" id="comments">'
             f'<a class="dlg-back" href="/a/{ident}" aria-label="Close comments"></a>'
-            f'<div class="cdrawer-card"><h2>Comments</h2>{scope}'
+            f'<div class="cdrawer-card"><h2>Comments</h2>'
+            # Filled by /comments.js from the page's own report of the marks
+            # it could not place; empty and hidden until then.
+            '<p class="cunplaced" id="marks-unplaced" hidden></p>'
+            f"{scope}"
         )
     ]
     if on_all:
@@ -3729,7 +3759,15 @@ def gallery_router(db: Database) -> APIRouter:
                 # questions -- "it feels odd to have the questions at the top".
                 f"{_render_comments(comment_rows, artifact_id, everywhere)}"
                 f"{_rename_dialog(artifact_id, row[0])}"
-                f"{_link_dialog(artifact_id)}",
+                f"{_link_dialog(artifact_id)}"
+                # The open marks /comments.js posts into the frame to be
+                # painted: quote and anchor only, never the note, escaped for
+                # an inline script so a quote cannot end the block. A JSON DATA
+                # block, never executed (so the CSP's script-src does not apply
+                # to it), and outside the comments panel, which stays
+                # script-free markup.
+                '<script type="application/json" id="artifact-marks">'
+                f"{_script_json(comments.marks_for_page(db, artifact_id))}</script>",
                 # gallery.js reads the content origin straight off this iframe's own
                 # `src` -- fixed ids, not a class selector, so a future second iframe
                 # on this page could never be mistaken for this one.

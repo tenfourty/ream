@@ -550,8 +550,17 @@ def test_the_detail_page_loads_gallery_js_and_inlines_no_script(db):
     page = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
     assert '<script src="/gallery.js" defer></script>' in page
     # every <script> tag on this page carries a src -- none is inline, which the CSP
-    # (script-src 'self', no 'unsafe-inline') would refuse to run anyway.
-    assert re.search(r"<script(?![^>]*\bsrc=)[^>]*>", page) is None
+    # (script-src 'self', no 'unsafe-inline') would refuse to run anyway. The one
+    # exception is the marks DATA block (page review step 1), which a browser
+    # never executes: exactly one, and exactly that non-executable type.
+    assert (
+        re.search(
+            r"<script(?![^>]*\bsrc=)(?! type=\"application/json\" id=\"artifact-marks\">)[^>]*>",
+            page,
+        )
+        is None
+    )
+    assert page.count('<script type="application/json" id="artifact-marks">') == 1
 
 
 def test_the_detail_page_ids_the_frame_and_sheet_gallery_js_looks_for(db):

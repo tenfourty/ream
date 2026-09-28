@@ -21,10 +21,17 @@ function el(tag) {
              return null;
            } };
 }
-function build() {
-  const frameWin = {};
+function build({ marks = "[]" } = {}) {
+  const framePosts = [];
+  const frameWin = { postMessage: (m, o) => framePosts.push([m, o]) };
+  const frameOn = {};
   const iframe = { src: "https://abc.tenfourty.com/p/x/", contentWindow: frameWin,
+                   addEventListener: (t, fn) => ((frameOn[t] ||= []).push(fn)),
                    getBoundingClientRect: () => ({ top: 100, left: 20 }) };
+  // The page embeds its open marks as JSON (null: the page has no such block),
+  // and renders an empty, hidden line the shim's report fills.
+  const marksEl = marks === null ? null : { textContent: marks };
+  const unplacedEl = el("p"); unplacedEl.hidden = true;
   const body = el("input"); body.name = "body";
   const form = el("form");
   form.submits = 0;
@@ -36,20 +43,22 @@ function build() {
     return m ? form.children.find((c) => c.name === m[1]) || null : null;
   };
   const docBody = el("body");
-  const doc = { getElementById: (id) => (id === "artifact-frame" ? iframe : null),
+  const byId = { "artifact-frame": iframe, "artifact-marks": marksEl, "marks-unplaced": unplacedEl };
+  const doc = { getElementById: (id) => byId[id] || null,
                 querySelector: (q) => (q === "form.cnew" ? form : null),
                 createElement: el, body: docBody };
   const listeners = {};
-  const win = { scrollX: 0, scrollY: 50, addEventListener: (t, f) => (listeners[t] = f) };
+  const win = { scrollX: 0, scrollY: 50, addEventListener: (t, f) => ((listeners[t] ||= []).push(f)) };
   const location = { hash: "" };
   new Function("document", "window", "location", "URL", src)(doc, win, location, URL);
   const bar = docBody.children[0];
   const buttons = {};
   bar.children.forEach((b) => (buttons[b.dataset.kind] = b));
   const send = (data, { source = frameWin, origin = "https://abc.tenfourty.com" } = {}) =>
-    listeners.message({ source, origin, data });
+    (listeners.message || []).forEach((fn) => fn({ source, origin, data }));
   const click = (kind) => bar.on.click({ target: buttons[kind] });
-  return { bar, buttons, form, body, location, send, click };
+  const reload = () => (frameOn.load || []).forEach((fn) => fn({}));
+  return { bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload };
 }
 const SEL = { type: "artifact-selection", quote: "the plan",
               anchor: { kind: "range", path: "body>p:nth-of-type(1)", start: 4, end: 12 },
@@ -100,6 +109,54 @@ const SEL = { type: "artifact-selection", quote: "the plan",
   g.send(SEL);
   g.bar.on.click({ target: g.bar });
   ok(g.form.children.find((c) => c.name === "kind") === undefined, "a click that hits no button does nothing"); }
+
+// Marks on the page (page review step 1, Task 5): the embedded marks go into
+// the frame once the page says it is there, once per load, only to the frame's
+// own origin; its report of what it could not place becomes one line.
+const MARKS = JSON.stringify([
+  { id: "m1", kind: "remove", quote: "the plan", anchor: SEL.anchor },
+  { id: "m2", kind: "comment", quote: "the rest", anchor: SEL.anchor }]);
+const STATE = { type: "artifact-state", height: 400, slots: [] };
+{ const g = build({ marks: MARKS });
+  ok(g.framePosts.length === 0, "no marks are posted before the page reports it is there");
+  g.send(STATE);
+  ok(g.framePosts.length === 1, "the page's first state report sends the marks");
+  const [msg, origin] = g.framePosts[0];
+  ok(origin === "https://abc.tenfourty.com", "only to the frame's own origin, never '*'");
+  ok(msg.type === "artifact-marks" && msg.marks.map((m) => m.id).join() === "m1,m2", "carrying the embedded marks");
+  g.send(STATE); g.send(STATE);
+  ok(g.framePosts.length === 1, "and only once per load, however often the page resizes");
+  g.reload(); g.send(STATE);
+  ok(g.framePosts.length === 2, "a new load of the frame gets them again"); }
+{ const g = build({ marks: MARKS });
+  g.send(STATE, { origin: "https://evil.example" });
+  g.send(STATE, { source: {} });
+  ok(g.framePosts.length === 0, "another origin or window cannot ask for the marks"); }
+{ for (const [marks, why] of [["[]", "no marks"], [null, "no marks block"], ["{not json", "a broken block"], ['{"a":1}', "a block that is not a list"]]) {
+    const g = build({ marks });
+    let threw = false;
+    try { g.send(STATE); } catch (e) { threw = true; }
+    ok(!threw && g.framePosts.length === 0, `nothing is posted for ${why}`);
+  } }
+{ const g = build({ marks: MARKS });
+  g.send(STATE);
+  g.send({ type: "artifact-marks-placed", placed: ["m2"], unplaced: ["m1"] });
+  ok(g.unplacedEl.hidden === false && g.unplacedEl.textContent === "1 mark could not be placed on this version of the page.",
+     "one unplaced mark is said, in the singular");
+  g.send({ type: "artifact-marks-placed", placed: [], unplaced: ["m1", "m2", "m1", "invented", 7, null] });
+  ok(g.unplacedEl.textContent === "2 marks could not be placed on this version of the page.",
+     "the count is of this page's own marks, each once -- the page cannot inflate it");
+  g.send({ type: "artifact-marks-placed", placed: ["m1", "m2"], unplaced: [] });
+  ok(g.unplacedEl.hidden === true, "the line goes when every mark is placed");
+  g.send({ type: "artifact-marks-placed", unplaced: ["m1"] }, { origin: "https://evil.example" });
+  ok(g.unplacedEl.hidden === true, "another origin cannot write the line");
+  let threw = false;
+  try { g.send({ type: "artifact-marks-placed", unplaced: "m1" }); g.send({ type: "artifact-marks-placed" }); }
+  catch (e) { threw = true; }
+  ok(!threw && g.unplacedEl.hidden === true, "a malformed report is ignored"); }
+{ const g = build({ marks: MARKS });
+  g.send(SEL);
+  ok(g.bar.hidden === false && g.framePosts.length === 0, "a selection still shows the bar and sends no marks"); }
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

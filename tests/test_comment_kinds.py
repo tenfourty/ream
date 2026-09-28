@@ -183,3 +183,92 @@ def test_an_agent_can_mark_its_own_page_and_a_bad_kind_names_the_field(client, d
         json={"kind": "nope", "body": "x"},
     )
     assert bad.status_code == 422 and bad.json()["detail"]["field"] == "kind"
+
+
+# ---------------------------------------------------------------------------
+# Task 5: the marks the page shim paints. The page is agent HTML on its own
+# origin, so what reaches it is the quote and the anchor -- never the note.
+# ---------------------------------------------------------------------------
+
+
+def test_marks_for_page_carries_no_note_text(db):
+    page = _page(db)
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="secret thought",
+        kind="comment",
+        quote="Rotate the keys every 90 days.",
+        anchor=RANGE,
+    )
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="page-level",
+        kind="comment",
+    )
+    marks = comments.marks_for_page(db, page.id)
+    assert [m["kind"] for m in marks] == ["comment"], "range-anchored roots only"
+    assert "secret thought" not in str(marks)
+    assert set(marks[0]) == {"id", "kind", "quote", "anchor"}
+
+
+def test_marks_for_page_are_open_roots_oldest_first(db):
+    page = _page(db)
+
+    def mark(kind, body=""):
+        return comments.add(
+            db,
+            artifact_id=page.id,
+            author_kind="human",
+            author="jeremy",
+            body=body,
+            kind=kind,
+            quote="Rotate the keys every 90 days.",
+            anchor=RANGE,
+        )
+
+    first = mark("remove")
+    settled = mark("looks_good")
+    last = mark("comment", body="why?")
+    # A reply inherits its root's anchor and quote; it is not a second mark.
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="seat",
+        body="reply text",
+        thread_root=first.id,
+    )
+    comments.resolve(db, settled.id, by="jeremy", agent="seat")
+    marks = comments.marks_for_page(db, page.id)
+    assert [m["id"] for m in marks] == [first.id, last.id]
+    assert [m["kind"] for m in marks] == ["remove", "comment"]
+    assert marks[0]["anchor"]["kind"] == "range"
+    assert "reply text" not in str(marks) and "why?" not in str(marks)
+
+
+def test_the_page_view_embeds_the_marks_and_never_the_note(client, db):
+    page = _page(db)
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="private note",
+        kind="remove",
+        # A quote that tries to end the script it is embedded in.
+        quote="Rotate the keys every 90 days.</script><b>",
+        anchor=RANGE,
+    )
+    html = client.get(f"/a/{page.id}").text
+    start = html.index('<script type="application/json" id="artifact-marks">')
+    block = html[start : html.index("</script>", start)]
+    assert '"kind": "remove"' in block
+    assert "</script><b>" not in block and "\\u003c/script\\u003e" in block
+    assert "private note" not in block
+    assert 'id="marks-unplaced"' in html, "the line the shim's report fills"

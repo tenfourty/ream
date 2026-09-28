@@ -150,6 +150,98 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         'document.querySelectorAll("[data-artifact-decision]"),function(el){'
         'var id=el.getAttribute("data-artifact-decision");'
         'el.style.minHeight=(want[id]||0)+"px"})});'
+        # MARKS ON THE PAGE (page review step 1, homelab-ij8.108). The gallery
+        # posts the open marks -- id, kind, quote and anchor, NEVER the note
+        # (comments.marks_for_page) -- and each is painted where its text is
+        # through the CSS Custom Highlight API. THE AGENT'S DOM IS NOT CHANGED:
+        # nothing is wrapped, moved, split or inserted around its content. The
+        # single addition is one <style id="ar-mark-style"> holding the
+        # ::highlight() rules -- a stylesheet, not content -- added once. No
+        # Highlight API means paint nothing and report nothing.
+        #
+        # Placement never guesses. The stored anchor is tried first (element
+        # path + offsets into that element's text, the same offsets the
+        # selection leg computes, script text included, so both walks agree),
+        # and accepted only if the text there still matches the quote. Failing
+        # that, the quote is searched for in the page's VISIBLE text -- a
+        # separate walk that skips <script>/<style>/<noscript>/<template>, so a
+        # copy of the words inside a script neither makes a real quote
+        # ambiguous nor gets painted -- with whitespace and case ignored,
+        # because a selection's own toString() is rendered text and need not
+        # match textContent byte for byte. More than one best match, even after
+        # the prefix/suffix context, is unplaced. So is anything past 50 hits.
+        "var mq=null,SK={SCRIPT:1,STYLE:1,NOSCRIPT:1,TEMPLATE:1};"
+        "function lo(c){var x=c.toLowerCase();return x.length===1?x:c}"
+        'function tight(v){var r="",i,c;for(i=0;i<v.length;i++){c=v.charAt(i);'
+        "if(!/\\s/.test(c))r+=lo(c)}return r}"
+        'function isn(v){return typeof v==="number"&&v>=0&&v<=1e8&&v%1===0}'
+        # `o+l>a` (strict) for the start: an offset exactly at the end of one
+        # text node starts at 0 in the NEXT one, not at the tail of this one.
+        "function rangeAt(el,a,z){var w=document.createTreeWalker(el,4),t,o=0,"
+        "r=document.createRange(),s=0;while((t=w.nextNode())){var l=t.nodeValue.length;"
+        "if(!s&&o+l>a){r.setStart(t,a-o);s=1}"
+        "if(s&&o+l>=z){r.setEnd(t,z-o);return r}o+=l}return null}"
+        # The visible text, tightened, with where each kept character came
+        # from. Built at most once per message, and only if a search is needed.
+        'function index(){var b=document.body,x={s:"",n:[],k:[]};if(!b)return x;'
+        "var w=document.createTreeWalker(b,4),t,v,i,c,p,s=[];"
+        "while((t=w.nextNode())){p=t.parentNode;"
+        "if(p&&SK[String(p.nodeName).toUpperCase()])continue;v=t.nodeValue;"
+        "for(i=0;i<v.length;i++){c=v.charAt(i);if(/\\s/.test(c))continue;"
+        's.push(lo(c));x.n.push(t);x.k.push(i)}}x.s=s.join("");return x}'
+        "function search(m,ix){var q=tight(m.quote);if(!q)return null;"
+        "if(!ix.v)ix.v=index();var x=ix.v,all=x.s,hits=[],i=all.indexOf(q);"
+        "while(i>=0&&hits.length<51){hits.push(i);i=all.indexOf(q,i+1)}"
+        "if(!hits.length||hits.length>50)return null;"
+        'var a=m.anchor,pre=typeof a.prefix==="string"?tight(a.prefix.slice(-64)):"",'
+        'suf=typeof a.suffix==="string"?tight(a.suffix.slice(0,64)):"",best=-1,bs=-1,tie=false;'
+        "hits.forEach(function(h){var sc=0;"
+        "if(pre&&all.slice(Math.max(0,h-pre.length),h)===pre)sc+=2;"
+        "if(suf&&all.slice(h+q.length,h+q.length+suf.length)===suf)sc+=2;"
+        "if(sc>bs){bs=sc;best=h;tie=false}else if(sc===bs)tie=true});"
+        "if(tie)return null;"
+        "var e=best+q.length-1,r=document.createRange();"
+        "r.setStart(x.n[best],x.k[best]);r.setEnd(x.n[e],x.k[e]+1);return r}"
+        # A quote at the 500-character cap the selection leg applies is the
+        # START of what was selected, so the stored range may be longer.
+        "function place(m,ix){var a=m.anchor,el=null;"
+        "if(a.path){try{el=document.querySelector(a.path)}catch(x){el=null}}"
+        "if(el&&isn(a.start)&&isn(a.end)&&a.end>a.start){var r=null;"
+        "try{r=rangeAt(el,a.start,a.end)}catch(x){r=null}"
+        "if(r){var got=tight(String(r)),want=tight(m.quote);"
+        "if(want&&(got===want||(m.quote.length>=500&&got.indexOf(want)===0)))return r}}"
+        "return search(m,ix)}"
+        "function paint(list){var G={comment:new Highlight(),remove:new Highlight(),"
+        "looks_good:new Highlight()},placed=[],unplaced=[],ix={v:null};"
+        "list.slice(0,200).forEach(function(m){"
+        'if(!m||typeof m!=="object"||typeof m.id!=="string")return;var r=null;'
+        'if(typeof m.quote==="string"&&m.quote&&m.anchor&&typeof m.anchor==="object"'
+        '&&typeof m.anchor.path==="string"){try{r=place(m,ix)}catch(x){r=null}}'
+        # hasOwnProperty, not `G[m.kind]||`: a kind of "constructor" would
+        # otherwise pick Object and throw on .add().
+        "var g=Object.prototype.hasOwnProperty.call(G,m.kind)?G[m.kind]:G.comment;"
+        "if(r){g.add(r);placed.push(m.id)}else unplaced.push(m.id)});"
+        'CSS.highlights.set("ar-comment",G.comment);CSS.highlights.set("ar-remove",G.remove);'
+        'CSS.highlights.set("ar-good",G.looks_good);'
+        'if(!document.getElementById("ar-mark-style")){var st=document.createElement("style");'
+        'st.id="ar-mark-style";st.textContent="::highlight(ar-comment){background:rgba(217,164,0,.28)}"'
+        '+"::highlight(ar-remove){background:rgba(192,57,43,.22);text-decoration:line-through}"'
+        '+"::highlight(ar-good){background:rgba(46,157,87,.22)}";'
+        "(document.head||document.documentElement).appendChild(st)}"
+        'parent.postMessage({type:"artifact-marks-placed",placed:placed,unplaced:unplaced},'
+        f"{origin})}}"
+        # The whole handler body is in a try: the top-level try/catch wraps
+        # only the REGISTRATION, and nothing may throw into the page's console.
+        # Marks that arrive before the page has loaded wait for it, or text
+        # further down would be reported unplaced; the latest set wins.
+        'addEventListener("message",function(e){try{'
+        f"if(e.origin!=={origin})return;"
+        "var d=e.data;"
+        'if(!d||d.type!=="artifact-marks"||!Array.isArray(d.marks))return;'
+        "if(!(window.CSS&&CSS.highlights&&window.Highlight))return;"
+        'if(document.readyState==="complete"){mq=null;paint(d.marks);return}'
+        'if(!mq)addEventListener("load",function(){try{var l=mq;mq=null;if(l)paint(l)}catch(x){}});'
+        "mq=d.marks}catch(x){}});"
         # SELECTING TEXT TO COMMENT ON IT (homelab-ij8.18). The gallery cannot
         # read inside this cross-origin page, by design, so the page reports a
         # selection: the quoted text (capped), an anchor the service already

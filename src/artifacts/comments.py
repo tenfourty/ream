@@ -499,6 +499,26 @@ def list_for_artifact(
         return _with_quote_state(conn, [_row_to_comment(row) for row in rows])
 
 
+def marks_for_page(db: Database, artifact_id: str) -> list[dict]:
+    """The open marks the page shim paints: id, kind, quote and anchor only,
+    NEVER the note -- the page is agent HTML on its own origin and must not read
+    what Jeremy wrote about it (page review design, Security).
+
+    Open ROOT comments with a `range` anchor, oldest first. A reply carries its
+    root's anchor and quote, so it is the same place on the page, not a second
+    mark; a settled thread has nothing left to point at; and a page-level or
+    point anchor has no text to paint."""
+    with db.connect() as conn:
+        rows = conn.execute(
+            "select id, kind, quote, anchor from comment"
+            " where artifact_id = %s and thread_root is null"
+            " and resolved_at is null and anchor->>'kind' = 'range'"
+            " order by created_at asc, id asc",
+            (artifact_id,),
+        ).fetchall()
+    return [{"id": r[0], "kind": r[1], "quote": r[2], "anchor": r[3]} for r in rows]
+
+
 def list_for_agent(
     db: Database, agent: str, *, include_resolved: bool = False, limit: int = 500
 ) -> list[CommentRow]:
