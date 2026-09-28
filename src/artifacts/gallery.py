@@ -3420,6 +3420,11 @@ def gallery_router(db: Database) -> APIRouter:
         _same_origin_write(request)
         if not store.set_archived(db, artifact_id, archived == "1", agent=None):
             raise HTTPException(404, "no such artifact")
+        # Archiving is "put this away", so it lands back on the wall, not on
+        # the page just put away (Jeremy, 28 Sep 2026: staying on the page read
+        # as if nothing had happened). Un-archiving opens the page again.
+        if archived == "1":
+            return RedirectResponse("/", status_code=303)
         return RedirectResponse(f"/a/{artifact_id}", status_code=303)
 
     @router.post("/a/{artifact_id}/agents")

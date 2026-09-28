@@ -297,3 +297,23 @@ def test_renaming_still_works_from_the_dialogs_form(client, db, page):
     )
     assert out.status_code == 303
     assert store.get_owned(db, "seat", page.id).title == "A better name"
+
+
+def test_archiving_goes_back_to_the_wall_and_unarchiving_opens_the_page(client, page):
+    """Jeremy, 28 Sep 2026: archiving from a page left him on the page it had
+    just put away."""
+    put_away = client.post(
+        f"/a/{page.id}/archive",
+        data={"archived": "1"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert put_away.status_code == 303
+    assert put_away.headers["location"] == "/"
+    back = client.post(
+        f"/a/{page.id}/archive",
+        data={"archived": "0"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert back.headers["location"] == f"/a/{page.id}"
