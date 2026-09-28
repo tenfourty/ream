@@ -98,3 +98,23 @@ def test_a_mark_with_no_note_still_says_something_to_the_agent(db):
     )
     [event] = events.list_for_agent(db, "seat")
     assert event.summary.startswith('Remove this: "Rotate the keys')
+
+
+def test_a_range_anchor_may_carry_context_either_side():
+    got = comments.validate_anchor({**RANGE, "prefix": "the keys ", "suffix": " and"})
+    assert got == {**RANGE, "prefix": "the keys ", "suffix": " and"}
+    assert comments.validate_anchor(RANGE) == RANGE, "context stays optional"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"prefix": 5},
+        {"suffix": None},
+        {"prefix": "x" * 65},
+        {"extra": "no"},
+    ],
+)
+def test_context_is_validated_like_the_rest_of_the_anchor(bad):
+    with pytest.raises(comments.InvalidAnchor):
+        comments.validate_anchor({**RANGE, **bad})

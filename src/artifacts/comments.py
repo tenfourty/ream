@@ -124,6 +124,11 @@ def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+# How much text either side of a quote a range anchor may carry. Short: it exists
+# to tell two identical quotes on the same page apart, not to store a paragraph.
+ANCHOR_CONTEXT_MAX = 64
+
+
 def validate_anchor(anchor: dict | None) -> dict:
     """Normalise and validate an anchor. `None` -- the default for a caller who
     doesn't mention where a comment belongs -- means a whole-page comment. Anything
@@ -164,7 +169,12 @@ def validate_anchor(anchor: dict | None) -> dict:
         return {"kind": "point", "x": float(x), "y": float(y)}
 
     if kind == "range":
-        if anchor.keys() != {"kind", "path", "start", "end"}:
+        keys = set(anchor.keys())
+        if not (
+            {"kind", "path", "start", "end"}
+            <= keys
+            <= {"kind", "path", "start", "end", "prefix", "suffix"}
+        ):
             raise InvalidAnchor()
         path, start, end = anchor["path"], anchor["start"], anchor["end"]
         if not isinstance(path, str) or len(path) > 512:
@@ -173,7 +183,17 @@ def validate_anchor(anchor: dict | None) -> dict:
             raise InvalidAnchor()
         if not (0 <= start < end):
             raise InvalidAnchor()
-        return {"kind": "range", "path": path, "start": start, "end": end}
+        out = {"kind": "range", "path": path, "start": start, "end": end}
+        # Text either side of the quote, so a quote that appears twice on the
+        # page is placed on the right one (the text-quote-selector idea; see
+        # the plannotator study, section A).
+        for side in ("prefix", "suffix"):
+            if side in anchor:
+                value = anchor[side]
+                if not isinstance(value, str) or len(value) > ANCHOR_CONTEXT_MAX:
+                    raise InvalidAnchor()
+                out[side] = value
+        return out
 
     raise InvalidAnchor()
 
