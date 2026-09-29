@@ -87,6 +87,23 @@ def test_every_answer_carries_the_cursor_for_now(db, client, auth):
 
 
 def test_an_agent_can_leave_out_its_own_actions(db, client, auth):
+    # Binning its own page shelves its open question: an event whose actor
+    # is the seat itself, and one it did not need telling about.
+    page = store.publish(db, "seat", "Board", PAGE)
+    decisions.ask(db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS)
+    store.set_deleted(db, page.id, True, agent="seat")
+    everything = client.get("/api/v1/events?since=0", headers=auth).json()
+    assert any(r["actor"] == "seat" for r in everything)
+    others = client.get("/api/v1/events?since=0&exclude_self=true", headers=auth).json()
+    assert all(r["actor"] != "seat" for r in others)
+
+
+def test_a_relayed_answer_is_never_left_out_as_the_agents_own(db, client, auth):
+    """The answer is his; the relay only carried it. A key is shared by every
+    session on a machine, so a waiter in one session must hear a verdict that
+    another session relayed with the same key. Found by the live proof of
+    page review step 2, 29 Sep 2026: the waiter slept through a relayed
+    verdict and exited 3."""
     page = store.publish(db, "seat", "Board", PAGE)
     asked = decisions.ask(
         db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS
@@ -99,10 +116,14 @@ def test_an_agent_can_leave_out_its_own_actions(db, client, auth):
         source="terminal",
         recorded_by="seat",
     )
-    everything = client.get("/api/v1/events?since=0", headers=auth).json()
-    assert any(r["actor"] == "seat" for r in everything)
     others = client.get("/api/v1/events?since=0&exclude_self=true", headers=auth).json()
-    assert all(r["actor"] != "seat" for r in others)
+    assert [r["kind"] for r in others if r["ref_id"] == asked.id] == [
+        "decision_answered"
+    ]
+    held = client.get(
+        "/api/v1/events?since=0&exclude_self=true&wait=1", headers=auth
+    ).json()
+    assert any(r["kind"] == "decision_answered" for r in held)
 
 
 def test_a_relayed_answer_carries_the_session_that_asked(db):

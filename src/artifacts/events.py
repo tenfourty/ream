@@ -194,7 +194,12 @@ def list_for_agent(
     # outside agent's listener woke on its own `record` of an answer he gave in
     # the terminal. A convenience like `session`, never a boundary.
     if exclude_actor is not None:
-        sql += " and event.actor <> %s"
+        # An answer is never the agent's own action, even when its key relayed
+        # it: the decision is his and the relay only carried it. A key is
+        # shared by every session on a machine, so leaving it out made a waiter
+        # sleep through a verdict another session relayed (live proof of page
+        # review step 2, 29 Sep 2026). A duplicate wake costs one look.
+        sql += " and (event.actor <> %s or event.kind = 'decision_answered')"
         params += (exclude_actor,)
     sql += " order by event.seq asc limit %s"
     params += (limit,)
