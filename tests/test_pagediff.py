@@ -557,3 +557,37 @@ def test_second_call_is_served_from_the_cache(monkeypatch):
     monkeypatch.setattr(pagediff, "_render", _boom)
     assert pagediff.render_changes_safely("<p>a y</p>", "<p>d y</p>") == first
     assert first[1] is None
+
+
+def test_a_timeout_is_not_cached_so_the_next_view_marks_up(monkeypatch):
+    pagediff._CACHE.clear()
+    monkeypatch.setattr(pagediff, "_render", _sleepy)
+    first = pagediff.render_changes_safely("<p>a t</p>", "<p>b t</p>", timeout=0.5)
+    assert first == ("<p>b t</p>", "could not mark up changes")
+    monkeypatch.setattr(pagediff, "_render", pagediff._checked_render)
+    doc, reason = pagediff.render_changes_safely("<p>a t</p>", "<p>b t</p>")
+    assert reason is None
+    assert marks(doc) == (["b"], ["a"])
+
+
+def test_a_busy_pool_is_not_cached_so_the_next_view_marks_up(monkeypatch):
+    import threading
+
+    pagediff._CACHE.clear()
+    monkeypatch.setattr(pagediff, "_SLOTS", threading.BoundedSemaphore(1))
+    pagediff._SLOTS.acquire()  # every slot taken
+    first = pagediff.render_changes_safely("<p>a u</p>", "<p>b u</p>", timeout=0.2)
+    assert first == ("<p>b u</p>", "could not mark up changes")
+    pagediff._SLOTS.release()
+    doc, reason = pagediff.render_changes_safely("<p>a u</p>", "<p>b u</p>")
+    assert reason is None
+    assert marks(doc) == (["b"], ["a"])
+
+
+def test_a_deterministic_fallback_is_cached(monkeypatch):
+    pagediff._CACHE.clear()
+    monkeypatch.setattr(pagediff, "_render", _boom)
+    first = pagediff.render_changes_safely("<p>a v</p>", "<p>b v</p>")
+    assert first[1] == "could not mark up changes"
+    monkeypatch.setattr(pagediff, "_render", pagediff._checked_render)
+    assert pagediff.render_changes_safely("<p>a v</p>", "<p>b v</p>") == first

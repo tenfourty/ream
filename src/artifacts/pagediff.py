@@ -1138,7 +1138,9 @@ def render_changes_safely(
 
     Whatever goes wrong (a stall, a crash, an output that fails its check), the
     answer is the new page unchanged with ``could not mark up changes``. Results
-    are cached by the two pages' hashes, so a repeat view never recomputes.
+    are cached by the two pages' hashes, so a repeat view never recomputes --
+    except a fallback caused by load (a timeout, or every worker busy), which
+    says nothing about the pages and is tried again on the next view.
     """
     try:
         key = (
@@ -1150,7 +1152,7 @@ def render_changes_safely(
             if hit is not None:
                 _CACHE.move_to_end(key)
                 return hit
-        result = _run_in_worker(old_html, new_html, timeout)
+        result, transient = _run_in_worker(old_html, new_html, timeout)
         if (
             not isinstance(result, tuple)
             or len(result) != 2
@@ -1158,6 +1160,8 @@ def render_changes_safely(
             or not (result[1] is None or isinstance(result[1], str))
         ):
             result = (new_html, REASON_FAILED)
+        if transient:
+            return result
         with _CACHE_LOCK:
             _CACHE[key] = result
             _CACHE.move_to_end(key)
@@ -1169,8 +1173,10 @@ def render_changes_safely(
 
 
 def _run_in_worker(old_html: str, new_html: str, timeout: float):
+    """``(result, transient)``: transient is True when the fallback came from
+    load or a broken worker rather than from the pages themselves."""
     if not _SLOTS.acquire(timeout=timeout):
-        return new_html, REASON_FAILED
+        return (new_html, REASON_FAILED), True
     try:
         with _IDLE_LOCK:
             worker = _IDLE.pop() if _IDLE else None
@@ -1180,9 +1186,9 @@ def _run_in_worker(old_html: str, new_html: str, timeout: float):
             result = worker.run(old_html, new_html, timeout)
         except BaseException:  # noqa: BLE001 - timed out or broken
             worker.kill()  # it never serves again
-            return new_html, REASON_FAILED
+            return (new_html, REASON_FAILED), True
         with _IDLE_LOCK:
             _IDLE.append(worker)
-        return result
+        return result, False
     finally:
         _SLOTS.release()
