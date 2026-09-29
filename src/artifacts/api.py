@@ -104,6 +104,8 @@ class RecordBody(BaseModel):
     note: str
     source: str
     said_at: str | None = None
+    # A review's round the verdict is for; a later round refuses it (409).
+    round: int | None = None
 
 
 class PatchBody(BaseModel):
@@ -1156,12 +1158,16 @@ def agent_router(
         row = decisions.get_owned(db, agent, review_id)
         if row is None or row.kind != "review":
             raise HTTPException(404, "no such review")
+        with db.connect() as conn:
+            current = decisions.current_round(conn, review_id)
+        round_n = current.n if current is not None else None
         if row.answer is None:
             return {
                 "id": row.id,
                 "artifact_id": row.artifact_id,
                 "created_at": row.created_at,
                 "review_mode": row.review_mode,
+                "round": round_n,
                 "verdict": None,
                 "answered_at": None,
                 "message": None,
@@ -1176,6 +1182,7 @@ def agent_router(
             "artifact_id": row.artifact_id,
             "created_at": row.created_at,
             "review_mode": row.review_mode,
+            "round": round_n,
             "verdict": decisions.VERDICTS[row.answer],
             "answered_at": row.answered_at,
             "message": message,
@@ -1455,6 +1462,7 @@ def agent_router(
                 source=payload.source,
                 recorded_by=agent,
                 said_at=said_at,
+                round=payload.round,
             )
         except decisions.InvalidSource:
             raise HTTPException(
@@ -1466,12 +1474,31 @@ def agent_router(
         except decisions.InvalidAnswer:
             raise HTTPException(422, "that letter is not one of the options") from None
         except decisions.AlreadyDecided as exc:
+            named, current = exc.round, exc.current
             raise HTTPException(
                 409,
                 {
                     "field": "answer",
-                    "verdict": decisions.VERDICTS.get(exc.row.answer),
-                    "answered_at": exc.row.answered_at,
+                    # The verdict that counted, from its round when rounds
+                    # exist: a stale relay's round has been cleared off the row.
+                    "verdict": (
+                        named.verdict
+                        if named is not None and named.verdict is not None
+                        else decisions.VERDICTS.get(exc.row.answer)
+                    ),
+                    "answered_at": (
+                        named.closed_at
+                        if named is not None and named.closed_at is not None
+                        else exc.row.answered_at
+                    ),
+                    "round": current.n if current is not None else None,
+                    "verdict_round": named.n if named is not None else None,
+                    "message": (
+                        f"This review already has a verdict for round {named.n}: "
+                        f"{named.verdict}"
+                        if named is not None and named.verdict is not None
+                        else None
+                    ),
                 },
             ) from None
         except store.NotFound:

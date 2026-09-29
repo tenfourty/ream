@@ -638,6 +638,15 @@ def patch(
                         " updated_at = now() where id = %s",
                         (n, title, artifact_id),
                     )
+                # A review he sent back opens its next round on this version,
+                # in this transaction, so the round and the version it reviews
+                # commit together. Only here: an identical body returned above
+                # without a version, and `publish` writes version 1, which no
+                # review can precede. Looked up at call time (not imported at
+                # the top) because decisions imports this module.
+                from artifacts import decisions
+
+                decisions._advance_rounds(conn, artifact_id, n)
         except UniqueViolation as exc:
             # Two patches raced the same `expected_revision`: both passed the
             # check above (nothing here takes a lock), but only one of them

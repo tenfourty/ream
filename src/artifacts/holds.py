@@ -154,7 +154,7 @@ def set_review_mode(db, decision_id: str, mode: str) -> tuple[str, int]:
         if found is None:
             raise store.NotFound()
         if found[6] is not None or found[11] is not None:
-            raise decisions.AlreadyDecided(decisions._row_to_decision(found))
+            raise decisions._already(conn, found)
         artifact_id = found[1]
         conn.execute(
             "update decision set review_mode = %s where id = %s", (mode, decision_id)

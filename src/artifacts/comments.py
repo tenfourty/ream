@@ -406,6 +406,22 @@ def add(
                 author_kind == "human"
                 and holds.page_mode(conn, artifact_id, lock=True) == "held"
             )
+            # The open round this mark belongs to, read after the review rows
+            # were locked (decision, then round): a republish opening the next
+            # round waits for this insert, and one that committed first is
+            # seen. None between rounds, on a page with no open review, and
+            # for an agent's write (a round is his review of the page).
+            review_round = None
+            if author_kind == "human":
+                review_round = conn.execute(
+                    "select r.n from review_round r"
+                    " join decision d on d.id = r.review_id"
+                    " where d.artifact_id = %s and d.kind = 'review'"
+                    " and d.answer is null and d.closed_at is null"
+                    " and r.closed_at is null"
+                    " order by d.created_at desc, r.n desc limit 1",
+                    (artifact_id,),
+                ).fetchone()
             # The decision rows were locked first, as a verdict does; the root
             # comes second so the two can never wait on each other.
             if is_reply:
@@ -422,8 +438,8 @@ def add(
                     raise NoSuchThread()
             conn.execute(
                 "insert into comment (id, artifact_id, version_n, thread_root, anchor,"
-                " quote, author_kind, author, body, kind, held)"
-                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                " quote, author_kind, author, body, kind, held, review_round)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     comment_id,
                     artifact_id,
@@ -436,6 +452,7 @@ def add(
                     body,
                     kind,
                     held,
+                    review_round[0] if review_round is not None else None,
                 ),
             )
             # THE HALF THAT WAS MISSING. The comment table, the anchor

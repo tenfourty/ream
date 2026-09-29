@@ -151,15 +151,42 @@ class InvalidOptions(Exception):
         self.field = "options"
 
 
+@dataclass(frozen=True)
+class RoundRow:
+    """One round of a review (`review_round`). `version_n` is the version under
+    review; `base_version` the one the previous round's changes were requested
+    on (None in round 1)."""
+
+    review_id: str
+    n: int
+    version_n: int
+    base_version: int | None
+    opened_at: str
+    closed_at: str | None
+    verdict: str | None
+
+
 class AlreadyDecided(Exception):
     """A second verdict on a review. The first one counts (page review design:
     'a verdict from a stale second device is refused, and he is told which
-    verdict counted and when'). `row` is the review as it stands."""
+    verdict counted and when'). `row` is the review as it stands.
 
-    def __init__(self, row: "DecisionRow") -> None:
+    `round` is the round whose verdict counted -- the one the refused verdict
+    was meant for -- and `current` the review's round now. They differ when a
+    stale tab answers a round a republish has since moved past. Both are None
+    for a decision with no rounds."""
+
+    def __init__(
+        self,
+        row: "DecisionRow",
+        round: "RoundRow | None" = None,
+        current: "RoundRow | None" = None,
+    ) -> None:
         super().__init__("answer")
         self.field = "answer"
         self.row = row
+        self.round = round
+        self.current = current
 
 
 class InvalidAnswer(Exception):
@@ -327,20 +354,27 @@ def ask_review(
         title, version_n = owned[1], owned[4]
         question = f"Review requested: {title}"[:MAX_QUESTION_BYTES]
         decision_id = ids.new_id()
-        conn.execute(
-            "insert into decision (id, artifact_id, version_n, question, options,"
-            " recommended, session, kind, review_mode)"
-            " values (%s, %s, %s, %s, %s, null, %s, 'review', %s)",
-            (
-                decision_id,
-                artifact_id,
-                version_n,
-                question,
-                Jsonb(REVIEW_OPTIONS),
-                session,
-                mode,
-            ),
-        )
+        with conn.transaction():
+            conn.execute(
+                "insert into decision (id, artifact_id, version_n, question, options,"
+                " recommended, session, kind, review_mode)"
+                " values (%s, %s, %s, %s, %s, null, %s, 'review', %s)",
+                (
+                    decision_id,
+                    artifact_id,
+                    version_n,
+                    question,
+                    Jsonb(REVIEW_OPTIONS),
+                    session,
+                    mode,
+                ),
+            )
+            # Round 1 is born with the review, at the version he will see.
+            conn.execute(
+                "insert into review_round (review_id, n, version_n, base_version)"
+                " values (%s, 1, %s, null)",
+                (decision_id, version_n),
+            )
         created = conn.execute(
             f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
             (decision_id,),
@@ -432,15 +466,89 @@ class InvalidSource(Exception):
     """
 
 
+_ROUND_COLUMNS = "review_id, n, version_n, base_version, opened_at, closed_at, verdict"
+
+
+def _row_to_round(row) -> RoundRow:
+    return RoundRow(
+        review_id=row[0],
+        n=row[1],
+        version_n=row[2],
+        base_version=row[3],
+        opened_at=row[4].isoformat(),
+        closed_at=row[5].isoformat() if row[5] else None,
+        verdict=row[6],
+    )
+
+
+def current_round(conn, review_id: str) -> RoundRow | None:
+    """The review's latest round, open or closed. None for a question."""
+    found = conn.execute(
+        f"select {_ROUND_COLUMNS} from review_round"  # noqa: S608 -- fixed constant
+        " where review_id = %s order by n desc limit 1",
+        (review_id,),
+    ).fetchone()
+    return _row_to_round(found) if found is not None else None
+
+
+def _round(conn, review_id: str, n: int) -> RoundRow | None:
+    found = conn.execute(
+        f"select {_ROUND_COLUMNS} from review_round"  # noqa: S608 -- fixed constant
+        " where review_id = %s and n = %s",
+        (review_id, n),
+    ).fetchone()
+    return _row_to_round(found) if found is not None else None
+
+
+def current_round_numbers(db: Database, review_ids: list[str]) -> dict[str, int]:
+    """{review id: its current round's n}, for the verdict forms."""
+    if not review_ids:
+        return {}
+    with db.connect() as conn:
+        return dict(
+            conn.execute(
+                "select review_id, max(n) from review_round"
+                " where review_id = any(%s) group by review_id",
+                (list(review_ids),),
+            ).fetchall()
+        )
+
+
+def _already(conn, decision_row, asked_round: int | None = None) -> AlreadyDecided:
+    """The refusal for a verdict that does not count, naming the round whose
+    verdict did: the one the form was for when that round is over, else the
+    current one."""
+    row = _row_to_decision(decision_row[: len(_COLUMNS.split(","))])
+    current = current_round(conn, row.id)
+    named = current
+    if (
+        asked_round is not None
+        and current is not None
+        and asked_round != current.n
+        and (earlier := _round(conn, row.id, asked_round)) is not None
+    ):
+        named = earlier
+    return AlreadyDecided(row, round=named, current=current)
+
+
 def _lock_review_and_settle_letter(
-    conn, decision_id: str, artifact_id: str, letter: str
+    conn,
+    decision_id: str,
+    artifact_id: str,
+    letter: str,
+    asked_round: int | None = None,
 ) -> str:
     """First step of a review verdict's transaction. Takes the decision row
     `for update`, so a flip to live (which takes the same lock) and a verdict
     serialise on it, then re-tests the row under the lock. Approved becomes
     Approved-with-notes when marks of his are still held: his marks reach the
     agent with the verdict, so an Approved that carried them must not read as
-    "nothing to say"."""
+    "nothing to say".
+
+    `asked_round` is the round the verdict was given for (the form's hidden
+    field, or a relay's `round`). A republish that opened a later round has
+    cleared the answer, so without this a stale tab's verdict for round 1
+    would land on round 2; tested under the same lock the republish takes."""
     current = conn.execute(
         f"select {_COLUMNS} from decision where decision.id = %s for update",  # noqa: S608 -- fixed constant, not caller input
         (decision_id,),
@@ -448,8 +556,63 @@ def _lock_review_and_settle_letter(
     if current[11] is not None:  # closed_at
         raise store.NotFound()
     if current[6] is not None:  # answer
-        raise AlreadyDecided(_row_to_decision(current))
+        raise _already(conn, current, asked_round)
+    if asked_round is not None:
+        now = current_round(conn, decision_id)
+        if now is not None and now.n != asked_round:
+            raise _already(conn, current, asked_round)
     return holds.approved_letter(conn, artifact_id, letter)
+
+
+def _close_round(conn, decision_id: str, letter: str) -> None:
+    """The verdict closes the open round, inside the verdict's transaction."""
+    conn.execute(
+        "update review_round set closed_at = now(), verdict = %s"
+        " where review_id = %s and closed_at is null",
+        (VERDICTS[letter], decision_id),
+    )
+
+
+def _advance_rounds(conn, artifact_id: str, version_n: int) -> None:
+    """A real new version of the page has just been written, in the caller's
+    transaction. For each open review on the page, locked `for update` first
+    (decision, then round -- the order a verdict takes):
+
+    * latest round closed with changes requested: open round n+1 at this
+      version, based on the version the changes were asked on, and clear the
+      decision's answer so the review waits on him again. Mode carries over.
+    * latest round still open: it now reviews this version; its base stays.
+    * otherwise (approved, with notes, dismissed): the review is over.
+    """
+    reviews = conn.execute(
+        "select id from decision where artifact_id = %s and kind = 'review'"
+        " and closed_at is null order by id for update",
+        (artifact_id,),
+    ).fetchall()
+    for (review_id,) in reviews:
+        latest = current_round(conn, review_id)
+        if latest is None:
+            continue
+        if latest.closed_at is None:
+            conn.execute(
+                "update review_round set version_n = %s"
+                " where review_id = %s and n = %s",
+                (version_n, review_id, latest.n),
+            )
+        elif latest.verdict == "changes_requested":
+            conn.execute(
+                "insert into review_round (review_id, n, version_n, base_version)"
+                " values (%s, %s, %s, %s)",
+                (review_id, latest.n + 1, version_n, latest.version_n),
+            )
+            # The earlier verdict lives on in review_round and the journal.
+            conn.execute(
+                "update decision set answer = null, answer_note = '',"
+                " answered_at = null, answered_by = null, answer_source = null,"
+                " recorded_by = null, said_at = null, acknowledged_at = null,"
+                " acknowledged_by = null where id = %s",
+                (review_id,),
+            )
 
 
 def record_elsewhere(
@@ -461,6 +624,7 @@ def record_elsewhere(
     source: str,
     recorded_by: str,
     said_at: datetime | None = None,
+    round: int | None = None,
 ) -> DecisionRow:
     """Record an answer Jeremy gave somewhere that is not the page.
 
@@ -490,6 +654,7 @@ def record_elsewhere(
     Refuses a closed decision, like `answer` does, and for the same reason: the
     agent that closed it said it no longer needs one. A relay on an already-answered
     REVIEW is refused too: the first verdict counts, relayed or tapped.
+    `round`, when given, must be the review's current round (see `answer`).
     """
     if source not in ANSWER_SOURCES:
         raise InvalidSource(source)
@@ -520,7 +685,7 @@ def record_elsewhere(
         with conn.transaction():
             if row[_KIND_IDX] == "review":
                 letter = _lock_review_and_settle_letter(
-                    conn, decision_id, artifact_id, letter
+                    conn, decision_id, artifact_id, letter, round
                 )
             label = next(o["label"] for o in options if o["letter"] == letter)
             summary = f"{letter}: {label} (relayed from {source})"[:200]
@@ -538,8 +703,9 @@ def record_elsewhere(
                     f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
                     (decision_id,),
                 ).fetchone()
-                raise AlreadyDecided(_row_to_decision(current))
+                raise _already(conn, current, round)
             if row[_KIND_IDX] == "review":
+                _close_round(conn, decision_id, letter)
                 # His verdict carries every mark in its message, so releasing
                 # the held ones writes no events of their own.
                 holds.release(conn, artifact_id, emit=False)
@@ -570,7 +736,13 @@ def record_elsewhere(
 
 
 def answer(
-    db: Database, decision_id: str, *, letter: str, note: str = "", by: str
+    db: Database,
+    decision_id: str,
+    *,
+    letter: str,
+    note: str = "",
+    by: str,
+    round: int | None = None,
 ) -> DecisionRow:
     """The gallery, acting for Jeremy, answers a decision. Takes no `agent`: this is
     not a call an agent ever makes, so there is no ownership to check against a
@@ -589,6 +761,12 @@ def answer(
     (`store.NotFound`) a decision that does not exist or is already closed: the agent
     that closed it said it no longer needs an answer, and a stale form resubmission
     must not manufacture one anyway.
+
+    `round` is the review round the verdict form was drawn for. A republish
+    after changes requested opens the next round and clears the answer, so a
+    tab left open on round 1 would otherwise land its verdict on round 2; a
+    `round` that is not the current one is refused (`AlreadyDecided`, naming
+    both rounds). None skips the check, as every caller before rounds did.
     """
     store._check_size(note, MAX_NOTE_BYTES, "note", agent=by, artifact_id=None)
 
@@ -624,7 +802,7 @@ def answer(
         # One verdict counts on a review: a second device, or a stale form, is
         # refused and told what counted. A QUESTION may still be re-answered.
         if row[_KIND_IDX] == "review" and row[6] is not None:
-            raise AlreadyDecided(_row_to_decision(row[: len(_COLUMNS.split(","))]))
+            raise _already(conn, row, round)
 
         store._check_secrets(note, "note", agent=by, artifact_id=artifact_id)
 
@@ -635,7 +813,7 @@ def answer(
         with conn.transaction():
             if row[_KIND_IDX] == "review":
                 letter = _lock_review_and_settle_letter(
-                    conn, decision_id, artifact_id, letter
+                    conn, decision_id, artifact_id, letter, round
                 )
             label = next(
                 option["label"] for option in options if option["letter"] == letter
@@ -659,8 +837,9 @@ def answer(
                     f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
                     (decision_id,),
                 ).fetchone()
-                raise AlreadyDecided(_row_to_decision(current))
+                raise _already(conn, current, round)
             if row[_KIND_IDX] == "review":
+                _close_round(conn, decision_id, letter)
                 # His verdict carries every mark in its message, so releasing
                 # the held ones writes no events of their own.
                 holds.release(conn, artifact_id, emit=False)

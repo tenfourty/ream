@@ -690,3 +690,33 @@ alter table comment alter column gg_scanned_at drop default;
 -- The last time the sweep tried this comment, answered or not, so one comment
 -- the relay keeps refusing cannot hold the head of the queue for ever.
 alter table comment add column if not exists gg_attempted_at timestamptz;
+
+-- REVIEW ROUNDS (page review step 4, homelab-ij8.108). Round 1 opens when the
+-- agent asks for a review; a republish after "changes requested" opens the
+-- next one by itself. `base_version` is the version the previous round's
+-- "changes requested" was given on (null for round 1), and it never moves;
+-- `version_n` follows the page while the round is open. A verdict closes the
+-- round and is kept here after the decision row is cleared for the next one.
+create table if not exists review_round (
+    review_id    text not null references decision(id) on delete cascade,
+    n            int not null,
+    version_n    int not null,
+    base_version int,
+    opened_at    timestamptz not null default now(),
+    closed_at    timestamptz,
+    verdict      text,
+    primary key (review_id, n)
+);
+-- Reviews asked before rounds existed get their round 1, once. Idempotent:
+-- every review already has a round 1 after the first run.
+insert into review_round (review_id, n, version_n, base_version, opened_at,
+                          closed_at, verdict)
+    select id, 1, version_n, null, created_at, answered_at,
+           case answer when 'a' then 'approved'
+                       when 'b' then 'approved_with_notes'
+                       when 'c' then 'changes_requested'
+                       when 'd' then 'dismissed' end
+    from decision where kind = 'review'
+    on conflict (review_id, n) do nothing;
+-- The round a mark was made in; null outside any open round.
+alter table comment add column if not exists review_round int;

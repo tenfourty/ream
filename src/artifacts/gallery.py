@@ -3112,6 +3112,7 @@ def _render_decisions(
     listening_since: str | None = None,
     outcomes: dict[str, list] | None = None,
     held_count: int = 0,
+    rounds: dict[str, int] | None = None,
 ) -> tuple[str, str]:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
@@ -3238,13 +3239,21 @@ def _render_decisions(
                 f" &middot; {escape(_when(row.answered_at or ''))}</p></div>"
             )
         buttons = "".join(_button(option, row) for option in row.options)
+        # The round this form was drawn for: a tab left open while a republish
+        # opened the next round must not have its verdict land on that one.
+        round_n = (rounds or {}).get(row.id) if is_review else None
+        round_field = (
+            f'<input type="hidden" name="round" value="{int(round_n)}">'
+            if round_n is not None
+            else ""
+        )
         return (
             f'<div class="ask"{anchor}>'
             f'<p class="q">{tag}{escape(row.question)}</p>'
             f"{_since(row)}"
             f"{hint}"
             f'<form method="post" action="/d/{escape(row.id)}/answer">'
-            f"{buttons}"
+            f"{round_field}{buttons}"
             '<input name="note" placeholder="note (optional)"></form></div>'
         )
 
@@ -4107,6 +4116,14 @@ def gallery_router(db: Database) -> APIRouter:
                 )
                 else 0
             ),
+            rounds=decisions.current_round_numbers(
+                db,
+                [
+                    r.id
+                    for r in decision_rows
+                    if getattr(r, "kind", "") == "review" and r.answer is None
+                ],
+            ),
         )
         # A fresh pass per view, good once and for minutes (homelab-ij8.101), minted only
         # on a page Jeremy's Authelia session can load. It travels in the iframe's src, and
@@ -4521,7 +4538,36 @@ def gallery_router(db: Database) -> APIRouter:
             headers={**gallery_headers(), "cache-control": "no-store"},
         )
 
-    def _already_decided_page(row: decisions.DecisionRow) -> HTMLResponse:
+    def _already_decided_page(exc: decisions.AlreadyDecided) -> HTMLResponse:
+        row, named, current = exc.row, exc.round, exc.current
+        if named is not None and named.verdict is not None:
+            # Rounds: name the round whose verdict counted, and, when a
+            # republish has since opened a later one, say so.
+            letter = next(
+                (k for k, v in decisions.VERDICTS.items() if v == named.verdict),
+                None,
+            )
+            label = next(
+                (o["label"] for o in row.options if o["letter"] == letter),
+                named.verdict,
+            )
+            later = (
+                f" The page has since been revised and is now in round {current.n}."
+                if current is not None and current.n != named.n
+                else ""
+            )
+            return HTMLResponse(
+                _shell(
+                    "Already decided",
+                    f"<p>This review already has a verdict for round {named.n}: "
+                    f"<b>{escape(label)}</b>, given "
+                    f"{escape(_when(named.closed_at or ''))}. That is the one "
+                    f"that counts.{later} "
+                    f'<a href="/a/{escape(row.artifact_id)}">Back to the page</a></p>',
+                ),
+                status_code=409,
+                headers=gallery_headers(),
+            )
         if row.answer is None:
             # Closed by the agent: there is no verdict to name.
             return HTMLResponse(
@@ -4561,7 +4607,7 @@ def gallery_router(db: Database) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(422, "mode is held or live") from exc
         except decisions.AlreadyDecided as exc:
-            return _already_decided_page(exc.row)
+            return _already_decided_page(exc)
         except store.NotFound as exc:
             raise HTTPException(404, "no such open review") from exc
         return RedirectResponse(f"/a/{artifact_id}", status_code=303)
@@ -4571,15 +4617,26 @@ def gallery_router(db: Database) -> APIRouter:
         decision_id: str,
         letter: str = Form(...),
         note: str = Form(""),
+        round_field: str = Form("", alias="round"),
         _guard: None = Depends(_same_origin_write),
     ):
+        # The round the form was drawn for; absent on a question's form.
+        try:
+            asked_round = int(round_field) if round_field else None
+        except ValueError as exc:
+            raise HTTPException(422, "round is a number") from exc
         # `by="jeremy"` is hardcoded, not read from any header -- see the module
         # docstring for why: Authelia admits exactly one subject to this host, and
         # nothing here proves the ingress strips an inbound copy of an identity
         # header before this app ever sees the request.
         try:
             row = decisions.answer(
-                db, decision_id, letter=letter, note=note, by="jeremy"
+                db,
+                decision_id,
+                letter=letter,
+                note=note,
+                by="jeremy",
+                round=asked_round,
             )
         except store.BodyTooLarge as exc:
             raise HTTPException(413, f"{exc.field} exceeds the size limit") from exc
@@ -4594,7 +4651,7 @@ def gallery_router(db: Database) -> APIRouter:
         except decisions.InvalidAnswer as exc:
             raise HTTPException(422, "not one of this decision's options") from exc
         except decisions.AlreadyDecided as exc:
-            return _already_decided_page(exc.row)
+            return _already_decided_page(exc)
         except store.NotFound as exc:
             raise HTTPException(404, "no such open decision") from exc
         return RedirectResponse(f"/a/{row.artifact_id}", status_code=303)
