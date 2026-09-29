@@ -601,3 +601,41 @@ def test_the_shim_names_the_held_highlight():
 
     source = content._viewer_report()
     assert "ar-held" in source and "underline dotted" in source
+
+
+def test_a_flip_on_a_review_the_agent_closed_says_so(db, gclient, nudges):
+    page, row, _ = _held_review(db, marks=1)
+    decisions.close(db, "seat", row.id)
+    resp = _mode_post(gclient, row.id, "live")
+    assert resp.status_code == 409
+    assert "None" not in resp.text
+    assert "The agent closed this review, so there is nothing left to switch." in (
+        resp.text
+    )
+    assert f'href="/a/{page.id}"' in resp.text
+    assert _mode_of(db, row.id) == "held"
+
+
+def test_the_card_hint_follows_the_mode(db, gclient, nudges):
+    page, row, _ = _held_review(db, marks=1)
+    held_hint = "Your marks on this page go with your verdict."
+    live_hint = (
+        "Each mark reaches the agent as you make it, and all of them go with "
+        "your verdict. Your first verdict is final."
+    )
+    html = gclient.get(f"/a/{page.id}").text
+    assert held_hint in html and live_hint not in html
+    _mode_post(gclient, row.id, "live")
+    html = gclient.get(f"/a/{page.id}").text
+    assert live_hint in html and held_hint not in html
+
+
+def test_a_mixed_page_shows_the_count_and_hint_on_every_open_review(
+    db, gclient, nudges
+):
+    page, held_row, _ = _held_review(db, marks=1)
+    live_row = decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="live")
+    html = gclient.get(f"/a/{page.id}").text
+    assert html.count("1 mark held") == 2
+    assert html.count("Approved with held marks counts as Approved with notes.") == 2
+    assert live_row.id in html and held_row.id in html

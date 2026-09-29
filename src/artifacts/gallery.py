@@ -2898,7 +2898,7 @@ def _render_decisions(
             )
         count = ""
         approved = ""
-        if row.review_mode == "held" and held > 0:
+        if held > 0:
             count = f' <span class="rheld">{held} mark{"" if held == 1 else "s"} held</span>'
             approved = (
                 '<p class="rhint">Approved with held marks counts as '
@@ -2918,9 +2918,17 @@ def _render_decisions(
         otherwise yank that card out of its own disclosure and drop it on the page."""
         is_review = getattr(row, "kind", "question") == "review"
         tag = '<span class="rtag">Review</span> ' if is_review else ""
+        live = row.review_mode != "held"
         hint = (
-            '<p class="rhint">Your marks on this page go with your verdict. '
-            "Your first verdict is final.</p>"
+            '<p class="rhint">'
+            + (
+                "Each mark reaches the agent as you make it, and all of them go "
+                "with your verdict. Your first verdict is final."
+                if live
+                else "Your marks on this page go with your verdict. "
+                "Your first verdict is final."
+            )
+            + "</p>"
             if is_review and row.answer is None
             else ""
         )
@@ -4214,6 +4222,18 @@ def gallery_router(db: Database) -> APIRouter:
         )
 
     def _already_decided_page(row: decisions.DecisionRow) -> HTMLResponse:
+        if row.answer is None:
+            # Closed by the agent: there is no verdict to name.
+            return HTMLResponse(
+                _shell(
+                    "Already decided",
+                    "<p>The agent closed this review, so there is nothing left "
+                    f'to switch. <a href="/a/{escape(row.artifact_id)}">'
+                    "Back to the page</a></p>",
+                ),
+                status_code=409,
+                headers=gallery_headers(),
+            )
         label = next(
             (o["label"] for o in row.options if o["letter"] == row.answer),
             row.answer,
