@@ -27,7 +27,7 @@ from dataclasses import dataclass, replace
 
 from psycopg.types.json import Jsonb
 
-from artifacts import events, ids, nudge, store, text
+from artifacts import events, holds, ids, nudge, store, text
 from artifacts.db import Database
 
 # A comment is a remark about a page, not a page in itself -- 8 KB is generous for
@@ -55,7 +55,7 @@ _COLUMNS = (
     "comment.id, comment.artifact_id, comment.version_n, comment.thread_root,"
     " comment.anchor, comment.quote, comment.author_kind, comment.author,"
     " comment.body, comment.created_at, comment.resolved_at, comment.resolved_by,"
-    " comment.kind"
+    " comment.kind, comment.held"
 )
 
 # Correlated subquery, not a join: for the comment a given row names -- itself, if it
@@ -96,6 +96,8 @@ class CommentRow:
     # storing it would make it a fact about the page as it was when somebody
     # last looked.
     quote_state: str = ""
+    # Written by Jeremy while his page's review was held: the agent cannot see it yet.
+    held: bool = False
 
 
 class InvalidAnchor(Exception):
@@ -235,7 +237,18 @@ def _row_to_comment(row) -> CommentRow:
         resolved_at=row[10].isoformat() if row[10] is not None else None,
         resolved_by=row[11],
         kind=row[12],
+        held=row[13],
     )
+
+
+def _event_summary(kind: str, quote: str, body: str) -> str:
+    """What a `comment_added` event says: the body, or for a mark the kind
+    label and the quote (the note after it)."""
+    label = {"remove": "Remove this", "looks_good": "Looks good"}.get(kind)
+    if not label:
+        return body
+    short = " ".join((quote or "").split())[:120]
+    return f'{label}: "{short}"' + (f" — {body}" if body.strip() else "")
 
 
 def add(
@@ -322,8 +335,10 @@ def add(
             root = conn.execute(
                 "select comment.anchor, comment.quote from comment"
                 " where comment.id = %s and comment.artifact_id = %s"
-                " and comment.thread_root is null",
-                (thread_root, artifact_id),
+                " and comment.thread_root is null"
+                # A held thread does not exist as far as the agent can tell.
+                " and (not comment.held or %s)",
+                (thread_root, artifact_id, agent is None),
             ).fetchone()
             if root is None:
                 raise NoSuchThread()
@@ -350,17 +365,14 @@ def add(
         # "body" -- empty for a mark, per the test above -- would tell the
         # agent nothing happened at all. Naming the mark and quoting what it
         # is about says the same thing a human reading the page sees.
-        label = {"remove": "Remove this", "looks_good": "Looks good"}.get(kind)
-        said = body
-        if label:
-            short = " ".join(effective_quote.split())[:120]
-            said = f'{label}: "{short}"' + (f" — {body}" if body.strip() else "")
+        said = _event_summary(kind, effective_quote, body)
+        held = author_kind == "human" and holds.page_mode(conn, artifact_id) == "held"
         with conn.transaction():
             comment_id = ids.new_id()
             conn.execute(
                 "insert into comment (id, artifact_id, version_n, thread_root, anchor,"
-                " quote, author_kind, author, body, kind)"
-                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                " quote, author_kind, author, body, kind, held)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     comment_id,
                     artifact_id,
@@ -372,6 +384,7 @@ def add(
                     author,
                     body,
                     kind,
+                    held,
                 ),
             )
             # THE HALF THAT WAS MISSING. The comment table, the anchor
@@ -384,7 +397,7 @@ def add(
             # "something happened on your page that you did not do", and a
             # seat woken by its own reply is a watcher crying wolf.
             event_seq = None
-            if author != owning_agent:
+            if author != owning_agent and not held:
                 event_seq = events.append(
                     conn,
                     artifact_id=artifact_id,
@@ -509,7 +522,11 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
 
 
 def list_for_artifact(
-    db: Database, artifact_id: str, *, include_resolved: bool = False
+    db: Database,
+    artifact_id: str,
+    *,
+    include_resolved: bool = False,
+    include_held: bool = False,
 ) -> list[CommentRow]:
     """Roots and replies together, oldest first (`id` breaks a tie on `created_at`,
     which two comments can share). Ownership is the caller's job -- this function
@@ -518,6 +535,8 @@ def list_for_artifact(
     # module constant, never caller input -- `artifact_id` travels as a bound
     # parameter below, not string-built.
     sql = f"select {_COLUMNS} from comment where comment.artifact_id = %s"  # noqa: S608
+    if not include_held:
+        sql += " and not comment.held"
     if not include_resolved:
         sql += f" and {_ROOT_RESOLVED_AT} is null"
     sql += " order by comment.created_at asc, comment.id asc"
@@ -541,13 +560,16 @@ def marks_for_page(db: Database, artifact_id: str) -> list[dict]:
     point anchor has no text to paint."""
     with db.connect() as conn:
         rows = conn.execute(
-            "select id, kind, quote, anchor from comment"
+            "select id, kind, quote, anchor, held from comment"
             " where artifact_id = %s and thread_root is null"
             " and resolved_at is null and anchor->>'kind' = 'range'"
             " order by created_at asc, id asc",
             (artifact_id,),
         ).fetchall()
-    return [{"id": r[0], "kind": r[1], "quote": r[2], "anchor": r[3]} for r in rows]
+    return [
+        {"id": r[0], "kind": r[1], "quote": r[2], "anchor": r[3], "held": r[4]}
+        for r in rows
+    ]
 
 
 def list_for_agent(
@@ -561,7 +583,7 @@ def list_for_agent(
     sql = (
         f"select {_COLUMNS} from comment"  # noqa: S608
         " join artifact on artifact.id = comment.artifact_id"
-        " where artifact.agent = %s"
+        " where artifact.agent = %s and not comment.held"
     )
     if not include_resolved:
         sql += f" and {_ROOT_RESOLVED_AT} is null"
@@ -700,7 +722,8 @@ def resolve(
             row = conn.execute(
                 f"select {_COLUMNS} from comment"  # noqa: S608 -- fixed constant, not caller input
                 " join artifact on artifact.id = comment.artifact_id"
-                " where comment.id = %s and artifact.agent = %s",
+                " where comment.id = %s and artifact.agent = %s"
+                " and not comment.held",
                 (comment_id, agent),
             ).fetchone()
         if row is None:

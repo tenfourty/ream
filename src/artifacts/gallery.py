@@ -3778,7 +3778,7 @@ def gallery_router(db: Database) -> APIRouter:
         # page that had been designed.
         archived = row[3] is not None
         comment_rows = comments.list_for_artifact(
-            db, artifact_id, include_resolved=True
+            db, artifact_id, include_resolved=True, include_held=True
         )
         open_threads = sum(
             1 for c in comment_rows if c.thread_root is None and c.resolved_at is None

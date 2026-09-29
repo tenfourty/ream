@@ -39,7 +39,7 @@ from datetime import datetime
 
 from psycopg.types.json import Jsonb
 
-from artifacts import csp, events, ids, nudge, store, text
+from artifacts import csp, events, holds, ids, nudge, store, text
 from artifacts.db import Database
 
 # A decision's question is a single line Jeremy reads on a card, not a page body -- 500
@@ -90,13 +90,14 @@ _COLUMNS = (
     " decision.answered_at, decision.answered_by, decision.created_at, decision.closed_at,"
     " decision.acknowledged_at, decision.acknowledged_by,"
     " decision.answer_source, decision.recorded_by, decision.said_at,"
-    " decision.session, decision.kind"
+    " decision.session, decision.kind, decision.review_mode"
 )
 # Positions in `_COLUMNS` that are read by index outside `_row_to_decision`.
 # Tied to its order: `session` is the 18th column, `kind` the 19th. Appending
 # a column leaves both alone; inserting one before them moves them.
 _SESSION_IDX = 17
 _KIND_IDX = 18
+_REVIEW_MODE_IDX = 19
 
 
 @dataclass(frozen=True)
@@ -130,6 +131,8 @@ class DecisionRow:
     # 'question' for every lettered question; 'review' for a review request,
     # whose four verdicts are fixed and of which only the first counts.
     kind: str = "question"
+    # 'held' or 'live' for a review (see holds.py); None for a question.
+    review_mode: str | None = None
 
 
 class InvalidOptions(Exception):
@@ -233,6 +236,7 @@ def _row_to_decision(row) -> DecisionRow:
         said_at=row[16].isoformat() if row[16] is not None else None,
         session=row[_SESSION_IDX],
         kind=row[_KIND_IDX],
+        review_mode=row[_REVIEW_MODE_IDX],
     )
 
 
@@ -298,15 +302,26 @@ def ask(
 
 
 def ask_review(
-    db: Database, *, agent: str, artifact_id: str, session: str | None = None
+    db: Database,
+    *,
+    agent: str,
+    artifact_id: str,
+    session: str | None = None,
+    mode: str | None = None,
 ) -> DecisionRow:
     """Ask Jeremy to review `artifact_id`: a decision of kind 'review' with the
     four fixed verdicts. Same ownership rule as `ask`: not yours and missing
-    look identical."""
+    look identical.
+
+    `mode` is 'held' or 'live': the agent's own choice for this review. Left
+    out, the review takes Jeremy's remembered preference."""
+    if mode is not None and mode not in holds.MODES:
+        raise ValueError(mode)
     with db.connect() as conn:
         owned = store._owned(conn, artifact_id, agent)
         if owned is None:
             raise store.NotFound()
+        mode = mode or holds.get_mode(conn)
         # The page's own stored title, scanned when it was published, so it needs
         # no second scan here.
         title, version_n = owned[1], owned[4]
@@ -314,8 +329,8 @@ def ask_review(
         decision_id = ids.new_id()
         conn.execute(
             "insert into decision (id, artifact_id, version_n, question, options,"
-            " recommended, session, kind)"
-            " values (%s, %s, %s, %s, %s, null, %s, 'review')",
+            " recommended, session, kind, review_mode)"
+            " values (%s, %s, %s, %s, %s, null, %s, 'review', %s)",
             (
                 decision_id,
                 artifact_id,
@@ -323,6 +338,7 @@ def ask_review(
                 question,
                 Jsonb(REVIEW_OPTIONS),
                 session,
+                mode,
             ),
         )
         created = conn.execute(
@@ -496,6 +512,10 @@ def record_elsewhere(
                     (decision_id,),
                 ).fetchone()
                 raise AlreadyDecided(_row_to_decision(current))
+            if row[_KIND_IDX] == "review":
+                # His verdict carries every mark in its message, so releasing
+                # the held ones writes no events of their own.
+                holds.release(conn, artifact_id, emit=False)
             # Journalled like a tapped answer, because to the OWNING agent the
             # fact is the same one it has been waiting for: Jeremy decided. The
             # summary names the relay so a reader of the feed is not misled, and
@@ -609,6 +629,10 @@ def answer(
                     (decision_id,),
                 ).fetchone()
                 raise AlreadyDecided(_row_to_decision(current))
+            if row[_KIND_IDX] == "review":
+                # His verdict carries every mark in its message, so releasing
+                # the held ones writes no events of their own.
+                holds.release(conn, artifact_id, emit=False)
             event_seq = events.append(
                 conn,
                 artifact_id=artifact_id,

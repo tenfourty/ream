@@ -278,7 +278,7 @@ def test_marks_for_page_carries_no_note_text(db):
     marks = comments.marks_for_page(db, page.id)
     assert [m["kind"] for m in marks] == ["comment"], "range-anchored roots only"
     assert "secret thought" not in str(marks)
-    assert set(marks[0]) == {"id", "kind", "quote", "anchor"}
+    assert set(marks[0]) == {"id", "kind", "quote", "anchor", "held"}
 
 
 def test_marks_for_page_are_open_roots_oldest_first(db):

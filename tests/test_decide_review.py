@@ -7,7 +7,7 @@ import time
 import pytest
 from test_client import key_file, live  # noqa: F401 -- fixtures
 
-from artifacts import decide, decisions, store
+from artifacts import decide, decisions, holds, store
 
 PAGE = "<!doctype html><title>Plan</title><p>Rotate the keys every 90 days.</p>"
 
@@ -15,6 +15,10 @@ PAGE = "<!doctype html><title>Plan</title><p>Rotate the keys every 90 days.</p>"
 def _setup(db, key_file, capsys):
     path, _ = key_file
     page = store.publish(db, "ops-seat", "Plan", PAGE)
+    # These tests are about marks that arrive as he makes them; a held review
+    # (the default) keeps them from the waiter until the verdict.
+    with db.connect() as conn:
+        holds.set_mode(conn, "live")
     assert decide.main(["--key-file", str(path), "ask-review", page.id]) == 0
     rid = capsys.readouterr().out.splitlines()[0].split()[0]
     return path, page, rid

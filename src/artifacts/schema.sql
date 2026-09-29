@@ -655,3 +655,15 @@ create table if not exists email_share_device (
 -- NULL render_errors with a NULL rendered_at means "not rendered (yet)".
 alter table version add column if not exists render_errors jsonb;
 alter table version add column if not exists rendered_at timestamptz;
+
+-- HOLD OR LIVE (page review step 3, homelab-ij8.108). A mark Jeremy makes
+-- while its page is under review in 'held' mode is invisible to the agent
+-- until his verdict or until he switches to 'live'.
+alter table comment add column if not exists held boolean not null default false;
+alter table decision add column if not exists review_mode text
+    check (review_mode in ('held', 'live'));
+create table if not exists human_pref (
+    key        text primary key,
+    value      text not null,
+    updated_at timestamptz not null default now()
+);
