@@ -117,7 +117,8 @@ def test_a_normal_pass_never_serves_marks(db, monkeypatch):
     page, _rev, _marks = _round_two(db)
     content = _content(db, page.id, monkeypatch)
     html = content.get(f"/p/{frame_pass.mint(db, page.id)}/", headers=FRAMED).text
-    assert "ar-diff-ins" not in html and "ar-diff-del" not in html
+    assert '<ins class="ar-diff-ins">' not in html
+    assert '<del class="ar-diff-del">' not in html and "ar-diff-style" not in html
     assert "30 days" in html
 
 
@@ -141,7 +142,7 @@ def test_a_changes_pass_for_another_page_is_refused(db, monkeypatch):
     content = _content(db, page.id, monkeypatch)
     theirs = frame_pass.mint(db, other.id, changes_from=1)
     html = content.get(f"/p/{theirs}/", headers=FRAMED).text
-    assert "ar-diff" not in html and "30 days" not in html
+    assert '<ins class="ar-diff-ins">' not in html and "30 days" not in html
     spent = frame_pass.spend(db, theirs, other.id)
     assert spent is not None and spent.changes_from == 1  # not burned
 
@@ -337,3 +338,29 @@ def test_round_two_carries_a_resolved_earlier_mark(db):
     message, data = review.render(db, rev.id, agent="seat")
     assert f"(mark {marks['gone'].id}) [addressed/removed]" in message
     assert len(data["items"]) == 3
+
+
+def test_an_open_mark_from_before_the_review_is_not_carried(db, gallery):
+    page = store.publish(db, "seat", "Plan", PAGE)
+    before = _mark(db, page, "Email the team when done.")
+    rev = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    during = _mark(db, page, "Keep the old runbook around.")
+    decisions.answer(db, rev.id, letter="c", note="", by="jeremy")
+    _republish(db, page, ROUND2)
+    rows = comments.list_for_artifact(db, page.id, include_resolved=True)
+    asked = decisions.get_owned(db, "seat", rev.id).created_at
+    carried = [c.id for c, _s in comments.carried_marks(rows, 2, asked, ROUND2)]
+    assert carried == [during.id] and before.id not in carried
+    html = gallery.get(f"/a/{page.id}").text
+    strip = re.search(r'<div class="carried">.*?</div>', html, re.DOTALL).group(0)
+    assert strip.count("<li") == 1
+
+
+def test_a_review_gone_from_the_list_between_reads_is_not_a_500(
+    db, gallery, monkeypatch
+):
+    page, _rev, _marks = _round_two(db)
+    monkeypatch.setattr(decisions, "list_for_artifact", lambda *a, **kw: [])
+    response = gallery.get(f"/a/{page.id}")
+    assert response.status_code == 200
+    assert '<div class="carried">' not in response.text

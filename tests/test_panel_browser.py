@@ -545,3 +545,75 @@ def test_round_two_opens_on_green_insertions_and_hides_them_on_request(
         assert not errors, errors
     finally:
         ctx.close()
+
+
+def test_a_mark_made_across_a_deletion_stores_the_live_words(browser, served, db):
+    """Page review step 4, review fix: selecting across struck-out old words
+    in round 2's changes view stores the live page's words and offsets, so
+    the mark paints on the plain page too."""
+    from artifacts import decisions, nudge
+
+    origin, ident = served
+    nudge_emit, nudge.emit = nudge.emit, lambda **kw: None
+    try:
+        review = decisions.ask_review(db, agent="seat", artifact_id=ident)
+        decisions.answer(db, review.id, letter="c", note="", by="jeremy")
+        page = store.get_owned(db, "seat", ident)
+        store.patch(
+            db,
+            "seat",
+            ident,
+            PAGE.replace("Paragraph 0: a sentence", "Paragraph 0: one sentence"),
+            page.revision,
+        )
+    finally:
+        nudge.emit = nudge_emit
+    ctx, pg, errors = _open_page(browser, origin, ident, 1400)
+    try:
+        frame = pg.frame_locator("#artifact-frame")
+        frame.locator("del.ar-diff-del").first.wait_for(timeout=10000)
+        assert frame.locator("del.ar-diff-del").first.evaluate(
+            "e => getComputedStyle(e).userSelect"
+        ) == ("none")
+        # From "Paragraph" to "sentence", across the struck "a".
+        frame.locator("body").evaluate(
+            """b => {const p = b.querySelector('p');
+                     const first = p.firstChild, last = p.querySelector('ins').nextSibling;
+                     const r = document.createRange();
+                     r.setStart(first, 0); r.setEnd(last, ' sentence'.length);
+                     const s = getSelection(); s.removeAllRanges(); s.addRange(r);}"""
+        )
+        pg.locator(".selbar").wait_for(state="visible", timeout=5000)
+        pg.click(".selbar button[data-kind=remove]")
+        for _ in range(50):
+            rows = [
+                c
+                for c in comments.list_for_artifact(db, ident, include_held=True)
+                if c.author_kind == "human"
+            ]
+            if rows:
+                break
+            pg.wait_for_timeout(100)
+        assert len(rows) == 1, rows
+        mark = rows[0]
+        assert mark.held  # round 2 holds his marks by default, so it paints dotted
+        assert mark.quote == "Paragraph 0: one sentence", mark.quote
+        plain = PAGE.replace("Paragraph 0: a sentence", "Paragraph 0: one sentence")
+        first_p = plain.split("<p>")[1].split("</p>")[0]
+        assert first_p[mark.anchor["start"] : mark.anchor["end"]] == mark.quote
+        ctx.close()
+
+        ctx, pg, errors = _open_page(browser, origin, ident, 1400, hash_="?changes=0")
+        pg.frame_locator("#artifact-frame").locator("p").first.wait_for(timeout=10000)
+        frame = pg.frames[1]
+        frame.wait_for_function(
+            "() => CSS.highlights.get('ar-held') && CSS.highlights.get('ar-held').size === 1",
+            timeout=10000,
+        )
+        painted = frame.evaluate(
+            "() => [...CSS.highlights.get('ar-held')][0].toString()"
+        )
+        assert painted == "Paragraph 0: one sentence"
+        assert not errors, errors
+    finally:
+        ctx.close()

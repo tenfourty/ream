@@ -591,3 +591,27 @@ def test_a_deterministic_fallback_is_cached(monkeypatch):
     assert first[1] == "could not mark up changes"
     monkeypatch.setattr(pagediff, "_render", pagediff._checked_render)
     assert pagediff.render_changes_safely("<p>a v</p>", "<p>b v</p>") == first
+
+
+def test_the_cache_is_capped_in_bytes_evicting_the_least_recently_used(monkeypatch):
+    pagediff._CACHE.clear()
+    monkeypatch.setattr(pagediff, "_cache_bytes", 0)
+    monkeypatch.setattr(pagediff, "CACHE_BYTES", 3000)
+    pages = [f"<p>{k} " + "w " * 500 + "</p>" for k in range(4)]  # ~1 KB each
+    for k in range(3):
+        pagediff.render_changes_safely("<p>x</p>", pages[k])
+    pagediff.render_changes_safely("<p>x</p>", pages[0])  # the oldest, used again
+    pagediff.render_changes_safely("<p>x</p>", pages[3])
+    assert pagediff._cache_bytes <= 3000
+    keys = [new for _old, new in pagediff._CACHE]
+    digest = lambda s: pagediff.hashlib.sha256(s.encode()).hexdigest()
+    assert digest(pages[1]) not in keys  # least recently used went first
+    assert digest(pages[0]) in keys and digest(pages[3]) in keys
+
+
+def test_a_result_bigger_than_the_whole_cap_is_not_cached(monkeypatch):
+    pagediff._CACHE.clear()
+    monkeypatch.setattr(pagediff, "_cache_bytes", 0)
+    monkeypatch.setattr(pagediff, "CACHE_BYTES", 100)
+    pagediff.render_changes_safely("<p>x</p>", "<p>" + "y " * 200 + "</p>")
+    assert not pagediff._CACHE and pagediff._cache_bytes == 0

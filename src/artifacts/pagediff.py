@@ -1126,9 +1126,28 @@ _last_killed = None  # the most recently killed worker process, for tests
 _IDLE: list[_Worker] = []
 _IDLE_LOCK = threading.Lock()
 _SLOTS = threading.BoundedSemaphore(4)
-_CACHE: OrderedDict[tuple[str, str], tuple[str, str | None]] = OrderedDict()
+# {(old hash, new hash): ((document, reason), size in bytes)}, least recently
+# used first. Capped in entries AND in bytes: near the 3 MB page cap, 64
+# entries alone could hold hundreds of MB in a pod with 512Mi.
+_CACHE: OrderedDict[tuple[str, str], tuple[tuple[str, str | None], int]] = OrderedDict()
 _CACHE_LOCK = threading.Lock()
 CACHE_SIZE = 64
+CACHE_BYTES = 32 * 1024 * 1024
+_cache_bytes = 0  # what the cache holds now, recounted on every store
+
+
+def _remember(key: tuple[str, str], result: tuple[str, str | None]) -> None:
+    global _cache_bytes
+    size = len(result[0].encode("utf-8", "surrogatepass")) + len(result[1] or "")
+    with _CACHE_LOCK:
+        _CACHE.pop(key, None)
+        if size <= CACHE_BYTES:
+            _CACHE[key] = (result, size)
+        total = sum(n for _r, n in _CACHE.values())
+        while _CACHE and (len(_CACHE) > CACHE_SIZE or total > CACHE_BYTES):
+            _k, (_r, n) = _CACHE.popitem(last=False)
+            total -= n
+        _cache_bytes = total
 
 
 def render_changes_safely(
@@ -1151,7 +1170,7 @@ def render_changes_safely(
             hit = _CACHE.get(key)
             if hit is not None:
                 _CACHE.move_to_end(key)
-                return hit
+                return hit[0]
         result, transient = _run_in_worker(old_html, new_html, timeout)
         if (
             not isinstance(result, tuple)
@@ -1162,11 +1181,7 @@ def render_changes_safely(
             result = (new_html, REASON_FAILED)
         if transient:
             return result
-        with _CACHE_LOCK:
-            _CACHE[key] = result
-            _CACHE.move_to_end(key)
-            while len(_CACHE) > CACHE_SIZE:
-                _CACHE.popitem(last=False)
+        _remember(key, result)
         return result
     except Exception:  # noqa: BLE001 - any failure is a fallback
         return new_html, REASON_FAILED

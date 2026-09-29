@@ -4202,6 +4202,7 @@ def gallery_router(db: Database) -> APIRouter:
         # it is on the card with scripts off.
         review_id, rnd, changes_from = _open_round(artifact_id, changes)
         round_view = None
+        asked = None
         if rnd is not None:
             live_n = int(row[5])
             wanted = [live_n] + ([changes_from] if changes_from is not None else [])
@@ -4213,7 +4214,11 @@ def gallery_router(db: Database) -> APIRouter:
                 )
             else:
                 changes_from = None
-            asked = next(r.created_at for r in decision_rows if r.id == review_id)
+            asked = next(
+                (r.created_at for r in decision_rows if r.id == review_id), None
+            )
+        # A review that closed between the two reads has no round view.
+        if rnd is not None and asked is not None:
             round_view = {
                 review_id: {
                     "artifact_id": artifact_id,

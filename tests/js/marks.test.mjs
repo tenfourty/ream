@@ -66,6 +66,8 @@ function build(body, paths, { highlights = true, readyState = "complete", immedi
     }
     get startContainer() { return this.sc; }
     get startOffset() { return this.so; }
+    get endContainer() { return this.ec; }
+    get endOffset() { return this.eo; }
     // Only the same-text-node case the selection tests need: a real
     // multi-node commonAncestorContainer is not modelled.
     get commonAncestorContainer() { return this.sc === this.ec ? this.sc : this.sc.parentNode; }
@@ -468,6 +470,56 @@ const mark = (over = {}) => ({ id: "m1", kind: "remove", quote: QUOTE,
   ok(hovers().join() === "artifact-mark-hover,artifact-mark-leave,artifact-mark-hover", "and the same mark hovers again after it");
   g.fire("scroll", {}); g.fire("scroll", {});
   ok(hovers().length === 4, "one leave, however many scroll events");
+}
+
+// 17. THE CHANGES VIEW (page review step 4). Round 2 opens on the page marked
+// up against the version he sent back: old words in <del class="ar-diff-del">,
+// removed-element chips, new words in <ins class="ar-diff-ins">. A selection
+// across a deletion must store the LIVE page's words and offsets -- deleted
+// text and chips are not page text -- and a mark made on the plain page must
+// paint in the changes view with that text skipped.
+{
+  const del = E("del", "90"); del.className = "ar-diff-del";
+  const ins = E("ins", "30"); ins.className = "ar-diff-ins";
+  const chip = E("span", "removed"); chip.className = "ar-diff-chip";
+  const p = E("p", "Rotate the keys every ", del, ins, chip, " days.");
+  const g = build(E("body", p), { "body>p:nth-of-type(1)": p }, { immediateTimers: true });
+  const LIVE = "keys every 30 days";
+  g.setSelection({
+    rangeCount: 1,
+    toString: () => "keys every 9030removed days",
+    getRangeAt: () => {
+      const r = new g.Range();
+      r.setStart(p.childNodes[0], 11);
+      r.setEnd(p.childNodes[4], 5);
+      return r;
+    },
+  });
+  g.fireDoc("selectionchange");
+  const [[msg]] = g.posted.filter(([m]) => m && m.type === "artifact-selection");
+  ok(msg.quote === LIVE, "a selection across a deletion quotes only the live words: " + JSON.stringify(msg.quote));
+  ok(msg.anchor.path === "body>p:nth-of-type(1)", "the path is the live page's element");
+  ok(msg.anchor.start === 11 && msg.anchor.end === 11 + LIVE.length,
+     "the offsets count the live text only: " + msg.anchor.start + "-" + msg.anchor.end);
+  ok(msg.anchor.prefix === "Rotate the " && msg.anchor.suffix === ".", "and so does the context either side");
+
+  // A selection inside the inserted words is anchored on their paragraph.
+  g.posted.length = 0;
+  g.setSelection({ rangeCount: 1, toString: () => "30",
+    getRangeAt: () => { const r = new g.Range(); r.setStart(ins.childNodes[0], 0); r.setEnd(ins.childNodes[0], 2); return r; } });
+  g.fireDoc("selectionchange");
+  const [[m2]] = g.posted.filter(([m]) => m && m.type === "artifact-selection");
+  ok(m2.quote === "30" && m2.anchor.path === "body>p:nth-of-type(1)" && m2.anchor.start === 22 && m2.anchor.end === 24,
+     "inserted words are ordinary text of the live paragraph: " + JSON.stringify(m2.anchor));
+
+  // Painting: the plain page's anchor lands on the same words here...
+  g.send([mark({ id: "d1", quote: LIVE, anchor: { start: 11, end: 11 + LIVE.length } }),
+          mark({ id: "d2", quote: "every 30 days.", anchor: { path: "body>div" } })]);
+  const [[rep]] = g.reports();
+  ok(rep.placed.join() === "d1,d2", "a plain-page mark paints in the changes view, by anchor and by search: " + JSON.stringify(rep));
+  const r1 = g.registry.get("ar-remove").ranges[0];
+  ok(r1.startContainer === p.childNodes[0] && r1.startOffset === 11 && r1.ec === p.childNodes[4] && r1.eo === 5,
+     "spanning the deletion without counting it");
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

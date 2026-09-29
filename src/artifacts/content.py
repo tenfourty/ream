@@ -68,8 +68,9 @@ INERT_SHIM = "<script>window.claude={use:async(n)=>null};window.storage=null;</s
 DIFF_STYLE = (
     '<style id="ar-diff-style">'
     "ins.ar-diff-ins{background:rgba(46,157,87,.22);text-decoration:none}"
-    "del.ar-diff-del{background:rgba(192,57,43,.18);text-decoration:line-through}"
-    "span.ar-diff-chip{display:inline-block;margin:0 .2em;padding:0 .4em;"
+    "del.ar-diff-del{background:rgba(192,57,43,.18);text-decoration:line-through;"
+    "user-select:none;-webkit-user-select:none}"
+    "span.ar-diff-chip{user-select:none;-webkit-user-select:none;display:inline-block;margin:0 .2em;padding:0 .4em;"
     "border-radius:.6em;background:rgba(127,127,127,.18);color:#666;"
     "font:600 .7em/1.6 system-ui,sans-serif;text-decoration:none;"
     "vertical-align:middle}"
@@ -187,22 +188,38 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         # match textContent byte for byte. More than one best match, even after
         # the prefix/suffix context, is unplaced. So is anything past 50 hits.
         "var mq=null,SK={SCRIPT:1,STYLE:1,NOSCRIPT:1,TEMPLATE:1};"
+        # THE CHANGES VIEW (page review step 4) adds old words in
+        # <del class="ar-diff-del"> and "removed" chips that are not on the
+        # live page. Every walk below -- placing, searching, and the selection
+        # leg's quote, offsets and path -- skips their text, and treats the
+        # inserted words (<ins class="ar-diff-ins">) as the ordinary text they
+        # are, so a mark made in either view is the same mark in both.
+        "function DK(e){if(!e||e.nodeType!==1)return 0;var c=e.className;"
+        'if(typeof c!=="string")return 0;var nm=String(e.nodeName).toUpperCase();'
+        'return nm==="DEL"&&c==="ar-diff-del"?2:nm==="SPAN"&&c==="ar-diff-chip"?2:'
+        'nm==="INS"&&c==="ar-diff-ins"?1:0}'
+        "function DX(t){for(var e=t&&t.parentNode;e&&e.nodeType===1;e=e.parentNode)"
+        "if(DK(e)===2)return 1;return 0}"
+        'var LT="";'
         "function lo(c){var x=c.toLowerCase();return x.length===1?x:c}"
         'function tight(v){var r="",i,c;for(i=0;i<v.length;i++){c=v.charAt(i);'
         "if(!/\\s/.test(c))r+=lo(c)}return r}"
         'function isn(v){return typeof v==="number"&&v>=0&&v<=1e8&&v%1===0}'
         # `o+l>a` (strict) for the start: an offset exactly at the end of one
         # text node starts at 0 in the NEXT one, not at the tail of this one.
+        # `LT` is the text the range covers, deleted text left out.
         "function rangeAt(el,a,z){var w=document.createTreeWalker(el,4),t,o=0,"
-        "r=document.createRange(),s=0;while((t=w.nextNode())){var l=t.nodeValue.length;"
-        "if(!s&&o+l>a){r.setStart(t,a-o);s=1}"
+        'r=document.createRange(),s=0;LT="";while((t=w.nextNode())){if(DX(t))continue;'
+        "var v=t.nodeValue,l=v.length;"
+        "if(!s&&o+l>a){r.setStart(t,a-o);s=1;LT=v.slice(a-o,Math.min(l,z-o))}"
+        "else if(s)LT+=v.slice(0,Math.min(l,z-o));"
         "if(s&&o+l>=z){r.setEnd(t,z-o);return r}o+=l}return null}"
         # The visible text, tightened, with where each kept character came
         # from. Built at most once per message, and only if a search is needed.
         'function index(){var b=document.body,x={s:"",n:[],k:[]};if(!b)return x;'
         "var w=document.createTreeWalker(b,4),t,v,i,c,p,s=[];"
         "while((t=w.nextNode())){p=t.parentNode;"
-        "if(p&&SK[String(p.nodeName).toUpperCase()])continue;v=t.nodeValue;"
+        "if(p&&SK[String(p.nodeName).toUpperCase()])continue;if(DX(t))continue;v=t.nodeValue;"
         "for(i=0;i<v.length;i++){c=v.charAt(i);if(/\\s/.test(c))continue;"
         's.push(lo(c));x.n.push(t);x.k.push(i)}}x.s=s.join("");return x}'
         "function search(m,ix){var q=tight(m.quote);if(!q)return null;"
@@ -227,7 +244,7 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         # been edited since -- is never painted. Painting the whole stored
         # range would be a partial guess.
         "function cut(el,r,n){var w=document.createTreeWalker(el,4),t,v,i,go=0,c=0;"
-        "while((t=w.nextNode())){if(t===r.startContainer)go=1;if(!go)continue;v=t.nodeValue;"
+        "while((t=w.nextNode())){if(t===r.startContainer)go=1;if(!go||DX(t))continue;v=t.nodeValue;"
         "for(i=t===r.startContainer?r.startOffset:0;i<v.length;i++){"
         "if(/\\s/.test(v.charAt(i)))continue;if(++c===n){r.setEnd(t,i+1);return r}}}"
         "return null}"
@@ -235,7 +252,7 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "if(a.path){try{el=document.querySelector(a.path)}catch(x){el=null}}"
         "if(el&&isn(a.start)&&isn(a.end)&&a.end>a.start){var r=null;"
         "try{r=rangeAt(el,a.start,a.end)}catch(x){r=null}"
-        "if(r){var got=tight(String(r)),want=tight(m.quote);"
+        "if(r){var got=tight(LT),want=tight(m.quote);"
         "if(want&&got===want)return r;"
         "if(want&&m.quote.length>=500&&got.indexOf(want)===0){"
         "try{r=cut(el,r,want.length)}catch(x){r=null}if(r)return r}}}"
@@ -360,21 +377,33 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         'if(!t){parent.postMessage({type:"artifact-selection",quote:""},'
         f"{origin});return}}"
         "var r=s.getRangeAt(0),n=r.commonAncestorContainer;"
-        "if(n.nodeType!==1)n=n.parentElement;if(!n)return;"
+        "if(n.nodeType!==1)n=n.parentElement;while(n&&DK(n))n=n.parentElement;if(!n)return;"
         "var p=[],e=n;while(e&&e!==document.body&&e.nodeType===1){"
-        "var i=1,x=e;while((x=x.previousElementSibling))if(x.tagName===e.tagName)i++;"
+        "var i=1,x=e;while((x=x.previousElementSibling))if(x.tagName===e.tagName&&!DK(x))i++;"
         'p.unshift(e.tagName.toLowerCase()+":nth-of-type("+i+")");e=e.parentElement}'
         'var path=("body"+(p.length?">"+p.join(">"):"")).slice(0,512);'
-        "var pre=document.createRange();pre.selectNodeContents(n);"
-        "pre.setEnd(r.startContainer,r.startOffset);"
-        "var a=String(pre).length,z=a+String(r).length;if(z<=a)return;"
+        # Offsets into `n`'s text as the LIVE page has it: counted by one walk
+        # that leaves deleted text out (on any other page, the same numbers
+        # a Range's own toString would give). Where deleted text was inside
+        # the selection, the quote is read from the live text too.
+        'var LV="",LD=0,w=document.createTreeWalker(n,4),q;'
+        "while((q=w.nextNode())){if(DX(q))LD=1;else LV+=q.nodeValue}"
+        "function cnt(c,o){var k=0,res=-1;(function g(x){"
+        "if(x.nodeType===3){if(x===c)res=k+(DX(x)?0:o);else if(!DX(x))k+=x.nodeValue.length;return}"
+        "var ch=x.childNodes||[];for(var j=0;j<ch.length;j++){if(x===c&&j===o){res=k;return}"
+        "g(ch[j]);if(res>=0)return}if(x===c)res=k})(n);return res}"
+        "var a=cnt(r.startContainer,r.startOffset),z=cnt(r.endContainer,r.endOffset);"
+        "if(a<0||z<=a)return;"
+        "if(LD){t=LV.slice(a,z).trim();"
+        'if(!t){parent.postMessage({type:"artifact-selection",quote:""},'
+        f"{origin});return}}}}"
         # Text either side of the quote, so validate_anchor's text-quote-selector
         # can tell two identical quotes on the same page apart (homelab-ij8.108,
         # Task 2). `a`/`z` are already offsets into `n`'s own text, so
         # `n.textContent` -- not the range's stringified text -- is the right
         # string to slice, and `Math.max(0,...)` covers a selection near the
         # start of `n` without a negative `slice` start wrapping from the end.
-        'var all=n.textContent||"",prefix=all.slice(Math.max(0,a-32),a),'
+        "var all=LV,prefix=all.slice(Math.max(0,a-32),a),"
         "suffix=all.slice(z,z+32);"
         # `slice` cuts UTF-16 code units, not characters: an astral character
         # (an emoji, say) straddling either boundary leaves a lone surrogate

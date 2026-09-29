@@ -621,17 +621,20 @@ def carried_marks(
 
     Earlier means a human root stamped with a lower round, or with none: a
     mark made between a verdict and the republish that opened this round
-    belongs to no round, and he made it about the version he sent back. An
-    open one is carried whenever it was made; a resolved one only if it was
-    made since the review was asked (`since`), so a thread settled before
-    this review began is not brought back as "addressed"."""
+    belongs to no round, and he made it about the version he sent back. A
+    mark with no round, and a resolved one, is carried only if it was made
+    since the review was asked (`since`): a mark from before this review
+    began is not part of its rounds, open or settled."""
     earlier = [
         c
         for c in rows
         if c.thread_root is None
         and c.author_kind == "human"
         and (c.review_round is None or c.review_round < round_n)
-        and (c.resolved_at is None or c.created_at >= since)
+        and (
+            (c.review_round is not None and c.resolved_at is None)
+            or c.created_at >= since
+        )
     ]
     states = carried_states(earlier, current_body)
     return [(c, states[c.id]) for c in earlier]
