@@ -157,9 +157,11 @@ shim answers `{placed, unplaced}`. For each mark:
 4. If several match equally, or none does, the mark is **unplaced**. It is never guessed.
 
 Painting uses the **CSS Custom Highlight API** (`CSS.highlights`), which colours a range without
-changing the agent's DOM and works under our CSP. It falls back to absolutely positioned rects.
-The shim stays small, hand-inlined, and accepts messages only from the gallery origin, as
-today.
+changing the agent's DOM and works under our CSP. Without it, the shim paints nothing and reports
+nothing -- ruled by the controller on final review, since every current browser has the API and a
+silent no-op is safer than a half-built fallback. A rects fallback (absolutely positioned boxes,
+for a browser with no Highlight API) is deferred, not built. The shim stays small, hand-inlined,
+and accepts messages only from the gallery origin, as today.
 
 ## Diffing (new `pagediff.py`, pure Python)
 
@@ -203,7 +205,10 @@ today.
     its source, but never give one;
   - a stale verdict gets 409.
 - **Scanning:** marks and notes go through the size cap and both secret scanners, exactly as
-  comments do today.
+  comments do today. The anchor's `prefix`/`suffix` do not: each is at most 32 characters taken
+  verbatim from the page's own already-published body, which was scanned when that version was
+  published -- re-scanning a slice of text the service already served and already scanned would
+  add a scan to every mark for no new risk caught.
 
 ## Build order
 
