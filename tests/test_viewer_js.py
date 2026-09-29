@@ -45,7 +45,7 @@ def test_the_gallery_script_behaves_when_actually_run(tmp_path):
     # stopped running its cases would still exit 0 with nothing to show.
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
-    assert passed >= 58, result.stdout
+    assert passed >= 78, result.stdout
 
 
 _NEWER = Path(__file__).parent / "js" / "newer.test.mjs"
@@ -143,4 +143,4 @@ def test_the_comment_on_selection_button_behaves_when_actually_run(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
-    assert passed >= 61, result.stdout
+    assert passed >= 78, result.stdout

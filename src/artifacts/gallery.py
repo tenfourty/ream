@@ -206,6 +206,7 @@ main{display:block}
   cursor:pointer}
 .sharebtn:hover,.fsbtn:hover{background:var(--chip-hover);color:var(--ink)}
 .fsbtn[hidden]{display:none}
+.acts .mi{width:1rem;height:1rem;opacity:1}
 @media (max-width:34rem){.sharebtn span{display:none}}
 /* The PAGE view only (the wall and the lists keep .wrap as it was): the agent's
    page is flush under the bar at the window's full width, like claude.ai. The

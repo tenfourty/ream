@@ -451,5 +451,26 @@ navigatorStub = {};
      "and tells the page to reserve nothing for it");
 }
 
+// 14. A FULL-WIDTH sheet, then one that narrows by 384px (24rem: what the
+// docked comments panel does). The page re-reports its slots for the width it
+// now has; the block must follow that width, never stay at the old one.
+{
+  const g = build(1400, { media: true });
+  g.sheet.width = 1400;
+  const at = (w) => good({ source: g.iframe.contentWindow, data: { type: "artifact-state",
+    height: 1200, slots: [{ id: "dec1", top: 40, left: 10, width: w - 20 }] } });
+  g.send(at(g.sheet.width));
+  ok(g.d1.parentNode === g.sheet && g.d1.style.left === "10px" && g.d1.style.width === "1380px",
+     "lifts onto a 1400px full-width sheet at the width the page reported");
+  g.sheet.width -= 384;
+  g.send(at(g.sheet.width));
+  ok(g.d1.style.width === "996px" && g.d1.style.left === "10px",
+     "follows the sheet when it narrows by 384px, not stuck at 1380px");
+  g.sheet.width += 384;
+  g.send(at(g.sheet.width));
+  ok(g.d1.style.width === "1380px", "and follows it back out when the panel closes");
+}
+
+
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
