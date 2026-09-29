@@ -148,7 +148,10 @@ def test_a_held_mark_is_in_no_agent_read(db):
     grouped = comments.across_pages(db)
     assert held.id in [c.id for g in grouped for c in g.rows]
     marks = comments.marks_for_page(db, page.id)
-    assert [m["held"] for m in marks if m["id"] == held.id] == [True]
+    [shown] = [m for m in marks if m["id"] == held.id]
+    assert shown["held"] is True
+    assert shown["kind"] == "", "a held mark's kind is not sent to the page"
+    assert shown["quote"] == "Rotate", "the dotted underline still needs the quote"
 
 
 def test_the_agent_cannot_reach_a_held_thread_by_its_id(db):
@@ -179,3 +182,92 @@ def test_the_agent_cannot_reach_a_held_thread_by_its_id(db):
             "select resolved_at from comment where id = %s", (held.id,)
         ).fetchone()[0]
     assert still is None
+
+
+def test_resolving_a_held_mark_tells_the_agent_nothing(db, nudges):
+    page = _page(db)
+    decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
+    held = _mark(db, page)
+    comments.resolve(db, held.id, by="jeremy")
+    with db.connect() as conn:
+        seen = conn.execute(
+            "select count(*) from event where ref_id = %s", (held.id,)
+        ).fetchone()[0]
+        stamped = conn.execute(
+            "select resolved_at from comment where id = %s", (held.id,)
+        ).fetchone()[0]
+    assert seen == 0
+    assert stamped is not None
+    assert nudges == []
+
+
+def _gate_after(monkeypatch, module, name):
+    """Wrap module.name so the caller pauses AFTER it returns, until released."""
+    import threading
+
+    reached, go = threading.Event(), threading.Event()
+    real = getattr(module, name)
+
+    def wrapped(*args, **kwargs):
+        out = real(*args, **kwargs)
+        reached.set()
+        assert go.wait(10)
+        return out
+
+    monkeypatch.setattr(module, name, wrapped)
+    return reached, go
+
+
+def test_a_verdict_that_lands_before_the_mark_leaves_it_unheld(db, monkeypatch):
+    import threading
+
+    from artifacts import review, store
+
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
+    reached, go = _gate_after(monkeypatch, store, "_check_secrets")
+    out = {}
+
+    def add():
+        out["row"] = _mark(db, page)
+
+    t = threading.Thread(target=add)
+    t.start()
+    assert reached.wait(10)
+    monkeypatch.undo()
+    decisions.answer(db, row.id, letter="c", by="jeremy")
+    go.set()
+    t.join(20)
+    assert out["row"].held is False
+    message, _ = review.render(db, row.id, agent="seat")
+    assert "Rotate" in message
+
+
+def test_a_verdict_that_waits_for_the_mark_releases_it(db, monkeypatch):
+    import threading
+    import time
+
+    from artifacts import review
+
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
+    reached, go = _gate_after(monkeypatch, holds, "page_mode")
+    out = {}
+
+    t = threading.Thread(target=lambda: out.update(row=_mark(db, page)))
+    t.start()
+    assert reached.wait(10)
+    verdict = threading.Thread(
+        target=lambda: decisions.answer(db, row.id, letter="c", by="jeremy")
+    )
+    verdict.start()
+    time.sleep(1)
+    assert verdict.is_alive(), "the verdict waits for the insert's lock"
+    go.set()
+    t.join(20)
+    verdict.join(20)
+    assert out["row"].held is True
+    [stored] = comments.list_for_artifact(db, page.id)
+    assert stored.id == out["row"].id and stored.held is False
+    message, _ = review.render(db, row.id, agent="seat")
+    assert "Rotate" in message

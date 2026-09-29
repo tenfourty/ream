@@ -366,9 +366,16 @@ def add(
         # agent nothing happened at all. Naming the mark and quoting what it
         # is about says the same thing a human reading the page sees.
         said = _event_summary(kind, effective_quote, body)
-        held = author_kind == "human" and holds.page_mode(conn, artifact_id) == "held"
         with conn.transaction():
             comment_id = ids.new_id()
+            # Read INSIDE the insert transaction, and locking the open review
+            # rows it reads: a verdict's update of the decision then waits for
+            # this insert (so its release sees the mark), and a verdict that
+            # committed first is seen here as no open review at all.
+            held = (
+                author_kind == "human"
+                and holds.page_mode(conn, artifact_id, lock=True) == "held"
+            )
             conn.execute(
                 "insert into comment (id, artifact_id, version_n, thread_root, anchor,"
                 " quote, author_kind, author, body, kind, held)"
@@ -557,7 +564,10 @@ def marks_for_page(db: Database, artifact_id: str) -> list[dict]:
     Open ROOT comments with a `range` anchor, oldest first. A reply carries its
     root's anchor and quote, so it is the same place on the page, not a second
     mark; a settled thread has nothing left to point at; and a page-level or
-    point anchor has no text to paint."""
+    point anchor has no text to paint.
+
+    A held mark's quote is still visible to page scripts, because the dotted
+    underline needs it; its note and its kind are not (kind is sent as "")."""
     with db.connect() as conn:
         rows = conn.execute(
             "select id, kind, quote, anchor, held from comment"
@@ -567,7 +577,13 @@ def marks_for_page(db: Database, artifact_id: str) -> list[dict]:
             (artifact_id,),
         ).fetchall()
     return [
-        {"id": r[0], "kind": r[1], "quote": r[2], "anchor": r[3], "held": r[4]}
+        {
+            "id": r[0],
+            "kind": "" if r[4] else r[1],
+            "quote": r[2],
+            "anchor": r[3],
+            "held": r[4],
+        }
         for r in rows
     ]
 
@@ -740,12 +756,12 @@ def resolve(
             # settled, in words, rather than only by id.
             owner = conn.execute(
                 "select artifact.agent, artifact.title, artifact.session,"
-                " root.body, root.quote"
+                " root.body, root.quote, root.held"
                 " from comment root join artifact on artifact.id = root.artifact_id"
                 " where root.id = %s",
                 (root_id,),
             ).fetchone()
-            owning_agent, title, page_session, root_body, root_quote = owner
+            owning_agent, title, page_session, root_body, root_quote, root_held = owner
             with conn.transaction():
                 conn.execute(
                     "update comment set resolved_at = now(), resolved_by = %s"
@@ -760,7 +776,7 @@ def resolve(
                 # own tidying up, so an owner settling its own thread is
                 # silent, exactly as its own comment is.
                 event_seq = None
-                if by != owning_agent:
+                if by != owning_agent and not root_held:
                     event_seq = events.append(
                         conn,
                         artifact_id=row[1],

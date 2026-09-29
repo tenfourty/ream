@@ -32,15 +32,19 @@ def set_mode(conn, mode: str) -> None:
     )
 
 
-def page_mode(conn, artifact_id: str) -> str | None:
+def page_mode(conn, artifact_id: str, *, lock: bool = False) -> str | None:
     """`held` if ANY open review on the page is held, `live` if open reviews
-    exist and none is held, None if the page has no open review."""
+    exist and none is held, None if the page has no open review.
+
+    `lock` takes a share lock on the open review rows it reads, so a verdict's
+    update of them waits for the caller's transaction to finish."""
     modes = [
         r[0]
         for r in conn.execute(
-            "select coalesce(review_mode, 'live') from decision"
+            "select coalesce(review_mode, 'live') from decision"  # noqa: S608 -- fixed strings
             " where artifact_id = %s and kind = 'review'"
-            " and answer is null and closed_at is null",
+            " and answer is null and closed_at is null"
+            + (" for share" if lock else ""),
             (artifact_id,),
         ).fetchall()
     ]
