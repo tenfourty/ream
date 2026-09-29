@@ -144,6 +144,16 @@ def test_a_surrogate_split_prefix_or_suffix_is_refused_not_stored():
         comments.validate_anchor({**RANGE, "suffix": "all \ud800"})
 
 
+def test_a_surrogate_split_path_is_refused_not_stored():
+    """`path` gets only a `str`-and-length check today, not the UTF-8 check
+    `prefix`/`suffix` already have -- the same lone-surrogate DataError (final
+    review, Item 1) reaches Postgres through `path` exactly as it does through
+    `prefix`/`suffix`, so `validate_anchor` must refuse it the same way (follow-up
+    to the final review, homelab-ij8.111)."""
+    with pytest.raises(comments.InvalidAnchor):
+        comments.validate_anchor({**RANGE, "path": "p\udfe2"})
+
+
 def test_the_gallery_form_takes_a_mark_with_no_note(client, db):
     page = _page(db)
     r = client.post(
@@ -164,6 +174,45 @@ def test_the_gallery_form_takes_a_mark_with_no_note(client, db):
         headers={"Authorization": f"Bearer {token}"},
     ).json()
     assert [row["kind"] for row in rows] == ["remove"]
+
+
+def test_the_gallery_form_refuses_a_surrogate_split_path_not_500(client, db):
+    """Follow-up to the final review, homelab-ij8.111: `path` reaches this route
+    the same way `prefix`/`suffix` already do -- a JSON-escaped string in the
+    form body that the server's own `json.loads` turns back into a real lone
+    surrogate. It must come back 422, never a 500."""
+    page = _page(db)
+    r = client.post(
+        f"/c/{page.id}",
+        data={
+            "body": "hello",
+            "quote": "Rotate the keys every 90 days.",
+            "anchor": '{"kind":"range","path":"p\\udfe2","start":0,"end":2}',
+        },
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert r.status_code == 422
+
+
+def test_the_gallery_form_refuses_a_surrogate_split_prefix_not_500(client, db):
+    """The same route, for `prefix` -- already guarded server-side, but
+    untested on the gallery form until now (homelab-ij8.111)."""
+    page = _page(db)
+    r = client.post(
+        f"/c/{page.id}",
+        data={
+            "body": "hello",
+            "quote": "Rotate the keys every 90 days.",
+            "anchor": (
+                '{"kind":"range","path":"body>p:nth-of-type(1)","start":0,'
+                '"end":2,"prefix":"\\udfe2 all"}'
+            ),
+        },
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert r.status_code == 422
 
 
 def test_an_empty_plain_comment_is_still_refused(client, db):

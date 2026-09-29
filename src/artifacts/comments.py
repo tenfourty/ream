@@ -129,6 +129,26 @@ def _is_int(value: object) -> bool:
 ANCHOR_CONTEXT_MAX = 64
 
 
+def _reject_lone_surrogate(value: str) -> None:
+    """Raise `InvalidAnchor` if `value` cannot round-trip through UTF-8.
+
+    A `str` can hold a lone surrogate (half of a UTF-16 pair) -- the page
+    shim's own `slice` can produce exactly one, cutting an astral character in
+    half at a boundary it slices at -- and Python is happy to carry it this
+    far. Postgres's `json` column is not: it raises on the way in, uncaught,
+    and turns one mark into a 500 (final review, Item 1). UTF-8 can never
+    encode a lone surrogate, so trying is the cheapest possible test for "will
+    this actually store", and never echoes what was rejected. Shared by every
+    `range`-anchor field that is caller-supplied text -- `path`, `prefix` and
+    `suffix` alike -- so there is one place that knows this check, not one
+    copy per field (follow-up to the final review, homelab-ij8.111).
+    """
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise InvalidAnchor() from None
+
+
 def validate_anchor(anchor: dict | None) -> dict:
     """Normalise and validate an anchor. `None` -- the default for a caller who
     doesn't mention where a comment belongs -- means a whole-page comment. Anything
@@ -179,6 +199,7 @@ def validate_anchor(anchor: dict | None) -> dict:
         path, start, end = anchor["path"], anchor["start"], anchor["end"]
         if not isinstance(path, str) or len(path) > 512:
             raise InvalidAnchor()
+        _reject_lone_surrogate(path)
         if not (_is_int(start) and _is_int(end)):
             raise InvalidAnchor()
         if not (0 <= start < end):
@@ -192,19 +213,7 @@ def validate_anchor(anchor: dict | None) -> dict:
                 value = anchor[side]
                 if not isinstance(value, str) or len(value) > ANCHOR_CONTEXT_MAX:
                     raise InvalidAnchor()
-                # A `str` can hold a lone surrogate (half of a UTF-16 pair) --
-                # the page shim's own `slice` can produce exactly one, cutting
-                # an astral character in half at the 32-char boundary -- and
-                # Python is happy to carry it this far. Postgres's `json`
-                # column is not: it raises on the way in, uncaught, and turns
-                # one mark into a 500 (final review, Item 1). UTF-8 can never
-                # encode a lone surrogate, so trying is the cheapest possible
-                # test for "will this actually store", and never echoes what
-                # was rejected.
-                try:
-                    value.encode("utf-8")
-                except UnicodeEncodeError:
-                    raise InvalidAnchor() from None
+                _reject_lone_surrogate(value)
                 out[side] = value
         return out
 

@@ -133,6 +133,36 @@ def test_a_surrogate_split_anchor_over_the_api_is_422_not_500(client, db):
     assert response.json()["detail"]["field"] == "anchor"
 
 
+def test_a_surrogate_split_path_over_the_api_is_422_not_500(client, db):
+    """Follow-up to the final review (homelab-ij8.111): `path` reaches `Jsonb`
+    the same way `prefix`/`suffix` already do, so a lone surrogate there must
+    come back 422 naming `anchor`, never a 500. Same ASCII-escaped body trick
+    as the prefix/suffix version above, so the server really receives a lone
+    surrogate rather than httpx raising client-side first."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    page = _publish(client, token)
+    raw = json.dumps(
+        {
+            "body": "hello",
+            "quote": "hi",
+            "anchor": {
+                "kind": "range",
+                "path": "p\udfe2",
+                "start": 0,
+                "end": 2,
+            },
+        },
+        ensure_ascii=True,
+    ).encode("ascii")
+    response = client.post(
+        f"/api/v1/artifacts/{page['id']}/comments",
+        content=raw,
+        headers={**auth(token), "Content-Type": "application/json"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["field"] == "anchor"
+
+
 # ---------------------------------------------------------------------------
 # Root + reply round trip, and inheritance of the root's anchor/quote.
 # ---------------------------------------------------------------------------

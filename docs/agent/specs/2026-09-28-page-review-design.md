@@ -205,10 +205,14 @@ and accepts messages only from the gallery origin, as today.
     its source, but never give one;
   - a stale verdict gets 409.
 - **Scanning:** marks and notes go through the size cap and both secret scanners, exactly as
-  comments do today. The anchor's `prefix`/`suffix` do not: each is at most 32 characters taken
-  verbatim from the page's own already-published body, which was scanned when that version was
-  published -- re-scanning a slice of text the service already served and already scanned would
-  add a scan to every mark for no new risk caught.
+  comments do today. The anchor's `prefix`/`suffix` do not: each is capped at 64 characters
+  (`ANCHOR_CONTEXT_MAX`) on the assumption that it is taken verbatim from the page's own
+  already-published body, which was scanned when that version was published -- re-scanning a
+  slice of text the service already served and already scanned would add a scan to every mark for
+  no new risk caught. The server never checks that assumption: nothing compares `prefix`/`suffix`
+  against the page they claim to quote, so a keyed API client -- never the gallery form, which only
+  ever sends what the shim actually read off the page -- could store up to 64 characters of its
+  own choosing, unscanned, in either field.
 
 ## Build order
 
