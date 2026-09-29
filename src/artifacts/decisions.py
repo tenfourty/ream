@@ -61,6 +61,23 @@ MAX_NOTE_BYTES = 1_000
 # decisions and should be asked as such.
 MAX_OPTIONS = 6
 
+KINDS = ("question", "review")
+
+# The four verdicts, in the order his buttons show them. A review asks
+# nothing he must choose between: there is no recommended letter.
+REVIEW_OPTIONS = [
+    {"letter": "a", "label": "Approved"},
+    {"letter": "b", "label": "Approved with notes"},
+    {"letter": "c", "label": "Changes requested"},
+    {"letter": "d", "label": "Dismissed"},
+]
+VERDICTS = {
+    "a": "approved",
+    "b": "approved_with_notes",
+    "c": "changes_requested",
+    "d": "dismissed",
+}
+
 # Every read of a decision row, in the fixed column order `_row_to_decision` expects.
 # Qualified with `decision.` throughout, exactly as comments.py's `_COLUMNS` is --
 # `list_for_agent` and `close` both join `artifact`, which also has an `id` and a
@@ -73,7 +90,7 @@ _COLUMNS = (
     " decision.answered_at, decision.answered_by, decision.created_at, decision.closed_at,"
     " decision.acknowledged_at, decision.acknowledged_by,"
     " decision.answer_source, decision.recorded_by, decision.said_at,"
-    " decision.session"
+    " decision.session, decision.kind"
 )
 
 
@@ -105,6 +122,9 @@ class DecisionRow:
     # permission -- see api.session. None for anything asked before sessions
     # existed, and for a caller that did not declare one.
     session: str | None
+    # 'question' for every lettered question; 'review' for a review request,
+    # whose four verdicts are fixed and of which only the first counts.
+    kind: str = "question"
 
 
 class InvalidOptions(Exception):
@@ -121,6 +141,17 @@ class InvalidOptions(Exception):
     def __init__(self) -> None:
         super().__init__("options")
         self.field = "options"
+
+
+class AlreadyDecided(Exception):
+    """A second verdict on a review. The first one counts (page review design:
+    'a verdict from a stale second device is refused, and he is told which
+    verdict counted and when'). `row` is the review as it stands."""
+
+    def __init__(self, row: "DecisionRow") -> None:
+        super().__init__("answer")
+        self.field = "answer"
+        self.row = row
 
 
 class InvalidAnswer(Exception):
@@ -196,6 +227,7 @@ def _row_to_decision(row) -> DecisionRow:
         recorded_by=row[15],
         said_at=row[16].isoformat() if row[16] is not None else None,
         session=row[17],
+        kind=row[18],
     )
 
 
@@ -250,6 +282,41 @@ def ask(
                 question,
                 Jsonb(validated_options),
                 recommended,
+                session,
+            ),
+        )
+        created = conn.execute(
+            f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
+            (decision_id,),
+        ).fetchone()
+    return _row_to_decision(created)
+
+
+def ask_review(
+    db: Database, *, agent: str, artifact_id: str, session: str | None = None
+) -> DecisionRow:
+    """Ask Jeremy to review `artifact_id`: a decision of kind 'review' with the
+    four fixed verdicts. Same ownership rule as `ask`: not yours and missing
+    look identical."""
+    with db.connect() as conn:
+        owned = store._owned(conn, artifact_id, agent)
+        if owned is None:
+            raise store.NotFound()
+        # The page's own stored title, scanned when it was published, so it needs
+        # no second scan here.
+        title, version_n = owned[1], owned[4]
+        question = f"Review requested: {title}"[:MAX_QUESTION_BYTES]
+        decision_id = ids.new_id()
+        conn.execute(
+            "insert into decision (id, artifact_id, version_n, question, options,"
+            " recommended, session, kind)"
+            " values (%s, %s, %s, %s, %s, null, %s, 'review')",
+            (
+                decision_id,
+                artifact_id,
+                version_n,
+                question,
+                Jsonb(REVIEW_OPTIONS),
                 session,
             ),
         )
@@ -399,7 +466,9 @@ def record_elsewhere(
         # `answer`). Missing until 23 Sep 2026: a relayed answer's event had no
         # session, so a waiter listening for its own session never heard it --
         # found by the first outside agent (homelab-ij8.106).
-        asking_session = row[len(_COLUMNS.split(",")) - 1]
+        asking_session = row[
+            17
+        ]  # `session` is the 18th column of _COLUMNS, `kind` the 19th
 
         if letter not in {option["letter"] for option in options}:
             raise InvalidAnswer()
@@ -485,11 +554,17 @@ def answer(
         # live. The event carries this so the seat that raised the question can
         # recognise its own answer in a feed three seats share -- see
         # events.list_for_agent's `session`.
-        asking_session = row[len(_COLUMNS.split(",")) - 1]
+        asking_session = row[
+            17
+        ]  # `session` is the 18th column of _COLUMNS, `kind` the 19th
 
         letters = {option["letter"] for option in options}
         if letter not in letters:
             raise InvalidAnswer()
+        # One verdict counts on a review: a second device, or a stale form, is
+        # refused and told what counted. A QUESTION may still be re-answered.
+        if row[18] == "review" and row[6] is not None:
+            raise AlreadyDecided(_row_to_decision(row[: len(_COLUMNS.split(","))]))
 
         store._check_secrets(note, "note", agent=by, artifact_id=artifact_id)
 

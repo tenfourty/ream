@@ -419,6 +419,11 @@ alter table event    add column if not exists session text;
 -- already (agent, seq) and this narrows within it.
 create index if not exists event_session_idx on event (agent, session, seq);
 
+-- A review request is a decision with four fixed verdicts (page review step 2,
+-- homelab-ij8.108, 29 Sep 2026). 'question' is every lettered question before it.
+alter table decision add column if not exists kind text not null default 'question'
+    check (kind in ('question', 'review'));
+
 -- WHICH SESSION LAST READ THE FEED, not merely which machine (homelab-ij8.64).
 --
 -- seat_read answers "is anybody still listening on this seat?", and the alert
