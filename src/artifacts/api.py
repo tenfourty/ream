@@ -1147,6 +1147,7 @@ def agent_router(
             return {
                 "id": row.id,
                 "artifact_id": row.artifact_id,
+                "created_at": row.created_at,
                 "verdict": None,
                 "answered_at": None,
                 "message": None,
@@ -1159,6 +1160,7 @@ def agent_router(
         return {
             "id": row.id,
             "artifact_id": row.artifact_id,
+            "created_at": row.created_at,
             "verdict": decisions.VERDICTS[row.answer],
             "answered_at": row.answered_at,
             "message": message,

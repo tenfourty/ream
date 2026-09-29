@@ -503,3 +503,12 @@ def test_the_gallery_shows_a_review_card_and_a_settled_one_without_buttons(clien
         "one verdict counts: no buttons after"
     )
     assert "Your verdict: <b>Approved with notes</b>" in settled
+
+
+def test_the_review_carries_its_own_created_at(client, db):
+    h = _auth(db)
+    page = _page(db)
+    asked = client.post(f"/api/v1/artifacts/{page.id}/reviews", headers=h, json={})
+    rid = asked.json()["id"]
+    got = client.get(f"/api/v1/reviews/{rid}", headers=h).json()
+    assert got["created_at"] == asked.json()["created_at"]

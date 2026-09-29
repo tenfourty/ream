@@ -324,12 +324,14 @@ def _wait(args, key: str, base: str) -> int:
             print("\n\n".join(_fmt_thread(t) for t in threads))
         return 0
 
-    found, waiting_threads = current(), owed()
-    if found or waiting_threads:
-        return report(found, waiting_threads)
+    # The cursor BEFORE the look: an answer landing between the two would
+    # otherwise be missed until the timeout.
     headers: dict = {}
     _request("GET", f"{base}/events?since=999999999999", key, None, headers_out=headers)
     cursor = int(headers.get("x-artifacts-cursor", "0"))
+    found, waiting_threads = current(), owed()
+    if found or waiting_threads:
+        return report(found, waiting_threads)
     print(
         f"waiting for Jeremy's answer{f' on {page}' if page else ''} "
         f"(up to {int(timeout // 60)}m)...",
@@ -424,9 +426,10 @@ def _wait_review(args, key: str, base: str) -> int:
     target = args.result_file
     if target and os.path.lexists(target):
         return _refuse(f"{target} exists; not overwriting it", 2)
+    if target and not os.path.isdir(os.path.dirname(os.path.abspath(target))):
+        return _refuse(f"the directory for {target} does not exist", 2)
     timeout = _duration(args.timeout)
     deadline = time.monotonic() + timeout
-    since: list = []  # the review's created_at, read once
 
     def look() -> int | None:
         review = _request("GET", f"{base}/reviews/{review_id}", key, None)
@@ -447,65 +450,70 @@ def _wait_review(args, key: str, base: str) -> int:
             return code
         if args.verdict_only:
             return None
-        page = review["artifact_id"]
-        if not since:
-            rows = _request(
-                "GET",
-                f"{base}/artifacts/{page}/decisions?include_answered=true",
-                key,
-                None,
-            )
-            mine = [r for r in rows if r.get("id") == review_id]
-            since.append(mine[0].get("created_at") if mine else None)
+        # The baseline rides on the review itself, so it is never missing, even
+        # for a review that has since been closed.
+        since = review["created_at"]
         fresh = [
             row
-            for row in _request("GET", f"{base}/artifacts/{page}/comments", key, None)
+            for row in _request(
+                "GET", f"{base}/artifacts/{review['artifact_id']}/comments", key, None
+            )
             if row.get("author_kind") == "human"
             and not row.get("thread_root")
-            and _after(row.get("created_at"), since[0])
+            and _after(row.get("created_at"), since)
         ]
         if not fresh:
             return None
         print("\n\n".join(_fmt_thread(t) for t in _threads(fresh)))
         return 1 if args.require_approval else 7
 
-    done = look()
-    if done is not None:
-        return done
+    # THE CURSOR FIRST, then the look: a verdict landing between the two would
+    # otherwise be missed until the timeout. Taken this way round, it is either
+    # seen by the look or is an event after the cursor.
     headers: dict = {}
     _request("GET", f"{base}/events?since=999999999999", key, None, headers_out=headers)
     cursor = int(headers.get("x-artifacts-cursor", "0"))
+    done = look()
+    if done is not None:
+        return done
+    wait_for = f"{int(timeout)}s" if timeout < 60 else f"{int(timeout // 60)}m"
     print(
-        f"waiting for Jeremy's verdict on {review_id} (up to {int(timeout // 60)}m)...",
+        f"waiting for Jeremy's verdict on {review_id} (up to {wait_for})...",
         file=sys.stderr,
         flush=True,
     )
-    while time.monotonic() < deadline:
-        hold = int(max(1, min(_HOLD, deadline - time.monotonic())))
+    kinds = {"decision_answered"} | (set() if args.verdict_only else {"comment_added"})
+    relook = False
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining < 1:
+            break
         try:
-            rows = _request(
-                "GET",
-                f"{base}/events?since={cursor}&wait={hold}&exclude_self=true",
-                key,
-                None,
-                timeout=hold + 30,
-            )
+            if not relook:
+                hold = int(min(_HOLD, remaining))
+                rows = _request(
+                    "GET",
+                    f"{base}/events?since={cursor}&wait={hold}&exclude_self=true",
+                    key,
+                    None,
+                    timeout=hold + 30,
+                )
+                if not isinstance(rows, list):
+                    rows = []
+                for row in rows:
+                    cursor = max(cursor, int(row.get("seq", cursor)))
+                relook = any(r.get("kind") in kinds for r in rows)
+            if relook:
+                done = look()
+                relook = False
+                if done is not None:
+                    return done
         except HTTPFailure as exc:
-            if exc.status in (401, 403):
+            if exc.status in (401, 403, 404):
                 raise
-            time.sleep(5)
-            continue
-        if not isinstance(rows, list):
-            rows = []
-        for row in rows:
-            cursor = max(cursor, int(row.get("seq", cursor)))
-        kinds = {"decision_answered"} | (
-            set() if args.verdict_only else {"comment_added"}
-        )
-        if any(r.get("kind") in kinds for r in rows):
-            done = look()
-            if done is not None:
-                return done
+            # A deploy or a dropped connection: ask again, and look again if the
+            # failure was in the look, since its event is already consumed.
+            time.sleep(min(5, max(0, deadline - time.monotonic())))
     print("nothing yet: no verdict before the timeout. Run it again.", file=sys.stderr)
     return 3
 
