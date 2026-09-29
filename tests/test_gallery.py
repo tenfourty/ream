@@ -891,7 +891,7 @@ def test_the_bar_order_is_home_title_comments_share_fullscreen_profile(db):
     ]
     at = [bar.index(m) for m in marks]
     assert at == sorted(at), at
-    assert re.search(rf'<a class="sharebtn" href="/a/{published.id}/share"', bar)
+    assert re.search(rf'<a class="sharebtn" aria-label="Share" href="/a/{published.id}/share"', bar)
     assert "hidden" in bar.split('class="fsbtn"', 1)[1].split(">", 1)[0]
     assert "Full screen" in bar and "Exit full screen" in html
 
