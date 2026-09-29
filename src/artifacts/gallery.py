@@ -198,6 +198,25 @@ main{display:block}
 .bar.bleed{position:sticky;top:0;z-index:40;background:var(--card);
   padding:0 .75rem;margin:0 0 1.25rem;min-height:48px;flex-wrap:nowrap;
   box-shadow:0 1px 0 var(--line)}
+.bar .acts{display:flex;align-items:center;gap:.25rem;margin-left:auto}
+.bar .acts + .profile{margin-left:0}
+.sharebtn,.fsbtn{display:inline-flex;align-items:center;gap:.3rem;height:1.75rem;
+  padding:0 .5rem;border:0;border-radius:.45rem;background:transparent;
+  color:var(--muted);text-decoration:none;font:inherit;font-size:.8125rem;
+  cursor:pointer}
+.sharebtn:hover,.fsbtn:hover{background:var(--chip-hover);color:var(--ink)}
+.fsbtn[hidden]{display:none}
+@media (max-width:34rem){.sharebtn span{display:none}}
+/* The PAGE view only (the wall and the lists keep .wrap as it was): the agent's
+   page is flush under the bar at the window's full width, like claude.ai. The
+   questions and the settled history keep a centred 52rem column, because they
+   are prose and a full-width sentence is unreadable. */
+.bar.bleed.flush{margin-bottom:0}
+.wrap.full{max-width:none;margin:0;padding:0 0 3.5rem}
+.col{max-width:52rem;margin:0 auto;padding:0 1rem}
+.col.top{padding-top:1.25rem}
+.full .sheet{border:0;border-radius:0;box-shadow:none}
+.sheet:fullscreen iframe{height:100vh !important}
 .bar.bleed h1{font:500 .875rem/1.25rem ui-sans-serif,system-ui,-apple-system,
   sans-serif}
 /* 14px, not the reference's 13: every other control in this interface is 14,
@@ -1839,6 +1858,20 @@ bar.addEventListener("click",function(e){
     if(i){i.placeholder="Add a note (optional)";if(!i.value){form.requestSubmit()}}
   }});
 })();
+// Full screen: the sheet, not the page, so the bar's own chrome drops away and
+// the framed page has the whole window. Shown only where the API exists.
+(function(){
+"use strict";
+var b=document.querySelector(".fsbtn"),s=document.getElementById("artifact-sheet");
+if(!b||!s||!document.fullscreenEnabled||!s.requestFullscreen)return;
+b.hidden=false;
+function paint(){var on=document.fullscreenElement===s;
+  var t=b.getAttribute(on?"data-on":"data-off");
+  b.setAttribute("aria-label",t);b.title=t;b.setAttribute("aria-pressed",on?"true":"false")}
+b.addEventListener("click",function(){
+  try{if(document.fullscreenElement)document.exitFullscreen();else s.requestFullscreen()}catch(e){}});
+document.addEventListener("fullscreenchange",paint);paint();
+})();
 """
 
 
@@ -2600,6 +2633,23 @@ def _comments_button(artifact_id: str, open_count: int) -> str:
     )
 
 
+def _share_button(artifact_id: str) -> str:
+    """The bar's direct Share: the same route the menu row opens."""
+    return (
+        f'<a class="sharebtn" href="/a/{escape(artifact_id)}/share">'
+        f"{_icon('link')}<span>Share</span></a>"
+    )
+
+
+# Hidden until comments.js finds the Fullscreen API; with scripts off it stays so.
+_FS_BUTTON = (
+    '<button type="button" class="fsbtn" hidden aria-label="Full screen"'
+    ' data-on="Exit full screen" data-off="Full screen">'
+    '<svg class="mi" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2h4v1.3H3.3V6H2V2Zm8 0h4v4h-1.3V3.3H10V2ZM2 10h1.3v2.7H6V14H2v-4Zm10.7 0H14v4h-4v-1.3h2.7V10Z"/></svg>'
+    "</button>"
+)
+
+
 # His menu, top right on every gallery page (homelab-ij8.103, his ask: "a little
 # profile area on the top right for my user"). A <details>, like the page menu,
 # so it opens with scripts off. Named outright: Authelia admits exactly one
@@ -2624,6 +2674,8 @@ def _shell(
     meta_html: str = "",
     controls: str = "",
     bleed: bool = False,
+    full: bool = False,
+    actions: str = "",
 ) -> str:
     """Every gallery page, wrapped the same way: one narrow bar carrying the way
     back, the title and a timestamp, then the body. Deliberately quiet -- the
@@ -2656,8 +2708,9 @@ def _shell(
     # are different on purpose, and both were measured off the saved pages.
     if bleed:
         top = (
-            f'<header class="bar bleed">{back}{heading}{meta_block}{_PROFILE}</header>'
-            '<div class="wrap">'
+            f'<header class="bar bleed{" flush" if full else ""}">{back}{heading}'
+            f"{meta_block}{actions}{_PROFILE}</header>"
+            f'<div class="wrap{" full" if full else ""}">'
         )
     else:
         top = (
@@ -3923,14 +3976,14 @@ def gallery_router(db: Database) -> APIRouter:
         return HTMLResponse(
             _shell(
                 row[0],
-                f"{asks_above}"
+                f"{f'''<div class="col top">{asks_above}</div>''' if asks_above else ''}"
                 f'<div class="sheet" id="artifact-sheet"'
                 # WHICH VERSION IS IN FRONT OF HIM. gallery.js compares this
                 # with what the server says is current and offers the new one
                 # rather than swapping it (homelab-ij8.74, his own ruling).
                 f' data-version="{int(row[5])}"><iframe id="artifact-frame"'
                 f' src="{src}" sandbox="{sandbox}" title="{escape(row[0])}"></iframe></div>'
-                f"{settled_below}"
+                f"{f'''<div class="col">{settled_below}</div>''' if settled_below else ''}"
                 # AFTER the page, with the settled decisions. A conversation
                 # about a page is read once you have read the page; putting it
                 # above would be the mistake Jeremy already named about the
@@ -3957,8 +4010,18 @@ def gallery_router(db: Database) -> APIRouter:
                 # is how the reference groups them: its page bar holds the title
                 # with its chevron on the left and a ButtonGroup labelled
                 # "Comments" among the controls on the right.
-                title_html=menu + _comments_button(artifact_id, open_threads),
+                title_html=menu,
+                # Right side, in the reference's order: comments, share, full
+                # screen (revealed by script), then the profile.
+                actions=(
+                    '<span class="acts">'
+                    + _comments_button(artifact_id, open_threads)
+                    + _share_button(artifact_id)
+                    + _FS_BUTTON
+                    + "</span>"
+                ),
                 bleed=True,
+                full=True,
             ),
             headers={**gallery_headers(), "cache-control": "no-store"},
         )

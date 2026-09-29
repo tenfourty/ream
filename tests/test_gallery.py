@@ -842,3 +842,63 @@ def test_a_settled_card_says_on_itself_that_it_can_be_changed(db):
     # The section-level line stays: it is what tells him before he opens
     # anything that none of this is final.
     assert "nothing here is locked" in page
+
+
+def _detail(db, title="Board"):
+    published = store.publish(db, "ops-seat", title, _PAGE)
+    html = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    return published, html
+
+
+def test_the_page_view_is_full_width_and_the_wall_is_not(db):
+    """On a page the sheet is flush under the bar; the other views keep their column."""
+    _, html = _detail(db)
+    assert '<div class="wrap full">' in html
+    assert '<div class="sheet" id="artifact-sheet"' in html
+    css = html.split("<style>", 1)[1].split("</style>", 1)[0]
+    assert ".wrap.full{max-width:none" in css
+    assert ".full .sheet{border:0;border-radius:0;box-shadow:none" in css
+    wall = TestClient(create_gallery_app(db)).get("/").text
+    assert "wrap full" not in wall
+
+
+def test_questions_and_history_sit_in_a_centred_column(db):
+    published, html = _detail(db)
+    css = html.split("<style>", 1)[1].split("</style>", 1)[0]
+    assert ".col{max-width:52rem;margin:0 auto;padding:0 1rem}" in css
+    decisions.ask(
+        db,
+        agent="ops-seat",
+        artifact_id=published.id,
+        question="Ship it?",
+        options=[{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}],
+    )
+    html = TestClient(create_gallery_app(db)).get(f"/a/{published.id}").text
+    col = html.split('<div class="col', 1)[1]
+    assert 'id="open-asks"' in col.split('id="artifact-sheet"', 1)[0]
+
+
+def test_the_bar_order_is_home_title_comments_share_fullscreen_profile(db):
+    published, html = _detail(db, "Zed & Co")
+    bar = html.split('<header class="bar bleed flush">', 1)[1].split("</header>", 1)[0]
+    marks = [
+        'class="home"',
+        'class="menu',
+        'class="cbtn',
+        'class="sharebtn"',
+        'class="fsbtn"',
+        'class="menu profile"',
+    ]
+    at = [bar.index(m) for m in marks]
+    assert at == sorted(at), at
+    assert re.search(rf'<a class="sharebtn" href="/a/{published.id}/share"', bar)
+    assert "hidden" in bar.split('class="fsbtn"', 1)[1].split(">", 1)[0]
+    assert "Full screen" in bar and "Exit full screen" in html
+
+
+def test_the_fullscreen_toggle_is_wired_by_script_where_the_api_exists(db):
+    from artifacts import gallery
+
+    js = gallery._COMMENTS_JS
+    assert "fullscreenEnabled" in js and "requestFullscreen" in js
+    assert "exitFullscreen" in js
