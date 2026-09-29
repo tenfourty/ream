@@ -132,3 +132,22 @@ def test_isolation_the_next_test_sees_the_real_schema(db):
         assert holds.get_mode(conn) == "live"
         assert "leftover_from_a_test" not in _tables(conn)
     _write_every_family(db)
+
+
+@pytest.mark.usefixtures("fresh_schema")
+def test_isolation_the_fingerprint_sees_a_schema_change(db, _schema):
+    """The check the `db` fixture runs after every test not asking for a rebuild."""
+    assert _schema.fingerprint() == _schema.built
+    with db.connect() as conn:
+        conn.execute("alter table human_pref add column extra int")
+    assert _schema.fingerprint() != _schema.built
+
+
+def test_a_dbname_in_the_query_does_not_override_the_workers_database():
+    from conftest import _with_dbname
+
+    got = _with_dbname("postgresql://u@/postgres?host=/tmp/x&dbname=postgres", "w1")
+    assert got == "postgresql://u@/w1?host=/tmp/x"
+    assert _with_dbname("postgresql://u@h:5432/postgres", "w1") == (
+        "postgresql://u@h:5432/w1"
+    )

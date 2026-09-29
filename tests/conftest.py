@@ -1,7 +1,7 @@
 """A real Postgres for every test, one database per xdist worker.
 
 `uv run pytest -q -n auto` runs the suite in parallel; plain `uv run pytest -q`
-still runs it serially (xdist's `worker_id` is then "master"). Each worker gets
+still runs it serially (the worker id is then "master"). Each worker gets
 its own database, `artifacts_test_<worker_id>`, built once per session. Between
 tests the `db` fixture empties every table with one TRUNCATE instead of
 rebuilding the schema -- ~24 ms instead of ~105 ms, and the result is the same:
@@ -10,15 +10,27 @@ every table empty, every owned sequence restarted.
 A test that changes the schema itself (drops a column, drops the schema, calls
 `reset()`) must request `fresh_schema`, which rebuilds the schema after it and
 re-reads the table list, so the next test on that worker gets the real schema.
+Any other test that changes the schema's column or table count fails with a
+message saying so, and the schema is rebuilt behind it.
+
+The throwaway server belongs to the xdist controller (or the only process,
+when serial), never to a worker, so a worker killed mid-run cannot orphan it.
+Servers orphaned by a killed controller are reaped at the next start.
 """
 
+import json
 import os
+import re
 import shutil
+import signal
 import tempfile
+import time
+import uuid
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import pgserver
+import psutil
 import psycopg
 import pytest
 from psycopg import sql
@@ -26,52 +38,144 @@ from psycopg.conninfo import make_conninfo
 
 from artifacts.db import Database
 
+# How the controller hands its server to the xdist workers it spawns.
+_URI_ENV = "ARTIFACTS_TEST_PG_URI"
+_PGDATA_PREFIX = "artifacts-pgtest-"
+
 
 def _with_dbname(dsn: str, dbname: str) -> str:
     """The same server, another database. Keeps URI DSNs as URIs, because
-    `Database` appends `?connect_timeout=` to anything without one."""
+    `Database` appends `?connect_timeout=` to anything without one. A `dbname`
+    in the query string would override the path, so it is dropped."""
     if "://" in dsn:
         parts = urlsplit(dsn)
-        return urlunsplit(parts._replace(path=f"/{dbname}"))
+        query = [(k, v) for k, v in parse_qsl(parts.query) if k != "dbname"]
+        return urlunsplit(
+            parts._replace(
+                path=f"/{dbname}", query=urlencode(query, safe="/", quote_via=quote)
+            )
+        )
     return make_conninfo(dsn, dbname=dbname, connect_timeout="5")
 
 
-@pytest.fixture(scope="session")
-def _pg_server(testrun_uid: str) -> str:
-    """The Postgres server this run uses: PG_TEST_DSN (CI's one service), else
-    one throwaway pgserver SHARED by every worker of this run.
-
-    Shared, not one per worker: pgserver serialises server start-up behind one
-    machine-wide lock, so eight servers start one after another (~1.5 s each)
-    and cost eight ~59 MB data directories in a RAM-backed /tmp. One server plus
-    a CREATE DATABASE per worker (~0.06 s) costs one start-up. pgserver counts
-    the processes holding it and stops the server when the last one lets go."""
-    existing = os.environ.get("PG_TEST_DSN")
-    if existing:
-        yield existing
-        return
-    pgdata = Path(tempfile.gettempdir()) / f"artifacts-pgtest-{testrun_uid}"
-    pgdata.mkdir(exist_ok=True)
-    # cleanup_mode="delete" (not the default "stop"): "stop" only stops the
-    # server and leaves the ~59 MB pgdata directory behind. /tmp here is
-    # RAM-backed, and 116 leftover directories once filled it to its quota,
-    # failing later suites at initdb with "Disk quota exceeded".
-    server = pgserver.get_server(pgdata, cleanup_mode="delete")
+def _stop_postmaster(pgdata: Path) -> None:
+    """Stop the server running in `pgdata`, by the pid in its postmaster.pid,
+    and only if that pid really is a postgres for this directory."""
     try:
-        yield server.get_uri()
-    finally:
-        server.cleanup()
-        # Belt and braces: the last worker's cleanup already removed `pgdata`.
-        # Never remove it while a server still runs in it for another worker.
-        if not (pgdata / "postmaster.pid").exists():
-            shutil.rmtree(pgdata, ignore_errors=True)
+        pid = int((pgdata / "postmaster.pid").read_text().splitlines()[0])
+        proc = psutil.Process(pid)
+        if "postgres" not in proc.name() or str(pgdata) not in proc.cmdline():
+            return
+        proc.send_signal(signal.SIGINT)  # postgres: fast shutdown
+        proc.wait(timeout=10)
+    except psutil.TimeoutExpired:
+        proc.kill()
+    except (OSError, ValueError, IndexError, psutil.Error):
+        return
+
+
+def _reap_orphans() -> None:
+    """Stop and remove every throwaway test server whose clients are all dead:
+    a run killed with SIGKILL never reached its own cleanup. pgserver lists its
+    client pids in .handle_pids.json and never prunes a dead one."""
+    for pgdata in Path(tempfile.gettempdir()).glob(f"{_PGDATA_PREFIX}*"):
+        try:
+            pids = json.loads((pgdata / ".handle_pids.json").read_text())
+        except FileNotFoundError:
+            # No client ever registered: a start-up in progress, or one that
+            # died before registering. Leave a young one alone.
+            try:
+                if time.time() - pgdata.stat().st_mtime < 300:
+                    continue
+            except OSError:
+                continue
+            pids = []
+        except (OSError, ValueError):
+            continue
+        if any(psutil.pid_exists(pid) for pid in pids):
+            continue
+        _stop_postmaster(pgdata)
+        shutil.rmtree(pgdata, ignore_errors=True)
+
+
+class _Server:
+    """The throwaway pgserver, owned by exactly one process: the xdist
+    controller (or the only process, when serial). Workers never hold it, so
+    a worker that crashes cannot leave it running.
+
+    One shared server, not one per worker: pgserver serialises start-up behind
+    one machine-wide lock, so eight servers start one after another (~1.5 s
+    each) and cost eight ~59 MB data directories in a RAM-backed /tmp. One
+    server plus a CREATE DATABASE per worker (~0.06 s) costs one start-up."""
+
+    server = None
+    pgdata: Path | None = None
+
+    @classmethod
+    def ensure(cls) -> str:
+        if cls.server is None:
+            _reap_orphans()
+            cls.pgdata = Path(tempfile.gettempdir()) / (
+                f"{_PGDATA_PREFIX}{uuid.uuid4().hex}"
+            )
+            cls.pgdata.mkdir()
+            # cleanup_mode="delete" (not the default "stop"): "stop" leaves the
+            # ~59 MB pgdata directory behind. /tmp here is RAM-backed, and 116
+            # leftover directories once filled it to its quota, failing later
+            # suites at initdb with "Disk quota exceeded".
+            cls.server = pgserver.get_server(cls.pgdata, cleanup_mode="delete")
+        return cls.server.get_uri()
+
+    @classmethod
+    def stop(cls) -> None:
+        if cls.server is None:
+            return
+        cls.server.cleanup()
+        # Belt and braces, in case cleanup ever stops short of both.
+        _stop_postmaster(cls.pgdata)
+        shutil.rmtree(cls.pgdata, ignore_errors=True)
+        cls.server = None
+
+
+def _is_worker(config) -> bool:
+    return hasattr(config, "workerinput")
+
+
+def pytest_configure(config) -> None:
+    """Under -n the controller starts the server before it spawns workers,
+    and they inherit its address. Serially it starts on first use instead."""
+    parallel = config.getoption("dist", "no") != "no"
+    if _is_worker(config) or not parallel or os.environ.get("PG_TEST_DSN"):
+        return
+    if config.getoption("collectonly") or config.getoption("help"):
+        return
+    os.environ[_URI_ENV] = _Server.ensure()
+
+
+def pytest_unconfigure(config) -> None:
+    if not _is_worker(config):
+        _Server.stop()
+        os.environ.pop(_URI_ENV, None)
 
 
 @pytest.fixture(scope="session")
-def dsn(_pg_server: str, worker_id: str) -> str:
+def _pg_server() -> str:
+    """PG_TEST_DSN (CI's one service), else the controller's throwaway server."""
+    return os.environ.get("PG_TEST_DSN") or os.environ.get(_URI_ENV) or _Server.ensure()
+
+
+def _worker_id() -> str:
+    """xdist's worker id ("gw0", ...), or "master" when serial or without xdist."""
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    assert re.fullmatch(r"\w+", worker), worker
+    return worker
+
+
+@pytest.fixture(scope="session")
+def dsn(_pg_server: str) -> str:
     """This worker's own database, created fresh (dropped first if a crashed run
     left it behind) and dropped again at the end of the session."""
-    name = f"artifacts_test_{worker_id}"
+    name = f"artifacts_test_{_worker_id()}"
     drop = sql.SQL("drop database if exists {} with (force)").format(
         sql.Identifier(name)
     )
@@ -102,6 +206,22 @@ class _Schema:
             ).fetchall()
         self.tables = [row[0] for row in rows]
         assert self.tables, "the schema built no tables"
+        self.built = self.fingerprint()
+
+    def fingerprint(self) -> tuple[int, int]:
+        """Cheap evidence the schema is still the one built: its column and
+        table counts. Catches a test that altered the schema without asking
+        for `fresh_schema`, before it poisons the next test on this worker."""
+        with self.database.connect() as conn:
+            # pg_catalog rather than information_schema.columns: the same
+            # counts for tables, in ~0.7 ms instead of ~2.4 ms per test.
+            return conn.execute(
+                "select count(*) filter (where a.attnum > 0), count(distinct c.oid)"
+                " from pg_class c join pg_attribute a"
+                "   on a.attrelid = c.oid and not a.attisdropped"
+                " where c.relnamespace = current_schema()::regnamespace"
+                "   and c.relkind in ('r', 'p')"
+            ).fetchone()
 
     def empty(self) -> None:
         truncate = sql.SQL("truncate {} restart identity cascade").format(
@@ -128,6 +248,17 @@ def fresh_schema(_schema: _Schema):
 
 
 @pytest.fixture()
-def db(_schema: _Schema, dsn: str) -> Database:
+def db(_schema: _Schema, dsn: str, request):
     _schema.empty()  # every table empty, every sequence restarted
-    return Database(dsn)
+    yield Database(dsn)
+    if "fresh_schema" in request.fixturenames:
+        return  # it rebuilds anyway
+    now = _schema.fingerprint()
+    if now != _schema.built:
+        _schema.rebuild()  # so the tests after it are not poisoned
+        pytest.fail(
+            f"{request.node.nodeid} changed the schema (columns, tables:"
+            f" {_schema.built} -> {now}) without requesting `fresh_schema`."
+            " Add @pytest.mark.usefixtures('fresh_schema') to it.",
+            pytrace=False,
+        )

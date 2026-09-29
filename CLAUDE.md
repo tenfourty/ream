@@ -67,7 +67,7 @@ be walked to learn which ids are real.
 | Piece | Where |
 |---|---|
 | The service (FastAPI + Postgres) | `src/artifacts/` |
-| Tests | `tests/` — `uv run pytest -q -n auto` |
+| Tests | `tests/` — `uv run pytest -q -n auto --maxprocesses 8` |
 | Container | `Dockerfile` |
 | Deployment values | `deploy/` |
 | CI → image → deploy | `.forgejo/workflows/ci.yml` |
@@ -97,9 +97,9 @@ broken peers mid-shift. Change them in the homelab repo, under its rules.
 ```bash
 uv sync --frozen --all-extras   # the server stack is the `server` extra
 uv run ruff check src tests
-uv run pytest -q -n auto      # the full suite, in parallel; a throwaway Postgres per run
+uv run pytest -q -n auto --maxprocesses 8   # the full suite, in parallel; a throwaway Postgres per run
 uv run pytest -q tests/test_x.py   # one file, serially
-PG_TEST_DSN=postgresql://…  uv run pytest -q -n auto   # or an existing Postgres
+PG_TEST_DSN=postgresql://…  uv run pytest -q -n auto --maxprocesses 8   # or an existing Postgres
 ```
 
 **Declare which session you are, on every publish.** A key is shared by every
