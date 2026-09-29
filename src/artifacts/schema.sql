@@ -739,3 +739,17 @@ alter table review_round add column if not exists claim_expires_at timestamptz;
 alter table review_round add column if not exists released_reason text;
 -- The session that handed the round back, for his card; a claim clears it.
 alter table review_round add column if not exists released_by text;
+
+-- IDEMPOTENCY (page review step 5). A retried reply or acknowledgement sends
+-- the same `Idempotency-Key`; the first response is kept for 24 hours and a
+-- repeat gets it back without writing anything. Scoped per agent and route.
+create table if not exists idempotency (
+    agent       text        not null,
+    route       text        not null,
+    key         text        not null,
+    body_sha256 text        not null,
+    status      int         not null,
+    response    jsonb       not null,
+    expires_at  timestamptz not null,
+    primary key (agent, route, key)
+);

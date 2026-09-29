@@ -31,6 +31,7 @@ import re
 import sys
 import tempfile
 import time
+import uuid
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
@@ -1096,12 +1097,19 @@ def main(argv: list[str] | None = None) -> int:
                 f"{base}/artifacts/{thread['artifact_id']}/comments",
                 key,
                 {"body": args.text, "thread_root": args.thread},
+                idempotency_key=str(uuid.uuid4()),
             )
             print(f"replied on {args.thread}; he sees it in the page's comments")
             return 0
         if args.cmd in ("ack", "close"):
             route = "acknowledge" if args.cmd == "ack" else "close"
-            row = _request("POST", f"{base}/decisions/{args.decision}/{route}", key, {})
+            row = _request(
+                "POST",
+                f"{base}/decisions/{args.decision}/{route}",
+                key,
+                {},
+                idempotency_key=str(uuid.uuid4()) if route == "acknowledge" else None,
+            )
             print(_fmt(row))
             return 0
     except UsageError as exc:

@@ -12,7 +12,15 @@ import threading
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+)
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import (
     FileResponse,
@@ -30,6 +38,7 @@ from artifacts import (
     events,
     grants,
     hosts,
+    idempotency,
     keys,
     onboarding,
     ratelimit,
@@ -1038,7 +1047,21 @@ def agent_router(
         payload: CommentBody,
         background: BackgroundTasks,
         agent: str = Depends(caller),
+        idempotency_key: str | None = Header(default=None),
     ):
+        def write() -> tuple[int, object]:
+            return 201, _add_comment(artifact_id, payload, background, agent)
+
+        return idempotency.run(
+            db,
+            agent,
+            f"comments:{artifact_id}",
+            idempotency_key,
+            payload.model_dump(),
+            write,
+        )
+
+    def _add_comment(artifact_id, payload, background, agent):
         try:
             row = comments.add(
                 db,
@@ -1702,11 +1725,20 @@ def agent_router(
         return [row.__dict__ for row in decisions.outcomes_for(db, decision_id)]
 
     @router.post("/decisions/{decision_id}/acknowledge")
-    def acknowledge_decision(decision_id: str, agent: str = Depends(caller)):
-        try:
-            return decisions.acknowledge(db, agent, decision_id).__dict__
-        except store.NotFound as exc:
-            raise HTTPException(404, "no such decision") from exc
+    def acknowledge_decision(
+        decision_id: str,
+        agent: str = Depends(caller),
+        idempotency_key: str | None = Header(default=None),
+    ):
+        def write() -> tuple[int, object]:
+            try:
+                return 200, decisions.acknowledge(db, agent, decision_id).__dict__
+            except store.NotFound as exc:
+                raise HTTPException(404, "no such decision") from exc
+
+        return idempotency.run(
+            db, agent, f"acknowledge:{decision_id}", idempotency_key, {}, write
+        )
 
     @router.get("/decisions/uncollected")
     def list_uncollected(

@@ -476,6 +476,7 @@ def _request(
     *,
     timeout: float | None = None,
     headers_out: dict | None = None,
+    idempotency_key: str | None = None,
 ) -> dict:
     # `timeout`: a held /events request needs longer than the default 30 s.
     # `headers_out`: filled with the response headers, for the one caller that
@@ -506,6 +507,10 @@ def _request(
     # there is one rule about headers on this request rather than two.
     if session:
         request.add_unredirected_header(_SESSION_HEADER, session)
+    if idempotency_key:
+        # Set once on the request object the retry loop below re-sends, so a
+        # retry after a 502 carries the SAME key and cannot post twice.
+        request.add_unredirected_header("Idempotency-Key", idempotency_key)
     if data is not None:
         request.add_header("Content-Type", "application/json")
     for attempt in range(_ROLLING_ATTEMPTS):
