@@ -401,7 +401,10 @@ def list_for_agent(
     sql = (
         f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
         " join artifact on artifact.id = decision.artifact_id"
-        " where artifact.agent = %s"
+        # A deleted page is gone from the agent's view (ij8.110, as ij8.97 did
+        # for the uncollected alert): listing its questions while their
+        # outcome route answered 404 was the list and the route disagreeing.
+        " where artifact.agent = %s and artifact.deleted_at is null"
     )
     if not include_closed:
         sql += " and decision.closed_at is null"

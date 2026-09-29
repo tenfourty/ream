@@ -647,7 +647,10 @@ def list_for_agent(
     sql = (
         f"select {_COLUMNS} from comment"  # noqa: S608
         " join artifact on artifact.id = comment.artifact_id"
-        f" where artifact.agent = %s and not comment.held and {_VISIBLE}"
+        # A deleted page's threads leave the agent's list too (ij8.110): they
+        # kept listing as NEEDS YOUR REPLY and waking its waiter.
+        f" where artifact.agent = %s and artifact.deleted_at is null"
+        f" and not comment.held and {_VISIBLE}"
     )
     if not include_resolved:
         sql += f" and {_ROOT_RESOLVED_AT} is null"
