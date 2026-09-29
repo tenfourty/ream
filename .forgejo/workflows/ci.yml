@@ -68,14 +68,19 @@ jobs:
 
       - name: tests
         env:
-          PG_TEST_DSN: postgresql://postgres@postgres:5432/postgres
+          # connect_timeout=30: production keeps its 5 s bound (db.py), but this
+          # service shares the runner's 5.5 cores with the workers, and on a
+          # loaded host a new backend took longer than 5 s to fork (29 Sep
+          # 2026, three ConnectionTimeouts in an otherwise green run).
+          PG_TEST_DSN: postgresql://postgres@postgres:5432/postgres?connect_timeout=30
           # This service container exists only for this job, so the tests may
           # turn its commit flushes off (tests/conftest.py, _declared_throwaway).
           ARTIFACTS_TEST_PG_THROWAWAY: "1"
-        # -n auto: one xdist worker per core, capped at 8 so a many-core runner
-        # cannot exhaust max_connections=100; each in its own database
+        # -n auto, capped at 5: the docker runner's one slot has 5.5 cores
+        # (docs/services/ci-builders in the homelab repo), so more workers only
+        # queue behind each other and the Postgres service; each in its own database
         # (artifacts_test_<worker>) on this one Postgres service.
-        run: uv run pytest -q -n auto --maxprocesses 8
+        run: uv run pytest -q -n auto --maxprocesses 5
 
   # No `needs:` -- the image builds while the tests run. An image whose tests fail
   # is only ever pushed to the internal registry; `deploy` below waits for both.
