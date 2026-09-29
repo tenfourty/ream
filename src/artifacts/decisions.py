@@ -92,6 +92,11 @@ _COLUMNS = (
     " decision.answer_source, decision.recorded_by, decision.said_at,"
     " decision.session, decision.kind"
 )
+# Positions in `_COLUMNS` that are read by index outside `_row_to_decision`.
+# Tied to its order: `session` is the 18th column, `kind` the 19th. Appending
+# a column leaves both alone; inserting one before them moves them.
+_SESSION_IDX = 17
+_KIND_IDX = 18
 
 
 @dataclass(frozen=True)
@@ -226,8 +231,8 @@ def _row_to_decision(row) -> DecisionRow:
         answer_source=row[14],
         recorded_by=row[15],
         said_at=row[16].isoformat() if row[16] is not None else None,
-        session=row[17],
-        kind=row[18],
+        session=row[_SESSION_IDX],
+        kind=row[_KIND_IDX],
     )
 
 
@@ -466,9 +471,7 @@ def record_elsewhere(
         # `answer`). Missing until 23 Sep 2026: a relayed answer's event had no
         # session, so a waiter listening for its own session never heard it --
         # found by the first outside agent (homelab-ij8.106).
-        asking_session = row[
-            17
-        ]  # `session` is the 18th column of _COLUMNS, `kind` the 19th
+        asking_session = row[_SESSION_IDX]
 
         if letter not in {option["letter"] for option in options}:
             raise InvalidAnswer()
@@ -554,16 +557,14 @@ def answer(
         # live. The event carries this so the seat that raised the question can
         # recognise its own answer in a feed three seats share -- see
         # events.list_for_agent's `session`.
-        asking_session = row[
-            17
-        ]  # `session` is the 18th column of _COLUMNS, `kind` the 19th
+        asking_session = row[_SESSION_IDX]
 
         letters = {option["letter"] for option in options}
         if letter not in letters:
             raise InvalidAnswer()
         # One verdict counts on a review: a second device, or a stale form, is
         # refused and told what counted. A QUESTION may still be re-answered.
-        if row[18] == "review" and row[6] is not None:
+        if row[_KIND_IDX] == "review" and row[6] is not None:
             raise AlreadyDecided(_row_to_decision(row[: len(_COLUMNS.split(","))]))
 
         store._check_secrets(note, "note", agent=by, artifact_id=artifact_id)
@@ -577,12 +578,25 @@ def answer(
         # never be sent for an answer that a later failure in this block undid,
         # and the journal must never gain a row whose cause never happened.
         with conn.transaction():
-            conn.execute(
+            # The write itself is conditional for a review, not only the read
+            # above: two devices can both pass that read before either writes,
+            # and only an atomic `answer is null` test in the update keeps the
+            # first verdict. A second writer waits on the row lock, re-tests
+            # and updates nothing.
+            written = conn.execute(
                 "update decision set answer = %s, answer_note = %s, answered_at = now(),"
                 " answered_by = %s, answer_source = 'page', recorded_by = null,"
-                " said_at = null where id = %s",
+                " said_at = null where id = %s"
+                " and (kind <> 'review' or answer is null)",
                 (letter, note, by, decision_id),
             )
+            if written.rowcount == 0:
+                # Lost the race: no event, and the row as it now stands.
+                current = conn.execute(
+                    f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
+                    (decision_id,),
+                ).fetchone()
+                raise AlreadyDecided(_row_to_decision(current))
             event_seq = events.append(
                 conn,
                 artifact_id=artifact_id,

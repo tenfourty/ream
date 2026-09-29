@@ -83,3 +83,44 @@ def test_the_asking_session_still_rides_the_answer_event(db):
         e for e in events.list_for_agent(db, "seat") if e.kind == "decision_answered"
     ]
     assert ev.session == "seat/one"
+
+
+def test_two_simultaneous_verdicts_keep_only_the_first(db, monkeypatch):
+    """Both callers pass the read-side check before either writes: the barrier
+    sits in `_check_secrets`, which runs after that check and before the write."""
+    import threading
+
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    barrier = threading.Barrier(2, timeout=10)
+    real = store._check_secrets
+
+    def gated(*args, **kwargs):
+        real(*args, **kwargs)
+        barrier.wait()
+
+    monkeypatch.setattr(store, "_check_secrets", gated)
+    outcomes = {}
+
+    def give(letter):
+        try:
+            outcomes[letter] = decisions.answer(db, row.id, letter=letter, by="jeremy")
+        except decisions.AlreadyDecided as err:
+            outcomes[letter] = err
+
+    threads = [threading.Thread(target=give, args=(x,)) for x in ("a", "c")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+
+    winners = [k for k, v in outcomes.items() if isinstance(v, decisions.DecisionRow)]
+    losers = [k for k, v in outcomes.items() if isinstance(v, decisions.AlreadyDecided)]
+    assert len(winners) == 1 and len(losers) == 1
+    [stored] = decisions.list_for_artifact(db, page.id, include_answered=True)
+    assert stored.answer == winners[0]
+    assert outcomes[losers[0]].row.answer == winners[0]
+    answered = [
+        e for e in events.list_for_agent(db, "seat") if e.kind == "decision_answered"
+    ]
+    assert len(answered) == 1
