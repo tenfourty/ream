@@ -9,19 +9,30 @@ const src = fs.readFileSync(process.argv[2], "utf8");
 let fails = 0, passes = 0;
 const ok = (c, m) => { c ? passes++ : (fails++, console.log("FAIL: " + m)); if (c) console.log("ok   " + m); };
 
+function classes() {
+  const set = new Set();
+  return { set, add: (c) => set.add(c), remove: (c) => set.delete(c), contains: (c) => set.has(c),
+           toggle(c, on) { if (on === undefined) on = !set.has(c); on ? set.add(c) : set.delete(c); return on; } };
+}
 function el(tag) {
   return { tag, style: {}, hidden: false, children: [], attrs: {}, on: {}, value: "", textContent: "", dataset: {},
+           classList: classes(),
+           setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; },
+           replaceChild(n, o) { const i = this.children.indexOf(o); if (i >= 0) this.children[i] = n; n.parentNode = this; o.parentNode = null; },
+           contains(n) { while (n) { if (n === this) return true; n = n.parentNode; } return false; },
            appendChild(c) { this.children.push(c); c.parentNode = this; },
            insertBefore(c) { this.children.unshift(c); c.parentNode = this; },
            addEventListener(t, f) { this.on[t] = f; }, focus() { this.focused = true; },
            closest(sel) {
-             const tag = sel.replace(/^\W+/, "");
+             // A tag, or a class (".x"), or a comma list of either.
+             const hit = (node) => sel.split(",").map((x) => x.trim()).some((x) =>
+               x.startsWith(".") ? node.className === x.slice(1) : node.tag === x.replace(/^\W+/, ""));
              let node = this;
-             while (node) { if (node.tag === tag) return node; node = node.parentNode; }
+             while (node) { if (hit(node)) return node; node = node.parentNode; }
              return null;
            } };
 }
-function build({ marks = "[]", fetchImpl = null, noForm = false } = {}) {
+function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false } = {}) {
   const framePosts = [];
   const frameWin = { postMessage: (m, o) => framePosts.push([m, o]) };
   const frameOn = {};
@@ -43,19 +54,31 @@ function build({ marks = "[]", fetchImpl = null, noForm = false } = {}) {
     return m ? form.children.find((c) => c.name === m[1]) || null : null;
   };
   const docBody = el("body");
-  const byId = { "artifact-frame": iframe, "artifact-marks": marksEl, "marks-unplaced": unplacedEl };
-  const docOn = {}, extra = {};
+  // The panel, its close link (a link to "#" as the server renders it) and
+  // the bar's comments button.
+  const panel = el("aside"); panel.id = "comments";
+  const close = el("a"); close.className = "cclose"; close.textContent = "\u00d7";
+  panel.appendChild(close);
+  panel.querySelector = (q) => (q === ".cclose" ? panel.children.find((c) => c.className === "cclose") || null : null);
+  const cbtn = el("a"); cbtn.className = "cbtn";
+  const byId = { "artifact-frame": iframe, "artifact-marks": marksEl, "marks-unplaced": unplacedEl, comments: noPanel ? null : panel };
+  const docOn = {}, extra = { ".cbtn": cbtn };
   const doc = { getElementById: (id) => byId[id] || null,
                 createElement: (t) => { const n = el(t); if (t === "template") Object.defineProperty(n, "innerHTML", { set(h) { n.content = { firstElementChild: { html: h } }; } }); return n; },
                 body: docBody,
                 addEventListener: (t, f) => ((docOn[t] ||= []).push(f)),
                 querySelector: (q) => (q === "form.cnew" ? (noForm ? null : form) : extra[q] || null) };
-  const listeners = {};
-  const win = { scrollX: 0, scrollY: 50, addEventListener: (t, f) => ((listeners[t] ||= []).push(f)) };
-  const location = { hash: "" };
+  const listeners = {}, capture = {};
+  const store = new Map(stored === undefined ? [] : [["artifacts.comments.open", stored]]);
+  const localStorage = storage ? { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) }
+    : { getItem() { throw new Error("denied"); }, setItem() { throw new Error("denied"); } };
+  const history = { entries: 0, replaced: [], pushState() { this.entries++; }, replaceState(s, t, u) { this.replaced.push(u); } };
+  const win = { scrollX: 0, scrollY: 50, localStorage, history,
+                addEventListener: (t, f, c) => (((c ? capture : listeners)[t] ||= []).push(f)) };
+  const location = { hash, pathname: "/a/abc", search: "" };
   const FD = function (f) { this.form = f; };
   new Function("document", "window", "location", "URL", "fetch", "FormData", src)(doc, win, location, URL, fetchImpl || undefined, FD);
-  const bar = docBody.children[0];
+  const bar = docBody.children.find((c) => c.className === "selbar");
   const buttons = {};
   if (bar) bar.children.forEach((b) => (buttons[b.dataset.kind] = b));
   const send = (data, { source = frameWin, origin = "https://abc.tenfourty.com" } = {}) =>
@@ -64,7 +87,12 @@ function build({ marks = "[]", fetchImpl = null, noForm = false } = {}) {
   const reload = () => (frameOn.load || []).forEach((fn) => fn({}));
   const submit = (fm, e = {}) => { const ev = { target: fm, prevented: false, preventDefault() { ev.prevented = true; }, ...e };
     (docOn.submit || []).forEach((fn) => fn(ev)); return ev; };
-  return { bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload, submit, extra, doc };
+  const tap = (target) => { const ev = { target, prevented: false, preventDefault() { ev.prevented = true; } };
+    (docOn.click || []).forEach((fn) => fn(ev)); return ev; };
+  const key = (k) => (capture.keydown || []).concat(listeners.keydown || [], docOn.keydown || []).forEach((fn) => fn({ key: k }));
+  const isOpen = () => docBody.classList.contains("cpanel-open");
+  return { bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload, submit, extra, doc,
+           panel, cbtn, docBody, store, history, tap, key, isOpen };
 }
 const SEL = { type: "artifact-selection", quote: "the plan",
               anchor: { kind: "range", path: "body>p:nth-of-type(1)", start: 4, end: 12 },
@@ -84,7 +112,8 @@ const SEL = { type: "artifact-selection", quote: "the plan",
   ok(anchor && JSON.parse(anchor.value).kind === "range", "and the anchor");
   ok(kind && kind.value === "comment", "and the kind");
   ok(g.form.children.find((c) => c.className === "cquote").textContent === "the plan", "the quote is shown, as text");
-  ok(g.location.hash === "comments" && g.body.focused, "the drawer opens with the cursor in the box");
+  ok(g.isOpen() && g.location.hash === "" && g.body.focused, "the panel opens, by class, with the cursor in the box");
+  ok(g.history.entries === 0 && g.history.replaced.length === 0, "and without touching the history");
   ok(g.body.placeholder === "Comment on the selected text", "asking for a comment");
   ok(g.bar.hidden === true, "and the bar goes");
   ok(g.form.submits === 0, "a comment is never auto-submitted"); }
@@ -196,7 +225,7 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
   const f = g.form; f.className = "cnew"; f.action = "/c/abc"; f.submitted = 0; f.submit = () => { f.submitted++; };
   const btn = { disabled: false }; f.querySelectorAll = () => [btn];
   const list = el("ul"); list.appended = []; list.appendChild = (c) => list.appended.push(c);
-  g.extra["#comments .cdrawer-card > ul.threads"] = list;
+  g.extra["#comments > ul.threads"] = list;
   g.body.value = "hello";
   g.send({ type: "artifact-state" });
   const before = g.framePosts.length;
@@ -247,7 +276,7 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
   const f = g.form; f.className = "cnew"; f.action = "/c/abc";
   f.querySelectorAll = () => [];
   const cn = { textContent: "2" }; g.extra[".cbtn .cn"] = cn;
-  const list = el("ul"); g.extra["#comments .cdrawer-card > ul.threads"] = list;
+  const list = el("ul"); g.extra["#comments > ul.threads"] = list;
   g.submit(f); await tick(); await tick(); await tick();
   ok(cn.textContent === "3", "a new root thread bumps the count on the bar"); }
 // The all-pages view has no new-comment form, and replies still post in place.
@@ -259,6 +288,55 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
   const ev = g.submit(f); await tick(); await tick(); await tick();
   ok(ev.prevented === true && li.parentNode.replaced && li.parentNode.replaced.html === "<li>t</li>" && f.submitted === 0,
      "a reply in the all-pages view is posted in place"); }
+
+// THE DOCKED PANEL. The bar's button and the close control toggle a class on
+// <body>; nothing navigates, so no fragment, no history entry, no reflow of a
+// tall page under a blurred backdrop. Escape closes it; the state is kept per
+// viewer in localStorage and a broken or refused storage costs only the memory.
+{ const g = build();
+  ok(!g.isOpen(), "the panel starts closed for a viewer with no memory of it");
+  ok(g.docBody.classList.contains("cjs"), "the script marks the page as scripted, so :target stops driving the panel");
+  const btn = g.panel.children.find((c) => c.className === "cclose");
+  ok(btn && btn.tag === "button" && btn.type === "button", "the close link becomes a real button");
+  ok(btn.attrs["aria-label"] === "Close comments" && btn.textContent === "\u00d7", "keeping its name and its mark");
+  let ev = g.tap(g.cbtn);
+  ok(ev.prevented && g.isOpen(), "the comments button opens the panel without following its link");
+  ok(g.location.hash === "" && g.history.entries === 0 && g.history.replaced.length === 0, "no fragment and no history entry");
+  ok(g.cbtn.attrs["aria-expanded"] === "true", "the button says it is expanded");
+  ok(g.store.get("artifacts.comments.open") === "1", "open is remembered");
+  ev = g.tap(g.cbtn);
+  ok(ev.prevented && !g.isOpen() && g.cbtn.attrs["aria-expanded"] === "false", "pressing it again closes it");
+  ok(g.store.get("artifacts.comments.open") === "0", "and closed is remembered");
+  g.tap(g.cbtn); ev = g.tap(btn);
+  ok(ev.prevented && !g.isOpen(), "the close button closes it");
+  const other = el("p"); other.closest = () => null;
+  ev = g.tap(other);
+  ok(!ev.prevented && !g.isOpen(), "a click anywhere else is left alone"); }
+{ const g = build();
+  g.tap(g.cbtn); g.key("Enter");
+  ok(g.isOpen(), "a key other than Escape leaves it open");
+  g.key("Escape");
+  ok(!g.isOpen() && g.store.get("artifacts.comments.open") === "0", "Escape closes it, and that is remembered");
+  g.extra[".dlg:target,details.menu[open]"] = el("div");
+  g.tap(g.cbtn); g.key("Escape");
+  ok(g.isOpen(), "Escape with a dialog or menu open closes that first, not the panel"); }
+{ const g = build({ stored: "1" });
+  ok(g.isOpen() && g.cbtn.attrs["aria-expanded"] === "true", "a viewer who left it open finds it open"); }
+{ const g = build({ stored: "0" });
+  ok(!g.isOpen(), "and one who closed it finds it closed"); }
+{ const g = build({ stored: "0", hash: "#comments" });
+  ok(g.isOpen(), "a link to #comments opens it, whatever was remembered");
+  ok(g.history.entries === 0 && g.history.replaced.length === 1 && g.history.replaced[0] === "/a/abc",
+     "and the fragment is dropped in place, so a reload obeys the memory rather than the old link"); }
+{ let threw = false, g;
+  try { g = build({ storage: false }); g.tap(g.cbtn); } catch (e) { threw = true; }
+  ok(!threw && g.isOpen(), "storage that throws costs only the memory: the panel still opens"); }
+{ let threw = false;
+  try { build({ noPanel: true }); } catch (e) { threw = true; }
+  ok(!threw, "a page with no panel is left alone"); }
+{ const g = build();
+  g.send(SEL); g.tap(g.cbtn);
+  ok(g.bar.hidden === true, "toggling the panel hides a selection bar whose position the reflow just made wrong"); }
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

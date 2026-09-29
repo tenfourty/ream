@@ -403,22 +403,48 @@ main{display:block}
   background:var(--accent);border-radius:.6rem;padding:.1rem .3rem}
 
 /* A PANEL, opened from the bar -- the reference keeps the conversation beside
-   the page rather than under it. `:target`, like the rename and link dialogs,
-   so it needs no script. Hidden until targeted; a drawer on the right at width
-   and a full-width sheet on a phone, because a 22rem drawer on a 390px screen
-   is a column of two-word lines. */
-.cdrawer{display:none}
-.cdrawer:target{display:block;position:fixed;inset:0;z-index:40}
-.cdrawer .dlg-back{position:absolute;inset:0;background:rgba(11,11,11,.28)}
-.cdrawer-card{position:absolute;top:0;right:0;bottom:0;width:min(24rem,100%);
-  background:var(--paper);border-left:1px solid var(--line);
-  box-shadow:var(--shadow);padding:1.1rem 1.1rem 1.6rem;overflow-y:auto}
-@media (max-width:34rem){.cdrawer-card{width:100%;border-left:0}}
-.cdrawer-card h2{font:600 .74rem/1.4 var(--mono);letter-spacing:.14em;
-  text-transform:uppercase;color:var(--muted);margin:0 0 .9rem}
+   the page rather than under it, and so does this: DOCKED on the right, below
+   the 48px bar, and the page area narrows by exactly its width so nothing is
+   covered and the frame reflows. It used to be a `:target` overlay with a
+   blurred, dimmed backdrop over a page that can be tens of thousands of pixels
+   tall, opened by navigating to #comments; both were slow. There is no
+   backdrop, no dimming and no blur on it anywhere.
+
+   With scripts, comments.js marks <body> `.cjs` and toggles `.cpanel-open`,
+   so no click navigates. Without them the fragment still does the whole job:
+   `:target` shows the same docked panel, and `:has()` narrows the page. */
+.cpanel{display:none;position:fixed;top:48px;right:0;bottom:0;z-index:30;
+  width:min(24rem,100%);background:var(--paper);border-left:1px solid var(--line);
+  padding:.9rem 1.1rem 1.6rem;overflow-y:auto;overscroll-behavior:contain}
+body:not(.cjs) .cpanel:target,body.cpanel-open .cpanel{display:block}
+body.cpanel-open .wrap.full{margin-right:min(24rem,100%)}
+body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
+.chead{display:flex;align-items:center;justify-content:space-between;
+  gap:.5rem;margin:0 0 .9rem}
+.cpanel h2{font:600 .74rem/1.4 var(--mono);letter-spacing:.14em;
+  text-transform:uppercase;color:var(--muted);margin:0}
+.cclose{display:inline-flex;align-items:center;justify-content:center;
+  width:1.75rem;height:1.75rem;border:0;border-radius:.45rem;background:transparent;
+  color:var(--muted);font:400 1.2rem/1 ui-sans-serif,system-ui,sans-serif;
+  text-decoration:none;cursor:pointer}
+.cclose:hover{background:var(--chip-hover);color:var(--ink)}
+.cbtn[aria-expanded="true"]{background:var(--chip);color:var(--ink)}
+/* THE PANEL ON A PHONE: a bottom sheet, 70vh, sliding up over the page. The one
+   place it may cover the page, because a 24rem column beside a 390px page is
+   two columns of two-word lines -- and it still has no backdrop and no blur. */
+@media (max-width:34rem){
+  .cpanel{top:auto;left:0;width:auto;height:70vh;border-left:0;
+    border-top:1px solid var(--line);border-radius:12px 12px 0 0;
+    box-shadow:var(--shadow);z-index:45;animation:cup .18s ease-out}
+  body.cpanel-open .wrap.full,
+  body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:0}
+}
+@keyframes cup{from{transform:translateY(100%)}}
+@media (prefers-reduced-motion:reduce){.cpanel{animation:none}}
+/* END THE PANEL ON A PHONE */
 .cempty{font-size:.875rem;line-height:1.55;color:var(--muted);margin:0 0 .9rem}
 /* This page / All pages. The wall's own .tab, so the two switches in this
-   product read as one idea; only the spacing is local to the drawer. */
+   product read as one idea; only the spacing is local to the panel. */
 .cscope{margin:0 0 .9rem}
 /* Which page a conversation belongs to, in the all-pages view. Quieter than
    the thread itself: it is a label on the group, not the thing being read. */
@@ -1776,6 +1802,39 @@ window.addEventListener("message",function(e){try{
   if(d.type==="artifact-state")sendMarks();
   else if(d.type==="artifact-marks-placed"&&Array.isArray(d.unplaced))unplacedLine(d.unplaced,d.overflow)
 }catch(x){}});
+// THE DOCKED PANEL. Opened and closed by a class on <body>, never by the
+// fragment: no navigation, no history entry, nothing laid over the page. The
+// bar's button and the close control are intercepted; Escape closes; the
+// state is this viewer's, in localStorage, and storage that throws or is
+// missing costs only the memory. `.cjs` hands the panel from :target to this.
+// A link to #comments (the scope tabs, a scriptless redirect) opens it once,
+// and the fragment is then replaced away so a reload obeys the memory.
+var P=document.getElementById("comments"),B=document.body,K="artifacts.comments.open",bar=null;
+function isOpen(){return !!(B&&B.classList.contains("cpanel-open"))}
+function panel(on,keep){if(!P)return;B.classList.toggle("cpanel-open",on);
+  var c=document.querySelector(".cbtn");if(c)c.setAttribute("aria-expanded",on?"true":"false");
+  // The frame reflows to its new width and reports its height on `resize`;
+  // a selection bar placed against the old layout would point at nothing.
+  if(bar)bar.hidden=true;
+  if(!keep)try{window.localStorage.setItem(K,on?"1":"0")}catch(x){}}
+if(P&&B&&B.classList){
+  B.classList.add("cjs");
+  var x0=P.querySelector(".cclose");
+  if(x0&&x0.parentNode){var xb=document.createElement("button");xb.type="button";xb.className="cclose";
+    xb.setAttribute("aria-label","Close comments");xb.textContent=x0.textContent;x0.parentNode.replaceChild(xb,x0)}
+  var st=null;try{st=window.localStorage.getItem(K)}catch(x){}
+  var linked=location.hash==="#comments";
+  if(linked)try{window.history.replaceState(null,"",location.pathname+location.search)}catch(x){}
+  panel(linked||st==="1",!linked);
+  document.addEventListener("click",function(e){
+    var t=e.target&&e.target.closest?e.target.closest(".cbtn,.cclose"):null;if(!t)return;
+    e.preventDefault();panel(t.className!=="cclose"&&!isOpen())});
+  // Capture, so this runs before gallery.js: an open dialog or menu is what
+  // Escape closes first, and the panel only when nothing else is open.
+  window.addEventListener("keydown",function(e){
+    if(e.key!=="Escape"||!isOpen()||document.querySelector(".dlg:target,details.menu[open]"))return;
+    var back=P.contains(document.activeElement);panel(false);
+    if(back){var c=document.querySelector(".cbtn");if(c&&c.focus)c.focus()}},true)}
 var form=document.querySelector("form.cnew");
 // POSTING IN PLACE. A comment or reply is sent with fetch and the thread it
 // comes back in is put where it belongs; the page, the open drawer and the
@@ -1792,7 +1851,7 @@ function place(fm,html,root){
   var li=t.content&&t.content.firstElementChild;if(!li)throw new Error("no thread");
   var old=fm.closest?fm.closest("li.thread"):null;
   if(old&&old.parentNode){old.parentNode.replaceChild(li,old);return false}
-  var list=document.querySelector("#comments .cdrawer-card > ul.threads");
+  var list=document.querySelector("#comments > ul.threads");
   if(!list){list=document.createElement("ul");list.className="threads";
     form.parentNode.insertBefore(list,form)}
   drop(document.querySelector("#comments .cempty"));
@@ -1827,7 +1886,7 @@ if(document.addEventListener)document.addEventListener("submit",function(e){
     if(saved){location.reload();return}
     fail(fm)})});
 if(!form)return;
-var bar=document.createElement("div");bar.className="selbar";bar.hidden=true;
+bar=document.createElement("div");bar.className="selbar";bar.hidden=true;
 [["comment","Comment"],["remove","Remove this"],["looks_good","Looks good"]].forEach(function(k){
   var b=document.createElement("button");b.type="button";b.textContent=k[1];b.dataset.kind=k[0];
   bar.appendChild(b)});
@@ -1851,7 +1910,7 @@ bar.addEventListener("click",function(e){
   field("kind",b.dataset.kind);
   var q=form.querySelector(".cquote");
   if(!q){q=document.createElement("blockquote");q.className="cquote";form.insertBefore(q,form.firstChild)}
-  q.textContent=last.quote.slice(0,500);bar.hidden=true;location.hash="comments";
+  q.textContent=last.quote.slice(0,500);panel(true);
   var i=form.querySelector("input[name=body]");
   if(b.dataset.kind==="comment"){
     if(i){i.placeholder="Comment on the selected text";i.focus()}
@@ -2549,15 +2608,17 @@ def _render_comments(
     # a panel rather than in the document flow. Read off the saved claude.ai
     # HTML Jeremy gave us, not guessed from the screenshots.
     #
-    # `:target` rather than script, exactly as the rename and link dialogs
-    # work: the bar link is href="#comments", the panel is #comments, and
-    # closing is a link back to the page. Everything here works with scripts
-    # off and a conversation is a poor place to start making exceptions.
+    # DOCKED BESIDE THE PAGE, not laid over it (see the .cpanel CSS). With
+    # scripts, comments.js opens and closes it by toggling a class, so nothing
+    # navigates. Without them `:target` still does the whole job: the bar link
+    # is href="#comments", the panel is #comments, and the close control is a
+    # link to "#", which drops the fragment. comments.js swaps that link for a
+    # real button. No backdrop link: there is no backdrop.
     out = [
         (
-            f'<div class="cdrawer" id="comments">'
-            f'<a class="dlg-back" href="/a/{ident}" aria-label="Close comments"></a>'
-            f'<div class="cdrawer-card"><h2>Comments</h2>'
+            '<aside class="cpanel" id="comments" aria-label="Comments">'
+            '<div class="chead"><h2>Comments</h2>'
+            '<a class="cclose" href="#" aria-label="Close comments">\u00d7</a></div>'
             # Filled by /comments.js from the page's own report of the marks
             # it could not place; empty and hidden until then.
             '<p class="cunplaced" id="marks-unplaced" hidden></p>'
@@ -2598,7 +2659,7 @@ def _render_comments(
                 '<p class="cempty">No conversations on any page yet. Open a page '
                 "and say something; the agent that published it will read it.</p>"
             )
-        out.append("</div></div>")
+        out.append("</aside>")
         return "".join(out)
     if open_roots:
         out.append(
@@ -2617,7 +2678,7 @@ def _render_comments(
     )
     if settled:
         out.append(settled_fold(settled))
-    out.append("</div></div>")
+    out.append("</aside>")
     return "".join(out)
 
 

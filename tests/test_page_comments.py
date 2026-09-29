@@ -17,6 +17,8 @@ across the origin boundary, and the bead says to ask him for the claude.ai
 comment screenshots before building that UI.
 """
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -207,7 +209,7 @@ def test_the_panel_needs_no_script(client, db, page):
     # Scoped to the drawer element, not "everything after it" -- the page's own
     # <script src="/gallery.js"> lives further down the shell and a slice to the
     # end of the document catches it. The claim is about the panel's own markup.
-    start = body.index('<div class="cdrawer"')
+    start = body.index('<aside class="cpanel"')
     # Bounded by the element the detail page renders next, the rename dialog.
     # My first two attempts at this slice both ran to the end of the document
     # and caught the page's own <script src="/gallery.js">, which is a test
@@ -219,6 +221,77 @@ def test_the_panel_needs_no_script(client, db, page):
     # And the toggle is a link to a fragment, which is what makes it work with
     # scripts off at all.
     assert 'href="#comments"' in body
+
+
+# --- docked beside the page, never an overlay ---------------------------------
+#
+# The drawer used to be a `:target` overlay: opening it was a navigation, and it
+# laid a blurred, dimmed backdrop over a page that can be tens of thousands of
+# pixels tall. Both were slow. The panel now docks beside the page, which
+# narrows to make room, and a script toggles it by class without navigating.
+
+
+def _rules(css: str, needle: str) -> list[str]:
+    """Every rule block in `css` whose selector mentions `needle`, comments
+    stripped -- the prose above a rule may say "blur"; the rule may not."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    out, pos = [], 0
+    while (at := css.find(needle, pos)) != -1:
+        start = css.rfind("}", 0, at) + 1
+        end = css.find("}", at) + 1
+        out.append(css[start:end])
+        pos = end
+    return out
+
+
+def test_the_panel_has_no_backdrop_and_keeps_its_id(client, db, page):
+    body = client.get(f"/a/{page.id}").text
+    start = body.index('<aside class="cpanel" id="comments"')
+    panel = body[start : body.index('<div class="dlg" id="rename"', start)]
+    assert "dlg-back" not in panel, "a backdrop is the dimming and the blur"
+    assert "cdrawer" not in body
+    # With scripts off the close control is a link that drops the fragment.
+    assert '<a class="cclose" href="#" aria-label="Close comments">' in panel
+
+
+def test_scripts_off_still_shows_the_panel_docked_and_unblurred():
+    from artifacts import gallery
+
+    css = gallery._CSS
+    target = [r for r in _rules(css, ".cpanel:target") if "display:block" in r]
+    assert target, "with scripts off, #comments must still open the panel"
+    for rule in _rules(css, "cpanel"):
+        assert "backdrop-filter" not in rule and "blur" not in rule, rule
+    # Docked, so the page beside it narrows rather than sitting underneath.
+    assert any(
+        ":has(.cpanel:target)" in r and "margin-right:min(24rem,100%)" in r
+        for r in _rules(css, ".wrap.full")
+    )
+
+
+def test_an_open_panel_narrows_the_page_and_is_a_sheet_on_a_phone():
+    from artifacts import gallery
+
+    css = gallery._CSS
+    assert any(
+        "body.cpanel-open .wrap.full" in r and "margin-right:min(24rem,100%)" in r
+        for r in _rules(css, "cpanel-open")
+    )
+    docked = next(r for r in _rules(css, ".cpanel{") if "position:fixed" in r)
+    assert "top:48px" in docked and "right:0" in docked and "bottom:0" in docked
+    phone = css[css.index("/* THE PANEL ON A PHONE") :]
+    phone = phone[: phone.index("/* END THE PANEL ON A PHONE")]
+    assert "@media (max-width:34rem)" in phone and "height:70vh" in phone
+    assert "margin-right:0" in phone, "on a phone the sheet slides over the page"
+
+
+def test_the_script_never_navigates_to_open_the_panel():
+    from artifacts import gallery
+
+    js = gallery._COMMENTS_JS
+    assert not re.search(r"location\.hash\s*=(?!=)", js), "opening must not navigate"
+    assert '"artifacts.comments.open"' in js
+    assert "cpanel-open" in js
 
 
 # --- this page / all pages ----------------------------------------------------
