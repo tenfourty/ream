@@ -26,8 +26,10 @@ matching `store.publish`/`store.patch`.
 import logging
 import threading
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 
+import psycopg
 from psycopg.types.json import Jsonb
 
 from artifacts import events, ggscan, holds, ids, nudge, store, text
@@ -281,6 +283,7 @@ def add(
     agent: str | None = None,
     kind: str = "comment",
     second_opinion: bool | None = None,
+    conn: psycopg.Connection | None = None,
 ) -> CommentRow:
     """Write a comment. `agent`, when given, is the identity the artifact must be
     owned by -- an agent answering comments on its OWN pages, via the keyed API.
@@ -305,6 +308,13 @@ def add(
     `second_opinion` is whether GitGuardian is asked BEFORE saving. It defaults
     to False for everyone: Jeremy's comments never wait on the relay, and an
     agent's are checked by `second_scan` after they are saved.
+
+    `conn`, when given, is the caller's open transaction (an
+    `Idempotency-Key`'d request): the comment is written inside it and commits
+    with whatever the caller stores next, or not at all. Its own transaction
+    becomes a savepoint. The owner-event nudge would then fire before the
+    caller commits, so that combination is refused: only the agent API passes
+    `conn`, and an agent writing on its own page raises no event.
     """
     if second_opinion is None:
         second_opinion = False
@@ -342,7 +352,9 @@ def add(
         ):
             raise InvalidKind()
 
-    with db.connect() as conn:
+    callers_txn = conn is not None
+    # The caller's connection, or one of our own: the same name below either way.
+    with nullcontext(conn) if callers_txn else db.connect() as conn:  # noqa: PLR1704
         if agent is not None:
             owned = store._owned(conn, artifact_id, agent)
         else:
@@ -470,6 +482,11 @@ def add(
             # seat woken by its own reply is a watcher crying wolf.
             event_seq = None
             if author != owning_agent and not held:
+                if callers_txn:
+                    raise ValueError(
+                        "a comment that raises an owner event cannot join a"
+                        " caller's transaction: its nudge would precede the commit"
+                    )
                 event_seq = events.append(
                     conn,
                     artifact_id=artifact_id,

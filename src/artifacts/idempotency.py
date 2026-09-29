@@ -7,6 +7,12 @@ second comment, event or scan. A reused key with a different body is refused.
 Two identical requests at once are serialised by a transaction-scoped advisory
 lock on a hash of (agent, route, key): the second waits, then finds the first's
 row. Only a successful response is stored, so a refusal can be retried.
+
+The action is handed the lock's connection and writes inside the same
+transaction as the stored response, so the two commit together or not at all:
+a crash between them can never leave a written comment with no stored response
+for the retry to find. Lock order: the advisory lock first, then whatever rows
+the action locks -- nothing takes this advisory lock after a row lock.
 """
 
 import hashlib
@@ -21,6 +27,10 @@ from fastapi.responses import JSONResponse
 from artifacts.db import Database
 
 MAX_KEY = 128
+
+# Expired rows removed per keyed request: bounded, so the held transaction
+# never waits on a scan of a backlog, and still far faster than rows expire.
+PRUNE_BATCH = 100
 
 
 def valid_key(key: str) -> bool:
@@ -38,11 +48,13 @@ def run(
     route: str,
     key: str | None,
     body: object,
-    action: Callable[[], tuple[int, object]],
+    action: Callable[[psycopg.Connection | None], tuple[int, object]],
 ) -> JSONResponse:
-    """Run `action` -> (status, json body) at most once per key."""
+    """Run `action(conn)` -> (status, json body) at most once per key. `conn`
+    is the transaction the response is stored in, or None with no key (the
+    action then opens its own connection, exactly as before)."""
     if key is None:
-        status, content = action()
+        status, content = action(None)
         return JSONResponse(jsonable_encoder(content), status_code=status)
     if not valid_key(key):
         raise HTTPException(
@@ -53,7 +65,11 @@ def run(
     ).hexdigest()
     with db.connect() as conn, conn.transaction():
         conn.execute("select pg_advisory_xact_lock(%s)", (_lock_id(agent, route, key),))
-        conn.execute("delete from idempotency where expires_at < now()")
+        conn.execute(
+            "delete from idempotency where ctid in (select ctid from idempotency"
+            " where expires_at < now() limit %s for update skip locked)",
+            (PRUNE_BATCH,),
+        )
         seen = conn.execute(
             "select body_sha256, status, response from idempotency"
             " where agent = %s and route = %s and key = %s",
@@ -65,7 +81,7 @@ def run(
                     422, "idempotency key reused with a different request"
                 )
             return JSONResponse(seen[2], status_code=seen[1])
-        status, content = action()
+        status, content = action(conn)
         encoded = jsonable_encoder(content)
         conn.execute(
             "insert into idempotency"

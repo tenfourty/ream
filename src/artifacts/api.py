@@ -1049,8 +1049,8 @@ def agent_router(
         agent: str = Depends(caller),
         idempotency_key: str | None = Header(default=None),
     ):
-        def write() -> tuple[int, object]:
-            return 201, _add_comment(artifact_id, payload, background, agent)
+        def write(conn) -> tuple[int, object]:
+            return 201, _add_comment(artifact_id, payload, background, agent, conn)
 
         return idempotency.run(
             db,
@@ -1061,10 +1061,11 @@ def agent_router(
             write,
         )
 
-    def _add_comment(artifact_id, payload, background, agent):
+    def _add_comment(artifact_id, payload, background, agent, conn=None):
         try:
             row = comments.add(
                 db,
+                conn=conn,
                 artifact_id=artifact_id,
                 author_kind="agent",
                 author=agent,
@@ -1730,9 +1731,11 @@ def agent_router(
         agent: str = Depends(caller),
         idempotency_key: str | None = Header(default=None),
     ):
-        def write() -> tuple[int, object]:
+        def write(conn) -> tuple[int, object]:
             try:
-                return 200, decisions.acknowledge(db, agent, decision_id).__dict__
+                return 200, decisions.acknowledge(
+                    db, agent, decision_id, conn=conn
+                ).__dict__
             except store.NotFound as exc:
                 raise HTTPException(404, "no such decision") from exc
 

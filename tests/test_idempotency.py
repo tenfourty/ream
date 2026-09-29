@@ -243,3 +243,95 @@ def test_the_client_retry_reuses_the_same_key(live, key_file, monkeypatch):
             idempotency_key="fixed",
         )
     assert sent[:2] == ["fixed", "fixed"]
+
+
+# --- the write and its stored response commit together ------------------------
+
+
+def _fail_storing(monkeypatch):
+    from artifacts import idempotency
+
+    def boom(content):
+        raise RuntimeError("crashed before the response was stored")
+
+    monkeypatch.setattr(idempotency, "jsonable_encoder", boom)
+
+
+def test_a_crash_before_the_response_is_stored_leaves_no_comment(
+    client, auth, db, page, monkeypatch
+):
+    """Otherwise the comment is committed without its stored response, and the
+    retry with the same key posts it a second time."""
+    _fail_storing(monkeypatch)
+    with pytest.raises(RuntimeError):
+        _post(client, auth, page, key="k1")
+    assert _count(db, page) == 0
+    monkeypatch.undo()
+    assert _post(client, auth, page, key="k1").status_code == 201
+    assert _count(db, page) == 1
+
+
+def test_a_crash_before_the_response_is_stored_leaves_no_acknowledgement(
+    client, auth, db, page, monkeypatch
+):
+    row = decisions.ask(
+        db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS
+    )
+    _fail_storing(monkeypatch)
+    with pytest.raises(RuntimeError):
+        client.post(
+            f"/api/v1/decisions/{row.id}/acknowledge",
+            headers={**auth, "Idempotency-Key": "ack1"},
+        )
+    assert decisions.get_owned(db, "seat", row.id).acknowledged_at is None
+
+
+def test_a_reply_and_an_ack_without_a_key_still_write(client, auth, db, page):
+    row = decisions.ask(
+        db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS
+    )
+    assert _post(client, auth, page).status_code == 201
+    r = client.post(f"/api/v1/decisions/{row.id}/acknowledge", headers=auth)
+    assert r.status_code == 200 and r.json()["acknowledged_by"] == "seat"
+
+
+# --- pruning ------------------------------------------------------------------
+
+
+def test_expired_rows_are_pruned_by_an_index_a_bounded_batch_at_a_time(
+    client, auth, db, page
+):
+    with db.connect() as conn:
+        found = conn.execute(
+            "select indexdef from pg_indexes where tablename = 'idempotency'"
+            " and indexdef like '%%(expires_at)%%'"
+        ).fetchall()
+        assert found, "no index on idempotency.expires_at"
+        conn.execute(
+            "insert into idempotency"
+            " (agent, route, key, body_sha256, status, response, expires_at)"
+            " select 'seat', 'r', 'old' || g, 'x', 201, '{}',"
+            " now() - interval '1 hour' from generate_series(1, 250) g"
+        )
+    assert _post(client, auth, page, key="new").status_code == 201
+    with db.connect() as conn:
+        left = conn.execute(
+            "select count(*) from idempotency where expires_at < now()"
+        ).fetchone()[0]
+    assert left == 150
+
+
+def test_a_comment_that_would_nudge_the_owner_cannot_join_a_callers_transaction(
+    db, page
+):
+    """The nudge fires after the commit; inside a caller's transaction it
+    would fire before one, for a row that might still roll back."""
+    with db.connect() as conn, conn.transaction(), pytest.raises(ValueError):
+        comments.add(
+            db,
+            conn=conn,
+            artifact_id=page.id,
+            author_kind="human",
+            author="jeremy",
+            body="hi",
+        )

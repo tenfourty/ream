@@ -1185,7 +1185,9 @@ def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
     return _row_to_decision(row)
 
 
-def acknowledge(db: Database, agent: str, decision_id: str) -> DecisionRow:
+def acknowledge(
+    db: Database, agent: str, decision_id: str, *, conn=None
+) -> DecisionRow:
     """ "I have seen this answer" -- a different fact from "the work is done".
 
     The alert that catches a lost answer keys on answered-and-not-acknowledged, and it
@@ -1204,24 +1206,35 @@ def acknowledge(db: Database, agent: str, decision_id: str) -> DecisionRow:
     Acknowledging an unanswered decision is allowed and means nothing yet -- the alert
     only ever reads it alongside `answered_at`. Refusing it would be a guard whose only
     effect is to make a retry after an answer arrives fail for the wrong reason.
+
+    `conn`, when given, is the caller's transaction (an `Idempotency-Key`'d
+    request), so the acknowledgement commits with the stored response.
     """
-    if get_owned(db, agent, decision_id) is None:
+    if conn is not None:
+        return _acknowledge(conn, agent, decision_id)
+    with db.connect() as own:
+        return _acknowledge(own, agent, decision_id)
+
+
+def _acknowledge(conn, agent: str, decision_id: str) -> DecisionRow:
+    row = conn.execute(
+        f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
+        " join artifact on artifact.id = decision.artifact_id"
+        " where decision.id = %s and artifact.agent = %s",
+        (decision_id, agent),
+    ).fetchone()
+    if row is None:
         raise store.NotFound()
-    with db.connect() as conn:
+    if row[12] is None:  # acknowledged_at
+        conn.execute(
+            "update decision set acknowledged_at = now(), acknowledged_by = %s"
+            " where id = %s",
+            (agent, decision_id),
+        )
         row = conn.execute(
             f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
             (decision_id,),
         ).fetchone()
-        if row[12] is None:  # acknowledged_at
-            conn.execute(
-                "update decision set acknowledged_at = now(), acknowledged_by = %s"
-                " where id = %s",
-                (agent, decision_id),
-            )
-            row = conn.execute(
-                f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
-                (decision_id,),
-            ).fetchone()
     return _row_to_decision(row)
 
 

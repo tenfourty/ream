@@ -753,3 +753,7 @@ create table if not exists idempotency (
     expires_at  timestamptz not null,
     primary key (agent, route, key)
 );
+
+-- Expired rows are pruned a bounded batch at a time; the index keeps finding
+-- them from being a scan of the whole table inside the held transaction.
+create index if not exists idempotency_expires_at on idempotency (expires_at);
