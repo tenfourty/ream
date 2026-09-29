@@ -82,7 +82,9 @@ def test_a_cross_site_json_post_is_refused_like_a_form_post(client, db, page):
         {"body": "x"},
         headers={"Sec-Fetch-Site": "cross-site", "Accept": "application/json"},
     )
-    assert got.status_code in (400, 403)
+    plain = _post(client, page, {"body": "x"}, headers={"Sec-Fetch-Site": "cross-site"})
+    assert plain.status_code in (400, 403)
+    assert got.status_code == plain.status_code
     assert comments.list_for_artifact(db, page.id) == []
 
 

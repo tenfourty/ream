@@ -1755,7 +1755,56 @@ window.addEventListener("message",function(e){try{
   if(d.type==="artifact-state")sendMarks();
   else if(d.type==="artifact-marks-placed"&&Array.isArray(d.unplaced))unplacedLine(d.unplaced,d.overflow)
 }catch(x){}});
-var form=document.querySelector("form.cnew");if(!form)return;
+var form=document.querySelector("form.cnew");
+// POSTING IN PLACE. A comment or reply is sent with fetch and the thread it
+// comes back in is put where it belongs; the page, the open drawer and the
+// scroll position are not touched. Delegated on the document because a reply
+// form arrives with an in-place thread. ANY failure falls back to the plain
+// form submit, so a comment is never lost, and the form is disabled while a
+// post is in flight so a fast Enter plus a click cannot post twice.
+function controls(fm){return fm.querySelectorAll?fm.querySelectorAll("button,input[type=submit]"):[]}
+function setBusy(fm,on){fm.dataset.busy=on?"1":"";
+  Array.prototype.forEach.call(controls(fm),function(c){c.disabled=on})}
+function drop(x){if(x&&x.parentNode&&x.parentNode.removeChild)x.parentNode.removeChild(x)}
+function place(fm,html,root){
+  var t=document.createElement("template");t.innerHTML=html;
+  var li=t.content&&t.content.firstElementChild;if(!li)throw new Error("no thread");
+  var old=fm.closest?fm.closest("li.thread"):null;
+  if(old&&old.parentNode){old.parentNode.replaceChild(li,old);return false}
+  var list=document.querySelector("#comments .cdrawer-card > ul.threads");
+  if(!list){list=document.createElement("ul");list.className="threads";
+    form.parentNode.insertBefore(list,form)}
+  drop(document.querySelector("#comments .cempty"));
+  list.appendChild(li);return true}
+function bump(){var c=document.querySelector(".cbtn .cn");
+  if(c){var n=parseInt(c.textContent,10);c.textContent=String((isFinite(n)?n:0)+1)}}
+function cleared(fm){
+  var b=fm.querySelector("input[name=body]");if(b)b.value="";
+  if(fm===form){["quote","anchor","kind"].forEach(function(n){drop(fm.querySelector("input[name="+n+"]"))});
+    drop(fm.querySelector(".cquote"));if(b)b.placeholder="Comment on this page"}}
+function fail(fm){setBusy(fm,false);fm.submit()}
+if(document.addEventListener)document.addEventListener("submit",function(e){
+  var fm=e.target;
+  if(!fm||!/(^|\\s)(cnew|creply)(\\s|$)/.test(fm.className||"")||typeof fetch!=="function"||typeof FormData!=="function")return;
+  e.preventDefault();if(fm.dataset&&fm.dataset.busy)return;
+  var body=new FormData(fm),saved=false;setBusy(fm,true);
+  fetch(fm.action,{method:"POST",body:body,headers:{"Accept":"application/json"},credentials:"same-origin"})
+  .then(function(r){if(r.status!==201)throw new Error("status "+r.status);saved=true;return r.json()})
+  .then(function(d){
+    if(!d||typeof d.html!=="string"||!Array.isArray(d.marks))throw new Error("shape");
+    var isRoot=place(fm,d.html,d.thread_root);
+    if(isRoot)bump();
+    // In the all-pages view a reply may belong to another page: the frame's
+    // marks are this page's, so they are only replaced where this page is.
+    if(form){marks=d.marks;known=Object.create(null);
+      marks.forEach(function(m){if(m&&typeof m.id==="string")known[m.id]=1});
+      sent=false}
+    cleared(fm);setBusy(fm,false);sendMarks()})
+  .catch(function(){
+    // Once the server has said 201 the comment IS saved: never post it again.
+    if(saved){location.reload();return}
+    fail(fm)})});
+if(!form)return;
 var bar=document.createElement("div");bar.className="selbar";bar.hidden=true;
 [["comment","Comment"],["remove","Remove this"],["looks_good","Looks good"]].forEach(function(k){
   var b=document.createElement("button");b.type="button";b.textContent=k[1];b.dataset.kind=k[0];
@@ -1787,45 +1836,6 @@ bar.addEventListener("click",function(e){
   }else{
     if(i){i.placeholder="Add a note (optional)";if(!i.value){form.requestSubmit()}}
   }});
-// POSTING IN PLACE. A comment or reply is sent with fetch and the thread it
-// comes back in is put where it belongs; the page, the open drawer and the
-// scroll position are not touched. Delegated on the document because a reply
-// form arrives with an in-place thread. ANY failure falls back to the plain
-// form submit, so a comment is never lost, and the form is disabled while a
-// post is in flight so a fast Enter plus a click cannot post twice.
-function controls(fm){return fm.querySelectorAll?fm.querySelectorAll("button,input[type=submit]"):[]}
-function setBusy(fm,on){fm.dataset.busy=on?"1":"";
-  Array.prototype.forEach.call(controls(fm),function(c){c.disabled=on})}
-function drop(x){if(x&&x.parentNode&&x.parentNode.removeChild)x.parentNode.removeChild(x)}
-function place(fm,html,root){
-  var t=document.createElement("template");t.innerHTML=html;
-  var li=t.content&&t.content.firstElementChild;if(!li)throw new Error("no thread");
-  var old=fm.closest?fm.closest("li.thread"):null;
-  if(old&&old.parentNode){old.parentNode.replaceChild(li,old);return}
-  var list=document.querySelector("#comments .cdrawer-card > ul.threads");
-  if(!list){list=document.createElement("ul");list.className="threads";
-    form.parentNode.insertBefore(list,form)}
-  drop(document.querySelector("#comments .cempty"));
-  list.appendChild(li)}
-function cleared(fm){
-  var b=fm.querySelector("input[name=body]");if(b)b.value="";
-  if(fm===form){["quote","anchor","kind"].forEach(function(n){drop(fm.querySelector("input[name="+n+"]"))});
-    drop(fm.querySelector(".cquote"));if(b)b.placeholder="Comment on this page"}}
-function fail(fm){setBusy(fm,false);fm.submit()}
-if(document.addEventListener)document.addEventListener("submit",function(e){
-  var fm=e.target;
-  if(!fm||!/(^|\\s)(cnew|creply)(\\s|$)/.test(fm.className||"")||typeof fetch!=="function"||typeof FormData!=="function")return;
-  e.preventDefault();if(fm.dataset&&fm.dataset.busy)return;
-  var body=new FormData(fm);setBusy(fm,true);
-  fetch(fm.action,{method:"POST",body:body,headers:{"Accept":"application/json"},credentials:"same-origin"})
-  .then(function(r){if(r.status!==201)throw new Error("status "+r.status);return r.json()})
-  .then(function(d){
-    if(!d||typeof d.html!=="string"||!Array.isArray(d.marks))throw new Error("shape");
-    place(fm,d.html,d.thread_root);
-    marks=d.marks;known=Object.create(null);
-    marks.forEach(function(m){if(m&&typeof m.id==="string")known[m.id]=1});
-    cleared(fm);setBusy(fm,false);sent=false;sendMarks()})
-  .catch(function(){fail(fm)})});
 })();
 """
 

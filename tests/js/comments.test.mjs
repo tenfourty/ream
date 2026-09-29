@@ -21,7 +21,7 @@ function el(tag) {
              return null;
            } };
 }
-function build({ marks = "[]", fetchImpl = null } = {}) {
+function build({ marks = "[]", fetchImpl = null, noForm = false } = {}) {
   const framePosts = [];
   const frameWin = { postMessage: (m, o) => framePosts.push([m, o]) };
   const frameOn = {};
@@ -49,7 +49,7 @@ function build({ marks = "[]", fetchImpl = null } = {}) {
                 createElement: (t) => { const n = el(t); if (t === "template") Object.defineProperty(n, "innerHTML", { set(h) { n.content = { firstElementChild: { html: h } }; } }); return n; },
                 body: docBody,
                 addEventListener: (t, f) => ((docOn[t] ||= []).push(f)),
-                querySelector: (q) => (q === "form.cnew" ? form : extra[q] || null) };
+                querySelector: (q) => (q === "form.cnew" ? (noForm ? null : form) : extra[q] || null) };
   const listeners = {};
   const win = { scrollX: 0, scrollY: 50, addEventListener: (t, f) => ((listeners[t] ||= []).push(f)) };
   const location = { hash: "" };
@@ -57,7 +57,7 @@ function build({ marks = "[]", fetchImpl = null } = {}) {
   new Function("document", "window", "location", "URL", "fetch", "FormData", src)(doc, win, location, URL, fetchImpl || undefined, FD);
   const bar = docBody.children[0];
   const buttons = {};
-  bar.children.forEach((b) => (buttons[b.dataset.kind] = b));
+  if (bar) bar.children.forEach((b) => (buttons[b.dataset.kind] = b));
   const send = (data, { source = frameWin, origin = "https://abc.tenfourty.com" } = {}) =>
     (listeners.message || []).forEach((fn) => fn({ source, origin, data }));
   const click = (kind) => bar.on.click({ target: buttons[kind] });
@@ -224,6 +224,33 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
   const other = el("form"); other.className = "cresolve";
   const ev = g.submit(other);
   ok(ev.prevented === false, "resolving a thread keeps its reload"); }
+
+// After a 201 the comment is saved: nothing that fails later may post it again.
+{ const g = build({ fetchImpl: () => Promise.resolve(OKRESP([])) });
+  const f = g.form; f.className = "cnew"; f.action = "/c/abc"; f.submitted = 0; f.submit = () => { f.submitted++; };
+  const btn = { disabled: false }; f.querySelectorAll = () => [btn];
+  g.doc.createElement = () => { throw new Error("boom"); };
+  let reloads = 0; g.location.reload = () => { reloads++; };
+  g.submit(f); await tick(); await tick(); await tick();
+  ok(f.submitted === 0, "a failure after the 201 never submits the form again");
+  ok(reloads === 1, "it reloads to show what was saved instead"); }
+// The count on the bar goes up when a new root comes back, not for a reply.
+{ const g = build({ fetchImpl: () => Promise.resolve(OKRESP([])) });
+  const f = g.form; f.className = "cnew"; f.action = "/c/abc";
+  f.querySelectorAll = () => [];
+  const cn = { textContent: "2" }; g.extra[".cbtn .cn"] = cn;
+  const list = el("ul"); g.extra["#comments .cdrawer-card > ul.threads"] = list;
+  g.submit(f); await tick(); await tick(); await tick();
+  ok(cn.textContent === "3", "a new root thread bumps the count on the bar"); }
+// The all-pages view has no new-comment form, and replies still post in place.
+{ const g = build({ fetchImpl: () => Promise.resolve(OKRESP([])), noForm: true });
+  const f = el("form"); f.className = "creply"; f.action = "/c/other"; f.submitted = 0; f.submit = () => { f.submitted++; };
+  f.querySelectorAll = () => []; f.querySelector = () => null;
+  const li = el("li"); li.parentNode = { replaced: null, replaceChild(n, o) { this.replaced = n; } };
+  f.closest = () => li;
+  const ev = g.submit(f); await tick(); await tick(); await tick();
+  ok(ev.prevented === true && li.parentNode.replaced && li.parentNode.replaced.html === "<li>t</li>" && f.submitted === 0,
+     "a reply in the all-pages view is posted in place"); }
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
