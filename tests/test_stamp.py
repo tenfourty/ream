@@ -6,6 +6,7 @@ half; the half worth fixing is that a page was carrying a time an agent had
 written down.
 """
 
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -107,7 +108,10 @@ def test_a_served_page_carries_the_time_the_service_recorded(db, monkeypatch, pa
     )
     assert page.status_code == 200
     assert stamp.MARKER not in page.text
-    assert "Updated 2" in page.text  # a day-of-month, not an empty gap
+    # A day of the month follows, not an empty gap. This used to assert the
+    # literal "Updated 2", which only held on the 2nd and the 20s (it broke on
+    # 30 Sep 2026).
+    assert re.search(r"Updated \d", page.text)
 
 
 def test_the_stored_body_still_holds_the_marker_not_a_frozen_time(db):
