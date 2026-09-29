@@ -639,3 +639,71 @@ def test_a_mixed_page_shows_the_count_and_hint_on_every_open_review(
     assert html.count("1 mark held") == 2
     assert html.count("Approved with held marks counts as Approved with notes.") == 2
     assert live_row.id in html and held_row.id in html
+
+
+def test_a_released_reply_in_a_visible_thread_gets_its_own_event(db, nudges):
+    page, row, _ = _held_review(db, marks=0)
+    root = comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="seat",
+        body="a remark",
+        agent="seat",
+    )
+    reply = comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        kind="comment",
+        body="my answer",
+        thread_root=root.id,
+    )
+    assert reply.held
+    assert holds.set_review_mode(db, row.id, "live") == (page.id, 1)
+    assert len(_comment_events(db, [reply.id])) == 1
+
+
+def test_a_resolved_root_is_released_without_an_event(db, nudges):
+    page, row, [mark, other] = _held_review(db, marks=2)
+    with db.connect() as conn:
+        conn.execute("update comment set resolved_at = now() where id = %s", (mark.id,))
+    assert holds.set_review_mode(db, row.id, "live") == (page.id, 2)
+    assert _comment_events(db, [mark.id]) == []
+    assert len(_comment_events(db, [other.id])) == 1
+    assert not any(_held_flags(db, page).values())
+
+
+def test_a_review_opened_while_shelving_is_still_released(db, monkeypatch, nudges):
+    """The shelve's own close decides what it shelves: a review that appears
+    after the page's decisions were first looked at is closed and released."""
+    page = _page(db)
+    decisions.ask(
+        db,
+        agent="seat",
+        artifact_id=page.id,
+        question="Q?",
+        options=[{"letter": "a", "label": "x"}, {"letter": "b", "label": "y"}],
+    )
+    real = store._shelve_open_questions
+    opened = {}
+
+    def late(conn, artifact_id, what, actor):
+        row = decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
+        opened["mark"] = _mark(db, page)
+        opened["row"] = row
+        return real(conn, artifact_id, what, actor)
+
+    monkeypatch.setattr(store, "_shelve_open_questions", late)
+    assert store.set_archived(db, page.id, True, agent="seat")
+    assert opened["mark"].held is True
+    assert not any(_held_flags(db, page).values())
+    assert len(_comment_events(db, [opened["mark"].id])) == 1
+    with db.connect() as conn:
+        shelved = conn.execute(
+            "select count(*) from event where kind = 'decision_shelved'"
+            " and artifact_id = %s",
+            (page.id,),
+        ).fetchone()[0]
+    assert shelved == 2

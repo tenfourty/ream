@@ -76,17 +76,24 @@ def release(conn, artifact_id: str, *, emit: bool) -> list[str]:
 
     released = conn.execute(
         "update comment set held = false where artifact_id = %s and held"
-        " returning id, thread_root, kind, quote, body, author, created_at",
+        " returning id, thread_root, kind, quote, body, author, created_at, resolved_at",
         (artifact_id,),
     ).fetchall()
     if emit and released:
         agent, page_session = conn.execute(
             "select agent, session from artifact where id = %s", (artifact_id,)
         ).fetchone()
-        for cid, root, kind, quote, body, author, _ in sorted(
+        released_ids = {r[0] for r in released}
+        for cid, root, kind, quote, body, author, _, resolved_at in sorted(
             released, key=lambda r: (r[6], r[0])
         ):
-            if root is not None:
+            # A root gets an event unless it is resolved (the agent's list
+            # hides resolved threads). A reply gets one only when its root was
+            # not released with it -- the root's event covers a whole thread,
+            # but a waiter never saw a thread that was already visible.
+            if root is None and resolved_at is not None:
+                continue
+            if root is not None and root in released_ids:
                 continue
             said = comments._event_summary(kind, quote, body)
             events.append(

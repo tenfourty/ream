@@ -991,16 +991,6 @@ def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int
 
     Returns how many questions it dropped, so a caller can report a number.
     """
-    rows = conn.execute(
-        # `d.session` comes along so the withdrawal lands in the feed of the
-        # session that ASKED, not merely of the machine it ran on. Without it,
-        # three seats sharing a key would each be woken by the other two's
-        # withdrawals -- the precise noise the filter exists to remove.
-        "select d.id, d.question, a.agent, d.session from decision d"
-        " join artifact a on a.id = d.artifact_id"
-        " where d.artifact_id = %s and d.answer is null and d.closed_at is null",
-        (artifact_id,),
-    ).fetchall()
     # The close and the release share ONE transaction of their own. The caller
     # (`set_archived`, `set_deleted`) runs under autocommit, so this is not the
     # archive's transaction; what it guarantees is that a mark inserted while
@@ -1014,53 +1004,59 @@ def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int
     #
     # `acknowledged_at` is coalesced rather than set, matching decisions.close:
     # an earlier and truer "seen at" must never be overwritten by this.
-    if rows:
-        with conn.transaction():
-            had_review = conn.execute(
-                "select 1 from decision where artifact_id = %s and kind = 'review'"
-                " and answer is null and closed_at is null limit 1",
-                (artifact_id,),
-            ).fetchone()
-            conn.execute(
-                "update decision set closed_at = now(),"
-                " acknowledged_at = coalesce(acknowledged_at, now())"
-                " where artifact_id = %s and answer is null and closed_at is null",
-                (artifact_id,),
-            )
-            if had_review:
+    with conn.transaction():
+        # The close returns exactly the rows it closed, so what is reported,
+        # what is released and what is closed can never disagree, even if a
+        # review opens while this runs. `session` comes along so the
+        # withdrawal lands in the feed of the session that ASKED, not merely
+        # of the machine it ran on. Without it, three seats sharing a key
+        # would each be woken by the other two's withdrawals -- the precise
+        # noise the filter exists to remove.
+        rows = conn.execute(
+            "update decision set closed_at = now(),"
+            " acknowledged_at = coalesce(acknowledged_at, now())"
+            " where artifact_id = %s and answer is null and closed_at is null"
+            " returning id, question, session, kind",
+            (artifact_id,),
+        ).fetchall()
+        if rows:
+            owner = conn.execute(
+                "select agent from artifact where id = %s", (artifact_id,)
+            ).fetchone()[0]
+            if any(kind == "review" for *_, kind in rows):
                 # A shelved review will never get a verdict; his held marks go
                 # to the agent now rather than stay invisible forever.
                 from artifacts import holds
 
                 holds.release(conn, artifact_id, emit=True)
-    for decision_id, question, owner, asked_by_session in rows:
-        events.append(
-            conn,
-            artifact_id=artifact_id,
-            agent=owner,
-            actor=actor,
-            kind="decision_shelved",
-            summary=f"{what}: {question}",
-            ref_id=decision_id,
-            # Said in full, because the agent reading this has to decide what to
-            # do and "shelved" alone does not tell it whether to give up.
-            #
-            # This note USED TO SAY "if the page comes back, so does the
-            # question", which was true until Jeremy ruled on 21 Sep that the
-            # question is dropped. A note that outlives the behaviour it
-            # describes is worse than no note: an agent would wait for a return
-            # that is never coming, which is the exact failure this event was
-            # created to end.
-            note=(
-                f"The page holding this question was {what}, so it has been "
-                "WITHDRAWN -- Jeremy will not be shown it and it will not come "
-                "back on its own, even if the page does. Nothing he said has "
-                "been lost; the question simply never got an answer. If you "
-                "still need one, ASK IT AGAIN on a page that is on his wall. "
-                "Stop waiting on this one."
-            ),
-            session=asked_by_session,
-        )
+            for decision_id, question, asked_by_session, _kind in rows:
+                events.append(
+                    conn,
+                    artifact_id=artifact_id,
+                    agent=owner,
+                    actor=actor,
+                    kind="decision_shelved",
+                    summary=f"{what}: {question}",
+                    ref_id=decision_id,
+                    # Said in full, because the agent reading this has to decide what to
+                    # do and "shelved" alone does not tell it whether to give up.
+                    #
+                    # This note USED TO SAY "if the page comes back, so does the
+                    # question", which was true until Jeremy ruled on 21 Sep that the
+                    # question is dropped. A note that outlives the behaviour it
+                    # describes is worse than no note: an agent would wait for a return
+                    # that is never coming, which is the exact failure this event was
+                    # created to end.
+                    note=(
+                        f"The page holding this question was {what}, so it has been "
+                        "WITHDRAWN -- Jeremy will not be shown it and it will not come "
+                        "back on its own, even if the page does. Nothing he said has "
+                        "been lost; the question simply never got an answer. If you "
+                        "still need one, ASK IT AGAIN on a page that is on his wall. "
+                        "Stop waiting on this one."
+                    ),
+                    session=asked_by_session,
+                )
     return len(rows)
 
 

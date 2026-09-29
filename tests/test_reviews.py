@@ -599,7 +599,7 @@ def test_an_agent_chooses_the_mode_when_asking_and_reads_it_back(client, db):
     assert held_row.status_code == 201
     assert held_row.json()["review_mode"] == "held"
     got = client.get(f"/api/v1/reviews/{held_row.json()['id']}", headers=h).json()
-    assert got["mode"] == "held"
+    assert got["review_mode"] == "held"
     page2 = _page(db)
     row = client.post(f"/api/v1/artifacts/{page2.id}/reviews", headers=h, json={})
     assert row.json()["review_mode"] == "live"  # his preference
@@ -625,4 +625,6 @@ def test_an_unknown_mode_is_422_and_the_answered_shape_has_mode(client, db):
         headers=SAME_ORIGIN,
         follow_redirects=False,
     )
-    assert client.get(f"/api/v1/reviews/{rid}", headers=h).json()["mode"] == "live"
+    assert (
+        client.get(f"/api/v1/reviews/{rid}", headers=h).json()["review_mode"] == "live"
+    )
