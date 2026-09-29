@@ -449,7 +449,8 @@ def record_elsewhere(
     answer", so the uncollected alert and the event journal need no special case.
 
     Refuses a closed decision, like `answer` does, and for the same reason: the
-    agent that closed it said it no longer needs one.
+    agent that closed it said it no longer needs one. A relay on an already-answered
+    REVIEW is refused too: the first verdict counts, relayed or tapped.
     """
     if source not in ANSWER_SOURCES:
         raise InvalidSource(source)
@@ -531,10 +532,13 @@ def answer(
     than trusting any identity header (see `gallery.py`), and this function stores
     whatever it is given without questioning it further.
 
-    Re-answering is allowed and REPLACES the previous answer -- Jeremy may change his
-    mind, and a 409 here would send him to a terminal to do it, which is exactly the
-    kind of friction this whole feature exists to remove. `answered_at` moves with
-    every call, including a second one that picks the same letter again. Refuses
+    Re-answering a QUESTION is allowed and REPLACES the previous answer -- Jeremy may
+    change his mind, and a 409 here would send him to a terminal to do it, which is
+    exactly the kind of friction this whole feature exists to remove. `answered_at`
+    moves with every call, including a second one that picks the same letter again.
+    A REVIEW is the exception: its first verdict counts and a second is refused
+    (`AlreadyAnswered`, a 409 at the gallery), so an agent never acts on one verdict
+    and then finds another. Refuses
     (`store.NotFound`) a decision that does not exist or is already closed: the agent
     that closed it said it no longer needs an answer, and a stale form resubmission
     must not manufacture one anyway.

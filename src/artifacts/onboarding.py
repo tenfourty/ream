@@ -101,7 +101,7 @@ skills.
     artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
     artifacts-decide wait --page <page-id>               # blocks until he answers
     artifacts-decide ask-review <page-id>                # ask him to review the page
-    artifacts-decide wait --review <review-id>           # 0 approved 4 notes 5 changes 6 dismissed
+    artifacts-decide wait --review <review-id>           # 0 ok 4 notes 5 changes 6 dismissed 7 marks
     artifacts-decide list                                # NEW ANSWERS first, then open ones
     artifacts-decide ack <decision-id>                   # say you have seen it
     artifacts-decide outcome <decision-id> "what you did about it"
@@ -261,10 +261,14 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
     artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
     artifacts-decide wait --page <page-id>                 # run in the BACKGROUND
     artifacts-decide ask-review <page-id>                  # ask him to review the page
-    artifacts-decide wait --review <review-id>             # 0 approved 4 notes 5 changes 6 dismissed
+    artifacts-decide wait --review <review-id>             # 0 ok 4 notes 5 changes 6 dismissed 7 marks
     artifacts-decide list                                  # new answers first
     artifacts-decide ack <decision-id>                     # you have seen it
     artifacts-decide outcome <decision-id> "what you did"
+
+Exit 7 means he left marks but no verdict yet: reply to each mark
+(artifacts-decide comments), then wait again; add --verdict-only to wake only
+for the verdict.
 
 After you ask, start `artifacts-decide wait` in the background so you are woken
 when he answers or comments; without background tasks, run `artifacts-decide

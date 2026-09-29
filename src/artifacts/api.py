@@ -1121,7 +1121,7 @@ def agent_router(
     @router.post("/artifacts/{artifact_id}/reviews", status_code=201)
     def ask_review(
         artifact_id: str,
-        payload: ReviewBody,
+        payload: ReviewBody | None = None,
         agent: str = Depends(caller),
         seat_session: str | None = Depends(session),
     ):

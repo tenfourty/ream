@@ -2844,9 +2844,10 @@ def _render_decisions(
     default, not a failure. Only OPEN decisions render there; settled ones are
     returned as a second, collapsed block the caller puts AFTER the page.
 
-    An answered decision still renders every button: re-answering is allowed (see
+    An answered QUESTION still renders every button: re-answering is allowed (see
     `decisions.answer`'s docstring) precisely so Jeremy can change his mind here, on
-    the page, rather than needing a terminal.
+    the page, rather than needing a terminal. A REVIEW is the exception: its first
+    verdict is final, so a settled review shows the verdict and no form.
     """
     if not rows:
         return "", ""
@@ -2879,7 +2880,8 @@ def _render_decisions(
         is_review = getattr(row, "kind", "question") == "review"
         tag = '<span class="rtag">Review</span> ' if is_review else ""
         hint = (
-            '<p class="rhint">Your marks on this page go with your verdict.</p>'
+            '<p class="rhint">Your marks on this page go with your verdict. '
+            "Your first verdict is final.</p>"
             if is_review and row.answer is None
             else ""
         )
@@ -2917,10 +2919,16 @@ def _render_decisions(
     below: list[str] = []
 
     if open_rows:
+        # A review's first verdict is final, so the "pick a different one" hint
+        # belongs only to ordinary questions; a review card carries its own.
         hint = (
-            '<p class="hint">Pick a letter and it is saved straight away; add a note '
-            "if the options do not fit. Your answer is the filled button &mdash; pick "
-            "a different one to change it, as often as you like.</p>"
+            ""
+            if all(getattr(r, "kind", "question") == "review" for r in open_rows)
+            else (
+                '<p class="hint">Pick a letter and it is saved straight away; add a note '
+                "if the options do not fit. Your answer is the filled button &mdash; pick "
+                "a different one to change it, as often as you like.</p>"
+            )
         )
         above.append(
             '<section class="asks" id="open-asks"><h2>Waiting on you</h2>'
@@ -3008,9 +3016,13 @@ def _render_decisions(
                 # proved again on the live service that morning; what was
                 # missing was anything on screen saying so at the moment of
                 # looking.
-                '<p class="hint">Tap a different letter to change this &mdash; '
-                "it replaces your answer, and the note with it.</p>"
-                f"{_card(row, anchorable=False)}</div></details>"
+                + (
+                    '<p class="hint">Your first verdict is final.</p>'
+                    if getattr(row, "kind", "question") == "review"
+                    else '<p class="hint">Tap a different letter to change this '
+                    "&mdash; it replaces your answer, and the note with it.</p>"
+                )
+                + f"{_card(row, anchorable=False)}</div></details>"
             )
         # Collapsed, and counted in its own summary. Four settled questions took
         # the whole first screen of a page whose point was the one still open;
@@ -3021,8 +3033,13 @@ def _render_decisions(
             '<details class="asks settled-list"><summary><h2>'
             f"{n} {noun} you have already settled</h2></summary>"
             + "".join(entries)
-            + '<p class="hint">Open one to see the options again, or to change your '
-            "mind &mdash; nothing here is locked.</p></details>"
+            + (
+                ""
+                if all(getattr(r, "kind", "question") == "review" for r in settled_rows)
+                else '<p class="hint">Open one to see the options again, or to change '
+                "your mind &mdash; nothing here is locked.</p>"
+            )
+            + "</details>"
         )
 
     return "".join(above), "".join(below)

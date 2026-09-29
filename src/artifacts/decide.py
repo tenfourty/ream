@@ -453,18 +453,24 @@ def _wait_review(args, key: str, base: str) -> int:
         # The baseline rides on the review itself, so it is never missing, even
         # for a review that has since been closed.
         since = review["created_at"]
-        fresh = [
-            row
-            for row in _request(
+        # A mark is new while it is an open human thread asked after the review
+        # whose last word is still his -- `_threads`' own "needs your reply" rule
+        # -- so replying clears it, and it still travels with the verdict.
+        threads = _threads(
+            _request(
                 "GET", f"{base}/artifacts/{review['artifact_id']}/comments", key, None
             )
-            if row.get("author_kind") == "human"
-            and not row.get("thread_root")
-            and _after(row.get("created_at"), since)
+        )
+        fresh = [
+            t
+            for t in threads
+            if t["needs_reply"]
+            and t["messages"][0].get("author_kind") == "human"
+            and _after(t["messages"][0].get("created_at"), since)
         ]
         if not fresh:
             return None
-        print("\n\n".join(_fmt_thread(t) for t in _threads(fresh)))
+        print("\n\n".join(_fmt_thread(t) for t in fresh))
         return 1 if args.require_approval else 7
 
     # THE CURSOR FIRST, then the look: a verdict landing between the two would

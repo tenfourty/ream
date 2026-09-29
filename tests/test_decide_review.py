@@ -362,3 +362,38 @@ def test_a_short_timeout_is_told_in_seconds(live, key_file, db, capsys):
     assert decide.main(args) == 3
     err = capsys.readouterr().err
     assert "up to 3s" in err and "0m" not in err
+
+
+def _reply_as_agent(live, path, page, rid_thread):
+    assert (
+        decide.main(
+            ["--key-file", str(path), "reply", rid_thread, "seen"],
+        )
+        == 0
+    )
+
+
+def test_a_reply_clears_the_marks_and_the_verdict_still_comes(
+    live, key_file, db, capsys
+):
+    from artifacts import comments
+
+    path, page, rid = _setup(db, key_file, capsys)
+    root = comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="hm",
+        kind="comment",
+    )
+    args = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "3s"]
+    assert decide.main(args) == 7
+    assert decide.main(args) == 7  # no reply yet: still his word last
+    capsys.readouterr()
+    _reply_as_agent(live, path, page, root.id)
+    assert decide.main(args) == 3  # the agent has the last word: nothing new
+    decisions.answer(db, rid, letter="c", by="jeremy")
+    capsys.readouterr()
+    assert decide.main(args) == 5
+    assert capsys.readouterr().out.startswith("Artifacts review:")

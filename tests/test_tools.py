@@ -83,6 +83,8 @@ def test_the_skill_and_the_orientation_teach_the_review_loop(gallery):
         text = gallery.get(path).text
         assert "artifacts-decide ask-review <page-id>" in text, path
         assert "artifacts-decide wait --review <review-id>" in text, path
+        assert "7 marks" in text, path
+    assert "--verdict-only" in gallery.get("/api/v1/skill.md").text
 
 
 def test_one_page_links_the_one_package_for_find_links(gallery, tools_dir):

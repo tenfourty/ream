@@ -512,3 +512,57 @@ def test_the_review_carries_its_own_created_at(client, db):
     rid = asked.json()["id"]
     got = client.get(f"/api/v1/reviews/{rid}", headers=h).json()
     assert got["created_at"] == asked.json()["created_at"]
+
+
+_CHANGE_HINTS = (
+    "pick a different one",
+    "Tap a different letter",
+    "nothing here is locked",
+)
+
+
+def test_a_review_card_says_its_first_verdict_is_final_open_and_settled(client, db):
+    h = _auth(db)
+    page = _page(db)
+    rid = client.post(
+        f"/api/v1/artifacts/{page.id}/reviews", headers=h, json={}
+    ).json()["id"]
+    open_html = client.get(f"/a/{page.id}").text
+    assert "Your first verdict is final." in open_html
+    for hint in _CHANGE_HINTS:
+        assert hint not in open_html
+    client.post(
+        f"/d/{rid}/answer",
+        data={"letter": "a"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    settled = client.get(f"/a/{page.id}").text
+    assert "Your first verdict is final." in settled
+    for hint in _CHANGE_HINTS:
+        assert hint not in settled
+
+
+def test_an_ordinary_decision_keeps_its_change_hints(client, db):
+    page = _page(db)
+    q = decisions.ask(
+        db,
+        agent="seat",
+        artifact_id=page.id,
+        question="Which?",
+        options=[{"letter": "a", "label": "x"}, {"letter": "b", "label": "y"}],
+    )
+    assert "pick a different one" in client.get(f"/a/{page.id}").text
+    decisions.answer(db, q.id, letter="a", by="jeremy")
+    settled = client.get(f"/a/{page.id}").text
+    assert "Tap a different letter" in settled and "nothing here is locked" in settled
+    assert "Your first verdict is final." not in settled
+
+
+def test_a_bodyless_review_request_is_accepted(client, db):
+    h = _auth(db)
+    page = _page(db)
+    assert (
+        client.post(f"/api/v1/artifacts/{page.id}/reviews", headers=h).status_code
+        == 201
+    )
