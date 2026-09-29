@@ -452,3 +452,50 @@ def test_a_flip_that_lands_first_makes_approved_plain(db, nudges):
     holds.set_review_mode(db, row.id, "live")
     assert decisions.answer(db, row.id, letter="a", by="jeremy").answer == "a"
     assert len(_comment_events(db, [made[0].id])) == 1
+
+
+def test_acknowledging_an_open_held_review_releases_nothing(db, nudges):
+    client = TestClient(create_gallery_app(db))
+    token, _ = keys.mint(db, agent="seat")
+    auth = {"Authorization": f"Bearer {token}"}
+    page, row, made = _held_review(db, marks=2)
+    r = client.post(f"/api/v1/decisions/{row.id}/acknowledge", headers=auth)
+    assert r.status_code == 200
+    assert all(_held_flags(db, page).values())
+    assert _comment_events(db, [m.id for m in made]) == []
+
+
+def test_flipping_one_review_to_live_leaves_another_reviews_marks_held(db, nudges):
+    page, first, made = _held_review(db, marks=2)
+    second = decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
+    assert holds.set_review_mode(db, first.id, "live") == (page.id, 0)
+    assert all(_held_flags(db, page).values())
+    assert _comment_events(db, [m.id for m in made]) == []
+    assert holds.set_review_mode(db, second.id, "live") == (page.id, 2)
+    assert not any(_held_flags(db, page).values())
+
+
+def test_an_archive_racing_a_mark_leaves_no_mark_held_on_a_closed_review(
+    db, monkeypatch, nudges
+):
+    import threading
+    import time
+
+    page, _row, _ = _held_review(db, marks=1)
+    reached, go = _gate_after(monkeypatch, holds, "page_mode")
+    out = {}
+    t = threading.Thread(target=lambda: out.update(row=_mark(db, page)))
+    t.start()
+    assert reached.wait(10)
+    a = threading.Thread(
+        target=lambda: store.set_archived(db, page.id, True, agent="seat")
+    )
+    a.start()
+    time.sleep(1)
+    assert a.is_alive(), "the archive waits for the insert's share lock"
+    go.set()
+    t.join(20)
+    a.join(20)
+    assert out["row"].held is True
+    assert not any(_held_flags(db, page).values())
+    assert len(_comment_events(db, [out["row"].id])) == 1

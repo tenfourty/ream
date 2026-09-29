@@ -805,9 +805,6 @@ def acknowledge(db: Database, agent: str, decision_id: str) -> DecisionRow:
                 " where id = %s",
                 (agent, decision_id),
             )
-            if row[_KIND_IDX] == "review":
-                # The review is over, so his held marks would never be seen.
-                holds.release(conn, row[1], emit=True)
             row = conn.execute(
                 f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
                 (decision_id,),

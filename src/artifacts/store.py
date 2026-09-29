@@ -1001,30 +1001,38 @@ def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int
         " where d.artifact_id = %s and d.answer is null and d.closed_at is null",
         (artifact_id,),
     ).fetchall()
-    # Closed in the SAME transaction as the archive or delete that caused it, on
-    # the caller's connection -- exactly like the events below. A close that
-    # committed while its cause rolled back would withdraw a question from a
-    # page that is still on the wall, which is worse than either outcome alone.
+    # The close and the release share ONE transaction of their own. The caller
+    # (`set_archived`, `set_deleted`) runs under autocommit, so this is not the
+    # archive's transaction; what it guarantees is that a mark inserted while
+    # this runs is either seen by the release (the close waits for the insert's
+    # share lock on the open review) or born unheld (the review is already
+    # closed). The order matters and matches `decisions.close`: close first,
+    # then release.
+    #
+    # Releasing on delete too is deliberate: it matches `decision_shelved`,
+    # which is also written on delete, and a restore brings the marks back.
     #
     # `acknowledged_at` is coalesced rather than set, matching decisions.close:
     # an earlier and truer "seen at" must never be overwritten by this.
     if rows:
-        if conn.execute(
-            "select 1 from decision where artifact_id = %s and kind = 'review'"
-            " and answer is null and closed_at is null limit 1",
-            (artifact_id,),
-        ).fetchone():
-            # A shelved review will never get a verdict; his held marks go to
-            # the agent now rather than stay invisible forever.
-            from artifacts import holds
+        with conn.transaction():
+            had_review = conn.execute(
+                "select 1 from decision where artifact_id = %s and kind = 'review'"
+                " and answer is null and closed_at is null limit 1",
+                (artifact_id,),
+            ).fetchone()
+            conn.execute(
+                "update decision set closed_at = now(),"
+                " acknowledged_at = coalesce(acknowledged_at, now())"
+                " where artifact_id = %s and answer is null and closed_at is null",
+                (artifact_id,),
+            )
+            if had_review:
+                # A shelved review will never get a verdict; his held marks go
+                # to the agent now rather than stay invisible forever.
+                from artifacts import holds
 
-            holds.release(conn, artifact_id, emit=True)
-        conn.execute(
-            "update decision set closed_at = now(),"
-            " acknowledged_at = coalesce(acknowledged_at, now())"
-            " where artifact_id = %s and answer is null and closed_at is null",
-            (artifact_id,),
-        )
+                holds.release(conn, artifact_id, emit=True)
     for decision_id, question, owner, asked_by_session in rows:
         events.append(
             conn,

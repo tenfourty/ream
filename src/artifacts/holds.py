@@ -129,5 +129,10 @@ def set_review_mode(db, decision_id: str, mode: str) -> tuple[str, int]:
             "update decision set review_mode = %s where id = %s", (mode, decision_id)
         )
         set_mode(conn, mode)
-        released = release(conn, artifact_id, emit=True) if mode == "live" else []
+        # Another open review on the page may still hold his marks.
+        released = (
+            release(conn, artifact_id, emit=True)
+            if mode == "live" and page_mode(conn, artifact_id) != "held"
+            else []
+        )
     return artifact_id, len(released)
