@@ -16,7 +16,7 @@ Ownership is checked before the scanner ever runs, exactly as `store.py`'s modul
 docstring lays out for `patch`: the scanner holds the GIL while it reads two views
 of the text, and that cost is never spent on behalf of a caller with no right to the
 artifact in the first place. Concretely, in `add()`: the cheap in-memory checks
-(size, and anchor shape) run first and touch no database; ownership of the artifact,
+(size, `kind`, and anchor shape) run first and touch no database; ownership of the artifact,
 and -- for a reply -- existence of the thread it names, run next, one query each;
 the scanner runs last, on whatever body and quote are actually about to be stored.
 An unknown artifact and someone else's look identical either way (both `NotFound`),
@@ -192,6 +192,19 @@ def validate_anchor(anchor: dict | None) -> dict:
                 value = anchor[side]
                 if not isinstance(value, str) or len(value) > ANCHOR_CONTEXT_MAX:
                     raise InvalidAnchor()
+                # A `str` can hold a lone surrogate (half of a UTF-16 pair) --
+                # the page shim's own `slice` can produce exactly one, cutting
+                # an astral character in half at the 32-char boundary -- and
+                # Python is happy to carry it this far. Postgres's `json`
+                # column is not: it raises on the way in, uncaught, and turns
+                # one mark into a 500 (final review, Item 1). UTF-8 can never
+                # encode a lone surrogate, so trying is the cheapest possible
+                # test for "will this actually store", and never echoes what
+                # was rejected.
+                try:
+                    value.encode("utf-8")
+                except UnicodeEncodeError:
+                    raise InvalidAnchor() from None
                 out[side] = value
         return out
 
@@ -239,6 +252,15 @@ def add(
     `author` (not `agent`, which can be None) is what's passed to `store`'s guards
     as their `agent=` logging identity, so a refusal line always names who actually
     wrote the content, human or agent alike.
+
+    `kind` is one of `KINDS` -- `"comment"` (the default, a free-form remark),
+    `"remove"` or `"looks_good"` (a mark that says something by being pinned to an
+    exact quote, not by its own words). `remove` and `looks_good` both require a
+    `range` anchor and a non-empty `quote`; without one there is nothing they are
+    marking, and `InvalidKind` is raised instead of storing a mark that points at
+    the whole page. A reply (`thread_root` given) is always stored as `"comment"`,
+    whatever `kind` was passed -- a thread is one conversation, and a reply cannot
+    put a second, independent mark on the spot its root already marked.
     """
     is_reply = thread_root is not None
 

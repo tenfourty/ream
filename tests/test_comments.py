@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -90,6 +92,45 @@ def test_a_bad_anchor_over_the_api_is_422_naming_only_anchor_and_never_echoes_it
     assert response.json()["detail"]["field"] == "anchor"
     assert marker not in response.text
     assert "bogus" not in response.text
+
+
+def test_a_surrogate_split_anchor_over_the_api_is_422_not_500(client, db):
+    """Final review, Item 1: a range anchor whose prefix/suffix cuts an astral
+    emoji's UTF-16 pair in half (exactly what the page shim's own 32-char
+    `slice` can produce at the boundary) used to reach `Jsonb` and 500 there.
+    It must come back 422, naming `anchor`, like any other anchor the service
+    cannot use -- never a 500, and the mark is never half-stored."""
+    token, _ = keys.mint(db, agent="ops-seat")
+    page = _publish(client, token)
+    # httpx's own `json=` convenience encodes with `ensure_ascii=False` and
+    # would raise UnicodeEncodeError client-side before a request is even
+    # sent -- exactly the bug this refusal exists to catch, just happening a
+    # hop too early to prove the server's own behaviour. `ensure_ascii=True`
+    # renders the lone surrogate as the literal, all-ASCII `\udfe2` escape,
+    # which travels as ordinary bytes and is only turned back into that one
+    # code unit when the SERVER's own JSON parser reads the body -- exactly
+    # what a real client sending malformed-but-valid-JSON text would produce.
+    raw = json.dumps(
+        {
+            "body": "hello",
+            "quote": "hi",
+            "anchor": {
+                "kind": "range",
+                "path": "p",
+                "start": 0,
+                "end": 2,
+                "prefix": "\udfe2 all",
+            },
+        },
+        ensure_ascii=True,
+    ).encode("ascii")
+    response = client.post(
+        f"/api/v1/artifacts/{page['id']}/comments",
+        content=raw,
+        headers={**auth(token), "Content-Type": "application/json"},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"]["field"] == "anchor"
 
 
 # ---------------------------------------------------------------------------

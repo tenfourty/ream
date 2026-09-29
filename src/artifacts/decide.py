@@ -225,7 +225,18 @@ def _threads(rows: list[dict]) -> list[dict]:
         thread["artifact_id"] = first.get("artifact_id")
         thread["quote"] = first.get("quote") or ""
         thread["kind"] = first.get("kind") or "comment"
-        thread["needs_reply"] = last.get("author_kind") == "human"
+        # A bare "looks good" -- the thread's only message, with no note of
+        # its own -- is an acknowledgement, not a question: nothing is being
+        # asked, so nothing is owed back (final review, Item 4c). `remove`
+        # still needs a reply even bare: it is asking for an action. A
+        # `looks_good` that DOES say something is a live thread like any
+        # other, not an ack.
+        is_bare_ack = (
+            len(thread["messages"]) == 1
+            and thread["kind"] == "looks_good"
+            and not (last.get("body") or "").strip()
+        )
+        thread["needs_reply"] = last.get("author_kind") == "human" and not is_bare_ack
         out.append(thread)
     return out
 
@@ -244,7 +255,11 @@ def _fmt_thread(thread: dict) -> str:
         who = (
             "HE SAID" if m.get("author_kind") == "human" else f"{m.get('author')} said"
         )
-        lines.append(f"  {who}: {m.get('body', '')}")
+        # `remove`/`looks_good` can carry no note at all -- "HE SAID: " with
+        # nothing after the colon reads as a rendering bug, not as the
+        # acknowledgement it is (final review, Item 4b).
+        raw_body = m.get("body") or ""
+        lines.append(f"  {who}: {raw_body if raw_body.strip() else '(no note)'}")
     if thread["needs_reply"]:
         lines.append(
             f'  reply: artifacts-decide reply {thread["id"]} "..."'
