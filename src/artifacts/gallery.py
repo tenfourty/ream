@@ -2009,7 +2009,7 @@ window.addEventListener("message",function(e){
   // In full screen the frame scrolls itself, so the page's own offsets are no
   // use: the bar is fixed under the selection as the frame shows it (vt/vl).
   if(document.fullscreenElement&&num(d.rect.vt)&&num(d.rect.vl)){bar.style.position="fixed";
-    bar.style.top=(r.top+d.rect.vt+d.rect.height+6)+"px";bar.style.left=(r.left+Math.max(0,d.rect.vl))+"px"}
+    bar.style.top=(r.top+Math.min(Math.max(0,d.rect.vt+d.rect.height),r.height)+6)+"px";bar.style.left=(r.left+Math.min(Math.max(0,d.rect.vl),r.width))+"px"}
   else{bar.style.position="";
     bar.style.top=(r.top+window.scrollY+d.rect.top+d.rect.height+6)+"px";
     bar.style.left=(r.left+window.scrollX+Math.max(0,d.rect.left))+"px"}
