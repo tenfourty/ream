@@ -209,7 +209,8 @@ def _no_durability(uri: str) -> None:
     commit durable changes nothing a test can observe -- locks, isolation and
     the rows themselves are the same -- and stops every commit, TRUNCATE and
     CREATE DATABASE from waiting on an fsync. All three settings take effect
-    on a reload. Only for the server this run starts; never PG_TEST_DSN."""
+    on a reload. Only for the server this run starts, or a PG_TEST_DSN the
+    environment has declared a throwaway (see `_declared_throwaway`)."""
     with psycopg.connect(uri, autocommit=True) as conn:
         for setting in ("fsync", "synchronous_commit", "full_page_writes"):
             conn.execute(
@@ -262,9 +263,31 @@ def _is_worker(config) -> bool:
     return hasattr(config, "workerinput")
 
 
+def _declared_throwaway(env) -> str | None:
+    """PG_TEST_DSN, but only when the environment also declares that server a
+    throwaway (ARTIFACTS_TEST_PG_THROWAWAY=1, which CI's own service container
+    sets). A developer's PG_TEST_DSN may point at a database that matters, so
+    durability is never touched on the DSN alone."""
+    uri = env.get("PG_TEST_DSN")
+    if uri and env.get("ARTIFACTS_TEST_PG_THROWAWAY") == "1":
+        return uri
+    return None
+
+
 def pytest_configure(config) -> None:
     """Under -n the controller starts the server before it spawns workers,
-    and they inherit its address. Serially it starts on first use instead."""
+    and they inherit its address. Serially it starts on first use instead.
+
+    CI's service Postgres gets the same no-durability settings as the local
+    throwaway one when it is declared a throwaway: measured 29 Sep 2026, the
+    database-heavy stretches of the suite ran ~7x slower on the forge runner
+    than the rest, with every commit waiting on a flush on a throttled host."""
+    throwaway = None if _is_worker(config) else _declared_throwaway(os.environ)
+    if throwaway:
+        try:
+            _no_durability(throwaway)
+        except psycopg.Error as exc:  # not a superuser: run durable, just slower
+            warnings.warn(f"could not relax durability: {exc}", stacklevel=1)
     parallel = config.getoption("dist", "no") != "no"
     if _is_worker(config) or not parallel or os.environ.get("PG_TEST_DSN"):
         return

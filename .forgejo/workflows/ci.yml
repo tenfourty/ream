@@ -69,6 +69,9 @@ jobs:
       - name: tests
         env:
           PG_TEST_DSN: postgresql://postgres@postgres:5432/postgres
+          # This service container exists only for this job, so the tests may
+          # turn its commit flushes off (tests/conftest.py, _declared_throwaway).
+          ARTIFACTS_TEST_PG_THROWAWAY: "1"
         # -n auto: one xdist worker per core, capped at 8 so a many-core runner
         # cannot exhaust max_connections=100; each in its own database
         # (artifacts_test_<worker>) on this one Postgres service.
