@@ -430,6 +430,17 @@ _CLAIMED_EXIT = 8
 
 _NO_LABEL = "no session label: not claiming the round (set ARTIFACTS_SESSION)"
 
+# The service's lease on an open round, for a server that does not say.
+_LEASE_SECONDS = 300
+
+# The two clocks a wait keeps. Monotonic time stops while the machine is
+# suspended on Linux and wall time does not, so when they part by more than
+# `_SUSPEND_GAP` the machine slept: the wait renews before its next poll and
+# measures its deadline in wall time. Module names, so a test can move them.
+_mono = time.monotonic
+_wall = time.time
+_SUSPEND_GAP = 60
+
 
 def _claim_line(body: dict) -> str:
     """`CLAIMED by <session> until <HH:MM UTC>: ...`, from a 409's body."""
@@ -457,17 +468,17 @@ class _Lease:
         self.renew_at = 0.0
 
     def due(self) -> bool:
-        return time.monotonic() >= self.renew_at
+        return _mono() >= self.renew_at
 
     def seconds_to_renewal(self) -> float:
-        return self.renew_at - time.monotonic()
+        return self.renew_at - _mono()
 
     def claim(self) -> str | None:
         """Claim or renew. The claim line when another session holds it, else
         None. A 401/403/404 raises; any other failure leaves it due, so the
         next loop tries again."""
         headers: dict = {}
-        asked = time.monotonic()
+        asked = _mono()
         try:
             got = _request(
                 "POST",
@@ -484,17 +495,18 @@ class _Lease:
             self.renew_at = 0.0
             return None
         # The lease left, measured on the SERVER's clock (its Date header), so
-        # a skewed clock here cannot renew late.
+        # a skewed clock here cannot renew late. Without one, the lease the
+        # server named (or the known one) from the moment the claim was sent,
+        # on this process's monotonic clock: never local wall time against
+        # the server's.
         try:
             server_now = parsedate_to_datetime(headers["date"])
-        except (KeyError, TypeError, ValueError):
-            server_now = datetime.now(UTC)
-        try:
             left = (
                 datetime.fromisoformat(got["claim_expires_at"]) - server_now
             ).total_seconds()
         except (KeyError, TypeError, ValueError):
-            left = 0.0
+            seconds = got.get("lease_seconds") if isinstance(got, dict) else None
+            left = float(seconds) if seconds else float(_LEASE_SECONDS)
         self.renew_at = asked + max(0.0, left - _RENEW_BELOW)
         return None
 
@@ -515,7 +527,10 @@ def _wait_review(args, key: str, base: str) -> int:
     if target and not os.path.isdir(os.path.dirname(os.path.abspath(target))):
         return _refuse(f"the directory for {target} does not exist", 2)
     timeout = _duration(args.timeout)
-    deadline = time.monotonic() + timeout
+    deadline = _mono() + timeout
+    wall_deadline = _wall() + timeout
+    # Wall minus monotonic; it jumps when the machine was suspended.
+    drift = _wall() - _mono()
 
     def claimed(line: str) -> int:
         print(line, file=sys.stderr, flush=True)
@@ -612,14 +627,23 @@ def _wait_review(args, key: str, base: str) -> int:
     kinds = {"decision_answered"} | (set() if args.verdict_only else {"comment_added"})
     relook = False
     while True:
-        remaining = deadline - time.monotonic()
+        now_drift = _wall() - _mono()
+        if abs(now_drift - drift) > _SUSPEND_GAP:
+            # The machine slept. The lease may have lapsed and the deadline is
+            # counted in time a person lived through: renew (which re-checks
+            # the claim) before the next poll, and re-measure the deadline.
+            drift = now_drift
+            deadline = _mono() + (wall_deadline - _wall())
+            if lease is not None:
+                lease.renew_at = 0.0
+        if lease is not None and lease.due():
+            held = lease.claim()
+            if held:
+                return claimed(held)
+        remaining = deadline - _mono()
         if remaining < 1:
             break
         try:
-            if lease is not None and lease.due():
-                held = lease.claim()
-                if held:
-                    return claimed(held)
             if not relook:
                 hold = int(min(_HOLD, remaining))
                 if lease is not None:
@@ -647,7 +671,7 @@ def _wait_review(args, key: str, base: str) -> int:
                 raise
             # A deploy or a dropped connection: ask again, and look again if the
             # failure was in the look, since its event is already consumed.
-            time.sleep(min(_RETRY_PAUSE, max(0, deadline - time.monotonic())))
+            time.sleep(min(_RETRY_PAUSE, max(0, deadline - _mono())))
     print("nothing yet: no verdict before the timeout. Run it again.", file=sys.stderr)
     return 3
 

@@ -71,7 +71,8 @@ def test_a_claim_takes_the_round_for_five_minutes(db, client):
     r = _claim(client, h, review.id, "seat/one")
     assert r.status_code == 200
     body = r.json()
-    assert set(body) == {"claimed_by", "claim_expires_at", "round"}
+    assert set(body) == {"claimed_by", "claim_expires_at", "round", "lease_seconds"}
+    assert body["lease_seconds"] == 300
     assert body["claimed_by"] == "seat/one" and body["round"] == 1
     n, by, expires, reason, left = _state(db, review.id)
     assert (n, by, reason) == (1, "seat/one", None)
@@ -350,3 +351,79 @@ def test_a_release_names_the_session_and_a_later_claim_clears_it(db, client):
     assert _released_by(db, review.id) == ("seat/one", "cannot deploy from here")
     assert _claim(client, h, review.id, "seat/two").status_code == 200
     assert _released_by(db, review.id) == (None, None)
+
+
+# ---- a round with a verdict is held for an hour ----
+
+
+def test_a_claim_on_a_round_with_a_verdict_lasts_an_hour(db, client):
+    h = _auth(db)
+    _page, review = _review(db)
+    decisions.answer(db, review.id, letter="c", note="tighten it", by="jeremy")
+    r = _claim(client, h, review.id, "seat/one")
+    assert r.status_code == 200 and r.json()["lease_seconds"] == 3600
+    assert 3590 < _state(db, review.id)[4] <= 3600
+
+
+def test_a_revision_longer_than_the_open_lease_keeps_the_closed_round(
+    db, client, monkeypatch
+):
+    """A gets the verdict and revises past the open lease: B is still refused
+    until the closed lease runs out."""
+    monkeypatch.setattr(decisions, "CLAIM_SECONDS", 1)
+    monkeypatch.setattr(decisions, "CLOSED_CLAIM_SECONDS", 6)
+    h = _auth(db)
+    _page, review = _review(db)
+    decisions.answer(db, review.id, letter="c", note="tighten it", by="jeremy")
+    started = time.monotonic()
+    assert _claim(client, h, review.id, "seat/a").status_code == 200
+    time.sleep(1.5)  # past the open lease
+    assert _claim(client, h, review.id, "seat/b").status_code == 409
+    deadline = time.monotonic() + 30
+    while True:
+        r = _claim(client, h, review.id, "seat/b")
+        if r.status_code == 200:
+            break
+        assert r.status_code == 409
+        assert time.monotonic() < deadline, "the closed lease never ran out"
+        time.sleep(0.05)
+    assert time.monotonic() - started >= 5.5, "taken before the closed lease ran out"
+
+
+def test_a_release_frees_a_closed_round_early(db, client):
+    h = _auth(db)
+    _page, review = _review(db)
+    decisions.answer(db, review.id, letter="c", note="tighten it", by="jeremy")
+    _claim(client, h, review.id, "seat/a")
+    assert _release(client, h, review.id, "seat/a", "handing over").status_code == 200
+    assert _claim(client, h, review.id, "seat/b").status_code == 200
+
+
+# ---- a review from before rounds existed ----
+
+
+def test_a_review_with_no_round_row_gets_round_one_and_is_claimed(db, client):
+    h = _auth(db)
+    _page, review = _review(db)
+    with db.connect() as conn:
+        conn.execute("delete from review_round where review_id = %s", (review.id,))
+    r = _claim(client, h, review.id, "seat/one")
+    assert r.status_code == 200 and r.json()["round"] == 1
+    assert _state(db, review.id)[:2] == (1, "seat/one")
+
+
+def test_an_answered_review_with_no_round_row_gets_a_closed_round_one(db, client):
+    h = _auth(db)
+    _page, review = _review(db)
+    decisions.answer(db, review.id, letter="c", note="tighten it", by="jeremy")
+    with db.connect() as conn:
+        conn.execute("delete from review_round where review_id = %s", (review.id,))
+    r = _claim(client, h, review.id, "seat/one")
+    assert r.status_code == 200 and r.json()["lease_seconds"] == 3600
+    with db.connect() as conn:
+        closed, verdict = conn.execute(
+            "select closed_at is not null, verdict from review_round"
+            " where review_id = %s",
+            (review.id,),
+        ).fetchone()
+    assert (closed, verdict) == (True, "changes_requested")

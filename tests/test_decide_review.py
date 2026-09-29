@@ -634,3 +634,58 @@ def test_review_release_needs_a_session_label(live, key_file, db, capsys, monkey
         == 2
     )
     assert "ARTIFACTS_SESSION" in capsys.readouterr().err
+
+
+def test_a_lease_with_no_date_header_is_timed_on_the_cli_clock(monkeypatch):
+    """No Date header: renew at send time + the lease the server named - the
+    margin, on the CLI's own monotonic clock; no wall-clock comparison."""
+    now = [1000.0]
+    monkeypatch.setattr(decide, "_mono", lambda: now[0])
+    body = {
+        "claimed_by": "s",
+        "claim_expires_at": "2000-01-01T00:00:00+00:00",
+        "round": 1,
+        "lease_seconds": 3600,
+    }
+
+    def answer(*a, **kw):
+        now[0] += 2  # the request takes 2 s
+        return dict(body)
+
+    monkeypatch.setattr(decide, "_request", answer)
+    lease = decide._Lease("http://x", "k", "r", "s")
+    assert lease.claim() is None
+    assert lease.renew_at == 1000.0 + 3600 - decide._RENEW_BELOW
+    del body["lease_seconds"]
+    now[0] = 5000.0
+    assert lease.claim() is None
+    assert lease.renew_at == 5000.0 + decide._LEASE_SECONDS - decide._RENEW_BELOW
+
+
+@brief
+def test_a_suspend_renews_before_the_next_poll_and_moves_the_deadline(
+    live, key_file, db, capsys, monkeypatch
+):
+    """The wall clock jumps two minutes past the monotonic one (a laptop lid):
+    the wait renews its claim at once and measures its deadline in wall time,
+    so a 20 s wait that slept for two minutes ends now."""
+    path, _page, rid = _setup(db, key_file, capsys)
+    offset = [0.0]
+    monkeypatch.setattr(decide, "_wall", lambda: time.time() + offset[0])
+    claims = []
+    real = decide._request
+
+    def jumping(method, url, *a, **kw):
+        if url.endswith(f"/reviews/{rid}/claim"):
+            claims.append(offset[0])
+        out = real(method, url, *a, **kw)
+        if "wait=" in url:
+            offset[0] = 120.0
+        return out
+
+    monkeypatch.setattr(decide, "_request", jumping)
+    args = ["--key-file", str(path), "--session", "ops-seat/me"]
+    started = time.monotonic()
+    assert decide.main([*args, "wait", "--review", rid, "--timeout", "20s"]) == 3
+    assert time.monotonic() - started < 10, "the deadline moved with the wall clock"
+    assert claims == [0.0, 120.0], "claimed, then renewed after the suspend"

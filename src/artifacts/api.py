@@ -1249,6 +1249,9 @@ def agent_router(
             "claimed_by": claim.claimed_by,
             "claim_expires_at": claim.claim_expires_at,
             "round": claim.round,
+            # So a client can time its renewal without trusting its own wall
+            # clock against the server's.
+            "lease_seconds": claim.lease_seconds,
         }
 
     @router.post("/reviews/{review_id}/release")

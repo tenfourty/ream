@@ -33,6 +33,7 @@ always LAST, once nothing cheaper could have refused the call, and only ever run
 value that is actually about to be stored.
 """
 
+import dataclasses
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -652,6 +653,14 @@ def _advance_rounds(conn, artifact_id: str, version_n: int) -> None:
 # enough that a waiter that died frees the round before anyone is waiting on it.
 CLAIM_SECONDS = 300
 
+# A round that already has its verdict is held for an hour instead. The holder
+# is revising, and a revision routinely outlasts five minutes; with the short
+# lease a second session could take the closed round and act on the same
+# verdict. An hour covers a normal revision and still frees itself if the
+# holder dies, whereas a claim that never expired would jam the review. The
+# holder's renewals, a release or the next round free it earlier.
+CLOSED_CLAIM_SECONDS = 3600
+
 # A handed-back round says why in a line on his card, not a paragraph.
 MAX_RELEASE_REASON_BYTES = 500
 
@@ -664,6 +673,8 @@ class ClaimRow:
     claimed_by: str | None
     claim_expires_at: str | None
     round: int
+    # How long the lease just taken lasts, for a client timing its renewal.
+    lease_seconds: int | None = None
 
 
 class Claimed(Exception):
@@ -680,15 +691,31 @@ class MissingReason(Exception):
 
 
 def _lock_current_round(conn, review_id: str):
-    """The review's latest round, locked, with its lease and whether the lease
-    is live. Called under the decision row's lock (decision, then round)."""
-    return conn.execute(
+    """The review's latest round, locked: (n, claimed_by, claim_expires_at,
+    lease live, has a verdict). Called under the decision row's lock (decision,
+    then round). A review asked before rounds existed gets its round 1 here,
+    repaired from the decision row exactly as `_advance_rounds` does."""
+    sql = (
         "select n, claimed_by, claim_expires_at,"
-        " claimed_by is not null and claim_expires_at > now()"
+        " claimed_by is not null and claim_expires_at > now(),"
+        " closed_at is not null"
         " from review_round where review_id = %s order by n desc limit 1"
-        " for update",
-        (review_id,),
+        " for update"
+    )
+    found = conn.execute(sql, (review_id,)).fetchone()
+    if found is not None:
+        return found
+    answered, asked_on = conn.execute(
+        "select answer, version_n from decision where id = %s", (review_id,)
     ).fetchone()
+    conn.execute(
+        "insert into review_round (review_id, n, version_n, base_version)"
+        " values (%s, 1, %s, null)",
+        (review_id, asked_on),
+    )
+    if answered is not None:
+        _close_round(conn, review_id, answered)
+    return conn.execute(sql, (review_id,)).fetchone()
 
 
 def _lock_owned_review(conn, agent: str, review_id: str) -> str:
@@ -727,19 +754,18 @@ def claim_round(db: Database, agent: str, review_id: str, session: str) -> Claim
     with db.connect() as conn, conn.transaction():
         _lock_owned_review(conn, agent, review_id)
         current = _lock_current_round(conn, review_id)
-        if current is None:
-            raise store.NotFound()
         if current[3] and current[1] != session:
             raise Claimed(_holder(current))
+        seconds = CLOSED_CLAIM_SECONDS if current[4] else CLAIM_SECONDS
         row = conn.execute(
             "update review_round set claimed_by = %s,"
             " claim_expires_at = now() + make_interval(secs => %s),"
             " released_reason = null, released_by = null"
             " where review_id = %s and n = %s"
             " returning n, claimed_by, claim_expires_at",
-            (session, CLAIM_SECONDS, review_id, current[0]),
+            (session, seconds, review_id, current[0]),
         ).fetchone()
-    return _holder(row)
+    return dataclasses.replace(_holder(row), lease_seconds=seconds)
 
 
 def release_round(
@@ -769,8 +795,6 @@ def release_round(
         with conn.transaction():
             _lock_owned_review(conn, agent, review_id)
             current = _lock_current_round(conn, review_id)
-            if current is None:
-                raise store.NotFound()
             if current[3] and current[1] != session:
                 raise Claimed(_holder(current))
             row = conn.execute(
