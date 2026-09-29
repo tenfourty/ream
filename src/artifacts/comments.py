@@ -398,6 +398,16 @@ def add(
         said = _event_summary(kind, effective_quote, body)
         with conn.transaction():
             comment_id = ids.new_id()
+            # Read INSIDE the insert transaction, and locking the open review
+            # rows it reads: a verdict's update of the decision then waits for
+            # this insert (so its release sees the mark), and a verdict that
+            # committed first is seen here as no open review at all.
+            held = (
+                author_kind == "human"
+                and holds.page_mode(conn, artifact_id, lock=True) == "held"
+            )
+            # The decision rows were locked first, as a verdict does; the root
+            # comes second so the two can never wait on each other.
             if is_reply:
                 # Locked until the insert commits (the connection is autocommit,
                 # so a lock taken by the lookup above would be gone already): a
@@ -410,14 +420,6 @@ def add(
                 ).fetchone()
                 if still is None:
                     raise NoSuchThread()
-            # Read INSIDE the insert transaction, and locking the open review
-            # rows it reads: a verdict's update of the decision then waits for
-            # this insert (so its release sees the mark), and a verdict that
-            # committed first is seen here as no open review at all.
-            held = (
-                author_kind == "human"
-                and holds.page_mode(conn, artifact_id, lock=True) == "held"
-            )
             conn.execute(
                 "insert into comment (id, artifact_id, version_n, thread_root, anchor,"
                 " quote, author_kind, author, body, kind, held)"
@@ -866,6 +868,10 @@ def withdraw(db: Database, comment_id: str, *, kind: str) -> bool:
         if row is None:
             return False
         artifact_id = row[0]
+        # A reply stores its root's quote as its own.
+        conn.execute(
+            "update comment set quote = '' where thread_root = %s", (comment_id,)
+        )
         # The text may also sit in events that quoted it (a resolved thread).
         conn.execute(
             "update event set summary = %s, note = ''"
@@ -918,6 +924,11 @@ def second_scan(db: Database, comment_id: str) -> str:
         if row is None:
             return "gone"
         body, artifact_id, author, quote = row
+        with db.connect() as conn:
+            conn.execute(
+                "update comment set gg_attempted_at = now() where id = %s",
+                (comment_id,),
+            )
         # The quote was only ever built-in scanned; the relay sees it too.
         found = ggscan.scan(body + "\n" + quote)
         if found is None:
@@ -944,8 +955,8 @@ def second_scan(db: Database, comment_id: str) -> str:
 
 def sweep_unscanned(db: Database, *, limit: int = 200) -> int:
     """Scan agent comments the background task never got to (a restart killed it),
-    oldest first, at most `limit` per pass. Stops at the first comment the relay
-    could not answer for (it is down; the rest would each wait out a timeout).
+    oldest first, at most `limit` per pass. Stops after two consecutive comments the
+    relay could not answer for (it is down).
     Returns how many were actually checked."""
     with db.connect() as conn:
         ids = [
@@ -954,14 +965,19 @@ def sweep_unscanned(db: Database, *, limit: int = 200) -> int:
                 "select id from comment where author_kind = 'agent'"
                 " and withdrawn_at is null and gg_scanned_at is null"
                 " and created_at < now() - interval '30 seconds'"
-                " order by created_at asc, id asc limit %s",
+                " order by gg_attempted_at asc nulls first, created_at asc, id asc"
+                " limit %s",
                 (limit,),
             ).fetchall()
         ]
     checked = 0
+    unavailable = 0
     for comment_id in ids:
         status = second_scan(db, comment_id)
-        if status == "unavailable":
+        # One refusal may be this comment's alone; two in a row mean the relay
+        # is down and the rest would each wait out a timeout.
+        unavailable = unavailable + 1 if status == "unavailable" else 0
+        if unavailable >= 2:
             break
         if status in ("scanned", "withdrawn"):
             checked += 1

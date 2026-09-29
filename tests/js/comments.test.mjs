@@ -234,6 +234,14 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
   g.submit(f); await tick(); await tick(); await tick();
   ok(f.submitted === 0, "a failure after the 201 never submits the form again");
   ok(reloads === 1, "it reloads to show what was saved instead"); }
+// A 201 that says reload (the server saved it but could not build the reply).
+{ const g = build({ fetchImpl: () => Promise.resolve({ status: 201, json: async () => ({ reload: true }) }) });
+  const f = g.form; f.className = "cnew"; f.action = "/c/abc"; f.submitted = 0; f.submit = () => { f.submitted++; };
+  f.querySelectorAll = () => [];
+  let reloads = 0; g.location.reload = () => { reloads++; };
+  g.submit(f); await tick(); await tick(); await tick();
+  ok(reloads === 1, "a 201 with reload reloads the page");
+  ok(f.submitted === 0, "and never submits the form again"); }
 // The count on the bar goes up when a new root comes back, not for a reply.
 { const g = build({ fetchImpl: () => Promise.resolve(OKRESP([])) });
   const f = g.form; f.className = "cnew"; f.action = "/c/abc";

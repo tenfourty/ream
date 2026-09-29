@@ -367,7 +367,7 @@ create index if not exists artifact_live_idx on artifact (deleted_at)
 alter table event drop constraint if exists event_kind_check;
 alter table event add constraint event_kind_check
     check (kind in ('decision_answered', 'comment_added', 'thread_resolved',
-                    'decision_shelved'));
+                    'decision_shelved', 'comment_withdrawn'));
 
 -- WHO, when three seats share one key (homelab-ij8.32, 21 Sep 2026).
 --
@@ -672,10 +672,6 @@ create table if not exists human_pref (
 -- text is blanked and it is hidden from every read; the kind stays.
 alter table comment add column if not exists withdrawn_at timestamptz;
 alter table comment add column if not exists withdrawn_kind text;
-alter table event drop constraint if exists event_kind_check;
-alter table event add constraint event_kind_check
-    check (kind in ('decision_answered', 'comment_added', 'thread_resolved',
-                    'decision_shelved', 'comment_withdrawn'));
 
 -- When GitGuardian last gave an answer on an agent's comment (homelab-ij8.112).
 -- Null means it has not been checked yet -- a restart killed the background
@@ -690,3 +686,7 @@ alter table event add constraint event_kind_check
 -- that is gone does nothing.
 alter table comment add column if not exists gg_scanned_at timestamptz default now();
 alter table comment alter column gg_scanned_at drop default;
+
+-- The last time the sweep tried this comment, answered or not, so one comment
+-- the relay keeps refusing cannot hold the head of the queue for ever.
+alter table comment add column if not exists gg_attempted_at timestamptz;

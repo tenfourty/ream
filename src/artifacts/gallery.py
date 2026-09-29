@@ -18,6 +18,7 @@ of read from something a request could forge.
 """
 
 import json
+import logging
 import threading
 import time
 from datetime import UTC, datetime
@@ -1791,6 +1792,7 @@ if(document.addEventListener)document.addEventListener("submit",function(e){
   fetch(fm.action,{method:"POST",body:body,headers:{"Accept":"application/json"},credentials:"same-origin"})
   .then(function(r){if(r.status!==201)throw new Error("status "+r.status);saved=true;return r.json()})
   .then(function(d){
+    if(d&&d.reload){location.reload();return}
     if(!d||typeof d.html!=="string"||!Array.isArray(d.marks))throw new Error("shape");
     var isRoot=place(fm,d.html,d.thread_root);
     if(isRoot)bump();
@@ -4433,18 +4435,24 @@ def gallery_router(db: Database) -> APIRouter:
         if "application/json" in request.headers.get("accept", ""):
             # The in-place post: the thread as the drawer renders it, and the
             # marks the frame should now paint.
-            root = row.thread_root or row.id
-            rows = comments.list_for_artifact(
-                db, artifact_id, include_resolved=True, include_held=True
-            )
-            return JSONResponse(
-                {
+            try:
+                root = row.thread_root or row.id
+                rows = comments.list_for_artifact(
+                    db, artifact_id, include_resolved=True, include_held=True
+                )
+                payload = {
                     "html": _render_comments(rows, artifact_id, only_thread=root),
                     "thread_root": root,
                     "marks": comments.marks_for_page(db, artifact_id),
-                },
-                status_code=201,
-            )
+                }
+            except Exception:
+                # The comment IS saved. A 500 here would make the script post it
+                # again, so say so and let the page reload.
+                logging.getLogger("artifacts.gallery").exception(
+                    "in-place reply failed after the save: comment=%s", row.id
+                )
+                return JSONResponse({"reload": True}, status_code=201)
+            return JSONResponse(payload, status_code=201)
         return RedirectResponse(f"/a/{artifact_id}#comments", status_code=303)
 
     @router.post("/c/{comment_id}/resolve")

@@ -313,29 +313,30 @@ def test_a_fresh_agent_comment_is_unscanned_and_migrating_again_keeps_it_so(db, 
     assert default is None
 
 
-def test_a_pass_stops_at_the_first_unavailable_relay(db, page, gg):
+def test_a_pass_stops_after_two_unavailable_answers_in_a_row(db, page, gg):
     for i in range(3):
         _age(db, _agent_comment(db, page, f"c{i}").id)
     gg.result = None
     assert comments.sweep_unscanned(db) == 0
-    assert len(gg.calls) == 1
+    assert len(gg.calls) == 2
 
 
 def test_a_withdrawal_waits_for_an_in_flight_reply(db, page, gg, monkeypatch):
     import threading
 
-    from artifacts import holds
+    from artifacts import events
 
     root = _agent_comment(db, page, "root")
     inside, go = threading.Event(), threading.Event()
-    real = holds.page_mode
+    real = events.append
 
     def slow(*a, **kw):
+        # Inside the reply's transaction, after its insert, before its commit.
         inside.set()
         assert go.wait(10)
         return real(*a, **kw)
 
-    monkeypatch.setattr(holds, "page_mode", slow)
+    monkeypatch.setattr(events, "append", slow)
     out = {}
 
     def reply():
@@ -361,3 +362,49 @@ def test_a_withdrawal_waits_for_an_in_flight_reply(db, page, gg, monkeypatch):
     t.join(10)
     w.join(10)
     assert out["w"] is True and out["reply"].thread_root == root.id
+
+
+def test_a_withdrawal_leaves_migrate_working_and_blanks_reply_quotes(db, page, gg):
+    hidden_quote = "AKIA-ish-quote-hidden_quote"
+    root = _agent_comment(
+        db,
+        page,
+        "root",
+        anchor={"kind": "range", "path": "p", "start": 0, "end": 1},
+        quote=hidden_quote,
+    )
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="reply",
+        thread_root=root.id,
+    )
+    comments.withdraw(db, root.id, kind="ggshield_x")
+    db.migrate()  # what every pod start runs, with a comment_withdrawn row present
+    with db.connect() as conn:
+        held = conn.execute(
+            "select count(*) from comment where quote = %s", (hidden_quote,)
+        ).fetchone()[0]
+    assert held == 0
+
+
+def test_a_comment_the_relay_always_refuses_does_not_block_a_newer_one(
+    db, page, monkeypatch
+):
+    old = _agent_comment(db, page, "old")
+    new = _agent_comment(db, page, "new")
+    _age(db, old.id, 300)
+    _age(db, new.id, 200)
+    seen = []
+
+    def scan(body):
+        seen.append(body.split("\n")[0])
+        return None if body.startswith("old") else []
+
+    monkeypatch.setattr(ggscan, "scan", scan)
+    monkeypatch.setattr(ggscan, "configured", lambda: True)
+    comments.sweep_unscanned(db)
+    comments.sweep_unscanned(db)
+    assert _stamped(db, new.id) and not _stamped(db, old.id)

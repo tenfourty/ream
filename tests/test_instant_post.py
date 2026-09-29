@@ -126,3 +126,17 @@ def test_the_served_script_posts_json_disables_the_form_and_falls_back(client):
     assert "disabled" in js
     assert "form.submit()" in js or ".submit()" in js
     assert 'addEventListener("submit"' in js
+
+
+def test_a_failure_building_the_json_after_the_save_says_reload(
+    client, db, page, monkeypatch, caplog
+):
+    def boom(*a, **k):
+        raise RuntimeError("marks broke")
+
+    monkeypatch.setattr(comments, "marks_for_page", boom)
+    got = _post(client, page, {"body": "saved anyway"})
+    assert got.status_code == 201
+    assert got.json() == {"reload": True}
+    assert [r.body for r in comments.list_for_artifact(db, page.id)] == ["saved anyway"]
+    assert "in-place reply failed" in caplog.text
