@@ -2637,7 +2637,7 @@ def _comments_button(artifact_id: str, open_count: int) -> str:
 def _share_button(artifact_id: str) -> str:
     """The bar's direct Share: the same route the menu row opens."""
     return (
-        f'<a class="sharebtn" href="/a/{escape(artifact_id)}/share">'
+        f'<a class="sharebtn" aria-label="Share" href="/a/{escape(artifact_id)}/share">'
         f"{_icon('link')}<span>Share</span></a>"
     )
 
