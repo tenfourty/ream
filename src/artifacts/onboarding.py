@@ -100,7 +100,7 @@ skills.
     artifacts-publish page.html --title "What it is"     # prints the page id
     artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
     artifacts-decide wait --page <page-id>               # blocks until he answers
-    artifacts-decide ask-review <page-id>                # ask him to review the page
+    artifacts-decide ask-review <page-id> [--live|--hold] # ask him to review the page
     artifacts-decide wait --review <review-id>           # 0 ok 4 notes 5 changes 6 dismissed 7 marks
     artifacts-decide list                                # NEW ANSWERS first, then open ones
     artifacts-decide ack <decision-id>                   # say you have seen it

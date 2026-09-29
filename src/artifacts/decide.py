@@ -763,10 +763,10 @@ def main(argv: list[str] | None = None) -> int:
                 {"mode": "live"} if args.live else {"mode": "held"} if args.hold else {}
             )
             row = _request("POST", f"{base}/artifacts/{args.page}/reviews", key, body)
-            print(
-                f"{row['id']}  review requested on {args.page}"
-                f" (marks: {row.get('review_mode')})"
-            )
+            # A server older than hold/live ignores the mode and names none; say
+            # so rather than print "None" or let --live pass for granted.
+            mode = row.get("review_mode") or "unknown, the server predates hold/live"
+            print(f"{row['id']}  review requested on {args.page} (marks: {mode})")
             print(f"  wait: artifacts-decide wait --review {row['id']}")
             return 0
         if args.cmd == "answers":

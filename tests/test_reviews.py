@@ -595,10 +595,10 @@ def test_an_agent_chooses_the_mode_when_asking_and_reads_it_back(client, db):
     with db.connect() as conn:
         holds.set_mode(conn, "live")
     url = f"/api/v1/artifacts/{page.id}/reviews"
-    live_row = client.post(url, headers=h, json={"mode": "held"})
-    assert live_row.status_code == 201
-    assert live_row.json()["review_mode"] == "held"
-    got = client.get(f"/api/v1/reviews/{live_row.json()['id']}", headers=h).json()
+    held_row = client.post(url, headers=h, json={"mode": "held"})
+    assert held_row.status_code == 201
+    assert held_row.json()["review_mode"] == "held"
+    got = client.get(f"/api/v1/reviews/{held_row.json()['id']}", headers=h).json()
     assert got["mode"] == "held"
     page2 = _page(db)
     row = client.post(f"/api/v1/artifacts/{page2.id}/reviews", headers=h, json={})

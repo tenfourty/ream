@@ -442,7 +442,22 @@ def test_a_held_mark_does_not_wake_the_wait_until_it_is_released(
     _mark(db, page)
     wait = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "3s"]
     assert decide.main(wait) == 3
-    capsys.readouterr()
+    assert "hm" not in capsys.readouterr().out
     holds.set_review_mode(db, rid, "live")
     assert decide.main(wait) == 7
     assert "hm" in capsys.readouterr().out
+
+
+def test_an_older_server_that_names_no_mode_is_said_plainly(
+    live, key_file, monkeypatch, capsys
+):
+    """A server from before hold/live ignores --live and returns no mode: say
+    so, never print "None" (step 3 task review, 29 Sep 2026)."""
+    path, _ = key_file
+    monkeypatch.setattr(
+        decide, "_request", lambda *a, **k: {"id": "r" * 26, "kind": "review"}
+    )
+    assert decide.main(["--key-file", str(path), "ask-review", "p" * 26, "--live"]) == 0
+    out = capsys.readouterr().out
+    assert "None" not in out
+    assert "(marks: unknown, the server predates hold/live)" in out
