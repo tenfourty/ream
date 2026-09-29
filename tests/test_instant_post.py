@@ -140,3 +140,23 @@ def test_a_failure_building_the_json_after_the_save_says_reload(
     assert got.json() == {"reload": True}
     assert [r.body for r in comments.list_for_artifact(db, page.id)] == ["saved anyway"]
     assert "in-place reply failed" in caplog.text
+
+
+def test_each_thread_names_its_mark_so_a_hover_card_can_copy_it(client, db, page):
+    """The hover card is a copy of the panel's own escaped thread markup, found
+    by the mark id the page reports -- never built from what the page sends."""
+    root = comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="Move this up",
+        quote="x",
+        anchor=ANCHOR,
+    )
+    html = client.get(f"/a/{page.id}").text
+    assert f'<li class="thread" data-mark-id="{root.id}">' in html
+    got = _post(client, page, {"body": "Thanks", "thread_root": root.id})
+    assert got.json()["html"].startswith(
+        f'<li class="thread" data-mark-id="{root.id}">'
+    )

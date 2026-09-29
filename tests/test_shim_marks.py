@@ -83,7 +83,7 @@ def test_the_shim_places_marks_when_actually_run(tmp_path, monkeypatch):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
-    assert passed >= 58, result.stdout
+    assert passed >= 75, result.stdout
 
 
 # --- Task 6: the same placement rules, proved in a real browser -------------
@@ -221,3 +221,20 @@ def test_placement_rules_in_a_real_browser(tmp_path, monkeypatch):
     match = re.search(r"<title>(.*?)</title>", out)
     assert match, out
     assert match.group(1) == ("second|unplaced|placed|followed|unplaced|highlights-ok")
+
+
+def test_the_hover_card_has_its_own_styles_from_the_tokens():
+    css = gallery._CSS
+    rule = css.split(".hovercard{", 1)[1].split("}", 1)[0]
+    assert "position:fixed" in rule and "max-width:22rem" in rule
+    assert "var(--card)" in rule and "var(--ink)" in rule and "var(--line)" in rule
+    assert "backdrop-filter" not in rule
+
+
+def test_hover_messages_are_named_as_the_constraints_fix_them(monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    source = content._viewer_report()
+    assert '"artifact-mark-hover"' in source and '"artifact-mark-leave"' in source
+    js = gallery._COMMENTS_JS
+    assert '"artifact-mark-hover"' in js and '"artifact-mark-leave"' in js
+    assert ",150)" in js and ",250)" in js

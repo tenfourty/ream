@@ -637,6 +637,21 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
    `hidden` property, never applies a stylesheet, so it cannot catch this --
    caught in review instead (page review step 1, homelab-ij8.108). */
 .selbar[hidden]{display:none}
+/* A HOVER CARD: the comment on marked text, beside it, drawn by the gallery
+   (comments.js) from the panel's own thread. Tokens only, so it follows the
+   theme; fixed, because a scroll closes it. */
+.hovercard{position:fixed;z-index:70;max-width:22rem;min-width:14rem;
+  background:var(--card);color:var(--ink);border:1px solid var(--line);
+  border-radius:.6rem;box-shadow:var(--shadow);padding:.6rem .75rem .65rem;
+  font-size:.875rem}
+.hovercard .ckind{display:block;margin:0 0 .3rem;color:var(--muted)}
+.hovercard .ckind-remove{color:var(--danger)}
+.hovercard .ckind-looks_good{color:var(--ok)}
+.hovercard .bubbles{max-height:14rem;overflow-y:auto}
+.hcact{display:flex;gap:.4rem;justify-content:flex-end;margin:.5rem 0 0}
+.hcact button{padding:.3rem .65rem;cursor:pointer;border:1px solid var(--line);
+  border-radius:.45rem;background:var(--card);color:var(--ink);font:500 .8rem/1 ui-sans-serif,system-ui,sans-serif}
+.hcact button:hover{background:var(--chip-hover)}
 .selbar button{font:500 .8rem/1 ui-sans-serif,system-ui,sans-serif;
   padding:.45rem .7rem;border-radius:8px;border:1px solid var(--accent);
   background:var(--card);color:var(--ink);box-shadow:0 2px 8px rgba(0,0,0,.18);cursor:pointer}
@@ -1816,7 +1831,7 @@ function panel(on,keep){if(!P)return;B.classList.toggle("cpanel-open",on);
   var c=document.querySelector(".cbtn");if(c)c.setAttribute("aria-expanded",on?"true":"false");
   // The frame reflows to its new width and reports its height on `resize`;
   // a selection bar placed against the old layout would point at nothing.
-  if(bar)bar.hidden=true;
+  if(bar)bar.hidden=true;hide();
   if(!keep)try{window.localStorage.setItem(K,on?"1":"0")}catch(x){}}
 if(P&&B&&B.classList){
   B.classList.add("cjs");
@@ -1840,9 +1855,64 @@ if(P&&B&&B.classList){
   // Capture, so this runs before gallery.js: an open dialog or menu is what
   // Escape closes first, and the panel only when nothing else is open.
   window.addEventListener("keydown",function(e){
+    if(e.key==="Escape"&&hc){hide();return}
     if(e.key!=="Escape"||!isOpen()||document.querySelector(".dlg:target,details.menu[open]"))return;
     var back=P.contains(document.activeElement);panel(false);
     if(back){var c=document.querySelector(".cbtn");if(c&&c.focus)c.focus()}},true)}
+// HOVER CARDS. When the pointer rests 150 ms on marked text, the page says
+// WHICH mark and WHERE -- `artifact-mark-hover` {id, rect}, nothing else -- and
+// a card with that comment appears beside it. The card is drawn HERE, in
+// Jeremy's origin, never in the agent's page, and it is a COPY of the panel's
+// own thread (the server-escaped markup, found by `data-mark-id`): nothing the
+// page sends is ever rendered. Only its own frame at its own origin is heard;
+// an id that is not one of this page's marks is ignored; the rect must be four
+// finite numbers and is clamped into the frame, and the card into the window.
+// A flood cannot show a card that has not rested: a new id restarts the rest.
+// It goes on `artifact-mark-leave` after a 250 ms grace (so the pointer can
+// reach it), on leaving the card, on Escape, on scroll, and when the panel
+// moves the page; never while its reply box has the cursor.
+var hc=null,hid=null,ht=0,hg=0,pend=null;
+function thread(id){if(!P||!P.querySelectorAll)return null;var ls=P.querySelectorAll("li.thread");
+  for(var i=0;i<ls.length;i++)if(ls[i].getAttribute("data-mark-id")===id)return ls[i];return null}
+function fin(v){return typeof v==="number"&&isFinite(v)}
+function hide(){clearTimeout(hg);hg=0;if(hc){drop(hc);hc=null;hid=null}}
+function grace(){clearTimeout(hg);hg=setTimeout(function(){hg=0;
+  if(hc&&hc.contains&&hc.contains(document.activeElement))return;hide()},250)}
+function show(id,r){var li=thread(id);if(!li)return;hide();
+  var c=document.createElement("div");c.className="hovercard";c.setAttribute("role","dialog");
+  c.setAttribute("aria-label","Comment");c.setAttribute("data-mark-id",id);
+  var k=li.querySelector(".ckind"),lab=document.createElement("span");
+  lab.className=k?k.className:"ckind";lab.textContent=k?k.textContent:"Comment";c.appendChild(lab);
+  var bu=li.querySelector(".bubbles");if(bu)c.appendChild(bu.cloneNode(true));
+  var rf=li.querySelector("form.creply"),rc=rf?rf.cloneNode(true):null;if(rc)c.appendChild(rc);
+  var row=document.createElement("div");row.className="hcact";c.appendChild(row);
+  function btn(t,fn){var b=document.createElement("button");b.type="button";b.textContent=t;
+    b.addEventListener("click",fn);row.appendChild(b)}
+  if(rc)btn("Reply",function(){var i=rc.querySelector("input[name=body]");if(i)i.focus()});
+  btn("Open",function(){hide();panel(true);var t=thread(id);
+    if(t&&t.scrollIntoView)t.scrollIntoView({block:"nearest"})});
+  c.addEventListener("pointerenter",function(){clearTimeout(hg);hg=0});
+  c.addEventListener("pointerleave",grace);
+  document.body.appendChild(c);hc=c;hid=id;
+  var fr=f.getBoundingClientRect(),FW=fin(fr.width)?fr.width:0,FH=fin(fr.height)?fr.height:0,
+    W=window.innerWidth||0,H=window.innerHeight||0,cw=c.offsetWidth||0,ch=c.offsetHeight||0,
+    l=Math.max(0,Math.min(r.left,FW)),t=Math.max(0,Math.min(r.top,FH)),
+    h=Math.max(0,Math.min(r.height,200,FH-t)),x=fr.left+l,y=fr.top+t+h+6;
+  if(y+ch>H-8)y=fr.top+t-ch-6;
+  c.style.left=Math.max(8,Math.min(x,W-cw-8))+"px";c.style.top=Math.max(8,Math.min(y,H-ch-8))+"px"}
+window.addEventListener("message",function(e){try{
+  if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
+  if(!d||typeof d!=="object")return;
+  if(d.type==="artifact-mark-leave"){clearTimeout(ht);ht=0;pend=null;if(hc)grace();return}
+  if(d.type!=="artifact-mark-hover"||typeof d.id!=="string"||!known[d.id])return;
+  var q=d.rect;if(!q||typeof q!=="object"||!fin(q.top)||!fin(q.left)||!fin(q.width)||!fin(q.height))return;
+  clearTimeout(hg);hg=0;q={top:q.top,left:q.left,width:q.width,height:q.height};
+  if(hc&&hid===d.id)return;
+  if(pend&&pend.id===d.id){pend.r=q;return}
+  hide();pend={id:d.id,r:q};clearTimeout(ht);
+  ht=setTimeout(function(){ht=0;var p=pend;pend=null;if(p)show(p.id,p.r)},150)
+}catch(x){}});
+window.addEventListener("scroll",function(){clearTimeout(ht);ht=0;pend=null;hide()});
 var form=document.querySelector("form.cnew");
 // POSTING IN PLACE. A comment or reply is sent with fetch and the thread it
 // comes back in is put where it belongs; the page, the open drawer and the
@@ -1857,7 +1927,8 @@ function drop(x){if(x&&x.parentNode&&x.parentNode.removeChild)x.parentNode.remov
 function place(fm,html,root){
   var t=document.createElement("template");t.innerHTML=html;
   var li=t.content&&t.content.firstElementChild;if(!li)throw new Error("no thread");
-  var old=fm.closest?fm.closest("li.thread"):null;
+  var old=fm.closest?fm.closest("li.thread"):null,hx=fm.closest?fm.closest(".hovercard"):null;
+  if(hx){old=thread(hx.getAttribute("data-mark-id"));hide();if(!old)throw new Error("gone")}
   if(old&&old.parentNode){old.parentNode.replaceChild(li,old);return false}
   var list=document.querySelector("#comments > ul.threads");
   if(!list){list=document.createElement("ul");list.className="threads";
@@ -2572,7 +2643,10 @@ def _render_comments(
             )
         )
         return (
-            f'<li class="thread{" settled" if resolved else ""}">'
+            # `data-mark-id` is what a hover card is copied by: the page names
+            # a mark, and comments.js clones THIS escaped markup for it.
+            f'<li class="thread{" settled" if resolved else ""}"'
+            f' data-mark-id="{escape(root.id)}">'
             f"{quoted(root)}"
             f'<ul class="bubbles">{bubble(root)}{kids}</ul>{reply}{action}</li>'
         )

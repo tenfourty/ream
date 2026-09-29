@@ -46,7 +46,7 @@ function texts(root) {
   return out;
 }
 
-function build(body, paths, { highlights = true, readyState = "complete", immediateTimers = false } = {}) {
+function build(body, paths, { highlights = true, readyState = "complete", immediateTimers = false, rects = new Map(), raf = true } = {}) {
   const head = E("head");
   const html = E("html", head, body);
   const listeners = {};
@@ -70,6 +70,9 @@ function build(body, paths, { highlights = true, readyState = "complete", immedi
     // multi-node commonAncestorContainer is not modelled.
     get commonAncestorContainer() { return this.sc === this.ec ? this.sc : this.sc.parentNode; }
     getBoundingClientRect() { return { top: 0, left: 0, width: 0, height: 0 }; }
+    // Hover hit-testing: the client rects a test pinned to the range's first
+    // text node (none by default, so nothing is hoverable unless a test says).
+    getClientRects() { return rects.get(this.sc) || []; }
     toString() {
       const ts = all(), i = ts.indexOf(this.sc), j = ts.indexOf(this.ec);
       if (i < 0 || j < 0 || j < i) return "";
@@ -96,6 +99,7 @@ function build(body, paths, { highlights = true, readyState = "complete", immedi
   };
   class Highlight { constructor() { this.ranges = []; } add(r) { this.ranges.push(r); } }
   const registry = new Map();
+  const frames = [];
   let currentSelection = null;
   const scope = {
     document: doc,
@@ -109,6 +113,8 @@ function build(body, paths, { highlights = true, readyState = "complete", immedi
     setTimeout: immediateTimers ? (fn) => { fn(); return 0; } : setTimeout,
     clearTimeout: immediateTimers ? () => {} : clearTimeout,
     Array, JSON, Math, Object, String,
+    // One frame per flush: pointer moves between flushes are a single check.
+    ...(raf ? { requestAnimationFrame: (fn) => { frames.push(fn); return frames.length; } } : {}),
     CSS: highlights ? { highlights: registry, escape: (s) => s } : undefined,
     Highlight: highlights ? Highlight : undefined,
   };
@@ -120,7 +126,8 @@ function build(body, paths, { highlights = true, readyState = "complete", immedi
   const reports = () => posted.filter(([m]) => m && m.type === "artifact-marks-placed");
   const raw = (data) => (listeners.message || []).forEach((fn) => fn({ origin: GALLERY, data }));
   return { head, body, doc, registry, posted, reports, send, raw, Range,
-           fire: (t) => (listeners[t] || []).forEach((fn) => fn({})),
+           fire: (t, ev = {}) => (listeners[t] || []).forEach((fn) => fn(ev)),
+           flush: () => { const fs = frames.splice(0); fs.forEach((fn) => fn(0)); return fs.length; },
            fireDoc: (t) => (docListeners[t] || []).forEach((fn) => fn({})),
            setSelection: (s) => { currentSelection = s; } };
 }
@@ -380,6 +387,69 @@ const mark = (over = {}) => ({ id: "m1", kind: "remove", quote: QUOTE,
   ok(["ar-comment", "ar-remove", "ar-good"].every((n) => g.registry.get(n).ranges.length === 0), "and in no kind's group");
   const css = g.doc.getElementById("ar-mark-style").textContent;
   ok(css.includes("::highlight(ar-held){text-decoration:underline dotted}") && !/ar-held\)\{[^}]*background/.test(css), "dotted underline, no background");
+}
+
+// 14. HOVER. Resting the pointer on painted text tells the gallery WHICH mark
+// and WHERE, nothing else: the card is drawn by the gallery from what it
+// already holds, so no text -- not the quote, and never a note -- crosses.
+{
+  const QUOTE2 = "Held words stay dotted here.";
+  const p = E("p", QUOTE), q = E("p", QUOTE2);
+  const rects = new Map([[p.childNodes[0], [{ top: 10, left: 5, width: 200, height: 18, right: 205, bottom: 28 }]],
+                         [q.childNodes[0], [{ top: 40, left: 5, width: 150, height: 18, right: 155, bottom: 58 }]]]);
+  const g = build(E("body", p, q), { "body>p:nth-of-type(1)": p, "body>p:nth-of-type(2)": q }, { rects });
+  const hovers = () => g.posted.filter(([m]) => m && /^artifact-mark-/.test(m.type));
+  g.fire("pointermove", { clientX: 50, clientY: 20, pointerType: "mouse" }); g.flush();
+  ok(hovers().length === 0, "before any marks are painted, a move posts nothing");
+  g.send([mark(), mark({ id: "h1", kind: "", held: true, quote: QUOTE2,
+    anchor: { path: "body>p:nth-of-type(2)", start: 0, end: QUOTE2.length } })]);
+  g.fire("pointermove", { clientX: 50, clientY: 20, pointerType: "mouse" });
+  g.fire("pointermove", { clientX: 60, clientY: 21, pointerType: "mouse" });
+  g.fire("pointermove", { clientX: 70, clientY: 22, pointerType: "mouse" });
+  ok(g.flush() === 1, "a burst of moves is one check per animation frame");
+  let hs = hovers();
+  ok(hs.length === 1, "entering marked text posts once");
+  const [msg, origin] = hs[0];
+  ok(origin === GALLERY, "to the gallery's origin only");
+  ok(JSON.stringify(Object.keys(msg).sort()) === '["id","rect","type"]', "carrying only type, id and rect");
+  ok(msg.type === "artifact-mark-hover" && msg.id === "m1", "naming the mark under the pointer");
+  ok(JSON.stringify(Object.keys(msg.rect).sort()) === '["height","left","top","width"]'
+     && msg.rect.top === 10 && msg.rect.left === 5 && msg.rect.width === 200 && msg.rect.height === 18,
+     "and the rect of the line it sits on, four numbers");
+  ok(!JSON.stringify(g.posted.filter(([m]) => m.type !== "artifact-marks-placed")).includes("Rotate"),
+     "no text of the mark is ever posted");
+  g.fire("pointermove", { clientX: 80, clientY: 20, pointerType: "mouse" }); g.flush();
+  ok(hovers().length === 1, "moving within the same mark says nothing more");
+  g.fire("pointermove", { clientX: 80, clientY: 45, pointerType: "mouse" }); g.flush();
+  hs = hovers();
+  ok(hs.length === 2 && hs[1][0].id === "h1" && hs[1][0].rect.top === 40, "a held mark is hoverable too");
+  g.fire("pointermove", { clientX: 400, clientY: 300, pointerType: "mouse" }); g.flush();
+  hs = hovers();
+  ok(hs.length === 3 && JSON.stringify(hs[2][0]) === '{"type":"artifact-mark-leave"}' && hs[2][1] === GALLERY,
+     "leaving marked text posts a bare leave");
+  g.fire("pointermove", { clientX: 500, clientY: 300, pointerType: "mouse" }); g.flush();
+  ok(hovers().length === 3, "and nothing more while off the marks");
+  g.fire("pointerdown", { clientX: 50, clientY: 20, pointerType: "touch" });
+  hs = hovers();
+  ok(hs.length === 4 && hs[3][0].id === "m1", "a tap on marked text is a hover, at once");
+  g.fire("pointerout", { relatedTarget: null });
+  hs = hovers();
+  ok(hs.length === 5 && hs[4][0].type === "artifact-mark-leave", "the pointer leaving the page is a leave");
+  g.fire("pointerdown", { clientX: 50, clientY: 20, pointerType: "mouse" });
+  ok(hovers().length === 5, "a mouse press is not a hover of its own");
+  let threw = false;
+  try { g.fire("pointermove", {}); g.flush(); g.fire("pointerdown", {}); g.fire("pointerout", {}); } catch (e) { threw = true; }
+  ok(!threw, "a malformed pointer event never throws into the page");
+}
+// 15. without requestAnimationFrame the check still runs, once per move
+{
+  const p = E("p", QUOTE);
+  const rects = new Map([[p.childNodes[0], [{ top: 10, left: 5, width: 200, height: 18, right: 205, bottom: 28 }]]]);
+  const g = build(E("body", p), { "body>p:nth-of-type(1)": p }, { rects, raf: false });
+  g.send([mark()]);
+  g.fire("pointermove", { clientX: 50, clientY: 20 });
+  g.fire("pointermove", { clientX: 51, clientY: 20 });
+  ok(g.posted.filter(([m]) => m.type === "artifact-mark-hover").length === 1, "no animation frames: still one hover");
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

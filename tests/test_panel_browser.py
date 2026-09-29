@@ -15,6 +15,8 @@ live server with that Host header, so the framed page, its shim and its height
 reports are the real ones, not a stub.
 """
 
+import json
+import os
 import urllib.error
 import urllib.request
 
@@ -22,7 +24,7 @@ import pytest
 from playwright import sync_api
 from test_client import _LiveServer
 
-from artifacts import events, store, thumbs
+from artifacts import comments, events, store, thumbs
 from artifacts.app import create_app
 
 pytestmark = [
@@ -291,5 +293,101 @@ def test_on_a_phone_a_sheet_and_with_scripts_off_still_docked(
         assert styles == ["none", "none"]
         # And its close link drops the target without jumping to the top.
         assert panel.locator(".cclose").get_attribute("href") == "#_"
+    finally:
+        ctx.close()
+
+
+# Every frame records what it is sent; the gallery records what its frame
+# sends it. The init script runs in every document, the framed one included.
+_SPY = """
+window.__got = [];
+addEventListener('message', function (e) {
+  try { window.__got.push(JSON.stringify(e.data)); } catch (x) {}
+}, true);
+"""
+
+
+def test_hovering_marked_text_shows_its_comment_beside_it(browser, served, db):
+    """Rest the pointer on marked text in the agent's page: a card with the
+    note appears in the GALLERY document beside it; move away and it goes.
+    The frame is never sent the note, and what it sends is only type, id and
+    rect -- checked on the wire, both ways, not inferred from the source."""
+    origin, ident = served
+    quote = "Paragraph 3: a sentence that wraps"
+    note = "HOVERNOTE keep this sentence shorter"
+    root = comments.add(
+        db,
+        artifact_id=ident,
+        author_kind="human",
+        author="jeremy",
+        body=note,
+        quote=quote,
+        anchor={
+            "kind": "range",
+            "path": "body>p:nth-of-type(4)",
+            "start": 0,
+            "end": len(quote),
+        },
+    )
+    ctx = browser.new_context(viewport={"width": 1400, "height": 800})
+    ctx.add_init_script(_SPY)
+    ctx.route("https://*.tenfourty.com/**", _forward(origin))
+    pg = ctx.new_page()
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    try:
+        pg.goto(f"{origin}/a/{ident}")
+        pg.wait_for_load_state("load")
+        _frame_height_settled(pg)
+        frame = pg.frames[1]
+        frame.wait_for_function(
+            "() => CSS.highlights.has('ar-comment')"
+            " && CSS.highlights.get('ar-comment').size === 1",
+            timeout=10000,
+        )
+        # Where the marked words are, in the gallery's coordinates.
+        box = pg.locator("#artifact-frame").bounding_box()
+        r = frame.evaluate(
+            """() => {const t=document.querySelectorAll('p')[3].firstChild;
+                      const g=document.createRange();g.setStart(t,2);g.setEnd(t,8);
+                      const b=g.getBoundingClientRect();
+                      return {x:b.left+b.width/2,y:b.top+b.height/2}}"""
+        )
+        pg.mouse.move(box["x"] + r["x"], box["y"] + r["y"])
+        card = pg.locator(".hovercard")
+        card.wait_for(state="visible", timeout=3000)
+        assert note in card.inner_text()
+        assert card.get_attribute("data-mark-id") == root.id
+        cb = card.bounding_box()
+        assert 0 <= cb["x"] and cb["x"] + cb["width"] <= 1400
+        assert abs(cb["y"] - (box["y"] + r["y"])) < 80, (
+            "the card is not beside the text"
+        )
+        assert cb["width"] <= 22 * 16 + 1
+        assert pg.evaluate("() => document.querySelectorAll('.hovercard').length") == 1
+        shot = os.environ.get("ARTIFACTS_HOVER_SHOT")
+        if shot:
+            pg.screenshot(path=shot)
+
+        # Away from any mark, inside the frame: the card goes after its grace.
+        pg.mouse.move(box["x"] + 600, box["y"] + 900)
+        card.wait_for(state="detached", timeout=3000)
+
+        # On the wire. What the frame was sent: marks (no note) and nothing
+        # carrying the note. What the frame sent about hovering: only these keys.
+        got = frame.evaluate("() => window.__got")
+        assert got and not any(note in m for m in got), got
+        sent = [m for m in pg.evaluate("() => window.__got") if '"artifact-mark-' in m]
+        hovers = [json.loads(m) for m in sent]
+        assert any(h["type"] == "artifact-mark-hover" for h in hovers), sent
+        assert any(h["type"] == "artifact-mark-leave" for h in hovers), sent
+        for h in hovers:
+            if h["type"] == "artifact-mark-hover":
+                assert sorted(h) == ["id", "rect", "type"] and h["id"] == root.id
+                assert sorted(h["rect"]) == ["height", "left", "top", "width"]
+            else:
+                assert h == {"type": "artifact-mark-leave"}
+        assert not any(quote in m or note in m for m in sent)
+        assert not errors, errors
     finally:
         ctx.close()

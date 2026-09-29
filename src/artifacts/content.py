@@ -242,7 +242,7 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "return null;"
         "try{return place(m,{v:null})}catch(x){return null}}}"
         "function paint(list){var G={comment:new Highlight(),remove:new Highlight(),"
-        "looks_good:new Highlight()},held=new Highlight(),placed=[],unplaced=[],ix={v:null};"
+        "looks_good:new Highlight()},held=new Highlight(),placed=[],unplaced=[],ix={v:null},hr=[];"
         # Only the first 200 are ever placed or painted -- a real cost, worth
         # capping. Past that, a mark with a usable id is still reported
         # unplaced rather than vanishing: the gallery's list of open marks and
@@ -260,7 +260,8 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         # A held mark arrives with kind "" (the page never learns the kind)
         # and is drawn dotted, in a highlight of its own.
         "var g=m.held===true?held:Object.prototype.hasOwnProperty.call(G,m.kind)?G[m.kind]:G.comment;"
-        "if(r){g.add(r);placed.push(m.id)}else unplaced.push(m.id)});"
+        "if(r){g.add(r);placed.push(m.id);hr.push({id:m.id,r:r})}else unplaced.push(m.id)});"
+        "MR=hr;"
         'CSS.highlights.set("ar-comment",G.comment);CSS.highlights.set("ar-remove",G.remove);'
         'CSS.highlights.set("ar-good",G.looks_good);CSS.highlights.set("ar-held",held);'
         'if(!document.getElementById("ar-mark-style")){var st=document.createElement("style");'
@@ -297,6 +298,36 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         'if(document.readyState==="complete"){mq=null;paint(d.marks);return}'
         'if(!mq)addEventListener("load",function(){try{var l=mq;mq=null;if(l)paint(l)}catch(x){}});'
         "mq=d.marks}catch(x){}});"
+        # HOVERING A MARK (page view, Task 3). The gallery draws a card with the
+        # comment beside marked text the pointer rests on; the card is the
+        # gallery's, never this page's, so the page must never hold a note. It
+        # says only WHICH mark (an id the gallery gave it) and WHERE (the client
+        # rect of the line under the pointer): `artifact-mark-hover` on
+        # entering, a bare `artifact-mark-leave` on leaving. No text, ever.
+        # Hit-testing uses the very ranges painted above (`MR`), via
+        # getClientRects -- nothing in the agent's DOM is touched or listened
+        # to beyond window-level pointer events. At most one check per
+        # animation frame, however fast the pointer moves; a touch tap is
+        # checked at once. A hover is re-sent when the line moved under a still
+        # pointer (the gallery scrolled), so the card can come back.
+        'var MR=[],hv=null,hk="",raf=0,px=-1,py=-1;'
+        "function hit(){for(var i=0;i<MR.length;i++){var rs=MR[i].r.getClientRects();"
+        "for(var j=0;j<rs.length;j++){var q=rs[j];"
+        "if(px>=q.left&&px<=q.left+q.width&&py>=q.top&&py<=q.top+q.height)"
+        "return{id:MR[i].id,rect:{top:q.top,left:q.left,width:q.width,height:q.height}}}}"
+        "return null}"
+        'function out(){if(hv){hv=null;hk="";'
+        f'parent.postMessage({{type:"artifact-mark-leave"}},{origin})}}}}'
+        "function look(){raf=0;try{var h=hit();if(!h){out();return}"
+        'var k=h.id+"|"+h.rect.top+"|"+h.rect.left;if(k===hk)return;hv=h.id;hk=k;'
+        'parent.postMessage({type:"artifact-mark-hover",id:h.id,rect:h.rect},'
+        f"{origin})}}catch(x){{}}}}"
+        'function at(e){if(!e||typeof e.clientX!=="number"||typeof e.clientY!=="number")return 0;'
+        "px=e.clientX;py=e.clientY;return 1}"
+        'addEventListener("pointermove",function(e){try{if(!at(e)||raf)return;raf=1;'
+        'if(typeof requestAnimationFrame==="function")requestAnimationFrame(look);else look()}catch(x){}});'
+        'addEventListener("pointerdown",function(e){try{if(at(e)&&e.pointerType==="touch")look()}catch(x){}});'
+        'addEventListener("pointerout",function(e){try{if(e&&!e.relatedTarget)out()}catch(x){}});'
         # SELECTING TEXT TO COMMENT ON IT (homelab-ij8.18). The gallery cannot
         # read inside this cross-origin page, by design, so the page reports a
         # selection: the quoted text (capped), an anchor the service already

@@ -14,6 +14,12 @@ function classes() {
   return { set, add: (c) => set.add(c), remove: (c) => set.delete(c), contains: (c) => set.has(c),
            toggle(c, on) { if (on === undefined) on = !set.has(c); on ? set.add(c) : set.delete(c); return on; } };
 }
+function matches(n, sel) {
+  const m = sel.match(/^(\w+)?(?:\.([\w-]+))?(?:\[name=(\w+)\])?$/);
+  if (!m) return false;
+  return (!m[1] || n.tag === m[1]) && (!m[2] || String(n.className || "").split(" ").includes(m[2])) && (!m[3] || n.name === m[3]);
+}
+function text(n) { return (n.textContent || "") + n.children.map(text).join(""); }
 function el(tag) {
   return { tag, style: {}, hidden: false, children: [], attrs: {}, on: {}, value: "", textContent: "", dataset: {},
            classList: classes(),
@@ -23,6 +29,15 @@ function el(tag) {
            appendChild(c) { this.children.push(c); c.parentNode = this; },
            insertBefore(c) { this.children.unshift(c); c.parentNode = this; },
            addEventListener(t, f) { this.on[t] = f; }, focus() { this.focused = true; },
+           removeChild(c) { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); c.parentNode = null; },
+           scrollIntoView() { this.scrolled = true; },
+           cloneNode(deep) { const n = el(this.tag);
+             for (const k of ["className", "textContent", "name", "type", "value"]) n[k] = this[k];
+             n.attrs = { ...this.attrs }; if (deep) this.children.forEach((c) => n.appendChild(c.cloneNode(true))); return n; },
+           // "tag", ".cls", "tag.cls" or "input[name=x]", over descendants.
+           querySelectorAll(sel) { const out = [];
+             (function walk(n) { n.children.forEach((c) => { if (matches(c, sel)) out.push(c); walk(c); }); })(this); return out; },
+           querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
            closest(sel) {
              // A tag, or a class (".x"), or a comma list of either.
              const hit = (node) => sel.split(",").map((x) => x.trim()).some((x) =>
@@ -32,13 +47,24 @@ function el(tag) {
              return null;
            } };
 }
-function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false } = {}) {
+// A fake clock, so the rest and the grace period are measured, not slept.
+function clock() {
+  let now = 0, id = 0; const due = new Map();
+  return { setTimeout: (fn, ms) => { due.set(++id, [now + (ms || 0), fn]); return id; },
+           clearTimeout: (k) => { due.delete(k); },
+           advance(ms) { const end = now + ms;
+             for (;;) { let next = null;
+               for (const [k, [t]] of due) if (t <= end && (!next || t < due.get(next)[0])) next = k;
+               if (!next) break; const [t, fn] = due.get(next); due.delete(next); now = t; fn(); }
+             now = end; } };
+}
+function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false, threads = [] } = {}) {
   const framePosts = [];
   const frameWin = { postMessage: (m, o) => framePosts.push([m, o]) };
   const frameOn = {};
   const iframe = { src: "https://abc.tenfourty.com/p/x/", contentWindow: frameWin,
                    addEventListener: (t, fn) => ((frameOn[t] ||= []).push(fn)),
-                   getBoundingClientRect: () => ({ top: 100, left: 20 }) };
+                   getBoundingClientRect: () => ({ top: 100, left: 20, width: 800, height: 3000 }) };
   // The page embeds its open marks as JSON (null: the page has no such block),
   // and renders an empty, hidden line the shim's report fills.
   const marksEl = marks === null ? null : { textContent: marks };
@@ -60,6 +86,8 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
   const close = el("a"); close.className = "cclose"; close.textContent = "\u00d7";
   panel.appendChild(close);
   panel.querySelector = (q) => (q === ".cclose" ? panel.children.find((c) => c.className === "cclose") || null : null);
+  const tlist = el("ul"); tlist.className = "threads"; threads.forEach((t) => tlist.appendChild(t)); panel.appendChild(tlist);
+  panel.querySelectorAll = (q) => (q === "li.thread" ? tlist.children.slice() : []);
   const cbtn = el("a"); cbtn.className = "cbtn";
   const byId = { "artifact-frame": iframe, "artifact-marks": marksEl, "marks-unplaced": unplacedEl, comments: noPanel ? null : panel };
   const docOn = {}, extra = { ".cbtn": cbtn };
@@ -73,11 +101,13 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
   const localStorage = storage ? { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) }
     : { getItem() { throw new Error("denied"); }, setItem() { throw new Error("denied"); } };
   const history = { entries: 0, replaced: [], pushState() { this.entries++; }, replaceState(s, t, u) { this.replaced.push(u); } };
-  const win = { scrollX: 0, scrollY: 50, localStorage, history,
+  const win = { scrollX: 0, scrollY: 50, innerWidth: 1000, innerHeight: 700, localStorage, history,
                 addEventListener: (t, f, c) => (((c ? capture : listeners)[t] ||= []).push(f)) };
   const location = { hash, pathname: "/a/abc", search: "" };
   const FD = function (f) { this.form = f; };
-  new Function("document", "window", "location", "URL", "fetch", "FormData", src)(doc, win, location, URL, fetchImpl || undefined, FD);
+  const clk = clock();
+  new Function("document", "window", "location", "URL", "fetch", "FormData", "setTimeout", "clearTimeout", src)(
+    doc, win, location, URL, fetchImpl || undefined, FD, clk.setTimeout, clk.clearTimeout);
   const bar = docBody.children.find((c) => c.className === "selbar");
   const buttons = {};
   if (bar) bar.children.forEach((b) => (buttons[b.dataset.kind] = b));
@@ -91,8 +121,10 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
     (docOn.click || []).forEach((fn) => fn(ev)); return ev; };
   const key = (k) => (capture.keydown || []).concat(listeners.keydown || [], docOn.keydown || []).forEach((fn) => fn({ key: k }));
   const isOpen = () => docBody.classList.contains("cpanel-open");
+  const card = () => docBody.children.filter((c) => c.className === "hovercard");
+  const scroll = () => (listeners.scroll || []).concat(capture.scroll || []).forEach((fn) => fn({}));
   return { bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload, submit, extra, doc,
-           panel, cbtn, docBody, store, history, tap, key, isOpen };
+           panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist };
 }
 const SEL = { type: "artifact-selection", quote: "the plan",
               anchor: { kind: "range", path: "body>p:nth-of-type(1)", start: 4, end: 12 },
@@ -284,7 +316,7 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
   const f = el("form"); f.className = "creply"; f.action = "/c/other"; f.submitted = 0; f.submit = () => { f.submitted++; };
   f.querySelectorAll = () => []; f.querySelector = () => null;
   const li = el("li"); li.parentNode = { replaced: null, replaceChild(n, o) { this.replaced = n; } };
-  f.closest = () => li;
+  f.closest = (sel) => (sel === "li.thread" ? li : null);
   const ev = g.submit(f); await tick(); await tick(); await tick();
   ok(ev.prevented === true && li.parentNode.replaced && li.parentNode.replaced.html === "<li>t</li>" && f.submitted === 0,
      "a reply in the all-pages view is posted in place"); }
@@ -349,6 +381,116 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
 { const g = build();
   g.send(SEL); g.tap(g.cbtn);
   ok(g.bar.hidden === true, "toggling the panel hides a selection bar whose position the reflow just made wrong"); }
+
+// HOVER CARDS. The page says only WHICH mark the pointer rests on and WHERE;
+// the card is the panel's own (already escaped) thread markup, cloned, drawn
+// by the gallery beside the text. Nothing the page sends is ever rendered.
+function threadLi(id, { note = "Move this up", kind = null, held = false, reply = true } = {}) {
+  const li = el("li"); li.className = "thread"; li.setAttribute("data-mark-id", id);
+  if (kind) { const bq = el("blockquote"); bq.className = "cquote";
+    const sp = el("span"); sp.className = "ckind ckind-" + kind; sp.textContent = kind === "remove" ? "Remove this" : "Looks good";
+    bq.appendChild(sp); li.appendChild(bq); }
+  const ul = el("ul"); ul.className = "bubbles";
+  const cm = el("li"); cm.className = "cmt human";
+  if (held) { const h = el("span"); h.className = "htag"; h.textContent = "held"; cm.appendChild(h); }
+  const p = el("p"); p.textContent = note; cm.appendChild(p); ul.appendChild(cm); li.appendChild(ul);
+  if (reply) { const f = el("form"); f.className = "creply"; f.action = "/c/abc";
+    const i = el("input"); i.name = "body"; f.appendChild(i); li.appendChild(f); }
+  return li;
+}
+const HMARKS = JSON.stringify([
+  { id: "m1", kind: "remove", quote: "the plan", anchor: SEL.anchor },
+  { id: "m2", kind: "comment", quote: "the rest", anchor: SEL.anchor },
+  { id: "h1", kind: "", quote: "held one", anchor: SEL.anchor, held: true },
+  { id: "m9", kind: "comment", quote: "no thread here", anchor: SEL.anchor }]);
+const hthreads = () => [threadLi("m1", { kind: "remove", note: "" }), threadLi("m2", { note: "Say more" }),
+                        threadLi("h1", { held: true, note: "Parked for later" })];
+const HOV = (id, rect = { top: 30, left: 10, width: 60, height: 18 }) => ({ type: "artifact-mark-hover", id, rect });
+const LEAVE = { type: "artifact-mark-leave" };
+const btnOf = (c, label) => c.querySelectorAll("button").find((b) => b.textContent === label);
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(HOV("m2")); g.clk.advance(149);
+  ok(g.card().length === 0, "no card before the pointer has rested 150 ms");
+  g.clk.advance(1);
+  const [c] = g.card();
+  ok(c && g.card().length === 1, "a card after the rest");
+  ok(c.getAttribute("data-mark-id") === "m2" && text(c).includes("Say more"), "showing that mark's note, from the panel's markup");
+  ok(c.querySelector(".ckind") && c.querySelector(".ckind").textContent === "Comment", "labelled with its kind");
+  ok(btnOf(c, "Reply") && btnOf(c, "Open"), "with Reply and Open");
+  ok(c.style.left === "30px" && c.style.top === "154px", "beside the text: the frame's position plus the rect, just under it");
+  ok(g.tlist.children[1].getAttribute("data-mark-id") === "m2" && text(g.tlist.children[1]).includes("Say more"),
+     "the panel keeps its own thread: the card is a copy");
+  ok(!JSON.stringify(g.framePosts).includes("Say more"), "and no note is ever posted to the frame");
+  g.send(LEAVE); g.clk.advance(249);
+  ok(g.card().length === 1, "leaving keeps it through the grace period");
+  g.clk.advance(1);
+  ok(g.card().length === 0, "and closes it after 250 ms"); }
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(HOV("m2")); g.clk.advance(150); g.send(LEAVE); g.clk.advance(100);
+  const [c] = g.card(); c.on.pointerenter({}); g.clk.advance(1000);
+  ok(g.card().length === 1, "moving into the card inside the grace period keeps it");
+  c.on.pointerleave({}); g.clk.advance(250);
+  ok(g.card().length === 0, "and leaving the card closes it after the grace period"); }
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(HOV("m2")); g.clk.advance(150);
+  const [c] = g.card();
+  btnOf(c, "Reply").on.click({});
+  const mine = c.querySelector("input[name=body]"), panelBox = g.tlist.children[1].querySelector("input[name=body]");
+  ok(mine && mine.focused === true && !panelBox.focused, "Reply puts the cursor in the card's own reply box");
+  mine.focused = true; g.doc.activeElement = mine;
+  g.send(LEAVE); g.clk.advance(1000);
+  ok(g.card().length === 1, "a card being typed in does not close when the pointer wanders off");
+  btnOf(c, "Open").on.click({});
+  ok(g.isOpen() && g.card().length === 0, "Open opens the panel and puts the card away");
+  ok(g.tlist.children[1].scrolled === true, "scrolled to that thread");
+  ok(g.location.hash === "" && g.history.entries === 0, "without navigating"); }
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  g.tap(g.cbtn); g.send(HOV("m1")); g.clk.advance(150);
+  ok(g.card().length === 1 && g.card()[0].querySelector(".ckind").textContent === "Remove this", "a remove mark says so");
+  g.key("Escape");
+  ok(g.card().length === 0 && g.isOpen(), "Escape closes the card first, and leaves the panel open");
+  g.send(HOV("m1")); g.clk.advance(150); g.scroll();
+  ok(g.card().length === 0, "scrolling closes it");
+  g.send(HOV("m1")); g.clk.advance(150); g.tap(g.cbtn);
+  ok(g.card().length === 0, "so does opening or closing the panel, which moves the page under it"); }
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(HOV("h1")); g.clk.advance(150);
+  ok(g.card().length === 1 && g.card()[0].querySelector(".htag").textContent === "held", "a held mark's card says held");
+  g.send(HOV("m2")); 
+  ok(g.card().length === 0, "a different mark puts the old card away at once");
+  g.clk.advance(150);
+  ok(g.card().length === 1 && g.card()[0].getAttribute("data-mark-id") === "m2", "and shows its own after the rest"); }
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(HOV("m2"), { origin: "https://evil.example" }); g.send(HOV("m2"), { source: {} });
+  g.send(HOV("invented")); g.send(HOV(7)); g.send({ type: "artifact-mark-hover", id: "m2" });
+  for (const rect of [{ top: "x", left: 1, width: 1, height: 1 }, { top: NaN, left: 1, width: 1, height: 1 },
+                      { top: 1, left: Infinity, width: 1, height: 1 }, { top: 1, left: 1 }, null, "1,2,3,4"]) g.send(HOV("m2", rect));
+  g.clk.advance(1000);
+  ok(g.card().length === 0, "another origin or window, an unknown id or a malformed rect shows nothing");
+  let threw = false;
+  try { g.send(HOV("m9")); g.clk.advance(1000); g.send(null); g.send("x"); g.send(LEAVE); g.clk.advance(1000); } catch (e) { threw = true; }
+  ok(!threw && g.card().length === 0, "a known mark with no thread in the panel shows nothing, and nothing throws"); }
+{ const inView = (c) => { const l = parseFloat(c.style.left), t = parseFloat(c.style.top); return l >= 8 && l <= 992 && t >= 8 && t <= 692; };
+  const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(HOV("m2", { top: 1e9, left: 1e9, width: 1e9, height: 1e9 })); g.clk.advance(150);
+  ok(g.card().length === 1 && inView(g.card()[0]), "a huge rect is clamped: the card stays in the window");
+  g.send(LEAVE); g.clk.advance(250);
+  g.send(HOV("m2", { top: -1e6, left: -1e6, width: -5, height: -5 })); g.clk.advance(150);
+  ok(g.card().length === 1 && inView(g.card()[0]), "so is a negative one"); }
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  for (let i = 0; i < 40; i++) { g.send(HOV(i % 2 ? "m1" : "m2")); g.clk.advance(100); }
+  ok(g.card().length === 0, "a flood that never rests never shows a card");
+  for (let i = 0; i < 1000; i++) g.send(HOV("m1"));
+  g.clk.advance(150);
+  ok(g.card().length === 1, "and a flood of one mark shows exactly one"); }
+{ const g = build({ marks: HMARKS, threads: hthreads(), fetchImpl: () => Promise.resolve(OKRESP([])) });
+  g.send(HOV("m2")); g.clk.advance(150);
+  const [c] = g.card(), fm = c.querySelector("form.creply");
+  fm.querySelectorAll = () => []; fm.submit = () => { fm.submitted = true; };
+  c.querySelector("input[name=body]").value = "Sure";
+  g.submit(fm); await tick(); await tick(); await tick();
+  ok(g.tlist.children.length === 3 && g.tlist.children[1].html === "<li>t</li>", "a reply sent from the card replaces the panel's thread, not a new one");
+  ok(g.card().length === 0 && !fm.submitted, "and the card is put away"); }
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
