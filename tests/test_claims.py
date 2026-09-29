@@ -427,3 +427,35 @@ def test_an_answered_review_with_no_round_row_gets_a_closed_round_one(db, client
             (review.id,),
         ).fetchone()
     assert (closed, verdict) == (True, "changes_requested")
+
+
+def test_a_verdict_stretches_the_holders_live_lease_to_an_hour(db, client):
+    """A holds the open round; his verdict lands. A's five-minute lease must
+    not lapse under the revision and let B act on the same verdict."""
+    h = _auth(db)
+    _page, review = _review(db)
+    assert _claim(client, h, review.id, "seat/a").status_code == 200
+    decisions.answer(db, review.id, letter="c", note="tighten it", by="jeremy")
+    assert 3590 < _state(db, review.id)[4] <= 3600
+    assert _state(db, review.id)[1] == "seat/a"
+    with db.connect() as conn:
+        conn.execute(
+            "update review_round set claim_expires_at ="
+            " claim_expires_at - interval '5 min' where review_id = %s",
+            (review.id,),
+        )
+    r = _claim(client, h, review.id, "seat/b")
+    assert r.status_code == 409
+
+
+def test_a_verdict_leaves_a_lapsed_lease_lapsed(db, client):
+    h = _auth(db)
+    _page, review = _review(db)
+    _claim(client, h, review.id, "seat/a")
+    with db.connect() as conn:
+        conn.execute(
+            "update review_round set claim_expires_at = now() - interval '1 min'"
+        )
+    decisions.answer(db, review.id, letter="c", note="tighten it", by="jeremy")
+    assert _state(db, review.id)[4] < 0
+    assert _claim(client, h, review.id, "seat/b").status_code == 200

@@ -3212,9 +3212,9 @@ def _render_decisions(
             f"</form></div>{approved}"
         )
 
-    def _presence_line(row: decisions.DecisionRow) -> str:
-        """Who is on an open review, or why it was handed back. Every value is
-        agent text and is escaped."""
+    def _presence_line(row: decisions.DecisionRow, tag: str = "p") -> str:
+        """Who is on a review, or why it was handed back. Every value is agent
+        text and is escaped. `tag` is "span" inside a settled entry's summary."""
         p = (presence or {}).get(row.id)
         if not p:
             return ""
@@ -3229,7 +3229,7 @@ def _render_decisions(
             text = f"Agent listening \u00b7 {escape(p['session'])}{seen}"
         else:
             text = f"Handed back by {escape(p['session'])}: {escape(p['reason'])}"
-        return f'<p class="rhint rpresence">{text}</p>'
+        return f'<{tag} class="rhint rpresence">{text}</{tag}>'
 
     def _round_block(row: decisions.DecisionRow) -> str:
         """Round 2 and later of an open review (page review step 4): the round,
@@ -3431,7 +3431,12 @@ def _render_decisions(
                 f'<summary><span class="when">{escape(_when(row.answered_at))}</span>'
                 f'<span class="sq">{escape(row.question)}</span>'
                 f'<span class="sa">({escape(row.answer)}) {escape(chosen)}</span>'
-                f"{relayed}{unread}</summary>"
+                f"{relayed}{unread}"
+                # Changes requested, and the review is stalled until a session
+                # revises: who is on it, or who handed it back and why, where
+                # he sees it without opening the entry.
+                + (_presence_line(row, "span") if row.answer == "c" else "")
+                + "</summary>"
                 f'<div class="settled-body">{_provenance(row)}{pickup}{note}'
                 # SAID WHERE THE HAND IS. The section already carries "nothing
                 # here is locked", but that sits at the foot of the whole list,
@@ -4255,7 +4260,7 @@ def gallery_router(db: Database) -> APIRouter:
             r.id: found
             for r in decision_rows
             if getattr(r, "kind", "") == "review"
-            and r.answer is None
+            and r.answer in (None, "c")
             and r.closed_at is None
             and (found := decisions.round_presence(db, row[2], r.id)) is not None
         }

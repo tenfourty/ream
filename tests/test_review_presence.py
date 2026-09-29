@@ -84,3 +84,34 @@ def test_another_agents_session_never_appears_on_a_page_it_does_not_own(db, gall
     html = gallery.get(f"/a/{mine.id}").text
     assert "other/secret-session" not in html and "Agent listening" not in html
     assert "other/secret-session" in gallery.get(f"/a/{other.id}").text
+
+
+def test_a_hand_back_after_changes_requested_shows_on_the_card(db, gallery):
+    """He sent it back; the session that took the verdict handed it back. The
+    card is where he sees why the review stalled."""
+    page, rev = _review(db)
+    decisions.answer(db, rev.id, letter="c", note="tighten it", by="jeremy")
+    decisions.claim_round(db, "seat", rev.id, "seat/alpha")
+    decisions.release_round(db, "seat", rev.id, "seat/alpha", "I ran out of context")
+    html = gallery.get(f"/a/{page.id}").text
+    summary = html.split('<details class="settled">', 1)[1].split("</summary>")[0]
+    # In the entry's summary line, so he sees it without opening the entry.
+    assert "Handed back by seat/alpha: I ran out of context" in summary
+
+
+def test_a_live_holder_after_changes_requested_shows_on_the_card(db, gallery):
+    page, rev = _review(db)
+    decisions.answer(db, rev.id, letter="c", note="tighten it", by="jeremy")
+    decisions.claim_round(db, "seat", rev.id, "seat/alpha")
+    events.note_read(db, "seat", "seat/alpha")
+    html = gallery.get(f"/a/{page.id}").text
+    assert "Agent listening · seat/alpha · last seen just now" in html
+
+
+def test_an_approved_review_shows_no_presence_even_when_still_held(db, gallery):
+    page, rev = _review(db)
+    decisions.answer(db, rev.id, letter="a", by="jeremy")
+    decisions.claim_round(db, "seat", rev.id, "seat/alpha")
+    decisions.release_round(db, "seat", rev.id, "seat/alpha", "done")
+    html = gallery.get(f"/a/{page.id}").text
+    assert "Handed back" not in html and "Agent listening" not in html

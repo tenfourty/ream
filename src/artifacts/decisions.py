@@ -575,11 +575,21 @@ def _close_round(
     conn, decision_id: str, letter: str, version: int | None = None
 ) -> None:
     """The verdict closes the open round, inside the verdict's transaction.
-    `version` is the one his page view showed, when the form said."""
+    `version` is the one his page view showed, when the form said.
+
+    A session holding a LIVE lease is the one that acts on the verdict, so its
+    lease is stretched to CLOSED_CLAIM_SECONDS here: a five-minute lease left
+    alone would lapse mid-revision and let a second session take the closed
+    round and act on the same verdict. A lapsed or absent lease is left as is."""
     conn.execute(
         "update review_round set closed_at = now(), verdict = %s,"
-        " reviewed_version = %s where review_id = %s and closed_at is null",
-        (VERDICTS[letter], version, decision_id),
+        " reviewed_version = %s,"
+        " claim_expires_at = case"
+        "   when claimed_by is not null and claim_expires_at > now()"
+        "   then greatest(claim_expires_at, now() + make_interval(secs => %s))"
+        "   else claim_expires_at end"
+        " where review_id = %s and closed_at is null",
+        (VERDICTS[letter], version, CLOSED_CLAIM_SECONDS, decision_id),
     )
 
 
@@ -1593,17 +1603,23 @@ def outcomes_for_artifact(
 
 
 def round_presence(db: Database, agent: str, review_id: str) -> dict | None:
-    """What his card says about who is on an OPEN review's current round:
+    """What his card says about who is on a review's current round:
     {"live": True, "session", "seen_seconds"} for a live lease, {"live": False,
     "session", "reason"} for a hand-back, None otherwise. `seen_seconds` is
     the newest `seat_read` for THIS agent and session, or None. Scoped to the
-    owning agent: another agent's session can never be named here."""
+    owning agent: another agent's session can never be named here.
+
+    The current round counts while it is open, and also once it is closed with
+    changes requested: that is when a session is revising (or has handed the
+    revision back), and the card is where he sees why the review stalled. Any
+    other verdict ends the review, and nobody is on it."""
     with db.connect() as conn:
         found = conn.execute(
             "select claimed_by, claim_expires_at > now(), released_reason,"
             " released_by from review_round where review_id = %s"
-            " and closed_at is null order by n desc limit 1",
-            (review_id,),
+            " and (closed_at is null or verdict = 'changes_requested')"
+            " and n = (select max(n) from review_round where review_id = %s)",
+            (review_id, review_id),
         ).fetchone()
         if found is None:
             return None
