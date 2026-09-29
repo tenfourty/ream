@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, decisions, events, keys, review, store
+from artifacts import comments, decisions, events, holds, keys, review, store
 from artifacts.app import create_gallery_app
 
 PAGE = (
@@ -587,3 +587,42 @@ def test_a_bodyless_review_request_is_accepted(client, db):
         client.post(f"/api/v1/artifacts/{page.id}/reviews", headers=h).status_code
         == 201
     )
+
+
+def test_an_agent_chooses_the_mode_when_asking_and_reads_it_back(client, db):
+    h = _auth(db)
+    page = _page(db)
+    with db.connect() as conn:
+        holds.set_mode(conn, "live")
+    url = f"/api/v1/artifacts/{page.id}/reviews"
+    live_row = client.post(url, headers=h, json={"mode": "held"})
+    assert live_row.status_code == 201
+    assert live_row.json()["review_mode"] == "held"
+    got = client.get(f"/api/v1/reviews/{live_row.json()['id']}", headers=h).json()
+    assert got["mode"] == "held"
+    page2 = _page(db)
+    row = client.post(f"/api/v1/artifacts/{page2.id}/reviews", headers=h, json={})
+    assert row.json()["review_mode"] == "live"  # his preference
+    page3 = _page(db)
+    row = client.post(f"/api/v1/artifacts/{page3.id}/reviews", headers=h)
+    assert row.status_code == 201 and row.json()["review_mode"] == "live"
+    page4 = _page(db)
+    row = client.post(
+        f"/api/v1/artifacts/{page4.id}/reviews", headers=h, json={"mode": "live"}
+    )
+    assert row.json()["review_mode"] == "live"
+
+
+def test_an_unknown_mode_is_422_and_the_answered_shape_has_mode(client, db):
+    h = _auth(db)
+    page = _page(db)
+    url = f"/api/v1/artifacts/{page.id}/reviews"
+    assert client.post(url, headers=h, json={"mode": "loud"}).status_code == 422
+    rid = client.post(url, headers=h, json={"mode": "live"}).json()["id"]
+    client.post(
+        f"/d/{rid}/answer",
+        data={"letter": "a", "note": ""},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert client.get(f"/api/v1/reviews/{rid}", headers=h).json()["mode"] == "live"

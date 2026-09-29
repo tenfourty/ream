@@ -84,7 +84,10 @@ def test_the_skill_and_the_orientation_teach_the_review_loop(gallery):
         assert "artifacts-decide ask-review <page-id>" in text, path
         assert "artifacts-decide wait --review <review-id>" in text, path
         assert "7 marks" in text, path
-    assert "--verdict-only" in gallery.get("/api/v1/skill.md").text
+    skill = gallery.get("/api/v1/skill.md").text
+    assert "--verdict-only" in skill
+    assert "ask-review <page-id> [--live|--hold]" in skill
+    assert "By default his marks are held until his verdict" in skill
 
 
 def test_one_page_links_the_one_package_for_find_links(gallery, tools_dir):

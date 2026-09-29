@@ -18,6 +18,10 @@ from pathlib import Path
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-09-29c",
+        "On a page under review Jeremy's marks are now held until his verdict unless he switches to live; artifacts-decide ask-review --live asks for them as he goes. A held mark is invisible to you until then.",
+    ),
+    (
         "2026-09-29b",
         "artifacts-decide ask-review <page-id> asks Jeremy to review a page; wait --review <id> prints one numbered message with his verdict and marks, and exits 0 approved, 4 approved with notes, 5 changes requested, 6 dismissed, 7 new marks with no verdict yet.",
     ),

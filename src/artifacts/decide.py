@@ -579,6 +579,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="ask Jeremy to review one of your pages (a verdict, not a question)",
     )
     ask_review.add_argument("page", metavar="PAGE-ID")
+    mode = ask_review.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--live",
+        action="store_true",
+        help="ask for his marks as he makes them",
+    )
+    mode.add_argument(
+        "--hold",
+        action="store_true",
+        help="his marks stay hidden from you until his verdict",
+    )
 
     answers = subs.add_parser(
         "answers", help="every decision on one page, answered ones included"
@@ -748,8 +759,14 @@ def main(argv: list[str] | None = None) -> int:
             print(_fmt(row))
             return 0
         if args.cmd == "ask-review":
-            row = _request("POST", f"{base}/artifacts/{args.page}/reviews", key, {})
-            print(f"{row['id']}  review requested on {args.page}")
+            body = (
+                {"mode": "live"} if args.live else {"mode": "held"} if args.hold else {}
+            )
+            row = _request("POST", f"{base}/artifacts/{args.page}/reviews", key, body)
+            print(
+                f"{row['id']}  review requested on {args.page}"
+                f" (marks: {row.get('review_mode')})"
+            )
             print(f"  wait: artifacts-decide wait --review {row['id']}")
             return 0
         if args.cmd == "answers":

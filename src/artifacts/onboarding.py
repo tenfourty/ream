@@ -260,7 +260,7 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
     artifacts-beads-page --parent <epic> --title "..."     # a status page drawn from beads
     artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
     artifacts-decide wait --page <page-id>                 # run in the BACKGROUND
-    artifacts-decide ask-review <page-id>                  # ask him to review the page
+    artifacts-decide ask-review <page-id> [--live|--hold]  # ask him to review the page
     artifacts-decide wait --review <review-id>             # 0 ok 4 notes 5 changes 6 dismissed 7 marks
     artifacts-decide list                                  # new answers first
     artifacts-decide ack <decision-id>                     # you have seen it
@@ -268,7 +268,9 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
 
 Exit 7 means he left marks but no verdict yet: reply to each mark
 (artifacts-decide comments), then wait again; add --verdict-only to wake only
-for the verdict.
+for the verdict. By default his marks are held until his verdict (his choice,
+remembered); --live asks for them as he makes them, and he can switch either way
+on the page.
 
 After you ask, start `artifacts-decide wait` in the background so you are woken
 when he answers or comments; without background tasks, run `artifacts-decide

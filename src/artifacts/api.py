@@ -10,7 +10,7 @@ import html
 import logging
 import threading
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
@@ -173,8 +173,11 @@ class DecisionBody(BaseModel):
 
 
 class ReviewBody(BaseModel):
-    """No fields today: a review is asked for by page, and the four verdicts are
-    fixed. A body class so a later field is not a breaking change."""
+    """A review is asked for by page and the four verdicts are fixed; the one
+    choice is whether his marks are held until the verdict or live. Absent, it
+    is his remembered preference."""
+
+    mode: Literal["held", "live"] | None = None
 
 
 # A scanner exception means the scanner is broken, not that the caller's
@@ -1130,7 +1133,11 @@ def agent_router(
         question, and read back with GET /reviews/{id}."""
         try:
             row = decisions.ask_review(
-                db, agent=agent, artifact_id=artifact_id, session=seat_session
+                db,
+                agent=agent,
+                artifact_id=artifact_id,
+                session=seat_session,
+                mode=payload.mode if payload else None,
             )
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
@@ -1148,6 +1155,7 @@ def agent_router(
                 "id": row.id,
                 "artifact_id": row.artifact_id,
                 "created_at": row.created_at,
+                "mode": row.review_mode,
                 "verdict": None,
                 "answered_at": None,
                 "message": None,
@@ -1161,6 +1169,7 @@ def agent_router(
             "id": row.id,
             "artifact_id": row.artifact_id,
             "created_at": row.created_at,
+            "mode": row.review_mode,
             "verdict": decisions.VERDICTS[row.answer],
             "answered_at": row.answered_at,
             "message": message,

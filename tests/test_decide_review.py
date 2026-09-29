@@ -401,3 +401,48 @@ def test_a_reply_clears_the_marks_and_the_verdict_still_comes(
     capsys.readouterr()
     assert decide.main(args) == 5
     assert capsys.readouterr().out.startswith("Artifacts review:")
+
+
+def _asked(path, page, *flags):
+    return decide.main(["--key-file", str(path), "ask-review", page.id, *flags])
+
+
+def test_ask_review_says_which_mode_it_got(live, key_file, db, capsys):
+    path, _ = key_file
+    with db.connect() as conn:
+        holds.set_mode(conn, "held")
+    p1 = store.publish(db, "ops-seat", "One", PAGE)
+    assert _asked(path, p1, "--live") == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].endswith(f"review requested on {p1.id} (marks: live)")
+    assert out[1].startswith("  wait: artifacts-decide wait --review ")
+    p2 = store.publish(db, "ops-seat", "Two", PAGE)
+    assert _asked(path, p2, "--hold") == 0
+    assert "(marks: held)" in capsys.readouterr().out
+    p3 = store.publish(db, "ops-seat", "Three", PAGE)
+    assert _asked(path, p3) == 0
+    assert "(marks: held)" in capsys.readouterr().out  # his preference
+
+
+def test_live_and_hold_together_is_a_usage_error(live, key_file, db, capsys):
+    path, _ = key_file
+    page = store.publish(db, "ops-seat", "One", PAGE)
+    with pytest.raises(SystemExit) as exc:
+        _asked(path, page, "--live", "--hold")
+    assert exc.value.code == 2
+
+
+def test_a_held_mark_does_not_wake_the_wait_until_it_is_released(
+    live, key_file, db, capsys
+):
+    path, _ = key_file
+    page = store.publish(db, "ops-seat", "Held", PAGE)
+    assert _asked(path, page, "--hold") == 0
+    rid = capsys.readouterr().out.splitlines()[0].split()[0]
+    _mark(db, page)
+    wait = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "3s"]
+    assert decide.main(wait) == 3
+    capsys.readouterr()
+    holds.set_review_mode(db, rid, "live")
+    assert decide.main(wait) == 7
+    assert "hm" in capsys.readouterr().out
