@@ -151,8 +151,17 @@ jobs:
           printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
             -u "${{ github.repository_owner }}" --password-stdin
 
-          docker build --network host -t "$image" .
+          # Reuse the previous build's layers (the chromium install above all)
+          # from a cache tag. Nothing deploys :buildcache -- the deploy job
+          # only ever bumps the :<sha12> tag -- and a missing cache (first run,
+          # or a pruned registry) just means a cold build.
+          cache="git.tenfourty.site/jeremy/artifacts:buildcache"
+          docker pull "$cache" || echo "no build cache yet: building cold"
+          docker build --network host --cache-from "$cache" \
+            --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" \
+            -t "$image" -t "$cache" .
           docker push "$image"
+          docker push "$cache"
 
   deploy:
     # Both: a failed or skipped test blocks the deploy even though image is green.

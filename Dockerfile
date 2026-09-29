@@ -68,7 +68,13 @@ FROM python:3.12-slim-bookworm
 # fonts at all renders every thumbnail as boxes. DejaVu supplies all three.
 # A thumbnail will therefore not be letter-for-letter what Jeremy sees in his
 # own browser, which is inherent to rendering anywhere but on his machine.
-RUN apt-get update \
+# The chromium layer is the slowest step (~2 min) and the biggest push (~70 s),
+# and it is identical from one build to the next, so CI reuses it from the
+# previous build's cache image. CHROMIUM_REFRESH is the ISO week: a new week
+# changes this line, which rebuilds the layer, so chromium's security updates
+# arrive within a week and a cached layer never goes stale for longer.
+ARG CHROMIUM_REFRESH=unset
+RUN echo "chromium layer for ${CHROMIUM_REFRESH}" && apt-get update \
  && apt-get install -y --no-install-recommends chromium fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
 
