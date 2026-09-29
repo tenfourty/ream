@@ -357,9 +357,7 @@ def add(
                 " where comment.id = %s and comment.artifact_id = %s"
                 " and comment.thread_root is null and comment.withdrawn_at is null"
                 # A held thread does not exist as far as the agent can tell.
-                " and (not comment.held or %s)"
-                # Locked, so a withdrawal cannot slip in before the insert.
-                " for share",
+                " and (not comment.held or %s)",
                 (thread_root, artifact_id, agent is None),
             ).fetchone()
             if root is None:
@@ -400,6 +398,18 @@ def add(
         said = _event_summary(kind, effective_quote, body)
         with conn.transaction():
             comment_id = ids.new_id()
+            if is_reply:
+                # Locked until the insert commits (the connection is autocommit,
+                # so a lock taken by the lookup above would be gone already): a
+                # withdrawal of the root now waits for this reply, and one that
+                # got in first is seen here.
+                still = conn.execute(
+                    "select 1 from comment where id = %s"
+                    " and withdrawn_at is null for share",
+                    (thread_root,),
+                ).fetchone()
+                if still is None:
+                    raise NoSuchThread()
             # Read INSIDE the insert transaction, and locking the open review
             # rows it reads: a verdict's update of the decision then waits for
             # this insert (so its release sees the mark), and a verdict that
@@ -890,11 +900,14 @@ def withdraw(db: Database, comment_id: str, *, kind: str) -> bool:
     return True
 
 
-def second_scan(db: Database, comment_id: str) -> None:
+def second_scan(db: Database, comment_id: str) -> str:
     """The background job after an agent's comment is saved: GitGuardian on the
     saved body. A finding withdraws the comment; an unreachable relay leaves it
     up on the built-in scan and says so. Never raises -- a background task's
-    exception is lost, so it is logged and swallowed."""
+    exception is lost, so it is logged and swallowed.
+
+    Returns "scanned", "withdrawn", "unavailable" (no answer from the relay)
+    or "gone" (nothing to scan, or the scan itself failed)."""
     try:
         with db.connect() as conn:
             row = conn.execute(
@@ -903,7 +916,7 @@ def second_scan(db: Database, comment_id: str) -> None:
                 (comment_id,),
             ).fetchone()
         if row is None:
-            return
+            return "gone"
         body, artifact_id, author, quote = row
         # The quote was only ever built-in scanned; the relay sees it too.
         found = ggscan.scan(body + "\n" + quote)
@@ -916,20 +929,24 @@ def second_scan(db: Database, comment_id: str) -> None:
                     artifact_id,
                     comment_id,
                 )
-            return
+            return "unavailable"
         if found:
             withdraw(db, comment_id, kind=found[0].shape)
         with db.connect() as conn:
             conn.execute(
                 "update comment set gg_scanned_at = now() where id = %s", (comment_id,)
             )
+        return "withdrawn" if found else "scanned"
     except Exception:  # noqa: BLE001 -- a background task's exception is lost
         _log.error("comment second scan failed: comment=%s", comment_id, exc_info=True)
+        return "gone"
 
 
 def sweep_unscanned(db: Database, *, limit: int = 200) -> int:
     """Scan agent comments the background task never got to (a restart killed it),
-    oldest first, at most `limit` per pass. Returns how many it ran the scan on."""
+    oldest first, at most `limit` per pass. Stops at the first comment the relay
+    could not answer for (it is down; the rest would each wait out a timeout).
+    Returns how many were actually checked."""
     with db.connect() as conn:
         ids = [
             r[0]
@@ -941,9 +958,14 @@ def sweep_unscanned(db: Database, *, limit: int = 200) -> int:
                 (limit,),
             ).fetchall()
         ]
+    checked = 0
     for comment_id in ids:
-        second_scan(db, comment_id)
-    return len(ids)
+        status = second_scan(db, comment_id)
+        if status == "unavailable":
+            break
+        if status in ("scanned", "withdrawn"):
+            checked += 1
+    return checked
 
 
 SWEEP_EVERY_SECONDS = 600

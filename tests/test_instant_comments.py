@@ -311,3 +311,53 @@ def test_a_fresh_agent_comment_is_unscanned_and_migrating_again_keeps_it_so(db, 
             " where table_name = 'comment' and column_name = 'gg_scanned_at'"
         ).fetchone()[0]
     assert default is None
+
+
+def test_a_pass_stops_at_the_first_unavailable_relay(db, page, gg):
+    for i in range(3):
+        _age(db, _agent_comment(db, page, f"c{i}").id)
+    gg.result = None
+    assert comments.sweep_unscanned(db) == 0
+    assert len(gg.calls) == 1
+
+
+def test_a_withdrawal_waits_for_an_in_flight_reply(db, page, gg, monkeypatch):
+    import threading
+
+    from artifacts import holds
+
+    root = _agent_comment(db, page, "root")
+    inside, go = threading.Event(), threading.Event()
+    real = holds.page_mode
+
+    def slow(*a, **kw):
+        inside.set()
+        assert go.wait(10)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(holds, "page_mode", slow)
+    out = {}
+
+    def reply():
+        out["reply"] = comments.add(
+            db,
+            artifact_id=page.id,
+            author_kind="human",
+            author="jeremy",
+            body="r",
+            thread_root=root.id,
+        )
+
+    t = threading.Thread(target=reply)
+    t.start()
+    assert inside.wait(10)
+    w = threading.Thread(
+        target=lambda: out.update(w=comments.withdraw(db, root.id, kind="ggshield_x"))
+    )
+    w.start()
+    w.join(0.7)
+    assert w.is_alive(), "the withdrawal must wait for the reply's transaction"
+    go.set()
+    t.join(10)
+    w.join(10)
+    assert out["w"] is True and out["reply"].thread_root == root.id
