@@ -15,6 +15,9 @@ import pytest
 
 from artifacts import thumbs
 
+# The real background render: tests elsewhere have it switched off.
+pytestmark = pytest.mark.background_thumbnails
+
 PAGE = (
     "<!doctype html><html><head><title>T</title>"
     "<style>body{background:#fff;font:16px sans-serif}</style></head>"

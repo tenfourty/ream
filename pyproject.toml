@@ -51,7 +51,10 @@ dev = [
 [tool.pytest.ini_options]
 # `slow`: a test that genuinely needs more than a second, each with a one-line
 # reason at the mark. At most ten may carry it; everything else stays under 1 s.
-markers = ["slow(reason): genuinely needs more than a second; says why"]
+markers = [
+    "slow(reason): genuinely needs more than a second; says why",
+    "background_thumbnails: publishes in this test start the real background thumbnail render (off by default in tests; see tests/conftest.py)",
+]
 
 [tool.ruff.lint]
 # S (bandit) and B (bugbear) are worth enabling deliberately on a service whose

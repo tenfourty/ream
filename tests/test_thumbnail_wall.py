@@ -14,6 +14,9 @@ from fastapi.testclient import TestClient
 from artifacts import keys, store, thumbs
 from artifacts.app import create_gallery_app
 
+# The real background render: tests elsewhere have it switched off.
+pytestmark = pytest.mark.background_thumbnails
+
 PAGE = (
     "<!doctype html><html><head><title>B</title></head><body><p>one</p></body></html>"
 )
@@ -76,6 +79,27 @@ def test_a_picture_for_a_version_that_has_gone_is_dropped_not_raised(db):
 
 
 # --- a publish never waits on a browser --------------------------------------
+
+
+@pytest.mark.skipif(
+    not thumbs.available(), reason="no headless browser in this environment"
+)
+def test_a_real_publish_gets_a_real_picture_in_the_background(client, db):
+    """End to end with the real browser: a publish through the API returns, and
+    the page's picture arrives afterwards. Every other test in the suite has the
+    background render switched off (tests/conftest.py), so this is where the
+    whole path -- publish, thread, browser, store -- is proved."""
+    token, _ = keys.mint(db, agent="seat")
+    got = client.post(
+        "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
+    )
+    assert got.status_code == 201
+    art_id = got.json()["id"]
+    deadline = time.monotonic() + 60  # a browser on a loaded box: seconds, rarely
+    while (png := store.live_thumbnail(db, art_id)) is None:
+        assert time.monotonic() < deadline, "no picture within 60 s of the publish"
+        time.sleep(0.05)
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_publishing_does_not_wait_for_the_render(client, db, monkeypatch):

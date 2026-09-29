@@ -313,6 +313,36 @@ def _patient_changes_view(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_background_thumbnails(request, monkeypatch):
+    """The service in a test has no renderer, as it has none in CI.
+
+    With a headless browser on the machine (ARTIFACTS_BROWSER), every publish
+    through the app started a real Chromium in the background, and every
+    `artifacts-publish` then waited up to 10 s for that render to report:
+    measured 30 Sep 2026, the largest single cost of a local run (a ~1 s wait
+    on each of hundreds of publishes, and the CPU of every browser). No test
+    outside the thumbnail files asserts anything about those renders, and CI,
+    with no browser, never ran them. So `thumbs.available()` says no and the
+    background render is a no-op, unless the test is marked
+    `background_thumbnails` (the thumbnail files are, module wide). A test
+    that wants a renderer still says so itself, as the preview tests do, by
+    setting `thumbs.available`. Also keeps a render thread from writing into
+    the database after its test has ended.
+
+    Collection-time checks (`skipif(not thumbs.available())` in the browser
+    tests) run before this and still see the real browser."""
+    if request.node.get_closest_marker("background_thumbnails"):
+        return
+    from artifacts import thumbs
+
+    def not_in_this_test(db, artifact_id: str, version_n: int, html: str) -> None:
+        return None
+
+    monkeypatch.setattr(thumbs, "available", lambda: False)
+    monkeypatch.setattr(thumbs, "render_in_background", not_in_this_test)
+
+
+@pytest.fixture(autouse=True)
 def _prompt_event_looks(monkeypatch):
     """A held wait looks for new events every half second in production, so a
     test that waits on one idled up to 0.5 s per wake. Tests look every 20 ms;
