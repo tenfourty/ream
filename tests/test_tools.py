@@ -76,6 +76,15 @@ def test_the_skill_is_open_and_in_the_skill_format(gallery):
     assert "art_" not in response.text
 
 
+def test_the_skill_and_the_orientation_teach_the_review_loop(gallery):
+    """An agent learns to ask for a review and wait for the verdict from what
+    it already reads, not from --help (page review step 2)."""
+    for path in ("/api/v1/skill.md", "/api/v1/agents.txt"):
+        text = gallery.get(path).text
+        assert "artifacts-decide ask-review <page-id>" in text, path
+        assert "artifacts-decide wait --review <review-id>" in text, path
+
+
 def test_one_page_links_the_one_package_for_find_links(gallery, tools_dir):
     """The stable install line: uv reads this page and picks the package
     (the homelab ops seat, 24 Sep 2026). Only the one file, never a listing."""
