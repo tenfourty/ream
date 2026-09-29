@@ -676,3 +676,9 @@ alter table event drop constraint if exists event_kind_check;
 alter table event add constraint event_kind_check
     check (kind in ('decision_answered', 'comment_added', 'thread_resolved',
                     'decision_shelved', 'comment_withdrawn'));
+
+-- When GitGuardian last gave an answer on an agent's comment (homelab-ij8.112).
+-- Null means it has not been checked yet -- a restart killed the background
+-- task, or the relay was unreachable -- and a sweep at startup and every ten
+-- minutes retries it.
+alter table comment add column if not exists gg_scanned_at timestamptz;

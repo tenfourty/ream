@@ -24,6 +24,8 @@ matching `store.publish`/`store.patch`.
 """
 
 import logging
+import threading
+import time
 from dataclasses import dataclass, replace
 
 from psycopg.types.json import Jsonb
@@ -355,7 +357,9 @@ def add(
                 " where comment.id = %s and comment.artifact_id = %s"
                 " and comment.thread_root is null and comment.withdrawn_at is null"
                 # A held thread does not exist as far as the agent can tell.
-                " and (not comment.held or %s)",
+                " and (not comment.held or %s)"
+                # Locked, so a withdrawal cannot slip in before the insert.
+                " for share",
                 (thread_root, artifact_id, agent is None),
             ).fetchone()
             if root is None:
@@ -852,6 +856,13 @@ def withdraw(db: Database, comment_id: str, *, kind: str) -> bool:
         if row is None:
             return False
         artifact_id = row[0]
+        # The text may also sit in events that quoted it (a resolved thread).
+        conn.execute(
+            "update event set summary = %s, note = ''"
+            " where kind <> 'comment_withdrawn' and ref_id in"
+            " (select id from comment where id = %s or thread_root = %s)",
+            (f"Withdrawn: it looked like a {kind}.", comment_id, comment_id),
+        )
         owner = conn.execute(
             "select agent, session from artifact where id = %s", (artifact_id,)
         ).fetchone()
@@ -887,14 +898,15 @@ def second_scan(db: Database, comment_id: str) -> None:
     try:
         with db.connect() as conn:
             row = conn.execute(
-                "select body, artifact_id, author from comment"
+                "select body, artifact_id, author, quote from comment"
                 " where id = %s and withdrawn_at is null and author_kind = 'agent'",
                 (comment_id,),
             ).fetchone()
         if row is None:
             return
-        body, artifact_id, author = row
-        found = ggscan.scan(body)
+        body, artifact_id, author, quote = row
+        # The quote was only ever built-in scanned; the relay sees it too.
+        found = ggscan.scan(body + "\n" + quote)
         if found is None:
             if ggscan.configured():
                 _log.warning(
@@ -907,5 +919,48 @@ def second_scan(db: Database, comment_id: str) -> None:
             return
         if found:
             withdraw(db, comment_id, kind=found[0].shape)
+        with db.connect() as conn:
+            conn.execute(
+                "update comment set gg_scanned_at = now() where id = %s", (comment_id,)
+            )
     except Exception:  # noqa: BLE001 -- a background task's exception is lost
         _log.error("comment second scan failed: comment=%s", comment_id, exc_info=True)
+
+
+def sweep_unscanned(db: Database, *, limit: int = 200) -> int:
+    """Scan agent comments the background task never got to (a restart killed it),
+    oldest first, at most `limit` per pass. Returns how many it ran the scan on."""
+    with db.connect() as conn:
+        ids = [
+            r[0]
+            for r in conn.execute(
+                "select id from comment where author_kind = 'agent'"
+                " and withdrawn_at is null and gg_scanned_at is null"
+                " and created_at < now() - interval '30 seconds'"
+                " order by created_at asc, id asc limit %s",
+                (limit,),
+            ).fetchall()
+        ]
+    for comment_id in ids:
+        second_scan(db, comment_id)
+    return len(ids)
+
+
+SWEEP_EVERY_SECONDS = 600
+
+
+def start_sweeper(db: Database) -> threading.Thread:
+    """One daemon thread: a pass at startup, then one every ten minutes. It never
+    blocks startup and never dies of an exception."""
+
+    def loop() -> None:
+        while True:
+            try:
+                sweep_unscanned(db)
+            except Exception:  # noqa: BLE001 -- the loop must outlive one bad pass
+                _log.error("comment sweep failed", exc_info=True)
+            time.sleep(SWEEP_EVERY_SECONDS)
+
+    thread = threading.Thread(target=loop, name="comment-sweep", daemon=True)
+    thread.start()
+    return thread

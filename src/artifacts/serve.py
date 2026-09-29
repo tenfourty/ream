@@ -9,7 +9,7 @@ import os
 import signal
 import sys
 
-from artifacts import events
+from artifacts import comments, events
 from artifacts.app import create_app
 from artifacts.db import Database
 
@@ -110,4 +110,5 @@ def app_from_env():
         raise SystemExit("DATABASE_URL is not set")
     db = Database(dsn)
     db.migrate()
+    comments.start_sweeper(db)
     return _arm_shutdown_signals(create_app(db))

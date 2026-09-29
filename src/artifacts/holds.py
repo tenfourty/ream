@@ -84,6 +84,15 @@ def release(conn, artifact_id: str, *, emit: bool) -> list[str]:
             "select agent, session from artifact where id = %s", (artifact_id,)
         ).fetchone()
         released_ids = {r[0] for r in released}
+        # A reply under a root GitGuardian withdrew is hidden with it: no event.
+        withdrawn_roots = {
+            r[0]
+            for r in conn.execute(
+                "select id from comment where id = any(%s)"
+                " and withdrawn_at is not null",
+                ([r[1] for r in released if r[1] is not None],),
+            ).fetchall()
+        }
         for cid, root, kind, quote, body, author, _, resolved_at in sorted(
             released, key=lambda r: (r[6], r[0])
         ):
@@ -94,6 +103,8 @@ def release(conn, artifact_id: str, *, emit: bool) -> list[str]:
             if root is None and resolved_at is not None:
                 continue
             if root is not None and root in released_ids:
+                continue
+            if root in withdrawn_roots:
                 continue
             said = comments._event_summary(kind, quote, body)
             events.append(

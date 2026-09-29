@@ -90,7 +90,7 @@ def test_his_comment_never_waits_on_ggshield(client, db, page, gg):
 def test_an_agent_comment_is_saved_then_scanned(client, auth, page, gg):
     got = _post(client, auth, page, "hello there")
     assert got.status_code == 201
-    assert gg.calls == ["hello there"]
+    assert gg.calls == ["hello there\n"]
 
 
 def test_a_finding_withdraws_it_and_tells_the_agent(client, db, auth, page, gg, caplog):
@@ -187,3 +187,114 @@ def test_a_withdrawn_root_hides_its_replies_without_breaking(
 def test_publish_still_waits_for_ggshield(db, gg):
     store.publish(db, "seat", "Board", PAGE)
     assert len(gg.calls) == 1
+
+
+# --- durable scanning ---------------------------------------------------------
+
+
+def _age(db, cid, seconds=120):
+    with db.connect() as conn:
+        conn.execute(
+            "update comment set created_at = now() - make_interval(secs => %s)"
+            " where id = %s",
+            (seconds, cid),
+        )
+
+
+def _stamped(db, cid):
+    with db.connect() as conn:
+        return conn.execute(
+            "select gg_scanned_at is not null from comment where id = %s", (cid,)
+        ).fetchone()[0]
+
+
+def _agent_comment(db, page, body="hello", **kw):
+    return comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="seat",
+        body=body,
+        **kw,
+    )
+
+
+def test_the_sweep_scans_an_old_unscanned_agent_comment_and_stamps_it(db, page, gg):
+    row = _agent_comment(db, page)
+    _age(db, row.id)
+    assert comments.sweep_unscanned(db) == 1
+    assert gg.calls == ["hello\n"]
+    assert _stamped(db, row.id)
+    assert comments.sweep_unscanned(db) == 0
+
+
+def test_the_sweep_skips_what_it_should(db, page, gg):
+    human = comments.add(
+        db, artifact_id=page.id, author_kind="human", author="jeremy", body="h"
+    )
+    gone = _agent_comment(db, page, "gone")
+    done = _agent_comment(db, page, "done")
+    new = _agent_comment(db, page, "new")
+    comments.withdraw(db, gone.id, kind="ggshield_x")
+    with db.connect() as conn:
+        conn.execute(
+            "update comment set gg_scanned_at = now() where id = %s", (done.id,)
+        )
+    for r in (human, gone, done):
+        _age(db, r.id)
+    assert comments.sweep_unscanned(db) == 0
+    assert gg.calls == []
+    assert not _stamped(db, new.id)
+
+
+def test_an_unavailable_relay_leaves_it_unstamped_for_the_next_pass(db, page, gg):
+    row = _agent_comment(db, page)
+    _age(db, row.id)
+    gg.result = None
+    comments.sweep_unscanned(db)
+    assert not _stamped(db, row.id)
+    gg.result = []
+    assert comments.sweep_unscanned(db) == 1
+    assert _stamped(db, row.id)
+
+
+def test_a_finding_in_the_quote_withdraws_it(db, page, gg):
+    row = _agent_comment(
+        db,
+        page,
+        "fine",
+        anchor={"kind": "range", "path": "p", "start": 0, "end": 1},
+        quote="secretish",
+    )
+    gg.result = [Finding(shape="ggshield_x", line=2)]
+    comments.second_scan(db, row.id)
+    assert gg.calls == ["fine\nsecretish"]
+    assert comments.list_for_artifact(db, page.id) == []
+
+
+def test_withdrawing_a_root_blanks_its_text_in_thread_resolved_events(db, page, gg):
+    root = _agent_comment(db, page, "the secret body")
+    comments.resolve(db, root.id, by="jeremy", agent=None)
+    comments.withdraw(db, root.id, kind="ggshield_x")
+    rows = _events(db, "thread_resolved")
+    assert len(rows) == 1
+    assert "secret body" not in rows[0][1] + (rows[0][3] or "")
+
+
+def test_release_says_nothing_of_replies_under_a_withdrawn_root(db, page):
+    from artifacts import holds
+
+    root = _agent_comment(db, page, "root")
+    decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="held reply",
+        thread_root=root.id,
+    )
+    comments.withdraw(db, root.id, kind="ggshield_x")
+    with db.connect() as conn, conn.transaction():
+        holds.release(conn, page.id, emit=True)
+    assert _events(db, "comment_added") == []
