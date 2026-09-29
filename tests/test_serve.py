@@ -42,6 +42,7 @@ def test_returned_app_answers_healthz_only_on_the_gallery_host(dsn, monkeypatch)
     assert other.status_code == 404
 
 
+@pytest.mark.usefixtures("fresh_schema")
 def test_app_from_env_migrates_so_the_schema_is_ready_on_first_request(
     dsn, monkeypatch
 ):

@@ -69,7 +69,9 @@ jobs:
       - name: tests
         env:
           PG_TEST_DSN: postgresql://postgres@postgres:5432/postgres
-        run: uv run pytest -q
+        # -n auto: one xdist worker per core, each in its own database
+        # (artifacts_test_<worker>) on this one Postgres service.
+        run: uv run pytest -q -n auto
 
   image:
     needs: test

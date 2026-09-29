@@ -16,6 +16,7 @@ from walk_gallery import walk
     not os.environ.get("ARTIFACTS_WALK"),
     reason="set ARTIFACTS_WALK=1 to walk the gallery",
 )
+@pytest.mark.usefixtures("fresh_schema")
 def test_walk(db):
     findings = walk(db.dsn)
     assert findings == [], "\n".join(findings)

@@ -89,6 +89,7 @@ def test_deleting_artifact_with_versions_and_files_succeeds(db):
     assert remaining_files == 0
 
 
+@pytest.mark.usefixtures("fresh_schema")
 def test_concurrent_migrate_calls_on_a_fresh_schema_both_succeed(dsn):
     """Two pods starting together both call migrate() against a schema that has
     never been migrated. Without a lock serialising them, `create table if not
