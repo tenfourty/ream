@@ -195,21 +195,19 @@ def test_wait_prints_an_answer_that_arrived_before_it_started(
     assert "early" in capsys.readouterr().out
 
 
-def test_wait_wakes_when_he_answers(
-    db, live, key_file, page, capsys, brief_holds, on_first_listen
-):
+def test_wait_wakes_when_he_answers(db, live, key_file, page, capsys, on_first_listen):
     path, _ = key_file
     asked = _ask(db, page)
     # He answers only once the waiter is listening, so exit 0 means the
     # answer woke it -- it cannot have been found by the first look.
-    thread = on_first_listen(
+    listener = on_first_listen(
         lambda: decisions.answer(db, asked.id, letter="b", note="later", by="jeremy")
     )
     started = time.monotonic()
     assert _run(["wait", "--page", page.id, "--timeout", "40s"], path) == 0
     took = time.monotonic() - started
     assert took < 15, took
-    thread.join(5)
+    listener.woke_the_first_hold()
     assert "later" in capsys.readouterr().out
 
 

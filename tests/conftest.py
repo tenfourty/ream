@@ -27,7 +27,9 @@ import tempfile
 import threading
 import time
 import uuid
+import warnings
 from collections import OrderedDict
+from dataclasses import fields
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
@@ -40,6 +42,8 @@ from psycopg.conninfo import make_conninfo
 
 from artifacts import events
 from artifacts.db import Database
+
+_REAL_WAIT_FOR_AGENT = events.wait_for_agent
 
 
 def _share_fastapi_type_adapters() -> None:
@@ -60,11 +64,27 @@ def _share_fastapi_type_adapters() -> None:
     slower."""
     try:
         from fastapi._compat import v2
+        from pydantic.fields import FieldInfo
     except ImportError:
         return
     if not (hasattr(v2, "asdict") and hasattr(v2.ModelField, "__post_init__")):
+        warnings.warn(
+            "fastapi internals moved: TypeAdapter sharing is off", stacklevel=1
+        )
         return
     build = v2.ModelField.__post_init__
+    # Share only while building a field sets exactly one attribute, the
+    # adapter. A FastAPI that starts setting more would have them silently
+    # skipped on a cache hit, so stand down (loudly) instead.
+    probe = v2.ModelField(field_info=FieldInfo(annotation=int), name="probe")
+    set_by_build = set(vars(probe)) - {f.name for f in fields(v2.ModelField)}
+    if set_by_build != {"_type_adapter"}:
+        warnings.warn(
+            f"fastapi's ModelField now sets {sorted(set_by_build)}:"
+            " TypeAdapter sharing is off",
+            stacklevel=1,
+        )
+        return
     cache: OrderedDict = OrderedDict()
 
     def frozen(value):
@@ -162,6 +182,21 @@ def _reap_orphans() -> None:
         shutil.rmtree(pgdata, ignore_errors=True)
 
 
+def _no_durability(uri: str) -> None:
+    """The throwaway server need not survive a crash: every write it takes is
+    thrown away at the end of the run. Turning off the flushes that make a
+    commit durable changes nothing a test can observe -- locks, isolation and
+    the rows themselves are the same -- and stops every commit, TRUNCATE and
+    CREATE DATABASE from waiting on an fsync. All three settings take effect
+    on a reload. Only for the server this run starts; never PG_TEST_DSN."""
+    with psycopg.connect(uri, autocommit=True) as conn:
+        for setting in ("fsync", "synchronous_commit", "full_page_writes"):
+            conn.execute(
+                sql.SQL("alter system set {} = off").format(sql.Identifier(setting))
+            )
+        conn.execute("select pg_reload_conf()")
+
+
 class _Server:
     """The throwaway pgserver, owned by exactly one process: the xdist
     controller (or the only process, when serial). Workers never hold it, so
@@ -188,6 +223,7 @@ class _Server:
             # leftover directories once filled it to its quota, failing later
             # suites at initdb with "Disk quota exceeded".
             cls.server = pgserver.get_server(cls.pgdata, cleanup_mode="delete")
+            _no_durability(cls.server.get_uri())
         return cls.server.get_uri()
 
     @classmethod
@@ -248,15 +284,41 @@ def brief_holds(monkeypatch):
     monkeypatch.setattr(events, "wait_for_agent", brief)
 
 
+class _Listener:
+    """What `on_first_listen` armed: the thread that acts, and how many held
+    requests the waiter made."""
+
+    def __init__(self, thread: threading.Thread) -> None:
+        self.thread = thread
+        self.held = 0
+
+    def woke_the_first_hold(self) -> None:
+        """Join the action and assert the waiter made exactly ONE held request:
+        the action woke that hold early. A hold that never wakes early would
+        run to its deadline, and the answer would only be found by a second
+        request -- which is exactly what this refuses."""
+        self.thread.join(10)
+        assert not self.thread.is_alive(), "the action never finished"
+        assert self.held == 1, f"{self.held} held requests: the first did not wake"
+
+
 @pytest.fixture()
 def on_first_listen(monkeypatch):
     """`arm(action)`: run `action` in a thread the moment an `artifacts-decide`
     waiter first asks the server to HOLD -- i.e. while it is listening, which is
-    what these tests are about -- instead of after a guessed sleep. Returns the
-    thread, to join."""
+    what these tests are about -- instead of after a guessed sleep. Returns a
+    `_Listener`; call `woke_the_first_hold()` after the waiter returns.
+
+    Refuses to arm under `brief_holds`: with the server's hold capped, a hold
+    that never wakes early still "passes", because the next request finds the
+    event."""
     from artifacts import decide
 
     def arm(action):
+        assert events.wait_for_agent is _REAL_WAIT_FOR_AGENT, (
+            "a wake test must not use brief_holds: capped holds hide a hold"
+            " that never wakes"
+        )
         real = decide._request
         fired = threading.Event()
 
@@ -264,16 +326,18 @@ def on_first_listen(monkeypatch):
             time.sleep(0.05)  # let the held request reach the server first
             action()
 
-        thread = threading.Thread(target=go, daemon=True)
+        listener = _Listener(threading.Thread(target=go, daemon=True))
 
         def listening(method, url, *args, **kwargs):
-            if "&wait=" in url and not fired.is_set():
-                fired.set()
-                thread.start()
+            if "&wait=" in url:
+                listener.held += 1
+                if not fired.is_set():
+                    fired.set()
+                    listener.thread.start()
             return real(method, url, *args, **kwargs)
 
         monkeypatch.setattr(decide, "_request", listening)
-        return thread
+        return listener
 
     return arm
 
@@ -342,6 +406,16 @@ class _Schema:
                 "select tablename from pg_tables where schemaname = current_schema()"
                 " order by tablename"
             ).fetchall()
+            self.sequences = [
+                row[0]
+                for row in conn.execute(
+                    "select sequencename from pg_sequences"
+                    " where schemaname = current_schema() order by sequencename"
+                ).fetchall()
+            ]
+            (self.superuser,) = conn.execute(
+                "select rolsuper from pg_roles where rolname = current_user"
+            ).fetchone()
         self.tables = [row[0] for row in rows]
         assert self.tables, "the schema built no tables"
         self.built = self.fingerprint()
@@ -362,14 +436,38 @@ class _Schema:
             ).fetchone()
 
     def empty(self) -> None:
-        truncate = sql.SQL("truncate {} restart identity cascade").format(
-            sql.SQL(", ").join(sql.Identifier(t) for t in self.tables)
-        )
+        """Every table empty, every sequence restarted.
+
+        DELETE rather than TRUNCATE when it can: on tables holding a test's
+        handful of rows, TRUNCATE's new files per table cost ~25 ms a test and
+        DELETE ~9 ms (measured 29 Sep 2026). Foreign-key triggers are switched
+        off for the one transaction (`session_replication_role`, superuser
+        only), which is safe because every table is emptied in it. Without
+        superuser it falls back to TRUNCATE, which gives the same result."""
+        if self.superuser:
+            statements = (
+                [sql.SQL("set local session_replication_role = replica")]
+                + [
+                    sql.SQL("delete from {}").format(sql.Identifier(t))
+                    for t in self.tables
+                ]
+                + [
+                    sql.SQL("alter sequence {} restart").format(sql.Identifier(q))
+                    for q in self.sequences
+                ]
+            )
+        else:
+            statements = [
+                sql.SQL("truncate {} restart identity cascade").format(
+                    sql.SQL(", ").join(sql.Identifier(t) for t in self.tables)
+                )
+            ]
         with self.database.connect() as conn:
             # A connection a previous test leaked with a lock held would block
             # this forever; fail loudly instead.
             conn.execute("set lock_timeout = '10s'")
-            conn.execute(truncate)
+            with conn.transaction():
+                conn.execute(sql.SQL("; ").join(statements))
 
 
 @pytest.fixture(scope="session")

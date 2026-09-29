@@ -35,8 +35,10 @@ class _PromptServer(uvicorn.Server):
     their real state every few milliseconds. Tests only; the service's own
     uvicorn is untouched."""
 
+    _GRACE = 3.0
     _wake: asyncio.Event | None = None
     _loop: asyncio.AbstractEventLoop | None = None
+    cancelled = 0
 
     async def main_loop(self) -> None:
         self._loop = asyncio.get_running_loop()
@@ -57,12 +59,15 @@ class _PromptServer(uvicorn.Server):
             server.close()
         for connection in list(self.server_state.connections):
             connection.shutdown()
-        # A request still in flight gets its answer; give up after 5 s.
-        deadline = time.monotonic() + 5
+        # A request still in flight gets its answer, for up to `_GRACE` --
+        # shorter than stop()'s join, so a stuck request is reported as
+        # that, never as a server that merely failed to stop.
+        deadline = time.monotonic() + self._GRACE
         while (
             self.server_state.connections or self.server_state.tasks
         ) and time.monotonic() < deadline:
             await asyncio.sleep(0.002)
+        self.cancelled = len(self.server_state.tasks)
         for task in self.server_state.tasks:
             task.cancel()
         for server in self.servers:
@@ -87,6 +92,10 @@ class _LiveServer:
         self.server.wake()
         self.thread.join(timeout=5)
         assert not self.thread.is_alive(), "the live server did not stop within 5 s"
+        assert not self.server.cancelled, (
+            f"{self.server.cancelled} request(s) were still running"
+            f" {self.server._GRACE:.0f} s after shutdown and were cancelled"
+        )
 
 
 @pytest.fixture()

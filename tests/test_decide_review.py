@@ -11,10 +11,9 @@ from artifacts import decide, decisions, holds, store
 
 PAGE = "<!doctype html><title>Plan</title><p>Rotate the keys every 90 days.</p>"
 
-# Every held read the server makes here is capped at 0.2 s, so a wait that
-# expects nothing ends at its (short) deadline rather than after whole-second
-# holds. See conftest.brief_holds.
-pytestmark = pytest.mark.usefixtures("brief_holds")
+# A test that expects "nothing before the timeout" caps the server's holds at
+# 0.2 s (conftest.brief_holds). The wake tests must not: see on_first_listen.
+brief = pytest.mark.usefixtures("brief_holds")
 
 
 def _setup(db, key_file, capsys):
@@ -162,6 +161,7 @@ def test_new_marks_before_a_verdict_wake_with_seven(live, key_file, db, capsys):
     )
 
 
+@brief
 def test_verdict_only_ignores_marks_and_times_out(live, key_file, db, capsys):
     from artifacts import comments
 
@@ -191,6 +191,7 @@ def test_verdict_only_ignores_marks_and_times_out(live, key_file, db, capsys):
     )
 
 
+@brief
 def test_a_review_that_is_not_yours_is_refused(live, key_file, db, capsys):
     path, _ = key_file
     other = store.publish(db, "other", "Theirs", PAGE)
@@ -272,12 +273,14 @@ def test_a_verdict_during_the_long_poll_is_caught(
     live, key_file, db, capsys, on_first_listen
 ):
     path, _page, rid = _setup(db, key_file, capsys)
-    thread = on_first_listen(lambda: decisions.answer(db, rid, letter="d", by="jeremy"))
+    listener = on_first_listen(
+        lambda: decisions.answer(db, rid, letter="d", by="jeremy")
+    )
     t = time.monotonic()
     code = decide.main(
         ["--key-file", str(path), "wait", "--review", rid, "--timeout", "30s"]
     )
-    thread.join()
+    listener.woke_the_first_hold()
     assert code == 6 and time.monotonic() - t < 10
 
 
@@ -286,7 +289,9 @@ def test_a_transient_failure_in_a_relook_does_not_end_the_wait(
 ):
     path, _page, rid = _setup(db, key_file, capsys)
     monkeypatch.setattr(decide, "_RETRY_PAUSE", 0.01)
-    thread = on_first_listen(lambda: decisions.answer(db, rid, letter="c", by="jeremy"))
+    listener = on_first_listen(
+        lambda: decisions.answer(db, rid, letter="c", by="jeremy")
+    )
     real = decide._request
     seen = []
 
@@ -298,11 +303,13 @@ def test_a_transient_failure_in_a_relook_does_not_end_the_wait(
         return real(method, url, *a, **kw)
 
     monkeypatch.setattr(decide, "_request", flaky)
+    started = time.monotonic()
     code = decide.main(
         ["--key-file", str(path), "wait", "--review", rid, "--timeout", "30s"]
     )
-    thread.join()
+    listener.woke_the_first_hold()
     assert code == 5 and len(seen) >= 3
+    assert time.monotonic() - started < 10, "woken by the answer, not the timeout"
 
 
 @pytest.mark.parametrize("letter", ["c", "d"])
@@ -328,6 +335,7 @@ def test_verdict_only_still_reports_a_verdict(live, key_file, db, capsys):
     assert decide.main([*args, "--verdict-only"]) == 4
 
 
+@brief
 def test_a_closed_review_does_not_count_older_marks_as_new(live, key_file, db, capsys):
     path, _ = key_file
     page = store.publish(db, "ops-seat", "Plan", PAGE)
@@ -356,6 +364,7 @@ def test_a_result_file_in_a_missing_directory_is_refused_before_waiting(
     assert decide.main(args) == 2
 
 
+@brief
 def test_a_short_timeout_is_told_in_seconds(live, key_file, db, capsys):
     path, _page, rid = _setup(db, key_file, capsys)
     args = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "1.1s"]
@@ -373,6 +382,7 @@ def _reply_as_agent(live, path, page, rid_thread):
     )
 
 
+@brief
 def test_a_reply_clears_the_marks_and_the_verdict_still_comes(
     live, key_file, db, capsys
 ):
@@ -428,6 +438,7 @@ def test_live_and_hold_together_is_a_usage_error(live, key_file, db, capsys):
     assert exc.value.code == 2
 
 
+@brief
 def test_a_held_mark_does_not_wake_the_wait_until_it_is_released(
     live, key_file, db, capsys
 ):

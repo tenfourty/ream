@@ -11,9 +11,6 @@ from artifacts import comments, decide, store
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>the plan</p></body></html>"
 
-# Held reads capped at 0.2 s so a wait expecting nothing ends at its deadline.
-pytestmark = pytest.mark.usefixtures("brief_holds")
-
 
 @pytest.fixture()
 def page(db, key_file):
@@ -42,7 +39,7 @@ def test_his_comment_wakes_the_waiter(
     path, _ = key_file
     # He comments only once the waiter is listening, so exit 0 means the
     # comment woke it -- it cannot have been found by the first look.
-    thread = on_first_listen(
+    listener = on_first_listen(
         lambda: _he_comments(
             db, page, "can you make the second chart bigger?", quote="the plan"
         )
@@ -50,7 +47,7 @@ def test_his_comment_wakes_the_waiter(
     started = time.monotonic()
     assert _run(["wait", "--page", page.id, "--timeout", "40s"], path) == 0
     assert time.monotonic() - started < 15
-    thread.join(5)
+    listener.woke_the_first_hold()
     out = capsys.readouterr().out
     assert "NEEDS YOUR REPLY" in out
     assert "HE SAID: can you make the second chart bigger?" in out
@@ -58,7 +55,7 @@ def test_his_comment_wakes_the_waiter(
     assert "artifacts-decide reply" in out
 
 
-def test_answers_only_ignores_comments(db, live, key_file, page, capsys):
+def test_answers_only_ignores_comments(db, live, key_file, page, capsys, brief_holds):
     path, _ = key_file
     _he_comments(db, page, "a comment")
     assert (

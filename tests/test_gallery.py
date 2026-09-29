@@ -124,16 +124,13 @@ def _ids_in_order(page: str) -> list[str]:
     return re.findall(r'href="/a/([a-z2-7]{26})"', page)
 
 
-def test_the_list_is_capped_at_two_hundred_rows(db):
+def test_the_list_is_capped_at_two_hundred_rows(db, monkeypatch):
     # The real publish, 201 times, over ONE connection: a fresh connection per
     # publish was most of this test's ~3 s.
-    with psycopg.connect(db.dsn, autocommit=True) as conn:
-        db.connect = contextlib.contextmanager(lambda: (yield conn))
-        try:
-            for i in range(201):
-                store.publish(db, "ops-seat", f"page {i}", _PAGE)
-        finally:
-            del db.connect
+    with psycopg.connect(db.dsn, autocommit=True) as conn, monkeypatch.context() as m:
+        m.setattr(db, "connect", contextlib.contextmanager(lambda: (yield conn)))
+        for i in range(201):
+            store.publish(db, "ops-seat", f"page {i}", _PAGE)
     page = (
         TestClient(create_gallery_app(db))
         .get("/", headers={"Remote-User": "jeremy"})
