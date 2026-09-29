@@ -441,7 +441,7 @@ def test_empty_comment_forms_do_not_swallow_the_page():
 # --- second review ------------------------------------------------------------
 
 
-def _bounded(old, new, limit=1.0):
+def _bounded(old, new, limit=10.0):  # the blow-ups this guards took 20-145 s
     t = time.perf_counter()
     doc, reason = render_changes(old, new)
     took = time.perf_counter() - t

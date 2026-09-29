@@ -141,9 +141,23 @@ def test_the_decisions_tool_takes_it_too(tmp_path):
     assert args.key_fd == 3
 
 
+def _a_closed_fd() -> int:
+    """A descriptor that is really closed in this process. A fixed number
+    (19) was open here once the changes view's worker held its pipes."""
+    import os
+
+    for fd in range(19, 4096):
+        try:
+            os.fstat(fd)
+        except OSError:
+            return fd
+    raise AssertionError("no closed descriptor below 4096")
+
+
 def test_a_bad_key_fd_exits_as_a_usage_error_not_a_crash(capsys):
-    assert client.main(["--key-fd", "19", "--list"]) == 2
-    assert "cannot read --key-fd 19" in capsys.readouterr().err
+    fd = _a_closed_fd()
+    assert client.main(["--key-fd", str(fd), "--list"]) == 2
+    assert f"cannot read --key-fd {fd}" in capsys.readouterr().err
 
 
 def test_a_missing_key_file_says_where_a_key_comes_from_now(
