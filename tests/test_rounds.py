@@ -430,3 +430,126 @@ def test_a_republish_holding_the_lock_opens_nothing_and_the_verdict_counts(
     # Round 1 moved to the version he was looking at when he answered, and
     # carries the verdict; nothing opened.
     assert _rounds(db, review.id) == [(1, 2, None, True, "changes_requested")]
+
+
+# ---- review fixes: base version, cached forms, old pods, forged rounds ----
+
+
+def test_the_base_is_the_version_he_was_shown_not_the_latest(db):
+    page = _page(db)
+    review = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    _republish(db, page, _v(1))  # v2 exists; his tab still shows v1
+    decisions.answer(db, review.id, letter="c", by="jeremy", round=1, version=1)
+    _republish(db, page, _v(2))  # v3
+    assert _rounds(db, review.id)[-1] == (2, 3, 1, False, None)
+
+
+def test_a_relay_without_a_version_bases_on_the_rounds_version(db):
+    page = _page(db)
+    review = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    _republish(db, page, _v(1))
+    decisions.record_elsewhere(
+        db, review.id, letter="c", note="redo", source="terminal", recorded_by="seat"
+    )
+    _republish(db, page, _v(2))
+    assert _rounds(db, review.id)[-1] == (2, 3, 2, False, None)
+
+
+def test_the_form_carries_the_version_it_showed(db, client):
+    page = _page(db)
+    decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    _republish(db, page, _v(1))
+    html = client.get(f"/a/{page.id}").text
+    assert '<input type="hidden" name="version" value="2">' in html
+
+
+def test_a_tapped_verdict_records_the_version_from_the_form(db, client):
+    page = _page(db)
+    review = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    _republish(db, page, _v(1))
+    r = client.post(
+        f"/d/{review.id}/answer",
+        data={"letter": "c", "round": "1", "version": "1"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    _republish(db, page, _v(2))
+    assert _rounds(db, review.id)[-1] == (2, 3, 1, False, None)
+
+
+def test_a_form_cached_before_rounds_counts_as_round_one(db, client):
+    page, review = _sent_back(db)
+    _republish(db, page, _v(1))
+    old_form = client.post(
+        f"/d/{review.id}/answer",
+        data={"letter": "a"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert old_form.status_code == 409
+    assert "round 2" in old_form.text
+    assert decisions.get_owned(db, "seat", review.id).answer is None
+
+
+def test_a_relay_without_a_round_takes_the_current_one(db, client):
+    h = _auth(db)
+    page, review = _sent_back(db)
+    _republish(db, page, _v(1))
+    body = {"letter": "a", "note": "ok", "source": "terminal"}
+    ok = client.post(f"/api/v1/decisions/{review.id}/record", headers=h, json=body)
+    assert ok.status_code == 200, ok.text
+    assert _rounds(db, review.id)[-1] == (2, 2, 1, True, "approved")
+
+
+def test_a_verdict_from_an_old_pod_is_closed_before_the_next_round(db):
+    page = _page(db)
+    review = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    with db.connect() as conn:  # an old pod: answers, leaves round 1 open
+        conn.execute(
+            "update decision set answer = 'c', answered_at = now(),"
+            " answered_by = 'jeremy', answer_source = 'page' where id = %s",
+            (review.id,),
+        )
+    _republish(db, page, _v(1))
+    rounds = _rounds(db, review.id)
+    assert rounds[0] == (1, 1, None, True, "changes_requested")
+    assert rounds[1] == (2, 2, 1, False, None)
+    assert decisions.get_owned(db, "seat", review.id).answer is None
+
+
+def test_an_old_pods_approval_opens_nothing_and_closes_round_one(db):
+    page = _page(db)
+    review = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    with db.connect() as conn:
+        conn.execute(
+            "update decision set answer = 'a', answered_at = now(),"
+            " answered_by = 'jeremy', answer_source = 'page' where id = %s",
+            (review.id,),
+        )
+    _republish(db, page, _v(1))
+    assert _rounds(db, review.id) == [(1, 1, None, True, "approved")]
+
+
+def test_a_forged_later_round_is_told_the_current_round(db, client):
+    page = _page(db)
+    review = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    r = client.post(
+        f"/d/{review.id}/answer",
+        data={"letter": "a", "round": "5"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert r.status_code == 409
+    assert "now in round 1" in r.text
+    assert "agent closed" not in r.text
+
+
+def test_the_review_reports_when_its_round_opened(db, client):
+    h = _auth(db)
+    page, review = _sent_back(db)
+    first = client.get(f"/api/v1/reviews/{review.id}", headers=h).json()
+    _republish(db, page, _v(1))
+    second = client.get(f"/api/v1/reviews/{review.id}", headers=h).json()
+    assert first["round_opened_at"] and second["round_opened_at"]
+    assert second["round_opened_at"] > first["round_opened_at"]

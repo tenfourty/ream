@@ -164,6 +164,8 @@ class RoundRow:
     opened_at: str
     closed_at: str | None
     verdict: str | None
+    # The version his page view showed when he gave the verdict, when known.
+    reviewed_version: int | None = None
 
 
 class AlreadyDecided(Exception):
@@ -466,7 +468,10 @@ class InvalidSource(Exception):
     """
 
 
-_ROUND_COLUMNS = "review_id, n, version_n, base_version, opened_at, closed_at, verdict"
+_ROUND_COLUMNS = (
+    "review_id, n, version_n, base_version, opened_at, closed_at, verdict,"
+    " reviewed_version"
+)
 
 
 def _row_to_round(row) -> RoundRow:
@@ -478,6 +483,7 @@ def _row_to_round(row) -> RoundRow:
         opened_at=row[4].isoformat(),
         closed_at=row[5].isoformat() if row[5] else None,
         verdict=row[6],
+        reviewed_version=row[7],
     )
 
 
@@ -564,12 +570,15 @@ def _lock_review_and_settle_letter(
     return holds.approved_letter(conn, artifact_id, letter)
 
 
-def _close_round(conn, decision_id: str, letter: str) -> None:
-    """The verdict closes the open round, inside the verdict's transaction."""
+def _close_round(
+    conn, decision_id: str, letter: str, version: int | None = None
+) -> None:
+    """The verdict closes the open round, inside the verdict's transaction.
+    `version` is the one his page view showed, when the form said."""
     conn.execute(
-        "update review_round set closed_at = now(), verdict = %s"
-        " where review_id = %s and closed_at is null",
-        (VERDICTS[letter], decision_id),
+        "update review_round set closed_at = now(), verdict = %s,"
+        " reviewed_version = %s where review_id = %s and closed_at is null",
+        (VERDICTS[letter], version, decision_id),
     )
 
 
@@ -583,16 +592,28 @@ def _advance_rounds(conn, artifact_id: str, version_n: int) -> None:
       decision's answer so the review waits on him again. Mode carries over.
     * latest round still open: it now reviews this version; its base stays.
     * otherwise (approved, with notes, dismissed): the review is over.
+
+    During a rollout an older pod may have asked a review without writing its
+    round 1, or given a verdict without closing the round. Both are repaired
+    here from the decision row first, then the rule above applies.
     """
     reviews = conn.execute(
-        "select id from decision where artifact_id = %s and kind = 'review'"
-        " and closed_at is null order by id for update",
+        "select id, answer, version_n from decision where artifact_id = %s"
+        " and kind = 'review' and closed_at is null order by id for update",
         (artifact_id,),
     ).fetchall()
-    for (review_id,) in reviews:
+    for review_id, answered, asked_on in reviews:
         latest = current_round(conn, review_id)
         if latest is None:
-            continue
+            conn.execute(
+                "insert into review_round (review_id, n, version_n, base_version)"
+                " values (%s, 1, %s, null)",
+                (review_id, asked_on),
+            )
+            latest = current_round(conn, review_id)
+        if latest.closed_at is None and answered is not None:
+            _close_round(conn, review_id, answered)
+            latest = current_round(conn, review_id)
         if latest.closed_at is None:
             conn.execute(
                 "update review_round set version_n = %s"
@@ -603,7 +624,16 @@ def _advance_rounds(conn, artifact_id: str, version_n: int) -> None:
             conn.execute(
                 "insert into review_round (review_id, n, version_n, base_version)"
                 " values (%s, %s, %s, %s)",
-                (review_id, latest.n + 1, version_n, latest.version_n),
+                (
+                    review_id,
+                    latest.n + 1,
+                    version_n,
+                    # The version he was shown when he sent it back; a relay
+                    # did not say, so the round's own version stands in.
+                    latest.reviewed_version
+                    if latest.reviewed_version is not None
+                    else latest.version_n,
+                ),
             )
             # The earlier verdict lives on in review_round and the journal.
             conn.execute(
@@ -743,6 +773,7 @@ def answer(
     note: str = "",
     by: str,
     round: int | None = None,
+    version: int | None = None,
 ) -> DecisionRow:
     """The gallery, acting for Jeremy, answers a decision. Takes no `agent`: this is
     not a call an agent ever makes, so there is no ownership to check against a
@@ -767,6 +798,8 @@ def answer(
     tab left open on round 1 would otherwise land its verdict on round 2; a
     `round` that is not the current one is refused (`AlreadyDecided`, naming
     both rounds). None skips the check, as every caller before rounds did.
+    `version` is the page version the form was drawn over; it is kept on the
+    round it closes, and the next round's changes are shown from it.
     """
     store._check_size(note, MAX_NOTE_BYTES, "note", agent=by, artifact_id=None)
 
@@ -839,7 +872,7 @@ def answer(
                 ).fetchone()
                 raise _already(conn, current, round)
             if row[_KIND_IDX] == "review":
-                _close_round(conn, decision_id, letter)
+                _close_round(conn, decision_id, letter, version)
                 # His verdict carries every mark in its message, so releasing
                 # the held ones writes no events of their own.
                 holds.release(conn, artifact_id, emit=False)
@@ -908,6 +941,31 @@ def get_owned(db: Database, agent: str, decision_id: str) -> DecisionRow | None:
             (decision_id, agent),
         ).fetchone()
     return None if row is None else _row_to_decision(row)
+
+
+def get_owned_with_round(
+    db: Database, agent: str, decision_id: str
+) -> tuple[DecisionRow | None, RoundRow | None]:
+    """`get_owned` and the review's current round, read in ONE statement so
+    the verdict and the round it belongs to can never come from either side
+    of a republish that opens the next round."""
+    width = len(_COLUMNS.split(","))
+    with db.connect() as conn:
+        row = conn.execute(
+            f"select {_COLUMNS}, r.* from decision"  # noqa: S608 -- fixed constant, not caller input
+            " join artifact on artifact.id = decision.artifact_id"
+            f" left join lateral (select {_ROUND_COLUMNS} from review_round"
+            "   where review_id = decision.id order by n desc limit 1) r on true"
+            " where decision.id = %s and artifact.agent = %s",
+            (decision_id, agent),
+        ).fetchone()
+    if row is None:
+        return None, None
+    found = row[width:]
+    return (
+        _row_to_decision(row[:width]),
+        _row_to_round(found) if found[0] is not None else None,
+    )
 
 
 def close(db: Database, agent: str, decision_id: str) -> DecisionRow:

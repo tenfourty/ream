@@ -457,6 +457,11 @@ def _wait_review(args, key: str, base: str) -> int:
         # The baseline rides on the review itself, so it is never missing, even
         # for a review that has since been closed.
         since = review["created_at"]
+        # From round 2 on, the round's own start: round-1 marks were answered
+        # by the republish and are not new to this round.
+        opened = review.get("round_opened_at")
+        if opened and _after(opened, since):
+            since = opened
         # A mark is new while it is an open human thread asked after the review
         # whose last word is still his -- `_threads`' own "needs your reply" rule
         # -- so replying clears it, and it still travels with the verdict.

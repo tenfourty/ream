@@ -720,3 +720,7 @@ insert into review_round (review_id, n, version_n, base_version, opened_at,
     on conflict (review_id, n) do nothing;
 -- The round a mark was made in; null outside any open round.
 alter table comment add column if not exists review_round int;
+-- The version the page view showed when he gave the round's verdict (the
+-- form's hidden field). The next round diffs from it; null for a relay, which
+-- falls back to the round's `version_n`.
+alter table review_round add column if not exists reviewed_version int;

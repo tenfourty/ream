@@ -1155,12 +1155,13 @@ def agent_router(
     def read_review(review_id: str, agent: str = Depends(caller)):
         """The verdict and the one message built from it. Not yours, and not a
         review, answer exactly like a missing id."""
-        row = decisions.get_owned(db, agent, review_id)
+        row, current = decisions.get_owned_with_round(db, agent, review_id)
         if row is None or row.kind != "review":
             raise HTTPException(404, "no such review")
-        with db.connect() as conn:
-            current = decisions.current_round(conn, review_id)
         round_n = current.n if current is not None else None
+        # When this round opened: a waiter counts only marks made since, so a
+        # round-2 wait is not woken by the marks round 1 already answered.
+        round_opened_at = current.opened_at if current is not None else None
         if row.answer is None:
             return {
                 "id": row.id,
@@ -1168,6 +1169,7 @@ def agent_router(
                 "created_at": row.created_at,
                 "review_mode": row.review_mode,
                 "round": round_n,
+                "round_opened_at": round_opened_at,
                 "verdict": None,
                 "answered_at": None,
                 "message": None,
@@ -1183,6 +1185,7 @@ def agent_router(
             "created_at": row.created_at,
             "review_mode": row.review_mode,
             "round": round_n,
+            "round_opened_at": round_opened_at,
             "verdict": decisions.VERDICTS[row.answer],
             "answered_at": row.answered_at,
             "message": message,

@@ -44,7 +44,9 @@ def page_mode(conn, artifact_id: str, *, lock: bool = False) -> str | None:
             "select coalesce(review_mode, 'live') from decision"  # noqa: S608 -- fixed strings
             " where artifact_id = %s and kind = 'review'"
             " and answer is null and closed_at is null"
-            + (" for share" if lock else ""),
+            # In id order, as `decisions._advance_rounds` locks them, so a mark
+            # and a republish on a page with two open reviews cannot deadlock.
+            " order by id" + (" for share" if lock else ""),
             (artifact_id,),
         ).fetchall()
     ]

@@ -3113,6 +3113,7 @@ def _render_decisions(
     outcomes: dict[str, list] | None = None,
     held_count: int = 0,
     rounds: dict[str, int] | None = None,
+    shown_version: int | None = None,
 ) -> tuple[str, str]:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
@@ -3247,6 +3248,12 @@ def _render_decisions(
             if round_n is not None
             else ""
         )
+        # And the version the page view showed: the next round's changes are
+        # drawn from what he actually looked at when he sent it back.
+        if is_review and shown_version is not None:
+            round_field += (
+                f'<input type="hidden" name="version" value="{int(shown_version)}">'
+            )
         return (
             f'<div class="ask"{anchor}>'
             f'<p class="q">{tag}{escape(row.question)}</p>'
@@ -4116,6 +4123,7 @@ def gallery_router(db: Database) -> APIRouter:
                 )
                 else 0
             ),
+            shown_version=row[5],
             rounds=decisions.current_round_numbers(
                 db,
                 [
@@ -4540,6 +4548,24 @@ def gallery_router(db: Database) -> APIRouter:
 
     def _already_decided_page(exc: decisions.AlreadyDecided) -> HTMLResponse:
         row, named, current = exc.row, exc.round, exc.current
+        if (
+            row.closed_at is None
+            and named is not None
+            and named.verdict is None
+            and named.closed_at is None
+        ):
+            # The round asked for is not one that has a verdict: a forged or
+            # future number. Name the round the review is actually in.
+            return HTMLResponse(
+                _shell(
+                    "Already decided",
+                    "<p>That verdict was not for the round this review is in. "
+                    f"It is now in round {named.n}. "
+                    f'<a href="/a/{escape(row.artifact_id)}">Back to the page</a></p>',
+                ),
+                status_code=409,
+                headers=gallery_headers(),
+            )
         if named is not None and named.verdict is not None:
             # Rounds: name the round whose verdict counted, and, when a
             # republish has since opened a later one, say so.
@@ -4618,13 +4644,17 @@ def gallery_router(db: Database) -> APIRouter:
         letter: str = Form(...),
         note: str = Form(""),
         round_field: str = Form("", alias="round"),
+        version_field: str = Form("", alias="version"),
         _guard: None = Depends(_same_origin_write),
     ):
-        # The round the form was drawn for; absent on a question's form.
+        # The round the form was drawn for. A form with none was drawn before
+        # rounds existed, when every review was in round 1; a question's form
+        # has none either, and a question ignores it.
         try:
-            asked_round = int(round_field) if round_field else None
+            asked_round = int(round_field) if round_field else 1
+            shown_version = int(version_field) if version_field else None
         except ValueError as exc:
-            raise HTTPException(422, "round is a number") from exc
+            raise HTTPException(422, "round and version are numbers") from exc
         # `by="jeremy"` is hardcoded, not read from any header -- see the module
         # docstring for why: Authelia admits exactly one subject to this host, and
         # nothing here proves the ingress strips an inbound copy of an identity
@@ -4637,6 +4667,7 @@ def gallery_router(db: Database) -> APIRouter:
                 note=note,
                 by="jeremy",
                 round=asked_round,
+                version=shown_version,
             )
         except store.BodyTooLarge as exc:
             raise HTTPException(413, f"{exc.field} exceeds the size limit") from exc

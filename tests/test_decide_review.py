@@ -468,3 +468,30 @@ def test_an_older_server_that_names_no_mode_is_said_plainly(
     out = capsys.readouterr().out
     assert "None" not in out
     assert "(marks: unknown, the server predates hold/live)" in out
+
+
+@brief
+def test_round_one_marks_do_not_wake_a_round_two_wait(live, key_file, db, capsys):
+    """After changes requested and a republish, the marks he made in round 1
+    are not new to round 2: the wait times out instead of exiting 7."""
+    from artifacts import comments
+
+    path, page, rid = _setup(db, key_file, capsys)
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="hm",
+        kind="comment",
+    )
+    decisions.answer(db, rid, letter="c", by="jeremy")
+    revision = store.get_owned(db, "ops-seat", page.id).revision
+    store.patch(db, "ops-seat", page.id, PAGE.replace("90", "30"), revision)
+    capsys.readouterr()
+    assert (
+        decide.main(
+            ["--key-file", str(path), "wait", "--review", rid, "--timeout", "3s"]
+        )
+        == 3
+    )
