@@ -3,9 +3,10 @@
 `uv run pytest -q -n auto` runs the suite in parallel; plain `uv run pytest -q`
 still runs it serially (the worker id is then "master"). Each worker gets
 its own database, `artifacts_test_<worker_id>`, built once per session. Between
-tests the `db` fixture empties every table with one TRUNCATE instead of
-rebuilding the schema -- ~24 ms instead of ~105 ms, and the result is the same:
-every table empty, every owned sequence restarted.
+tests the `db` fixture empties every table instead of rebuilding the schema:
+DELETE with every sequence restarted (~10 ms; one TRUNCATE, ~25 ms, without
+superuser) instead of ~105 ms, and the result is the same: every table empty,
+every owned sequence restarted.
 
 A test that changes the schema itself (drops a column, drops the schema, calls
 `reset()`) must request `fresh_schema`, which rebuilds the schema after it and
@@ -70,6 +71,18 @@ def _share_fastapi_type_adapters() -> None:
     if not (hasattr(v2, "asdict") and hasattr(v2.ModelField, "__post_init__")):
         warnings.warn(
             "fastapi internals moved: TypeAdapter sharing is off", stacklevel=1
+        )
+        return
+    # Checked against this FastAPI only: the cache key below is what 0.141's
+    # __post_init__ READS, and a new version could read more. Stand down on any
+    # other version until someone re-checks it (final review, 29 Sep 2026).
+    import fastapi
+
+    if fastapi.__version__ != "0.141.1":
+        warnings.warn(
+            f"fastapi {fastapi.__version__} is not the checked 0.141.1:"
+            " TypeAdapter sharing is off",
+            stacklevel=1,
         )
         return
     build = v2.ModelField.__post_init__
@@ -142,20 +155,28 @@ def _with_dbname(dsn: str, dbname: str) -> str:
     return make_conninfo(dsn, dbname=dbname, connect_timeout="5")
 
 
-def _stop_postmaster(pgdata: Path) -> None:
+def _stop_postmaster(pgdata: Path) -> bool:
     """Stop the server running in `pgdata`, by the pid in its postmaster.pid,
-    and only if that pid really is a postgres for this directory."""
+    and only if that pid really is a postgres for this directory. True when
+    nothing is left running there, False when it declined to touch a process
+    it could not prove was that server -- the caller then keeps the directory."""
     try:
         pid = int((pgdata / "postmaster.pid").read_text().splitlines()[0])
+    except (OSError, ValueError, IndexError):
+        return True  # no pid file: no server there
+    try:
         proc = psutil.Process(pid)
         if "postgres" not in proc.name() or str(pgdata) not in proc.cmdline():
-            return
+            return False
         proc.send_signal(signal.SIGINT)  # postgres: fast shutdown
         proc.wait(timeout=10)
+    except psutil.NoSuchProcess:
+        return True
     except psutil.TimeoutExpired:
         proc.kill()
-    except (OSError, ValueError, IndexError, psutil.Error):
-        return
+    except (OSError, psutil.Error):
+        return False
+    return True
 
 
 def _reap_orphans() -> None:
@@ -178,8 +199,8 @@ def _reap_orphans() -> None:
             continue
         if any(psutil.pid_exists(pid) for pid in pids):
             continue
-        _stop_postmaster(pgdata)
-        shutil.rmtree(pgdata, ignore_errors=True)
+        if _stop_postmaster(pgdata):
+            shutil.rmtree(pgdata, ignore_errors=True)
 
 
 def _no_durability(uri: str) -> None:
@@ -392,7 +413,7 @@ def dsn(_pg_server: str) -> str:
 
 
 class _Schema:
-    """The worker's schema, built once, and the table list TRUNCATE empties."""
+    """The worker's schema, built once, and the list of tables `empty` clears."""
 
     def __init__(self, dsn: str) -> None:
         self.database = Database(dsn)
