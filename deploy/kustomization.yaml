@@ -32,4 +32,4 @@ images:
   # is never expected to exist in the registry -- Flux is not pointed at this
   # path until the first real image has landed here.
   - name: git.tenfourty.site/jeremy/artifacts
-    newTag: 3a1d90fc4a67
+    newTag: 7aa36a7459f0
