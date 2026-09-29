@@ -291,8 +291,24 @@ const mark = (over = {}) => ({ id: "m1", kind: "remove", quote: QUOTE,
   h.send(big);
   const [[m2]] = h.reports();
   ok(m2.placed.length === 200, "at most 200 marks are painted");
-  ok(m2.unplaced.length === 300 && m2.placed.length + m2.unplaced.length === 500,
-     "the rest are reported unplaced, not silently dropped (final review, Item 3)");
+  // homelab-ij8.111, follow-up Item 2: the unplaced REPLY is itself capped at
+  // 200 ids, with the rest folded into an `overflow` count rather than sent
+  // as ids -- every mark is still accounted for, just not all of them by id.
+  ok(m2.unplaced.length === 200, "the unplaced ids in the reply are capped at 200");
+  ok(m2.overflow === 100, "the other 100 unplaced marks are counted, not listed");
+  ok(m2.placed.length + m2.unplaced.length + m2.overflow === 500,
+     "every mark is still accounted for, across ids and the overflow count");
+}
+// 15. the unplaced cap carries no `overflow` key at all when nothing was cut
+// from the list -- only sent when there is something it would otherwise hide
+{
+  const list400 = Array.from({ length: 400 }, (_, i) => mark({ id: "c" + i }));
+  const h = build(E("body", E("p", QUOTE)), {});
+  h.send(list400);
+  const [[msg]] = h.reports();
+  ok(msg.placed.length === 200 && msg.unplaced.length === 200,
+     "200 placed, 200 unplaced -- exactly at the cap, nothing left over");
+  ok(!("overflow" in msg), "no overflow key when the unplaced list was not actually cut");
 }
 // 13. ids beyond the 200 cap are reported unplaced, never vanish -- but a
 // hostile shape past the cap is still dropped, exactly as one within it is

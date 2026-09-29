@@ -1726,16 +1726,26 @@ try{marks=JSON.parse(mk?mk.textContent:"[]");if(!Array.isArray(marks))marks=[]}c
 marks.forEach(function(m){if(m&&typeof m.id==="string")known[m.id]=1});
 function sendMarks(){if(sent||!marks.length)return;sent=true;
   try{f.contentWindow.postMessage({type:"artifact-marks",marks:marks},o)}catch(e){}}
-function unplacedLine(ids){var p=document.getElementById("marks-unplaced");if(!p)return;
+function unplacedLine(ids,overflow){var p=document.getElementById("marks-unplaced");if(!p)return;
   var n=0,seen=Object.create(null);
   ids.slice(0,200).forEach(function(id){if(typeof id==="string"&&known[id]&&!seen[id]){seen[id]=1;n++}});
+  // The shim itself caps how many unplaced ids it names and folds the rest
+  // into `overflow` (homelab-ij8.111, follow-up Item 2), so the true count
+  // this line says is the ids actually given PLUS that number -- never just
+  // the ids, or a page with many unplaced marks would undercount its own
+  // line. `overflow` is untrusted the same way `ids` already is: only a
+  // finite non-negative integer is ever added, and even a genuine one from a
+  // huge page is capped, so a forged message cannot make this line print an
+  // arbitrary number.
+  if(typeof overflow==="number"&&isFinite(overflow)&&overflow>0&&overflow===Math.floor(overflow))
+    n+=Math.min(overflow,100000);
   p.textContent=n?n+(n===1?" mark":" marks")+" could not be placed on this version of the page.":"";p.hidden=!n}
 if(f.addEventListener)f.addEventListener("load",function(){sent=false;sendMarks()});
 window.addEventListener("message",function(e){try{
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
   if(!d||typeof d!=="object")return;
   if(d.type==="artifact-state")sendMarks();
-  else if(d.type==="artifact-marks-placed"&&Array.isArray(d.unplaced))unplacedLine(d.unplaced)
+  else if(d.type==="artifact-marks-placed"&&Array.isArray(d.unplaced))unplacedLine(d.unplaced,d.overflow)
 }catch(x){}});
 var form=document.querySelector("form.cnew");if(!form)return;
 var bar=document.createElement("div");bar.className="selbar";bar.hidden=true;

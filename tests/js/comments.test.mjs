@@ -156,6 +156,26 @@ const STATE = { type: "artifact-state", height: 400, slots: [] };
   try { g.send({ type: "artifact-marks-placed", unplaced: "m1" }); g.send({ type: "artifact-marks-placed" }); }
   catch (e) { threw = true; }
   ok(!threw && g.unplacedEl.hidden === true, "a malformed report is ignored"); }
+// homelab-ij8.111, follow-up Item 2: the shim caps the unplaced ids it sends
+// and reports the rest as a count, `overflow`. The line's own count must add
+// that in, and must not trust it blindly -- a forged or nonsense value is
+// never rendered as-is.
+{ const g = build({ marks: MARKS });
+  g.send(STATE);
+  g.send({ type: "artifact-marks-placed", placed: [], unplaced: ["m1"], overflow: 3 });
+  ok(g.unplacedEl.textContent === "4 marks could not be placed on this version of the page.",
+     "the overflow count is added to the ids actually named");
+  g.send({ type: "artifact-marks-placed", placed: ["m1", "m2"], unplaced: [], overflow: 0 });
+  ok(g.unplacedEl.hidden === true, "an overflow of zero says nothing on its own");
+  g.send({ type: "artifact-marks-placed", placed: [], unplaced: ["m1"], overflow: -5 });
+  ok(g.unplacedEl.textContent === "1 mark could not be placed on this version of the page.",
+     "a negative overflow is nonsense and ignored, not subtracted");
+  g.send({ type: "artifact-marks-placed", placed: [], unplaced: ["m1"], overflow: 1.5 });
+  ok(g.unplacedEl.textContent === "1 mark could not be placed on this version of the page.",
+     "a non-integer overflow is ignored the same way");
+  g.send({ type: "artifact-marks-placed", placed: [], unplaced: ["m1"], overflow: 1e15 });
+  ok(g.unplacedEl.textContent === "100001 marks could not be placed on this version of the page.",
+     "an absurd overflow from a forged message is capped sanely, not rendered verbatim"); }
 { const g = build({ marks: MARKS });
   g.send(SEL);
   ok(g.bar.hidden === false && g.framePosts.length === 0, "a selection still shows the bar and sends no marks"); }

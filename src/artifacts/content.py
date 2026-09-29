@@ -266,7 +266,21 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         '+"::highlight(ar-remove){background:rgba(192,57,43,.22);text-decoration:line-through}"'
         '+"::highlight(ar-good){background:rgba(46,157,87,.22)}";'
         "(document.head||document.documentElement).appendChild(st)}"
-        'parent.postMessage({type:"artifact-marks-placed",placed:placed,unplaced:unplaced},'
+        # THE REPLY ITSELF IS CAPPED (final review, Item 3's own follow-up:
+        # homelab-ij8.111, Item 2). `unplaced` can hold one id for every mark
+        # in `list` -- unbounded by this function -- and Item 3 deliberately
+        # keeps every one of them rather than dropping any. Sending all of
+        # them back is a different cost from painting them: at most 200 ids
+        # are named, and however many more there are is said as a count,
+        # `overflow`, so the gallery's line can still say a true total without
+        # this message growing without bound. `overflow` is present only when
+        # it is greater than zero -- a page where nothing was cut says nothing
+        # extra, exactly as before this existed.
+        "var un=unplaced.length>200?unplaced.slice(0,200):unplaced,"
+        "ov=unplaced.length>200?unplaced.length-200:0;"
+        'var pm={type:"artifact-marks-placed",placed:placed,unplaced:un};'
+        "if(ov>0)pm.overflow=ov;"
+        "parent.postMessage(pm,"
         f"{origin})}}"
         # The whole handler body is in a try: the top-level try/catch wraps
         # only the REGISTRATION, and nothing may throw into the page's console.
