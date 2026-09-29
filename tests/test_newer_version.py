@@ -27,12 +27,39 @@ PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></h
 @pytest.fixture()
 def client(db, monkeypatch):
     monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    # A held read looks again every half second in production; here every
+    # 20 ms, so a republish ends a test's hold at once. The hold's deadline
+    # and its shutdown check are unchanged.
+    real_wait = events.wait_for_shutdown
+    monkeypatch.setattr(
+        events, "wait_for_shutdown", lambda timeout: real_wait(min(timeout, 0.02))
+    )
     return TestClient(create_gallery_app(db=db))
 
 
 @pytest.fixture()
 def page(db):
     return store.publish(db, "seat", "Board", PAGE)
+
+
+@pytest.fixture()
+def slots(monkeypatch):
+    """The gallery's held-read slots, fresh for this test, so it can tell the
+    moment a read is really holding instead of sleeping and hoping."""
+    from artifacts import gallery
+
+    fresh = threading.BoundedSemaphore(gallery._MAX_WATCHERS)
+    monkeypatch.setattr(gallery, "_watchers", fresh)
+    return fresh
+
+
+def _until_holding(slots, count=1):
+    """Wait until `count` reads have taken a slot, i.e. are genuinely held."""
+    want = slots._initial_value - count
+    deadline = time.monotonic() + 10
+    while slots._value > want and time.monotonic() < deadline:
+        time.sleep(0.002)
+    assert slots._value <= want, "the read never began holding"
 
 
 def test_it_says_which_version_is_live(client, page):
@@ -54,13 +81,13 @@ def test_a_deleted_page_stops_answering(client, db, page):
 def test_asking_about_the_version_you_have_holds(client, page):
     """The whole point: the browser does not wake up and ask, the server waits."""
     began = time.monotonic()
-    got = client.get(f"/a/{page.id}/current?since=1&wait=2")
+    got = client.get(f"/a/{page.id}/current?since=1&wait=0.4")
     waited = time.monotonic() - began
     assert got.json() == {"n": 1}, "unchanged, so ask again"
-    assert waited >= 1.5, f"it held rather than answering at once ({waited:.2f}s)"
+    assert waited >= 0.35, f"it held rather than answering at once ({waited:.2f}s)"
 
 
-def test_a_republish_ends_the_hold_within_a_second(client, db, page):
+def test_a_republish_ends_the_hold_within_a_second(client, db, page, slots):
     """The acceptance criteria: a notice appears in the open view within
     seconds of an agent republishing."""
     answer = {}
@@ -72,7 +99,7 @@ def test_a_republish_ends_the_hold_within_a_second(client, db, page):
 
     thread = threading.Thread(target=hold)
     thread.start()
-    time.sleep(0.8)  # long enough that it is genuinely holding
+    _until_holding(slots)
     store.patch(db, "seat", page.id, PAGE.replace("hi", "hi again"), page.revision)
     thread.join(20)
 
@@ -90,7 +117,7 @@ def test_a_stale_since_is_answered_at_once(client, db, page):
     assert time.monotonic() - began < 2
 
 
-def test_a_shutdown_ends_the_hold_rather_than_outliving_it(client, page):
+def test_a_shutdown_ends_the_hold_rather_than_outliving_it(client, page, slots):
     """A rollout must never wait out somebody's browser. The same rule the
     agent-facing waiter follows, through the same event."""
     answer = {}
@@ -102,7 +129,7 @@ def test_a_shutdown_ends_the_hold_rather_than_outliving_it(client, page):
 
     thread = threading.Thread(target=hold)
     thread.start()
-    time.sleep(0.5)
+    _until_holding(slots)
     events.begin_shutdown()
     try:
         thread.join(20)
@@ -112,7 +139,9 @@ def test_a_shutdown_ends_the_hold_rather_than_outliving_it(client, page):
         events._shutdown.clear()
 
 
-def test_too_many_watchers_are_answered_rather_than_queued(client, page, monkeypatch):
+def test_too_many_watchers_are_answered_rather_than_queued(
+    client, db, page, monkeypatch
+):
     """Past the bound it answers at once, which is ordinary polling and
     correct -- an answer now beats a thread later."""
     from artifacts import gallery
@@ -139,7 +168,10 @@ def test_too_many_watchers_are_answered_rather_than_queued(client, page, monkeyp
     # Queued would mean 8 s; answered at once is milliseconds. The bound sits
     # far from both so load cannot flip it.
     assert time.monotonic() - began < 4, "answered immediately rather than queued"
+    # End the first watcher's hold now rather than waiting out its 8 s.
+    store.patch(db, "seat", page.id, PAGE.replace("hi", "hi again"), page.revision)
     thread.join(15)
+    assert not thread.is_alive()
 
 
 def test_the_wait_is_capped(client, page):

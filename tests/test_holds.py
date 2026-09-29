@@ -201,6 +201,25 @@ def test_resolving_a_held_mark_tells_the_agent_nothing(db, nudges):
     assert nudges == []
 
 
+def _until_waiting_on_a_lock(db, timeout=10.0):
+    """Return once some session in this test's database is blocked on a lock:
+    the positive evidence a racing statement is really waiting, instead of a
+    sleep that hopes it got there. Fails loudly if nothing ever waits."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with db.connect() as conn:
+            (waiting,) = conn.execute(
+                "select count(*) from pg_stat_activity"
+                " where datname = current_database() and wait_event_type = 'Lock'"
+            ).fetchone()
+        if waiting:
+            return
+        time.sleep(0.005)
+    raise AssertionError("no statement ever waited on a lock")
+
+
 def _gate_after(monkeypatch, module, name):
     """Wrap module.name so the caller pauses AFTER it returns, until released."""
     import threading
@@ -245,7 +264,6 @@ def test_a_verdict_that_lands_before_the_mark_leaves_it_unheld(db, monkeypatch):
 
 def test_a_verdict_that_waits_for_the_mark_releases_it(db, monkeypatch):
     import threading
-    import time
 
     from artifacts import review
 
@@ -261,7 +279,7 @@ def test_a_verdict_that_waits_for_the_mark_releases_it(db, monkeypatch):
         target=lambda: decisions.answer(db, row.id, letter="c", by="jeremy")
     )
     verdict.start()
-    time.sleep(1)
+    _until_waiting_on_a_lock(db)
     assert verdict.is_alive(), "the verdict waits for the insert's lock"
     go.set()
     t.join(20)
@@ -414,7 +432,6 @@ def test_closing_or_archiving_releases_held_marks(db, nudges):
 
 def test_a_flip_racing_approved_never_drops_a_mark(db, monkeypatch, nudges):
     import threading
-    import time
 
     from artifacts import review
 
@@ -436,7 +453,7 @@ def test_a_flip_racing_approved_never_drops_a_mark(db, monkeypatch, nudges):
     assert reached.wait(10)
     f = threading.Thread(target=flip)
     f.start()
-    time.sleep(1)
+    _until_waiting_on_a_lock(db)
     assert f.is_alive(), "the flip waits for the verdict's row lock"
     go.set()
     t.join(20)
@@ -479,7 +496,6 @@ def test_an_archive_racing_a_mark_leaves_no_mark_held_on_a_closed_review(
     db, monkeypatch, nudges
 ):
     import threading
-    import time
 
     page, _row, _ = _held_review(db, marks=1)
     reached, go = _gate_after(monkeypatch, holds, "page_mode")
@@ -491,7 +507,7 @@ def test_an_archive_racing_a_mark_leaves_no_mark_held_on_a_closed_review(
         target=lambda: store.set_archived(db, page.id, True, agent="seat")
     )
     a.start()
-    time.sleep(1)
+    _until_waiting_on_a_lock(db)
     assert a.is_alive(), "the archive waits for the insert's share lock"
     go.set()
     t.join(20)

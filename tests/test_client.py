@@ -8,6 +8,8 @@ answer as the gallery: `ARTIFACTS_GALLERY_ORIGIN` is set to this server's own
 environment-driven read `create_app`'s router already uses in `test_router.py`.
 """
 
+import asyncio
+import contextlib
 import http.server
 import json
 import re
@@ -24,22 +26,67 @@ from artifacts.app import create_app
 SECRET_BODY = "<!doctype html><body>AKIA" + "IOSFODNN7EXAMPLE</body>"
 
 
+class _PromptServer(uvicorn.Server):
+    """uvicorn, minus the two fixed 0.1 s sleeps that made every test using a
+    live server pay ~0.2 s on the way out: `main_loop` polls `should_exit`
+    every 0.1 s, and `shutdown` sleeps 0.1 s after asking connections to close
+    before it even starts waiting for them. Here the main loop wakes the moment
+    `wake()` is called, and shutdown waits for the connections by polling
+    their real state every few milliseconds. Tests only; the service's own
+    uvicorn is untouched."""
+
+    _wake: asyncio.Event | None = None
+    _loop: asyncio.AbstractEventLoop | None = None
+
+    async def main_loop(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._wake = asyncio.Event()
+        while not await self.on_tick(0):  # counter 0: refresh the Date header
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._wake.wait(), timeout=1.0)
+
+    def wake(self) -> None:
+        self.should_exit = True
+        loop, event = self._loop, self._wake
+        if loop is not None and event is not None:
+            with contextlib.suppress(RuntimeError):  # loop already closed
+                loop.call_soon_threadsafe(event.set)
+
+    async def shutdown(self, sockets=None) -> None:
+        for server in self.servers:
+            server.close()
+        for connection in list(self.server_state.connections):
+            connection.shutdown()
+        # A request still in flight gets its answer; give up after 5 s.
+        deadline = time.monotonic() + 5
+        while (
+            self.server_state.connections or self.server_state.tasks
+        ) and time.monotonic() < deadline:
+            await asyncio.sleep(0.002)
+        for task in self.server_state.tasks:
+            task.cancel()
+        for server in self.servers:
+            await server.wait_closed()
+        await self.lifespan.shutdown()
+
+
 class _LiveServer:
     def __init__(self, app):
         config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning")
-        self.server = uvicorn.Server(config)
+        self.server = _PromptServer(config)
         self.thread = threading.Thread(target=self.server.run, daemon=True)
 
     def start(self) -> str:
         self.thread.start()
         while not self.server.started:
-            time.sleep(0.01)
+            time.sleep(0.002)
         port = self.server.servers[0].sockets[0].getsockname()[1]
         return f"http://127.0.0.1:{port}"
 
     def stop(self) -> None:
-        self.server.should_exit = True
+        self.server.wake()
         self.thread.join(timeout=5)
+        assert not self.thread.is_alive(), "the live server did not stop within 5 s"
 
 
 @pytest.fixture()
@@ -244,7 +291,9 @@ class _BareServer:
 
     def __init__(self, host: str, handler_cls: type):
         self.httpd = http.server.HTTPServer((host, 0), handler_cls)
-        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread = threading.Thread(
+            target=self.httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+        )
 
     def start(self) -> str:
         self.thread.start()

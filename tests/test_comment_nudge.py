@@ -252,7 +252,7 @@ def test_a_failing_nudge_never_costs_the_comment(db, page, monkeypatch):
 # --- end to end: the held request actually ends -------------------------------
 
 
-def test_a_held_waiter_is_answered_the_moment_he_comments(client, db, page):
+def test_a_held_waiter_is_answered_the_moment_he_comments(client, db, page, first_look):
     """The whole point of ij8.19, and the only test here that proves it: an
     agent holding /events?wait= is answered by him pressing Comment, rather
     than on its next poll. No address for the agent is needed, so this works
@@ -276,9 +276,9 @@ def test_a_held_waiter_is_answered_the_moment_he_comments(client, db, page):
     thread = threading.Thread(target=hold)
     thread.start()
     started.wait(5)
-    # Long enough for the holder to find nothing and settle into waiting, so
-    # this cannot pass on a row that was already there.
-    time.sleep(1.0)
+    # Let the holder find nothing and settle into waiting, so this cannot
+    # pass on a row that was already there.
+    assert first_look.wait(10), "the held request never looked"
     client.post(
         f"/c/{page.id}",
         data={"body": "While you are in there, can the chart go first?"},

@@ -89,7 +89,11 @@ class _Receiver:
                 outer.event.set()
 
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread = threading.Thread(
+            target=self.server.serve_forever,
+            kwargs={"poll_interval": 0.01},
+            daemon=True,
+        )
 
     def start(self) -> str:
         self.thread.start()
@@ -265,7 +269,9 @@ def test_a_hanging_receiver_leaves_emit_returning_promptly_and_normally(
             time.sleep(5)  # well past the timeout this test configures below
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HangingHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
     thread.start()
     try:
         host, port = server.server_address

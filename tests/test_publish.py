@@ -231,6 +231,7 @@ def test_the_auth_scheme_is_case_insensitive(client, db):
     assert response.status_code == 201
 
 
+@pytest.mark.slow(reason="a real 3 MiB body through JSON parsing and the secret scan")
 def test_a_body_at_the_exact_size_cap_is_accepted(client, db):
     token, _ = keys.mint(db, agent="ops-seat")
     body = _padded_body(store.MAX_BODY_BYTES)

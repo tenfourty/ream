@@ -114,11 +114,11 @@ def test_rows_that_landed_are_still_returned_at_shutdown(db, monkeypatch):
 def test_normal_waiting_is_unchanged_when_nothing_is_shutting_down(db):
     began = time.monotonic()
 
-    rows = events.wait_for_agent(db, "ops-seat", since=0, seconds=1)
+    rows = events.wait_for_agent(db, "ops-seat", since=0, seconds=0.3)
 
     elapsed = time.monotonic() - began
     assert rows == []
-    assert 0.9 < elapsed < 3, f"a 1s hold took {elapsed:.2f}s"
+    assert 0.25 < elapsed < 3, f"a 0.3s hold took {elapsed:.2f}s"
 
 
 # ------------------------------------------------------------ the signal wiring

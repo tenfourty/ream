@@ -319,7 +319,7 @@ def test_the_events_page_size_is_bounded_at_the_route(db):
     assert client.get("/api/v1/events?since=-1", headers=auth(token)).status_code == 422
 
 
-def test_a_waiting_agent_is_answered_the_moment_an_event_lands(client, db):
+def test_a_waiting_agent_is_answered_the_moment_an_event_lands(client, db, first_look):
     """The mechanism by which an agent anywhere hears about an answer: it holds
     the request open, and Jeremy pressing a button is what ends the wait. No
     address for the agent is needed, which is the whole point -- a push needs
@@ -340,9 +340,9 @@ def test_a_waiting_agent_is_answered_the_moment_an_event_lands(client, db):
     thread = threading.Thread(target=hold)
     thread.start()
     started.wait(5)
-    # Give the holder time to find nothing and settle into waiting, so this
-    # cannot pass by the row simply being there before the request began.
-    time.sleep(1.0)
+    # Let the holder find nothing and settle into waiting, so this cannot
+    # pass by the row simply being there before the request began.
+    assert first_look.wait(10), "the held request never looked"
     _append_event(db, agent="waiter-seat", artifact_id=artifact_id)
     thread.join(20)
 
@@ -357,12 +357,12 @@ def test_a_wait_that_finds_nothing_returns_empty_rather_than_failing(client, db)
     forever, so a timeout must never look like an error."""
     token, _ = keys.mint(db, agent="quiet-seat")
     began = time.monotonic()
-    r = client.get("/api/v1/events?since=0&wait=1", headers=auth(token))
+    r = client.get("/api/v1/events?since=0&wait=0.3", headers=auth(token))
     waited = time.monotonic() - began
     assert r.status_code == 200
     assert r.json() == []
     # It really waited, and it did not overshoot what was asked for.
-    assert 0.9 < waited < 5
+    assert 0.25 < waited < 5
 
 
 def test_an_event_already_there_is_returned_without_waiting(client, db):
@@ -378,7 +378,7 @@ def test_an_event_already_there_is_returned_without_waiting(client, db):
     assert time.monotonic() - began < 5
 
 
-def test_one_agents_wait_is_never_ended_by_another_agents_event(client, db):
+def test_one_agents_wait_is_never_ended_by_another_agents_event(client, db, first_look):
     """The scoping that makes this safe to expose: a held request is a standing
     read of one agent's own events, so an unrelated agent's activity must not
     end it -- that would both wake the wrong agent and leak that something
@@ -390,12 +390,12 @@ def test_one_agents_wait_is_never_ended_by_another_agents_event(client, db):
     answer = {}
 
     def hold():
-        r = client.get("/api/v1/events?since=0&wait=3", headers=auth(mine))
+        r = client.get("/api/v1/events?since=0&wait=0.5", headers=auth(mine))
         answer["rows"] = r.json()
 
     thread = threading.Thread(target=hold)
     thread.start()
-    time.sleep(0.8)
+    assert first_look.wait(10), "the held request never looked"
     _append_event(db, agent="theirs-seat", artifact_id=their_artifact)
     thread.join(20)
 

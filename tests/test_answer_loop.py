@@ -2,7 +2,6 @@
 (homelab-ij8.106, 23 Sep 2026): its answers went unseen, its listener died at
 Cloudflare, and `list` hid the answers it most needed."""
 
-import threading
 import time
 
 import pytest
@@ -62,10 +61,10 @@ def test_through_cloudflare_a_hold_is_capped(client, auth, monkeypatch):
 
 
 def test_inside_the_house_the_hold_is_what_was_asked(client, auth, monkeypatch):
-    monkeypatch.setattr(api, "PUBLIC_MAX_WAIT", 0.1)
+    monkeypatch.setattr(api, "PUBLIC_MAX_WAIT", 0.05)
     started = time.monotonic()
-    client.get("/api/v1/events?since=999999&wait=1.2", headers=auth)
-    assert time.monotonic() - started >= 1.0
+    client.get("/api/v1/events?since=999999&wait=0.5", headers=auth)
+    assert time.monotonic() - started >= 0.4, "held for what was asked, not the cap"
 
 
 def test_every_answer_carries_the_cursor_for_now(db, client, auth):
@@ -196,26 +195,30 @@ def test_wait_prints_an_answer_that_arrived_before_it_started(
     assert "early" in capsys.readouterr().out
 
 
-def test_wait_wakes_when_he_answers(db, live, key_file, page, capsys):
+def test_wait_wakes_when_he_answers(
+    db, live, key_file, page, capsys, brief_holds, on_first_listen
+):
     path, _ = key_file
     asked = _ask(db, page)
-
-    def answer_soon():
-        time.sleep(1.5)
-        decisions.answer(db, asked.id, letter="b", note="later", by="jeremy")
-
-    threading.Thread(target=answer_soon, daemon=True).start()
+    # He answers only once the waiter is listening, so exit 0 means the
+    # answer woke it -- it cannot have been found by the first look.
+    thread = on_first_listen(
+        lambda: decisions.answer(db, asked.id, letter="b", note="later", by="jeremy")
+    )
     started = time.monotonic()
     assert _run(["wait", "--page", page.id, "--timeout", "40s"], path) == 0
     took = time.monotonic() - started
-    assert 1.0 < took < 15, took
+    assert took < 15, took
+    thread.join(5)
     assert "later" in capsys.readouterr().out
 
 
-def test_wait_says_nothing_yet_at_the_timeout(db, live, key_file, page, capsys):
+def test_wait_says_nothing_yet_at_the_timeout(
+    db, live, key_file, page, capsys, brief_holds
+):
     path, _ = key_file
     _ask(db, page)
-    assert _run(["wait", "--page", page.id, "--timeout", "2s"], path) == 3
+    assert _run(["wait", "--page", page.id, "--timeout", "0.1s"], path) == 3
     assert "nothing yet" in capsys.readouterr().err
 
 

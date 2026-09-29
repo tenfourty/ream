@@ -282,6 +282,10 @@ def _open_threads(key: str, base: str, page: str | None = None) -> list[dict]:
 # that keeps one code path inside the house and out.
 _HOLD = 50
 
+# How long a waiter pauses after a failed request (a deploy, a dropped
+# connection, Cloudflare blinking) before it asks again from the same cursor.
+_RETRY_PAUSE = 5
+
 
 def _wait(args, key: str, base: str) -> int:
     """Block until Jeremy answers, print the answer(s), exit 0.
@@ -353,7 +357,7 @@ def _wait(args, key: str, base: str) -> int:
                 raise
             # A deploy, a dropped connection, Cloudflare blinking: pause and ask
             # again from the same cursor, which loses nothing.
-            time.sleep(5)
+            time.sleep(_RETRY_PAUSE)
             continue
         if not isinstance(rows, list):
             rows = []
@@ -519,7 +523,7 @@ def _wait_review(args, key: str, base: str) -> int:
                 raise
             # A deploy or a dropped connection: ask again, and look again if the
             # failure was in the look, since its event is already consumed.
-            time.sleep(min(5, max(0, deadline - time.monotonic())))
+            time.sleep(min(_RETRY_PAUSE, max(0, deadline - time.monotonic())))
     print("nothing yet: no verdict before the timeout. Run it again.", file=sys.stderr)
     return 3
 

@@ -47,6 +47,11 @@ dev = [
     "ruff>=0.16.8",
 ]
 
+[tool.pytest.ini_options]
+# `slow`: a test that genuinely needs more than a second, each with a one-line
+# reason at the mark. At most ten may carry it; everything else stays under 1 s.
+markers = ["slow(reason): genuinely needs more than a second; says why"]
+
 [tool.ruff.lint]
 # S (bandit) and B (bugbear) are worth enabling deliberately on a service whose
 # whole job is handling credentials and publishing agent-authored HTML -- on

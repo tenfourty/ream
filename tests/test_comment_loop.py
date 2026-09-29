@@ -2,7 +2,6 @@
 2026): his comment wakes the agent's waiter, the agent lists, replies and
 settles threads from its own tool."""
 
-import threading
 import time
 
 import pytest
@@ -11,6 +10,9 @@ from test_client import key_file, live  # noqa: F401
 from artifacts import comments, decide, store
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>the plan</p></body></html>"
+
+# Held reads capped at 0.2 s so a wait expecting nothing ends at its deadline.
+pytestmark = pytest.mark.usefixtures("brief_holds")
 
 
 @pytest.fixture()
@@ -34,19 +36,21 @@ def _he_comments(db, page, body, quote="", thread_root=None):
     )
 
 
-def test_his_comment_wakes_the_waiter(db, live, key_file, page, capsys):
+def test_his_comment_wakes_the_waiter(
+    db, live, key_file, page, capsys, on_first_listen
+):
     path, _ = key_file
-
-    def comment_soon():
-        time.sleep(1.5)
-        _he_comments(
+    # He comments only once the waiter is listening, so exit 0 means the
+    # comment woke it -- it cannot have been found by the first look.
+    thread = on_first_listen(
+        lambda: _he_comments(
             db, page, "can you make the second chart bigger?", quote="the plan"
         )
-
-    threading.Thread(target=comment_soon, daemon=True).start()
+    )
     started = time.monotonic()
     assert _run(["wait", "--page", page.id, "--timeout", "40s"], path) == 0
-    assert 1.0 < time.monotonic() - started < 15
+    assert time.monotonic() - started < 15
+    thread.join(5)
     out = capsys.readouterr().out
     assert "NEEDS YOUR REPLY" in out
     assert "HE SAID: can you make the second chart bigger?" in out
@@ -58,7 +62,7 @@ def test_answers_only_ignores_comments(db, live, key_file, page, capsys):
     path, _ = key_file
     _he_comments(db, page, "a comment")
     assert (
-        _run(["wait", "--page", page.id, "--timeout", "2s", "--answers-only"], path)
+        _run(["wait", "--page", page.id, "--timeout", "0.1s", "--answers-only"], path)
         == 3
     )
 

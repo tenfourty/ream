@@ -11,6 +11,11 @@ from artifacts import decide, decisions, holds, store
 
 PAGE = "<!doctype html><title>Plan</title><p>Rotate the keys every 90 days.</p>"
 
+# Every held read the server makes here is capped at 0.2 s, so a wait that
+# expects nothing ends at its (short) deadline rather than after whole-second
+# holds. See conftest.brief_holds.
+pytestmark = pytest.mark.usefixtures("brief_holds")
+
 
 def _setup(db, key_file, capsys):
     path, _ = key_file
@@ -178,7 +183,7 @@ def test_verdict_only_ignores_marks_and_times_out(live, key_file, db, capsys):
                 "--review",
                 rid,
                 "--timeout",
-                "3s",
+                "1.1s",
                 "--verdict-only",
             ]
         )
@@ -192,7 +197,7 @@ def test_a_review_that_is_not_yours_is_refused(live, key_file, db, capsys):
     rid = decisions.ask_review(db, agent="other", artifact_id=other.id).id
     assert (
         decide.main(
-            ["--key-file", str(path), "wait", "--review", rid, "--timeout", "3s"]
+            ["--key-file", str(path), "wait", "--review", rid, "--timeout", "1.1s"]
         )
         == 1
     )
@@ -226,18 +231,6 @@ def test_ask_review_on_a_page_that_is_not_yours_is_refused(live, key_file, db):
     path, _ = key_file
     other = store.publish(db, "other", "Theirs", PAGE)
     assert decide.main(["--key-file", str(path), "ask-review", other.id]) == 1
-
-
-def _answer_later(db, rid, letter, delay=1.0):
-    import threading
-
-    def go():
-        time.sleep(delay)
-        decisions.answer(db, rid, letter=letter, by="jeremy")
-
-    thread = threading.Thread(target=go)
-    thread.start()
-    return thread
 
 
 def _mark(db, page):
@@ -275,9 +268,11 @@ def test_a_verdict_landing_between_the_look_and_the_listen_is_caught(
     assert code == 5 and time.monotonic() - t < 10
 
 
-def test_a_verdict_during_the_long_poll_is_caught(live, key_file, db, capsys):
+def test_a_verdict_during_the_long_poll_is_caught(
+    live, key_file, db, capsys, on_first_listen
+):
     path, _page, rid = _setup(db, key_file, capsys)
-    thread = _answer_later(db, rid, "d")
+    thread = on_first_listen(lambda: decisions.answer(db, rid, letter="d", by="jeremy"))
     t = time.monotonic()
     code = decide.main(
         ["--key-file", str(path), "wait", "--review", rid, "--timeout", "30s"]
@@ -287,9 +282,11 @@ def test_a_verdict_during_the_long_poll_is_caught(live, key_file, db, capsys):
 
 
 def test_a_transient_failure_in_a_relook_does_not_end_the_wait(
-    live, key_file, db, capsys, monkeypatch
+    live, key_file, db, capsys, monkeypatch, on_first_listen
 ):
     path, _page, rid = _setup(db, key_file, capsys)
+    monkeypatch.setattr(decide, "_RETRY_PAUSE", 0.01)
+    thread = on_first_listen(lambda: decisions.answer(db, rid, letter="c", by="jeremy"))
     real = decide._request
     seen = []
 
@@ -301,7 +298,6 @@ def test_a_transient_failure_in_a_relook_does_not_end_the_wait(
         return real(method, url, *a, **kw)
 
     monkeypatch.setattr(decide, "_request", flaky)
-    thread = _answer_later(db, rid, "c")
     code = decide.main(
         ["--key-file", str(path), "wait", "--review", rid, "--timeout", "30s"]
     )
@@ -339,7 +335,7 @@ def test_a_closed_review_does_not_count_older_marks_as_new(live, key_file, db, c
     assert decide.main(["--key-file", str(path), "ask-review", page.id]) == 0
     rid = capsys.readouterr().out.splitlines()[0].split()[0]
     decisions.close(db, "ops-seat", rid)
-    args = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "3s"]
+    args = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "1.1s"]
     assert decide.main(args) == 3
 
 
@@ -362,10 +358,10 @@ def test_a_result_file_in_a_missing_directory_is_refused_before_waiting(
 
 def test_a_short_timeout_is_told_in_seconds(live, key_file, db, capsys):
     path, _page, rid = _setup(db, key_file, capsys)
-    args = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "3s"]
+    args = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "1.1s"]
     assert decide.main(args) == 3
     err = capsys.readouterr().err
-    assert "up to 3s" in err and "0m" not in err
+    assert "up to 1s" in err and "0m" not in err
 
 
 def _reply_as_agent(live, path, page, rid_thread):
@@ -391,7 +387,7 @@ def test_a_reply_clears_the_marks_and_the_verdict_still_comes(
         body="hm",
         kind="comment",
     )
-    args = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "3s"]
+    args = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "1.1s"]
     assert decide.main(args) == 7
     assert decide.main(args) == 7  # no reply yet: still his word last
     capsys.readouterr()
@@ -440,7 +436,7 @@ def test_a_held_mark_does_not_wake_the_wait_until_it_is_released(
     assert _asked(path, page, "--hold") == 0
     rid = capsys.readouterr().out.splitlines()[0].split()[0]
     _mark(db, page)
-    wait = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "3s"]
+    wait = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "1.1s"]
     assert decide.main(wait) == 3
     assert "hm" not in capsys.readouterr().out
     holds.set_review_mode(db, rid, "live")

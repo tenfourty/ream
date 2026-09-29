@@ -43,7 +43,11 @@ class Relay:
                 self.wfile.write(data)
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        threading.Thread(
+            target=self.server.serve_forever,
+            kwargs={"poll_interval": 0.01},
+            daemon=True,
+        ).start()
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/scan"
 
 
@@ -174,6 +178,9 @@ def test_a_relay_that_swallows_packets_costs_seconds_not_the_scan_timeout(
     # TEST-NET-1 (RFC 5737): routable nowhere, so a SYN goes unanswered.
     monkeypatch.setenv(ggscan.URL_ENV, "http://192.0.2.1:9098/scan")
     monkeypatch.setenv(ggscan.TOKEN_ENV, TOKEN)
+    # The production connect bound is seconds; a short one proves the same
+    # thing -- the connect bound, not the 20 s scan timeout, is what is paid.
+    monkeypatch.setattr(ggscan, "CONNECT_SECONDS", 0.2)
     started = time.monotonic()
     assert ggscan.scan(PAGE) is None
     assert time.monotonic() - started < ggscan.CONNECT_SECONDS + 2

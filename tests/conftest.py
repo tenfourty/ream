@@ -24,8 +24,10 @@ import re
 import shutil
 import signal
 import tempfile
+import threading
 import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
@@ -36,7 +38,69 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
+from artifacts import events
 from artifacts.db import Database
+
+
+def _share_fastapi_type_adapters() -> None:
+    """Build each FastAPI parameter validator once per process, not once per app.
+
+    Almost every test builds its own app, and building one is ~0.13 s of CPU:
+    FastAPI makes a fresh pydantic `TypeAdapter` for every parameter of every
+    route (~200 per app), although the same `str`/`int`/`Query(...)` shapes
+    recur in every build. Sharing an adapter across equal fields halves the
+    build and takes about a minute of CPU off a full run. An adapter is a pure
+    function of what is keyed here -- the annotation, its metadata, the field's
+    attributes and the config, exactly what `ModelField.__post_init__` reads --
+    so a shared one validates identically. Bounded, because models defined
+    inside a router are new classes on every build and never hit.
+
+    Tests only; the service builds its one app once and gains nothing. If
+    FastAPI's internals move, this quietly stands down and tests are just
+    slower."""
+    try:
+        from fastapi._compat import v2
+    except ImportError:
+        return
+    if not (hasattr(v2, "asdict") and hasattr(v2.ModelField, "__post_init__")):
+        return
+    build = v2.ModelField.__post_init__
+    cache: OrderedDict = OrderedDict()
+
+    def frozen(value):
+        try:
+            hash(value)
+            return value
+        except TypeError:
+            return ("unhashable", type(value), repr(value))
+
+    def post_init(self) -> None:
+        parts = v2.asdict(self.field_info)
+        try:
+            key = (
+                parts["annotation"],
+                tuple(frozen(m) for m in parts["metadata"]),
+                tuple(sorted((k, frozen(v)) for k, v in parts["attributes"].items())),
+                repr(self.config),
+            )
+            hash(key)
+        except TypeError:
+            build(self)
+            return
+        adapter = cache.get(key)
+        if adapter is None:
+            build(self)
+            cache[key] = self._type_adapter
+            if len(cache) > 2048:
+                cache.popitem(last=False)
+        else:
+            cache.move_to_end(key)
+            self._type_adapter = adapter
+
+    v2.ModelField.__post_init__ = post_init
+
+
+_share_fastapi_type_adapters()
 
 # How the controller hands its server to the xdist workers it spawns.
 _URI_ENV = "ARTIFACTS_TEST_PG_URI"
@@ -156,6 +220,80 @@ def pytest_unconfigure(config) -> None:
     if not _is_worker(config):
         _Server.stop()
         os.environ.pop(_URI_ENV, None)
+
+
+@pytest.fixture(autouse=True)
+def _prompt_event_looks(monkeypatch):
+    """A held wait looks for new events every half second in production, so a
+    test that waits on one idled up to 0.5 s per wake. Tests look every 20 ms;
+    a test that needs a particular interval still sets its own."""
+    monkeypatch.setattr(events, "_LOOK_EVERY", 0.02)
+
+
+@pytest.fixture()
+def brief_holds(monkeypatch):
+    """Cap every held `/events` read the server makes at 0.2 s.
+
+    The CLI waiters ask the server to hold for whole seconds (at least one),
+    so a test that expects "nothing before the timeout" used to sit through
+    one or more full seconds of an empty hold. With the server's side capped,
+    a short timeout (`wait --timeout 0.1s`, `wait --review --timeout 1.1s`)
+    still runs the client's real loop -- look, listen once, give up at the
+    deadline -- in about a quarter of a second."""
+    real = events.wait_for_agent
+
+    def brief(db, agent, *, seconds, **kwargs):
+        return real(db, agent, seconds=min(seconds, 0.2), **kwargs)
+
+    monkeypatch.setattr(events, "wait_for_agent", brief)
+
+
+@pytest.fixture()
+def on_first_listen(monkeypatch):
+    """`arm(action)`: run `action` in a thread the moment an `artifacts-decide`
+    waiter first asks the server to HOLD -- i.e. while it is listening, which is
+    what these tests are about -- instead of after a guessed sleep. Returns the
+    thread, to join."""
+    from artifacts import decide
+
+    def arm(action):
+        real = decide._request
+        fired = threading.Event()
+
+        def go():
+            time.sleep(0.05)  # let the held request reach the server first
+            action()
+
+        thread = threading.Thread(target=go, daemon=True)
+
+        def listening(method, url, *args, **kwargs):
+            if "&wait=" in url and not fired.is_set():
+                fired.set()
+                thread.start()
+            return real(method, url, *args, **kwargs)
+
+        monkeypatch.setattr(decide, "_request", listening)
+        return thread
+
+    return arm
+
+
+@pytest.fixture()
+def first_look(monkeypatch):
+    """Set once a held wait has made its first look and found nothing, i.e.
+    it has settled into waiting. Waiting on this instead of a fixed sleep
+    means the test proceeds the moment the condition is true, under any load."""
+    real = events.list_for_agent
+    looked = threading.Event()
+
+    def look(*args, **kwargs):
+        rows = real(*args, **kwargs)
+        if not rows:
+            looked.set()
+        return rows
+
+    monkeypatch.setattr(events, "list_for_agent", look)
+    return looked
 
 
 @pytest.fixture(scope="session")

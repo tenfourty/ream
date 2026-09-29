@@ -1,6 +1,7 @@
 """Sharing a page with people outside his space (homelab-ij8.101, Jeremy's
 rulings: revocable at once; 1a latest version; 2a just the page; 3a only him)."""
 
+import functools
 import re
 
 import pytest
@@ -30,9 +31,17 @@ def _share(gallery, page):
     return url
 
 
+@functools.lru_cache(maxsize=1)
+def _outside(db):
+    """The whole service as the outside world reaches it, built once per test
+    (keyed on that test's own `db`) rather than once per request: building it
+    is ~0.15 s of route set-up, and these tests open three or four links."""
+    return TestClient(create_app(db))
+
+
 def _open(db, url):
     host, path = re.match(r"https://([^/]+)(/.*)", url).groups()
-    return TestClient(create_app(db)).get(path, headers={"host": host})
+    return _outside(db).get(path, headers={"host": host})
 
 
 def test_he_shares_and_anyone_with_the_link_reads_the_page(db, gallery, page):

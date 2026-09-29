@@ -64,7 +64,7 @@ def test_a_render_that_prints_something_that_is_not_a_page_publishes_nothing(
 
 
 def test_a_render_that_hangs_does_not_hang_the_caller(tmp_path, logged, monkeypatch):
-    monkeypatch.setattr(republish, "RENDER_TIMEOUT", 1)
+    monkeypatch.setattr(republish, "RENDER_TIMEOUT", 0.2)
     assert republish.render("sleep 30") is None
     assert "render" in logged.read_text().lower()
 

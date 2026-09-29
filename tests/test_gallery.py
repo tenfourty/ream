@@ -1,5 +1,7 @@
+import contextlib
 import re
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -123,8 +125,15 @@ def _ids_in_order(page: str) -> list[str]:
 
 
 def test_the_list_is_capped_at_two_hundred_rows(db):
-    for i in range(201):
-        store.publish(db, "ops-seat", f"page {i}", _PAGE)
+    # The real publish, 201 times, over ONE connection: a fresh connection per
+    # publish was most of this test's ~3 s.
+    with psycopg.connect(db.dsn, autocommit=True) as conn:
+        db.connect = contextlib.contextmanager(lambda: (yield conn))
+        try:
+            for i in range(201):
+                store.publish(db, "ops-seat", f"page {i}", _PAGE)
+        finally:
+            del db.connect
     page = (
         TestClient(create_gallery_app(db))
         .get("/", headers={"Remote-User": "jeremy"})
