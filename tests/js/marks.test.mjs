@@ -368,5 +368,19 @@ const mark = (over = {}) => ({ id: "m1", kind: "remove", quote: QUOTE,
   ok(msg.anchor.suffix === "b".repeat(31), "a trailing half emoji is dropped whole from the suffix, never split");
 }
 
+// 13. a held mark goes in its own dotted highlight, never in a kind's group
+{
+  const p = E("p", QUOTE);
+  const g = build(E("body", p), { "body>p:nth-of-type(1)": p });
+  g.send([mark({ id: "h1", kind: "", held: true })]);
+  const [[msg]] = g.reports();
+  ok(JSON.stringify(msg.placed) === '["h1"]', "a held mark is placed");
+  const h = g.registry.get("ar-held");
+  ok(h && h.ranges.length === 1 && String(h.ranges[0]) === QUOTE, "painted in ar-held");
+  ok(["ar-comment", "ar-remove", "ar-good"].every((n) => g.registry.get(n).ranges.length === 0), "and in no kind's group");
+  const css = g.doc.getElementById("ar-mark-style").textContent;
+  ok(css.includes("::highlight(ar-held){text-decoration:underline dotted}") && !/ar-held\)\{[^}]*background/.test(css), "dotted underline, no background");
+}
+
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

@@ -499,3 +499,105 @@ def test_an_archive_racing_a_mark_leaves_no_mark_held_on_a_closed_review(
     assert out["row"].held is True
     assert not any(_held_flags(db, page).values())
     assert len(_comment_events(db, [out["row"].id])) == 1
+
+
+# ---- the switch and the held marks drawn for him (task 3) ----
+
+SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
+
+
+@pytest.fixture()
+def gclient(db, monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    return TestClient(create_gallery_app(db=db))
+
+
+def _mode_post(client, rid, mode, headers=SAME_ORIGIN):
+    return client.post(
+        f"/d/{rid}/mode",
+        data={"mode": mode},
+        headers=headers,
+        follow_redirects=False,
+    )
+
+
+def test_the_held_card_offers_the_switch_and_counts_held_marks(db, gclient, nudges):
+    page, row, _ = _held_review(db, marks=2)
+    html = gclient.get(f"/a/{page.id}").text
+    assert "Holding your marks until your verdict" in html
+    assert f'action="/d/{row.id}/mode"' in html
+    assert 'name="mode" value="live"' in html and "Send them as I go" in html
+    assert "2 marks held" in html
+    assert "Approved with held marks counts as Approved with notes." in html
+
+
+def test_one_held_mark_is_singular_and_none_shows_no_count(db, gclient, nudges):
+    page, _row, _ = _held_review(db, marks=1)
+    assert "1 mark held" in gclient.get(f"/a/{page.id}").text
+    empty, _row2, _ = _held_review(db, marks=0)
+    html = gclient.get(f"/a/{empty.id}").text
+    assert "Holding your marks until your verdict" in html
+    assert "marks held" not in html and "mark held" not in html
+    assert "counts as Approved with notes" not in html
+
+
+def test_flipping_to_live_releases_and_shows_the_live_card(db, gclient, nudges):
+    page, row, _made = _held_review(db, marks=2)
+    resp = _mode_post(gclient, row.id, "live")
+    assert resp.status_code == 303
+    assert resp.headers["location"] == f"/a/{page.id}"
+    html = gclient.get(f"/a/{page.id}").text
+    assert "Sending your marks as you make them" in html
+    assert "Hold them until my verdict" in html
+    assert 'name="mode" value="held"' in html
+    assert "Holding your marks until your verdict" not in html
+    assert not any(_held_flags(db, page).values())
+    back = _mode_post(gclient, row.id, "held")
+    assert back.status_code == 303
+    assert "Holding your marks until your verdict" in gclient.get(f"/a/{page.id}").text
+
+
+def test_the_switch_refuses_bad_modes_questions_settled_and_cross_origin(
+    db, gclient, nudges
+):
+    page, row, _ = _held_review(db, marks=1)
+    assert _mode_post(gclient, row.id, "loud").status_code == 422
+    assert _mode_of(db, row.id) == "held"
+    q = decisions.ask(
+        db,
+        agent="seat",
+        artifact_id=page.id,
+        question="q?",
+        options=[{"letter": "a", "label": "x"}, {"letter": "b", "label": "y"}],
+    )
+    assert _mode_post(gclient, q.id, "live").status_code == 404
+    cross = gclient.post(
+        f"/d/{row.id}/mode",
+        data={"mode": "live"},
+        headers={"sec-fetch-site": "cross-site"},
+        follow_redirects=False,
+    )
+    assert cross.status_code == 403
+    assert _mode_of(db, row.id) == "held"
+    decisions.answer(db, row.id, letter="c", by="jeremy")
+    settled = _mode_post(gclient, row.id, "live")
+    assert settled.status_code == 409
+    assert "Changes requested" in settled.text
+
+
+def test_the_panel_tags_a_held_row_and_the_page_gets_the_flag(db, gclient, nudges):
+    page, row, _made = _held_review(db, marks=1)
+    html = gclient.get(f"/a/{page.id}").text
+    assert '<span class="htag">held</span>' in html
+    assert '"held": true' in html or '"held":true' in html
+    _mode_post(gclient, row.id, "live")
+    html = gclient.get(f"/a/{page.id}").text
+    assert '<span class="htag">held</span>' not in html
+    assert '"held": false' in html or '"held":false' in html
+
+
+def test_the_shim_names_the_held_highlight():
+    from artifacts import content
+
+    source = content._viewer_report()
+    assert "ar-held" in source and "underline dotted" in source

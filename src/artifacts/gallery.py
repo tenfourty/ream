@@ -34,6 +34,7 @@ from artifacts import (
     email_share,
     events,
     frame_pass,
+    holds,
     keys,
     mail,
     stamp,
@@ -264,6 +265,10 @@ main{display:block}
   .ask button.chosen,.ask button.rec.chosen{color:#10201d}}
 .rtag{font:600 .7rem var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--accent)}
 .rhint{font-size:.85rem;color:var(--muted);margin:.2rem 0}
+.htag{font:600 .7rem var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-left:.5rem}
+.rmode{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;font-size:.85rem;color:var(--muted);margin:.2rem 0}
+.rmode form{display:inline;margin:0}
+.rmode .rheld{font:600 .7rem var(--mono);letter-spacing:.06em;color:var(--ink)}
 .verdict{margin:.3rem 0}
 .ask .tag{font:.68rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
   opacity:.8;margin-left:.45rem;white-space:nowrap}
@@ -2340,10 +2345,12 @@ def _render_comments(
         # paragraph at all; what it IS is already the tag on its quote, in
         # `quoted()` below (final review, Item 4a).
         note = f"<p>{escape(row.body)}</p>" if row.body.strip() else ""
+        held = '<span class="htag">held</span>' if getattr(row, "held", False) else ""
         return (
             f'<li class="cmt {escape(row.author_kind)}">'
             f'<span class="cwho">{who}</span>'
             f'<span class="cwhen">{escape(when)}</span>'
+            f"{held}"
             f"{note}</li>"
         )
 
@@ -2814,6 +2821,7 @@ def _render_decisions(
     rows: list[decisions.DecisionRow],
     listening_since: str | None = None,
     outcomes: dict[str, list] | None = None,
+    held_count: int = 0,
 ) -> tuple[str, str]:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
@@ -2872,6 +2880,37 @@ def _render_decisions(
         label = "Since you were asked" if row.answer is None else "What it led to"
         return f'<div class="since"><b>{label}</b><ul>{items}</ul></div>'
 
+    def _mode_switch(row: decisions.DecisionRow, held: int) -> str:
+        """Hold or live, for an OPEN review only: his marks reach the agent as he
+        makes them, or wait for his verdict. The mode is the server's, so every
+        device shows the same one."""
+        if row.review_mode == "held":
+            state, button, target = (
+                "Holding your marks until your verdict",
+                "Send them as I go",
+                "live",
+            )
+        else:
+            state, button, target = (
+                "Sending your marks as you make them",
+                "Hold them until my verdict",
+                "held",
+            )
+        count = ""
+        approved = ""
+        if row.review_mode == "held" and held > 0:
+            count = f' <span class="rheld">{held} mark{"" if held == 1 else "s"} held</span>'
+            approved = (
+                '<p class="rhint">Approved with held marks counts as '
+                "Approved with notes.</p>"
+            )
+        return (
+            f'<div class="rmode"><span>{state}</span>{count}'
+            f'<form method="post" action="/d/{escape(row.id)}/mode">'
+            f'<button type="submit" name="mode" value="{target}">{button}</button>'
+            f"</form></div>{approved}"
+        )
+
     def _card(row: decisions.DecisionRow, anchorable: bool = True) -> str:
         """`anchorable` carries the id the page's script matches a slot against.
         Only an OPEN decision gets one: a settled decision lives inside a collapsed
@@ -2886,6 +2925,8 @@ def _render_decisions(
             else ""
         )
         anchor = f' data-decision-id="{escape(row.id)}"' if anchorable else ""
+        if is_review and row.answer is None:
+            hint += _mode_switch(row, held_count)
         if is_review and row.answer is not None:
             # One verdict counts: a settled review has no form.
             label = next(
@@ -3758,6 +3799,16 @@ def gallery_router(db: Database) -> APIRouter:
             decision_rows,
             listening_since=events.last_read(db, row[2]),
             outcomes=decisions.outcomes_for_artifact(db, artifact_id),
+            held_count=(
+                holds.held_count(db, artifact_id)
+                if any(
+                    getattr(r, "kind", "") == "review"
+                    and r.answer is None
+                    and r.closed_at is None
+                    for r in decision_rows
+                )
+                else 0
+            ),
         )
         # A fresh pass per view, good once and for minutes (homelab-ij8.101), minted only
         # on a page Jeremy's Authelia session can load. It travels in the iframe's src, and
@@ -4162,6 +4213,39 @@ def gallery_router(db: Database) -> APIRouter:
             headers={**gallery_headers(), "cache-control": "no-store"},
         )
 
+    def _already_decided_page(row: decisions.DecisionRow) -> HTMLResponse:
+        label = next(
+            (o["label"] for o in row.options if o["letter"] == row.answer),
+            row.answer,
+        )
+        return HTMLResponse(
+            _shell(
+                "Already decided",
+                f"<p>This review already has a verdict: <b>{escape(label)}</b>, "
+                f"given {escape(_when(row.answered_at or ''))}. That is the "
+                f'one that counts. <a href="/a/{escape(row.artifact_id)}">'
+                "Back to the page</a></p>",
+            ),
+            status_code=409,
+            headers=gallery_headers(),
+        )
+
+    @router.post("/d/{decision_id}/mode")
+    def review_mode(
+        decision_id: str,
+        mode: str = Form(...),
+        _guard: None = Depends(_same_origin_write),
+    ):
+        try:
+            artifact_id, _released = holds.set_review_mode(db, decision_id, mode)
+        except ValueError as exc:
+            raise HTTPException(422, "mode is held or live") from exc
+        except decisions.AlreadyDecided as exc:
+            return _already_decided_page(exc.row)
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such open review") from exc
+        return RedirectResponse(f"/a/{artifact_id}", status_code=303)
+
     @router.post("/d/{decision_id}/answer")
     def answer_decision(
         decision_id: str,
@@ -4190,21 +4274,7 @@ def gallery_router(db: Database) -> APIRouter:
         except decisions.InvalidAnswer as exc:
             raise HTTPException(422, "not one of this decision's options") from exc
         except decisions.AlreadyDecided as exc:
-            label = next(
-                (o["label"] for o in exc.row.options if o["letter"] == exc.row.answer),
-                exc.row.answer,
-            )
-            return HTMLResponse(
-                _shell(
-                    "Already decided",
-                    f"<p>This review already has a verdict: <b>{escape(label)}</b>, "
-                    f"given {escape(_when(exc.row.answered_at or ''))}. That is the "
-                    f'one that counts. <a href="/a/{escape(exc.row.artifact_id)}">'
-                    "Back to the page</a></p>",
-                ),
-                status_code=409,
-                headers=gallery_headers(),
-            )
+            return _already_decided_page(exc.row)
         except store.NotFound as exc:
             raise HTTPException(404, "no such open decision") from exc
         return RedirectResponse(f"/a/{row.artifact_id}", status_code=303)

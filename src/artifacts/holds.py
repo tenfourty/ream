@@ -53,6 +53,19 @@ def page_mode(conn, artifact_id: str, *, lock: bool = False) -> str | None:
     return "held" if "held" in modes else "live"
 
 
+def held_count(conn_or_db, artifact_id: str) -> int:
+    """Open held root marks on the page, for the review card. Takes a connection
+    or a Database."""
+    sql = (
+        "select count(*) from comment where artifact_id = %s and held"
+        " and thread_root is null and resolved_at is null"
+    )
+    if hasattr(conn_or_db, "connect"):
+        with conn_or_db.connect() as conn:
+            return conn.execute(sql, (artifact_id,)).fetchone()[0]
+    return conn_or_db.execute(sql, (artifact_id,)).fetchone()[0]
+
+
 def release(conn, artifact_id: str, *, emit: bool) -> list[str]:
     """Make every held comment of the page visible to the agent; returns the ids.
 

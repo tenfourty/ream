@@ -242,7 +242,7 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "return null;"
         "try{return place(m,{v:null})}catch(x){return null}}}"
         "function paint(list){var G={comment:new Highlight(),remove:new Highlight(),"
-        "looks_good:new Highlight()},placed=[],unplaced=[],ix={v:null};"
+        "looks_good:new Highlight()},held=new Highlight(),placed=[],unplaced=[],ix={v:null};"
         # Only the first 200 are ever placed or painted -- a real cost, worth
         # capping. Past that, a mark with a usable id is still reported
         # unplaced rather than vanishing: the gallery's list of open marks and
@@ -257,14 +257,17 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         '&&typeof m.anchor.path==="string"){try{r=place(m,ix)}catch(x){r=null}}'
         # hasOwnProperty, not `G[m.kind]||`: a kind of "constructor" would
         # otherwise pick Object and throw on .add().
-        "var g=Object.prototype.hasOwnProperty.call(G,m.kind)?G[m.kind]:G.comment;"
+        # A held mark arrives with kind "" (the page never learns the kind)
+        # and is drawn dotted, in a highlight of its own.
+        "var g=m.held===true?held:Object.prototype.hasOwnProperty.call(G,m.kind)?G[m.kind]:G.comment;"
         "if(r){g.add(r);placed.push(m.id)}else unplaced.push(m.id)});"
         'CSS.highlights.set("ar-comment",G.comment);CSS.highlights.set("ar-remove",G.remove);'
-        'CSS.highlights.set("ar-good",G.looks_good);'
+        'CSS.highlights.set("ar-good",G.looks_good);CSS.highlights.set("ar-held",held);'
         'if(!document.getElementById("ar-mark-style")){var st=document.createElement("style");'
         'st.id="ar-mark-style";st.textContent="::highlight(ar-comment){background:rgba(217,164,0,.28)}"'
         '+"::highlight(ar-remove){background:rgba(192,57,43,.22);text-decoration:line-through}"'
-        '+"::highlight(ar-good){background:rgba(46,157,87,.22)}";'
+        '+"::highlight(ar-good){background:rgba(46,157,87,.22)}"'
+        '+"::highlight(ar-held){text-decoration:underline dotted}";'
         "(document.head||document.documentElement).appendChild(st)}"
         # THE REPLY ITSELF IS CAPPED (final review, Item 3's own follow-up:
         # homelab-ij8.111, Item 2). `unplaced` can hold one id for every mark
