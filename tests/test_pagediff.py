@@ -172,38 +172,26 @@ def test_too_many_tokens_falls_back_with_reason():
     big = "<body>" + " ".join(["w"] * 31000) + "</body>"
     doc, reason = render_changes(big, big + " x")
     assert reason == "too large to mark up changes"
-    assert (
-        '<div class="ar-diff-banner">Showing the page as it now is: too large to mark up changes</div>'
-        in doc
-    )
-    assert "ar-diff-ins" not in doc
+    assert doc == big + " x"
 
 
 def test_mostly_script_falls_back_with_reason():
     new = "<html><body><p>hi</p><script>" + "x=1;" * 500 + "</script></body></html>"
     doc, reason = render_changes("<html><body><p>hi</p></body></html>", new)
     assert reason == "this page draws itself with script"
-    assert (
-        '<div class="ar-diff-banner">Showing the page as it now is: this page draws itself with script</div>'
-        in doc
-    )
+    assert doc == new
 
 
-def test_banner_goes_after_body_tag():
-    new = (
-        '<html><body class="x"><p>hi</p><script>'
-        + "x=1;" * 500
-        + "</script></body></html>"
-    )
-    doc, _ = render_changes("<p>a</p>", new)
-    m = re.search(r'<body class="x"><div class="ar-diff-banner">', doc)
-    assert m, doc[:200]
-
-
-def test_banner_without_body_goes_first():
-    new = "<p>hi</p><script>" + "x=1;" * 500 + "</script>"
-    doc, _ = render_changes("<p>a</p>", new)
-    assert doc.startswith('<div class="ar-diff-banner">')
+def test_fallback_returns_the_new_page_byte_for_byte():
+    for new in (
+        '<html><body class="x"><p>hi</p><script>' + "x=1;" * 500 + "</script>",
+        "<p>hi</p><script>" + "x=1;" * 500 + "</script>",
+        " w" * 31000 + "<body onload=alert(1) <p>",
+    ):
+        doc, reason = render_changes("<p>a</p>", new)
+        assert reason is not None
+        assert doc == new
+        assert "ar-diff" not in doc
 
 
 def test_degenerate_repeated_phrase_page_is_bounded():
@@ -327,6 +315,13 @@ def test_recursive_matching_is_budgeted():
     assert reason == "too large to mark up changes"
 
 
+def test_svg_ambiguity_has_its_own_reason():
+    new = "<svg><style>a < b</style></svg><p>x</p>"
+    doc, reason = render_changes("<p>y</p>", new)
+    assert reason == "this page uses markup browsers read differently"
+    assert doc == new
+
+
 def test_title_and_textarea_are_never_marked_inside():
     old = "<title>Old name</title><textarea>one two</textarea><p>x</p>"
     new = "<title>New name</title><textarea>one three</textarea><p>x</p>"
@@ -439,3 +434,126 @@ def test_empty_comment_forms_do_not_swallow_the_page():
         new = f"<p>a</p>{empty}<p>two</p><!-- x -->"
         doc, _ = render_changes(old, new)
         assert marks(doc) == (["two"], ["one"]), doc
+
+
+# --- second review ------------------------------------------------------------
+
+
+def _bounded(old, new, limit=1.0):
+    t = time.perf_counter()
+    doc, reason = render_changes(old, new)
+    took = time.perf_counter() - t
+    assert took < limit, took
+    return doc, reason
+
+
+def test_long_svg_attribute_run_is_linear():
+    new = "<svg a=" + "b=" * 80000 + " c/>"
+    _bounded("<p>x</p>", new)
+    _bounded(new, new + "<p>y</p>")
+
+
+def test_many_renamed_tags_are_linear():
+    _bounded("<p>" * 20000, "<q>" * 20000)
+
+
+def test_many_stray_end_tags_are_linear():
+    _bounded("<p>x</p>", "<div>" * 25000 + "</x>" * 25000)
+    _bounded("<p>x</p>", "<table>" + "<div>" * 25000 + "<td>a</td>" * 5000)
+
+
+def test_deep_lists_do_not_recurse():
+    base = "<ul>" * 3000 + "<i>"
+    _, reason = _bounded(base + "gone keep", base + "keep")
+    assert reason in (None, "too large to mark up changes")
+
+
+def test_select_anywhere_in_the_stack_is_select_context():
+    old = "<select><option><b>Red Blue</b></option></select>"
+    new = "<select><option><b>Red Green</b></option></select>"
+    doc, _ = render_changes(old, new)
+    inner = doc[doc.index("<select>") : doc.index("</select>")]
+    assert "ar-diff" not in inner, doc
+
+
+def test_deletion_waits_for_text_when_formatting_would_be_reopened():
+    old = "<p><i onclick=f()>a</p><p>gone</p><div>b</div>"
+    new = "<p><i onclick=f()>a</p><div>b</div>"
+    doc, _ = render_changes(old, new)
+    # The browser re-opens <i> at the first text after </p>; our <del> must not
+    # be that text, or a cloned <i onclick> would wrap the whole <div>.
+    assert doc.index("<div>") < doc.index(DEL) < doc.index("b</div>"), doc
+
+
+def test_nothing_goes_before_a_frameset():
+    doc, _ = render_changes(
+        "<p>gone</p><frameset><frame src=a></frameset>",
+        "<frameset><frame src=a></frameset>",
+    )
+    assert doc.startswith("<frameset>"), doc
+
+
+# --- the safe entry point -----------------------------------------------------
+
+from artifacts import pagediff
+
+
+def _sleepy(old, new):
+    time.sleep(10)
+    return new, None
+
+
+def _boom(old, new):
+    raise RuntimeError("boom")
+
+
+def _adds_a_tag(old, new):
+    return "<img src=x onerror=alert(1)>" + new, None
+
+
+def test_safely_times_out_and_kills_the_worker(monkeypatch):
+    monkeypatch.setattr(pagediff, "_render", _sleepy)
+    pagediff._CACHE.clear()
+    t = time.perf_counter()
+    doc, reason = pagediff.render_changes_safely("<p>a</p>", "<p>b</p>", timeout=1.0)
+    assert time.perf_counter() - t < 3
+    assert (doc, reason) == ("<p>b</p>", "could not mark up changes")
+    proc = pagediff._last_killed
+    assert proc is not None
+    assert proc.poll() is not None  # the worker process is gone
+
+
+def test_safely_survives_an_exception(monkeypatch):
+    monkeypatch.setattr(pagediff, "_render", _boom)
+    pagediff._CACHE.clear()
+    doc, reason = pagediff.render_changes_safely("<p>a</p>", "<p>c</p>")
+    assert (doc, reason) == ("<p>c</p>", "could not mark up changes")
+
+
+def test_safely_marks_changes_normally():
+    pagediff._CACHE.clear()
+    doc, reason = pagediff.render_changes_safely("<p>a x</p>", "<p>b x</p>")
+    assert reason is None
+    assert marks(doc) == (["b"], ["a"])
+
+
+def test_output_check_turns_an_added_tag_into_a_fallback(monkeypatch):
+    monkeypatch.setattr(pagediff, "render_changes", _adds_a_tag)
+    assert pagediff._checked_render("<p>a</p>", "<p>b</p>") == (
+        "<p>b</p>",
+        "could not mark up changes",
+    )
+
+
+def test_output_check_passes_our_own_marks_and_the_authors():
+    new = "<p>keep <ins>mine</ins> also</p>"
+    doc, reason = pagediff._checked_render("<p>keep <ins>mine</ins> too</p>", new)
+    assert reason is None and marks(doc) == (["also"], ["too"])
+
+
+def test_second_call_is_served_from_the_cache(monkeypatch):
+    pagediff._CACHE.clear()
+    first = pagediff.render_changes_safely("<p>a y</p>", "<p>d y</p>")
+    monkeypatch.setattr(pagediff, "_render", _boom)
+    assert pagediff.render_changes_safely("<p>a y</p>", "<p>d y</p>") == first
+    assert first[1] is None

@@ -19,11 +19,17 @@ marks themselves:
   budget. Past any bound the page falls back to the plain new document.
 """
 
+import hashlib
+import os
 import re
+import subprocess
+import sys
+import threading
 import time
 from bisect import bisect_left
-from collections import Counter
+from collections import Counter, OrderedDict
 from difflib import Match, SequenceMatcher
+from html.parser import HTMLParser
 
 MAX_TOKENS = 60_000
 MAX_BYTES = 3 * 1024 * 1024  # the page cap
@@ -35,6 +41,8 @@ MAX_MATCH_SECONDS = 1.5
 
 REASON_LARGE = "too large to mark up changes"
 REASON_SCRIPT = "this page draws itself with script"
+REASON_MIXED = "this page uses markup browsers read differently"
+REASON_FAILED = "could not mark up changes"
 
 _INS = '<ins class="ar-diff-ins">'
 _DEL = '<del class="ar-diff-del">'
@@ -188,7 +196,7 @@ def _tokenize(s: str, strict: bool = True) -> tuple[list[str], list[int], bool]:
             html_end = gt + 1 if gt >= 0 else n
             foreign_end = cd + 3 if cd >= 0 else n
             if html_end != foreign_end and zone and strict:
-                raise _Unsafe(REASON_LARGE)
+                raise _Unsafe(REASON_MIXED)
             j = html_end
             open_end = gt < 0
         else:
@@ -233,12 +241,30 @@ def _alpha(c: str) -> bool:
     return c.isascii() and c.isalpha()
 
 
-# A "/>" whose "/" belongs to an unquoted attribute value does not self-close.
-_SLASH_IN_VALUE = re.compile(r"""=[\t\n\f\r ]*(?:[^\t\n\f\r >"'][^\t\n\f\r >]*)?/>$""")
+_LAST_SPACE = re.compile(r"[\t\n\f\r ][^\t\n\f\r ]*\Z")
+_UNQUOTED_EQ = re.compile(r"""=(?!["'])""")
 
 
 def _self_closing(tag: str) -> bool:
-    return tag.endswith("/>") and not _SLASH_IN_VALUE.search(tag)
+    """A trailing "/>" self-closes unless its "/" ends an unquoted value.
+
+    Only the last attribute can own that "/", and an unquoted value holds no
+    whitespace, so only the text after the last space is examined (linear).
+    Unsure cases answer "not self-closing", which keeps the foreign region open:
+    the cautious reading.
+    """
+    if not tag.endswith("/>"):
+        return False
+    body = tag[:-2]
+    m = _LAST_SPACE.search(body)
+    if m is None:
+        seg, before = body, ""
+    else:
+        seg, before = body[m.start() + 1 :], body[: m.start()]
+    if _UNQUOTED_EQ.search(seg + "/"):
+        return False  # "a=b/>", "a=/>", "a=b=c/>"
+    tail = before.rstrip("\t\n\f\r ")
+    return not (tail.endswith("=") and (not seg or seg[0] not in "\"'"))
 
 
 def _raw_text_end(s, i, j, name, finder, zone, strict) -> tuple[int, bool]:
@@ -251,13 +277,13 @@ def _raw_text_end(s, i, j, name, finder, zone, strict) -> tuple[int, bool]:
         zone = False
     if name == "plaintext":
         if zone:
-            raise _Unsafe(REASON_LARGE)
+            raise _Unsafe(REASON_MIXED)
         return n, True
     e = finder.search(_END_RE[name], j)
     body = s[j:] if e < 0 else s[j:e]
     if zone and "<" in body:
         # Read as markup there by some parsers and as text by others.
-        raise _Unsafe(REASON_SCRIPT if name == "script" else REASON_LARGE)
+        raise _Unsafe(REASON_MIXED)
     if strict and name == "script" and "<!--" in body:
         k = body.find("<!--")
         if _SCRIPT_OPEN.search(body, k):
@@ -322,22 +348,8 @@ def _escape_text(tok: str) -> str:
 
 
 def _fallback(new_html: str, reason: str) -> tuple[str, str]:
-    banner = (
-        f'<div class="ar-diff-banner">Showing the page as it now is: {reason}</div>'
-    )
-    at = 0
-    if len(new_html) <= MAX_BYTES:
-        try:
-            toks, region, _ = _tokenize(new_html)
-        except _Unsafe:
-            toks, region = [], []
-        pos = 0
-        for tok, r in zip(toks, region, strict=True):
-            pos += len(tok)
-            if r < 0 and _tag_name(tok) == "body":
-                at = pos
-                break
-    return new_html[:at] + banner + new_html[at:], reason
+    """The new page exactly as it is; the reason is shown beside it, not in it."""
+    return new_html, reason
 
 
 # --- matcher --------------------------------------------------------------------
@@ -470,17 +482,36 @@ def _starts_body(tok: str) -> bool:
         return False
     name = _tag_name(tok)
     if name is not None:
-        return name not in _HEAD
+        # Text before a frameset would start a body and void the frameset.
+        return name not in _HEAD and name not in ("frameset", "frame")
     return _end_name(tok) in ("body", "html", "br")
 
 
-class _Frame:
-    __slots__ = ("last_close", "name", "start")
+_FORMATTING = frozenset(
+    "a b big code em font i nobr s small strike strong tt u".split()  # noqa: SIM905
+)
+_MARKER = frozenset("td th caption applet object marquee template".split())  # noqa: SIM905
+MAX_PLACE_STEPS = 2_000_000
+# Start tags before which the browser does not clone formatting elements back.
+_NO_REOPEN = frozenset(
+    "address article aside blockquote center details dialog dir div dl fieldset "  # noqa: SIM905
+    "figcaption figure footer header hgroup main menu nav ol p search section "
+    "summary ul h1 h2 h3 h4 h5 h6 pre listing form li dd dt plaintext table hr "
+    "param source track textarea caption col colgroup frame frameset head tbody "
+    "td tfoot th thead tr html body base basefont bgsound link meta noframes "
+    "script style template title".split()
+)
 
-    def __init__(self, name: str, start: int):
+
+class _Frame:
+    __slots__ = ("depth", "last_close", "listed", "name", "start")
+
+    def __init__(self, name: str, start: int, depth: int):
         self.name = name
         self.start = start
+        self.depth = depth  # index in the stack
         self.last_close: int | None = None  # tables/lists: end of the last cell
+        self.listed = False  # on the active formatting list
 
 
 class _Places:
@@ -489,33 +520,111 @@ class _Places:
     Browsers move anything that is not a cell out of table structure, and drop
     or move phrasing markup inside a ``<select>``, so a deletion that would land
     there is moved to the end of the nearest earlier cell or list item, or
-    before the table or select.
+    before the table or select. Frames are also indexed by name, so no lookup
+    walks the stack, and every walk that remains is charged to a budget.
     """
 
     def __init__(self, toks: list[str], region: list[int]):
         self.toks = toks
         self.region = region
         self.stack: list[_Frame] = []
+        self.by_name: dict[str, list[_Frame]] = {}
         self.region_target: dict[int, tuple[int, bool]] = {}
+        self.steps = 0
+        # The active formatting list: frames, with None for a marker. A listed
+        # frame that is no longer open is one the browser clones back in at the
+        # next text or inline start tag.
+        self.afe: list[_Frame | None] = []
+
+    def _charge(self, n: int = 1) -> None:
+        self.steps += n
+        if self.steps > MAX_PLACE_STEPS:
+            raise _OverBudget
 
     # stack upkeep ----------------------------------------------------------
+    def _innermost(self, names) -> _Frame | None:
+        best = None
+        for nm in names:
+            frames = self.by_name.get(nm)
+            if frames and (best is None or frames[-1].depth > best.depth):
+                best = frames[-1]
+        return best
+
+    def _push(self, name: str, i: int) -> None:
+        f = _Frame(name, i, len(self.stack))
+        self.stack.append(f)
+        self.by_name.setdefault(name, []).append(f)
+        if name in _MARKER:
+            self.afe.append(None)
+        elif name in _FORMATTING:
+            self.afe.append(f)
+            f.listed = True
+
     def _pop_to(self, k: int, at: int) -> None:
         while len(self.stack) > k:
+            self._charge()
             f = self.stack.pop()
+            self.by_name[f.name].pop()
+            if f.name in _MARKER:
+                self._clear_to_marker()
             if f.name in ("td", "th", "li"):
-                want = ("table",) if f.name != "li" else ("ul", "ol")
-                for g in reversed(self.stack):
-                    if g.name in want:
-                        g.last_close = at
-                        break
+                g = self._innermost(("table",) if f.name != "li" else _LISTS)
+                if g is not None:
+                    g.last_close = at
+
+    def _clear_to_marker(self) -> None:
+        while self.afe:
+            self._charge()
+            e = self.afe.pop()
+            if e is None:
+                return
+            self._unlist(e)
+
+    def _unlist(self, e: _Frame) -> None:
+        e.listed = False
+
+    def _open(self, f: _Frame) -> bool:
+        return f.depth < len(self.stack) and self.stack[f.depth] is f
+
+    def needs_reopen(self) -> bool:
+        """The browser would clone formatting elements in at the next insert."""
+        last = self.afe[-1] if self.afe else None
+        return last is not None and not self._open(last)
+
+    def reopen(self, i: int) -> None:
+        """Clone closed formatting elements back in, as the browser does."""
+        if not self.needs_reopen():
+            return
+        k = len(self.afe) - 1
+        while k > 0 and self.afe[k - 1] is not None and not self._open(self.afe[k - 1]):
+            self._charge()
+            k -= 1
+        for idx in range(k, len(self.afe)):
+            self._charge()
+            old = self.afe[idx]
+            clone = _Frame(old.name, i, len(self.stack))
+            clone.listed = True
+            self.stack.append(clone)
+            self.by_name.setdefault(old.name, []).append(clone)
+            self.afe[idx] = clone
 
     def _close(self, names, stop, at: int) -> None:
-        for k in range(len(self.stack) - 1, -1, -1):
-            nm = self.stack[k].name
-            if nm in names:
-                self._pop_to(k, at)
+        f = self._innermost(names)
+        if f is None:
+            return
+        g = self._innermost(stop)
+        if g is None or g.depth < f.depth:
+            self._pop_to(f.depth, at)
+
+    def _end_formatting(self, name: str) -> None:
+        for k in range(len(self.afe) - 1, -1, -1):
+            self._charge()
+            e = self.afe[k]
+            if e is None:
                 return
-            if nm in stop:
+            if e.name == name:
+                del self.afe[k]
+                self._unlist(e)
                 return
 
     def step(self, i: int) -> bool:
@@ -527,10 +636,11 @@ class _Places:
         if name is None:
             end = _end_name(tok)
             if end:
-                for k in range(len(self.stack) - 1, -1, -1):
-                    if self.stack[k].name == end:
-                        self._pop_to(k, i)
-                        break
+                if end in _FORMATTING:
+                    self._end_formatting(end)
+                frames = self.by_name.get(end)
+                if frames:
+                    self._pop_to(frames[-1].depth, i)
             return False
         sections = {"table", "tbody", "thead", "tfoot"}
         if name in ("td", "th"):
@@ -549,17 +659,31 @@ class _Places:
         elif name == "optgroup":
             self._close({"option"}, {"select", "optgroup", "datalist"}, i)
             self._close({"optgroup"}, {"select"}, i)
+        if name not in _NO_REOPEN:
+            self.reopen(i)
         if name in _VOID:
             return False
-        self.stack.append(_Frame(name, i))
+        self._push(name, i)
         return True
 
     # decisions -------------------------------------------------------------
     def top(self) -> str | None:
         return self.stack[-1].name if self.stack else None
 
+    def _outer_select(self) -> _Frame | None:
+        best = None
+        for nm in _SELECT:
+            frames = self.by_name.get(nm)
+            if frames and (best is None or frames[0].depth < best.depth):
+                best = frames[0]
+        return best
+
     def text_marks_ok(self, i: int) -> bool:
-        return not self._inside_region(i) and self.top() not in _NO_TEXT_MARKS
+        return (
+            not self._inside_region(i)
+            and self.top() not in _NO_TEXT_MARKS
+            and self._outer_select() is None
+        )
 
     def _inside_region(self, i: int) -> bool:
         return i < len(self.region) and self.region[i] >= 0 and self.region[i] != i
@@ -576,32 +700,38 @@ class _Places:
             self.region_target[i] = self._resolve(i, len(self.stack))
 
     def _resolve(self, pos: int, k: int) -> tuple[int, bool]:
-        if k == 0:
-            return pos, True
-        f = self.stack[k - 1]
-        if f.name in _SELECT:
-            while k > 1 and self.stack[k - 2].name in _SELECT:
-                k -= 1
-            return self._resolve(self.stack[k - 1].start, k - 1)
-        if f.name in _LISTS:
-            if f.last_close is not None:
-                return f.last_close, True
-            return self._resolve(f.start, k - 1)
-        if f.name in _TABLE:
-            outer = k
-            table = None
-            while outer > 0 and self.stack[outer - 1].name in _TABLE:
-                outer -= 1
-                if table is None and self.stack[outer].name == "table":
-                    table = self.stack[outer]
-            if table is not None and table.last_close is not None:
-                return table.last_close, True
-            spot, _ = self._resolve(self.stack[outer].start, outer)
-            return spot, False
-        return pos, True
+        keep = True
+        sel = self._outer_select()
+        if sel is not None and sel.depth < k:
+            pos, k = sel.start, sel.depth  # never inside a select, at any depth
+        while k > 0:
+            self._charge()
+            f = self.stack[k - 1]
+            if f.name in _LISTS:
+                if f.last_close is not None:
+                    return f.last_close, keep
+                pos, k = f.start, k - 1
+                continue
+            if f.name in _TABLE:
+                outer = k
+                table = None
+                while outer > 0 and self.stack[outer - 1].name in _TABLE:
+                    self._charge()
+                    outer -= 1
+                    if table is None and self.stack[outer].name == "table":
+                        table = self.stack[outer]
+                if table is not None and table.last_close is not None:
+                    return table.last_close, keep
+                keep = False
+                pos, k = self.stack[outer].start, outer
+                continue
+            break
+        return pos, keep
 
     def chip_after_ok(self, name: str, pushed: bool, i: int) -> bool:
         if self._inside_region(i) or self.region[i] == i:
+            return False
+        if self._outer_select() is not None:
             return False
         if pushed:
             return name not in _NO_SPAN_INSIDE and name not in _RAWTEXT
@@ -701,6 +831,11 @@ def _mark(
     # page's own head tags are read, so deletions wait for the body.
     in_head = True
     held: list[str] = []
+    # When the browser would clone closed formatting elements (say an
+    # <i onclick> that a </p> closed early) in at the next insert, a mark put
+    # there would pull the clone around the blocks that follow; marks wait for
+    # the page's own next text instead.
+    fmt_held: list[str] = []
 
     def place(pos: int) -> None:
         if in_head:
@@ -708,6 +843,9 @@ def _mark(
             return
         spot, keep = places.target(pos)
         parts = deleted_at[pos] if keep else [_CHIP]
+        if spot == pos and places.needs_reopen():
+            fmt_held.extend(parts)
+            return
         insert_before.setdefault(spot, []).extend(parts)
 
     for i, tok in enumerate(new_toks):
@@ -723,17 +861,25 @@ def _mark(
                 where = after_tok if _tag_name(tok) == "body" else insert_before
                 where.setdefault(i, []).extend(held)
                 held = []
-        if tok[0] != "<" or len(tok) == 1:
+        is_text = tok[0] != "<" or len(tok) == 1
+        if fmt_held and (is_text or _tag_name(tok) not in _NO_REOPEN | {None}):
+            insert_before[i] = fmt_held + insert_before.get(i, [])
+            fmt_held = []
+        if is_text:
+            places.reopen(i)
             if i in ins_at and places.text_marks_ok(i):
                 ins_ok.add(i)
             continue
         pushed = places.step(i)
         if i in changed_at and places.chip_after_ok(_tag_name(tok), pushed, i):
-            after_tok.setdefault(i, []).insert(0, _CHANGED)
+            if places.needs_reopen():
+                fmt_held.insert(0, _CHANGED)
+            else:
+                after_tok.setdefault(i, []).insert(0, _CHANGED)
     if len(new_toks) in deleted_at:
         place(len(new_toks))
-    if held:
-        insert_before.setdefault(len(new_toks), []).extend(held)
+    if held or fmt_held:
+        insert_before.setdefault(len(new_toks), []).extend(held + fmt_held)
     if open_end:
         # The last token runs to the end unterminated: anything after it would
         # be read as part of it, so it all goes before it instead.
@@ -786,22 +932,38 @@ def _mark(
 
 
 def _changed_tags(a_mid, i1, i2, b_mid, j1, j2, lo, b_idx) -> list[int]:
-    """New start tags in a replaced run whose old twin had other attributes."""
-    olds = [(_tag_name(t), t) for t in a_mid[i1:i2] if not _is_opaque(t)]
-    olds = [(nm, t) for nm, t in olds if nm]
+    """New start tags in a replaced run whose old twin had other attributes.
+
+    Twins pair in order: each new tag takes the first unused old tag of its
+    name that comes after the previous pairing. Old tags are indexed by name
+    with a pointer per name, so the pairing is linear.
+    """
+    by_name: dict[str, list[tuple[int, str]]] = {}
+    for q in range(i1, i2):
+        t = a_mid[q]
+        nm = _tag_name(t)
+        if nm and not _is_opaque(t):
+            by_name.setdefault(nm, []).append((q, t))
+    ptr: dict[str, int] = {}
     found = []
-    p = 0
+    last = -1
     for j in range(j1, j2):
         tok = b_mid[j]
         name = _tag_name(tok)
         if not name or _is_opaque(tok):
             continue
-        for q in range(p, len(olds)):
-            if olds[q][0] == name:
-                if olds[q][1] != tok:
-                    found.append(b_idx[lo + j])
-                p = q + 1
-                break
+        olds = by_name.get(name)
+        if not olds:
+            continue
+        k = ptr.get(name, 0)
+        while k < len(olds) and olds[k][0] <= last:
+            k += 1
+        if k < len(olds):
+            if olds[k][1] != tok:
+                found.append(b_idx[lo + j])
+            last = olds[k][0]
+            k += 1
+        ptr[name] = k
     return found
 
 
@@ -840,3 +1002,187 @@ def _render_deleted(idxs: list[int], old_toks: list[str], b_all_text: bool) -> s
     ):
         return _CHIP
     return "".join(parts)
+
+
+# --- the safe entry point -------------------------------------------------------
+
+
+class _StartTags(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tags: list[tuple[str, tuple]] = []
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.append((tag, tuple(attrs)))
+
+    handle_startendtag = handle_starttag
+
+
+_OURS = {
+    ("ins", (("class", "ar-diff-ins"),)),
+    ("del", (("class", "ar-diff-del"),)),
+    ("span", (("class", "ar-diff-chip"),)),
+}
+
+
+def _start_tags(doc: str) -> list[tuple[str, tuple]]:
+    p = _StartTags()
+    p.feed(doc)
+    p.close()
+    return p.tags
+
+
+def _checked_render(old_html: str, new_html: str) -> tuple[str, str | None]:
+    """``render_changes``, then prove the output added no tag of its own.
+
+    The output's start tags, minus our marks, must be the new page's start tags
+    in order with the same attributes. Any mismatch is a bug somewhere above,
+    and it becomes the plain new page rather than a page with markup in it
+    that neither version had.
+    """
+    doc, reason = render_changes(old_html, new_html)
+    if reason is not None:
+        return new_html, reason
+    ours = [t for t in _start_tags(doc) if t not in _OURS]
+    if ours != _start_tags(new_html):
+        return new_html, REASON_FAILED
+    return doc, None
+
+
+_render = _checked_render  # what the worker runs; a module global so tests can swap it
+
+
+def _serve(conn_in, conn_out) -> None:
+    """Worker loop: render each request; never let an exception escape."""
+    while True:
+        try:
+            func, old_html, new_html = conn_in.recv()
+        except (EOFError, OSError):
+            return
+        try:
+            result = func(old_html, new_html)
+        except BaseException:  # noqa: BLE001 - any failure is a fallback
+            result = (new_html, REASON_FAILED)
+        try:
+            conn_out.send(result)
+        except (EOFError, OSError):
+            return
+
+
+def _worker_main() -> None:
+    """Entry point of ``python -c``: the channel is stdin/stdout, so the
+    parent's ``__main__`` is never re-imported (as spawn/forkserver would)."""
+    from multiprocessing.connection import Connection
+
+    out_fd = os.dup(1)
+    os.dup2(2, 1)  # stray prints go to stderr, not into the channel
+    conn_in = Connection(0, writable=False)
+    conn_out = Connection(out_fd, readable=False)
+    sys.path[:0] = [x for x in conn_in.recv() if x not in sys.path]
+    _serve(conn_in, conn_out)
+
+
+class _Worker:
+    def __init__(self):
+        from multiprocessing.connection import Connection
+
+        self.proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "from artifacts.pagediff import _worker_main; _worker_main()",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            close_fds=True,
+        )
+        self.conn_out = Connection(os.dup(self.proc.stdin.fileno()), readable=False)
+        self.conn_in = Connection(os.dup(self.proc.stdout.fileno()), writable=False)
+        self.proc.stdin.close()
+        self.proc.stdout.close()
+        self.conn_out.send(list(sys.path))
+
+    def alive(self) -> bool:
+        return self.proc.poll() is None
+
+    def run(self, old_html: str, new_html: str, timeout: float):
+        self.conn_out.send((_render, old_html, new_html))
+        if not self.conn_in.poll(timeout):
+            raise TimeoutError
+        return self.conn_in.recv()
+
+    def kill(self) -> None:
+        global _last_killed
+        _last_killed = self.proc
+        try:
+            self.proc.kill()
+            self.proc.wait(1)
+        finally:
+            self.conn_in.close()
+            self.conn_out.close()
+
+
+_last_killed = None  # the most recently killed worker process, for tests
+_IDLE: list[_Worker] = []
+_IDLE_LOCK = threading.Lock()
+_SLOTS = threading.BoundedSemaphore(4)
+_CACHE: OrderedDict[tuple[str, str], tuple[str, str | None]] = OrderedDict()
+_CACHE_LOCK = threading.Lock()
+CACHE_SIZE = 64
+
+
+def render_changes_safely(
+    old_html: str, new_html: str, *, timeout: float = 2.0
+) -> tuple[str, str | None]:
+    """``render_changes`` in a separate process with a hard timeout.
+
+    Whatever goes wrong (a stall, a crash, an output that fails its check), the
+    answer is the new page unchanged with ``could not mark up changes``. Results
+    are cached by the two pages' hashes, so a repeat view never recomputes.
+    """
+    try:
+        key = (
+            hashlib.sha256(old_html.encode("utf-8", "surrogatepass")).hexdigest(),
+            hashlib.sha256(new_html.encode("utf-8", "surrogatepass")).hexdigest(),
+        )
+        with _CACHE_LOCK:
+            hit = _CACHE.get(key)
+            if hit is not None:
+                _CACHE.move_to_end(key)
+                return hit
+        result = _run_in_worker(old_html, new_html, timeout)
+        if (
+            not isinstance(result, tuple)
+            or len(result) != 2
+            or not isinstance(result[0], str)
+            or not (result[1] is None or isinstance(result[1], str))
+        ):
+            result = (new_html, REASON_FAILED)
+        with _CACHE_LOCK:
+            _CACHE[key] = result
+            _CACHE.move_to_end(key)
+            while len(_CACHE) > CACHE_SIZE:
+                _CACHE.popitem(last=False)
+        return result
+    except Exception:  # noqa: BLE001 - any failure is a fallback
+        return new_html, REASON_FAILED
+
+
+def _run_in_worker(old_html: str, new_html: str, timeout: float):
+    if not _SLOTS.acquire(timeout=timeout):
+        return new_html, REASON_FAILED
+    try:
+        with _IDLE_LOCK:
+            worker = _IDLE.pop() if _IDLE else None
+        if worker is None or not worker.alive():
+            worker = _Worker()
+        try:
+            result = worker.run(old_html, new_html, timeout)
+        except BaseException:  # noqa: BLE001 - timed out or broken
+            worker.kill()  # it never serves again
+            return new_html, REASON_FAILED
+        with _IDLE_LOCK:
+            _IDLE.append(worker)
+        return result
+    finally:
+        _SLOTS.release()
