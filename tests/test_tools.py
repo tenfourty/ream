@@ -127,3 +127,10 @@ def test_the_document_carries_a_stable_line_and_a_machine_readable_one(
     assert f"--find-links {base} artifacts" in text
     wheel_lines = [line for line in text.splitlines() if line.startswith("wheel: ")]
     assert wheel_lines == [f"wheel: {base}{WHEEL}"]
+
+
+def test_both_exit_code_lists_name_eight_claimed():
+    from artifacts import onboarding
+
+    for text in (onboarding.agents_txt("http://x"), onboarding.skill_md("http://x")):
+        assert "6 dismissed 7 marks 8 claimed" in text

@@ -443,6 +443,13 @@ _wall = time.time
 _SUSPEND_GAP = 60
 
 
+# A retry inside one run always reuses its key; a fresh one per run by default.
+_IDEMPOTENCY_HELP = (
+    "reuse KEY (1-128 printable ASCII) so re-running this command after a"
+    " timeout cannot post twice; default a fresh one each run"
+)
+
+
 def _claim_line(body: dict) -> str:
     """`CLAIMED by <session> until <HH:MM UTC>: ...`, from a 409's body."""
     who = body.get("claimed_by") or "another session"
@@ -474,9 +481,9 @@ class _Lease:
     def seconds_to_renewal(self) -> float:
         return self.renew_at - _mono()
 
-    def claim(self) -> str | None:
-        """Claim or renew. The claim line when another session holds it, else
-        None. A 401/403/404 raises; any other failure leaves it due, so the
+    def claim(self) -> dict | None:
+        """Claim or renew. The 409's body (who holds it, until when, which
+        round) when another session holds it, else None. A 401/403/404 raises; any other failure leaves it due, so the
         next loop tries again."""
         headers: dict = {}
         asked = _mono()
@@ -490,7 +497,7 @@ class _Lease:
             )
         except HTTPFailure as exc:
             if exc.status == 409 and isinstance(exc.body, dict):
-                return _claim_line(exc.body)
+                return exc.body
             if exc.status in (401, 403, 404):
                 raise
             self.renew_at = 0.0
@@ -533,8 +540,20 @@ def _wait_review(args, key: str, base: str) -> int:
     # Wall minus monotonic; it jumps when the machine was suspended.
     drift = _wall() - _mono()
 
-    def claimed(line: str) -> int:
-        print(line, file=sys.stderr, flush=True)
+    def claimed(body: dict) -> int:
+        print(_claim_line(body), file=sys.stderr, flush=True)
+        if args.json:
+            # One line on stdout, like every other --json exit: who has it.
+            print(
+                json.dumps(
+                    {
+                        "claimed_by": body.get("claimed_by"),
+                        "claim_expires_at": body.get("claim_expires_at"),
+                        "round": body.get("round"),
+                    }
+                ),
+                flush=True,
+            )
         return 1 if args.require_approval else _CLAIMED_EXIT
 
     # CLAIM FIRST: the session that holds the round is the one that acts on its
@@ -814,6 +833,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     ack = subs.add_parser("ack", help="say you have seen an answer")
     ack.add_argument("decision", metavar="DECISION-ID")
+    ack.add_argument("--idempotency-key", metavar="KEY", help=_IDEMPOTENCY_HELP)
 
     close = subs.add_parser("close", help="withdraw a question you no longer need")
     close.add_argument("decision", metavar="DECISION-ID")
@@ -872,6 +892,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reply.add_argument("thread", metavar="THREAD-ID")
     reply.add_argument("text", metavar="TEXT")
+    reply.add_argument("--idempotency-key", metavar="KEY", help=_IDEMPOTENCY_HELP)
     settle = subs.add_parser("settle", help="mark a comment thread done")
     settle.add_argument("thread", metavar="THREAD-ID")
 
@@ -1097,7 +1118,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"{base}/artifacts/{thread['artifact_id']}/comments",
                 key,
                 {"body": args.text, "thread_root": args.thread},
-                idempotency_key=str(uuid.uuid4()),
+                idempotency_key=args.idempotency_key or str(uuid.uuid4()),
             )
             print(f"replied on {args.thread}; he sees it in the page's comments")
             return 0
@@ -1108,7 +1129,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"{base}/decisions/{args.decision}/{route}",
                 key,
                 {},
-                idempotency_key=str(uuid.uuid4()) if route == "acknowledge" else None,
+                idempotency_key=(args.idempotency_key or str(uuid.uuid4()))
+                if route == "acknowledge"
+                else None,
             )
             print(_fmt(row))
             return 0

@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import pytest
 from test_client import key_file, live  # noqa: F401 -- fixtures
 
-from artifacts import decide, decisions, holds, store
+from artifacts import comments, decide, decisions, holds, store
 
 PAGE = "<!doctype html><title>Plan</title><p>Rotate the keys every 90 days.</p>"
 
@@ -535,8 +535,10 @@ def test_wait_exits_eight_when_another_session_has_the_round(
     live, key_file, db, capsys
 ):
     path, _page, rid = _setup(db, key_file, capsys)
-    line = _held_by_other(db, rid)
+    # Claimed after the verdict: a verdict stretches a live lease, so the
+    # line's time is the one the closed round's claim names.
     decisions.answer(db, rid, letter="c", by="jeremy")
+    line = _held_by_other(db, rid)
     args = ["--key-file", str(path), "--session", "ops-seat/me"]
     started = time.monotonic()
     assert decide.main([*args, "wait", "--review", rid, "--timeout", "30s"]) == 8
@@ -689,3 +691,50 @@ def test_a_suspend_renews_before_the_next_poll_and_moves_the_deadline(
     assert decide.main([*args, "wait", "--review", rid, "--timeout", "20s"]) == 3
     assert time.monotonic() - started < 10, "the deadline moved with the wall clock"
     assert claims == [0.0, 120.0], "claimed, then renewed after the suspend"
+
+
+def test_exit_eight_with_json_prints_one_line_naming_the_holder(
+    live, key_file, db, capsys
+):
+    path, _page, rid = _setup(db, key_file, capsys)
+    _held_by_other(db, rid)
+    args = ["--key-file", str(path), "--session", "ops-seat/me"]
+    wait = ["wait", "--review", rid, "--timeout", "5s", "--json"]
+    assert decide.main([*args, *wait]) == 8
+    out = capsys.readouterr().out.strip()
+    assert "\n" not in out
+    data = json.loads(out)
+    assert data["claimed_by"] == "ops-seat/other"
+    assert data["round"] == 1
+    assert datetime.fromisoformat(data["claim_expires_at"]) > datetime.now(UTC)
+
+
+def test_reply_and_ack_reuse_a_given_idempotency_key(live, key_file, db, capsys):
+    """A re-run after a timeout that DID commit, with the same key, writes
+    nothing twice."""
+    path, _ = key_file
+    page = store.publish(db, "ops-seat", "Mine", PAGE)
+    root = comments.add(
+        db, artifact_id=page.id, author_kind="human", author="jeremy", body="hi"
+    )
+    row = decisions.ask(
+        db,
+        agent="ops-seat",
+        artifact_id=page.id,
+        question="q?",
+        options=[{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}],
+    )
+    args = ["--key-file", str(path)]
+    for _ in range(2):
+        assert (
+            decide.main(
+                [*args, "reply", root.id, "one", "--idempotency-key", "rerun-1"]
+            )
+            == 0
+        )
+        assert decide.main([*args, "ack", row.id, "--idempotency-key", "rerun-2"]) == 0
+    with db.connect() as conn:
+        replies = conn.execute(
+            "select count(*) from comment where thread_root = %s", (root.id,)
+        ).fetchone()[0]
+    assert replies == 1

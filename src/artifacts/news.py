@@ -19,7 +19,7 @@ from pathlib import Path
 NEWS: tuple[tuple[str, str], ...] = (
     (
         "2026-09-29f",
-        'wait --review now claims the round for your session (set ARTIFACTS_SESSION): a second session waiting on the same review exits 8 and names who has it. artifacts-decide review-release <id> --reason "…" hands it back, and Jeremy sees why. reply and ack send an Idempotency-Key, so a retry never posts twice.',
+        'wait --review now claims the round for your session (set ARTIFACTS_SESSION): a second session waiting on the same review exits 8 and names who has it. artifacts-decide review-release <id> --reason "…" hands it back, and Jeremy sees why. reply and ack send an Idempotency-Key, so a retry of the same request never posts twice; pass the same --idempotency-key to make re-running the command safe too.',
     ),
     (
         "2026-09-29e",
