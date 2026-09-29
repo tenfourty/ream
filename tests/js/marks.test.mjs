@@ -452,5 +452,23 @@ const mark = (over = {}) => ({ id: "m1", kind: "remove", quote: QUOTE,
   ok(g.posted.filter(([m]) => m.type === "artifact-mark-hover").length === 1, "no animation frames: still one hover");
 }
 
+// 16. the frame's OWN scroll (full screen, where it scrolls inside itself)
+// moves the text from under a still pointer: a leave, and the next move over
+// the same mark is a hover again.
+{
+  const p = E("p", QUOTE);
+  const rects = new Map([[p.childNodes[0], [{ top: 10, left: 5, width: 200, height: 18 }]]]);
+  const g = build(E("body", p), { "body>p:nth-of-type(1)": p }, { rects });
+  g.send([mark()]);
+  const hovers = () => g.posted.filter(([m]) => m && /^artifact-mark-/.test(m.type)).map(([m]) => m.type);
+  g.fire("pointermove", { clientX: 50, clientY: 20 }); g.flush();
+  g.fire("scroll", {});
+  ok(hovers().join() === "artifact-mark-hover,artifact-mark-leave", "the frame scrolling posts a leave");
+  g.fire("pointermove", { clientX: 50, clientY: 20 }); g.flush();
+  ok(hovers().join() === "artifact-mark-hover,artifact-mark-leave,artifact-mark-hover", "and the same mark hovers again after it");
+  g.fire("scroll", {}); g.fire("scroll", {});
+  ok(hovers().length === 4, "one leave, however many scroll events");
+}
+
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

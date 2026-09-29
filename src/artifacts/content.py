@@ -308,8 +308,11 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         # getClientRects -- nothing in the agent's DOM is touched or listened
         # to beyond window-level pointer events. At most one check per
         # animation frame, however fast the pointer moves; a touch tap is
-        # checked at once. A hover is re-sent when the line moved under a still
-        # pointer (the gallery scrolled), so the card can come back.
+        # checked at once. A hover is re-sent on the next move once the line
+        # has moved (the gallery scrolled), so the card can come back. The
+        # frame's OWN scroll (full screen, where it scrolls itself) moves the
+        # text from under the pointer with no move at all: that is a leave,
+        # and it clears what was last said, so the next move re-hovers.
         'var MR=[],hv=null,hk="",raf=0,px=-1,py=-1;'
         "function hit(){for(var i=0;i<MR.length;i++){var rs=MR[i].r.getClientRects();"
         "for(var j=0;j<rs.length;j++){var q=rs[j];"
@@ -328,6 +331,7 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         'if(typeof requestAnimationFrame==="function")requestAnimationFrame(look);else look()}catch(x){}});'
         'addEventListener("pointerdown",function(e){try{if(at(e)&&e.pointerType==="touch")look()}catch(x){}});'
         'addEventListener("pointerout",function(e){try{if(e&&!e.relatedTarget)out()}catch(x){}});'
+        'addEventListener("scroll",function(){try{out();hk=""}catch(x){}});'
         # SELECTING TEXT TO COMMENT ON IT (homelab-ij8.18). The gallery cannot
         # read inside this cross-origin page, by design, so the page reports a
         # selection: the quoted text (capped), an anchor the service already
@@ -370,7 +374,10 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "var b=r.getBoundingClientRect();"
         'parent.postMessage({type:"artifact-selection",quote:t.slice(0,500),'
         'anchor:{kind:"range",path:path,start:a,end:z,prefix:prefix,suffix:suffix},'
-        "rect:{top:b.top+scrollY,left:b.left+scrollX,width:b.width,height:b.height}},"
+        # vt/vl: where the frame SHOWS it, for full screen, where the frame
+        # scrolls itself and top/left (page offsets) cannot place the bar.
+        "rect:{top:b.top+scrollY,left:b.left+scrollX,width:b.width,height:b.height,"
+        "vt:b.top,vl:b.left}},"
         f"{origin})}}"
         # Guarded: registering this listener must never be what stops the rest
         # of the shim, whatever document it finds itself in.

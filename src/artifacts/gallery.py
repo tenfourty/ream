@@ -648,6 +648,7 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
 .hovercard .ckind-remove{color:var(--danger)}
 .hovercard .ckind-looks_good{color:var(--ok)}
 .hovercard .bubbles{max-height:14rem;overflow-y:auto}
+.hovercard .creply[hidden]{display:none}
 .hcact{display:flex;gap:.4rem;justify-content:flex-end;margin:.5rem 0 0}
 .hcact button{padding:.3rem .65rem;cursor:pointer;border:1px solid var(--line);
   border-radius:.45rem;background:var(--card);color:var(--ink);font:500 .8rem/1 ui-sans-serif,system-ui,sans-serif}
@@ -1831,7 +1832,7 @@ function panel(on,keep){if(!P)return;B.classList.toggle("cpanel-open",on);
   var c=document.querySelector(".cbtn");if(c)c.setAttribute("aria-expanded",on?"true":"false");
   // The frame reflows to its new width and reports its height on `resize`;
   // a selection bar placed against the old layout would point at nothing.
-  if(bar)bar.hidden=true;hide();
+  if(bar)bar.hidden=true;if(!busy())hide();
   if(!keep)try{window.localStorage.setItem(K,on?"1":"0")}catch(x){}}
 if(P&&B&&B.classList){
   B.classList.add("cjs");
@@ -1855,7 +1856,7 @@ if(P&&B&&B.classList){
   // Capture, so this runs before gallery.js: an open dialog or menu is what
   // Escape closes first, and the panel only when nothing else is open.
   window.addEventListener("keydown",function(e){
-    if(e.key==="Escape"&&hc){hide();return}
+    if(e.key==="Escape"&&hc){hide();if(e.stopPropagation)e.stopPropagation();return}
     if(e.key!=="Escape"||!isOpen()||document.querySelector(".dlg:target,details.menu[open]"))return;
     var back=P.contains(document.activeElement);panel(false);
     if(back){var c=document.querySelector(".cbtn");if(c&&c.focus)c.focus()}},true)}
@@ -1869,42 +1870,51 @@ if(P&&B&&B.classList){
 // finite numbers and is clamped into the frame, and the card into the window.
 // A flood cannot show a card that has not rested: a new id restarts the rest.
 // It goes on `artifact-mark-leave` after a 250 ms grace (so the pointer can
-// reach it), on leaving the card, on Escape, on scroll, and when the panel
-// moves the page; never while its reply box has the cursor.
+// reach it), on leaving the card, on scroll, and when the panel moves the
+// page. It reads Reply . Open; its reply box stays hidden until Reply. A reply
+// being written (the box has the cursor, or text) is never thrown away by any
+// of those -- on a phone, the keyboard coming up scrolls the window -- so the
+// card then goes only on Escape (which is the card's alone), Open, a sent
+// reply, or a press outside it. In full screen it lives inside the
+// full-screen element, the one part of the page that is drawn.
 var hc=null,hid=null,ht=0,hg=0,pend=null;
+function host(){return document.fullscreenElement||document.body}
+function busy(){var i=hc&&hc.querySelector?hc.querySelector("input[name=body]"):null;
+  return !!(i&&(document.activeElement===i||i.value))}
 function thread(id){if(!P||!P.querySelectorAll)return null;var ls=P.querySelectorAll("li.thread");
   for(var i=0;i<ls.length;i++)if(ls[i].getAttribute("data-mark-id")===id)return ls[i];return null}
 function fin(v){return typeof v==="number"&&isFinite(v)}
 function hide(){clearTimeout(hg);hg=0;if(hc){drop(hc);hc=null;hid=null}}
-function grace(){clearTimeout(hg);hg=setTimeout(function(){hg=0;
-  if(hc&&hc.contains&&hc.contains(document.activeElement))return;hide()},250)}
+function grace(){clearTimeout(hg);hg=setTimeout(function(){hg=0;if(!busy())hide()},250)}
 function show(id,r){var li=thread(id);if(!li)return;hide();
   var c=document.createElement("div");c.className="hovercard";c.setAttribute("role","dialog");
   c.setAttribute("aria-label","Comment");c.setAttribute("data-mark-id",id);
   var k=li.querySelector(".ckind"),lab=document.createElement("span");
   lab.className=k?k.className:"ckind";lab.textContent=k?k.textContent:"Comment";c.appendChild(lab);
   var bu=li.querySelector(".bubbles");if(bu)c.appendChild(bu.cloneNode(true));
-  var rf=li.querySelector("form.creply"),rc=rf?rf.cloneNode(true):null;if(rc)c.appendChild(rc);
+  var rf=li.querySelector("form.creply"),rc=rf?rf.cloneNode(true):null;if(rc){rc.hidden=true;c.appendChild(rc)}
   var row=document.createElement("div");row.className="hcact";c.appendChild(row);
   function btn(t,fn){var b=document.createElement("button");b.type="button";b.textContent=t;
     b.addEventListener("click",fn);row.appendChild(b)}
-  if(rc)btn("Reply",function(){var i=rc.querySelector("input[name=body]");if(i)i.focus()});
+  if(rc)btn("Reply",function(){rc.hidden=false;var i=rc.querySelector("input[name=body]");if(i)i.focus()});
   btn("Open",function(){hide();panel(true);var t=thread(id);
     if(t&&t.scrollIntoView)t.scrollIntoView({block:"nearest"})});
   c.addEventListener("pointerenter",function(){clearTimeout(hg);hg=0});
   c.addEventListener("pointerleave",grace);
-  document.body.appendChild(c);hc=c;hid=id;
+  host().appendChild(c);hc=c;hid=id;
   var fr=f.getBoundingClientRect(),FW=fin(fr.width)?fr.width:0,FH=fin(fr.height)?fr.height:0,
     W=window.innerWidth||0,H=window.innerHeight||0,cw=c.offsetWidth||0,ch=c.offsetHeight||0,
     l=Math.max(0,Math.min(r.left,FW)),t=Math.max(0,Math.min(r.top,FH)),
     h=Math.max(0,Math.min(r.height,200,FH-t)),x=fr.left+l,y=fr.top+t+h+6;
   if(y+ch>H-8)y=fr.top+t-ch-6;
-  c.style.left=Math.max(8,Math.min(x,W-cw-8))+"px";c.style.top=Math.max(8,Math.min(y,H-ch-8))+"px"}
+  // Never past the frame's right edge: the docked panel is on the other side.
+  c.style.left=Math.max(8,Math.min(x,Math.min(W,fr.left+FW)-cw-8))+"px";c.style.top=Math.max(8,Math.min(y,H-ch-8))+"px"}
 window.addEventListener("message",function(e){try{
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
   if(!d||typeof d!=="object")return;
+  if(d.type!=="artifact-mark-leave"&&d.type!=="artifact-mark-hover"||busy())return;
   if(d.type==="artifact-mark-leave"){clearTimeout(ht);ht=0;pend=null;if(hc)grace();return}
-  if(d.type!=="artifact-mark-hover"||typeof d.id!=="string"||!known[d.id])return;
+  if(typeof d.id!=="string"||!known[d.id])return;
   var q=d.rect;if(!q||typeof q!=="object"||!fin(q.top)||!fin(q.left)||!fin(q.width)||!fin(q.height))return;
   clearTimeout(hg);hg=0;q={top:q.top,left:q.left,width:q.width,height:q.height};
   if(hc&&hid===d.id)return;
@@ -1912,7 +1922,14 @@ window.addEventListener("message",function(e){try{
   hide();pend={id:d.id,r:q};clearTimeout(ht);
   ht=setTimeout(function(){ht=0;var p=pend;pend=null;if(p)show(p.id,p.r)},150)
 }catch(x){}});
-window.addEventListener("scroll",function(){clearTimeout(ht);ht=0;pend=null;hide()});
+window.addEventListener("scroll",function(){if(busy())return;clearTimeout(ht);ht=0;pend=null;hide()});
+if(document.addEventListener){
+  document.addEventListener("pointerdown",function(e){if(hc&&!(hc.contains&&hc.contains(e.target)))hide()});
+  // The card and the selection bar move with full screen: outside the
+  // full-screen element nothing is drawn. The bar's old place is wrong now.
+  document.addEventListener("fullscreenchange",function(){
+    if(hc){if(busy())host().appendChild(hc);else hide()}
+    if(bar){bar.hidden=true;host().appendChild(bar)}})}
 var form=document.querySelector("form.cnew");
 // POSTING IN PLACE. A comment or reply is sent with fetch and the thread it
 // comes back in is put where it belongs; the page, the open drawer and the
@@ -1941,7 +1958,16 @@ function cleared(fm){
   var b=fm.querySelector("input[name=body]");if(b)b.value="";
   if(fm===form){["quote","anchor","kind"].forEach(function(n){drop(fm.querySelector("input[name="+n+"]"))});
     drop(fm.querySelector(".cquote"));if(b)b.placeholder="Comment on this page"}}
-function fail(fm){setBusy(fm,false);fm.submit()}
+// A reply from a hover card that has since gone is sent through the panel's
+// own copy of that thread, text and all: a detached form cannot submit, and a
+// comment is never silently lost.
+function fail(fm){setBusy(fm,false);
+  var hx=fm.closest?fm.closest(".hovercard"):null;
+  if(hx&&hx!==hc){var t=thread(hx.getAttribute("data-mark-id")),pf=t&&t.querySelector("form.creply");
+    if(pf){var a=fm.querySelector("input[name=body]"),b=pf.querySelector("input[name=body]");
+      if(a&&b)b.value=a.value;pf.submit();return}
+    fm.hidden=true;document.body.appendChild(fm)}
+  fm.submit()}
 if(document.addEventListener)document.addEventListener("submit",function(e){
   var fm=e.target;
   if(!fm||!/(^|\\s)(cnew|creply)(\\s|$)/.test(fm.className||"")||typeof fetch!=="function"||typeof FormData!=="function")return;
@@ -1969,7 +1995,7 @@ bar=document.createElement("div");bar.className="selbar";bar.hidden=true;
 [["comment","Comment"],["remove","Remove this"],["looks_good","Looks good"]].forEach(function(k){
   var b=document.createElement("button");b.type="button";b.textContent=k[1];b.dataset.kind=k[0];
   bar.appendChild(b)});
-document.body.appendChild(bar);
+host().appendChild(bar);
 var last=null;
 function num(v){return typeof v==="number"&&isFinite(v)}
 function field(n,v){var x=form.querySelector("input[name="+n+"]");
@@ -1980,8 +2006,14 @@ window.addEventListener("message",function(e){
   if(typeof d.quote!=="string"||!d.quote||!d.anchor||!d.rect||!num(d.rect.top)||!num(d.rect.left)||!num(d.rect.height)){
     bar.hidden=true;last=null;return}
   last=d;var r=f.getBoundingClientRect();
-  bar.style.top=(r.top+window.scrollY+d.rect.top+d.rect.height+6)+"px";
-  bar.style.left=(r.left+window.scrollX+Math.max(0,d.rect.left))+"px";bar.hidden=false});
+  // In full screen the frame scrolls itself, so the page's own offsets are no
+  // use: the bar is fixed under the selection as the frame shows it (vt/vl).
+  if(document.fullscreenElement&&num(d.rect.vt)&&num(d.rect.vl)){bar.style.position="fixed";
+    bar.style.top=(r.top+d.rect.vt+d.rect.height+6)+"px";bar.style.left=(r.left+Math.max(0,d.rect.vl))+"px"}
+  else{bar.style.position="";
+    bar.style.top=(r.top+window.scrollY+d.rect.top+d.rect.height+6)+"px";
+    bar.style.left=(r.left+window.scrollX+Math.max(0,d.rect.left))+"px"}
+  bar.hidden=false});
 bar.addEventListener("click",function(e){
   var b=e.target&&e.target.closest?e.target.closest("button"):null;
   if(!b||!last)return;

@@ -391,3 +391,92 @@ def test_hovering_marked_text_shows_its_comment_beside_it(browser, served, db):
         assert not errors, errors
     finally:
         ctx.close()
+
+
+def _mark(db, ident, n, note):
+    quote = f"Paragraph {n}: a sentence that wraps"
+    return comments.add(
+        db,
+        artifact_id=ident,
+        author_kind="human",
+        author="jeremy",
+        body=note,
+        quote=quote,
+        anchor={
+            "kind": "range",
+            "path": f"body>p:nth-of-type({n + 1})",
+            "start": 0,
+            "end": len(quote),
+        },
+    )
+
+
+def _point_at(pg, n):
+    """Put the pointer on paragraph n's marked words, in gallery coordinates."""
+    box = pg.locator("#artifact-frame").bounding_box()
+    r = pg.frames[1].evaluate(
+        """n => {const t=document.querySelectorAll('p')[n].firstChild;
+                 const g=document.createRange();g.setStart(t,2);g.setEnd(t,8);
+                 const b=g.getBoundingClientRect();
+                 return {x:b.left+b.width/2,y:b.top+b.height/2}}""",
+        n,
+    )
+    pg.mouse.move(box["x"] + r["x"], box["y"] + r["y"])
+
+
+def test_a_reply_being_typed_survives_and_full_screen_shows_the_card(
+    browser, served, db
+):
+    """The card reads Reply . Open; Reply reveals its box. Text typed there
+    survives hovering another mark. In full screen the card is drawn inside the
+    full-screen sheet, where it can actually be seen."""
+    origin, ident = served
+    first = _mark(db, ident, 3, "FIRSTNOTE shorten this")
+    _mark(db, ident, 5, "SECONDNOTE and this")
+    ctx, pg, errors = _open_page(browser, origin, ident, 1400)
+    try:
+        _frame_height_settled(pg)
+        pg.frames[1].wait_for_function(
+            "() => CSS.highlights.get('ar-comment')"
+            " && CSS.highlights.get('ar-comment').size === 2",
+            timeout=10000,
+        )
+        _point_at(pg, 3)
+        card = pg.locator(".hovercard")
+        card.wait_for(state="visible", timeout=3000)
+        assert card.locator(".hcact button").all_inner_texts() == ["Reply", "Open"]
+        assert not card.locator("form.creply").is_visible()
+        shot = os.environ.get("ARTIFACTS_HOVER_SHOT2")
+        if shot:
+            pg.screenshot(path=shot)
+        card.get_by_role("button", name="Reply").click()
+        box = card.locator("input[name=body]")
+        assert box.is_visible()
+        box.type("half a thought")
+        _point_at(pg, 5)
+        pg.wait_for_timeout(700)  # past the rest and the grace, both
+        assert pg.locator(".hovercard").count() == 1
+        assert card.get_attribute("data-mark-id") == first.id
+        assert box.input_value() == "half a thought"
+        # Escape is a choice to leave.
+        pg.keyboard.press("Escape")
+        card.wait_for(state="detached", timeout=2000)
+
+        pg.click(".fsbtn")
+        pg.wait_for_timeout(300)
+        if pg.evaluate("() => document.fullscreenElement?.id") != "artifact-sheet":
+            pytest.skip("this headless browser refused full screen")
+        pg.frames[1].evaluate("() => window.scrollTo(0, 0)")
+        _point_at(pg, 5)
+        card.wait_for(state="attached", timeout=3000)
+        seen = pg.evaluate(
+            """() => {const c=document.querySelector('.hovercard'),b=c.getBoundingClientRect();
+                      const hit=document.elementFromPoint(b.left+b.width/2,b.top+10);
+                      return {inside: document.fullscreenElement.contains(c),
+                              drawn: !!(hit && c.contains(hit)), text: c.innerText}}"""
+        )
+        assert seen["inside"] and seen["drawn"], seen
+        assert "SECONDNOTE" in seen["text"]
+        assert not errors, errors
+    finally:
+        ctx.close()

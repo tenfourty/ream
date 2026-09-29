@@ -119,12 +119,17 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
     (docOn.submit || []).forEach((fn) => fn(ev)); return ev; };
   const tap = (target) => { const ev = { target, prevented: false, preventDefault() { ev.prevented = true; } };
     (docOn.click || []).forEach((fn) => fn(ev)); return ev; };
-  const key = (k) => (capture.keydown || []).concat(listeners.keydown || [], docOn.keydown || []).forEach((fn) => fn({ key: k }));
+  // One event through capture, then bubble; stopPropagation ends its trip.
+  const key = (k) => { const ev = { key: k, stopped: false, stopPropagation() { ev.stopped = true; } };
+    for (const fn of (capture.keydown || []).concat(listeners.keydown || [], docOn.keydown || [])) { if (ev.stopped) break; fn(ev); }
+    return ev; };
+  const press = (target) => (docOn.pointerdown || []).forEach((fn) => fn({ target }));
+  const fsChange = () => (docOn.fullscreenchange || []).forEach((fn) => fn({}));
   const isOpen = () => docBody.classList.contains("cpanel-open");
   const card = () => docBody.children.filter((c) => c.className === "hovercard");
   const scroll = () => (listeners.scroll || []).concat(capture.scroll || []).forEach((fn) => fn({}));
   return { bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload, submit, extra, doc,
-           panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist };
+           panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist, press, fsChange };
 }
 const SEL = { type: "artifact-selection", quote: "the plan",
               anchor: { kind: "range", path: "body>p:nth-of-type(1)", start: 4, end: 12 },
@@ -491,6 +496,71 @@ const btnOf = (c, label) => c.querySelectorAll("button").find((b) => b.textConte
   g.submit(fm); await tick(); await tick(); await tick();
   ok(g.tlist.children.length === 3 && g.tlist.children[1].html === "<li>t</li>", "a reply sent from the card replaces the panel's thread, not a new one");
   ok(g.card().length === 0 && !fm.submitted, "and the card is put away"); }
+
+// Fix wave: the card reads Reply . Open, its reply box hidden until Reply; a
+// reply being written survives hover, leave, scroll and the panel; one Escape
+// is the card's alone; a failed send falls back through the panel; the card
+// never covers the panel; a tap outside closes it; full screen shows it.
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(HOV("m2")); g.clk.advance(150);
+  const [c] = g.card(), fm = c.querySelector("form.creply");
+  ok(fm && fm.hidden === true, "the card's reply box is hidden until Reply is pressed");
+  ok(c.querySelector(".hcact").children.map((b) => b.textContent).join(" · ") === "Reply · Open", "the card reads Reply · Open");
+  btnOf(c, "Reply").on.click({});
+  const box = c.querySelector("input[name=body]");
+  ok(fm.hidden === false && box.focused === true, "Reply reveals the box and focuses it");
+  g.doc.activeElement = box;
+  g.send(HOV("m1")); g.clk.advance(1000);
+  ok(g.card().length === 1 && g.card()[0] === c, "a reply being typed survives hovering another mark");
+  g.send(LEAVE); g.clk.advance(1000); g.scroll();
+  ok(g.card().length === 1, "and a leave, and a scroll (a phone's keyboard scrolls the window)");
+  g.tap(g.cbtn);
+  ok(g.card().length === 1 && g.isOpen(), "and the panel opening");
+  g.doc.activeElement = null; box.value = "half a thought";
+  g.send(HOV("m1")); g.clk.advance(1000); g.scroll();
+  ok(g.card().length === 1, "text in the box keeps it even once the cursor has gone");
+  g.press(box);
+  ok(g.card().length === 1, "a press inside the card keeps it");
+  const ev = g.key("Escape");
+  ok(g.card().length === 0 && ev.stopped === true, "Escape closes it, and goes no further");
+  ok(g.isOpen(), "so the same Escape does not also close the panel"); }
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(HOV("m2")); g.clk.advance(150);
+  g.press(el("div"));
+  ok(g.card().length === 0, "a press outside the card closes it (a phone's tap)");
+  g.send(HOV("m2")); g.clk.advance(150);
+  const [c] = g.card(), box = c.querySelector("input[name=body]");
+  btnOf(c, "Reply").on.click({}); box.value = "typed"; g.press(el("div"));
+  ok(g.card().length === 0, "even with a reply typed: a tap outside is a choice to leave"); }
+{ let rejectIt; const g = build({ marks: HMARKS, threads: hthreads(), fetchImpl: () => new Promise((_, rej) => { rejectIt = rej; }) });
+  g.send(HOV("m2")); g.clk.advance(150);
+  const [c] = g.card(), fm = c.querySelector("form.creply");
+  fm.submitted = 0; fm.submit = () => { fm.submitted++; };
+  const pf = g.tlist.children[1].querySelector("form.creply"); pf.submitted = 0; pf.submit = () => { pf.submitted++; };
+  c.querySelector("input[name=body]").value = "Keep this";
+  g.submit(fm); g.key("Escape");
+  ok(g.card().length === 0, "the card can go while its reply is in flight");
+  rejectIt(new Error("net")); await tick(); await tick(); await tick();
+  ok(pf.submitted === 1 && pf.querySelector("input[name=body]").value === "Keep this" && fm.submitted === 0,
+     "a failed send from a card that is gone falls back through the panel's copy, text and all"); }
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(HOV("m2", { top: 30, left: 1e9, width: 10, height: 18 })); g.clk.advance(150);
+  ok(parseFloat(g.card()[0].style.left) <= 812, "the card stops at the frame's right edge, clear of the docked panel"); }
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  const fs = el("div"); g.doc.fullscreenElement = fs; g.fsChange();
+  g.send(HOV("m2")); g.clk.advance(150);
+  ok(g.card().length === 0 && fs.children.filter((c) => c.className === "hovercard").length === 1,
+     "in full screen the card goes inside the full-screen element, where it can be seen");
+  g.fsChange();
+  ok(fs.children.filter((c) => c.className === "hovercard").length === 0, "leaving or entering full screen puts it away");
+  ok(g.bar.parentNode === fs, "the selection bar moves into the full-screen element too");
+  g.send({ ...SEL, rect: { ...SEL.rect, top: 900, vt: 30, vl: 10 } });
+  ok(g.bar.hidden === false && g.bar.style.position === "fixed" && g.bar.style.top === "154px" && g.bar.style.left === "30px",
+     "and sits under the selection as the frame shows it, since the frame scrolls itself there");
+  g.doc.fullscreenElement = null; g.fsChange();
+  ok(g.bar.parentNode === g.docBody && g.bar.hidden === true, "back in the page when full screen ends");
+  g.send(SEL);
+  ok(g.bar.style.position === "" && g.bar.style.top === "204px", "placed in page coordinates again"); }
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
