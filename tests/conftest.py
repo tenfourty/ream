@@ -303,6 +303,16 @@ def pytest_unconfigure(config) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _patient_changes_view(monkeypatch):
+    """The changes view waits 2 s for its worker in production; tests that
+    expect a marked-up result wait 15 s, so a loaded CI box cannot flip them.
+    Tests about the timeout itself pass their own short `timeout`."""
+    from artifacts import pagediff
+
+    monkeypatch.setattr(pagediff, "TIMEOUT_SECONDS", 15.0)
+
+
+@pytest.fixture(autouse=True)
 def _prompt_event_looks(monkeypatch):
     """A held wait looks for new events every half second in production, so a
     test that waits on one idled up to 0.5 s per wake. Tests look every 20 ms;

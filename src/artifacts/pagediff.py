@@ -1150,8 +1150,14 @@ def _remember(key: tuple[str, str], result: tuple[str, str | None]) -> None:
         _cache_bytes = total
 
 
+# How long a view waits for the worker before showing the page as it now is.
+# Module-level so the test suite can widen it: a cold worker takes ~0.5 s even
+# on a quiet machine, and a loaded CI box must not flip a test on 2 s.
+TIMEOUT_SECONDS = 2.0
+
+
 def render_changes_safely(
-    old_html: str, new_html: str, *, timeout: float = 2.0
+    old_html: str, new_html: str, *, timeout: float | None = None
 ) -> tuple[str, str | None]:
     """``render_changes`` in a separate process with a hard timeout.
 
@@ -1171,7 +1177,9 @@ def render_changes_safely(
             if hit is not None:
                 _CACHE.move_to_end(key)
                 return hit[0]
-        result, transient = _run_in_worker(old_html, new_html, timeout)
+        result, transient = _run_in_worker(
+            old_html, new_html, TIMEOUT_SECONDS if timeout is None else timeout
+        )
         if (
             not isinstance(result, tuple)
             or len(result) != 2

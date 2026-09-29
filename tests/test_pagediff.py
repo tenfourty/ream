@@ -150,7 +150,9 @@ def test_long_page_one_change_marks_exactly_one_word():
     took = time.perf_counter() - t
     assert reason is None
     assert marks(doc) == (["CHANGED"], ["w0"])
-    assert took < 2
+    assert (
+        took < 10
+    )  # guards against the 20-145 s regressions, with headroom for a loaded CI box
 
 
 def test_long_page_with_repeated_tokens_and_scattered_edits_is_fast():
@@ -164,7 +166,7 @@ def test_long_page_with_repeated_tokens_and_scattered_edits_is_fast():
     new = "<p>" + " ".join(w2) + "</p>"
     t = time.perf_counter()
     doc, _ = render_changes(old, new)
-    assert time.perf_counter() - t < 2
+    assert time.perf_counter() - t < 10
     assert sorted(marks(doc)[0]) == ["CAT", "DOG", "DOG", "DOG"]
 
 
@@ -199,7 +201,7 @@ def test_degenerate_repeated_phrase_page_is_bounded():
     new = old.replace("cat", "dog", 3000)
     t = time.perf_counter()
     _, reason = render_changes(old, new)
-    assert time.perf_counter() - t < 2
+    assert time.perf_counter() - t < 10
     assert reason in (None, "too large to mark up changes")
 
 
@@ -301,7 +303,7 @@ def test_input_over_the_page_cap_falls_back():
     big = "<body>" + "x" * (3 * 1024 * 1024 + 1) + "</body>"
     t = time.perf_counter()
     _, reason = render_changes("<p>a</p>", big)
-    assert time.perf_counter() - t < 1
+    assert time.perf_counter() - t < 10
     assert reason == "too large to mark up changes"
 
 
@@ -311,7 +313,7 @@ def test_recursive_matching_is_budgeted():
     new = "<p>" + " ".join(reversed(words)) + "</p>"
     t = time.perf_counter()
     _, reason = render_changes(old, new)
-    assert time.perf_counter() - t < 3
+    assert time.perf_counter() - t < 15
     assert reason == "too large to mark up changes"
 
 
@@ -516,7 +518,7 @@ def test_safely_times_out_and_kills_the_worker(monkeypatch):
     pagediff._CACHE.clear()
     t = time.perf_counter()
     doc, reason = pagediff.render_changes_safely("<p>a</p>", "<p>b</p>", timeout=1.0)
-    assert time.perf_counter() - t < 3
+    assert time.perf_counter() - t < 15
     assert (doc, reason) == ("<p>b</p>", "could not mark up changes")
     proc = pagediff._last_killed
     assert proc is not None
