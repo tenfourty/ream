@@ -25,9 +25,13 @@ this never offers it.
 """
 
 import argparse
+import json
+import os
 import re
 import sys
+import tempfile
 import time
+from datetime import datetime
 
 from artifacts import news
 from artifacts.client import (
@@ -367,6 +371,145 @@ def _wait(args, key: str, base: str) -> int:
     return 3
 
 
+# Exit code per verdict for `wait --review`; 7 (new marks) and 3 (timeout) are
+# handled inline.
+_VERDICT_EXIT = {
+    "approved": 0,
+    "approved_with_notes": 4,
+    "changes_requested": 5,
+    "dismissed": 6,
+}
+
+
+def _refuse(text: str, code: int = 1) -> int:
+    print(f"REFUSED: {text}", file=sys.stderr)
+    return code
+
+
+def _write_result_file(target: str, text: str) -> bool:
+    """Same bytes as stdout, atomically, never over an existing file: a temp file
+    beside the target (mode 0600), hard-linked into place. `os.link` fails if the
+    target exists, which `os.rename` would not, so a racing writer is refused
+    rather than clobbered. False when the target appeared first."""
+    directory = os.path.dirname(os.path.abspath(target))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".verdict-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        try:
+            os.link(tmp, target)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        os.unlink(tmp)
+
+
+def _after(stamp: str | None, since: str | None) -> bool:
+    if not stamp or not since:
+        return bool(stamp)
+    return datetime.fromisoformat(stamp) > datetime.fromisoformat(since)
+
+
+def _wait_review(args, key: str, base: str) -> int:
+    """Block until Jeremy gives a verdict on a review; exit by verdict.
+
+    0 approved, 4 approved with notes, 5 changes requested, 6 dismissed, 7 new
+    marks and no verdict yet, 3 timeout, 1 refused, 2 usage. `--require-approval`
+    folds 0/4 to 0 and 5/6/7 to 1.
+
+    STARTS BY LOOKING, then long-polls the events feed exactly as `_wait` does,
+    so a verdict given earlier is printed at once and a later one wakes it."""
+    review_id = args.review
+    target = args.result_file
+    if target and os.path.lexists(target):
+        return _refuse(f"{target} exists; not overwriting it", 2)
+    timeout = _duration(args.timeout)
+    deadline = time.monotonic() + timeout
+    since: list = []  # the review's created_at, read once
+
+    def look() -> int | None:
+        review = _request("GET", f"{base}/reviews/{review_id}", key, None)
+        verdict = review.get("verdict")
+        if verdict:
+            out = (
+                json.dumps(review["data"]) + "\n"
+                if args.json
+                else (review.get("message") or "")
+            )
+            sys.stdout.write(out)
+            sys.stdout.flush()
+            if target and not _write_result_file(target, out):
+                return _refuse(f"{target} exists; not overwriting it", 2)
+            code = _VERDICT_EXIT[verdict]
+            if args.require_approval:
+                code = 0 if code in (0, 4) else 1
+            return code
+        if args.verdict_only:
+            return None
+        page = review["artifact_id"]
+        if not since:
+            rows = _request(
+                "GET",
+                f"{base}/artifacts/{page}/decisions?include_answered=true",
+                key,
+                None,
+            )
+            mine = [r for r in rows if r.get("id") == review_id]
+            since.append(mine[0].get("created_at") if mine else None)
+        fresh = [
+            row
+            for row in _request("GET", f"{base}/artifacts/{page}/comments", key, None)
+            if row.get("author_kind") == "human"
+            and not row.get("thread_root")
+            and _after(row.get("created_at"), since[0])
+        ]
+        if not fresh:
+            return None
+        print("\n\n".join(_fmt_thread(t) for t in _threads(fresh)))
+        return 1 if args.require_approval else 7
+
+    done = look()
+    if done is not None:
+        return done
+    headers: dict = {}
+    _request("GET", f"{base}/events?since=999999999999", key, None, headers_out=headers)
+    cursor = int(headers.get("x-artifacts-cursor", "0"))
+    print(
+        f"waiting for Jeremy's verdict on {review_id} (up to {int(timeout // 60)}m)...",
+        file=sys.stderr,
+        flush=True,
+    )
+    while time.monotonic() < deadline:
+        hold = int(max(1, min(_HOLD, deadline - time.monotonic())))
+        try:
+            rows = _request(
+                "GET",
+                f"{base}/events?since={cursor}&wait={hold}&exclude_self=true",
+                key,
+                None,
+                timeout=hold + 30,
+            )
+        except HTTPFailure as exc:
+            if exc.status in (401, 403):
+                raise
+            time.sleep(5)
+            continue
+        if not isinstance(rows, list):
+            rows = []
+        for row in rows:
+            cursor = max(cursor, int(row.get("seq", cursor)))
+        kinds = {"decision_answered"} | (
+            set() if args.verdict_only else {"comment_added"}
+        )
+        if any(r.get("kind") in kinds for r in rows):
+            done = look()
+            if done is not None:
+                return done
+    print("nothing yet: no verdict before the timeout. Run it again.", file=sys.stderr)
+    return 3
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _StaleAwareParser(
         prog="artifacts-decide",
@@ -416,6 +559,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="LETTER",
         help="defaults to the first option -- his house style is (a) first",
     )
+
+    ask_review = subs.add_parser(
+        "ask-review",
+        help="ask Jeremy to review one of your pages (a verdict, not a question)",
+    )
+    ask_review.add_argument("page", metavar="PAGE-ID")
 
     answers = subs.add_parser(
         "answers", help="every decision on one page, answered ones included"
@@ -504,6 +653,27 @@ def build_parser() -> argparse.ArgumentParser:
     waiting.add_argument(
         "--answers-only", action="store_true", help="do not wake for his comments"
     )
+    waiting.add_argument(
+        "--review", metavar="REVIEW-ID", help="wait for the verdict on this review"
+    )
+    waiting.add_argument(
+        "--json", action="store_true", help="with --review: print the data as one line"
+    )
+    waiting.add_argument(
+        "--result-file",
+        metavar="PATH",
+        help="with --review: also write it here, never over a file",
+    )
+    waiting.add_argument(
+        "--require-approval",
+        action="store_true",
+        help="with --review: exit 0 for approved (with or without notes), else 1",
+    )
+    waiting.add_argument(
+        "--verdict-only",
+        action="store_true",
+        help="with --review: ignore new marks, wake only for the verdict",
+    )
 
     threads = subs.add_parser(
         "comments",
@@ -532,12 +702,41 @@ def main(argv: list[str] | None = None) -> int:
     key = maybe_rotate(args, key)
 
     base = _api_base()
-    if args.cmd in ("ask", "record", "outcome", "ack", "close", "reply", "settle"):
+    if args.cmd == "wait" and not args.review:
+        used = [
+            flag
+            for flag, on in (
+                ("--json", args.json),
+                ("--result-file", args.result_file),
+                ("--require-approval", args.require_approval),
+                ("--verdict-only", args.verdict_only),
+            )
+            if on
+        ]
+        if used:
+            print(f"{', '.join(used)} only work with --review ID", file=sys.stderr)
+            return 2
+
+    if args.cmd in (
+        "ask",
+        "ask-review",
+        "record",
+        "outcome",
+        "ack",
+        "close",
+        "reply",
+        "settle",
+    ):
         warn_if_unlabelled(args.cmd)
     try:
         if args.cmd == "ask":
             row = _ask(args, key)
             print(_fmt(row))
+            return 0
+        if args.cmd == "ask-review":
+            row = _request("POST", f"{base}/artifacts/{args.page}/reviews", key, {})
+            print(f"{row['id']}  review requested on {args.page}")
+            print(f"  wait: artifacts-decide wait --review {row['id']}")
             return 0
         if args.cmd == "answers":
             # WITHDRAWN ONES INCLUDED. A question withdrawn because its page
@@ -649,6 +848,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"recorded on {written['decision_id']}: {written['body']}")
             return 0
         if args.cmd == "wait":
+            if args.review:
+                try:
+                    return _wait_review(args, key, base)
+                except HTTPFailure as exc:
+                    if exc.status in (401, 403, 404):
+                        return _refuse(str(exc))
+                    raise
             return _wait(args, key, base)
         if args.cmd == "comments":
             found = _open_threads(key, base, args.page)
