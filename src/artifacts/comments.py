@@ -58,7 +58,7 @@ _COLUMNS = (
     "comment.id, comment.artifact_id, comment.version_n, comment.thread_root,"
     " comment.anchor, comment.quote, comment.author_kind, comment.author,"
     " comment.body, comment.created_at, comment.resolved_at, comment.resolved_by,"
-    " comment.kind, comment.held"
+    " comment.kind, comment.held, comment.review_round"
 )
 
 # Correlated subquery, not a join: for the comment a given row names -- itself, if it
@@ -111,6 +111,9 @@ class CommentRow:
     quote_state: str = ""
     # Written by Jeremy while his page's review was held: the agent cannot see it yet.
     held: bool = False
+    # The review round open when he made it (page review step 4); None outside
+    # an open round, and for an agent's write.
+    review_round: int | None = None
 
 
 class InvalidAnchor(Exception):
@@ -251,6 +254,7 @@ def _row_to_comment(row) -> CommentRow:
         resolved_by=row[11],
         kind=row[12],
         held=row[13],
+        review_round=row[14],
     )
 
 
@@ -553,6 +557,84 @@ def _state_against(quote: str, words: str, tight_words: str) -> str:
     if needle in words or _tight(quote) in tight_words:
         return "current"
     return "changed"
+
+
+STILL = "still on page"
+TEXT_CHANGED = "text changed"
+ADDRESSED = "addressed/removed"
+
+# How much of a quote's surroundings, or of the quote itself, must still be on
+# the page (spaces removed) for its absence to read as an edit in place rather
+# than a removal. Short enough to survive an edit next to it, long enough that
+# a few common letters do not count.
+_CONTEXT_CHARS = 32
+_CONTEXT_MIN = 8
+
+
+def carried_state(row: CommentRow, current_body: str) -> str:
+    """What became of a mark from an earlier review round, read off the page as
+    it is now (page review step 4). Inferred, never a flag:
+
+    - `addressed/removed`: the thread is resolved, or its quote is gone;
+    - `text changed`: its quote is not there as it was, but the text around it
+      (the anchor's prefix or suffix) or half of the quote itself still is --
+      the words were edited in place;
+    - `still on page`: otherwise, including a mark that quotes nothing.
+
+    Compared the way `quote_state` compares -- tags stripped, whitespace and
+    case ignored -- so a sentence that only gained emphasis is still on page.
+    """
+    words = text.searchable(current_body)
+    return _carried_against(row, words, _tight(words))
+
+
+def _carried_against(row: CommentRow, words: str, tight_words: str) -> str:
+    if row.resolved_at is not None:
+        return ADDRESSED
+    if _state_against(row.quote, words, tight_words) != "changed":
+        return STILL
+    anchor = row.anchor or {}
+    hints = [
+        _tight(anchor.get("prefix") or "")[-_CONTEXT_CHARS:],
+        _tight(anchor.get("suffix") or "")[:_CONTEXT_CHARS],
+    ]
+    quote = _tight(row.quote)
+    half = len(quote) // 2
+    hints += [quote[:half], quote[half:]]
+    if any(len(h) >= _CONTEXT_MIN and h in tight_words for h in hints):
+        return TEXT_CHANGED
+    return ADDRESSED
+
+
+def carried_states(rows: list[CommentRow], current_body: str) -> dict[str, str]:
+    """`carried_state` for many rows, reading the page once."""
+    words = text.searchable(current_body)
+    tight_words = _tight(words)
+    return {row.id: _carried_against(row, words, tight_words) for row in rows}
+
+
+def carried_marks(
+    rows: list[CommentRow], round_n: int, since: str, current_body: str
+) -> list[tuple[CommentRow, str]]:
+    """His marks from earlier rounds of a review in round `round_n`, each with
+    its `carried_state`, oldest first.
+
+    Earlier means a human root stamped with a lower round, or with none: a
+    mark made between a verdict and the republish that opened this round
+    belongs to no round, and he made it about the version he sent back. An
+    open one is carried whenever it was made; a resolved one only if it was
+    made since the review was asked (`since`), so a thread settled before
+    this review began is not brought back as "addressed"."""
+    earlier = [
+        c
+        for c in rows
+        if c.thread_root is None
+        and c.author_kind == "human"
+        and (c.review_round is None or c.review_round < round_n)
+        and (c.resolved_at is None or c.created_at >= since)
+    ]
+    states = carried_states(earlier, current_body)
+    return [(c, states[c.id]) for c in earlier]
 
 
 def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:

@@ -18,6 +18,7 @@ from artifacts import (
     frame_pass,
     hosts,
     mail,
+    pagediff,
     stamp,
     store,
     templates,
@@ -59,6 +60,21 @@ SHIM = "<script>window.claude={use:async(n)=>null};</script>"  # replaced in Tas
 # so removing window.claude entirely makes that page throw a TypeError instead
 # of degrading. Serve the null shim there and let the page render read-only.
 INERT_SHIM = "<script>window.claude={use:async(n)=>null};window.storage=null;</script>"
+
+# THE CHANGES VIEW'S STYLES (page review step 4). Beside the mark styles
+# (`ar-mark-style`, added by the viewer script once marks arrive), but a plain
+# <style> of its own, because the insertions and deletions must show on a page
+# with no marks and with scripts off. Only the changes view carries it.
+DIFF_STYLE = (
+    '<style id="ar-diff-style">'
+    "ins.ar-diff-ins{background:rgba(46,157,87,.22);text-decoration:none}"
+    "del.ar-diff-del{background:rgba(192,57,43,.18);text-decoration:line-through}"
+    "span.ar-diff-chip{display:inline-block;margin:0 .2em;padding:0 .4em;"
+    "border-radius:.6em;background:rgba(127,127,127,.18);color:#666;"
+    "font:600 .7em/1.6 system-ui,sans-serif;text-decoration:none;"
+    "vertical-align:middle}"
+    "</style>"
+)
 
 
 def _viewer_report(missing: Sequence[str] = ()) -> str:
@@ -601,6 +617,16 @@ def create_content_app(db: Database) -> FastAPI:
         if loaded is None:
             return Response("not found", status_code=404, media_type="text/plain")
         body, _served, published_at = loaded
+        # THE CHANGES VIEW (page review step 4): the live page marked up against
+        # the version he sent back. Diffed on the stored bodies (the stamp is
+        # applied after), with the same call and so the same cache as the
+        # gallery's card, which shows any fallback reason. Never stored.
+        diff_style = ""
+        if spent.changes_from is not None and n is None:
+            base = _load(artifact_id, spent.changes_from)
+            if base is not None:
+                body, _reason = pagediff.render_changes_safely(base[0], body)
+                diff_style = DIFF_STYLE
         # The service fills in when this version was published, so no agent has
         # to write a time down (homelab-ij8.70). Done here rather than at store
         # time: the stored body is hashed to make `revision`, so folding a clock
@@ -615,7 +641,7 @@ def create_content_app(db: Database) -> FastAPI:
                 slot
                 for slot, _line in decisions.unresolved_slots(db, artifact_id, body)
             ]
-            shim = SHIM + _viewer_report(missing)
+            shim = SHIM + _viewer_report(missing) + diff_style
         else:
             shim = INERT_SHIM
         html = inject(body, shim)

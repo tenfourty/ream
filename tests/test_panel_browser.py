@@ -480,3 +480,68 @@ def test_a_reply_being_typed_survives_and_full_screen_shows_the_card(
         assert not errors, errors
     finally:
         ctx.close()
+
+
+def test_round_two_opens_on_green_insertions_and_hides_them_on_request(
+    browser, served, db
+):
+    """Page review step 4: in round 2 the frame shows what changed since the
+    version he sent back -- insertions green, deletions struck -- and the
+    card's Hide changes link brings back the plain page."""
+    from artifacts import decisions, nudge
+
+    origin, ident = served
+    nudge_emit, nudge.emit = nudge.emit, lambda **kw: None
+    try:
+        review = decisions.ask_review(db, agent="seat", artifact_id=ident)
+        comments.add(
+            db,
+            artifact_id=ident,
+            author_kind="human",
+            author="jeremy",
+            kind="comment",
+            anchor={"kind": "range", "path": "/p[1]", "start": 0, "end": 11},
+            quote="Paragraph 0",
+            body="say more",
+        )
+        decisions.answer(db, review.id, letter="c", note="", by="jeremy")
+        page = store.get_owned(db, "seat", ident)
+        store.patch(
+            db,
+            "seat",
+            ident,
+            PAGE.replace("Paragraph 0:", "Paragraph 0, now clearer:"),
+            page.revision,
+        )
+    finally:
+        nudge.emit = nudge_emit
+    ctx, pg, errors = _open_page(browser, origin, ident, 1400)
+    try:
+        assert "Round 2" in pg.text_content(".ask")
+        frame = pg.frame_locator("#artifact-frame")
+        ins = frame.locator("ins.ar-diff-ins").first
+        ins.wait_for(timeout=10000)
+        assert "clearer" in ins.inner_text()
+        assert ins.evaluate("e => getComputedStyle(e).backgroundColor") == (
+            "rgba(46, 157, 87, 0.22)"
+        )
+        assert ins.evaluate("e => getComputedStyle(e).textDecorationLine") == "none"
+        struck = frame.locator("del.ar-diff-del").first
+        assert struck.evaluate("e => getComputedStyle(e).textDecorationLine") == (
+            "line-through"
+        )
+        assert "still on page" in pg.text_content(".carried")
+        shot = os.environ.get("ARTIFACTS_ROUND2_SHOT")
+        if shot:
+            pg.screenshot(path=shot)
+
+        pg.click("text=Hide changes")
+        pg.wait_for_load_state("load")
+        assert pg.url.endswith("?changes=0")
+        frame = pg.frame_locator("#artifact-frame")
+        frame.locator("p").first.wait_for(timeout=10000)
+        assert frame.locator("ins.ar-diff-ins").count() == 0
+        assert "Show changes" in pg.text_content(".ask")
+        assert not errors, errors
+    finally:
+        ctx.close()

@@ -520,6 +520,11 @@ create table if not exists frame_pass (
 
 create index if not exists frame_pass_expires_idx on frame_pass (expires_at);
 
+-- A pass for the CHANGES VIEW (page review step 4): the live page marked up
+-- against this earlier version. NULL for the plain page. The view is drawn
+-- when served and never stored as a version.
+alter table frame_pass add column if not exists changes_from integer;
+
 -- A MACHINE ASKING TO JOIN (homelab-ij8.102, 23 Sep 2026).
 --
 -- Jeremy's confirmed ruling: an arriving agent asks for access and shows him a

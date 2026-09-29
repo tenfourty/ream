@@ -63,28 +63,66 @@ def _page_order(threads: list, body: str) -> list:
     return [root for _, root in sorted(enumerate(threads), key=key)]
 
 
+def _round_of(db: Database, review_id: str):
+    with db.connect() as conn:
+        return decisions.current_round(conn, review_id)
+
+
 def render(db: Database, review_id: str, *, agent: str) -> tuple[str, dict]:
     decision = _load(db, review_id, agent)
     verdict = decisions.VERDICTS[decision.answer]
     page = store.get_owned(db, agent, decision.artifact_id)
     stored = store.get_body(db, agent, decision.artifact_id)
 
-    everything = comments.list_for_artifact(db, decision.artifact_id)
+    # The round this verdict closed (page review step 4). The version is the
+    # round's -- the one his page view showed when he gave it, when known --
+    # not `decision.version_n`, which is the version first asked about.
+    rnd = _round_of(db, review_id)
+    round_n = rnd.n if rnd is not None else 1
+    version = stored.version
+    base_version = None
+    if rnd is not None:
+        version = rnd.reviewed_version or rnd.version_n
+        base_version = rnd.base_version
+    carried = round_n >= 2
+    body_now = stored.body
+    if carried and rnd.version_n != stored.version:
+        body_now = store.get_version_body(
+            db, agent, decision.artifact_id, rnd.version_n
+        ).body
+
+    everything = comments.list_for_artifact(
+        db, decision.artifact_id, include_resolved=carried
+    )
     replies: dict[str, list[comments.CommentRow]] = {}
     for c in everything:
         if c.thread_root:
             replies.setdefault(c.thread_root, []).append(c)
+    states: dict[str, str] = {}
+    if carried:
+        states = {
+            c.id: state
+            for c, state in comments.carried_marks(
+                everything, round_n, decision.created_at, body_now
+            )
+        }
     roots = [
-        c for c in everything if c.thread_root is None and c.author_kind == "human"
+        c
+        for c in everything
+        if c.thread_root is None
+        and c.author_kind == "human"
+        and (c.resolved_at is None or c.id in states)
     ]
-    ordered = _page_order(roots, stored.body)
+    ordered = _page_order(roots, body_now)
 
     note = sanitize(decision.answer_note).strip()
     n = len(ordered)
+    # Round 1 keeps the step-2 line exactly, so its callers are unchanged.
+    where = f"{page.id}, v{version}" + (f", round {round_n}" if carried else "")
     lines = [
         (
             f"Artifacts review: {verdict.upper().replace('_', ' ')}"
-            f' — "{_quote(page.title)}" ({page.id}, v{stored.version})'
+            f' — "{_quote(page.title)}" ({where})'
         ),
         "",
     ]
@@ -119,10 +157,12 @@ def render(db: Database, review_id: str, *, agent: str) -> tuple[str, dict]:
     for number, root in enumerate(ordered, 1):
         body = sanitize(root.body).strip()
         if root.anchor.get("kind") == "page":
-            lines.append(f"{number}. General feedback about the page (mark {root.id})")
+            head = f"{number}. General feedback about the page (mark {root.id})"
         else:
             label = _LABEL.get(root.kind, _LABEL["comment"])
-            lines.append(f'{number}. {label}: "{_quote(root.quote)}" (mark {root.id})')
+            head = f'{number}. {label}: "{_quote(root.quote)}" (mark {root.id})'
+        state = states.get(root.id)
+        lines.append(head + (f" [{state}]" if state else ""))
         for line in body.splitlines():
             lines.append(f"   > {line}")
         thread = []
@@ -138,16 +178,16 @@ def render(db: Database, review_id: str, *, agent: str) -> tuple[str, dict]:
                 "kind": root.kind,
                 "quote": _quote(root.quote),
                 "note": body,
-                "state": root.quote_state,
+                "state": states.get(root.id, "new"),
                 "replies": thread,
             }
         )
 
     data = {
         "verdict": verdict,
-        "round": 1,
-        "version": stored.version,
-        "base_version": None,
+        "round": round_n,
+        "version": version,
+        "base_version": base_version,
         "note": note,
         "items": items,
     }

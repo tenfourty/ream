@@ -46,11 +46,20 @@ def _hash(token: str) -> str:
 class Spent:
     artifact_id: str
     version: int | None
+    # The base version of a changes view (page review step 4): the frame shows
+    # the page marked up against it. None for the plain page.
+    changes_from: int | None = None
 
 
-def mint(db: Database, artifact_id: str, version: int | None = None) -> str:
+def mint(
+    db: Database,
+    artifact_id: str,
+    version: int | None = None,
+    changes_from: int | None = None,
+) -> str:
     """A fresh pass for one page (the live one when `version` is None). The
-    plaintext is returned once and never stored."""
+    plaintext is returned once and never stored. `changes_from` makes it a pass
+    for the changes view: the page marked up against that earlier version."""
     token = secrets.token_urlsafe(32)
     with db.connect() as conn:
         conn.execute(
@@ -58,9 +67,10 @@ def mint(db: Database, artifact_id: str, version: int | None = None) -> str:
             (_KEEP_SECONDS,),
         )
         conn.execute(
-            "insert into frame_pass (token_sha256, artifact_id, version, expires_at)"
-            " values (%s, %s, %s, now() + make_interval(secs => %s))",
-            (_hash(token), artifact_id, version, LIFETIME_SECONDS),
+            "insert into frame_pass"
+            " (token_sha256, artifact_id, version, changes_from, expires_at)"
+            " values (%s, %s, %s, %s, now() + make_interval(secs => %s))",
+            (_hash(token), artifact_id, version, changes_from, LIFETIME_SECONDS),
         )
     return token
 
@@ -79,7 +89,9 @@ def spend(db: Database, token: str, artifact_id: str) -> Spent | None:
             "update frame_pass set used_at = now()"
             " where token_sha256 = %s and artifact_id = %s"
             " and used_at is null and expires_at > now()"
-            " returning artifact_id, version",
+            " returning artifact_id, version, changes_from",
             (_hash(token), artifact_id),
         ).fetchone()
-    return Spent(artifact_id=row[0], version=row[1]) if row else None
+    return (
+        Spent(artifact_id=row[0], version=row[1], changes_from=row[2]) if row else None
+    )

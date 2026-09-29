@@ -38,6 +38,7 @@ from artifacts import (
     holds,
     keys,
     mail,
+    pagediff,
     stamp,
     store,
     thumbs,
@@ -291,6 +292,12 @@ main{display:block}
 .rmode form{display:inline;margin:0}
 .rmode .rheld{font:600 .7rem var(--mono);letter-spacing:.06em;color:var(--ink)}
 .verdict{margin:.3rem 0}
+.rround{display:flex;flex-wrap:wrap;align-items:baseline;gap:.5rem;font-size:.85rem;color:var(--muted);margin:.2rem 0}
+.rround a{color:var(--accent)}
+.carried{font-size:.85rem;margin:.3rem 0}
+.carried ul{margin:.2rem 0;padding-left:1.1rem}
+.carried .cstate{font:600 .68rem var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-right:.4rem}
+.carried .cstate.still{color:var(--accent)}
 .ask .tag{font:.68rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
   opacity:.8;margin-left:.45rem;white-space:nowrap}
 .ask input[name=note]{font:inherit;font-size:.9rem;flex:1 1 11rem;min-width:8rem;
@@ -1200,7 +1207,7 @@ function isStatic(el){try{return window.getComputedStyle(el).position==="static"
 var renewals=0;
 function renew(){
   if(++renewals>3)return;
-  window.fetch(location.pathname+"/frame",{credentials:"same-origin"})
+  window.fetch(location.pathname+"/frame"+location.search,{credentials:"same-origin"})
     .then(function(r){return r.ok?r.json():null})
     .then(function(d){if(d&&typeof d.src==="string"&&new URL(d.src).origin===contentOrigin)iframe.src=d.src})
     .catch(function(){});
@@ -3114,6 +3121,7 @@ def _render_decisions(
     held_count: int = 0,
     rounds: dict[str, int] | None = None,
     shown_version: int | None = None,
+    round_view: dict | None = None,
 ) -> tuple[str, str]:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
@@ -3203,6 +3211,50 @@ def _render_decisions(
             f"</form></div>{approved}"
         )
 
+    def _round_block(row: decisions.DecisionRow) -> str:
+        """Round 2 and later of an open review (page review step 4): the round,
+        the Hide/Show changes link (a plain link, so it works with scripts
+        off), why the changes could not be marked up if they could not, and his
+        marks from earlier rounds with what became of each."""
+        view = (round_view or {}).get(row.id)
+        if not view:
+            return ""
+        page = escape(view["artifact_id"])
+        if view["on"]:
+            toggle = (
+                f"<span>Showing what changed since v{int(view['base'])}</span>"
+                f'<a href="/a/{page}?changes=0">Hide changes</a>'
+            )
+        else:
+            toggle = f'<a href="/a/{page}?changes=1">Show changes</a>'
+        out = (
+            f'<div class="rround"><span class="rtag">Round {int(view["n"])}</span>'
+            f"{toggle}</div>"
+        )
+        if view["on"] and view["reason"]:
+            out += (
+                '<p class="rhint">Showing the page as it now is: '
+                f"{escape(view['reason'])}</p>"
+            )
+        carried = view["carried"]
+        if carried:
+            items = []
+            for mark, state in carried:
+                cls = "still" if state == comments.STILL else ""
+                what = (
+                    f"\u201c{escape(' '.join(mark.quote.split())[:160])}\u201d"
+                    if mark.quote
+                    else "General feedback about the page"
+                )
+                items.append(
+                    f'<li><span class="cstate {cls}">{escape(state)}</span>{what}</li>'
+                )
+            out += (
+                '<div class="carried"><b>Your marks from earlier rounds</b>'
+                f"<ul>{''.join(items)}</ul></div>"
+            )
+        return out
+
     def _card(row: decisions.DecisionRow, anchorable: bool = True) -> str:
         """`anchorable` carries the id the page's script matches a slot against.
         Only an OPEN decision gets one: a settled decision lives inside a collapsed
@@ -3226,7 +3278,7 @@ def _render_decisions(
         )
         anchor = f' data-decision-id="{escape(row.id)}"' if anchorable else ""
         if is_review and row.answer is None:
-            hint += _mode_switch(row, held_count)
+            hint = _round_block(row) + hint + _mode_switch(row, held_count)
         if is_review and row.answer is not None:
             # One verdict counts: a settled review has no form.
             label = next(
@@ -4079,6 +4131,35 @@ def gallery_router(db: Database) -> APIRouter:
             _watchers.release()
         return {"n": int(row[0]) if row else since}
 
+    def _open_round(artifact_id: str, changes: str):
+        """The open review's round when it is round 2 or later, and the base
+        version the frame's changes view is drawn against (None when he turned
+        the changes off, or there is nothing to draw them against).
+
+        (review, round, changes_from), or (None, None, None)."""
+        with db.connect() as conn:
+            found = conn.execute(
+                "select id from decision where artifact_id = %s and kind = 'review'"
+                " and answer is null and closed_at is null"
+                " order by created_at desc limit 1",
+                (artifact_id,),
+            ).fetchone()
+            rnd = decisions.current_round(conn, found[0]) if found else None
+        if rnd is None or rnd.n < 2:
+            return None, None, None
+        base = rnd.base_version if changes != "0" else None
+        return found[0], rnd, base
+
+    def _bodies(artifact_id: str, ns: list[int]) -> dict[int, str]:
+        with db.connect() as conn:
+            return dict(
+                conn.execute(
+                    "select n, body from version where artifact_id = %s"
+                    " and n = any(%s) and status = 'live'",
+                    (artifact_id, ns),
+                ).fetchall()
+            )
+
     @router.get("/a/{artifact_id}", response_class=HTMLResponse)
     def detail(
         artifact_id: str,
@@ -4088,6 +4169,8 @@ def gallery_router(db: Database) -> APIRouter:
         # the drawer open across the round trip, and the result is a URL he can
         # keep, which a script-driven toggle would not be.
         comments_scope: str = Query("this", alias="comments", pattern="^(this|all)$"),
+        # Round 2 and later open on what changed; "0" is his Hide changes.
+        changes: str = Query("1", pattern="^(0|1)$"),
     ) -> HTMLResponse:
         # Look the artifact up rather than framing whatever the URL said: an
         # unchecked id renders a frame pointing at an invented subdomain, and
@@ -4109,8 +4192,43 @@ def gallery_router(db: Database) -> APIRouter:
         decision_rows = decisions.list_for_artifact(
             db, artifact_id, include_answered=True, include_closed=False
         )
+        comment_rows = comments.list_for_artifact(
+            db, artifact_id, include_resolved=True, include_held=True
+        )
+        # ROUND 2 AND LATER (page review step 4): the frame opens on what
+        # changed since the version he sent back, and the card says the round,
+        # offers Hide/Show changes and lists his earlier marks. The fallback
+        # reason is read here, with the same cached call the frame makes, so
+        # it is on the card with scripts off.
+        review_id, rnd, changes_from = _open_round(artifact_id, changes)
+        round_view = None
+        if rnd is not None:
+            live_n = int(row[5])
+            wanted = [live_n] + ([changes_from] if changes_from is not None else [])
+            bodies = _bodies(artifact_id, wanted)
+            reason = None
+            if changes_from is not None and changes_from in bodies:
+                _doc, reason = pagediff.render_changes_safely(
+                    bodies[changes_from], bodies.get(live_n, "")
+                )
+            else:
+                changes_from = None
+            asked = next(r.created_at for r in decision_rows if r.id == review_id)
+            round_view = {
+                review_id: {
+                    "artifact_id": artifact_id,
+                    "n": rnd.n,
+                    "on": changes_from is not None,
+                    "base": changes_from,
+                    "reason": reason,
+                    "carried": comments.carried_marks(
+                        comment_rows, rnd.n, asked, bodies.get(live_n, "")
+                    ),
+                }
+            }
         asks_above, settled_below = _render_decisions(
             decision_rows,
+            round_view=round_view,
             listening_since=events.last_read(db, row[2]),
             outcomes=decisions.outcomes_for_artifact(db, artifact_id),
             held_count=(
@@ -4138,7 +4256,12 @@ def gallery_router(db: Database) -> APIRouter:
         # the CONTENT app's Referrer-Policy: no-referrer keeps it out of a Referer; spent on
         # first load, it is worthless afterwards anyway. The response is no-store (below):
         # an HTML page carrying a single-use pass must never be replayed from a cache.
-        src = escape(content_url(artifact_id, frame_pass.mint(db, artifact_id)))
+        src = escape(
+            content_url(
+                artifact_id,
+                frame_pass.mint(db, artifact_id, changes_from=changes_from),
+            )
+        )
         # Sandboxed with no allow-top-navigation*, no allow-forms, no allow-modals: an agent's
         # page must never be able to navigate Jeremy's signed-in gallery tab out from under him
         # (e.g. to a fake sign-in page) or pop a dialog over it. allow-same-origin is safe here
@@ -4151,9 +4274,6 @@ def gallery_router(db: Database) -> APIRouter:
         # Jeremy meant by "wow that ux is ugly" -- raw browser widgets beside a
         # page that had been designed.
         archived = row[3] is not None
-        comment_rows = comments.list_for_artifact(
-            db, artifact_id, include_resolved=True, include_held=True
-        )
         open_threads = sum(
             1 for c in comment_rows if c.thread_root is None and c.resolved_at is None
         )
@@ -4526,7 +4646,9 @@ def gallery_router(db: Database) -> APIRouter:
         )
 
     @router.get("/a/{artifact_id}/frame")
-    def fresh_frame(artifact_id: str) -> Response:
+    def fresh_frame(
+        artifact_id: str, changes: str = Query("1", pattern="^(0|1)$")
+    ) -> Response:
         """A new pass for the page in front of him, for gallery.js to re-point a
         frame whose pass was spent (homelab-ij8.101). Behind Authelia like every
         gallery route, and JSON a cross-origin page cannot read. A deleted or
@@ -4540,7 +4662,16 @@ def gallery_router(db: Database) -> APIRouter:
             raise HTTPException(404, "no such artifact")
         return Response(
             json.dumps(
-                {"src": content_url(artifact_id, frame_pass.mint(db, artifact_id))}
+                {
+                    "src": content_url(
+                        artifact_id,
+                        frame_pass.mint(
+                            db,
+                            artifact_id,
+                            changes_from=_open_round(artifact_id, changes)[2],
+                        ),
+                    )
+                }
             ),
             media_type="application/json",
             headers={**gallery_headers(), "cache-control": "no-store"},
