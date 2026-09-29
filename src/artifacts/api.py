@@ -12,7 +12,7 @@ import threading
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import (
     FileResponse,
@@ -1020,10 +1020,13 @@ def agent_router(
 
     @router.post("/artifacts/{artifact_id}/comments", status_code=201)
     def create_comment(
-        artifact_id: str, payload: CommentBody, agent: str = Depends(caller)
+        artifact_id: str,
+        payload: CommentBody,
+        background: BackgroundTasks,
+        agent: str = Depends(caller),
     ):
         try:
-            return comments.add(
+            row = comments.add(
                 db,
                 artifact_id=artifact_id,
                 author_kind="agent",
@@ -1034,7 +1037,10 @@ def agent_router(
                 thread_root=payload.thread_root,
                 agent=agent,
                 kind=payload.kind,
-            ).__dict__
+            )
+            # GitGuardian checks the saved comment straight after the response.
+            background.add_task(comments.second_scan, db, row.id)
+            return row.__dict__
         except store.NotAPage as exc:
             # 422, not 413: the body is not too much, it is not a page. Named
             # like every other refusal so a caller can tell them apart without

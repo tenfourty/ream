@@ -298,7 +298,12 @@ def check_body(body: str, *, agent: str) -> None:
 
 
 def _check_secrets(
-    value: str, field: str, *, agent: str, artifact_id: str | None
+    value: str,
+    field: str,
+    *,
+    agent: str,
+    artifact_id: str | None,
+    second_opinion: bool = True,
 ) -> None:
     try:
         findings = scan.scan(value)
@@ -325,7 +330,7 @@ def _check_secrets(
             type(exc).__name__,
         )
         raise ScanFailed(field) from exc
-    if not findings and field == "body":
+    if not findings and field == "body" and second_opinion:
         # The second opinion, on the ORIGINAL body (homelab-ij8.2; see ggscan).
         # Only once the built-in scan is clean: an obvious secret is refused
         # here without ever leaving the house.

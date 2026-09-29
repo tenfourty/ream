@@ -23,11 +23,12 @@ An unknown artifact and someone else's look identical either way (both `NotFound
 matching `store.publish`/`store.patch`.
 """
 
+import logging
 from dataclasses import dataclass, replace
 
 from psycopg.types.json import Jsonb
 
-from artifacts import events, holds, ids, nudge, store, text
+from artifacts import events, ggscan, holds, ids, nudge, store, text
 from artifacts.db import Database
 
 # A comment is a remark about a page, not a page in itself -- 8 KB is generous for
@@ -71,6 +72,16 @@ _ROOT_RESOLVED_AT = (
     "(select root.resolved_at from comment as root"
     " where root.id = coalesce(comment.thread_root, comment.id))"
 )
+
+# A comment GitGuardian flagged after it was saved is withdrawn: hidden from every
+# read, and so are the replies under a withdrawn ROOT (Jeremy may have answered it
+# a second before it went). Same root-subquery shape as `_ROOT_RESOLVED_AT`.
+_VISIBLE = (
+    "comment.withdrawn_at is null and (select root.withdrawn_at from comment as root"
+    " where root.id = coalesce(comment.thread_root, comment.id)) is null"
+)
+
+_log = logging.getLogger("artifacts.comments")
 
 
 @dataclass(frozen=True)
@@ -263,6 +274,7 @@ def add(
     thread_root: str | None = None,
     agent: str | None = None,
     kind: str = "comment",
+    second_opinion: bool | None = None,
 ) -> CommentRow:
     """Write a comment. `agent`, when given, is the identity the artifact must be
     owned by -- an agent answering comments on its OWN pages, via the keyed API.
@@ -283,7 +295,13 @@ def add(
     the whole page. A reply (`thread_root` given) is always stored as `"comment"`,
     whatever `kind` was passed -- a thread is one conversation, and a reply cannot
     put a second, independent mark on the spot its root already marked.
+
+    `second_opinion` is whether GitGuardian is asked BEFORE saving. It defaults
+    to False for everyone: Jeremy's comments never wait on the relay, and an
+    agent's are checked by `second_scan` after they are saved.
     """
+    if second_opinion is None:
+        second_opinion = False
     is_reply = thread_root is not None
 
     # Cheapest first, no database touched yet. A reply's own `anchor`/`quote`
@@ -335,7 +353,7 @@ def add(
             root = conn.execute(
                 "select comment.anchor, comment.quote from comment"
                 " where comment.id = %s and comment.artifact_id = %s"
-                " and comment.thread_root is null"
+                " and comment.thread_root is null and comment.withdrawn_at is null"
                 # A held thread does not exist as far as the agent can tell.
                 " and (not comment.held or %s)",
                 (thread_root, artifact_id, agent is None),
@@ -348,9 +366,19 @@ def add(
         # that's the root's own quote, inherited rather than the caller's, and
         # scanning it again here is cheap and keeps one invariant true without
         # exception: every quote that lands in a row passed a scan on THIS call.
-        store._check_secrets(body, "body", agent=author, artifact_id=artifact_id)
         store._check_secrets(
-            effective_quote, "quote", agent=author, artifact_id=artifact_id
+            body,
+            "body",
+            agent=author,
+            artifact_id=artifact_id,
+            second_opinion=second_opinion,
+        )
+        store._check_secrets(
+            effective_quote,
+            "quote",
+            agent=author,
+            artifact_id=artifact_id,
+            second_opinion=second_opinion,
         )
 
         owning_agent = owned[2]
@@ -541,7 +569,10 @@ def list_for_artifact(
     # Every interpolated piece here (`_COLUMNS`, `_ROOT_RESOLVED_AT`) is a fixed
     # module constant, never caller input -- `artifact_id` travels as a bound
     # parameter below, not string-built.
-    sql = f"select {_COLUMNS} from comment where comment.artifact_id = %s"  # noqa: S608
+    sql = (
+        f"select {_COLUMNS} from comment where comment.artifact_id = %s"  # noqa: S608
+        f" and {_VISIBLE}"
+    )
     if not include_held:
         sql += " and not comment.held"
     if not include_resolved:
@@ -572,7 +603,8 @@ def marks_for_page(db: Database, artifact_id: str) -> list[dict]:
         rows = conn.execute(
             "select id, kind, quote, anchor, held from comment"
             " where artifact_id = %s and thread_root is null"
-            " and resolved_at is null and anchor->>'kind' = 'range'"
+            " and resolved_at is null and withdrawn_at is null"
+            " and anchor->>'kind' = 'range'"
             " order by created_at asc, id asc",
             (artifact_id,),
         ).fetchall()
@@ -599,7 +631,7 @@ def list_for_agent(
     sql = (
         f"select {_COLUMNS} from comment"  # noqa: S608
         " join artifact on artifact.id = comment.artifact_id"
-        " where artifact.agent = %s and not comment.held"
+        f" where artifact.agent = %s and not comment.held and {_VISIBLE}"
     )
     if not include_resolved:
         sql += f" and {_ROOT_RESOLVED_AT} is null"
@@ -648,7 +680,7 @@ def across_pages(
     sql = (
         f"select {_COLUMNS}, artifact.title, artifact.archived_at from comment"  # noqa: S608
         " join artifact on artifact.id = comment.artifact_id"
-        " where artifact.deleted_at is null"
+        f" where artifact.deleted_at is null and {_VISIBLE}"
     )
     if not include_resolved:
         sql += f" and {_ROOT_RESOLVED_AT} is null"
@@ -731,7 +763,8 @@ def resolve(
     with db.connect() as conn:
         if agent is None:
             row = conn.execute(
-                f"select {_COLUMNS} from comment where comment.id = %s",  # noqa: S608 -- fixed constant, not caller input
+                f"select {_COLUMNS} from comment where comment.id = %s"  # noqa: S608 -- fixed constant, not caller input
+                f" and {_VISIBLE}",
                 (comment_id,),
             ).fetchone()
         else:
@@ -739,7 +772,7 @@ def resolve(
                 f"select {_COLUMNS} from comment"  # noqa: S608 -- fixed constant, not caller input
                 " join artifact on artifact.id = comment.artifact_id"
                 " where comment.id = %s and artifact.agent = %s"
-                " and not comment.held",
+                f" and not comment.held and {_VISIBLE}",
                 (comment_id, agent),
             ).fetchone()
         if row is None:
@@ -802,3 +835,77 @@ def resolve(
                 )
 
     return _row_to_comment(row)
+
+
+def withdraw(db: Database, comment_id: str, *, kind: str) -> bool:
+    """Take a comment GitGuardian flagged out of every read, and blank its text so
+    the secret does not sit in the database. `kind` names the shape (e.g.
+    `ggshield_slack_bot_token`), never the value. Row, event and log line are one
+    transaction. False if the comment is missing or already withdrawn."""
+    with db.connect() as conn, conn.transaction():
+        row = conn.execute(
+            "update comment set withdrawn_at = now(), withdrawn_kind = %s,"
+            " body = '', quote = ''"
+            " where id = %s and withdrawn_at is null returning artifact_id",
+            (kind, comment_id),
+        ).fetchone()
+        if row is None:
+            return False
+        artifact_id = row[0]
+        owner = conn.execute(
+            "select agent, session from artifact where id = %s", (artifact_id,)
+        ).fetchone()
+        agent = owner[0]
+        events.append(
+            conn,
+            artifact_id=artifact_id,
+            agent=agent,
+            actor="artifacts",
+            kind="comment_withdrawn",
+            summary=(
+                f"Your comment was withdrawn: it looked like a {kind}. "
+                "Nothing of it was kept visible."
+            ),
+            ref_id=comment_id,
+            session=owner[1],
+        )
+        _log.warning(
+            "comment withdrawn: agent=%s artifact=%s comment=%s reason=%s",
+            agent,
+            artifact_id,
+            comment_id,
+            kind,
+        )
+    return True
+
+
+def second_scan(db: Database, comment_id: str) -> None:
+    """The background job after an agent's comment is saved: GitGuardian on the
+    saved body. A finding withdraws the comment; an unreachable relay leaves it
+    up on the built-in scan and says so. Never raises -- a background task's
+    exception is lost, so it is logged and swallowed."""
+    try:
+        with db.connect() as conn:
+            row = conn.execute(
+                "select body, artifact_id, author from comment"
+                " where id = %s and withdrawn_at is null and author_kind = 'agent'",
+                (comment_id,),
+            ).fetchone()
+        if row is None:
+            return
+        body, artifact_id, author = row
+        found = ggscan.scan(body)
+        if found is None:
+            if ggscan.configured():
+                _log.warning(
+                    "comment kept on the built-in scan only: agent=%s artifact=%s "
+                    "comment=%s reason=ggshield_unavailable",
+                    author,
+                    artifact_id,
+                    comment_id,
+                )
+            return
+        if found:
+            withdraw(db, comment_id, kind=found[0].shape)
+    except Exception:  # noqa: BLE001 -- a background task's exception is lost
+        _log.error("comment second scan failed: comment=%s", comment_id, exc_info=True)

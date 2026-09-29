@@ -18,6 +18,10 @@ from pathlib import Path
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-09-29d",
+        "Your comments on a page are saved at once and checked by GitGuardian just after; if it finds a secret the comment is withdrawn and you get a comment_withdrawn event naming the kind, never the value.",
+    ),
+    (
         "2026-09-29c",
         "On a page under review Jeremy's marks are now held until his verdict unless he switches to live; artifacts-decide ask-review --live asks for them as he goes. A held mark is invisible to you until then.",
     ),

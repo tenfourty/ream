@@ -42,6 +42,8 @@ KINDS = (
     # will otherwise sit until its own timeout, every time, unable to tell
     # "not yet" from "he is never going to be shown this".
     "decision_shelved",
+    # GitGuardian flagged the agent's own comment after it was saved.
+    "comment_withdrawn",
 )
 
 # A note is his own words and must survive the trip whole. 1000 is the same

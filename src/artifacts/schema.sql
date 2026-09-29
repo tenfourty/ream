@@ -667,3 +667,12 @@ create table if not exists human_pref (
     value      text not null,
     updated_at timestamptz not null default now()
 );
+
+-- A comment GitGuardian flagged after it was saved (homelab-ij8.112): its
+-- text is blanked and it is hidden from every read; the kind stays.
+alter table comment add column if not exists withdrawn_at timestamptz;
+alter table comment add column if not exists withdrawn_kind text;
+alter table event drop constraint if exists event_kind_check;
+alter table event add constraint event_kind_check
+    check (kind in ('decision_answered', 'comment_added', 'thread_resolved',
+                    'decision_shelved', 'comment_withdrawn'));
