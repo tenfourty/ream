@@ -189,8 +189,29 @@ def test_no_marks_still_says_so(db):
     _answer(db, row, "c")
     message, data = review.render(db, row.id, agent="seat")
     assert "He left no marks." in message
-    assert "ALL 0 items" in message
+    assert "0 items" not in message
     assert data["items"] == []
+
+
+def test_changes_with_no_marks_point_at_his_note_not_at_zero_items(db):
+    """Found in the live proof, 29 Sep 2026: 'address ALL 0 items below'."""
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    _answer(db, row, "c", note="make it shorter")
+    message, _ = review.render(db, row.id, agent="seat")
+    assert "0 items" not in message
+    assert "You MUST revise the page as his note asks, then republish it" in message
+    assert "Do not republish it unchanged." in message
+
+
+def test_changes_with_no_marks_and_no_note_say_to_ask_him(db):
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    _answer(db, row, "c")
+    message, _ = review.render(db, row.id, agent="seat")
+    assert "0 items" not in message
+    assert "He did not say what to change: ask him" in message
+    assert "Do not republish it unchanged." in message
 
 
 @pytest.mark.parametrize(

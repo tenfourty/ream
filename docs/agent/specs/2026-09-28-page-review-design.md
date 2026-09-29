@@ -86,7 +86,9 @@ stay 1 or 2 as today, but print `REFUSED`, so a typo never reads as a rejection.
   The message never starts with `/`.
 - **Changes requested** adds a firm block: "You MUST revise the page to address ALL N items
   below, then republish it with `artifacts-publish <file> --update <id>`. Do not republish it
-  unchanged." Plannotator found that agents ignore softer wording.
+  unchanged." Plannotator found that agents ignore softer wording. With no marks the block
+  points at his note instead ("…as his note asks…"), and with no note either it tells the
+  agent to ask him what to change (found in the live proof, 29 Sep 2026).
 - **Approved with notes:** "These notes are non-blocking guidance. Do not revise solely
   because of them."
 - **Dismissed:** "Closed without a verdict. This is not approval."

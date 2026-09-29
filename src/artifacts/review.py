@@ -89,11 +89,22 @@ def render(db: Database, review_id: str, *, agent: str) -> tuple[str, dict]:
         "",
     ]
     if verdict == "changes_requested":
-        lines.append(
-            f"You MUST revise the page to address ALL {n} items below, then"
+        republish = (
             f" republish it with artifacts-publish <file> --update {page.id}."
             " Do not republish it unchanged."
         )
+        if n:
+            what = f"You MUST revise the page to address ALL {n} items below, then"
+        elif note:
+            what = "You MUST revise the page as his note asks, then"
+        else:
+            # No marks and no note: nothing here says what to change, and
+            # guessing is how a page gets republished unchanged in spirit.
+            what = (
+                "He did not say what to change: ask him"
+                f" (artifacts-decide ask {page.id} ...), then revise the page and"
+            )
+        lines.append(what + republish)
     else:
         lines.append(_HEAD[verdict])
     if note:
