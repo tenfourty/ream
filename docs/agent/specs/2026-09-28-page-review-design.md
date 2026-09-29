@@ -136,8 +136,9 @@ This is the seam the later plan-mode hook uses.
 - **`comment.held`:** a boolean. A held mark is excluded from the agent's reads and events
   until release.
 - **`comment.review_round`:** nullable; set on marks made while a round is open.
-- **The anchor** gains optional `prefix` and `suffix`: 32 characters of text either side of
-  the quote. The existing path plus offsets stay the fast path.
+- **The anchor** gains optional `prefix` and `suffix`: the text either side of
+  the quote (the shim sends 32 characters each; the stored limit is 64). The existing path
+  plus offsets stay the fast path.
 - **`quote_state`** gains `moved`: the quote was found, but not at the stored path. Marks are
   never moved on the server; they are re-evaluated.
 - **The hold/live preference** is one row in a small `human_pref` table: key `review_mode`,
