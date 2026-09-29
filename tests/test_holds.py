@@ -271,3 +271,184 @@ def test_a_verdict_that_waits_for_the_mark_releases_it(db, monkeypatch):
     assert stored.id == out["row"].id and stored.held is False
     message, _ = review.render(db, row.id, agent="seat")
     assert "Rotate" in message
+
+
+# ---- release: verdict, flip, close or shelve (task 2) ----
+
+
+def _held_review(db, marks=2, agent="seat"):
+    page = _page(db, agent)
+    row = decisions.ask_review(db, agent=agent, artifact_id=page.id, mode="held")
+    made = [_mark(db, page) for _ in range(marks)]
+    assert all(m.held for m in made)
+    return page, row, made
+
+
+def _comment_events(db, ids):
+    with db.connect() as conn:
+        return conn.execute(
+            "select ref_id from event where kind = 'comment_added'"
+            " and ref_id = any(%s)",
+            (list(ids),),
+        ).fetchall()
+
+
+def _held_flags(db, page):
+    return {
+        c.id: c.held for c in comments.list_for_artifact(db, page.id, include_held=True)
+    }
+
+
+def test_a_verdict_releases_his_held_marks_without_extra_events(db, nudges):
+    from artifacts import review
+
+    page, row, made = _held_review(db)
+    decisions.answer(db, row.id, letter="c", by="jeremy")
+    assert not any(_held_flags(db, page).values())
+    assert _comment_events(db, [m.id for m in made]) == []
+    message, _ = review.render(db, row.id, agent="seat")
+    assert message.count("Rotate") >= 2
+
+
+def test_approved_with_held_marks_counts_as_approved_with_notes(db, nudges):
+    page, row, _ = _held_review(db, marks=1)
+    assert decisions.answer(db, row.id, letter="a", by="jeremy").answer == "b"
+
+    page, row, _ = _held_review(db, marks=1)
+    out = decisions.record_elsewhere(
+        db, row.id, letter="a", note="ok", source="telegram", recorded_by="seat"
+    )
+    assert out.answer == "b"
+
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
+    assert decisions.answer(db, row.id, letter="a", by="jeremy").answer == "a"
+
+    page, row, [mark] = _held_review(db, marks=1)
+    with db.connect() as conn:
+        conn.execute("update comment set resolved_at = now() where id = %s", (mark.id,))
+    assert decisions.answer(db, row.id, letter="a", by="jeremy").answer == "a"
+
+
+def test_dismissed_releases_them_as_context(db, nudges):
+    from artifacts import review
+
+    page, row, _ = _held_review(db)
+    decisions.answer(db, row.id, letter="d", by="jeremy")
+    assert not any(_held_flags(db, page).values())
+    message, _ = review.render(db, row.id, agent="seat")
+    assert "Rotate" in message
+
+
+def test_flipping_to_live_releases_with_events_and_remembers(db, nudges):
+    page, row, made = _held_review(db, marks=1)
+    reply = comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        kind="comment",
+        body="and more",
+        thread_root=made[0].id,
+    )
+    assert reply.held
+    extra = _mark(db, page)
+    assert holds.set_review_mode(db, row.id, "live") == (page.id, 3)
+    assert len(_comment_events(db, [made[0].id, extra.id])) == 2
+    assert _comment_events(db, [reply.id]) == []
+    with db.connect() as conn:
+        assert holds.get_mode(conn) == "live"
+    assert nudges == []
+    assert _mark(db, page).held is False
+
+
+def test_flipping_back_to_held_holds_new_marks_only(db, nudges):
+    page, row, _ = _held_review(db, marks=0)
+    holds.set_review_mode(db, row.id, "live")
+    first = _mark(db, page)
+    assert first.held is False
+    holds.set_review_mode(db, row.id, "held")
+    assert _mark(db, page).held is True
+    assert _held_flags(db, page)[first.id] is False
+
+
+def test_a_settled_or_non_review_decision_cannot_be_flipped(db):
+    page, answered, _ = _held_review(db, marks=0)
+    decisions.answer(db, answered.id, letter="c", by="jeremy")
+    closed = decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
+    decisions.close(db, "seat", closed.id)
+    question = decisions.ask(
+        db,
+        agent="seat",
+        artifact_id=page.id,
+        question="Q?",
+        options=[{"letter": "a", "label": "x"}, {"letter": "b", "label": "y"}],
+    )
+    with db.connect() as conn:
+        holds.set_mode(conn, "held")
+    for did, exc in (
+        (answered.id, decisions.AlreadyDecided),
+        (closed.id, decisions.AlreadyDecided),
+        (question.id, store.NotFound),
+    ):
+        with pytest.raises(exc):
+            holds.set_review_mode(db, did, "live")
+        with db.connect() as conn:
+            assert holds.get_mode(conn) == "held"
+    with pytest.raises(ValueError):
+        holds.set_review_mode(db, closed.id, "loud")
+
+
+def test_closing_or_archiving_releases_held_marks(db, nudges):
+    page, row, made = _held_review(db, marks=2)
+    decisions.close(db, "seat", row.id)
+    assert not any(_held_flags(db, page).values())
+    assert len(_comment_events(db, [m.id for m in made])) == 2
+
+    page, row, made = _held_review(db, marks=2)
+    assert store.set_archived(db, page.id, True, agent="seat")
+    assert not any(_held_flags(db, page).values())
+    assert len(_comment_events(db, [m.id for m in made])) == 2
+    assert nudges == []
+
+
+def test_a_flip_racing_approved_never_drops_a_mark(db, monkeypatch, nudges):
+    import threading
+    import time
+
+    from artifacts import review
+
+    page, row, _made = _held_review(db, marks=2)
+    reached, go = _gate_after(monkeypatch, holds, "approved_letter")
+    out = {}
+
+    def approve():
+        out["verdict"] = decisions.answer(db, row.id, letter="a", by="jeremy")
+
+    def flip():
+        try:
+            out["flip"] = holds.set_review_mode(db, row.id, "live")
+        except decisions.AlreadyDecided as err:
+            out["flip"] = err
+
+    t = threading.Thread(target=approve)
+    t.start()
+    assert reached.wait(10)
+    f = threading.Thread(target=flip)
+    f.start()
+    time.sleep(1)
+    assert f.is_alive(), "the flip waits for the verdict's row lock"
+    go.set()
+    t.join(20)
+    f.join(20)
+    assert out["verdict"].answer == "b"
+    assert not any(_held_flags(db, page).values())
+    message, _ = review.render(db, row.id, agent="seat")
+    assert message.count("Rotate") >= 2
+
+
+def test_a_flip_that_lands_first_makes_approved_plain(db, nudges):
+    _page, row, made = _held_review(db, marks=1)
+    holds.set_review_mode(db, row.id, "live")
+    assert decisions.answer(db, row.id, letter="a", by="jeremy").answer == "a"
+    assert len(_comment_events(db, [made[0].id])) == 1

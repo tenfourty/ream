@@ -88,3 +88,46 @@ def release(conn, artifact_id: str, *, emit: bool) -> list[str]:
                 session=page_session,
             )
     return [r[0] for r in released]
+
+
+def approved_letter(conn, artifact_id: str, letter: str) -> str:
+    """`a` (Approved) becomes `b` (Approved with notes) while an open held ROOT
+    mark of his exists on the page; every other letter passes through. Call it
+    inside the verdict's transaction, after locking the decision row."""
+    if letter != "a":
+        return letter
+    held = conn.execute(
+        "select 1 from comment where artifact_id = %s and held"
+        " and author_kind = 'human' and thread_root is null and resolved_at is null"
+        " limit 1",
+        (artifact_id,),
+    ).fetchone()
+    return "b" if held is not None else letter
+
+
+def set_review_mode(db, decision_id: str, mode: str) -> tuple[str, int]:
+    """Jeremy's switch on an open review: remember `mode`, and on `live` release
+    what is held, with events. Returns (artifact_id, released_count). Takes the
+    decision row `for update`, the same lock a verdict takes, so a flip and a
+    verdict serialise."""
+    from artifacts import decisions, store
+
+    if mode not in MODES:
+        raise ValueError(mode)
+    with db.connect() as conn, conn.transaction():
+        found = conn.execute(
+            f"select {decisions._COLUMNS} from decision"  # noqa: S608 -- fixed constant
+            " where decision.id = %s and decision.kind = 'review' for update",
+            (decision_id,),
+        ).fetchone()
+        if found is None:
+            raise store.NotFound()
+        if found[6] is not None or found[11] is not None:
+            raise decisions.AlreadyDecided(decisions._row_to_decision(found))
+        artifact_id = found[1]
+        conn.execute(
+            "update decision set review_mode = %s where id = %s", (mode, decision_id)
+        )
+        set_mode(conn, mode)
+        released = release(conn, artifact_id, emit=True) if mode == "live" else []
+    return artifact_id, len(released)

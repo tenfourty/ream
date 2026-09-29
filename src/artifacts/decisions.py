@@ -429,6 +429,26 @@ class InvalidSource(Exception):
     """
 
 
+def _lock_review_and_settle_letter(
+    conn, decision_id: str, artifact_id: str, letter: str
+) -> str:
+    """First step of a review verdict's transaction. Takes the decision row
+    `for update`, so a flip to live (which takes the same lock) and a verdict
+    serialise on it, then re-tests the row under the lock. Approved becomes
+    Approved-with-notes when marks of his are still held: his marks reach the
+    agent with the verdict, so an Approved that carried them must not read as
+    "nothing to say"."""
+    current = conn.execute(
+        f"select {_COLUMNS} from decision where decision.id = %s for update",  # noqa: S608 -- fixed constant, not caller input
+        (decision_id,),
+    ).fetchone()
+    if current[11] is not None:  # closed_at
+        raise store.NotFound()
+    if current[6] is not None:  # answer
+        raise AlreadyDecided(_row_to_decision(current))
+    return holds.approved_letter(conn, artifact_id, letter)
+
+
 def record_elsewhere(
     db: Database,
     decision_id: str,
@@ -494,9 +514,13 @@ def record_elsewhere(
             raise InvalidAnswer()
         store._check_secrets(note, "note", agent=recorded_by, artifact_id=artifact_id)
 
-        label = next(o["label"] for o in options if o["letter"] == letter)
-        summary = f"{letter}: {label} (relayed from {source})"[:200]
         with conn.transaction():
+            if row[_KIND_IDX] == "review":
+                letter = _lock_review_and_settle_letter(
+                    conn, decision_id, artifact_id, letter
+                )
+            label = next(o["label"] for o in options if o["letter"] == letter)
+            summary = f"{letter}: {label} (relayed from {source})"[:200]
             # One verdict counts on a review, relayed or tapped: the same
             # atomic guard `answer` uses, so a relay cannot overwrite it.
             written = conn.execute(
@@ -601,15 +625,19 @@ def answer(
 
         store._check_secrets(note, "note", agent=by, artifact_id=artifact_id)
 
-        label = next(
-            option["label"] for option in options if option["letter"] == letter
-        )
-        summary = f"{letter}: {label}"[:200]
         # One transaction: the answer and the event that describes it commit or
         # roll back together (events.append's own docstring) -- a nudge must
         # never be sent for an answer that a later failure in this block undid,
         # and the journal must never gain a row whose cause never happened.
         with conn.transaction():
+            if row[_KIND_IDX] == "review":
+                letter = _lock_review_and_settle_letter(
+                    conn, decision_id, artifact_id, letter
+                )
+            label = next(
+                option["label"] for option in options if option["letter"] == letter
+            )
+            summary = f"{letter}: {label}"[:200]
             # The write itself is conditional for a review, not only the read
             # above: two devices can both pass that read before either writes,
             # and only an atomic `answer is null` test in the update keeps the
@@ -717,17 +745,26 @@ def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
             (decision_id,),
         ).fetchone()
         if row[11] is None:  # closed_at
-            # Closing implies acknowledgement -- an agent that finished the work
-            # necessarily heard the answer -- but only when nothing has acknowledged
-            # it yet, so an earlier, truer "seen at" is never overwritten by a later
-            # close. `coalesce` does both in one statement.
-            conn.execute(
-                "update decision set closed_at = now(),"
-                " acknowledged_at = coalesce(acknowledged_at, now()),"
-                " acknowledged_by = coalesce(acknowledged_by, %s)"
-                " where id = %s",
-                (agent, decision_id),
-            )
+            with conn.transaction():
+                # Closing implies acknowledgement -- an agent that finished the work
+                # necessarily heard the answer -- but only when nothing has acknowledged
+                # it yet, so an earlier, truer "seen at" is never overwritten by a later
+                # close. `coalesce` does both in one statement.
+                conn.execute(
+                    "update decision set closed_at = now(),"
+                    " acknowledged_at = coalesce(acknowledged_at, now()),"
+                    " acknowledged_by = coalesce(acknowledged_by, %s)"
+                    " where id = %s",
+                    (agent, decision_id),
+                )
+                if (
+                    row[_KIND_IDX] == "review"
+                    and holds.page_mode(conn, row[1]) != "held"
+                ):
+                    # The review is over, so his held marks would never be
+                    # seen -- unless another open review on the page still
+                    # holds them.
+                    holds.release(conn, row[1], emit=True)
             row = conn.execute(
                 f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
                 (decision_id,),
@@ -768,6 +805,9 @@ def acknowledge(db: Database, agent: str, decision_id: str) -> DecisionRow:
                 " where id = %s",
                 (agent, decision_id),
             )
+            if row[_KIND_IDX] == "review":
+                # The review is over, so his held marks would never be seen.
+                holds.release(conn, row[1], emit=True)
             row = conn.execute(
                 f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
                 (decision_id,),

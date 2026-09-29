@@ -1009,6 +1009,16 @@ def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int
     # `acknowledged_at` is coalesced rather than set, matching decisions.close:
     # an earlier and truer "seen at" must never be overwritten by this.
     if rows:
+        if conn.execute(
+            "select 1 from decision where artifact_id = %s and kind = 'review'"
+            " and answer is null and closed_at is null limit 1",
+            (artifact_id,),
+        ).fetchone():
+            # A shelved review will never get a verdict; his held marks go to
+            # the agent now rather than stay invisible forever.
+            from artifacts import holds
+
+            holds.release(conn, artifact_id, emit=True)
         conn.execute(
             "update decision set closed_at = now(),"
             " acknowledged_at = coalesce(acknowledged_at, now())"
