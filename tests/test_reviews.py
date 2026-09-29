@@ -2,7 +2,7 @@
 
 import pytest
 
-from artifacts import decisions, events, store
+from artifacts import comments, decisions, events, review, store
 
 PAGE = (
     "<!doctype html><title>Plan</title>"
@@ -124,3 +124,199 @@ def test_two_simultaneous_verdicts_keep_only_the_first(db, monkeypatch):
         e for e in events.list_for_agent(db, "seat") if e.kind == "decision_answered"
     ]
     assert len(answered) == 1
+
+
+RANGE1 = {"kind": "range", "path": "body>p:nth-of-type(1)", "start": 0, "end": 31}
+RANGE2 = {"kind": "range", "path": "body>p:nth-of-type(2)", "start": 0, "end": 25}
+
+
+def _answer(db, row, letter, note=""):
+    decisions.answer(db, row.id, letter=letter, note=note, by="jeremy")
+
+
+def _human(db, page, **kw):
+    return comments.add(
+        db, artifact_id=page.id, author_kind="human", author="jeremy", **kw
+    )
+
+
+def test_changes_requested_is_firm_numbered_in_page_order_with_ids(db):
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    second = _human(
+        db,
+        page,
+        body="",
+        kind="remove",
+        quote="Email the team when done.",
+        anchor=RANGE2,
+    )
+    first = _human(
+        db,
+        page,
+        body="why 90? weekly",
+        kind="comment",
+        quote="Rotate the keys every 90 days.",
+        anchor=RANGE1,
+    )
+    _answer(db, row, "c")
+    message, data = review.render(db, row.id, agent="seat")
+    lines = message.splitlines()
+    assert (
+        lines[0] == f'Artifacts review: CHANGES REQUESTED \u2014 "Plan" ({page.id}, v1)'
+    )
+    assert "You MUST revise the page to address ALL 2 items below" in message
+    assert "Do not republish it unchanged." in message
+    assert "He left 2 marks:" in message
+    i1 = message.index(
+        f'1. Feedback on: "Rotate the keys every 90 days." (mark {first.id})'
+    )
+    i2 = message.index(
+        f'2. Remove this: "Email the team when done." (mark {second.id})'
+    )
+    assert i1 < i2, "page order, not creation order"
+    assert "   > why 90? weekly" in message
+    assert data["verdict"] == "changes_requested"
+    assert [i["n"] for i in data["items"]] == [1, 2]
+    assert data["items"][0]["id"] == first.id and data["items"][1]["kind"] == "remove"
+
+
+def test_no_marks_still_says_so(db):
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    _answer(db, row, "c")
+    message, data = review.render(db, row.id, agent="seat")
+    assert "He left no marks." in message
+    assert "ALL 0 items" in message
+    assert data["items"] == []
+
+
+@pytest.mark.parametrize(
+    "letter,verdict,phrase",
+    [
+        ("a", "approved", "Approved."),
+        (
+            "b",
+            "approved_with_notes",
+            "These notes are non-blocking guidance. Do not revise solely because of them.",
+        ),
+        ("d", "dismissed", "Closed without a verdict. This is not approval."),
+    ],
+)
+def test_each_verdict_has_its_own_wording(db, letter, verdict, phrase):
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    _answer(db, row, letter, note="see below")
+    message, data = review.render(db, row.id, agent="seat")
+    assert phrase in message and data["verdict"] == verdict
+    assert data["note"] == "see below" and "His note: see below" in message
+
+
+def test_invisible_characters_and_a_leading_slash_are_stripped(db):
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    _human(
+        db,
+        page,
+        body="/rm -rf\u202e\u200b evil",
+        kind="comment",
+        quote="Rotate the keys every 90 days.",
+        anchor=RANGE1,
+    )
+    _answer(db, row, "c", note="\ufeff/also")
+    message, data = review.render(db, row.id, agent="seat")
+    assert message.startswith("Artifacts review:")
+    for ch in "\u202e\u200b\ufeff":
+        assert ch not in message and ch not in str(data)
+
+
+def test_replies_nest_unnumbered_and_resolved_marks_are_left_out(db):
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    root = _human(
+        db,
+        page,
+        body="why?",
+        kind="comment",
+        quote="Rotate the keys every 90 days.",
+        anchor=RANGE1,
+    )
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="seat",
+        body="because",
+        thread_root=root.id,
+    )
+    settled = _human(
+        db,
+        page,
+        body="old",
+        kind="comment",
+        quote="Email the team when done.",
+        anchor=RANGE2,
+    )
+    comments.resolve(db, settled.id, by="jeremy")
+    _answer(db, row, "b")
+    message, data = review.render(db, row.id, agent="seat")
+    assert "   - seat: because" in message
+    assert "He left 1 mark:" in message
+    assert settled.id not in message
+    assert data["items"][0]["replies"] == [{"author": "seat", "text": "because"}]
+
+
+def test_page_level_comments_come_last_and_agent_roots_are_left_out(db):
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    general = _human(db, page, body="too long", kind="comment", anchor={"kind": "page"})
+    ranged = _human(
+        db,
+        page,
+        body="",
+        kind="looks_good",
+        quote="Email the team when done.",
+        anchor=RANGE2,
+    )
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="seat",
+        body="mine",
+        anchor={"kind": "page"},
+    )
+    _answer(db, row, "c")
+    message, _ = review.render(db, row.id, agent="seat")
+    assert "He left 2 marks:" in message
+    assert message.index(f"(mark {ranged.id})") < message.index(
+        f"2. General feedback about the page (mark {general.id})"
+    )
+    assert f'1. Looks good: "Email the team when done." (mark {ranged.id})' in message
+    assert "mine" not in message
+
+
+def test_a_quote_is_one_line_and_at_most_300_characters():
+    assert review.sanitize("a\u202eb") == "ab"
+    long = review._quote("x " * 400)
+    assert "\n" not in long and len(long) <= 300
+
+
+def test_render_refuses_what_is_not_yours_or_not_decided(db):
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    with pytest.raises(store.NotFound):
+        review.render(db, row.id, agent="seat")  # no verdict yet
+    _answer(db, row, "a")
+    with pytest.raises(store.NotFound):
+        review.render(db, row.id, agent="someone-else")
+
+
+def test_render_refuses_a_plain_question(db):
+    page = _page(db)
+    row = decisions.ask(
+        db, agent="seat", artifact_id=page.id, question="q?", options=TWO
+    )
+    _answer(db, row, "a")
+    with pytest.raises(store.NotFound):
+        review.render(db, row.id, agent="seat")
