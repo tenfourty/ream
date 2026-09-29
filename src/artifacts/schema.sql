@@ -737,3 +737,5 @@ alter table review_round add column if not exists reviewed_version int;
 alter table review_round add column if not exists claimed_by text;
 alter table review_round add column if not exists claim_expires_at timestamptz;
 alter table review_round add column if not exists released_reason text;
+-- The session that handed the round back, for his card; a claim clears it.
+alter table review_round add column if not exists released_by text;

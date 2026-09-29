@@ -331,3 +331,22 @@ def test_claim_expiry_is_a_real_timestamp(db, client):
     expires = datetime.fromisoformat(body["claim_expires_at"])
     assert expires.tzinfo is not None
     assert 200 < (expires - datetime.now(UTC)).total_seconds() <= 305
+
+
+def _released_by(db, rid):
+    with db.connect() as conn:
+        return conn.execute(
+            "select released_by, released_reason from review_round"
+            " where review_id = %s order by n desc limit 1",
+            (rid,),
+        ).fetchone()
+
+
+def test_a_release_names_the_session_and_a_later_claim_clears_it(db, client):
+    h = _auth(db)
+    _page, review = _review(db)
+    _claim(client, h, review.id, "seat/one")
+    _release(client, h, review.id, "seat/one", "cannot deploy from here")
+    assert _released_by(db, review.id) == ("seat/one", "cannot deploy from here")
+    assert _claim(client, h, review.id, "seat/two").status_code == 200
+    assert _released_by(db, review.id) == (None, None)

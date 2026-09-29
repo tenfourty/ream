@@ -734,7 +734,7 @@ def claim_round(db: Database, agent: str, review_id: str, session: str) -> Claim
         row = conn.execute(
             "update review_round set claimed_by = %s,"
             " claim_expires_at = now() + make_interval(secs => %s),"
-            " released_reason = null"
+            " released_reason = null, released_by = null"
             " where review_id = %s and n = %s"
             " returning n, claimed_by, claim_expires_at",
             (session, CLAIM_SECONDS, review_id, current[0]),
@@ -775,10 +775,11 @@ def release_round(
                 raise Claimed(_holder(current))
             row = conn.execute(
                 "update review_round set claimed_by = null,"
-                " claim_expires_at = null, released_reason = %s"
+                " claim_expires_at = null, released_reason = %s,"
+                " released_by = %s"
                 " where review_id = %s and n = %s"
                 " returning n, claimed_by, claim_expires_at",
-                (reason, review_id, current[0]),
+                (reason, session, review_id, current[0]),
             ).fetchone()
     return _holder(row)
 
