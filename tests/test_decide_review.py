@@ -1,8 +1,10 @@
 # tests/test_decide_review.py
 """`artifacts-decide ask-review` and `wait --review` (page review step 2)."""
 
+import itertools
 import json
 import time
+from datetime import UTC, datetime
 
 import pytest
 from test_client import key_file, live  # noqa: F401 -- fixtures
@@ -495,3 +497,140 @@ def test_round_one_marks_do_not_wake_a_round_two_wait(live, key_file, db, capsys
         )
         == 3
     )
+
+
+# ---- claims (page review step 5) ----
+
+
+def _claim_state(db, rid):
+    with db.connect() as conn:
+        return conn.execute(
+            "select claimed_by, claim_expires_at, released_reason from review_round"
+            " where review_id = %s order by n desc limit 1",
+            (rid,),
+        ).fetchone()
+
+
+def _held_by_other(db, rid, session="ops-seat/other"):
+    claim = decisions.claim_round(db, "ops-seat", rid, session)
+    until = (
+        datetime.fromisoformat(claim.claim_expires_at)
+        .astimezone(UTC)
+        .strftime("%H:%M UTC")
+    )
+    return (
+        f"CLAIMED by {session} until {until}: another session is acting on this round"
+    )
+
+
+def test_wait_claims_the_round_for_its_session(live, key_file, db, capsys):
+    path, _page, rid = _setup(db, key_file, capsys)
+    decisions.answer(db, rid, letter="c", by="jeremy")
+    args = ["--key-file", str(path), "--session", "ops-seat/me"]
+    assert decide.main([*args, "wait", "--review", rid, "--timeout", "5s"]) == 5
+    assert _claim_state(db, rid)[0] == "ops-seat/me"
+
+
+def test_wait_exits_eight_when_another_session_has_the_round(
+    live, key_file, db, capsys
+):
+    path, _page, rid = _setup(db, key_file, capsys)
+    line = _held_by_other(db, rid)
+    decisions.answer(db, rid, letter="c", by="jeremy")
+    args = ["--key-file", str(path), "--session", "ops-seat/me"]
+    started = time.monotonic()
+    assert decide.main([*args, "wait", "--review", rid, "--timeout", "30s"]) == 8
+    assert time.monotonic() - started < 10
+    captured = capsys.readouterr()
+    assert line in captured.err.splitlines()
+    assert "Artifacts review:" not in captured.out, "the verdict is not this one's"
+    assert _claim_state(db, rid)[0] == "ops-seat/other"
+
+
+def test_require_approval_maps_claimed_to_one(live, key_file, db, capsys):
+    path, _page, rid = _setup(db, key_file, capsys)
+    _held_by_other(db, rid)
+    args = ["--key-file", str(path), "--session", "ops-seat/me"]
+    wait = ["wait", "--review", rid, "--timeout", "5s", "--require-approval"]
+    assert decide.main([*args, *wait]) == 1
+
+
+def test_the_same_session_waiting_again_reclaims_rather_than_exit_eight(
+    live, key_file, db, capsys, monkeypatch
+):
+    path, _page, rid = _setup(db, key_file, capsys)
+    monkeypatch.setenv("ARTIFACTS_SESSION", "ops-seat/me")
+    decisions.claim_round(db, "ops-seat", rid, "ops-seat/me")
+    decisions.answer(db, rid, letter="a", by="jeremy")
+    wait = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "5s"]
+    assert decide.main(wait) == 0
+    assert _claim_state(db, rid)[0] == "ops-seat/me"
+
+
+def test_wait_without_a_session_label_does_not_claim_and_says_so(
+    live, key_file, db, capsys, monkeypatch
+):
+    monkeypatch.delenv("ARTIFACTS_SESSION", raising=False)
+    path, _page, rid = _setup(db, key_file, capsys)
+    decisions.answer(db, rid, letter="c", by="jeremy")
+    wait = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "5s"]
+    assert decide.main(wait) == 5
+    err = capsys.readouterr().err.splitlines()
+    assert "no session label: not claiming the round (set ARTIFACTS_SESSION)" in err
+    assert _claim_state(db, rid)[0] is None
+
+
+@brief
+def test_wait_renews_its_lease_while_it_runs(live, key_file, db, capsys, monkeypatch):
+    """A 4 s lease renewed when under 3.5 s remain, for a 9 s wait: without
+    renewal it would lapse twice over, and another session could take it."""
+    monkeypatch.setattr(decisions, "CLAIM_SECONDS", 4)
+    monkeypatch.setattr(decide, "_RENEW_BELOW", 3.5)
+    path, _page, rid = _setup(db, key_file, capsys)
+    claims = []
+    real = decide._request
+
+    def counting(method, url, *a, **kw):
+        if url.endswith(f"/reviews/{rid}/claim"):
+            claims.append(time.monotonic())
+        return real(method, url, *a, **kw)
+
+    monkeypatch.setattr(decide, "_request", counting)
+    args = ["--key-file", str(path), "--session", "ops-seat/me"]
+    assert decide.main([*args, "wait", "--review", rid, "--timeout", "9s"]) == 3
+    assert len(claims) >= 3, "claimed once and renewed at least twice"
+    assert max(b - a for a, b in itertools.pairwise(claims)) < 3.5
+    # Still held when the wait ends, though the first claim is 9 s old.
+    with pytest.raises(decisions.Claimed):
+        decisions.claim_round(db, "ops-seat", rid, "ops-seat/other")
+
+
+def test_review_release_hands_the_round_back(live, key_file, db, capsys):
+    path, _page, rid = _setup(db, key_file, capsys)
+    decisions.claim_round(db, "ops-seat", rid, "ops-seat/me")
+    args = ["--key-file", str(path), "--session", "ops-seat/me"]
+    reason = "cannot deploy from this machine"
+    assert decide.main([*args, "review-release", rid, "--reason", reason]) == 0
+    assert capsys.readouterr().out == f"released {rid}: {reason}\n"
+    assert _claim_state(db, rid) == (None, None, reason)
+
+
+def test_review_release_of_another_sessions_round_exits_eight(
+    live, key_file, db, capsys
+):
+    path, _page, rid = _setup(db, key_file, capsys)
+    line = _held_by_other(db, rid)
+    args = ["--key-file", str(path), "--session", "ops-seat/me"]
+    assert decide.main([*args, "review-release", rid, "--reason", "mine now"]) == 8
+    assert line in capsys.readouterr().err.splitlines()
+    assert _claim_state(db, rid)[0] == "ops-seat/other"
+
+
+def test_review_release_needs_a_session_label(live, key_file, db, capsys, monkeypatch):
+    monkeypatch.delenv("ARTIFACTS_SESSION", raising=False)
+    path, _page, rid = _setup(db, key_file, capsys)
+    assert (
+        decide.main(["--key-file", str(path), "review-release", rid, "--reason", "x"])
+        == 2
+    )
+    assert "ARTIFACTS_SESSION" in capsys.readouterr().err

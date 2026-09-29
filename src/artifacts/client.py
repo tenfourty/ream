@@ -132,10 +132,14 @@ class HTTPFailure(Exception):
     empty result, and carries the server's explanation with it. The status
     number stays in the string: callers grep for it."""
 
-    def __init__(self, status: int, detail) -> None:
+    def __init__(self, status: int, detail, body: dict | None = None) -> None:
         super().__init__(f"HTTP {status}")
         self.status = status
         self.detail = detail
+        # The whole JSON body when it was an object, for the few callers that
+        # branch on a structured refusal (a 409 naming who holds a review
+        # round). Never printed by __str__.
+        self.body = body
 
     def __str__(self) -> str:
         head = f"HTTP {self.status}"
@@ -418,6 +422,15 @@ _ROLLING_ATTEMPTS = 4
 _ROLLING_BACKOFF = 1.5
 
 
+def _json_object(raw: bytes) -> dict | None:
+    """An error body parsed, when it is a JSON object; None otherwise."""
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _detail(raw: bytes, headers=None) -> str:
     """What to SAY about an error body, which is not the same as showing it.
 
@@ -517,7 +530,9 @@ def _request(
                 # would spend every attempt inside the same second.
                 time.sleep(_ROLLING_BACKOFF * (attempt + 1))
                 continue
-            raise HTTPFailure(exc.code, _detail(raw, exc.headers)) from None
+            raise HTTPFailure(
+                exc.code, _detail(raw, exc.headers), body=_json_object(raw)
+            ) from None
         except urllib.error.URLError as exc:
             raise HTTPFailure(0, str(exc.reason)) from None
     if not raw:

@@ -182,6 +182,18 @@ class ReviewBody(BaseModel):
     mode: Literal["held", "live"] | None = None
 
 
+class ClaimBody(BaseModel):
+    """Which session is claiming the round. In the body, not only the header:
+    the claim is ABOUT the session, so it is required here."""
+
+    session: str
+
+
+class ReleaseBody(BaseModel):
+    session: str
+    reason: str
+
+
 # A scanner exception means the scanner is broken, not that the caller's
 # content is -- 422 would tell a well-behaved agent to rewrite and resubmit
 # a page that was never at fault, forever, while the actual defect goes
@@ -1190,6 +1202,98 @@ def agent_router(
             "answered_at": row.answered_at,
             "message": message,
             "data": data,
+        }
+
+    def _claim_session(raw: str) -> str:
+        label = text.sanitize((raw or "").strip())
+        if not label:
+            raise HTTPException(
+                422, {"field": "session", "detail": "session is required"}
+            )
+        if len(label) > SESSION_MAX:
+            raise HTTPException(
+                422,
+                {
+                    "field": "session",
+                    "detail": f"session must be at most {SESSION_MAX} characters",
+                },
+            )
+        return label
+
+    def _claimed(exc: decisions.Claimed) -> JSONResponse:
+        # The holder at the top level, like the 200, so a waiter reads the
+        # same three fields either way; `detail` for anything that only prints.
+        return JSONResponse(
+            status_code=409,
+            content={
+                "claimed_by": exc.claim.claimed_by,
+                "claim_expires_at": exc.claim.claim_expires_at,
+                "round": exc.claim.round,
+                "detail": "another session is acting on this round",
+            },
+        )
+
+    @router.post("/reviews/{review_id}/claim")
+    def claim_review(review_id: str, payload: ClaimBody, agent: str = Depends(caller)):
+        """Claim the review's current round for one session, for five minutes
+        (page review step 5). 409 names the session holding it. Not yours
+        answers exactly like a missing id."""
+        label = _claim_session(payload.session)
+        try:
+            claim = decisions.claim_round(db, agent, review_id, label)
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such review") from exc
+        except decisions.Claimed as exc:
+            return _claimed(exc)
+        return {
+            "claimed_by": claim.claimed_by,
+            "claim_expires_at": claim.claim_expires_at,
+            "round": claim.round,
+        }
+
+    @router.post("/reviews/{review_id}/release")
+    def release_review(
+        review_id: str, payload: ReleaseBody, agent: str = Depends(caller)
+    ):
+        """Hand the round back with a reason: the session cannot act on it.
+        409 in the claim's shape when another session holds the lease."""
+        label = _claim_session(payload.session)
+        try:
+            claim = decisions.release_round(db, agent, review_id, label, payload.reason)
+        except decisions.MissingReason as exc:
+            raise HTTPException(
+                422, {"field": "reason", "detail": "reason is required"}
+            ) from exc
+        except store.BodyTooLarge as exc:
+            raise HTTPException(
+                413,
+                {
+                    "field": exc.field,
+                    "size": exc.size,
+                    "detail": f"{exc.field} exceeds the size limit",
+                },
+            ) from exc
+        except store.InvalidText as exc:
+            raise HTTPException(
+                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+            ) from exc
+        except store.SecretFound as found:
+            raise HTTPException(
+                422, _refused_detail(found.field, found.findings)
+            ) from found
+        except store.ScanFailed as exc:
+            raise HTTPException(
+                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+            ) from exc
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such review") from exc
+        except decisions.Claimed as exc:
+            return _claimed(exc)
+        return {
+            "claimed_by": None,
+            "claim_expires_at": None,
+            "round": claim.round,
+            "released_reason": payload.reason,
         }
 
     @router.post("/artifacts/{artifact_id}/decisions", status_code=201)

@@ -31,7 +31,8 @@ import re
 import sys
 import tempfile
 import time
-from datetime import datetime
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 
 from artifacts import news
 from artifacts.client import (
@@ -417,12 +418,93 @@ def _after(stamp: str | None, since: str | None) -> bool:
     return datetime.fromisoformat(stamp) > datetime.fromisoformat(since)
 
 
+# THE LEASE (page review step 5). `wait --review` claims the round for its
+# session so a second session waiting on the same review is told who has it
+# instead of acting on the verdict twice. The service's lease is five minutes;
+# this renews it when less than `_RENEW_BELOW` seconds are left, checked every
+# loop, and never holds a request past the renewal point.
+_RENEW_BELOW = 120
+
+# Another session holds the round.
+_CLAIMED_EXIT = 8
+
+_NO_LABEL = "no session label: not claiming the round (set ARTIFACTS_SESSION)"
+
+
+def _claim_line(body: dict) -> str:
+    """`CLAIMED by <session> until <HH:MM UTC>: ...`, from a 409's body."""
+    who = body.get("claimed_by") or "another session"
+    until = "?"
+    try:
+        until = (
+            datetime.fromisoformat(body["claim_expires_at"])
+            .astimezone(UTC)
+            .strftime("%H:%M UTC")
+        )
+    except (KeyError, TypeError, ValueError):
+        pass
+    return f"CLAIMED by {who} until {until}: another session is acting on this round"
+
+
+class _Lease:
+    """This session's claim on a review round, renewed while the wait runs."""
+
+    def __init__(self, base: str, key: str, review_id: str, session: str) -> None:
+        self.url = f"{base}/reviews/{review_id}/claim"
+        self.key = key
+        self.session = session
+        # Monotonic time at which to renew; 0 means now.
+        self.renew_at = 0.0
+
+    def due(self) -> bool:
+        return time.monotonic() >= self.renew_at
+
+    def seconds_to_renewal(self) -> float:
+        return self.renew_at - time.monotonic()
+
+    def claim(self) -> str | None:
+        """Claim or renew. The claim line when another session holds it, else
+        None. A 401/403/404 raises; any other failure leaves it due, so the
+        next loop tries again."""
+        headers: dict = {}
+        asked = time.monotonic()
+        try:
+            got = _request(
+                "POST",
+                self.url,
+                self.key,
+                {"session": self.session},
+                headers_out=headers,
+            )
+        except HTTPFailure as exc:
+            if exc.status == 409 and isinstance(exc.body, dict):
+                return _claim_line(exc.body)
+            if exc.status in (401, 403, 404):
+                raise
+            self.renew_at = 0.0
+            return None
+        # The lease left, measured on the SERVER's clock (its Date header), so
+        # a skewed clock here cannot renew late.
+        try:
+            server_now = parsedate_to_datetime(headers["date"])
+        except (KeyError, TypeError, ValueError):
+            server_now = datetime.now(UTC)
+        try:
+            left = (
+                datetime.fromisoformat(got["claim_expires_at"]) - server_now
+            ).total_seconds()
+        except (KeyError, TypeError, ValueError):
+            left = 0.0
+        self.renew_at = asked + max(0.0, left - _RENEW_BELOW)
+        return None
+
+
 def _wait_review(args, key: str, base: str) -> int:
     """Block until Jeremy gives a verdict on a review; exit by verdict.
 
     0 approved, 4 approved with notes, 5 changes requested, 6 dismissed, 7 new
-    marks and no verdict yet, 3 timeout, 1 refused, 2 usage. `--require-approval`
-    folds 0/4 to 0 and 5/6/7 to 1.
+    marks and no verdict yet, 8 another session holds the round, 3 timeout, 1
+    refused, 2 usage. `--require-approval` folds 0/4 to 0 and 5/6/7/8 to 1.
 
     STARTS BY LOOKING, then long-polls the events feed exactly as `_wait` does,
     so a verdict given earlier is printed at once and a later one wakes it."""
@@ -434,6 +516,36 @@ def _wait_review(args, key: str, base: str) -> int:
         return _refuse(f"the directory for {target} does not exist", 2)
     timeout = _duration(args.timeout)
     deadline = time.monotonic() + timeout
+
+    def claimed(line: str) -> int:
+        print(line, file=sys.stderr, flush=True)
+        return 1 if args.require_approval else _CLAIMED_EXIT
+
+    # CLAIM FIRST: the session that holds the round is the one that acts on its
+    # verdict, including one given before this started.
+    session = declared_session(args.session)
+    lease = None
+    if session is None:
+        print(_NO_LABEL, file=sys.stderr, flush=True)
+    else:
+        lease = _Lease(base, key, review_id, session)
+        try:
+            held = lease.claim()
+        except HTTPFailure as exc:
+            if exc.status != 404:
+                raise
+            # Not yours or missing, OR a service older than claims. The review
+            # itself says which: its own 404 ends the wait as a refusal.
+            _request("GET", f"{base}/reviews/{review_id}", key, None)
+            print(
+                "the service does not take claims yet: not claiming the round",
+                file=sys.stderr,
+                flush=True,
+            )
+            lease = None
+            held = None
+        if held:
+            return claimed(held)
 
     def look() -> int | None:
         review = _request("GET", f"{base}/reviews/{review_id}", key, None)
@@ -504,8 +616,15 @@ def _wait_review(args, key: str, base: str) -> int:
         if remaining < 1:
             break
         try:
+            if lease is not None and lease.due():
+                held = lease.claim()
+                if held:
+                    return claimed(held)
             if not relook:
                 hold = int(min(_HOLD, remaining))
+                if lease is not None:
+                    # Never held past the renewal point.
+                    hold = max(1, min(hold, int(lease.seconds_to_renewal())))
                 rows = _request(
                     "GET",
                     f"{base}/events?since={cursor}&wait={hold}&exclude_self=true",
@@ -709,6 +828,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="with --review: ignore new marks, wake only for the verdict",
     )
 
+    release = subs.add_parser(
+        "review-release",
+        help="hand a review round back: this session cannot act on it",
+    )
+    release.add_argument("review", metavar="REVIEW-ID")
+    release.add_argument(
+        "--reason", required=True, help="why -- he reads it on the review card"
+    )
+
     threads = subs.add_parser(
         "comments",
         help="comment threads on your pages; NEEDS YOUR REPLY marks his last word",
@@ -896,6 +1024,27 @@ def main(argv: list[str] | None = None) -> int:
                         return _refuse(str(exc))
                     raise
             return _wait(args, key, base)
+        if args.cmd == "review-release":
+            session = declared_session(args.session)
+            if session is None:
+                raise UsageError(
+                    "review-release needs a session label: pass --session or "
+                    "set ARTIFACTS_SESSION"
+                )
+            try:
+                _request(
+                    "POST",
+                    f"{base}/reviews/{args.review}/release",
+                    key,
+                    {"session": session, "reason": args.reason},
+                )
+            except HTTPFailure as exc:
+                if exc.status == 409 and isinstance(exc.body, dict):
+                    print(_claim_line(exc.body), file=sys.stderr)
+                    return _CLAIMED_EXIT
+                raise
+            print(f"released {args.review}: {args.reason}")
+            return 0
         if args.cmd == "comments":
             found = _open_threads(key, base, args.page)
             if not found:

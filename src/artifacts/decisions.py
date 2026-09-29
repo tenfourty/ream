@@ -645,6 +645,144 @@ def _advance_rounds(conn, artifact_id: str, version_n: int) -> None:
             )
 
 
+# CLAIMS (page review step 5). One session acts on a round: `wait --review`
+# claims it with a lease and renews it while it runs, so a second session
+# waiting on the same review is told who has it instead of acting twice. Five
+# minutes: long enough that a renewal every few holds never lapses, short
+# enough that a waiter that died frees the round before anyone is waiting on it.
+CLAIM_SECONDS = 300
+
+# A handed-back round says why in a line on his card, not a paragraph.
+MAX_RELEASE_REASON_BYTES = 500
+
+
+@dataclass(frozen=True)
+class ClaimRow:
+    """Who holds a round's lease, and until when. `claimed_by` is None for a
+    round nobody holds."""
+
+    claimed_by: str | None
+    claim_expires_at: str | None
+    round: int
+
+
+class Claimed(Exception):
+    """Another session holds a live lease on the round."""
+
+    def __init__(self, claim: ClaimRow) -> None:
+        super().__init__("claimed by another session")
+        self.claim = claim
+
+
+class MissingReason(Exception):
+    """A release with no reason: handing a round back says why, or his card
+    would say only that somebody walked away."""
+
+
+def _lock_current_round(conn, review_id: str):
+    """The review's latest round, locked, with its lease and whether the lease
+    is live. Called under the decision row's lock (decision, then round)."""
+    return conn.execute(
+        "select n, claimed_by, claim_expires_at,"
+        " claimed_by is not null and claim_expires_at > now()"
+        " from review_round where review_id = %s order by n desc limit 1"
+        " for update",
+        (review_id,),
+    ).fetchone()
+
+
+def _lock_owned_review(conn, agent: str, review_id: str) -> str:
+    """Take the decision row `for update`, only if it is a review on a page
+    `agent` owns; its page id. NotFound covers missing, not a review and not
+    yours alike."""
+    found = conn.execute(
+        "select decision.artifact_id from decision"
+        " join artifact on artifact.id = decision.artifact_id"
+        " where decision.id = %s and artifact.agent = %s"
+        " and decision.kind = 'review'"
+        " for update of decision",
+        (review_id, agent),
+    ).fetchone()
+    if found is None:
+        raise store.NotFound()
+    return found[0]
+
+
+def _holder(row) -> ClaimRow:
+    return ClaimRow(
+        claimed_by=row[1],
+        claim_expires_at=row[2].isoformat() if row[2] else None,
+        round=row[0],
+    )
+
+
+def claim_round(db: Database, agent: str, review_id: str, session: str) -> ClaimRow:
+    """Claim the review's current round for `session`, for CLAIM_SECONDS.
+
+    Succeeds when the round is unclaimed, its lease has run out, or `session`
+    already holds it (a restarted waiter re-claims its own lease); raises
+    `Claimed` naming the holder otherwise. Atomic under the decision row's
+    lock, so two sessions racing get exactly one winner. Clears any
+    handed-back reason: somebody is acting on it again."""
+    with db.connect() as conn, conn.transaction():
+        _lock_owned_review(conn, agent, review_id)
+        current = _lock_current_round(conn, review_id)
+        if current is None:
+            raise store.NotFound()
+        if current[3] and current[1] != session:
+            raise Claimed(_holder(current))
+        row = conn.execute(
+            "update review_round set claimed_by = %s,"
+            " claim_expires_at = now() + make_interval(secs => %s),"
+            " released_reason = null"
+            " where review_id = %s and n = %s"
+            " returning n, claimed_by, claim_expires_at",
+            (session, CLAIM_SECONDS, review_id, current[0]),
+        ).fetchone()
+    return _holder(row)
+
+
+def release_round(
+    db: Database, agent: str, review_id: str, session: str, reason: str
+) -> ClaimRow:
+    """Hand the current round back with a reason: the lease is cleared and the
+    reason kept for his card. Refused with `Claimed` when ANOTHER session holds
+    a live lease; releasing an unheld round just records why. No event: the
+    agent released it itself, so there is nobody to tell."""
+    store._check_size(
+        reason, MAX_RELEASE_REASON_BYTES, "reason", agent=agent, artifact_id=None
+    )
+    if not reason.strip():
+        raise MissingReason()
+    with db.connect() as conn:
+        artifact_id = conn.execute(
+            "select decision.artifact_id from decision"
+            " join artifact on artifact.id = decision.artifact_id"
+            " where decision.id = %s and artifact.agent = %s"
+            " and decision.kind = 'review'",
+            (review_id, agent),
+        ).fetchone()
+        if artifact_id is None:
+            raise store.NotFound()
+        # Scanned like an outcome: it is read on his page.
+        store._check_secrets(reason, "reason", agent=agent, artifact_id=artifact_id[0])
+        with conn.transaction():
+            _lock_owned_review(conn, agent, review_id)
+            current = _lock_current_round(conn, review_id)
+            if current is None:
+                raise store.NotFound()
+            if current[3] and current[1] != session:
+                raise Claimed(_holder(current))
+            row = conn.execute(
+                "update review_round set claimed_by = null,"
+                " claim_expires_at = null, released_reason = %s"
+                " where review_id = %s and n = %s"
+                " returning n, claimed_by, claim_expires_at",
+                (reason, review_id, current[0]),
+            ).fetchone()
+    return _holder(row)
+
+
 def record_elsewhere(
     db: Database,
     decision_id: str,

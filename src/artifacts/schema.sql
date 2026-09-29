@@ -729,3 +729,11 @@ alter table comment add column if not exists review_round int;
 -- form's hidden field). The next round diffs from it; null for a relay, which
 -- falls back to the round's `version_n`.
 alter table review_round add column if not exists reviewed_version int;
+
+-- CLAIMS (page review step 5). One session acts on a round: `wait --review`
+-- claims the current round with a lease it renews while it runs, and a second
+-- session is told who holds it. A session that cannot act hands the round back
+-- with a reason. Per round, so a new round starts unclaimed.
+alter table review_round add column if not exists claimed_by text;
+alter table review_round add column if not exists claim_expires_at timestamptz;
+alter table review_round add column if not exists released_reason text;
