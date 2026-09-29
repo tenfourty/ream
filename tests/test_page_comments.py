@@ -8,13 +8,14 @@ comments and reply" a loop with no beginning.
 SHAPE TAKEN FROM THE REFERENCE, not invented: the saved claude.ai HTML he gave
 us puts a ButtonGroup labelled "Comments" in the page bar, holding a Comment
 toggle and a "More comment options" menu, with the conversation in a panel
-rather than in the document flow. So: a control in the bar, and a `:target`
-drawer — the same scriptless mechanism the rename and link dialogs use.
+rather than in the document flow. So: a control in the bar, and a panel docked
+beside the page, which narrows to make room. With scripts a class opens it and
+nothing navigates; without them `:target` on #comments shows the same docked
+panel, so it never depends on script.
 
-NOT BUILT HERE, and it is the half he actually described: selecting text and
-anchoring a comment to it. That needs the content shim to postMessage an anchor
-across the origin boundary, and the bead says to ask him for the claude.ai
-comment screenshots before building that UI.
+Selecting text and anchoring a comment to it is tested beside the shim
+(test_shim_marks.py, tests/js/comments.test.mjs); the panel in a real browser
+is test_panel_browser.py.
 """
 
 import re
@@ -251,7 +252,8 @@ def test_the_panel_has_no_backdrop_and_keeps_its_id(client, db, page):
     assert "dlg-back" not in panel, "a backdrop is the dimming and the blur"
     assert "cdrawer" not in body
     # With scripts off the close control is a link that drops the fragment.
-    assert '<a class="cclose" href="#" aria-label="Close comments">' in panel
+    assert '<a class="cclose" href="#_" aria-label="Close comments">' in panel
+    assert 'aria-controls="comments"' in body
 
 
 def test_scripts_off_still_shows_the_panel_docked_and_unblurred():

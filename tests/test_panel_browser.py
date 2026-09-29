@@ -6,9 +6,9 @@ nothing is laid over the frame, that the frame's height follows its new width,
 and that the address never changes. That is the whole claim of "comments open
 beside the page at once", so it is checked where it is true or false.
 
-Needs a headless browser (`ARTIFACTS_BROWSER`, as the thumbnail tests) AND
-playwright, which is not a dependency of the service; without either this
-skips. Run it with `uv run --with playwright pytest tests/test_panel_browser.py`.
+Needs the system's headless browser (`ARTIFACTS_BROWSER`, found the same way as
+the thumbnail tests); without one -- CI -- it skips. playwright is a dev
+dependency and drives that browser; it never downloads one of its own.
 
 The frame's content origin (`<id>.tenfourty.com`) is routed back to the same
 live server with that Host header, so the framed page, its shim and its height
@@ -19,16 +19,20 @@ import urllib.error
 import urllib.request
 
 import pytest
+from playwright import sync_api
 from test_client import _LiveServer
 
 from artifacts import events, store, thumbs
 from artifacts.app import create_app
 
-sync_api = pytest.importorskip("playwright.sync_api")
-
-pytestmark = pytest.mark.skipif(
-    not thumbs.available(), reason="no headless browser in this environment"
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not thumbs.available(), reason="no headless browser in this environment"
+    ),
+    pytest.mark.slow(
+        reason="a real browser against a live server: seconds, not milliseconds"
+    ),
+]
 
 # Tall enough to scroll, and prose, so a narrower frame is a TALLER frame: the
 # height the gallery sets must follow the width the panel leaves it.
@@ -157,7 +161,9 @@ def _geometry(pg):
     )
 
 
-def test_the_panel_docks_beside_the_page_without_navigating(browser, served, tmp_path):
+def test_on_a_wide_window_the_panel_docks_in_place_and_is_remembered(
+    browser, served, tmp_path
+):
     origin, ident = served
     ctx, pg, errors = _open_page(browser, origin, ident, 1400)
     try:
@@ -166,6 +172,7 @@ def test_the_panel_docks_beside_the_page_without_navigating(browser, served, tmp
         assert not closed["open"] and not closed["shown"]
         assert closed["frameWidth"] == closed["innerWidth"]
 
+        # Opens beside the page: narrower frame, nothing over it, no navigation.
         pg.click(".cbtn")
         pg.wait_for_function(
             """w => document.getElementById('artifact-frame')
@@ -197,23 +204,28 @@ def test_the_panel_docks_beside_the_page_without_navigating(browser, served, tmp
         )
         assert view == opened["frameHeight"], "the frame's height is stale"
         assert bottom <= view, "the narrower page is clipped"
-
         pg.screenshot(path=str(tmp_path / "panel-1400-open.png"))
+
+        # The "This page" tab, already on: opens in place, no history entry.
+        pg.click("#comments .cscope .tab.on")
+        same = _geometry(pg)
+        assert same["open"] and same["entries"] == closed["entries"]
+
+        # Escape closes it, with the address untouched.
         pg.keyboard.press("Escape")
         pg.wait_for_function("() => !document.body.classList.contains('cpanel-open')")
         after = _geometry(pg)
         assert not after["shown"] and after["frameWidth"] == closed["frameWidth"]
         assert after["href"] == closed["href"] and after["entries"] == closed["entries"]
         pg.screenshot(path=str(tmp_path / "panel-1400-closed.png"))
-        assert not errors, errors
-    finally:
-        ctx.close()
 
+        # The close button hands focus back rather than dropping it on <body>.
+        pg.click(".cbtn")
+        pg.click("#comments .cclose")
+        assert not _geometry(pg)["open"]
+        assert pg.evaluate("() => document.activeElement.className").startswith("cbtn")
 
-def test_a_reload_keeps_the_panel_as_it_was_left(browser, served):
-    origin, ident = served
-    ctx, pg, errors = _open_page(browser, origin, ident, 1400)
-    try:
+        # A reload keeps the panel as it was left, open or closed.
         pg.click(".cbtn")
         pg.reload()
         pg.wait_for_load_state("load")
@@ -222,12 +234,27 @@ def test_a_reload_keeps_the_panel_as_it_was_left(browser, served):
         pg.reload()
         pg.wait_for_load_state("load")
         assert not _geometry(pg)["open"], "closed, a reload opened it"
+
+        # Full screen: headless may refuse it; pressing it must be safe, and
+        # the button must say what it will do next.
+        fs = pg.locator(".fsbtn")
+        if fs.is_visible():
+            pg.click(".fsbtn")
+            pg.wait_for_timeout(200)
+            on = pg.evaluate(
+                "() => document.fullscreenElement && document.fullscreenElement.id"
+            )
+            assert fs.get_attribute("aria-label") == (
+                "Exit full screen" if on == "artifact-sheet" else "Full screen"
+            )
         assert not errors, errors
     finally:
         ctx.close()
 
 
-def test_on_a_phone_it_is_a_bottom_sheet(browser, served, tmp_path):
+def test_on_a_phone_a_sheet_and_with_scripts_off_still_docked(
+    browser, served, tmp_path
+):
     origin, ident = served
     ctx, pg, errors = _open_page(browser, origin, ident, 390)
     try:
@@ -247,9 +274,6 @@ def test_on_a_phone_it_is_a_bottom_sheet(browser, served, tmp_path):
     finally:
         ctx.close()
 
-
-def test_with_scripts_off_the_fragment_still_docks_it_unblurred(browser, served):
-    origin, ident = served
     ctx, pg, _errors = _open_page(
         browser, origin, ident, 1400, js=False, hash_="#comments"
     )
@@ -265,28 +289,7 @@ def test_with_scripts_off_the_fragment_still_docks_it_unblurred(browser, served)
             " getComputedStyle(document.body).backdropFilter]"
         )
         assert styles == ["none", "none"]
-    finally:
-        ctx.close()
-
-
-def test_the_full_screen_button_does_not_throw(browser, served):
-    """Headless may refuse full screen; what matters is that pressing it is
-    safe, and that the button says what it will do."""
-    origin, ident = served
-    ctx, pg, errors = _open_page(browser, origin, ident, 1400)
-    try:
-        fs = pg.locator(".fsbtn")
-        if not fs.is_visible():
-            pytest.skip("this browser has no Fullscreen API, so the button is hidden")
-        pg.click(".fsbtn")
-        pg.wait_for_timeout(200)
-        assert not errors, errors
-        label = fs.get_attribute("aria-label")
-        on = pg.evaluate(
-            "() => document.fullscreenElement && document.fullscreenElement.id"
-        )
-        assert label == (
-            "Exit full screen" if on == "artifact-sheet" else "Full screen"
-        )
+        # And its close link drops the target without jumping to the top.
+        assert panel.locator(".cclose").get_attribute("href") == "#_"
     finally:
         ctx.close()

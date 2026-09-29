@@ -1807,8 +1807,9 @@ window.addEventListener("message",function(e){try{
 // bar's button and the close control are intercepted; Escape closes; the
 // state is this viewer's, in localStorage, and storage that throws or is
 // missing costs only the memory. `.cjs` hands the panel from :target to this.
-// A link to #comments (the scope tabs, a scriptless redirect) opens it once,
-// and the fragment is then replaced away so a reload obeys the memory.
+// A link to #comments (the scope tabs, a scriptless redirect) opens it for
+// this visit only -- it is not written to the memory -- and the fragment is
+// replaced away so a reload obeys the memory rather than the old link.
 var P=document.getElementById("comments"),B=document.body,K="artifacts.comments.open",bar=null;
 function isOpen(){return !!(B&&B.classList.contains("cpanel-open"))}
 function panel(on,keep){if(!P)return;B.classList.toggle("cpanel-open",on);
@@ -1825,10 +1826,17 @@ if(P&&B&&B.classList){
   var st=null;try{st=window.localStorage.getItem(K)}catch(x){}
   var linked=location.hash==="#comments";
   if(linked)try{window.history.replaceState(null,"",location.pathname+location.search)}catch(x){}
-  panel(linked||st==="1",!linked);
+  panel(linked||st==="1",true);
   document.addEventListener("click",function(e){
-    var t=e.target&&e.target.closest?e.target.closest(".cbtn,.cclose"):null;if(!t)return;
-    e.preventDefault();panel(t.className!=="cclose"&&!isOpen())});
+    var t=e.target&&e.target.closest?e.target.closest(".cbtn,.cclose"):null;
+    if(t){e.preventDefault();var shut=t.className==="cclose";panel(!shut&&!isOpen());
+      // The close button is inside what just hid: keyboard focus would fall
+      // to <body>, so it goes back to the control that opens the panel.
+      if(shut){var c=document.querySelector(".cbtn");if(c&&c.focus)c.focus()}return}
+    // A #comments link to THIS page (the scope tab already on, this page's
+    // group in all-pages) would push a history entry for nothing: open instead.
+    var a=e.target&&e.target.closest?e.target.closest('a[href$="#comments"]'):null;
+    if(a&&a.pathname===location.pathname&&a.search===location.search){e.preventDefault();panel(true)}});
   // Capture, so this runs before gallery.js: an open dialog or menu is what
   // Escape closes first, and the panel only when nothing else is open.
   window.addEventListener("keydown",function(e){
@@ -2612,13 +2620,14 @@ def _render_comments(
     # scripts, comments.js opens and closes it by toggling a class, so nothing
     # navigates. Without them `:target` still does the whole job: the bar link
     # is href="#comments", the panel is #comments, and the close control is a
-    # link to "#", which drops the fragment. comments.js swaps that link for a
+    # link to "#_" (a fragment nothing has, so the page does not scroll to its
+    # top the way "#" would), which drops the target. comments.js swaps it for a
     # real button. No backdrop link: there is no backdrop.
     out = [
         (
             '<aside class="cpanel" id="comments" aria-label="Comments">'
             '<div class="chead"><h2>Comments</h2>'
-            '<a class="cclose" href="#" aria-label="Close comments">\u00d7</a></div>'
+            '<a class="cclose" href="#_" aria-label="Close comments">\u00d7</a></div>'
             # Filled by /comments.js from the page's own report of the marks
             # it could not place; empty and hidden until then.
             '<p class="cunplaced" id="marks-unplaced" hidden></p>'
@@ -2691,7 +2700,7 @@ def _comments_button(artifact_id: str, open_count: int) -> str:
     count = f'<span class="cn">{open_count}</span>' if open_count else ""
     return (
         f'<a class="cbtn{" has" if open_count else ""}" href="#comments"'
-        f' aria-label="Comments">{_icon("comment")}{count}</a>'
+        f' aria-controls="comments" aria-label="Comments">{_icon("comment")}{count}</a>'
     )
 
 

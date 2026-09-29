@@ -41,6 +41,7 @@ build-backend = "uv_build"
 dev = [
     "httpx>=0.28.1",
     "pgserver>=0.1.4",
+    "playwright>=1.63.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-xdist>=3.8.0",
