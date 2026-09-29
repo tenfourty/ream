@@ -243,8 +243,16 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "try{return place(m,{v:null})}catch(x){return null}}}"
         "function paint(list){var G={comment:new Highlight(),remove:new Highlight(),"
         "looks_good:new Highlight()},placed=[],unplaced=[],ix={v:null};"
-        "list.slice(0,200).forEach(function(m){"
-        'if(!m||typeof m!=="object"||typeof m.id!=="string")return;var r=null;'
+        # Only the first 200 are ever placed or painted -- a real cost, worth
+        # capping. Past that, a mark with a usable id is still reported
+        # unplaced rather than vanishing: the gallery's list of open marks and
+        # what the page actually painted must never quietly disagree (final
+        # review, Item 3). A shape too broken to report at all (no string id)
+        # is dropped exactly as it would be within the cap.
+        "list.forEach(function(m,mi){"
+        'if(!m||typeof m!=="object"||typeof m.id!=="string")return;'
+        "if(mi>=200){unplaced.push(m.id);return}"
+        "var r=null;"
         'if(typeof m.quote==="string"&&m.quote&&m.anchor&&typeof m.anchor==="object"'
         '&&typeof m.anchor.path==="string"){try{r=place(m,ix)}catch(x){r=null}}'
         # hasOwnProperty, not `G[m.kind]||`: a kind of "constructor" would
@@ -300,6 +308,17 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         # start of `n` without a negative `slice` start wrapping from the end.
         'var all=n.textContent||"",prefix=all.slice(Math.max(0,a-32),a),'
         "suffix=all.slice(z,z+32);"
+        # `slice` cuts UTF-16 code units, not characters: an astral character
+        # (an emoji, say) straddling either boundary leaves a lone surrogate
+        # half in `prefix` or `suffix` -- valid in a JS string, but not valid
+        # UTF-8, and the server's `json` column raises on it (final review,
+        # Item 1). Drop the half that has nothing to pair with rather than
+        # send it; the 31-or-so characters either side of it are still
+        # plenty of context.
+        "if(prefix.charCodeAt(0)>=0xdc00&&prefix.charCodeAt(0)<=0xdfff)"
+        "prefix=prefix.slice(1);"
+        "if(suffix.charCodeAt(suffix.length-1)>=0xd800&&"
+        "suffix.charCodeAt(suffix.length-1)<=0xdbff)suffix=suffix.slice(0,-1);"
         "var b=r.getBoundingClientRect();"
         'parent.postMessage({type:"artifact-selection",quote:t.slice(0,500),'
         'anchor:{kind:"range",path:path,start:a,end:z,prefix:prefix,suffix:suffix},'

@@ -18,10 +18,19 @@ const ok = (c, m) => { c ? passes++ : (fails++, console.log("FAIL: " + m)); if (
 const GALLERY = "https://artifacts.tenfourty.site";
 
 // ---- a minimal DOM ------------------------------------------------------
-function T(v) { return { nodeType: 3, nodeValue: v, parentNode: null }; }
+function T(v) { return { nodeType: 3, nodeValue: v, parentNode: null, get parentElement() { return this.parentNode; } }; }
 function E(tag, ...kids) {
   const e = { nodeType: 1, nodeName: tag.toUpperCase(), tagName: tag.toUpperCase(), childNodes: [], parentNode: null,
               style: {}, id: "", scrollHeight: 0, offsetHeight: 0,
+              get parentElement() { return this.parentNode; },
+              // Only what the selection leg's path-building actually walks: the
+              // nearest earlier ELEMENT sibling, or null when there is none.
+              get previousElementSibling() {
+                if (!this.parentNode) return null;
+                const kids = this.parentNode.childNodes, i = kids.indexOf(this);
+                for (let k = i - 1; k >= 0; k--) if (kids[k].nodeType === 1) return kids[k];
+                return null;
+              },
               // Only for the shim's height report, which the `load` in case 11 also fires.
               getBoundingClientRect: () => ({ top: 0, left: 0, width: 0, bottom: 0 }),
               appendChild(c) { this.childNodes.push(c); c.parentNode = this; return c; } };
@@ -37,17 +46,30 @@ function texts(root) {
   return out;
 }
 
-function build(body, paths, { highlights = true, readyState = "complete" } = {}) {
+function build(body, paths, { highlights = true, readyState = "complete", immediateTimers = false } = {}) {
   const head = E("head");
   const html = E("html", head, body);
   const listeners = {};
+  const docListeners = {};
   const posted = [];
   const all = () => texts(html);
   class Range {
     setStart(n, o) { if (n.nodeType !== 3 || o < 0 || o > n.nodeValue.length) throw new Error("IndexSizeError"); this.sc = n; this.so = o; }
     setEnd(n, o) { if (n.nodeType !== 3 || o < 0 || o > n.nodeValue.length) throw new Error("IndexSizeError"); this.ec = n; this.eo = o; }
+    // Only the case the selection leg's own `n` argument ever is here: an
+    // element with at least one text descendant (real `selectNodeContents`
+    // works from ANY node; a fuller model is not needed to drive `sel()`).
+    selectNodeContents(n) {
+      if (n.nodeType === 3) { this.setStart(n, 0); this.setEnd(n, n.nodeValue.length); return; }
+      const ts = texts(n);
+      if (ts.length) { this.setStart(ts[0], 0); this.setEnd(ts[ts.length - 1], ts[ts.length - 1].nodeValue.length); }
+    }
     get startContainer() { return this.sc; }
     get startOffset() { return this.so; }
+    // Only the same-text-node case the selection tests need: a real
+    // multi-node commonAncestorContainer is not modelled.
+    get commonAncestorContainer() { return this.sc === this.ec ? this.sc : this.sc.parentNode; }
+    getBoundingClientRect() { return { top: 0, left: 0, width: 0, height: 0 }; }
     toString() {
       const ts = all(), i = ts.indexOf(this.sc), j = ts.indexOf(this.ec);
       if (i < 0 || j < 0 || j < i) return "";
@@ -70,16 +92,22 @@ function build(body, paths, { highlights = true, readyState = "complete" } = {})
       return paths[sel] || null;
     },
     querySelectorAll: () => [],
+    addEventListener: (t, fn) => (docListeners[t] ||= []).push(fn),
   };
   class Highlight { constructor() { this.ranges = []; } add(r) { this.ranges.push(r); } }
   const registry = new Map();
+  let currentSelection = null;
   const scope = {
     document: doc,
     parent: { postMessage: (m, o) => posted.push([m, o]) },
     scrollX: 0, scrollY: 0,
     addEventListener: (t, fn) => (listeners[t] ||= []).push(fn),
     getComputedStyle: () => ({ marginBottom: "0px" }),
-    setTimeout, clearTimeout,
+    getSelection: () => currentSelection,
+    // Real time by default, unaffected by `immediateTimers` -- only the
+    // selection leg's 350ms debounce ever needs it collapsed for a test.
+    setTimeout: immediateTimers ? (fn) => { fn(); return 0; } : setTimeout,
+    clearTimeout: immediateTimers ? () => {} : clearTimeout,
     Array, JSON, Math, Object, String,
     CSS: highlights ? { highlights: registry, escape: (s) => s } : undefined,
     Highlight: highlights ? Highlight : undefined,
@@ -91,7 +119,10 @@ function build(body, paths, { highlights = true, readyState = "complete" } = {})
     (listeners.message || []).forEach((fn) => fn({ origin, data: { type: "artifact-marks", marks } }));
   const reports = () => posted.filter(([m]) => m && m.type === "artifact-marks-placed");
   const raw = (data) => (listeners.message || []).forEach((fn) => fn({ origin: GALLERY, data }));
-  return { head, body, doc, registry, posted, reports, send, raw, fire: (t) => (listeners[t] || []).forEach((fn) => fn({})) };
+  return { head, body, doc, registry, posted, reports, send, raw, Range,
+           fire: (t) => (listeners[t] || []).forEach((fn) => fn({})),
+           fireDoc: (t) => (docListeners[t] || []).forEach((fn) => fn({})),
+           setSelection: (s) => { currentSelection = s; } };
 }
 
 const QUOTE = "Rotate the keys every 90 days.";
@@ -259,7 +290,66 @@ const mark = (over = {}) => ({ id: "m1", kind: "remove", quote: QUOTE,
   const h = build(E("body", E("p", QUOTE)), {});
   h.send(big);
   const [[m2]] = h.reports();
-  ok(m2.placed.length + m2.unplaced.length === 200, "at most 200 marks are considered");
+  ok(m2.placed.length === 200, "at most 200 marks are painted");
+  ok(m2.unplaced.length === 300 && m2.placed.length + m2.unplaced.length === 500,
+     "the rest are reported unplaced, not silently dropped (final review, Item 3)");
+}
+// 13. ids beyond the 200 cap are reported unplaced, never vanish -- but a
+// hostile shape past the cap is still dropped, exactly as one within it is
+{
+  const p = E("p", QUOTE);
+  const paths = { "body>p:nth-of-type(1)": p };
+  const list = Array.from({ length: 205 }, (_, i) => mark({ id: "b" + i }));
+  list.push({ id: 5 }); // past the cap AND not a usable shape: dropped, not reported
+  const g = build(E("body", p), paths);
+  g.send(list);
+  const [[msg]] = g.reports();
+  ok(msg.placed.length === 200, "only the first 200 are painted");
+  ok(msg.unplaced.length === 5, "the 5 valid ids past the cap are reported unplaced");
+  ok(msg.unplaced.includes("b204") && !msg.unplaced.includes(5),
+     "by id, and the hostile shape past the cap never appears anywhere");
+  ok(msg.placed.length + msg.unplaced.length === 205, "every valid mark is accounted for");
+}
+// 14. selecting text where an astral emoji straddles the prefix/suffix
+// boundary never sends a lone surrogate (final review, Item 1): `slice` cuts
+// UTF-16 code units, not characters, and a lone surrogate reaching the
+// server as JSON is what turned a mark into a 500 there.
+{
+  function hasLoneSurrogate(s) {
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff) {
+        if (i + 1 >= s.length || s.charCodeAt(i + 1) < 0xdc00 || s.charCodeAt(i + 1) > 0xdfff) return true;
+      } else if (c >= 0xdc00 && c <= 0xdfff) {
+        if (i === 0 || s.charCodeAt(i - 1) < 0xd800 || s.charCodeAt(i - 1) > 0xdbff) return true;
+      }
+    }
+    return false;
+  }
+  const EMOJI = "🟢"; // a green circle: one astral character, two UTF-16 units
+  const before = EMOJI + "a".repeat(31); // the low surrogate lands exactly where the prefix starts
+  const quote = "MIDDLE";
+  const after = "b".repeat(31) + EMOJI + "b".repeat(5); // the high surrogate lands exactly where the suffix ends
+  const text = before + quote + after;
+  const p = E("p", text);
+  const g = build(E("body", p), {}, { immediateTimers: true });
+  const start = before.length, end = start + quote.length;
+  g.setSelection({
+    rangeCount: 1,
+    toString: () => quote,
+    getRangeAt: () => {
+      const r = new g.Range();
+      r.setStart(p.childNodes[0], start);
+      r.setEnd(p.childNodes[0], end);
+      return r;
+    },
+  });
+  g.fireDoc("selectionchange");
+  const [[msg]] = g.posted.filter(([m]) => m && m.type === "artifact-selection");
+  ok(!hasLoneSurrogate(msg.anchor.prefix), "the reported prefix carries no lone surrogate at its boundary");
+  ok(!hasLoneSurrogate(msg.anchor.suffix), "the reported suffix carries no lone surrogate at its boundary");
+  ok(msg.anchor.prefix === "a".repeat(31), "a leading half emoji is dropped whole from the prefix, never split");
+  ok(msg.anchor.suffix === "b".repeat(31), "a trailing half emoji is dropped whole from the suffix, never split");
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);
