@@ -1,8 +1,10 @@
 """Review requests and verdicts (page review step 2, homelab-ij8.108)."""
 
 import pytest
+from fastapi.testclient import TestClient
 
-from artifacts import comments, decisions, events, review, store
+from artifacts import comments, decisions, events, keys, review, store
+from artifacts.app import create_gallery_app
 
 PAGE = (
     "<!doctype html><title>Plan</title>"
@@ -366,3 +368,138 @@ def test_a_quote_not_on_the_page_sorts_after_found_ones_before_page_level(db):
     _answer(db, row, "c")
     _, data = review.render(db, row.id, agent="seat")
     assert [i["id"] for i in data["items"]] == [found.id, lost.id, general.id]
+
+
+SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
+
+
+@pytest.fixture()
+def client(db, monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    return TestClient(create_gallery_app(db=db))
+
+
+def _auth(db, agent="seat"):
+    token, _ = keys.mint(db, agent=agent)
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_an_agent_asks_and_reads_back_the_verdict(client, db):
+    h = _auth(db)
+    page = _page(db)
+    asked = client.post(f"/api/v1/artifacts/{page.id}/reviews", headers=h, json={})
+    assert asked.status_code == 201 and asked.json()["kind"] == "review"
+    rid = asked.json()["id"]
+    before = client.get(f"/api/v1/reviews/{rid}", headers=h).json()
+    assert before["verdict"] is None and before["message"] is None
+    client.post(
+        f"/d/{rid}/answer",
+        data={"letter": "c", "note": ""},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    after = client.get(f"/api/v1/reviews/{rid}", headers=h).json()
+    assert after["verdict"] == "changes_requested"
+    assert after["message"].startswith("Artifacts review: CHANGES REQUESTED")
+    assert after["data"]["verdict"] == "changes_requested"
+
+
+def test_not_yours_and_not_a_review_look_identical(client, db):
+    h, other = _auth(db), _auth(db, "other")
+    page = _page(db)
+    rid = client.post(
+        f"/api/v1/artifacts/{page.id}/reviews", headers=h, json={}
+    ).json()["id"]
+    assert client.get(f"/api/v1/reviews/{rid}", headers=other).status_code == 404
+    q = decisions.ask(
+        db,
+        agent="seat",
+        artifact_id=page.id,
+        question="q?",
+        options=[{"letter": "a", "label": "x"}, {"letter": "b", "label": "y"}],
+    )
+    assert client.get(f"/api/v1/reviews/{q.id}", headers=h).status_code == 404
+    assert (
+        client.post(
+            f"/api/v1/artifacts/{page.id}/reviews", headers=other, json={}
+        ).status_code
+        == 404
+    )
+
+
+def test_a_second_verdict_from_another_device_is_409_and_names_what_counted(client, db):
+    h = _auth(db)
+    page = _page(db)
+    rid = client.post(
+        f"/api/v1/artifacts/{page.id}/reviews", headers=h, json={}
+    ).json()["id"]
+    first = client.post(
+        f"/d/{rid}/answer",
+        data={"letter": "a"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert first.status_code == 303
+    second = client.post(
+        f"/d/{rid}/answer",
+        data={"letter": "c"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert second.status_code == 409
+    assert "Approved" in second.text, "he is told which verdict counted"
+    assert client.get(f"/api/v1/reviews/{rid}", headers=h).json()["verdict"] == (
+        "approved"
+    )
+
+
+def test_a_relayed_second_verdict_is_409_and_the_stored_verdict_is_unchanged(
+    client, db
+):
+    h = _auth(db)
+    page = _page(db)
+    rid = client.post(
+        f"/api/v1/artifacts/{page.id}/reviews", headers=h, json={}
+    ).json()["id"]
+    body = {"letter": "a", "note": "said in the terminal", "source": "terminal"}
+    first = client.post(f"/api/v1/decisions/{rid}/record", headers=h, json=body)
+    assert first.status_code == 200, first.text
+    second = client.post(
+        f"/api/v1/decisions/{rid}/record", headers=h, json={**body, "letter": "c"}
+    )
+    assert second.status_code == 409
+    detail = second.json()["detail"]
+    assert detail["field"] == "answer" and detail["verdict"] == "approved"
+    assert detail["answered_at"]
+    assert decisions.get_owned(db, "seat", rid).answer == "a"
+
+
+def test_get_owned_returns_only_the_owners_row(db):
+    page = _page(db)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id)
+    assert decisions.get_owned(db, "seat", row.id).id == row.id
+    assert decisions.get_owned(db, "other", row.id) is None
+    assert decisions.get_owned(db, "seat", "nope") is None
+
+
+def test_the_gallery_shows_a_review_card_and_a_settled_one_without_buttons(client, db):
+    h = _auth(db)
+    page = _page(db)
+    rid = client.post(
+        f"/api/v1/artifacts/{page.id}/reviews", headers=h, json={}
+    ).json()["id"]
+    open_html = client.get(f"/a/{page.id}").text
+    assert "Review requested" in open_html and "go with your verdict" in open_html
+    assert 'class="rtag"' in open_html
+    assert f'action="/d/{rid}/answer"' in open_html
+    client.post(
+        f"/d/{rid}/answer",
+        data={"letter": "b"},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    settled = client.get(f"/a/{page.id}").text
+    assert f'action="/d/{rid}/answer"' not in settled, (
+        "one verdict counts: no buttons after"
+    )
+    assert "Your verdict: <b>Approved with notes</b>" in settled

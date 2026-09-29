@@ -480,13 +480,21 @@ def record_elsewhere(
         label = next(o["label"] for o in options if o["letter"] == letter)
         summary = f"{letter}: {label} (relayed from {source})"[:200]
         with conn.transaction():
-            conn.execute(
+            # One verdict counts on a review, relayed or tapped: the same
+            # atomic guard `answer` uses, so a relay cannot overwrite it.
+            written = conn.execute(
                 "update decision set answer = %s, answer_note = %s,"
                 " answered_at = now(), answered_by = 'jeremy',"
                 " answer_source = %s, recorded_by = %s, said_at = %s"
-                " where id = %s",
+                " where id = %s and (kind <> 'review' or answer is null)",
                 (letter, note, source, recorded_by, said_at, decision_id),
             )
+            if written.rowcount == 0:
+                current = conn.execute(
+                    f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
+                    (decision_id,),
+                ).fetchone()
+                raise AlreadyDecided(_row_to_decision(current))
             # Journalled like a tapped answer, because to the OWNING agent the
             # fact is the same one it has been waiting for: Jeremy decided. The
             # summary names the relay so a reader of the feed is not misled, and

@@ -262,6 +262,9 @@ main{display:block}
   border-color:var(--accent);color:#fff;font-weight:600}
 @media (prefers-color-scheme:dark){
   .ask button.chosen,.ask button.rec.chosen{color:#10201d}}
+.rtag{font:600 .7rem var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--accent)}
+.rhint{font-size:.85rem;color:var(--muted);margin:.2rem 0}
+.verdict{margin:.3rem 0}
 .ask .tag{font:.68rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
   opacity:.8;margin-left:.45rem;white-space:nowrap}
 .ask input[name=note]{font:inherit;font-size:.9rem;flex:1 1 11rem;min-width:8rem;
@@ -2873,12 +2876,32 @@ def _render_decisions(
         Only an OPEN decision gets one: a settled decision lives inside a collapsed
         <details> in the timeline, and a page that reported a slot for it would
         otherwise yank that card out of its own disclosure and drop it on the page."""
-        buttons = "".join(_button(option, row) for option in row.options)
+        is_review = getattr(row, "kind", "question") == "review"
+        tag = '<span class="rtag">Review</span> ' if is_review else ""
+        hint = (
+            '<p class="rhint">Your marks on this page go with your verdict.</p>'
+            if is_review and row.answer is None
+            else ""
+        )
         anchor = f' data-decision-id="{escape(row.id)}"' if anchorable else ""
+        if is_review and row.answer is not None:
+            # One verdict counts: a settled review has no form.
+            label = next(
+                (o["label"] for o in row.options if o["letter"] == row.answer),
+                row.answer,
+            )
+            return (
+                f'<div class="ask"{anchor}>'
+                f'<p class="q">{tag}{escape(row.question)}</p>'
+                f'<p class="verdict">Your verdict: <b>{escape(label)}</b>'
+                f" &middot; {escape(_when(row.answered_at or ''))}</p></div>"
+            )
+        buttons = "".join(_button(option, row) for option in row.options)
         return (
             f'<div class="ask"{anchor}>'
-            f'<p class="q">{escape(row.question)}</p>'
+            f'<p class="q">{tag}{escape(row.question)}</p>'
             f"{_since(row)}"
+            f"{hint}"
             f'<form method="post" action="/d/{escape(row.id)}/answer">'
             f"{buttons}"
             '<input name="note" placeholder="note (optional)"></form></div>'
@@ -4149,6 +4172,22 @@ def gallery_router(db: Database) -> APIRouter:
             raise HTTPException(503, _SCAN_FAILED_DETAIL) from exc
         except decisions.InvalidAnswer as exc:
             raise HTTPException(422, "not one of this decision's options") from exc
+        except decisions.AlreadyDecided as exc:
+            label = next(
+                (o["label"] for o in exc.row.options if o["letter"] == exc.row.answer),
+                exc.row.answer,
+            )
+            return HTMLResponse(
+                _shell(
+                    "Already decided",
+                    f"<p>This review already has a verdict: <b>{escape(label)}</b>, "
+                    f"given {escape(_when(exc.row.answered_at or ''))}. That is the "
+                    f'one that counts. <a href="/a/{escape(exc.row.artifact_id)}">'
+                    "Back to the page</a></p>",
+                ),
+                status_code=409,
+                headers=gallery_headers(),
+            )
         except store.NotFound as exc:
             raise HTTPException(404, "no such open decision") from exc
         return RedirectResponse(f"/a/{row.artifact_id}", status_code=303)

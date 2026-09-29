@@ -33,6 +33,7 @@ from artifacts import (
     keys,
     onboarding,
     ratelimit,
+    review,
     store,
     templates,
     text,
@@ -169,6 +170,11 @@ class DecisionBody(BaseModel):
     # kind of failure, whichever way it fails.
     options: Any
     recommended: str | None = None
+
+
+class ReviewBody(BaseModel):
+    """No fields today: a review is asked for by page, and the four verdicts are
+    fixed. A body class so a later field is not a breaking change."""
 
 
 # A scanner exception means the scanner is broken, not that the caller's
@@ -1112,6 +1118,53 @@ def agent_router(
             )
         ]
 
+    @router.post("/artifacts/{artifact_id}/reviews", status_code=201)
+    def ask_review(
+        artifact_id: str,
+        payload: ReviewBody,
+        agent: str = Depends(caller),
+        seat_session: str | None = Depends(session),
+    ):
+        """Ask Jeremy to review this page (page review step 2). A decision of
+        kind 'review' with four fixed verdicts; answered in the gallery like any
+        question, and read back with GET /reviews/{id}."""
+        try:
+            row = decisions.ask_review(
+                db, agent=agent, artifact_id=artifact_id, session=seat_session
+            )
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such artifact") from exc
+        return row.__dict__
+
+    @router.get("/reviews/{review_id}")
+    def read_review(review_id: str, agent: str = Depends(caller)):
+        """The verdict and the one message built from it. Not yours, and not a
+        review, answer exactly like a missing id."""
+        row = decisions.get_owned(db, agent, review_id)
+        if row is None or row.kind != "review":
+            raise HTTPException(404, "no such review")
+        if row.answer is None:
+            return {
+                "id": row.id,
+                "artifact_id": row.artifact_id,
+                "verdict": None,
+                "answered_at": None,
+                "message": None,
+                "data": None,
+            }
+        try:
+            message, data = review.render(db, review_id, agent=agent)
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such review") from exc
+        return {
+            "id": row.id,
+            "artifact_id": row.artifact_id,
+            "verdict": decisions.VERDICTS[row.answer],
+            "answered_at": row.answered_at,
+            "message": message,
+            "data": data,
+        }
+
     @router.post("/artifacts/{artifact_id}/decisions", status_code=201)
     def create_decision(
         artifact_id: str,
@@ -1395,6 +1448,15 @@ def agent_router(
             ) from None
         except decisions.InvalidAnswer:
             raise HTTPException(422, "that letter is not one of the options") from None
+        except decisions.AlreadyDecided as exc:
+            raise HTTPException(
+                409,
+                {
+                    "field": "answer",
+                    "verdict": decisions.VERDICTS.get(exc.row.answer),
+                    "answered_at": exc.row.answered_at,
+                },
+            ) from None
         except store.NotFound:
             raise HTTPException(404, "no such open decision") from None
         return row.__dict__
