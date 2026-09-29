@@ -3122,6 +3122,7 @@ def _render_decisions(
     rounds: dict[str, int] | None = None,
     shown_version: int | None = None,
     round_view: dict | None = None,
+    presence: dict | None = None,
 ) -> tuple[str, str]:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
@@ -3211,6 +3212,25 @@ def _render_decisions(
             f"</form></div>{approved}"
         )
 
+    def _presence_line(row: decisions.DecisionRow) -> str:
+        """Who is on an open review, or why it was handed back. Every value is
+        agent text and is escaped."""
+        p = (presence or {}).get(row.id)
+        if not p:
+            return ""
+        if p["live"]:
+            secs = p["seen_seconds"]
+            if secs is None:
+                seen = ""
+            elif secs < 60:
+                seen = " \u00b7 last seen just now"
+            else:
+                seen = f" \u00b7 last seen {int(secs // 60)} min ago"
+            text = f"Agent listening \u00b7 {escape(p['session'])}{seen}"
+        else:
+            text = f"Handed back by {escape(p['session'])}: {escape(p['reason'])}"
+        return f'<p class="rhint rpresence">{text}</p>'
+
     def _round_block(row: decisions.DecisionRow) -> str:
         """Round 2 and later of an open review (page review step 4): the round,
         the Hide/Show changes link (a plain link, so it works with scripts
@@ -3218,7 +3238,7 @@ def _render_decisions(
         marks from earlier rounds with what became of each."""
         view = (round_view or {}).get(row.id)
         if not view:
-            return ""
+            return _presence_line(row)
         page = escape(view["artifact_id"])
         if view["on"]:
             toggle = (
@@ -3229,7 +3249,7 @@ def _render_decisions(
             toggle = f'<a href="/a/{page}?changes=1">Show changes</a>'
         out = (
             f'<div class="rround"><span class="rtag">Round {int(view["n"])}</span>'
-            f"{toggle}</div>"
+            f"{toggle}</div>" + _presence_line(row)
         )
         if view["on"] and view["reason"]:
             out += (
@@ -4231,9 +4251,18 @@ def gallery_router(db: Database) -> APIRouter:
                     ),
                 }
             }
+        presence = {
+            r.id: found
+            for r in decision_rows
+            if getattr(r, "kind", "") == "review"
+            and r.answer is None
+            and r.closed_at is None
+            and (found := decisions.round_presence(db, row[2], r.id)) is not None
+        }
         asks_above, settled_below = _render_decisions(
             decision_rows,
             round_view=round_view,
+            presence=presence,
             listening_since=events.last_read(db, row[2]),
             outcomes=decisions.outcomes_for_artifact(db, artifact_id),
             held_count=(

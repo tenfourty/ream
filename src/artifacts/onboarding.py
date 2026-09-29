@@ -272,6 +272,9 @@ for the verdict. By default his marks are held until his verdict (his choice,
 remembered); --live asks for them as he makes them, and he can switch either way
 on the page. After changes requested, republish the page and run the same wait
 --review again: the next round opens by itself.
+Set ARTIFACTS_SESSION so wait --review can claim the round; if it exits 8 another
+session is acting on it, and if you cannot act, run artifacts-decide review-release
+<id> --reason "…".
 
 After you ask, start `artifacts-decide wait` in the background so you are woken
 when he answers or comments; without background tasks, run `artifacts-decide

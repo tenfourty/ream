@@ -95,6 +95,15 @@ def test_the_skill_says_a_republish_opens_the_next_round(gallery):
     assert "run the same wait --review again: the next round opens by itself" in text
 
 
+def test_the_skill_teaches_claiming_and_handing_back_a_review(gallery):
+    text = " ".join(gallery.get("/api/v1/skill.md").text.split())
+    assert (
+        "Set ARTIFACTS_SESSION so wait --review can claim the round; if it exits 8 "
+        "another session is acting on it, and if you cannot act, run "
+        'artifacts-decide review-release <id> --reason "…".'
+    ) in text
+
+
 def test_one_page_links_the_one_package_for_find_links(gallery, tools_dir):
     """The stable install line: uv reads this page and picks the package
     (the homelab ops seat, 24 Sep 2026). Only the one file, never a listing."""

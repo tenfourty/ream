@@ -1590,3 +1590,37 @@ def outcomes_for_artifact(
     for row in rows:
         out.setdefault(row[1], []).append(_row_to_outcome(row))
     return out
+
+
+def round_presence(db: Database, agent: str, review_id: str) -> dict | None:
+    """What his card says about who is on an OPEN review's current round:
+    {"live": True, "session", "seen_seconds"} for a live lease, {"live": False,
+    "session", "reason"} for a hand-back, None otherwise. `seen_seconds` is
+    the newest `seat_read` for THIS agent and session, or None. Scoped to the
+    owning agent: another agent's session can never be named here."""
+    with db.connect() as conn:
+        found = conn.execute(
+            "select claimed_by, claim_expires_at > now(), released_reason,"
+            " released_by from review_round where review_id = %s"
+            " and closed_at is null order by n desc limit 1",
+            (review_id,),
+        ).fetchone()
+        if found is None:
+            return None
+        claimed_by, live, reason, released_by = found
+        if claimed_by is not None and live:
+            seen = conn.execute(
+                "select extract(epoch from now() - max(last_read_at))"
+                " from seat_read where agent = %s and session = %s",
+                (agent, claimed_by),
+            ).fetchone()
+            return {
+                "live": True,
+                "session": claimed_by,
+                "seen_seconds": float(seen[0])
+                if seen and seen[0] is not None
+                else None,
+            }
+    if claimed_by is None and reason:
+        return {"live": False, "session": released_by or "an agent", "reason": reason}
+    return None
