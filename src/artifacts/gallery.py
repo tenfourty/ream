@@ -2320,11 +2320,18 @@ def _render_comments(
         when = _ago(datetime.fromisoformat(row.created_at)) if row.created_at else ""
         # Agent-written text landing in Jeremy's own signed-in origin, so it is
         # escaped here like everything else that crosses that boundary.
+        #
+        # `remove`/`looks_good` carry no note of their own (comments.add()
+        # allows an empty body for those two kinds) -- an empty `<p></p>` is
+        # not a rendering of anything anyone said, so a bodiless mark gets no
+        # paragraph at all; what it IS is already the tag on its quote, in
+        # `quoted()` below (final review, Item 4a).
+        note = f"<p>{escape(row.body)}</p>" if row.body.strip() else ""
         return (
             f'<li class="cmt {escape(row.author_kind)}">'
             f'<span class="cwho">{who}</span>'
             f'<span class="cwhen">{escape(when)}</span>'
-            f"<p>{escape(row.body)}</p></li>"
+            f"{note}</li>"
         )
 
     def quoted(root) -> str:

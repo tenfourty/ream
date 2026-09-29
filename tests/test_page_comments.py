@@ -171,6 +171,26 @@ def test_agent_text_is_escaped_into_his_signed_in_origin(client, db, page):
     assert "&lt;script&gt;" in body
 
 
+def test_a_mark_with_no_note_renders_no_empty_paragraph(client, db, page):
+    """Final review, Item 4a: a 'remove this'/'looks good' mark carries no note
+    of its own (comments.py's `add()` allows an empty `body` for those two
+    kinds), and the bubble used to render `<p></p>` for it -- an empty tag
+    with nothing in it, not a rendering of anything Jeremy or the agent said.
+    """
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="",
+        kind="looks_good",
+        quote="x",
+        anchor={"kind": "range", "path": "body>p:nth-of-type(1)", "start": 0, "end": 1},
+    )
+    body = client.get(f"/a/{page.id}").text
+    assert "<p></p>" not in body
+
+
 def test_an_empty_page_still_offers_the_box(client, db, page):
     """An empty section with a box is an invitation; an empty section with no
     box is a fault."""
