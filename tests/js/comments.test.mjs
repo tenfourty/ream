@@ -21,7 +21,7 @@ function el(tag) {
              return null;
            } };
 }
-function build({ marks = "[]" } = {}) {
+function build({ marks = "[]", fetchImpl = null } = {}) {
   const framePosts = [];
   const frameWin = { postMessage: (m, o) => framePosts.push([m, o]) };
   const frameOn = {};
@@ -44,13 +44,17 @@ function build({ marks = "[]" } = {}) {
   };
   const docBody = el("body");
   const byId = { "artifact-frame": iframe, "artifact-marks": marksEl, "marks-unplaced": unplacedEl };
+  const docOn = {}, extra = {};
   const doc = { getElementById: (id) => byId[id] || null,
-                querySelector: (q) => (q === "form.cnew" ? form : null),
-                createElement: el, body: docBody };
+                createElement: (t) => { const n = el(t); if (t === "template") Object.defineProperty(n, "innerHTML", { set(h) { n.content = { firstElementChild: { html: h } }; } }); return n; },
+                body: docBody,
+                addEventListener: (t, f) => ((docOn[t] ||= []).push(f)),
+                querySelector: (q) => (q === "form.cnew" ? form : extra[q] || null) };
   const listeners = {};
   const win = { scrollX: 0, scrollY: 50, addEventListener: (t, f) => ((listeners[t] ||= []).push(f)) };
   const location = { hash: "" };
-  new Function("document", "window", "location", "URL", src)(doc, win, location, URL);
+  const FD = function (f) { this.form = f; };
+  new Function("document", "window", "location", "URL", "fetch", "FormData", src)(doc, win, location, URL, fetchImpl || undefined, FD);
   const bar = docBody.children[0];
   const buttons = {};
   bar.children.forEach((b) => (buttons[b.dataset.kind] = b));
@@ -58,7 +62,9 @@ function build({ marks = "[]" } = {}) {
     (listeners.message || []).forEach((fn) => fn({ source, origin, data }));
   const click = (kind) => bar.on.click({ target: buttons[kind] });
   const reload = () => (frameOn.load || []).forEach((fn) => fn({}));
-  return { bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload };
+  const submit = (fm, e = {}) => { const ev = { target: fm, prevented: false, preventDefault() { ev.prevented = true; }, ...e };
+    (docOn.submit || []).forEach((fn) => fn(ev)); return ev; };
+  return { bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload, submit, extra, doc };
 }
 const SEL = { type: "artifact-selection", quote: "the plan",
               anchor: { kind: "range", path: "body>p:nth-of-type(1)", start: 4, end: 12 },
@@ -179,6 +185,45 @@ const STATE = { type: "artifact-state", height: 400, slots: [] };
 { const g = build({ marks: MARKS });
   g.send(SEL);
   ok(g.bar.hidden === false && g.framePosts.length === 0, "a selection still shows the bar and sends no marks"); }
+
+// Posting in place: the submit is intercepted, sent with fetch as JSON, the
+// thread is put in, the form clears, the marks are re-sent; any failure falls
+// back to the plain submit.
+const tick = () => new Promise((r) => setTimeout(r, 0));
+const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>", thread_root: "r1", marks }) });
+{ let calls = [];
+  const g = build({ marks: MARKS, fetchImpl: (url, o) => { calls.push([url, o]); return Promise.resolve(OKRESP([{ id: "n1", kind: "comment", quote: "q", anchor: SEL.anchor }])); } });
+  const f = g.form; f.className = "cnew"; f.action = "/c/abc"; f.submitted = 0; f.submit = () => { f.submitted++; };
+  const btn = { disabled: false }; f.querySelectorAll = () => [btn];
+  const list = el("ul"); list.appended = []; list.appendChild = (c) => list.appended.push(c);
+  g.extra["#comments .cdrawer-card > ul.threads"] = list;
+  g.body.value = "hello";
+  g.send({ type: "artifact-state" });
+  const before = g.framePosts.length;
+  const ev = g.submit(f);
+  ok(ev.prevented === true, "the submit is intercepted");
+  ok(btn.disabled === true, "the form is disabled while the post is in flight");
+  const ev2 = g.submit(f);
+  ok(calls.length === 1 && ev2.prevented === true, "a second submit while in flight posts nothing more");
+  ok(calls[0][0] === "/c/abc" && calls[0][1].method === "POST" && calls[0][1].headers.Accept === "application/json"
+     && calls[0][1].credentials === "same-origin", "it posts JSON-accepting, same-origin, to the form's action");
+  await tick(); await tick(); await tick();
+  ok(list.appended.length === 1 && list.appended[0].html === "<li>t</li>", "a new root thread is appended to the open threads");
+  ok(g.body.value === "" && btn.disabled === false, "the input clears and the form is usable again");
+  ok(f.submitted === 0, "no native submit on success");
+  const last = g.framePosts[g.framePosts.length - 1][0];
+  ok(g.framePosts.length === before + 1 && last.marks.length === 1 && last.marks[0].id === "n1",
+     "the frame is sent the marks from the response"); }
+{ for (const bad of [() => Promise.reject(new Error("net")), () => Promise.resolve({ status: 500, json: async () => ({}) })]) {
+    const g = build({ fetchImpl: bad });
+    const f = g.form; f.className = "creply"; f.action = "/c/abc"; f.submitted = 0; f.submit = () => { f.submitted++; };
+    const btn = { disabled: false }; f.querySelectorAll = () => [btn];
+    g.submit(f); await tick(); await tick(); await tick();
+    ok(f.submitted === 1 && btn.disabled === false, "a failed post falls back to the plain form submit"); } }
+{ const g = build({ fetchImpl: () => { throw new Error("must not"); } });
+  const other = el("form"); other.className = "cresolve";
+  const ev = g.submit(other);
+  ok(ev.prevented === false, "resolving a thread keeps its reload"); }
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from markupsafe import escape
 
 from artifacts import (
@@ -1787,6 +1787,45 @@ bar.addEventListener("click",function(e){
   }else{
     if(i){i.placeholder="Add a note (optional)";if(!i.value){form.requestSubmit()}}
   }});
+// POSTING IN PLACE. A comment or reply is sent with fetch and the thread it
+// comes back in is put where it belongs; the page, the open drawer and the
+// scroll position are not touched. Delegated on the document because a reply
+// form arrives with an in-place thread. ANY failure falls back to the plain
+// form submit, so a comment is never lost, and the form is disabled while a
+// post is in flight so a fast Enter plus a click cannot post twice.
+function controls(fm){return fm.querySelectorAll?fm.querySelectorAll("button,input[type=submit]"):[]}
+function setBusy(fm,on){fm.dataset.busy=on?"1":"";
+  Array.prototype.forEach.call(controls(fm),function(c){c.disabled=on})}
+function drop(x){if(x&&x.parentNode&&x.parentNode.removeChild)x.parentNode.removeChild(x)}
+function place(fm,html,root){
+  var t=document.createElement("template");t.innerHTML=html;
+  var li=t.content&&t.content.firstElementChild;if(!li)throw new Error("no thread");
+  var old=fm.closest?fm.closest("li.thread"):null;
+  if(old&&old.parentNode){old.parentNode.replaceChild(li,old);return}
+  var list=document.querySelector("#comments .cdrawer-card > ul.threads");
+  if(!list){list=document.createElement("ul");list.className="threads";
+    form.parentNode.insertBefore(list,form)}
+  drop(document.querySelector("#comments .cempty"));
+  list.appendChild(li)}
+function cleared(fm){
+  var b=fm.querySelector("input[name=body]");if(b)b.value="";
+  if(fm===form){["quote","anchor","kind"].forEach(function(n){drop(fm.querySelector("input[name="+n+"]"))});
+    drop(fm.querySelector(".cquote"));if(b)b.placeholder="Comment on this page"}}
+function fail(fm){setBusy(fm,false);fm.submit()}
+if(document.addEventListener)document.addEventListener("submit",function(e){
+  var fm=e.target;
+  if(!fm||!/(^|\\s)(cnew|creply)(\\s|$)/.test(fm.className||"")||typeof fetch!=="function"||typeof FormData!=="function")return;
+  e.preventDefault();if(fm.dataset&&fm.dataset.busy)return;
+  var body=new FormData(fm);setBusy(fm,true);
+  fetch(fm.action,{method:"POST",body:body,headers:{"Accept":"application/json"},credentials:"same-origin"})
+  .then(function(r){if(r.status!==201)throw new Error("status "+r.status);return r.json()})
+  .then(function(d){
+    if(!d||typeof d.html!=="string"||!Array.isArray(d.marks))throw new Error("shape");
+    place(fm,d.html,d.thread_root);
+    marks=d.marks;known=Object.create(null);
+    marks.forEach(function(m){if(m&&typeof m.id==="string")known[m.id]=1});
+    cleared(fm);setBusy(fm,false);sent=false;sendMarks()})
+  .catch(function(){fail(fm)})});
 })();
 """
 
@@ -2303,7 +2342,10 @@ def _wall_meta(waiting: int, hidden: int = 0) -> str:
 
 
 def _render_comments(
-    rows: list, artifact_id: str, everywhere: list | None = None
+    rows: list,
+    artifact_id: str,
+    everywhere: list | None = None,
+    only_thread: str | None = None,
 ) -> str:
     """The conversation on a page: threads, replies, and a box to start one --
     and, with `everywhere`, every page's conversations in the same drawer.
@@ -2322,6 +2364,9 @@ def _render_comments(
 
     Always renders the composer, even with nothing to show -- an empty section
     with a box is an invitation; an empty section with no box is a fault.
+
+    `only_thread` (a root id) returns just that one thread's <li>, rendered by
+    the very same helper the drawer uses, for the in-place post.
     """
     roots = [r for r in rows if r.thread_root is None]
     replies: dict[str, list] = {}
@@ -2429,6 +2474,9 @@ def _render_comments(
             + "".join(thread(r) for r in settled_roots)
             + "</ul></details>"
         )
+
+    if only_thread is not None:
+        return "".join(thread(r) for r in roots if r.id == only_thread)
 
     open_roots = [r for r in roots if r.resolved_at is None]
     settled = [r for r in roots if r.resolved_at is not None]
@@ -4319,6 +4367,7 @@ def gallery_router(db: Database) -> APIRouter:
     # repost.
     @router.post("/c/{artifact_id}")
     def add_comment(
+        request: Request,
         artifact_id: str,
         # Default "": a mark ("remove"/"looks_good") needs no note, and it is
         # `kind`, not the form itself, that decides whether an empty body is
@@ -4340,7 +4389,7 @@ def gallery_router(db: Database) -> APIRouter:
             except ValueError:
                 raise HTTPException(422, "not a valid anchor") from None
         try:
-            comments.add(
+            row = comments.add(
                 db,
                 artifact_id=artifact_id,
                 author_kind="human",
@@ -4371,6 +4420,21 @@ def gallery_router(db: Database) -> APIRouter:
             ) from None
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
+        if "application/json" in request.headers.get("accept", ""):
+            # The in-place post: the thread as the drawer renders it, and the
+            # marks the frame should now paint.
+            root = row.thread_root or row.id
+            rows = comments.list_for_artifact(
+                db, artifact_id, include_resolved=True, include_held=True
+            )
+            return JSONResponse(
+                {
+                    "html": _render_comments(rows, artifact_id, only_thread=root),
+                    "thread_root": root,
+                    "marks": comments.marks_for_page(db, artifact_id),
+                },
+                status_code=201,
+            )
         return RedirectResponse(f"/a/{artifact_id}#comments", status_code=303)
 
     @router.post("/c/{comment_id}/resolve")
