@@ -516,3 +516,13 @@ def test_a_withdrawn_decision_still_needs_asking_for(client, db):
         headers=auth(token),
     ).json()
     assert len(with_closed) == 1
+
+
+def test_get_owned_returns_own_row_and_none_for_others_or_missing(db):
+    page = store.publish(db, "seat", "Board", PAGE)
+    row = decisions.ask(
+        db, agent="seat", artifact_id=page.id, question="q?", options=_OPTIONS
+    )
+    assert decisions.get_owned(db, "seat", row.id).id == row.id
+    assert decisions.get_owned(db, "other", row.id) is None
+    assert decisions.get_owned(db, "seat", "nope") is None

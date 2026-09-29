@@ -650,6 +650,20 @@ def answer(
     return answered
 
 
+def get_owned(db: Database, agent: str, decision_id: str) -> DecisionRow | None:
+    """One decision, only if its page belongs to `agent`. None covers a missing id
+    and someone else's identically, so a key cannot be walked to learn which ids
+    are real."""
+    with db.connect() as conn:
+        row = conn.execute(
+            f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
+            " join artifact on artifact.id = decision.artifact_id"
+            " where decision.id = %s and artifact.agent = %s",
+            (decision_id, agent),
+        ).fetchone()
+    return None if row is None else _row_to_decision(row)
+
+
 def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
     """The agent withdrawing a question it no longer needs answered. Idempotent: a
     second close returns the row unchanged, `closed_at` untouched, exactly as
@@ -659,15 +673,13 @@ def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
     a different agent -- the same artifact-join shape `comments.resolve` uses, so the
     two look identical from outside exactly as `store.patch`'s ownership check makes
     them look identical there too."""
+    if get_owned(db, agent, decision_id) is None:
+        raise store.NotFound()
     with db.connect() as conn:
         row = conn.execute(
-            f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
-            " join artifact on artifact.id = decision.artifact_id"
-            " where decision.id = %s and artifact.agent = %s",
-            (decision_id, agent),
+            f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
+            (decision_id,),
         ).fetchone()
-        if row is None:
-            raise store.NotFound()
         if row[11] is None:  # closed_at
             # Closing implies acknowledgement -- an agent that finished the work
             # necessarily heard the answer -- but only when nothing has acknowledged
@@ -707,15 +719,13 @@ def acknowledge(db: Database, agent: str, decision_id: str) -> DecisionRow:
     only ever reads it alongside `answered_at`. Refusing it would be a guard whose only
     effect is to make a retry after an answer arrives fail for the wrong reason.
     """
+    if get_owned(db, agent, decision_id) is None:
+        raise store.NotFound()
     with db.connect() as conn:
         row = conn.execute(
-            f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
-            " join artifact on artifact.id = decision.artifact_id"
-            " where decision.id = %s and artifact.agent = %s",
-            (decision_id, agent),
+            f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
+            (decision_id,),
         ).fetchone()
-        if row is None:
-            raise store.NotFound()
         if row[12] is None:  # acknowledged_at
             conn.execute(
                 "update decision set acknowledged_at = now(), acknowledged_by = %s"

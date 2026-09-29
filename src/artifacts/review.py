@@ -42,16 +42,9 @@ def _quote(s: str) -> str:
 def _load(db: Database, review_id: str, agent: str):
     """The answered review decision, only to the agent that owns its page.
     Every refusal is the same NotFound, so a key learns nothing about ids."""
-    with db.connect() as conn:
-        row = conn.execute(
-            f"select {decisions._COLUMNS} from decision"  # noqa: S608 -- fixed constant
-            " join artifact on artifact.id = decision.artifact_id"
-            " where decision.id = %s and artifact.agent = %s",
-            (review_id, agent),
-        ).fetchone()
-    if row is None:
+    decision = decisions.get_owned(db, agent, review_id)
+    if decision is None:
         raise store.NotFound()
-    decision = decisions._row_to_decision(row)
     if decision.kind != "review" or decision.answer is None:
         raise store.NotFound()
     return decision
@@ -104,7 +97,8 @@ def render(db: Database, review_id: str, *, agent: str) -> tuple[str, dict]:
     else:
         lines.append(_HEAD[verdict])
     if note:
-        lines.append(f"His note: {note}")
+        lines.append("His note:")
+        lines.extend(f"   > {line}" for line in note.splitlines())
     lines.append("")
     lines.append(
         "He left no marks." if n == 0 else f"He left {n} mark{'' if n == 1 else 's'}:"
