@@ -681,4 +681,12 @@ alter table event add constraint event_kind_check
 -- Null means it has not been checked yet -- a restart killed the background
 -- task, or the relay was unreachable -- and a sweep at startup and every ten
 -- minutes retries it.
-alter table comment add column if not exists gg_scanned_at timestamptz;
+--
+-- BACKFILL: every comment saved before this column existed was already checked
+-- by GitGuardian BEFORE it was saved (the old behaviour), so the column is
+-- created with default now() to mark those rows scanned exactly once, and the
+-- default is dropped straight after so new rows start null. Re-running is a
+-- no-op: the add does nothing once the column exists, and dropping a default
+-- that is gone does nothing.
+alter table comment add column if not exists gg_scanned_at timestamptz default now();
+alter table comment alter column gg_scanned_at drop default;

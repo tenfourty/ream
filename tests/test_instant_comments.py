@@ -298,3 +298,16 @@ def test_release_says_nothing_of_replies_under_a_withdrawn_root(db, page):
     with db.connect() as conn, conn.transaction():
         holds.release(conn, page.id, emit=True)
     assert _events(db, "comment_added") == []
+
+
+def test_a_fresh_agent_comment_is_unscanned_and_migrating_again_keeps_it_so(db, page):
+    row = _agent_comment(db, page)
+    assert not _stamped(db, row.id)
+    db.migrate()
+    assert not _stamped(db, row.id)
+    with db.connect() as conn:
+        default = conn.execute(
+            "select column_default from information_schema.columns"
+            " where table_name = 'comment' and column_name = 'gg_scanned_at'"
+        ).fetchone()[0]
+    assert default is None
