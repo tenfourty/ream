@@ -74,8 +74,9 @@ jobs:
         # (artifacts_test_<worker>) on this one Postgres service.
         run: uv run pytest -q -n auto --maxprocesses 8
 
+  # No `needs:` -- the image builds while the tests run. An image whose tests fail
+  # is only ever pushed to the internal registry; `deploy` below waits for both.
   image:
-    needs: test
     runs-on: docker
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     services:
@@ -151,7 +152,8 @@ jobs:
           docker push "$image"
 
   deploy:
-    needs: image
+    # Both: a failed or skipped test blocks the deploy even though image is green.
+    needs: [test, image]
     runs-on: docker
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     steps:
