@@ -117,22 +117,29 @@ def test_too_many_watchers_are_answered_rather_than_queued(client, page, monkeyp
     correct -- an answer now beats a thread later."""
     from artifacts import gallery
 
-    monkeypatch.setattr(gallery, "_watchers", threading.BoundedSemaphore(1))
-    held = threading.Event()
+    slots = threading.BoundedSemaphore(1)
+    monkeypatch.setattr(gallery, "_watchers", slots)
 
     def hold():
-        held.set()
-        client.get(f"/a/{page.id}/current?since=1&wait=3")
+        client.get(f"/a/{page.id}/current?since=1&wait=8")
 
     thread = threading.Thread(target=hold)
     thread.start()
-    held.wait(5)
-    time.sleep(0.3)
+    # Wait until the first watcher has really TAKEN the one slot, rather than
+    # sleeping and hoping: under CI load a fixed 0.3 s was not enough, the
+    # second request took the slot itself and waited out its hold (29 Sep 2026,
+    # the only failure in a 35-minute run).
+    deadline = time.monotonic() + 10
+    while slots._value and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert slots._value == 0, "the first watcher never took the slot"
     began = time.monotonic()
-    got = client.get(f"/a/{page.id}/current?since=1&wait=3")
+    got = client.get(f"/a/{page.id}/current?since=1&wait=8")
     assert got.json() == {"n": 1}
-    assert time.monotonic() - began < 1.5, "answered immediately rather than queued"
-    thread.join(10)
+    # Queued would mean 8 s; answered at once is milliseconds. The bound sits
+    # far from both so load cannot flip it.
+    assert time.monotonic() - began < 4, "answered immediately rather than queued"
+    thread.join(15)
 
 
 def test_the_wait_is_capped(client, page):
