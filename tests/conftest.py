@@ -139,7 +139,7 @@ _share_fastapi_type_adapters()
 
 
 class _TestsDatabase:
-    """What a reused gallery app's routes hold instead of a `Database`: the one
+    """What a reused app's routes hold instead of a `Database`: the one
     the CURRENT test asked for its app with, looked up on every use. So a test
     that patches its own `db` (`monkeypatch.setattr(db, "connect", ...)`) still
     reaches the app, exactly as it would with an app built for it."""
@@ -428,8 +428,9 @@ def pytest_xdist_auto_num_workers(config) -> int | None:
     physical core (xdist's default, with psutil installed). Most of a test's
     time here is spent waiting -- on Postgres, on a live server thread, on a
     subprocess -- so a second worker per core fills the gaps: measured on baba
-    (4 cores, 8 threads) 30 Sep 2026, 8 workers finished in 80 s where 4 took
-    89 s. `--maxprocesses` still caps it (CI passes 5), and
+    (4 cores, 8 threads) 30 Sep 2026, 8 workers averaged 43 s over three runs
+    where 4 averaged 48 s, alternated under the same load. `--maxprocesses`
+    still caps it (CI passes 5), and
     PYTEST_XDIST_AUTO_NUM_WORKERS still overrides it, as it does in xdist."""
     env = os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS")
     if env:
