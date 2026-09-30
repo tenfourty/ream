@@ -151,27 +151,33 @@ class _TestsDatabase:
         return getattr(self.target, name)
 
 
-class _GalleryApps:
-    """One gallery app per worker and database, handed to one test at a time.
+class _ReusedApps:
+    """One app per worker and database from each of `create_gallery_app(db)`
+    and `create_app(db)`, handed to one test at a time.
 
-    Building `create_gallery_app(db)` is ~40 ms of CPU on an idle box, and
-    FastAPI builds each route's state a second time on the app's first request
-    (~15 ms more). Almost every API test builds one, so measured 30 Sep 2026
-    that was about a fifth of the whole suite's CPU. What a build makes that
-    could carry anything from one test to the next is exactly two things --
-    read out of `create_gallery_app` and the routers it mounts: the failed-key
-    limiter, which is re-initialised to a new one's state on every hand-out,
-    and the `db` the routes close over, which is `_TestsDatabase` pointed at
-    the asking test's `db`. Everything else a build makes is constants and
-    route definitions. Module-level state is shared by every app either way.
+    Building a gallery app is ~40 ms of CPU on an idle box and `create_app`
+    (gallery, API and content apps behind the host router) ~75 ms, and FastAPI
+    builds each route's state a second time on an app's first request. Almost
+    every API test builds one, so measured 30 Sep 2026 that was about a fifth
+    of the whole suite's CPU.
 
-    Only the plain call is reused: `create_gallery_app(db)` for a real
-    `Database`, no limiter of the caller's own. A test asking for a second
-    gallery app gets a freshly built one, so two apps in one test are never
-    the same object. `ARTIFACTS_TEST_FRESH_APPS=1` turns reuse off entirely,
-    to rule it out when a test misbehaves."""
+    What a build makes that could carry anything from one test to the next is
+    exactly two things -- read out of both factories and the routers they
+    mount: the failed-key limiter (`create_app` makes one and shares it between
+    its gallery and API faces), which is re-initialised to a new one's state
+    on every hand-out, and the `db` the routes close over, which is
+    `_TestsDatabase` pointed at the asking test's `db`. Everything else a build
+    makes is constants and route definitions; module-level state is shared by
+    every app either way.
 
-    real = None
+    Only the plain calls are reused: a real `Database`, and for the gallery app
+    no limiter of the caller's own. A test asking a factory for a second app
+    gets a freshly built one, so two apps in one test are never the same
+    object. `ARTIFACTS_TEST_FRESH_APPS=1` turns reuse off entirely, to rule it
+    out when a test misbehaves."""
+
+    real_gallery = None
+    real_app = None
     entries: ClassVar[dict] = {}
     handed: ClassVar[set] = set()
 
@@ -181,35 +187,79 @@ class _GalleryApps:
             return
         from artifacts import app as app_module
 
-        cls.real = app_module.create_gallery_app
-        app_module.create_gallery_app = cls.create
+        cls.real_gallery = app_module.create_gallery_app
+        cls.real_app = app_module.create_app
+        app_module.create_gallery_app = cls.create_gallery_app
+        app_module.create_app = cls.create_app
 
     @classmethod
-    def create(cls, db=None, limiter=None):
-        if limiter is not None or type(db) is not Database or db.dsn in cls.handed:
-            return cls.real(db, limiter)
+    def _hand_out(cls, key, db, build):
+        """The app for `key`, built once by `build(held_db)` -> (app, limiters),
+        pointed at `db` and with every limiter it holds as good as new."""
         from artifacts import ratelimit
 
-        entry = cls.entries.get(db.dsn)
+        entry = cls.entries.get(key)
         if entry is None:
-            held, fresh = _TestsDatabase(db), ratelimit.FailedAuthLimiter()
-            entry = cls.entries[db.dsn] = (cls.real(held, fresh), held, fresh)
-        app, held, fresh = entry
+            held = _TestsDatabase(db)
+            entry = cls.entries[key] = (*build(held), held)
+        app, limiters, held = entry
+        assert limiters, "a reused app must have its limiter to reset"
         held.target = db
-        fresh.__init__()  # a new limiter's state: no failures remembered
-        cls.handed.add(db.dsn)
+        for limiter in limiters:
+            # A new limiter's state, whatever subclass recorded it.
+            ratelimit.FailedAuthLimiter.__init__(limiter)
+        cls.handed.add(key)
         return app
 
+    @classmethod
+    def create_gallery_app(cls, db=None, limiter=None):
+        key = ("gallery", getattr(db, "dsn", None))
+        if limiter is not None or type(db) is not Database or key in cls.handed:
+            return cls.real_gallery(db, limiter)
+        from artifacts import ratelimit
 
-_GalleryApps.install()
+        def build(held):
+            fresh = ratelimit.FailedAuthLimiter()
+            return cls.real_gallery(held, fresh), [fresh]
+
+        return cls._hand_out(key, db, build)
+
+    @classmethod
+    def create_app(cls, db):
+        key = ("app", getattr(db, "dsn", None))
+        if type(db) is not Database or key in cls.handed:
+            return cls.real_app(db)
+        from artifacts import ratelimit
+
+        def build(held):
+            # `create_app` makes its limiter itself; note it as it is made.
+            made = []
+            real = ratelimit.FailedAuthLimiter
+
+            class Noted(real):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
+                    made.append(self)
+
+            ratelimit.FailedAuthLimiter = Noted
+            try:
+                app = cls.real_app(held)
+            finally:
+                ratelimit.FailedAuthLimiter = real
+            return app, made
+
+        return cls._hand_out(key, db, build)
+
+
+_ReusedApps.install()
 
 
 @pytest.fixture(autouse=True)
-def _gallery_apps_hand_out_afresh():
-    """A reused gallery app goes to at most one caller per test."""
-    _GalleryApps.handed.clear()
+def _apps_hand_out_afresh():
+    """A reused app goes to at most one caller per test."""
+    _ReusedApps.handed.clear()
     yield
-    _GalleryApps.handed.clear()
+    _ReusedApps.handed.clear()
 
 
 # How the controller hands its server to the xdist workers it spawns.

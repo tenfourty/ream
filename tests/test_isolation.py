@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from artifacts import comments, decisions, events, holds, keys, ratelimit, store
-from artifacts.app import create_gallery_app
+from artifacts.app import create_app, create_gallery_app
 from artifacts.db import Database
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body>{}</body></html>"
@@ -158,52 +158,64 @@ def test_a_dbname_in_the_query_does_not_override_the_workers_database():
     )
 
 
-# --- a gallery app reused across tests carries nothing between them ----------
+# --- an app reused across tests carries nothing between them ----------------
 #
-# tests/conftest.py (`_GalleryApps`) hands one gallery app per worker to one
-# test at a time instead of building one per test. These say what that must
-# not change. `_next_test()` does what the autouse fixture does between two
-# tests, so each of these crosses a test boundary inside one test.
+# tests/conftest.py (`_ReusedApps`) hands one app per worker from each of
+# `create_gallery_app(db)` and `create_app(db)` to one test at a time instead
+# of building one per test. These say what that must not change, for both.
+# `_next_test()` does what the autouse fixture does between two tests, so each
+# of these crosses a test boundary inside one test.
+
+_FACTORIES = pytest.mark.parametrize(
+    "factory", [create_gallery_app, create_app], ids=["gallery", "create_app"]
+)
 
 
-def _bad(client):
-    return client.get(
+def _client(app):
+    # The gallery host, which `create_app`'s router needs; any host serves the
+    # bare gallery app.
+    return TestClient(app, base_url="https://artifacts.tenfourty.site")
+
+
+def _bad(app):
+    return _client(app).get(
         "/api/v1/artifacts",
         headers={"Authorization": "Bearer art_nope", "x-real-ip": "203.0.113.9"},
     )
 
 
 def _next_test() -> None:
-    from conftest import _GalleryApps
+    from conftest import _ReusedApps
 
-    _GalleryApps.handed.clear()
+    _ReusedApps.handed.clear()
 
 
 def _reusing() -> bool:
     return os.environ.get("ARTIFACTS_TEST_FRESH_APPS") != "1"
 
 
-def test_a_reused_app_remembers_no_failed_keys_from_the_test_before(db):
-    app = create_gallery_app(db)
-    statuses = [_bad(TestClient(app)).status_code for _ in range(ratelimit.THRESHOLD)]
+@_FACTORIES
+def test_a_reused_app_remembers_no_failed_keys_from_the_test_before(db, factory):
+    app = factory(db)
+    statuses = [_bad(app).status_code for _ in range(ratelimit.THRESHOLD)]
     assert statuses[-1] == 429, "the limiter never engaged: nothing was proved"
     _next_test()
-    again = create_gallery_app(db)
+    again = factory(db)
     if _reusing():
         assert again is app, "not reused, so this proves nothing about reuse"
-    assert _bad(TestClient(again)).status_code == 401
+    assert _bad(again).status_code == 401
 
 
-def test_a_reused_app_uses_the_database_this_test_patched(db, monkeypatch):
+@_FACTORIES
+def test_a_reused_app_uses_the_database_this_test_patched(db, monkeypatch, factory):
     # An earlier "test" had its own `db`: another object, the same database.
-    first = create_gallery_app(Database(db.dsn))
+    first = factory(Database(db.dsn))
     _next_test()
-    app = create_gallery_app(db)
+    app = factory(db)
     if _reusing():
         assert app is first, "not reused, so this proves nothing about reuse"
-
     token, _ = keys.mint(db, agent="seat")
-    client = TestClient(app)
+    client = _client(app)
     listed = client.get(
         "/api/v1/artifacts", headers={"Authorization": f"Bearer {token}"}
     )
@@ -217,5 +229,6 @@ def test_a_reused_app_uses_the_database_this_test_patched(db, monkeypatch):
         client.get("/api/v1/artifacts", headers={"Authorization": f"Bearer {token}"})
 
 
-def test_two_gallery_apps_in_one_test_are_two_apps(db):
-    assert create_gallery_app(db) is not create_gallery_app(db)
+@_FACTORIES
+def test_two_apps_from_one_factory_in_one_test_are_two_apps(db, factory):
+    assert factory(db) is not factory(db)
