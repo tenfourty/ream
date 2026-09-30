@@ -583,6 +583,9 @@ def test_wait_without_a_session_label_does_not_claim_and_says_so(
 
 
 @brief
+@pytest.mark.slow(
+    reason="a real 9 s wait: the lease must lapse twice over without renewal"
+)
 def test_wait_renews_its_lease_while_it_runs(live, key_file, db, capsys, monkeypatch):
     """A 4 s lease renewed when under 3.5 s remain, for a 9 s wait: without
     renewal it would lapse twice over, and another session could take it."""

@@ -19,6 +19,7 @@ when serial), never to a worker, so a worker killed mid-run cannot orphan it.
 Servers orphaned by a killed controller are reaped at the next start.
 """
 
+import contextlib
 import json
 import os
 import re
@@ -296,6 +297,52 @@ def pytest_configure(config) -> None:
     os.environ[_URI_ENV] = _Server.ensure()
 
 
+def pytest_xdist_auto_num_workers(config) -> int | None:
+    """`-n auto` means one worker per CPU the process may run on, not one per
+    physical core (xdist's default, with psutil installed). Most of a test's
+    time here is spent waiting -- on Postgres, on a live server thread, on a
+    subprocess -- so a second worker per core fills the gaps: measured on baba
+    (4 cores, 8 threads) 30 Sep 2026, 8 workers finished in 80 s where 4 took
+    89 s. `--maxprocesses` still caps it (CI passes 5), and
+    PYTEST_XDIST_AUTO_NUM_WORKERS still overrides it, as it does in xdist."""
+    env = os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS")
+    if env:
+        return None  # xdist's own hook reads it
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:  # not Linux
+        return None
+
+
+def pytest_collection_modifyitems(config, items) -> None:
+    """Under xdist, start each worker on one of the `slow` tests.
+
+    The worksteal scheduler (pyproject's addopts) hands each worker one
+    contiguous run of the collection, and idle workers steal from the others'
+    tails. So a slow test is placed at the head of a worker's run, where it
+    starts at once and overlaps the rest, instead of wherever its file sorts
+    -- one that happens to start in the last seconds becomes the run's tail
+    on its own. Serially, and in every test's own terms, nothing changes: the
+    same tests, the same fixtures; only the order across files. Every worker
+    computes the same order, as xdist requires."""
+    workers = getattr(config, "workerinput", {}).get("workercount")
+    if not workers or workers < 2:
+        return
+    slow = [item for item in items if item.get_closest_marker("slow")]
+    if not slow:
+        return
+    rest = [item for item in items if not item.get_closest_marker("slow")]
+    segment = max(len(items) // workers, 1)
+    ordered = list(rest)
+    # Insert from the back so earlier insertion points do not shift.
+    placed = [
+        (n % workers * segment + n // workers, item) for n, item in enumerate(slow)
+    ]
+    for at, item in sorted(placed, key=lambda p: p[0], reverse=True):
+        ordered.insert(min(at, len(ordered)), item)
+    items[:] = ordered
+
+
 def pytest_unconfigure(config) -> None:
     if not _is_worker(config):
         _Server.stop()
@@ -481,7 +528,37 @@ class _Schema:
     def __init__(self, dsn: str) -> None:
         self.database = Database(dsn)
         self.tables: list[str] = []
+        self._conn: psycopg.Connection | None = None
         self.rebuild()
+
+    @contextlib.contextmanager
+    def _held(self):
+        """The fixture's own connection, opened once per worker and reused by
+        `empty` and `fingerprint` before and after every test. A new connection
+        is a new Postgres backend, ~7 ms on this machine (measured 30 Sep
+        2026), and these two opened one each per test. Autocommit, and nothing
+        is prepared (`prepare_threshold=None`), so a schema rebuilt under it
+        cannot leave it holding a stale plan. A connection a test broke (by
+        terminating backends, say) is replaced, never reused."""
+        conn = self._conn
+        if conn is None or conn.closed or conn.broken:
+            conn = self._conn = psycopg.connect(
+                self.database.dsn, autocommit=True, prepare_threshold=None
+            )
+            # A connection a previous test leaked with a lock held would block
+            # `empty` forever; fail loudly instead.
+            conn.execute("set lock_timeout = '10s'")
+        try:
+            yield conn
+        except psycopg.OperationalError:
+            conn.close()
+            self._conn = None
+            raise
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
 
     def rebuild(self) -> None:
         self.database.reset()
@@ -508,7 +585,7 @@ class _Schema:
         """Cheap evidence the schema is still the one built: its column and
         table counts. Catches a test that altered the schema without asking
         for `fresh_schema`, before it poisons the next test on this worker."""
-        with self.database.connect() as conn:
+        with self._held() as conn:
             # pg_catalog rather than information_schema.columns: the same
             # counts for tables, in ~0.7 ms instead of ~2.4 ms per test.
             return conn.execute(
@@ -546,17 +623,17 @@ class _Schema:
                     sql.SQL(", ").join(sql.Identifier(t) for t in self.tables)
                 )
             ]
-        with self.database.connect() as conn:
-            # A connection a previous test leaked with a lock held would block
-            # this forever; fail loudly instead.
-            conn.execute("set lock_timeout = '10s'")
-            with conn.transaction():
-                conn.execute(sql.SQL("; ").join(statements))
+        with self._held() as conn, conn.transaction():
+            conn.execute(sql.SQL("; ").join(statements))
 
 
 @pytest.fixture(scope="session")
-def _schema(dsn: str) -> _Schema:
-    return _Schema(dsn)
+def _schema(dsn: str):
+    schema = _Schema(dsn)
+    try:
+        yield schema
+    finally:
+        schema.close()  # before `dsn` drops the database under it
 
 
 @pytest.fixture()

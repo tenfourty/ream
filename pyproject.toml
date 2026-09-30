@@ -49,6 +49,11 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+# worksteal, not xdist's default `load`: idle workers take tests from the
+# busiest one's tail, so the run ends when the work does, not when the unluckiest
+# worker's last chunk does. Inert without -n. See pytest_collection_modifyitems
+# in tests/conftest.py for where the slow tests go.
+addopts = "--dist=worksteal"
 # `slow`: a test that genuinely needs more than a second, each with a one-line
 # reason at the mark. At most ten may carry it; everything else stays under 1 s.
 markers = [

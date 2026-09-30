@@ -365,6 +365,7 @@ def test_a_claim_on_a_round_with_a_verdict_lasts_an_hour(db, client):
     assert 3590 < _state(db, review.id)[4] <= 3600
 
 
+@pytest.mark.slow(reason="waits out a real 6 s closed lease on the database clock")
 def test_a_revision_longer_than_the_open_lease_keeps_the_closed_round(
     db, client, monkeypatch
 ):
