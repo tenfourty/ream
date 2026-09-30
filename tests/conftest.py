@@ -33,6 +33,7 @@ import warnings
 from collections import OrderedDict
 from dataclasses import fields
 from pathlib import Path
+from typing import ClassVar
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import pgserver
@@ -135,6 +136,81 @@ def _share_fastapi_type_adapters() -> None:
 
 
 _share_fastapi_type_adapters()
+
+
+class _TestsDatabase:
+    """What a reused gallery app's routes hold instead of a `Database`: the one
+    the CURRENT test asked for its app with, looked up on every use. So a test
+    that patches its own `db` (`monkeypatch.setattr(db, "connect", ...)`) still
+    reaches the app, exactly as it would with an app built for it."""
+
+    def __init__(self, target: Database) -> None:
+        self.target = target
+
+    def __getattr__(self, name: str):
+        return getattr(self.target, name)
+
+
+class _GalleryApps:
+    """One gallery app per worker and database, handed to one test at a time.
+
+    Building `create_gallery_app(db)` is ~40 ms of CPU on an idle box, and
+    FastAPI builds each route's state a second time on the app's first request
+    (~15 ms more). Almost every API test builds one, so measured 30 Sep 2026
+    that was about a fifth of the whole suite's CPU. What a build makes that
+    could carry anything from one test to the next is exactly two things --
+    read out of `create_gallery_app` and the routers it mounts: the failed-key
+    limiter, which is re-initialised to a new one's state on every hand-out,
+    and the `db` the routes close over, which is `_TestsDatabase` pointed at
+    the asking test's `db`. Everything else a build makes is constants and
+    route definitions. Module-level state is shared by every app either way.
+
+    Only the plain call is reused: `create_gallery_app(db)` for a real
+    `Database`, no limiter of the caller's own. A test asking for a second
+    gallery app gets a freshly built one, so two apps in one test are never
+    the same object. `ARTIFACTS_TEST_FRESH_APPS=1` turns reuse off entirely,
+    to rule it out when a test misbehaves."""
+
+    real = None
+    entries: ClassVar[dict] = {}
+    handed: ClassVar[set] = set()
+
+    @classmethod
+    def install(cls) -> None:
+        if os.environ.get("ARTIFACTS_TEST_FRESH_APPS") == "1":
+            return
+        from artifacts import app as app_module
+
+        cls.real = app_module.create_gallery_app
+        app_module.create_gallery_app = cls.create
+
+    @classmethod
+    def create(cls, db=None, limiter=None):
+        if limiter is not None or type(db) is not Database or db.dsn in cls.handed:
+            return cls.real(db, limiter)
+        from artifacts import ratelimit
+
+        entry = cls.entries.get(db.dsn)
+        if entry is None:
+            held, fresh = _TestsDatabase(db), ratelimit.FailedAuthLimiter()
+            entry = cls.entries[db.dsn] = (cls.real(held, fresh), held, fresh)
+        app, held, fresh = entry
+        held.target = db
+        fresh.__init__()  # a new limiter's state: no failures remembered
+        cls.handed.add(db.dsn)
+        return app
+
+
+_GalleryApps.install()
+
+
+@pytest.fixture(autouse=True)
+def _gallery_apps_hand_out_afresh():
+    """A reused gallery app goes to at most one caller per test."""
+    _GalleryApps.handed.clear()
+    yield
+    _GalleryApps.handed.clear()
+
 
 # How the controller hands its server to the xdist workers it spawns.
 _URI_ENV = "ARTIFACTS_TEST_PG_URI"
