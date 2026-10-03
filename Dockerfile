@@ -75,7 +75,7 @@ FROM python:3.12-slim-bookworm
 # arrive within a week and a cached layer never goes stale for longer.
 ARG CHROMIUM_REFRESH=unset
 RUN echo "chromium layer for ${CHROMIUM_REFRESH}" && apt-get update \
- && apt-get install -y --no-install-recommends chromium fonts-dejavu-core \
+ && apt-get install -y --no-install-recommends chromium fonts-dejavu-core tini \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/.venv /app/.venv
@@ -98,4 +98,8 @@ EXPOSE 8000
 # uvicorn should find nothing to wait for. If something ever does hold on, 15
 # seconds is well inside Kubernetes' 30-second default grace period, so the
 # process exits on its own terms rather than being killed mid-answer.
+# tini is PID 1 so orphaned chromium helpers are reaped instead of piling up as
+# zombies (homelab-o88p). -g forwards signals to the whole group, so SIGTERM
+# still reaches uvicorn for its graceful shutdown.
+ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
 CMD ["uvicorn", "artifacts.serve:app_from_env", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--proxy-headers", "--timeout-graceful-shutdown", "15"]

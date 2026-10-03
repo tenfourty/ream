@@ -41,9 +41,11 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -62,6 +64,46 @@ TIMEOUT_SECONDS = 20
 # page. A full-page shot of a long status board is an unreadable grey smear.
 WIDTH = 900
 HEIGHT = 640
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    """SIGKILL the child's whole process group. The child was started with
+    start_new_session, so its pgid is its pid and every chromium helper it
+    spawned (zygote, renderer, crashpad) is in it. Safe to call on a group that
+    is already gone."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _run(argv: list[str], *, timeout: float, **kwargs) -> subprocess.CompletedProcess:
+    """subprocess.run, except that the whole process GROUP dies on a timeout.
+
+    subprocess.run kills only the direct child on a timeout, so chromium's
+    helpers were orphaned to PID 1, which (uvicorn) never reaped them: 3,900
+    zombies in two days (homelab-o88p). Here the group is SIGKILLed and the
+    child is waited on, and the group is swept after a normal exit too, because
+    crashpad can outlive a browser that exited cleanly."""
+    proc = subprocess.Popen(  # noqa: S603 -- argv list, no shell, binary from config
+        argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,  # its own process group, so a timeout kills all of it
+        **kwargs,
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except BaseException:
+        _kill_group(proc)
+        try:
+            proc.communicate(timeout=5)  # reap the child; drain the pipes
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        raise
+    _kill_group(proc)
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
 def browser_path() -> str | None:
@@ -126,7 +168,12 @@ def render_report(
     # the wall. A render happens at publish or preview time, so now is the date.
     html = stamp.apply(html, datetime.now(UTC))
 
-    with tempfile.TemporaryDirectory(prefix="artifacts-thumb-") as workdir:
+    # ignore_cleanup_errors: a straggler writing into the directory while it is
+    # removed raised "Directory not empty" (homelab-o88p); the group is killed
+    # first, and a leftover is then no reason to fail the render.
+    with tempfile.TemporaryDirectory(
+        prefix="artifacts-thumb-", ignore_cleanup_errors=True
+    ) as workdir:
         page = Path(workdir) / "page.html"
         shot = Path(workdir) / "shot.png"
         try:
@@ -163,17 +210,14 @@ def render_report(
             page.as_uri(),
         ]
         try:
-            done = subprocess.run(  # noqa: S603 -- argv list, no shell, binary from config
+            done = _run(
                 argv,
-                capture_output=True,
                 timeout=TIMEOUT_SECONDS,
-                check=False,
                 # BUILT FROM NOTHING, not inherited. DATABASE_URL and every
                 # agent key are simply absent from the child. HOME and a temp
                 # dir are the only things the browser genuinely needs.
                 env={"HOME": workdir, "TMPDIR": workdir, "PATH": "/usr/bin:/bin"},
                 cwd=workdir,
-                start_new_session=True,  # its own process group, so a timeout kills all of it
             )
         except subprocess.TimeoutExpired:
             log.warning("thumbnail render timed out after %ss", TIMEOUT_SECONDS)
@@ -200,6 +244,47 @@ def render_report(
     return data, errors
 
 
+# Bounded retries per artifact version (homelab-o88p). A page whose render keeps
+# failing (a timeout is 20 s of CPU and disk) must not be re-rendered forever:
+# after MAX_FAILURES the version is given up on and logged once. Between
+# attempts the wait doubles from BACKOFF_SECONDS. In memory on purpose: a
+# restart is a fresh start, and the count only has to stop a loop within one
+# process.
+MAX_FAILURES = 3
+BACKOFF_SECONDS = 60.0
+_MAX_TRACKED = 2000
+_failures: dict[tuple[str, int], tuple[int, float]] = {}
+_failures_lock = threading.Lock()
+
+
+def _may_render(key: tuple[str, int]) -> bool:
+    with _failures_lock:
+        count, last = _failures.get(key, (0, 0.0))
+        if count == 0:
+            return True
+        if count >= MAX_FAILURES:
+            return False
+        return time.monotonic() - last >= BACKOFF_SECONDS * 2 ** (count - 1)
+
+
+def _record(key: tuple[str, int], ok: bool) -> None:
+    with _failures_lock:
+        if ok:
+            _failures.pop(key, None)
+            return
+        count = _failures.get(key, (0, 0.0))[0] + 1
+        if len(_failures) >= _MAX_TRACKED and key not in _failures:
+            _failures.pop(next(iter(_failures)))
+        _failures[key] = (count, time.monotonic())
+    if count == MAX_FAILURES:
+        log.warning(
+            "thumbnail render failed %d times for %s v%s; giving up on this version",
+            count,
+            key[0],
+            key[1],
+        )
+
+
 def render_in_background(db, artifact_id: str, version_n: int, html: str) -> None:
     """Render and store a thumbnail after the publish has already returned.
 
@@ -221,9 +306,14 @@ def render_in_background(db, artifact_id: str, version_n: int, html: str) -> Non
     if not available():
         return
 
+    key = (artifact_id, version_n)
+    if not _may_render(key):
+        return
+
     def work() -> None:
         try:
             png, errors = render_report(html)
+            _record(key, png is not None)
             if png is not None:
                 store.save_thumbnail(db, artifact_id, version_n, png)
             if errors is not None:
