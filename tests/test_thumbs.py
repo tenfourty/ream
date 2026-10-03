@@ -8,7 +8,9 @@ child runs under. Those constraints are what this file tests; everything else
 about thumbnails is decoration by comparison.
 """
 
+import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -46,7 +48,7 @@ def test_the_child_gets_no_credentials(monkeypatch):
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:hunter2@db/artifacts")
     monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
-    monkeypatch.setattr(thumbs.subprocess, "run", capture)
+    monkeypatch.setattr(thumbs, "_run", capture)
 
     assert thumbs.render(PAGE) is None
     env = seen["env"]
@@ -56,17 +58,16 @@ def test_the_child_gets_no_credentials(monkeypatch):
 
 
 def test_the_child_is_its_own_process_group(monkeypatch):
-    """So a timeout kills the browser and everything it spawned, not just the
-    parent. A renderer that leaves zombies behind fills the pod slowly."""
+    """The timeout is handed to the group-killing runner (the real kill is
+    tested below with a real process tree)."""
     seen = {}
     monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
     monkeypatch.setattr(
-        thumbs.subprocess,
-        "run",
+        thumbs,
+        "_run",
         lambda argv, **kw: seen.update(kw) or subprocess.CompletedProcess(argv, 0),
     )
     thumbs.render(PAGE)
-    assert seen["start_new_session"] is True
     assert seen["timeout"] == thumbs.TIMEOUT_SECONDS
 
 
@@ -81,8 +82,8 @@ def test_no_browser_means_no_thumbnail_not_an_error(monkeypatch):
 def test_a_timeout_produces_nothing_rather_than_raising(monkeypatch):
     monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
     monkeypatch.setattr(
-        thumbs.subprocess,
-        "run",
+        thumbs,
+        "_run",
         lambda argv, **kw: (_ for _ in ()).throw(subprocess.TimeoutExpired(argv, 1)),
     )
     assert thumbs.render(PAGE) is None
@@ -98,7 +99,7 @@ def test_output_that_is_not_a_png_is_refused(monkeypatch, tmp_path):
         Path(shot.split("=", 1)[1]).write_bytes(b"not a png at all")
         return subprocess.CompletedProcess(argv, 0)
 
-    monkeypatch.setattr(thumbs.subprocess, "run", write_rubbish)
+    monkeypatch.setattr(thumbs, "_run", write_rubbish)
     assert thumbs.render(PAGE) is None
 
 
@@ -108,8 +109,8 @@ def test_the_flags_disable_the_network(monkeypatch):
     seen = {}
     monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
     monkeypatch.setattr(
-        thumbs.subprocess,
-        "run",
+        thumbs,
+        "_run",
         lambda argv, **kw: (
             seen.setdefault("argv", argv) or subprocess.CompletedProcess(argv, 0)
         ),
@@ -156,7 +157,132 @@ def test_the_browser_sees_the_page_stamped_as_a_reader_would(monkeypatch):
         seen["html"] = Path(argv[-1].removeprefix("file://")).read_text()
         return subprocess.CompletedProcess(argv, 0)
 
-    monkeypatch.setattr(thumbs.subprocess, "run", read_page)
+    monkeypatch.setattr(thumbs, "_run", read_page)
     thumbs.render_report("<p>DECISION · <!--artifacts:updated--> · BABA</p>")
     assert "<!--artifacts:updated-->" not in seen["html"]
     assert "· ·" not in seen["html"]
+
+
+# --- zombies: the whole group dies, and a failing page stops being retried ----
+# homelab-o88p: 3,900 zombie chromium processes in two days, 232 temp dirs.
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    # a zombie answers kill(0); read its state instead
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return False
+
+
+def test_a_timeout_kills_the_whole_process_group(tmp_path):
+    """The child forks a grandchild that would outlive it. After the timeout
+    neither may be left running (subprocess.run killed only the direct child)."""
+    pidfile = tmp_path / "grandchild.pid"
+    script = f"sleep 300 & echo $! > {pidfile}; wait"
+    with pytest.raises(subprocess.TimeoutExpired):
+        thumbs._run(["/bin/sh", "-c", script], timeout=1)
+    grandchild = int(pidfile.read_text())
+    deadline = time.monotonic() + 5
+    while _alive(grandchild) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _alive(grandchild), "the grandchild survived the timeout"
+
+
+def test_a_normal_exit_sweeps_stragglers(tmp_path):
+    """crashpad can outlive a browser that exited cleanly."""
+    pidfile = tmp_path / "straggler.pid"
+    script = f"sleep 300 >/dev/null 2>&1 & echo $! > {pidfile}"
+    done = thumbs._run(["/bin/sh", "-c", script], timeout=10)
+    assert done.returncode == 0
+    straggler = int(pidfile.read_text())
+    deadline = time.monotonic() + 5
+    while _alive(straggler) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _alive(straggler)
+
+
+def test_the_temp_dir_is_gone_after_a_timeout(monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    seen = {}
+
+    def hang(argv, **kw):
+        seen["dir"] = Path(kw["cwd"])
+        raise subprocess.TimeoutExpired(argv, 1)
+
+    monkeypatch.setattr(thumbs, "_run", hang)
+    assert thumbs.render(PAGE) is None
+    assert not seen["dir"].exists()
+
+
+@pytest.fixture
+def clean_failures():
+    thumbs._failures.clear()
+    yield
+    thumbs._failures.clear()
+
+
+def _count_renders(monkeypatch, png):
+    calls = []
+
+    def fake(html, *a, **kw):
+        calls.append(1)
+        return png, None
+
+    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setattr(thumbs, "render_report", fake)
+    monkeypatch.setattr(thumbs.store, "save_thumbnail", lambda *a: True)
+    monkeypatch.setattr(thumbs.store, "save_render_errors", lambda *a: True)
+    monkeypatch.setattr(thumbs.threading, "Thread", _InlineThread)
+    return calls
+
+
+class _InlineThread:
+    def __init__(self, target, **kw):
+        self.target = target
+
+    def start(self):
+        self.target()
+
+
+def test_a_failing_version_is_retried_with_backoff_then_given_up(
+    monkeypatch, clean_failures, caplog
+):
+    calls = _count_renders(monkeypatch, None)
+    clock = [1000.0]
+    monkeypatch.setattr(thumbs.time, "monotonic", lambda: clock[0])
+
+    thumbs.render_in_background(None, "a1", 1, PAGE)
+    assert len(calls) == 1
+    thumbs.render_in_background(None, "a1", 1, PAGE)  # inside the backoff
+    assert len(calls) == 1
+    for expected in (2, 3):
+        clock[0] += thumbs.BACKOFF_SECONDS * 4
+        with caplog.at_level("WARNING", logger="artifacts.thumbs"):
+            thumbs.render_in_background(None, "a1", 1, PAGE)
+        assert len(calls) == expected
+    clock[0] += 10**6  # however long we wait, it is over
+    for _ in range(3):
+        thumbs.render_in_background(None, "a1", 1, PAGE)
+    assert len(calls) == thumbs.MAX_FAILURES
+    assert sum("giving up" in r.message for r in caplog.records) == 1
+
+
+def test_a_new_version_gets_its_own_attempts(monkeypatch, clean_failures):
+    calls = _count_renders(monkeypatch, None)
+    thumbs._failures[("a1", 1)] = (thumbs.MAX_FAILURES, 0.0)
+    thumbs.render_in_background(None, "a1", 1, PAGE)
+    assert calls == []
+    thumbs.render_in_background(None, "a1", 2, PAGE)
+    assert len(calls) == 1
+
+
+def test_a_success_clears_the_failure_count(monkeypatch, clean_failures):
+    _count_renders(monkeypatch, b"\x89PNG\r\n\x1a\n" + b"x" * 10)
+    thumbs._failures[("a1", 1)] = (2, 0.0)
+    thumbs.render_in_background(None, "a1", 1, PAGE)
+    assert ("a1", 1) not in thumbs._failures
