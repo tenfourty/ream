@@ -123,10 +123,16 @@ spec:
           resources:
             requests:
               cpu: 50m
-              memory: 128Mi
+              memory: 384Mi
             limits:
               # Deliberately no cpu limit (fleet convention) -- memory only.
-              memory: 512Mi
+              # 512Mi -> 1Gi, request 128Mi -> 384Mi (homelab ops seat,
+              # 4 Oct 2026): at 512Mi the cgroup could not keep chromium's
+              # files cached between thumbnail renders, so each render re-read
+              # them from disk -- bursts up to 458 MiB/s of reads, which kept
+              # talos02's disk queue at 13-30 (NodeDiskIOSaturation). Uvicorn
+              # alone is ~180Mi anonymous; the rest is page cache for chromium.
+              memory: 1Gi
           volumeMounts:
             - name: tmp
               mountPath: /tmp
