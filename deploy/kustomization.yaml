@@ -32,4 +32,4 @@ images:
   # is never expected to exist in the registry -- Flux is not pointed at this
   # path until the first real image has landed here.
   - name: git.tenfourty.site/runcove/artifacts
-    newTag: 7e8e4f7f16ea
+    newTag: 52020845331f
