@@ -1400,8 +1400,8 @@ _UNREAD_WORD = '<span class="sr">Unread. </span>'
 
 
 def _part_line(part: str, flagged: bool) -> str:
-    """Which part of the page changed, on its tile or row: "Running now: new
-    row". Jeremy's ruling 1a (6 Oct 2026) -- the wall marks a page updated and
+    """Which part of the page changed, on its tile or row: "Running now:
+    added". Jeremy's ruling 1a (6 Oct 2026) -- the wall marks a page updated and
     says WHICH PART, so one moved row does not read as the whole page
     redrawn. `flagged` is the publisher's `notify`: the same line, louder."""
     cls = "part flagged" if flagged else "part"
@@ -3553,7 +3553,7 @@ def gallery_router(db: Database) -> APIRouter:
             "       a.current_version > coalesce((select r.read_version"
             "          from page_read r where r.artifact_id = a.id), 0) as unread,"
             # WHICH PART CHANGED, when the live version is a section update
-            # (Jeremy, 6 Oct, ruling 1a: "Running now: new row"), and whether
+            # (Jeremy, 6 Oct, ruling 1a: "Running now: added"), and whether
             # its publisher asked for his eye. NULL/false for a whole-page
             # version, which says nothing about a part.
             "       (select v.section from version v"

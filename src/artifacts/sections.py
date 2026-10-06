@@ -117,6 +117,8 @@ _CLOSES_P = frozenset(
         "ul",
     ]
 )
+# Roots of foreign content, where `/>` self-closes (HTML spec, 13.2.6.5).
+_FOREIGN = frozenset(["svg", "math"])
 _HEADINGS = frozenset(["h1", "h2", "h3", "h4", "h5", "h6"])
 
 # The longest a part name may be on the wall; a heading is a heading, not a
@@ -200,9 +202,13 @@ class _Walker(HTMLParser):
             ):
                 self._pop_to(len(self.stack) - 1, start)
         attr = dict(attrs)
-        # `/>` closes the element: XHTML-style authors mean it, and inline SVG
-        # (`<path/>`) depends on it.
-        closed = tag in _VOID or raw.rstrip().endswith("/>")
+        # PARSED AS A BROWSER PARSES IT, so the element located here is the one
+        # a reader sees. In HTML a `/>` on a non-void element is ignored --
+        # `<div id="a"/>text` is an OPEN div holding "text". Only void
+        # elements have no content. The one place `/>` does self-close is
+        # foreign content (inline SVG and MathML: `<path/>`), as in a browser.
+        foreign = tag in _FOREIGN or any(e[0] in _FOREIGN for e in self.stack)
+        closed = tag in _VOID or (foreign and raw.rstrip().endswith("/>"))
         is_target = self.target is not None and attr.get("id") == self.target
         if is_target:
             self._current = {
@@ -397,10 +403,10 @@ class SectionChanged(SectionError):
 
 
 # What the wall says happened, after the part's name. Jeremy's ruling (1a):
-# the tile says WHICH PART changed, e.g. "Running now: new row".
+# the tile says WHICH PART changed, e.g. "Running now: added".
 OP_WORDS = {
     "replace": "updated",
-    "append": "new row",
-    "prepend": "new row",
+    "append": "added",
+    "prepend": "added",
     "remove": "removed",
 }

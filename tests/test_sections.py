@@ -130,6 +130,30 @@ def test_an_unbalanced_fragment_is_refused(client, db, page, fragment):
     assert body_of(db, aid) == PAGE
 
 
+def test_a_self_closing_div_is_open_as_a_browser_reads_it():
+    """`<div id="a"/>` is an OPEN div in HTML: a browser puts what follows
+    inside it, so the section is everything up to its real end tag."""
+    body = '<body><div id="a"/><p>inside</p></div><p id="b">after</p></body>'
+    where = sections.locate(body, "a")
+    assert where.inner(body) == "<p>inside</p>"
+    assert not where.void
+    assert sections.apply(body, "a", "replace", "new").body == (
+        '<body><div id="a"/>new</div><p id="b">after</p></body>'
+    )
+
+
+def test_a_self_closing_div_in_a_fragment_is_left_open():
+    with pytest.raises(sections.UnbalancedError):
+        sections.check_balanced("<div/>")
+
+
+def test_only_void_and_svg_elements_self_close():
+    sections.check_balanced('<br/><img src="x"/><svg><path d="M0 0"/></svg>')
+    body = '<svg id="s"><circle r="1"/><g id="g"/></svg><p id="p">x</p>'
+    assert sections.locate(body, "g").void
+    assert sections.locate(body, "s").inner(body) == '<circle r="1"/><g id="g"/>'
+
+
 def test_a_row_whose_end_tag_html_allows_omitting_is_balanced():
     sections.check_balanced("<li>new row")
     sections.check_balanced('<svg><path d="M0 0"/></svg><br>')
@@ -302,7 +326,7 @@ def test_the_wall_tile_names_the_part_that_changed(client, db, page):
     part = '<span class="part" title="Changed part">{}</span>'
     assert part.format("Running now: updated") in client.get("/").text
     section(client, aid, token, "rows", op="append", html="<li>b4</li>")
-    assert part.format("rows: new row") in client.get("/").text
+    assert part.format("rows: added") in client.get("/").text
     section(client, aid, token, "status", op="replace", html="red", notify=True)
     wall = client.get("/").text
     assert "Status line: updated</span>" in wall
