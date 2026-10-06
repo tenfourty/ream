@@ -152,9 +152,13 @@ jobs:
           fi
           sha12="${GITHUB_SHA:0:12}"
           image="git.tenfourty.site/jeremy/artifacts:${sha12}"
+          # Moving to runcove/artifacts (6 Oct 2026): every build also goes to the
+          # new address, so the deploy can switch to an image that already exists
+          # there. The old address is dropped once the switch has deployed.
+          next_image="git.tenfourty.site/runcove/artifacts:${sha12}"
 
           printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
-            -u "${{ github.repository_owner }}" --password-stdin
+            -u jeremy --password-stdin
 
           # Reuse the previous build's layers (the chromium install above all)
           # from a cache tag. Nothing deploys :buildcache -- the deploy job
@@ -164,8 +168,9 @@ jobs:
           docker pull "$cache" || echo "no build cache yet: building cold"
           docker build --network host --cache-from "$cache" \
             --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" \
-            -t "$image" -t "$cache" .
+            -t "$image" -t "$next_image" -t "$cache" .
           docker push "$image"
+          docker push "$next_image"
           docker push "$cache"
 
   deploy:
