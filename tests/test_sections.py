@@ -651,3 +651,18 @@ def test_a_retry_does_not_rescan_what_was_already_scanned(db, page, monkeypatch)
     store.patch_section(db, "ci-seat", aid, "log", "append", "<b>x</b>")
     notes = [v for v in asked_about if v.startswith("#log: append")]
     assert len(notes) == 1
+
+
+def test_a_page_too_large_for_section_updates_says_republish_whole(client, db, page):
+    """The browser-faithful check is pure Python; past 512 KB it would take
+    too long, so the update is refused with the way forward."""
+    from artifacts import sections
+
+    big = (
+        "<!doctype html><html><body><div id='log'>x</div>"
+        + ("<p>" + "filler " * 100 + "</p>") * 800
+        + "</body></html>"
+    )
+    assert len(big.encode()) > sections.SECTION_PAGE_MAX
+    with pytest.raises(sections.TooLargeError, match="republish the whole page"):
+        sections.apply(big, "log", "append", "<p>new</p>")

@@ -523,9 +523,25 @@ class Applied:
     slots_after: frozenset = frozenset()
 
 
+# The browser-faithful check (html5lib, pure Python) parses the page twice per
+# update: about 2 s for a 100 KB page, so a page near the 3 MB publish limit
+# would take minutes. The pages agents keep updating run 40-140 KB (feedback,
+# 6 Oct 2026); larger ones are republished whole.
+SECTION_PAGE_MAX = 512 * 1024
+
+
+class TooLargeError(SectionError): ...
+
+
 def apply(
     body: str, element_id: str, op: str, fragment: str | None, *, if_section=None
 ) -> Applied:
+    size = len(body.encode("utf-8"))
+    if size > SECTION_PAGE_MAX:
+        raise TooLargeError(
+            f"this page is {size // 1024} KB; section updates work on pages up to "
+            f"{SECTION_PAGE_MAX // 1024} KB -- republish the whole page instead"
+        )
     if op not in OPS:
         raise SectionError(f"op must be one of {', '.join(OPS)}")
     where = locate(body, element_id)
