@@ -14,7 +14,9 @@ PAGE = "<!doctype html><html><head><title>B</title></head><body><p>the plan</p><
 
 @pytest.fixture()
 def page(db, key_file):
-    return store.publish(db, "ops-seat", "Board", PAGE)
+    # Published by the same office the waiter below declares ("t"): a waiter
+    # hears only comments on its own office's pages (feedback, 6 Oct 2026).
+    return store.publish(db, "ops-seat", "Board", PAGE, session="t/0")
 
 
 def _run(args, key_path) -> int:

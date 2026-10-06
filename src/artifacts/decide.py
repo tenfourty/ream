@@ -210,7 +210,9 @@ def _new_answers(rows: list[dict]) -> list[dict]:
 
 
 def _duration(text: str) -> float:
-    """'55m', '90s', '2h', or plain seconds."""
+    """'55m', '90s', '2h', or plain seconds; 'forever' is 0 (no limit)."""
+    if (text or "").strip().lower() == "forever":
+        return 0.0
     match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([smh]?)\s*", text or "")
     if not match:
         raise UsageError(f"--timeout must look like 55m, 90s or 2h, got {text!r}")
@@ -289,6 +291,97 @@ _HOLD = 50
 _RETRY_PAUSE = 5
 
 
+# How often an answer of this office's own that is still unacknowledged is
+# shown again (feedback, 6 Oct 2026). Every maintainer wanted it never lost
+# and none wanted it re-waking on every re-arm: one missed ack used to turn the
+# waiter into a busy loop. `list` keeps showing it until it is acknowledged.
+_RESURFACE_EVERY = 3600.0
+
+
+def _office(args) -> str | None:
+    """Whose answers this waiter hears: `--office`, else the part of the
+    session label before the first "/" ("cove-maintainer/ab12" is the
+    cove-maintainer office). None means every office, as before 6 Oct 2026."""
+    if args.all_offices:
+        return None
+    if args.office is not None:
+        return args.office.strip() or None
+    session = declared_session(args.session)
+    if session is None:
+        print(
+            "no office: hearing every office's answers under this key. Set "
+            "ARTIFACTS_SESSION=<office>/<ref> or pass --office NAME to hear only "
+            "your own (--all-offices says this on purpose).",
+            file=sys.stderr,
+        )
+        return None
+    return session.split("/", 1)[0].strip() or None
+
+
+def _belongs(session: str | None, office: str | None, key_agent: str | None) -> bool:
+    """Whether something asked (or published) by `session` is this office's.
+
+    A question with NO label -- asked before labels existed, or by a session
+    that forgot -- goes to the key's own office: the one named like the key's
+    agent. Every other office sharing the key leaves it alone, so an
+    unlabelled question is heard once, by its owner, not by everyone."""
+    if office is None:
+        return True
+    if not session:
+        return office == key_agent
+    return session == office or session.startswith(office + "/")
+
+
+class _Surfaced:
+    """When each of this office's items was last shown, kept on disk so a
+    re-armed waiter does not show the same unacknowledged answer again within
+    the hour. One small JSON file per office under
+    ${XDG_STATE_HOME:-~/.local/state}/artifacts/. A file that cannot be read
+    or written costs only the rate limit, never an answer."""
+
+    def __init__(self, office: str) -> None:
+        root = os.environ.get("XDG_STATE_HOME") or os.path.join(
+            os.path.expanduser("~"), ".local", "state"
+        )
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", office)
+        self.path = os.path.join(root, "artifacts", f"wait-{safe}.json")
+        try:
+            with open(self.path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            self.seen = {
+                str(k): float(v) for k, v in data.items() if isinstance(v, (int, float))
+            }
+        except (OSError, ValueError, AttributeError):
+            self.seen = {}
+
+    def due_at(self, mark: str) -> float:
+        return self.seen.get(mark, float("-inf")) + _RESURFACE_EVERY
+
+    def record(self, marks: list[str], now: float) -> None:
+        for mark in marks:
+            self.seen[mark] = now
+        # Forget what nobody will ask about again, so the file stays small.
+        self.seen = {k: v for k, v in self.seen.items() if now - v < 30 * 86400}
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(self.path))
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(self.seen, fh)
+            os.replace(tmp, self.path)
+        except OSError as exc:
+            print(f"could not record what was shown ({exc})", file=sys.stderr)
+
+
+def _answer_mark(row: dict) -> str:
+    # Per answer, not per question: a question answered again is news.
+    return f"d:{row['id']}@{row.get('answered_at') or ''}"
+
+
+def _thread_mark(thread: dict) -> str:
+    # Per last message: his new reply in an old thread is news.
+    return f"t:{thread['id']}@{thread['messages'][-1].get('id', '')}"
+
+
 def _wait(args, key: str, base: str) -> int:
     """Block until Jeremy answers, print the answer(s), exit 0.
 
@@ -301,10 +394,34 @@ def _wait(args, key: str, base: str) -> int:
     background task that wakes its agent when it exits.
 
     STARTS BY LOOKING, not by listening: an answer that landed before this ran
-    is printed at once, so starting the waiter late never loses one."""
+    is printed at once, so starting the waiter late never loses one.
+
+    HEARS ONLY ITS OWN OFFICE (feedback, 6 Oct 2026). A key is shared by every
+    office on a machine, and a waiter that woke for any unacknowledged answer
+    under it looped on another office's answer for as long as that went
+    unacknowledged. Now every look -- the first one, each wake, each re-look
+    -- keeps only what this office asked, and an answer of its own already
+    shown comes back at most hourly."""
     timeout = _duration(args.timeout)
-    deadline = time.monotonic() + timeout
+    endless = timeout == 0
+    deadline = float("inf") if endless else time.monotonic() + timeout
     page = args.page
+    office = _office(args)
+    key_agent = None
+    surfaced = None
+    if office is not None:
+        key_agent = (_request("GET", f"{base}/me", key, None) or {}).get("agent")
+        surfaced = _Surfaced(office)
+    page_sessions: dict[str, str | None] | None = None
+
+    def thread_session(thread: dict) -> str | None:
+        # A comment is about the page it is on, so it is the office that
+        # published the page whose waiter hears it.
+        nonlocal page_sessions
+        if page_sessions is None:
+            listed = _request("GET", f"{base}/artifacts", key, None) or []
+            page_sessions = {p["id"]: p.get("last_session") for p in listed}
+        return page_sessions.get(thread.get("artifact_id"))
 
     def current() -> list[dict]:
         url = (
@@ -312,16 +429,64 @@ def _wait(args, key: str, base: str) -> int:
             if page
             else f"{base}/decisions?include_answered=true&scope=mine"
         )
-        return _new_answers(_request("GET", url, key, None))
+        rows = _new_answers(_request("GET", url, key, None))
+        return [r for r in rows if _belongs(r.get("session"), office, key_agent)]
 
     def owed() -> list[dict]:
         # His comments waiting for this agent's reply wake it too, unless it
         # asked for answers only (homelab-ij8.18: comments that reach the agent).
         if args.answers_only:
             return []
-        return [t for t in _open_threads(key, base, page) if t["needs_reply"]]
+        return [
+            t
+            for t in _open_threads(key, base, page)
+            if t["needs_reply"] and _belongs(thread_session(t), office, key_agent)
+        ]
+
+    next_due = [float("inf")]
+
+    def look() -> tuple[list[dict], list[dict]]:
+        """This office's news, less anything already shown within the hour;
+        notes when the earliest held-back item falls due."""
+        answers, threads = current(), owed()
+        if surfaced is None:
+            return answers, threads
+        now = time.time()
+        due = [float("inf")]
+
+        def fresh(item: dict, mark: str) -> bool:
+            at = surfaced.due_at(mark)
+            if at <= now:
+                return True
+            due.append(at)
+            return False
+
+        answers = [a for a in answers if fresh(a, _answer_mark(a))]
+        threads = [t for t in threads if fresh(t, _thread_mark(t))]
+        next_due[0] = time.monotonic() + (min(due) - now)
+        return answers, threads
 
     def report(answers: list[dict], threads: list[dict]) -> int:
+        if surfaced is not None:
+            surfaced.record(
+                [_answer_mark(a) for a in answers] + [_thread_mark(t) for t in threads],
+                time.time(),
+            )
+        if args.json:
+            # One line per wake, so a unit can append it to a mailbox.
+            print(
+                json.dumps(
+                    {
+                        "office": office,
+                        "page": page,
+                        "answers": answers,
+                        "threads": threads,
+                    },
+                    separators=(",", ":"),
+                ),
+                flush=True,
+            )
+            return 0
         if answers:
             _print_rows(answers, empty="")
         if threads:
@@ -335,17 +500,25 @@ def _wait(args, key: str, base: str) -> int:
     headers: dict = {}
     _request("GET", f"{base}/events?since=999999999999", key, None, headers_out=headers)
     cursor = int(headers.get("x-artifacts-cursor", "0"))
-    found, waiting_threads = current(), owed()
+    found, waiting_threads = look()
     if found or waiting_threads:
         return report(found, waiting_threads)
+    whose = f" for {office}" if office else ""
+    limit = "with no limit" if endless else f"up to {int(timeout // 60)}m"
     print(
-        f"waiting for Jeremy's answer{f' on {page}' if page else ''} "
-        f"(up to {int(timeout // 60)}m)...",
+        f"waiting for Jeremy's answer{whose}{f' on {page}' if page else ''} "
+        f"({limit})...",
         file=sys.stderr,
         flush=True,
     )
+    kinds = {"decision_answered"}
+    if not args.answers_only:
+        kinds.add("comment_added")
     while time.monotonic() < deadline:
-        hold = int(max(1, min(_HOLD, deadline - time.monotonic())))
+        # Never hold past the moment a held-back answer of ours falls due, so
+        # an endless waiter still shows it again on the hour.
+        until = min(deadline, next_due[0]) - time.monotonic()
+        hold = int(max(1, min(_HOLD, until)))
         try:
             rows = _request(
                 "GET",
@@ -365,14 +538,14 @@ def _wait(args, key: str, base: str) -> int:
             rows = []
         for row in rows:
             cursor = max(cursor, int(row.get("seq", cursor)))
-        kinds = {"decision_answered"}
-        if not args.answers_only:
-            kinds.add("comment_added")
-        if any(
-            r.get("kind") in kinds and (not page or r.get("artifact_id") == page)
+        woke = any(
+            r.get("kind") in kinds
+            and (not page or r.get("artifact_id") == page)
+            and _belongs(r.get("session"), office, key_agent)
             for r in rows
-        ):
-            found, waiting_threads = current(), owed()
+        )
+        if woke or time.monotonic() >= next_due[0]:
+            found, waiting_threads = look()
             if found or waiting_threads:
                 return report(found, waiting_threads)
     print("nothing yet: no answer before the timeout. Run it again.", file=sys.stderr)
@@ -851,7 +1024,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--page", metavar="ARTIFACT-ID", help="only answers on this page"
     )
     waiting.add_argument(
-        "--timeout", default="55m", help="how long to wait (default 55m)"
+        "--timeout",
+        default="55m",
+        help="how long to wait (default 55m; 0 or forever: no limit)",
+    )
+    waiting.add_argument(
+        "--office",
+        metavar="NAME",
+        help="hear only this office's answers (default: ARTIFACTS_SESSION before"
+        " the first /; '' for every office)",
+    )
+    waiting.add_argument(
+        "--all-offices",
+        action="store_true",
+        help="hear every office's answers under this key, as before",
     )
     waiting.add_argument(
         "--answers-only", action="store_true", help="do not wake for his comments"
@@ -860,7 +1046,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--review", metavar="REVIEW-ID", help="wait for the verdict on this review"
     )
     waiting.add_argument(
-        "--json", action="store_true", help="with --review: print the data as one line"
+        "--json", action="store_true", help="print each wake as one JSON line"
     )
     waiting.add_argument(
         "--result-file",
@@ -919,7 +1105,6 @@ def main(argv: list[str] | None = None) -> int:
         used = [
             flag
             for flag, on in (
-                ("--json", args.json),
                 ("--result-file", args.result_file),
                 ("--require-approval", args.require_approval),
                 ("--verdict-only", args.verdict_only),

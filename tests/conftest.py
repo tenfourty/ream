@@ -522,6 +522,16 @@ def _no_background_thumbnails(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_inherited_office(monkeypatch, tmp_path):
+    """`artifacts-decide wait` takes its office from ARTIFACTS_SESSION and keeps
+    what it has shown under XDG_STATE_HOME. Neither may leak in from the shell
+    running the suite: a maintainer's own label would filter every wait test,
+    and its state file would hold answers back. A test that wants either sets it."""
+    monkeypatch.delenv("ARTIFACTS_SESSION", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
+
+
+@pytest.fixture(autouse=True)
 def _prompt_event_looks(monkeypatch):
     """A held wait looks for new events every half second in production, so a
     test that waits on one idled up to 0.5 s per wake. Tests look every 20 ms;

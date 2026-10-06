@@ -207,9 +207,10 @@ def test_a_review_that_is_not_yours_is_refused(live, key_file, db, capsys):
 
 
 def test_result_flags_without_review_are_a_usage_error(live, key_file, capsys):
+    # --json is not here: a plain wait prints each wake as a JSON line too
+    # (feedback, 6 Oct 2026), so a unit can append it to a mailbox.
     path, _ = key_file
     for flag in (
-        ["--json"],
         ["--require-approval"],
         ["--result-file", "x"],
         ["--verdict-only"],

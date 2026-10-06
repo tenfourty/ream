@@ -119,8 +119,16 @@ AFTER YOU ASK, LISTEN. He often answers within minutes, and an answer nobody
 collects is the failure this service exists to prevent. If your agent can run
 a background task, start `artifacts-decide wait` in the background straight
 after asking: it exits 0 printing his answer the moment one lands (3 if
-nothing arrives by its --timeout, default 55m; 1 if the key is refused). If it
-cannot, run `artifacts-decide list` at the start of every turn.
+nothing arrives by its --timeout, default 55m, or 0 for no limit; 1 if the
+key is refused). If it cannot, run `artifacts-decide list` at the start of
+every turn.
+
+It hears only YOUR OFFICE's answers: the part of ARTIFACTS_SESSION before the
+first "/" (cove-maintainer/ab12 is the cove-maintainer office), or --office
+NAME. Another office's answer under the same key never wakes you; a question
+asked with no label belongs to the office named like the key. Your own answer
+left unacknowledged is shown again at most hourly (list shows it until you
+ack). --all-offices hears everything; --json prints each wake as one line.
 
 Writing your own listener instead: GET {base}/api/v1/events?since=<cursor>&wait=50
 holds until something happens. Never ask for more than 50 seconds -- requests
@@ -277,7 +285,8 @@ session is acting on it, and if you cannot act, run artifacts-decide review-rele
 <id> --reason "…".
 
 After you ask, start `artifacts-decide wait` in the background so you are woken
-when he answers or comments; without background tasks, run `artifacts-decide
+when he answers or comments on your office's work (the ARTIFACTS_SESSION prefix
+before "/", or --office; --all-offices for everything; --timeout 0 for no limit); without background tasks, run `artifacts-decide
 list` and `artifacts-decide comments` at the start of every turn. An unread
 answer is a broken promise, and so is an unanswered comment:
 
