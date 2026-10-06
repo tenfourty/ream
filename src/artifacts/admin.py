@@ -18,10 +18,10 @@ import secrets
 import sys
 from datetime import UTC, datetime
 
-from artifacts import grants, keys, store
+from artifacts import grants, keys, rename, store
 from artifacts.db import Database
 
-_AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+_AGENT_NAME = keys.AGENT_NAME
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -30,6 +30,14 @@ def _check_agent(agent: str) -> None:
         raise SystemExit(
             f"invalid agent name {agent!r}: must match {_AGENT_NAME.pattern!r}"
         )
+
+
+def _current(db: Database, agent: str) -> str:
+    """The agent a typed name means now, saying so when it was renamed."""
+    now = rename.resolve(db, agent)
+    if now != agent:
+        print(f"{agent} was renamed to {now}; using {now}", file=sys.stderr)
+    return now
 
 
 def _database_url() -> str:
@@ -77,6 +85,7 @@ def cmd_register_key(args: argparse.Namespace) -> None:
     if not _SHA256_HEX.fullmatch(args.sha256):
         raise SystemExit("sha256 must be exactly 64 lowercase hex characters")
     db = Database(_database_url())
+    args.agent = _current(db, args.agent)
     key_id = keys.register(db, args.agent, args.sha256)
     print(f"key_id={key_id} agent={args.agent}")
 
@@ -99,6 +108,7 @@ def cmd_list_keys(_args: argparse.Namespace) -> None:
 def cmd_grant_scope(args: argparse.Namespace) -> None:
     _check_agent(args.agent)
     db = Database(_database_url())
+    args.agent = _current(db, args.agent)
     try:
         grants.grant(db, args.agent, args.scope)
     except grants.UnknownScope:
@@ -111,6 +121,7 @@ def cmd_grant_scope(args: argparse.Namespace) -> None:
 def cmd_revoke_scope(args: argparse.Namespace) -> None:
     _check_agent(args.agent)
     db = Database(_database_url())
+    args.agent = _current(db, args.agent)
     grants.revoke(db, args.agent, args.scope)
     # Says what is true afterwards rather than what it did: "revoked" on a grant
     # that was never held would read as "it used to have this", which is a
@@ -124,6 +135,27 @@ def cmd_list_scopes(_args: argparse.Namespace) -> None:
         print("no seat holds any scope")
     for agent, scope, granted_at in rows:
         print(f"{agent}\t{scope}\t{granted_at}")
+
+
+def cmd_rename_agent(args: argparse.Namespace) -> None:
+    """Rename an agent, or merge it into one that already exists. Every row
+    that names it moves, its keys keep working as the new name, and the old
+    name still means the new one wherever somebody types it."""
+    db = Database(_database_url())
+    try:
+        counts = rename.rename_agent(db, args.old, args.new, dry_run=args.dry_run)
+    except rename.Refused as exc:
+        raise SystemExit(f"refused: {exc}") from None
+    if args.dry_run:
+        print(
+            f"DRY RUN -- nothing changed. Renaming {args.old} to {args.new} would change:"
+        )
+    else:
+        print(f"renamed {args.old} to {args.new}:")
+    for column, n in counts.items():
+        print(f"{column}\t{n}")
+    total = sum(counts.values())
+    print(f"total\t{total}{' (DRY RUN, nothing changed)' if args.dry_run else ''}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -167,6 +199,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_scopes = sub.add_parser("list-scopes")
     list_scopes.set_defaults(func=cmd_list_scopes)
+
+    rename_agent = sub.add_parser(
+        "rename-agent",
+        help="rename an agent, or merge it into an existing one (needs DATABASE_URL)",
+    )
+    rename_agent.add_argument("old")
+    rename_agent.add_argument("new")
+    rename_agent.add_argument(
+        "--dry-run", action="store_true", help="count what would change, change nothing"
+    )
+    rename_agent.set_defaults(func=cmd_rename_agent)
 
     purge = sub.add_parser(
         "purge-deleted",

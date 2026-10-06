@@ -1,4 +1,5 @@
 import hashlib
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -9,6 +10,10 @@ from artifacts.db import Database
 # once it is this much older without having been (homelab-ij8.34).
 ROTATE_AFTER = timedelta(days=7)
 ROTATING_MAX_AGE = timedelta(days=14)
+
+# What an agent may be called: `artifacts-admin` checks every name it is typed
+# against this, and so does a rename.
+AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
 
 @dataclass(frozen=True)

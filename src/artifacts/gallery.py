@@ -39,6 +39,7 @@ from artifacts import (
     keys,
     mail,
     pagediff,
+    rename,
     stamp,
     store,
     thumbs,
@@ -3811,6 +3812,8 @@ def gallery_router(db: Database) -> APIRouter:
         agents = sorted({r[3] for r in rows})
         chosen_agent = (request.query_params.get("agent") or "").strip()
         if chosen_agent:
+            # A link saved before an agent was renamed still finds its pages.
+            chosen_agent = rename.resolve(db, chosen_agent)
             rows = [r for r in rows if r[3] == chosen_agent]
             archived_rows = [r for r in archived_rows if r[3] == chosen_agent]
 
@@ -4552,7 +4555,9 @@ def gallery_router(db: Database) -> APIRouter:
             return _move_page(artifact_id, note=f"{to} is not a connected agent.")
         if old is None:
             raise HTTPException(404, "no such artifact")
-        return _move_page(artifact_id, note=f"Moved from {old} to {to}.")
+        return _move_page(
+            artifact_id, note=f"Moved from {old} to {store.owner(db, artifact_id)}."
+        )
 
     @router.get("/machines", response_class=HTMLResponse)
     def machines_page(revoke: str = "") -> HTMLResponse:
@@ -4639,6 +4644,10 @@ def gallery_router(db: Database) -> APIRouter:
             )
         else:
             agent = connect.clean_name(name)
+            if agent is not None:
+                # A renamed agent's old name means the agent it became, so
+                # typing it can never quietly bring the old name back.
+                agent = rename.resolve(db, agent)
             if agent is None:
                 body = _connect_page(
                     code,

@@ -1,0 +1,189 @@
+"""Renaming an agent without breaking anything it has published (6 Oct 2026).
+
+Jeremy renamed every permanent agent from "seat" to "<area> maintainer", and
+one of those renames is a MERGE: baba-operator and homelab-ops both become
+homelab-maintainer, one agent with two keys. The rule that shapes all of it:
+nothing already published may break or change owner. So a rename rewrites
+every column whose value is an AGENT NAME -- live rows and history alike --
+in one transaction, and leaves an alias so a name somebody types still means
+the agent it became.
+
+Deliberately NOT rewritten: SESSION labels (`*.session`,
+`review_round.claimed_by` / `released_by`). They read like
+"artifacts-seat/5ed2e1c5" but they are what a session called itself at the
+time, not a reference to an agent, and nothing resolves them to one.
+`connect_request.suggested_name` is what a machine proposed before Jeremy
+named it, and `agent_key.replaces` is a key id.
+"""
+
+from __future__ import annotations
+
+import psycopg
+
+from artifacts.db import Database
+from artifacts.keys import AGENT_NAME
+
+# Fixed, and distinct from db._MIGRATE_LOCK_KEY and idempotency's hashed keys
+# (which are spread over the whole bigint range, so a collision is as likely as
+# with any constant). Two renames at once serialise here.
+_RENAME_LOCK_KEY = 0x72656E61_6D650001  # "rename" + 1
+
+# (table.column, the WHERE clause beyond `column = old`). Plain columns only:
+# the three tables with a key on `agent` are merged separately, below.
+_PLAIN: tuple[tuple[str, str], ...] = (
+    ("agent_key.agent", ""),
+    ("artifact.agent", ""),
+    ("version.created_by", ""),
+    ("comment.author", " and author_kind = 'agent'"),
+    ("comment.resolved_by", ""),
+    ("decision.answered_by", ""),
+    ("decision.recorded_by", ""),
+    ("decision.acknowledged_by", ""),
+    ("decision_outcome.agent", ""),
+    ("event.agent", ""),
+    ("event.actor", ""),
+    ("connect_request.agent", ""),
+)
+
+
+class Refused(Exception):
+    """A rename the service will not do, with a reason fit to print."""
+
+
+def _resolve(conn, name: str) -> str:
+    row = conn.execute("select new from agent_alias where old = %s", (name,)).fetchone()
+    return row[0] if row else name
+
+
+def resolve(db: Database, name: str) -> str:
+    """The agent a TYPED name means now: its new name if it was renamed,
+    otherwise the name itself. One hop is enough -- a rename re-points every
+    alias that pointed at its old name."""
+    with db.connect() as conn:
+        return _resolve(conn, name)
+
+
+def rename_agent(db: Database, old: str, new: str, *, dry_run: bool) -> dict[str, int]:
+    """Rename agent `old` to `new`, merging into `new` if it already exists.
+
+    Returns the rows changed -- or, in a dry run, that would change -- per
+    `table.column`, plus `agent_alias` for the alias rows written. Re-running a
+    finished rename changes nothing and succeeds. Raises `Refused` for a bad
+    name, `old == new`, a cycle, or an `old` that names nothing at all."""
+    for name in (old, new):
+        if not AGENT_NAME.fullmatch(name):
+            raise Refused(
+                f"invalid agent name {name!r}: must match {AGENT_NAME.pattern!r}"
+            )
+    if old == new:
+        raise Refused(f"{old} is already called {new}")
+
+    counts: dict[str, int] = {}
+    with db.connect() as conn, conn.transaction() as tx:
+        conn.execute("select pg_advisory_xact_lock(%s)", (_RENAME_LOCK_KEY,))
+        onward = conn.execute(
+            "select new from agent_alias where old = %s", (new,)
+        ).fetchone()
+        if onward is not None:
+            if onward[0] == old:
+                raise Refused(
+                    f"{new} was renamed to {old}; renaming {old} back to "
+                    f"{new} would make a cycle"
+                )
+            raise Refused(
+                f"{new} was itself renamed to {onward[0]}; rename {old} "
+                f"to {onward[0]} instead"
+            )
+
+        for column, extra in _PLAIN:
+            table, col = column.split(".")
+            counts[column] = conn.execute(
+                f"update {table} set {col} = %s where {col} = %s{extra}",  # noqa: S608 -- fixed identifiers from _PLAIN
+                (new, old),
+            ).rowcount
+
+        counts["seat_grant.agent"] = _merge_grants(conn, old, new)
+        counts["seat_read.agent"] = _merge_reads(conn, old, new)
+        counts["idempotency.agent"] = _merge_idempotency(conn, old, new)
+
+        moved = sum(counts.values())
+        already = conn.execute(
+            "select 1 from agent_alias where old = %s and new = %s",
+            (old, new),
+        ).fetchone()
+        if moved == 0 and already is None:
+            raise Refused(f"no agent named {old}; nothing changed")
+
+        aliased = conn.execute(
+            "insert into agent_alias (old, new) values (%s, %s)"
+            " on conflict (old) do update"
+            " set new = excluded.new, renamed_at = now()"
+            " where agent_alias.new is distinct from excluded.new",
+            (old, new),
+        ).rowcount
+        aliased += conn.execute(
+            "update agent_alias set new = %s where new = %s", (new, old)
+        ).rowcount
+        counts["agent_alias"] = aliased
+
+        if dry_run:
+            raise psycopg.Rollback(tx)
+    return counts
+
+
+def _merge_grants(conn, old: str, new: str) -> int:
+    """The union of both agents' scopes: a scope `new` already holds keeps its
+    own row (and its grant time); the rest move."""
+    dropped = conn.execute(
+        "delete from seat_grant o using seat_grant n"
+        " where o.agent = %s and n.agent = %s and n.scope = o.scope",
+        (old, new),
+    ).rowcount
+    moved = conn.execute(
+        "update seat_grant set agent = %s where agent = %s", (new, old)
+    ).rowcount
+    return dropped + moved
+
+
+def _merge_reads(conn, old: str, new: str) -> int:
+    """One row per (agent, session), NULL sessions included: on a clash the
+    newest read is kept, because the question this table answers is "is anyone
+    still listening", and the later hearing is the truer answer."""
+    conn.execute(
+        "update seat_read n set last_read_at = o.last_read_at from seat_read o"
+        " where n.agent = %s and o.agent = %s"
+        " and n.session is not distinct from o.session"
+        " and o.last_read_at > n.last_read_at",
+        (new, old),
+    )
+    dropped = conn.execute(
+        "delete from seat_read o using seat_read n"
+        " where o.agent = %s and n.agent = %s"
+        " and n.session is not distinct from o.session",
+        (old, new),
+    ).rowcount
+    moved = conn.execute(
+        "update seat_read set agent = %s where agent = %s", (new, old)
+    ).rowcount
+    return dropped + moved
+
+
+def _merge_idempotency(conn, old: str, new: str) -> int:
+    """On a (route, key) clash the newer stored response wins -- the one that
+    expires later, since every row lives the same length of time."""
+    conn.execute(
+        "delete from idempotency n using idempotency o"
+        " where n.agent = %s and o.agent = %s"
+        " and n.route = o.route and n.key = o.key and o.expires_at > n.expires_at",
+        (new, old),
+    )
+    dropped = conn.execute(
+        "delete from idempotency o using idempotency n"
+        " where o.agent = %s and n.agent = %s"
+        " and n.route = o.route and n.key = o.key",
+        (old, new),
+    ).rowcount
+    moved = conn.execute(
+        "update idempotency set agent = %s where agent = %s", (new, old)
+    ).rowcount
+    return dropped + moved

@@ -54,6 +54,7 @@ from datetime import UTC, datetime, timedelta
 from psycopg.errors import UniqueViolation
 
 from artifacts import events, ggscan, ids, scan
+from artifacts import rename as agent_rename
 from artifacts.db import Database
 from artifacts.text import LEADING_DOCTYPE
 
@@ -1504,13 +1505,19 @@ def _live_agent(conn, name: str) -> str:
     agent whose name differs only in case or `_`/`-`. The page list shows
     `homelab-ops` and the vault's seat is `homelab_ops`, and the homelab ops
     seat's first give (24 Sep 2026) was refused as though the agent did not
-    exist. Two candidates is ambiguous, and nothing is guessed."""
+    exist. Two candidates is ambiguous, and nothing is guessed. A name an
+    agent had before it was renamed means the agent it became."""
     rows = conn.execute(
         "select distinct agent from agent_key where revoked_at is null"
     ).fetchall()
     live = [r[0] for r in rows]
+    # A renamed agent's old name still means it (6 Oct 2026), in either spelling.
+    name = agent_rename._resolve(conn, name)
     if name in live:
         return name
+    renamed = agent_rename._resolve(conn, _spelling(name))
+    if renamed != _spelling(name) and renamed in live:
+        return renamed
     near = [a for a in live if _spelling(a) == _spelling(name)]
     if len(near) == 1:
         return near[0]

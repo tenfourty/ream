@@ -757,3 +757,17 @@ create table if not exists idempotency (
 -- Expired rows are pruned a bounded batch at a time; the index keeps finding
 -- them from being a scan of the whole table inside the held transaction.
 create index if not exists idempotency_expires_at on idempotency (expires_at);
+
+-- WHAT AN AGENT USED TO BE CALLED (6 Oct 2026). Jeremy renamed every
+-- permanent agent from "seat" to "<area> maintainer"; `artifacts-admin
+-- rename-agent` rewrites every row that names the old agent, and leaves one row
+-- here so a name somebody TYPES (give a page to, filter the wall by, grant a
+-- scope to) still means the agent it became. One hop only: a rename re-points
+-- every alias that pointed at its old name, so `new` is never itself an alias.
+-- Authentication needs none of this -- the key is the identity, and its row is
+-- rewritten with everything else.
+create table if not exists agent_alias (
+    old        text primary key,
+    new        text not null,
+    renamed_at timestamptz not null default now()
+);
