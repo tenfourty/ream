@@ -786,6 +786,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--open-only", action="store_true", help="only questions still waiting on him"
     )
     listing.add_argument(
+        "--json",
+        action="store_true",
+        help="the rows as JSON, each with its page (artifact_id) -- for a script",
+    )
+    listing.add_argument(
         "--all",
         action="store_true",
         help="every seat's decisions, not just this key's (needs decisions:read-all)",
@@ -1038,6 +1043,9 @@ def main(argv: list[str] | None = None) -> int:
                 empty = "no new answers, and nothing waiting on Jeremy" + (
                     "" if args.all else " from this seat"
                 )
+            if args.json:
+                print(json.dumps(rows))
+                return 0
             return _print_rows(rows, empty=empty)
         if args.cmd == "record":
             payload = {

@@ -9,6 +9,8 @@ point of this client is that it works with nothing but the standard library and
 a socket.
 """
 
+import json
+
 import pytest
 
 # Reuses test_client's fixtures rather than restating them -- same app, same
@@ -578,3 +580,22 @@ def test_writing_without_a_session_label_says_so_on_stderr(
         == 0
     )
     assert "carries no session label" not in capsys.readouterr().err
+
+
+def test_list_json_gives_each_open_question_its_page(live, key_file, page, db, capsys):
+    """A script (the status board) links each question to its own page, so the
+    JSON form carries the page id the text form only names."""
+    path, _ = key_file
+    decisions.ask(
+        db,
+        agent="ops-seat",
+        artifact_id=page.id,
+        question="Which page am I on?",
+        options=[{"letter": "a", "label": "One"}, {"letter": "b", "label": "Two"}],
+        recommended="a",
+    )
+    assert _run(["list", "--open-only", "--json"], path) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert [(r["question"], r["artifact_id"]) for r in rows] == [
+        ("Which page am I on?", page.id)
+    ]

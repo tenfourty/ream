@@ -130,24 +130,26 @@ def load_decisions() -> list[dict] | None:
     if fd and fd.isdigit():
         kw["pass_fds"] = (int(fd),)
     try:
-        proc = _run(["artifacts-decide", "list", "--open-only"], **kw)
+        proc = _run(["artifacts-decide", "list", "--open-only", "--json"], **kw)
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
         return None
-    text = proc.stdout.strip()
-    if text.startswith("nothing waiting on Jeremy"):
-        return []
-    found: list[dict] = []
-    for block in re.split(r"\n\s*\n", text):
-        lines = block.splitlines()
-        head = _DECISION_HEAD.match(lines[0]) if lines else None
-        if not head:
-            continue
-        page = next((m.group(1) for ln in lines[1:] if (m := _ON_PAGE.match(ln))), None)
-        found.append({"id": head.group(1), "question": head.group(2), "page": page})
-    # Output we could not read at all is unknown, not empty.
-    return found if found else None
+    try:
+        rows = json.loads(proc.stdout)
+    except ValueError:
+        return None  # output we could not read at all is unknown, not empty
+    if not isinstance(rows, list):
+        return None
+    return [
+        {
+            "id": r.get("id", ""),
+            "question": r.get("question", ""),
+            "page": r.get("artifact_title"),
+            "artifact_id": r.get("artifact_id"),
+        }
+        for r in rows
+    ]
 
 
 # --- shaping -----------------------------------------------------------------
@@ -345,6 +347,12 @@ def _plain_question(q: str) -> str:
     return f"Review {m.group(1)}" if m else q
 
 
+def _link(d: dict) -> str:
+    """The question's own page in the gallery, or the gallery when unknown."""
+    aid = d.get("artifact_id") or ""
+    return f"{GALLERY}/a/{aid}" if re.fullmatch(r"[a-z0-9]{26}", aid) else f"{GALLERY}/"
+
+
 def _needs_box(decisions: list[dict] | None) -> str:
     if decisions is None:
         sub, items = (
@@ -359,7 +367,7 @@ def _needs_box(decisions: list[dict] | None) -> str:
     else:
         sub = f"{len(decisions)} open"
         items = "".join(
-            f'<li><a href="{e(GALLERY)}/" target="_blank" rel="noopener">'
+            f'<li><a href="{e(_link(d))}" target="_blank" rel="noopener">'
             f"{e(_plain_question(d['question']))}</a>"
             + (f'<span class="when">on {e(d["page"])}</span>' if d.get("page") else "")
             + f'<span class="bid">{e(d["id"])}</span></li>'

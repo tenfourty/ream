@@ -1,27 +1,93 @@
 {
-  "show runcove-5t3oj": [{"id": "runcove-5t3oj", "title": "EPIC: Artifacts", "status": "open",
-    "description": "Pages any agent can publish for Jeremy to read and answer on. More detail.\nSecond line.",
-    "comment_count": 1}],
-  "comments runcove-5t3oj": [
-    {"text": "health: two lanes moving, nothing stuck.", "created_at": "2026-10-06T09:00:00Z"},
-    {"text": "health: OLD HEALTH LINE", "created_at": "2026-10-05T09:00:00Z"}],
-  "list --all --parent runcove-5t3oj": [
-    {"id": "runcove-5t3oj.1", "title": "chore: artifacts lives in runcove", "status": "closed",
-     "estimated_minutes": 180, "assignee": "artifacts-seat", "comment_count": 0},
-    {"id": "runcove-5t3oj.2", "title": "feat: the board is a programme board", "status": "in_progress",
-     "estimated_minutes": 300, "assignee": "artifacts-seat", "comment_count": 2},
-    {"id": "runcove-5t3oj.3", "title": "feat: page formats", "status": "open", "comment_count": 0},
-    {"id": "runcove-5t3oj.4", "title": "feat: update one section", "status": "backlog", "comment_count": 0}],
-  "comments runcove-5t3oj.2": [
-    {"text": "update: OLDER UPDATE", "created_at": "2026-10-06T08:00:00Z"},
-    {"text": "update: the stat strip and lanes render from the tracker", "created_at": "2026-10-06T10:30:00Z"}],
-  "list --all --parent runcove-5t3oj.1": [],
-  "list --all --parent runcove-5t3oj.2": [],
-  "list --all --parent runcove-5t3oj.3": [
-    {"id": "runcove-5t3oj.3.1", "title": "feat: slide decks", "status": "closed", "estimated_minutes": 120, "comment_count": 0},
-    {"id": "runcove-5t3oj.3.2", "title": "feat: long documents", "status": "blocked", "comment_count": 0},
-    {"id": "runcove-5t3oj.3.3", "title": "feat: design pages", "status": "open", "comment_count": 0,
-     "dependencies": [{"id": "runcove-5t3oj.3.2", "status": "blocked", "dependency_type": "blocks"}]}],
-  "list --all --parent runcove-5t3oj.4": [],
-  "decide": "ol3x3a53xveelmhk53bywr4jhb  Review requested: Template — implementation plan\n  on \"Template plan\" [artifacts-seat]\n  asked by artifacts-seat/5ed2e1c5\n  (a) Approved\n  unanswered\n\n4hf2oae224fvqfirguamkrfqud  Which colour for blocked lanes?\n  asked by artifacts-seat/5ed2e1c5\n  (a) Red\n  unanswered"
+ "show runcove-5t3oj": [
+  {
+   "id": "runcove-5t3oj",
+   "title": "EPIC: Artifacts",
+   "status": "open",
+   "description": "Pages any agent can publish for Jeremy to read and answer on. More detail.\nSecond line.",
+   "comment_count": 1
+  }
+ ],
+ "comments runcove-5t3oj": [
+  {
+   "text": "health: two lanes moving, nothing stuck.",
+   "created_at": "2026-10-06T09:00:00Z"
+  },
+  {
+   "text": "health: OLD HEALTH LINE",
+   "created_at": "2026-10-05T09:00:00Z"
+  }
+ ],
+ "list --all --parent runcove-5t3oj": [
+  {
+   "id": "runcove-5t3oj.1",
+   "title": "chore: artifacts lives in runcove",
+   "status": "closed",
+   "estimated_minutes": 180,
+   "assignee": "artifacts-seat",
+   "comment_count": 0
+  },
+  {
+   "id": "runcove-5t3oj.2",
+   "title": "feat: the board is a programme board",
+   "status": "in_progress",
+   "estimated_minutes": 300,
+   "assignee": "artifacts-seat",
+   "comment_count": 2
+  },
+  {
+   "id": "runcove-5t3oj.3",
+   "title": "feat: page formats",
+   "status": "open",
+   "comment_count": 0
+  },
+  {
+   "id": "runcove-5t3oj.4",
+   "title": "feat: update one section",
+   "status": "backlog",
+   "comment_count": 0
+  }
+ ],
+ "comments runcove-5t3oj.2": [
+  {
+   "text": "update: OLDER UPDATE",
+   "created_at": "2026-10-06T08:00:00Z"
+  },
+  {
+   "text": "update: the stat strip and lanes render from the tracker",
+   "created_at": "2026-10-06T10:30:00Z"
+  }
+ ],
+ "list --all --parent runcove-5t3oj.1": [],
+ "list --all --parent runcove-5t3oj.2": [],
+ "list --all --parent runcove-5t3oj.3": [
+  {
+   "id": "runcove-5t3oj.3.1",
+   "title": "feat: slide decks",
+   "status": "closed",
+   "estimated_minutes": 120,
+   "comment_count": 0
+  },
+  {
+   "id": "runcove-5t3oj.3.2",
+   "title": "feat: long documents",
+   "status": "blocked",
+   "comment_count": 0
+  },
+  {
+   "id": "runcove-5t3oj.3.3",
+   "title": "feat: design pages",
+   "status": "open",
+   "comment_count": 0,
+   "dependencies": [
+    {
+     "id": "runcove-5t3oj.3.2",
+     "status": "blocked",
+     "dependency_type": "blocks"
+    }
+   ]
+  }
+ ],
+ "list --all --parent runcove-5t3oj.4": [],
+ "decide": "[{\"id\": \"ol3x3a53xveelmhk53bywr4jhb\", \"question\": \"Review requested: Template \\u2014 implementation plan\", \"artifact_id\": \"2lofcbex57yacbmcrqk4m47unk\", \"artifact_title\": \"Template plan\"}, {\"id\": \"4hf2oae224fvqfirguamkrfqud\", \"question\": \"Which colour for blocked lanes?\", \"artifact_id\": \"gfj34msjk7jdfk2yhbkddrwe2r\", \"artifact_title\": null}]"
 }

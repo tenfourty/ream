@@ -62,6 +62,8 @@ def test_header_summary_and_stat_strip(board):
 def test_needs_you_and_in_flight(board):
     page = _page(board)
     assert "Review Template — implementation plan" in page
+    # each question links to its own page, not the gallery home
+    assert "/a/2lofcbex57yacbmcrqk4m47unk" in page
     assert "on Template plan" in page and "Which colour for blocked lanes?" in page
     assert "the stat strip and lanes render from the tracker" in page
     assert "OLDER UPDATE" not in page.split('id="flight-h"')[1].split("</section>")[0]
