@@ -264,6 +264,7 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
     artifacts-publish page.html --preview shot.png         # LOOK at it: a phone-width render
     artifacts-publish page.html --title "What it is"       # prints the page id
     artifacts-publish page.html --update <page-id>         # a new version
+    artifacts-publish --update <page-id> --section <el> --append row.html   # one part only
     artifacts-publish --matches <page-id> page.html        # exit 0 if already live
     artifacts-beads-page --parent <epic> --title "..."     # a status page drawn from beads
     artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
@@ -293,6 +294,29 @@ answer is a broken promise, and so is an unanswered comment:
     artifacts-decide comments                              # his comments, NEEDS YOUR REPLY first
     artifacts-decide reply <thread-id> "your answer"
     artifacts-decide settle <thread-id>
+
+## Changing one part of a live page
+
+When you change one row, one status line or one log of a page, update that
+SECTION rather than republishing the whole page from your local copy. The
+server applies the change to what is live, so nothing elsewhere on the page can
+be lost -- a whole republish from a copy that has drifted silently drops
+whatever the copy is missing. Address an element by an id already in the page:
+
+    artifacts-publish --fetch <page-id> --section <el> part.html   # revisions on stderr
+    artifacts-publish --update <page-id> --section <el> --replace part.html --if-section <rev>
+    artifacts-publish --update <page-id> --section <el> --prepend row.html   # newest on top
+    artifacts-publish --update <page-id> --section <el> --append row.html
+    artifacts-publish --update <page-id> --section <el> --remove
+
+Each is its own version ("#<el>: append"), checked like a whole page. An id
+must match exactly one element; a fragment must close every tag it opens; a
+question slot for an open question cannot be removed. --if-section refuses if
+that section changed since you fetched it (other sections may move freely);
+--if-revision refuses if anything on the page did. Jeremy is not notified;
+--notify marks the page on his wall for his eye. Give a section a heading or a
+data-section-title: his wall names the part that changed by it. Republish the
+whole page only when you regenerate it whole from its real source.
 
 ## Rules that save you
 

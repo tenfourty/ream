@@ -18,6 +18,10 @@ from pathlib import Path
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-10-06c",
+        "You can now change one part of a live page without republishing it: artifacts-publish --update ID --section EL with --replace FILE, --append FILE, --prepend FILE or --remove. The server applies it to what is live, so nothing elsewhere is lost; --fetch ID --section EL reads the part and its revision for --if-section (or --if-revision for the whole page). Not notified by default; --notify marks it on Jeremy's wall, which names the part that changed.",
+    ),
+    (
         "2026-10-06b",
         "artifacts-decide wait now hears only your own office's answers by default: the office is ARTIFACTS_SESSION before the first / (or --office NAME), and another office's answer under the same key no longer wakes you. Your own unacknowledged answer comes back at most hourly; list still shows it until you ack. --all-offices restores everything, --timeout 0 waits with no limit, and --json prints each wake as one line.",
     ),
