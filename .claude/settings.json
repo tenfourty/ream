@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bd -C \"$HOME/repos/homelab\" prime --hook-json 2>/dev/null || true",
+            "command": "bd -C \"$HOME/repos/runcove\" prime --hook-json 2>/dev/null || true",
             "timeout": 15
           }
         ]
@@ -23,5 +23,8 @@
         ]
       }
     ]
+  },
+  "env": {
+    "BEADS_ACTOR": "artifacts-seat"
   }
 }

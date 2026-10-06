@@ -2,14 +2,14 @@
 
 ## START HERE, every session and after every compaction
 
-**The `ij8` beads are this seat's state of record** — progress, decisions, open
+**The `runcove-5t3oj` beads are this seat's state of record** — progress, decisions, open
 questions, and which beliefs were verified rather than merely told. Not your
 memory, and not a compaction summary. Before acting on anything you think you
 know:
 
 ```bash
-bd -C ~/repos/homelab prime          # the tracker, primed
-bd -C ~/repos/homelab ready          # what is actually unblocked
+bd -C ~/repos/runcove prime                          # the shared runcove tracker, primed
+bd -C ~/repos/runcove list --parent runcove-5t3oj    # this seat's work
 ls docs/agent/handoff-*.md           # then read the newest one
 ```
 
@@ -132,17 +132,25 @@ content origin on one port, discriminated by `Host`.
 
 ## Tracking
 
-The arc's issues are `ij8.*` beads in the **homelab** workspace, with a long
-history and cross-references from other arcs. **They are the state of record,
-not a to-do list** — see START HERE above. Reach them from here with:
+Since 6 Oct 2026 (Jeremy's ruling) the work lives in the **shared runcove
+tracker**, under the epic `runcove-5t3oj`, labelled `artifacts` + `repo:artifacts`
+(plus `repo:homelab` / `repo:runcove` when a change lands there). Follow
+runcove's conventions in `~/repos/runcove/.beads/PRIME.md` and
+`scripts/tracker-board/RITUALS.md`: `BEADS_ACTOR=artifacts-seat` on every write,
+`bd update <id> --claim` when you start, a daily `health:` comment on the epic
+and `update:` on each claimed item, and `bd dolt commit` after every write.
+**They are the state of record, not a to-do list** — see START HERE above.
 
 ```bash
-bd -C ~/repos/homelab ready
-bd -C ~/repos/homelab show ij8.69
+export BEADS_ACTOR=artifacts-seat
+bd -C ~/repos/runcove list --parent runcove-5t3oj
+bd -C ~/repos/runcove show runcove-5t3oj.1
 ```
 
-Do not start a second beads workspace here without asking Jeremy — splitting
-the tracker is how an arc loses its own history.
+The history before the move -- the design, about 115 finished items and every
+ruling -- stays at `homelab-ij8.*` in the homelab tracker (`bd -C ~/repos/homelab
+show homelab-ij8.69`); each moved item links back to it. Do not start a beads
+workspace of this repo's own: splitting the tracker is how an arc loses its history.
 
 `bd update --notes` **replaces** the notes and warns only afterwards, with no
 history and no export. Always `--append-notes`.

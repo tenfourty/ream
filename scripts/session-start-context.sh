@@ -59,7 +59,7 @@
 # passes.
 set -uo pipefail
 
-MSG='You are the artifacts seat (~/repos/artifacts). Before you act on anything you think you know: (1) your state of record is the ij8 beads, not your memory and not a compaction summary -- `bd -C ~/repos/homelab prime`, then `bd -C ~/repos/homelab ready`; (2) read the newest ~/repos/artifacts/docs/agent/handoff-*.md, then CLAUDE.md; (3) separate what you have VERIFIED this session from what you were TOLD -- a page this seat publishes is read as current, so a claim carried over from a summary and republished is a stale claim with a fresh timestamp on it; (4) before you republish any page, re-read the bead it reports on. Ruled by Jeremy 2026-09-20 (retro item 3: compaction is the main memory loss).'
+MSG='You are the artifacts seat (~/repos/artifacts). Before you act on anything you think you know: (1) your state of record is the runcove-5t3oj beads in the shared runcove tracker (moved from homelab-ij8 on 6 Oct 2026; history stays there), not your memory and not a compaction summary -- `bd -C ~/repos/runcove prime`, then `bd -C ~/repos/runcove list --parent runcove-5t3oj`; (2) read the newest ~/repos/artifacts/docs/agent/handoff-*.md, then CLAUDE.md; (3) separate what you have VERIFIED this session from what you were TOLD -- a page this seat publishes is read as current, so a claim carried over from a summary and republished is a stale claim with a fresh timestamp on it; (4) before you republish any page, re-read the bead it reports on. Ruled by Jeremy 2026-09-20 (retro item 3: compaction is the main memory loss).'
 
 # The events whose output this harness actually injects into the session. Kept
 # as data rather than an `if`, because the interesting case is the one that is
@@ -179,7 +179,7 @@ cmd_selftest() {
     # The things the message must actually carry, or it is decoration. The
     # last is the stamp: without it a carried-over reminder and a fresh one
     # are indistinguishable, which is the whole point of writing one.
-    for needle in 'bd -C ~/repos/homelab prime' 'handoff' 'VERIFIED' 'Injected by the SessionStart hook at'; do
+    for needle in 'bd -C ~/repos/runcove prime' 'handoff' 'VERIFIED' 'Injected by the SessionStart hook at'; do
       case "$ctx" in
         *"$needle"*) ;;
         *) echo "FAIL: SessionStart context never mentions '$needle'" >&2; fails=$((fails + 1)) ;;
@@ -234,8 +234,8 @@ cmd_selftest() {
   # The command the message tells the session to run must actually work from
   # THIS directory -- the beads live in another repo, and a reminder naming a
   # command that errors is worse than no reminder.
-  if ! bd -C "$HOME/repos/homelab" ready >/dev/null 2>&1; then
-    echo "FAIL: 'bd -C ~/repos/homelab ready' does not work from $(pwd)" >&2
+  if ! bd -C "$HOME/repos/runcove" ready >/dev/null 2>&1; then
+    echo "FAIL: 'bd -C ~/repos/runcove ready' does not work from $(pwd)" >&2
     fails=$((fails + 1))
   fi
 
