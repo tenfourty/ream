@@ -108,8 +108,16 @@ session on the machine, so without this a page says only which KEY published it
 answers read as belonging to a departed seat. Set it once per shell:
 
 ```bash
-export ARTIFACTS_SESSION="artifacts-seat/<this session's ref>"
+export ARTIFACTS_SESSION="artifacts-maintainer/<this session's ref>"
 ```
+
+**Which key** (Jeremy, 6 Oct 2026): this office is the **artifacts maintainer**, with a key of
+its own. Publish **new** work under it:
+`ARTIFACTS_SEAT=artifacts_maintainer artifacts-key -- artifacts-publish …` (agent
+`artifacts-maintainer`). Pages published before 6 Oct -- the status board `y5sx7…`, the seven
+templates and their decisions -- stay with `homelab-maintainer`, because nothing published
+changes owner. Update those through `ARTIFACTS_SEAT=baba_operator` (an alias of
+`homelab_maintainer`), never with `--give`.
 
 `artifacts-publish --list` then marks your own pages `(you)`, and every question
 you pose says who asked it. A page whose live version was published without it
