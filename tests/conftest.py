@@ -484,6 +484,11 @@ def _patient_changes_view(monkeypatch):
     from artifacts import pagediff
 
     monkeypatch.setattr(pagediff, "TIMEOUT_SECONDS", 15.0)
+    # The matcher's own budget (1.5 s in production) too: on a starved box
+    # (6 Oct 2026, five workers on one CPU) it ran out and a speed test saw
+    # the page come back unmarked. Workers are separate processes and keep
+    # the production value.
+    monkeypatch.setattr(pagediff, "MAX_MATCH_SECONDS", 15.0)
 
 
 @pytest.fixture(autouse=True)

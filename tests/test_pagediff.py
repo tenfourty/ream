@@ -1,9 +1,12 @@
 """Tests for artifacts.pagediff: the new page with its changes marked."""
 
+import os
 import random
 import re
 import time
 from html.parser import HTMLParser
+
+import pytest
 
 from artifacts.pagediff import render_changes
 
@@ -617,3 +620,25 @@ def test_a_result_bigger_than_the_whole_cap_is_not_cached(monkeypatch):
     monkeypatch.setattr(pagediff, "CACHE_BYTES", 100)
     pagediff.render_changes_safely("<p>x</p>", "<p>" + "y " * 200 + "</p>")
     assert not pagediff._CACHE and pagediff._cache_bytes == 0
+
+
+def test_a_worker_that_stops_reading_cannot_hold_a_request_for_ever():
+    """6 Oct 2026: a CI job sat idle for 35 minutes. Sending a page larger
+    than the pipe's buffer blocks until the worker reads it, so a worker that
+    is alive but not reading (here: stopped) used to hold the request, and its
+    slot, for ever. The whole exchange now has the timeout's bound."""
+    import signal
+
+    from artifacts import pagediff
+
+    worker = pagediff._Worker()
+    try:
+        os.kill(worker.proc.pid, signal.SIGSTOP)
+        page = "<p>" + "word " * 200_000 + "</p>"  # ~1 MB, far past a pipe buffer
+        started = time.perf_counter()
+        with pytest.raises(TimeoutError):
+            worker.run(page, page + "x", timeout=1.0)
+        assert time.perf_counter() - started < 10  # 1 s bound, room for a loaded box
+    finally:
+        worker.kill()  # SIGKILL ends a stopped process too, breaking the pipe
+    assert worker.proc.poll() is not None

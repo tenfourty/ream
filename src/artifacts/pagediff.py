@@ -1106,10 +1106,33 @@ class _Worker:
         return self.proc.poll() is None
 
     def run(self, old_html: str, new_html: str, timeout: float):
-        self.conn_out.send((_render, old_html, new_html))
-        if not self.conn_in.poll(timeout):
-            raise TimeoutError
-        return self.conn_in.recv()
+        """The worker's answer within `timeout`, or TimeoutError.
+
+        The whole exchange is bounded, the SEND included: a page larger than
+        the pipe's buffer blocks `send` until the worker reads it, and a worker
+        that is alive but not reading (stopped, wedged, starved) would hold
+        the request -- and its slot -- for ever, with every process idle. That
+        is the shape of a CI job seen idle for 35 minutes on 6 Oct 2026. The
+        exchange runs in a thread; on timeout the caller kills the worker,
+        which breaks the pipe and ends the thread."""
+        outcome: dict = {}
+
+        def exchange() -> None:
+            try:
+                self.conn_out.send((_render, old_html, new_html))
+                if self.conn_in.poll(timeout):
+                    outcome["result"] = self.conn_in.recv()
+            except BaseException as exc:  # noqa: BLE001 -- reported below
+                outcome["error"] = exc
+
+        thread = threading.Thread(target=exchange, daemon=True)
+        thread.start()
+        thread.join(timeout)
+        if "result" in outcome:
+            return outcome["result"]
+        if "error" in outcome and not thread.is_alive():
+            raise outcome["error"]
+        raise TimeoutError
 
     def kill(self) -> None:
         global _last_killed

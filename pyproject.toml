@@ -44,6 +44,7 @@ dev = [
     "playwright>=1.63.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
     "ruff>=0.16.8",
 ]
@@ -54,6 +55,12 @@ dev = [
 # worker's last chunk does. Inert without -n. See pytest_collection_modifyitems
 # in tests/conftest.py for where the slow tests go.
 addopts = "--dist=worksteal"
+# A test that hangs fails after 5 minutes with every thread's stack printed,
+# naming itself, instead of holding a CI builder until the job's own limit
+# (6 Oct 2026: a test job sat idle for 35 minutes and left no clue). The
+# slowest test takes about 9 s; this only ever catches a hang.
+timeout = 300
+timeout_method = "thread"
 # `slow`: a test that genuinely needs more than a second, each with a one-line
 # reason at the mark. At most ten may carry it; everything else stays under 1 s.
 markers = [
