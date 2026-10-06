@@ -126,6 +126,22 @@ class PatchBody(BaseModel):
     title: str | None = None
 
 
+class SectionBody(BaseModel):
+    """One operation on one element of the live page (6 Oct 2026)."""
+
+    op: Literal["replace", "append", "prepend", "remove"]
+    html: str | None = None
+    # The page revision (hash) or version number the caller read; refused 409
+    # if the page has moved on since.
+    if_revision: str | None = None
+    # The section revision GET returned; refused 409 if that element changed.
+    if_section: str | None = None
+    note: str | None = None
+    # Off by default (every maintainer asked for that); true marks the tile on
+    # his wall for his eye.
+    notify: bool = False
+
+
 class ArchiveBody(BaseModel):
     """`archived` is required and has no default.
 
@@ -715,6 +731,140 @@ def agent_router(
             ) from exc
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
+
+    def _section_refusal(exc: Exception) -> HTTPException:
+        """A section update's refusals, as the whole-page update words them
+        wherever the cause is the same."""
+        from artifacts import sections
+
+        if isinstance(exc, sections.SectionChanged):
+            return HTTPException(409, "section changed, re-fetch")
+        if isinstance(exc, sections.SectionError):
+            return HTTPException(422, {"field": "section", "detail": str(exc)})
+        if isinstance(exc, store.OpenDecisionDropped):
+            return HTTPException(
+                422,
+                {
+                    "field": "section",
+                    "decision": exc.decision_id,
+                    "detail": (
+                        f"this would remove the slot of open question "
+                        f"{exc.decision_id} ({exc.question!r}), which he has "
+                        "not answered. Keep its data-artifact-decision slot, "
+                        "or close the question first. Nothing was changed."
+                    ),
+                },
+            )
+        if isinstance(exc, store.PageChanged):
+            return HTTPException(
+                409, f"page changed since revision {exc.given}, re-fetch"
+            )
+        if isinstance(exc, store.RevisionMismatch):
+            return HTTPException(409, "page changed, re-fetch")
+        if isinstance(exc, store.NotAPage):
+            return HTTPException(
+                422,
+                {
+                    "field": exc.field,
+                    "detail": "the resulting page does not look like an HTML page",
+                },
+            )
+        if isinstance(exc, store.BodyTooLarge):
+            return HTTPException(
+                413,
+                {
+                    "field": exc.field,
+                    "size": exc.size,
+                    "detail": f"{exc.field} exceeds the size limit",
+                },
+            )
+        if isinstance(exc, store.InvalidText):
+            return HTTPException(
+                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+            )
+        if isinstance(exc, store.SecretFound):
+            return HTTPException(422, _refused_detail(exc.field, exc.findings))
+        if isinstance(exc, store.ScanFailed):
+            return HTTPException(
+                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+            )
+        if isinstance(exc, store.NotFound):
+            return HTTPException(404, "no such artifact")
+        raise exc
+
+    _SECTION_REFUSALS = (
+        store.NotFound,
+        store.RevisionMismatch,
+        store.PageChanged,
+        store.OpenDecisionDropped,
+        store.NotAPage,
+        store.BodyTooLarge,
+        store.InvalidText,
+        store.SecretFound,
+        store.ScanFailed,
+    )
+
+    @router.get("/artifacts/{artifact_id}/sections/{element_id}")
+    def read_section(artifact_id: str, element_id: str, agent: str = Depends(caller)):
+        """One element of the live page, to edit what is live rather than a
+        local copy. Owner only, like every write it prepares for."""
+        from artifacts import sections
+
+        try:
+            outer, rev, live = store.get_section(db, agent, artifact_id, element_id)
+        except (sections.SectionError, *_SECTION_REFUSALS) as exc:
+            raise _section_refusal(exc) from exc
+        return {
+            "html": outer,
+            "section_revision": rev,
+            "page_revision": live.revision,
+            "version": live.version,
+        }
+
+    @router.patch("/artifacts/{artifact_id}/sections/{element_id}")
+    def update_section(
+        artifact_id: str,
+        element_id: str,
+        payload: SectionBody,
+        agent: str = Depends(caller),
+        seat_session: str | None = Depends(session),
+    ):
+        """Apply one operation to one element of the LIVE page and store the
+        whole result as a new version. Every check a whole-page update runs,
+        runs on the whole resulting page."""
+        from artifacts import sections
+
+        try:
+            result = store.patch_section(
+                db,
+                agent,
+                artifact_id,
+                element_id,
+                payload.op,
+                payload.html,
+                if_revision=payload.if_revision,
+                if_section=payload.if_section,
+                note=payload.note,
+                notify=payload.notify,
+                session=seat_session,
+            )
+        except (sections.SectionError, *_SECTION_REFUSALS) as exc:
+            raise _section_refusal(exc) from exc
+        published = result.published
+        if not published.unchanged:
+            thumbs.render_in_background(
+                db, published.id, published.version, result.body
+            )
+        return {
+            "page_revision": published.revision,
+            "section_revision": result.section_revision,
+            "version": published.version,
+            "unchanged": published.unchanged,
+            "section": result.label,
+            "page_url": published.page_url,
+            "bytes": published.bytes,
+            "warnings": _warnings_for(published.id, result.body),
+        }
 
     # DECLARED BEFORE /artifacts/{artifact_id}, and it has to be. FastAPI
     # matches in declaration order, so with the parameterised route first this

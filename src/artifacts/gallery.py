@@ -353,6 +353,10 @@ main{display:block}
    ONLY when it has not -- an answer that landed needs no announcement, and the one
    that did not is the whole reason this is on the page. */
 .settled .unread{color:var(--now);font-size:.82rem;font-weight:600}
+.part{display:block;font-size:.8rem;color:var(--now);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.part.flagged{font-weight:700}
+.rmeta .part{display:inline}
 .settled .pickup{margin:.2rem .35rem .5rem;font-size:.82rem;color:var(--muted)}
 
 
@@ -1393,6 +1397,15 @@ def _icon(name: str) -> str:
 # would change every page's name as far as they are concerned.
 _UNREAD_ATTR = ' data-unread="1" title="Not opened since it changed"'
 _UNREAD_WORD = '<span class="sr">Unread. </span>'
+
+
+def _part_line(part: str, flagged: bool) -> str:
+    """Which part of the page changed, on its tile or row: "Running now: new
+    row". Jeremy's ruling 1a (6 Oct 2026) -- the wall marks a page updated and
+    says WHICH PART, so one moved row does not read as the whole page
+    redrawn. `flagged` is the publisher's `notify`: the same line, louder."""
+    cls = "part flagged" if flagged else "part"
+    return f'<span class="{cls}" title="Changed part">{escape(part)}</span>'
 
 
 def _pin_button(artifact_id: str, pinned: bool) -> str:
@@ -3538,7 +3551,17 @@ def gallery_router(db: Database) -> APIRouter:
             "            and v.n = a.current_version) as session,"
             # UNREAD: new, or changed since he last opened it (homelab-ij8.103).
             "       a.current_version > coalesce((select r.read_version"
-            "          from page_read r where r.artifact_id = a.id), 0) as unread"
+            "          from page_read r where r.artifact_id = a.id), 0) as unread,"
+            # WHICH PART CHANGED, when the live version is a section update
+            # (Jeremy, 6 Oct, ruling 1a: "Running now: new row"), and whether
+            # its publisher asked for his eye. NULL/false for a whole-page
+            # version, which says nothing about a part.
+            "       (select v.section from version v"
+            "          where v.artifact_id = a.id"
+            "            and v.n = a.current_version) as part,"
+            "       coalesce((select v.notify from version v"
+            "          where v.artifact_id = a.id"
+            "            and v.n = a.current_version), false) as flagged"
             "  from artifact a"
             " where (a.archived_at is null) = %s and a.deleted_at is null"
             # THE WALL SORTS ITSELF BY WHAT NEEDS HIM. Pinned first, because
@@ -3588,6 +3611,8 @@ def gallery_router(db: Database) -> APIRouter:
             pinned_at,
             session,
             unread,
+            part,
+            flagged,
         ) = row
         ident = escape(artifact_id)
         # The reference puts a coloured per-type icon here. Types do not exist
@@ -3608,6 +3633,8 @@ def gallery_router(db: Database) -> APIRouter:
             right.append(f'<span class="wait">{waiting} {word} for you</span>')
         if unread:
             right.insert(0, _UNREAD_WORD)
+            if part:
+                right.append(_part_line(part, flagged))
         right.append(f'<span class="who">{escape(agent)}</span>')
         right.append(_session_tag(session))
         when = _ago(updated)
@@ -3654,6 +3681,8 @@ def gallery_router(db: Database) -> APIRouter:
                 pinned_at,
                 session,
                 unread,
+                part,
+                flagged,
             ) = row
             # Every one of these is agent-controlled text reaching the gallery
             # origin, so every one is escaped here. `describe` strips tags but
@@ -3706,6 +3735,11 @@ def gallery_router(db: Database) -> APIRouter:
             if waiting:
                 word = "question" if waiting == 1 else "questions"
                 flag = f'<span class="wait">{waiting} {word} for you</span>'
+            if unread and flagged and not waiting:
+                # The publisher asked for his eye (`notify`). On the picture,
+                # where a question rides, because it is the same kind of fact:
+                # something to look at without reading the tile.
+                flag = '<span class="wait look">Look at this</span>'
 
             bits = [
                 (
@@ -3717,6 +3751,10 @@ def gallery_router(db: Database) -> APIRouter:
                 '<span class="body">',
                 f'<span class="t">{escape(title)}</span>',
             ]
+            # Changed since he opened it, by a section update: name the part
+            # (ruling 1a). Gone once he has read it -- then it is history.
+            if unread and part:
+                bits.append(_part_line(part, flagged))
             # No description under the title of a tile that HAS a picture: the
             # picture is the description, which is why the reference carries no
             # tile description at all. Dropping it is what takes a card from

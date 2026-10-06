@@ -535,8 +535,14 @@ def patch(
     title: str | None = None,
     *,
     session: str | None = None,
+    note: str | None = None,
+    section: str | None = None,
+    notify: bool = False,
 ) -> Published:
     """`title=None` leaves the page's name alone; a string renames it.
+
+    `note`, `section` and `notify` are written on the new version by a section
+    update (`patch_section`); a whole-page update leaves them NULL/false.
 
     `session` labels the VERSION this call writes -- see `publish`.
 
@@ -623,9 +629,20 @@ def patch(
                 # the version rows already say and say better.
                 conn.execute(
                     "insert into version"
-                    " (artifact_id, n, body, revision, created_by, session)"
-                    " values (%s, %s, %s, %s, %s, %s)",
-                    (artifact_id, n, body, revision, agent, session),
+                    " (artifact_id, n, body, revision, created_by, session,"
+                    "  note, section, notify)"
+                    " values (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        artifact_id,
+                        n,
+                        body,
+                        revision,
+                        agent,
+                        session,
+                        note,
+                        section,
+                        notify,
+                    ),
                 )
                 if title is None:
                     conn.execute(
@@ -678,6 +695,153 @@ def patch(
         title=title if title is not None else row[1],
         bytes=len(body.encode()),
     )
+
+
+class PageChanged(Exception):
+    """`if_revision` named a revision the page has moved on from."""
+
+    def __init__(self, given: str):
+        self.given = given
+
+
+class OpenDecisionDropped(Exception):
+    """A section update would remove the slot of a question still open."""
+
+    def __init__(self, decision_id: str, question: str):
+        self.decision_id = decision_id
+        self.question = question
+
+
+@dataclass(frozen=True)
+class SectionResult:
+    published: Published
+    section_revision: str | None
+    label: str
+    body: str
+
+
+# A caller's version note is a line in a history listing, not a document.
+SECTION_NOTE_MAX = 300
+
+# How many times a section update re-reads and re-applies when ANOTHER update
+# landed between its read and its write. Each retry is against the new live
+# page, so two sessions changing different sections both land.
+_SECTION_RETRIES = 5
+
+
+def _slots(body: str) -> set[str]:
+    from artifacts import csp, decisions
+
+    return {
+        m.group(1) or m.group(2)
+        for m in decisions._SLOT_IN_BODY.finditer(csp.outside_comments(body))
+    }
+
+
+def _matches_revision(given: str, version_n: int, revision: str) -> bool:
+    """`if_revision` may be the revision hash every update returns, or the
+    version number -- the spec says "revision N", and a script that chains on
+    `version` should not have to learn a second field to do it."""
+    given = given.strip()
+    if given.isdigit():
+        return int(given) == version_n
+    return given == revision
+
+
+def get_section(
+    db: Database, agent: str, artifact_id: str, element_id: str
+) -> tuple[str, str, StoredBody]:
+    """(outer html, section revision, live body) of one element of the live
+    page, to the page's own agent. Raises NotFound or a sections.SectionError."""
+    from artifacts import sections
+
+    live = get_body(db, agent, artifact_id)
+    where = sections.locate(live.body, element_id)
+    outer = where.outer(live.body)
+    return outer, sections.section_revision(outer), live
+
+
+def patch_section(
+    db: Database,
+    agent: str,
+    artifact_id: str,
+    element_id: str,
+    op: str,
+    fragment: str | None,
+    *,
+    if_revision: str | None = None,
+    if_section: str | None = None,
+    note: str | None = None,
+    notify: bool = False,
+    session: str | None = None,
+) -> SectionResult:
+    """Apply one operation to one element of the LIVE page and store the
+    whole result as a new version, through `patch` -- so the size limit, the
+    is-a-page check, both secret scanners and the review rounds all run on the
+    whole resulting page exactly as they do for a whole-page update.
+
+    Optimistic rather than locking: read, apply, then write with the live
+    revision as the precondition. If another update landed in between, the
+    write loses the race (`RevisionMismatch`) and this re-reads and re-applies
+    against the new page -- unless the caller pinned `if_revision`, in which
+    case the page moving IS the refusal it asked for. No row lock is held
+    across the GitGuardian call.
+    """
+    from artifacts import sections
+    from artifacts import text as text_module
+
+    if fragment is not None:
+        # Before anything else touches it: the same refusal a body gets.
+        _check_size(
+            fragment, MAX_BODY_BYTES, "body", agent=agent, artifact_id=artifact_id
+        )
+    label_note = f"#{element_id}: {op}"
+    if note and note.strip():
+        label_note += " -- " + text_module.sanitize(note, SECTION_NOTE_MAX)
+    for attempt in range(_SECTION_RETRIES):
+        live = get_body(db, agent, artifact_id)
+        if if_revision is not None and not _matches_revision(
+            if_revision, live.version, live.revision
+        ):
+            raise PageChanged(if_revision)
+        applied = sections.apply(
+            live.body, element_id, op, fragment, if_section=if_section
+        )
+        dropped = _slots(live.body) - _slots(applied.body)
+        if dropped:
+            with db.connect() as conn:
+                still_open = conn.execute(
+                    "select id, question from decision"
+                    " where artifact_id = %s and id = any(%s)"
+                    "   and answer is null and closed_at is null"
+                    " order by id limit 1",
+                    (artifact_id, sorted(dropped)),
+                ).fetchone()
+            if still_open:
+                raise OpenDecisionDropped(still_open[0], still_open[1])
+        try:
+            published = patch(
+                db,
+                agent,
+                artifact_id,
+                applied.body,
+                live.revision,
+                session=session,
+                note=label_note,
+                section=f"{applied.label}: {sections.OP_WORDS[op]}",
+                notify=notify,
+            )
+        except RevisionMismatch:
+            if if_revision is not None or attempt == _SECTION_RETRIES - 1:
+                raise
+            continue
+        return SectionResult(
+            published=published,
+            section_revision=applied.section_revision,
+            label=applied.label,
+            body=applied.body,
+        )
+    raise RevisionMismatch()  # unreachable: the loop returns or raises
 
 
 def get_owned(
@@ -770,6 +934,9 @@ class VersionRow:
     session: str | None
     bytes: int
     live: bool
+    # What a section update says moved ("#running-now: prepend"); None on a
+    # whole-page version.
+    note: str | None = None
 
 
 def list_versions(
@@ -798,7 +965,7 @@ def list_versions(
             # with any non-ASCII in it would report fewer bytes than it has --
             # which is the one number this row exists to give honestly.
             "select n, revision, created_at, created_by, session,"
-            "       octet_length(body) from version"
+            "       octet_length(body), note from version"
             " where artifact_id = %s order by n desc",
             (artifact_id,),
         ).fetchall()
@@ -811,6 +978,7 @@ def list_versions(
             session=r[4],
             bytes=r[5],
             live=r[0] == row[4],
+            note=r[6],
         )
         for r in rows
     ]

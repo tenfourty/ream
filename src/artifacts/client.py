@@ -24,7 +24,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from artifacts import csp, news, traps
 
@@ -645,9 +645,12 @@ def _print_versions(rows: list[dict]) -> None:
         mark = "*" if row.get("live") else " "
         who = row.get("session") or row.get("created_by") or ""
         when = (row.get("created_at") or "")[:19].replace("T", " ")
+        # A section update's note ("#rows: prepend"), last and only when set,
+        # so the columns every existing caller splits on are unchanged.
+        note = f"\t{row['note']}" if row.get("note") else ""
         print(
             f"{mark} v{row['n']}\t{row.get('revision', '')}\t"
-            f"{row.get('bytes', 0)}\t{when}\t{who}"
+            f"{row.get('bytes', 0)}\t{when}\t{who}{note}"
         )
     print("* is the version on the wall now", file=sys.stderr)
 
@@ -685,6 +688,60 @@ def _fetch(artifact_id: str, key: str, version: int | None = None) -> str:
     # stdout is still byte-for-byte the page.
     _print_warnings(got)
     return body
+
+
+def _section_url(artifact_id: str, element_id: str) -> str:
+    return (
+        f"{_api_base()}/artifacts/{quote(artifact_id, safe='')}"
+        f"/sections/{quote(element_id, safe='')}"
+    )
+
+
+def _fetch_section(artifact_id: str, element_id: str, key: str) -> dict:
+    """One element of the LIVE page, with the revisions a section update can
+    be pinned to. Edit what is live, never a local copy (6 Oct 2026)."""
+    return _request("GET", _section_url(artifact_id, element_id), key, None)
+
+
+def _section_op(args) -> tuple[str, str | None]:
+    """Which operation, and the file holding its fragment. Exactly one."""
+    chosen = [
+        (op, getattr(args, op))
+        for op in ("replace", "append", "prepend")
+        if getattr(args, op)
+    ]
+    if args.remove:
+        chosen.append(("remove", None))
+    if len(chosen) != 1:
+        raise UsageError(
+            "--section needs exactly one of --replace FILE, --append FILE, "
+            "--prepend FILE or --remove"
+        )
+    return chosen[0]
+
+
+def _update_section(args, key: str) -> dict:
+    op, file_path = _section_op(args)
+    payload: dict = {"op": op, "notify": bool(args.notify)}
+    if file_path is not None:
+        payload["html"] = _read_page(file_path)
+    if args.if_revision is not None:
+        payload["if_revision"] = args.if_revision
+    if args.if_section is not None:
+        payload["if_section"] = args.if_section
+    if args.note:
+        payload["note"] = args.note
+    try:
+        return _request("PATCH", _section_url(args.update, args.section), key, payload)
+    except HTTPFailure as exc:
+        if exc.status != 409:
+            raise
+        raise Conflict(
+            f"{exc.detail} -- your section update was NOT applied.\n"
+            f"  artifacts-publish --fetch {args.update} --section {args.section}"
+            " part.html\n"
+            "  ...re-apply your change, then update with the new --if-section"
+        ) from exc
 
 
 def _matches(artifact_id: str, file_path: str | None, key: str) -> int:
@@ -1268,6 +1325,34 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="write the page's current HTML back out, to FILE or stdout",
     )
+    part = parser.add_argument_group(
+        "one section of a page (with --update ID or --fetch ID)"
+    )
+    part.add_argument(
+        "--section",
+        metavar="EL",
+        help="the id of ONE element on the live page; the change applies to it alone",
+    )
+    part.add_argument("--replace", metavar="FILE", help="FILE becomes its content")
+    part.add_argument("--append", metavar="FILE", help="FILE becomes its last child")
+    part.add_argument("--prepend", metavar="FILE", help="FILE becomes its first child")
+    part.add_argument("--remove", action="store_true", help="remove the element")
+    part.add_argument(
+        "--if-revision",
+        metavar="N",
+        help="refuse if the page changed since this revision (hash or version)",
+    )
+    part.add_argument(
+        "--if-section",
+        metavar="H",
+        help="refuse if this section changed since --fetch printed this revision",
+    )
+    part.add_argument(
+        "--notify",
+        action="store_true",
+        help="ask for Jeremy's eye: his wall marks the tile (off by default)",
+    )
+    part.add_argument("--note", metavar="TEXT", help="a line for the page's history")
     return parser
 
 
@@ -1431,6 +1516,18 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.matches:
             return _matches(args.matches, args.file, key)
+        if args.fetch and args.section:
+            got = _fetch_section(args.fetch, args.section, key)
+            if args.file:
+                pathlib.Path(args.file).write_text(got["html"], encoding="utf-8")
+            else:
+                sys.stdout.write(got["html"])
+            print(
+                f"section_revision {got['section_revision']}\t"
+                f"page_revision {got['page_revision']}\tversion {got['version']}",
+                file=sys.stderr,
+            )
+            return 0
         if args.fetch:
             # To FILE when one is given, else stdout, so it composes either way:
             # `--fetch ID page.html` to edit, `--fetch ID | grep` to look. The
@@ -1458,6 +1555,28 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.preview:
             return _preview(args.file, args.preview, args.width, key)
+        if args.update and args.section:
+            warn_if_unlabelled("update")
+            done = _update_section(args, key)
+            print(
+                json.dumps(
+                    {
+                        k: done.get(k)
+                        for k in (
+                            "page_revision",
+                            "section_revision",
+                            "version",
+                            "unchanged",
+                            "section",
+                            "page_url",
+                        )
+                    }
+                )
+            )
+            _print_warnings(done)
+            return 0
+        if args.section:
+            raise UsageError("--section goes with --update ID or --fetch ID")
         if args.update:
             if not args.file:
                 print("FILE is required with --update", file=sys.stderr)

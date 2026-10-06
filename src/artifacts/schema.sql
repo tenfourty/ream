@@ -771,3 +771,14 @@ create table if not exists agent_alias (
     new        text not null,
     renamed_at timestamptz not null default now()
 );
+
+-- A SECTION UPDATE'S OWN RECORD (6 Oct 2026). A version written by
+-- `PATCH /artifacts/{id}/sections/{el}` says what moved: `note` is
+-- "#<id>: <op>" plus the caller's note, `section` is the part's name as his
+-- wall shows it (its heading, a data-section-title, or the id), and `notify`
+-- is the publisher asking for his eye -- the wall marks that tile. NULL /
+-- false on every whole-page version, which is the honest value: those say
+-- nothing about which part changed.
+alter table version add column if not exists note    text;
+alter table version add column if not exists section text;
+alter table version add column if not exists notify  boolean not null default false;
