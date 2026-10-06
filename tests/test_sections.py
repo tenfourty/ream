@@ -480,3 +480,20 @@ def test_versions_printing_strips_escape_characters(capsys):
     out = capsys.readouterr().out
     assert "\x1b" not in out and "\x07" not in out and "\u202e" not in out
     assert "#rows: append -- [31mred" in out
+
+
+def test_a_label_is_clean_where_it_is_derived_and_everywhere_it_goes(client, db, page):
+    """Sanitised in sections.py, so the version row, the wall, the API echo
+    and the CLI all get the same clean value."""
+    aid, token = page
+    heading = "<h2>Running\x1b[31m\nnow</h2>"
+    r = section(client, aid, token, "running", op="replace", html=heading)
+    assert r.status_code == 200, r.text
+    assert r.json()["section"] == "Running[31m now"
+    with db.connect() as conn:
+        stored = conn.execute(
+            "select section from version where artifact_id = %s order by n desc",
+            (aid,),
+        ).fetchone()[0]
+    assert stored == "Running[31m now: updated"
+    assert "Running[31m now: updated</span>" in client.get("/").text
