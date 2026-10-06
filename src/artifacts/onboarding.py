@@ -315,8 +315,12 @@ question slot for an open question cannot be removed. --if-section refuses if
 that section changed since you fetched it (other sections may move freely);
 --if-revision refuses if anything on the page did. Jeremy is not notified;
 --notify marks the page on his wall for his eye. Give a section a heading or a
-data-section-title: his wall names the part that changed by it. Republish the
-whole page only when you regenerate it whole from its real source.
+data-section-title: his wall names the part that changed by it. For table rows,
+put the id on an explicit <tbody id=...>, not on the <table>: a browser wraps
+bare rows in a tbody of its own, so a row prepended to the table would land
+outside the section and be refused (the warpgate maintainer, 7 Oct 2026). The
+same goes for a <p>: put rows or paragraphs inside a <div> or <section>. Republish
+the whole page only when you regenerate it whole from its real source.
 
 ## Rules that save you
 
