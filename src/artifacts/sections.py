@@ -147,6 +147,9 @@ class Located:
     inner_end: int  # the "<" of its end tag (== end when implicitly closed)
     end: int  # just after the end tag's ">"
     void: bool
+    # Inside inline SVG or MathML, where `/>` self-closes: a fragment for it
+    # is checked in that context.
+    foreign: bool
     label: str
 
     def outer(self, body: str) -> str:
@@ -159,7 +162,7 @@ class Located:
 class _Walker(HTMLParser):
     """Tracks the open-element stack with absolute offsets into `src`."""
 
-    def __init__(self, src: str, target: str | None = None):
+    def __init__(self, src: str, target: str | None = None, foreign: bool = False):
         super().__init__(convert_charrefs=False)
         self.src = src
         self.target = target
@@ -167,7 +170,10 @@ class _Walker(HTMLParser):
         self._lines = [0]
         for m in re.finditer("\n", src):
             self._lines.append(m.end())
-        self.stack: list[list] = []
+        # A fragment checked for a section inside SVG starts in that context:
+        # a base entry the fragment must never close.
+        self._base = ["svg", 0, 0, False, False] if foreign else None
+        self.stack: list[list] = [self._base] if foreign else []
         self.matches: list[dict] = []
         self.stray_end: list[str] = []
         self._heading: dict | None = None  # capturing the target's first heading
@@ -218,6 +224,7 @@ class _Walker(HTMLParser):
                 "inner_end": inner_start if closed else None,
                 "end": inner_start if closed else None,
                 "void": closed,
+                "foreign": foreign,
                 "title": attr.get("data-section-title"),
             }
             self.matches.append(self._current)
@@ -328,6 +335,7 @@ def locate(body: str, element_id: str) -> Located:
         inner_end=m["inner_end"],
         end=m["end"],
         void=m["void"],
+        foreign=m["foreign"],
         label=label,
     )
 
@@ -337,21 +345,27 @@ def section_revision(outer_html: str) -> str:
     return hashlib.sha256(outer_html.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
-def check_balanced(fragment: str) -> None:
+def check_balanced(fragment: str, *, foreign: bool = False) -> None:
     """Refuse a fragment that would leave the section's tags open or closed
     wrongly: an end tag with no start in the fragment (it would close the
     section or one of its ancestors), an element left open whose end tag is
     not optional, or a construct cut off mid-way (`<!--` or `<div` at the end,
     which would swallow what follows it)."""
-    walker = _Walker(fragment)
+    walker = _Walker(fragment, foreign=foreign)
     leftover = walker.finish()
+    if walker._base is not None and walker._base not in walker.stack:
+        walker.stray_end.insert(0, "svg")
     if walker.stray_end:
         raise UnbalancedError(
             f"the fragment closes </{walker.stray_end[0]}> without opening it, "
             "which would close the section or a part of the page around it. "
             "Nothing was changed."
         )
-    still_open = [e[0] for e in walker.stack if e[0] not in _OPTIONAL_END]
+    still_open = [
+        e[0]
+        for e in walker.stack
+        if e is not walker._base and e[0] not in _OPTIONAL_END
+    ]
     if still_open:
         raise UnbalancedError(
             f"the fragment leaves <{still_open[0]}> open, which would swallow "
@@ -364,11 +378,149 @@ def check_balanced(fragment: str) -> None:
         )
 
 
+# --- the gate: the page as a browser reads it ---------------------------------
+#
+# The walker above finds byte offsets fast, but it is hand-rolled, and HTML's
+# parsing rules (foreign-content integration points, CDATA, foster parenting,
+# implied ends, duplicate attributes, <template>) are long. So it is not the
+# gate. The gate is an INVARIANT checked with a spec-compliant parser
+# (html5lib): parse the old and new pages as a browser would, and require that
+# everything OUTSIDE the target element serialises identically. Whatever the
+# walker got wrong, a change that reaches outside the section -- or a section
+# the browser does not see where the walker did -- is refused, never written.
+
+_PLACEHOLDER = "artifacts-section-placeholder"
+
+
+def _parse(body: str):
+    import html5lib
+
+    return html5lib.parse(body, treebuilder="etree", namespaceHTMLElements=False)
+
+
+def _render(root) -> str:
+    from html5lib import serializer, treewalkers
+
+    walker = treewalkers.getTreeWalker("etree")
+    out = serializer.HTMLSerializer(
+        omit_optional_tags=False,
+        quote_attr_values="always",
+        alphabetical_attributes=True,
+        resolve_entities=False,
+    )
+    return out.render(walker(root))
+
+
+def _with_id(root, element_id: str) -> list[tuple]:
+    """Every element whose id (the FIRST id attribute, as a browser keeps it)
+    is `element_id`, as (element, parent, inside a <template>)."""
+    found = []
+    stack = [(root, None, False)]
+    while stack:
+        el, parent, in_template = stack.pop()
+        if not isinstance(el.tag, str):
+            continue  # a comment
+        if el.attrib.get("id") == element_id:
+            found.append((el, parent, in_template))
+        inner = in_template or el.tag == "template"
+        stack.extend((child, el, inner) for child in reversed(el))
+    return found
+
+
+def _slots_in(root) -> set[str]:
+    """Question slots on real elements, as the page shim's querySelectorAll
+    finds them -- never a match in a comment, CDATA or another attribute."""
+    return {
+        el.attrib["data-artifact-decision"]
+        for el in root.iter()
+        if isinstance(el.tag, str) and "data-artifact-decision" in el.attrib
+    }
+
+
+def _one_target(root, element_id: str):
+    hits = _with_id(root, element_id)
+    if not hits:
+        raise NotFoundError(
+            f"a browser finds no element with id {element_id!r} on the live "
+            "page -- nothing was changed."
+        )
+    if len(hits) > 1:
+        raise AmbiguousError(
+            f"a browser finds {len(hits)} elements with id {element_id!r} -- "
+            "nothing was changed. An id must be unique to address a section."
+        )
+    el, parent, in_template = hits[0]
+    if in_template:
+        raise SectionError(
+            f"the element with id {element_id!r} is inside a <template>, which "
+            "a reader never sees -- nothing was changed."
+        )
+    return el, parent
+
+
+def _excise(el, parent) -> None:
+    """Put a placeholder comment where `el` was, keeping the text after it."""
+    from xml.etree import ElementTree
+
+    mark = ElementTree.Comment(_PLACEHOLDER)
+    mark.tail = el.tail
+    index = list(parent).index(el)
+    parent.remove(el)
+    parent.insert(index, mark)
+
+
+class OutsideChanged(SectionError): ...
+
+
+def check_target(body: str, element_id: str) -> None:
+    """The browser sees exactly one element with this id, outside <template>."""
+    _one_target(_parse(body), element_id)
+
+
+def verify(old: str, new: str, element_id: str, op: str) -> tuple[set, set]:
+    """Refuse unless `new` differs from `old`, as a browser reads both, only
+    inside the target element. Returns (slots before, slots after)."""
+    before_tree = _parse(old)
+    target, parent = _one_target(before_tree, element_id)
+    tag, attrs = target.tag, dict(target.attrib)
+    slots_before = _slots_in(before_tree)
+    _excise(target, parent)
+    outside_before = _render(before_tree)
+
+    after_tree = _parse(new)
+    slots_after = _slots_in(after_tree)
+    outside = OutsideChanged(
+        f"this change would alter the page outside #{element_id} as a browser "
+        "reads it -- nothing was changed."
+    )
+    if op == "remove":
+        if _with_id(after_tree, element_id):
+            raise outside
+        mark = f"<!--{_PLACEHOLDER}-->"
+        if outside_before.replace(mark, "") != _render(after_tree):
+            raise outside
+        return slots_before, slots_after
+    hits = _with_id(after_tree, element_id)
+    if len(hits) != 1 or hits[0][2]:
+        raise outside
+    el, el_parent, _ = hits[0]
+    if el.tag != tag or dict(el.attrib) != attrs:
+        raise outside
+    _excise(el, el_parent)
+    if _render(after_tree) != outside_before:
+        raise outside
+    return slots_before, slots_after
+
+
 @dataclass(frozen=True)
 class Applied:
     body: str
     label: str  # the part's name, for his wall
     section_revision: str | None  # None after a remove: there is no section
+    # Question slots on real elements before and after, as a browser reads
+    # the page (`data-artifact-decision` attributes, never a text match).
+    slots_before: frozenset = frozenset()
+    slots_after: frozenset = frozenset()
 
 
 def apply(
@@ -380,10 +532,14 @@ def apply(
     if if_section is not None and section_revision(where.outer(body)) != if_section:
         raise SectionChanged()
     if op == "remove":
+        new = body[: where.start] + body[where.end :]
+        before, after = verify(body, new, element_id, op)
         return Applied(
-            body=body[: where.start] + body[where.end :],
+            body=new,
             label=where.label,
             section_revision=None,
+            slots_before=frozenset(before),
+            slots_after=frozenset(after),
         )
     if fragment is None:
         raise SectionError(f"op {op!r} needs html")
@@ -392,7 +548,7 @@ def apply(
             f"<{where.tag} id={element_id!r}> is a void element and has no "
             "content to change; use remove, or address its container."
         )
-    check_balanced(fragment)
+    check_balanced(fragment, foreign=where.foreign)
     if op == "replace":
         cut = (where.inner_start, where.inner_end)
     elif op == "append":
@@ -400,6 +556,7 @@ def apply(
     else:  # prepend
         cut = (where.inner_start, where.inner_start)
     new = body[: cut[0]] + fragment + body[cut[1] :]
+    before, after = verify(body, new, element_id, op)
     again = locate(new, element_id)
     # The label is taken from the RESULT, so a replace that renames the
     # heading shows the new name -- that is the section he will now see.
@@ -407,6 +564,8 @@ def apply(
         body=new,
         label=again.label,
         section_revision=section_revision(again.outer(new)),
+        slots_before=frozenset(before),
+        slots_after=frozenset(after),
     )
 
 
