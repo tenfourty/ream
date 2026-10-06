@@ -31,5 +31,5 @@ images:
   # commit sha it just built and pushed. `bootstrap` is a placeholder tag that
   # is never expected to exist in the registry -- Flux is not pointed at this
   # path until the first real image has landed here.
-  - name: git.tenfourty.site/jeremy/artifacts
-    newTag: b4214416e6af
+  - name: git.tenfourty.site/runcove/artifacts
+    newTag: 8def68e19534
