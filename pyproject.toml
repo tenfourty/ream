@@ -61,7 +61,11 @@ addopts = "--dist=worksteal"
 # (6 Oct 2026: a test job sat idle for 35 minutes and left no clue). The
 # slowest test takes about 9 s; this only ever catches a hang.
 timeout = 300
-timeout_method = "thread"
+# "signal", not "thread": the thread method dumps stacks and kills the worker,
+# and xdist drops a dead worker's stderr -- on 7 Oct 2026 a CI hang left only
+# "node down: Not properly terminated". The signal method fails the hung test
+# in place with its traceback, and the worker carries on.
+timeout_method = "signal"
 # `slow`: a test that genuinely needs more than a second, each with a one-line
 # reason at the mark. At most ten may carry it; everything else stays under 1 s.
 markers = [
