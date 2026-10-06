@@ -559,6 +559,16 @@ def apply(
         )
     if fragment is None:
         raise SectionError(f"op {op!r} needs html")
+    # The RESULT is capped too, before any parsing: a small page plus a huge
+    # fragment would otherwise make the browser-faithful check parse megabytes
+    # (security review, 6 Oct 2026).
+    grown = size + len(fragment.encode("utf-8"))
+    if grown > SECTION_PAGE_MAX:
+        raise TooLargeError(
+            f"with this change the page would be {grown // 1024} KB; section "
+            f"updates work on pages up to {SECTION_PAGE_MAX // 1024} KB -- "
+            "republish the whole page instead"
+        )
     if where.void:
         raise SectionError(
             f"<{where.tag} id={element_id!r}> is a void element and has no "

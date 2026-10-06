@@ -666,3 +666,19 @@ def test_a_page_too_large_for_section_updates_says_republish_whole(client, db, p
     assert len(big.encode()) > sections.SECTION_PAGE_MAX
     with pytest.raises(sections.TooLargeError, match="republish the whole page"):
         sections.apply(big, "log", "append", "<p>new</p>")
+
+
+def test_a_huge_fragment_on_a_small_page_is_refused_before_parsing(monkeypatch):
+    """The cap covers the result, not only the live page: a small page plus a
+    multi-megabyte fragment is refused before the slow check sees it."""
+    from artifacts import sections
+
+    def no_parse(*_a, **_k):
+        raise AssertionError("parsed a fragment that should have been refused")
+
+    monkeypatch.setattr(sections, "check_balanced", no_parse)
+    monkeypatch.setattr(sections, "verify", no_parse)
+    small = "<!doctype html><html><body><div id='log'>x</div></body></html>"
+    huge = "<p>" + "x" * (sections.SECTION_PAGE_MAX + 1) + "</p>"
+    with pytest.raises(sections.TooLargeError, match="republish the whole page"):
+        sections.apply(small, "log", "append", huge)
