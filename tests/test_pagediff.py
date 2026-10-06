@@ -642,3 +642,31 @@ def test_a_worker_that_stops_reading_cannot_hold_a_request_for_ever():
     finally:
         worker.kill()  # SIGKILL ends a stopped process too, breaking the pipe
     assert worker.proc.poll() is not None
+    # The pipes close only once the exchange thread has stopped using them: a
+    # descriptor closed under a live thread frees its number for reuse.
+    assert not worker._exchange.is_alive()
+    assert worker.conn_in.closed and worker.conn_out.closed
+
+
+def test_a_worker_whose_exchange_will_not_stop_keeps_its_pipes_open(monkeypatch):
+    """If the exchange thread somehow outlives the kill, its pipes are left
+    open (a small leak) rather than closed under it, where a reused descriptor
+    number could send its bytes to the wrong socket."""
+    import threading
+
+    from artifacts import pagediff
+
+    monkeypatch.setattr(pagediff, "_KILL_JOIN_SECONDS", 0.1)
+    release = threading.Event()
+    worker = pagediff._Worker()
+    stuck = threading.Thread(target=release.wait, daemon=True)
+    stuck.start()
+    worker._exchange = stuck
+    try:
+        worker.kill()
+        assert not worker.conn_in.closed and not worker.conn_out.closed
+    finally:
+        release.set()
+        stuck.join(5)
+        worker.conn_in.close()
+        worker.conn_out.close()

@@ -1101,6 +1101,7 @@ class _Worker:
         self.proc.stdin.close()
         self.proc.stdout.close()
         self.conn_out.send(list(sys.path))
+        self._exchange: threading.Thread | None = None
 
     def alive(self) -> bool:
         return self.proc.poll() is None
@@ -1126,6 +1127,7 @@ class _Worker:
                 outcome["error"] = exc
 
         thread = threading.Thread(target=exchange, daemon=True)
+        self._exchange = thread
         thread.start()
         thread.join(timeout)
         if "result" in outcome:
@@ -1135,17 +1137,30 @@ class _Worker:
         raise TimeoutError
 
     def kill(self) -> None:
+        """Kill the worker, then close its pipes -- but never while an exchange
+        thread may still be inside a call on them. Closing a descriptor another
+        thread is using frees its NUMBER, and the next open() anywhere in the
+        server (a client's socket, say) can be given it, so the stray thread
+        would then write to or read from the wrong thing. Killing the worker
+        breaks both pipes, which ends the thread almost at once; if it somehow
+        does not, the pipes are left open (a small leak) rather than reused."""
         global _last_killed
         _last_killed = self.proc
         try:
             self.proc.kill()
             self.proc.wait(1)
         finally:
-            self.conn_in.close()
-            self.conn_out.close()
+            thread = self._exchange
+            if thread is not None and thread.is_alive():
+                thread.join(_KILL_JOIN_SECONDS)
+            if thread is None or not thread.is_alive():
+                self.conn_in.close()
+                self.conn_out.close()
 
 
 _last_killed = None  # the most recently killed worker process, for tests
+# How long kill() waits for an exchange thread to let go of the pipes.
+_KILL_JOIN_SECONDS = 5.0
 _IDLE: list[_Worker] = []
 _IDLE_LOCK = threading.Lock()
 _SLOTS = threading.BoundedSemaphore(4)
