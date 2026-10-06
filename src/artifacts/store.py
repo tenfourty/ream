@@ -259,6 +259,10 @@ def read_token(db: Database, artifact_id: str) -> str | None:
     return row[0] if row else None
 
 
+def _digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
+
+
 def _revision(body: str, n: int) -> str:
     return hashlib.sha256(f"{n}:{body}".encode()).hexdigest()[:16]
 
@@ -542,11 +546,17 @@ def patch(
     note: str | None = None,
     section: str | None = None,
     notify: bool = False,
+    guard=None,
+    scanned: set[str] | None = None,
 ) -> Published:
     """`title=None` leaves the page's name alone; a string renames it.
 
     `note`, `section` and `notify` are written on the new version by a section
     update (`patch_section`); a whole-page update leaves them NULL/false.
+    `guard(conn)`, when given, runs inside the write's transaction after the
+    artifact row is locked `for update`, and may raise to refuse the write.
+    `scanned` is a per-request set of body digests already scanned clean, so
+    a retry of an identical body skips the scanners.
 
     `session` labels the VERSION this call writes -- see `publish`.
 
@@ -616,7 +626,10 @@ def patch(
                 bytes=len(body.encode()),
             )
 
-        _check_secrets(body, "body", agent=agent, artifact_id=artifact_id)
+        if scanned is None or _digest(body) not in scanned:
+            _check_secrets(body, "body", agent=agent, artifact_id=artifact_id)
+            if scanned is not None:
+                scanned.add(_digest(body))
         if title is not None:
             _check_secrets(title, "title", agent=agent, artifact_id=artifact_id)
         n = current + 1
@@ -626,6 +639,14 @@ def patch(
             # artifact exactly as it was, not pointing at a version that was
             # never written.
             with conn.transaction():
+                if guard is not None:
+                    # The same lock `decisions.ask` takes, so the guard's
+                    # check and a new question cannot interleave.
+                    conn.execute(
+                        "select 1 from artifact where id = %s for update",
+                        (artifact_id,),
+                    )
+                    guard(conn)
                 # The version carries the session that wrote IT. The artifact's
                 # own `session` is deliberately NOT updated here: it records who
                 # first published the page, and overwriting it on every edit
@@ -733,13 +754,17 @@ SECTION_NOTE_MAX = 300
 _SECTION_RETRIES = 5
 
 
-def _slots(body: str) -> set[str]:
-    from artifacts import csp, decisions
-
-    return {
-        m.group(1) or m.group(2)
-        for m in decisions._SLOT_IN_BODY.finditer(csp.outside_comments(body))
-    }
+def _open_among(conn, artifact_id: str, slots) -> tuple[str, str] | None:
+    """The first still-open question whose slot is in `slots`, if any."""
+    if not slots:
+        return None
+    return conn.execute(
+        "select id, question from decision"
+        " where artifact_id = %s and id = any(%s)"
+        "   and answer is null and closed_at is null"
+        " order by id limit 1",
+        (artifact_id, sorted(slots)),
+    ).fetchone()
 
 
 def _matches_revision(given: str, version_n: int, revision: str) -> bool:
@@ -761,6 +786,8 @@ def get_section(
 
     live = get_body(db, agent, artifact_id)
     where = sections.locate(live.body, element_id)
+    # The walker found it; a browser must find the same single element too.
+    sections.check_target(live.body, element_id)
     outer = where.outer(live.body)
     return outer, sections.section_revision(outer), live
 
@@ -802,6 +829,8 @@ def patch_section(
     label_note = f"#{element_id}: {op}"
     if note and note.strip():
         label_note += " -- " + text_module.sanitize(note, SECTION_NOTE_MAX)
+    # Digests of what has passed the scanners during THIS request.
+    scanned: set[str] = set()
     for attempt in range(_SECTION_RETRIES):
         live = get_body(db, agent, artifact_id)
         if if_revision is not None and not _matches_revision(
@@ -811,32 +840,39 @@ def patch_section(
         applied = sections.apply(
             live.body, element_id, op, fragment, if_section=if_section
         )
-        dropped = _slots(live.body) - _slots(applied.body)
-        if dropped:
-            with db.connect() as conn:
-                still_open = conn.execute(
-                    "select id, question from decision"
-                    " where artifact_id = %s and id = any(%s)"
-                    "   and answer is null and closed_at is null"
-                    " order by id limit 1",
-                    (artifact_id, sorted(dropped)),
-                ).fetchone()
-            if still_open:
-                raise OpenDecisionDropped(still_open[0], still_open[1])
+        # Slots as a browser reads the page (html5lib attributes, never a text
+        # match). Checked here to fail fast, and again INSIDE the write's
+        # transaction under the artifact row lock (`guard`), which `ask` and
+        # `ask_review` also take -- so a question created after this read
+        # cannot lose its slot to this write.
+        dropped = applied.slots_before - applied.slots_after
+        with db.connect() as conn:
+            still_open = _open_among(conn, artifact_id, dropped)
+        if still_open:
+            raise OpenDecisionDropped(*still_open)
+
+        def guard(conn, dropped=dropped):
+            found = _open_among(conn, artifact_id, dropped)
+            if found:
+                raise OpenDecisionDropped(*found)
+
         part = f"{applied.label}: {sections.OP_WORDS[op]}"
         # The note and the part label are stored on the version and shown in
         # history and on his wall, so they face both scanners as page text
-        # does. The label is NOT just a copy of body text the body scan saw:
-        # it joins a heading's text across its tags, so `AKIA<b></b>...` in a
-        # heading is whole only here. One call (field "note") so GitGuardian
-        # is asked once: line 1 is the note, line 2 the label.
-        _check_secrets(
-            f"{label_note}\n{part}",
-            "note",
-            agent=agent,
-            artifact_id=artifact_id,
-            gitguardian=True,
-        )
+        # does. One call (field "note") so GitGuardian is asked once: line 1
+        # is the note, line 2 the label. Cached by content for this request,
+        # so an optimistic retry does not ask GitGuardian the same thing twice.
+        stored_text = f"{label_note}\n{part}"
+        digest = _digest(stored_text)
+        if digest not in scanned:
+            _check_secrets(
+                stored_text,
+                "note",
+                agent=agent,
+                artifact_id=artifact_id,
+                gitguardian=True,
+            )
+            scanned.add(digest)
         try:
             published = patch(
                 db,
@@ -848,6 +884,8 @@ def patch_section(
                 note=label_note,
                 section=part,
                 notify=notify,
+                guard=guard,
+                scanned=scanned,
             )
         except RevisionMismatch:
             if if_revision is not None or attempt == _SECTION_RETRIES - 1:

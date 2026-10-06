@@ -497,3 +497,157 @@ def test_a_label_is_clean_where_it_is_derived_and_everywhere_it_goes(client, db,
         ).fetchone()[0]
     assert stored == "Running[31m now: updated"
     assert "Running[31m now: updated</span>" in client.get("/").text
+
+
+# --- the gate: the page as a browser reads it (html5lib) ------------------------
+
+GATE_PAGE = (
+    '<!doctype html><html><body><div id="a"><h2>A</h2>x</div>'
+    '<div id="q">Q</div></body></html>'
+)
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        "<![CDATA[><textarea>]]>",
+        "<![CDATA[><div>]]>",
+        "<math><mi><textarea/></mi></math>",
+        "<svg><desc><textarea/></desc></svg>",
+        '<math><annotation-xml encoding="text/html"><div/></annotation-xml></math>',
+        "<svg><foreignObject><div/></foreignObject></svg>",
+        "<svg><div/><textarea/></svg>",
+        "<svg><b/></svg>",
+        "<p>a<table>",
+        "<template><div/></template>",
+        "<select><textarea/></select>",
+        "<noscript/>",
+    ],
+)
+def test_a_fragment_that_escapes_its_section_as_a_browser_reads_it_is_refused(
+    fragment,
+):
+    with pytest.raises(sections.SectionError):
+        sections.apply(GATE_PAGE, "a", "append", fragment)
+
+
+@pytest.mark.parametrize(
+    ("body", "el"),
+    [
+        # A duplicate id attribute: a browser keeps the FIRST.
+        ('<html><body><div id="b" id="a">X</div></body></html>', "a"),
+        # A browser reads the CDATA as a bogus comment ending at the first ">".
+        ('<html><body><![CDATA[><div id="x">]]>X</div></body></html>', "x"),
+        # Never seen by a reader.
+        ('<html><body><template><div id="t">X</div></template></body></html>', "t"),
+    ],
+)
+def test_a_target_a_browser_would_not_see_as_addressed_is_refused(body, el):
+    with pytest.raises(sections.SectionError):
+        sections.apply(body, el, "replace", "Z")
+
+
+@pytest.mark.parametrize(
+    ("body", "el", "fragment", "expect"),
+    [
+        (
+            '<html><body><svg id="s"><g id="g"><circle r="1"/></g></svg></body></html>',
+            "g",
+            '<rect width="2"/>',
+            '<g id="g"><circle r="1"/><rect width="2"/></g>',
+        ),
+        (
+            "<html><body><table><tr><td id=c>1</td><td>2</td></tr></table></body></html>",
+            "c",
+            "<b>9</b>",
+            "<td id=c><b>9</b></td>",
+        ),
+        (
+            "<html><body><ul id=l><li>a<li>b</ul><p>after</p></body></html>",
+            "l",
+            "<li>c",
+            "<li>b<li>c</ul>",
+        ),
+    ],
+)
+def test_legitimate_edits_in_svg_a_table_cell_and_a_list_are_accepted(
+    body, el, fragment, expect
+):
+    op = "replace" if el == "c" else "append"
+    assert expect in sections.apply(body, el, op, fragment).body
+
+
+@pytest.mark.parametrize(
+    "fake",
+    [
+        '<![CDATA[ data-artifact-decision="{d}" ]]>',
+        "<span title='data-artifact-decision=\"{d}\"'></span>",
+    ],
+)
+def test_slot_lookalike_text_does_not_count_as_the_slot(client, db, page, fake):
+    aid, token = page
+    asked = _ask(db, aid)
+    slot = f'<span data-artifact-decision="{asked.id}">Q</span>'
+    assert section(client, aid, token, "log", op="append", html=slot).is_success
+    r = section(client, aid, token, "log", op="replace", html=fake.format(d=asked.id))
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["decision"] == asked.id
+
+
+def test_a_question_opened_during_the_update_keeps_its_slot(db, page):
+    """The slot check runs again inside the write's transaction, under the
+    artifact row lock ask() also takes."""
+    aid, _ = page
+    asked = _ask(db, aid)
+    slot = f'<div data-artifact-decision="{asked.id}"></div>'
+    store.patch_section(db, "ci-seat", aid, "log", "append", slot)
+    decisions.close(db, "ci-seat", asked.id)
+    real_patch = store.patch
+
+    def reopen_then_patch(*args, **kwargs):
+        with db.connect() as conn:
+            conn.execute(
+                "update decision set closed_at = null where id = %s", (asked.id,)
+            )
+        return real_patch(*args, **kwargs)
+
+    store.patch = reopen_then_patch
+    try:
+        with pytest.raises(store.OpenDecisionDropped):
+            store.patch_section(db, "ci-seat", aid, "log", "replace", "gone")
+    finally:
+        store.patch = real_patch
+    assert slot in body_of(db, aid)
+
+
+def test_a_retry_does_not_rescan_what_was_already_scanned(db, page, monkeypatch):
+    from artifacts import ggscan
+
+    aid, _ = page
+    asked_about = []
+
+    def scan(value):
+        asked_about.append(value)
+        return []
+
+    monkeypatch.setattr(ggscan, "scan", scan)
+    real_patch = store.patch
+    raced = []
+
+    def patch_after_a_rival(*args, **kwargs):
+        if not raced:
+            raced.append(1)
+            live_body = store.get_body(db, "ci-seat", aid)
+            real_patch(
+                db,
+                "ci-seat",
+                aid,
+                live_body.body.replace("green", "red"),
+                live_body.revision,
+            )
+        return real_patch(*args, **kwargs)
+
+    monkeypatch.setattr(store, "patch", patch_after_a_rival)
+    store.patch_section(db, "ci-seat", aid, "log", "append", "<b>x</b>")
+    notes = [v for v in asked_about if v.startswith("#log: append")]
+    assert len(notes) == 1

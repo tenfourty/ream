@@ -306,24 +306,32 @@ def ask(
             )
 
         decision_id = ids.new_id()
-        conn.execute(
-            # `session` is which SESSION raised the question -- a label the
-            # caller declared, never a permission (see api.session). It is what
-            # lets a seat sharing a key with two others recognise its own
-            # question in a feed, and what lets the answer wake the right one.
-            "insert into decision"
-            " (id, artifact_id, version_n, question, options, recommended, session)"
-            " values (%s, %s, %s, %s, %s, %s, %s)",
-            (
-                decision_id,
-                artifact_id,
-                version_n,
-                question,
-                Jsonb(validated_options),
-                recommended,
-                session,
-            ),
-        )
+        # The artifact row lock a section update holds while it checks that
+        # it drops no open question's slot (store.patch_section): taken here
+        # so a question created mid-update is seen by that check or created
+        # after the write -- never between the two.
+        with conn.transaction():
+            conn.execute(
+                "select 1 from artifact where id = %s for update", (artifact_id,)
+            )
+            conn.execute(
+                # `session` is which SESSION raised the question -- a label the
+                # caller declared, never a permission (see api.session). It is what
+                # lets a seat sharing a key with two others recognise its own
+                # question in a feed, and what lets the answer wake the right one.
+                "insert into decision"
+                " (id, artifact_id, version_n, question, options, recommended, session)"
+                " values (%s, %s, %s, %s, %s, %s, %s)",
+                (
+                    decision_id,
+                    artifact_id,
+                    version_n,
+                    question,
+                    Jsonb(validated_options),
+                    recommended,
+                    session,
+                ),
+            )
         created = conn.execute(
             f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
             (decision_id,),
@@ -358,6 +366,10 @@ def ask_review(
         question = f"Review requested: {title}"[:MAX_QUESTION_BYTES]
         decision_id = ids.new_id()
         with conn.transaction():
+            # The same artifact row lock `ask` takes (see there).
+            conn.execute(
+                "select 1 from artifact where id = %s for update", (artifact_id,)
+            )
             conn.execute(
                 "insert into decision (id, artifact_id, version_n, question, options,"
                 " recommended, session, kind, review_mode)"
