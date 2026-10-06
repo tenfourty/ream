@@ -418,3 +418,65 @@ def test_cli_section_needs_exactly_one_operation(live, key_file, capsys):
     rc = cli.main(["--key-file", str(path), "--update", "x", "--section", "rows"])
     assert rc == 2
     assert "exactly one of" in capsys.readouterr().err
+
+
+# --- what is stored beside the page faces the same checks ---------------------
+
+
+def test_a_secret_in_the_note_is_refused_as_a_page_secret_is(client, db, page):
+    aid, token = page
+    secret = "AKIA" + "IOSFODNN7EXAMPLE"
+    r = section(client, aid, token, "log", op="append", html="x", note=f"k {secret}")
+    assert r.status_code == 422
+    assert r.json()["detail"]["refused"][0]["field"] == "note"
+    assert secret not in r.text
+    assert body_of(db, aid) == PAGE
+
+
+def test_a_secret_in_a_heading_that_becomes_the_label_is_refused(client, db, page):
+    """The label is scanned in its own right, before the page is: the refusal
+    names the note field (line 2 is the label), not the body."""
+    aid, token = page
+    split = "<h2>AKIA<b></b>" + "IOSFODNN7EXAMPLE</h2>"
+    r = section(client, aid, token, "running", op="replace", html=split)
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["refused"][0] == {
+        "field": "note",
+        "shape": "aws_access_key_id",
+        "line": 2,
+    }
+    assert "IOSFODNN7EXAMPLE" not in r.text
+    assert body_of(db, aid) == PAGE
+
+
+@pytest.mark.parametrize("bad", ["has space", "esc%1B%5B31m", "a" * 129, "é"])
+def test_an_id_outside_the_safe_charset_is_refused(client, page, bad):
+    aid, token = page
+    patched = section(client, aid, token, bad, op="remove")
+    got = client.get(f"/api/v1/artifacts/{aid}/sections/{bad}", headers=auth(token))
+    assert patched.status_code == got.status_code == 422
+    assert "letters, digits" in patched.json()["detail"]["detail"]
+
+
+def test_the_label_is_stripped_of_control_characters():
+    body = '<div id="d"><h2>Run\x1b[31mning\x07 now</h2></div>'
+    assert sections.locate(body, "d").label == "Run[31mning now"
+
+
+def test_versions_printing_strips_escape_characters(capsys):
+    cli._print_versions(
+        [
+            {
+                "n": 2,
+                "revision": "abc\x1b]0;x\x07",
+                "bytes": 10,
+                "created_at": "2026-10-06T10:00:00",
+                "session": "s\x1b[2J",
+                "live": True,
+                "note": "#rows: append -- \x1b[31mred\u202e",
+            }
+        ]
+    )
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\x07" not in out and "\u202e" not in out
+    assert "#rows: append -- [31mred" in out

@@ -305,6 +305,7 @@ def _check_secrets(
     agent: str,
     artifact_id: str | None,
     second_opinion: bool = True,
+    gitguardian: bool = False,
 ) -> None:
     try:
         findings = scan.scan(value)
@@ -331,7 +332,10 @@ def _check_secrets(
             type(exc).__name__,
         )
         raise ScanFailed(field) from exc
-    if not findings and field == "body" and second_opinion:
+    # GitGuardian runs on a body, and on any other field whose caller asks for
+    # it (`gitguardian=True`: a section update's version note and part label,
+    # which are stored and shown like page text).
+    if not findings and (field == "body" or gitguardian) and second_opinion:
         # The second opinion, on the ORIGINAL body (homelab-ij8.2; see ggscan).
         # Only once the built-in scan is clean: an obvious secret is refused
         # here without ever leaving the house.
@@ -819,6 +823,20 @@ def patch_section(
                 ).fetchone()
             if still_open:
                 raise OpenDecisionDropped(still_open[0], still_open[1])
+        part = f"{applied.label}: {sections.OP_WORDS[op]}"
+        # The note and the part label are stored on the version and shown in
+        # history and on his wall, so they face both scanners as page text
+        # does. The label is NOT just a copy of body text the body scan saw:
+        # it joins a heading's text across its tags, so `AKIA<b></b>...` in a
+        # heading is whole only here. One call (field "note") so GitGuardian
+        # is asked once: line 1 is the note, line 2 the label.
+        _check_secrets(
+            f"{label_note}\n{part}",
+            "note",
+            agent=agent,
+            artifact_id=artifact_id,
+            gitguardian=True,
+        )
         try:
             published = patch(
                 db,
@@ -828,7 +846,7 @@ def patch_section(
                 live.revision,
                 session=session,
                 note=label_note,
-                section=f"{applied.label}: {sections.OP_WORDS[op]}",
+                section=part,
                 notify=notify,
             )
         except RevisionMismatch:
