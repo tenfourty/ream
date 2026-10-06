@@ -20,6 +20,9 @@ defaults:
 jobs:
   test:
     runs-on: docker
+    # A hung job fails here instead of holding a builder for the runner's default of hours
+    # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
+    timeout-minutes: 20
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     services:
       postgres:
@@ -86,6 +89,9 @@ jobs:
   # is only ever pushed to the internal registry; `deploy` below waits for both.
   image:
     runs-on: docker
+    # A hung job fails here instead of holding a builder for the runner's default of hours
+    # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
+    timeout-minutes: 30
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     services:
       dind:
@@ -177,6 +183,9 @@ jobs:
     # Both: a failed or skipped test blocks the deploy even though image is green.
     needs: [test, image]
     runs-on: docker
+    # A hung job fails here instead of holding a builder for the runner's default of hours
+    # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
+    timeout-minutes: 15
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     steps:
       - uses: actions/checkout@v4
