@@ -51,7 +51,7 @@ spec:
         - name: app
           # CI rewrites the tag on `deploy/kustomization.yaml`'s `images:` entry --
           # never edit the tag here.
-          image: git.tenfourty.site/jeremy/artifacts:bootstrap
+          image: git.tenfourty.site/runcove/artifacts:bootstrap
           ports:
             - name: http
               containerPort: 8000

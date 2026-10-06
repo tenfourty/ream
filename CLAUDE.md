@@ -116,8 +116,8 @@ you pose says who asked it. A page whose live version was published without it
 stays unattributed until its next real change — an identical republish mints no
 version, so this arrives as pages move, never retroactively.
 
-Push to `main` on `git.tenfourty.site/jeremy/artifacts` runs CI, builds
-`git.tenfourty.site/jeremy/artifacts:<sha12>`, and **pushes a
+Push to `main` on `git.tenfourty.site/runcove/artifacts` runs CI, builds
+`git.tenfourty.site/runcove/artifacts:<sha12>`, and **pushes a
 `deploy: … [skip ci]` commit back onto main**. Two consequences that have both
 bitten:
 

@@ -92,7 +92,7 @@ learn which ids are real.
 ## How deploys happen
 
 Every push to `main` runs `.forgejo/workflows/ci.yml`: tests, then an image
-build pushed to `git.tenfourty.site/jeremy/artifacts:<sha12>`, then a commit
+build pushed to `git.tenfourty.site/runcove/artifacts:<sha12>`, then a commit
 that rewrites `deploy/kustomization.yaml`'s `newTag:` to that sha and pushes
 it back to `main` (with `[skip ci]`, so it never retriggers itself). Flux
 applies `deploy/` from there on — pushing to `main` is the whole deploy step.

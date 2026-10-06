@@ -72,7 +72,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: purge
-              image: git.tenfourty.site/jeremy/artifacts:bootstrap
+              image: git.tenfourty.site/runcove/artifacts:bootstrap
               command: [artifacts-admin, purge-deleted]
               env:
                 - name: DATABASE_URL
