@@ -742,3 +742,19 @@ def test_reply_and_ack_reuse_a_given_idempotency_key(live, key_file, db, capsys)
             "select count(*) from comment where thread_root = %s", (root.id,)
         ).fetchone()[0]
     assert replies == 1
+
+
+def test_a_review_wait_with_no_limit_waits_for_the_verdict(
+    live, key_file, db, capsys, on_first_listen
+):
+    """`--timeout forever` used to end a review wait at once: its deadline was
+    "now + 0". It now waits until the verdict comes."""
+    path, _page, rid = _setup(db, key_file, capsys)
+    listener = on_first_listen(
+        lambda: decisions.answer(db, rid, letter="a", by="jeremy")
+    )
+    code = decide.main(
+        ["--key-file", str(path), "wait", "--review", rid, "--timeout", "forever"]
+    )
+    listener.woke_the_first_hold()
+    assert code == 0

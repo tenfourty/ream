@@ -708,8 +708,9 @@ def _wait_review(args, key: str, base: str) -> int:
     if target and not os.path.isdir(os.path.dirname(os.path.abspath(target))):
         return _refuse(f"the directory for {target} does not exist", 2)
     timeout = _duration(args.timeout)
-    deadline = _mono() + timeout
-    wall_deadline = _wall() + timeout
+    # 0 / forever means no limit here too, as for a plain wait.
+    deadline = float("inf") if timeout == 0 else _mono() + timeout
+    wall_deadline = float("inf") if timeout == 0 else _wall() + timeout
     # Wall minus monotonic; it jumps when the machine was suspended.
     drift = _wall() - _mono()
 
