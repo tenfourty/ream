@@ -25,6 +25,6 @@
     ]
   },
   "env": {
-    "BEADS_ACTOR": "artifacts-seat"
+    "BEADS_ACTOR": "artifacts-maintainer"
   }
 }

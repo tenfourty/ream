@@ -144,13 +144,13 @@ Since 6 Oct 2026 (Jeremy's ruling) the work lives in the **shared runcove
 tracker**, under the epic `runcove-5t3oj`, labelled `artifacts` + `repo:artifacts`
 (plus `repo:homelab` / `repo:runcove` when a change lands there). Follow
 runcove's conventions in `~/repos/runcove/.beads/PRIME.md` and
-`scripts/tracker-board/RITUALS.md`: `BEADS_ACTOR=artifacts-seat` on every write,
+`scripts/tracker-board/RITUALS.md`: `BEADS_ACTOR=artifacts-maintainer` on every write,
 `bd update <id> --claim` when you start, a daily `health:` comment on the epic
 and `update:` on each claimed item, and `bd dolt commit` after every write.
 **They are the state of record, not a to-do list** — see START HERE above.
 
 ```bash
-export BEADS_ACTOR=artifacts-seat
+export BEADS_ACTOR=artifacts-maintainer
 bd -C ~/repos/runcove list --parent runcove-5t3oj
 bd -C ~/repos/runcove show runcove-5t3oj.1
 ```
