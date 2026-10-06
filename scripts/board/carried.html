@@ -1,0 +1,52 @@
+<!-- Carried over from the homelab status page (docs/pages/artifacts-status.tmpl.html)
+     on 6 Oct 2026. Prose a human edits deliberately; render.py never writes it. -->
+<section class="box carry latest" aria-labelledby="latest-h">
+<h2 id="latest-h">Latest<span class="sub">30 September</span></h2>
+<ul>
+      <li><b>Done last night &mdash; a review goes round by round:</b> when you request changes and the agent republishes, the same review reopens as round 2. The page opens with what changed marked in green and red (Hide changes shows it clean), and each earlier mark says whether it is still on the page, its text changed, or it was addressed.</li>
+      <li><b>Done overnight &mdash; one agent acts on each verdict:</b> if several sessions are waiting on the same review, only one takes it and the others are told who has it. If that session cannot do what you asked, it hands the review back and the review card says who and why, instead of going quiet. A reply an agent retries after a glitch never posts twice.</li>
+      <li><b>Done overnight &mdash; the tests take 45 seconds</b> (they took two and a half minutes), and a push now reaches the service in about three minutes.</li>
+      <li><b>Waiting on you (you chose this next, 15:58):</b> each of the seven page templates on your wall now has a review card &mdash; approve it, request changes, or dismiss it, and mark any text as you read. That is also the new page view to try. Your verdicts decide the slide-deck, long-document and design formats I build next. Nothing is lost by waiting.</li>
+    </ul>
+</section>
+<section class="box carry works" aria-labelledby="works-h">
+<h2 id="works-h">What works today</h2>
+<ul>
+      <li>A gallery at <code>artifacts.tenfourty.site</code>, behind your login, you only. Every page gets its own address and opens only inside that gallery, never appearing in a log.</li>
+      <li>An agent poses a lettered question on its page; you answer it in the browser; the agent reads your answer back. Proven on your own answers, including changing your mind three times in forty seconds.</li>
+      <li>Every answer is recorded in a journal an agent anywhere can read, so hearing about it does not depend on running on this machine.</li>
+      <li>Every push to the app builds, tests and deploys itself, with no step I perform by hand.</li>
+      <li>Agents start from a template rather than a blank file, so a page arrives already obeying the rules that have caught us out.</li>
+      <li>Answering on your phone. You cleared seven questions from it this morning, one a minute; before today it had worked exactly once, ever.</li>
+      <li>An agent asks you a question, and reads your answer back, with one command &mdash; rather than hand-writing a web request with its key in it, which is how keys end up somewhere they should not be.</li>
+      <li>Deleting a page is reversible for thirty days. A sweep each night clears only what has run out.</li>
+      <li>The wall says which session last changed each page, and filters by who published &mdash; next to the search, and only when there is more than one of us to choose between.</li>
+      <li>A question can now say what happened to it. If an agent corrects the framing of a page after asking you something, that correction appears <em>above</em> the buttons, so you read it before you choose rather than after &mdash; a question whose premise moved after you read it is one you could answer wrongly through no fault of your own. Nothing has written one yet.</li>
+      <li>A page keeps every version it has ever had, and an agent can list them, read any earlier one and put it back &mdash; as a new version, never by rewriting the record.</li>
+      <li>A question that a page points to but that does not exist now says so, in words, where the buttons would be. Blank space is what you were reading when you said some questions did not give you the option.</li>
+      <li>Archived pages sit on their own tab beside the others, rather than folded away at the foot of the wall.</li>
+      <li>A private page can be read only through your logged-in gallery. Each time it shows you a page it hands the frame a pass that works once, within two minutes, so a copied page link is dead as soon as the page has loaded. The old links that worked for ever read nothing now. Modelled on how claude.ai does it, minus its hour-long pass.</li>
+      <li>An agent that keeps presenting wrong keys is told to stop, in words, and every attempt is logged without the key. A key that works is never turned away, so one broken agent cannot lock the rest out.</li>
+      <li>An agent arriving from another machine has one address to read that tells it everything it needs, and to ask you for a key for its machine. It works on the LAN today and outside once the door is open.</li>
+      <li>You can onboard an agent yourself. Paste the starter prompt from the connect page into it; it runs our tools with one line, needing nothing installed, and shows you a short code. You type the code, name the machine and approve, and the key goes straight to that machine: you never see it, and it is never in a chat. You tested it from the gallery on 23 September.</li>
+      <li>You can share any page: a link anyone can open, or a personal link emailed to one person, who confirms each new device with a code sent to their inbox so a forwarded email opens nothing. You see who has access and can withdraw each link, or each person, at once.</li>
+      <li>Select text on a page and comment on it; the agent that published it is woken by your comment and replies on the page.</li>
+      <li>Every agent in your space can read every page unless you close one to just you and its publisher.</li>
+      <li>A machine's key renews itself every week; a stolen copy stops working on its own, and a thief who renews it first locks the real machine out, which shows.</li>
+      <li>You can see every connected machine, rename it and revoke it, from the menu under your name.</li>
+      <li>Every page is also checked by GitGuardian's scanner as it is published, updated or previewed, on top of our own. It caught a Slack token ours missed, and ours now catches that kind too. If the scanner is unreachable a page still publishes, and that is logged.</li>
+      <li>An agent can see its page at phone width before you do: the service renders it without publishing and hands back the picture. It found its own first bug, a blank where a page's date should be, on every tile of the wall; fixed.</li>
+      <li>The page check refuses a page built from a template and left half-filled: a leftover fill-in marker, or the template's example title.</li>
+      <li>An agent can ask "is my file what's live?" in one command, give a page to another agent under either spelling of its name, and install the tools with one line that never changes.</li>
+      <li>Any agent can keep a status page current from its own task list: it redraws after every change, showing titles and states only, never task ids.</li>
+      <li>Pages up to 3&nbsp;MB.</li>
+      <li>Mark text on any page as <i>Remove this</i> or <i>Looks good</i> as well as comment on it; your marks are painted where their text is, and ones that can no longer be placed are listed rather than guessed.</li>
+      <li>An agent can ask you to review a page and wait for your verdict; your first verdict is final, and your marks travel with it as one numbered list.</li>
+      <li>The page view fills the window like claude.ai: comments beside the page, a card when you hover over marked text, and comments that save instantly without a reload.</li>
+      <li>When an agent asks you to review a page, your marks are held back until your verdict unless you switch to live; the switch is on the review card and remembers your choice.</li>
+      <li>A review runs in rounds: request changes, the agent republishes, and round 2 opens on the same card with the changes marked and your earlier marks followed through.</li>
+      <li>Only one agent session acts on a verdict, and one that gives a review back says why on the card.</li>
+      <li>On a page under review your marks can be held until your verdict, or sent as you go.</li>
+      <li>A page can no longer be replaced by something that is not a page. A builder script's log line was published over a board here on 19 September; that is now refused, and it says why.</li>
+    </ul>
+</section>
