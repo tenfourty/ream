@@ -88,10 +88,11 @@ def test_the_processs_own_output_streams_are_refused():
 
 
 def test_a_descriptor_nobody_opened_says_what_to_do():
+    fd = _a_closed_fd()
     with pytest.raises(client.UsageError) as raised:
-        client._read_key_fd(19)
+        client._read_key_fd(fd)
     message = str(raised.value)
-    assert "cannot read --key-fd 19" in message
+    assert f"cannot read --key-fd {fd}" in message
     assert "3< <(" in message, "the error carries the idiom, not just the fault"
 
 
@@ -142,16 +143,16 @@ def test_the_decisions_tool_takes_it_too(tmp_path):
 
 
 def _a_closed_fd() -> int:
-    """A descriptor that is really closed in this process. A fixed number
-    (19) was open here once the changes view's worker held its pipes."""
-    import os
+    """A descriptor number that can never be open in this process: the soft
+    limit on open files is one past the highest number the kernel will hand
+    out. A fixed number (19) was open once the changes view's worker held its
+    pipes, and a number merely free when picked can be taken by another thread
+    before the read -- which then blocks on a pipe with no writer (a CI worker
+    hung for 5 minutes on exactly that, 7 Oct 2026)."""
+    import resource
 
-    for fd in range(19, 4096):
-        try:
-            os.fstat(fd)
-        except OSError:
-            return fd
-    raise AssertionError("no closed descriptor below 4096")
+    soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    return soft
 
 
 def test_a_bad_key_fd_exits_as_a_usage_error_not_a_crash(capsys):
