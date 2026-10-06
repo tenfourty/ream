@@ -628,6 +628,15 @@ def _versions(artifact_id: str, key: str) -> list[dict]:
     return _request("GET", f"{_api_base()}/artifacts/{artifact_id}/versions", key, None)
 
 
+# C0/C1 controls (ESC included), DEL, and the bidi overrides that reorder what
+# a terminal shows. Stripped from server-sourced text before it is printed.
+_UNPRINTABLE = re.compile(r"[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
+
+
+def _printable(value) -> str:
+    return _UNPRINTABLE.sub("", str(value if value is not None else ""))
+
+
 def _print_versions(rows: list[dict]) -> None:
     """One line per version, newest first, and never a body.
 
@@ -643,14 +652,17 @@ def _print_versions(rows: list[dict]) -> None:
         return
     for row in rows:
         mark = "*" if row.get("live") else " "
-        who = row.get("session") or row.get("created_by") or ""
-        when = (row.get("created_at") or "")[:19].replace("T", " ")
+        # Every field is server-sourced and some are caller-written (session
+        # labels, notes), so none reaches the terminal with a control or
+        # escape character in it.
+        who = _printable(row.get("session") or row.get("created_by"))
+        when = _printable((row.get("created_at") or "")[:19].replace("T", " "))
         # A section update's note ("#rows: prepend"), last and only when set,
         # so the columns every existing caller splits on are unchanged.
-        note = f"\t{row['note']}" if row.get("note") else ""
+        note = f"\t{_printable(row['note'])}" if row.get("note") else ""
         print(
-            f"{mark} v{row['n']}\t{row.get('revision', '')}\t"
-            f"{row.get('bytes', 0)}\t{when}\t{who}{note}"
+            f"{mark} v{_printable(row['n'])}\t{_printable(row.get('revision'))}\t"
+            f"{_printable(row.get('bytes', 0))}\t{when}\t{who}{note}"
         )
     print("* is the version on the wall now", file=sys.stderr)
 
@@ -1561,7 +1573,11 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 json.dumps(
                     {
-                        k: done.get(k)
+                        # json.dumps escapes control characters already; the
+                        # strip makes the echo clean rather than merely inert.
+                        k: _printable(done[k])
+                        if isinstance(done.get(k), str)
+                        else done.get(k)
                         for k in (
                             "page_revision",
                             "section_revision",

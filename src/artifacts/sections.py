@@ -269,16 +269,29 @@ class _Walker(HTMLParser):
 
 
 def _clean_label(raw: str) -> str:
+    """Heading text as a one-line name: entities decoded, whitespace
+    collapsed, control and escape characters stripped (it reaches terminals
+    through --versions and the update echo), capped at LABEL_MAX."""
     import html as _html
 
-    text = re.sub(r"\s+", " ", _html.unescape(raw)).strip()
-    if len(text) > LABEL_MAX:
-        text = text[: LABEL_MAX - 1].rstrip() + "…"
-    return text
+    from artifacts import text
+
+    return text.sanitize(_html.unescape(raw), LABEL_MAX).strip()
+
+
+# What an addressable id may contain. Real ids on these pages are slugs; a
+# narrow charset keeps the id safe to echo into a version note, a URL and a
+# terminal, with no escaping anywhere it travels.
+ELEMENT_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 
 
 def locate(body: str, element_id: str) -> Located:
     """The one element whose id is `element_id`, or a SectionError."""
+    if not ELEMENT_ID.fullmatch(element_id):
+        raise SectionError(
+            "a section id may use only letters, digits, _ . : and -, up to 128 "
+            "characters. Nothing was changed."
+        )
     walker = _Walker(body, element_id)
     walker.finish()
     found = walker.matches
