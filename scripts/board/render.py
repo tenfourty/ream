@@ -487,7 +487,9 @@ def _lanes(tracker: dict, s: dict) -> str:
         + "".join(_lane(lane) for lane in tracker["lanes"])
         + '<p class="note">One lane per piece of the programme. Blocks are sized by points'
         " (an hour of estimate is a point; an unsized item counts as one). Built from the"
-        " runcove tracker each time the page is drawn.</p></section>"
+        " runcove tracker each time the page is drawn, by scripts/board/render.py in"
+        " runcove/artifacts (the homelab's old scripts/artifacts-status.py is retired).</p>"
+        "</section>"
     )
 
 
