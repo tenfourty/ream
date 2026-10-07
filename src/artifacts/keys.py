@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 import hashlib
 import re
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
-from artifacts.db import Database
+if TYPE_CHECKING:  # annotations only: `artifacts-admin new-key` runs without psycopg
+    from artifacts.db import Database
 
 # A rotating key is swapped once it is this old (by the tools), and refused
 # once it is this much older without having been (homelab-ij8.34).

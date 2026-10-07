@@ -10,6 +10,8 @@ over `kubectl exec`, or printed by `list-keys`. Neither `new-key`'s own
 output nor any other command in this module ever prints the token itself.
 """
 
+from __future__ import annotations
+
 import argparse
 import hashlib
 import os
@@ -17,9 +19,15 @@ import re
 import secrets
 import sys
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
-from artifacts import grants, keys, rename, store
-from artifacts.db import Database
+from artifacts import grants, keys
+
+# The database modules are imported by the commands that use them, never here:
+# `new-key` needs no database and must run where only the client is installed
+# (the uv tool has no psycopg; found minting retrobrew_maintainer, 7 Oct 2026).
+if TYPE_CHECKING:
+    from artifacts.db import Database
 
 _AGENT_NAME = keys.AGENT_NAME
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
@@ -34,10 +42,18 @@ def _check_agent(agent: str) -> None:
 
 def _current(db: Database, agent: str) -> str:
     """The agent a typed name means now, saying so when it was renamed."""
+    from artifacts import rename
+
     now = rename.resolve(db, agent)
     if now != agent:
         print(f"{agent} was renamed to {now}; using {now}", file=sys.stderr)
     return now
+
+
+def _open_db() -> Database:
+    from artifacts.db import Database
+
+    return Database(_database_url())
 
 
 def _database_url() -> str:
@@ -84,14 +100,14 @@ def cmd_register_key(args: argparse.Namespace) -> None:
     _check_agent(args.agent)
     if not _SHA256_HEX.fullmatch(args.sha256):
         raise SystemExit("sha256 must be exactly 64 lowercase hex characters")
-    db = Database(_database_url())
+    db = _open_db()
     args.agent = _current(db, args.agent)
     key_id = keys.register(db, args.agent, args.sha256)
     print(f"key_id={key_id} agent={args.agent}")
 
 
 def cmd_revoke_key(args: argparse.Namespace) -> None:
-    db = Database(_database_url())
+    db = _open_db()
     rows = keys.revoke(db, args.key_id)
     if rows == 0:
         raise SystemExit(f"no active key with id {args.key_id}")
@@ -100,14 +116,14 @@ def cmd_revoke_key(args: argparse.Namespace) -> None:
 
 
 def cmd_list_keys(_args: argparse.Namespace) -> None:
-    db = Database(_database_url())
+    db = _open_db()
     for row in keys.list_keys(db):
         print(f"{row.id}\t{row.agent}\t{row.created_at}\t{row.revoked_at or '-'}")
 
 
 def cmd_grant_scope(args: argparse.Namespace) -> None:
     _check_agent(args.agent)
-    db = Database(_database_url())
+    db = _open_db()
     args.agent = _current(db, args.agent)
     try:
         grants.grant(db, args.agent, args.scope)
@@ -120,7 +136,7 @@ def cmd_grant_scope(args: argparse.Namespace) -> None:
 
 def cmd_revoke_scope(args: argparse.Namespace) -> None:
     _check_agent(args.agent)
-    db = Database(_database_url())
+    db = _open_db()
     args.agent = _current(db, args.agent)
     grants.revoke(db, args.agent, args.scope)
     # Says what is true afterwards rather than what it did: "revoked" on a grant
@@ -130,7 +146,7 @@ def cmd_revoke_scope(args: argparse.Namespace) -> None:
 
 
 def cmd_list_scopes(_args: argparse.Namespace) -> None:
-    rows = grants.list_all(Database(_database_url()))
+    rows = grants.list_all(_open_db())
     if not rows:
         print("no seat holds any scope")
     for agent, scope, granted_at in rows:
@@ -141,7 +157,9 @@ def cmd_rename_agent(args: argparse.Namespace) -> None:
     """Rename an agent, or merge it into one that already exists. Every row
     that names it moves, its keys keep working as the new name, and the old
     name still means the new one wherever somebody types it."""
-    db = Database(_database_url())
+    from artifacts import rename
+
+    db = _open_db()
     try:
         counts = rename.rename_agent(db, args.old, args.new, dry_run=args.dry_run)
     except rename.Refused as exc:
@@ -245,7 +263,9 @@ def cmd_closed_to_agents(args) -> None:
     the rest open. Without --open-all-except it only lists. With it, every
     closed page NOT named is opened, and each one is printed, because a bulk
     change that says only a number leaves nobody able to check it."""
-    database = Database(_database_url())
+    from artifacts import store
+
+    database = _open_db()
     with database.connect() as conn:
         closed = conn.execute(
             "select id, agent, title from artifact"
@@ -290,7 +310,9 @@ def cmd_purge_deleted(args) -> None:
     only operation here that cannot be undone and a log line saying "3" gives
     whoever reads it no way to find out afterwards what went.
     """
-    database = Database(_database_url())
+    from artifacts import store
+
+    database = _open_db()
     if args.dry_run:
         # The same cutoff the real run uses, read the same way, so the rehearsal
         # cannot disagree with the performance.

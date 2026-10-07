@@ -9,7 +9,12 @@ The alternative -- a seat that can read everything because it is called
 operator-ish seat appears and inherits a privilege nobody decided to give it.
 """
 
-from artifacts.db import Database
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # annotations only, as in keys.py
+    from artifacts.db import Database
 
 # Read every open decision across every page, not just this seat's own. Held by
 # the operator seat so that "what is waiting on Jeremy" is answerable from the
