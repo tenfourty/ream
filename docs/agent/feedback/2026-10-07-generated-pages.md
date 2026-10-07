@@ -20,7 +20,7 @@ whole-page `--update`. Already existing, which the question did not say: the ser
 | cove | Unknown whether its old generated boards still run; office page hand-published | (b), but (a) for an id appearing or disappearing (a new decision slot, a card removed) | (a): `--touch` keeps history meaningful | (a), and for hand-published pages too: the office page sat unrepublished 30 Sep–7 Oct while work moved hourly, until Jeremy asked |
 | retrobrew | The MVP board, 30-min timer; ~1 in 4–6 renders differs (a guess) | (b): prefers `--note` naming what moved (the renderer knows); ids repeat across versions | (a): "Updated" = last real change, "checked" = last render; drops PR 132's stamp and checksum | (a): declares 30 min, flag at ~2.5 intervals |
 | homelab | Ops board every 3 h (scripts/ops-board-tick.sh); runcove sign-ups page on a timer; both whole | (a): most republishes change one line and Jeremy cannot tell which | (a): a checked-but-unchanged page looks identical to a dead timer | (a): it knows the interval; pages quiet at night defeat inference |
-| quarterdeck | _awaiting_ | | | |
+| quarterdeck | Design pages regenerated from spec markdown on change (a few a day in review); no timer pages yet, a pilot status board likely soon | (b): a heading diff on request; automatic would be layout noise | (a): drops its checksum file and its own time stamp | (a): on-demand pages defeat inference |
 
 Also asked for:
 - cove: `--if-revision` by default on whole republishes; a publish warning for a decision slot
@@ -33,12 +33,12 @@ Also asked for:
 - retrobrew: `--touch --status failed`, so a broken renderer shows on the wall instead of looking
   current but old.
 
-## Where they agree (so far)
-- Part names on a whole republish: **split**. (b) from warpgate, cove and retrobrew — the
+## Where they agree
+- Part names on a whole republish: **split**. (b) from warpgate, cove, retrobrew and quarterdeck — the
   publisher says what moved (`--note`); (a) from homelab, whose one-line changes are invisible to
   Jeremy. Cove's exception (an id appearing or disappearing) and a `--note` shown on the tile may
   satisfy both.
-- Freshness: **(a)** from cove, retrobrew and homelab; a "checked" time distinct
+- Freshness: **(a)** from cove, retrobrew, homelab and quarterdeck (warpgate (b)); a "checked" time distinct
   from "changed".
 - Staleness: **(a)**, declared by the publisher, never inferred — and it applies to hand-kept
   pages as much as generated ones.
