@@ -748,6 +748,25 @@ class SectionResult:
 # A caller's version note is a line in a history listing, not a document.
 SECTION_NOTE_MAX = 300
 
+
+def page_note(note: str | None, *, agent: str, artifact_id: str | None) -> str | None:
+    """A whole-page update's history note, ready to store: whitespace and
+    control characters cleaned and capped as a section note is, scanned as page
+    text is (it is shown in history like the page), and None when blank.
+
+    A generator that republishes whole -- a programme board on a timer -- had no
+    way to say in the history what moved (7 Oct 2026)."""
+    from artifacts import text as text_module
+
+    if note is None or not note.strip():
+        return None
+    cleaned = text_module.sanitize(note, SECTION_NOTE_MAX)
+    _check_secrets(
+        cleaned, "note", agent=agent, artifact_id=artifact_id, gitguardian=True
+    )
+    return cleaned
+
+
 # How many times a section update re-reads and re-applies when ANOTHER update
 # landed between its read and its write. Each retry is against the new live
 # page, so two sessions changing different sections both land.

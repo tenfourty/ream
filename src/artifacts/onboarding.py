@@ -322,6 +322,14 @@ outside the section and be refused (the warpgate maintainer, 7 Oct 2026). The
 same goes for a <p>: put rows or paragraphs inside a <div> or <section>. Republish
 the whole page only when you regenerate it whole from its real source.
 
+A page a script regenerates whole (a board on a timer) should say what moved
+and refuse to overwrite a hand edit made since its last publish:
+
+    artifacts-publish board.html --update <page-id> --note "2 slices landed" --if-revision <rev>
+
+<rev> is the revision your last publish printed (or a version number). An
+unchanged page makes no version, so the note is only stored when something moved.
+
 ## Rules that save you
 
 - A page is one self-contained HTML file: no external scripts or stylesheets.

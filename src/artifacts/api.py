@@ -124,6 +124,10 @@ class PatchBody(BaseModel):
     # than `""` so that clearing a title and not touching it stay distinguishable:
     # an empty string is a rename to nothing, which the title guard refuses.
     title: str | None = None
+    # A line for the page's history ("2 slices landed"), as a section update
+    # carries one. Stored on the new version only; an unchanged body stores
+    # nothing, because it makes no version.
+    note: str | None = None
 
 
 class SectionBody(BaseModel):
@@ -677,6 +681,9 @@ def agent_router(
                 payload.expected_revision,
                 title=payload.title,
                 session=seat_session,
+                note=store.page_note(
+                    payload.note, agent=agent, artifact_id=artifact_id
+                ),
             )
             # After the write, never inside it: a publish must not wait on a
             # browser, nor fail because of one. See thumbs.render_in_background.

@@ -574,6 +574,7 @@ def _patch(
     expected_revision: str,
     key: str,
     title: str | None = None,
+    note: str | None = None,
 ) -> dict:
     """PATCH with `expected_revision`, and REFUSE on a conflict rather than
     retrying.
@@ -602,6 +603,8 @@ def _patch(
     payload = {"body": body, "expected_revision": expected_revision}
     if title is not None:
         payload["title"] = title
+    if note:
+        payload["note"] = note
     try:
         return _request("PATCH", f"{_api_base()}/artifacts/{artifact_id}", key, payload)
     except HTTPFailure as exc:
@@ -618,10 +621,36 @@ def _patch(
 
 
 def _update(
-    file_path: str, artifact_id: str, key: str, title: str | None = None
+    file_path: str,
+    artifact_id: str,
+    key: str,
+    title: str | None = None,
+    *,
+    note: str | None = None,
+    if_revision: str | None = None,
 ) -> dict:
-    expected_revision = _read_current(artifact_id, key)["revision"]
-    return _patch(file_path, artifact_id, expected_revision, key, title)
+    """A whole-page update. With `if_revision` (the hash or version number the
+    caller last published or read), refuse if the page has moved on since: a
+    generator that owns a page must not overwrite a hand edit made in between
+    (7 Oct 2026). The read-then-PATCH gap is covered by `expected_revision`."""
+    current = _read_current(artifact_id, key)
+    if if_revision is not None:
+        given = if_revision.strip()
+        same = (
+            int(given) == current.get("current_version")
+            if given.isdigit()
+            else given == current["revision"]
+        )
+        if not same:
+            raise Conflict(
+                f"{artifact_id} has changed since revision {given} -- it is at"
+                f" version {current.get('current_version')} now. Your update was NOT"
+                " applied, and nothing was overwritten.\n"
+                f"  artifacts-publish --fetch {artifact_id} page.html\n"
+                "  ...see what changed and re-apply your change...\n"
+                f"  artifacts-publish page.html --update {artifact_id}"
+            )
+    return _patch(file_path, artifact_id, current["revision"], key, title, note)
 
 
 def _versions(artifact_id: str, key: str) -> list[dict]:
@@ -1352,7 +1381,8 @@ def build_parser() -> argparse.ArgumentParser:
     part.add_argument(
         "--if-revision",
         metavar="N",
-        help="refuse if the page changed since this revision (hash or version)",
+        help="refuse if the page changed since this revision (hash or version);"
+        " also on a whole-page --update",
     )
     part.add_argument(
         "--if-section",
@@ -1364,7 +1394,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="ask for Jeremy's eye: his wall marks the tile (off by default)",
     )
-    part.add_argument("--note", metavar="TEXT", help="a line for the page's history")
+    part.add_argument(
+        "--note",
+        metavar="TEXT",
+        help="a line for the page's history; also on a whole-page --update",
+    )
     return parser
 
 
@@ -1598,7 +1632,14 @@ def main(argv: list[str] | None = None) -> int:
                 print("FILE is required with --update", file=sys.stderr)
                 return 2
             warn_if_unlabelled("update")
-            updated = _update(args.file, args.update, key, args.title)
+            updated = _update(
+                args.file,
+                args.update,
+                key,
+                args.title,
+                note=args.note,
+                if_revision=args.if_revision,
+            )
             _print_published(updated)
             if not updated.get("unchanged"):
                 _report_render(updated["id"], key)
