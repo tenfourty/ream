@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/guards/commit-msg-guard.sh — the two commit-message rules CLAUDE.md
+# scripts/guards/commit-msg-guard.sh — the two commit-message rules AGENTS.md
 # states in prose, made mechanical: conventional commits, and no attribution
 # trailers.
 #
@@ -7,7 +7,7 @@
 # somebody who had read them:
 #
 #   * FIVE commits on 19 Sep 2026 carry a Co-Authored-By trailer — 4a37bad,
-#     c2ff307, 3d9a474, 7522c95, 7796b0e — against CLAUDE.md's "Conventional
+#     c2ff307, 3d9a474, 7522c95, 7796b0e — against AGENTS.md's "Conventional
 #     commits, no co-authored-by". It is not carelessness: the harness re-offers
 #     that trailer, and a "Generated with Claude Code" line, in a system
 #     reminder at the start of every session, so the rule has to be refused
@@ -49,7 +49,7 @@ check_message() {
 
   if printf '%s\n' "$body" | grep -qiE '^[[:space:]]*co-authored-by:'; then
     echo "$SELF: REFUSED — the message carries a Co-Authored-By trailer." >&2
-    echo "  CLAUDE.md: conventional commits, no co-authored-by. Five commits on" >&2
+    echo "  AGENTS.md: conventional commits, no co-authored-by. Five commits on" >&2
     echo "  19 Sep 2026 slipped this rule; the harness re-offers the trailer every" >&2
     echo "  session, which is why it is a hook and not a paragraph." >&2
     problems=1

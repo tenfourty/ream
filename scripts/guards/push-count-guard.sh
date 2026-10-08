@@ -5,7 +5,7 @@
 # Ported from ~/repos/homelab/scripts/push-count-guard.sh (ij8.76,
 # 21 Sep 2026); the logic is the homelab's, the reasons are this repo's.
 #
-# WHY HERE. CLAUDE.md: "Announce a push, with hashes, before making it.
+# WHY HERE. AGENTS.md: "Announce a push, with hashes, before making it.
 # Verify what actually went out against the remote." A push from this repo is
 # a production change — CI builds an image from it and Flux rolls it out
 # minutes later, unattended — and the outgoing range moves under the
@@ -44,7 +44,7 @@
 # It cannot catch a wrong announcement, and it cannot catch a rebase that
 # kept the count and changed every hash — only reachability afterwards
 # (`git merge-base --is-ancestor <hash> origin/main` after a fetch) does that,
-# which is why CLAUDE.md asks for that check too.
+# which is why AGENTS.md asks for that check too.
 #
 # LEFTHOOK DISPATCH (homelab trap 48): lefthook hard-codes every `pre-push`
 # command to skip — "(skip) no matching push files", exit 0, command never

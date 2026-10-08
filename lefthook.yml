@@ -1,7 +1,7 @@
 # lefthook.yml — git hook orchestration for the artifacts repo.
 #
 # Ported from the homelab's guards on 22 Sep 2026 (ij8.76), after Jeremy asked
-# for them: until now every rule in CLAUDE.md here was prose, and each one had
+# for them: until now every rule in AGENTS.md here was prose, and each one had
 # already failed to stop somebody who had read it. What is enforced now:
 #
 #   pre-commit         ggshield on the staged diff; no credential on an argv;

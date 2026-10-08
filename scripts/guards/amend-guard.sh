@@ -78,7 +78,7 @@ set -euo pipefail
 # is what made it look like it worked.
 #
 # The selftest could not have caught this: it calls the script with a
-# well-formed sha, which is precisely the tidier input shape CLAUDE.md warns
+# well-formed sha, which is precisely the tidier input shape AGENTS.md warns
 # about. Only a real `git commit --amend -m` through a real lefthook install
 # shows it. Wiring anything else as `{n}` inherits the same trap.
 sanitise_arg() {

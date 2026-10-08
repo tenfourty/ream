@@ -65,7 +65,7 @@ run_gate() {
       printf '%s\n' "$out"
       echo "$SELF: REFUSED — ggshield found a secret in the staged diff (above)." >&2
       echo "Remove it from the change. If it is a real credential that reached a file," >&2
-      echo "CLAUDE.md's leak policy applies: vault it, redact every copy on this machine," >&2
+      echo "AGENTS.md's leak policy applies: vault it, redact every copy on this machine," >&2
       echo "and rotate it only if it left the homelab." >&2
       return 1
       ;;

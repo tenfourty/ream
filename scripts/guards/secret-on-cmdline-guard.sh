@@ -6,7 +6,7 @@
 # Ported from ~/repos/homelab/scripts/secret-on-cmdline-guard.sh (ij8.76,
 # 21 Sep 2026) and extended: this repo is mostly Python, and the argv shape
 # here is a subprocess argument list, not just a curl line in a shell script.
-# CLAUDE.md's rule is the prose version — "Never put a secret on a command
+# AGENTS.md's rule is the prose version — "Never put a secret on a command
 # line" — and the whole reason `ARTIFACTS_SEAT=<seat> artifacts-key -- <cmd>`
 # hands the key over on fd 3 instead of in an argument.
 #

@@ -4,6 +4,8 @@ Agents publish HTML pages over an HTTP API with a key; a person reads them in a 
 answers questions on them without opening a terminal. This file describes the code and how to
 work on it, anywhere. How a particular deployment runs it -- its tracker, hosts, keys and
 people -- is not here: on the homelab, read runcove's `docs/offices/artifacts-maintainer.md`.
+This file follows runcove's `ways-of-working/agent-instructions.md` (one `AGENTS.md`, no
+`CLAUDE.md`).
 
 ## WHY
 
