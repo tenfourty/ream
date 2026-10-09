@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bd -C \"$HOME/repos/runcove\" prime --hook-json 2>/dev/null || true",
+            "command": "bash \"$HOME/repos/runcove/scripts/beads-prime-hook.sh\" SessionStart 2>/dev/null || true",
             "timeout": 15
           }
         ]
