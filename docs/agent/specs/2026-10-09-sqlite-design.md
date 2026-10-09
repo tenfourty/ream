@@ -19,9 +19,9 @@ Ruled by Jeremy on 9 Oct 2026 (multi-user rulings, 4b; backups, (a)):
      written on SQLite in the meantime (the copier runs in reverse, with the same verifier).
 - **Constraints.**
   - Production image: Python 3.12, SQLite 3.40.1, measured in the pod.
-  - Storage and backups are homelab's: a `linstor-thin-retain` RWO PVC, Deployment strategy
-    `Recreate`, and the nightly snapshot onto `artifacts-backup-nfs`, which VolSync already ships
-    off-site daily.
+  - Storage and the off-site path are homelab's: a 5Gi `linstor-thin-retain` RWO PVC, Deployment
+    strategy `Recreate`, and a homelab CronJob that copies the app's nightly snapshot from the PVC to
+    `artifacts-backup-nfs`, which VolSync already ships off-site daily. The app pod mounts no NFS.
   - Litestream to a new bucket on the QNAP's S3 follows later.
   - The cutover is a production change: announced in #agents first. Removing CNPG afterwards
     deletes data, so it needs Jeremy's yes.
@@ -75,12 +75,13 @@ schema, not a rewrite. Both databases work during the rollback week. After it, P
 | Errors | `sqlite3.IntegrityError` mapped by `sqlite_errorname` (`SQLITE_CONSTRAINT_PRIMARYKEY` = the patch race). `sqlite3.OperationalError` joins `psycopg.OperationalError` in the wait loop's ride-out (`events.py`) | — |
 | NUL and surrogates | The layer refuses a NUL in every str parameter and in every JSON-encoded value, with the same error type callers see today. A lone surrogate raises `UnicodeEncodeError` in sqlite3; the layer maps it to the same refusal | Postgres refuses both in any text or jsonb value, and the tests pin it |
 | Rows by key order | `ctid` becomes `rowid`; `octet_length(body)` becomes `length(cast(body as blob))` | — |
-| Purge and backup | Run in-process **by wall clock**, not "every 24 h from start", because every push to main restarts the pod: the backup at 04:00 and the purge after it, so anything purged is in a backup first. At start-up, if the newest backup on the share is over 24 h old, it runs at once (replacing the CronJob's `startingDeadlineSeconds`). `deploy/purge-cronjob.yaml` and its kustomization entry go in the same slice | A second pod cannot share an RWO volume, and a timer reset by every deploy might never fire |
-| Nightly backup, how | `VACUUM INTO` a temporary file on the PVC, then compress, copy to the NFS share as `.tmp` and rename; 7 kept. Never SQLite directly on NFS. The WAL grows during the copy; harmless at this size | Keeps SQLite away from NFS locking and fsync |
-| Storage layout | The database, its `-wal` and `-shm` in one directory on the PVC (`/data/artifacts.db`); `SQLITE_TMPDIR` on a writable volume; the pod gains `fsGroup: 10001` so uid 10001 can create files on a fresh, root-owned volume; `readOnlyRootFilesystem` stays | — |
+| Purge and backup | Run in-process **by wall clock**, not "every 24 h from start", because every push to main restarts the pod: the backup at 04:00 UTC and the purge after it, so anything purged is in a backup first. At start-up, if the newest backup on the share is over 24 h old, it runs at once (replacing the CronJob's `startingDeadlineSeconds`). `deploy/purge-cronjob.yaml` and its kustomization entry go in the same slice | A second pod cannot share an RWO volume, and a timer reset by every deploy might never fire |
+| Nightly backup, how | `VACUUM INTO /data/backups/.tmp-…`, then rename to `artifacts-sqlite-<UTC date>.db`, uncompressed (restic compresses and dedups; gzip defeats its dedup); 7 kept on the PVC, matched only by the `artifacts-sqlite-` prefix (never the pg_dumps' `artifacts-db-*`). A homelab CronJob running as root, hardened like authelia's, mounts the PVC read-only with podAffinity to the app's node and copies new snapshots to `artifacts-backup-nfs`. The WAL grows during the copy; harmless at this size | The QNAP share refuses non-root writers and `fsGroup` does nothing on NFS; an NFS mount in the app pod would tie the gallery to the NAS (a NAS outage would leave the pod stuck in ContainerCreating) |
+| Storage layout | One 5Gi PVC mounted at `/data`: the database, its `-wal` and `-shm` (`/data/artifacts.db`), `/data/backups`, and `SQLITE_TMPDIR=/data/tmp`, not `/tmp`. Peak use during a backup is about 2 GB (database, the `VACUUM INTO` copy, WAL, the previous snapshots). The pod gains `fsGroup: 10001` so uid 10001 can create files on the fresh, root-owned linstor volume; `readOnlyRootFilesystem` stays | — |
 | Rollouts | Deployment strategy `Recreate`. **Accepted behaviour change**: each deploy has a few seconds' gap with 502s on held polls and the gallery, where today's rolling update overlaps. Clients already retry on 5xx (the onboarding says so; checked for `artifacts-decide wait` and the gallery's watch); the `deployment.yaml` comments about the overlap and the preStop drain are rewritten in the same slice | Two pods must never open the file at once |
 | Checkpoints | The layer keeps one long-lived idle connection open, so closing the last request connection does not checkpoint and delete the WAL each time (repeated fsyncs on DRBD under `synchronous=FULL`) | — |
-| Admin commands | `artifacts-admin` runs inside the pod (`kubectl exec`), the only place the file is reachable | — |
+| Admin commands | `artifacts-admin` runs inside the pod (`kubectl exec`) while it runs. With the pod stopped (migration, rollback, restore drill), it runs as a one-off Job mounting the PVC | The file is reachable only through the PVC |
+| `DATABASE_URL` | Set in this repo's `deploy/artifacts-config.env` as `sqlite:////data/artifacts.db`. The Postgres URI stays available as a second variable (from the CNPG secret `artifacts-db-app/uri`) through the rollback week, for the reverse copy | It comes from a CNPG-made secret today, not a sops file; no homelab change |
 | Tests | One temporary SQLite file per test worker, emptied between tests. Lock-wait tests use thread events instead of `pg_stat_activity` | No server to start: faster runs |
 
 ## 3. Surfaces
@@ -88,15 +89,16 @@ schema, not a rewrite. Both databases work during the rollback week. After it, P
 None change for agents or readers. Operators see:
 
 - `DATABASE_URL` accepts `sqlite:///<path>` as well as `postgresql://…`;
-- the backup files on the NFS share;
+- the nightly snapshots in `/data/backups` on the PVC, and their copies on the backup share;
 - `artifacts-admin migrate-from-postgres` (§5).
 
 ## 4. Error handling
 
 - **Busy past `busy_timeout`:** the request fails with 503 and a retry hint. This should not happen
   at today's write rate; it is logged with the statement.
-- **A failed backup:** logged, and retried at the next start-up or the next 04:00. A backup older
-  than 48 h raises an artifacts health warning on the status board.
+- **A failed backup:** logged, and retried at the next start-up or the next 04:00 UTC. A backup older
+  than 48 h raises an artifacts health warning on the status board. Homelab's copy CronJob reports
+  its own failures.
 - **A corrupt file:** restore from the newest snapshot. The cutover runbook includes a restore drill.
 
 ## 5. Migration and cutover
@@ -113,14 +115,18 @@ None change for agents or readers. Operators see:
   for a rollback that keeps writes made on SQLite.
 - **Rehearsal:** run against a copy of last night's pg_dump before the real window.
 - **Window, an evening announced in #agents:**
-  1. scale to 0;
-  2. migrate and verify;
-  3. switch `DATABASE_URL` and the PVC in the homelab manifests;
-  4. scale to 1;
-  5. smoke-test publish, fetch, a decision and a comment end to end;
-  6. watch an agent's wait wake.
-- **Rollback, for one week:** stop the pod, run `migrate-to-postgres` into CNPG (which stays
-  running, backed up by its pg_dump CronJob), verify, point `DATABASE_URL` back, start.
+  1. `flux suspend ks artifacts-app`, so Flux doesn't undo the next step within 5 minutes;
+  2. scale the Deployment to 0;
+  3. run `migrate-from-postgres` as a one-off Job mounting the PVC, and check its verification;
+  4. apply the SQLite `DATABASE_URL` and the PVC mount (the change already merged, waiting behind
+     the suspension);
+  5. `flux resume ks artifacts-app`, and the pod starts on SQLite;
+  6. smoke-test publish, fetch, a decision and a comment end to end, and watch an agent's wait wake.
+- **Rollback, for one week:** suspend Flux, scale to 0, run `migrate-to-postgres` into CNPG as a
+  one-off Job (CNPG stays running, backed up by its pg_dump CronJob, and the 5432 egress NetworkPolicy
+  stays), verify, point `DATABASE_URL` back, resume.
+- **Restore drill:** the same one-off Job pattern, restoring the newest snapshot into a scratch file
+  and running the verifier's row counts against it.
 - **After the week:** remove CNPG, its pg_dump CronJob and netpol egress, and the Postgres code
   paths, with Jeremy's yes. The homelab priority test changes in the same commit.
 
@@ -162,9 +168,9 @@ Each lands on main by itself. Slices 1 to 4 change behaviour on Postgres not at 
 | 3 | The connection layer owns transactions (on Postgres still plain transactions and savepoints; the `BEGIN IMMEDIATE` branch arrives with slice 5), its own `Rollback`, eager fetching and error mapping; `for update` and advisory locks behind the helper; `ctid` → primary key, `octet_length` → `length(cast(… as blob))`, `%s::jsonb` → the adapter | 3 |
 | 4 | NUL and surrogate refusals in the layer, for every str and JSON parameter (instead of relying on Postgres `DataError`) | 3 |
 | 5 | SQLite backend and `schema_sqlite.sql`, selected by `DATABASE_URL`; tests on SQLite in CI | 1 |
-| 6 | Purge and nightly backup in-process by wall clock; `Recreate`, `fsGroup`, the PVC mount and `SQLITE_TMPDIR` in this repo's `deploy/`; remove `deploy/purge-cronjob.yaml` | 4 |
+| 6 | Purge and nightly backup in-process by wall clock; `Recreate`, `fsGroup`, the PVC mount and `SQLITE_TMPDIR` in this repo's `deploy/`; remove `deploy/purge-cronjob.yaml`. Deploys only after homelab's PVC exists, and stays on Postgres until the cutover | 4 |
 | 7 | `migrate-from-postgres` and `migrate-to-postgres` with the verifier; the runbook; a rehearsal on a pg_dump copy | 2, 5 |
-| 8 | Homelab's side (the PVC, the backup share mount, the `DATABASE_URL` secret), handed to homelab; the cutover | 2 |
+| 8 | The cutover, using homelab's side: the 5Gi PVC (it must exist before slice 6 deploys, or the pod sits Pending) and the root copy CronJob, both built by homelab | 2 |
 | 9 | After the rollback week: remove the Postgres paths and CNPG (Jeremy's yes) | — |
 
 ## 9. Risks
@@ -178,4 +184,5 @@ Each lands on main by itself. Slices 1 to 4 change behaviour on Postgres not at 
 | Timestamp text mis-ordering | One fixed format, written only by the codec, and a round-trip test |
 | Migration silently drops or alters data | Per-table counts and checksums, refusing on mismatch; a rehearsal first |
 | Data loss since the last snapshot | RPO 24 h as today, then near zero once Litestream lands. The backup runs by wall clock, so restarts cannot starve it |
-| Losing CNPG's replication and failover | A pod restart on the replicated linstor volume is the failover. It's acceptable for one reader and agents that retry |
+| Losing CNPG's replication and failover | A drain or a deploy is seconds. **A dead node is minutes**: the RWO volume stays attached until piraeus's ha-controller fences the node, where CNPG fails over in seconds today. Accepted for one reader and agents that retry. No PodDisruptionBudget: `minAvailable: 1` on one replica would block Talos drains |
+| The NAS being down | The app pod mounts no NFS, so the gallery is unaffected; only the off-site copy waits |
