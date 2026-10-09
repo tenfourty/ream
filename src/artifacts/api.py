@@ -814,11 +814,14 @@ def agent_router(
     @router.get("/artifacts/{artifact_id}/sections/{element_id}")
     def read_section(artifact_id: str, element_id: str, agent: str = Depends(caller)):
         """One element of the live page, to edit what is live rather than a
-        local copy. Owner only, like every write it prepares for."""
+        local copy. Any agent may read it when the page is open to agents, as
+        it may read the whole page (10 Oct 2026); only the publisher may update it."""
         from artifacts import sections
 
         try:
-            outer, rev, live = store.get_section(db, agent, artifact_id, element_id)
+            outer, rev, live = store.get_section(
+                db, agent, artifact_id, element_id, as_reader=True
+            )
         except (sections.SectionError, *_SECTION_REFUSALS) as exc:
             raise _section_refusal(exc) from exc
         return {

@@ -797,13 +797,20 @@ def _matches_revision(given: str, version_n: int, revision: str) -> bool:
 
 
 def get_section(
-    db: Database, agent: str, artifact_id: str, element_id: str
+    db: Database,
+    agent: str,
+    artifact_id: str,
+    element_id: str,
+    *,
+    as_reader: bool = False,
 ) -> tuple[str, str, StoredBody]:
     """(outer html, section revision, live body) of one element of the live
-    page, to the page's own agent. Raises NotFound or a sections.SectionError."""
+    page. `as_reader` lets any agent read it when the page is open to agents,
+    exactly as it may read the whole page; updating it stays the publisher's.
+    Raises NotFound or a sections.SectionError."""
     from artifacts import sections
 
-    live = get_body(db, agent, artifact_id)
+    live = get_body(db, agent, artifact_id, as_reader=as_reader)
     where = sections.locate(live.body, element_id)
     # The walker found it; a browser must find the same single element too.
     sections.check_target(live.body, element_id)

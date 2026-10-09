@@ -299,7 +299,10 @@ def test_get_returns_the_section_and_both_revisions(client, db, page):
     assert data["page_revision"] == read["revision"]
 
 
-def test_another_agents_key_gets_the_no_such_page_answer(client, db, page):
+def test_another_agents_key_gets_the_no_such_page_answer_on_update(client, db, page):
+    """Updating a section stays the publisher's alone. Reading one follows the
+    whole-page read rule (test_agents_can_read.py): an open page's section is
+    readable by any agent, a closed page's answers as no such page."""
     aid, _ = page
     other, _ = keys.mint(db, agent="someone-else")
     missing = section(client, "doesnotexist", other, "log", op="remove")
@@ -307,11 +310,8 @@ def test_another_agents_key_gets_the_no_such_page_answer(client, db, page):
     assert theirs.status_code == missing.status_code == 404
     assert theirs.json() == missing.json()
     got = client.get(f"/api/v1/artifacts/{aid}/sections/log", headers=auth(other))
-    nope = client.get(
-        "/api/v1/artifacts/doesnotexist/sections/log", headers=auth(other)
-    )
-    assert got.status_code == nope.status_code == 404
-    assert got.json() == nope.json()
+    assert got.status_code == 200
+    assert got.json()["html"] == '<div id="log">first</div>'
 
 
 # --- his wall -------------------------------------------------------------------

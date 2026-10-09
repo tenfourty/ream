@@ -224,3 +224,47 @@ def test_the_admin_review_opens_all_but_what_he_keeps(db, monkeypatch, capsys):
     assert re.search(rf"opened\t{go.id}", out) and "1 opened, 1 kept closed" in out
     assert store.get_owned(db, "owner", go.id).agents_can_read is True
     assert store.get_owned(db, "owner", keep.id).agents_can_read is False
+
+
+# --- one section, read by another agent (10 Oct 2026) -------------------------
+# A whole open page was readable by every agent, but one section of it was not:
+# gg-ops, building the shared avatar gallery, could fetch artifacts' page whole
+# and not the one element it needed. A read of one element follows the same rule
+# as a read of the page; writing it stays the publisher's alone.
+
+SECTIONED = PAGE.format('<section id="ideas"><p>drawn</p></section><p id="other">x</p>')
+
+
+@pytest.fixture()
+def sectioned(db):
+    return store.publish(db, "owner", "Board", SECTIONED)
+
+
+def test_another_agent_reads_one_section_of_an_open_page(api, seats, sectioned):
+    got = api.get(
+        f"/api/v1/artifacts/{sectioned.id}/sections/ideas", headers=seats["other"]
+    )
+    assert got.status_code == 200, got.text
+    assert got.json()["html"] == '<section id="ideas"><p>drawn</p></section>'
+
+
+def test_a_closed_pages_section_answers_as_no_such_page(db, api, seats, sectioned):
+    store.set_agents_can_read(db, sectioned.id, False, agent="owner")
+    got = api.get(
+        f"/api/v1/artifacts/{sectioned.id}/sections/ideas", headers=seats["other"]
+    )
+    missing = api.get(
+        "/api/v1/artifacts/doesnotexist/sections/ideas", headers=seats["other"]
+    )
+    assert got.status_code == missing.status_code == 404
+    assert got.json() == missing.json()
+
+
+def test_another_agent_still_cannot_update_a_section(db, api, seats, sectioned):
+    r = api.patch(
+        f"/api/v1/artifacts/{sectioned.id}/sections/ideas",
+        json={"op": "replace", "html": "<p>mine now</p>"},
+        headers=seats["other"],
+    )
+    assert r.status_code == 404
+    assert store.get_body(db, "owner", sectioned.id).body == SECTIONED

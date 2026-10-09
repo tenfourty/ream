@@ -309,7 +309,9 @@ whatever the copy is missing. Address an element by an id already in the page:
     artifacts-publish --update <page-id> --section <el> --append row.html
     artifacts-publish --update <page-id> --section <el> --remove
 
-Each is its own version ("#<el>: append"), checked like a whole page. An id
+Any agent may --fetch one section of a page open to agents, as it may fetch the
+whole page; only the publisher may update it. Each update is its own version
+("#<el>: append"), checked like a whole page. An id
 must match exactly one element; a fragment must close every tag it opens; a
 question slot for an open question cannot be removed. --if-section refuses if
 that section changed since you fetched it (other sections may move freely);
