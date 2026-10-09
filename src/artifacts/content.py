@@ -105,7 +105,9 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
       empty scroll space at the bottom of the page"). body's scrollHeight has no such
       floor; the max() and the bottom margin cover a page whose body is positioned or
       has margins of its own, and erring a pixel LARGE is right, because a pixel short
-      brings back the second scrollbar this is here to remove.
+      brings back the second scrollbar this is here to remove. A page wider than its
+      frame adds its horizontal scrollbar's thickness for the same reason (10 Oct 2026:
+      a 1060px image in a 1085px frame left an inner scrollbar the frame's full height).
     - `slots`: the page-coordinate rectangle (id, top, left, width) of every element the
       agent marked with `data-artifact-decision="<id>"` -- never the element's own
       contents. What a reported id is even allowed to mean is entirely the gallery's
@@ -125,11 +127,16 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         + "function b(e){var r=e.getBoundingClientRect();"
         'return{id:e.getAttribute("data-artifact-decision"),'
         "top:r.top+scrollY,left:r.left+scrollX,width:r.width}}"
-        "function h(){var b=document.body,m=0;"
-        "if(!b)return document.documentElement.scrollHeight;try{"
+        "function h(){var b=document.body,m=0,x=0,d=document.documentElement;"
+        "if(!b)return d.scrollHeight;try{"
         "m=parseFloat(getComputedStyle(b).marginBottom)||0}catch(e){}"
+        # A page wider than its frame has a horizontal scrollbar, which takes its
+        # thickness off the frame's viewport; without adding it back the frame is
+        # that much short and grows a SECOND vertical scrollbar (10 Oct 2026).
+        "try{if(d.scrollWidth>d.clientWidth)"
+        "x=Math.max(0,(window.innerHeight||0)-d.clientHeight)}catch(e){}"
         "return Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,"
-        "b.getBoundingClientRect().bottom+scrollY)+m)}"
+        "b.getBoundingClientRect().bottom+scrollY)+m+x)}"
         'function send(){parent.postMessage({type:"artifact-state",'
         "height:h(),"
         'slots:Array.from(document.querySelectorAll("[data-artifact-decision]"),b)},'

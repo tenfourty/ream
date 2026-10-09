@@ -20,7 +20,7 @@ function el(attrs = {}, rect = { top: 40, left: 10, width: 300 }) {
            getAttribute(k) { return this._attrs[k] ?? null; } };
 }
 
-function build() {
+function build(opts = {}) {
   const slot = el({ "data-artifact-decision": "dec1" });
   const listeners = {};
   const posted = [];
@@ -31,7 +31,7 @@ function build() {
   // Reporting documentElement would pin the frame at its high-water mark for
   // good, and the page could never shrink again.
   const doc = {
-    documentElement: { scrollHeight: 1234 },
+    documentElement: { scrollHeight: 1234, ...(opts.doc || {}) },
     body: {
       scrollHeight: 800, offsetHeight: 800,
       getBoundingClientRect: () => ({ bottom: 800 }),
@@ -46,6 +46,7 @@ function build() {
     addEventListener: (t, fn) => (listeners[t] ||= []).push(fn),
     getComputedStyle: () => ({ marginBottom: "0px" }),
     Array, JSON, Math, CSS: undefined,
+    ...(opts.scope || {}),
   };
   scope.window = scope;
   const names = Object.keys(scope);
@@ -62,6 +63,28 @@ const sized = (over = {}) => ({
   data: { type: "artifact-slot-sizes", sizes: [{ id: "dec1", height: 96 }] },
   ...over,
 });
+
+// 1b. a page wider than its frame (10 Oct 2026: gg-ops's crew page, a 1060px
+// image in a 1085px frame). Its horizontal scrollbar takes 15px off the frame's
+// viewport, so a report of the body's height alone leaves a SECOND vertical
+// scrollbar inside the frame that runs almost its full height -- what Jeremy saw.
+// The report adds the scrollbar's thickness; the horizontal one stays, honestly.
+{
+  const g = build({
+    doc: { scrollWidth: 1111, clientWidth: 1085, clientHeight: 1219 },
+    scope: { innerHeight: 1234 },
+  });
+  g.fire("load", {});
+  ok(g.posted[0][0].height === 815,
+     "a page wider than its frame reports its height plus the horizontal " +
+     "scrollbar (800 + 15), so no second vertical scrollbar appears");
+}
+{
+  const g = build({ doc: { scrollWidth: 1085, clientWidth: 1085, clientHeight: 1234 },
+                    scope: { innerHeight: 1234 } });
+  g.fire("load", {});
+  ok(g.posted[0][0].height === 800, "a page that fits its width reports exactly its height");
+}
 
 // 1. what it reports on load
 {
