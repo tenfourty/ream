@@ -28,6 +28,7 @@ import threading
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -935,9 +936,9 @@ def resolve(
             owning_agent, title, page_session, root_body, root_quote, root_held = owner
             with conn.transaction():
                 conn.execute(
-                    "update comment set resolved_at = now(), resolved_by = %s"
+                    "update comment set resolved_at = %s, resolved_by = %s"
                     " where id = %s or thread_root = %s",
-                    (by, root_id, root_id),
+                    (datetime.now(UTC), by, root_id, root_id),
                 )
                 # Settling a thread is one of the interactions Jeremy widened
                 # this to on 19 Sep: EVERY interaction he has with a page
@@ -982,10 +983,10 @@ def withdraw(db: Database, comment_id: str, *, kind: str) -> bool:
     transaction. False if the comment is missing or already withdrawn."""
     with db.connect() as conn, conn.transaction():
         row = conn.execute(
-            "update comment set withdrawn_at = now(), withdrawn_kind = %s,"
+            "update comment set withdrawn_at = %s, withdrawn_kind = %s,"
             " body = '', quote = ''"
             " where id = %s and withdrawn_at is null returning artifact_id",
-            (kind, comment_id),
+            (datetime.now(UTC), kind, comment_id),
         ).fetchone()
         if row is None:
             return False
@@ -1048,8 +1049,8 @@ def second_scan(db: Database, comment_id: str) -> str:
         body, artifact_id, author, quote = row
         with db.connect() as conn:
             conn.execute(
-                "update comment set gg_attempted_at = now() where id = %s",
-                (comment_id,),
+                "update comment set gg_attempted_at = %s where id = %s",
+                (datetime.now(UTC), comment_id),
             )
         # The quote was only ever built-in scanned; the relay sees it too.
         found = ggscan.scan(body + "\n" + quote)
@@ -1067,7 +1068,8 @@ def second_scan(db: Database, comment_id: str) -> str:
             withdraw(db, comment_id, kind=found[0].shape)
         with db.connect() as conn:
             conn.execute(
-                "update comment set gg_scanned_at = now() where id = %s", (comment_id,)
+                "update comment set gg_scanned_at = %s where id = %s",
+                (datetime.now(UTC), comment_id),
             )
         return "withdrawn" if found else "scanned"
     except Exception:  # noqa: BLE001 -- a background task's exception is lost
@@ -1086,10 +1088,10 @@ def sweep_unscanned(db: Database, *, limit: int = 200) -> int:
             for r in conn.execute(
                 "select id from comment where author_kind = 'agent'"
                 " and withdrawn_at is null and gg_scanned_at is null"
-                " and created_at < now() - interval '30 seconds'"
+                " and created_at < %s"
                 " order by gg_attempted_at asc nulls first, created_at asc, id asc"
                 " limit %s",
-                (limit,),
+                (datetime.now(UTC) - timedelta(seconds=30), limit),
             ).fetchall()
         ]
     checked = 0

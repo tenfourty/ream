@@ -449,6 +449,9 @@ def publish(
     token = secrets.token_urlsafe(
         24
     )  # 192 bits; URL-safe alphabet, so it is one path segment
+    # One instant for the whole publish, as Postgres's now() was: a new page's
+    # created_at and updated_at are equal.
+    now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
         # Three steps, not two: `version` references `artifact`, and `artifact.current_version`
         # references `version`, so the two tables point at each other. The artifact row is born
@@ -458,9 +461,10 @@ def publish(
         # else) must leave no row behind, not an artifact with no version.
         conn.execute(
             "insert into artifact"
-            " (id, title, agent, read_token, current_version, session)"
-            " values (%s, %s, %s, %s, null, %s)",
-            (artifact_id, title, agent, token, session),
+            " (id, title, agent, read_token, current_version, session,"
+            "  created_at, updated_at)"
+            " values (%s, %s, %s, %s, null, %s, %s, %s)",
+            (artifact_id, title, agent, token, session, now, now),
         )
         conn.execute(
             "insert into version (artifact_id, n, body, revision, created_by, session)"
@@ -468,8 +472,8 @@ def publish(
             (artifact_id, body, revision, agent, session),
         )
         conn.execute(
-            "update artifact set current_version = 1, updated_at = now() where id = %s",
-            (artifact_id,),
+            "update artifact set current_version = 1, updated_at = %s where id = %s",
+            (now, artifact_id),
         )
     return Published(
         id=artifact_id,
@@ -609,8 +613,8 @@ def patch(
             if title is not None:
                 _check_secrets(title, "title", agent=agent, artifact_id=artifact_id)
                 conn.execute(
-                    "update artifact set title = %s, updated_at = now() where id = %s",
-                    (title, artifact_id),
+                    "update artifact set title = %s, updated_at = %s where id = %s",
+                    (title, datetime.now(UTC), artifact_id),
                 )
             return Published(
                 id=artifact_id,
@@ -671,15 +675,15 @@ def patch(
                 )
                 if title is None:
                     conn.execute(
-                        "update artifact set current_version = %s, updated_at = now()"
+                        "update artifact set current_version = %s, updated_at = %s"
                         " where id = %s",
-                        (n, artifact_id),
+                        (n, datetime.now(UTC), artifact_id),
                     )
                 else:
                     conn.execute(
                         "update artifact set current_version = %s, title = %s,"
-                        " updated_at = now() where id = %s",
-                        (n, title, artifact_id),
+                        " updated_at = %s where id = %s",
+                        (n, title, datetime.now(UTC), artifact_id),
                     )
                 # A review he sent back opens its next round on this version,
                 # in this transaction, so the round and the version it reviews
@@ -1277,12 +1281,13 @@ def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int
         # of the machine it ran on. Without it, three seats sharing a key
         # would each be woken by the other two's withdrawals -- the precise
         # noise the filter exists to remove.
+        now = datetime.now(UTC)
         rows = conn.execute(
-            "update decision set closed_at = now(),"
-            " acknowledged_at = coalesce(acknowledged_at, now())"
+            "update decision set closed_at = %s,"
+            " acknowledged_at = coalesce(acknowledged_at, %s)"
             " where artifact_id = %s and answer is null and closed_at is null"
             " returning id, question, session, kind",
-            (artifact_id,),
+            (now, now, artifact_id),
         ).fetchall()
         if rows:
             owner = conn.execute(
@@ -1605,8 +1610,8 @@ def rename(db: Database, artifact_id: str, title: str, *, agent: str | None) -> 
     where, params = _scoped(artifact_id, agent)
     with db.connect() as conn:
         done = conn.execute(
-            f"update artifact set title = %s, updated_at = now() {where}",  # noqa: S608 -- see _scoped
-            (title, *params),
+            f"update artifact set title = %s, updated_at = %s {where}",  # noqa: S608 -- see _scoped
+            (title, datetime.now(UTC), *params),
         )
         return done.rowcount > 0
 
@@ -1635,12 +1640,12 @@ def mark_read(db: Database, artifact_id: str) -> None:
     (homelab-ij8.103). Only ever called from the gallery, behind his login."""
     with db.connect() as conn:
         conn.execute(
-            "insert into page_read (artifact_id, read_version)"
-            " select id, current_version from artifact"
+            "insert into page_read (artifact_id, read_version, read_at)"
+            " select id, current_version, %s from artifact"
             " where id = %s and current_version is not null"
             " on conflict (artifact_id) do update"
-            " set read_version = excluded.read_version, read_at = now()",
-            (artifact_id,),
+            " set read_version = excluded.read_version, read_at = excluded.read_at",
+            (datetime.now(UTC), artifact_id),
         )
 
 
@@ -1815,9 +1820,9 @@ def save_render_errors(
 
     with db.connect() as conn:
         conn.execute(
-            "update version set render_errors = %s::jsonb, rendered_at = now()"
+            "update version set render_errors = %s::jsonb, rendered_at = %s"
             " where artifact_id = %s and n = %s",
-            (json.dumps(errors), artifact_id, version_n),
+            (json.dumps(errors), datetime.now(UTC), artifact_id, version_n),
         )
 
 

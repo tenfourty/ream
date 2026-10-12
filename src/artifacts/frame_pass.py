@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from artifacts.db import Database
 
@@ -61,16 +62,23 @@ def mint(
     plaintext is returned once and never stored. `changes_from` makes it a pass
     for the changes view: the page marked up against that earlier version."""
     token = secrets.token_urlsafe(32)
+    now = datetime.now(UTC)
     with db.connect() as conn:
         conn.execute(
-            "delete from frame_pass where expires_at < now() - make_interval(secs => %s)",
-            (_KEEP_SECONDS,),
+            "delete from frame_pass where expires_at < %s",
+            (now - timedelta(seconds=_KEEP_SECONDS),),
         )
         conn.execute(
             "insert into frame_pass"
             " (token_sha256, artifact_id, version, changes_from, expires_at)"
-            " values (%s, %s, %s, %s, now() + make_interval(secs => %s))",
-            (_hash(token), artifact_id, version, changes_from, LIFETIME_SECONDS),
+            " values (%s, %s, %s, %s, %s)",
+            (
+                _hash(token),
+                artifact_id,
+                version,
+                changes_from,
+                now + timedelta(seconds=LIFETIME_SECONDS),
+            ),
         )
     return token
 
@@ -84,13 +92,14 @@ def spend(db: Database, token: str, artifact_id: str) -> Spent | None:
     from an unknown pass, so a pass cannot be used to learn which ids exist."""
     if not token or len(token) > 128:
         return None
+    now = datetime.now(UTC)
     with db.connect() as conn:
         row = conn.execute(
-            "update frame_pass set used_at = now()"
+            "update frame_pass set used_at = %s"
             " where token_sha256 = %s and artifact_id = %s"
-            " and used_at is null and expires_at > now()"
+            " and used_at is null and expires_at > %s"
             " returning artifact_id, version, changes_from",
-            (_hash(token), artifact_id),
+            (now, _hash(token), artifact_id, now),
         ).fetchone()
     return (
         Spent(artifact_id=row[0], version=row[1], changes_from=row[2]) if row else None

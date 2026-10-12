@@ -21,6 +21,7 @@ with `since=<last seq it saw>` can never skip or repeat a row.
 import threading
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import psycopg
 
@@ -244,9 +245,10 @@ def note_read(db: Database, agent: str, session: str | None = None) -> None:
             # on every single read.
             conn.execute(
                 "insert into seat_read (agent, session, last_read_at)"
-                " values (%s, %s, now())"
-                " on conflict (agent, session) do update set last_read_at = now()",
-                (agent, session),
+                " values (%s, %s, %s)"
+                " on conflict (agent, session)"
+                " do update set last_read_at = excluded.last_read_at",
+                (agent, session, datetime.now(UTC)),
             )
     except Exception:  # noqa: BLE001 -- see the docstring: this must never fail a read
         return

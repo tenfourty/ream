@@ -18,6 +18,7 @@ the action locks -- nothing takes this advisory lock after a row lock.
 import hashlib
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 import psycopg
 from fastapi import HTTPException
@@ -63,12 +64,13 @@ def run(
     digest = hashlib.sha256(
         json.dumps(body, sort_keys=True, ensure_ascii=False, default=str).encode()
     ).hexdigest()
+    now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
         conn.execute("select pg_advisory_xact_lock(%s)", (_lock_id(agent, route, key),))
         conn.execute(
             "delete from idempotency where ctid in (select ctid from idempotency"
-            " where expires_at < now() limit %s for update skip locked)",
-            (PRUNE_BATCH,),
+            " where expires_at < %s limit %s for update skip locked)",
+            (now, PRUNE_BATCH),
         )
         seen = conn.execute(
             "select body_sha256, status, response from idempotency"
@@ -86,7 +88,15 @@ def run(
         conn.execute(
             "insert into idempotency"
             " (agent, route, key, body_sha256, status, response, expires_at)"
-            " values (%s, %s, %s, %s, %s, %s, now() + interval '24 hours')",
-            (agent, route, key, digest, status, psycopg.types.json.Jsonb(encoded)),
+            " values (%s, %s, %s, %s, %s, %s, %s)",
+            (
+                agent,
+                route,
+                key,
+                digest,
+                status,
+                psycopg.types.json.Jsonb(encoded),
+                now + timedelta(hours=24),
+            ),
         )
         return JSONResponse(encoded, status_code=status)

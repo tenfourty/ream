@@ -120,18 +120,19 @@ def first_use(db: Database, key: AgentKey) -> None:
     out; after it, a copy of the old key is worthless."""
     if not key.rotating:
         return
+    now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
         row = conn.execute(
-            "update agent_key set first_used_at = now()"
+            "update agent_key set first_used_at = %s"
             " where id = %s and first_used_at is null and replaces is not null"
             " returning replaces",
-            (key.id,),
+            (now, key.id),
         ).fetchone()
         if row:
             conn.execute(
-                "update agent_key set revoked_at = now(), revoked_reason = 'replaced'"
+                "update agent_key set revoked_at = %s, revoked_reason = 'replaced'"
                 " where id = %s and revoked_at is null",
-                (row[0],),
+                (now, row[0]),
             )
 
 
@@ -149,9 +150,9 @@ def rotate(db: Database, key: AgentKey) -> tuple[str, str]:
     key_id = secrets.token_hex(8)
     with db.connect() as conn, conn.transaction():
         conn.execute(
-            "update agent_key set revoked_at = now(), revoked_reason = 'superseded'"
+            "update agent_key set revoked_at = %s, revoked_reason = 'superseded'"
             " where replaces = %s and first_used_at is null and revoked_at is null",
-            (key.id,),
+            (datetime.now(UTC), key.id),
         )
         conn.execute(
             "insert into agent_key (id, agent, token_sha256, rotating, replaces, label)"
@@ -168,8 +169,8 @@ def revoke(db: Database, key_id: str) -> int:
     and callers use the row count to tell "revoked" from "nothing to do"."""
     with db.connect() as conn:
         cursor = conn.execute(
-            "update agent_key set revoked_at = now() where id = %s and revoked_at is null",
-            (key_id,),
+            "update agent_key set revoked_at = %s where id = %s and revoked_at is null",
+            (datetime.now(UTC), key_id),
         )
         return cursor.rowcount
 
@@ -198,11 +199,12 @@ def touch(db: Database, key_id: str) -> None:
     """Record that a key was just used -- at most once every five minutes, so a
     busy agent costs an update that matches nothing, not a write per request
     (homelab-ij8.103)."""
+    now = datetime.now(UTC)
     with db.connect() as conn:
         conn.execute(
-            "update agent_key set last_used_at = now() where id = %s"
-            " and (last_used_at is null or last_used_at < now() - interval '5 minutes')",
-            (key_id,),
+            "update agent_key set last_used_at = %s where id = %s"
+            " and (last_used_at is null or last_used_at < %s)",
+            (now, key_id, now - timedelta(minutes=5)),
         )
 
 

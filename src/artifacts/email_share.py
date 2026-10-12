@@ -20,7 +20,7 @@ import hmac
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from artifacts.db import Database
 
@@ -67,9 +67,9 @@ def create(db: Database, artifact_id: str, email: str) -> tuple[Share, str]:
     share_id = secrets.token_hex(10)
     with db.connect() as conn, conn.transaction():
         conn.execute(
-            "update email_share set revoked_at = now()"
+            "update email_share set revoked_at = %s"
             " where artifact_id = %s and email = %s and revoked_at is null",
-            (artifact_id, email),
+            (datetime.now(UTC), artifact_id, email),
         )
         row = conn.execute(
             "insert into email_share (id, artifact_id, email, token_sha256)"
@@ -93,9 +93,9 @@ def people(db: Database, artifact_id: str) -> list[Share]:
 def withdraw(db: Database, artifact_id: str, share_id: str) -> bool:
     with db.connect() as conn:
         done = conn.execute(
-            "update email_share set revoked_at = now()"
+            "update email_share set revoked_at = %s"
             " where id = %s and artifact_id = %s and revoked_at is null",
-            (share_id, artifact_id),
+            (datetime.now(UTC), share_id, artifact_id),
         )
         return done.rowcount > 0
 
@@ -118,11 +118,12 @@ def find(db: Database, artifact_id: str, token: str) -> Share | None:
 def new_code(db: Database, share: Share) -> str:
     """A fresh six-digit code for this share, limited per hour. The caller
     emails it; only its hash is kept."""
+    now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
         recent = conn.execute(
             "select count(*) from email_share_code where share_id = %s"
-            " and created_at > now() - interval '1 hour'",
-            (share.id,),
+            " and created_at > %s",
+            (share.id, now - timedelta(hours=1)),
         ).fetchone()[0]
         if recent >= CODES_PER_HOUR:
             raise Refused(
@@ -132,12 +133,12 @@ def new_code(db: Database, share: Share) -> str:
         code = f"{secrets.randbelow(1_000_000):06d}"
         conn.execute(
             "insert into email_share_code (id, share_id, code_sha256, expires_at)"
-            " values (%s, %s, %s, now() + make_interval(mins => %s))",
+            " values (%s, %s, %s, %s)",
             (
                 secrets.token_hex(10),
                 share.id,
                 _hash(share.id + ":" + code),
-                CODE_MINUTES,
+                now + timedelta(minutes=CODE_MINUTES),
             ),
         )
     return code
@@ -148,12 +149,13 @@ def check_code(db: Database, share: Share, typed: str) -> str | None:
     cookie value (store it in the browser; only its hash is kept). Every wrong
     try counts against the newest live code."""
     typed = re.sub(r"\s", "", typed or "")
+    now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
         row = conn.execute(
             "select id, code_sha256, attempts from email_share_code"
-            " where share_id = %s and used_at is null and expires_at > now()"
+            " where share_id = %s and used_at is null and expires_at > %s"
             " order by created_at desc limit 1 for update",
-            (share.id,),
+            (share.id, now),
         ).fetchone()
         if row is None:
             return None
@@ -170,13 +172,13 @@ def check_code(db: Database, share: Share, typed: str) -> str | None:
             )
             return None
         conn.execute(
-            "update email_share_code set used_at = now() where id = %s", (code_id,)
+            "update email_share_code set used_at = %s where id = %s", (now, code_id)
         )
         cookie = secrets.token_urlsafe(32)
         conn.execute(
             "insert into email_share_device (cookie_sha256, share_id, expires_at)"
-            " values (%s, %s, now() + make_interval(days => %s))",
-            (_hash(cookie), share.id, DEVICE_DAYS),
+            " values (%s, %s, %s)",
+            (_hash(cookie), share.id, now + timedelta(days=DEVICE_DAYS)),
         )
     return cookie
 
@@ -184,16 +186,17 @@ def check_code(db: Database, share: Share, typed: str) -> str | None:
 def device_ok(db: Database, share: Share, cookie: str | None) -> bool:
     if not cookie or len(cookie) > 128:
         return False
+    now = datetime.now(UTC)
     with db.connect() as conn:
         row = conn.execute(
             "select 1 from email_share_device d join email_share s on s.id = d.share_id"
-            " where d.cookie_sha256 = %s and d.share_id = %s and d.expires_at > now()"
+            " where d.cookie_sha256 = %s and d.share_id = %s and d.expires_at > %s"
             " and s.revoked_at is null",
-            (_hash(cookie), share.id),
+            (_hash(cookie), share.id, now),
         ).fetchone()
         if row:
             conn.execute(
-                "update email_share set last_opened_at = now() where id = %s",
-                (share.id,),
+                "update email_share set last_opened_at = %s where id = %s",
+                (now, share.id),
             )
     return row is not None

@@ -29,7 +29,7 @@ import hashlib
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from artifacts import keys
 from artifacts.db import Database
@@ -81,12 +81,13 @@ class Started:
 
 
 def request(db: Database, suggested_name: str | None, from_address: str) -> Started:
+    now = datetime.now(UTC)
     with db.connect() as conn:
         mine, total = conn.execute(
             "select count(*) filter (where from_address = %s), count(*)"
             " from connect_request"
-            " where expires_at > now() and approved_at is null and denied_at is null",
-            (from_address,),
+            " where expires_at > %s and approved_at is null and denied_at is null",
+            (from_address, now),
         ).fetchone()
         if mine >= MAX_PENDING_PER_ADDRESS:
             raise Refused(
@@ -101,7 +102,7 @@ def request(db: Database, suggested_name: str | None, from_address: str) -> Star
             inserted = conn.execute(
                 "insert into connect_request"
                 " (id, code, poll_sha256, suggested_name, from_address, expires_at)"
-                " values (%s, %s, %s, %s, %s, now() + make_interval(secs => %s))"
+                " values (%s, %s, %s, %s, %s, %s)"
                 " on conflict (code) do nothing returning id",
                 (
                     secrets.token_hex(12),
@@ -109,7 +110,7 @@ def request(db: Database, suggested_name: str | None, from_address: str) -> Star
                     _hash(poll),
                     clean_name(suggested_name),
                     from_address,
-                    LIFETIME_SECONDS,
+                    now + timedelta(seconds=LIFETIME_SECONDS),
                 ),
             ).fetchone()
             if inserted:
@@ -131,9 +132,9 @@ def find(db: Database, typed_code: str) -> Pending | None:
     with db.connect() as conn:
         row = conn.execute(
             "select id, code, suggested_name, from_address, created_at"
-            " from connect_request where code = %s and expires_at > now()"
+            " from connect_request where code = %s and expires_at > %s"
             " and approved_at is null and denied_at is null",
-            (normalise_code(typed_code),),
+            (normalise_code(typed_code), datetime.now(UTC)),
         ).fetchone()
     return Pending(*row) if row else None
 
@@ -150,12 +151,13 @@ def name_in_use(db: Database, agent: str) -> bool:
 
 
 def approve(db: Database, request_id: str, agent: str) -> bool:
+    now = datetime.now(UTC)
     with db.connect() as conn:
         row = conn.execute(
-            "update connect_request set approved_at = now(), agent = %s"
-            " where id = %s and expires_at > now()"
+            "update connect_request set approved_at = %s, agent = %s"
+            " where id = %s and expires_at > %s"
             " and approved_at is null and denied_at is null returning id",
-            (agent, request_id),
+            (now, agent, request_id, now),
         ).fetchone()
     return row is not None
 
@@ -163,9 +165,9 @@ def approve(db: Database, request_id: str, agent: str) -> bool:
 def deny(db: Database, request_id: str) -> bool:
     with db.connect() as conn:
         row = conn.execute(
-            "update connect_request set denied_at = now()"
+            "update connect_request set denied_at = %s"
             " where id = %s and approved_at is null and denied_at is null returning id",
-            (request_id,),
+            (datetime.now(UTC), request_id),
         ).fetchone()
     return row is not None
 
@@ -176,11 +178,12 @@ def collect(db: Database, poll_token: str) -> dict:
     two racing polls cannot both receive one."""
     if not poll_token or len(poll_token) > 128:
         return {"status": "expired"}
+    now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
         row = conn.execute(
             "select id, approved_at, agent, denied_at, delivered_at,"
-            " expires_at > now() from connect_request where poll_sha256 = %s for update",
-            (_hash(poll_token),),
+            " expires_at > %s from connect_request where poll_sha256 = %s for update",
+            (now, _hash(poll_token)),
         ).fetchone()
         if row is None:
             return {"status": "expired"}
@@ -200,7 +203,7 @@ def collect(db: Database, poll_token: str) -> dict:
             (key_id, agent, keys._hash(token)),
         )
         conn.execute(
-            "update connect_request set delivered_at = now(), key_id = %s where id = %s",
-            (key_id, request_id),
+            "update connect_request set delivered_at = %s, key_id = %s where id = %s",
+            (now, key_id, request_id),
         )
     return {"status": "approved", "agent": agent, "key": token}

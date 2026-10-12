@@ -18,6 +18,8 @@ named it, and `agent_key.replaces` is a key id.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import psycopg
 
 from artifacts.db import Database
@@ -117,9 +119,9 @@ def rename_agent(db: Database, old: str, new: str, *, dry_run: bool) -> dict[str
         aliased = conn.execute(
             "insert into agent_alias (old, new) values (%s, %s)"
             " on conflict (old) do update"
-            " set new = excluded.new, renamed_at = now()"
+            " set new = excluded.new, renamed_at = %s"
             " where agent_alias.new is distinct from excluded.new",
-            (old, new),
+            (old, new, datetime.now(UTC)),
         ).rowcount
         aliased += conn.execute(
             "update agent_alias set new = %s where new = %s", (new, old)

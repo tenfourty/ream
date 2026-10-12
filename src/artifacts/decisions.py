@@ -36,7 +36,7 @@ value that is actually about to be stored.
 import dataclasses
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from psycopg.types.json import Jsonb
 
@@ -593,15 +593,23 @@ def _close_round(
     lease is stretched to CLOSED_CLAIM_SECONDS here: a five-minute lease left
     alone would lapse mid-revision and let a second session take the closed
     round and act on the same verdict. A lapsed or absent lease is left as is."""
+    now = datetime.now(UTC)
     conn.execute(
-        "update review_round set closed_at = now(), verdict = %s,"
+        "update review_round set closed_at = %s, verdict = %s,"
         " reviewed_version = %s,"
         " claim_expires_at = case"
-        "   when claimed_by is not null and claim_expires_at > now()"
-        "   then greatest(claim_expires_at, now() + make_interval(secs => %s))"
+        "   when claimed_by is not null and claim_expires_at > %s"
+        "   then greatest(claim_expires_at, %s)"
         "   else claim_expires_at end"
         " where review_id = %s and closed_at is null",
-        (VERDICTS[letter], version, CLOSED_CLAIM_SECONDS, decision_id),
+        (
+            now,
+            VERDICTS[letter],
+            version,
+            now,
+            now + timedelta(seconds=CLOSED_CLAIM_SECONDS),
+            decision_id,
+        ),
     )
 
 
@@ -719,12 +727,12 @@ def _lock_current_round(conn, review_id: str):
     repaired from the decision row exactly as `_advance_rounds` does."""
     sql = (
         "select n, claimed_by, claim_expires_at,"
-        " claimed_by is not null and claim_expires_at > now(),"
+        " claimed_by is not null and claim_expires_at > %s,"
         " closed_at is not null"
         " from review_round where review_id = %s order by n desc limit 1"
         " for update"
     )
-    found = conn.execute(sql, (review_id,)).fetchone()
+    found = conn.execute(sql, (datetime.now(UTC), review_id)).fetchone()
     if found is not None:
         return found
     answered, asked_on = conn.execute(
@@ -737,7 +745,7 @@ def _lock_current_round(conn, review_id: str):
     )
     if answered is not None:
         _close_round(conn, review_id, answered)
-    return conn.execute(sql, (review_id,)).fetchone()
+    return conn.execute(sql, (datetime.now(UTC), review_id)).fetchone()
 
 
 def _lock_owned_review(conn, agent: str, review_id: str) -> str:
@@ -781,11 +789,16 @@ def claim_round(db: Database, agent: str, review_id: str, session: str) -> Claim
         seconds = CLOSED_CLAIM_SECONDS if current[4] else CLAIM_SECONDS
         row = conn.execute(
             "update review_round set claimed_by = %s,"
-            " claim_expires_at = now() + make_interval(secs => %s),"
+            " claim_expires_at = %s,"
             " released_reason = null, released_by = null"
             " where review_id = %s and n = %s"
             " returning n, claimed_by, claim_expires_at",
-            (session, seconds, review_id, current[0]),
+            (
+                session,
+                datetime.now(UTC) + timedelta(seconds=seconds),
+                review_id,
+                current[0],
+            ),
         ).fetchone()
     return dataclasses.replace(_holder(row), lease_seconds=seconds)
 
@@ -908,10 +921,18 @@ def record_elsewhere(
             # atomic guard `answer` uses, so a relay cannot overwrite it.
             written = conn.execute(
                 "update decision set answer = %s, answer_note = %s,"
-                " answered_at = now(), answered_by = 'jeremy',"
+                " answered_at = %s, answered_by = 'jeremy',"
                 " answer_source = %s, recorded_by = %s, said_at = %s"
                 " where id = %s and (kind <> 'review' or answer is null)",
-                (letter, note, source, recorded_by, said_at, decision_id),
+                (
+                    letter,
+                    note,
+                    datetime.now(UTC),
+                    source,
+                    recorded_by,
+                    said_at,
+                    decision_id,
+                ),
             )
             if written.rowcount == 0:
                 current = conn.execute(
@@ -1043,11 +1064,11 @@ def answer(
             # first verdict. A second writer waits on the row lock, re-tests
             # and updates nothing.
             written = conn.execute(
-                "update decision set answer = %s, answer_note = %s, answered_at = now(),"
+                "update decision set answer = %s, answer_note = %s, answered_at = %s,"
                 " answered_by = %s, answer_source = 'page', recorded_by = null,"
                 " said_at = null where id = %s"
                 " and (kind <> 'review' or answer is null)",
-                (letter, note, by, decision_id),
+                (letter, note, datetime.now(UTC), by, decision_id),
             )
             if written.rowcount == 0:
                 # Lost the race: no event, and the row as it now stands.
@@ -1175,12 +1196,13 @@ def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
                 # necessarily heard the answer -- but only when nothing has acknowledged
                 # it yet, so an earlier, truer "seen at" is never overwritten by a later
                 # close. `coalesce` does both in one statement.
+                now = datetime.now(UTC)
                 conn.execute(
-                    "update decision set closed_at = now(),"
-                    " acknowledged_at = coalesce(acknowledged_at, now()),"
+                    "update decision set closed_at = %s,"
+                    " acknowledged_at = coalesce(acknowledged_at, %s),"
                     " acknowledged_by = coalesce(acknowledged_by, %s)"
                     " where id = %s",
-                    (agent, decision_id),
+                    (now, now, agent, decision_id),
                 )
                 if (
                     row[_KIND_IDX] == "review"
@@ -1239,9 +1261,9 @@ def _acknowledge(conn, agent: str, decision_id: str) -> DecisionRow:
         raise store.NotFound()
     if row[12] is None:  # acknowledged_at
         conn.execute(
-            "update decision set acknowledged_at = now(), acknowledged_by = %s"
+            "update decision set acknowledged_at = %s, acknowledged_by = %s"
             " where id = %s",
-            (agent, decision_id),
+            (datetime.now(UTC), agent, decision_id),
         )
         row = conn.execute(
             f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
@@ -1322,14 +1344,14 @@ def uncollected(
         "   and seat_read.session is not distinct from decision.session"
         " where decision.answered_at is not null"
         " and decision.acknowledged_at is null"
-        " and decision.answered_at < now() - make_interval(secs => %s)"
+        " and decision.answered_at < %s"
         # A DELETED page's answers owe nobody anything (homelab-ij8.97): the page
         # is gone and nothing on it can be acted on, so reporting it here for
         # ever made the one queue meant to be empty never empty. Restoring the
         # page brings it back, because the answer itself is untouched.
         " and artifact.deleted_at is null"
     )
-    params: list[object] = [stuck_after_seconds]
+    params: list[object] = [datetime.now(UTC) - timedelta(seconds=stuck_after_seconds)]
     if agent is not None:
         sql += " and artifact.agent = %s"
         params.append(agent)
@@ -1416,7 +1438,7 @@ def across_seats(
     has been waiting longest, because that is the one most likely to have been
     forgotten.
 
-    `age_seconds` is computed by the database that stamped `created_at`, so a
+    `age_seconds` is computed by the service from the `created_at` it stamped, so a
     consumer's own clock never disagrees with the service about how old something
     is -- and a queue that reads "17 hours" is telling Jeremy something the
     service is prepared to stand behind.
@@ -1424,7 +1446,7 @@ def across_seats(
     """
     sql = (
         f"select {_COLUMNS}, artifact.agent, artifact.title,"  # noqa: S608 -- fixed constant, not caller input
-        " extract(epoch from now() - decision.created_at)::bigint from decision"
+        " decision.created_at from decision"
         " join artifact on artifact.id = decision.artifact_id"
         " where true"
     )
@@ -1435,12 +1457,13 @@ def across_seats(
     sql += " order by decision.created_at asc, decision.id asc limit %s"
     with db.connect() as conn:
         rows = conn.execute(sql, (limit,)).fetchall()
+    now = datetime.now(UTC)
     return [
         CrossSeatRow(
             decision=_row_to_decision(row),
             agent=row[-3],
             artifact_title=row[-2],
-            age_seconds=int(row[-1]),
+            age_seconds=round((now - row[-1]).total_seconds()),
         )
         for row in rows
     ]
@@ -1640,25 +1663,25 @@ def round_presence(db: Database, agent: str, review_id: str) -> dict | None:
     other verdict ends the review, and nobody is on it."""
     with db.connect() as conn:
         found = conn.execute(
-            "select claimed_by, claim_expires_at > now(), released_reason,"
+            "select claimed_by, claim_expires_at > %s, released_reason,"
             " released_by from review_round where review_id = %s"
             " and (closed_at is null or verdict = 'changes_requested')"
             " and n = (select max(n) from review_round where review_id = %s)",
-            (review_id, review_id),
+            (datetime.now(UTC), review_id, review_id),
         ).fetchone()
         if found is None:
             return None
         claimed_by, live, reason, released_by = found
         if claimed_by is not None and live:
             seen = conn.execute(
-                "select extract(epoch from now() - max(last_read_at))"
+                "select max(last_read_at)"
                 " from seat_read where agent = %s and session = %s",
                 (agent, claimed_by),
             ).fetchone()
             return {
                 "live": True,
                 "session": claimed_by,
-                "seen_seconds": float(seen[0])
+                "seen_seconds": (datetime.now(UTC) - seen[0]).total_seconds()
                 if seen and seen[0] is not None
                 else None,
             }

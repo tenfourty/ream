@@ -8,6 +8,8 @@ is held. Every function here takes the caller's connection, so a release runs
 inside the caller's own transaction.
 """
 
+from datetime import UTC, datetime
+
 from artifacts import events
 
 MODES = ("held", "live")
@@ -27,8 +29,8 @@ def set_mode(conn, mode: str) -> None:
         raise ValueError(mode)
     conn.execute(
         "insert into human_pref (key, value) values (%s, %s)"
-        " on conflict (key) do update set value = excluded.value, updated_at = now()",
-        (_KEY, mode),
+        " on conflict (key) do update set value = excluded.value, updated_at = %s",
+        (_KEY, mode, datetime.now(UTC)),
     )
 
 
