@@ -5,6 +5,7 @@ machine out -- loudly."""
 
 import os
 import time
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -81,8 +82,8 @@ def test_a_key_never_swapped_is_refused_after_two_weeks(db, api):
     token, key_id = _rotating_key(db)
     with db.connect() as conn:
         conn.execute(
-            "update agent_key set created_at = now() - interval '15 days' where id = %s",
-            (key_id,),
+            "update agent_key set created_at = %s where id = %s",
+            (datetime.now(UTC) - timedelta(days=15), key_id),
         )
     refused = _me(api, token)
     assert refused.status_code == 401

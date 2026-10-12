@@ -4,6 +4,7 @@ and a verdict meant for an earlier round is refused."""
 
 import threading
 import time
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -133,9 +134,9 @@ def test_changes_requested_then_a_republish_opens_round_two(db):
     page, review = _sent_back(db)
     with db.connect() as conn:
         conn.execute(
-            "update decision set acknowledged_at = now(), acknowledged_by = 'seat'"
+            "update decision set acknowledged_at = %s, acknowledged_by = 'seat'"
             " where id = %s",
-            (review.id,),
+            (datetime.now(UTC), review.id),
         )
     published = _republish(db, page, _v(1))
     assert published.version == 2
@@ -365,6 +366,7 @@ def _gate_after(monkeypatch, module, name):
 
 
 @pytest.mark.parametrize("letter", ["c", "a"])
+@pytest.mark.postgres_only  # waits for a lock through pg_stat_activity
 def test_a_verdict_holding_the_lock_lands_on_round_one(db, monkeypatch, letter):
     """The verdict locks the review first; the republish waits, then sees the
     verdict and opens round 2 only if it was changes requested."""
@@ -401,6 +403,7 @@ def test_a_verdict_holding_the_lock_lands_on_round_one(db, monkeypatch, letter):
         assert decisions.get_owned(db, "seat", review.id).answer == "a"
 
 
+@pytest.mark.postgres_only  # waits for a lock through pg_stat_activity
 def test_a_republish_holding_the_lock_opens_nothing_and_the_verdict_counts(
     db, monkeypatch
 ):
@@ -507,9 +510,9 @@ def test_a_verdict_from_an_old_pod_is_closed_before_the_next_round(db):
     review = decisions.ask_review(db, agent="seat", artifact_id=page.id)
     with db.connect() as conn:  # an old pod: answers, leaves round 1 open
         conn.execute(
-            "update decision set answer = 'c', answered_at = now(),"
+            "update decision set answer = 'c', answered_at = %s,"
             " answered_by = 'jeremy', answer_source = 'page' where id = %s",
-            (review.id,),
+            (datetime.now(UTC), review.id),
         )
     _republish(db, page, _v(1))
     rounds = _rounds(db, review.id)
@@ -523,9 +526,9 @@ def test_an_old_pods_approval_opens_nothing_and_closes_round_one(db):
     review = decisions.ask_review(db, agent="seat", artifact_id=page.id)
     with db.connect() as conn:
         conn.execute(
-            "update decision set answer = 'a', answered_at = now(),"
+            "update decision set answer = 'a', answered_at = %s,"
             " answered_by = 'jeremy', answer_source = 'page' where id = %s",
-            (review.id,),
+            (datetime.now(UTC), review.id),
         )
     _republish(db, page, _v(1))
     assert _rounds(db, review.id) == [(1, 1, None, True, "approved")]

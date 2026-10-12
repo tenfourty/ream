@@ -6,13 +6,14 @@ old key keeps working as the new name, and the old name still means the new
 one wherever somebody types it.
 """
 
-import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
 from artifacts import admin, comments, decisions, events, keys, rename, store
 from artifacts.app import create_gallery_app
+from artifacts.db import jsonb
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
@@ -91,29 +92,34 @@ def _populate(db, agent: str, *, session: str = "s1", scope: str = "x:one"):
     )
     with db.connect() as conn:
         conn.execute(
-            "update decision set answer = 'b', answered_at = now(), answered_by = %s"
+            "update decision set answer = 'b', answered_at = %s, answered_by = %s"
             " where id = %s",
-            (agent, legacy.id),
+            (datetime.now(UTC), agent, legacy.id),
         )
         conn.execute(
             "insert into seat_grant (agent, scope) values (%s, %s)", (agent, scope)
         )
         conn.execute(
-            "insert into seat_read (agent, session, last_read_at)"
-            " values (%s, %s, now() - interval '1 hour')",
-            (agent, session),
+            "insert into seat_read (agent, session, last_read_at) values (%s, %s, %s)",
+            (agent, session, datetime.now(UTC) - timedelta(hours=1)),
         )
         conn.execute(
             "insert into idempotency (agent, route, key, body_sha256, status,"
-            " response, expires_at) values (%s, 'r', 'k', 'h', 200, %s::jsonb,"
-            " now() + interval '1 hour')",
-            (agent, json.dumps({"from": agent})),
+            " response, expires_at) values (%s, 'r', 'k', 'h', 200, %s, %s)",
+            (agent, jsonb({"from": agent}), datetime.now(UTC) + timedelta(hours=1)),
         )
         conn.execute(
             "insert into connect_request (id, code, poll_sha256, from_address,"
             " expires_at, approved_at, agent) values (%s, %s, %s, '1.2.3.4',"
-            " now() + interval '1 hour', now(), %s)",
-            (f"cr-{agent}", f"C-{agent}", f"p-{agent}", agent),
+            " %s, %s, %s)",
+            (
+                f"cr-{agent}",
+                f"C-{agent}",
+                f"p-{agent}",
+                datetime.now(UTC) + timedelta(hours=1),
+                datetime.now(UTC),
+                agent,
+            ),
         )
     return token, page.id, asked.id
 
@@ -174,16 +180,19 @@ def test_merging_into_an_existing_agent_keeps_both_keys_pages_and_grants(db, api
         )
         # the merged-in agent's read of session s1 is the NEWER one, and its
         # stored response for (r, k) expires later: both should win
+        now = datetime.now(UTC)
         conn.execute(
-            "update seat_read set last_read_at = now() where agent = 'baba-operator'"
+            "update seat_read set last_read_at = %s where agent = 'baba-operator'",
+            (now,),
         )
         conn.execute(
-            "update idempotency set expires_at = now() + interval '2 hours'"
-            " where agent = 'baba-operator'"
+            "update idempotency set expires_at = %s where agent = 'baba-operator'",
+            (now + timedelta(hours=2),),
         )
         conn.execute(
             "insert into seat_read (agent, session, last_read_at)"
-            " values ('baba-operator', '', now())"
+            " values ('baba-operator', '', %s)",
+            (now,),
         )
 
     rename.rename_agent(db, "homelab-ops", "homelab-maintainer", dry_run=False)
@@ -207,11 +216,11 @@ def test_merging_into_an_existing_agent_keeps_both_keys_pages_and_grants(db, api
         ).fetchall()
         assert [s[0] for s in scopes] == ["x:own", "x:shared"]
         reads = conn.execute(
-            "select session, last_read_at > now() - interval '1 minute'"
-            " from seat_read where agent = 'homelab-maintainer'"
-            " order by session nulls first"
+            "select session, last_read_at from seat_read"
+            " where agent = 'homelab-maintainer' order by session"
         ).fetchall()
-        assert reads == [("", True), ("s1", True)]
+        recent = datetime.now(UTC) - timedelta(minutes=1)
+        assert [(s, at > recent) for s, at in reads] == [("", True), ("s1", True)]
         kept = conn.execute(
             "select response from idempotency where agent = 'homelab-maintainer'"
         ).fetchall()

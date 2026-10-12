@@ -1,7 +1,7 @@
 import contextlib
 import re
+from datetime import UTC, datetime, timedelta
 
-import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -127,7 +127,7 @@ def _ids_in_order(page: str) -> list[str]:
 def test_the_list_is_capped_at_two_hundred_rows(db, monkeypatch):
     # The real publish, 201 times, over ONE connection: a fresh connection per
     # publish was most of this test's ~3 s.
-    with psycopg.connect(db.dsn, autocommit=True) as conn, monkeypatch.context() as m:
+    with db.connect() as conn, monkeypatch.context() as m:
         m.setattr(db, "connect", contextlib.contextmanager(lambda: (yield conn)))
         for i in range(201):
             store.publish(db, "ops-seat", f"page {i}", _PAGE)
@@ -143,8 +143,8 @@ def test_the_list_orders_newest_first(db):
     older = store.publish(db, "ops-seat", "older", _PAGE)
     with db.connect() as conn:
         conn.execute(
-            "update artifact set updated_at = now() - interval '1 hour' where id = %s",
-            (older.id,),
+            "update artifact set updated_at = %s where id = %s",
+            (datetime.now(UTC) - timedelta(hours=1), older.id),
         )
     newer = store.publish(db, "ops-seat", "newer", _PAGE)
     page = (

@@ -1,6 +1,8 @@
 """Hold or live (page review step 3, homelab-ij8.108): a mark Jeremy makes on a
 page under a held review is invisible to the agent."""
 
+from datetime import UTC, datetime
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -262,6 +264,7 @@ def test_a_verdict_that_lands_before_the_mark_leaves_it_unheld(db, monkeypatch):
     assert "Rotate" in message
 
 
+@pytest.mark.postgres_only  # waits for a lock through pg_stat_activity
 def test_a_verdict_that_waits_for_the_mark_releases_it(db, monkeypatch):
     import threading
 
@@ -344,7 +347,10 @@ def test_approved_with_held_marks_counts_as_approved_with_notes(db, nudges):
 
     page, row, [mark] = _held_review(db, marks=1)
     with db.connect() as conn:
-        conn.execute("update comment set resolved_at = now() where id = %s", (mark.id,))
+        conn.execute(
+            "update comment set resolved_at = %s where id = %s",
+            (datetime.now(UTC), mark.id),
+        )
     assert decisions.answer(db, row.id, letter="a", by="jeremy").answer == "a"
 
 
@@ -430,6 +436,7 @@ def test_closing_or_archiving_releases_held_marks(db, nudges):
     assert nudges == []
 
 
+@pytest.mark.postgres_only  # waits for a lock through pg_stat_activity
 def test_a_flip_racing_approved_never_drops_a_mark(db, monkeypatch, nudges):
     import threading
 
@@ -492,6 +499,7 @@ def test_flipping_one_review_to_live_leaves_another_reviews_marks_held(db, nudge
     assert not any(_held_flags(db, page).values())
 
 
+@pytest.mark.postgres_only  # waits for a lock through pg_stat_activity
 def test_an_archive_racing_a_mark_leaves_no_mark_held_on_a_closed_review(
     db, monkeypatch, nudges
 ):
@@ -684,7 +692,10 @@ def test_a_released_reply_in_a_visible_thread_gets_its_own_event(db, nudges):
 def test_a_resolved_root_is_released_without_an_event(db, nudges):
     page, row, [mark, other] = _held_review(db, marks=2)
     with db.connect() as conn:
-        conn.execute("update comment set resolved_at = now() where id = %s", (mark.id,))
+        conn.execute(
+            "update comment set resolved_at = %s where id = %s",
+            (datetime.now(UTC), mark.id),
+        )
     assert holds.set_review_mode(db, row.id, "live") == (page.id, 2)
     assert _comment_events(db, [mark.id]) == []
     assert len(_comment_events(db, [other.id])) == 1

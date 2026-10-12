@@ -17,6 +17,11 @@ message saying so, and the schema is rebuilt behind it.
 The throwaway server belongs to the xdist controller (or the only process,
 when serial), never to a worker, so a worker killed mid-run cannot orphan it.
 Servers orphaned by a killed controller are reaped at the next start.
+
+ARTIFACTS_TEST_DB=sqlite runs the same suite on SQLite instead (the SQLite
+switch, slice 5): each worker gets its own database file, no server is
+started, and a test marked `postgres_only` (it reads Postgres's catalogue or
+its own SQL is Postgres's) is skipped. CI runs the suite both ways.
 """
 
 import contextlib
@@ -47,6 +52,7 @@ from artifacts import events
 from artifacts.db import Database
 
 _REAL_WAIT_FOR_AGENT = events.wait_for_agent
+SQLITE = os.environ.get("ARTIFACTS_TEST_DB") == "sqlite"
 
 
 def _share_fastapi_type_adapters() -> None:
@@ -416,7 +422,7 @@ def pytest_configure(config) -> None:
         except psycopg.Error as exc:  # not a superuser: run durable, just slower
             warnings.warn(f"could not relax durability: {exc}", stacklevel=1)
     parallel = config.getoption("dist", "no") != "no"
-    if _is_worker(config) or not parallel or os.environ.get("PG_TEST_DSN"):
+    if SQLITE or _is_worker(config) or not parallel or os.environ.get("PG_TEST_DSN"):
         return
     if config.getoption("collectonly") or config.getoption("help"):
         return
@@ -636,6 +642,8 @@ def first_look(monkeypatch):
 @pytest.fixture(scope="session")
 def _pg_server() -> str:
     """PG_TEST_DSN (CI's one service), else the controller's throwaway server."""
+    if SQLITE:
+        return ""
     return os.environ.get("PG_TEST_DSN") or os.environ.get(_URI_ENV) or _Server.ensure()
 
 
@@ -651,6 +659,13 @@ def dsn(_pg_server: str) -> str:
     """This worker's own database, created fresh (dropped first if a crashed run
     left it behind) and dropped again at the end of the session."""
     name = f"artifacts_test_{_worker_id()}"
+    if SQLITE:
+        folder = tempfile.mkdtemp(prefix=f"{name}-")
+        try:
+            yield f"sqlite:///{folder}/{name}.db"
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+        return
     drop = sql.SQL("drop database if exists {} with (force)").format(
         sql.Identifier(name)
     )
@@ -769,9 +784,59 @@ class _Schema:
             conn.execute(sql.SQL("; ").join(statements))
 
 
+class _SqliteSchema:
+    """`_Schema`'s contract on SQLite: build once, empty between tests (every
+    table, and the AUTOINCREMENT counters), and a fingerprint of column and
+    table counts."""
+
+    def __init__(self, dsn: str) -> None:
+        self.database = Database(dsn)
+        self.rebuild()
+
+    def close(self) -> None:
+        return None
+
+    def rebuild(self) -> None:
+        self.database.reset()
+        self.database.migrate()
+        with self.database.connect() as conn:
+            self.tables = [
+                row[0]
+                for row in conn.execute(
+                    "select name from sqlite_master where type = 'table'"
+                    " and name not like 'sqlite_%' order by name"
+                ).fetchall()
+            ]
+        assert self.tables, "the schema built no tables"
+        self.built = self.fingerprint()
+
+    def fingerprint(self) -> tuple[int, int]:
+        with self.database.connect() as conn:
+            tables = [
+                row[0]
+                for row in conn.execute(
+                    "select name from sqlite_master where type = 'table'"
+                    " and name not like 'sqlite_%'"
+                ).fetchall()
+            ]
+            columns = sum(
+                len(conn.execute(f'pragma table_info("{t}")').fetchall())
+                for t in tables
+            )
+        return columns, len(tables)
+
+    def empty(self) -> None:
+        with self.database.connect() as conn:
+            conn.execute("pragma foreign_keys = off")
+            with conn.transaction():
+                for table in self.tables:
+                    conn.execute(f'delete from "{table}"')  # noqa: S608 -- table names from sqlite_master
+                conn.execute("delete from sqlite_sequence")
+
+
 @pytest.fixture(scope="session")
 def _schema(dsn: str):
-    schema = _Schema(dsn)
+    schema = _SqliteSchema(dsn) if SQLITE else _Schema(dsn)
     try:
         yield schema
     finally:
@@ -784,6 +849,13 @@ def fresh_schema(_schema: _Schema):
     test on this worker is not poisoned by what this one changed."""
     yield
     _schema.rebuild()
+
+
+@pytest.fixture(autouse=True)
+def _postgres_only(request):
+    """A test marked `postgres_only` is skipped on SQLite."""
+    if SQLITE and request.node.get_closest_marker("postgres_only"):
+        pytest.skip("Postgres only")
 
 
 @pytest.fixture()

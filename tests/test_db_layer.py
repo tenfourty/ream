@@ -12,7 +12,9 @@ from artifacts import db as dbmod
 
 def test_rows_are_fetched_eagerly_and_read_in_order(db):
     with db.connect() as conn:
-        result = conn.execute("select n from generate_series(1, 3) n order by n")
+        result = conn.execute(
+            "select 1 union all select 2 union all select 3 order by 1"
+        )
         assert result.fetchone() == (1,)
         assert result.fetchall() == [(2,), (3,)]
         assert result.fetchone() is None

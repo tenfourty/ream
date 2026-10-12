@@ -60,7 +60,12 @@ uv run ruff check src tests
 uv run pytest -q -n auto --maxprocesses 8   # the full suite, in parallel; a throwaway Postgres per run
 uv run pytest -q tests/test_x.py            # one file, serially
 PG_TEST_DSN=postgresql://… uv run pytest -q -n auto --maxprocesses 8   # or an existing Postgres
+ARTIFACTS_TEST_DB=sqlite uv run pytest -q -n auto --maxprocesses 8      # the same suite on SQLite
 ```
+
+The service runs on Postgres or SQLite, chosen by `DATABASE_URL` (`postgresql://…` or
+`sqlite:////data/artifacts.db`). Only `src/artifacts/db.py` talks to a driver; SQL elsewhere must
+read the same on both (`docs/agent/specs/2026-10-09-sqlite-design.md`). CI runs the suite on both.
 
 **On baba, never run the test suite** (Jeremy, 13 Oct 2026: no test-suite runs there). Push the
 change to a `ci/<name>` branch instead: CI runs the full suite on it and never builds an image or

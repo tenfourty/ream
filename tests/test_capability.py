@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -57,7 +59,10 @@ def test_a_pass_works_once(db, content, published):
 def test_a_pass_expires_unused(db, content, published):
     stale = _pass(db, published.id)
     with db.connect() as conn:
-        conn.execute("update frame_pass set expires_at = now() - interval '1 second'")
+        conn.execute(
+            "update frame_pass set expires_at = %s",
+            (datetime.now(UTC) - timedelta(seconds=1),),
+        )
     assert content.get(f"/p/{stale}/", headers=FRAMED).status_code == 403
 
 
@@ -76,7 +81,8 @@ def test_a_deleted_page_is_not_served_even_with_a_fresh_pass(db, content, publis
     fresh = _pass(db, published.id)
     with db.connect() as conn:
         conn.execute(
-            "update artifact set deleted_at = now() where id = %s", (published.id,)
+            "update artifact set deleted_at = %s where id = %s",
+            (datetime.now(UTC), published.id),
         )
     assert content.get(f"/p/{fresh}/", headers=FRAMED).status_code == 404
 

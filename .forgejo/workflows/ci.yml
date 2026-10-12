@@ -88,6 +88,14 @@ jobs:
         # (artifacts_test_<worker>) on this one Postgres service.
         run: uv run pytest -q -n auto --maxprocesses 5
 
+      # The same suite on SQLite (the SQLite switch, slice 5): one database file
+      # per worker, no server; tests marked postgres_only are skipped. In this
+      # job rather than its own so it costs no second runner slot.
+      - name: tests on SQLite
+        env:
+          ARTIFACTS_TEST_DB: sqlite
+        run: uv run pytest -q -n auto --maxprocesses 5
+
   # No `needs:` -- the image builds while the tests run. An image whose tests fail
   # is only ever pushed to the internal registry; `deploy` below waits for both.
   image:

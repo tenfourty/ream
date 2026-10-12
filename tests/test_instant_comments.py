@@ -2,6 +2,7 @@
 (homelab-ij8.112). Jeremy's never wait on it."""
 
 import logging
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -195,9 +196,8 @@ def test_publish_still_waits_for_ggshield(db, gg):
 def _age(db, cid, seconds=120):
     with db.connect() as conn:
         conn.execute(
-            "update comment set created_at = now() - make_interval(secs => %s)"
-            " where id = %s",
-            (seconds, cid),
+            "update comment set created_at = %s where id = %s",
+            (datetime.now(UTC) - timedelta(seconds=seconds), cid),
         )
 
 
@@ -238,7 +238,8 @@ def test_the_sweep_skips_what_it_should(db, page, gg):
     comments.withdraw(db, gone.id, kind="ggshield_x")
     with db.connect() as conn:
         conn.execute(
-            "update comment set gg_scanned_at = now() where id = %s", (done.id,)
+            "update comment set gg_scanned_at = %s where id = %s",
+            (datetime.now(UTC), done.id),
         )
     for r in (human, gone, done):
         _age(db, r.id)
@@ -300,6 +301,7 @@ def test_release_says_nothing_of_replies_under_a_withdrawn_root(db, page):
     assert _events(db, "comment_added") == []
 
 
+@pytest.mark.postgres_only  # reads information_schema
 def test_a_fresh_agent_comment_is_unscanned_and_migrating_again_keeps_it_so(db, page):
     row = _agent_comment(db, page)
     assert not _stamped(db, row.id)

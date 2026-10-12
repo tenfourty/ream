@@ -2,6 +2,7 @@
 
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -109,7 +110,10 @@ def test_a_refusal_is_not_remembered(client, auth, page):
 def test_expired_rows_are_pruned_and_no_longer_replay(client, auth, db, page):
     _post(client, auth, page, key="old")
     with db.connect() as conn:
-        conn.execute("update idempotency set expires_at = now() - interval '1 second'")
+        conn.execute(
+            "update idempotency set expires_at = %s",
+            (datetime.now(UTC) - timedelta(seconds=1),),
+        )
     r = _post(client, auth, page, key="new")
     assert r.status_code == 201
     with db.connect() as conn:
@@ -117,7 +121,10 @@ def test_expired_rows_are_pruned_and_no_longer_replay(client, auth, db, page):
     assert keys_left == ["new"]
     # and the expired key runs afresh rather than replaying
     with db.connect() as conn:
-        conn.execute("update idempotency set expires_at = now() - interval '1 second'")
+        conn.execute(
+            "update idempotency set expires_at = %s",
+            (datetime.now(UTC) - timedelta(seconds=1),),
+        )
     _post(client, auth, page, key="new")
     assert _count(db, page) == 3
 
@@ -298,6 +305,7 @@ def test_a_reply_and_an_ack_without_a_key_still_write(client, auth, db, page):
 # --- pruning ------------------------------------------------------------------
 
 
+@pytest.mark.postgres_only  # reads pg_indexes and uses generate_series
 def test_expired_rows_are_pruned_by_an_index_a_bounded_batch_at_a_time(
     client, auth, db, page
 ):

@@ -43,6 +43,7 @@ def test_returned_app_answers_healthz_only_on_the_gallery_host(dsn, monkeypatch)
 
 
 @pytest.mark.usefixtures("fresh_schema")
+@pytest.mark.postgres_only  # reads information_schema
 def test_app_from_env_migrates_so_the_schema_is_ready_on_first_request(
     dsn, monkeypatch
 ):

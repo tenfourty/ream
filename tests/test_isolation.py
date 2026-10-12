@@ -102,14 +102,17 @@ def test_every_table_is_empty_at_the_start(db):
     assert set(_row_counts(db).values()) == {0}
 
 
+@pytest.mark.postgres_only  # reads Postgres's catalogue
 def test_isolation_empty_before_the_writer(db):
     _assert_clean(db)
 
 
+@pytest.mark.postgres_only  # reads Postgres's catalogue
 def test_isolation_writes_every_table_family(db):
     _write_every_family(db)
 
 
+@pytest.mark.postgres_only  # reads Postgres's catalogue
 def test_isolation_empty_after_the_writer(db):
     _assert_clean(db)
 
@@ -118,6 +121,8 @@ def test_isolation_empty_after_the_writer(db):
 
 
 @pytest.mark.usefixtures("fresh_schema")
+@pytest.mark.postgres_only  # reads Postgres's catalogue
+@pytest.mark.postgres_only  # reads Postgres's catalogue
 def test_isolation_alters_the_schema(db):
     with db.connect() as conn:
         conn.execute("alter table artifact drop column agents_can_read")
@@ -126,6 +131,8 @@ def test_isolation_alters_the_schema(db):
         conn.execute("insert into leftover_from_a_test values (1)")
 
 
+@pytest.mark.postgres_only  # reads Postgres's catalogue
+@pytest.mark.postgres_only  # reads Postgres's catalogue
 def test_isolation_the_next_test_sees_the_real_schema(db):
     page = store.publish(db, "owner", "After", PAGE.format("a"))
     with db.connect() as conn:
@@ -140,6 +147,8 @@ def test_isolation_the_next_test_sees_the_real_schema(db):
 
 
 @pytest.mark.usefixtures("fresh_schema")
+@pytest.mark.postgres_only  # reads Postgres's catalogue
+@pytest.mark.postgres_only  # reads Postgres's catalogue
 def test_isolation_the_fingerprint_sees_a_schema_change(db, _schema):
     """The check the `db` fixture runs after every test not asking for a rebuild."""
     assert _schema.fingerprint() == _schema.built
@@ -148,6 +157,7 @@ def test_isolation_the_fingerprint_sees_a_schema_change(db, _schema):
     assert _schema.fingerprint() != _schema.built
 
 
+@pytest.mark.postgres_only  # reads Postgres's catalogue
 def test_a_dbname_in_the_query_does_not_override_the_workers_database():
     from conftest import _with_dbname
 

@@ -3,6 +3,8 @@ slice 2): SQLite has no NULLS NOT DISTINCT, so one row per unlabelled seat needs
 a real shared value. The migration folds NULL rows left by an older pod into
 the '' row, keeping the later read."""
 
+import pytest
+
 from artifacts import events
 
 
@@ -17,6 +19,7 @@ def test_an_unlabelled_read_is_stored_with_an_empty_session(db):
     assert events.last_read(db, "seat-a") is not None
 
 
+@pytest.mark.postgres_only  # migrates the Postgres schema
 def test_the_migration_folds_a_null_session_into_the_empty_one_keeping_the_later(
     db,
 ):

@@ -4,7 +4,7 @@ hands the round back with a reason."""
 
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -54,12 +54,13 @@ def _release(client, h, rid, session, reason):
 
 def _state(db, rid):
     with db.connect() as conn:
-        return conn.execute(
-            "select n, claimed_by, claim_expires_at, released_reason,"
-            " extract(epoch from claim_expires_at - now())"
+        row = conn.execute(
+            "select n, claimed_by, claim_expires_at, released_reason"
             " from review_round where review_id = %s order by n desc limit 1",
             (rid,),
         ).fetchone()
+    left = None if row[2] is None else (row[2] - datetime.now(UTC)).total_seconds()
+    return (*row, left)
 
 
 # ---- claim ----
@@ -129,13 +130,13 @@ def test_a_backdated_lease_is_free_to_another_session(db, client):
     _claim(client, h, review.id, "seat/dead")
     with db.connect() as conn:
         conn.execute(
-            "update review_round set claim_expires_at = now() - interval '1 second'"
-            " where review_id = %s",
-            (review.id,),
+            "update review_round set claim_expires_at = %s where review_id = %s",
+            (datetime.now(UTC) - timedelta(seconds=1), review.id),
         )
     assert _claim(client, h, review.id, "seat/new").status_code == 200
 
 
+@pytest.mark.postgres_only  # waits for a lock through pg_stat_activity
 def test_two_sessions_racing_to_claim_get_exactly_one_winner(db, live, monkeypatch):
     """The loser waits on the decision row's lock while the winner holds it,
     then sees the winner's claim: 409, never a second 200."""
@@ -440,10 +441,10 @@ def test_a_verdict_stretches_the_holders_live_lease_to_an_hour(db, client):
     assert 3590 < _state(db, review.id)[4] <= 3600
     assert _state(db, review.id)[1] == "seat/a"
     with db.connect() as conn:
+        expires = _state(db, review.id)[2]
         conn.execute(
-            "update review_round set claim_expires_at ="
-            " claim_expires_at - interval '5 min' where review_id = %s",
-            (review.id,),
+            "update review_round set claim_expires_at = %s where review_id = %s",
+            (expires - timedelta(minutes=5), review.id),
         )
     r = _claim(client, h, review.id, "seat/b")
     assert r.status_code == 409
@@ -455,7 +456,8 @@ def test_a_verdict_leaves_a_lapsed_lease_lapsed(db, client):
     _claim(client, h, review.id, "seat/a")
     with db.connect() as conn:
         conn.execute(
-            "update review_round set claim_expires_at = now() - interval '1 min'"
+            "update review_round set claim_expires_at = %s",
+            (datetime.now(UTC) - timedelta(minutes=1),),
         )
     decisions.answer(db, review.id, letter="c", note="tighten it", by="jeremy")
     assert _state(db, review.id)[4] < 0

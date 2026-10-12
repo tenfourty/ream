@@ -70,6 +70,7 @@ timeout_method = "signal"
 # reason at the mark. At most ten may carry it; everything else stays under 1 s.
 markers = [
     "slow(reason): genuinely needs more than a second; says why",
+    "postgres_only: reads Postgres's catalogue or runs Postgres's own SQL; skipped when ARTIFACTS_TEST_DB=sqlite",
     "background_thumbnails: publishes in this test start the real background thumbnail render (off by default in tests; see tests/conftest.py)",
 ]
 

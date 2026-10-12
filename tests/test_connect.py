@@ -4,6 +4,7 @@ collects a key nobody sees (homelab-ij8.102, his ruling of 23 Sep 2026)."""
 import os
 import re
 import stat
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -102,7 +103,8 @@ def test_an_unapproved_request_expires(db, gallery):
     started = _ask(gallery)
     with db.connect() as conn:
         conn.execute(
-            "update connect_request set expires_at = now() - interval '1 second'"
+            "update connect_request set expires_at = %s",
+            (datetime.now(UTC) - timedelta(seconds=1),),
         )
     assert _poll(gallery, started) == {"status": "expired"}
     assert (

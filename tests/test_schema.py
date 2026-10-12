@@ -1,11 +1,11 @@
 import threading
 
-import psycopg
 import pytest
 
-from artifacts.db import SCHEMA_VERSION, Database
+from artifacts.db import INTEGRITY, SCHEMA_VERSION, Database
 
 
+@pytest.mark.postgres_only  # reads information_schema
 def test_migrate_creates_every_table(db):
     with db.connect() as conn:
         rows = conn.execute(
@@ -36,7 +36,7 @@ def test_file_requires_an_existing_version(db):
             "insert into artifact (id, title, agent, read_token) values (%s, %s, %s, %s)",
             ("a1", "t", "agent1", "tok1"),
         )
-        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        with pytest.raises(INTEGRITY):
             conn.execute(
                 "insert into file (artifact_id, n, path, content_type, bytes) "
                 "values (%s, %s, %s, %s, %s)",
@@ -50,7 +50,7 @@ def test_current_version_must_reference_an_existing_version(db):
             "insert into artifact (id, title, agent, read_token) values (%s, %s, %s, %s)",
             ("a1", "t", "agent1", "tok1"),
         )
-        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        with pytest.raises(INTEGRITY):
             conn.execute(
                 "update artifact set current_version = %s where id = %s", (42, "a1")
             )
@@ -90,6 +90,7 @@ def test_deleting_artifact_with_versions_and_files_succeeds(db):
 
 
 @pytest.mark.usefixtures("fresh_schema")
+@pytest.mark.postgres_only  # reads information_schema
 def test_concurrent_migrate_calls_on_a_fresh_schema_both_succeed(dsn):
     """Two pods starting together both call migrate() against a schema that has
     never been migrated. Without a lock serialising them, `create table if not

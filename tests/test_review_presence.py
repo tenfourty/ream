@@ -1,6 +1,8 @@
 """The review card says which session is on the round, or why it was handed
 back (page review step 5)."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -33,7 +35,10 @@ def test_a_live_lease_shows_who_is_listening_and_when_last_seen(db, gallery):
     html = gallery.get(f"/a/{page.id}").text
     assert "Agent listening · seat/alpha · last seen just now" in html
     with db.connect() as conn:
-        conn.execute("update seat_read set last_read_at = now() - interval '5 min'")
+        conn.execute(
+            "update seat_read set last_read_at = %s",
+            (datetime.now(UTC) - timedelta(minutes=5),),
+        )
     html = gallery.get(f"/a/{page.id}").text
     assert "Agent listening · seat/alpha · last seen 5 min ago" in html
 
@@ -43,7 +48,8 @@ def test_an_expired_lease_shows_nothing(db, gallery):
     decisions.claim_round(db, "seat", rev.id, "seat/alpha")
     with db.connect() as conn:
         conn.execute(
-            "update review_round set claim_expires_at = now() - interval '1 min'"
+            "update review_round set claim_expires_at = %s",
+            (datetime.now(UTC) - timedelta(minutes=1),),
         )
     html = gallery.get(f"/a/{page.id}").text
     assert "Agent listening" not in html and "Handed back" not in html
