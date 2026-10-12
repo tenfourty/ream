@@ -62,6 +62,10 @@ uv run pytest -q tests/test_x.py            # one file, serially
 PG_TEST_DSN=postgresql://… uv run pytest -q -n auto --maxprocesses 8   # or an existing Postgres
 ```
 
+**On baba, never run the test suite** (Jeremy, 13 Oct 2026: no test-suite runs there). Push the
+change to a `ci/<name>` branch instead: CI runs the full suite on it and never builds an image or
+deploys from it. Land on `main` once that run is green, then delete the branch.
+
 **Declare which session you are on every publish.** A key may be shared by several sessions;
 without a label a page says only which KEY published it. `ARTIFACTS_SESSION="<agent>/<session
 ref>"` rides on the page, version, decision and events. A page published without it stays

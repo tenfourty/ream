@@ -6,7 +6,10 @@ name: ci
 # every other tool that ever reads this file.
 "on":
   push:
-    branches: [main]
+    # A `ci/...` branch runs the tests only, never image or deploy: tests don't
+    # run on baba (Jeremy, 13 Oct 2026), so a change is proven here before it
+    # reaches main.
+    branches: [main, "ci/**"]
   workflow_dispatch:
 
 concurrency:
@@ -92,7 +95,7 @@ jobs:
     # A hung job fails here instead of holding a builder for the runner's default of hours
     # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
     timeout-minutes: 30
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    if: "github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       dind:
         image: docker:28-dind
@@ -181,7 +184,7 @@ jobs:
     # A hung job fails here instead of holding a builder for the runner's default of hours
     # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
     timeout-minutes: 15
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    if: "github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')"
     steps:
       - uses: actions/checkout@v4
         with:
