@@ -23,10 +23,8 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-import psycopg
-
 from artifacts import text
-from artifacts.db import Database
+from artifacts.db import TRANSIENT, Database
 
 # The three kinds the design names (schema.sql's own CHECK constraint is the
 # enforced copy of this set) -- defined here even though only
@@ -415,7 +413,7 @@ def wait_for_agent(
                     exclude_actor=exclude_actor,
                 )
                 failing_since = None
-            except psycopg.OperationalError:
+            except TRANSIENT:
                 # The FIRST look is never excused: a database that is down
                 # when the request arrives is an error now, not after a hold.
                 # A later one is "nothing seen this time" and is retried, which

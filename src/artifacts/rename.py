@@ -20,9 +20,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-import psycopg
-
-from artifacts.db import Database
+from artifacts.db import Database, Rollback
 from artifacts.keys import AGENT_NAME
 
 # Fixed, and distinct from db._MIGRATE_LOCK_KEY and idempotency's hashed keys
@@ -81,8 +79,8 @@ def rename_agent(db: Database, old: str, new: str, *, dry_run: bool) -> dict[str
         raise Refused(f"{old} is already called {new}")
 
     counts: dict[str, int] = {}
-    with db.connect() as conn, conn.transaction() as tx:
-        conn.execute("select pg_advisory_xact_lock(%s)", (_RENAME_LOCK_KEY,))
+    with db.connect() as conn, conn.transaction():
+        conn.advisory_lock(_RENAME_LOCK_KEY)
         onward = conn.execute(
             "select new from agent_alias where old = %s", (new,)
         ).fetchone()
@@ -129,7 +127,7 @@ def rename_agent(db: Database, old: str, new: str, *, dry_run: bool) -> dict[str
         counts["agent_alias"] = aliased
 
         if dry_run:
-            raise psycopg.Rollback(tx)
+            raise Rollback()
     return counts
 
 

@@ -38,10 +38,8 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from psycopg.types.json import Jsonb
-
 from artifacts import csp, events, holds, ids, nudge, store, text
-from artifacts.db import Database, in_list
+from artifacts.db import Database, in_list, jsonb
 
 # A decision's question is a single line Jeremy reads on a card, not a page body -- 500
 # bytes is generous for a real question and small enough that a wall of prose is refused
@@ -312,7 +310,8 @@ def ask(
         # after the write -- never between the two.
         with conn.transaction():
             conn.execute(
-                "select 1 from artifact where id = %s for update", (artifact_id,)
+                "select 1 from artifact where id = %s" + conn.for_update(),  # noqa: S608 -- clause from the db layer, no caller input
+                (artifact_id,),
             )
             conn.execute(
                 # `session` is which SESSION raised the question -- a label the
@@ -327,7 +326,7 @@ def ask(
                     artifact_id,
                     version_n,
                     question,
-                    Jsonb(validated_options),
+                    jsonb(validated_options),
                     recommended,
                     session,
                 ),
@@ -368,7 +367,8 @@ def ask_review(
         with conn.transaction():
             # The same artifact row lock `ask` takes (see there).
             conn.execute(
-                "select 1 from artifact where id = %s for update", (artifact_id,)
+                "select 1 from artifact where id = %s" + conn.for_update(),  # noqa: S608 -- clause from the db layer, no caller input
+                (artifact_id,),
             )
             conn.execute(
                 "insert into decision (id, artifact_id, version_n, question, options,"
@@ -379,7 +379,7 @@ def ask_review(
                     artifact_id,
                     version_n,
                     question,
-                    Jsonb(REVIEW_OPTIONS),
+                    jsonb(REVIEW_OPTIONS),
                     session,
                     mode,
                 ),
@@ -570,7 +570,8 @@ def _lock_review_and_settle_letter(
     cleared the answer, so without this a stale tab's verdict for round 1
     would land on round 2; tested under the same lock the republish takes."""
     current = conn.execute(
-        f"select {_COLUMNS} from decision where decision.id = %s for update",  # noqa: S608 -- fixed constant, not caller input
+        f"select {_COLUMNS} from decision where decision.id = %s"  # noqa: S608 -- fixed constant, not caller input
+        + conn.for_update(),
         (decision_id,),
     ).fetchone()
     if current[11] is not None:  # closed_at
@@ -626,8 +627,8 @@ def _advance_rounds(conn, artifact_id: str, version_n: int) -> None:
     here from the decision row first, then the rule above applies.
     """
     reviews = conn.execute(
-        "select id, answer, version_n from decision where artifact_id = %s"
-        " and kind = 'review' and closed_at is null order by id for update",
+        "select id, answer, version_n from decision where artifact_id = %s"  # noqa: S608 -- clause from the db layer, no caller input
+        " and kind = 'review' and closed_at is null order by id" + conn.for_update(),
         (artifact_id,),
     ).fetchall()
     for review_id, answered, asked_on in reviews:
@@ -723,11 +724,11 @@ def _lock_current_round(conn, review_id: str):
     then round). A review asked before rounds existed gets its round 1 here,
     repaired from the decision row exactly as `_advance_rounds` does."""
     sql = (
-        "select n, claimed_by, claim_expires_at,"
+        "select n, claimed_by, claim_expires_at,"  # noqa: S608 -- clause from the db layer, no caller input
         " claimed_by is not null and claim_expires_at > %s,"
         " closed_at is not null"
         " from review_round where review_id = %s order by n desc limit 1"
-        " for update"
+        + conn.for_update()
     )
     found = conn.execute(sql, (datetime.now(UTC), review_id)).fetchone()
     if found is not None:
@@ -750,11 +751,10 @@ def _lock_owned_review(conn, agent: str, review_id: str) -> str:
     `agent` owns; its page id. NotFound covers missing, not a review and not
     yours alike."""
     found = conn.execute(
-        "select decision.artifact_id from decision"
+        "select decision.artifact_id from decision"  # noqa: S608 -- clause from the db layer, no caller input
         " join artifact on artifact.id = decision.artifact_id"
         " where decision.id = %s and artifact.agent = %s"
-        " and decision.kind = 'review'"
-        " for update of decision",
+        " and decision.kind = 'review'" + conn.for_update(" of decision"),
         (review_id, agent),
     ).fetchone()
     if found is None:

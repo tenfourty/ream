@@ -51,11 +51,9 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from psycopg.errors import UniqueViolation
-
 from artifacts import events, ggscan, ids, scan
 from artifacts import rename as agent_rename
-from artifacts.db import Database, in_list
+from artifacts.db import DUPLICATE_KEY, Database, in_list, jsonb
 from artifacts.text import LEADING_DOCTYPE
 
 # 3 MiB since 28 Sep 2026: an agent's real page hit the old 512 KiB, and
@@ -647,7 +645,7 @@ def patch(
                     # The same lock `decisions.ask` takes, so the guard's
                     # check and a new question cannot interleave.
                     conn.execute(
-                        "select 1 from artifact where id = %s for update",
+                        "select 1 from artifact where id = %s" + conn.for_update(),  # noqa: S608 -- clause from the db layer, no caller input
                         (artifact_id,),
                     )
                     guard(conn)
@@ -694,7 +692,7 @@ def patch(
                 from artifacts import decisions
 
                 decisions._advance_rounds(conn, artifact_id, n)
-        except UniqueViolation as exc:
+        except DUPLICATE_KEY as exc:
             # Two patches raced the same `expected_revision`: both passed the
             # check above (nothing here takes a lock), but only one of them
             # can occupy `version(artifact_id, n)` -- the primary key is what
@@ -1048,11 +1046,11 @@ def list_versions(
         if row is None:
             raise NotFound()
         rows = conn.execute(
-            # octet_length, not length: `length` counts CHARACTERS, and a page
-            # with any non-ASCII in it would report fewer bytes than it has --
+            # Bytes, not length: `length` counts CHARACTERS, and a page with
+            # any non-ASCII in it would report fewer bytes than it has --
             # which is the one number this row exists to give honestly.
-            "select n, revision, created_at, created_by, session,"
-            "       octet_length(body), note from version"
+            "select n, revision, created_at, created_by, session,"  # noqa: S608 -- clause from the db layer, no caller input
+            f"       {conn.byte_length('body')}, note from version"
             " where artifact_id = %s order by n desc",
             (artifact_id,),
         ).fetchall()
@@ -1794,7 +1792,8 @@ def transfer(
         to_agent = _live_agent(conn, to_agent)
         where, params = _scoped(artifact_id, agent)
         row = conn.execute(
-            f"select agent from artifact {where} for update",  # noqa: S608 -- fixed clause from _scoped
+            f"select agent from artifact {where}"  # noqa: S608 -- fixed clause from _scoped
+            + conn.for_update(),
             params,
         ).fetchone()
         if row is None:
@@ -1817,13 +1816,11 @@ def save_render_errors(
 ) -> None:
     """The page's script errors from its render, kept with that version
     (homelab-ij8.72). An empty list means it rendered cleanly."""
-    import json
-
     with db.connect() as conn:
         conn.execute(
-            "update version set render_errors = %s::jsonb, rendered_at = %s"
+            "update version set render_errors = %s, rendered_at = %s"
             " where artifact_id = %s and n = %s",
-            (json.dumps(errors), datetime.now(UTC), artifact_id, version_n),
+            (jsonb(errors), datetime.now(UTC), artifact_id, version_n),
         )
 
 

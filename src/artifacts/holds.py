@@ -154,7 +154,7 @@ def set_review_mode(db, decision_id: str, mode: str) -> tuple[str, int]:
     with db.connect() as conn, conn.transaction():
         found = conn.execute(
             f"select {decisions._COLUMNS} from decision"  # noqa: S608 -- fixed constant
-            " where decision.id = %s and decision.kind = 'review' for update",
+            " where decision.id = %s and decision.kind = 'review'" + conn.for_update(),
             (decision_id,),
         ).fetchone()
         if found is None:

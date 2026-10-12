@@ -3,6 +3,8 @@ from contextlib import contextmanager
 from importlib import resources
 
 import psycopg
+from psycopg.errors import UniqueViolation
+from psycopg.types.json import Jsonb
 
 SCHEMA_VERSION = 1
 
@@ -30,6 +32,90 @@ def _with_connect_timeout(dsn: str) -> str:
     return f"{dsn}{sep}connect_timeout={_CONNECT_TIMEOUT_SECONDS}"
 
 
+# The errors callers catch, named here so no module outside this one imports a
+# driver (the SQLite switch, slice 3). Tuples, so slice 5 can add sqlite3's.
+#   TRANSIENT: the database could not be reached or dropped the connection.
+#   DUPLICATE_KEY: an insert collided with a primary key or unique index.
+TRANSIENT: tuple[type[Exception], ...] = (psycopg.OperationalError,)
+DUPLICATE_KEY: tuple[type[Exception], ...] = (UniqueViolation,)
+
+
+class Rollback(Exception):
+    """Raised inside `conn.transaction()` to undo it: the innermost transaction
+    rolls back and the exception goes no further."""
+
+
+def jsonb(value) -> object:
+    """A JSON parameter: a dict or list stored in a JSON column."""
+    return Jsonb(value)
+
+
+class Result:
+    """A statement's rows, fetched before `execute` returns, and its row count.
+    Eager, so no open cursor ever outlives its statement (on SQLite an
+    unfinished `update ... returning` would hold the write lock)."""
+
+    __slots__ = ("_next", "_rows", "rowcount")
+
+    def __init__(self, rows: list, rowcount: int) -> None:
+        self._rows = rows
+        self._next = 0
+        self.rowcount = rowcount
+
+    def fetchone(self):
+        if self._next >= len(self._rows):
+            return None
+        self._next += 1
+        return self._rows[self._next - 1]
+
+    def fetchall(self) -> list:
+        rest = self._rows[self._next :]
+        self._next = len(self._rows)
+        return rest
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
+class Connection:
+    """One connection, in autocommit until `transaction()`. The only object
+    the rest of the service talks to the database through."""
+
+    def __init__(self, raw: psycopg.Connection) -> None:
+        self._raw = raw
+
+    def execute(self, query: str, params=None) -> Result:
+        cur = self._raw.execute(query, params)
+        rows = cur.fetchall() if cur.description is not None else []
+        return Result(rows, cur.rowcount)
+
+    @contextmanager
+    def transaction(self) -> Iterator["Connection"]:
+        """A transaction, or a savepoint when one is already open. `Rollback`
+        raised inside undoes it and is swallowed; any other exception undoes
+        it and propagates."""
+        with self._raw.transaction() as tx:
+            try:
+                yield self
+            except Rollback:
+                raise psycopg.Rollback(tx) from None
+
+    def for_update(self, suffix: str = "") -> str:
+        """A row-lock clause for a select inside a transaction, such as
+        `for update of decision`. SQLite will need none: its transactions
+        take the write lock up front."""
+        return f" for update{suffix}"
+
+    def advisory_lock(self, key: int) -> None:
+        """Serialise this transaction against any other taking the same key;
+        released when the transaction ends."""
+        self._raw.execute("select pg_advisory_xact_lock(%s)", (key,))
+
+    def byte_length(self, column: str) -> str:
+        """The size in bytes of a text column, not its length in characters."""
+        return f"octet_length({column})"
+
+
 def in_list(values) -> str:
     """The `(%s, %s, …)` of an expanded `in`, one placeholder per value, for SQL
     that both Postgres and SQLite read (SQLite has no arrays, so no `= any(%s)`).
@@ -43,9 +129,9 @@ class Database:
         self.dsn = _with_connect_timeout(dsn)
 
     @contextmanager
-    def connect(self) -> Iterator[psycopg.Connection]:
+    def connect(self) -> Iterator[Connection]:
         with psycopg.connect(self.dsn, autocommit=True) as conn:
-            yield conn
+            yield Connection(conn)
 
     def migrate(self) -> None:
         """Idempotent (re-running is a no-op) AND race-safe: two pods starting together
@@ -60,7 +146,7 @@ class Database:
         everything it was about to create."""
         sql = resources.files("artifacts").joinpath("schema.sql").read_text()
         with self.connect() as conn, conn.transaction():
-            conn.execute("select pg_advisory_xact_lock(%s)", (_MIGRATE_LOCK_KEY,))
+            conn.advisory_lock(_MIGRATE_LOCK_KEY)
             conn.execute(sql)
 
     def reset(self) -> None:

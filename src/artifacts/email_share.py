@@ -152,9 +152,9 @@ def check_code(db: Database, share: Share, typed: str) -> str | None:
     now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
         row = conn.execute(
-            "select id, code_sha256, attempts from email_share_code"
+            "select id, code_sha256, attempts from email_share_code"  # noqa: S608 -- clause from the db layer, no caller input
             " where share_id = %s and used_at is null and expires_at > %s"
-            " order by created_at desc limit 1 for update",
+            " order by created_at desc limit 1" + conn.for_update(),
             (share.id, now),
         ).fetchone()
         if row is None:

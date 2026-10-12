@@ -20,12 +20,11 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
-import psycopg
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
-from artifacts.db import Database
+from artifacts.db import Connection, Database, jsonb
 
 MAX_KEY = 128
 
@@ -49,7 +48,7 @@ def run(
     route: str,
     key: str | None,
     body: object,
-    action: Callable[[psycopg.Connection | None], tuple[int, object]],
+    action: Callable[[Connection | None], tuple[int, object]],
 ) -> JSONResponse:
     """Run `action(conn)` -> (status, json body) at most once per key. `conn`
     is the transaction the response is stored in, or None with no key (the
@@ -66,10 +65,14 @@ def run(
     ).hexdigest()
     now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
-        conn.execute("select pg_advisory_xact_lock(%s)", (_lock_id(agent, route, key),))
+        conn.advisory_lock(_lock_id(agent, route, key))
+        # By primary key, not ctid (SQLite has none). Without `skip locked`:
+        # a row another request is pruning blocks this one for a moment, which
+        # a batch of PRUNE_BATCH bounds; SQLite serialises writers anyway.
         conn.execute(
-            "delete from idempotency where ctid in (select ctid from idempotency"
-            " where expires_at < %s limit %s for update skip locked)",
+            "delete from idempotency where (agent, route, key) in ("
+            "select agent, route, key from idempotency"
+            " where expires_at < %s limit %s)",
             (now, PRUNE_BATCH),
         )
         seen = conn.execute(
@@ -95,7 +98,7 @@ def run(
                 key,
                 digest,
                 status,
-                psycopg.types.json.Jsonb(encoded),
+                jsonb(encoded),
                 now + timedelta(hours=24),
             ),
         )

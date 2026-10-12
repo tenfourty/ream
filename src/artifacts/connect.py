@@ -181,8 +181,9 @@ def collect(db: Database, poll_token: str) -> dict:
     now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
         row = conn.execute(
-            "select id, approved_at, agent, denied_at, delivered_at,"
-            " expires_at > %s from connect_request where poll_sha256 = %s for update",
+            "select id, approved_at, agent, denied_at, delivered_at,"  # noqa: S608 -- clause from the db layer, no caller input
+            " expires_at > %s from connect_request where poll_sha256 = %s"
+            + conn.for_update(),
             (now, _hash(poll_token)),
         ).fetchone()
         if row is None:

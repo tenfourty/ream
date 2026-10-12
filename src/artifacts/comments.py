@@ -30,11 +30,8 @@ from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
-import psycopg
-from psycopg.types.json import Jsonb
-
 from artifacts import events, ggscan, holds, ids, nudge, store, text
-from artifacts.db import Database, in_list
+from artifacts.db import Connection, Database, in_list, jsonb
 
 # A comment is a remark about a page, not a page in itself -- 8 KB is generous for
 # prose and small enough that a thread of hundreds never becomes its own storage
@@ -284,7 +281,7 @@ def add(
     agent: str | None = None,
     kind: str = "comment",
     second_opinion: bool | None = None,
-    conn: psycopg.Connection | None = None,
+    conn: Connection | None = None,
 ) -> CommentRow:
     """Write a comment. `agent`, when given, is the identity the artifact must be
     owned by -- an agent answering comments on its OWN pages, via the keyed API.
@@ -462,7 +459,7 @@ def add(
                     artifact_id,
                     version_n,
                     thread_root,
-                    Jsonb(effective_anchor),
+                    jsonb(effective_anchor),
                     effective_quote,
                     author_kind,
                     author,
@@ -706,7 +703,7 @@ def list_for_artifact(
     # module constant, never caller input -- `artifact_id` travels as a bound
     # parameter below, not string-built.
     sql = (
-        f"select {_COLUMNS} from comment where comment.artifact_id = %s"  # noqa: S608
+        f"select {_COLUMNS} from comment where comment.artifact_id = %s"  # noqa: S608 -- clause from the db layer, no caller input
         f" and {_VISIBLE}"
     )
     if not include_held:
@@ -765,7 +762,7 @@ def list_for_agent(
     from pulling its entire back catalogue on every poll."""
     # As in list_for_artifact: every interpolated piece is a fixed module constant.
     sql = (
-        f"select {_COLUMNS} from comment"  # noqa: S608
+        f"select {_COLUMNS} from comment"  # noqa: S608 -- clause from the db layer, no caller input
         " join artifact on artifact.id = comment.artifact_id"
         # A deleted page's threads leave the agent's list too (ij8.110): they
         # kept listing as NEEDS YOUR REPLY and waking its waiter.
@@ -817,7 +814,7 @@ def across_pages(
     the kind of thing that gets lost.
     """
     sql = (
-        f"select {_COLUMNS}, artifact.title, artifact.archived_at from comment"  # noqa: S608
+        f"select {_COLUMNS}, artifact.title, artifact.archived_at from comment"  # noqa: S608 -- clause from the db layer, no caller input
         " join artifact on artifact.id = comment.artifact_id"
         f" where artifact.deleted_at is null and {_VISIBLE}"
     )
