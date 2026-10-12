@@ -233,19 +233,30 @@ def machines(db: Database) -> list[Machine]:
             "select k.id, k.agent, k.label, k.created_at, k.revoked_at, k.last_used_at,"
             " (select count(*) from artifact a where a.agent = k.agent"
             "   and a.deleted_at is null),"
-            " array(select s from (select v.session as s, max(v.created_at) as at"
-            "   from version v join artifact a on a.id = v.artifact_id"
-            "   where a.agent = k.agent and v.session is not null"
-            "   group by v.session order by at desc limit 5) recent)"
-            " , k.rotating"
+            " k.rotating"
             " from agent_key k"
             # A key retired by its own weekly swap is not a revocation, and
             # listing one per week per machine would bury the real ones.
             " where coalesce(k.revoked_reason, '') not in ('replaced', 'superseded')"
             " order by k.revoked_at is not null, k.created_at desc"
         ).fetchall()
+        # Each agent's five most recent sessions, one query per agent: SQLite
+        # has no array(select ...), and an agent has only a few keys.
+        sessions = {
+            agent: [
+                r[0]
+                for r in conn.execute(
+                    "select v.session, max(v.created_at) as at"
+                    " from version v join artifact a on a.id = v.artifact_id"
+                    " where a.agent = %s and v.session is not null"
+                    " group by v.session order by at desc limit 5",
+                    (agent,),
+                ).fetchall()
+            ]
+            for agent in {row[1] for row in rows}
+        }
     return [
-        Machine(*row[:7], sessions=list(row[7] or []), rotating=bool(row[8]))
+        Machine(*row[:7], sessions=sessions[row[1]], rotating=bool(row[7]))
         for row in rows
     ]
 

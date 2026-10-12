@@ -34,7 +34,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from artifacts import events, ggscan, holds, ids, nudge, store, text
-from artifacts.db import Database
+from artifacts.db import Database, in_list
 
 # A comment is a remark about a page, not a page in itself -- 8 KB is generous for
 # prose and small enough that a thread of hundreds never becomes its own storage
@@ -675,10 +675,10 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
         return rows
     words_by_page: dict[str, tuple[str, str]] = {}
     for artifact_id, body in conn.execute(
-        "select a.id, v.body from artifact a"
+        "select a.id, v.body from artifact a"  # noqa: S608 -- placeholders only
         " join version v on v.artifact_id = a.id and v.n = a.current_version"
-        " where a.id = any(%s)",
-        (quoting,),
+        f" where a.id in {in_list(quoting)}",
+        tuple(quoting),
     ).fetchall():
         words = text.searchable(body)
         words_by_page[artifact_id] = (words, _tight(words))

@@ -120,7 +120,7 @@ def rename_agent(db: Database, old: str, new: str, *, dry_run: bool) -> dict[str
             "insert into agent_alias (old, new) values (%s, %s)"
             " on conflict (old) do update"
             " set new = excluded.new, renamed_at = %s"
-            " where agent_alias.new is distinct from excluded.new",
+            " where agent_alias.new <> excluded.new",
             (old, new, datetime.now(UTC)),
         ).rowcount
         aliased += conn.execute(
@@ -137,8 +137,8 @@ def _merge_grants(conn, old: str, new: str) -> int:
     """The union of both agents' scopes: a scope `new` already holds keeps its
     own row (and its grant time); the rest move."""
     dropped = conn.execute(
-        "delete from seat_grant o using seat_grant n"
-        " where o.agent = %s and n.agent = %s and n.scope = o.scope",
+        "delete from seat_grant where agent = %s and exists (select 1"
+        " from seat_grant n where n.agent = %s and n.scope = seat_grant.scope)",
         (old, new),
     ).rowcount
     moved = conn.execute(
@@ -148,20 +148,20 @@ def _merge_grants(conn, old: str, new: str) -> int:
 
 
 def _merge_reads(conn, old: str, new: str) -> int:
-    """One row per (agent, session), NULL sessions included: on a clash the
-    newest read is kept, because the question this table answers is "is anyone
-    still listening", and the later hearing is the truer answer."""
+    """One row per (agent, session), the unlabelled '' session included: on a
+    clash the newest read is kept, because the question this table answers is
+    "is anyone still listening", and the later hearing is the truer answer."""
     conn.execute(
-        "update seat_read n set last_read_at = o.last_read_at from seat_read o"
-        " where n.agent = %s and o.agent = %s"
-        " and n.session is not distinct from o.session"
-        " and o.last_read_at > n.last_read_at",
-        (new, old),
+        "update seat_read set last_read_at = (select o.last_read_at"
+        "   from seat_read o where o.agent = %s and o.session = seat_read.session)"
+        " where agent = %s and exists (select 1 from seat_read o"
+        "   where o.agent = %s and o.session = seat_read.session"
+        "   and o.last_read_at > seat_read.last_read_at)",
+        (old, new, old),
     )
     dropped = conn.execute(
-        "delete from seat_read o using seat_read n"
-        " where o.agent = %s and n.agent = %s"
-        " and n.session is not distinct from o.session",
+        "delete from seat_read where agent = %s and exists (select 1"
+        " from seat_read n where n.agent = %s and n.session = seat_read.session)",
         (old, new),
     ).rowcount
     moved = conn.execute(
@@ -174,15 +174,15 @@ def _merge_idempotency(conn, old: str, new: str) -> int:
     """On a (route, key) clash the newer stored response wins -- the one that
     expires later, since every row lives the same length of time."""
     conn.execute(
-        "delete from idempotency n using idempotency o"
-        " where n.agent = %s and o.agent = %s"
-        " and n.route = o.route and n.key = o.key and o.expires_at > n.expires_at",
+        "delete from idempotency where agent = %s and exists (select 1"
+        " from idempotency o where o.agent = %s and o.route = idempotency.route"
+        " and o.key = idempotency.key and o.expires_at > idempotency.expires_at)",
         (new, old),
     )
     dropped = conn.execute(
-        "delete from idempotency o using idempotency n"
-        " where o.agent = %s and n.agent = %s"
-        " and n.route = o.route and n.key = o.key",
+        "delete from idempotency where agent = %s and exists (select 1"
+        " from idempotency n where n.agent = %s and n.route = idempotency.route"
+        " and n.key = idempotency.key)",
         (old, new),
     ).rowcount
     moved = conn.execute(

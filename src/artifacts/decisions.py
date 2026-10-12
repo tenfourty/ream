@@ -41,7 +41,7 @@ from datetime import UTC, datetime, timedelta
 from psycopg.types.json import Jsonb
 
 from artifacts import csp, events, holds, ids, nudge, store, text
-from artifacts.db import Database
+from artifacts.db import Database, in_list
 
 # A decision's question is a single line Jeremy reads on a card, not a page body -- 500
 # bytes is generous for a real question and small enough that a wall of prose is refused
@@ -485,6 +485,7 @@ _ROUND_COLUMNS = (
     "review_id, n, version_n, base_version, opened_at, closed_at, verdict,"
     " reviewed_version"
 )
+_R_ROUND_COLUMNS = ", ".join("r." + c.strip() for c in _ROUND_COLUMNS.split(","))
 
 
 def _row_to_round(row) -> RoundRow:
@@ -526,9 +527,9 @@ def current_round_numbers(db: Database, review_ids: list[str]) -> dict[str, int]
     with db.connect() as conn:
         return dict(
             conn.execute(
-                "select review_id, max(n) from review_round"
-                " where review_id = any(%s) group by review_id",
-                (list(review_ids),),
+                "select review_id, max(n) from review_round"  # noqa: S608 -- placeholders only
+                f" where review_id in {in_list(review_ids)} group by review_id",
+                tuple(review_ids),
             ).fetchall()
         )
 
@@ -594,22 +595,18 @@ def _close_round(
     alone would lapse mid-revision and let a second session take the closed
     round and act on the same verdict. A lapsed or absent lease is left as is."""
     now = datetime.now(UTC)
+    stretched = now + timedelta(seconds=CLOSED_CLAIM_SECONDS)
     conn.execute(
         "update review_round set closed_at = %s, verdict = %s,"
         " reviewed_version = %s,"
         " claim_expires_at = case"
-        "   when claimed_by is not null and claim_expires_at > %s"
-        "   then greatest(claim_expires_at, %s)"
-        "   else claim_expires_at end"
+        "   when claimed_by is null or claim_expires_at <= %s"
+        "   then claim_expires_at"
+        # The later of the two, without greatest() (SQLite's max() differs).
+        "   when claim_expires_at > %s then claim_expires_at"
+        "   else %s end"
         " where review_id = %s and closed_at is null",
-        (
-            now,
-            VERDICTS[letter],
-            version,
-            now,
-            now + timedelta(seconds=CLOSED_CLAIM_SECONDS),
-            decision_id,
-        ),
+        (now, VERDICTS[letter], version, now, stretched, stretched, decision_id),
     )
 
 
@@ -1158,10 +1155,12 @@ def get_owned_with_round(
     width = len(_COLUMNS.split(","))
     with db.connect() as conn:
         row = conn.execute(
-            f"select {_COLUMNS}, r.* from decision"  # noqa: S608 -- fixed constant, not caller input
+            f"select {_COLUMNS}, {_R_ROUND_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
             " join artifact on artifact.id = decision.artifact_id"
-            f" left join lateral (select {_ROUND_COLUMNS} from review_round"
-            "   where review_id = decision.id order by n desc limit 1) r on true"
+            # The latest round, as a correlated subquery (SQLite has no lateral).
+            " left join review_round r on r.review_id = decision.id"
+            "   and r.n = (select max(n) from review_round rr"
+            "   where rr.review_id = decision.id)"
             " where decision.id = %s and artifact.agent = %s",
             (decision_id, agent),
         ).fetchone()
@@ -1336,12 +1335,12 @@ def uncollected(
         # sessions share one key, so the first answers yes while the asker is
         # long gone, which is the wrong answer in the case this exists for.
         #
-        # `is not distinct from` rather than `=`, because a decision asked
-        # before sessions existed has NULL here and must match the row for the
-        # unlabelled reader, which also has NULL. Plain `=` is never true for
-        # NULL, so every pre-session decision would read as no_reader for ever.
+        # A decision asked without a session has NULL here and must match the
+        # unlabelled reader's row, whose session is stored as ''. Plain `=` is
+        # never true for NULL, so without the coalesce every pre-session
+        # decision would read as no_reader for ever.
         " left join seat_read on seat_read.agent = artifact.agent"
-        "   and seat_read.session is not distinct from decision.session"
+        "   and seat_read.session = coalesce(decision.session, '')"
         " where decision.answered_at is not null"
         " and decision.acknowledged_at is null"
         " and decision.answered_at < %s"
@@ -1619,8 +1618,9 @@ def unresolved_slots(
         return []
     with db.connect() as conn:
         rows = conn.execute(
-            "select id from decision where artifact_id = %s and id = any(%s)",
-            (artifact_id, list(first)),
+            "select id from decision where artifact_id = %s"  # noqa: S608 -- placeholders only
+            f" and id in {in_list(first)}",
+            (artifact_id, *first),
         ).fetchall()
     real = {r[0] for r in rows}
     return [(slot, line) for slot, line in first.items() if slot not in real]

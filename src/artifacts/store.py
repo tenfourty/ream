@@ -55,7 +55,7 @@ from psycopg.errors import UniqueViolation
 
 from artifacts import events, ggscan, ids, scan
 from artifacts import rename as agent_rename
-from artifacts.db import Database
+from artifacts.db import Database, in_list
 from artifacts.text import LEADING_DOCTYPE
 
 # 3 MiB since 28 Sep 2026: an agent's real page hit the old 512 KiB, and
@@ -781,12 +781,13 @@ def _open_among(conn, artifact_id: str, slots) -> tuple[str, str] | None:
     """The first still-open question whose slot is in `slots`, if any."""
     if not slots:
         return None
+    ordered = sorted(slots)
     return conn.execute(
-        "select id, question from decision"
-        " where artifact_id = %s and id = any(%s)"
+        "select id, question from decision"  # noqa: S608 -- placeholders only
+        f" where artifact_id = %s and id in {in_list(ordered)}"
         "   and answer is null and closed_at is null"
         " order by id limit 1",
-        (artifact_id, sorted(slots)),
+        (artifact_id, *ordered),
     ).fetchone()
 
 

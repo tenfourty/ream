@@ -782,3 +782,17 @@ create table if not exists agent_alias (
 alter table version add column if not exists note    text;
 alter table version add column if not exists section text;
 alter table version add column if not exists notify  boolean not null default false;
+
+-- seat_read: an unlabelled session is '' rather than NULL (13 Oct 2026, the
+-- SQLite switch, slice 2). SQLite has no NULLS NOT DISTINCT, so a plain unique
+-- index can only fold every unlabelled caller into one row if they share a
+-- real value. Idempotent: a NULL row written by an older pod during a rollout
+-- merges into the '' row (the later read wins) before the rest are renamed.
+update seat_read t set last_read_at = n.last_read_at from seat_read n
+    where t.session = '' and n.session is null and n.agent = t.agent
+    and n.last_read_at > t.last_read_at;
+delete from seat_read where session is null and exists (
+    select 1 from seat_read e where e.agent = seat_read.agent and e.session = '');
+update seat_read set session = '' where session is null;
+alter table seat_read alter column session set default '';
+alter table seat_read alter column session set not null;

@@ -11,6 +11,7 @@ inside the caller's own transaction.
 from datetime import UTC, datetime
 
 from artifacts import events
+from artifacts.db import in_list
 
 MODES = ("held", "live")
 _KEY = "review_mode"
@@ -89,12 +90,13 @@ def release(conn, artifact_id: str, *, emit: bool) -> list[str]:
         ).fetchone()
         released_ids = {r[0] for r in released}
         # A reply under a root GitGuardian withdrew is hidden with it: no event.
+        roots = [r[1] for r in released if r[1] is not None]
         withdrawn_roots = {
             r[0]
             for r in conn.execute(
-                "select id from comment where id = any(%s)"
+                f"select id from comment where id in {in_list(roots)}"  # noqa: S608 -- placeholders only
                 " and withdrawn_at is not null",
-                ([r[1] for r in released if r[1] is not None],),
+                tuple(roots),
             ).fetchall()
         }
         for cid, root, kind, quote, body, author, _, resolved_at in sorted(

@@ -30,6 +30,14 @@ def _with_connect_timeout(dsn: str) -> str:
     return f"{dsn}{sep}connect_timeout={_CONNECT_TIMEOUT_SECONDS}"
 
 
+def in_list(values) -> str:
+    """The `(%s, %s, …)` of an expanded `in`, one placeholder per value, for SQL
+    that both Postgres and SQLite read (SQLite has no arrays, so no `= any(%s)`).
+    An empty list gives `(null)`, which matches nothing, as `= any('{}')` did."""
+    n = len(values)
+    return "(" + ", ".join(["%s"] * n) + ")" if n else "(null)"
+
+
 class Database:
     def __init__(self, dsn: str) -> None:
         self.dsn = _with_connect_timeout(dsn)

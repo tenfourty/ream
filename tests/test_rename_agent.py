@@ -183,7 +183,7 @@ def test_merging_into_an_existing_agent_keeps_both_keys_pages_and_grants(db, api
         )
         conn.execute(
             "insert into seat_read (agent, session, last_read_at)"
-            " values ('baba-operator', null, now())"
+            " values ('baba-operator', '', now())"
         )
 
     rename.rename_agent(db, "homelab-ops", "homelab-maintainer", dry_run=False)
@@ -211,7 +211,7 @@ def test_merging_into_an_existing_agent_keeps_both_keys_pages_and_grants(db, api
             " from seat_read where agent = 'homelab-maintainer'"
             " order by session nulls first"
         ).fetchall()
-        assert reads == [(None, True), ("s1", True)]
+        assert reads == [("", True), ("s1", True)]
         kept = conn.execute(
             "select response from idempotency where agent = 'homelab-maintainer'"
         ).fetchall()

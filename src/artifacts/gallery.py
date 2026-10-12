@@ -46,7 +46,7 @@ from artifacts import (
 )
 from artifacts import text as text_module
 from artifacts.content import _script_json
-from artifacts.db import Database
+from artifacts.db import Database, in_list
 from artifacts.store import content_domain, content_url, gallery_origin
 
 # Mirrors api.py's own wording for the identical fault: the scanner broke, the
@@ -4220,9 +4220,9 @@ def gallery_router(db: Database) -> APIRouter:
         with db.connect() as conn:
             return dict(
                 conn.execute(
-                    "select n, body from version where artifact_id = %s"
-                    " and n = any(%s) and status = 'live'",
-                    (artifact_id, ns),
+                    "select n, body from version where artifact_id = %s"  # noqa: S608 -- placeholders only
+                    f" and n in {in_list(ns)} and status = 'live'",
+                    (artifact_id, *ns),
                 ).fetchall()
             )
 

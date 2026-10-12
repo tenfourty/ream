@@ -239,16 +239,16 @@ def note_read(db: Database, agent: str, session: str | None = None) -> None:
     """
     try:
         with db.connect() as conn:
-            # `on conflict (agent, session)` matches the unique index in
-            # schema.sql, which is NULLS NOT DISTINCT -- so every caller that
-            # declares no session shares one row instead of inserting a new one
-            # on every single read.
+            # An unlabelled caller is stored as session '' (not NULL), so
+            # `on conflict (agent, session)` folds every caller that declares
+            # no session into one row on both Postgres and SQLite, which has no
+            # NULLS NOT DISTINCT.
             conn.execute(
                 "insert into seat_read (agent, session, last_read_at)"
                 " values (%s, %s, %s)"
                 " on conflict (agent, session)"
                 " do update set last_read_at = excluded.last_read_at",
-                (agent, session, datetime.now(UTC)),
+                (agent, session or "", datetime.now(UTC)),
             )
     except Exception:  # noqa: BLE001 -- see the docstring: this must never fail a read
         return
