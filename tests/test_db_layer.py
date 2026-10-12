@@ -70,3 +70,21 @@ def test_no_module_but_db_imports_the_driver():
             if any(n == "psycopg" or n.startswith("psycopg.") for n in names):
                 offenders.append(path.name)
     assert offenders == []
+
+
+@pytest.mark.parametrize("bad", ["a\x00b", "a\ud800b"])
+def test_a_string_no_column_can_hold_is_refused_before_it_is_sent(db, bad):
+    with db.connect() as conn:
+        conn.execute("create temporary table t (s text)")
+        with pytest.raises(dbmod.DataError):
+            conn.execute("insert into t values (%s)", (bad,))
+        assert conn.execute("select count(*) from t").fetchone() == (0,)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [{"k": "a\x00"}, {"a\ud800": 1}, ["ok", ["a\x00"]], {"n": {"m": "\udfff"}}],
+)
+def test_a_json_value_holding_one_is_refused_too(bad):
+    with pytest.raises(dbmod.DataError):
+        dbmod.jsonb(bad)

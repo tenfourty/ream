@@ -3,10 +3,10 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
+from artifacts import db as dbmod
 from artifacts import keys, store
 from artifacts.app import create_gallery_app
 
@@ -515,7 +515,7 @@ def test_a_failed_publish_leaves_no_artifact_row(client, db):
     token, _ = keys.mint(db, agent="ops-seat")
     with db.connect() as conn:
         before = conn.execute("select count(*) from artifact").fetchone()[0]
-    with pytest.raises(psycopg.DataError):
+    with pytest.raises(dbmod.DataError):
         client.post(
             "/api/v1/artifacts",
             json={"title": "x", "body": PAGE + "\x00"},

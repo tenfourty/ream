@@ -40,13 +40,45 @@ TRANSIENT: tuple[type[Exception], ...] = (psycopg.OperationalError,)
 DUPLICATE_KEY: tuple[type[Exception], ...] = (UniqueViolation,)
 
 
+class DataError(ValueError):
+    """A parameter no database column can hold: a NUL character, or a lone
+    surrogate (half of a UTF-16 pair, which JSON can deliver). Refused here,
+    before the statement is sent, for every string and every JSON value, so
+    the refusal is the same whichever database is underneath. Callers that
+    let it through answer 500, as they did when Postgres raised it."""
+
+
+def refuse_unstorable(value: str) -> None:
+    if "\x00" in value:
+        raise DataError("a NUL character cannot be stored")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise DataError("a lone surrogate cannot be stored") from None
+
+
+def _refuse_in_json(value) -> None:
+    if isinstance(value, str):
+        refuse_unstorable(value)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str):
+                refuse_unstorable(key)
+            _refuse_in_json(item)
+    elif isinstance(value, list | tuple):
+        for item in value:
+            _refuse_in_json(item)
+
+
 class Rollback(Exception):
     """Raised inside `conn.transaction()` to undo it: the innermost transaction
     rolls back and the exception goes no further."""
 
 
 def jsonb(value) -> object:
-    """A JSON parameter: a dict or list stored in a JSON column."""
+    """A JSON parameter: a dict or list stored in a JSON column. Every string
+    in it, keys included, is checked as a plain string parameter is."""
+    _refuse_in_json(value)
     return Jsonb(value)
 
 
@@ -85,6 +117,9 @@ class Connection:
         self._raw = raw
 
     def execute(self, query: str, params=None) -> Result:
+        for value in params or ():
+            if isinstance(value, str):
+                refuse_unstorable(value)
         cur = self._raw.execute(query, params)
         rows = cur.fetchall() if cur.description is not None else []
         return Result(rows, cur.rowcount)
