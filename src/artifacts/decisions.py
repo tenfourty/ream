@@ -1674,7 +1674,7 @@ def round_presence(db: Database, agent: str, review_id: str) -> dict | None:
         claimed_by, live, reason, released_by = found
         if claimed_by is not None and live:
             seen = conn.execute(
-                "select max(last_read_at)"
+                'select max(last_read_at) as "seen [TIMESTAMPTZ]"'
                 " from seat_read where agent = %s and session = %s",
                 (agent, claimed_by),
             ).fetchone()

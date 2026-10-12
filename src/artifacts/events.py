@@ -260,7 +260,11 @@ def last_read(db: Database, agent: str, session: str | None = None) -> str | Non
     any session on the seat, which is the older and weaker fact and is still
     what a human asking "is that box alive at all" wants.
     """
-    sql = "select max(last_read_at) from seat_read where agent = %s"
+    # The alias's bracketed type is how SQLite types a computed column.
+    sql = (
+        'select max(last_read_at) as "last [TIMESTAMPTZ]" from seat_read'
+        " where agent = %s"
+    )
     params: tuple = (agent,)
     if session is not None:
         sql += " and session = %s"
