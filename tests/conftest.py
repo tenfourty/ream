@@ -53,6 +53,8 @@ from artifacts.db import Database
 
 _REAL_WAIT_FOR_AGENT = events.wait_for_agent
 SQLITE = os.environ.get("ARTIFACTS_TEST_DB") == "sqlite"
+# No nightly backup-and-purge thread in a test that builds the real app.
+os.environ["ARTIFACTS_MAINTENANCE"] = "off"
 
 
 def _share_fastapi_type_adapters() -> None:

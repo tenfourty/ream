@@ -9,7 +9,7 @@ import os
 import signal
 import sys
 
-from artifacts import comments, events
+from artifacts import comments, events, maintenance
 from artifacts.app import create_app
 from artifacts.db import Database
 
@@ -111,4 +111,8 @@ def app_from_env():
     db = Database(dsn)
     db.migrate()
     comments.start_sweeper(db)
+    # The nightly backup and purge (maintenance.py). ARTIFACTS_MAINTENANCE=off
+    # turns it off, for tests that build the real app.
+    if os.environ.get("ARTIFACTS_MAINTENANCE") != "off":
+        maintenance.start(db)
     return _arm_shutdown_signals(create_app(db))
