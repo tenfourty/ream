@@ -100,6 +100,7 @@ def test_asking_opens_round_one_at_the_current_version(db):
     assert current.closed_at is None and current.verdict is None
 
 
+@pytest.mark.postgres_only  # the backfill lives in schema.sql; SQLite starts fresh
 def test_migrating_gives_a_review_from_before_rounds_its_round_one(db):
     page, review = _sent_back(db)
     open_one = decisions.ask_review(db, agent="seat", artifact_id=page.id)
