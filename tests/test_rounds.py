@@ -309,8 +309,8 @@ def test_a_mark_made_in_round_two_is_stamped_round_two(db):
     with db.connect() as conn:
         stamps = dict(
             conn.execute(
-                "select id, review_round from comment where id = any(%s)",
-                ([first.id, between.id, second.id],),
+                "select id, review_round from comment where id in (%s, %s, %s)",
+                (first.id, between.id, second.id),
             ).fetchall()
         )
     assert stamps == {first.id: 1, between.id: None, second.id: 2}

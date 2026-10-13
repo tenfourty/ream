@@ -187,6 +187,7 @@ def test_another_site_cannot_flip_it_with_his_session(api, page):
     assert response.status_code == 403
 
 
+@pytest.mark.postgres_only  # migrates the Postgres schema
 @pytest.mark.usefixtures("fresh_schema")
 def test_pages_that_existed_before_the_setting_start_closed(db):
     """His 2a: he sees the list and picks before anything opens. The migration

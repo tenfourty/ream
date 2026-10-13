@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from artifacts import decisions, keys, store
 from artifacts.app import create_gallery_app
+from artifacts.db import in_list
 
 XSS = '"><img src=x onerror=alert(1)>'
 
@@ -181,8 +182,9 @@ def test_the_list_breaks_updated_at_ties_by_id(db):
     ids = [store.publish(db, "ops-seat", f"page {i}", _PAGE).id for i in range(10)]
     with db.connect() as conn:
         conn.execute(
-            "update artifact set updated_at = '2026-01-01T00:00:00Z' where id = any(%s)",
-            (ids,),
+            "update artifact set updated_at = %s"  # noqa: S608 -- placeholders only
+            f" where id in {in_list(ids)}",
+            (datetime(2026, 1, 1, tzinfo=UTC), *ids),
         )
     page = (
         TestClient(create_gallery_app(db))

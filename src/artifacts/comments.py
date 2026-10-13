@@ -444,8 +444,8 @@ def add(
                 # withdrawal of the root now waits for this reply, and one that
                 # got in first is seen here.
                 still = conn.execute(
-                    "select 1 from comment where id = %s"
-                    " and withdrawn_at is null for share",
+                    "select 1 from comment where id = %s"  # noqa: S608 -- clause from the db layer, no caller input
+                    " and withdrawn_at is null" + conn.for_share(),
                     (thread_root,),
                 ).fetchone()
                 if still is None:

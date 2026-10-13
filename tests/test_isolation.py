@@ -98,6 +98,7 @@ def _write_every_family(db) -> None:
     assert seq is not None and seq >= 2
 
 
+@pytest.mark.postgres_only  # reads Postgres's catalogue
 def test_every_table_is_empty_at_the_start(db):
     assert set(_row_counts(db).values()) == {0}
 

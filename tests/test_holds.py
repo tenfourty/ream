@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from artifacts import comments, decisions, holds, keys, nudge, store
 from artifacts.app import create_gallery_app
-from artifacts.db import Database
+from artifacts.db import Database, in_list
 
 PAGE = (
     "<!doctype html><title>Plan</title>"
@@ -308,9 +308,9 @@ def _held_review(db, marks=2, agent="seat"):
 def _comment_events(db, ids):
     with db.connect() as conn:
         return conn.execute(
-            "select ref_id from event where kind = 'comment_added'"
-            " and ref_id = any(%s)",
-            (list(ids),),
+            "select ref_id from event where kind = 'comment_added'"  # noqa: S608 -- placeholders only
+            f" and ref_id in {in_list(list(ids))}",
+            tuple(ids),
         ).fetchall()
 
 

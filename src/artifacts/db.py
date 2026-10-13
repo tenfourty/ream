@@ -173,6 +173,11 @@ class Connection:
         take the write lock up front."""
         return f" for update{suffix}"
 
+    def for_share(self) -> str:
+        """A shared row lock: other readers proceed, a writer of the row waits
+        for this transaction. None on SQLite, as with `for_update`."""
+        return " for share"
+
     def advisory_lock(self, key: int) -> None:
         """Serialise this transaction against any other taking the same key;
         released when the transaction ends."""
@@ -250,6 +255,9 @@ class SqliteConnection(Connection):
         self._raw.execute("commit" if depth == 0 else f"release {savepoint}")
 
     def for_update(self, suffix: str = "") -> str:
+        return ""
+
+    def for_share(self) -> str:
         return ""
 
     def advisory_lock(self, key: int) -> None:

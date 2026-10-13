@@ -49,7 +49,7 @@ def page_mode(conn, artifact_id: str, *, lock: bool = False) -> str | None:
             " and answer is null and closed_at is null"
             # In id order, as `decisions._advance_rounds` locks them, so a mark
             # and a republish on a page with two open reviews cannot deadlock.
-            " order by id" + (" for share" if lock else ""),
+            " order by id" + (conn.for_share() if lock else ""),
             (artifact_id,),
         ).fetchall()
     ]
