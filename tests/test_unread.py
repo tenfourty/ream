@@ -89,3 +89,15 @@ def test_only_the_owner_sees_it(db, gallery):
     assert (
         response.json()["seen_version"] is None and response.json()["seen_at"] is None
     )
+
+
+def test_an_unread_tile_has_no_tooltip(db, gallery):
+    """No `title` on the unread tile or row (Jeremy, 14 Oct): it covered the whole tile,
+    and after a click the tooltip stayed over the opened page's frame, which takes the
+    mouse events that would have dismissed it. The dot and the screen-reader word remain."""
+    _publish(db, "One")
+    for view in ("/", "/?view=list"):
+        wall = gallery.get(view).text
+        assert 'data-unread="1"' in wall
+        assert not re.search(r'<li [^>]*data-unread="1"[^>]*title=', wall), view
+        assert "Not opened since it changed" not in wall, view

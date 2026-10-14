@@ -1395,7 +1395,13 @@ def _icon(name: str) -> str:
 # in the meta line. Not markup inside the title: other readers of this page
 # (and its tests) take the title text as it is, and a marker spliced into it
 # would change every page's name as far as they are concerned.
-_UNREAD_ATTR = ' data-unread="1" title="Not opened since it changed"'
+#
+# No `title` on it (Jeremy, 14 Oct): the attribute sits on the whole tile, so the
+# browser's tooltip covered it, and a click that opened the page left the tooltip
+# standing over the page's frame until the pointer reached the gallery's own bar
+# (the frame takes the mouse events that would have dismissed it). The dot says
+# "changed" to the eye and _UNREAD_WORD says it to a screen reader.
+_UNREAD_ATTR = ' data-unread="1"'
 _UNREAD_WORD = '<span class="sr">Unread. </span>'
 
 
