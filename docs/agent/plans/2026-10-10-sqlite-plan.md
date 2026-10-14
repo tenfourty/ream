@@ -1,5 +1,10 @@
 # Artifacts on SQLite: slice plan (10 Oct 2026)
 
+**Where it stands (14 Oct 2026):** slices 1–5 merged and live, production still on Postgres; slice 6's
+app side live (in-process backup then purge), its deployment side waiting for the manifests to move into
+the homelab repo. Before the cutover (8): runcove-5t3oj.20.10, a lease renewal that can stall on SQLite
+under load.
+
 Spec: `docs/agent/specs/2026-10-09-sqlite-design.md` (§8 Slices is the source; this file is the
 working order). Each slice lands on `main` by itself, with the full suite green. Slices 1–4 change
 nothing on Postgres: same responses, same refusals.
