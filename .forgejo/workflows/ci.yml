@@ -12,6 +12,12 @@ name: ci
     branches: [main, "ci/**"]
   workflow_dispatch:
 
+# The forge's SSH address and its pinned host key, for the deploy key's push (and the
+# check that proves the path on every run). Public values, not secrets.
+env:
+  FORGE_SSH_URL: ssh://git@git-ssh.tenfourty.site:22/runcove/artifacts.git
+  FORGE_SSH_HOST_KEY: "git-ssh.tenfourty.site ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC5KztG8jEz9ppP0nD2i2O7DiFEBAr86YEbQySYxbcv7429PNQVDcxjr6gaBz1IUqFRcttWpLUgnsMz9uvCF975ZyUH+xfXqnDmky+aDCBE2vKhmV6hBq0JnvSyo6i2ZfOjRqg2LrX1j2YVo6UUOLkDjen8suIx5BD5VphVkon+ZEkyFTKFurUerPmkr3v7OzaLtqlS6WGWhY/73TC1n8AKDQY6ruioRu6N97lw88k/KjWy2FhLX44oYlzjPySdKRCgIi+osB1/z/pqNO7rqK6eO2geimRGRS/qJ5wnO7R8O522dFV9u7l1rbE2dw62WN7xRg+s9XQNtf266qYLEkvEYxOUAEV30UdaaKuqQS0OEoPFwpPyBYg/8kyDr3AGTRB4xUZlbLUA4wgobRLJMMoBGRbXE090KIe2GN+cqXMAaep4dYf8FB8z78JqZueFNAgBZZOtAcbPzmWGDuHz3vr7PJmP/R7fOatfBqZdCwI/yljqOzghQ+Mmb9tkGliYOLpKS1m4q5UTCS07byhcAajPGaJQkw/fCTHGbz1FkQC9XXYb+4l/8wFBm6aWeP5UnSR/uFMdN/kW9iDjOGILVtmefPZLsAhFoKj4Tze3VZAPaMCwOmFEeVYsdtqV3/HzrbI0MP9rqCeNNkRXyXjzsPxvOVyMRjv00CcnYUN3OzRoyw=="
+
 concurrency:
   group: artifacts-main
   cancel-in-progress: false
@@ -185,6 +191,29 @@ jobs:
           docker push "$image"
           docker push "$cache"
 
+  # Proves on every run, ci/ branches included, that the deploy key reaches the forge over
+  # SSH and is accepted, read-only (ls-remote), so a broken key shows on a branch, not
+  # first at a deploy. Skipped when the secret is absent.
+  push-path:
+    runs-on: docker
+    timeout-minutes: 5
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    steps:
+      - name: the deploy key can reach main over SSH
+        env:
+          DEPLOY_PUSH_KEY: ${{ secrets.DEPLOY_PUSH_KEY }}
+        run: |
+          set -eu
+          [ -n "${DEPLOY_PUSH_KEY:-}" ] || { echo "no DEPLOY_PUSH_KEY: nothing to check"; exit 0; }
+          keydir="$(mktemp -d)"
+          trap 'rm -rf "$keydir"' EXIT
+          ( umask 077; printf '%s\n' "$DEPLOY_PUSH_KEY" > "$keydir/key" )
+          printf '%s\n' "$FORGE_SSH_HOST_KEY" > "$keydir/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $keydir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$keydir/known_hosts -o StrictHostKeyChecking=yes"
+          head=$(git ls-remote "$FORGE_SSH_URL" refs/heads/main | cut -f1)
+          [ -n "$head" ] || { echo "ls-remote over SSH returned no main" >&2; exit 1; }
+          echo "deploy key accepted over SSH; main is at $head"
+
   deploy:
     # Both: a failed or skipped test blocks the deploy even though image is green.
     needs: [test, image]
@@ -200,10 +229,26 @@ jobs:
           fetch-depth: 0
 
       - name: bump the deploy tag
+        env:
+          # A write deploy key on this repository (homelab, 14 Oct 2026), allowlisted on
+          # main's branch rule: the job token is refused on a protected branch. Only the
+          # bump's `git push` uses it; reads stay on the job token.
+          DEPLOY_PUSH_KEY: ${{ secrets.DEPLOY_PUSH_KEY }}
         run: |
           set -eu
           git fetch origin main
           sha12="${GITHUB_SHA:0:12}"
+          push_main() { git push origin main; }
+          if [ -n "${DEPLOY_PUSH_KEY:-}" ]; then
+            keydir="$(mktemp -d)"
+            trap 'rm -rf "$keydir"' EXIT
+            ( umask 077; printf '%s\n' "$DEPLOY_PUSH_KEY" > "$keydir/key" )
+            # Pinned, not trusted on first use: checked 14 Oct 2026 against the forge
+            # pod's own host key file and a network scan (SHA256:ma8vb5yKPrZoF3/W8eDzmAdtY505HbkWKXrg4CxgPeU).
+            printf '%s\n' "$FORGE_SSH_HOST_KEY" > "$keydir/known_hosts"
+            export GIT_SSH_COMMAND="ssh -i $keydir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$keydir/known_hosts -o StrictHostKeyChecking=yes"
+            push_main() { git push "$FORGE_SSH_URL" HEAD:main; }
+          fi
 
           git config user.name "artifacts-ci"
           git config user.email "ci@git.tenfourty.site"
@@ -259,7 +304,7 @@ jobs:
 
             git add deploy/kustomization.yaml || return 15
             git commit -m "deploy: artifacts ${sha12} [skip ci]" || return 16
-            git push origin main || return $?
+            push_main || return $?
 
             # Trust but verify: confirm what actually landed on origin/main is
             # the bump we think we just pushed, not just that `git push` itself
