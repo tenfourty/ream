@@ -191,13 +191,15 @@ jobs:
           docker push "$image"
           docker push "$cache"
 
-  # Proves on every run, ci/ branches included, that the deploy key reaches the forge over
-  # SSH and is accepted, read-only (ls-remote), so a broken key shows on a branch, not
-  # first at a deploy. Skipped when the secret is absent.
+  # Proves on each push to main that the deploy key reaches the forge over SSH and is
+  # accepted, read-only (ls-remote). Main only (homelab, 14 Oct): a branch run handling the
+  # key multiplies its exposure, and the forge hands repository secrets to any branch's
+  # workflow, so this is a one-day bridge until pin PRs need no push-capable secret.
+  # Skipped when the secret is absent.
   push-path:
     runs-on: docker
     timeout-minutes: 5
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    if: "github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')"
     steps:
       - name: the deploy key can reach main over SSH
         env:
