@@ -70,6 +70,10 @@ read the same on both (`docs/agent/specs/2026-10-09-sqlite-design.md`). CI runs 
 **On baba, never run the test suite** (Jeremy, 13 Oct 2026: no test-suite runs there). Push the
 change to a `ci/<name>` branch instead: CI runs the full suite on it and never builds an image or
 deploys from it. Land on `main` once that run is green, then delete the branch.
+To read a failed run's log without a browser: `FORGE_AS=<you> forge tea api` on
+`/repos/runcove/artifacts/actions/runs?limit=N` (the run's `id`), then `…/actions/runs/<id>/jobs` (the
+job's `id`), then `…/actions/jobs/<job id>/logs`. Grep out only the lines you need: the tests mint
+throwaway keys, and a log carries their `Bearer art_…` lines.
 
 **Declare which session you are on every publish.** A key may be shared by several sessions;
 without a label a page says only which KEY published it. `ARTIFACTS_SESSION="<agent>/<session
