@@ -63,12 +63,11 @@ from artifacts.text import LEADING_DOCTYPE
 # scans in about 0.3 s, and the worst bodies found (dense entity references,
 # dense hits) take about 1.2 s. ggshield was shown to find a token at the end
 # of a 3 MiB page. It was 512 KiB from 19 Sep, when the bar was 0.5 s at 1 MiB.
-# 8 MiB was tried on 15 Oct 2026 and rolled back the same morning: one 8 MiB
-# publish took the pod past its 1 GiB memory limit (OOMKilled, the gallery down
-# for every reader). Back to 3 MiB until the memory per publish is bounded and
-# measured (runcove-5t3oj.23). The ingresses (12m) and the relay (12 MiB) keep
-# their room for it.
-MAX_BODY_BYTES = 3 * 1024 * 1024
+# 8 MiB since 15 Oct 2026: the tracker board reached 2.7 MB, and Jeremy chose a
+# higher limit over trimming it. The ingresses allow 12m and the ggshield relay
+# 12 MiB for it (homelab); the scan times scale with size, about 3 s for the
+# worst 8 MiB bodies by the figures above.
+MAX_BODY_BYTES = 8 * 1024 * 1024
 
 # A title is a page name shown in a gallery list, not prose -- 512 bytes, not
 # the body's megabytes.
