@@ -47,8 +47,8 @@ new name; published pages never change owner by accident.
 | Admin commands (keys, scopes, renames) | `src/artifacts/admin.py` -> `artifacts-admin` |
 | Tests | `tests/` |
 | Container | `Dockerfile` |
-| Deployment values | `deploy/` |
-| CI -> image -> deploy | `.forgejo/workflows/ci.yml` |
+| Deployment values | the homelab repo (`k8s/apps/artifacts/artifacts/app/`); `deploy/` here is no longer applied |
+| CI -> image -> pin PR | `.forgejo/workflows/ci.yml`, `.forgejo/scripts/pin-pr.sh` |
 | The design this argues from | `docs/agent/design.md` |
 | The build plan and its ledger | `docs/agent/implementation-plan.md` |
 
@@ -80,10 +80,11 @@ without a label a page says only which KEY published it. `ARTIFACTS_SESSION="<ag
 ref>"` rides on the page, version, decision and events. A page published without it stays
 unattributed until its next real change -- an identical republish mints no version.
 
-**A push to `main` deploys.** CI tests, builds an image, and pushes a `deploy: … [skip ci]`
-commit back onto main that rolls it out minutes later, unattended. So your next push is a
-non-fast-forward unless you fetch and rebase first (normal, not a conflict), and a push here is a
-production change.
+**A push to `main` asks to deploy.** CI tests, builds an image, and opens a pin PR on the
+deployment's manifest repo that moves production onto that image
+(`.forgejo/scripts/pin-pr.sh`); production moves when that PR is merged. On the homelab the
+manifests live in the homelab repo and its maintainer merges the pin PRs. This repo's `deploy/`
+is no longer applied by anything.
 
 After changing a CLI, reinstall it wherever agents run it (`uv tool install <checkout> --force`),
 or they keep the old behaviour.

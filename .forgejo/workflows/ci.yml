@@ -12,12 +12,6 @@ name: ci
     branches: [main, "ci/**"]
   workflow_dispatch:
 
-# The forge's SSH address and its pinned host key, for the deploy key's push (and the
-# check that proves the path on every run). Public values, not secrets.
-env:
-  FORGE_SSH_URL: ssh://git@git-ssh.tenfourty.site:22/runcove/artifacts.git
-  FORGE_SSH_HOST_KEY: "git-ssh.tenfourty.site ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC5KztG8jEz9ppP0nD2i2O7DiFEBAr86YEbQySYxbcv7429PNQVDcxjr6gaBz1IUqFRcttWpLUgnsMz9uvCF975ZyUH+xfXqnDmky+aDCBE2vKhmV6hBq0JnvSyo6i2ZfOjRqg2LrX1j2YVo6UUOLkDjen8suIx5BD5VphVkon+ZEkyFTKFurUerPmkr3v7OzaLtqlS6WGWhY/73TC1n8AKDQY6ruioRu6N97lw88k/KjWy2FhLX44oYlzjPySdKRCgIi+osB1/z/pqNO7rqK6eO2geimRGRS/qJ5wnO7R8O522dFV9u7l1rbE2dw62WN7xRg+s9XQNtf266qYLEkvEYxOUAEV30UdaaKuqQS0OEoPFwpPyBYg/8kyDr3AGTRB4xUZlbLUA4wgobRLJMMoBGRbXE090KIe2GN+cqXMAaep4dYf8FB8z78JqZueFNAgBZZOtAcbPzmWGDuHz3vr7PJmP/R7fOatfBqZdCwI/yljqOzghQ+Mmb9tkGliYOLpKS1m4q5UTCS07byhcAajPGaJQkw/fCTHGbz1FkQC9XXYb+4l/8wFBm6aWeP5UnSR/uFMdN/kW9iDjOGILVtmefPZLsAhFoKj4Tze3VZAPaMCwOmFEeVYsdtqV3/HzrbI0MP9rqCeNNkRXyXjzsPxvOVyMRjv00CcnYUN3OzRoyw=="
-
 concurrency:
   group: artifacts-main
   cancel-in-progress: false
@@ -78,6 +72,9 @@ jobs:
       - name: guard selftests
         run: scripts/guards/run-selftests.sh --no-lefthook
 
+      - name: pin-pr selftest
+        run: .forgejo/scripts/pin-pr.sh --selftest
+
       - name: tests
         env:
           # connect_timeout=30: production keeps its 5 s bound (db.py), but this
@@ -126,6 +123,9 @@ jobs:
           DOCKER_TLS_CERTDIR: ""
     env:
       DOCKER_HOST: tcp://dind:2375
+    # The pushed image as <repo>:<sha12>@sha256:<digest>, for the pin job.
+    outputs:
+      ref: ${{ steps.build.outputs.ref }}
     steps:
       - uses: actions/checkout@v4
 
@@ -165,6 +165,7 @@ jobs:
             || { echo "a host-network build container cannot resolve git.tenfourty.site" >&2; exit 1; }
 
       - name: build and push
+        id: build
         env:
           REGISTRY_PASSWORD: "${{ secrets.REGISTRY_PUSH_TOKEN }}"
         run: |
@@ -190,159 +191,29 @@ jobs:
             -t "$image" -t "$cache" .
           docker push "$image"
           docker push "$cache"
+          digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" \
+            | grep -m1 '^git.tenfourty.site/runcove/artifacts@sha256:' | cut -d@ -f2)
+          [ -n "$digest" ] || { echo "no registry digest for $image after the push" >&2; exit 1; }
+          echo "ref=${image}@${digest}" >> "$GITHUB_OUTPUT"
 
-  # Proves on each push to main that the deploy key reaches the forge over SSH and is
-  # accepted, read-only (ls-remote). Main only (homelab, 14 Oct): a branch run handling the
-  # key multiplies its exposure, and the forge hands repository secrets to any branch's
-  # workflow, so this is a one-day bridge until pin PRs need no push-capable secret.
-  # Skipped when the secret is absent.
-  push-path:
-    runs-on: docker
-    timeout-minutes: 5
-    if: "github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')"
-    steps:
-      - name: the deploy key can reach main over SSH
-        env:
-          DEPLOY_PUSH_KEY: ${{ secrets.DEPLOY_PUSH_KEY }}
-        run: |
-          set -eu
-          [ -n "${DEPLOY_PUSH_KEY:-}" ] || { echo "no DEPLOY_PUSH_KEY: nothing to check"; exit 0; }
-          keydir="$(mktemp -d)"
-          trap 'rm -rf "$keydir"' EXIT
-          ( umask 077; printf '%s\n' "$DEPLOY_PUSH_KEY" > "$keydir/key" )
-          printf '%s\n' "$FORGE_SSH_HOST_KEY" > "$keydir/known_hosts"
-          export GIT_SSH_COMMAND="ssh -i $keydir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$keydir/known_hosts -o StrictHostKeyChecking=yes"
-          head=$(git ls-remote "$FORGE_SSH_URL" refs/heads/main | cut -f1)
-          [ -n "$head" ] || { echo "ls-remote over SSH returned no main" >&2; exit 1; }
-          echo "deploy key accepted over SSH; main is at $head"
-
-  deploy:
-    # Both: a failed or skipped test blocks the deploy even though image is green.
+  # Opens the pull request on the homelab repo that moves production onto this image
+  # (homelab-qa3c, 15 Oct 2026): the manifests live there, pinned by digest, and only a
+  # merged pin PR deploys. It changes the one `image:` line; the homelab maintainer
+  # merges it. PIN_PR_TOKEN belongs to homelab-pin-bot, which only reads the homelab repo
+  # and pushes to its own fork, so a branch workflow reading it can open a PR at worst.
+  pin:
+    # Both: a failed or skipped test blocks the pin even though image is green.
     needs: [test, image]
     runs-on: docker
-    # A hung job fails here instead of holding a builder for the runner's default of hours
-    # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
-    timeout-minutes: 15
+    timeout-minutes: 10
     if: "github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')"
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # The whole history: the script refuses to move production to an older commit.
           fetch-depth: 0
 
-      - name: bump the deploy tag
+      - name: open the pin PR
         env:
-          # A write deploy key on this repository (homelab, 14 Oct 2026), allowlisted on
-          # main's branch rule: the job token is refused on a protected branch. Only the
-          # bump's `git push` uses it; reads stay on the job token.
-          DEPLOY_PUSH_KEY: ${{ secrets.DEPLOY_PUSH_KEY }}
-        run: |
-          set -eu
-          git fetch origin main
-          sha12="${GITHUB_SHA:0:12}"
-          push_main() { git push origin main; }
-          if [ -n "${DEPLOY_PUSH_KEY:-}" ]; then
-            keydir="$(mktemp -d)"
-            trap 'rm -rf "$keydir"' EXIT
-            ( umask 077; printf '%s\n' "$DEPLOY_PUSH_KEY" > "$keydir/key" )
-            # Pinned, not trusted on first use: checked 14 Oct 2026 against the forge
-            # pod's own host key file and a network scan (SHA256:ma8vb5yKPrZoF3/W8eDzmAdtY505HbkWKXrg4CxgPeU).
-            printf '%s\n' "$FORGE_SSH_HOST_KEY" > "$keydir/known_hosts"
-            export GIT_SSH_COMMAND="ssh -i $keydir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$keydir/known_hosts -o StrictHostKeyChecking=yes"
-            push_main() { git push "$FORGE_SSH_URL" HEAD:main; }
-          fi
-
-          git config user.name "artifacts-ci"
-          git config user.email "ci@git.tenfourty.site"
-
-          # The whole change is one mechanical line edit with no other local commits
-          # to preserve, so "reapply the edit on top of the latest origin/main" is
-          # `git switch -C main origin/main` + sed + commit -- equivalent to a
-          # fetch-and-rebase for this one-line bump, and simpler to make idempotent
-          # across the one retry below. The guard runs INSIDE this function, right
-          # after the switch, so the retry (which re-fetches a moved origin/main)
-          # re-checks it too, against the origin/main IT sees, instead of trusting
-          # a check the first call already made against a now-stale origin/main.
-          #
-          # `set -e` does NOT apply inside this function while a caller tests its
-          # exit status (`if bump_and_push; ...` below) -- a failing command deep
-          # inside would otherwise be silently skipped past, not caught. Every
-          # failure this function must act on is therefore checked and `return`ed
-          # explicitly, using exit codes distinct from git's own (usually 1) so the
-          # caller can tell "the guard said stand down" from "a plain push race":
-          # 10 = guard says stand down, 12 = guard hit a git error, 13 = the
-          # newTag: sed did not touch exactly one line, 14/15/16 = `git switch`/
-          # `add`/`commit` failed before anything was pushed, 17/18 = the fetch
-          # after a successful push failed, or what actually landed on
-          # origin/main does not match what we just pushed. 12/13/17/18 all exit
-          # the job without retrying -- 17/18 in particular happen AFTER a push
-          # already succeeded, so retrying would push a second, redundant bump
-          # commit rather than fix anything. Anything else (a plain nonzero from
-          # `git push` itself) is treated as a push race worth one retry.
-          bump_and_push() {
-            git switch -C main origin/main || return 14
-
-            .forgejo/scripts/deploy-guard.sh "$GITHUB_SHA" HEAD
-            guard_status=$?
-            if [ "$guard_status" -eq 1 ]; then
-              return 10
-            elif [ "$guard_status" -ne 0 ]; then
-              return 12
-            fi
-
-            # Compared as STRINGS, not `-ne`: if deploy/kustomization.yaml is
-            # missing, `grep -c` prints nothing to stdout (its own error goes to
-            # stderr), so `before`/`after` are empty -- `[ "" -ne 1 ]` itself
-            # errors ("integer expression expected"), which makes the `if`
-            # condition false and this check silently passes. `[ "$before" != 1 ]`
-            # has no such hole: an empty string is simply not equal to "1".
-            before=$(grep -c '^[[:space:]]*newTag: ' deploy/kustomization.yaml)
-            sed -i -E 's#^([[:space:]]*)newTag: .*#\1newTag: '"$sha12"'#' deploy/kustomization.yaml
-            after=$(grep -c '^[[:space:]]*newTag: ' deploy/kustomization.yaml)
-            if [ "$before" != 1 ] || [ "$after" != 1 ]; then
-              echo "expected exactly 1 newTag: line before and after editing, found '$before' and '$after'" >&2
-              return 13
-            fi
-
-            git add deploy/kustomization.yaml || return 15
-            git commit -m "deploy: artifacts ${sha12} [skip ci]" || return 16
-            push_main || return $?
-
-            # Trust but verify: confirm what actually landed on origin/main is
-            # the bump we think we just pushed, not just that `git push` itself
-            # returned 0.
-            git fetch origin main || return 17
-            landed=$(git show origin/main:deploy/kustomization.yaml \
-              | sed -n -E 's/^[[:space:]]*newTag: (.*)$/\1/p')
-            if [ "$landed" != "$sha12" ]; then
-              echo "origin/main's newTag is '${landed}', expected ${sha12} -- the push did not land what we think it did" >&2
-              return 18
-            fi
-          }
-
-          # `bump_and_push || status=$?` would capture `true`'s status (0), not
-          # the function's -- `if`/`else` is the idiom that both suppresses
-          # `errexit` for the call and hands back its real exit status.
-          if bump_and_push; then
-            status=0
-          else
-            status=$?
-          fi
-          case "$status" in
-            0) exit 0 ;;
-            10) echo "standing down: a newer run's deploy already won"; exit 0 ;;
-            12|13|17|18) echo "deploy guard, edit-count, or post-push verification failed hard -- not retrying" >&2; exit "$status" ;;
-          esac
-
-          echo "push race (a newer bump landed first) -- fetching and retrying once"
-          git fetch origin main
-          if bump_and_push; then
-            status=0
-          else
-            status=$?
-          fi
-          case "$status" in
-            0) exit 0 ;;
-            10) echo "standing down: a newer run's deploy already won"; exit 0 ;;
-            *) echo "bump_and_push failed on the retry too (status=$status)" >&2; exit "$status" ;;
-          esac
+          PIN_PR_TOKEN: ${{ secrets.PIN_PR_TOKEN }}
+        run: .forgejo/scripts/pin-pr.sh "$GITHUB_SHA" "${{ needs.image.outputs.ref }}"

@@ -92,7 +92,8 @@ learn which ids are real.
 ## How deploys happen
 
 Every push to `main` runs `.forgejo/workflows/ci.yml`: tests, then an image
-build pushed to `git.tenfourty.site/runcove/artifacts:<sha12>`, then a commit
-that rewrites `deploy/kustomization.yaml`'s `newTag:` to that sha and pushes
-it back to `main` (with `[skip ci]`, so it never retriggers itself). Flux
-applies `deploy/` from there on — pushing to `main` is the whole deploy step.
+build pushed to `git.tenfourty.site/runcove/artifacts:<sha12>`, then a pin PR
+on the homelab repo that changes the one `image:` line in
+`k8s/apps/artifacts/artifacts/app/deployment.yaml` to that image, pinned by
+digest (`.forgejo/scripts/pin-pr.sh`). Production moves when that PR is merged;
+Flux applies the homelab repo. `deploy/` in this repo is no longer applied.
