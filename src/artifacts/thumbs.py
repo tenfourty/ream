@@ -59,6 +59,25 @@ log = logging.getLogger("artifacts.thumbs")
 BROWSER_ENV = "ARTIFACTS_BROWSER"
 
 TIMEOUT_SECONDS = 20
+
+# THE BROWSER'S MEMORY IS THE POD'S MEMORY. Chromium runs inside the pod's own
+# memory limit, and the kernel kills the whole container when that is crossed,
+# so one big render takes the gallery down for every reader. That happened on 15
+# Oct 2026: a single 8 MiB publish was OOM-killed at the 1 GiB limit. Measured on
+# baba with chrome-headless-shell, peak memory of one render of a plain table page:
+# 1 MiB 442 Mi, 2 MiB 458 Mi, 3 MiB 612 Mi, 8 MiB 1511 Mi. So:
+#   * no picture of a page over RENDER_MAX_BYTES: its tile is the text tile, as
+#     for any failed render (runcove-5t3oj.23);
+#   * one render at a time, previews included, so two big publishes in the same
+#     moment cannot stack two browsers in one limit.
+RENDER_MAX_BYTES = 2 * 1024 * 1024
+_RENDER_SLOT = threading.BoundedSemaphore(1)
+
+
+def too_big_to_render(html: str) -> bool:
+    return len(html) > RENDER_MAX_BYTES or len(html.encode()) > RENDER_MAX_BYTES
+
+
 # The tile is rendered at this width and cropped to this height: a thumbnail is
 # the TOP of a page, the part a reader would recognise, not a squashed whole
 # page. A full-page shot of a long status board is an unreadable grey smear.
@@ -162,6 +181,9 @@ def render_report(
     binary = browser_path()
     if binary is None:
         return None, None
+    if too_big_to_render(html):
+        log.info("no thumbnail: page is over %d bytes", RENDER_MAX_BYTES)
+        return None, None
     # Stamped as a reader would see it. The marker is filled in when a page is
     # SERVED, not stored, so an unstamped render showed "DECISION · · BABA" --
     # found by the first live preview, 24 Sep 2026, and true of every tile on
@@ -210,15 +232,16 @@ def render_report(
             page.as_uri(),
         ]
         try:
-            done = _run(
-                argv,
-                timeout=TIMEOUT_SECONDS,
-                # BUILT FROM NOTHING, not inherited. DATABASE_URL and every
-                # agent key are simply absent from the child. HOME and a temp
-                # dir are the only things the browser genuinely needs.
-                env={"HOME": workdir, "TMPDIR": workdir, "PATH": "/usr/bin:/bin"},
-                cwd=workdir,
-            )
+            with _RENDER_SLOT:
+                done = _run(
+                    argv,
+                    timeout=TIMEOUT_SECONDS,
+                    # BUILT FROM NOTHING, not inherited. DATABASE_URL and every
+                    # agent key are simply absent from the child. HOME and a temp
+                    # dir are the only things the browser genuinely needs.
+                    env={"HOME": workdir, "TMPDIR": workdir, "PATH": "/usr/bin:/bin"},
+                    cwd=workdir,
+                )
         except subprocess.TimeoutExpired:
             log.warning("thumbnail render timed out after %ss", TIMEOUT_SECONDS)
             return None, None
@@ -303,7 +326,7 @@ def render_in_background(db, artifact_id: str, version_n: int, html: str) -> Non
     Daemon so it can never hold up shutdown: SIGTERM starts a fifteen-second
     grace period, and a half-finished picture is worth none of it.
     """
-    if not available():
+    if not available() or too_big_to_render(html):
         return
 
     key = (artifact_id, version_n)

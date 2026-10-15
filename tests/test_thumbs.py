@@ -286,3 +286,60 @@ def test_a_success_clears_the_failure_count(monkeypatch, clean_failures):
     thumbs._failures[("a1", 1)] = (2, 0.0)
     thumbs.render_in_background(None, "a1", 1, PAGE)
     assert ("a1", 1) not in thumbs._failures
+
+
+# --- the browser's memory is the pod's (runcove-5t3oj.23) --------------------
+
+
+def _no_browser_may_start(argv, **kw):
+    raise AssertionError("a browser was started for a page over the render cap")
+
+
+def test_a_page_over_the_render_cap_starts_no_browser(monkeypatch):
+    """15 Oct 2026: one 8 MiB render took the pod past 1 GiB and the kernel
+    killed it. A page over the cap gets the text tile, never a browser."""
+    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setattr(thumbs, "_run", _no_browser_may_start)
+    big = "<p>" + "x" * thumbs.RENDER_MAX_BYTES + "</p>"
+    assert thumbs.render_report(big) == (None, None)
+
+
+def test_the_cap_counts_bytes_not_characters(monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setattr(thumbs, "_run", _no_browser_may_start)
+    # Under the cap in characters, over it in UTF-8 bytes.
+    big = "é" * (thumbs.RENDER_MAX_BYTES // 2 + 1)
+    assert len(big) < thumbs.RENDER_MAX_BYTES < len(big.encode())
+    assert thumbs.render_report(big) == (None, None)
+
+
+def test_a_page_over_the_cap_queues_no_background_render(monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+
+    def no_thread(*a, **kw):
+        raise AssertionError("a render thread was started for a page over the cap")
+
+    monkeypatch.setattr(thumbs.threading, "Thread", no_thread)
+    big = "<p>" + "x" * thumbs.RENDER_MAX_BYTES + "</p>"
+    thumbs.render_in_background(None, "id", 1, big)
+
+
+def test_renders_take_turns(monkeypatch):
+    """Two browsers at once would stack in one memory limit: the browser runs
+    only while holding the one render slot."""
+    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    held = []
+
+    def check_slot(argv, **kw):
+        free = thumbs._RENDER_SLOT.acquire(blocking=False)
+        if free:
+            thumbs._RENDER_SLOT.release()
+        held.append(not free)
+        raise subprocess.TimeoutExpired(argv, 1)
+
+    monkeypatch.setattr(thumbs, "_run", check_slot)
+    assert thumbs.render(PAGE) is None
+    assert held == [True]
+    # and released afterwards, even on a timeout
+    assert thumbs._RENDER_SLOT.acquire(blocking=False)
+    thumbs._RENDER_SLOT.release()
