@@ -48,11 +48,18 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
+from artifacts import db as _dbmod
 from artifacts import events
 from artifacts.db import Database
 
 _REAL_WAIT_FOR_AGENT = events.wait_for_agent
 SQLITE = os.environ.get("ARTIFACTS_TEST_DB") == "sqlite"
+# Every SQLite database a test makes is a throwaway file, so no commit waits on
+# an fsync -- the same trade the Postgres pass makes (_no_durability, measured
+# 29 Sep 2026). With FULL, a lease test on CI's throttled runner saw single
+# commits take over 6 s (runcove-5t3oj.20.10). The service keeps FULL.
+if SQLITE:
+    _dbmod.SQLITE_SYNCHRONOUS = "off"
 # No nightly backup-and-purge thread in a test that builds the real app.
 os.environ["ARTIFACTS_MAINTENANCE"] = "off"
 

@@ -286,6 +286,11 @@ def _statements(script: str) -> list[str]:
 
 SQLITE_SCHEMA_VERSION = 1
 
+# FULL in service: safe on power loss (homelab's advice, design doc). The test
+# suite turns it off for its throwaway files, as it turns fsync off for its
+# throwaway Postgres (tests/conftest.py).
+SQLITE_SYNCHRONOUS = "full"
+
 
 def in_list(values) -> str:
     """The `(%s, %s, …)` of an expanded `in`, one placeholder per value, for SQL
@@ -338,7 +343,7 @@ class Database:
                 )
                 raw.execute("pragma foreign_keys = on")
                 raw.execute("pragma busy_timeout = 5000")
-                raw.execute("pragma synchronous = full")
+                raw.execute(f"pragma synchronous = {SQLITE_SYNCHRONOUS}")
                 self._keep_open(raw)
                 yield SqliteConnection(raw)
             finally:

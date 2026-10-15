@@ -3,7 +3,6 @@
 
 import itertools
 import json
-import os
 import time
 from datetime import UTC, datetime
 
@@ -587,11 +586,6 @@ def test_wait_without_a_session_label_does_not_claim_and_says_so(
 @brief
 @pytest.mark.slow(
     reason="a real 9 s wait: the lease must lapse twice over without renewal"
-)
-@pytest.mark.xfail(
-    os.environ.get("ARTIFACTS_TEST_DB") == "sqlite",
-    reason="runcove-5t3oj.20.10: on SQLite under parallel load a renewal can stall 4-5 s",
-    strict=False,
 )
 def test_wait_renews_its_lease_while_it_runs(live, key_file, db, capsys, monkeypatch):
     """A 4 s lease renewed when under 3.5 s remain, for a 9 s wait: without
