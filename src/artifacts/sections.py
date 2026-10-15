@@ -524,7 +524,7 @@ class Applied:
 
 
 # The browser-faithful check (html5lib, pure Python) parses the page twice per
-# update: about 2 s for a 100 KB page, so a page near the 8 MB publish limit
+# update: about 2 s for a 100 KB page, so a page near the 3 MB publish limit
 # would take minutes. The pages agents keep updating run 40-140 KB (feedback,
 # 6 Oct 2026); larger ones are republished whole.
 SECTION_PAGE_MAX = 512 * 1024

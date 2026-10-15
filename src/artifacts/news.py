@@ -18,10 +18,6 @@ from pathlib import Path
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
-        "2026-10-15a",
-        "A page may now be up to 8 MB (it was 3 MB). Changes are still marked up on pages up to 3 MB; a bigger page shows 'too large to mark up changes'.",
-    ),
-    (
         "2026-10-06c",
         "You can now change one part of a live page without republishing it: artifacts-publish --update ID --section EL with --replace FILE, --append FILE, --prepend FILE or --remove. The server applies it to what is live, so nothing elsewhere is lost; --fetch ID --section EL reads the part and its revision for --if-section (or --if-revision for the whole page). Not notified by default; --notify marks it on Jeremy's wall, which names the part that changed.",
     ),
