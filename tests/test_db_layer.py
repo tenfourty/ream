@@ -90,3 +90,21 @@ def test_a_string_no_column_can_hold_is_refused_before_it_is_sent(db, bad):
 def test_a_json_value_holding_one_is_refused_too(bad):
     with pytest.raises(dbmod.DataError):
         dbmod.jsonb(bad)
+
+
+def test_closing_a_request_connection_does_not_checkpoint_the_wal(tmp_path):
+    """runcove-5t3oj.20.10: when the LAST connection to a WAL database closes,
+    SQLite checkpoints and deletes the WAL (two fsyncs). Every request opens
+    and closes its own connection, so the layer keeps one idle connection open
+    and the WAL outlives each request's."""
+    path = tmp_path / "a.db"
+    database = dbmod.Database(f"sqlite:///{path}")
+    database.migrate()
+    for n in range(3):
+        with database.connect() as conn, conn.transaction():
+            conn.execute("create table if not exists t (n int)")
+            conn.execute("insert into t values (%s)", (n,))
+    wal = pathlib.Path(f"{path}-wal")
+    assert wal.exists() and wal.stat().st_size > 0
+    with database.connect() as conn:
+        assert conn.execute("select count(*) from t").fetchone() == (3,)

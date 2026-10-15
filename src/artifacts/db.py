@@ -1,6 +1,7 @@
 import json
 import re
 import sqlite3
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -298,6 +299,29 @@ class Database:
     def __init__(self, dsn: str) -> None:
         self.sqlite = dsn.startswith("sqlite:")
         self.dsn = dsn if self.sqlite else _with_connect_timeout(dsn)
+        # SQLite only: one idle connection held for the life of this object
+        # (design doc, "Checkpoints"). When the LAST connection to a WAL database
+        # closes, SQLite checkpoints the WAL into the file and deletes it, two
+        # fsyncs; every request opens and closes its own short connections, so
+        # without this every request paid them. Under disk pressure each took
+        # seconds (runcove-5t3oj.20.10: a claim and a 1 s held poll both took
+        # over 6 s in CI). Opened once the database is in WAL mode, and it reads
+        # once so it holds the WAL index; it never runs a query after that.
+        self._keeper: sqlite3.Connection | None = None
+        self._keeper_lock = threading.Lock()
+
+    def _keep_open(self, raw: sqlite3.Connection) -> None:
+        if self._keeper is not None:
+            return
+        if raw.execute("pragma journal_mode").fetchone()[0] != "wal":
+            return
+        with self._keeper_lock:
+            if self._keeper is None:
+                keeper = sqlite3.connect(
+                    _sqlite_path(self.dsn), check_same_thread=False
+                )
+                keeper.execute("select 1 from sqlite_master limit 1").fetchall()
+                self._keeper = keeper
 
     @contextmanager
     def connect(self) -> Iterator[Connection]:
@@ -315,6 +339,7 @@ class Database:
                 raw.execute("pragma foreign_keys = on")
                 raw.execute("pragma busy_timeout = 5000")
                 raw.execute("pragma synchronous = full")
+                self._keep_open(raw)
                 yield SqliteConnection(raw)
             finally:
                 raw.close()
