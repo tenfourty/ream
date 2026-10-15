@@ -485,7 +485,7 @@ def _request(
     session = session or _session
     _check_url_scheme(url)
     # UTF-8, not \u-escapes: an escaped non-ASCII character is six bytes, and a
-    # 3 MiB page must still fit the ingress's 4m body limit as JSON.
+    # 8 MiB page must still fit the ingress's 12m body limit as JSON.
     data = (
         json.dumps(payload, ensure_ascii=False).encode()
         if payload is not None

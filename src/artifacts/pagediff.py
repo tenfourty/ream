@@ -32,7 +32,9 @@ from difflib import Match, SequenceMatcher
 from html.parser import HTMLParser
 
 MAX_TOKENS = 60_000
-MAX_BYTES = 3 * 1024 * 1024  # the page cap
+# The diff's own cap, below the page cap since that rose to 8 MiB (15 Oct 2026):
+# a bigger page shows "too large to mark up changes" instead of a marked-up diff.
+MAX_BYTES = 3 * 1024 * 1024
 MAX_SCRIPT_SHARE = 0.7
 # Inner-loop steps the matcher may take across all its recursive calls, and a
 # wall-clock bound as belt and braces. About 0.1 µs a step.
