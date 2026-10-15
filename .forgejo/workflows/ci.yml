@@ -216,4 +216,7 @@ jobs:
       - name: open the pin PR
         env:
           PIN_PR_TOKEN: ${{ secrets.PIN_PR_TOKEN }}
-        run: .forgejo/scripts/pin-pr.sh "$GITHUB_SHA" "${{ needs.image.outputs.ref }}"
+          # Through the environment, not interpolated into the script: the script
+          # validates it as <repo>:<sha12>@sha256:<digest> before using it.
+          IMAGE_REF: ${{ needs.image.outputs.ref }}
+        run: .forgejo/scripts/pin-pr.sh "$GITHUB_SHA" "$IMAGE_REF"
