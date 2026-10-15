@@ -343,3 +343,34 @@ def test_renders_take_turns(monkeypatch):
     # and released afterwards, even on a timeout
     assert thumbs._RENDER_SLOT.acquire(blocking=False)
     thumbs._RENDER_SLOT.release()
+
+
+def test_a_burst_of_publishes_parks_a_bounded_number_of_renders(monkeypatch):
+    """One render at a time must not become a queue without end: past the
+    background slots, a page gets no picture this time rather than a thread."""
+    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    taken = 0
+    while thumbs._BACKGROUND_SLOTS.acquire(blocking=False):
+        taken += 1
+    try:
+        assert taken == 4
+
+        def no_thread(*a, **kw):
+            raise AssertionError("a render thread was started past the bound")
+
+        monkeypatch.setattr(thumbs.threading, "Thread", no_thread)
+        thumbs.render_in_background(None, "burst", 1, PAGE)
+    finally:
+        for _ in range(taken):
+            thumbs._BACKGROUND_SLOTS.release()
+
+
+def test_a_render_that_gets_no_turn_produces_nothing(monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setattr(thumbs, "SLOT_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(thumbs, "_run", _no_browser_may_start)
+    assert thumbs._RENDER_SLOT.acquire(blocking=False)
+    try:
+        assert thumbs.render_report(PAGE) == (None, None)
+    finally:
+        thumbs._RENDER_SLOT.release()

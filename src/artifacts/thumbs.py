@@ -72,6 +72,12 @@ TIMEOUT_SECONDS = 20
 #     moment cannot stack two browsers in one limit.
 RENDER_MAX_BYTES = 2 * 1024 * 1024
 _RENDER_SLOT = threading.BoundedSemaphore(1)
+# The turn-taking must not become a queue without end: a burst of publishes would
+# park one thread per page, each holding its page. At most this many background
+# renders wait or run; past that a page gets no picture this time, and its next
+# publish tries again. A render waits at most this long for its turn.
+_BACKGROUND_SLOTS = threading.BoundedSemaphore(4)
+SLOT_WAIT_SECONDS = TIMEOUT_SECONDS + 10
 
 
 def too_big_to_render(html: str) -> bool:
@@ -231,8 +237,13 @@ def render_report(
             f"--screenshot={shot}",
             page.as_uri(),
         ]
+        if not _RENDER_SLOT.acquire(timeout=SLOT_WAIT_SECONDS):
+            log.warning(
+                "thumbnail render skipped: no turn within %ss", SLOT_WAIT_SECONDS
+            )
+            return None, None
         try:
-            with _RENDER_SLOT:
+            try:
                 done = _run(
                     argv,
                     timeout=TIMEOUT_SECONDS,
@@ -242,6 +253,8 @@ def render_report(
                     env={"HOME": workdir, "TMPDIR": workdir, "PATH": "/usr/bin:/bin"},
                     cwd=workdir,
                 )
+            finally:
+                _RENDER_SLOT.release()
         except subprocess.TimeoutExpired:
             log.warning("thumbnail render timed out after %ss", TIMEOUT_SECONDS)
             return None, None
@@ -332,6 +345,9 @@ def render_in_background(db, artifact_id: str, version_n: int, html: str) -> Non
     key = (artifact_id, version_n)
     if not _may_render(key):
         return
+    if not _BACKGROUND_SLOTS.acquire(blocking=False):
+        log.warning("thumbnail render skipped for %s v%s: too many waiting", *key)
+        return
 
     def work() -> None:
         try:
@@ -345,5 +361,10 @@ def render_in_background(db, artifact_id: str, version_n: int, html: str) -> Non
             log.exception(
                 "thumbnail rendering failed for %s v%s", artifact_id, version_n
             )
+        finally:
+            _BACKGROUND_SLOTS.release()
 
-    threading.Thread(target=work, name=f"thumb-{artifact_id}", daemon=True).start()
+    try:
+        threading.Thread(target=work, name=f"thumb-{artifact_id}", daemon=True).start()
+    except RuntimeError:  # no thread to be had: no picture, and the slot back
+        _BACKGROUND_SLOTS.release()
