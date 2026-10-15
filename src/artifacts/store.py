@@ -65,8 +65,9 @@ from artifacts.text import LEADING_DOCTYPE
 # of a 3 MiB page. It was 512 KiB from 19 Sep, when the bar was 0.5 s at 1 MiB.
 # 8 MiB since 15 Oct 2026: the tracker board reached 2.7 MB, and Jeremy chose a
 # higher limit over trimming it. The ingresses allow 12m and the ggshield relay
-# 12 MiB for it (homelab); the scan times scale with size, about 3 s for the
-# worst 8 MiB bodies by the figures above.
+# 12 MiB for it (homelab); ggshield found a token at the end of an 8 MiB page in
+# 2.5 s. The first try OOM-killed the pod through the thumbnail browser; pages over
+# thumbs.RENDER_MAX_BYTES now get no browser at all.
 MAX_BODY_BYTES = 8 * 1024 * 1024
 
 # A title is a page name shown in a gallery list, not prose -- 512 bytes, not

@@ -153,7 +153,7 @@ main() {
     "$sha12" "${FORK%%/*}" "$branch" "$BASE_BRANCH" "$cur" "$sha12" "$sha12" "$FORGE" "$sha" "$PIN_FILE")
   code=$(forge POST "/repos/$UPSTREAM/pulls" "$body" "$work/pr.json") || failed "the PR call failed"
   case "$code" in
-    201) say "opened $(grep -o '"html_url":"[^"]*"' "$work/pr.json" | head -1 | cut -d'"' -f4)" ;;
+    201) say "opened $(grep -oE '"html_url":"[^"]*/pulls/[0-9]+"' "$work/pr.json" | head -1 | cut -d'"' -f4)" ;;
     409|422) say "a PR for $branch is already open: the push above updated it" ;;
     *) failed "opening the PR returned HTTP $code" ;;
   esac
