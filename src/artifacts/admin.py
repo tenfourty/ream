@@ -254,7 +254,132 @@ def build_parser() -> argparse.ArgumentParser:
     )
     agents.set_defaults(func=cmd_closed_to_agents)
 
+    for name, src_help, dst_help, func in (
+        (
+            "migrate-from-postgres",
+            "the Postgres DSN, or env:NAME to read it from an environment variable",
+            "the SQLite file to create (a path, or sqlite:///path)",
+            cmd_migrate_from_postgres,
+        ),
+        (
+            "migrate-to-postgres",
+            "the SQLite file (a path, or sqlite:///path)",
+            "the Postgres DSN, or env:NAME to read it from an environment variable",
+            cmd_migrate_to_postgres,
+        ),
+    ):
+        migrate = sub.add_parser(
+            name,
+            help="copy every table into an empty database and verify the copy"
+            " (run with the service stopped)",
+        )
+        migrate.add_argument("--from", dest="source", required=True, help=src_help)
+        migrate.add_argument("--to", dest="destination", required=True, help=dst_help)
+        migrate.set_defaults(func=func)
+
+    drill = sub.add_parser(
+        "restore-drill",
+        help="restore a nightly snapshot into a scratch file, verified, and count its rows",
+    )
+    drill.add_argument(
+        "--snapshot", required=True, help="an artifacts-sqlite-*.db file"
+    )
+    drill.set_defaults(func=cmd_restore_drill)
+
     return parser
+
+
+def cmd_restore_drill(args) -> None:
+    """The restore drill (spec §5): the snapshot passes SQLite's integrity
+    check, then the migration copier restores it into a scratch file and
+    verifies it table by table, printing each table's row count. The scratch
+    folder (under SQLITE_TMPDIR when set) is removed afterwards; the snapshot
+    itself is only read, through a copy."""
+    import shutil
+    import sqlite3
+    import tempfile
+
+    from artifacts import migrate
+    from artifacts.db import Database
+
+    if not os.path.isfile(args.snapshot):
+        raise SystemExit(f"no such snapshot: {args.snapshot}")
+    with tempfile.TemporaryDirectory(
+        prefix="restore-drill-", dir=os.environ.get("SQLITE_TMPDIR")
+    ) as scratch:
+        source = os.path.join(scratch, "snapshot.db")
+        shutil.copyfile(args.snapshot, source)
+        check = sqlite3.connect(source)
+        try:
+            (result,) = check.execute("pragma integrity_check").fetchone()
+        except sqlite3.DatabaseError as exc:
+            result = str(exc)
+        finally:
+            check.close()
+        if result != "ok":
+            raise SystemExit(
+                f"REFUSED: the snapshot fails its integrity check: {result}"
+            )
+        print("integrity_check ok")
+        restored = Database(f"sqlite:///{os.path.join(scratch, 'restored.db')}")
+        try:
+            checks = migrate.copy(
+                Database(f"sqlite:///{source}"), restored, log=lambda _: None
+            )
+        except migrate.Mismatch as exc:
+            raise SystemExit(f"REFUSED: {exc}") from None
+    for table in checks:
+        print(f"{table.name}\t{table.rows}")
+    print(
+        f"restored and verified {len(checks)} tables, {sum(c.rows for c in checks)} rows"
+    )
+
+
+def _postgres_dsn(value: str) -> str:
+    """A Postgres DSN from the command line, or from the environment variable
+    `env:NAME` names, so a password need never be a process argument."""
+    if value.startswith("env:"):
+        dsn = os.environ.get(value.removeprefix("env:"), "")
+        if not dsn:
+            raise SystemExit(f"{value.removeprefix('env:')} is not set")
+        value = dsn
+    if not value.startswith(("postgresql://", "postgres://")):
+        raise SystemExit("not a Postgres DSN: expected postgresql://...")
+    return value
+
+
+def _sqlite_dsn(value: str) -> str:
+    if value.startswith("sqlite:"):
+        return value
+    if "://" in value:
+        raise SystemExit("not a SQLite path: expected a file path or sqlite:///path")
+    return f"sqlite:///{value}"
+
+
+def _run_migration(source: str, destination: str) -> None:
+    from artifacts import migrate
+    from artifacts.db import Database
+
+    print(
+        f"copying {migrate.redact(source)} -> {migrate.redact(destination)}",
+        file=sys.stderr,
+    )
+    try:
+        migrate.copy(Database(source), Database(destination))
+    except migrate.Mismatch as exc:
+        raise SystemExit(
+            f"REFUSED, nothing was kept in the destination: {exc}"
+        ) from None
+
+
+def cmd_migrate_from_postgres(args) -> None:
+    """Postgres to SQLite, the cutover (spec §5)."""
+    _run_migration(_postgres_dsn(args.source), _sqlite_dsn(args.destination))
+
+
+def cmd_migrate_to_postgres(args) -> None:
+    """SQLite back to Postgres, the rollback that keeps writes made on SQLite."""
+    _run_migration(_sqlite_dsn(args.source), _postgres_dsn(args.destination))
 
 
 def cmd_closed_to_agents(args) -> None:

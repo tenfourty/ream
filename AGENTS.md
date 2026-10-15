@@ -45,6 +45,8 @@ new name; published pages never change owner by accident.
 | The service (FastAPI + Postgres) | `src/artifacts/` |
 | The agent CLIs (`artifacts-publish`, `artifacts-decide`, …) | `src/artifacts/client.py`, `decide.py` |
 | Admin commands (keys, scopes, renames) | `src/artifacts/admin.py` -> `artifacts-admin` |
+| The Postgres <-> SQLite copier and its verifier | `src/artifacts/migrate.py` |
+| Runbooks (cutover, rollback, backups, restore drill) | `docs/agent/runbooks/` |
 | Tests | `tests/` |
 | Container | `Dockerfile` |
 | Deployment values | the homelab repo (`k8s/apps/artifacts/artifacts/app/`); `deploy/` here is no longer applied |

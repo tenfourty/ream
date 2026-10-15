@@ -1,8 +1,10 @@
 # Artifacts on SQLite: slice plan (10 Oct 2026)
 
-**Where it stands (14 Oct 2026):** slices 1–5 merged and live, production still on Postgres; slice 6's
+**Where it stands (15 Oct 2026):** slices 1–5 merged and live, production still on Postgres; slice 6's
 app side live (in-process backup then purge), its deployment side waiting for the manifests to move into
-the homelab repo. Before the cutover (8): runcove-5t3oj.20.10, a lease renewal that can stall on SQLite
+the homelab repo. Slice 7's code and runbook built (`migrate.py`, `artifacts-admin migrate-from-postgres`,
+`migrate-to-postgres`, `restore-drill`, `docs/agent/runbooks/sqlite.md`); its rehearsal on a pg_dump copy
+is still to run. Before the cutover (8): runcove-5t3oj.20.10, a lease renewal that can stall on SQLite
 under load.
 
 Spec: `docs/agent/specs/2026-10-09-sqlite-design.md` (§8 Slices is the source; this file is the
