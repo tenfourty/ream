@@ -81,6 +81,26 @@ forge() { # <method> <path> <body-or-empty> <outfile>
   fi
 }
 
+# The head commit of <repo>'s <branch>, or nothing.
+branch_head() {
+  local out="$work/branch.json"
+  [ "$(forge GET "/repos/$1/branches/$2" "" "$out")" = 200 ] || return 0
+  grep -oE '"id":"[0-9a-f]{40}"' "$out" | head -1 | cut -d'"' -f4
+}
+
+# The clone is shallow, and the forge refuses a shallow push to a fork that lacks
+# its base commit ("shallow update not allowed"), so bring the fork's base branch
+# level with the upstream's first. The forge answers 400 when they are already level.
+sync_fork() {
+  local fh uh code
+  fh=$(branch_head "$FORK" "$BASE_BRANCH")
+  uh=$(branch_head "$UPSTREAM" "$BASE_BRANCH")
+  [ -n "$uh" ] || failed "could not read $UPSTREAM's $BASE_BRANCH"
+  [ "$fh" = "$uh" ] && return 0
+  code=$(forge POST "/repos/$FORK/sync_fork/$BASE_BRANCH" '{}' "$work/sync.json") || failed "the fork sync call failed"
+  case "$code" in 200|204) say "synced $FORK's $BASE_BRANCH with $UPSTREAM" ;; *) failed "syncing $FORK answered HTTP $code" ;; esac
+}
+
 main() {
   local sha="${1:-}" ref="${2:-}"
   printf '%s' "$sha" | grep -Eqx '[0-9a-f]{40}' || refuse "'$sha' is not a full commit sha"
@@ -122,6 +142,7 @@ main() {
     commit --quiet -m "artifacts: pin $sha12" \
     -m "Moves artifacts from $cur to $sha12 (runcove/artifacts@$sha). Opened by artifacts CI; only the image line changes." \
     -- "$PIN_FILE" || failed "commit failed"
+  sync_fork
   # --force only ever touches the pin bot's own artifacts-pin/<sha12> branch on its fork.
   git -C "$work/homelab" push --quiet --force "$FORGE/$FORK.git" "HEAD:refs/heads/$branch" \
     || failed "push to $FORK failed"
