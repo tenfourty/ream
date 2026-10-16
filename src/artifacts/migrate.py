@@ -155,7 +155,12 @@ def _postgres_schema(conn: Connection) -> Schema:
     tables: dict[str, Table] = {}
     counters = {}
     for name, column, data_type, default in conn.execute(
-        "select table_name, column_name, data_type, column_default"
+        # ::text on every column: information_schema's columns are domains
+        # (sql_identifier, character_data) that a driver may hand back as
+        # bytes, which made `default.startswith("nextval(")` raise on a real
+        # restored database (the rehearsal, 16 Oct 2026).
+        "select table_name::text, column_name::text, data_type::text,"
+        "       column_default::text"
         " from information_schema.columns"
         " where table_schema = current_schema()"
         "   and table_name in (select tablename from pg_tables"
