@@ -80,11 +80,15 @@ RENDER_MAX_BYTES = 2 * 1024 * 1024
 # RSS_POLL_SECONDS) and the group is SIGKILLed past this ceiling; the render then
 # fails like any other and the tile is the text tile. 700 MiB sits above the 458
 # Mi a 2 MiB page measured and well under the 1 GiB pod limit, which also holds
-# the service. RSS counts pages shared between the processes once per process, so
-# the sum errs high, which is the safe side. A JS heap cap was not chosen: it does
-# not bound the native memory of the DOM, layout and the compositor.
+# the service. The sum is PSS, which shares each page among the processes that map
+# it, so it is the memory the group really adds to the pod (plain resident size
+# counted chromium's shared pages once per process and read 870 MiB for a 16 KiB
+# page, which killed every render). A JS heap cap was not chosen: it does not
+# bound the native memory of the DOM, layout and the compositor. Sampling can miss
+# a spike that grows faster than the poll, so the pod's own 1 GiB limit stays the
+# hard stop; a cgroup of its own for the browser would let the kernel enforce this.
 RENDER_MAX_RSS_BYTES = 700 * 1024 * 1024
-RSS_POLL_SECONDS = 0.25
+RSS_POLL_SECONDS = 0.1
 _PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
 _RENDER_SLOT = threading.BoundedSemaphore(1)
 # The turn-taking must not become a queue without end: a burst of publishes would
