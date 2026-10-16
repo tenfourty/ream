@@ -195,6 +195,9 @@ jobs:
             | grep -m1 '^git.tenfourty.site/runcove/artifacts@sha256:' | cut -d@ -f2)
           [ -n "$digest" ] || { echo "no registry digest for $image after the push" >&2; exit 1; }
           echo "ref=${image}@${digest}" >> "$GITHUB_OUTPUT"
+          # One line, printed once, that homelab's pin lander reads from this job's log to bind
+          # the pinned digest to main's own CI run (runcove-5t3oj.19): do not reword it.
+          echo "PUBLISHED image=${image} digest=${digest}"
 
   # Opens the pull request on the homelab repo that moves production onto this image
   # (homelab-qa3c, 15 Oct 2026): the manifests live there, pinned by digest, and only a
