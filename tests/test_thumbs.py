@@ -198,6 +198,13 @@ def test_stat_and_statm_are_read_whatever_the_command_is_called():
     assert thumbs._stat_pgrp_and_pages(stat, "5000 1234 10 1 0 900 0") == (777, 1234)
 
 
+def test_pss_is_read_for_a_live_process():
+    # smaps_rollup is readable for our own process, and PSS never exceeds RSS
+    pss = thumbs._pss_bytes(str(os.getpid()))
+    assert pss is not None and pss > 0
+    assert thumbs._pss_bytes("999999999") is None
+
+
 def test_group_rss_counts_only_the_group():
     """The decision input, with no browser: a live process group reports some
     memory, a group that does not exist reports none."""

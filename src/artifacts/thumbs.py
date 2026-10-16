@@ -76,7 +76,7 @@ TIMEOUT_SECONDS = 20
 RENDER_MAX_BYTES = 2 * 1024 * 1024
 # The input cap bounds the HTML, not what a page builds from it: a few hundred
 # bytes of script can grow a DOM far past the limit. So the browser's own memory
-# is watched while it runs (RSS summed over its process group, polled every
+# is watched while it runs (PSS summed over its process group, polled every
 # RSS_POLL_SECONDS) and the group is SIGKILLed past this ceiling; the render then
 # fails like any other and the tile is the text tile. 700 MiB sits above the 458
 # Mi a 2 MiB page measured and well under the 1 GiB pod limit, which also holds
@@ -84,7 +84,7 @@ RENDER_MAX_BYTES = 2 * 1024 * 1024
 # the sum errs high, which is the safe side. A JS heap cap was not chosen: it does
 # not bound the native memory of the DOM, layout and the compositor.
 RENDER_MAX_RSS_BYTES = 700 * 1024 * 1024
-RSS_POLL_SECONDS = 0.1
+RSS_POLL_SECONDS = 0.25
 _PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
 _RENDER_SLOT = threading.BoundedSemaphore(1)
 # The turn-taking must not become a queue without end: a burst of publishes would
@@ -129,8 +129,25 @@ def _stat_pgrp_and_pages(stat: str, statm: str) -> tuple[int, int]:
     return int(fields[2]), int(statm.split()[1])
 
 
+def _pss_bytes(entry: str) -> int | None:
+    """Proportional set size of /proc/<entry>, in bytes, or None if unreadable.
+    PSS divides each shared page among the processes sharing it, so the sum over
+    a process group is the memory the group really adds to the pod; the plain
+    resident size counts chromium's shared pages once per process and read 870
+    MiB for a 16 KiB page (live, 16 Oct 2026), which killed every render."""
+    try:
+        with open(f"/proc/{entry}/smaps_rollup") as f:
+            for line in f:
+                if line.startswith("Pss:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
 def _group_rss(pgid: int) -> int:
-    """Resident bytes of every process in group `pgid`, 0 if there is none. A
+    """Memory in bytes of every process in group `pgid` (summed PSS, falling
+    back to resident pages where PSS cannot be read), 0 if there is none. A
     process that exits while being read is skipped."""
     total = 0
     for entry in os.listdir("/proc"):
@@ -145,7 +162,8 @@ def _group_rss(pgid: int) -> int:
         except (OSError, ValueError, IndexError):
             continue
         if group == pgid:
-            total += pages * _PAGE_SIZE
+            pss = _pss_bytes(entry)
+            total += pss if pss is not None else pages * _PAGE_SIZE
     return total
 
 
