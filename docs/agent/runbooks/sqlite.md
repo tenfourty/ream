@@ -107,6 +107,14 @@ artifacts-admin restore-drill --snapshot /tmp/rehearsal.db   # and it restores, 
 
 It must end in `verified …`. Note how long it took: that is the window's copy time.
 
+**Measured, 16 Oct 2026** (homelab's one-off Job, run 8, on a dump of the live database: 1.3 GB,
+22 tables, 4,206 rows, `version` 2,654 rows): Postgres to SQLite, the restore-drill, and SQLite
+back to Postgres took **285 s** in all, and every table's hash after the round trip equalled the
+first copy's. The dump took 2 m 42 s and its restore 1 m 21 s. So plan a cutover copy of a few
+minutes, not an hour. The copier fetches 8 rows at a time (`migrate._BATCH`): at 500 rows the
+`version` table (bodies up to 8 MiB) was OOM-killed at 768 Mi, so give the Job at least 1 Gi and
+a work volume of 10 Gi or more (the copy, the drill's own copy and its journal).
+
 ## Cutover (spec §5, an evening announced in #agents)
 
 1. `flux suspend ks artifacts-app`, so Flux does not undo step 2 within five minutes.
