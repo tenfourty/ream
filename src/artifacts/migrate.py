@@ -49,7 +49,14 @@ DEFERRED = {("artifact", "current_version"), ("comment", "thread_root")}
 # in today's schema.sql. Mapped to '' wherever it is read (spec §5).
 _EMPTY_SESSION = ("seat_read", "session")
 
-_BATCH = 500
+# Rows fetched at a time. Small on purpose: a version body is up to 8 MiB, and
+# Postgres sends a bytea as hex text, so a batch holds each body about three
+# times over. 500 rows of the live `version` table (1.3 GB) was OOM-killed at
+# 768 MiB in the rehearsal (16 Oct 2026); 8 rows is at most ~200 MiB, and the
+# smaller tables lose nothing to the extra round trips.
+_BATCH = 8
+# A progress line every this many rows, so a long table shows it is moving.
+_PROGRESS = 250
 
 
 class Mismatch(Exception):
@@ -354,6 +361,8 @@ def copy(src_db: Database, dst_db: Database, log=print) -> list[TableCheck]:
                     ]
                     dst.execute(insert, values)
                     n += 1
+                    if n % _PROGRESS == 0:
+                        log(f"  {name}: {n} rows so far")
                 log(f"copied {name}: {n} rows")
             for name, column in sorted(DEFERRED):
                 _fill_deferred(src_db, src, dst, src_schema.tables[name], column)
