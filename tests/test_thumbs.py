@@ -193,6 +193,55 @@ def test_a_timeout_kills_the_whole_process_group(tmp_path):
     assert not _alive(grandchild), "the grandchild survived the timeout"
 
 
+def test_stat_and_statm_are_read_whatever_the_command_is_called():
+    stat = "42 (we ird) name) S 1 777 777 0 -1 4194560 100"
+    assert thumbs._stat_pgrp_and_pages(stat, "5000 1234 10 1 0 900 0") == (777, 1234)
+
+
+def test_group_rss_counts_only_the_group():
+    """The decision input, with no browser: a live process group reports some
+    memory, a group that does not exist reports none."""
+    proc = subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)
+    try:
+        assert thumbs._group_rss(proc.pid) > 0
+        assert thumbs._group_rss(2**22 + 12345) == 0
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_a_group_over_the_memory_ceiling_is_killed(tmp_path):
+    pidfile = tmp_path / "child.pid"
+    script = f"sleep 300 & echo $! > {pidfile}; wait"
+    started = time.monotonic()
+    with pytest.raises(thumbs.RenderTooBig):
+        thumbs._run(["/bin/sh", "-c", script], timeout=30, max_rss=1)
+    assert time.monotonic() - started < 10
+    child = int(pidfile.read_text())
+    deadline = time.monotonic() + 5
+    while _alive(child) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _alive(child), "the group survived the memory ceiling"
+
+
+def test_a_group_under_the_ceiling_is_left_alone():
+    done = thumbs._run(
+        ["/bin/sh", "-c", "sleep 0.3; echo ok"], timeout=10, max_rss=1 << 40
+    )
+    assert done.returncode == 0 and done.stdout.strip() == b"ok"
+
+
+def test_a_render_that_blows_the_memory_ceiling_produces_nothing(monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+
+    def blow(argv, **kw):
+        assert kw["max_rss"] == thumbs.RENDER_MAX_RSS_BYTES
+        raise thumbs.RenderTooBig("9 bytes resident")
+
+    monkeypatch.setattr(thumbs, "_run", blow)
+    assert thumbs.render_report(PAGE) == (None, None)
+
+
 def test_a_normal_exit_sweeps_stragglers(tmp_path):
     """crashpad can outlive a browser that exited cleanly."""
     pidfile = tmp_path / "straggler.pid"

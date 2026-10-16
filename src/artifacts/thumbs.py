@@ -26,6 +26,9 @@ alternative is worse:
     a worker. On timeout the whole group dies, not just the parent.
   * NOTHING ON DISK IT DID NOT BRING. The render happens in a temp directory
     that is removed afterwards, whatever happened.
+  * A MEMORY CEILING. A small page can build a huge DOM; the browser's memory is
+    watched and its group killed past RENDER_MAX_RSS_BYTES, so it cannot take
+    the pod's container down with it.
   * A FAILED RENDER PRODUCES NO THUMBNAIL. Never a stale one, never a partial
     one. The wall is allowed to have gaps; it is not allowed to show Jeremy a
     picture of a page that is not what the page says now.
@@ -71,6 +74,18 @@ TIMEOUT_SECONDS = 20
 #   * one render at a time, previews included, so two big publishes in the same
 #     moment cannot stack two browsers in one limit.
 RENDER_MAX_BYTES = 2 * 1024 * 1024
+# The input cap bounds the HTML, not what a page builds from it: a few hundred
+# bytes of script can grow a DOM far past the limit. So the browser's own memory
+# is watched while it runs (RSS summed over its process group, polled every
+# RSS_POLL_SECONDS) and the group is SIGKILLed past this ceiling; the render then
+# fails like any other and the tile is the text tile. 700 MiB sits above the 458
+# Mi a 2 MiB page measured and well under the 1 GiB pod limit, which also holds
+# the service. RSS counts pages shared between the processes once per process, so
+# the sum errs high, which is the safe side. A JS heap cap was not chosen: it does
+# not bound the native memory of the DOM, layout and the compositor.
+RENDER_MAX_RSS_BYTES = 700 * 1024 * 1024
+RSS_POLL_SECONDS = 0.1
+_PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
 _RENDER_SLOT = threading.BoundedSemaphore(1)
 # The turn-taking must not become a queue without end: a burst of publishes would
 # park one thread per page, each holding its page. At most this many background
@@ -102,8 +117,47 @@ def _kill_group(proc: subprocess.Popen) -> None:
         pass
 
 
-def _run(argv: list[str], *, timeout: float, **kwargs) -> subprocess.CompletedProcess:
-    """subprocess.run, except that the whole process GROUP dies on a timeout.
+class RenderTooBig(subprocess.SubprocessError):
+    """The browser's memory crossed RENDER_MAX_RSS_BYTES and its group was killed."""
+
+
+def _stat_pgrp_and_pages(stat: str, statm: str) -> tuple[int, int]:
+    """(process group, resident pages) from the text of /proc/<pid>/stat and
+    /proc/<pid>/statm. The command name in stat is in parentheses and may hold
+    spaces, so the fields are counted from the LAST closing parenthesis."""
+    fields = stat.rsplit(")", 1)[1].split()  # fields[0] is the state, field 3
+    return int(fields[2]), int(statm.split()[1])
+
+
+def _group_rss(pgid: int) -> int:
+    """Resident bytes of every process in group `pgid`, 0 if there is none. A
+    process that exits while being read is skipped."""
+    total = 0
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat") as f:
+                stat = f.read()
+            with open(f"/proc/{entry}/statm") as f:
+                statm = f.read()
+            group, pages = _stat_pgrp_and_pages(stat, statm)
+        except (OSError, ValueError, IndexError):
+            continue
+        if group == pgid:
+            total += pages * _PAGE_SIZE
+    return total
+
+
+def _run(
+    argv: list[str],
+    *,
+    timeout: float,
+    max_rss: int | None = None,
+    **kwargs,
+) -> subprocess.CompletedProcess:
+    """subprocess.run, except that the whole process GROUP dies on a timeout,
+    and, given `max_rss`, when the group's memory passes it (RenderTooBig).
 
     subprocess.run kills only the direct child on a timeout, so chromium's
     helpers were orphaned to PID 1, which (uvicorn) never reaped them: 3,900
@@ -117,8 +171,20 @@ def _run(argv: list[str], *, timeout: float, **kwargs) -> subprocess.CompletedPr
         start_new_session=True,  # its own process group, so a timeout kills all of it
         **kwargs,
     )
+    deadline = time.monotonic() + timeout
     try:
-        out, err = proc.communicate(timeout=timeout)
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            try:
+                out, err = proc.communicate(
+                    timeout=min(left, RSS_POLL_SECONDS) if max_rss else left
+                )
+                break
+            except subprocess.TimeoutExpired:
+                if max_rss and (rss := _group_rss(proc.pid)) > max_rss:
+                    raise RenderTooBig(f"{rss} bytes resident") from None
     except BaseException:
         _kill_group(proc)
         try:
@@ -247,6 +313,7 @@ def render_report(
                 done = _run(
                     argv,
                     timeout=TIMEOUT_SECONDS,
+                    max_rss=RENDER_MAX_RSS_BYTES,
                     # BUILT FROM NOTHING, not inherited. DATABASE_URL and every
                     # agent key are simply absent from the child. HOME and a temp
                     # dir are the only things the browser genuinely needs.
@@ -257,6 +324,9 @@ def render_report(
                 _RENDER_SLOT.release()
         except subprocess.TimeoutExpired:
             log.warning("thumbnail render timed out after %ss", TIMEOUT_SECONDS)
+            return None, None
+        except RenderTooBig as exc:
+            log.warning("thumbnail render killed: browser memory over %s", exc)
             return None, None
         except (OSError, ValueError) as exc:
             log.warning("thumbnail render could not start: %s", exc)
