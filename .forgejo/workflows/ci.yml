@@ -186,11 +186,22 @@ jobs:
           # or a pruned registry) just means a cold build.
           cache="git.tenfourty.site/runcove/artifacts:buildcache"
           docker pull "$cache" || echo "no build cache yet: building cold"
-          docker build --network host --cache-from "$cache" \
-            --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" \
-            -t "$image" -t "$cache" .
-          docker push "$image"
-          docker push "$cache"
+          # A re-run of a commit whose image is already in the registry must NOT rebuild and
+          # re-push it: a rebuild has another digest, which would move a tag a pin may already
+          # name (homelab's pin lander refuses a re-pushed tag, runcove-5t3oj.19). Reuse it.
+          if pulled=$(docker pull "$image" 2>&1); then
+            echo "$image is already in the registry (a re-run): reusing it, nothing rebuilt or pushed"
+          else
+            case "$pulled" in
+              *"manifest unknown"*|*"not found"*) ;;
+              *) echo "$pulled" >&2; echo "could not tell whether $image exists" >&2; exit 1 ;;
+            esac
+            docker build --network host --cache-from "$cache" \
+              --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" \
+              -t "$image" -t "$cache" .
+            docker push "$image"
+            docker push "$cache"
+          fi
           digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" \
             | grep -m1 '^git.tenfourty.site/runcove/artifacts@sha256:' | cut -d@ -f2)
           [ -n "$digest" ] || { echo "no registry digest for $image after the push" >&2; exit 1; }

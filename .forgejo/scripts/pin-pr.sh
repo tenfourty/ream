@@ -67,6 +67,32 @@ decide() {
   if git -C "$dir" merge-base --is-ancestor "$full" "$ours"; then echo go; else echo behind; fi
 }
 
+# Open pin PRs of this fork that this one supersedes: branch artifacts-pin/<sha12> (not ours)
+# whose commit is an ANCESTOR of <our sha> in <repo dir>. Reads the open-PR list from <json file>,
+# prints one PR number per line. Anything it cannot read or resolve is left alone.
+superseded_prs() { # <json file> <repo dir> <our sha> <our branch> <fork owner>
+  command -v python3 >/dev/null 2>&1 || return 0
+  local number sha12 full
+  python3 - "$1" "$4" "$5" <<'PY' | while read -r number sha12; do
+import json, re, sys
+path, ours, owner = sys.argv[1:4]
+try:
+    prs = json.load(open(path))
+except (OSError, ValueError):
+    sys.exit(0)
+for pr in prs if isinstance(prs, list) else []:
+    head = pr.get("head") or {}
+    ref = head.get("ref") or ""
+    user = ((head.get("repo") or {}).get("owner") or {}).get("login") or ""
+    m = re.fullmatch(r"artifacts-pin/([0-9a-f]{12})", ref)
+    if m and ref != ours and user == owner and isinstance(pr.get("number"), int):
+        print(pr["number"], m.group(1))
+PY
+    full=$(git -C "$2" rev-parse --verify --quiet "${sha12}^{commit}") || continue
+    if git -C "$2" merge-base --is-ancestor "$full" "$3"; then printf '%s\n' "$number"; fi
+  done
+}
+
 # One forge call; the token goes to curl on stdin as a config line, never on argv.
 forge() { # <method> <path> <body-or-empty> <outfile>
   local method="$1" path="$2" body="$3" out="$4"
@@ -157,6 +183,25 @@ main() {
     409|422) say "a PR for $branch is already open: the push above updated it" ;;
     *) failed "opening the PR returned HTTP $code" ;;
   esac
+  close_superseded "$sha" "$branch"
+}
+
+# Close the older open pin PRs this one replaces, so they do not pile up. Best effort: the pin
+# bot may lack the right to close a PR; that is said and never fails the job (exit 0 stays "a PR
+# is open for this image"). Only PRs from the bot's own fork on artifacts-pin/ branches whose
+# commit is an ancestor of this one are touched.
+close_superseded() { # <our sha> <our branch>
+  local n
+  [ "$(forge GET "/repos/$UPSTREAM/pulls?state=open&limit=50" "" "$work/open.json")" = 200 ] \
+    || { say "could not list open PRs: not closing superseded pins"; return 0; }
+  for n in $(superseded_prs "$work/open.json" . "$1" "$2" "${FORK%%/*}"); do
+    if [ "$(forge PATCH "/repos/$UPSTREAM/pulls/$n" '{"state":"closed"}' "$work/close.json")" = 201 ] \
+       || grep -q '"state":"closed"' "$work/close.json" 2>/dev/null; then
+      say "closed #$n, superseded by $2"
+    else
+      say "could not close #$n (superseded by $2); a person can close it"
+    fi
+  done
 }
 
 selftest() {
@@ -198,6 +243,24 @@ selftest() {
   expect "a diverged pin did not stand down" [ "$(decide "$d" "${b:0:12}" "$c")" = behind ]
   expect "the same pin did not read as same" [ "$(decide "$d" "${b:0:12}" "$b")" = same ]
   expect "an unknown pin was not unknown"    [ "$(decide "$d" "fedcba987654" "$b")" = unknown ]
+
+  # superseded_prs: an older pin of OUR fork on an artifacts-pin/ branch is picked, a newer one,
+  # another owner's, another branch name and ourselves are not.
+  {
+    printf '[{"number":5,"head":{"ref":"artifacts-pin/%s","repo":{"owner":{"login":"homelab-pin-bot"}}}},' "${a:0:12}"
+    printf '{"number":6,"head":{"ref":"artifacts-pin/%s","repo":{"owner":{"login":"homelab-pin-bot"}}}},' "${c:0:12}"
+    printf '{"number":7,"head":{"ref":"artifacts-pin/%s","repo":{"owner":{"login":"someone-else"}}}},' "${a:0:12}"
+    printf '{"number":8,"head":{"ref":"warpgate-pin/%s","repo":{"owner":{"login":"homelab-pin-bot"}}}},' "${a:0:12}"
+    printf '{"number":9,"head":{"ref":"artifacts-pin/%s","repo":{"owner":{"login":"homelab-pin-bot"}}}}]' "${b:0:12}"
+  } > "$t/open.json"
+  if command -v python3 >/dev/null 2>&1; then
+    expect "an ancestor pin PR was not picked, or another was" \
+      [ "$(superseded_prs "$t/open.json" "$d" "$b" "artifacts-pin/${b:0:12}" homelab-pin-bot | tr '\n' ' ')" = "5 " ]
+    expect "a diverged pin PR was picked" \
+      [ -z "$(superseded_prs "$t/open.json" "$d" "$a" "artifacts-pin/${a:0:12}" homelab-pin-bot)" ]
+    printf 'not json' > "$t/bad.json"
+    expect "an unreadable list picked something" [ -z "$(superseded_prs "$t/bad.json" "$d" "$b" x homelab-pin-bot)" ]
+  fi
 
   printf 'pin-pr selftest: %d checks passed\n' "$pass"
 }
