@@ -189,8 +189,13 @@ jobs:
           # A re-run of a commit whose image is already in the registry must NOT rebuild and
           # re-push it: a rebuild has another digest, which would move a tag a pin may already
           # name (homelab's pin lander refuses a re-pushed tag, runcove-5t3oj.19). Reuse it.
+          reused=0
           if pulled=$(docker pull "$image" 2>&1); then
-            echo "$image is already in the registry (a re-run): reusing it, nothing rebuilt or pushed"
+            # A tag's presence is NOT proof that CI built it (anyone able to push could have put
+            # one there), so a reused image is never certified: no PUBLISHED line below, and the
+            # pin lander, which needs exactly one, refuses a pin that only a re-run vouches for.
+            echo "$image is already in the registry (a re-run): reusing it, nothing rebuilt or pushed, and not certified by this run"
+            reused=1
           else
             case "$pulled" in
               *"manifest unknown"*|*"not found"*) ;;
@@ -208,7 +213,11 @@ jobs:
           echo "ref=${image}@${digest}" >> "$GITHUB_OUTPUT"
           # One line, printed once, that homelab's pin lander reads from this job's log to bind
           # the pinned digest to main's own CI run (runcove-5t3oj.19): do not reword it.
-          echo "PUBLISHED image=${image} digest=${digest}"
+          if [ "$reused" = 0 ]; then
+            echo "PUBLISHED image=${image} digest=${digest}"
+          else
+            echo "REUSED image=${image} digest=${digest} (existing tag, not built or certified by this run)"
+          fi
 
   # Opens the pull request on the homelab repo that moves production onto this image
   # (homelab-qa3c, 15 Oct 2026): the manifests live there, pinned by digest, and only a
