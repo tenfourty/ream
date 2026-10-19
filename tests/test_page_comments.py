@@ -292,7 +292,7 @@ def test_the_script_never_navigates_to_open_the_panel():
 
     js = gallery._COMMENTS_JS
     assert not re.search(r"location\.hash\s*=(?!=)", js), "opening must not navigate"
-    assert '"artifacts.comments.open"' in js
+    assert '"artifacts.comments.open:"' in js
     assert "cpanel-open" in js
 
 

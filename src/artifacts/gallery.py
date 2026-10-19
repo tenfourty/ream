@@ -1848,12 +1848,14 @@ window.addEventListener("message",function(e){try{
 // THE DOCKED PANEL. Opened and closed by a class on <body>, never by the
 // fragment: no navigation, no history entry, nothing laid over the page. The
 // bar's button and the close control are intercepted; Escape closes; the
-// state is this viewer's, in localStorage, and storage that throws or is
-// missing costs only the memory. `.cjs` hands the panel from :target to this.
+// state is this viewer's and this page's, in localStorage under a key per
+// page id (open on one page is not open on the next), and storage that
+// throws or is missing costs only the memory. `.cjs` hands the panel from :target to this.
 // A link to #comments (the scope tabs, a scriptless redirect) opens it for
 // this visit only -- it is not written to the memory -- and the fragment is
 // replaced away so a reload obeys the memory rather than the old link.
-var P=document.getElementById("comments"),B=document.body,K="artifacts.comments.open",bar=null;
+var P=document.getElementById("comments"),B=document.body,bar=null,
+  seg=String(location.pathname||"").split("/"),K="artifacts.comments.open:"+(seg[1]==="a"&&seg[2]?seg[2]:seg.join("/"));
 function isOpen(){return !!(B&&B.classList.contains("cpanel-open"))}
 function panel(on,keep){if(!P)return;B.classList.toggle("cpanel-open",on);
   var c=document.querySelector(".cbtn");if(c)c.setAttribute("aria-expanded",on?"true":"false");

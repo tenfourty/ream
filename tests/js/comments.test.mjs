@@ -58,7 +58,7 @@ function clock() {
                if (!next) break; const [t, fn] = due.get(next); due.delete(next); now = t; fn(); }
              now = end; } };
 }
-function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false, threads = [] } = {}) {
+function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false, threads = [], page = "abc", seed = null } = {}) {
   const framePosts = [];
   const frameWin = { postMessage: (m, o) => framePosts.push([m, o]) };
   const frameOn = {};
@@ -97,13 +97,13 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
                 addEventListener: (t, f) => ((docOn[t] ||= []).push(f)),
                 querySelector: (q) => (q === "form.cnew" ? (noForm ? null : form) : extra[q] || null) };
   const listeners = {}, capture = {};
-  const store = new Map(stored === undefined ? [] : [["artifacts.comments.open", stored]]);
+  const store = new Map(seed || (stored === undefined ? [] : [["artifacts.comments.open:" + page, stored]]));
   const localStorage = storage ? { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) }
     : { getItem() { throw new Error("denied"); }, setItem() { throw new Error("denied"); } };
   const history = { entries: 0, replaced: [], pushState() { this.entries++; }, replaceState(s, t, u) { this.replaced.push(u); } };
   const win = { scrollX: 0, scrollY: 50, innerWidth: 1000, innerHeight: 700, localStorage, history,
                 addEventListener: (t, f, c) => (((c ? capture : listeners)[t] ||= []).push(f)) };
-  const location = { hash, pathname: "/a/abc", search: "" };
+  const location = { hash, pathname: "/a/" + page, search: "" };
   const FD = function (f) { this.form = f; };
   const clk = clock();
   new Function("document", "window", "location", "URL", "fetch", "FormData", "setTimeout", "clearTimeout", src)(
@@ -340,10 +340,10 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
   ok(ev.prevented && g.isOpen(), "the comments button opens the panel without following its link");
   ok(g.location.hash === "" && g.history.entries === 0 && g.history.replaced.length === 0, "no fragment and no history entry");
   ok(g.cbtn.attrs["aria-expanded"] === "true", "the button says it is expanded");
-  ok(g.store.get("artifacts.comments.open") === "1", "open is remembered");
+  ok(g.store.get("artifacts.comments.open:abc") === "1", "open is remembered");
   ev = g.tap(g.cbtn);
   ok(ev.prevented && !g.isOpen() && g.cbtn.attrs["aria-expanded"] === "false", "pressing it again closes it");
-  ok(g.store.get("artifacts.comments.open") === "0", "and closed is remembered");
+  ok(g.store.get("artifacts.comments.open:abc") === "0", "and closed is remembered");
   g.tap(g.cbtn); g.cbtn.focused = false; ev = g.tap(btn);
   ok(ev.prevented && !g.isOpen(), "the close button closes it");
   ok(g.cbtn.focused === true, "and hands focus back to the comments button, not to <body>");
@@ -354,7 +354,7 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
   g.tap(g.cbtn); g.key("Enter");
   ok(g.isOpen(), "a key other than Escape leaves it open");
   g.key("Escape");
-  ok(!g.isOpen() && g.store.get("artifacts.comments.open") === "0", "Escape closes it, and that is remembered");
+  ok(!g.isOpen() && g.store.get("artifacts.comments.open:abc") === "0", "Escape closes it, and that is remembered");
   g.extra[".dlg:target,details.menu[open]"] = el("div");
   g.tap(g.cbtn); g.key("Escape");
   ok(g.isOpen(), "Escape with a dialog or menu open closes that first, not the panel"); }
@@ -362,9 +362,19 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
   ok(g.isOpen() && g.cbtn.attrs["aria-expanded"] === "true", "a viewer who left it open finds it open"); }
 { const g = build({ stored: "0" });
   ok(!g.isOpen(), "and one who closed it finds it closed"); }
+// Remembered per page, not across pages (Jeremy, 19 Oct 2026): open on one
+// page is not open on the next.
+{ const g = build({ page: "xyz", seed: [["artifacts.comments.open:abc", "1"]] });
+  ok(!g.isOpen(), "a page left open does not open the next page's panel");
+  g.tap(g.cbtn);
+  ok(g.store.get("artifacts.comments.open:xyz") === "1" && g.store.get("artifacts.comments.open:abc") === "1",
+     "each page keeps its own memory");
+  g.tap(g.cbtn);
+  ok(g.store.get("artifacts.comments.open:xyz") === "0" && g.store.get("artifacts.comments.open:abc") === "1",
+     "and closing one leaves the other's alone"); }
 { const g = build({ stored: "0", hash: "#comments" });
   ok(g.isOpen(), "a link to #comments opens it, whatever was remembered");
-  ok(g.store.get("artifacts.comments.open") === "0", "without overwriting what the viewer chose");
+  ok(g.store.get("artifacts.comments.open:abc") === "0", "without overwriting what the viewer chose");
   ok(g.history.entries === 0 && g.history.replaced.length === 1 && g.history.replaced[0] === "/a/abc",
      "and the fragment is dropped in place, so a reload obeys the memory rather than the old link"); }
 { let threw = false, g;
