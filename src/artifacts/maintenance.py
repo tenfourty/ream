@@ -101,6 +101,8 @@ def nightly(db: Database) -> None:
         made = backup(db, folder)
         _log.info("backup written: %s", made.name)
     gone = store.purge_expired(db)
+    # After the purge, so the statistics describe what is left.
+    db.optimize()
     _log.info("purge: %d destroyed%s", len(gone), "".join(f" {g}" for g in gone))
 
 

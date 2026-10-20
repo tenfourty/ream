@@ -870,7 +870,9 @@ def _postgres_only(request):
 @pytest.fixture()
 def db(_schema: _Schema, dsn: str, request):
     _schema.empty()  # every table empty, every sequence restarted
-    yield Database(dsn)
+    database = Database(dsn)
+    yield database
+    database.close()  # its reused SQLite connections, not left to the collector
     if "fresh_schema" in request.fixturenames:
         return  # it rebuilds anyway
     now = _schema.fingerprint()

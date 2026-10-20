@@ -286,10 +286,26 @@ def _statements(script: str) -> list[str]:
 
 SQLITE_SCHEMA_VERSION = 1
 
-# FULL in service: safe on power loss (homelab's advice, design doc). The test
-# suite turns it off for its throwaway files, as it turns fsync off for its
-# throwaway Postgres (tests/conftest.py).
-SQLITE_SYNCHRONOUS = "full"
+# NORMAL in service since 20 Oct 2026 (Jeremy's choice, runcove-5t3oj.34): in
+# WAL mode a commit no longer waits for the disk. On this volume (DRBD protocol
+# C, the pod's node diskless) FULL cost about 7 ms a commit, a network round
+# trip each; NORMAL about 0.01 ms. The trade: a power cut or kernel panic on the
+# node can lose the last few seconds of commits not yet checkpointed. A pod
+# crash loses nothing, and the database is never corrupted (checkpoints still
+# sync). The test suite turns it off for its throwaway files, as it turns fsync
+# off for its throwaway Postgres (tests/conftest.py).
+SQLITE_SYNCHRONOUS = "normal"
+# Per connection: a 16 MiB page cache (SQLite's default is about 2 MiB) and up
+# to 256 MiB of the file read through memory-mapping, which is the kernel's page
+# cache, reclaimable, not the process's own memory. The file is 3.2 GB; the hot
+# part (page lists, decisions, current versions) is far smaller. Sized against
+# the pod's 1 GiB, which the thumbnail browser shares: at most SQLITE_POOL_MAX
+# idle caches, so 64 MiB of cache at worst.
+SQLITE_CACHE_KIB = 16 * 1024
+SQLITE_MMAP_BYTES = 256 * 1024 * 1024
+# Idle connections kept for reuse. Opening one per request threw its cache
+# away every time and re-ran its setup; reuse keeps both.
+SQLITE_POOL_MAX = 4
 
 
 def in_list(values) -> str:
@@ -314,6 +330,9 @@ class Database:
         # once so it holds the WAL index; it never runs a query after that.
         self._keeper: sqlite3.Connection | None = None
         self._keeper_lock = threading.Lock()
+        # SQLite only: idle request connections, reused (runcove-5t3oj.34).
+        self._idle: list[sqlite3.Connection] = []
+        self._idle_lock = threading.Lock()
 
     def _keep_open(self, raw: sqlite3.Connection) -> None:
         if self._keeper is not None:
@@ -328,26 +347,76 @@ class Database:
                 keeper.execute("select 1 from sqlite_master limit 1").fetchall()
                 self._keeper = keeper
 
+    def _open_sqlite(self) -> sqlite3.Connection:
+        raw = sqlite3.connect(
+            _sqlite_path(self.dsn),
+            isolation_level=None,
+            detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+            check_same_thread=False,
+        )
+        raw.create_function("artifacts_now", 0, lambda: _time_text(datetime.now(UTC)))
+        raw.execute("pragma busy_timeout = 5000")
+        raw.execute(f"pragma synchronous = {SQLITE_SYNCHRONOUS}")
+        raw.execute(f"pragma cache_size = -{SQLITE_CACHE_KIB}")
+        raw.execute(f"pragma mmap_size = {SQLITE_MMAP_BYTES}")
+        return raw
+
+    def _checkout(self) -> sqlite3.Connection:
+        with self._idle_lock:
+            raw = self._idle.pop() if self._idle else None
+        if raw is None:
+            raw = self._open_sqlite()
+        # Every checkout, not only the first: reset() and the migration turn
+        # foreign keys off on the connection they use, and a reused connection
+        # must not carry that into the next request.
+        raw.execute("pragma foreign_keys = on")
+        self._keep_open(raw)
+        return raw
+
+    def _checkin(self, raw: sqlite3.Connection, failed: bool) -> None:
+        """Back to the idle list, or closed: a connection whose request failed,
+        or that is still inside a transaction, is never reused."""
+        if not failed and not raw.in_transaction:
+            with self._idle_lock:
+                if len(self._idle) < SQLITE_POOL_MAX:
+                    self._idle.append(raw)
+                    return
+        try:
+            if raw.in_transaction:
+                raw.rollback()
+        finally:
+            raw.close()
+
+    def close(self) -> None:
+        """Close every idle connection (and the keeper). For tests and shutdown;
+        a connection in use is closed when it is handed back."""
+        with self._idle_lock:
+            idle, self._idle = self._idle, []
+        for raw in idle:
+            raw.close()
+        with self._keeper_lock:
+            if self._keeper is not None:
+                self._keeper.close()
+                self._keeper = None
+
+    def optimize(self) -> None:
+        """Refresh the query planner's statistics (SQLite's own advice: run
+        `pragma optimize` periodically). Cheap; a no-op on Postgres, whose
+        autovacuum does this."""
+        if self.sqlite:
+            with self.connect() as conn:
+                conn.execute("pragma optimize")
+
     @contextmanager
     def connect(self) -> Iterator[Connection]:
         if self.sqlite:
-            raw = sqlite3.connect(
-                _sqlite_path(self.dsn),
-                isolation_level=None,
-                detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
-                check_same_thread=False,
-            )
+            raw = self._checkout()
+            failed = True
             try:
-                raw.create_function(
-                    "artifacts_now", 0, lambda: _time_text(datetime.now(UTC))
-                )
-                raw.execute("pragma foreign_keys = on")
-                raw.execute("pragma busy_timeout = 5000")
-                raw.execute(f"pragma synchronous = {SQLITE_SYNCHRONOUS}")
-                self._keep_open(raw)
                 yield SqliteConnection(raw)
+                failed = False
             finally:
-                raw.close()
+                self._checkin(raw, failed)
             return
         with psycopg.connect(self.dsn, autocommit=True) as conn:
             yield Connection(conn)
