@@ -4,7 +4,8 @@ The design and the reasons for each step are in `docs/agent/specs/2026-10-09-sql
 (§2 for backups, §5 for the migration). This file holds the commands. The deployment's own names
 (the cluster, the Flux kustomization, the backup share) live in the homelab repo; the names below
 are the ones this repo's `deploy/` uses: namespace `artifacts`, Deployment `artifacts`, the CNPG
-secret `artifacts-db-app` (key `uri`), and the 5Gi PVC `artifacts-data` mounted at `/data`.
+secret `artifacts-db-app` (key `uri`), and the PVC `artifacts-data` mounted at `/data` (30Gi since
+20 Oct 2026; see "Sizing" below).
 
 ## The commands
 
@@ -115,20 +116,45 @@ minutes, not an hour. The copier fetches 8 rows at a time (`migrate._BATCH`): at
 `version` table (bodies up to 8 MiB) was OOM-killed at 768 Mi, so give the Job at least 1 Gi and
 a work volume of 10 Gi or more (the copy, the drill's own copy and its journal).
 
-## Cutover (spec §5, an evening announced in #agents)
+## Cutover (spec §5): done 20 Oct 2026, through the deployment repo
 
-1. `flux suspend ks artifacts-app`, so Flux does not undo step 2 within five minutes.
-2. `kubectl -n artifacts scale deploy/artifacts --replicas=0`, and wait until no pod is left:
-   `kubectl -n artifacts get pods -l app.kubernetes.io/name=artifacts` shows none.
-3. Run the Job above with `migrate-from-postgres --from env:ARTIFACTS_PG_URI --to
-   /data/artifacts.db`, and check its log ends in `verified …`. Keep the log.
-4. Apply the SQLite `DATABASE_URL` (`sqlite:////data/artifacts.db`, in `deploy/artifacts-config.env`)
-   and the PVC mount: the change already merged, waiting behind the suspension.
-5. `flux resume ks artifacts-app`; the pod starts on SQLite.
-6. Smoke test end to end: publish a page, fetch it, ask a decision and answer it in the gallery,
-   leave a comment, and watch an agent's `artifacts-decide wait` wake on the answer.
+On the homelab, changes reach the cluster only through the manifests repo, never by a hand-run
+`kubectl` or a Flux suspend. So the cutover was three merges, each checked before the next.
+Announce the window to every agent about 30 minutes ahead.
 
-If step 3 refuses: resume Flux without step 4, and the app comes back on Postgres as before.
+1. **Scale to 0** (a manifest PR: `replicas: 0`). Wait until
+   `kubectl -n artifacts get pods -l app.kubernetes.io/name=artifacts` shows none. The copy must
+   not start while the app can still write: a write mid-copy makes the verify refuse (safe), but
+   one after the verify and before the pod stops is lost silently. RWO does not prevent a second
+   mount on the same node, so the Job goes in its own PR, merged only once no pod is left.
+2. **The copy Job** (a manifest PR adding the Job above, the Deployment's image digest, a 1Gi
+   memory limit, `SQLITE_TMPDIR=/data`, `backoffLimit: 0`). Its log must end
+   `verified 22 tables, <M> rows`. **Save the log**: the next PR removes the Job, and Flux's prune
+   deletes it with its log.
+3. **The switch** (a manifest PR: `DATABASE_URL: sqlite:////data/artifacts.db`, `replicas: 1`, the
+   Job removed). If step 2 refused, this PR is only `replicas: 1` and the Job removed: the app
+   comes back on Postgres as before.
+4. Smoke test: the page list matches the one taken before step 1 (same ids); publish a page, fetch
+   it, update it, list its versions; ask a decision on it and have a person tap it while an agent's
+   `artifacts-decide wait --page <id>` waits.
+5. Force one off-site sync, then restore the newest off-site snapshot and run `restore-drill` on it
+   beside a `VACUUM INTO` copy of the live file (homelab's `scripts/restore-test-offsite-artifacts.sh`).
+   Removing Postgres waits on this passing.
+
+**Measured, 20 Oct 2026**: the window took 10 minutes from the first merge to the app ready on
+SQLite (09:29 to 09:39 Paris); the copy itself 3.5 minutes, `verified 22 tables, 4646 rows`
+(`version` 3,017 rows).
+
+## Sizing
+
+The SQLite file is much larger than Postgres reports, because Postgres stores the page bodies
+TOAST-compressed and SQLite stores them raw. On 20 Oct 2026 Postgres reported `version` at
+1.5 GB; the SQLite file was **3.23 GB**. The 16 Oct rehearsal's "1.3 GB" was the compressed dump,
+not the database. On the volume: the live file, its WAL, a `VACUUM INTO` temporary during each
+nightly snapshot, and the kept snapshots (`maintenance.KEEP`, 7, uncompressed), so about
+(KEEP + 2) times the file. At 3.2 GB that is about 29 GB: the 30Gi volume is close to full once
+seven nights have run. Grow the volume, or keep fewer snapshots on it (the off-site copy and the
+NAS hold the history).
 
 ## Rollback (for one week after the cutover)
 
