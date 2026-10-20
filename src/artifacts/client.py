@@ -577,14 +577,15 @@ def _publish(file_path: str, title: str | None, key: str) -> dict:
     return _request("POST", f"{_api_base()}/artifacts", key, payload)
 
 
-def _rendered(file_path: str, key: str) -> str:
+def _rendered(file_path: str, key: str, title: str | None = None) -> str:
     """The HTML a publish of this file would store: the file itself, or for a
     `.md` file the service's rendering of it (so `--check` and `--matches`
     look at what a reader would get)."""
     text = _read_page(file_path)
     if not _is_markdown(file_path):
         return text
-    out = _request("POST", f"{_api_base()}/markdown", key, {"body": text})
+    payload = {"body": text, **({"title": title} if title else {})}
+    out = _request("POST", f"{_api_base()}/markdown", key, payload)
     return out["html"]
 
 
@@ -831,7 +832,10 @@ def _matches(artifact_id: str, file_path: str | None, key: str) -> int:
             "--matches needs a FILE: artifacts-publish --matches ID page.html"
         )
     if _is_markdown(file_path):
-        local = _rendered(file_path, key)
+        # Rendered under the page's own name, which may not be its # heading:
+        # otherwise a page published with --title always "differs".
+        name = _read_current(artifact_id, key).get("title")
+        local = _rendered(file_path, key, name)
     else:
         local = pathlib.Path(file_path).read_text(encoding="utf-8")
     live = _fetch(artifact_id, key)

@@ -248,3 +248,50 @@ def test_cli_check_refuses_markdown_with_a_way_forward(tmp_path):
     page.write_text("# Status\n")
     with pytest.raises(cli.UsageError, match="--preview"):
         cli._check_page(str(page))
+
+
+def test_oversized_markdown_is_refused_before_it_is_rendered(api, monkeypatch):
+    client, auth = api
+    monkeypatch.setattr(store, "MAX_BODY_BYTES", 100)
+    rendered = []
+    monkeypatch.setattr(
+        markdown, "render_page", lambda *a: rendered.append(a) or ("", None)
+    )
+    big = "# T\n\n" + "x" * 200
+    for path, payload in (
+        ("/api/v1/artifacts", {"body": big, "format": "markdown"}),
+        ("/api/v1/markdown", {"body": big}),
+    ):
+        r = client.post(path, json=payload, headers=auth)
+        assert r.status_code == 413, (path, r.text)
+    assert rendered == []
+
+
+def test_title_from_heading_is_plain_text():
+    _, title = markdown.render_page("# Release **v2** of `foo`\n")
+    assert title == "Release v2 of foo"
+
+
+def test_a_nested_heading_stays_where_it_is():
+    page, title = markdown.render_page("- # in a list\n")
+    assert title is None and "<li>" in page.split("<main>")[1]
+
+
+def test_long_headings_get_ids_section_updates_accept():
+    page, _ = markdown.render_page("# T\n\n## " + "word " * 60 + "\n")
+    ident = page.split('<h2 id="')[1].split('"')[0]
+    assert 0 < len(ident) <= 120
+
+
+def test_fragments_get_no_heading_ids():
+    assert "id=" not in markdown.render_fragment("## Notes")
+
+
+def test_lone_surrogate_is_a_422_not_a_500(api):
+    client, auth = api
+    r = client.post(
+        "/api/v1/markdown",
+        content=b'{"body": "# T \\ud800"}',
+        headers={**auth, "content-type": "application/json"},
+    )
+    assert r.status_code == 422

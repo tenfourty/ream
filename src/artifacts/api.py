@@ -102,9 +102,28 @@ _NO_MARKDOWN_TITLE = (
 )
 
 
+def _markdown_input(text: str) -> str:
+    """Refuse markdown over the page size limit BEFORE rendering it. The store
+    checks the rendered page too, but only after the work: a large input must
+    not get a render for free. (Table padding is capped by markdown-it-py
+    itself at 65,536 filled-in cells, so the output cannot run away either.)"""
+    try:
+        size = len(text.encode())
+    except UnicodeEncodeError as exc:  # a lone surrogate from JSON's \ud800
+        raise HTTPException(
+            422, {"field": "body", "detail": "body is not valid UTF-8"}
+        ) from exc
+    if size > store.MAX_BODY_BYTES:
+        raise HTTPException(
+            413,
+            {"field": "body", "size": size, "detail": "body exceeds the size limit"},
+        )
+    return text
+
+
 def _markdown_page(text: str, title: str | None) -> tuple[str, str | None]:
     """A markdown body rendered to a page: (html, title or None)."""
-    return markdown.render_page(text, title)
+    return markdown.render_page(_markdown_input(text), title)
 
 
 class PublishBody(BaseModel):
@@ -633,10 +652,6 @@ def agent_router(
         publishing it: for an agent that wants the HTML (to keep, to diff, or
         to finish by hand), and for the CLI's `--check` and `--matches` on a
         `.md` file. `title` names the page as on a publish."""
-        if len(payload.body.encode()) > store.MAX_BODY_BYTES:
-            raise HTTPException(
-                413, f"body is larger than {store.MAX_BODY_BYTES} bytes"
-            )
         body, title = _markdown_page(payload.body, payload.title)
         return {"html": body, "title": title}
 
@@ -889,7 +904,7 @@ def agent_router(
 
         fragment = payload.html
         if payload.format == "markdown" and fragment is not None:
-            fragment = markdown.render_fragment(fragment)
+            fragment = markdown.render_fragment(_markdown_input(fragment))
         try:
             result = store.patch_section(
                 db,

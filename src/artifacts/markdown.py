@@ -65,27 +65,50 @@ def _slug(text: str) -> str:
     Ids stay inside what `--section` accepts ([A-Za-z0-9_.:-])."""
     s = re.sub(r"[^\w\- ]", "", text.strip().lower(), flags=re.UNICODE)
     s = re.sub(r"[^A-Za-z0-9_\- ]", "", s)
-    return re.sub(r"\s+", "-", s).strip("-") or "section"
+    s = re.sub(r"\s+", "-", s).strip("-")
+    # `--section` takes ids of up to 128 characters; leave room for the
+    # plugin's "-N" suffix on a repeated heading.
+    return s[:120].strip("-") or "section"
 
 
-def _engine() -> MarkdownIt:
+def _engine(*, anchors: bool = True) -> MarkdownIt:
     md = MarkdownIt("commonmark", {"html": True, "typographer": False})
     md.enable(["table", "strikethrough"])
     md.use(tasklists_plugin, enabled=False)
-    md.use(anchors_plugin, min_level=2, max_level=6, slug_func=_slug, permalink=False)
+    if anchors:
+        md.use(
+            anchors_plugin, min_level=2, max_level=6, slug_func=_slug, permalink=False
+        )
     return md
 
 
 _MD = _engine()
+# Fragments get no heading ids: a fragment's ids are counted only within the
+# fragment, so appending "## Notes" to a page that has one would make two
+# id="notes" and leave both unaddressable by a later section update. Give a
+# fragment heading an id by hand (raw HTML) when it needs one.
+_MD_FRAGMENT = _engine(anchors=False)
 
 
 def _first_h1(tokens: list[Token]) -> tuple[str | None, int | None]:
     """The text of the first level-1 heading, and its token index."""
     for i, tok in enumerate(tokens):
-        if tok.type == "heading_open" and tok.tag == "h1":
-            inline = tokens[i + 1]
-            return inline.content.strip(), i
+        # Top level only: a "# x" inside a list or a quote stays where it is.
+        if tok.type == "heading_open" and tok.tag == "h1" and tok.level == 0:
+            return _plain(tokens[i + 1]), i
     return None, None
+
+
+def _plain(inline: Token) -> str:
+    """A heading's text without its markdown: "# Release **v2**" names the page
+    "Release v2", not "Release **v2**"."""
+    parts = []
+    for child in inline.children or []:
+        if child.type in ("text", "code_inline"):
+            parts.append(child.content)
+        elif child.type in ("softbreak", "hardbreak"):
+            parts.append(" ")
+    return "".join(parts).strip() or inline.content.strip()
 
 
 def _wrap_tables(html: str) -> str:
@@ -96,7 +119,7 @@ def _wrap_tables(html: str) -> str:
 
 def render_fragment(text: str) -> str:
     """Markdown to an HTML fragment, for a section update."""
-    return _wrap_tables(_MD.render(text))
+    return _wrap_tables(_MD_FRAGMENT.render(text))
 
 
 def first_heading(text: str) -> str | None:

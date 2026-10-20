@@ -342,7 +342,8 @@ unchanged page makes no version, so the note is only stored when something moved
   fenced code, task lists, and `##` headings with ids you can link to or update
   with `--section`. Raw HTML passes through, so a decision slot works; keep a
   raw HTML block free of blank lines, or markdown resumes inside it. No title
-  needed: the first `# heading` names the page; `--title` overrides it.
+  needed: the first `# heading` names the page; `--title` overrides it. A `.md`
+  fragment for `--section` gets no heading ids: add one in raw HTML if needed.
 - Put questions to him as lettered options, your recommendation first as (a).
 - Write for him: say what changed and what it means, not internal jargon.
 - A 401 or 403 is a refusal to look, never an empty result. Say so.
