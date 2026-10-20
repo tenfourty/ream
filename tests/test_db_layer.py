@@ -151,14 +151,31 @@ def test_foreign_keys_are_back_on_for_the_next_request(tmp_path):
     database.close()
 
 
-def test_a_failed_request_never_hands_its_connection_on(tmp_path):
+def test_a_database_error_never_hands_its_connection_on(tmp_path):
     database = _sqlite(tmp_path)
-    with pytest.raises(RuntimeError), database.connect() as conn:
+    with pytest.raises(dbmod.sqlite3.Error), database.connect() as conn:
         broken = conn._raw
-        raise RuntimeError("boom")
+        conn.execute("select * from no_such_table")
     with database.connect() as conn:
         assert conn._raw is not broken
     database.close()
+
+
+def test_an_ordinary_refusal_keeps_its_connection(tmp_path):
+    database = _sqlite(tmp_path)
+    with pytest.raises(LookupError), database.connect() as conn:
+        kept = conn._raw
+        raise LookupError("no such page")
+    with database.connect() as conn:
+        assert conn._raw is kept
+    database.close()
+
+
+def test_nothing_rejoins_the_idle_list_after_close(tmp_path):
+    database = _sqlite(tmp_path)
+    with database.connect():
+        database.close()
+    assert database._idle == []
 
 
 def test_a_connection_left_in_a_transaction_is_rolled_back_not_reused(tmp_path):
