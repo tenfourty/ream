@@ -40,6 +40,7 @@ from artifacts import (
     hosts,
     idempotency,
     keys,
+    markdown,
     onboarding,
     ratelimit,
     review,
@@ -83,6 +84,7 @@ class PollBody(BaseModel):
 
 class PreviewBody(BaseModel):
     body: str
+    format: Literal["html", "markdown"] = "html"
     # A phone by default: the width Jeremy reads most pages at, and the one an
     # author on a desktop never sees.
     width: int = 390
@@ -94,10 +96,25 @@ class PreviewBody(BaseModel):
 _PREVIEW_SLOT = threading.Semaphore(1)
 PREVIEW_WAIT_SECONDS = 30
 
+_NO_MARKDOWN_TITLE = (
+    "a markdown page needs a name: pass a title, or start the markdown with a "
+    "`# heading`"
+)
+
+
+def _markdown_page(text: str, title: str | None) -> tuple[str, str | None]:
+    """A markdown body rendered to a page: (html, title or None)."""
+    return markdown.render_page(text, title)
+
 
 class PublishBody(BaseModel):
-    title: str
+    # Optional only for markdown, whose first `#` heading names the page when
+    # no title is given; an HTML publish without one is refused as before.
+    title: str | None = None
     body: str
+    # "markdown": the service renders `body` into a page in the house look
+    # (markdown.py, runcove-5t3oj.33). The default keeps every existing caller.
+    format: Literal["html", "markdown"] = "html"
 
 
 class RecordBody(BaseModel):
@@ -128,6 +145,7 @@ class PatchBody(BaseModel):
     # carries one. Stored on the new version only; an unchanged body stores
     # nothing, because it makes no version.
     note: str | None = None
+    format: Literal["html", "markdown"] = "html"
 
 
 class SectionBody(BaseModel):
@@ -144,6 +162,8 @@ class SectionBody(BaseModel):
     # Off by default (every maintainer asked for that); true marks the tile on
     # his wall for his eye.
     notify: bool = False
+    # "markdown": `html` is markdown, rendered to a fragment before it is placed.
+    format: Literal["html", "markdown"] = "html"
 
 
 class ArchiveBody(BaseModel):
@@ -607,24 +627,44 @@ def agent_router(
             headers={"x-content-type-options": "nosniff"},
         )
 
+    @router.post("/markdown")
+    def render_markdown(payload: PublishBody, agent: str = Depends(caller)):
+        """Render markdown to the page a markdown publish would store, without
+        publishing it: for an agent that wants the HTML (to keep, to diff, or
+        to finish by hand), and for the CLI's `--check` and `--matches` on a
+        `.md` file. `title` names the page as on a publish."""
+        if len(payload.body.encode()) > store.MAX_BODY_BYTES:
+            raise HTTPException(
+                413, f"body is larger than {store.MAX_BODY_BYTES} bytes"
+            )
+        body, title = _markdown_page(payload.body, payload.title)
+        return {"html": body, "title": title}
+
     @router.post("/artifacts", status_code=201)
     def create(
         payload: PublishBody,
         agent: str = Depends(caller),
         seat_session: str | None = Depends(session),
     ):
+        body, title = payload.body, payload.title
+        if payload.format == "html" and title is None:
+            # As before markdown: an HTML publish names its page.
+            raise HTTPException(422, {"field": "title", "detail": "title is required"})
+        if payload.format == "markdown":
+            body, named = _markdown_page(payload.body, title)
+            if not named:
+                raise HTTPException(
+                    422, {"field": "title", "detail": _NO_MARKDOWN_TITLE}
+                )
+            title = named
         try:
-            published = store.publish(
-                db, agent, payload.title, payload.body, session=seat_session
-            )
+            published = store.publish(db, agent, title, body, session=seat_session)
             # After the write, never inside it: a publish must not wait on a
             # browser, nor fail because of one. See thumbs.render_in_background.
-            thumbs.render_in_background(
-                db, published.id, published.version, payload.body
-            )
+            thumbs.render_in_background(db, published.id, published.version, body)
             return {
                 **published.__dict__,
-                "warnings": _warnings_for(published.id, payload.body),
+                "warnings": _warnings_for(published.id, body),
             }
         except store.NotAPage as exc:
             # 422, not 413: the body is not too much, it is not a page. Named
@@ -672,12 +712,17 @@ def agent_router(
         agent: str = Depends(caller),
         seat_session: str | None = Depends(session),
     ):
+        body = payload.body
+        if payload.format == "markdown":
+            # The title keeps its usual rule on update: omitted keeps the name
+            # the page has. The masthead and <title> follow the markdown.
+            body, _ = _markdown_page(payload.body, payload.title)
         try:
             published = store.patch(
                 db,
                 agent,
                 artifact_id,
-                payload.body,
+                body,
                 payload.expected_revision,
                 title=payload.title,
                 session=seat_session,
@@ -687,12 +732,10 @@ def agent_router(
             )
             # After the write, never inside it: a publish must not wait on a
             # browser, nor fail because of one. See thumbs.render_in_background.
-            thumbs.render_in_background(
-                db, published.id, published.version, payload.body
-            )
+            thumbs.render_in_background(db, published.id, published.version, body)
             return {
                 **published.__dict__,
-                "warnings": _warnings_for(published.id, payload.body),
+                "warnings": _warnings_for(published.id, body),
             }
         except store.NotAPage as exc:
             # 422, not 413: the body is not too much, it is not a page. Named
@@ -844,6 +887,9 @@ def agent_router(
         runs on the whole resulting page."""
         from artifacts import sections
 
+        fragment = payload.html
+        if payload.format == "markdown" and fragment is not None:
+            fragment = markdown.render_fragment(fragment)
         try:
             result = store.patch_section(
                 db,
@@ -851,7 +897,7 @@ def agent_router(
                 artifact_id,
                 element_id,
                 payload.op,
-                payload.html,
+                fragment,
                 if_revision=payload.if_revision,
                 if_section=payload.if_section,
                 note=payload.note,
@@ -925,12 +971,15 @@ def agent_router(
         published; the same size limit as a publish applies. `rendered: false`
         means this deployment has no browser or the render failed -- never
         "clean"."""
-        if len(payload.body.encode()) > store.MAX_BODY_BYTES:
+        body = payload.body
+        if payload.format == "markdown":
+            body, _ = _markdown_page(payload.body, None)
+        if len(body.encode()) > store.MAX_BODY_BYTES:
             raise HTTPException(
                 413, f"body is larger than {store.MAX_BODY_BYTES} bytes"
             )
         try:
-            store.check_body(payload.body, agent=agent)
+            store.check_body(body, agent=agent)
         except store.SecretFound as found:
             raise HTTPException(
                 422, _refused_detail(found.field, found.findings)
@@ -948,7 +997,7 @@ def agent_router(
                 503, "another preview is rendering; try again in a few seconds"
             )
         try:
-            png, errors = thumbs.render_report(payload.body, width, height)
+            png, errors = thumbs.render_report(body, width, height)
         finally:
             _PREVIEW_SLOT.release()
         return {

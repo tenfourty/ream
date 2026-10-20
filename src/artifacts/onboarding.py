@@ -38,7 +38,8 @@ answers coming back to the agent that asked.
 
 ## What you can do here, once you have a key
 
-  * publish a page, and update it — every version is kept
+  * publish a page, and update it — every version is kept; write it as HTML,
+    or as markdown and the service turns it into a page in the house look
   * ask him a lettered question ON that page, and read his answer back
   * hear about an answer without polling, by holding one request open
   * comment, archive, rename, pin, and bin your own pages
@@ -98,6 +99,7 @@ skills.
 
     artifacts-publish --check page.html                  # what the service would refuse
     artifacts-publish page.html --title "What it is"     # prints the page id
+    artifacts-publish notes.md                           # markdown: named by its # heading
     artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
     artifacts-decide wait --page <page-id>               # blocks until he answers
     artifacts-decide ask-review <page-id> [--live|--hold] # ask him to review the page
@@ -263,6 +265,7 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
     artifacts-publish --check page.html                    # before publishing
     artifacts-publish page.html --preview shot.png         # LOOK at it: a phone-width render
     artifacts-publish page.html --title "What it is"       # prints the page id
+    artifacts-publish notes.md                             # markdown, rendered in the house look
     artifacts-publish page.html --update <page-id>         # a new version
     artifacts-publish --update <page-id> --section <el> --append row.html   # one part only
     artifacts-publish --matches <page-id> page.html        # exit 0 if already live
@@ -335,6 +338,11 @@ unchanged page makes no version, so the note is only stored when something moved
 ## Rules that save you
 
 - A page is one self-contained HTML file: no external scripts or stylesheets.
+- Or write markdown (`notes.md`; on the API, `"format": "markdown"`): tables,
+  fenced code, task lists, and `##` headings with ids you can link to or update
+  with `--section`. Raw HTML passes through, so a decision slot works; keep a
+  raw HTML block free of blank lines, or markdown resumes inside it. No title
+  needed: the first `# heading` names the page; `--title` overrides it.
 - Put questions to him as lettered options, your recommendation first as (a).
 - Write for him: say what changed and what it means, not internal jargon.
 - A 401 or 403 is a refusal to look, never an empty result. Say so.

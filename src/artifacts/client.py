@@ -557,11 +557,35 @@ def _read_page(file_path: str) -> str:
     return path.read_text()
 
 
-def _publish(file_path: str, title: str, key: str) -> dict:
+# A `.md` file is markdown: the service renders it into a page in the house
+# look (runcove-5t3oj.33). No flag, by every office's wish: the extension is
+# the declaration, and a flag is one more thing to forget.
+_MARKDOWN_SUFFIXES = (".md", ".markdown")
+
+
+def _is_markdown(file_path: str | None) -> bool:
+    return bool(file_path) and Path(file_path).suffix.lower() in _MARKDOWN_SUFFIXES
+
+
+def _format_of(file_path: str | None) -> dict:
+    return {"format": "markdown"} if _is_markdown(file_path) else {}
+
+
+def _publish(file_path: str, title: str | None, key: str) -> dict:
     body = _read_page(file_path)
-    return _request(
-        "POST", f"{_api_base()}/artifacts", key, {"title": title, "body": body}
-    )
+    payload = {"title": title or "", "body": body, **_format_of(file_path)}
+    return _request("POST", f"{_api_base()}/artifacts", key, payload)
+
+
+def _rendered(file_path: str, key: str) -> str:
+    """The HTML a publish of this file would store: the file itself, or for a
+    `.md` file the service's rendering of it (so `--check` and `--matches`
+    look at what a reader would get)."""
+    text = _read_page(file_path)
+    if not _is_markdown(file_path):
+        return text
+    out = _request("POST", f"{_api_base()}/markdown", key, {"body": text})
+    return out["html"]
 
 
 def _read_current(artifact_id: str, key: str) -> dict:
@@ -600,7 +624,11 @@ def _patch(
     is heading -- a board an arc's lead and its workers all update.
     """
     body = _read_page(file_path)
-    payload = {"body": body, "expected_revision": expected_revision}
+    payload = {
+        "body": body,
+        "expected_revision": expected_revision,
+        **_format_of(file_path),
+    }
     if title is not None:
         payload["title"] = title
     if note:
@@ -766,6 +794,7 @@ def _update_section(args, key: str) -> dict:
     payload: dict = {"op": op, "notify": bool(args.notify)}
     if file_path is not None:
         payload["html"] = _read_page(file_path)
+        payload.update(_format_of(file_path))
     if args.if_revision is not None:
         payload["if_revision"] = args.if_revision
     if args.if_section is not None:
@@ -801,7 +830,10 @@ def _matches(artifact_id: str, file_path: str | None, key: str) -> int:
         raise UsageError(
             "--matches needs a FILE: artifacts-publish --matches ID page.html"
         )
-    local = pathlib.Path(file_path).read_text(encoding="utf-8")
+    if _is_markdown(file_path):
+        local = _rendered(file_path, key)
+    else:
+        local = pathlib.Path(file_path).read_text(encoding="utf-8")
     live = _fetch(artifact_id, key)
     if local == live:
         print(f"{file_path} is the live version of {artifact_id}", file=sys.stderr)
@@ -839,7 +871,10 @@ def _preview(file_path: str | None, out: str, width: int, key: str) -> int:
         )
     body = pathlib.Path(file_path).read_text(encoding="utf-8")
     got = _request(
-        "POST", f"{_api_base()}/preview", key, {"body": body, "width": width}
+        "POST",
+        f"{_api_base()}/preview",
+        key,
+        {"body": body, "width": width, **_format_of(file_path)},
     )
     for error in got.get("errors") or []:
         print(f"script error: {error}", file=sys.stderr)
@@ -993,6 +1028,13 @@ def _check_page(file_path: str) -> int:
     case it exists for -- run it in CI, run it before you have a key, run it
     on a page you have not decided to publish yet.
     """
+    if _is_markdown(file_path):
+        raise UsageError(
+            f"--check reads an HTML page; {file_path} is markdown, which the"
+            " service renders. Publish it (the service runs the same checks on"
+            " the rendered page and prints any warning), or look first with"
+            f" --preview shot.png {file_path}."
+        )
     body = _read_page(file_path)
     findings, syntax, node_ran = check_page(body)
     # THE SERVICE'S OWN SECRET SCAN, run here too (homelab-ij8.106). The first
@@ -1239,7 +1281,18 @@ class _Parser(argparse.ArgumentParser):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="artifacts-publish")
-    parser.add_argument("file", nargs="?", metavar="FILE")
+    parser.add_argument(
+        "file",
+        nargs="?",
+        metavar="FILE",
+        help=(
+            "the page: HTML, or markdown when it ends in .md, which the service"
+            " renders into a page in the house look (tables, fenced code, task"
+            " lists, linkable headings; raw HTML such as a decision slot passes"
+            " through). A markdown page needs no --title: its first # heading"
+            " names it. A .md fragment works with --section too."
+        ),
+    )
     # So the question can be asked BEFORE it becomes a surprise: a seat about to
     # rely on a recent flag can check what it is running in one command.
     parser.add_argument(
@@ -1247,7 +1300,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"artifacts-publish, installed {installed_stamp()}",
     )
-    parser.add_argument("--title")
+    parser.add_argument(
+        "--title", help="the page's name; for a .md file, overrides its # heading"
+    )
     parser.add_argument("--update", metavar="ID")
     parser.add_argument("--list", action="store_true")
     parser.add_argument(
@@ -1644,7 +1699,9 @@ def main(argv: list[str] | None = None) -> int:
             if not updated.get("unchanged"):
                 _report_render(updated["id"], key)
             return 0
-        if args.file and args.title:
+        if args.file and (args.title or _is_markdown(args.file)):
+            # A markdown page may go without --title: its first `# heading`
+            # names it, and the service refuses one that has neither.
             warn_if_unlabelled("publish")
             published = _publish(args.file, args.title, key)
             _print_published(published)
