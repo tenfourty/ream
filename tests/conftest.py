@@ -884,3 +884,14 @@ def db(_schema: _Schema, dsn: str, request):
             " Add @pytest.mark.usefixtures('fresh_schema') to it.",
             pytrace=False,
         )
+
+
+@pytest.fixture(autouse=True)
+def _forget_clean_scans():
+    """The GitGuardian clean-answer memory is per process; one test's clean
+    body must not spare the next test its scan."""
+    from artifacts import ggscan
+
+    with ggscan._clean_lock:
+        ggscan._clean.clear()
+    yield

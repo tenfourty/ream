@@ -26,11 +26,14 @@ found nothing.
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import logging
 import os
 import re
+import threading
+import time
 import urllib.parse
 
 from artifacts.scan import Finding
@@ -48,6 +51,42 @@ MAX_FINDINGS = 20
 
 log = logging.getLogger("artifacts.ggscan")
 _said_unconfigured: list[bool] = []
+
+# ALREADY SCANNED CLEAN (Jeremy, 20 Oct 2026, runcove-5t3oj.35): a body
+# GitGuardian passed is not sent again while the answer is fresh, so a retry, a
+# repeat publish or a preview followed by its publish waits once, not twice.
+# Only a clean answer from a scan that actually ran is remembered: a finding,
+# or "could not scan", is asked again every time. Keyed by the body's SHA-256,
+# so no page text is held. Fresh for a day, because GitGuardian's detectors
+# change; bounded, so a busy day cannot grow it without limit. Per process: a
+# restart forgets it, which costs one scan, never a missed one.
+CLEAN_FRESH_SECONDS = 24 * 3600
+CLEAN_MAX = 2048
+_clean: dict[str, float] = {}
+_clean_lock = threading.Lock()
+
+
+def _digest(body: str) -> str:
+    return hashlib.sha256(body.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _known_clean(digest: str, now: float) -> bool:
+    with _clean_lock:
+        at = _clean.get(digest)
+        if at is None:
+            return False
+        if now - at > CLEAN_FRESH_SECONDS:
+            del _clean[digest]
+            return False
+        return True
+
+
+def _remember_clean(digest: str, now: float) -> None:
+    with _clean_lock:
+        _clean.pop(digest, None)
+        _clean[digest] = now
+        while len(_clean) > CLEAN_MAX:
+            del _clean[next(iter(_clean))]  # the oldest, by insertion
 
 
 def configured() -> bool:
@@ -108,6 +147,9 @@ def scan(body: str) -> list[Finding] | None:
                 "ggshield relay not configured: pages get the built-in scan only"
             )
         return None
+    digest, now = _digest(body), time.monotonic()
+    if _known_clean(digest, now):
+        return []
     try:
         answer = _post(url, token, body)
     except _Refused as exc:
@@ -139,4 +181,6 @@ def scan(body: str) -> list[Finding] | None:
         # ggshield said something and none of it was readable: that is not
         # "clean", and it must not publish as though it were.
         found.append(Finding(shape="ggshield_secret", line=1))
+    if not found:
+        _remember_clean(digest, now)
     return found

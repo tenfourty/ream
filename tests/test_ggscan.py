@@ -184,3 +184,48 @@ def test_a_relay_that_swallows_packets_costs_seconds_not_the_scan_timeout(
     started = time.monotonic()
     assert ggscan.scan(PAGE) is None
     assert time.monotonic() - started < ggscan.CONNECT_SECONDS + 2
+
+
+# ---- already scanned clean (runcove-5t3oj.35, 20 Oct 2026) ----------------
+
+
+def test_a_body_scanned_clean_is_not_sent_again(relay):
+    assert ggscan.scan(PAGE) == []
+    assert ggscan.scan(PAGE) == []
+    assert len(relay.received) == 1
+
+
+def test_a_different_body_is_still_scanned(relay):
+    ggscan.scan(PAGE)
+    ggscan.scan(PAGE + "<p>more</p>")
+    assert len(relay.received) == 2
+
+
+def test_a_finding_is_never_remembered(relay):
+    relay.answer = {"scanned": True, "findings": [{"type": "Slack Token", "line": 1}]}
+    assert ggscan.scan(PAGE)
+    assert ggscan.scan(PAGE)
+    assert len(relay.received) == 2
+
+
+def test_could_not_scan_is_never_remembered_as_clean(relay):
+    relay.answer = {"scanned": False, "reason": "busy"}
+    assert ggscan.scan(PAGE) is None
+    relay.answer = {"scanned": True, "findings": [{"type": "Slack Token", "line": 1}]}
+    assert ggscan.scan(PAGE)
+
+
+def test_a_clean_answer_goes_stale_after_a_day(relay, monkeypatch):
+    ggscan.scan(PAGE)
+    later = ggscan.time.monotonic() + ggscan.CLEAN_FRESH_SECONDS + 1
+    monkeypatch.setattr(ggscan.time, "monotonic", lambda: later)
+    ggscan.scan(PAGE)
+    assert len(relay.received) == 2
+
+
+def test_the_memory_is_bounded_and_holds_no_text(relay, monkeypatch):
+    monkeypatch.setattr(ggscan, "CLEAN_MAX", 3)
+    for n in range(5):
+        ggscan.scan(f"{PAGE}<p>{n}</p>")
+    assert len(ggscan._clean) == 3
+    assert all(len(k) == 64 for k in ggscan._clean)
