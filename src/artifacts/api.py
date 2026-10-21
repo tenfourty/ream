@@ -45,6 +45,7 @@ from artifacts import (
     keys,
     markdown,
     onboarding,
+    partner_in,
     ratelimit,
     review,
     store,
@@ -304,6 +305,39 @@ def _refused_detail(field: str, findings) -> dict:
             {"field": field, "shape": finding.shape, "line": finding.line}
             for finding in findings
         ]
+    }
+
+
+def _slack_view(c: partner_in.Copy, now: datetime) -> dict:
+    """A question whose home is the partner, as an agent reads it: the fields a
+    page question has, plus `source` and `home`. Read-only: no route here
+    answers it."""
+    return {
+        "id": c.qid,
+        "source": c.source,
+        "home": "partner",
+        "read_only": True,
+        "kind": "question",
+        "question": c.title,
+        "options": c.options,
+        "recommended": c.recommended,
+        "context": c.context,
+        "link": c.link,
+        "topic": c.topic,
+        "depends_on": c.depends_on,
+        "replaces": c.replaces,
+        "urgency": c.urgency,
+        "blocked_on": c.blocked_on,
+        "needed_by": c.needed_by,
+        "for": c.for_offices,
+        "agent": c.asking_office,
+        "artifact_id": None,
+        "artifact_title": "",
+        "answer": None,
+        "pending_answer": c.pending_answer,
+        "held_by": [],
+        "created_at": c.created_at,
+        "overdue": inbox.is_overdue(c, now),
     }
 
 
@@ -2003,16 +2037,28 @@ def agent_router(
             ]
         now = datetime.now(UTC)
         found = [f for f in found if f[0].kind == "question"]
-        found.sort(key=lambda f: (bool(f[0].held_by), inbox.key(f[0], now)))
-        return [
-            {
-                **decisions.public(d),
-                "agent": who,
-                "artifact_title": title,
-                "overdue": inbox.is_overdue(d, now),
-            }
+        ranked = [
+            (
+                (bool(d.held_by), inbox.key(d, now)),
+                {
+                    **decisions.public(d),
+                    "agent": who,
+                    "artifact_title": title,
+                    "overdue": inbox.is_overdue(d, now),
+                },
+            )
             for d, who, title in found
         ]
+        if scope == "all":
+            # Questions whose home is the partner (asked in Slack), read-only
+            # and marked with their source, in the inbox's own order among the
+            # ready ones. One he has already answered here shows its pending
+            # answer until the home settles it.
+            for waiting in (True, False):
+                for c in partner_in.open_copies(db, 1000, waiting_on_him=waiting):
+                    ranked.append(((False, inbox.key(c, now)), _slack_view(c, now)))
+        ranked.sort(key=lambda r: r[0])
+        return [view for _, view in ranked]
 
     @router.post("/decisions/{decision_id}/close")
     def close_decision(decision_id: str, agent: str = Depends(caller)):

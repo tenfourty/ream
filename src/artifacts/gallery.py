@@ -21,7 +21,7 @@ import json
 import logging
 import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -40,6 +40,7 @@ from artifacts import (
     keys,
     mail,
     pagediff,
+    partner_in,
     rename,
     stamp,
     store,
@@ -3161,6 +3162,11 @@ def _provenance(row) -> str:
     """
     if not row.answer_source or row.answer_source == "page":
         return ""
+    if row.answer_source == "slack":
+        return (
+            '<p class="relayed-note">You answered this in Slack, verified by '
+            "quarterdeck. If that is not what you meant, answer it again here.</p>"
+        )
     who = escape(row.recorded_by or "an agent")
     where = escape(row.answer_source)
     said = f" You said it {escape(_when(row.said_at))}." if row.said_at else ""
@@ -3264,6 +3270,82 @@ def _since_block(row: decisions.DecisionRow, mine: list) -> str:
     return f'<div class="since"><b>{label}</b><ul>{items}</ul></div>'
 
 
+def _slack_button(option: dict, copy, chosen: str | None = None) -> str:
+    recommended = option["letter"] == copy.recommended
+    is_chosen = option["letter"] == chosen
+    classes = " ".join(
+        c for c in ("rec" if recommended else "", "chosen" if is_chosen else "") if c
+    )
+    if is_chosen:
+        tag = '<span class="tag">&check; your answer</span>'
+    elif recommended:
+        tag = '<span class="tag">recommended</span>'
+    else:
+        tag = ""
+    attr = f' class="{classes}"' if classes else ""
+    return (
+        f'<button type="submit" name="letter" value="{escape(option["letter"])}"{attr}>'
+        f"({escape(option['letter'])}) {escape(option['label'])}{tag}</button>"
+    )
+
+
+def _slack_link(copy) -> str:
+    """The link to Slack. Only an http(s) link was ever stored (partner_in)."""
+    if not copy.link:
+        return "Asked in Slack"
+    return f'<a href="{escape(copy.link)}" rel="noopener noreferrer">Open in Slack</a>'
+
+
+def _slack_head(copy, label: str = "Question") -> str:
+    return (
+        f'<p class="ihead"><span>{label}</span>'
+        '<span class="from-slack">from Slack</span>'
+        f"<span>from {escape(copy.asking_office)}</span></p>"
+    )
+
+
+def _render_slack_question(copy, now: datetime) -> str:
+    meta = " &middot; ".join(_question_meta(copy, now))
+    ctx = f'<p class="qctx">{escape(copy.context)}</p>' if copy.context else ""
+    buttons = "".join(_slack_button(o, copy) for o in copy.options)
+    return (
+        f'<li class="ask" id="i-{escape(copy.id)}">{_slack_head(copy)}'
+        f'<p class="q">{escape(copy.title)}</p>{ctx}'
+        f'<p class="qmeta">{meta}</p>'
+        f'<form method="post" action="/pq/{escape(copy.qid)}/answer">'
+        f'<input type="hidden" name="next" value="inbox">{buttons}'
+        '<input name="note" placeholder="note (optional)"></form>'
+        f'<p class="ilink">{_slack_link(copy)}</p></li>'
+    )
+
+
+def _render_slack_status(pending: list, settled: list) -> str:
+    """Slack-home questions he is no longer being asked: ones he answered here
+    that the home has not confirmed, and ones the home has settled lately."""
+    out = []
+    for c in pending:
+        mine = next(
+            (o["label"] for o in c.options if o["letter"] == c.pending_answer), ""
+        )
+        out.append(
+            f'<li class="ask" id="i-{escape(c.id)}">{_slack_head(c, "Answered here")}'
+            f'<p class="q">{escape(c.title)}</p>'
+            f'<p class="pickup">You answered ({escape(c.pending_answer or "")}) '
+            f"{escape(mine)} here. Answered here, waiting for quarterdeck.</p>"
+            f'<p class="ilink">{_slack_link(c)}</p></li>'
+        )
+    for c in settled:
+        mine = next((o["label"] for o in c.options if o["letter"] == c.answer), "")
+        out.append(
+            f'<li class="ask" id="i-{escape(c.id)}">{_slack_head(c, "Settled")}'
+            f'<p class="q">{escape(c.title)}</p>'
+            f'<p class="pickup">Settled in Slack: ({escape(c.answer or "")}) '
+            f"{escape(mine)}.</p>"
+            f'<p class="ilink">{_slack_link(c)}</p></li>'
+        )
+    return '<ul class="inbox">' + "".join(out) + "</ul>" if out else ""
+
+
 def _render_inbox(
     rows: list[inbox.Item], now: datetime, outcomes: dict | None = None
 ) -> str:
@@ -3276,7 +3358,9 @@ def _render_inbox(
         page = f"/a/{escape(item.artifact_id)}"
         title = escape(item.page_title)
         d = item.decision
-        if item.kind == "question" and d is not None:
+        if item.kind == "slack_question" and item.copy is not None:
+            out.append(_render_slack_question(item.copy, now))
+        elif item.kind == "question" and d is not None:
             meta = " &middot; ".join(_question_meta(d, now))
             ctx = f'<p class="qctx">{escape(d.context)}</p>' if d.context else ""
             buttons = "".join(_button(o, d) for o in d.options)
@@ -3712,7 +3796,12 @@ def _render_decisions(
             # `answer_source` is never null on an answered row, so an unmarked
             # entry here genuinely means he tapped it.
             relayed = ""
-            if row.answer_source and row.answer_source != "page":
+            if row.answer_source == "slack":
+                relayed = (
+                    '<span class="relayed" title="Answered in Slack, verified by '
+                    'quarterdeck; not tapped on this page">via Slack</span>'
+                )
+            elif row.answer_source and row.answer_source != "page":
                 where = escape(row.answer_source)
                 who = escape(row.recorded_by or "an agent")
                 relayed = (
@@ -4292,10 +4381,14 @@ def gallery_router(db: Database) -> APIRouter:
         outcomes = decisions.outcomes_for_decisions(
             db, [i.id for i in rows if i.kind == "question"]
         )
+        slack_status = _render_slack_status(
+            partner_in.open_copies(db, waiting_on_him=False),
+            partner_in.settled_copies(db, datetime.now(UTC) - timedelta(days=7)),
+        )
         return HTMLResponse(
             _shell(
                 "Inbox",
-                _render_inbox(rows, datetime.now(UTC), outcomes),
+                _render_inbox(rows, datetime.now(UTC), outcomes) + slack_status,
                 meta=meta,
             ),
             headers={**gallery_headers(), "cache-control": "no-store"},
@@ -5256,6 +5349,34 @@ def gallery_router(db: Database) -> APIRouter:
         if next_field == "inbox":
             return RedirectResponse("/inbox", status_code=303)
         return RedirectResponse(f"/a/{row.artifact_id}", status_code=303)
+
+    @router.post("/pq/{question_id}/answer")
+    def answer_slack_question(
+        question_id: str,
+        letter: str = Form(...),
+        note: str = Form(""),
+        _guard: None = Depends(_same_origin_write),
+    ):
+        """He answers a question whose home is the partner. The answer is
+        recorded as PENDING and sent to the home; it settles when the home says
+        so (partner_in.answer_here)."""
+        try:
+            partner_in.answer_here(db, question_id, letter=letter, note=note)
+        except store.BodyTooLarge as exc:
+            raise HTTPException(413, f"{exc.field} exceeds the size limit") from exc
+        except store.InvalidText as exc:
+            raise HTTPException(422, f"{exc.field} is not valid UTF-8") from exc
+        except store.SecretFound as exc:
+            raise HTTPException(
+                422, f"{exc.field} looks like it contains a secret"
+            ) from exc
+        except store.ScanFailed as exc:
+            raise HTTPException(503, _SCAN_FAILED_DETAIL) from exc
+        except decisions.InvalidAnswer as exc:
+            raise HTTPException(422, "not one of this question's options") from exc
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such open question") from exc
+        return RedirectResponse("/inbox", status_code=303)
 
     # --- comments: the conversation happens on the page --------------------
     #

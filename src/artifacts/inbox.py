@@ -1,6 +1,10 @@
 """His inbox: everything that is waiting on Jeremy, in one list, in one order.
 
-Three kinds of item today, all built by `items`, which returns typed `Item`s:
+Four kinds of item today, all built by `items`, which returns typed `Item`s:
+
+- `slack_question`: an open question whose home is the partner (asked in Slack,
+  `partner_in.Copy`), one he has not yet answered here. One he HAS answered
+  here waits for the home and is not waiting on him: the page shows it apart.
 
 - `question`: an open lettered question on any page, unless it is held behind an
   earlier unanswered one (a held question is not for him yet);
@@ -8,8 +12,8 @@ Three kinds of item today, all built by `items`, which returns typed `Item`s:
 - `reply`: an office's reply under one of his comments or notes that he has not
   seen (the same rule the wall's unread mark uses, `comments.UNSEEN_REPLY`).
 
-A further source (the Slack bridge, later) is one more function that returns
-`Item`s, appended in `items`; `order` and the views take it from there.
+A Slack-home question takes the same order as a page question (`key` reads the
+same attributes off the copy).
 
 THE ORDER (Jeremy's, 21 Oct 2026): overdue first, then urgency (blocking, by,
 when_you_can), then a question before a review or reply of the same band, then
@@ -23,7 +27,7 @@ offers something better, and a review is already flagged on the wall by its page
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from artifacts import comments, decisions
+from artifacts import comments, decisions, partner_in
 from artifacts.db import Database
 
 URGENCY_RANK = {"blocking": 0, "by": 1, "when_you_can": 2}
@@ -70,7 +74,7 @@ def key(row: decisions.DecisionRow, now: datetime) -> tuple:
 
 @dataclass(frozen=True)
 class Item:
-    kind: str  # 'question' | 'review' | 'reply'
+    kind: str  # 'question' | 'review' | 'reply' | 'slack_question'
     id: str  # the decision's id, or the reply comment's
     artifact_id: str
     page_title: str
@@ -80,6 +84,8 @@ class Item:
     created_at: datetime
     decision: decisions.DecisionRow | None = None
     body: str = ""
+    # The copy, for a `slack_question`.
+    copy: partner_in.Copy | None = None
 
 
 def item_key(item: Item, now: datetime) -> tuple:
@@ -88,6 +94,9 @@ def item_key(item: Item, now: datetime) -> tuple:
     after the questions of that band, oldest first."""
     if item.kind == "question" and item.decision is not None:
         k = key(item.decision, now)
+        return (*k[:2], 0, *k[2:])
+    if item.kind == "slack_question" and item.copy is not None:
+        k = key(item.copy, now)
         return (*k[:2], 0, *k[2:])
     return (
         True,
@@ -137,6 +146,22 @@ def _decision_items(db: Database, limit: int) -> tuple[list[Item], bool]:
     return out, len(got) >= limit
 
 
+def _slack_items(db: Database, limit: int) -> tuple[list[Item], bool]:
+    found = partner_in.open_copies(db, limit)
+    return [
+        Item(
+            kind="slack_question",
+            id=c.source,
+            artifact_id="",
+            page_title=c.title,
+            office=c.asking_office,
+            created_at=moment(c.created_at) or datetime.now(UTC),
+            copy=c,
+        )
+        for c in found
+    ], len(found) >= limit
+
+
 def _reply_items(db: Database, limit: int) -> tuple[list[Item], bool]:
     with db.connect() as conn:
         found = conn.execute(
@@ -170,7 +195,8 @@ def gather(
     limit = limit or _LIMIT
     decided, capped_d = _decision_items(db, limit)
     replied, capped_r = _reply_items(db, limit)
-    return order(decided + replied, now), capped_d or capped_r
+    slacked, capped_s = _slack_items(db, limit)
+    return order(decided + replied + slacked, now), capped_d or capped_r or capped_s
 
 
 def items(
@@ -187,8 +213,9 @@ def count(db: Database, limit: int | None = None) -> tuple[int, bool]:
     reviews, questions, open_rows = decisions.open_counts(db)
     with db.connect() as conn:
         replies = conn.execute(f"select count(*){_REPLY_FROM_WHERE}").fetchone()[0]
-    capped = open_rows >= limit or replies >= limit
-    return reviews + questions + replies, capped
+    slacked = partner_in.count_waiting(db)
+    capped = open_rows >= limit or replies >= limit or slacked >= limit
+    return reviews + questions + replies + slacked, capped
 
 
 def label(total: int, capped: bool, limit: int | None = None) -> str:
