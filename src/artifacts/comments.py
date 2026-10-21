@@ -23,15 +23,14 @@ An unknown artifact and someone else's look identical either way (both `NotFound
 matching `store.publish`/`store.patch`.
 """
 
-import html
 import logging
-import re
 import threading
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from html.parser import HTMLParser
 
 from artifacts import events, ggscan, holds, ids, nudge, store, text
 from artifacts.db import Connection, Database, in_list, jsonb
@@ -159,29 +158,63 @@ class TextAnchorError(Exception):
         self.matches = matches
 
 
-_HEADING = re.compile(r"<h([1-6])\b[^>]*>(.*?)</h\1\s*>", re.IGNORECASE | re.DOTALL)
-_TAGS = re.compile(r"<[^>]*>")
+class _Headings(HTMLParser):
+    """Every CLOSED heading as (level, start, end, name): `start` is where its
+    opening tag begins, `end` where its closing tag ends, both offsets into the
+    body. One linear pass, so a page of unclosed `<h2` openers costs no more than
+    any other page; an opener never closed before the next heading is dropped."""
 
+    def __init__(self, body: str) -> None:
+        super().__init__()
+        self._body = body
+        self._lines = [0]
+        for line in body.splitlines(keepends=True):
+            self._lines.append(self._lines[-1] + len(line))
+        self.found: list[tuple[int, int, int, str]] = []
+        self._open: tuple[int, int] | None = None
+        self._text: list[str] = []
 
-def _heading_name(inner: str) -> str:
-    return " ".join(html.unescape(_TAGS.sub(" ", inner)).split()).lower()
+    def _offset(self) -> int:
+        line, col = self.getpos()
+        return self._lines[line - 1] + col
+
+    def handle_starttag(self, tag, attrs):
+        if len(tag) == 2 and tag[0] == "h" and tag[1] in "123456":
+            self._open = (int(tag[1]), self._offset())
+            self._text = []
+
+    def handle_data(self, data):
+        if self._open is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag):
+        if self._open is not None and tag == f"h{self._open[0]}":
+            at = self._offset()
+            stop = self._body.find(">", at)
+            end = len(self._body) if stop < 0 else stop + 1
+            name = " ".join("".join(self._text).split()).lower()
+            self.found.append((self._open[0], self._open[1], end, name))
+            self._open = None
 
 
 def _section_slices(body: str, section: str) -> list[str]:
     """The HTML under every heading named `section` (case and spacing folded):
     from the heading to the next heading of the same or a higher rank."""
     want = " ".join(section.split()).lower()
-    heads = list(_HEADING.finditer(body))
+    parser = _Headings(body)
+    parser.feed(body)
+    parser.close()
+    heads = parser.found
     out = []
-    for i, head in enumerate(heads):
-        if _heading_name(head.group(2)) != want:
+    for i, (level, _, end, name) in enumerate(heads):
+        if name != want:
             continue
-        end = len(body)
-        for later in heads[i + 1 :]:
-            if int(later.group(1)) <= int(head.group(1)):
-                end = later.start()
+        stop = len(body)
+        for later_level, later_start, _, _ in heads[i + 1 :]:
+            if later_level <= level:
+                stop = later_start
                 break
-        out.append(body[head.end() : end])
+        out.append(body[end:stop])
     return out
 
 

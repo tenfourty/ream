@@ -335,6 +335,9 @@ def test_another_agents_artifact_is_404_on_read_write_and_resolve(client, db):
     token_a, _ = keys.mint(db, agent="seat-a")
     token_b, _ = keys.mint(db, agent="seat-b")
     page = _publish(client, token_a)
+    # Closed to other agents: an open page may be read and commented on by any
+    # agent (tests/test_agent_comments.py); a closed one answers 404.
+    store.set_agents_can_read(db, page["id"], False, agent="seat-a")
     mine = client.post(
         f"/api/v1/artifacts/{page['id']}/comments",
         json={"body": "a comment"},

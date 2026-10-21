@@ -86,8 +86,9 @@ def test_another_agents_identical_key_is_independent(client, auth, db, page):
     mine = _post(client, auth, page, key="k1")
     theirs = _post(client, other, page, key="k1")
     assert mine.status_code == 201
-    assert theirs.status_code == 404  # not their page: not answered from mine
-    assert _count(db, page) == 1
+    # An open page takes their comment too, as its own write, not mine replayed.
+    assert theirs.status_code == 201 and theirs.json()["id"] != mine.json()["id"]
+    assert _count(db, page) == 2
 
 
 @pytest.mark.parametrize(
