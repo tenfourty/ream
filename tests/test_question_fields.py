@@ -28,6 +28,7 @@ NEW_KEYS = {
     "blocked_on",
     "needed_by",
     "for",
+    "held_by",
 }
 
 
@@ -476,9 +477,9 @@ def test_onboarding_explains_the_fields_and_says_dependents_are_held_back():
         "--for",
     ):
         assert flag in text, flag
-    assert "comes in a later release" in text
-    assert "do not ask a dependent" in text
-    assert "held back from Jeremy until" not in text
+    assert "comes in a later release" not in text
+    assert "is held\nback from Jeremy" in text or "held back from Jeremy" in text
+    assert "held_by" in text
     assert "--depends-on" in onboarding.skill_md("http://x")
 
 

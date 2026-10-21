@@ -137,10 +137,13 @@ a flag, and the same name in the JSON body (`POST /api/v1/artifacts/<id>/decisio
 
 An id that is unknown and an id that is someone else's are refused the same
 way, so name only your own questions (not reviews). depends_on is stored and
-returned now. Holding a dependent question back from Jeremy until the earlier
-one is answered comes in a later release; until then, do not ask a dependent
-question before its prerequisite is answered. Reading the
-question back (list, answers, wait, the API) returns all of these, with `for`
+returned. A question whose depends_on holds an unanswered question is held
+back from Jeremy: his page shows a one-line note instead of the buttons, the
+service refuses his answer to it (409), and it opens by itself when the earlier
+one is answered. An earlier question that is withdrawn or replaced releases it.
+Every read carries held_by, the unanswered ids a question still waits on (empty
+when it is not held). The top of his page lists the open questions, overdue
+first, then blocking, by, when-you-can. Reading the question back (list, answers, wait, the API) returns all of these, with `for`
 and `replaced_by` included.
 
 He can also COMMENT on your page, on the whole page or on text he selected.
@@ -349,9 +352,9 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
 
 A question can also carry --context, --topic ID[:TITLE], --depends-on ID,
 --replaces ID, --urgency blocking|by|when-you-can (with --blocked-on or
---needed-by) and --for OFFICE; see /api/v1/agents.txt. --depends-on is stored
-and returned; holding a dependent question back from Jeremy comes in a later
-release, so do not ask one before its prerequisite is answered.
+--needed-by) and --for OFFICE; see /api/v1/agents.txt. A --depends-on question
+is held back from Jeremy until the earlier one is answered; held_by shows what
+it still waits on.
 
 Exit 7 means he left marks but no verdict yet: reply to each mark
 (artifacts-decide comments), then wait again; add --verdict-only to wake only
