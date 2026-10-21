@@ -518,3 +518,26 @@ def test_the_second_scan_waits_for_the_commit(client, db, seats, page, monkeypat
     monkeypatch.setattr(comments, "second_scan", lambda d, i: ran.append(i))
     got = _post(client, seats, page.id)
     assert got.status_code == 201 and ran == [got.json()["id"]]
+
+
+def test_a_non_owner_never_sees_or_answers_a_held_mark(client, db, seats, page):
+    decisions.ask_review(db, agent="owner", artifact_id=page.id, mode="held")
+    held = comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        kind="remove",
+        anchor={"kind": "range", "path": "/p[1]", "start": 0, "end": 6},
+        quote="The un",
+        body="",
+    )
+    assert held.held
+    seen = client.get(
+        f"/api/v1/artifacts/{page.id}/comments", headers=seats["other"]
+    ).json()
+    assert held.id not in [r["id"] for r in seen]
+    under = _post(client, seats, page.id, thread_root=held.id)
+    unknown = _post(client, seats, page.id, thread_root="nope")
+    assert under.status_code == unknown.status_code == 422
+    assert under.json() == unknown.json()

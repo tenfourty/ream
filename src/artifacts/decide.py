@@ -269,7 +269,7 @@ def _threads(
     return out
 
 
-def _fmt_thread(thread: dict) -> str:
+def _fmt_thread(thread: dict, *, on_page: bool = False) -> str:
     head = "NEEDS YOUR REPLY" if thread["needs_reply"] else "replied"
     lines = [
         f"{thread['id']}  comment thread on page {thread['artifact_id']}  [{head}]"
@@ -295,7 +295,8 @@ def _fmt_thread(thread: dict) -> str:
     if thread["needs_reply"]:
         lines.append(
             f'  reply: artifacts-decide reply {thread["id"]} "..."'
-            f"   · done: artifacts-decide settle {thread['id']}"
+            + (f" --page {thread['artifact_id']}" if on_page else "")
+            + f"   · done: artifacts-decide settle {thread['id']}"
         )
     return "\n".join(lines)
 
@@ -1111,10 +1112,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     threads.add_argument("--page", metavar="ARTIFACT-ID", help="only this page")
     reply = subs.add_parser(
-        "reply", help="answer a comment thread on one of your pages"
+        "reply",
+        help="answer a comment thread: on one of your pages, or with --page on"
+        " another office's page you can read",
     )
     reply.add_argument("thread", metavar="THREAD-ID")
     reply.add_argument("text", metavar="TEXT")
+    reply.add_argument(
+        "--page",
+        metavar="ARTIFACT-ID",
+        help="the page the thread is on; needed on another office's page",
+    )
     reply.add_argument("--idempotency-key", metavar="KEY", help=_IDEMPOTENCY_HELP)
     comment = subs.add_parser(
         "comment",
@@ -1358,7 +1366,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 0
             found.sort(key=lambda t: not t["needs_reply"])
-            print("\n\n".join(_fmt_thread(t) for t in found))
+            print("\n\n".join(_fmt_thread(t, on_page=bool(args.page)) for t in found))
             return 0
         if args.cmd == "comment":
             if args.section and not args.quote:
@@ -1393,17 +1401,26 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         if args.cmd in ("reply", "settle"):
+            # Your own pages by default; another office's page by --page,
+            # where every comment, his included, may be answered.
+            page = getattr(args, "page", None)
             mine = {
                 t["id"]: t
                 for t in _open_threads(
-                    key, base, None, _office_of(declared_session(args.session))
+                    key, base, page, _office_of(declared_session(args.session))
                 )
             }
             thread = mine.get(args.thread)
             if thread is None:
+                where = "on that page" if page else "on your pages"
+                hint = (
+                    "artifacts-decide comments --page <page-id> lists them"
+                    if page
+                    else "artifacts-decide comments lists them; on another"
+                    " office's page add --page <page-id>"
+                )
                 raise UsageError(
-                    f"no open comment thread {args.thread} on your pages "
-                    "(artifacts-decide comments lists them)"
+                    f"no open comment thread {args.thread} {where} ({hint})"
                 )
             if args.cmd == "settle":
                 _request("POST", f"{base}/comments/{args.thread}/resolve", key, {})

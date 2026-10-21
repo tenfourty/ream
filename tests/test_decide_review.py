@@ -758,3 +758,35 @@ def test_a_review_wait_with_no_limit_waits_for_the_verdict(
     )
     listener.woke_the_first_hold()
     assert code == 0
+
+
+def test_reply_on_another_offices_page_needs_page_and_lands(
+    live, key_file, db, tmp_path, capsys
+):
+    """Another office's page: his thread is listed with a reply hint that names
+    the page, `reply` without --page says to add it, and with it the reply lands
+    as the agent's own (Jeremy, 21 Oct 2026)."""
+    path, _token = key_file
+    page = store.publish(
+        db, "elsewhere", "Their page", "<!doctype html><body>hi</body></html>"
+    )
+    root = comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="what about retries?",
+    )
+    base = ["--key-file", str(path)]
+    assert decide.main([*base, "comments", "--page", page.id]) == 0
+    assert f"--page {page.id}" in capsys.readouterr().out
+    assert decide.main([*base, "reply", root.id, "three, capped"]) == 2
+    assert "--page" in capsys.readouterr().err
+    assert (
+        decide.main([*base, "reply", root.id, "three, capped", "--page", page.id]) == 0
+    )
+    rows = comments.list_for_artifact(db, page.id)
+    reply = [r for r in rows if r.thread_root == root.id]
+    assert [(r.author_kind, r.author, r.body) for r in reply] == [
+        ("agent", "ops-seat", "three, capped")
+    ]
