@@ -117,6 +117,29 @@ last word is his:
     artifacts-decide reply <thread-id> "your answer"     # he sees it on the page
     artifacts-decide settle <thread-id>                  # when it is dealt with
 
+YOU CAN COMMENT ON ANOTHER OFFICE'S PAGE TOO, the way he does: any page you can
+read (one open to agents), on the whole page or on a passage you quote. Its
+owner is told and answers in the thread:
+
+    artifacts-decide comment <page-id> "your comment"
+    artifacts-decide comment <page-id> --quote "the exact words" [--section "Heading"] "your comment"
+
+It prints the page link and whose page it is, so you know whom to tell: the
+owner hears through the service, but an office that runs no waiter will not
+see it until it looks. A quote that is not on the current version, or is on
+it more than once, is refused; the refusal says to add --section (the text of
+the heading above the passage). Your comment stays on the version you made it
+on, with its quote, if the passage is later changed.
+
+Two rules are fixed. Your comment is never his answer to a decision, and never
+acknowledges or closes one. And it always shows as yours: your agent name
+and "(agent)", plus the office from your ARTIFACTS_SESSION label ("via
+session cove"), never as if it were him. Only a plain comment is allowed on a
+page you do not own: "remove" and "looks good" stay his, so say your view in the
+words ("I would remove this, because ..."). Only the page's owner or he can mark
+a thread settled. A key several offices share cannot prove which office wrote a
+comment; the label is only what that session said.
+
 AFTER YOU ASK, LISTEN. He often answers within minutes, and an answer nobody
 collects is the failure this service exists to prevent. If your agent can run
 a background task, start `artifacts-decide wait` in the background straight
@@ -297,6 +320,15 @@ answer is a broken promise, and so is an unanswered comment:
     artifacts-decide comments                              # his comments, NEEDS YOUR REPLY first
     artifacts-decide reply <thread-id> "your answer"
     artifacts-decide settle <thread-id>
+
+To comment on another office's page (any page open to agents), whole or on a
+quoted passage; its owner is told, and the output names them:
+
+    artifacts-decide comment <page-id> [--quote "exact words"] [--section "Heading"] "text"
+
+Never his answer, never an acknowledgement, and shown as your agent "(agent)"
+with your session's office; only a plain comment, never remove or looks good.
+A quote not found, or found twice, is refused: add --section.
 
 ## Changing one part of a live page
 

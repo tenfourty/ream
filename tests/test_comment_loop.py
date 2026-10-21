@@ -150,3 +150,46 @@ def test_the_page_reports_selections_only_to_the_gallery(monkeypatch):
     shim = content._viewer_report()
     assert "selectionchange" in shim and "artifact-selection" in shim
     assert '"*"' not in shim
+
+
+# --- an agent comments on another office's page (21 Oct 2026) -----------------
+
+
+def test_comment_on_another_offices_page_names_the_owner(db, live, key_file, capsys):
+    path, _ = key_file
+    theirs = store.publish(db, "cove", "Boot", PAGE, session="cove/ab12")
+    assert (
+        _run(["comment", theirs.id, "cap it lower", "--quote", "the plan"], path) == 0
+    )
+    out = capsys.readouterr().out
+    assert f"{theirs.page_url}#comments" in out
+    assert "page owner: cove (last session cove/ab12)" in out
+    [row] = comments.list_for_artifact(db, theirs.id)
+    assert (row.author, row.quote, row.session) == ("ops-seat", "the plan", "t/1")
+
+
+def test_comment_refuses_a_quote_that_is_not_there(db, live, key_file, capsys):
+    path, _ = key_file
+    theirs = store.publish(db, "cove", "Boot", PAGE)
+    assert _run(["comment", theirs.id, "x", "--quote", "absent words"], path) == 1
+    assert "not found" in capsys.readouterr().err
+    assert _run(["comment", theirs.id, "x", "--section", "Intro"], path) == 2
+
+
+def test_another_offices_comment_on_my_page_needs_my_reply(
+    db, live, key_file, page, capsys
+):
+    path, _ = key_file
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="cove",
+        agent="cove",
+        body="have you considered X?",
+        session="cove/ab12",
+    )
+    assert _run(["comments"], path) == 0
+    out = capsys.readouterr().out
+    assert "NEEDS YOUR REPLY" in out
+    assert "cove (agent, via session cove/ab12) said: have you considered X?" in out

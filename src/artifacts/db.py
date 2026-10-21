@@ -284,7 +284,13 @@ def _statements(script: str) -> list[str]:
     ]
 
 
-SQLITE_SCHEMA_VERSION = 1
+# Step 1 is `schema_sqlite.sql`, run whole on a fresh file. Every later change is
+# a numbered step here, run statement by statement, never an edit to that file.
+_SQLITE_STEPS: dict[int, tuple[str, ...]] = {
+    # 21 Oct 2026: the session label an agent's comment was written under.
+    2: ("alter table comment add column session text",),
+}
+SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 
 # NORMAL in service since 20 Oct 2026 (Jeremy's choice, runcove-5t3oj.34): in
 # WAL mode a commit no longer waits for the disk. On this volume (DRBD protocol
@@ -473,13 +479,19 @@ class Database:
                 (version,) = conn.execute("pragma user_version").fetchone()
                 if version >= SQLITE_SCHEMA_VERSION:
                     return
-                script = (
-                    resources.files("artifacts")
-                    .joinpath("schema_sqlite.sql")
-                    .read_text()
-                )
-                for statement in _statements(script):
-                    conn.execute(statement)
+                if version < 1:
+                    script = (
+                        resources.files("artifacts")
+                        .joinpath("schema_sqlite.sql")
+                        .read_text()
+                    )
+                    for statement in _statements(script):
+                        conn.execute(statement)
+                    version = 1
+                for number in sorted(_SQLITE_STEPS):
+                    if number > version:
+                        for statement in _SQLITE_STEPS[number]:
+                            conn.execute(statement)
                 conn.execute(f"pragma user_version = {SQLITE_SCHEMA_VERSION}")
 
     def reset(self) -> None:

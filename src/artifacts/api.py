@@ -1254,8 +1254,10 @@ def agent_router(
     def list_comments(
         artifact_id: str, include_resolved: bool = False, agent: str = Depends(caller)
     ):
+        # A page the caller may READ: its own, or another agent's that is open
+        # to agents. A closed, deleted or unknown page answers the same 404.
         try:
-            store.get_owned(db, agent, artifact_id)
+            store.get_owned(db, agent, artifact_id, as_reader=True)
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
         return [
@@ -1272,11 +1274,23 @@ def agent_router(
         background: BackgroundTasks,
         agent: str = Depends(caller),
         idempotency_key: str | None = Header(default=None),
+        seat_session: str | None = Depends(session),
     ):
-        def write(conn) -> tuple[int, object]:
-            return 201, _add_comment(artifact_id, payload, background, agent, conn)
+        """Comment on a page the caller may read: its own, or another agent's
+        that is open to agents. On another agent's page only a plain `comment`
+        is allowed (`remove` and `looks_good` are Jeremy's), and a comment never
+        answers, acknowledges or closes a decision. `anchor` may be
+        `{"kind": "text", "quote": ..., "section": optional heading}`: the
+        server finds the passage in the page's current version."""
+        # Run once the keyed transaction has committed; empty on a replay.
+        later: list = []
 
-        return idempotency.run(
+        def write(conn) -> tuple[int, object]:
+            return 201, _add_comment(
+                artifact_id, payload, background, agent, conn, seat_session, later
+            )
+
+        response = idempotency.run(
             db,
             agent,
             f"comments:{artifact_id}",
@@ -1284,9 +1298,68 @@ def agent_router(
             payload.model_dump(),
             write,
         )
+        for send in later:
+            background.add_task(send)
+        return response
 
-    def _add_comment(artifact_id, payload, background, agent, conn=None):
+    def _text_anchor(artifact_id, payload, agent) -> tuple[dict | None, str]:
+        """Turn an agent's `text` anchor into the stored shape: a page-level
+        anchor carrying the quote, which the gallery shows as a quoted comment
+        (an agent cannot compute the DOM path the browser's range anchor needs).
+        Anything else passes through unchanged."""
+        anchor = payload.anchor
+        if (
+            payload.thread_root is not None
+            or not isinstance(anchor, dict)
+            or anchor.get("kind") != "text"
+        ):
+            return anchor, payload.quote
+        quote, section = anchor.get("quote"), anchor.get("section")
+        if (
+            set(anchor) - {"kind", "quote", "section"}
+            or not isinstance(quote, str)
+            or not (section is None or isinstance(section, str))
+        ):
+            raise HTTPException(
+                422,
+                {
+                    "field": "anchor",
+                    "detail": 'a text anchor is {"kind": "text", "quote": "...", '
+                    '"section": "optional heading text"}',
+                },
+            )
+        store._check_size(
+            quote,
+            comments.MAX_QUOTE_BYTES,
+            "quote",
+            agent=agent,
+            artifact_id=artifact_id,
+        )
+        current = store.get_body(db, agent, artifact_id, as_reader=True)
         try:
+            comments.resolve_text_anchor(current.body, quote, section)
+        except comments.TextAnchorError as exc:
+            raise HTTPException(
+                422,
+                {
+                    "field": "anchor",
+                    "detail": exc.detail,
+                    "matches": exc.matches,
+                },
+            ) from exc
+        return {"kind": "page"}, quote
+
+    def _add_comment(
+        artifact_id,
+        payload,
+        background,
+        agent,
+        conn=None,
+        seat_session=None,
+        later=None,
+    ):
+        try:
+            anchor, quote = _text_anchor(artifact_id, payload, agent)
             row = comments.add(
                 db,
                 conn=conn,
@@ -1294,11 +1367,13 @@ def agent_router(
                 author_kind="agent",
                 author=agent,
                 body=payload.body,
-                anchor=payload.anchor,
-                quote=payload.quote,
+                anchor=anchor,
+                quote=quote,
                 thread_root=payload.thread_root,
                 agent=agent,
                 kind=payload.kind,
+                session=seat_session,
+                after_commit=later,
             )
             # GitGuardian checks the saved comment straight after the response.
             background.add_task(comments.second_scan, db, row.id)
@@ -1353,6 +1428,18 @@ def agent_router(
                     "detail": (
                         "kind must be comment, remove or looks_good, with a "
                         "quoted range for the last two"
+                    ),
+                },
+            ) from exc
+        except comments.VerdictRefused as exc:
+            raise HTTPException(
+                422,
+                {
+                    "field": exc.field,
+                    "detail": (
+                        "on a page you do not own only kind comment is allowed: "
+                        "remove and looks_good are Jeremy's. Say it in the body "
+                        "of a plain comment instead."
                     ),
                 },
             ) from exc

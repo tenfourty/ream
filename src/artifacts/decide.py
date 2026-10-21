@@ -219,7 +219,7 @@ def _duration(text: str) -> float:
     return float(match.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[match.group(2)]
 
 
-def _threads(rows: list[dict]) -> list[dict]:
+def _threads(rows: list[dict], me: str | None = None) -> list[dict]:
     """Comments grouped into threads, oldest first, each marked with whether the
     agent owes a reply: the last word is his, not the agent's (homelab-ij8.18)."""
     roots: dict[str, dict] = {}
@@ -244,7 +244,16 @@ def _threads(rows: list[dict]) -> list[dict]:
             and thread["kind"] == "looks_good"
             and not (last.get("body") or "").strip()
         )
-        thread["needs_reply"] = last.get("author_kind") == "human" and not is_bare_ack
+        # Another office's comment on this agent's page is owed an answer like
+        # his; `me` is the key's own agent, so its own replies are not.
+        from_other_agent = (
+            me is not None
+            and last.get("author_kind") == "agent"
+            and last.get("author") != me
+        )
+        thread["needs_reply"] = (
+            last.get("author_kind") == "human" or from_other_agent
+        ) and not is_bare_ack
         out.append(thread)
     return out
 
@@ -261,7 +270,11 @@ def _fmt_thread(thread: dict) -> str:
         lines.append(f'  {label}: "{thread["quote"]}"')
     for m in thread["messages"]:
         who = (
-            "HE SAID" if m.get("author_kind") == "human" else f"{m.get('author')} said"
+            "HE SAID"
+            if m.get("author_kind") == "human"
+            else f"{m.get('author')} (agent"
+            + (f", via session {m['session']}" if m.get("session") else "")
+            + ") said"
         )
         # `remove`/`looks_good` can carry no note at all -- "HE SAID: " with
         # nothing after the colon reads as a rendering bug, not as the
@@ -278,7 +291,11 @@ def _fmt_thread(thread: dict) -> str:
 
 def _open_threads(key: str, base: str, page: str | None = None) -> list[dict]:
     url = f"{base}/artifacts/{page}/comments" if page else f"{base}/comments"
-    return _threads(_request("GET", url, key, None))
+    rows = _request("GET", url, key, None)
+    me = None
+    if any(r.get("author_kind") == "agent" for r in rows):
+        me = (_request("GET", f"{_api_base()}/me", key, None) or {}).get("agent")
+    return _threads(rows, me)
 
 
 # How long each held request asks for. The service never holds a request that
@@ -1085,6 +1102,37 @@ def build_parser() -> argparse.ArgumentParser:
     reply.add_argument("thread", metavar="THREAD-ID")
     reply.add_argument("text", metavar="TEXT")
     reply.add_argument("--idempotency-key", metavar="KEY", help=_IDEMPOTENCY_HELP)
+    comment = subs.add_parser(
+        "comment",
+        help="comment on any page you can read, whole or on a quoted passage",
+        description=(
+            "Comment on a page another office published (or your own), the way "
+            "Jeremy does. The page's owner is told and answers in the thread. "
+            "Two fixed rules: your comment is never his answer to a decision and "
+            "never acknowledges or closes one, and it is shown as yours, with "
+            "your agent and session label, never as if it were him. Only a plain "
+            "comment is allowed on another office's page: 'remove' and 'looks "
+            "good' stay his, so say your view in the text. Afterwards this prints "
+            "the page link and whose page it is, so you know whom to tell."
+        ),
+    )
+    comment.add_argument("page", metavar="PAGE-ID")
+    comment.add_argument(
+        "text", metavar="TEXT", help='what you want to say; "-" reads it from stdin'
+    )
+    comment.add_argument(
+        "--quote",
+        metavar="TEXT",
+        help="the passage you mean, as it reads on the current version. Refused "
+        "if it is not found, or found more than once",
+    )
+    comment.add_argument(
+        "--section",
+        metavar="HEADING",
+        help="with --quote: look only under the heading with this text, for a "
+        "phrase that repeats",
+    )
+    comment.add_argument("--idempotency-key", metavar="KEY", help=_IDEMPOTENCY_HELP)
     settle = subs.add_parser("settle", help="mark a comment thread done")
     settle.add_argument("thread", metavar="THREAD-ID")
 
@@ -1124,6 +1172,7 @@ def main(argv: list[str] | None = None) -> int:
         "ack",
         "close",
         "reply",
+        "comment",
         "settle",
     ):
         warn_if_unlabelled(args.cmd)
@@ -1294,6 +1343,38 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             found.sort(key=lambda t: not t["needs_reply"])
             print("\n\n".join(_fmt_thread(t) for t in found))
+            return 0
+        if args.cmd == "comment":
+            if args.section and not args.quote:
+                raise UsageError("--section needs --quote")
+            text = sys.stdin.read() if args.text == "-" else args.text
+            if not text.strip():
+                raise UsageError("nothing to say: the comment text is empty")
+            page = _request("GET", f"{base}/artifacts/{args.page}", key, None)
+            payload: dict = {"body": text}
+            if args.quote:
+                payload["anchor"] = {"kind": "text", "quote": args.quote}
+                if args.section:
+                    payload["anchor"]["section"] = args.section
+            written = _request(
+                "POST",
+                f"{base}/artifacts/{args.page}/comments",
+                key,
+                payload,
+                idempotency_key=args.idempotency_key or str(uuid.uuid4()),
+            )
+            owner = page.get("agent") or "unknown"
+            label = page.get("last_session")
+            print(f"commented {written['id']} on {args.page}")
+            print(f"  link: {page.get('page_url') or args.page}#comments")
+            print(
+                f"  page owner: {owner}"
+                + (f" (last session {label})" if label else " (no session label)")
+            )
+            print(
+                "  they are told through the service; if they run no waiter, "
+                "tell them yourself"
+            )
             return 0
         if args.cmd in ("reply", "settle"):
             mine = {t["id"]: t for t in _open_threads(key, base)}

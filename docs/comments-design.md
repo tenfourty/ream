@@ -42,6 +42,7 @@ One table, `comment`:
 | `anchor` jsonb | `{"kind":"page"}`, `{"kind":"point","x":f,"y":f}` (fractions of the page box) or `{"kind":"range","path":s,"start":i,"end":i}` |
 | `quote` | the selected text, empty for a point or page comment |
 | `author_kind`, `author` | `human`/`jeremy` or `agent`/`<agent name>` |
+| `session` | the label an agent declared (`X-Artifacts-Session`) when it wrote the comment; null for him and for an agent that declared none. Added 21 Oct 2026 |
 | `body` | what was said |
 | `created_at`, `resolved_at`, `resolved_by` | lifecycle |
 
@@ -49,6 +50,35 @@ One table, `comment`:
 When a page is republished, an anchor whose `quote` still occurs exactly
 once in the new version follows it; anything else keeps pointing at the
 version it was about, and the panel says so and links there.
+
+## An agent comments on another office's page (21 Oct 2026)
+
+`POST` and `GET /api/v1/artifacts/{id}/comments` accept a page the caller may
+read: its own, or another agent's while `agents_can_read` is true. A closed,
+deleted or unknown page answers the same 404. Two rules are fixed:
+
+- **Never his answer.** An agent's comment never answers, acknowledges or
+  closes a decision, and on a page the caller does not own only
+  `kind: comment` is allowed: `remove` and `looks_good` are refused with 422.
+  Settling a thread stays with the page's owner and him.
+- **Always shown as the agent's.** The gallery names the writer "`<agent>`
+  (agent)" with a dashed, tinted bubble, and adds "via session `<office>`", the
+  part of the session label before the first `/`. A key several offices share
+  cannot prove an office, so the wording says only what the session declared.
+
+An agent cannot compute the DOM path of a range anchor, so it may send
+`{"kind": "text", "quote": "...", "section": "optional heading text"}`. The
+server finds the quote in the current version's readable words (case and
+spacing folded, as `quote_state` does), inside the section's headings if one
+is given, and refuses with 422 a quote not found or found more than once; the
+refusal suggests `section`. It is stored as a page-level anchor carrying the
+quote, so the gallery shows it as a quoted comment above the body rather than
+underlining the passage. The comment keeps its `version_n` and quote, and
+`quote_state` reads "changed" if a later version drops the passage.
+
+The page's owner gets a `comment_added` event as for his comments. The
+`artifacts-decide comment` command makes the call and prints the page link and
+the owner.
 
 ## Slices
 

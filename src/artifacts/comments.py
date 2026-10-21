@@ -23,12 +23,15 @@ An unknown artifact and someone else's look identical either way (both `NotFound
 matching `store.publish`/`store.patch`.
 """
 
+import html
 import logging
+import re
 import threading
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from functools import partial
 
 from artifacts import events, ggscan, holds, ids, nudge, store, text
 from artifacts.db import Connection, Database, in_list, jsonb
@@ -58,7 +61,7 @@ _COLUMNS = (
     "comment.id, comment.artifact_id, comment.version_n, comment.thread_root,"
     " comment.anchor, comment.quote, comment.author_kind, comment.author,"
     " comment.body, comment.created_at, comment.resolved_at, comment.resolved_by,"
-    " comment.kind, comment.held, comment.review_round"
+    " comment.kind, comment.held, comment.review_round, comment.session"
 )
 
 # Correlated subquery, not a join: for the comment a given row names -- itself, if it
@@ -114,6 +117,12 @@ class CommentRow:
     # The review round open when he made it (page review step 4); None outside
     # an open round, and for an agent's write.
     review_round: int | None = None
+    # The session label the writing agent declared (X-Artifacts-Session), or
+    # None: Jeremy's comments, comments made before 21 Oct 2026, and a caller
+    # that declared none. A LABEL THE CALLER CHOSE, not a proven office: a key
+    # several offices share cannot tell them apart, so the gallery says "via
+    # session ..." rather than naming an office as fact.
+    session: str | None = None
 
 
 class InvalidAnchor(Exception):
@@ -129,6 +138,96 @@ class InvalidKind(Exception):
 
 
 class NoSuchThread(Exception): ...
+
+
+class VerdictRefused(Exception):
+    """An agent tried `remove` or `looks_good` on a page it does not own. Those
+    marks are Jeremy's; another office's view goes in a plain comment."""
+
+    field = "kind"
+
+
+class TextAnchorError(Exception):
+    """A `text` anchor that cannot be placed. `detail` says why and what to
+    send instead; `matches` is how many places the quote was found."""
+
+    field = "anchor"
+
+    def __init__(self, detail: str, matches: int = 0) -> None:
+        super().__init__(detail)
+        self.detail = detail
+        self.matches = matches
+
+
+_HEADING = re.compile(r"<h([1-6])\b[^>]*>(.*?)</h\1\s*>", re.IGNORECASE | re.DOTALL)
+_TAGS = re.compile(r"<[^>]*>")
+
+
+def _heading_name(inner: str) -> str:
+    return " ".join(html.unescape(_TAGS.sub(" ", inner)).split()).lower()
+
+
+def _section_slices(body: str, section: str) -> list[str]:
+    """The HTML under every heading named `section` (case and spacing folded):
+    from the heading to the next heading of the same or a higher rank."""
+    want = " ".join(section.split()).lower()
+    heads = list(_HEADING.finditer(body))
+    out = []
+    for i, head in enumerate(heads):
+        if _heading_name(head.group(2)) != want:
+            continue
+        end = len(body)
+        for later in heads[i + 1 :]:
+            if int(later.group(1)) <= int(head.group(1)):
+                end = later.start()
+                break
+        out.append(body[head.end() : end])
+    return out
+
+
+def _count(needle: str, words: str) -> int:
+    tight = "".join(needle.split())
+    found = words.count(needle)
+    return found or ("".join(words.split()).count(tight) if tight else 0)
+
+
+def resolve_text_anchor(body: str, quote: str, section: str | None = None) -> None:
+    """Check that `quote` is on the page, once, within `section` when one is
+    given, or raise `TextAnchorError` saying what to send instead.
+
+    Compared as `quote_state` compares: readable words, case and spacing
+    folded. The quote stays the comment's own `quote`, so a later version that
+    drops the passage reads "changed" exactly as for a browser-made quote."""
+    needle = " ".join(quote.split()).lower()
+    if not needle:
+        raise TextAnchorError("the anchor's quote is empty")
+    if section is not None and section.strip():
+        slices = _section_slices(body, section)
+        if not slices:
+            raise TextAnchorError(
+                f"no heading named {section!r} on the current version of the page"
+            )
+        matches = sum(_count(needle, text.searchable(part)) for part in slices)
+        where = f" under the section {section!r}"
+    else:
+        matches = _count(needle, text.searchable(body))
+        where = ""
+    if matches == 0:
+        raise TextAnchorError(
+            f"the quoted text was not found{where} on the current version of the page"
+        )
+    if matches > 1:
+        hint = (
+            " Quote more of the passage."
+            if where
+            else ' Quote more of the passage, or add "section": "<heading text>"'
+            " to look only under that heading."
+        )
+        raise TextAnchorError(
+            f"the quoted text was found {matches} times{where}, so it does not"
+            f" say which one you mean.{hint}",
+            matches,
+        )
 
 
 def _is_number(value: object) -> bool:
@@ -255,6 +354,7 @@ def _row_to_comment(row) -> CommentRow:
         kind=row[12],
         held=row[13],
         review_round=row[14],
+        session=row[15],
     )
 
 
@@ -282,6 +382,8 @@ def add(
     kind: str = "comment",
     second_opinion: bool | None = None,
     conn: Connection | None = None,
+    session: str | None = None,
+    after_commit: list | None = None,
 ) -> CommentRow:
     """Write a comment. `agent`, when given, is the identity the artifact must be
     owned by -- an agent answering comments on its OWN pages, via the keyed API.
@@ -311,8 +413,18 @@ def add(
     `Idempotency-Key`'d request): the comment is written inside it and commits
     with whatever the caller stores next, or not at all. Its own transaction
     becomes a savepoint. The owner-event nudge would then fire before the
-    caller commits, so that combination is refused: only the agent API passes
-    `conn`, and an agent writing on its own page raises no event.
+    caller commits, so a comment that raises one needs `after_commit`, a list
+    the nudge is appended to as a no-argument callable for the caller to run
+    once its transaction has committed; without one that combination is
+    refused.
+
+    AN AGENT MAY COMMENT ON A PAGE IT DOES NOT OWN (21 Oct 2026) when the page
+    is open to agents, the same reach as reading it: `agent` is then the
+    reader, not the owner. Such a comment is a plain `comment`: `remove` and
+    `looks_good` are Jeremy's, and are refused with `VerdictRefused`. Nothing
+    here touches a decision: no answer, acknowledgement or closing.
+
+    `session` is the caller's declared label, stored on an agent's comment.
     """
     if second_opinion is None:
         second_opinion = False
@@ -354,7 +466,7 @@ def add(
     # The caller's connection, or one of our own: the same name below either way.
     with nullcontext(conn) if callers_txn else db.connect() as conn:  # noqa: PLR1704
         if agent is not None:
-            owned = store._owned(conn, artifact_id, agent)
+            owned = store._owned(conn, artifact_id, agent, as_reader=True)
         else:
             owned = conn.execute(
                 "select id, title, agent, visibility, current_version"
@@ -364,6 +476,8 @@ def add(
         if owned is None:
             raise store.NotFound()
         version_n = owned[4]
+        if agent is not None and owned[2] != agent and kind != "comment":
+            raise VerdictRefused()
 
         if is_reply:
             root = conn.execute(
@@ -452,8 +566,9 @@ def add(
                     raise NoSuchThread()
             conn.execute(
                 "insert into comment (id, artifact_id, version_n, thread_root, anchor,"
-                " quote, author_kind, author, body, kind, held, review_round)"
-                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                " quote, author_kind, author, body, kind, held, review_round,"
+                " session)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     comment_id,
                     artifact_id,
@@ -467,6 +582,7 @@ def add(
                     kind,
                     held,
                     review_round[0] if review_round is not None else None,
+                    session if author_kind == "agent" else None,
                 ),
             )
             # THE HALF THAT WAS MISSING. The comment table, the anchor
@@ -480,7 +596,7 @@ def add(
             # seat woken by its own reply is a watcher crying wolf.
             event_seq = None
             if author != owning_agent and not held:
-                if callers_txn:
+                if callers_txn and after_commit is None:
                     raise ValueError(
                         "a comment that raises an owner event cannot join a"
                         " caller's transaction: its nudge would precede the commit"
@@ -510,7 +626,8 @@ def add(
     # commenting is what Jeremy came to do, and telling a seat about it is a
     # courtesy on top of a journal that already has the comment durably.
     if event_seq is not None:
-        nudge.emit(
+        send = partial(
+            nudge.emit,
             kind="comment_added",
             artifact_id=artifact_id,
             title=title,
@@ -518,6 +635,10 @@ def add(
             summary=said,
             event_id=str(event_seq),
         )
+        if callers_txn:
+            after_commit.append(send)
+        else:
+            send()
     return _row_to_comment(created)
 
 

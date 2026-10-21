@@ -796,3 +796,9 @@ delete from seat_read where session is null and exists (
 update seat_read set session = '' where session is null;
 alter table seat_read alter column session set default '';
 alter table seat_read alter column session set not null;
+
+-- Which session an agent's comment was written under (21 Oct 2026, an agent
+-- comments on another office's page): the label the caller declared in
+-- X-Artifacts-Session. NULL on every earlier comment, on Jeremy's, and on a
+-- caller that declared none -- the honest value, never a guess.
+alter table comment add column if not exists session text;

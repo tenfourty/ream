@@ -486,6 +486,12 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
 .cmt{padding:.35rem 0;border-left:2px solid var(--line);padding-left:.7rem;
   margin:0 0 .35rem}
 .cmt.human{border-left-color:var(--accent)}
+/* An agent's words are plainly not his: a dashed rule, a tinted ground, and the
+   writer named with "(agent)". The office after "via session" is only what the
+   session called itself; one key can be shared by several offices. */
+.cmt.agent{border-left-style:dashed;border-left-color:var(--muted);
+  background:var(--chip);padding-right:.5rem;border-radius:0 .35rem .35rem 0}
+.cvia{margin-left:.5rem;font-size:.75rem;color:var(--muted)}
 .cwho{font:600 .8125rem/1.4 ui-sans-serif,system-ui,sans-serif;color:var(--ink)}
 .cwhen{margin-left:.5rem;font-size:.75rem;color:var(--muted)}
 .cmt p{margin:.15rem 0 0;font-size:.875rem;line-height:1.55;color:var(--ink);
@@ -2620,7 +2626,19 @@ def _render_comments(
             replies.setdefault(row.thread_root, []).append(row)
 
     def bubble(row) -> str:
-        who = "Jeremy" if row.author_kind == "human" else escape(row.author)
+        who = (
+            "Jeremy" if row.author_kind == "human" else escape(row.author) + " (agent)"
+        )
+        # The office is the part of the caller's session label before the first
+        # "/", and only what the caller said: a key several offices share cannot
+        # tell them apart, so it reads "via session", never as a fact.
+        label = (getattr(row, "session", None) or "").strip()
+        via = (
+            f'<span class="cvia" title="{escape(label)}">'
+            f"via session {escape(label.split('/', 1)[0] or label)}</span>"
+            if row.author_kind != "human" and label
+            else ""
+        )
         # CommentRow.created_at is an ISO STRING, not a datetime -- `_ago` takes
         # the latter, and handing it the former raises on .tzinfo. Caught by
         # rendering the page; the whole comment section would have 500'd on
@@ -2639,6 +2657,7 @@ def _render_comments(
         return (
             f'<li class="cmt {escape(row.author_kind)}">'
             f'<span class="cwho">{who}</span>'
+            f"{via}"
             f'<span class="cwhen">{escape(when)}</span>'
             f"{held}"
             f"{note}</li>"
