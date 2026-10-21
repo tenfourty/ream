@@ -53,6 +53,16 @@ def _publish(client, token: str, title: str = "Board") -> dict:
         pytest.param(123, id="a-number"),
         pytest.param({"kind": "page", "extra": "nope"}, id="extra-key-on-page"),
         pytest.param({"kind": "point", "x": 0.5}, id="missing-key-on-point"),
+        pytest.param({"kind": "decision"}, id="decision-without-id"),
+        pytest.param({"kind": "decision", "decision_id": 7}, id="decision-id-not-str"),
+        pytest.param({"kind": "decision", "decision_id": ""}, id="decision-id-empty"),
+        pytest.param(
+            {"kind": "decision", "decision_id": "d" * 65}, id="decision-id-too-long"
+        ),
+        pytest.param(
+            {"kind": "decision", "decision_id": "d1", "quote": "x"},
+            id="decision-with-extra-key",
+        ),
     ],
 )
 def test_each_rejected_anchor_shape_names_only_anchor(anchor):
@@ -71,6 +81,8 @@ def test_anchor_none_defaults_to_page():
         {"kind": "page"},
         {"kind": "point", "x": 0.0, "y": 1.0},
         {"kind": "range", "path": "src/x.py", "start": 0, "end": 5},
+        {"kind": "decision", "decision_id": "d1"},
+        {"kind": "decision", "decision_id": "d" * 64},
     ],
 )
 def test_each_accepted_anchor_shape_round_trips(anchor):

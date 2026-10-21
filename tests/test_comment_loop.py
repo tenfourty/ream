@@ -193,3 +193,31 @@ def test_another_offices_comment_on_my_page_needs_my_reply(
     out = capsys.readouterr().out
     assert "NEEDS YOUR REPLY" in out
     assert "cove (agent, via session cove/ab12) said: have you considered X?" in out
+
+
+def test_reply_note_round_trip_and_the_hint(db, live, key_file, page, capsys):
+    from artifacts import decisions
+
+    path, _ = key_file
+    ask = decisions.ask(
+        db,
+        agent="ops-seat",
+        artifact_id=page.id,
+        question="ship?",
+        options=[{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}],
+    )
+    # Not answered yet: nothing to reply to.
+    assert _run(["reply-note", ask.id, "hello"], path) == 1
+    capsys.readouterr()
+    decisions.answer(db, ask.id, letter="a", note="go, mind the cost", by="jeremy")
+    assert _run(["reply-note", ask.id, "which cost?"], path) == 0
+    out = capsys.readouterr().out
+    assert f"#note-{ask.id}" in out and "page owner: ops-seat" in out
+    thread = comments.note_threads(db, page.id)[ask.id]
+    assert [m.body for m in thread] == ["which cost?"]
+    # He answers back; the thread now needs the agent, and says where.
+    _he_comments(db, page, "the hosting bill", thread_root=thread[0].id)
+    assert _run(["comments"], path) == 0
+    out = capsys.readouterr().out
+    assert f"under his answer on decision {ask.id}" in out
+    assert f'artifacts-decide reply-note {ask.id} "..."' in out

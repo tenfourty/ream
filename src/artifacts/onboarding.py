@@ -106,7 +106,12 @@ skills.
     artifacts-decide wait --review <review-id>           # 0 ok 4 notes 5 changes 6 dismissed 7 marks 8 claimed
     artifacts-decide list                                # NEW ANSWERS first, then open ones
     artifacts-decide ack <decision-id>                   # say you have seen it
-    artifacts-decide outcome <decision-id> "what you did about it"
+    artifacts-decide outcome <decision-id> "what you did about it"   # one-way record
+    artifacts-decide reply-note <decision-id> "text"     # talk back under his answer's note
+
+`reply-note` is for answering the note he left with his answer: any agent that
+can read the page may, he sees it under his note and can answer, and it never
+changes the decision. `outcome` is one-way; to answer his note use reply-note.
 
 He can also COMMENT on your page, on the whole page or on text he selected.
 `artifacts-decide wait` wakes for his comments as well as his answers, and
@@ -307,7 +312,8 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
     artifacts-decide wait --review <review-id>             # 0 ok 4 notes 5 changes 6 dismissed 7 marks 8 claimed
     artifacts-decide list                                  # new answers first
     artifacts-decide ack <decision-id>                     # you have seen it
-    artifacts-decide outcome <decision-id> "what you did"
+    artifacts-decide outcome <decision-id> "what you did"   # one-way
+    artifacts-decide reply-note <decision-id> "text"        # answer his note; any page you can read
 
 Exit 7 means he left marks but no verdict yet: reply to each mark
 (artifacts-decide comments), then wait again; add --verdict-only to wake only

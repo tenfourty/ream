@@ -140,6 +140,11 @@ class InvalidKind(Exception):
 class NoSuchThread(Exception): ...
 
 
+class NoSuchDecision(Exception):
+    """A decision-anchored thread was started under a decision that is not on
+    this page or has not been answered. The two look the same to the caller."""
+
+
 def office_of(label: str | None) -> str:
     """The part of a session label before the first "/": what the session said
     its office is. Only what it said -- nothing proves it."""
@@ -426,6 +431,16 @@ def validate_anchor(anchor: dict | None) -> dict:
                 out[side] = value
         return out
 
+    if kind == "decision":
+        # The thread under the note he leaves when answering a decision.
+        if anchor.keys() != {"kind", "decision_id"}:
+            raise InvalidAnchor()
+        decision_id = anchor["decision_id"]
+        if not isinstance(decision_id, str) or not decision_id or len(decision_id) > 64:
+            raise InvalidAnchor()
+        _reject_lone_surrogate(decision_id)
+        return {"kind": "decision", "decision_id": decision_id}
+
     raise InvalidAnchor()
 
 
@@ -583,6 +598,21 @@ def add(
             if root is None:
                 raise NoSuchThread()
             effective_anchor, effective_quote = root[0], root[1]
+        elif effective_anchor.get("kind") == "decision":
+            # A NEW thread under his answer's note: the decision must be on
+            # this very page and answered (a closed one is fine). Not-yours
+            # was settled above, so this reads the same as an unknown id.
+            found = conn.execute(
+                "select 1 from decision where id = %s and artifact_id = %s"
+                " and answer is not null",
+                (effective_anchor["decision_id"], artifact_id),
+            ).fetchone()
+            if found is None:
+                raise NoSuchDecision()
+        # A thread under his decision note is never held and never part of a
+        # review round: it is not a mark on the page, and a reply to it must
+        # not wait on a review verdict.
+        on_note = (effective_anchor or {}).get("kind") == "decision"
 
         # The scanner last, on whatever will actually be stored -- for a reply
         # that's the root's own quote, inherited rather than the caller's, and
@@ -628,6 +658,7 @@ def add(
             # committed first is seen here as no open review at all.
             held = (
                 author_kind == "human"
+                and not on_note
                 and holds.page_mode(conn, artifact_id, lock=True) == "held"
             )
             # The open round this mark belongs to, read after the review rows
@@ -636,7 +667,7 @@ def add(
             # seen. None between rounds, on a page with no open review, and
             # for an agent's write (a round is his review of the page).
             review_round = None
-            if author_kind == "human":
+            if author_kind == "human" and not on_note:
                 review_round = conn.execute(
                     "select r.n from review_round r"
                     " join decision d on d.id = r.review_id"
@@ -739,6 +770,31 @@ def add(
         else:
             send()
     return _row_to_comment(created)
+
+
+def note_threads(db: Database, artifact_id: str) -> dict[str, list[CommentRow]]:
+    """The threads under his answer notes, by decision id: every root anchored
+    to the decision (two racing first replies make two roots; they read as one
+    thread) with all replies, oldest first. Ownership is the caller's job."""
+    with db.connect() as conn:
+        rows = conn.execute(
+            f"select {_COLUMNS} from comment where comment.artifact_id = %s"  # noqa: S608 -- clause from the db layer, no caller input
+            f" and {_VISIBLE} and not comment.held"
+            " and (select root.anchor->>'kind' from comment as root"
+            " where root.id = coalesce(comment.thread_root, comment.id)) = 'decision'"
+            " order by comment.created_at asc, comment.id asc",
+            (artifact_id,),
+        ).fetchall()
+    out: dict[str, list[CommentRow]] = {}
+    root_decision = {
+        r[0]: r[4].get("decision_id") for r in rows if r[3] is None and r[4]
+    }
+    for row in rows:
+        c = _row_to_comment(row)
+        d = root_decision.get(c.thread_root or c.id)
+        if d:
+            out.setdefault(d, []).append(c)
+    return out
 
 
 def quote_state(quote: str, current_body: str) -> str:
@@ -1084,6 +1140,10 @@ def across_pages(
         f"select {_COLUMNS}, artifact.title, artifact.archived_at from comment"  # noqa: S608 -- clause from the db layer, no caller input
         " join artifact on artifact.id = comment.artifact_id"
         f" where artifact.deleted_at is null and {_VISIBLE}"
+        # A thread under his answer's note belongs to that decision's entry,
+        # not to a page's conversations.
+        " and (select root.anchor->>'kind' from comment as root"
+        " where root.id = coalesce(comment.thread_root, comment.id)) <> 'decision'"
     )
     if not include_resolved:
         sql += f" and {_ROOT_RESOLVED_AT} is null"

@@ -191,3 +191,33 @@ def test_a_reply_lifts_the_page_in_the_wall_order(db, gallery):
     assert _order(gallery)[:2] == [second.id, first.id]
     _reply(db, first, his)
     assert _order(gallery)[:2] == [first.id, second.id]
+
+
+def test_a_reply_under_his_answer_note_makes_the_page_unread(db, gallery):
+    from artifacts import comments
+
+    page = _publish(db, "One")
+    ask = decisions.ask(
+        db,
+        agent="seat",
+        artifact_id=page.id,
+        question="ship?",
+        options=[{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}],
+    )
+    decisions.answer(db, ask.id, letter="a", note="go", by="jeremy")
+    gallery.get(f"/a/{page.id}")
+    assert 'data-unread="1"' not in gallery.get("/").text
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="seat",
+        agent="seat",
+        body="a question about your note",
+        anchor={"kind": "decision", "decision_id": ask.id},
+        session="cove/ab12",
+    )
+    wall = gallery.get("/").text
+    assert 'data-unread="1"' in wall and "Reply from cove" in wall
+    gallery.get(f"/a/{page.id}")
+    assert 'data-unread="1"' not in gallery.get("/").text

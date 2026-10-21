@@ -9,6 +9,7 @@ import base64
 import html
 import logging
 import threading
+from contextlib import nullcontext
 from datetime import datetime
 from functools import partial
 from typing import Any, Literal
@@ -219,6 +220,12 @@ class DestroyBody(BaseModel):
 class OutcomeBody(BaseModel):
     """What a decision caused, or what changed under it. One field, because an
     outcome is a sentence somebody writes, not a form."""
+
+    body: str
+
+
+class ReplyBody(BaseModel):
+    """A reply under the note he left when answering a decision."""
 
     body: str
 
@@ -1284,6 +1291,21 @@ def agent_router(
         answers, acknowledges or closes a decision. `anchor` may be
         `{"kind": "text", "quote": ..., "section": optional heading}`: the
         server finds the passage in the page's current version."""
+        if (
+            payload.thread_root is None
+            and isinstance(payload.anchor, dict)
+            and payload.anchor.get("kind") == "decision"
+        ):
+            raise HTTPException(
+                422,
+                {
+                    "field": "anchor",
+                    "detail": (
+                        "a thread under his answer is started with "
+                        "POST /api/v1/decisions/{decision_id}/replies"
+                    ),
+                },
+            )
         # Run once the keyed transaction has committed; empty on a replay.
         later: list = []
 
@@ -1457,6 +1479,8 @@ def agent_router(
                     "detail": "no open root comment with that id on this artifact",
                 },
             ) from exc
+        except comments.NoSuchDecision as exc:
+            raise HTTPException(404, "no such decision") from exc
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
 
@@ -1774,12 +1798,14 @@ def agent_router(
             omitted = sum(1 for d in every if d.answer) - sum(
                 1 for d in shown if d.answer
             )
+        notes = comments.note_threads(db, artifact_id)
         return JSONResponse(
             jsonable_encoder(
                 [
                     {
                         **row.__dict__,
                         "outcomes": [o.__dict__ for o in outcomes.get(row.id, [])],
+                        "replies": [r.__dict__ for r in notes.get(row.id, [])],
                     }
                     for row in shown
                 ]
@@ -2022,6 +2048,80 @@ def agent_router(
             ) from exc
         except store.NotFound as exc:
             raise HTTPException(404, "no such decision") from exc
+
+    @router.post("/decisions/{decision_id}/replies", status_code=201)
+    def reply_to_note(
+        decision_id: str,
+        payload: ReplyBody,
+        background: BackgroundTasks,
+        agent: str = Depends(caller),
+        idempotency_key: str | None = Header(default=None),
+        seat_session: str | None = Depends(session),
+    ):
+        """Reply under the note he left when answering this decision.
+
+        Any agent that can read the page may: its owner, or any agent when the
+        page is open to agents. The reply is a comment in a thread anchored to
+        the decision; it never touches the decision row (no answer, note,
+        acknowledgement or closing). "Not yours" answers exactly like "no such
+        decision". A decision he has not answered has no note to reply to."""
+        later: list = []
+
+        def write(conn) -> tuple[int, object]:
+            later.clear()
+            # Scope by the same join as list_outcomes, read inside the keyed
+            # transaction when there is one.
+            with nullcontext(conn) if conn is not None else db.connect() as c:
+                found = c.execute(
+                    "select decision.artifact_id, decision.answer from decision"
+                    " join artifact on artifact.id = decision.artifact_id"
+                    " where decision.id = %s"
+                    "   and (artifact.agent = %s or artifact.agents_can_read)"
+                    "   and artifact.deleted_at is null",
+                    (decision_id, agent),
+                ).fetchone()
+                if found is None:
+                    raise HTTPException(404, "no such decision")
+                artifact_id, answer = found
+                if answer is None:
+                    raise HTTPException(
+                        422,
+                        {
+                            "field": "decision",
+                            "detail": "he has not answered yet",
+                        },
+                    )
+                root = c.execute(
+                    "select id from comment where artifact_id = %s"
+                    " and thread_root is null and withdrawn_at is null"
+                    " and not held and anchor->>'kind' = 'decision'"
+                    " and anchor->>'decision_id' = %s"
+                    " order by created_at asc, id asc limit 1",
+                    (artifact_id, decision_id),
+                ).fetchone()
+            body = (
+                CommentBody(body=payload.body, thread_root=root[0])
+                if root is not None
+                else CommentBody(
+                    body=payload.body,
+                    anchor={"kind": "decision", "decision_id": decision_id},
+                )
+            )
+            return 201, _add_comment(
+                artifact_id, body, background, agent, conn, seat_session, later
+            )
+
+        response = idempotency.run(
+            db,
+            agent,
+            f"replies:{decision_id}",
+            idempotency_key,
+            payload.model_dump(),
+            write,
+        )
+        for send in later:
+            background.add_task(send)
+        return response
 
     @router.get("/decisions/{decision_id}/outcomes")
     def list_outcomes(decision_id: str, agent: str = Depends(caller)):

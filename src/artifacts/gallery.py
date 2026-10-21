@@ -496,15 +496,18 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
 .cwhen{margin-left:.5rem;font-size:.75rem;color:var(--muted)}
 .cmt p{margin:.15rem 0 0;font-size:.875rem;line-height:1.55;color:var(--ink);
   white-space:pre-wrap;overflow-wrap:anywhere}
-.cnew,.creply{display:flex;gap:.4rem;margin:.5rem 0 0}
-.cnew input,.creply input{flex:1 1 auto;min-width:0;padding:.4rem .6rem;
+.cnew,.creply,.nreply{display:flex;gap:.4rem;margin:.5rem 0 0}
+.cnew input,.creply input,.nreply input{flex:1 1 auto;min-width:0;padding:.4rem .6rem;
   border:1px solid var(--line);border-radius:.45rem;background:var(--paper);
   color:var(--ink);font:.875rem/1.4 ui-sans-serif,system-ui,sans-serif}
-.cnew button,.creply button,.cresolve button{padding:.4rem .7rem;cursor:pointer;
+.cnew button,.creply button,.nreply button,.cresolve button{padding:.4rem .7rem;cursor:pointer;
   border:1px solid var(--line);border-radius:.45rem;background:var(--chip);
   color:var(--ink);font:.8125rem/1.4 ui-sans-serif,system-ui,sans-serif}
 .cnew button{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .cresolve{margin:.5rem 0 0}
+.nthread{margin:.2rem .35rem .6rem}
+.nthread .nhead{font-size:.8125rem;color:var(--muted);margin:0 0 .3rem}
+.nthread .ntag{margin-left:.5rem;color:var(--now);font-weight:600}
 .settled-cmts{margin:.6rem 0 0}
 .settled-cmts > summary{cursor:pointer;list-style:none;display:inline-flex;
   align-items:center;gap:.5rem;font:.8125rem/1.4 ui-sans-serif,system-ui,sans-serif;
@@ -1414,23 +1417,25 @@ _UNREAD_WORD = '<span class="sr">Unread. </span>'
 # he wrote an earlier message, made after he last opened the page. Without it a
 # reply to him leaves a read page looking read. Yields who wrote it (the session
 # label when there is one, so the tile can name the office, else the author).
-# `_WALL_HIS_THREAD` is the one place the "thread that is his" rule lives: a
-# later slice widens it with `or <the root's anchor kind is 'decision'>`.
+# `_WALL_HIS_THREAD` is the one place the "thread that is his" rule lives. A
+# thread under his answer's note is his by being there: the note is his message.
 # Plain SQL on both drivers: `created_at` compares as the one stored format.
 _WALL_HIS_THREAD = (
-    "exists (select 1 from comment h"
+    "(exists (select 1 from comment h"
     "  where h.artifact_id = c.artifact_id"
     "    and coalesce(h.thread_root, h.id) = c.thread_root"
     "    and h.author_kind = 'human' and h.withdrawn_at is null"
     "    and h.created_at < c.created_at)"
+    "  or c.anchor->>'kind' = 'decision')"
 )
 _WALL_REPLIED_BY = (
     "(select coalesce(nullif(c.session, ''), c.author) from comment c"  # noqa: S608
     "  where c.artifact_id = a.id and c.author_kind = 'agent'"
-    "    and c.kind = 'comment' and c.thread_root is not null"
+    "    and c.kind = 'comment' and (c.thread_root is not null"
+    "         or c.anchor->>'kind' = 'decision')"
     "    and c.withdrawn_at is null and not c.held"
     "    and (select root.withdrawn_at from comment root"
-    "          where root.id = c.thread_root) is null"
+    "          where root.id = coalesce(c.thread_root, c.id)) is null"
     "    and not exists (select 1 from page_read r"
     "          where r.artifact_id = a.id and r.read_at >= c.created_at)"
     f"    and {_WALL_HIS_THREAD}"
@@ -2632,6 +2637,44 @@ def _wall_meta(waiting: int, hidden: int = 0) -> str:
     return out
 
 
+def _bubble(row) -> str:
+    """One message in a thread: who, via which session, when, and what."""
+    who = "Jeremy" if row.author_kind == "human" else escape(row.author) + " (agent)"
+    # The office is the part of the caller's session label before the first
+    # "/", and only what the caller said: a key several offices share cannot
+    # tell them apart, so it reads "via session", never as a fact.
+    label = (getattr(row, "session", None) or "").strip()
+    via = (
+        f'<span class="cvia" title="{escape(label)}">'
+        f"via session {escape(label.split('/', 1)[0] or label)}</span>"
+        if row.author_kind != "human" and label
+        else ""
+    )
+    # CommentRow.created_at is an ISO STRING, not a datetime -- `_ago` takes
+    # the latter, and handing it the former raises on .tzinfo. Caught by
+    # rendering the page; the whole comment section would have 500'd on
+    # first use.
+    when = _ago(datetime.fromisoformat(row.created_at)) if row.created_at else ""
+    # Agent-written text landing in Jeremy's own signed-in origin, so it is
+    # escaped here like everything else that crosses that boundary.
+    #
+    # `remove`/`looks_good` carry no note of their own (comments.add()
+    # allows an empty body for those two kinds) -- an empty `<p></p>` is
+    # not a rendering of anything anyone said, so a bodiless mark gets no
+    # paragraph at all; what it IS is already the tag on its quote, in
+    # `quoted()` below (final review, Item 4a).
+    note = f"<p>{escape(row.body)}</p>" if row.body.strip() else ""
+    held = '<span class="htag">held</span>' if getattr(row, "held", False) else ""
+    return (
+        f'<li class="cmt {escape(row.author_kind)}">'
+        f'<span class="cwho">{who}</span>'
+        f"{via}"
+        f'<span class="cwhen">{escape(when)}</span>'
+        f"{held}"
+        f"{note}</li>"
+    )
+
+
 def _render_comments(
     rows: list,
     artifact_id: str,
@@ -2665,43 +2708,7 @@ def _render_comments(
         if row.thread_root:
             replies.setdefault(row.thread_root, []).append(row)
 
-    def bubble(row) -> str:
-        who = (
-            "Jeremy" if row.author_kind == "human" else escape(row.author) + " (agent)"
-        )
-        # The office is the part of the caller's session label before the first
-        # "/", and only what the caller said: a key several offices share cannot
-        # tell them apart, so it reads "via session", never as a fact.
-        label = (getattr(row, "session", None) or "").strip()
-        via = (
-            f'<span class="cvia" title="{escape(label)}">'
-            f"via session {escape(label.split('/', 1)[0] or label)}</span>"
-            if row.author_kind != "human" and label
-            else ""
-        )
-        # CommentRow.created_at is an ISO STRING, not a datetime -- `_ago` takes
-        # the latter, and handing it the former raises on .tzinfo. Caught by
-        # rendering the page; the whole comment section would have 500'd on
-        # first use.
-        when = _ago(datetime.fromisoformat(row.created_at)) if row.created_at else ""
-        # Agent-written text landing in Jeremy's own signed-in origin, so it is
-        # escaped here like everything else that crosses that boundary.
-        #
-        # `remove`/`looks_good` carry no note of their own (comments.add()
-        # allows an empty body for those two kinds) -- an empty `<p></p>` is
-        # not a rendering of anything anyone said, so a bodiless mark gets no
-        # paragraph at all; what it IS is already the tag on its quote, in
-        # `quoted()` below (final review, Item 4a).
-        note = f"<p>{escape(row.body)}</p>" if row.body.strip() else ""
-        held = '<span class="htag">held</span>' if getattr(row, "held", False) else ""
-        return (
-            f'<li class="cmt {escape(row.author_kind)}">'
-            f'<span class="cwho">{who}</span>'
-            f"{via}"
-            f'<span class="cwhen">{escape(when)}</span>'
-            f"{held}"
-            f"{note}</li>"
-        )
+    bubble = _bubble
 
     def quoted(root) -> str:
         """What the thread is about, when it is about a particular passage.
@@ -3195,6 +3202,19 @@ def _button(option: dict, row: decisions.DecisionRow) -> str:
     )
 
 
+def _moment(value: datetime | str | None) -> datetime | None:
+    """A stored timestamp as an aware datetime, or None if there is none or it
+    will not parse. Drivers hand back datetimes or ISO strings."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 def _render_decisions(
     rows: list[decisions.DecisionRow],
     listening_since: str | None = None,
@@ -3204,6 +3224,8 @@ def _render_decisions(
     shown_version: int | None = None,
     round_view: dict | None = None,
     presence: dict | None = None,
+    note_threads: dict[str, list] | None = None,
+    prev_read_at: datetime | str | None = None,
 ) -> tuple[str, str]:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
@@ -3244,6 +3266,41 @@ def _render_decisions(
 
     open_rows = [r for r in rows if r.answer is None]
     settled_rows = [r for r in rows if r.answer is not None]
+
+    def _note_thread(row: decisions.DecisionRow) -> tuple[str, bool]:
+        """The short thread under his note, and whether it holds a message from
+        an agent newer than his previous visit. Empty until someone has replied:
+        the form that continues a thread needs a thread to continue."""
+        thread = (note_threads or {}).get(row.id) or []
+        if not thread:
+            return "", False
+        first = thread[0]
+        seen = _moment(prev_read_at)
+        fresh = any(
+            m.author_kind == "agent"
+            and (seen is None or (_moment(m.created_at) or seen) > seen)
+            for m in thread
+        )
+        answered = _moment(row.answered_at)
+        earlier = (
+            answered is not None and (_moment(first.created_at) or answered) < answered
+        )
+        head = ("About an earlier answer" if earlier else "Replies under your note") + (
+            '<span class="ntag">new reply</span>' if fresh else ""
+        )
+        root = first.thread_root or first.id
+        form = (
+            f'<form class="nreply" method="post" action="/c/{escape(row.artifact_id)}">'
+            f'<input type="hidden" name="thread_root" value="{escape(root)}">'
+            '<input name="body" placeholder="Reply" aria-label="Reply under your note">'
+            '<button type="submit">Send</button></form>'
+        )
+        html = (
+            f'<div class="nthread" id="note-{escape(row.id)}"><p class="nhead">{head}</p>'
+            f'<ul class="bubbles">{"".join(_bubble(m) for m in thread)}</ul>'
+            f"{form}</div>"
+        )
+        return html, fresh
 
     def _since(row: decisions.DecisionRow) -> str:
         """What has happened to this question since it was asked.
@@ -3452,6 +3509,7 @@ def _render_decisions(
             settled_rows, key=lambda r: r.answered_at or "", reverse=True
         )
         entries = []
+        any_fresh = False
         for row in settled_rows:
             chosen = next(
                 (o["label"] for o in row.options if o["letter"] == row.answer),
@@ -3507,8 +3565,11 @@ def _render_decisions(
                     f'<span class="relayed" title="Recorded by {who} from '
                     f'{where}; not tapped on this page">via {where}</span>'
                 )
+            thread_html, fresh = _note_thread(row)
+            any_fresh = any_fresh or fresh
             entries.append(
-                '<details class="settled">'
+                f'<details class="settled"'
+                f"{' open' if fresh else ''}>"
                 f'<summary><span class="when">{escape(_when(row.answered_at))}</span>'
                 f'<span class="sq">{escape(row.question)}</span>'
                 f'<span class="sa">({escape(row.answer)}) {escape(chosen)}</span>'
@@ -3519,6 +3580,7 @@ def _render_decisions(
                 + (_presence_line(row, "span") if row.answer == "c" else "")
                 + "</summary>"
                 f'<div class="settled-body">{_provenance(row)}{pickup}{note}'
+                f"{thread_html}"
                 # SAID WHERE THE HAND IS. The section already carries "nothing
                 # here is locked", but that sits at the foot of the whole list,
                 # after every other entry -- so the card you have actually
@@ -3530,12 +3592,15 @@ def _render_decisions(
                 # missing was anything on screen saying so at the moment of
                 # looking.
                 + (
-                    '<p class="hint">Your first verdict is final.</p>'
+                    ""
+                    if row.closed_at is not None
+                    else '<p class="hint">Your first verdict is final.</p>'
                     if getattr(row, "kind", "question") == "review"
                     else '<p class="hint">Tap a different letter to change this '
                     "&mdash; it replaces your answer, and the note with it.</p>"
                 )
-                + f"{_card(row, anchorable=False)}</div></details>"
+                + ("" if row.closed_at is not None else _card(row, anchorable=False))
+                + "</div></details>"
             )
         # Collapsed, and counted in its own summary. Four settled questions took
         # the whole first screen of a page whose point was the one still open;
@@ -3543,7 +3608,8 @@ def _render_decisions(
         n = len(entries)
         noun = "question" if n == 1 else "questions"
         below.append(
-            '<details class="asks settled-list"><summary><h2>'
+            f'<details class="asks settled-list"{" open" if any_fresh else ""}>'
+            "<summary><h2>"
             f"{n} {noun} you have already settled</h2></summary>"
             + "".join(entries)
             + (
@@ -4324,15 +4390,38 @@ def gallery_router(db: Database) -> APIRouter:
             raise HTTPException(404, "no such artifact")
         # He has opened it: the wall stops calling it unread, and its agent can
         # see that he has (homelab-ij8.103).
+        # What he had seen before this visit: a reply under his note is "new"
+        # against it, and mark_read is about to move it.
+        with db.connect() as conn:
+            prev = conn.execute(
+                "select read_at from page_read where artifact_id = %s",
+                (artifact_id,),
+            ).fetchone()
+        prev_read_at = prev[0] if prev else None
         store.mark_read(db, artifact_id)
-        # Open or answered-but-not-closed decisions only: a closed one is the agent
-        # saying it no longer needs an answer, so it has nothing left to show here.
-        decision_rows = decisions.list_for_artifact(
-            db, artifact_id, include_answered=True, include_closed=False
+        # Open or answered-but-not-closed decisions: a closed one is the agent
+        # saying it no longer needs an answer, so it has nothing left to show
+        # here -- unless he left a note and a thread grew under it, which is a
+        # conversation and stays readable.
+        every_row = decisions.list_for_artifact(
+            db, artifact_id, include_answered=True, include_closed=True
         )
-        comment_rows = comments.list_for_artifact(
-            db, artifact_id, include_resolved=True, include_held=True
-        )
+        decision_rows = [r for r in every_row if r.closed_at is None]
+        note_threads = comments.note_threads(db, artifact_id)
+        shown_rows = decision_rows + [
+            r
+            for r in every_row
+            if r.closed_at is not None and r.answer and r.id in note_threads
+        ]
+        # The drawer is about the page: a thread under a decision's note lives
+        # under that decision, never in the drawer or its count.
+        comment_rows = [
+            c
+            for c in comments.list_for_artifact(
+                db, artifact_id, include_resolved=True, include_held=True
+            )
+            if (c.anchor or {}).get("kind") != "decision"
+        ]
         # ROUND 2 AND LATER (page review step 4): the frame opens on what
         # changed since the version he sent back, and the card says the round,
         # offers Hide/Show changes and lists his earlier marks. The fallback
@@ -4378,7 +4467,9 @@ def gallery_router(db: Database) -> APIRouter:
             and (found := decisions.round_presence(db, row[2], r.id)) is not None
         }
         asks_above, settled_below = _render_decisions(
-            decision_rows,
+            shown_rows,
+            note_threads=note_threads,
+            prev_read_at=prev_read_at,
             round_view=round_view,
             presence=presence,
             listening_since=events.last_read(db, row[2]),
@@ -5047,8 +5138,23 @@ def gallery_router(db: Database) -> APIRouter:
                 "kind must be comment, remove or looks_good, with a quoted "
                 "range for the last two",
             ) from None
+        except comments.NoSuchDecision:
+            raise HTTPException(404, "no such decision") from None
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
+        note_decision = (
+            row.anchor.get("decision_id")
+            if isinstance(row.anchor, dict) and row.anchor.get("kind") == "decision"
+            else None
+        )
+        if note_decision:
+            # A reply under his note lives under that decision, not in the
+            # drawer: back to the note (or, in place, reload to draw it).
+            if "application/json" in request.headers.get("accept", ""):
+                return JSONResponse({"reload": True}, status_code=201)
+            return RedirectResponse(
+                f"/a/{artifact_id}#note-{note_decision}", status_code=303
+            )
         if "application/json" in request.headers.get("accept", ""):
             # The in-place post: the thread as the drawer renders it, and the
             # marks the frame should now paint.

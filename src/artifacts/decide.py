@@ -239,6 +239,12 @@ def _threads(
         thread["artifact_id"] = first.get("artifact_id")
         thread["quote"] = first.get("quote") or ""
         thread["kind"] = first.get("kind") or "comment"
+        anchor = first.get("anchor")
+        thread["decision_id"] = (
+            anchor.get("decision_id")
+            if isinstance(anchor, dict) and anchor.get("kind") == "decision"
+            else None
+        )
         # A bare "looks good" -- the thread's only message, with no note of
         # its own -- is an acknowledgement, not a question: nothing is being
         # asked, so nothing is owed back (final review, Item 4c). `remove`
@@ -274,6 +280,8 @@ def _fmt_thread(thread: dict, *, on_page: bool = False) -> str:
     lines = [
         f"{thread['id']}  comment thread on page {thread['artifact_id']}  [{head}]"
     ]
+    if thread.get("decision_id"):
+        lines.append(f"  under his answer on decision {thread['decision_id']}")
     if thread["quote"]:
         label = {"remove": "REMOVE THIS", "looks_good": "LOOKS GOOD"}.get(
             thread.get("kind"), "on"
@@ -292,7 +300,12 @@ def _fmt_thread(thread: dict, *, on_page: bool = False) -> str:
         # acknowledgement it is (final review, Item 4b).
         raw_body = m.get("body") or ""
         lines.append(f"  {who}: {raw_body if raw_body.strip() else '(no note)'}")
-    if thread["needs_reply"]:
+    if thread["needs_reply"] and thread.get("decision_id"):
+        lines.append(
+            f'  reply: artifacts-decide reply-note {thread["decision_id"]} "..."'
+            f"   · done: artifacts-decide settle {thread['id']}"
+        )
+    elif thread["needs_reply"]:
         lines.append(
             f'  reply: artifacts-decide reply {thread["id"]} "..."'
             + (f" --page {thread['artifact_id']}" if on_page else "")
@@ -1028,7 +1041,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     outcome = subs.add_parser(
         "outcome",
-        help="append what this decision caused, or what changed under it",
+        help="append what this decision caused, or what changed under it "
+        "(one-way; to answer his note use reply-note)",
     )
     outcome.add_argument("decision", metavar="DECISION-ID")
     outcome.add_argument(
@@ -1041,6 +1055,22 @@ def build_parser() -> argparse.ArgumentParser:
             "it, he can answer the old question by accident."
         ),
     )
+
+    reply_note = subs.add_parser(
+        "reply-note",
+        help="reply under the note he left when answering a decision",
+        description=(
+            "Reply under the note Jeremy left with his answer, on any page you "
+            "can read. He sees it under his note and can answer; the page's "
+            "owner is told when you are another office. It never changes the "
+            "decision: no answer, acknowledgement or closing. Use outcome to "
+            "record what the decision caused; this is for talking back. "
+            '"-" reads the text from stdin.'
+        ),
+    )
+    reply_note.add_argument("decision", metavar="DECISION-ID")
+    reply_note.add_argument("text", metavar="TEXT")
+    reply_note.add_argument("--idempotency-key", metavar="KEY", help=_IDEMPOTENCY_HELP)
 
     ack = subs.add_parser("ack", help="say you have seen an answer")
     ack.add_argument("decision", metavar="DECISION-ID")
@@ -1191,6 +1221,7 @@ def main(argv: list[str] | None = None) -> int:
         "ask-review",
         "record",
         "outcome",
+        "reply-note",
         "ack",
         "close",
         "reply",
@@ -1325,6 +1356,32 @@ def main(argv: list[str] | None = None) -> int:
                 {"body": args.note},
             )
             print(f"recorded on {written['decision_id']}: {written['body']}")
+            return 0
+        if args.cmd == "reply-note":
+            text = sys.stdin.read() if args.text == "-" else args.text
+            if not text.strip():
+                raise UsageError("nothing to say: the reply text is empty")
+            written = _request(
+                "POST",
+                f"{base}/decisions/{args.decision}/replies",
+                key,
+                {"body": text},
+                idempotency_key=args.idempotency_key or str(uuid.uuid4()),
+            )
+            page_id = written["artifact_id"]
+            page = _request("GET", f"{base}/artifacts/{page_id}", key, None)
+            owner = page.get("agent") or "unknown"
+            label = page.get("last_session")
+            print(f"replied {written['id']} under his answer on {args.decision}")
+            print(f"  link: {page.get('page_url') or page_id}#note-{args.decision}")
+            print(
+                f"  page owner: {owner}"
+                + (f" (last session {label})" if label else " (no session label)")
+            )
+            print(
+                "  he sees it under his note; if you are another office, the owner "
+                "is told through the service"
+            )
             return 0
         if args.cmd == "wait":
             if args.review:

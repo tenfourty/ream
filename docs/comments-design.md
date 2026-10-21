@@ -41,6 +41,7 @@ One table, `comment`:
 | `thread_root` | null on a first comment, the root's id on a reply |
 | `anchor` jsonb | `{"kind":"page"}`, `{"kind":"point","x":f,"y":f}` (fractions of the page box) or `{"kind":"range","path":s,"start":i,"end":i}` |
 | `quote` | the selected text, empty for a point or page comment |
+|  | a fourth anchor, `{"kind":"decision","decision_id":s}` (21 Oct 2026), puts a thread under the note he left when answering that decision; its quote is empty |
 | `author_kind`, `author` | `human`/`jeremy` or `agent`/`<agent name>` |
 | `session` | the label an agent declared (`X-Artifacts-Session`) when it wrote the comment; null for him and for an agent that declared none. Added 21 Oct 2026 |
 | `body` | what was said |
@@ -93,6 +94,40 @@ are the caller's own word, so this is a best effort, not proof.
 style, SVG and templates removed first (up to 2 MB of it; a page with more
 refuses a text anchor). `section` is at most 200 characters, is searched in
 pages up to 2 MB, and the heading's own text counts as part of its section.
+
+## A thread under his answer's note (21 Oct 2026)
+
+A decision's answer note is a message from him, so it can have a short thread:
+an office replies, he answers, the office answers back. No schema change: the
+thread is an ordinary comment thread anchored `{"kind":"decision","decision_id":D}`
+with an empty quote. The first agent reply becomes the root; later messages
+(his and the agents') point to it with `thread_root`. Two racing first replies
+make two roots, and `comments.note_threads` merges every root of a decision
+into one thread, oldest first.
+
+- **Writing.** `POST /api/v1/decisions/{id}/replies` `{"body": ...}`, or
+  `artifacts-decide reply-note <decision-id> "text"`. Any agent that can read the
+  page may (owner, or any agent while `agents_can_read`); not yours, deleted and
+  unknown answer the same 404 "no such decision". A decision he has not answered
+  is 422 `{"field":"decision","detail":"he has not answered yet"}`; a closed but
+  answered one still takes a reply. `POST /artifacts/{id}/comments` refuses to
+  start a decision-anchored thread (422, pointing here) but still takes replies
+  by `thread_root`.
+- **The decision is untouched.** A reply never changes the answer, the note,
+  `acknowledged_at` or `closed_at`.
+- **Never held.** His message in such a thread is neither held during a held
+  review nor part of a review round: it is not a mark on the page.
+- **Reading.** `GET /artifacts/{id}/decisions` rows carry `"replies"` beside
+  `"outcomes"`. In the gallery the thread renders in the settled entry right
+  under the note, with a plain no-script reply form, `id="note-<decision>"`, a
+  "new reply" tag and the entry open when an agent wrote since his previous
+  visit. A thread whose root predates the decision's current answer (he
+  re-answered) is labelled "About an earlier answer". The comment drawer, its
+  open-thread count and the all-pages view leave these threads out; a closed
+  answered decision with a thread stays visible, one without stays hidden.
+- **Telling people.** His reply raises `comment_added` for the page's owner; an
+  office's reply does so only when it is another office's. On the wall an agent's
+  message in such a thread marks the page unread ("Reply from <office>").
 
 The page's owner gets a `comment_added` event as for his comments. The
 `artifacts-decide comment` command makes the call and prints the page link and
