@@ -1410,6 +1410,46 @@ def _icon(name: str) -> str:
 _UNREAD_ATTR = ' data-unread="1"'
 _UNREAD_WORD = '<span class="sr">Unread. </span>'
 
+# A REPLY HE HAS NOT SEEN: the newest live agent comment under a thread in which
+# he wrote an earlier message, made after he last opened the page. Without it a
+# reply to him leaves a read page looking read. Yields who wrote it (the session
+# label when there is one, so the tile can name the office, else the author).
+# `_WALL_HIS_THREAD` is the one place the "thread that is his" rule lives: a
+# later slice widens it with `or <the root's anchor kind is 'decision'>`.
+# Plain SQL on both drivers: `created_at` compares as the one stored format.
+_WALL_HIS_THREAD = (
+    "exists (select 1 from comment h"
+    "  where h.artifact_id = c.artifact_id"
+    "    and coalesce(h.thread_root, h.id) = c.thread_root"
+    "    and h.author_kind = 'human' and h.withdrawn_at is null"
+    "    and h.created_at < c.created_at)"
+)
+_WALL_REPLIED_BY = (
+    "(select coalesce(nullif(c.session, ''), c.author) from comment c"  # noqa: S608
+    "  where c.artifact_id = a.id and c.author_kind = 'agent'"
+    "    and c.kind = 'comment' and c.thread_root is not null"
+    "    and c.withdrawn_at is null and not c.held"
+    "    and (select root.withdrawn_at from comment root"
+    "          where root.id = c.thread_root) is null"
+    "    and not exists (select 1 from page_read r"
+    "          where r.artifact_id = a.id and r.read_at >= c.created_at)"
+    f"    and {_WALL_HIS_THREAD}"
+    "  order by c.created_at desc, c.id desc limit 1)"
+)
+_WALL_UNREAD = (
+    "(a.current_version > coalesce((select r.read_version"  # noqa: S608
+    "   from page_read r where r.artifact_id = a.id), 0)"
+    f"  or {_WALL_REPLIED_BY} is not null)"
+)
+
+
+def _reply_line(replied_by: str | None) -> str:
+    """ "Reply from <office>" on a tile or row, in the style of `_part_line`."""
+    if not replied_by:
+        return ""
+    who = comments.office_of(replied_by) or replied_by
+    return f'<span class="part" title="Reply">Reply from {escape(who)}</span>'
+
 
 def _part_line(part: str, flagged: bool) -> str:
     """Which part of the page changed, on its tile or row: "Running now:
@@ -3552,7 +3592,7 @@ def gallery_router(db: Database) -> APIRouter:
             # `decision` multiplies it again, so a page with 12 versions and
             # 2 open questions would report 24 of each. That is the classic
             # shape and it is silent -- the numbers merely look large.
-            "select a.id, a.title, a.updated_at, a.agent,"
+            "select a.id, a.title, a.updated_at, a.agent,"  # noqa: S608
             "       (select count(*) from version v"
             "          where v.artifact_id = a.id) as versions,"
             "       (select count(*) from decision d"
@@ -3577,8 +3617,7 @@ def gallery_router(db: Database) -> APIRouter:
             "          where v.artifact_id = a.id"
             "            and v.n = a.current_version) as session,"
             # UNREAD: new, or changed since he last opened it (homelab-ij8.103).
-            "       a.current_version > coalesce((select r.read_version"
-            "          from page_read r where r.artifact_id = a.id), 0) as unread,"
+            f"       {_WALL_UNREAD} as unread,"
             # WHICH PART CHANGED, when the live version is a section update
             # (Jeremy, 6 Oct, ruling 1a: "Running now: added"), and whether
             # its publisher asked for his eye. NULL/false for a whole-page
@@ -3588,7 +3627,8 @@ def gallery_router(db: Database) -> APIRouter:
             "            and v.n = a.current_version) as part,"
             "       coalesce((select v.notify from version v"
             "          where v.artifact_id = a.id"
-            "            and v.n = a.current_version), false) as flagged"
+            "            and v.n = a.current_version), false) as flagged,"
+            f"       {_WALL_REPLIED_BY} as replied_by"
             "  from artifact a"
             " where (a.archived_at is null) = %s and a.deleted_at is null"
             # THE WALL SORTS ITSELF BY WHAT NEEDS HIM. Pinned first, because
@@ -3613,8 +3653,7 @@ def gallery_router(db: Database) -> APIRouter:
             "               and d.closed_at is null) > 0 desc,"
             # Then what he has not read yet, newest first; once he opens a page
             # it drops back into the order below (homelab-ij8.103, his ruling).
-            "          a.current_version > coalesce((select r.read_version"
-            "             from page_read r where r.artifact_id = a.id), 0) desc,"
+            f"          {_WALL_UNREAD} desc,"
             "          a.updated_at desc, a.id desc limit 200",
             (not archived,),
         ).fetchall()
@@ -3640,6 +3679,7 @@ def gallery_router(db: Database) -> APIRouter:
             unread,
             part,
             flagged,
+            replied_by,
         ) = row
         ident = escape(artifact_id)
         # The reference puts a coloured per-type icon here. Types do not exist
@@ -3662,6 +3702,8 @@ def gallery_router(db: Database) -> APIRouter:
             right.insert(0, _UNREAD_WORD)
             if part:
                 right.append(_part_line(part, flagged))
+            if replied_by:
+                right.append(_reply_line(replied_by))
         right.append(f'<span class="who">{escape(agent)}</span>')
         right.append(_session_tag(session))
         when = _ago(updated)
@@ -3710,6 +3752,7 @@ def gallery_router(db: Database) -> APIRouter:
                 unread,
                 part,
                 flagged,
+                replied_by,
             ) = row
             # Every one of these is agent-controlled text reaching the gallery
             # origin, so every one is escaped here. `describe` strips tags but
@@ -3782,6 +3825,8 @@ def gallery_router(db: Database) -> APIRouter:
             # (ruling 1a). Gone once he has read it -- then it is history.
             if unread and part:
                 bits.append(_part_line(part, flagged))
+            if unread and replied_by:
+                bits.append(_reply_line(replied_by))
             # No description under the title of a tile that HAS a picture: the
             # picture is the description, which is why the reference carries no
             # tile description at all. Dropping it is what takes a card from

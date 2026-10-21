@@ -101,3 +101,93 @@ def test_an_unread_tile_has_no_tooltip(db, gallery):
         assert 'data-unread="1"' in wall
         assert not re.search(r'<li [^>]*data-unread="1"[^>]*title=', wall), view
         assert "Not opened since it changed" not in wall, view
+
+
+def _his(db, page, body="his question"):
+    from artifacts import comments
+
+    return comments.add(
+        db, artifact_id=page.id, author_kind="human", author="jeremy", body=body
+    )
+
+
+def _reply(db, page, root, session="cove/ab12", author="seat"):
+    from artifacts import comments
+
+    return comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author=author,
+        agent=author,
+        body="an answer",
+        thread_root=root.id,
+        session=session,
+    )
+
+
+def test_a_reply_under_his_comment_makes_a_read_page_unread_and_names_the_office(
+    db, gallery
+):
+    page = _publish(db, "One")
+    his = _his(db, page)
+    gallery.get(f"/a/{page.id}")
+    assert 'data-unread="1"' not in gallery.get("/").text
+    _reply(db, page, his)
+    wall = gallery.get("/").text
+    assert 'data-unread="1"' in wall
+    assert "Reply from cove" in wall
+    gallery.get(f"/a/{page.id}")
+    wall = gallery.get("/").text
+    assert 'data-unread="1"' not in wall and "Reply from" not in wall
+
+
+def test_two_replies_show_the_newest_office(db, gallery):
+    page = _publish(db, "One")
+    his = _his(db, page)
+    gallery.get(f"/a/{page.id}")
+    _reply(db, page, his, session="cove/1")
+    _reply(db, page, his, session="runcove/2")
+    wall = gallery.get("/").text
+    assert "Reply from runcove" in wall and "Reply from cove<" not in wall
+
+
+def test_the_owner_in_its_own_thread_he_never_spoke_in_is_not_a_reply(db, gallery):
+    from artifacts import comments
+
+    page = _publish(db, "One")
+    gallery.get(f"/a/{page.id}")
+    root = comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="seat",
+        agent="seat",
+        body="a note",
+    )
+    _reply(db, page, root)
+    wall = gallery.get("/").text
+    assert 'data-unread="1"' not in wall and "Reply from" not in wall
+
+
+def test_a_withdrawn_reply_does_not_mark_the_page_unread(db, gallery):
+    from artifacts import comments
+
+    page = _publish(db, "One")
+    his = _his(db, page)
+    gallery.get(f"/a/{page.id}")
+    reply = _reply(db, page, his)
+    comments.withdraw(db, reply.id, kind="test")
+    wall = gallery.get("/").text
+    assert 'data-unread="1"' not in wall and "Reply from" not in wall
+
+
+def test_a_reply_lifts_the_page_in_the_wall_order(db, gallery):
+    first = _publish(db, "first")
+    his = _his(db, first)
+    second = _publish(db, "second")
+    for page in (first, second):
+        gallery.get(f"/a/{page.id}")
+    assert _order(gallery)[:2] == [second.id, first.id]
+    _reply(db, first, his)
+    assert _order(gallery)[:2] == [first.id, second.id]
