@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from artifacts import hosts, onboarding, ratelimit
+from artifacts import hosts, onboarding, partner_in, ratelimit
 from artifacts.api import agent_router
 from artifacts.content import create_content_app
 from artifacts.db import Database
@@ -152,7 +152,7 @@ def create_api_app(
     return app
 
 
-def create_app(db: Database):
+def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
     """Fail CLOSED, not open: the content hostname is never behind Authelia (it is
     agent-published HTML), and the gallery app trusts Authelia at ITS ingress instead of
     checking identity itself. A request that reaches the gallery app having entered
@@ -167,6 +167,14 @@ def create_app(db: Database):
     limiter = ratelimit.FailedAuthLimiter()
     gallery, content = create_gallery_app(db, limiter), create_content_app(db)
     api = create_api_app(db, limiter)
+    # The partner's endpoint, when the inbound bridge is configured: its own app on
+    # its own host, which is the service's name INSIDE the cluster. Nothing else
+    # serves it (see partner_in.create_partner_app).
+    partner_app = (
+        partner_in.create_partner_app(db, partner_inbound)
+        if partner_inbound is not None
+        else None
+    )
 
     async def router(scope, receive, send):
         if scope["type"] == "lifespan":
@@ -180,6 +188,8 @@ def create_app(db: Database):
             chosen = gallery
         elif hosts.is_api(host):
             chosen = api
+        elif partner_app is not None and host == partner_inbound.host:
+            chosen = partner_app
         elif hosts.artifact_id(host) is not None:
             chosen = content
         else:

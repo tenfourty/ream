@@ -9,7 +9,7 @@ import os
 import signal
 import sys
 
-from artifacts import comments, events, maintenance, partner
+from artifacts import comments, events, maintenance, partner, partner_in
 from artifacts.app import create_app
 from artifacts.db import Database
 
@@ -112,7 +112,8 @@ def app_from_env():
     # start with a message that names variables and never a value.
     try:
         partner_config = partner.config_from_env()
-    except partner.PartnerConfigError as exc:
+        inbound = partner_in.config_from_env(partner_config)
+    except (partner.PartnerConfigError, partner_in.PartnerInboundConfigError) as exc:
         raise SystemExit(str(exc)) from None
     db = Database(dsn)
     db.migrate()
@@ -123,4 +124,4 @@ def app_from_env():
         maintenance.start(db)
     # The partner bridge's sender: only when fully configured (partner.py).
     partner.start(db, partner_config)
-    return _arm_shutdown_signals(create_app(db))
+    return _arm_shutdown_signals(create_app(db, inbound))

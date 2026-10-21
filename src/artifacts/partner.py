@@ -273,13 +273,11 @@ def answered_body(
     or a seat recorded words he gave elsewhere (verified_by 'agent': artifacts
     saw only the seat's word, named in `recorded_by`)."""
     name = {"jeremy": "Jeremy"}.get(answered_by, answered_by)
+    verified = {"page": "artifacts", "slack": "quarterdeck"}.get(answer_source, "agent")
     body = {
         "answer": letter,
         "note": note,
-        "answered_by": {
-            "name": name,
-            "verified_by": "artifacts" if answer_source == "page" else "agent",
-        },
+        "answered_by": {"name": name, "verified_by": verified},
         "answered_at": _iso(answered_at),
         "answer_source": answer_source,
     }
@@ -288,6 +286,42 @@ def answered_body(
     if said_at is not None:
         body["said_at"] = _iso(said_at)
     return body
+
+
+FOREIGN_PREFIX = "qd:"
+
+
+def foreign_source(question_id: str) -> str:
+    """The source of a question whose home is the partner."""
+    return f"{FOREIGN_PREFIX}{question_id}"
+
+
+def enqueue_foreign(
+    conn: Connection,
+    source: str,
+    version: int,
+    kind: str,
+    body: dict,
+    *,
+    at: datetime | None = None,
+) -> None:
+    """Add one event about a question whose home is the PARTNER (his answer given
+    here, on its copy). The outbox's `decision_id` column holds the whole source
+    ("qd:<id>"), so `unique (decision_id, version)` is a version space of our
+    own per copy, which never meets the home's: the home counts its events, we
+    count ours. `version` comes from `partner_question.out_version`, bumped by
+    the caller in the same transaction."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown partner event kind {kind!r}")
+    if not source.startswith(FOREIGN_PREFIX):
+        raise ValueError("a foreign event names a partner-home source")
+    when = at or datetime.now(UTC)
+    conn.execute(
+        "insert into partner_outbox"
+        " (event_id, decision_id, version, kind, body, created_at, next_attempt_at)"
+        " values (%s, %s, %s, %s, %s, %s, %s)",
+        (ids.new_id(), source, version, kind, dbmod.jsonb(body), when, when),
+    )
 
 
 def link_for(artifact_id: str, decision_id: str) -> str:
@@ -302,11 +336,13 @@ def link_for(artifact_id: str, decision_id: str) -> str:
 def envelope(row: dict, key_id: str, sent_at: datetime) -> bytes:
     """The exact request body for one attempt. `sent_at` and `key_id` are inside
     it, so the one signature covers them. Compact JSON, UTF-8."""
+    held = row["decision_id"]
+    foreign = held.startswith(FOREIGN_PREFIX)
     event = {
         "event_id": row["event_id"],
         "kind": row["kind"],
-        "source": source_of(row["decision_id"]),
-        "question": row["decision_id"],
+        "source": held if foreign else source_of(held),
+        "question": held.removeprefix(FOREIGN_PREFIX),
         "version": row["version"],
         "key_id": key_id,
         "at": _iso(row["created_at"]),
@@ -527,6 +563,12 @@ def prune(db: Database, now: datetime | None = None) -> int:
     """Forget delivered events older than KEEP_DELIVERED."""
     cutoff = (now or datetime.now(UTC)) - KEEP_DELIVERED
     with db.connect() as conn:
+        # The inbound side keeps event ids and settled copies as long.
+        conn.execute("delete from partner_event_seen where seen_at < %s", (cutoff,))
+        conn.execute(
+            "delete from partner_question where state <> 'open' and updated_at < %s",
+            (cutoff,),
+        )
         return conn.execute(
             "delete from partner_outbox where delivered_at is not null"
             " and delivered_at < %s",

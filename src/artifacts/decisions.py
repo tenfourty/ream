@@ -36,11 +36,12 @@ value that is actually about to be stored.
 import dataclasses
 import re
 import types
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from artifacts import csp, events, holds, ids, keys, nudge, partner, store, text
-from artifacts.db import Database, in_list, jsonb
+from artifacts.db import Connection, Database, in_list, jsonb
 
 # A decision's question is a single line Jeremy reads on a card, not a page body -- 500
 # bytes is generous for a real question and small enough that a wall of prose is refused
@@ -862,6 +863,10 @@ def list_for_agent(
 # reader can switch on it, and so a seat cannot invent a source that sounds more
 # authoritative than it is.
 ANSWER_SOURCES = ("terminal", "telegram", "in-person", "other")
+# 'slack' is stored (the partner bridge, inbound) but is NOT in the set above: a
+# relay is an agent's word, and 'slack' means quarterdeck verified who pressed.
+# Only `answer(..., source='slack')`, called from partner_in, writes it.
+STORED_SOURCES = ("page", *ANSWER_SOURCES, "slack")
 
 
 class InvalidSource(Exception):
@@ -1386,6 +1391,9 @@ def answer(
     by: str,
     round: int | None = None,
     version: int | None = None,
+    source: str = "page",
+    recorded_by: str | None = None,
+    in_transaction: Callable[[Connection], None] | None = None,
 ) -> DecisionRow:
     """The gallery, acting for Jeremy, answers a decision. Takes no `agent`: this is
     not a call an agent ever makes, so there is no ownership to check against a
@@ -1412,7 +1420,16 @@ def answer(
     both rounds). None skips the check, as every caller before rounds did.
     `version` is the page version the form was drawn over; it is kept on the
     round it closes, and the next round's changes are shown from it.
+
+    `source` is 'page' for his tap. The partner bridge passes 'slack' (and
+    `recorded_by='quarterdeck'`, the party that vouched for the press) for an
+    answer that came back from Slack; everything else is identical, the event
+    and the outbound `answered` included. `in_transaction`, when given, is
+    called with the connection inside the answer's own transaction, so the
+    caller's own records commit or roll back with it.
     """
+    if source not in ("page", "slack"):
+        raise InvalidSource(source)
     store._check_size(note, MAX_NOTE_BYTES, "note", agent=by, artifact_id=None)
 
     with db.connect() as conn:
@@ -1473,6 +1490,8 @@ def answer(
                 option["label"] for option in options if option["letter"] == letter
             )
             summary = f"{letter}: {label}"[:200]
+            if source == "slack":
+                summary = f"{letter}: {label} (answered in Slack)"[:200]
             # The write itself is conditional for a review, not only the read
             # above: two devices can both pass that read before either writes,
             # and only an atomic `answer is null` test in the update keeps the
@@ -1481,10 +1500,10 @@ def answer(
             answered_at = datetime.now(UTC)
             written = conn.execute(
                 "update decision set answer = %s, answer_note = %s, answered_at = %s,"
-                " answered_by = %s, answer_source = 'page', recorded_by = null,"
+                " answered_by = %s, answer_source = %s, recorded_by = %s,"
                 " said_at = null where id = %s and closed_at is null"
                 " and (kind <> 'review' or answer is null)",
-                (letter, note, answered_at, by, decision_id),
+                (letter, note, answered_at, by, source, recorded_by, decision_id),
             )
             if written.rowcount == 0:
                 # Lost the race: no event, and the row as it now stands.
@@ -1513,10 +1532,12 @@ def answer(
                         note=note,
                         answered_by=by,
                         answered_at=answered_at,
-                        answer_source="page",
+                        answer_source=source,
                     ),
                     at=answered_at,
                 )
+            if in_transaction is not None:
+                in_transaction(conn)
             event_seq = events.append(
                 conn,
                 artifact_id=artifact_id,

@@ -318,6 +318,30 @@ def _seed(database: Database) -> None:
                 T0,
             ],
         ),
+        (
+            "partner_question",
+            (
+                "source, version, asking_office, title, options, context, state,"
+                " created_at, updated_at"
+            ),
+            [
+                "qd:q1",
+                3,
+                "warpgate",
+                "Zürich?",
+                j([{"letter": "a", "label": "yes"}]),
+                "ctx",
+                "open",
+                T0,
+                T1,
+            ],
+        ),
+        ("partner_version_seen", "source, version, updated_at", ["qd:q1", 3, T1]),
+        (
+            "partner_event_seen",
+            "event_id, source, version, kind, outcome, detail, seen_at",
+            ["ev1", "qd:q1", 3, "asked", "applied", j({"slack_id": "U1"}), T1],
+        ),
     ]
     with database.connect() as conn, conn.transaction():
         for table, cols, values in rows:

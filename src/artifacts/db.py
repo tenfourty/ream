@@ -284,6 +284,11 @@ def _statements(script: str) -> list[str]:
     ]
 
 
+def _sql_text(text: str) -> str:
+    """`text` as an SQL string literal (fixed text only, never caller input)."""
+    return "'" + text.replace("'", "''") + "'"
+
+
 # Step 1 is `schema_sqlite.sql`, run whole on a fresh file. Every later change is
 # a numbered step here, run statement by statement, never an edit to that file.
 _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
@@ -329,6 +334,70 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
     ),
     # 21 Oct 2026: a refusal retrying cannot change parks the outbox row.
     5: ("alter table partner_outbox add column parked_at timestamptz",),
+    # 21 Oct 2026: the partner bridge, inbound. 'slack' joins the answer
+    # sources (a CHECK cannot be altered in SQLite, so the stored table text is
+    # widened in place, the documented way to relax a constraint), and the copy
+    # of a partner-home question with the dedupe records.
+    6: (
+        "pragma writable_schema = on",
+        (
+            "update sqlite_master set sql = replace(sql, "  # noqa: S608 -- fixed text
+            + _sql_text("'in-person', 'other')")
+            + ", "
+            + _sql_text("'in-person', 'other', 'slack')")
+            + ") where type = 'table' and name = 'decision'"
+        ),
+        "pragma writable_schema = off",
+        (
+            "create table partner_question ("
+            " source text primary key,"
+            " version integer not null,"
+            " asking_office text not null,"
+            " title text not null,"
+            " options jsonb not null check (json_valid(options)),"
+            " recommended text,"
+            " context text not null default '',"
+            " link text,"
+            " topic_id text,"
+            " topic_title text,"
+            " depends_on jsonb not null default '[]',"
+            " replaces text,"
+            " replaced_by text,"
+            " urgency text not null default 'when_you_can',"
+            " blocked_on text,"
+            " needed_by timestamptz,"
+            " for_offices jsonb not null default '[]',"
+            " state text not null default 'open'"
+            " check (state in ('open', 'answered', 'withdrawn', 'replaced')),"
+            " answer text,"
+            " answer_note text not null default '',"
+            " answered_by text,"
+            " answered_at timestamptz,"
+            " pending_answer text,"
+            " pending_note text not null default '',"
+            " pending_at timestamptz,"
+            " out_version integer not null default 0,"
+            " created_at timestamptz not null,"
+            " updated_at timestamptz not null)"
+        ),
+        (
+            "create table partner_version_seen ("
+            " source text primary key,"
+            " version integer not null,"
+            " updated_at timestamptz not null)"
+        ),
+        (
+            "create table partner_event_seen ("
+            " event_id text primary key,"
+            " source text not null,"
+            " version integer not null,"
+            " kind text not null,"
+            " outcome text not null,"
+            " detail jsonb,"
+            " seen_at timestamptz not null)"
+        ),
+        "create index partner_event_seen_at_idx on partner_event_seen (seen_at)",
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

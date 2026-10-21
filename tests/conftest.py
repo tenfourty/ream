@@ -240,10 +240,11 @@ class _ReusedApps:
         return cls._hand_out(key, db, build)
 
     @classmethod
-    def create_app(cls, db):
+    def create_app(cls, db, *args, **kwargs):
         key = ("app", getattr(db, "dsn", None))
-        if type(db) is not Database or key in cls.handed:
-            return cls.real_app(db)
+        # An app with a partner endpoint is its own build, never a shared one.
+        if args or kwargs or type(db) is not Database or key in cls.handed:
+            return cls.real_app(db, *args, **kwargs)
         from artifacts import ratelimit
 
         def build(held):

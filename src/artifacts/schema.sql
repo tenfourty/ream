@@ -258,6 +258,7 @@ create table if not exists seat_grant (
 -- alert and the event journal need no special case.
 alter table decision add column if not exists answer_source text
     check (answer_source in ('page', 'terminal', 'telegram', 'in-person', 'other'));
+-- 'slack' is added further down (the partner bridge, inbound).
 alter table decision add column if not exists recorded_by text;
 alter table decision add column if not exists said_at timestamptz;
 
@@ -851,3 +852,68 @@ create table if not exists partner_outbox (
 alter table partner_outbox add column if not exists parked_at timestamptz;
 create index if not exists partner_outbox_due_idx
     on partner_outbox (next_attempt_at) where delivered_at is null;
+
+-- THE PARTNER BRIDGE, INBOUND (runcove-5t3oj.39.4, second half; partner_in.py).
+--
+-- 'slack' is an answer source: Jeremy pressed a button in Slack and the partner
+-- (quarterdeck) vouched for who pressed. The CHECK is dropped and re-added, as
+-- `event_kind_check` is, because it cannot be widened in place. Agents cannot
+-- record 'slack' (`decisions.ANSWER_SOURCES` stays what a relay may claim).
+alter table decision drop constraint if exists decision_answer_source_check;
+alter table decision add constraint decision_answer_source_check
+    check (answer_source in ('page', 'terminal', 'telegram', 'in-person', 'other',
+                             'slack'));
+
+-- A question whose home is the partner: the copy artifacts shows him. `source`
+-- is "qd:<id>"; `version` is the HOME's last applied version. `out_version` is
+-- OUR counter for the events we send about the copy (his answer given here): a
+-- separate space, so it can never collide with the home's.
+create table if not exists partner_question (
+    source          text primary key,
+    version         integer not null,
+    asking_office   text not null,
+    title           text not null,
+    options         jsonb not null,
+    recommended     text,
+    context         text not null default '',
+    link            text,
+    topic_id        text,
+    topic_title     text,
+    depends_on      jsonb not null default '[]',
+    replaces        text,
+    replaced_by     text,
+    urgency         text not null default 'when_you_can',
+    blocked_on      text,
+    needed_by       timestamptz,
+    for_offices     jsonb not null default '[]',
+    state           text not null default 'open'
+                    check (state in ('open', 'answered', 'withdrawn', 'replaced')),
+    answer          text,
+    answer_note     text not null default '',
+    answered_by     text,
+    answered_at     timestamptz,
+    pending_answer  text,
+    pending_note    text not null default '',
+    pending_at      timestamptz,
+    out_version     integer not null default 0,
+    created_at      timestamptz not null,
+    updated_at      timestamptz not null
+);
+-- The last version applied per question, either home (kept), and the events
+-- seen (event_id, pruned after 30 days). `outcome` says what was done with it;
+-- `detail` holds the audit for a press (who, by Slack id), never shown or logged.
+create table if not exists partner_version_seen (
+    source      text primary key,
+    version     integer not null,
+    updated_at  timestamptz not null
+);
+create table if not exists partner_event_seen (
+    event_id    text primary key,
+    source      text not null,
+    version     integer not null,
+    kind        text not null,
+    outcome     text not null,
+    detail      jsonb,
+    seen_at     timestamptz not null
+);
+create index if not exists partner_event_seen_at_idx on partner_event_seen (seen_at);
