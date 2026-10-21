@@ -18,6 +18,8 @@ There is no list of consumers to keep in step.
 """
 
 import re
+from html.parser import HTMLParser
+from typing import ClassVar
 
 # Every C0 control character except the whitespace ones `sanitize` already
 # turns into a plain space by splitting on whitespace (tab, LF, CR, FF, VT),
@@ -143,6 +145,57 @@ def searchable(body: str) -> str:
     for entity, char in _ENTITIES.items():
         text = text.replace(entity, char)
     return " ".join(text.split()).lower()
+
+
+# The most visible text a comment's quote is matched against (22 Oct 2026).
+VISIBLE_LIMIT = 2_000_000
+
+
+class _Visible(HTMLParser):
+    """The words outside script, style, svg and template, in one linear pass."""
+
+    _SKIP: ClassVar[set[str]] = {"script", "style", "svg", "template"}
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(convert_charrefs=True)
+        self.limit = limit
+        self.size = 0
+        self.truncated = False
+        self.parts: list[str] = []
+        self._depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIP:
+            self._depth += 1
+
+    def handle_endtag(self, tag):
+        if tag in self._SKIP and self._depth:
+            self._depth -= 1
+
+    def handle_data(self, data):
+        if self._depth or self.truncated:
+            return
+        self.size += len(data) + 1
+        if self.size > self.limit:
+            self.truncated = True
+            return
+        self.parts.append(data)
+
+
+def visible(body: str, limit: int = VISIBLE_LIMIT) -> tuple[str, bool]:
+    """A page's readable words, lowercased, with script, style, SVG and
+    templates removed BEFORE any length limit is applied, and whether the text
+    was cut at `limit`. Unlike `searchable`, which cuts the HTML first and so
+    misses text that follows a large inline stylesheet. A small page takes the
+    same quick path as `searchable`; a large one is walked once by a parser, so
+    no input makes it slow."""
+    if len(body) <= SEARCH_LIMIT:
+        words = searchable(body)
+        return words, len(words) > limit
+    parser = _Visible(limit)
+    parser.feed(body)
+    parser.close()
+    return " ".join(" ".join(parser.parts).split()).lower(), parser.truncated
 
 
 def describe(body: str) -> str:

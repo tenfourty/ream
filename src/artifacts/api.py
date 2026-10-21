@@ -1257,15 +1257,17 @@ def agent_router(
         # A page the caller may READ: its own, or another agent's that is open
         # to agents. A closed, deleted or unknown page answers the same 404.
         try:
-            store.get_owned(db, agent, artifact_id, as_reader=True)
+            page = store.get_owned(db, agent, artifact_id, as_reader=True)
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
-        return [
-            row.__dict__
-            for row in comments.list_for_artifact(
-                db, artifact_id, include_resolved=include_resolved
-            )
-        ]
+        rows = comments.list_for_artifact(
+            db, artifact_id, include_resolved=include_resolved
+        )
+        if page.agent != agent:
+            # Another office's page: only agents' comments. His words and his
+            # review marks are for the page's owner.
+            rows = [row for row in rows if row.author_kind == "agent"]
+        return [row.__dict__ for row in rows]
 
     @router.post("/artifacts/{artifact_id}/comments", status_code=201)
     def create_comment(
@@ -1286,6 +1288,7 @@ def agent_router(
         later: list = []
 
         def write(conn) -> tuple[int, object]:
+            later.clear()  # a retried attempt must not send the last one's nudge
             return 201, _add_comment(
                 artifact_id, payload, background, agent, conn, seat_session, later
             )

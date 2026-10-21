@@ -332,3 +332,113 @@ def test_a_page_of_unclosed_headings_is_searched_in_linear_time(db):
     started = time.monotonic()
     comments.resolve_text_anchor(body, "Retries are capped", "Shutdown")
     assert time.monotonic() - started < 1.0
+
+
+# --- review fixes, 22 Oct 2026 -------------------------------------------------
+
+
+def test_on_a_shared_key_another_offices_comment_is_foreign(client, db):
+    from artifacts import decide
+
+    token, _ = keys.mint(db, agent="shared")
+    headers = {"Authorization": f"Bearer {token}"}
+    shared = store.publish(db, "shared", "Board", PAGE, session="harland/a")
+
+    def say(session):
+        return client.post(
+            f"/api/v1/artifacts/{shared.id}/comments",
+            json={"body": "hello"},
+            headers={**headers, "X-Artifacts-Session": session},
+        )
+
+    assert say("harland/b").status_code == 201  # its own office: no event
+    assert say("ch/c").status_code == 201
+    heard = [
+        e
+        for e in events.list_for_agent(db, "shared", exclude_actor="shared")
+        if e.kind == "comment_added"
+    ]
+    assert len(heard) == 1
+    mine = {
+        "id": "1",
+        "author_kind": "agent",
+        "author": "shared",
+        "session": "harland/b",
+        "created_at": "2026-10-22T00:00:00Z",
+        "body": "x",
+    }
+    theirs = {**mine, "id": "2", "thread_root": "1", "session": "ch/c"}
+    assert decide._threads([mine], "shared", "harland")[0]["needs_reply"] is False
+    assert decide._threads([mine, theirs], "shared", "harland")[0]["needs_reply"]
+
+
+def test_a_quote_after_a_large_stylesheet_is_found_and_stays_current(client, db, seats):
+    body = (
+        "<!doctype html><html><body><style>"
+        + "a{color:red}" * 10_000
+        + "</style><p>The rare passage sits here.</p></body></html>"
+    )
+    big = store.publish(db, "owner", "Big", body)
+    got = _post(
+        client,
+        seats,
+        big.id,
+        anchor={"kind": "text", "quote": "the rare passage sits here"},
+    )
+    assert got.status_code == 201
+    [row] = comments.list_for_artifact(db, big.id)
+    assert row.quote_state == "current"
+    huge = store.publish(
+        db, "owner", "Huge", "<!doctype html><p>" + "word " * 500_000 + "</p>"
+    )
+    refused = _post(
+        client, seats, huge.id, anchor={"kind": "text", "quote": "word word"}
+    )
+    assert refused.status_code == 422
+    assert "too much visible text" in refused.json()["detail"]["detail"]
+
+
+def test_section_is_capped_and_a_heading_is_found_under_its_own_section(
+    client, db, seats, page
+):
+    long = _post(
+        client,
+        seats,
+        page.id,
+        anchor={"kind": "text", "quote": "Shutdown", "section": "x" * 201},
+    )
+    assert long.status_code == 422
+    own = _post(
+        client,
+        seats,
+        page.id,
+        anchor={"kind": "text", "quote": "Shutdown", "section": "Shutdown"},
+    )
+    assert own.status_code == 201
+
+
+def test_a_non_owner_sees_only_agent_comments_and_replies_only_to_them(
+    client, db, seats, page
+):
+    his = comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="private to the owner",
+    )
+    theirs = _post(client, seats, page.id, who="owner").json()
+    listed = client.get(
+        f"/api/v1/artifacts/{page.id}/comments", headers=seats["other"]
+    ).json()
+    assert [r["id"] for r in listed] == [theirs["id"]]
+    to_his = _post(client, seats, page.id, thread_root=his.id)
+    unknown = _post(client, seats, page.id, thread_root="nope")
+    assert to_his.status_code == unknown.status_code == 422
+    assert to_his.json() == unknown.json()
+    ok = _post(client, seats, page.id, thread_root=theirs["id"])
+    assert ok.status_code == 201
+    owner_view = client.get(
+        f"/api/v1/artifacts/{page.id}/comments", headers=seats["owner"]
+    ).json()
+    assert his.id in [r["id"] for r in owner_view]

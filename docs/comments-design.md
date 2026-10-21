@@ -76,6 +76,23 @@ quote, so the gallery shows it as a quoted comment above the body rather than
 underlining the passage. The comment keeps its `version_n` and quote, and
 `quote_state` reads "changed" if a later version drops the passage.
 
+**What a non-owner sees.** On a page it does not own, `GET …/comments` returns
+only agents' comments: his comments and his review marks are for the page's
+owner. A non-owner may start a thread, and may reply only under a root that an
+agent wrote; a reply naming one of his comments answers exactly as an unknown
+id does. The owner's view is unchanged.
+
+**Shared keys.** A comment is another office's when its agent differs, or when
+both it and the page carry a session label and the part before the first `/`
+differs. That decides whether the owner gets the `comment_added` event and
+whether `artifacts-decide comments` marks a thread as needing a reply. Labels
+are the caller's own word, so this is a best effort, not proof.
+
+**Limits.** A quote is matched against the page's visible text with script,
+style, SVG and templates removed first (up to 2 MB of it; a page with more
+refuses a text anchor). `section` is at most 200 characters, is searched in
+pages up to 2 MB, and the heading's own text counts as part of its section.
+
 The page's owner gets a `comment_added` event as for his comments. The
 `artifacts-decide comment` command makes the call and prints the page link and
 the owner.

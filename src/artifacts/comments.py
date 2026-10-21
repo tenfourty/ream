@@ -139,6 +139,25 @@ class InvalidKind(Exception):
 class NoSuchThread(Exception): ...
 
 
+def office_of(label: str | None) -> str:
+    """The part of a session label before the first "/": what the session said
+    its office is. Only what it said -- nothing proves it."""
+    return (label or "").split("/", 1)[0].strip()
+
+
+def is_foreign(
+    author: str, author_session: str | None, owner: str, owner_session: str | None
+) -> bool:
+    """Whether a comment is someone else's on the owner's page. A different
+    agent always is. On a key several offices share the agent is the same, so
+    two session labels that both name an office and name different ones count
+    too (a label is the caller's own word, but it is all there is to go on)."""
+    if author != owner:
+        return True
+    mine, theirs = office_of(author_session), office_of(owner_session)
+    return bool(mine and theirs and mine != theirs)
+
+
 class VerdictRefused(Exception):
     """An agent tried `remove` or `looks_good` on a page it does not own. Those
     marks are Jeremy's; another office's view goes in a plain comment."""
@@ -167,9 +186,12 @@ class _Headings(HTMLParser):
     def __init__(self, body: str) -> None:
         super().__init__()
         self._body = body
+        # HTMLParser counts a line at each "\n" and nothing else.
         self._lines = [0]
-        for line in body.splitlines(keepends=True):
-            self._lines.append(self._lines[-1] + len(line))
+        at = body.find("\n")
+        while at >= 0:
+            self._lines.append(at + 1)
+            at = body.find("\n", at + 1)
         self.found: list[tuple[int, int, int, str]] = []
         self._open: tuple[int, int] | None = None
         self._text: list[str] = []
@@ -197,16 +219,23 @@ class _Headings(HTMLParser):
             self._open = None
 
 
+SECTION_MAX = 200
+# A page this large is not searched by heading: the parse is linear but not free.
+SECTION_PAGE_MAX = 2_000_000
+
+
 def _section_slices(body: str, section: str) -> list[str]:
-    """The HTML under every heading named `section` (case and spacing folded):
-    from the heading to the next heading of the same or a higher rank."""
+    """The HTML of every heading named `section` (case and spacing folded) and
+    what follows it, to the next heading of the same or a higher rank. The
+    heading itself is included, so a quote that is the heading's own words is
+    found under its own section."""
     want = " ".join(section.split()).lower()
     parser = _Headings(body)
     parser.feed(body)
     parser.close()
     heads = parser.found
     out = []
-    for i, (level, _, end, name) in enumerate(heads):
+    for i, (level, start, _, name) in enumerate(heads):
         if name != want:
             continue
         stop = len(body)
@@ -214,8 +243,14 @@ def _section_slices(body: str, section: str) -> list[str]:
             if later_level <= level:
                 stop = later_start
                 break
-        out.append(body[end:stop])
+        out.append(body[start:stop])
     return out
+
+
+_TOO_MUCH_TEXT = (
+    "this page has too much visible text to search for a quote: comment on the"
+    " whole page instead"
+)
 
 
 def _count(needle: str, words: str) -> int:
@@ -235,15 +270,32 @@ def resolve_text_anchor(body: str, quote: str, section: str | None = None) -> No
     if not needle:
         raise TextAnchorError("the anchor's quote is empty")
     if section is not None and section.strip():
+        if len(section) > SECTION_MAX:
+            raise TextAnchorError(
+                f"section is at most {SECTION_MAX} characters: give the heading's text"
+            )
+        if len(body) > SECTION_PAGE_MAX:
+            raise TextAnchorError(
+                "this page is too large to search by section: quote more of the"
+                " passage instead"
+            )
         slices = _section_slices(body, section)
         if not slices:
             raise TextAnchorError(
                 f"no heading named {section!r} on the current version of the page"
             )
-        matches = sum(_count(needle, text.searchable(part)) for part in slices)
+        matches = 0
+        for part in slices:
+            words, cut = text.visible(part)
+            if cut:
+                raise TextAnchorError(_TOO_MUCH_TEXT)
+            matches += _count(needle, words)
         where = f" under the section {section!r}"
     else:
-        matches = _count(needle, text.searchable(body))
+        words, cut = text.visible(body)
+        if cut:
+            raise TextAnchorError(_TOO_MUCH_TEXT)
+        matches = _count(needle, words)
         where = ""
     if matches == 0:
         raise TextAnchorError(
@@ -518,8 +570,15 @@ def add(
                 " where comment.id = %s and comment.artifact_id = %s"
                 " and comment.thread_root is null and comment.withdrawn_at is null"
                 # A held thread does not exist as far as the agent can tell.
-                " and (not comment.held or %s)",
-                (thread_root, artifact_id, agent is None),
+                " and (not comment.held or %s)"
+                # Nor does one of his, to an agent that does not own the page.
+                " and (comment.author_kind = 'agent' or %s)",
+                (
+                    thread_root,
+                    artifact_id,
+                    agent is None,
+                    agent is None or owned[2] == agent,
+                ),
             ).fetchone()
             if root is None:
                 raise NoSuchThread()
@@ -628,7 +687,10 @@ def add(
             # "something happened on your page that you did not do", and a
             # seat woken by its own reply is a watcher crying wolf.
             event_seq = None
-            if author != owning_agent and not held:
+            if not held and (
+                author_kind == "human"
+                or is_foreign(author, session, owning_agent, page_session)
+            ):
                 if callers_txn and after_commit is None:
                     raise ValueError(
                         "a comment that raises an owner event cannot join a"
@@ -697,7 +759,7 @@ def quote_state(quote: str, current_body: str) -> str:
     comment cannot go stale in this sense, and claiming otherwise would put a
     warning on a comment that is perfectly fine.
     """
-    words = text.searchable(current_body)
+    words, _ = text.visible(current_body)
     return _state_against(quote, words, _tight(words))
 
 
@@ -753,7 +815,7 @@ def carried_state(row: CommentRow, current_body: str) -> str:
     Compared the way `quote_state` compares -- tags stripped, whitespace and
     case ignored -- so a sentence that only gained emphasis is still on page.
     """
-    words = text.searchable(current_body)
+    words, _ = text.visible(current_body)
     return _carried_against(row, words, _tight(words))
 
 
@@ -777,7 +839,7 @@ def _carried_against(row: CommentRow, words: str, tight_words: str) -> str:
 
 def carried_states(rows: list[CommentRow], current_body: str) -> dict[str, str]:
     """`carried_state` for many rows, reading the page once."""
-    words = text.searchable(current_body)
+    words, _ = text.visible(current_body)
     tight_words = _tight(words)
     return {row.id: _carried_against(row, words, tight_words) for row in rows}
 
@@ -831,7 +893,7 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
         f" where a.id in {in_list(quoting)}",
         tuple(quoting),
     ).fetchall():
-        words = text.searchable(body)
+        words, _ = text.visible(body)
         words_by_page[artifact_id] = (words, _tight(words))
     return [
         replace(

@@ -200,7 +200,13 @@ def list_for_agent(
         # shared by every session on a machine, so leaving it out made a waiter
         # sleep through a verdict another session relayed (live proof of page
         # review step 2, 29 Sep 2026). A duplicate wake costs one look.
-        sql += " and (event.actor <> %s or event.kind = 'decision_answered')"
+        # A comment_added event is only ever raised for a comment that is not the
+        # owner's own: on a key several offices share, the actor's agent name is
+        # the owner's, and leaving it out would hide the other office's comment.
+        sql += (
+            " and (event.actor <> %s"
+            " or event.kind in ('decision_answered', 'comment_added'))"
+        )
         params += (exclude_actor,)
     sql += " order by event.seq asc limit %s"
     params += (limit,)

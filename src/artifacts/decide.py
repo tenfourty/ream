@@ -219,7 +219,13 @@ def _duration(text: str) -> float:
     return float(match.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[match.group(2)]
 
 
-def _threads(rows: list[dict], me: str | None = None) -> list[dict]:
+def _office_of(label: str | None) -> str:
+    return (label or "").split("/", 1)[0].strip()
+
+
+def _threads(
+    rows: list[dict], me: str | None = None, office: str | None = None
+) -> list[dict]:
     """Comments grouped into threads, oldest first, each marked with whether the
     agent owes a reply: the last word is his, not the agent's (homelab-ij8.18)."""
     roots: dict[str, dict] = {}
@@ -246,10 +252,15 @@ def _threads(rows: list[dict], me: str | None = None) -> list[dict]:
         )
         # Another office's comment on this agent's page is owed an answer like
         # his; `me` is the key's own agent, so its own replies are not.
+        # On a key several offices share the agent name is the same, so a
+        # session label naming a different office counts as another's too.
+        theirs = _office_of(last.get("session"))
         from_other_agent = (
             me is not None
             and last.get("author_kind") == "agent"
-            and last.get("author") != me
+            and (
+                last.get("author") != me or bool(office and theirs and theirs != office)
+            )
         )
         thread["needs_reply"] = (
             last.get("author_kind") == "human" or from_other_agent
@@ -289,13 +300,15 @@ def _fmt_thread(thread: dict) -> str:
     return "\n".join(lines)
 
 
-def _open_threads(key: str, base: str, page: str | None = None) -> list[dict]:
+def _open_threads(
+    key: str, base: str, page: str | None = None, office: str | None = None
+) -> list[dict]:
     url = f"{base}/artifacts/{page}/comments" if page else f"{base}/comments"
     rows = _request("GET", url, key, None)
     me = None
     if any(r.get("author_kind") == "agent" for r in rows):
         me = (_request("GET", f"{_api_base()}/me", key, None) or {}).get("agent")
-    return _threads(rows, me)
+    return _threads(rows, me, office)
 
 
 # How long each held request asks for. The service never holds a request that
@@ -456,7 +469,7 @@ def _wait(args, key: str, base: str) -> int:
             return []
         return [
             t
-            for t in _open_threads(key, base, page)
+            for t in _open_threads(key, base, page, office)
             if t["needs_reply"] and _belongs(thread_session(t), office, key_agent)
         ]
 
@@ -813,6 +826,7 @@ def _wait_review(args, key: str, base: str) -> int:
             for t in threads
             if t["needs_reply"]
             and t["messages"][0].get("author_kind") == "human"
+            and t["messages"][-1].get("author_kind") == "human"
             and _after(t["messages"][0].get("created_at"), since)
         ]
         if not fresh:
@@ -1335,7 +1349,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"released {args.review}: {args.reason}")
             return 0
         if args.cmd == "comments":
-            found = _open_threads(key, base, args.page)
+            found = _open_threads(
+                key, base, args.page, _office_of(declared_session(args.session))
+            )
             if not found:
                 print(
                     "no open comment threads" + (" on that page" if args.page else "")
@@ -1377,7 +1393,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         if args.cmd in ("reply", "settle"):
-            mine = {t["id"]: t for t in _open_threads(key, base)}
+            mine = {
+                t["id"]: t
+                for t in _open_threads(
+                    key, base, None, _office_of(declared_session(args.session))
+                )
+            }
             thread = mine.get(args.thread)
             if thread is None:
                 raise UsageError(

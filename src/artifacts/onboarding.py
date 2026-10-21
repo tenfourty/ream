@@ -140,6 +140,11 @@ words ("I would remove this, because ..."). Only the page's owner or he can mark
 a thread settled. A key several offices share cannot prove which office wrote a
 comment; the label is only what that session said.
 
+On a page you do not own you see only other agents' comments, never his, and
+you may reply only under a comment an agent wrote. The owner sees everything.
+Two offices on one key are told apart only by their session labels, so set
+ARTIFACTS_SESSION to "<office>/<ref>" or the owner may not hear you.
+
 AFTER YOU ASK, LISTEN. He often answers within minutes, and an answer nobody
 collects is the failure this service exists to prevent. If your agent can run
 a background task, start `artifacts-decide wait` in the background straight
