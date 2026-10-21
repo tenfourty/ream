@@ -87,16 +87,68 @@ def _ask(args, key: str) -> dict:
         # command that made him hunt for which one we meant would be a command
         # that quietly drops the most useful half of every question.
         recommended = options[0]["letter"]
+    body = {
+        "question": args.question,
+        "options": options,
+        "recommended": recommended,
+    }
+    # Only what was asked for goes out, so the call is unchanged for a question
+    # that carries none of it.
+    if args.context is not None:
+        body["context"] = args.context
+    if args.topic is not None:
+        topic_id, _, title = args.topic.partition(":")
+        body["topic"] = {"id": topic_id.strip()}
+        if title.strip():
+            body["topic"]["title"] = title.strip()
+    if args.depends_on:
+        body["depends_on"] = args.depends_on
+    if args.replaces is not None:
+        body["replaces"] = args.replaces
+    if args.urgency is not None:
+        body["urgency"] = args.urgency.replace("-", "_")
+    if args.blocked_on is not None:
+        body["blocked_on"] = args.blocked_on
+    if args.needed_by is not None:
+        body["needed_by"] = args.needed_by
+    if args.for_office:
+        body["for"] = args.for_office
     return _request(
-        "POST",
-        f"{_api_base()}/artifacts/{args.artifact}/decisions",
-        key,
-        {
-            "question": args.question,
-            "options": options,
-            "recommended": recommended,
-        },
+        "POST", f"{_api_base()}/artifacts/{args.artifact}/decisions", key, body
     )
+
+
+def _carries(row: dict) -> list[str]:
+    """What a question carries, one compact line each, and only what is set:
+    nothing at all for a plain question."""
+    lines = []
+    marks = []
+    topic = row.get("topic")
+    if topic:
+        marks.append(f"topic {topic.get('id')} ({topic.get('title')})")
+    urgency = row.get("urgency") or "when_you_can"
+    if urgency == "blocking":
+        marks.append(f"BLOCKING: {row.get('blocked_on')}")
+    elif urgency == "by":
+        marks.append("urgency by")
+    if row.get("needed_by"):
+        marks.append(f"needed by {row['needed_by']}")
+    if marks:
+        lines.append("  " + " · ".join(marks))
+    links = []
+    if row.get("depends_on"):
+        links.append("depends on " + ", ".join(row["depends_on"]))
+    if row.get("replaces"):
+        links.append(f"replaces {row['replaces']}")
+    if row.get("replaced_by"):
+        links.append(f"REPLACED by {row['replaced_by']}")
+    if row.get("for"):
+        links.append("also needed by " + ", ".join(row["for"]))
+    if links:
+        lines.append("  " + " · ".join(links))
+    if row.get("context"):
+        lines.append(f"  context: {row['context']}")
+    return lines
 
 
 def _fmt(row: dict) -> str:
@@ -134,6 +186,7 @@ def _fmt(row: dict) -> str:
             f"waiting {age // 3600}h" if age >= 3600 else f"waiting {age // 60}m"
         )
     lines.append("  " + " · ".join(where))
+    lines.extend(_carries(row))
 
     if row.get("answer"):
         chosen = row["answer"]
@@ -987,6 +1040,52 @@ def build_parser() -> argparse.ArgumentParser:
         "--recommend",
         metavar="LETTER",
         help="defaults to the first option -- his house style is (a) first",
+    )
+    ask.add_argument(
+        "--context",
+        metavar="TEXT",
+        help="what he needs to know to answer, plain text, at most 1000 characters",
+    )
+    ask.add_argument(
+        "--topic",
+        metavar="ID[:TITLE]",
+        help="the subject this belongs to: a lowercase slug, plus a title the first"
+        " time you use that slug",
+    )
+    ask.add_argument(
+        "--depends-on",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="repeatable (max 10); one of your own questions this waits on",
+    )
+    ask.add_argument(
+        "--replaces",
+        metavar="ID",
+        help="one of your own still-open questions; asking this one closes it",
+    )
+    ask.add_argument(
+        "--urgency",
+        choices=["blocking", "by", "when-you-can"],
+        help="blocking needs --blocked-on, by needs --needed-by; default when-you-can",
+    )
+    ask.add_argument(
+        "--blocked-on",
+        metavar="TEXT",
+        help="with --urgency blocking: what has stopped, at most 200 characters",
+    )
+    ask.add_argument(
+        "--needed-by",
+        metavar="ISO8601",
+        help="when you need the answer, with a timezone: 2026-10-22T15:00:00Z",
+    )
+    ask.add_argument(
+        "--for",
+        dest="for_office",
+        action="append",
+        default=[],
+        metavar="OFFICE",
+        help="repeatable (max 5); another office that also needs the answer",
     )
 
     ask_review = subs.add_parser(

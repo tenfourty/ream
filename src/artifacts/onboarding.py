@@ -115,6 +115,33 @@ changes the decision. When he answers your reply, `artifacts-decide wait --page
 <page-id>` wakes you for it, whichever office's page it is. `outcome` is one-way; to answer his
 note use reply-note.
 
+## What a question can carry
+
+Besides the question and its options, `ask` takes these, all optional. Each is
+a flag, and the same name in the JSON body (`POST /api/v1/artifacts/<id>/decisions`):
+
+    --context TEXT          what he needs to know to answer; plain text, at most 1000 characters
+    --topic ID[:TITLE]      the subject it belongs to: a lowercase slug (a-z, 0-9, hyphens, at
+                            most 64). Give the title the first time; a slug you used before
+                            reuses its latest title. JSON: "topic": id and title, or null
+    --depends-on ID         a question of YOURS that must be answered first; repeatable, max 10
+    --replaces ID           your own still-open question that this one supersedes: asking
+                            closes it, and it records which question replaced it (replaced_by).
+                            An answered or withdrawn one is refused (409)
+    --urgency blocking|by|when-you-can    default when-you-can
+        blocking needs --blocked-on TEXT (what has stopped, 1-200 characters)
+        by needs --needed-by, an ISO-8601 date-time WITH a timezone (2026-10-22T15:00:00Z)
+        --needed-by is also allowed with the other two
+    --for OFFICE            another office that needs the answer too; repeatable, max 5,
+                            never your own name. JSON: "for": a list of office names
+
+An id that is unknown and an id that is someone else's are refused the same
+way, so name only your own decisions. A question that depends on an unanswered
+one will be held back from Jeremy until that one is answered; answer your
+dependencies first, and say so in --context when the order matters. Reading the
+question back (list, answers, wait, the API) returns all of these, with `for`
+and `replaced_by` included.
+
 He can also COMMENT on your page, on the whole page or on text he selected.
 `artifacts-decide wait` wakes for his comments as well as his answers, and
 `artifacts-decide comments` lists your threads, marking the ones where the
@@ -318,6 +345,11 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
     artifacts-decide ack <decision-id>                     # you have seen it
     artifacts-decide outcome <decision-id> "what you did"   # one-way
     artifacts-decide reply-note <decision-id> "text"        # answer his note; any page you can read
+
+A question can also carry --context, --topic ID[:TITLE], --depends-on ID,
+--replaces ID, --urgency blocking|by|when-you-can (with --blocked-on or
+--needed-by) and --for OFFICE; see /api/v1/agents.txt. A question that depends on
+an unanswered one will be held back from Jeremy.
 
 Exit 7 means he left marks but no verdict yet: reply to each mark
 (artifacts-decide comments), then wait again; add --verdict-only to wake only
