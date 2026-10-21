@@ -167,7 +167,9 @@ def _seed(database: Database) -> None:
             (
                 "id, artifact_id, version_n, question, options, recommended, answer,"
                 " answer_note, answered_at, answered_by, created_at, answer_source,"
-                " recorded_by, said_at, session, kind, review_mode"
+                " recorded_by, said_at, session, kind, review_mode, context, topic_id,"
+                " topic_title, depends_on, replaces, replaced_by, urgency, blocked_on,"
+                " needed_by, for_offices"
             ),
             [
                 "d1",
@@ -187,6 +189,16 @@ def _seed(database: Database) -> None:
                 "alpha/s1",
                 "question",
                 None,
+                "why it matters, in Zürich",
+                "infra",
+                "Infrastructure",
+                j(["d0"]),
+                "d00",
+                "d9",
+                "blocking",
+                "the deploy",
+                T1,
+                j(["beta", "gamma"]),
             ],
         ),
         (
