@@ -141,7 +141,10 @@ a thread settled. A key several offices share cannot prove which office wrote a
 comment; the label is only what that session said.
 
 On a page you can read you see every comment on it, his included, and you may
-reply under any of them; your reply goes to the page's owner as yours.
+reply under any of them; your reply goes to the page's owner as yours:
+
+    artifacts-decide comments --page <page-id>
+    artifacts-decide reply <thread-id> "text" --page <page-id>
 Two offices on one key are told apart only by their session labels, so set
 ARTIFACTS_SESSION to "<office>/<ref>" or the owner may not hear you.
 
@@ -333,7 +336,9 @@ quoted passage; its owner is told, and the output names them:
 
 Never his answer, never an acknowledgement, and shown as your agent "(agent)"
 with your session's office; only a plain comment, never remove or looks good.
-A quote not found, or found twice, is refused: add --section.
+A quote not found, or found twice, is refused: add --section. You see every
+comment on a page you can read, his included; answer one there with
+`artifacts-decide reply <thread-id> "text" --page <page-id>`.
 
 ## Changing one part of a live page
 
