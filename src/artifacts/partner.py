@@ -57,6 +57,8 @@ ENV_URL = "ARTIFACTS_PARTNER_EVENTS_URL"
 ENV_KEY_FILE = "ARTIFACTS_PARTNER_SIGNING_KEY_FILE"
 ENV_KEY_ID = "ARTIFACTS_PARTNER_KEY_ID"
 _ENV_ALL = (ENV_NAME, ENV_URL, ENV_KEY_FILE, ENV_KEY_ID)
+# Optional, outside the all-or-none set: plain http only when asked for by name.
+ENV_ALLOW_HTTP = "ARTIFACTS_PARTNER_ALLOW_HTTP"
 
 KINDS = ("asked", "answered", "withdrawn", "replaced", "message_added", "edited")
 
@@ -95,6 +97,10 @@ def enabled() -> bool:
     return all(os.environ.get(name, "").strip() for name in _ENV_ALL)
 
 
+def allow_http() -> bool:
+    return os.environ.get(ENV_ALLOW_HTTP, "").strip() == "1"
+
+
 def config_from_env() -> Config | None:
     """None when the feature is off (no variable set). Raises
     `PartnerConfigError` when some but not all are set, when the URL is not
@@ -112,8 +118,12 @@ def config_from_env() -> Config | None:
             + ", ".join(missing)
         )
     url = os.environ[ENV_URL].strip()
-    if not url.startswith(("https://", "http://")):
-        raise PartnerConfigError(f"{ENV_URL} must start with https:// or http://")
+    plain_ok = url.startswith("http://") and allow_http()
+    if not url.startswith("https://") and not plain_ok:
+        raise PartnerConfigError(
+            f"{ENV_URL} must start with https:// (plain http:// only with "
+            f"{ENV_ALLOW_HTTP}=1)"
+        )
     path = os.environ[ENV_KEY_FILE].strip()
     try:
         with open(path, "rb") as handle:
@@ -324,7 +334,8 @@ def http_post(url: str, body: bytes, headers: dict[str, str], timeout: float) ->
     request = urllib.request.Request(  # noqa: S310 -- scheme checked in config_from_env
         url, data=body, method="POST", headers=headers
     )
-    opener = urllib.request.build_opener(_NoRedirect)
+    # No proxy from the environment: a signed body goes only where it is addressed.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
     try:
         with opener.open(request, timeout=timeout) as response:
             return response.status
@@ -352,27 +363,39 @@ def _backoff(attempts: int) -> timedelta:
     )
 
 
-def _claim(db: Database, now: datetime) -> list[dict]:
+def _claim(db: Database, now: datetime, limit: int = 1) -> list[dict]:
     """Rows to deliver now, claimed by a lease. Only the OLDEST undelivered
     version of each question is eligible, so version N+1 waits for N whatever
-    N's own retry time. On Postgres the select takes `for update of o skip
-    locked`, so two processes claiming together get different rows; the lease
-    (`claimed_until`) then holds the row without holding a transaction open
-    across the network. SQLite has one process and `begin immediate` already
-    serialises writers."""
+    N's own retry time, and a parked N holds its later versions. A read-only
+    look comes first, so an empty queue never takes SQLite's writer lock. On
+    Postgres the select takes `for update of o skip locked`, so two processes
+    claiming together get different rows; the lease (`claimed_until`) then holds
+    the row without holding a transaction open across the network. SQLite has
+    one process and `begin immediate` already serialises writers."""
+    due = (
+        " where o.delivered_at is null and o.parked_at is null"
+        " and o.next_attempt_at <= %s"
+        " and (o.claimed_until is null or o.claimed_until <= %s)"
+        " and not exists (select 1 from partner_outbox p"
+        "   where p.decision_id = o.decision_id and p.version < o.version"
+        "   and p.delivered_at is null)"
+    )
+    with db.connect() as conn:
+        waiting = conn.execute(
+            "select 1 from partner_outbox o" + due + " limit 1",  # noqa: S608 -- fixed text
+            (now, now),
+        ).fetchone()
+    if waiting is None:
+        return []
     lease = now + timedelta(seconds=LEASE_SECONDS)
     with db.connect() as conn, conn.transaction():
         rows = conn.execute(
             "select o.event_id, o.decision_id, o.version, o.kind, o.body,"  # noqa: S608 -- clause from the db layer, no caller input
             " o.created_at, o.attempts from partner_outbox o"
-            " where o.delivered_at is null and o.next_attempt_at <= %s"
-            " and (o.claimed_until is null or o.claimed_until <= %s)"
-            " and not exists (select 1 from partner_outbox p"
-            "   where p.decision_id = o.decision_id and p.version < o.version"
-            "   and p.delivered_at is null)"
-            " order by o.created_at, o.version limit %s"
+            + due
+            + " order by o.created_at, o.version limit %s"
             + conn.for_update(" of o skip locked"),
-            (now, now, BATCH),
+            (now, now, limit),
         ).fetchall()
         for row in rows:
             conn.execute(
@@ -391,6 +414,20 @@ def _claim(db: Database, now: datetime) -> list[dict]:
         }
         for r in rows
     ]
+
+
+# Statuses that retrying cannot change: the receiver understood the request and
+# refused THIS event. Everything else is retried with backoff, 401 and 403
+# included: the partner answers 401 for a bad signature, an unknown key_id or a
+# stale sent_at, all of which a key rotation or a clock fix cures, so the queue
+# drains by itself once that is done.
+_PARK_ON = (400, 404, 409, 410, 413, 415, 422)
+# A run of these in the outbox means a credential or clock problem; status counts them.
+_AUTH_ERRORS = ("HTTP 401", "HTTP 403")
+
+
+def _permanent(error: str) -> bool:
+    return error.startswith("HTTP ") and int(error[5:]) in _PARK_ON
 
 
 def _attempt(config: Config, row: dict, post: PostFn, now: datetime) -> str | None:
@@ -418,10 +455,16 @@ def deliver_due(
     post: PostFn = http_post,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> tuple[int, int]:
-    """One pass: claim what is due, attempt each, record the outcome. Returns
-    (delivered, failed). Safe to call from two processes at once."""
+    """One pass: claim what is due ONE ROW AT A TIME (so a row's lease is taken
+    just before its own attempt and a slow neighbour cannot let it lapse), attempt
+    it, record the outcome. Returns (delivered, failed). Safe to call from two
+    processes at once. A pass is bounded by BATCH rows."""
     delivered = failed = 0
-    for row in _claim(db, clock()):
+    for _ in range(BATCH):
+        claimed = _claim(db, clock(), 1)
+        if not claimed:
+            break
+        row = claimed[0]
         # Fresh each attempt: the receiver refuses a body whose sent_at is stale.
         error = _attempt(config, row, post, clock())
         finished = clock()
@@ -434,29 +477,50 @@ def deliver_due(
                     (finished, row["event_id"]),
                 )
                 delivered += 1
-            else:
-                attempts = row["attempts"] + 1
-                conn.execute(
-                    "update partner_outbox set attempts = %s, next_attempt_at = %s,"
-                    " claimed_until = null, last_error = %s, last_error_at = %s"
-                    " where event_id = %s",
-                    (
-                        attempts,
-                        finished + _backoff(attempts),
-                        error,
-                        finished,
-                        row["event_id"],
-                    ),
-                )
-                failed += 1
-                _log.warning(
-                    "partner event v%s %s not delivered (attempt %d): %s",
-                    row["version"],
-                    row["kind"],
+                continue
+            attempts = row["attempts"] + 1
+            parked = _permanent(error)
+            conn.execute(
+                "update partner_outbox set attempts = %s, next_attempt_at = %s,"
+                " claimed_until = null, last_error = %s, last_error_at = %s,"
+                " parked_at = %s where event_id = %s",
+                (
                     attempts,
+                    finished + _backoff(attempts),
                     error,
-                )
+                    finished,
+                    finished if parked else None,
+                    row["event_id"],
+                ),
+            )
+            failed += 1
+            _log.warning(
+                "partner event v%s %s %s (attempt %d): %s",
+                row["version"],
+                row["kind"],
+                "PARKED, will not be retried until released"
+                if parked
+                else "not delivered",
+                attempts,
+                error,
+            )
     return delivered, failed
+
+
+def unpark(
+    db: Database, event_id: str | None = None, now: datetime | None = None
+) -> int:
+    """Release one parked event (or all, with no id) for another go: attempts and
+    the retry time are reset. Returns how many were released."""
+    now = now or datetime.now(UTC)
+    with db.connect() as conn:
+        return conn.execute(
+            "update partner_outbox set parked_at = null, attempts = 0,"  # noqa: S608 -- fixed text
+            " next_attempt_at = %s, claimed_until = null"
+            " where parked_at is not null and delivered_at is null"
+            + (" and event_id = %s" if event_id is not None else ""),
+            (now, event_id) if event_id is not None else (now,),
+        ).rowcount
 
 
 def prune(db: Database, now: datetime | None = None) -> int:
@@ -471,31 +535,48 @@ def prune(db: Database, now: datetime | None = None) -> int:
 
 
 def status(db: Database, now: datetime | None = None) -> dict:
-    """Outbox depth, the age of the oldest undelivered event, and the most recent
-    error. Counts and a short reason; never a body, never a key."""
+    """Outbox depth, the age of the oldest undelivered event, parked rows and the
+    most recent error of a row still waiting. Counts, codes and a short reason;
+    never a body, never a key."""
     now = now or datetime.now(UTC)
+
+    def age(then: datetime | None) -> int | None:
+        return None if then is None else max(0, int((now - then).total_seconds()))
+
     with db.connect() as conn:
         (depth,) = conn.execute(
             "select count(*) from partner_outbox where delivered_at is null"
         ).fetchone()
-        # A plain column, not min(): SQLite hands an aggregate back as text.
+        # Plain columns, not min(): SQLite hands an aggregate back as text.
         first = conn.execute(
             "select created_at from partner_outbox where delivered_at is null"
             " order by created_at limit 1"
         ).fetchone()
-        oldest = None if first is None else first[0]
+        parked = conn.execute(
+            "select parked_at, last_error from partner_outbox"
+            " where parked_at is not null and delivered_at is null"
+            " order by parked_at"
+        ).fetchall()
+        (auth,) = conn.execute(
+            "select count(*) from partner_outbox where delivered_at is null"
+            " and parked_at is null and last_error in (%s, %s)",
+            _AUTH_ERRORS,
+        ).fetchone()
         error = conn.execute(
             "select last_error, last_error_at from partner_outbox"
-            " where last_error is not null order by last_error_at desc limit 1"
+            " where last_error is not null and delivered_at is null"
+            " order by last_error_at desc limit 1"
         ).fetchone()
     return {
         "enabled": enabled(),
         "depth": depth,
-        "oldest_undelivered_age_seconds": (
-            None if oldest is None else max(0, int((now - oldest).total_seconds()))
-        ),
+        "oldest_undelivered_age_seconds": age(None if first is None else first[0]),
+        "parked": len(parked),
+        "oldest_parked_age_seconds": age(parked[0][0] if parked else None),
+        "parked_codes": sorted({r[1] for r in parked}),
+        "auth_errors": auth,
         "last_error": None if error is None else error[0],
-        "last_error_at": None if error is None else _iso(error[1]),
+        "last_error_age_seconds": age(None if error is None else error[1]),
     }
 
 
@@ -506,6 +587,8 @@ def start(db: Database, config: Config | None) -> threading.Thread | None:
     undelivered row is simply still in the outbox next time)."""
     if config is None:
         return None
+    if config.url.startswith("http://"):
+        _log.warning("partner bridge: plain HTTP is in use (%s=1)", ENV_ALLOW_HTTP)
     _stop.clear()
 
     def loop() -> None:

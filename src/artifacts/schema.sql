@@ -846,5 +846,8 @@ create table if not exists partner_outbox (
     last_error_at   timestamptz,
     unique (decision_id, version)
 );
+-- A refusal retrying cannot change parks the row, and holds its question's
+-- later versions; `artifacts-admin partner-outbox --retry` releases it.
+alter table partner_outbox add column if not exists parked_at timestamptz;
 create index if not exists partner_outbox_due_idx
     on partner_outbox (next_attempt_at) where delivered_at is null;

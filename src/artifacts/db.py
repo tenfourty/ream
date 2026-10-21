@@ -327,6 +327,8 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " where delivered_at is null"
         ),
     ),
+    # 21 Oct 2026: a refusal retrying cannot change parks the outbox row.
+    5: ("alter table partner_outbox add column parked_at timestamptz",),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

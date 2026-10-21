@@ -121,16 +121,38 @@ def cmd_list_keys(_args: argparse.Namespace) -> None:
         print(f"{row.id}\t{row.agent}\t{row.created_at}\t{row.revoked_at or '-'}")
 
 
-def cmd_partner_outbox(_args: argparse.Namespace) -> None:
+def cmd_partner_outbox(args: argparse.Namespace) -> None:
     from artifacts import partner
 
-    report = partner.status(_open_db())
+    db = _open_db()
+    if args.retry and args.retry_parked:
+        raise SystemExit("give --retry <event_id> or --retry-parked, not both")
+    if args.retry or args.retry_parked:
+        released = partner.unpark(db, args.retry)
+        print(f"released {released} parked event(s)")
+        if args.retry and released == 0:
+            raise SystemExit(f"no parked event with id {args.retry}")
+    report = partner.status(db)
+
+    def secs(value):
+        return "-" if value is None else f"{value}s"
+
     print(f"partner bridge: {'on' if report['enabled'] else 'off in this shell'}")
     print(f"undelivered events: {report['depth']}")
-    age = report["oldest_undelivered_age_seconds"]
-    print(f"oldest undelivered: {'-' if age is None else f'{age}s'}")
+    print(f"oldest undelivered: {secs(report['oldest_undelivered_age_seconds'])}")
     print(
-        f"last error: {report['last_error'] or '-'} at {report['last_error_at'] or '-'}"
+        f"parked: {report['parked']}"
+        f" (oldest {secs(report['oldest_parked_age_seconds'])},"
+        f" codes {', '.join(report['parked_codes']) or '-'})"
+    )
+    if report["auth_errors"]:
+        print(
+            f"WARNING: {report['auth_errors']} waiting event(s) last refused with"
+            " 401/403: check the signing key, its key_id and the clock"
+        )
+    print(
+        f"last error of a waiting event: {report['last_error'] or '-'}"
+        f" ({secs(report['last_error_age_seconds'])} ago)"
     )
 
 
@@ -217,6 +239,12 @@ def build_parser() -> argparse.ArgumentParser:
     partner_outbox = sub.add_parser(
         "partner-outbox",
         help="partner bridge: undelivered events, oldest age, last error (needs DATABASE_URL)",
+    )
+    partner_outbox.add_argument(
+        "--retry", metavar="EVENT_ID", help="release one parked event for another try"
+    )
+    partner_outbox.add_argument(
+        "--retry-parked", action="store_true", help="release every parked event"
     )
     partner_outbox.set_defaults(func=cmd_partner_outbox)
 
