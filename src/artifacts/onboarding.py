@@ -140,7 +140,8 @@ way, so name only your own questions (not reviews). depends_on is stored and
 returned. A question whose depends_on holds an unanswered question is held
 back from Jeremy: his page shows a one-line note instead of the buttons, the
 service refuses his answer to it (409), and it opens by itself when the earlier
-one is answered. An earlier question that is withdrawn or replaced releases it.
+one is answered (a relay you store with `artifacts-decide record` is still stored for a held
+question, since the words are his). An earlier question that is withdrawn or replaced releases it.
 Every read carries held_by, the unanswered ids a question still waits on (empty
 when it is not held). The top of his page lists the open questions, overdue
 first, then blocking, by, when-you-can. Reading the question back (list, answers, wait, the API) returns all of these, with `for`

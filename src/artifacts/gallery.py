@@ -3608,7 +3608,10 @@ def _render_decisions(
         # belongs only to ordinary questions; a review card carries its own.
         hint = (
             ""
-            if all(getattr(r, "kind", "question") == "review" for r in open_rows)
+            if all(
+                getattr(r, "kind", "question") == "review" or r.held_by
+                for r in open_rows
+            )
             else (
                 '<p class="hint">Pick a letter and it is saved straight away; add a note '
                 "if the options do not fit. Your answer is the filled button &mdash; pick "

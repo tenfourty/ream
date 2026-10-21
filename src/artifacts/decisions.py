@@ -1833,15 +1833,16 @@ def across_seats(
     sql += " order by decision.created_at asc, decision.id asc limit %s"
     with db.connect() as conn:
         rows = conn.execute(sql, (limit,)).fetchall()
+        decided = _with_held(conn, [_row_to_decision(row) for row in rows])
     now = datetime.now(UTC)
     return [
         CrossSeatRow(
-            decision=_row_to_decision(row),
+            decision=decision,
             agent=row[-3],
             artifact_title=row[-2],
             age_seconds=round((now - row[-1]).total_seconds()),
         )
-        for row in rows
+        for row, decision in zip(rows, decided, strict=True)
     ]
 
 

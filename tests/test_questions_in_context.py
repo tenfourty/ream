@@ -351,3 +351,71 @@ def test_onboarding_says_what_is_true_now():
     assert "held_by" in text
     assert "refuses" in text or "refused" in text
     assert "held back" in onboarding.skill_md("http://x")
+
+
+# --- review follow-ups ------------------------------------------------------
+
+
+def test_read_all_scope_all_carries_held_by(db, page):
+    from artifacts import grants, keys
+
+    first = ask(db, page)
+    second = ask(db, page, "second?", depends_on=[first.id])
+    token, _ = keys.mint(db, agent="ops")
+    grants.grant(db, "ops", grants.READ_ALL_DECISIONS)
+    rows = TestClient(create_gallery_app(db)).get(
+        "/api/v1/decisions?scope=all", headers={"Authorization": f"Bearer {token}"}
+    )
+    held = {r["id"]: r["held_by"] for r in rows.json()}
+    assert held == {first.id: [], second.id: [first.id]}
+
+
+def test_a_held_question_is_absent_from_the_list_while_others_remain(db, client, page):
+    first = ask(db, page, "first?")
+    held = ask(db, page, "held?", depends_on=[first.id])
+    other = ask(db, page, "other?")
+    html = view(client, page)
+    assert sorted(listed_ids(html)) == sorted([first.id, other.id])
+    assert held.id not in open_list(html)
+
+
+def test_the_pick_a_letter_hint_is_hidden_when_every_open_card_is_held(db, client):
+    # A prerequisite on another page keeps this page's only open card held.
+    elsewhere = store.publish(db, "ops-seat", "Elsewhere", PAGE)
+    here = store.publish(db, "ops-seat", "Here", PAGE)
+    prerequisite = ask(db, elsewhere)
+    ask(db, here, "held?", depends_on=[prerequisite.id])
+    html = view(client, here)
+    assert "Waiting on an earlier question" in html
+    assert "on another page" in html
+    assert "Pick a letter" not in html
+    assert open_list(html) is None
+    # And the hint is there when a card is answerable.
+    assert "Pick a letter" in view(client, elsewhere)
+
+
+def test_a_relay_is_still_stored_for_a_held_question(db, page):
+    first = ask(db, page)
+    second = ask(db, page, "second?", depends_on=[first.id])
+    row = decisions.record_elsewhere(
+        db,
+        second.id,
+        letter="a",
+        note="",
+        source="terminal",
+        recorded_by="ops-seat",
+    )
+    assert row.answer == "a"
+
+
+def test_for_office_names_are_escaped_where_rendered(db, page):
+    # A name cannot carry markup (the name pattern refuses it), so this proves
+    # the rendering path escapes rather than that a hostile name can arrive.
+    import dataclasses
+
+    from artifacts.gallery import _question_meta
+
+    row = dataclasses.replace(ask(db, page, "x"), for_offices=["<i>x</i>"])
+    rendered = "".join(_question_meta(row, datetime.now(UTC)))
+    assert "<i>" not in rendered
+    assert "&lt;i&gt;" in rendered
