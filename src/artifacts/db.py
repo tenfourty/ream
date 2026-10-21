@@ -303,6 +303,30 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
         "alter table decision add column needed_by timestamptz",
         "alter table decision add column for_offices jsonb not null default '[]'",
     ),
+    # 21 Oct 2026: the partner outbox and the per-question event counter.
+    4: (
+        "alter table decision add column partner_version integer not null default 0",
+        (
+            "create table partner_outbox ("
+            " event_id text primary key,"
+            " decision_id text not null,"
+            " version integer not null,"
+            " kind text not null,"
+            " body jsonb not null check (json_valid(body)),"
+            " created_at timestamptz not null,"
+            " attempts integer not null default 0,"
+            " next_attempt_at timestamptz not null,"
+            " claimed_until timestamptz,"
+            " delivered_at timestamptz,"
+            " last_error text,"
+            " last_error_at timestamptz,"
+            " unique (decision_id, version))"
+        ),
+        (
+            "create index partner_outbox_due_idx on partner_outbox (next_attempt_at)"
+            " where delivered_at is null"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

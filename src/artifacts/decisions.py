@@ -39,7 +39,7 @@ import types
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from artifacts import csp, events, holds, ids, keys, nudge, store, text
+from artifacts import csp, events, holds, ids, keys, nudge, partner, store, text
 from artifacts.db import Database, in_list, jsonb
 
 # A decision's question is a single line Jeremy reads on a card, not a page body -- 500
@@ -688,6 +688,33 @@ def ask(
                     jsonb(fields.for_offices),
                 ),
             )
+            # The partner is told in the same transaction (partner.py): a rolled
+            # back ask leaves no event. Nothing at all when the bridge is off.
+            if partner.enabled():
+                partner.enqueue(
+                    conn,
+                    decision_id,
+                    "asked",
+                    partner.asked_body(
+                        asking_office=agent,
+                        title=question,
+                        options=validated_options,
+                        recommended=recommended,
+                        context=fields.context,
+                        link=partner.link_for(artifact_id, decision_id),
+                        topic=(
+                            {"id": fields.topic_id, "title": title}
+                            if fields.topic_id is not None
+                            else None
+                        ),
+                        depends_on=fields.depends_on,
+                        replaces=fields.replaces,
+                        urgency=fields.urgency,
+                        blocked_on=fields.blocked_on,
+                        needed_by=fields.needed_by,
+                        for_offices=fields.for_offices,
+                    ),
+                )
             if old is not None:
                 _close_row(conn, agent, old, replaced_by=decision_id)
         created = conn.execute(
@@ -1281,6 +1308,7 @@ def record_elsewhere(
             summary = f"{letter}: {label} (relayed from {source})"[:200]
             # One verdict counts on a review, relayed or tapped: the same
             # atomic guard `answer` uses, so a relay cannot overwrite it.
+            answered_at = datetime.now(UTC)
             written = conn.execute(
                 "update decision set answer = %s, answer_note = %s,"
                 " answered_at = %s, answered_by = 'jeremy',"
@@ -1289,7 +1317,7 @@ def record_elsewhere(
                 (
                     letter,
                     note,
-                    datetime.now(UTC),
+                    answered_at,
                     source,
                     recorded_by,
                     said_at,
@@ -1307,6 +1335,22 @@ def record_elsewhere(
                 # His verdict carries every mark in its message, so releasing
                 # the held ones writes no events of their own.
                 holds.release(conn, artifact_id, emit=False)
+            elif partner.enabled():
+                partner.enqueue(
+                    conn,
+                    decision_id,
+                    "answered",
+                    partner.answered_body(
+                        letter=letter,
+                        note=note,
+                        answered_by="jeremy",
+                        answered_at=answered_at,
+                        answer_source=source,
+                        recorded_by=recorded_by,
+                        said_at=said_at,
+                    ),
+                    at=answered_at,
+                )
             # Journalled like a tapped answer, because to the OWNING agent the
             # fact is the same one it has been waiting for: Jeremy decided. The
             # summary names the relay so a reader of the feed is not misled, and
@@ -1434,12 +1478,13 @@ def answer(
             # and only an atomic `answer is null` test in the update keeps the
             # first verdict. A second writer waits on the row lock, re-tests
             # and updates nothing.
+            answered_at = datetime.now(UTC)
             written = conn.execute(
                 "update decision set answer = %s, answer_note = %s, answered_at = %s,"
                 " answered_by = %s, answer_source = 'page', recorded_by = null,"
                 " said_at = null where id = %s and closed_at is null"
                 " and (kind <> 'review' or answer is null)",
-                (letter, note, datetime.now(UTC), by, decision_id),
+                (letter, note, answered_at, by, decision_id),
             )
             if written.rowcount == 0:
                 # Lost the race: no event, and the row as it now stands.
@@ -1457,6 +1502,21 @@ def answer(
                 # His verdict carries every mark in its message, so releasing
                 # the held ones writes no events of their own.
                 holds.release(conn, artifact_id, emit=False)
+            elif partner.enabled():
+                # A changed answer is a new version: the partner keeps the latest.
+                partner.enqueue(
+                    conn,
+                    decision_id,
+                    "answered",
+                    partner.answered_body(
+                        letter=letter,
+                        note=note,
+                        answered_by=by,
+                        answered_at=answered_at,
+                        answer_source="page",
+                    ),
+                    at=answered_at,
+                )
             event_seq = events.append(
                 conn,
                 artifact_id=artifact_id,
@@ -1569,6 +1629,29 @@ def _close_row(conn, agent: str, row, *, replaced_by: str | None = None) -> None
         " where id = %s",
         (now, now, agent, replaced_by, row[0]),
     )
+    if row[_KIND_IDX] == "question" and row[6] is None and partner.enabled():
+        # Closed with no answer: withdrawn, or replaced by the question that
+        # took its place. An answered question that is then closed is the
+        # agent finishing its work, which the partner has no use for.
+        if replaced_by is not None:
+            partner.enqueue(
+                conn,
+                row[0],
+                "replaced",
+                {
+                    "replaced_by": replaced_by,
+                    "replaced_by_source": partner.source_of(replaced_by),
+                },
+                at=now,
+            )
+        else:
+            partner.enqueue(
+                conn,
+                row[0],
+                "withdrawn",
+                {"reason": "The asking agent closed the question without an answer."},
+                at=now,
+            )
     if row[_KIND_IDX] == "review" and holds.page_mode(conn, row[1]) != "held":
         # The review is over, so his held marks would never be
         # seen -- unless another open review on the page still

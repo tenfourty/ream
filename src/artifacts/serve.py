@@ -9,7 +9,7 @@ import os
 import signal
 import sys
 
-from artifacts import comments, events, maintenance
+from artifacts import comments, events, maintenance, partner
 from artifacts.app import create_app
 from artifacts.db import Database
 
@@ -108,6 +108,12 @@ def app_from_env():
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
         raise SystemExit("DATABASE_URL is not set")
+    # Before any connection is made: a half-configured partner bridge stops the
+    # start with a message that names variables and never a value.
+    try:
+        partner_config = partner.config_from_env()
+    except partner.PartnerConfigError as exc:
+        raise SystemExit(str(exc)) from None
     db = Database(dsn)
     db.migrate()
     comments.start_sweeper(db)
@@ -115,4 +121,6 @@ def app_from_env():
     # turns it off, for tests that build the real app.
     if os.environ.get("ARTIFACTS_MAINTENANCE") != "off":
         maintenance.start(db)
+    # The partner bridge's sender: only when fully configured (partner.py).
+    partner.start(db, partner_config)
     return _arm_shutdown_signals(create_app(db))

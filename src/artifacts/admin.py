@@ -121,6 +121,19 @@ def cmd_list_keys(_args: argparse.Namespace) -> None:
         print(f"{row.id}\t{row.agent}\t{row.created_at}\t{row.revoked_at or '-'}")
 
 
+def cmd_partner_outbox(_args: argparse.Namespace) -> None:
+    from artifacts import partner
+
+    report = partner.status(_open_db())
+    print(f"partner bridge: {'on' if report['enabled'] else 'off in this shell'}")
+    print(f"undelivered events: {report['depth']}")
+    age = report["oldest_undelivered_age_seconds"]
+    print(f"oldest undelivered: {'-' if age is None else f'{age}s'}")
+    print(
+        f"last error: {report['last_error'] or '-'} at {report['last_error_at'] or '-'}"
+    )
+
+
 def cmd_grant_scope(args: argparse.Namespace) -> None:
     _check_agent(args.agent)
     db = _open_db()
@@ -200,6 +213,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_keys_parser = sub.add_parser("list-keys")
     list_keys_parser.set_defaults(func=cmd_list_keys)
+
+    partner_outbox = sub.add_parser(
+        "partner-outbox",
+        help="partner bridge: undelivered events, oldest age, last error (needs DATABASE_URL)",
+    )
+    partner_outbox.set_defaults(func=cmd_partner_outbox)
 
     grant_scope = sub.add_parser(
         "grant-scope", help="give a seat a named privilege (needs DATABASE_URL)"

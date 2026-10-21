@@ -820,3 +820,31 @@ alter table decision add column if not exists urgency text not null default 'whe
 alter table decision add column if not exists blocked_on text;
 alter table decision add column if not exists needed_by timestamptz;
 alter table decision add column if not exists for_offices jsonb not null default '[]';
+
+-- THE PARTNER OUTBOX (runcove-5t3oj.39.4, 21 Oct 2026): one row per event a
+-- question's life gives the partner service (partner.py). Written in the SAME
+-- transaction as the change that causes it, delivered later by a background
+-- loop. No foreign key to `decision`: a purged page must not take with it an
+-- event not yet delivered. `partner_version` is the per-question counter; the
+-- update that bumps it takes the row lock, so two events for one question never
+-- share a version, and (decision_id, version) is unique as a second guard.
+-- `body` is the event's own body only: key_id and sent_at are added, and the
+-- whole signed, on each delivery attempt.
+alter table decision add column if not exists partner_version integer not null default 0;
+create table if not exists partner_outbox (
+    event_id        text primary key,
+    decision_id     text not null,
+    version         integer not null,
+    kind            text not null,
+    body            jsonb not null,
+    created_at      timestamptz not null,
+    attempts        integer not null default 0,
+    next_attempt_at timestamptz not null,
+    claimed_until   timestamptz,
+    delivered_at    timestamptz,
+    last_error      text,
+    last_error_at   timestamptz,
+    unique (decision_id, version)
+);
+create index if not exists partner_outbox_due_idx
+    on partner_outbox (next_attempt_at) where delivered_at is null;

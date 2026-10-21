@@ -51,7 +51,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from artifacts import events, ggscan, ids, scan
+from artifacts import events, ggscan, ids, partner, scan
 from artifacts import rename as agent_rename
 from artifacts.db import DUPLICATE_KEY, Database, in_list, jsonb
 from artifacts.text import LEADING_DOCTYPE
@@ -1303,7 +1303,15 @@ def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int
                 from artifacts import holds
 
                 holds.release(conn, artifact_id, emit=True)
-            for decision_id, question, asked_by_session, _kind in rows:
+            for decision_id, question, asked_by_session, kind in rows:
+                if kind == "question" and partner.enabled():
+                    partner.enqueue(
+                        conn,
+                        decision_id,
+                        "withdrawn",
+                        {"reason": f"The page holding this question was {what}."},
+                        at=now,
+                    )
                 events.append(
                     conn,
                     artifact_id=artifact_id,
