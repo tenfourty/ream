@@ -292,11 +292,16 @@ class InvalidField(Exception):
 class NotReplaceable(Exception):
     """`replaces` names the caller's own decision, but it is no longer open."""
 
-    def __init__(self, decision_id: str, state: str) -> None:
+    def __init__(
+        self, decision_id: str, state: str, replaced_by: str | None = None
+    ) -> None:
         super().__init__("replaces")
         self.field = "replaces"
         self.decision_id = decision_id
         self.state = state  # 'answered' or 'closed'
+        # Set when it was closed BY a replacement (always the caller's own
+        # question): a retried ask whose first answer was lost can tell it landed.
+        self.replaced_by = replaced_by
 
 
 def _ids_list(value: object, field: str, limit: int, what: str) -> list[str]:
@@ -458,7 +463,9 @@ def _row_to_decision(row) -> DecisionRow:
         replaced_by=row[25],
         urgency=row[26],
         blocked_on=row[27],
-        needed_by=row[28].isoformat() if row[28] is not None else None,
+        needed_by=(
+            row[28].astimezone(UTC).isoformat() if row[28] is not None else None
+        ),
         for_offices=row[29],
     )
 
@@ -475,6 +482,8 @@ def _owned_row(conn, agent: str, decision_id: str, *, lock: bool = False):
         f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
         " join artifact on artifact.id = decision.artifact_id"
         " where decision.id = %s and artifact.agent = %s"
+        # Only questions: a review id answers like an unknown one.
+        " and decision.kind = 'question'"
         + (conn.for_update(" of decision") if lock else ""),
         (decision_id, agent),
     ).fetchone()
@@ -595,7 +604,7 @@ def ask(
                 if old[6] is not None:  # answer
                     raise NotReplaceable(fields.replaces, "answered")
                 if old[11] is not None:  # closed_at
-                    raise NotReplaceable(fields.replaces, "closed")
+                    raise NotReplaceable(fields.replaces, "closed", old[25])
             conn.execute(
                 # `session` is which SESSION raised the question -- a label the
                 # caller declared, never a permission (see api.session). It is what
@@ -1359,7 +1368,7 @@ def answer(
             written = conn.execute(
                 "update decision set answer = %s, answer_note = %s, answered_at = %s,"
                 " answered_by = %s, answer_source = 'page', recorded_by = null,"
-                " said_at = null where id = %s"
+                " said_at = null where id = %s and closed_at is null"
                 " and (kind <> 'review' or answer is null)",
                 (letter, note, datetime.now(UTC), by, decision_id),
             )
@@ -1369,6 +1378,10 @@ def answer(
                     f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
                     (decision_id,),
                 ).fetchone()
+                if current is None or current[11] is not None:
+                    # Closed (withdrawn, or replaced) between the read above
+                    # and this write: answered exactly as a closed decision is.
+                    raise store.NotFound()
                 raise _already(conn, current, round)
             if row[_KIND_IDX] == "review":
                 _close_round(conn, decision_id, letter, version)

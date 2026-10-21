@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from artifacts import db as dbmod
-from artifacts import decide, decisions, keys, migrate, onboarding, store
+from artifacts import decide, decisions, events, keys, migrate, onboarding, store
 from artifacts.app import create_gallery_app
 from artifacts.db import Database
 
@@ -476,7 +476,9 @@ def test_onboarding_explains_the_fields_and_says_dependents_are_held_back():
         "--for",
     ):
         assert flag in text, flag
-    assert "held back" in text
+    assert "comes in a later release" in text
+    assert "do not ask a dependent" in text
+    assert "held back from Jeremy until" not in text
     assert "--depends-on" in onboarding.skill_md("http://x")
 
 
@@ -574,3 +576,121 @@ def test_ask_validates_without_the_api(db, page):
             urgency="by",
         )
     assert caught.value.field == "needed_by"
+
+
+# --- review-pass additions ----------------------------------------------------
+
+
+def test_a_review_id_is_refused_exactly_like_an_unknown_id(client, seats, page, db):
+    review = client.post(
+        f"/api/v1/artifacts/{page.id}/reviews", json={}, headers=seats["owner"]
+    ).json()
+    for field in ("depends_on", "replaces"):
+        value = [review["id"]] if field == "depends_on" else review["id"]
+        unknown = ["nope-nothing"] if field == "depends_on" else "nope-nothing"
+        as_review = ask(client, seats, page, **{field: value})
+        as_unknown = ask(client, seats, page, **{field: unknown})
+        assert as_review.status_code == as_unknown.status_code == 422
+        assert as_review.json() == as_unknown.json()
+    # and the refused replaces closed nothing
+    assert decisions.get_owned(db, "owner", review["id"]).closed_at is None
+
+
+def test_answering_a_replaced_question_is_answered_as_a_closed_one_and_emits_nothing(
+    client, seats, page, db
+):
+    old = ok(client, seats, page)
+    ok(client, seats, page, replaces=old["id"])
+    before = len(events.list_for_agent(db, "owner"))
+    with pytest.raises(store.NotFound):
+        decisions.answer(db, old["id"], letter="a", note="", by="jeremy")
+    stored = decisions.get_owned(db, "owner", old["id"])
+    assert stored.answer is None and stored.closed_at is not None
+    assert len(events.list_for_agent(db, "owner")) == before
+    assert not [
+        e for e in events.list_for_agent(db, "owner") if e.kind == "decision_answered"
+    ]
+
+
+def test_the_closed_409_names_the_replacement_so_a_retry_can_tell_it_landed(
+    client, seats, page
+):
+    old = ok(client, seats, page)
+    new = ok(client, seats, page, replaces=old["id"])
+    retry = ask(client, seats, page, replaces=old["id"])
+    assert retry.status_code == 409
+    body = retry.json()["detail"]
+    assert body["state"] == "closed"
+    assert body["replaced_by"] == new["id"]
+    assert "already replaced" in body["detail"] and new["id"] in body["detail"]
+    # Withdrawn rather than replaced: no replacement to name.
+    gone = ok(client, seats, page)
+    client.post(f"/api/v1/decisions/{gone['id']}/close", headers=seats["owner"])
+    plain = ask(client, seats, page, replaces=gone["id"]).json()["detail"]
+    assert plain["replaced_by"] is None and "already replaced" not in plain["detail"]
+
+
+def test_needed_by_is_the_same_utc_string_on_every_read(client, seats, page, db):
+    row = ok(client, seats, page, needed_by="2026-10-22T17:00:00+02:00")
+    assert row["needed_by"] == "2026-10-22T15:00:00+00:00"
+    assert decisions.get_owned(db, "owner", row["id"]).needed_by == (
+        "2026-10-22T15:00:00+00:00"
+    )
+
+
+@pytest.mark.parametrize(
+    "fields,name",
+    [
+        ({"context": "rotate SECRET"}, "context"),
+        ({"urgency": "blocking", "blocked_on": "SECRET"}, "blocked_on"),
+        ({"topic": {"id": "leak", "title": "SECRET"}}, "topic"),
+    ],
+)
+def test_a_secret_in_the_new_text_fields_is_refused(client, seats, page, fields, name):
+    secret = "AKIA" + "IOSFODNN7EXAMPLE"
+    filled = {
+        k: v.replace("SECRET", secret)
+        if isinstance(v, str)
+        else {kk: vv.replace("SECRET", secret) for kk, vv in v.items()}
+        for k, v in fields.items()
+    }
+    response = ask(client, seats, page, **filled)
+    assert response.status_code == 422
+    assert [r["field"] for r in response.json()["detail"]["refused"]] == [name]
+    assert secret not in response.text
+
+
+def test_read_all_and_uncollected_carry_the_new_fields(client, seats, page, db):
+    from artifacts import grants
+
+    row = ok(
+        client,
+        seats,
+        page,
+        context="because",
+        topic={"id": "infra", "title": "Infrastructure"},
+        urgency="by",
+        needed_by="2026-10-22T15:00:00Z",
+        **{"for": ["beta"]},
+    )
+    ops, _ = keys.mint(db, agent="ops")
+    grants.grant(db, "ops", grants.READ_ALL_DECISIONS)
+    ops_headers = {"Authorization": f"Bearer {ops}"}
+    everyone = client.get("/api/v1/decisions?scope=all", headers=ops_headers).json()
+    seen = next(d for d in everyone if d["id"] == row["id"])
+    assert NEW_KEYS <= set(seen)
+    assert seen["topic"] == {"id": "infra", "title": "Infrastructure"}
+    assert seen["for"] == ["beta"] and seen["context"] == "because"
+
+    decisions.answer(db, row["id"], letter="a", note="", by="jeremy")
+    for path, headers in (
+        ("/api/v1/decisions/uncollected?stuck_after_seconds=0", seats["owner"]),
+        (
+            "/api/v1/decisions/uncollected?stuck_after_seconds=0&scope=all",
+            ops_headers,
+        ),
+    ):
+        found = client.get(path, headers=headers).json()
+        carried = next(r["decision"] for r in found if r["decision"]["id"] == row["id"])
+        assert NEW_KEYS <= set(carried)
+        assert carried["urgency"] == "by" and carried["for"] == ["beta"]

@@ -136,9 +136,10 @@ a flag, and the same name in the JSON body (`POST /api/v1/artifacts/<id>/decisio
                             never your own name. JSON: "for": a list of office names
 
 An id that is unknown and an id that is someone else's are refused the same
-way, so name only your own decisions. A question that depends on an unanswered
-one will be held back from Jeremy until that one is answered; answer your
-dependencies first, and say so in --context when the order matters. Reading the
+way, so name only your own questions (not reviews). depends_on is stored and
+returned now. Holding a dependent question back from Jeremy until the earlier
+one is answered comes in a later release; until then, do not ask a dependent
+question before its prerequisite is answered. Reading the
 question back (list, answers, wait, the API) returns all of these, with `for`
 and `replaced_by` included.
 
@@ -348,8 +349,9 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
 
 A question can also carry --context, --topic ID[:TITLE], --depends-on ID,
 --replaces ID, --urgency blocking|by|when-you-can (with --blocked-on or
---needed-by) and --for OFFICE; see /api/v1/agents.txt. A question that depends on
-an unanswered one will be held back from Jeremy.
+--needed-by) and --for OFFICE; see /api/v1/agents.txt. --depends-on is stored
+and returned; holding a dependent question back from Jeremy comes in a later
+release, so do not ask one before its prerequisite is answered.
 
 Exit 7 means he left marks but no verdict yet: reply to each mark
 (artifacts-decide comments), then wait again; add --verdict-only to wake only

@@ -1759,10 +1759,15 @@ def agent_router(
                 {
                     "field": exc.field,
                     "state": exc.state,
+                    "replaced_by": exc.replaced_by,
                     "detail": (
-                        f"the decision you replace is already {exc.state}, so there"
-                        " is nothing left to replace: ask without `replaces`, or"
-                        " read its answer"
+                        f"the decision you replace was already replaced by"
+                        f" {exc.replaced_by}: if your earlier ask got no reply,"
+                        " that question is the one it created"
+                        if exc.replaced_by
+                        else f"the decision you replace is already {exc.state}, so"
+                        " there is nothing left to replace: ask without"
+                        " `replaces`, or read its answer"
                     ),
                 },
             ) from exc
