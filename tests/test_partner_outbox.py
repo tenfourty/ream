@@ -103,6 +103,7 @@ def bridge(monkeypatch, tmp_path, keypair):
     path.write_bytes(pem)
     monkeypatch.setenv(partner.ENV_NAME, "partner-x")
     monkeypatch.setenv(partner.ENV_URL, "http://partner.invalid/events")
+    monkeypatch.setenv(partner.ENV_ALLOW_HTTP, "1")
     monkeypatch.setenv(partner.ENV_KEY_FILE, str(path))
     monkeypatch.setenv(partner.ENV_KEY_ID, "test-key-1")
     monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://gallery.invalid")
@@ -606,7 +607,8 @@ def test_status_reports_depth_age_and_the_last_error(db, page, bridge):
     partner.deliver_due(db, bridge, FakePartner(), clock)
     after = partner.status(db, clock())
     assert after["depth"] == 0
-    assert after["last_error"] == "HTTP 502"  # kept as history
+    # Only a row still waiting shows an error: a delivered one is history.
+    assert after["last_error"] is None
 
 
 def test_delivered_rows_are_pruned_after_thirty_days(db, page, bridge):
@@ -643,3 +645,251 @@ def test_a_database_file_from_before_the_outbox_is_upgraded(tmp_path, monkeypatc
     upgraded.migrate()
     assert "partner_outbox" in tables()
     upgraded.close()
+
+
+# --- close() against an answer, and against itself -----------------------------------
+
+
+def _stale_read(db, decision_id):
+    with db.connect() as conn:
+        return conn.execute(
+            f"select {decisions._COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant
+            (decision_id,),
+        ).fetchone()
+
+
+def test_a_close_that_lost_to_an_answer_sends_no_withdrawn(db, page, bridge):
+    row = _ask(db, page)
+    stale = _stale_read(db, row.id)
+    assert stale[6] is None  # read while still unanswered
+    decisions.answer(db, row.id, letter="a", by="jeremy")
+    with db.connect() as conn, conn.transaction():
+        decisions._close_row(conn, "owner", stale)  # acts on the stale read
+    assert _kinds(db, row.id) == [(1, "asked"), (2, "answered")]
+
+
+def test_two_closes_send_one_withdrawn(db, page, bridge):
+    row = _ask(db, page)
+    stale = _stale_read(db, row.id)
+    for _ in range(2):  # both hold the same unclosed read
+        with db.connect() as conn, conn.transaction():
+            decisions._close_row(conn, "owner", stale)
+    assert _kinds(db, row.id) == [(1, "asked"), (2, "withdrawn")]
+
+
+def test_close_still_returns_the_row_whether_open_answered_or_closed(db, page, bridge):
+    open_q = _ask(db, page)
+    closed = decisions.close(db, "owner", open_q.id)
+    assert closed.closed_at is not None
+    again = decisions.close(db, "owner", open_q.id)
+    assert again.closed_at == closed.closed_at
+    answered = _ask(db, page)
+    decisions.answer(db, answered.id, letter="b", by="jeremy")
+    done = decisions.close(db, "owner", answered.id)
+    assert done.answer == "b" and done.closed_at is not None
+
+
+# --- parking ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("code", [400, 404, 409, 410, 413, 415, 422])
+def test_a_permanent_refusal_parks_the_row_and_holds_later_versions(
+    db, page, bridge, code
+):
+    row = _ask(db, page)
+    decisions.answer(db, row.id, letter="a", by="jeremy")  # version 2
+    other = _ask(db, page)  # another question keeps flowing
+    clock = Clock()
+    fake = FakePartner(code)
+    partner.deliver_due(db, bridge, fake, clock)
+    sent = fake.envelopes()
+    assert sent[0]["version"] == 1 and sent[0]["question"] == row.id
+    # Version 2 of the same question never goes; the other question does.
+    assert {e["question"] for e in sent[1:]} == {other.id}
+    clock.advance(days=2)
+    partner.deliver_due(db, bridge, fake, clock)
+    assert [e["version"] for e in fake.envelopes() if e["question"] == row.id] == [1]
+    parked = next(r for r in _rows(db, row.id) if r[1] == 1)
+    assert parked[7] == f"HTTP {code}"
+    report = partner.status(db, clock())
+    assert report["parked"] == 1
+    assert report["parked_codes"] == [f"HTTP {code}"]
+    assert report["oldest_parked_age_seconds"] >= 2 * 86400 - 5
+
+
+@pytest.mark.parametrize(
+    "outcome", [401, 403, 405, 408, 418, 425, 429, 500, 502, 503, 302]
+)
+def test_other_failures_are_retried_with_backoff_not_parked(db, page, bridge, outcome):
+    _ask(db, page)
+    clock = Clock()
+    fake = FakePartner(outcome, 200)
+    partner.deliver_due(db, bridge, fake, clock)
+    assert partner.status(db, clock())["parked"] == 0
+    clock.advance(seconds=partner.BACKOFF_BASE_SECONDS + 1)
+    assert partner.deliver_due(db, bridge, fake, clock) == (1, 0)
+
+
+def test_a_network_failure_is_retried(db, page, bridge):
+    _ask(db, page)
+    clock = Clock()
+    fake = FakePartner(partner.DeliveryFailed("timed out"), 200)
+    partner.deliver_due(db, bridge, fake, clock)
+    assert partner.status(db, clock())["parked"] == 0
+    clock.advance(seconds=partner.BACKOFF_BASE_SECONDS + 1)
+    assert partner.deliver_due(db, bridge, fake, clock) == (1, 0)
+
+
+def test_retry_releases_one_or_all_parked_events(db, page, bridge, monkeypatch, capsys):
+    first = _ask(db, page)
+    second = _ask(db, page)
+    clock = Clock()
+    partner.deliver_due(db, bridge, FakePartner(404, 404), clock)
+    assert partner.status(db, clock())["parked"] == 2
+    monkeypatch.setattr(admin, "_open_db", lambda: db)
+    with db.connect() as conn:
+        (event_id,) = conn.execute(
+            "select event_id from partner_outbox where decision_id = %s", (first.id,)
+        ).fetchone()
+    admin.main(["partner-outbox", "--retry", event_id])
+    assert "released 1" in capsys.readouterr().out
+    assert partner.status(db, clock())["parked"] == 1
+    with pytest.raises(SystemExit):
+        admin.main(["partner-outbox", "--retry", event_id])  # no longer parked
+    capsys.readouterr()
+    admin.main(["partner-outbox", "--retry-parked"])
+    assert "released 1" in capsys.readouterr().out
+    fake = FakePartner()
+    clock.advance(minutes=1)  # released at the real "now"; the test clock is older
+    partner.deliver_due(db, bridge, fake, clock)
+    assert {e["question"] for e in fake.envelopes()} == {first.id, second.id}
+    assert partner.status(db, clock())["parked"] == 0
+
+
+def test_the_admin_report_shows_parked_rows(db, page, bridge, monkeypatch, capsys):
+    _ask(db, page)
+    partner.deliver_due(db, bridge, FakePartner(422), Clock())
+    monkeypatch.setattr(admin, "_open_db", lambda: db)
+    admin.main(["partner-outbox"])
+    shown = capsys.readouterr().out
+    assert "parked: 1" in shown and "HTTP 422" in shown
+
+
+# --- the lease and idle polling ------------------------------------------------------------
+
+
+def test_a_row_is_not_claimable_by_a_second_sender_during_its_attempt(db, page, bridge):
+    _ask(db, page)
+    seen = []
+
+    def slow_partner(url, body, headers, timeout):
+        # A second sender looks while the first is mid-request.
+        seen.append(partner._claim(db, datetime.now(UTC) + timedelta(seconds=30)))
+        return 200
+
+    assert partner.deliver_due(db, bridge, slow_partner) == (1, 0)
+    assert seen == [[]]
+
+
+def test_an_empty_queue_takes_no_write_transaction(db, page, bridge, monkeypatch):
+    from artifacts import db as dbmod
+
+    begun = []
+    for cls in (dbmod.Connection, dbmod.SqliteConnection):
+        original = cls.transaction
+
+        def counted(self, _original=original):
+            begun.append(1)
+            return _original(self)
+
+        monkeypatch.setattr(cls, "transaction", counted)
+    assert partner.deliver_due(db, bridge, FakePartner()) == (0, 0)
+    assert begun == []
+    _ask(db, page)
+    begun.clear()
+    partner.deliver_due(db, bridge, FakePartner())
+    assert begun  # work does open one
+
+
+# --- the transport -----------------------------------------------------------------------------
+
+
+def test_http_needs_the_explicit_opt_in_and_https_does_not(bridge, monkeypatch):
+    assert partner.config_from_env().url.startswith("http://")
+    monkeypatch.delenv(partner.ENV_ALLOW_HTTP)
+    with pytest.raises(partner.PartnerConfigError, match="https"):
+        partner.config_from_env()
+    monkeypatch.setenv(partner.ENV_ALLOW_HTTP, "yes")  # only "1" counts
+    with pytest.raises(partner.PartnerConfigError):
+        partner.config_from_env()
+    monkeypatch.setenv(partner.ENV_URL, "https://partner.invalid/events")
+    assert partner.config_from_env().url.startswith("https://")
+    monkeypatch.setenv(partner.ENV_URL, "ftp://partner.invalid/events")
+    with pytest.raises(partner.PartnerConfigError):
+        partner.config_from_env()
+
+
+def test_plain_http_is_logged_once_at_start(db, bridge, caplog, monkeypatch):
+    monkeypatch.setattr(partner, "POLL_SECONDS", 0.05)
+    with caplog.at_level(logging.WARNING, logger="artifacts.partner"):
+        thread = partner.start(db, bridge)
+        partner.stop()
+        thread.join(5)
+    assert caplog.text.count("plain HTTP is in use") == 1
+
+
+def test_a_proxy_in_the_environment_is_ignored_and_a_redirect_is_not_followed(
+    bridge, monkeypatch
+):
+    hits = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            hits.append(self.path)
+            if self.path == "/events":
+                self.send_response(302)
+                self.send_header("Location", "/elsewhere")
+                self.end_headers()
+            else:
+                self.send_response(200)
+                self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    # A proxy that does not exist: were it used, the post would fail to connect.
+    for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"):
+        monkeypatch.setenv(name, "http://127.0.0.1:9")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    try:
+        url = f"http://127.0.0.1:{server.server_port}/events"
+        assert partner.http_post(url, b"{}", {}, 5) == 302
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert hits == ["/events"]  # the redirect target was never requested
+    assert partner._permanent("HTTP 302") is False
+
+
+def test_a_run_of_401_and_403_is_counted_and_drains_once_fixed(
+    db, page, bridge, monkeypatch, capsys
+):
+    first = _ask(db, page)
+    _ask(db, page)
+    clock = Clock()
+    partner.deliver_due(db, bridge, FakePartner(401, 403), clock)
+    report = partner.status(db, clock())
+    assert report["parked"] == 0 and report["auth_errors"] == 2
+    monkeypatch.setattr(admin, "_open_db", lambda: db)
+    admin.main(["partner-outbox"])
+    assert "401/403" in capsys.readouterr().out
+    # The key is rotated: nothing to release by hand, the queue drains itself.
+    clock.advance(minutes=20)
+    fake = FakePartner()
+    assert partner.deliver_due(db, bridge, fake, clock) == (2, 0)
+    assert first.id in {e["question"] for e in fake.envelopes()}
+    assert partner.status(db, clock())["auth_errors"] == 0
