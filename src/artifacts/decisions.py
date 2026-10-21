@@ -149,6 +149,10 @@ class DecisionRow:
     blocked_on: str | None = None
     needed_by: str | None = None
     for_offices: list = dataclasses.field(default_factory=list)
+    # The still-unanswered questions this one waits on, in `depends_on` order;
+    # empty when it is not held (see `held_by`). Derived on read, never stored,
+    # so a held question is released the moment its prerequisite is answered.
+    held_by: list = dataclasses.field(default_factory=list)
 
 
 def public(row: DecisionRow) -> dict:
@@ -470,6 +474,55 @@ def _row_to_decision(row) -> DecisionRow:
     )
 
 
+def held_map(conn, rows: list[DecisionRow]) -> dict[str, list[str]]:
+    """For each OPEN question in `rows` that waits on something, the ids it still
+    waits on (runcove-5t3oj.39.2). Absent from the result means not held.
+
+    A prerequisite holds only while it is itself open and unanswered. Answered
+    releases it. CLOSED WITHOUT AN ANSWER (withdrawn, replaced, or its page
+    archived) also releases it, and so does an id that no longer resolves: an
+    answer that will never come must not hold a question for ever.
+    """
+    waiting = {
+        r.id: r.depends_on
+        for r in rows
+        if r.depends_on
+        and r.answer is None
+        and r.closed_at is None
+        and r.kind == "question"
+    }
+    wanted = sorted({pid for ids_ in waiting.values() for pid in ids_})
+    if not wanted:
+        return {}
+    found = conn.execute(
+        "select id from decision where answer is null and closed_at is null"  # noqa: S608 -- placeholders only
+        f" and id in {in_list(wanted)}",
+        tuple(wanted),
+    ).fetchall()
+    unanswered = {r[0] for r in found}
+    out = {}
+    for rid, deps in waiting.items():
+        still = [d for d in deps if d in unanswered]
+        if still:
+            out[rid] = still
+    return out
+
+
+def _with_held(conn, rows: list[DecisionRow]) -> list[DecisionRow]:
+    held = held_map(conn, rows)
+    return [
+        dataclasses.replace(r, held_by=held[r.id]) if r.id in held else r for r in rows
+    ]
+
+
+class Held(Exception):
+    """An answer to a question that waits on an earlier, unanswered one."""
+
+    def __init__(self, by: list[str]) -> None:
+        super().__init__("held")
+        self.by = by
+
+
 # One message for "no such decision" and "not yours", for depends_on and replaces.
 _NOT_YOURS = "an id here is not one of your own decisions (unknown ids look the same)"
 
@@ -640,7 +693,7 @@ def ask(
             f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
             (decision_id,),
         ).fetchone()
-    return _row_to_decision(created)
+        return _with_held(conn, [_row_to_decision(created)])[0]
 
 
 def ask_review(
@@ -724,7 +777,7 @@ def list_for_artifact(
     sql += " order by decision.created_at asc, decision.id asc"
     with db.connect() as conn:
         rows = conn.execute(sql, (artifact_id,)).fetchall()
-    return [_row_to_decision(row) for row in rows]
+        return _with_held(conn, [_row_to_decision(row) for row in rows])
 
 
 def list_for_agent(
@@ -767,7 +820,7 @@ def list_for_agent(
     sql += " order by decision.created_at desc, decision.id desc limit %s"
     with db.connect() as conn:
         rows = conn.execute(sql, (agent, limit)).fetchall()
-    return [_row_to_decision(row) for row in rows]
+        return _with_held(conn, [_row_to_decision(row) for row in rows])
 
 
 # Where an answer can have come from. 'page' is a tap in the gallery; the rest
@@ -1340,6 +1393,15 @@ def answer(
         letters = {option["letter"] for option in options}
         if letter not in letters:
             raise InvalidAnswer()
+        # A held question is not answerable: a page drawn before its prerequisite
+        # was settled must not be able to answer it. Only a first answer is
+        # refused; one already given stands and may be changed.
+        if row[_KIND_IDX] == "question" and row[6] is None:
+            current = _with_held(
+                conn, [_row_to_decision(row[: len(_COLUMNS.split(","))])]
+            )[0]
+            if current.held_by:
+                raise Held(current.held_by)
         # One verdict counts on a review: a second device, or a stale form, is
         # refused and told what counted. A QUESTION may still be re-answered.
         if row[_KIND_IDX] == "review" and row[6] is not None:
@@ -1452,7 +1514,7 @@ def get_owned(db: Database, agent: str, decision_id: str) -> DecisionRow | None:
             " where decision.id = %s and artifact.agent = %s",
             (decision_id, agent),
         ).fetchone()
-    return None if row is None else _row_to_decision(row)
+        return None if row is None else _with_held(conn, [_row_to_decision(row)])[0]
 
 
 def get_owned_with_round(
@@ -1476,8 +1538,10 @@ def get_owned_with_round(
     if row is None:
         return None, None
     found = row[width:]
+    with db.connect() as conn:
+        decision = _with_held(conn, [_row_to_decision(row[:width])])[0]
     return (
-        _row_to_decision(row[:width]),
+        decision,
         _row_to_round(found) if found[0] is not None else None,
     )
 

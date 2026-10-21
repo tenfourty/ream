@@ -138,6 +138,8 @@ def _carries(row: dict) -> list[str]:
     links = []
     if row.get("depends_on"):
         links.append("depends on " + ", ".join(row["depends_on"]))
+    if row.get("held_by"):
+        links.append("HELD until answered: " + ", ".join(row["held_by"]))
     if row.get("replaces"):
         links.append(f"replaces {row['replaces']}")
     if row.get("replaced_by"):
