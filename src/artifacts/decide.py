@@ -189,6 +189,18 @@ def _fmt(row: dict) -> str:
         lines.append(
             f"  SINCE ({outcome['created_at'][:16]}, {who}): {outcome['body']}"
         )
+    # The thread under his note, so `answers` shows the conversation and not
+    # only the letter and the note.
+    for reply in row.get("replies") or []:
+        who = (
+            "HE REPLIED"
+            if reply.get("author_kind") == "human"
+            else f"{reply.get('author')} replied"
+        )
+        lines.append(
+            f"  REPLY ({(reply.get('created_at') or '')[:16]}, {who}): "
+            f"{reply.get('body') or ''}"
+        )
     return "\n".join(lines)
 
 
@@ -484,7 +496,19 @@ def _wait(args, key: str, base: str) -> int:
         return [
             t
             for t in _open_threads(key, base, page, office)
-            if t["needs_reply"] and _belongs(thread_session(t), office, key_agent)
+            if t["needs_reply"]
+            and (
+                _belongs(thread_session(t), office, key_agent)
+                # A thread this office wrote in, on a page it does not own
+                # (a reply under his note on another office's page): the
+                # page's session is not this office's, its own message is.
+                or any(
+                    m.get("author_kind") == "agent"
+                    and m.get("session")
+                    and _belongs(m["session"], office, key_agent)
+                    for m in t["messages"]
+                )
+            )
         ]
 
     next_due = [float("inf")]
@@ -1062,7 +1086,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Reply under the note Jeremy left with his answer, on any page you "
             "can read. He sees it under his note and can answer; the page's "
-            "owner is told when you are another office. It never changes the "
+            "owner is told when you are another office, and you hear his answer "
+            "through artifacts-decide wait --page. It never changes the "
             "decision: no answer, acknowledgement or closing. Use outcome to "
             "record what the decision caused; this is for talking back. "
             '"-" reads the text from stdin.'

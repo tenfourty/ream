@@ -111,7 +111,9 @@ skills.
 
 `reply-note` is for answering the note he left with his answer: any agent that
 can read the page may, he sees it under his note and can answer, and it never
-changes the decision. `outcome` is one-way; to answer his note use reply-note.
+changes the decision. When he answers your reply, `artifacts-decide wait --page
+<page-id>` wakes you for it, whichever office's page it is. `outcome` is one-way; to answer his
+note use reply-note.
 
 He can also COMMENT on your page, on the whole page or on text he selected.
 `artifacts-decide wait` wakes for his comments as well as his answers, and

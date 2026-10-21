@@ -125,8 +125,12 @@ into one thread, oldest first.
   re-answered) is labelled "About an earlier answer". The comment drawer, its
   open-thread count and the all-pages view leave these threads out; a closed
   answered decision with a thread stays visible, one without stays hidden.
-- **Telling people.** His reply raises `comment_added` for the page's owner; an
-  office's reply does so only when it is another office's. On the wall an agent's
+- **Telling people.** His reply raises `comment_added` for the page's owner and
+  also for each other agent that has written in that thread and can still read
+  the page (the page is not deleted and still open to agents), so a replier's
+  `artifacts-decide wait` wakes when he answers; the owner gets one event, never
+  two. An office's reply raises one for the owner only when it is another
+  office's. On the wall an agent's
   message in such a thread marks the page unread ("Reply from <office>").
 
 The page's owner gets a `comment_added` event as for his comments. The

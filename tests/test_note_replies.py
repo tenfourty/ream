@@ -335,3 +335,75 @@ def test_two_roots_for_one_decision_read_as_one_thread(db, page):
             anchor={"kind": "decision", "decision_id": ask.id},
         )
     assert len(comments.note_threads(db, page.id)[ask.id]) == 2
+
+
+def _he_answers_in(db, page, root_id, body="the hosting bill"):
+    return comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body=body,
+        thread_root=root_id,
+    )
+
+
+def _heard(db, agent):
+    return [
+        e
+        for e in events.list_for_agent(db, agent)
+        if e.kind == "comment_added" and e.actor == "jeremy"
+    ]
+
+
+def test_a_replier_on_another_offices_page_hears_his_answer(client, db, seats, page):
+    ask = _ask(db, page)
+    root = _reply(client, seats, ask.id, who="reader").json()
+    assert _heard(db, "reader") == []
+    mine = _he_answers_in(db, page, root["id"])
+    got = _heard(db, "reader")
+    assert len(got) == 1 and got[0].artifact_id == page.id
+    assert got[0].ref_id == mine.id
+
+
+def test_a_replier_that_lost_read_access_does_not_hear_him(client, db, seats, page):
+    ask = _ask(db, page)
+    root = _reply(client, seats, ask.id, who="reader").json()
+    assert store.set_agents_can_read(db, page.id, False, agent="owner")
+    _he_answers_in(db, page, root["id"])
+    assert _heard(db, "reader") == []
+    assert len(_heard(db, "owner")) == 1
+
+
+def test_the_owner_gets_one_event_when_it_and_a_reader_are_both_in_the_thread(
+    client, db, seats, page
+):
+    ask = _ask(db, page)
+    root = _reply(client, seats, ask.id, who="owner").json()
+    _reply(client, seats, ask.id, who="reader", body="noted")
+    _he_answers_in(db, page, root["id"])
+    assert len(_heard(db, "owner")) == 1
+    assert len(_heard(db, "reader")) == 1
+
+
+def test_his_ordinary_comment_does_not_reach_a_note_replier(client, db, seats, page):
+    ask = _ask(db, page)
+    _reply(client, seats, ask.id, who="reader")
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="unrelated",
+    )
+    assert _heard(db, "reader") == []
+
+
+def test_a_wrong_decision_subroute_points_at_replies(client, seats):
+    got = client.post(
+        "/api/v1/decisions/whatever/reply", json={}, headers=seats["reader"]
+    )
+    assert got.status_code == 404
+    detail = got.json()["detail"]
+    assert "replies" in detail["routes"]
+    assert detail["did_you_mean"].startswith("replies")

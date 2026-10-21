@@ -1262,6 +1262,9 @@ def agent_router(
     def list_comments(
         artifact_id: str, include_resolved: bool = False, agent: str = Depends(caller)
     ):
+        """Every comment thread on a page the caller may read. Threads under
+        his decision notes (`anchor.kind == "decision"`) are included on
+        purpose: they are comments, and `artifacts-decide` labels them."""
         # A page the caller may READ: its own, or another agent's that is open
         # to agents. A closed, deleted or unknown page answers the same 404.
         try:
@@ -1499,6 +1502,9 @@ def agent_router(
 
     @router.get("/comments")
     def list_all_comments(include_resolved: bool = False, agent: str = Depends(caller)):
+        """Every comment across the pages the caller owns, newest first.
+        Threads under his decision notes (`anchor.kind == "decision"`) are
+        included on purpose; `artifacts-decide` labels them."""
         return [
             row.__dict__
             for row in comments.list_for_agent(
@@ -2356,7 +2362,14 @@ def agent_router(
     # someone who already knows that, which is folklore rather than a feature.
     # Naming the real sub-routes turns it into something the first 404 says
     # out loud, at the only moment the reader is guaranteed to be looking.
-    _DECISION_SUBROUTES = ("outcome", "outcomes", "record", "acknowledge", "close")
+    _DECISION_SUBROUTES = (
+        "outcome",
+        "outcomes",
+        "record",
+        "acknowledge",
+        "close",
+        "replies",
+    )
 
     @router.api_route(
         "/decisions/{decision_id}/{unknown:path}",
@@ -2373,8 +2386,12 @@ def agent_router(
                 "did_you_mean": (
                     "outcome -- append what this decision caused, or what "
                     "changed under it"
-                    if unknown in ("outcomes/", "result", "results", "caused", "note")
-                    else None
+                    if unknown in ("outcomes/", "result", "results", "caused")
+                    else (
+                        "replies -- POST a reply under his note on an answered decision"
+                        if unknown in ("reply", "note")
+                        else None
+                    )
                 ),
                 "routes": sorted(_DECISION_SUBROUTES),
                 # The distinction that cost the operator two turns. A route that

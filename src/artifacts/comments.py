@@ -722,6 +722,7 @@ def add(
             # "something happened on your page that you did not do", and a
             # seat woken by its own reply is a watcher crying wolf.
             event_seq = None
+            replier_events: list[tuple[str, int]] = []
             if not held and (
                 author_kind == "human"
                 or is_foreign(author, session, owning_agent, page_session)
@@ -746,6 +747,40 @@ def add(
                     note=said,
                     session=page_session,
                 )
+            # Under his note, every AGENT already in the thread hears his
+            # answer too, not only the page's owner: an office that replied on
+            # another office's page would otherwise wait on a waiter that never
+            # wakes. Only agents that can still read the page (the owner is
+            # skipped: the event above is its one); a deleted page or one shut
+            # to agents since reaches nobody.
+            if on_note and author_kind == "human" and not held:
+                repliers = conn.execute(
+                    "select c.author, max(c.session) from comment c"
+                    " join artifact a on a.id = c.artifact_id"
+                    " where c.artifact_id = %s and c.author_kind = 'agent'"
+                    " and (c.id = %s or c.thread_root = %s)"
+                    " and c.withdrawn_at is null and c.author <> %s"
+                    " and a.deleted_at is null and a.agents_can_read"
+                    " group by c.author order by c.author",
+                    (artifact_id, thread_root, thread_root, owning_agent),
+                ).fetchall()
+                for replier, replier_session in repliers:
+                    replier_events.append(
+                        (
+                            replier,
+                            events.append(
+                                conn,
+                                artifact_id=artifact_id,
+                                agent=replier,
+                                actor=author,
+                                kind="comment_added",
+                                summary=said,
+                                ref_id=comment_id,
+                                note=said,
+                                session=replier_session,
+                            ),
+                        )
+                    )
         created = conn.execute(
             f"select {_COLUMNS} from comment where comment.id = %s",  # noqa: S608 -- _COLUMNS is a fixed module constant, never caller input
             (comment_id,),
@@ -764,6 +799,20 @@ def add(
             agent=owning_agent,
             summary=said,
             event_id=str(event_seq),
+        )
+        if callers_txn:
+            after_commit.append(send)
+        else:
+            send()
+    for replier, seq in replier_events:
+        send = partial(
+            nudge.emit,
+            kind="comment_added",
+            artifact_id=artifact_id,
+            title=title,
+            agent=replier,
+            summary=said,
+            event_id=str(seq),
         )
         if callers_txn:
             after_commit.append(send)
@@ -1021,7 +1070,10 @@ def list_for_artifact(
 ) -> list[CommentRow]:
     """Roots and replies together, oldest first (`id` breaks a tie on `created_at`,
     which two comments can share). Ownership is the caller's job -- this function
-    trusts `artifact_id` outright, exactly as `store`'s own listing helpers do."""
+    trusts `artifact_id` outright, exactly as `store`'s own listing helpers do.
+
+    Threads under his decision notes (anchor kind "decision") are included on
+    purpose: they are comments, and `artifacts-decide` labels them."""
     # Every interpolated piece here (`_COLUMNS`, `_ROOT_RESOLVED_AT`) is a fixed
     # module constant, never caller input -- `artifact_id` travels as a bound
     # parameter below, not string-built.
@@ -1082,7 +1134,10 @@ def list_for_agent(
     """Every comment across every artifact `agent` owns, newest first -- the
     polling surface an agent uses to find what Jeremy said, so newest matters
     more than oldest and a hard `limit` protects an agent with a very long history
-    from pulling its entire back catalogue on every poll."""
+    from pulling its entire back catalogue on every poll.
+
+    Threads under his decision notes (anchor kind "decision") are included on
+    purpose: they are comments, and `artifacts-decide` labels them."""
     # As in list_for_artifact: every interpolated piece is a fixed module constant.
     sql = (
         f"select {_COLUMNS} from comment"  # noqa: S608 -- clause from the db layer, no caller input
