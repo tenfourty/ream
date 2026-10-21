@@ -25,6 +25,12 @@ T1 = T0 + timedelta(hours=1)
 
 def _schema_tables(filename: str) -> set[str]:
     text = resources.files("artifacts").joinpath(filename).read_text()
+    if filename == "schema_sqlite.sql":
+        # SQLite's later tables arrive as numbered steps, never as edits to
+        # this file (db._SQLITE_STEPS).
+        from artifacts import db as dbmod
+
+        text += "\n".join(s for step in dbmod._SQLITE_STEPS.values() for s in step)
     return set(
         re.findall(r"^create table (?:if not exists )?(\w+)", text, re.MULTILINE)
     )
@@ -290,6 +296,28 @@ def _seed(database: Database) -> None:
             ["alpha", "publish", "i1", "1" * 64, 201, j({"id": "a1", "n": 1}), T1],
         ),
         ("agent_alias", "old, new, renamed_at", ["oldname", "alpha", T0]),
+        (
+            "partner_outbox",
+            (
+                "event_id, decision_id, version, kind, body, created_at, attempts,"
+                " next_attempt_at, claimed_until, delivered_at, last_error,"
+                " last_error_at"
+            ),
+            [
+                "pe1",
+                "d1",
+                1,
+                "asked",
+                j({"title": "Zürich?"}),
+                T0,
+                2,
+                T1,
+                None,
+                None,
+                "HTTP 502",
+                T0,
+            ],
+        ),
     ]
     with database.connect() as conn, conn.transaction():
         for table, cols, values in rows:
