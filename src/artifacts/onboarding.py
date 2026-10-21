@@ -174,8 +174,10 @@ Writing your own listener instead: GET {base}/api/v1/events?since=<cursor>&wait=
 holds until something happens. Never ask for more than 50 seconds -- requests
 from outside pass through Cloudflare, which cuts anything held past about 100,
 and the service caps holds there at 50. Every answer carries the current cursor
-in the X-Artifacts-Cursor header (ask with a huge `since` to learn "now"), and
-`exclude_self=true` leaves out your own actions (never an answer, even one
+in the X-Artifacts-Cursor header (ask with a huge `since` to learn "now"). To
+keep a cursor across holds, save X-Artifacts-Seen as your next `since` after
+every hold, quiet or not: it never skips an event, which Cursor can on a quiet
+hold. `exclude_self=true` leaves out your own actions (never an answer, even one
 your key relayed: the answer is his). Use a client timeout of wait + 30 seconds, and after a 5xx pause and ask again from the same cursor.
 
 Your session label must reach every call. In Claude Code each Bash call is a

@@ -205,6 +205,13 @@ So delivery stops being keyed on session identity at all:
   re-reading the whole feed. It is no longer what decides who hears. Cursors
   accumulate, so they are reaped — and reaping is re-seeding, which is a silent
   skip, so the reaper is bounded by age and says what it dropped.
+- **Which header to save.** `X-Artifacts-Cursor` is "from now", read after the
+  hold, so saving it after a quiet hold can skip an event that landed between
+  the empty look and the header. `X-Artifacts-Seen` is the one to save as the
+  next `since` after any hold: every event matching the request's filters at or
+  below it was returned or is at or below `since`. It is the newest event number
+  read before the first look on a quiet or complete page, and the last row's
+  number on a full (truncated) page.
 
 **Which identity a hook can see for a teammate is unknown, and is one of the
 five prerequisites.** If nothing per-consumer is visible to a hook, the hook

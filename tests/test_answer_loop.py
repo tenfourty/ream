@@ -85,6 +85,78 @@ def test_every_answer_carries_the_cursor_for_now(db, client, auth):
     assert client.get(f"/api/v1/events?since={now}", headers=auth).json() == []
 
 
+def _event(db, n=1):
+    page = store.publish(db, "seat", f"Board {n}", PAGE)
+    decisions.ask(db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS)
+
+
+def test_safe_cursor_is_never_above_what_was_returned_on_a_full_page():
+    from types import SimpleNamespace
+
+    from artifacts import events
+
+    def row(n):
+        return SimpleNamespace(seq=n)
+
+    assert events.safe_cursor(5, 9, [], 100) == 9
+    assert events.safe_cursor(12, 9, [], 100) == 12
+    assert events.safe_cursor(0, 9, [row(2), row(3)], 100) == 9
+    assert events.safe_cursor(0, 9, [row(2), row(3)], 2) == 3
+    assert events.safe_cursor(0, 1, [row(2), row(3)], 100) == 3
+
+
+def test_a_quiet_hold_is_seen_up_to_the_latest_before_the_look(db, client, auth):
+    _event(db)
+    latest = int(
+        client.get("/api/v1/events?since=999999", headers=auth).headers[
+            "x-artifacts-cursor"
+        ]
+    )
+    quiet = client.get(f"/api/v1/events?since={latest}", headers=auth)
+    assert quiet.json() == []
+    assert quiet.headers["x-artifacts-seen"] == str(latest)
+    assert quiet.headers["x-artifacts-cursor"] == str(latest)
+    ahead = client.get("/api/v1/events?since=999999", headers=auth)
+    assert ahead.headers["x-artifacts-seen"] == "999999"
+
+
+def test_a_truncated_page_is_seen_only_to_its_last_row(db, client, auth):
+    _event(db, 1)
+    _event(db, 2)
+    full = client.get("/api/v1/events?since=0", headers=auth).json()
+    assert len(full) >= 3
+    page = client.get("/api/v1/events?since=0&limit=2", headers=auth)
+    rows = page.json()
+    assert len(rows) == 2
+    assert page.headers["x-artifacts-seen"] == str(rows[-1]["seq"])
+    assert page.headers["x-artifacts-cursor"] == str(full[-1]["seq"])
+    assert int(page.headers["x-artifacts-seen"]) < int(
+        page.headers["x-artifacts-cursor"]
+    )
+
+
+def test_an_event_landing_during_a_hold_is_returned_and_seen(db, client, auth):
+    import threading
+
+    _event(db, 1)
+    latest = int(
+        client.get("/api/v1/events?since=999999", headers=auth).headers[
+            "x-artifacts-cursor"
+        ]
+    )
+    timer = threading.Timer(0.5, _event, args=(db, 2))
+    timer.start()
+    try:
+        held = client.get(f"/api/v1/events?since={latest}&wait=10", headers=auth)
+    finally:
+        timer.join()
+    rows = held.json()
+    assert rows
+    assert all(r["seq"] > latest for r in rows)
+    assert int(held.headers["x-artifacts-seen"]) >= rows[-1]["seq"]
+    assert int(held.headers["x-artifacts-seen"]) > latest
+
+
 def test_an_agent_can_leave_out_its_own_actions(db, client, auth):
     # Binning its own page shelves its open question: an event whose actor
     # is the seat itself, and one it did not need telling about.

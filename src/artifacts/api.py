@@ -2284,6 +2284,8 @@ def agent_router(
         if request.headers.get("cf-ray"):
             wait = min(wait, PUBLIC_MAX_WAIT)
         exclude = agent if exclude_self else None
+        # Before the first look, never after the hold: see events.safe_cursor.
+        pre = events.latest_seq(db, agent)
         rows = events.list_for_agent(
             db,
             agent,
@@ -2317,6 +2319,8 @@ def agent_router(
             headers={
                 # "From now" is this number; see events.latest_seq.
                 "x-artifacts-cursor": str(events.latest_seq(db, agent)),
+                # Safe to save as the next `since` after ANY hold, quiet or not.
+                "x-artifacts-seen": str(events.safe_cursor(since, pre, rows, limit)),
                 "x-artifacts-max-wait": str(int(PUBLIC_MAX_WAIT)),
             },
         )

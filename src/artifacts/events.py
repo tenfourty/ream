@@ -215,6 +215,25 @@ def list_for_agent(
     return [_row_to_event(row) for row in rows]
 
 
+def safe_cursor(since: int, pre: int, rows: list[EventRow], limit: int) -> int:
+    """A cursor that is always safe to save as the next `since`: every event
+    matching the request's filters with a seq at or below it was returned in this
+    answer or is at or below `since`.
+
+    `pre` is `latest_seq` read BEFORE the first look, so any matching event at or
+    below it was already committed when the look ran. With no rows that makes
+    `pre` safe. With fewer rows than `limit` the page is complete, so the last
+    row or `pre`, whichever is higher. A full page may have matching events
+    below `pre` that did not fit, so only its last row is safe. `latest_seq`
+    (the "from now" header) is computed after the hold and is none of these."""
+    top = max((r.seq for r in rows), default=None)
+    if top is None:
+        return max(since, pre)
+    if len(rows) >= limit:
+        return top
+    return max(pre, top)
+
+
 def note_read(db: Database, agent: str, session: str | None = None) -> None:
     """Record that this seat -- and this SESSION -- asked for its events, just now.
 
