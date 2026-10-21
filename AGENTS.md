@@ -46,7 +46,7 @@ new name; published pages never change owner by accident.
 | The agent CLIs (`artifacts-publish`, `artifacts-decide`, …) | `src/artifacts/client.py`, `decide.py` |
 | Admin commands (keys, scopes, renames) | `src/artifacts/admin.py` -> `artifacts-admin` |
 | The Postgres <-> SQLite copier and its verifier | `src/artifacts/migrate.py` |
-| Runbooks (cutover, rollback, backups, restore drill) | `docs/agent/runbooks/` |
+| Runbooks (cutover, rollback, backups, restore drill, CI logs) | `docs/agent/runbooks/` |
 | Tests | `tests/` |
 | Container | `Dockerfile` |
 | Deployment values | the homelab repo (`k8s/apps/artifacts/artifacts/app/`); `deploy/` here is no longer applied |
@@ -72,10 +72,7 @@ read the same on both (`docs/agent/specs/2026-10-09-sqlite-design.md`). CI runs 
 **On baba, never run the test suite** (Jeremy, 13 Oct 2026: no test-suite runs there). Push the
 change to a `ci/<name>` branch instead: CI runs the full suite on it and never builds an image or
 deploys from it. Land on `main` once that run is green, then delete the branch.
-To read a failed run's log without a browser: `FORGE_AS=<you> forge tea api` on
-`/repos/runcove/artifacts/actions/runs?limit=N` (the run's `id`), then `…/actions/runs/<id>/jobs` (the
-job's `id`), then `…/actions/jobs/<job id>/logs`. Grep out only the lines you need: the tests mint
-throwaway keys, and a log carries their `Bearer art_…` lines.
+Reading a run's log without a browser, safely: `docs/agent/runbooks/ci-logs.md`.
 
 **Declare which session you are on every publish.** A key may be shared by several sessions;
 without a label a page says only which KEY published it. `ARTIFACTS_SESSION="<agent>/<session
@@ -85,11 +82,9 @@ unattributed until its next real change -- an identical republish mints no versi
 **A push to `main` asks to deploy.** CI tests, builds an image, and opens a pin PR on the
 deployment's manifest repo that moves production onto that image
 (`.forgejo/scripts/pin-pr.sh`); production moves when that PR is merged. On the homelab the
-manifests live in the homelab repo and its maintainer merges the pin PRs. This repo's `deploy/`
-is no longer applied by anything.
+manifests live in the homelab repo and its maintainer merges the pin PRs.
 
-After changing a CLI, reinstall it wherever agents run it (`uv tool install <checkout> --force`),
-or they keep the old behaviour.
+After changing a CLI, reinstall it where agents run it (`uv tool install <checkout> --force`).
 
 ## Safety rules
 

@@ -1,0 +1,15 @@
+# Reading a CI run's log without a browser
+
+Through the forge API, as yourself (`FORGE_AS=<you> forge tea api …`):
+
+1. `/repos/runcove/artifacts/actions/runs?limit=N&page=1` gives the run's `id`. Always send
+   `page=1`: Forgejo ignores `limit` without it and loads every run, a heavy query on the forge's
+   database.
+2. `/repos/runcove/artifacts/actions/runs/<id>/jobs` gives the job's `id`.
+3. `/repos/runcove/artifacts/actions/jobs/<job id>/logs` gives the log.
+
+Grep out only the lines you need. The tests mint throwaway keys, and a log carries their
+`Bearer art_…` lines.
+
+A superseded run still holds the runner. Cancel it before pushing again to the same branch:
+`forge tea api -X POST /repos/runcove/artifacts/actions/runs/<id>/cancel`.
