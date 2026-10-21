@@ -17,9 +17,14 @@ a message that names the variables and never a value.
 | Variable | Meaning |
 |---|---|
 | `ARTIFACTS_PARTNER_NAME` | the partner's name, for logs and the admin report |
-| `ARTIFACTS_PARTNER_EVENTS_URL` | where events are POSTed (`http://` or `https://`; inside the cluster) |
+| `ARTIFACTS_PARTNER_EVENTS_URL` | where events are POSTed; must be `https://` unless the opt-in below is set |
 | `ARTIFACTS_PARTNER_SIGNING_KEY_FILE` | path to artifacts' Ed25519 private key, PEM PKCS8, unencrypted |
 | `ARTIFACTS_PARTNER_KEY_ID` | the key's id, sent in every event so the receiver can rotate keys |
+
+Optional: `ARTIFACTS_PARTNER_ALLOW_HTTP=1` allows a plain `http://` URL (for an in-cluster
+service with no TLS). Without it an `http://` URL stops start-up. When it is in use the
+service logs a warning once at start. Proxy variables in the environment are ignored, and
+redirects are never followed (a 3xx counts as a failed attempt and is retried).
 
 The key file is read once at start-up, never logged, never put in an error and never
 stored. Mount it from the deployment's secret store; it is not in this repo. Generate a
@@ -78,19 +83,27 @@ Ed25519 over the exact bytes of the request body, base64, in the header named by
 One daemon thread (`partner-sender`), started by `serve.app_from_env` only when the
 bridge is configured, polling every 2 seconds. It never runs on a request's path.
 
-- At least once. 2xx is delivered; anything else, or a transport failure, is retried
-  with exponential backoff from 5 seconds, capped at 15 minutes. The receiver answers a
-  duplicate with success.
+- At least once. 2xx is delivered. Anything else is retried with exponential backoff
+  from 5 seconds, capped at 15 minutes, EXCEPT the statuses that mean the receiver
+  refused this event for good: 400, 404, 409, 410, 413, 415 and 422. Those PARK the row
+  (`parked_at` set, the code in `last_error`): it is not retried, and the same question's
+  later versions are held behind it (the receiver cannot apply `answered` without
+  `asked`). Other questions keep flowing. 401 and 403 are NOT parked: the partner answers
+  401 for a bad signature, an unknown `key_id` or a stale `sent_at`, so a key rotation or
+  a clock fix lets the queue drain by itself. 5xx, 408, 425, 429, 3xx, other 4xx and
+  network failures are retried too.
 - Every attempt is re-signed with a fresh `sent_at`; `event_id` and `version` do not
   change.
-- Order: version N+1 of a question is never claimed while version N is undelivered,
-  whatever N's retry time. Different questions do not wait for each other.
-- Claiming: a due row is claimed with a lease (`claimed_until`, 60 seconds). On Postgres
+- Order: version N+1 of a question is never claimed while version N is undelivered
+  (or parked), whatever N's retry time. Different questions do not wait for each other.
+- Claiming: one due row at a time is claimed with a lease (`claimed_until`, 60 seconds). On Postgres
   the claim query takes `for update of o skip locked`, so two processes get different
   rows; the lease then holds the row across the network call without an open
   transaction, and a crashed process's rows come back when it runs out. SQLite assumes
   one process and its `begin immediate` already serialises writers; the lease applies
-  there too.
+  there too. Claiming one row per attempt means a lease is taken just before its own
+  request, so a slow neighbour cannot let it lapse. An empty queue is detected by a
+  read-only select first, so idle polling never takes SQLite's writer lock.
 - Redirects are not followed. The timeout is 10 seconds.
 - `last_error` holds `HTTP <status>` or a short class of failure ("timed out", "could
   not connect"). A response body is never read into it or logged.
@@ -98,5 +111,11 @@ bridge is configured, polling every 2 seconds. It never runs on a request's path
 ## Looking at it
 
 `artifacts-admin partner-outbox` (needs `DATABASE_URL`) prints the undelivered count, the
-age of the oldest undelivered event and the last error. `partner.status(db)` returns
-the same as a dict. No body, no key.
+age of the oldest undelivered event, the parked rows (count, oldest, their codes), a
+warning when waiting events last failed with 401/403, and the last error of an event
+still waiting, with its age. A delivered event's old error is not shown.
+`partner.status(db)` returns the same as a dict. No body, no key.
+
+To release parked events once the cause is fixed (the receiver deployed, the event
+understood): `artifacts-admin partner-outbox --retry <event_id>` for one, or
+`--retry-parked` for all. Either resets attempts and the retry time.
