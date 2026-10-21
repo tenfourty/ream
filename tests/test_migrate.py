@@ -30,7 +30,12 @@ def _schema_tables(filename: str) -> set[str]:
         # this file (db._SQLITE_STEPS).
         from artifacts import db as dbmod
 
-        text += "\n".join(s for step in dbmod._SQLITE_STEPS.values() for s in step)
+        text += "\n".join(
+            s
+            for step in dbmod._SQLITE_STEPS.values()
+            for s in step
+            if isinstance(s, str)
+        )
     return set(
         re.findall(r"^create table (?:if not exists )?(\w+)", text, re.MULTILINE)
     )

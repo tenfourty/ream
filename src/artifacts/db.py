@@ -284,6 +284,37 @@ def _statements(script: str) -> list[str]:
     ]
 
 
+def _widen_answer_sources(conn) -> None:
+    """Step 6: add 'slack' to the answer_source CHECK by editing the stored
+    table text (SQLite cannot alter a CHECK). Runs inside the migration's
+    transaction and checks its own work: if the stored SQL does not contain the
+    widened list afterwards (different whitespace, a hand-edited schema) it
+    raises, the transaction rolls back and user_version stays where it was, so
+    start-up fails loudly instead of marking a no-op as done. The pragma is
+    always switched off again. No integrity_check: the database is large."""
+    old = "'in-person', 'other')"
+    new = "'in-person', 'other', 'slack')"
+    conn.execute("pragma writable_schema = on")
+    try:
+        conn.execute(
+            "update sqlite_master set sql = replace(sql, "  # noqa: S608 -- fixed text
+            + _sql_text(old)
+            + ", "
+            + _sql_text(new)
+            + ") where type = 'table' and name = 'decision'"
+        )
+    finally:
+        conn.execute("pragma writable_schema = off")
+    row = conn.execute(
+        "select sql from sqlite_master where type = 'table' and name = 'decision'"
+    ).fetchone()
+    if row is None or new not in row[0]:
+        raise RuntimeError(
+            "schema step 6 could not widen decision.answer_source's CHECK to "
+            "include 'slack': the stored table text is not the expected shape"
+        )
+
+
 def _sql_text(text: str) -> str:
     """`text` as an SQL string literal (fixed text only, never caller input)."""
     return "'" + text.replace("'", "''") + "'"
@@ -339,15 +370,7 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
     # widened in place, the documented way to relax a constraint), and the copy
     # of a partner-home question with the dedupe records.
     6: (
-        "pragma writable_schema = on",
-        (
-            "update sqlite_master set sql = replace(sql, "  # noqa: S608 -- fixed text
-            + _sql_text("'in-person', 'other')")
-            + ", "
-            + _sql_text("'in-person', 'other', 'slack')")
-            + ") where type = 'table' and name = 'decision'"
-        ),
-        "pragma writable_schema = off",
+        _widen_answer_sources,
         (
             "create table partner_question ("
             " source text primary key,"
@@ -600,7 +623,10 @@ class Database:
                 for number in sorted(_SQLITE_STEPS):
                     if number > version:
                         for statement in _SQLITE_STEPS[number]:
-                            conn.execute(statement)
+                            if callable(statement):
+                                statement(conn)
+                            else:
+                                conn.execute(statement)
                 conn.execute(f"pragma user_version = {SQLITE_SCHEMA_VERSION}")
 
     def reset(self) -> None:
