@@ -36,6 +36,7 @@ from artifacts import (
     events,
     frame_pass,
     holds,
+    inbox,
     keys,
     mail,
     pagediff,
@@ -330,6 +331,17 @@ main{display:block}
 .openlist ul{list-style:none;margin:0;padding:0}
 .openlist li{margin:.15rem 0;font-size:.9rem}
 .openlist .lmeta{font:.74rem/1.4 var(--mono);color:var(--muted);margin-left:.5rem}
+.bar .inboxlink{font-size:.84rem;color:var(--muted);text-decoration:none;
+  border:1px solid var(--line);border-radius:999px;padding:.18rem .6rem}
+.bar .inboxlink.some{color:var(--on-now);background:var(--now-solid);
+  border-color:var(--now-solid);font-weight:600}
+.inbox{list-style:none;margin:0;padding:0}
+.inbox>li{margin:0 0 .9rem}
+.inbox .ihead{margin:0 0 .35rem;font:.74rem/1.5 var(--mono);color:var(--muted);
+  display:flex;flex-wrap:wrap;gap:.2rem .7rem}
+.inbox .ihead a{color:inherit}
+.inbox .ibody{margin:0 0 .6rem;font-size:.92rem;white-space:pre-line}
+.inbox .ilink{font-size:.84rem}
 .ask.done{border-left-color:var(--ok)}
 .ask.done .q{font-weight:500}
 .hint{margin:.1rem 0 0;font-size:.8rem;color:var(--muted)}
@@ -1431,28 +1443,11 @@ _UNREAD_WORD = '<span class="sr">Unread. </span>'
 # he wrote an earlier message, made after he last opened the page. Without it a
 # reply to him leaves a read page looking read. Yields who wrote it (the session
 # label when there is one, so the tile can name the office, else the author).
-# `_WALL_HIS_THREAD` is the one place the "thread that is his" rule lives. A
-# thread under his answer's note is his by being there: the note is his message.
-# Plain SQL on both drivers: `created_at` compares as the one stored format.
-_WALL_HIS_THREAD = (
-    "(exists (select 1 from comment h"
-    "  where h.artifact_id = c.artifact_id"
-    "    and coalesce(h.thread_root, h.id) = c.thread_root"
-    "    and h.author_kind = 'human' and h.withdrawn_at is null"
-    "    and h.created_at < c.created_at)"
-    "  or c.anchor->>'kind' = 'decision')"
-)
+# The rule itself lives in `comments.UNSEEN_REPLY` so his inbox asks the same
+# question the wall does.
 _WALL_REPLIED_BY = (
     "(select coalesce(nullif(c.session, ''), c.author) from comment c"  # noqa: S608
-    "  where c.artifact_id = a.id and c.author_kind = 'agent'"
-    "    and c.kind = 'comment' and (c.thread_root is not null"
-    "         or c.anchor->>'kind' = 'decision')"
-    "    and c.withdrawn_at is null and not c.held"
-    "    and (select root.withdrawn_at from comment root"
-    "          where root.id = coalesce(c.thread_root, c.id)) is null"
-    "    and not exists (select 1 from page_read r"
-    "          where r.artifact_id = a.id and r.read_at >= c.created_at)"
-    f"    and {_WALL_HIS_THREAD}"
+    f"  where c.artifact_id = a.id and {comments.UNSEEN_REPLY}"
     "  order by c.created_at desc, c.id desc limit 1)"
 )
 _WALL_UNREAD = (
@@ -2605,7 +2600,13 @@ def _session_tag(session: str | None) -> str:
     return f'<span class="sess" title="{escape(session)}">{escape(short)}</span>'
 
 
-def _wall_meta(waiting: int, hidden: int = 0) -> str:
+def _inbox_link(count: int) -> str:
+    """The way into his inbox, always there, with how many items it holds."""
+    some = " some" if count else ""
+    return f'<a class="inboxlink{some}" href="/inbox">Inbox ({int(count)})</a>'
+
+
+def _wall_meta(waiting: int, hidden: int = 0, inbox_count: int = 0) -> str:
     """What sits beside the title, and it is only ever one thing.
 
     "5 pages" is a fact about the service and belongs in the controls row below.
@@ -2618,10 +2619,10 @@ def _wall_meta(waiting: int, hidden: int = 0) -> str:
     jumping to the first answers "where is it"; the useful question is "show me
     them", and the filtered wall answers both.
     """
-    out = ""
+    out = _inbox_link(inbox_count)
     if waiting:
         noun = "question" if waiting == 1 else "questions"
-        out = (
+        out += (
             f'<a class="waiting" href="/?filter=waiting">'
             f"{waiting} {noun} waiting on you</a>"
         )
@@ -3216,42 +3217,13 @@ def _button(option: dict, row: decisions.DecisionRow) -> str:
     )
 
 
-def _moment(value: datetime | str | None) -> datetime | None:
-    """A stored timestamp as an aware datetime, or None if there is none or it
-    will not parse. Drivers hand back datetimes or ISO strings."""
-    if value is None or value == "":
-        return None
-    if isinstance(value, str):
-        try:
-            value = datetime.fromisoformat(value)
-        except ValueError:
-            return None
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-
-
-_URGENCY_RANK = {"blocking": 0, "by": 1, "when_you_can": 2}
-
-
-def _is_overdue(row: decisions.DecisionRow, now: datetime) -> bool:
-    needed = _moment(row.needed_by)
-    return needed is not None and needed < now
+_moment = inbox.moment
+_is_overdue = inbox.is_overdue
 
 
 def _inbox_key(row: decisions.DecisionRow, now: datetime) -> tuple:
-    """Inbox order: overdue first, then urgency, then soonest needed-by (none
-    last), then topic title (none last), then when it was asked."""
-    needed = _moment(row.needed_by)
-    title = (row.topic or {}).get("title")
-    return (
-        not _is_overdue(row, now),
-        _URGENCY_RANK.get(row.urgency, 2),
-        needed is None,
-        needed or now,
-        title is None,
-        (title or "").lower(),
-        row.created_at,
-        row.id,
-    )
+    """Inbox order for a question (see `inbox`); the page's open list uses it too."""
+    return inbox.key(row, now)
 
 
 def _question_meta(row: decisions.DecisionRow, now: datetime) -> list[str]:
@@ -3280,6 +3252,57 @@ def _question_meta(row: decisions.DecisionRow, now: datetime) -> list[str]:
             + "</span>"
         )
     return parts
+
+
+def _render_inbox(rows: list[inbox.Item], now: datetime) -> str:
+    """His inbox: one list, already in inbox order, each item with what he needs
+    to act. Every agent-supplied string is escaped here."""
+    if not rows:
+        return '<p class="empty">Nothing is waiting on you.</p>'
+    out = []
+    for item in rows:
+        page = f"/a/{escape(item.artifact_id)}"
+        title = escape(item.page_title)
+        d = item.decision
+        if item.kind == "question" and d is not None:
+            meta = " &middot; ".join(_question_meta(d, now))
+            ctx = f'<p class="qctx">{escape(d.context)}</p>' if d.context else ""
+            buttons = "".join(_button(o, d) for o in d.options)
+            out.append(
+                f'<li class="ask" id="i-{escape(d.id)}">'
+                f'<p class="ihead"><span>Question</span>'
+                f'<a href="{page}">{title}</a>'
+                f"<span>from {escape(item.office)}</span></p>"
+                f'<p class="q">{escape(d.question)}</p>{ctx}'
+                f'<p class="qmeta">{meta}</p>'
+                f'<form method="post" action="/d/{escape(d.id)}/answer">'
+                f'<input type="hidden" name="next" value="inbox">{buttons}'
+                '<input name="note" placeholder="note (optional)"></form>'
+                f'<p class="ilink"><a href="{page}#q-{escape(d.id)}">Open the page</a></p>'
+                "</li>"
+            )
+        elif item.kind == "review" and d is not None:
+            out.append(
+                f'<li class="ask" id="i-{escape(d.id)}">'
+                f'<p class="ihead"><span>Review</span>'
+                f'<a href="{page}">{title}</a>'
+                f"<span>from {escape(item.office)}</span></p>"
+                f'<p class="q"><span class="rtag">Review</span> {escape(d.question)}</p>'
+                f'<p class="ilink"><a href="{page}">Open the review</a></p></li>'
+            )
+        else:
+            excerpt = item.body.strip()
+            if len(excerpt) > inbox.REPLY_EXCERPT:
+                excerpt = excerpt[: inbox.REPLY_EXCERPT].rstrip() + "\u2026"
+            out.append(
+                f'<li class="ask" id="i-{escape(item.id)}">'
+                f'<p class="ihead"><span>Reply from {escape(item.office)}</span>'
+                f'<a href="{page}">{title}</a>'
+                f"<span>{escape(_when(item.created_at.isoformat()))} UTC</span></p>"
+                f'<p class="ibody">{escape(excerpt)}</p>'
+                f'<p class="ilink"><a href="{page}#comments">Open the thread</a></p></li>'
+            )
+    return '<ul class="inbox">' + "".join(out) + "</ul>"
 
 
 def _render_decisions(
@@ -4212,7 +4235,9 @@ def gallery_router(db: Database) -> APIRouter:
             _shell(
                 "Artifacts",
                 body,
-                meta_html=_wall_meta(waiting_total, hidden_questions),
+                meta_html=_wall_meta(
+                    waiting_total, hidden_questions, len(inbox.items(db))
+                ),
                 controls=_controls_row(
                     view,
                     query,
@@ -4244,6 +4269,19 @@ def gallery_router(db: Database) -> APIRouter:
                 path="/",
             )
         return response
+
+    @router.get("/inbox", response_class=HTMLResponse)
+    def inbox_page() -> HTMLResponse:
+        rows = inbox.items(db)
+        noun = "item" if len(rows) == 1 else "items"
+        return HTMLResponse(
+            _shell(
+                "Inbox",
+                _render_inbox(rows, datetime.now(UTC)),
+                meta=f"{len(rows)} {noun} waiting on you",
+            ),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
 
     @router.get("/thumb/{artifact_id}.png")
     def thumbnail(artifact_id: str) -> Response:
@@ -5148,6 +5186,9 @@ def gallery_router(db: Database) -> APIRouter:
         note: str = Form(""),
         round_field: str = Form("", alias="round"),
         version_field: str = Form("", alias="version"),
+        # "inbox" when the form was drawn on his inbox: he goes back there. Any
+        # other value is ignored, so this is never an open redirect.
+        next_field: str = Form("", alias="next"),
         _guard: None = Depends(_same_origin_write),
     ):
         # The round the form was drawn for. A form with none was drawn before
@@ -5194,6 +5235,8 @@ def gallery_router(db: Database) -> APIRouter:
             return _already_decided_page(exc)
         except store.NotFound as exc:
             raise HTTPException(404, "no such open decision") from exc
+        if next_field == "inbox":
+            return RedirectResponse("/inbox", status_code=303)
         return RedirectResponse(f"/a/{row.artifact_id}", status_code=303)
 
     # --- comments: the conversation happens on the page --------------------

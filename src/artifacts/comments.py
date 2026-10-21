@@ -151,6 +151,34 @@ def office_of(label: str | None) -> str:
     return (label or "").split("/", 1)[0].strip().casefold()
 
 
+# THE ONE RULE FOR "A REPLY HE HAS NOT SEEN", as a SQL condition on a comment
+# aliased `c`: a live agent comment under a thread in which he wrote an earlier
+# message (or under the note he left on a decision, which is his by being
+# there), made after he last opened the page. The wall's unread mark and his
+# inbox both read it, so they can never disagree about what is new.
+# `c.artifact_id` is the page; `page_read.read_at` is when he last opened it.
+# Plain SQL on both drivers: `created_at` compares as the one stored format.
+_HIS_THREAD = (
+    "(exists (select 1 from comment h"
+    "  where h.artifact_id = c.artifact_id"
+    "    and coalesce(h.thread_root, h.id) = c.thread_root"
+    "    and h.author_kind = 'human' and h.withdrawn_at is null"
+    "    and h.created_at < c.created_at)"
+    "  or c.anchor->>'kind' = 'decision')"
+)
+UNSEEN_REPLY = (
+    "c.author_kind = 'agent'"  # noqa: S608
+    " and c.kind = 'comment' and (c.thread_root is not null"
+    "      or c.anchor->>'kind' = 'decision')"
+    " and c.withdrawn_at is null and not c.held"
+    " and (select root.withdrawn_at from comment root"
+    "       where root.id = coalesce(c.thread_root, c.id)) is null"
+    " and not exists (select 1 from page_read r"
+    "       where r.artifact_id = c.artifact_id and r.read_at >= c.created_at)"
+    f" and {_HIS_THREAD}"
+)
+
+
 def is_foreign(
     author: str, author_session: str | None, owner: str, owner_session: str | None
 ) -> bool:
