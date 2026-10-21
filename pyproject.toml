@@ -17,6 +17,7 @@ dependencies = []
 
 [project.optional-dependencies]
 server = [
+    "cryptography>=46",
     "fastapi>=0.141.1",
     "html5lib>=1.1",
     "markdown-it-py>=4",
