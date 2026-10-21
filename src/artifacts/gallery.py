@@ -2600,13 +2600,13 @@ def _session_tag(session: str | None) -> str:
     return f'<span class="sess" title="{escape(session)}">{escape(short)}</span>'
 
 
-def _inbox_link(count: int) -> str:
+def _inbox_link(count: int | str) -> str:
     """The way into his inbox, always there, with how many items it holds."""
-    some = " some" if count else ""
-    return f'<a class="inboxlink{some}" href="/inbox">Inbox ({int(count)})</a>'
+    some = " some" if str(count) != "0" else ""
+    return f'<a class="inboxlink{some}" href="/inbox">Inbox ({escape(str(count))})</a>'
 
 
-def _wall_meta(waiting: int, hidden: int = 0, inbox_count: int = 0) -> str:
+def _wall_meta(waiting: int, hidden: int = 0, inbox_count: int | str = 0) -> str:
     """What sits beside the title, and it is only ever one thing.
 
     "5 pages" is a fact about the service and belongs in the controls row below.
@@ -3254,7 +3254,19 @@ def _question_meta(row: decisions.DecisionRow, now: datetime) -> list[str]:
     return parts
 
 
-def _render_inbox(rows: list[inbox.Item], now: datetime) -> str:
+def _since_block(row: decisions.DecisionRow, mine: list) -> str:
+    """The outcomes on a decision, the one markup the page card and the inbox card
+    share: shown above the buttons, so he sees what moved before he chooses."""
+    if not mine:
+        return ""
+    items = "".join(f"<li>{escape(o.body)}</li>" for o in mine)
+    label = "Since you were asked" if row.answer is None else "What it led to"
+    return f'<div class="since"><b>{label}</b><ul>{items}</ul></div>'
+
+
+def _render_inbox(
+    rows: list[inbox.Item], now: datetime, outcomes: dict | None = None
+) -> str:
     """His inbox: one list, already in inbox order, each item with what he needs
     to act. Every agent-supplied string is escaped here."""
     if not rows:
@@ -3275,6 +3287,7 @@ def _render_inbox(rows: list[inbox.Item], now: datetime) -> str:
                 f"<span>from {escape(item.office)}</span></p>"
                 f'<p class="q">{escape(d.question)}</p>{ctx}'
                 f'<p class="qmeta">{meta}</p>'
+                f"{_since_block(d, (outcomes or {}).get(d.id) or [])}"
                 f'<form method="post" action="/d/{escape(d.id)}/answer">'
                 f'<input type="hidden" name="next" value="inbox">{buttons}'
                 '<input name="note" placeholder="note (optional)"></form>'
@@ -3404,12 +3417,7 @@ def _render_decisions(
         answer wrongly through no fault of his own. So it renders ABOVE the
         buttons on an open card: he must see it before he chooses, not after.
         """
-        mine = (outcomes or {}).get(row.id) or []
-        if not mine:
-            return ""
-        items = "".join(f"<li>{escape(o.body)}</li>" for o in mine)
-        label = "Since you were asked" if row.answer is None else "What it led to"
-        return f'<div class="since"><b>{label}</b><ul>{items}</ul></div>'
+        return _since_block(row, (outcomes or {}).get(row.id) or [])
 
     def _mode_switch(row: decisions.DecisionRow, held: int) -> str:
         """Hold or live, for an OPEN review only: his marks reach the agent as he
@@ -4236,7 +4244,7 @@ def gallery_router(db: Database) -> APIRouter:
                 "Artifacts",
                 body,
                 meta_html=_wall_meta(
-                    waiting_total, hidden_questions, len(inbox.items(db))
+                    waiting_total, hidden_questions, inbox.label(*inbox.count(db))
                 ),
                 controls=_controls_row(
                     view,
@@ -4272,13 +4280,23 @@ def gallery_router(db: Database) -> APIRouter:
 
     @router.get("/inbox", response_class=HTMLResponse)
     def inbox_page() -> HTMLResponse:
-        rows = inbox.items(db)
-        noun = "item" if len(rows) == 1 else "items"
+        rows, capped = inbox.gather(db)
+        if capped:
+            meta = (
+                f"{inbox.label(len(rows), True)} items waiting on you; "
+                "showing the oldest of each kind"
+            )
+        else:
+            noun = "item" if len(rows) == 1 else "items"
+            meta = f"{len(rows)} {noun} waiting on you"
+        outcomes = decisions.outcomes_for_decisions(
+            db, [i.id for i in rows if i.kind == "question"]
+        )
         return HTMLResponse(
             _shell(
                 "Inbox",
-                _render_inbox(rows, datetime.now(UTC)),
-                meta=f"{len(rows)} {noun} waiting on you",
+                _render_inbox(rows, datetime.now(UTC), outcomes),
+                meta=meta,
             ),
             headers={**gallery_headers(), "cache-control": "no-store"},
         )

@@ -35,6 +35,7 @@ value that is actually about to be stored.
 
 import dataclasses
 import re
+import types
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -787,6 +788,7 @@ def list_for_agent(
     include_answered: bool = False,
     include_closed: bool = False,
     limit: int = 200,
+    kind: str | None = None,
 ) -> list[DecisionRow]:
     """Newest first -- this is the polling surface an agent uses to learn Jeremy's
     answer, so newest matters more than oldest, exactly as `comments.list_for_agent`
@@ -817,9 +819,14 @@ def list_for_agent(
         sql += " and decision.closed_at is null"
     if not include_answered:
         sql += " and decision.answer is null"
+    params: list[object] = [agent]
+    if kind is not None:
+        # In the query, so `limit` counts only this kind.
+        sql += " and decision.kind = %s"
+        params.append(kind)
     sql += " order by decision.created_at desc, decision.id desc limit %s"
     with db.connect() as conn:
-        rows = conn.execute(sql, (agent, limit)).fetchall()
+        rows = conn.execute(sql, (*params, limit)).fetchall()
         return _with_held(conn, [_row_to_decision(row) for row in rows])
 
 
@@ -2026,6 +2033,47 @@ def outcomes_for_artifact(
     for row in rows:
         out.setdefault(row[1], []).append(_row_to_outcome(row))
     return out
+
+
+def outcomes_for_decisions(
+    db: Database, decision_ids: list[str]
+) -> dict[str, list[OutcomeRow]]:
+    """Outcomes on the given decisions, keyed by decision id, oldest first: one
+    query for a list of questions that live on different pages."""
+    if not decision_ids:
+        return {}
+    out: dict[str, list[OutcomeRow]] = {}
+    with db.connect() as conn:
+        rows = conn.execute(
+            "select id, decision_id, body, agent, session, created_at"  # noqa: S608 -- placeholders only
+            f" from decision_outcome where decision_id in {in_list(decision_ids)}"
+            " order by created_at asc, id asc",
+            tuple(decision_ids),
+        ).fetchall()
+    for row in rows:
+        out.setdefault(row[1], []).append(_row_to_outcome(row))
+    return out
+
+
+def open_counts(db: Database) -> tuple[int, int, int]:
+    """(open reviews, open questions that are not held, every open row), counted without reading
+    any question text: the same rows `across_seats` returns by default, and the
+    same held rule, so a count and a list cannot disagree."""
+    with db.connect() as conn:
+        found = conn.execute(
+            "select id, kind, depends_on from decision"
+            " where closed_at is null and answer is null"
+        ).fetchall()
+        reviews = sum(1 for r in found if r[1] == "review")
+        waiting = [
+            types.SimpleNamespace(
+                id=r[0], depends_on=r[2], answer=None, closed_at=None, kind=r[1]
+            )
+            for r in found
+            if r[1] == "question"
+        ]
+        held = held_map(conn, waiting)
+    return reviews, len(waiting) - len(held), len(found)
 
 
 def round_presence(db: Database, agent: str, review_id: str) -> dict | None:

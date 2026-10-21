@@ -30,7 +30,7 @@ URGENCY_RANK = {"blocking": 0, "by": 1, "when_you_can": 2}
 
 # A reply is shown as its first part, enough to know what it says.
 REPLY_EXCERPT = 600
-_LIMIT = 500
+_LIMIT = 500  # per source
 
 
 def moment(value: datetime | str | None) -> datetime | None:
@@ -106,9 +106,20 @@ def order(rows: list[Item], now: datetime) -> list[Item]:
     return sorted(rows, key=lambda i: item_key(i, now))
 
 
-def _decision_items(db: Database) -> list[Item]:
+# Shared by the list and the count, so they cannot disagree about which replies
+# are waiting: a reply he has not seen, on a page that is neither archived nor
+# deleted.
+_REPLY_FROM_WHERE = (
+    " from comment c join artifact a on a.id = c.artifact_id"
+    " where a.deleted_at is null and a.archived_at is null"
+    f"   and {comments.UNSEEN_REPLY}"
+)
+
+
+def _decision_items(db: Database, limit: int) -> tuple[list[Item], bool]:
     out = []
-    for r in decisions.across_seats(db, limit=_LIMIT):
+    got = decisions.across_seats(db, limit=limit)
+    for r in got:
         d = r.decision
         if d.kind == "question" and d.held_by:
             continue  # not for him yet
@@ -123,19 +134,17 @@ def _decision_items(db: Database) -> list[Item]:
                 decision=d,
             )
         )
-    return out
+    return out, len(got) >= limit
 
 
-def _reply_items(db: Database) -> list[Item]:
+def _reply_items(db: Database, limit: int) -> tuple[list[Item], bool]:
     with db.connect() as conn:
         found = conn.execute(
-            "select c.id, c.artifact_id, a.title, a.agent,"  # noqa: S608 -- fixed constants
+            "select c.id, c.artifact_id, a.title, a.agent,"
             "       coalesce(nullif(c.session, ''), c.author), c.body, c.created_at"
-            "  from comment c join artifact a on a.id = c.artifact_id"
-            " where a.deleted_at is null and a.archived_at is null"
-            f"   and {comments.UNSEEN_REPLY}"
+            f"{_REPLY_FROM_WHERE}"
             " order by c.created_at asc, c.id asc limit %s",
-            (_LIMIT,),
+            (limit,),
         ).fetchall()
     return [
         Item(
@@ -148,11 +157,40 @@ def _reply_items(db: Database) -> list[Item]:
             body=body,
         )
         for cid, aid, title, agent, label, body, created in found
-    ]
+    ], len(found) >= limit
 
 
-def items(db: Database, now: datetime | None = None) -> list[Item]:
-    """Everything waiting on him, in inbox order."""
+def gather(
+    db: Database, now: datetime | None = None, limit: int | None = None
+) -> tuple[list[Item], bool]:
+    """Everything waiting on him in inbox order, and whether a source hit its
+    `limit` (the oldest `limit` of each source are read; a newer one is not
+    shown, and the caller must say so)."""
     now = now or datetime.now(UTC)
-    gathered = _decision_items(db) + _reply_items(db)
-    return order(gathered, now)
+    limit = limit or _LIMIT
+    decided, capped_d = _decision_items(db, limit)
+    replied, capped_r = _reply_items(db, limit)
+    return order(decided + replied, now), capped_d or capped_r
+
+
+def items(
+    db: Database, now: datetime | None = None, limit: int | None = None
+) -> list[Item]:
+    """Everything waiting on him, in inbox order."""
+    return gather(db, now, limit)[0]
+
+
+def count(db: Database, limit: int | None = None) -> tuple[int, bool]:
+    """How many items `items` would hold, and whether a source is over `limit`,
+    from COUNT queries and ids only: no question text and no reply bodies."""
+    limit = limit or _LIMIT
+    reviews, questions, open_rows = decisions.open_counts(db)
+    with db.connect() as conn:
+        replies = conn.execute(f"select count(*){_REPLY_FROM_WHERE}").fetchone()[0]
+    capped = open_rows >= limit or replies >= limit
+    return reviews + questions + replies, capped
+
+
+def label(total: int, capped: bool, limit: int | None = None) -> str:
+    """The number as he reads it: "500+" when the list is cut short."""
+    return f"{limit or _LIMIT}+" if capped else str(total)

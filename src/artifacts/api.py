@@ -1997,7 +1997,9 @@ def agent_router(
                 )
             found = [
                 (d, agent, titles.get(d.artifact_id, ""))
-                for d in decisions.list_for_agent(db, agent, limit=1000)
+                for d in decisions.list_for_agent(
+                    db, agent, limit=1000, kind="question"
+                )
             ]
         now = datetime.now(UTC)
         found = [f for f in found if f[0].kind == "question"]
