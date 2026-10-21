@@ -1621,15 +1621,20 @@ def _close_row(conn, agent: str, row, *, replaced_by: str | None = None) -> None
     # it yet, so an earlier, truer "seen at" is never overwritten by a later
     # close. `coalesce` does both in one statement.
     now = datetime.now(UTC)
-    conn.execute(
+    # Conditional on still being open, and the answer read back from the update
+    # itself: `row` was read earlier and may be stale. A second close, or one
+    # that lost to an answer, changes nothing and tells the partner nothing.
+    closed = conn.execute(
         "update decision set closed_at = %s,"
         " acknowledged_at = coalesce(acknowledged_at, %s),"
         " acknowledged_by = coalesce(acknowledged_by, %s),"
         " replaced_by = coalesce(%s, replaced_by)"
-        " where id = %s",
+        " where id = %s and closed_at is null returning answer",
         (now, now, agent, replaced_by, row[0]),
-    )
-    if row[_KIND_IDX] == "question" and row[6] is None and partner.enabled():
+    ).fetchone()
+    if closed is None:
+        return
+    if row[_KIND_IDX] == "question" and closed[0] is None and partner.enabled():
         # Closed with no answer: withdrawn, or replaced by the question that
         # took its place. An answered question that is then closed is the
         # agent finishing its work, which the partner has no use for.
