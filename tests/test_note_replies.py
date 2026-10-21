@@ -6,7 +6,7 @@ the office answers back; none of it ever touches the decision row.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, decisions, events, keys, store
+from artifacts import comments, decisions, events, grants, keys, store
 from artifacts.app import create_gallery_app
 
 PAGE = (
@@ -268,6 +268,24 @@ def test_the_decisions_route_carries_the_replies(client, db, seats, page):
         f"/api/v1/artifacts/{page.id}/decisions", headers=seats["owner"]
     ).json()
     assert [r["body"] for r in rows[0]["replies"]] == ["what cost?"]
+
+
+def test_the_read_all_grant_sees_the_answer_but_never_the_thread(
+    client, db, seats, page
+):
+    """decisions:read-all reads questions, answers and outcomes on a page it
+    cannot open, never the conversation under his note: that is a comment."""
+    ask = _ask(db, page)
+    _reply(client, seats, ask.id, who="owner")
+    assert store.set_agents_can_read(db, page.id, False, agent="owner")
+    ops, _ = keys.mint(db, agent="ops")
+    grants.grant(db, "ops", grants.READ_ALL_DECISIONS)
+    rows = client.get(
+        f"/api/v1/artifacts/{page.id}/decisions",
+        headers={"Authorization": f"Bearer {ops}"},
+    ).json()
+    assert rows[0]["answer"] == "a"
+    assert rows[0]["replies"] == []
 
 
 def test_a_new_reply_opens_the_entry_and_is_tagged(client, db, seats, page):

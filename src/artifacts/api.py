@@ -1756,7 +1756,12 @@ def agent_router(
             # A page open to agents shows its questions and his answers to any
             # agent reading it -- Jeremy's choice (4b), homelab-ij8.105.
             store.get_owned(db, agent, artifact_id, as_reader=True)
+            can_read = True
         except store.NotFound as exc:
+            # The grant reads questions, answers and outcomes, never the page's
+            # conversation: replies under his notes are comments, and comments
+            # are for whoever can read the page.
+            can_read = False
             # A key holding decisions:read-all reads any seat's questions HERE
             # too, not only on /decisions?scope=all (homelab-9gj). The operator
             # consumed the grant on 20 Sep and found it half a feature: it could
@@ -1798,7 +1803,7 @@ def agent_router(
             omitted = sum(1 for d in every if d.answer) - sum(
                 1 for d in shown if d.answer
             )
-        notes = comments.note_threads(db, artifact_id)
+        notes = comments.note_threads(db, artifact_id) if can_read else {}
         return JSONResponse(
             jsonable_encoder(
                 [
