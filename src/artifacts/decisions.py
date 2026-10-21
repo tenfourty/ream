@@ -38,7 +38,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from artifacts import csp, events, holds, ids, nudge, store, text
+from artifacts import csp, events, holds, ids, keys, nudge, store, text
 from artifacts.db import Database, in_list, jsonb
 
 # A decision's question is a single line Jeremy reads on a card, not a page body -- 500
@@ -89,7 +89,11 @@ _COLUMNS = (
     " decision.answered_at, decision.answered_by, decision.created_at, decision.closed_at,"
     " decision.acknowledged_at, decision.acknowledged_by,"
     " decision.answer_source, decision.recorded_by, decision.said_at,"
-    " decision.session, decision.kind, decision.review_mode"
+    " decision.session, decision.kind, decision.review_mode,"
+    " decision.context, decision.topic_id, decision.topic_title,"
+    " decision.depends_on, decision.replaces, decision.replaced_by,"
+    " decision.urgency, decision.blocked_on, decision.needed_by,"
+    " decision.for_offices"
 )
 # Positions in `_COLUMNS` that are read by index outside `_row_to_decision`.
 # Tied to its order: `session` is the 18th column, `kind` the 19th. Appending
@@ -132,6 +136,27 @@ class DecisionRow:
     kind: str = "question"
     # 'held' or 'live' for a review (see holds.py); None for a question.
     review_mode: str | None = None
+    # What a question carries (runcove-5t3oj.39.1). A review keeps the defaults.
+    # `topic` is {"id", "title"} or None; `for_offices` goes out as `for` (see
+    # `public`), the one JSON name that is not a Python identifier.
+    context: str = ""
+    topic: dict | None = None
+    depends_on: list = dataclasses.field(default_factory=list)
+    replaces: str | None = None
+    # The decision that replaced this one, set when it was asked.
+    replaced_by: str | None = None
+    urgency: str = "when_you_can"
+    blocked_on: str | None = None
+    needed_by: str | None = None
+    for_offices: list = dataclasses.field(default_factory=list)
+
+
+def public(row: DecisionRow) -> dict:
+    """The JSON an agent reads for a decision: the row's fields, with
+    `for_offices` under its contract name `for`."""
+    out = dict(row.__dict__)
+    out["for"] = out.pop("for_offices")
+    return out
 
 
 class InvalidOptions(Exception):
@@ -243,6 +268,167 @@ def _validate_options(options: object) -> tuple[list[dict], set[str]]:
     return validated, letters
 
 
+URGENCIES = ("blocking", "by", "when_you_can")
+MAX_CONTEXT_CHARS = 1_000
+MAX_TOPIC_TITLE_CHARS = 120
+MAX_BLOCKED_ON_CHARS = 200
+MAX_DEPENDS_ON = 10
+MAX_FOR = 5
+TOPIC_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+
+class InvalidField(Exception):
+    """A malformed question field (context, topic, depends_on, replaces,
+    urgency, blocked_on, needed_by, for). Unlike `InvalidOptions` it says what
+    to change: these are short, structured values the agent just wrote, and the
+    message names the rule, never anything the caller did not send."""
+
+    def __init__(self, field: str, detail: str) -> None:
+        super().__init__(field)
+        self.field = field
+        self.detail = detail
+
+
+class NotReplaceable(Exception):
+    """`replaces` names the caller's own decision, but it is no longer open."""
+
+    def __init__(self, decision_id: str, state: str) -> None:
+        super().__init__("replaces")
+        self.field = "replaces"
+        self.decision_id = decision_id
+        self.state = state  # 'answered' or 'closed'
+
+
+def _ids_list(value: object, field: str, limit: int, what: str) -> list[str]:
+    if not isinstance(value, list) or len(value) > limit:
+        raise InvalidField(field, f"{field} must be a list of at most {limit} {what}")
+    if not all(isinstance(i, str) and i for i in value) or len(set(value)) != len(
+        value
+    ):
+        raise InvalidField(field, f"{field} must hold distinct, non-empty {what}")
+    return list(value)
+
+
+def _parse_needed_by(value: object) -> datetime:
+    parsed = None
+    if isinstance(value, str) and "T" in value.upper():
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            parsed = None
+    if parsed is None or parsed.tzinfo is None:
+        raise InvalidField(
+            "needed_by",
+            "needed_by must be an ISO-8601 date-time with a timezone,"
+            " e.g. 2026-10-22T15:00:00Z or 2026-10-22T17:00:00+02:00",
+        )
+    return parsed.astimezone(UTC)
+
+
+@dataclass(frozen=True)
+class _Fields:
+    context: str
+    topic_id: str | None
+    topic_title: str | None  # None with a topic id: reuse the agent's latest title
+    depends_on: list[str]
+    replaces: str | None
+    urgency: str
+    blocked_on: str | None
+    needed_by: datetime | None
+    for_offices: list[str]
+
+
+def _validate_fields(
+    agent: str,
+    *,
+    context: object,
+    topic: object,
+    depends_on: object,
+    replaces: object,
+    urgency: object,
+    blocked_on: object,
+    needed_by: object,
+    for_offices: object,
+) -> _Fields:
+    """Shape checks only, in memory. Ownership of depends_on/replaces and the
+    topic title lookup need the database and happen in `ask`."""
+    if not isinstance(context, str) or len(context) > MAX_CONTEXT_CHARS:
+        raise InvalidField(
+            "context",
+            f"context must be text of at most {MAX_CONTEXT_CHARS} characters",
+        )
+    topic_id = topic_title = None
+    if topic is not None:
+        if not isinstance(topic, dict) or not set(topic) <= {"id", "title"}:
+            raise InvalidField(
+                "topic", 'topic must be {"id": ..., "title": ...} or null'
+            )
+        tid = topic.get("id")
+        if not isinstance(tid, str) or not TOPIC_ID.fullmatch(tid):
+            raise InvalidField(
+                "topic",
+                "topic.id must be a lowercase slug: letters, digits and hyphens,"
+                " starting with a letter or digit, at most 64 characters",
+            )
+        topic_id = tid
+        if topic.get("title") is not None:
+            title = topic["title"]
+            if (
+                not isinstance(title, str)
+                or not title.strip()
+                or len(title) > MAX_TOPIC_TITLE_CHARS
+            ):
+                raise InvalidField(
+                    "topic",
+                    f"topic.title must be 1-{MAX_TOPIC_TITLE_CHARS} characters",
+                )
+            topic_title = title
+    deps = _ids_list(depends_on, "depends_on", MAX_DEPENDS_ON, "decision ids")
+    if replaces is not None and (not isinstance(replaces, str) or not replaces):
+        raise InvalidField("replaces", "replaces must be one decision id or null")
+    if urgency not in URGENCIES:
+        raise InvalidField("urgency", f"urgency must be one of {', '.join(URGENCIES)}")
+    if urgency == "blocking":
+        if blocked_on is None:
+            raise InvalidField(
+                "blocked_on", "urgency 'blocking' needs blocked_on: what has stopped"
+            )
+    elif blocked_on is not None:
+        raise InvalidField("blocked_on", "blocked_on is only for urgency 'blocking'")
+    if blocked_on is not None and (
+        not isinstance(blocked_on, str)
+        or not blocked_on.strip()
+        or len(blocked_on) > MAX_BLOCKED_ON_CHARS
+    ):
+        raise InvalidField(
+            "blocked_on", f"blocked_on must be 1-{MAX_BLOCKED_ON_CHARS} characters"
+        )
+    if urgency == "by" and needed_by is None:
+        raise InvalidField(
+            "needed_by", "urgency 'by' needs needed_by: when you need the answer"
+        )
+    needed = _parse_needed_by(needed_by) if needed_by is not None else None
+    offices = _ids_list(for_offices, "for", MAX_FOR, "office names")
+    for office in offices:
+        if not keys.AGENT_NAME.fullmatch(office):
+            raise InvalidField(
+                "for", "for must list office names: lowercase letters, digits, hyphens"
+            )
+        if office == agent:
+            raise InvalidField("for", "for lists OTHER offices, not the one asking")
+    return _Fields(
+        context,
+        topic_id,
+        topic_title,
+        deps,
+        replaces,
+        urgency,
+        blocked_on,
+        needed,
+        offices,
+    )
+
+
 def _row_to_decision(row) -> DecisionRow:
     return DecisionRow(
         id=row[0],
@@ -265,7 +451,33 @@ def _row_to_decision(row) -> DecisionRow:
         session=row[_SESSION_IDX],
         kind=row[_KIND_IDX],
         review_mode=row[_REVIEW_MODE_IDX],
+        context=row[20],
+        topic={"id": row[21], "title": row[22]} if row[21] is not None else None,
+        depends_on=row[23],
+        replaces=row[24],
+        replaced_by=row[25],
+        urgency=row[26],
+        blocked_on=row[27],
+        needed_by=row[28].isoformat() if row[28] is not None else None,
+        for_offices=row[29],
     )
+
+
+# One message for "no such decision" and "not yours", for depends_on and replaces.
+_NOT_YOURS = "an id here is not one of your own decisions (unknown ids look the same)"
+
+
+def _owned_row(conn, agent: str, decision_id: str, *, lock: bool = False):
+    """The decision's raw row, only if its page belongs to `agent`; None for a
+    missing id and someone else's identically. `lock` takes the row lock a
+    close needs, so two askers cannot both replace the same question."""
+    return conn.execute(
+        f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
+        " join artifact on artifact.id = decision.artifact_id"
+        " where decision.id = %s and artifact.agent = %s"
+        + (conn.for_update(" of decision") if lock else ""),
+        (decision_id, agent),
+    ).fetchone()
 
 
 def ask(
@@ -277,16 +489,49 @@ def ask(
     options: list[dict],
     recommended: str | None = None,
     session: str | None = None,
+    context: str = "",
+    topic: dict | None = None,
+    depends_on: list | None = None,
+    replaces: str | None = None,
+    urgency: str = "when_you_can",
+    blocked_on: str | None = None,
+    needed_by: str | None = None,
+    for_offices: list | None = None,
 ) -> DecisionRow:
     """Pose a lettered question on `artifact_id`. Refuses (`store.NotFound`) an
     artifact `agent` does not own, exactly as `store.patch` does -- someone else's
-    page and a missing one must look identical, never a hint either way."""
+    page and a missing one must look identical, never a hint either way.
+
+    The question's own fields (context, topic, depends_on, replaces, urgency,
+    blocked_on, needed_by, for_offices) are validated here (`InvalidField`).
+    `depends_on` and `replaces` must be the caller's own decisions: an unknown id
+    and someone else's raise the SAME `InvalidField`. `replaces` must also still
+    be open (`NotReplaceable`); asking closes it in the same transaction."""
     store._check_size(
         question, MAX_QUESTION_BYTES, "question", agent=agent, artifact_id=artifact_id
     )
     validated_options, letters = _validate_options(options)
     if recommended is not None and recommended not in letters:
         raise InvalidOptions()
+    fields = _validate_fields(
+        agent,
+        context=context,
+        topic=topic,
+        depends_on=[] if depends_on is None else depends_on,
+        replaces=replaces,
+        urgency=urgency,
+        blocked_on=blocked_on,
+        needed_by=needed_by,
+        for_offices=[] if for_offices is None else for_offices,
+    )
+    # Every free-text field is size-checked (also catching a lone surrogate)
+    # before any database work; the scan comes last, below.
+    for value, name in (
+        (fields.context, "context"),
+        (fields.blocked_on or "", "blocked_on"),
+        (fields.topic_title or "", "topic"),
+    ):
+        store._check_size(value, 4_000, name, agent=agent, artifact_id=artifact_id)
 
     with db.connect() as conn:
         owned = store._owned(conn, artifact_id, agent)
@@ -302,6 +547,13 @@ def ask(
             store._check_secrets(
                 option["label"], "options", agent=agent, artifact_id=artifact_id
             )
+        for value, name in (
+            (fields.context, "context"),
+            (fields.blocked_on, "blocked_on"),
+            (fields.topic_title, "topic"),
+        ):
+            if value:
+                store._check_secrets(value, name, agent=agent, artifact_id=artifact_id)
 
         decision_id = ids.new_id()
         # The artifact row lock a section update holds while it checks that
@@ -313,14 +565,47 @@ def ask(
                 "select 1 from artifact where id = %s" + conn.for_update(),  # noqa: S608 -- clause from the db layer, no caller input
                 (artifact_id,),
             )
+            title = fields.topic_title
+            if fields.topic_id is not None and title is None:
+                # A topic id this agent used before keeps its latest title.
+                found = conn.execute(
+                    "select decision.topic_title from decision"
+                    " join artifact on artifact.id = decision.artifact_id"
+                    " where artifact.agent = %s and decision.topic_id = %s"
+                    " and decision.topic_title is not null"
+                    " order by decision.created_at desc, decision.id desc limit 1",
+                    (agent, fields.topic_id),
+                ).fetchone()
+                if found is None:
+                    raise InvalidField(
+                        "topic",
+                        "a topic id you have not used before needs a title:"
+                        ' {"id": ..., "title": ...}',
+                    )
+                title = found[0]
+            # The same refusal for an unknown id and someone else's.
+            for dep in fields.depends_on:
+                if _owned_row(conn, agent, dep) is None:
+                    raise InvalidField("depends_on", _NOT_YOURS)
+            old = None
+            if fields.replaces is not None:
+                old = _owned_row(conn, agent, fields.replaces, lock=True)
+                if old is None:
+                    raise InvalidField("replaces", _NOT_YOURS)
+                if old[6] is not None:  # answer
+                    raise NotReplaceable(fields.replaces, "answered")
+                if old[11] is not None:  # closed_at
+                    raise NotReplaceable(fields.replaces, "closed")
             conn.execute(
                 # `session` is which SESSION raised the question -- a label the
                 # caller declared, never a permission (see api.session). It is what
                 # lets a seat sharing a key with two others recognise its own
                 # question in a feed, and what lets the answer wake the right one.
                 "insert into decision"
-                " (id, artifact_id, version_n, question, options, recommended, session)"
-                " values (%s, %s, %s, %s, %s, %s, %s)",
+                " (id, artifact_id, version_n, question, options, recommended, session,"
+                " context, topic_id, topic_title, depends_on, replaces, urgency,"
+                " blocked_on, needed_by, for_offices)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     decision_id,
                     artifact_id,
@@ -329,8 +614,19 @@ def ask(
                     jsonb(validated_options),
                     recommended,
                     session,
+                    fields.context,
+                    fields.topic_id,
+                    title if fields.topic_id is not None else None,
+                    jsonb(fields.depends_on),
+                    fields.replaces,
+                    fields.urgency,
+                    fields.blocked_on,
+                    fields.needed_by,
+                    jsonb(fields.for_offices),
                 ),
             )
+            if old is not None:
+                _close_row(conn, agent, old, replaced_by=decision_id)
         created = conn.execute(
             f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
             (decision_id,),
@@ -1173,6 +1469,29 @@ def get_owned_with_round(
     )
 
 
+def _close_row(conn, agent: str, row, *, replaced_by: str | None = None) -> None:
+    """Close the decision `row` (raw, from `_COLUMNS`) inside the caller's
+    transaction. `replaced_by` records which question took its place."""
+    # Closing implies acknowledgement -- an agent that finished the work
+    # necessarily heard the answer -- but only when nothing has acknowledged
+    # it yet, so an earlier, truer "seen at" is never overwritten by a later
+    # close. `coalesce` does both in one statement.
+    now = datetime.now(UTC)
+    conn.execute(
+        "update decision set closed_at = %s,"
+        " acknowledged_at = coalesce(acknowledged_at, %s),"
+        " acknowledged_by = coalesce(acknowledged_by, %s),"
+        " replaced_by = coalesce(%s, replaced_by)"
+        " where id = %s",
+        (now, now, agent, replaced_by, row[0]),
+    )
+    if row[_KIND_IDX] == "review" and holds.page_mode(conn, row[1]) != "held":
+        # The review is over, so his held marks would never be
+        # seen -- unless another open review on the page still
+        # holds them.
+        holds.release(conn, row[1], emit=True)
+
+
 def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
     """The agent withdrawing a question it no longer needs answered. Idempotent: a
     second close returns the row unchanged, `closed_at` untouched, exactly as
@@ -1191,26 +1510,7 @@ def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
         ).fetchone()
         if row[11] is None:  # closed_at
             with conn.transaction():
-                # Closing implies acknowledgement -- an agent that finished the work
-                # necessarily heard the answer -- but only when nothing has acknowledged
-                # it yet, so an earlier, truer "seen at" is never overwritten by a later
-                # close. `coalesce` does both in one statement.
-                now = datetime.now(UTC)
-                conn.execute(
-                    "update decision set closed_at = %s,"
-                    " acknowledged_at = coalesce(acknowledged_at, %s),"
-                    " acknowledged_by = coalesce(acknowledged_by, %s)"
-                    " where id = %s",
-                    (now, now, agent, decision_id),
-                )
-                if (
-                    row[_KIND_IDX] == "review"
-                    and holds.page_mode(conn, row[1]) != "held"
-                ):
-                    # The review is over, so his held marks would never be
-                    # seen -- unless another open review on the page still
-                    # holds them.
-                    holds.release(conn, row[1], emit=True)
+                _close_row(conn, agent, row)
             row = conn.execute(
                 f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
                 (decision_id,),

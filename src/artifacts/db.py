@@ -289,6 +289,20 @@ def _statements(script: str) -> list[str]:
 _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
     # 21 Oct 2026: the session label an agent's comment was written under.
     2: ("alter table comment add column session text",),
+    # 21 Oct 2026: what a question carries (context, topic, depends_on,
+    # replaces, urgency, the offices that also need the answer).
+    3: (
+        "alter table decision add column context text not null default ''",
+        "alter table decision add column topic_id text",
+        "alter table decision add column topic_title text",
+        "alter table decision add column depends_on jsonb not null default '[]'",
+        "alter table decision add column replaces text",
+        "alter table decision add column replaced_by text",
+        "alter table decision add column urgency text not null default 'when_you_can'",
+        "alter table decision add column blocked_on text",
+        "alter table decision add column needed_by timestamptz",
+        "alter table decision add column for_offices jsonb not null default '[]'",
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

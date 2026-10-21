@@ -802,3 +802,21 @@ alter table seat_read alter column session set not null;
 -- X-Artifacts-Session. NULL on every earlier comment, on Jeremy's, and on a
 -- caller that declared none -- the honest value, never a guess.
 alter table comment add column if not exists session text;
+
+-- WHAT A QUESTION CARRIES (runcove-5t3oj.39.1, 21 Oct 2026): the context he
+-- needs to answer it, the topic it belongs to, what it depends on and
+-- replaces, how urgent it is, and which other offices need the answer.
+-- All asked of 'question' decisions; a review keeps the defaults.
+alter table decision add column if not exists context text not null default '';
+alter table decision add column if not exists topic_id text;
+alter table decision add column if not exists topic_title text;
+alter table decision add column if not exists depends_on jsonb not null default '[]';
+-- Plain text, not foreign keys: the ids are checked when the question is asked
+-- (and answer as one "not yours" whether unknown or someone else's), and a
+-- deleted page must not be blocked by, or take with it, a question that named it.
+alter table decision add column if not exists replaces text;
+alter table decision add column if not exists replaced_by text;
+alter table decision add column if not exists urgency text not null default 'when_you_can';
+alter table decision add column if not exists blocked_on text;
+alter table decision add column if not exists needed_by timestamptz;
+alter table decision add column if not exists for_offices jsonb not null default '[]';

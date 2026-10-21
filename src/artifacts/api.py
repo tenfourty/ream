@@ -30,7 +30,7 @@ from fastapi.responses import (
     JSONResponse,
     PlainTextResponse,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from artifacts import (
     comments,
@@ -248,6 +248,17 @@ class DecisionBody(BaseModel):
     # kind of failure, whichever way it fails.
     options: Any
     recommended: str | None = None
+    # What a question carries (runcove-5t3oj.39.1). `Any` for the same reason as
+    # `options`: a wrong shape reaches decisions._validate_fields and comes back
+    # as one 422 that names the field and the rule, not as Pydantic's own text.
+    context: Any = ""
+    topic: Any = None
+    depends_on: Any = None
+    replaces: Any = None
+    urgency: Any = "when_you_can"
+    blocked_on: Any = None
+    needed_by: Any = None
+    for_offices: Any = Field(default=None, alias="for")
 
 
 class ReviewBody(BaseModel):
@@ -1532,7 +1543,7 @@ def agent_router(
             )
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
-        return row.__dict__
+        return decisions.public(row)
 
     @router.get("/reviews/{review_id}")
     def read_review(review_id: str, agent: str = Depends(caller)):
@@ -1678,7 +1689,7 @@ def agent_router(
         seat_session: str | None = Depends(session),
     ):
         try:
-            return decisions.ask(
+            row = decisions.ask(
                 db,
                 agent=agent,
                 artifact_id=artifact_id,
@@ -1686,7 +1697,16 @@ def agent_router(
                 options=payload.options,
                 recommended=payload.recommended,
                 session=seat_session,
-            ).__dict__
+                context=payload.context,
+                topic=payload.topic,
+                depends_on=payload.depends_on,
+                replaces=payload.replaces,
+                urgency=payload.urgency,
+                blocked_on=payload.blocked_on,
+                needed_by=payload.needed_by,
+                for_offices=payload.for_offices,
+            )
+            return decisions.public(row)
         except store.NotAPage as exc:
             # 422, not 413: the body is not too much, it is not a page. Named
             # like every other refusal so a caller can tell them apart without
@@ -1728,6 +1748,23 @@ def agent_router(
         except decisions.InvalidOptions as exc:
             raise HTTPException(
                 422, {"field": exc.field, "detail": "not a valid set of options"}
+            ) from exc
+        except decisions.InvalidField as exc:
+            raise HTTPException(
+                422, {"field": exc.field, "detail": exc.detail}
+            ) from exc
+        except decisions.NotReplaceable as exc:
+            raise HTTPException(
+                409,
+                {
+                    "field": exc.field,
+                    "state": exc.state,
+                    "detail": (
+                        f"the decision you replace is already {exc.state}, so there"
+                        " is nothing left to replace: ask without `replaces`, or"
+                        " read its answer"
+                    ),
+                },
             ) from exc
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
@@ -1814,7 +1851,7 @@ def agent_router(
             jsonable_encoder(
                 [
                     {
-                        **row.__dict__,
+                        **decisions.public(row),
                         "outcomes": [o.__dict__ for o in outcomes.get(row.id, [])],
                         "replies": [r.__dict__ for r in notes.get(row.id, [])],
                     }
@@ -1884,7 +1921,7 @@ def agent_router(
             # than it looks.
             return [
                 {
-                    **row.decision.__dict__,
+                    **decisions.public(row.decision),
                     "agent": row.agent,
                     "artifact_title": row.artifact_title,
                     "age_seconds": row.age_seconds,
@@ -1899,7 +1936,7 @@ def agent_router(
                 )
             ]
         return [
-            row.__dict__
+            decisions.public(row)
             for row in decisions.list_for_agent(
                 db,
                 agent,
@@ -1911,7 +1948,7 @@ def agent_router(
     @router.post("/decisions/{decision_id}/close")
     def close_decision(decision_id: str, agent: str = Depends(caller)):
         try:
-            return decisions.close(db, agent, decision_id).__dict__
+            return decisions.public(decisions.close(db, agent, decision_id))
         except store.NotFound as exc:
             raise HTTPException(404, "no such decision") from exc
 
@@ -1991,7 +2028,7 @@ def agent_router(
             ) from None
         except store.NotFound:
             raise HTTPException(404, "no such open decision") from None
-        return row.__dict__
+        return decisions.public(row)
 
     @router.post("/decisions/{decision_id}/outcome", status_code=201)
     def add_outcome(
@@ -2161,9 +2198,9 @@ def agent_router(
     ):
         def write(conn) -> tuple[int, object]:
             try:
-                return 200, decisions.acknowledge(
-                    db, agent, decision_id, conn=conn
-                ).__dict__
+                return 200, decisions.public(
+                    decisions.acknowledge(db, agent, decision_id, conn=conn)
+                )
             except store.NotFound as exc:
                 raise HTTPException(404, "no such decision") from exc
 
@@ -2201,7 +2238,7 @@ def agent_router(
             )
         return [
             {
-                "decision": row.decision.__dict__,
+                "decision": decisions.public(row.decision),
                 "state": row.state,
                 "last_read_at": row.last_read_at,
                 # Whose, and on what. Redundant when a seat asks about itself
