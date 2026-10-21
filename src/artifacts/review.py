@@ -169,7 +169,9 @@ def render(db: Database, review_id: str, *, agent: str) -> tuple[str, dict]:
         for r in replies.get(root.id, []):
             said = " ".join(sanitize(r.body).split())
             author = _quote(r.author)
-            if r.author_kind != "human":
+            if r.author_kind != "human" and comments.is_foreign(
+                r.author, r.session, agent, decision.session
+            ):
                 via = comments.office_of(r.session)
                 author = f"(agent {author}" + (f", via session {via})" if via else ")")
             lines.append(f"   - {author}: {said}")

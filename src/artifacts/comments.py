@@ -26,6 +26,7 @@ matching `store.publish`/`store.patch`.
 import logging
 import threading
 import time
+from collections import OrderedDict
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -269,6 +270,8 @@ def resolve_text_anchor(body: str, quote: str, section: str | None = None) -> No
     needle = " ".join(quote.split()).lower()
     if not needle:
         raise TextAnchorError("the anchor's quote is empty")
+    if len(body) > text.INPUT_LIMIT:
+        raise TextAnchorError(_TOO_MUCH_TEXT)
     if section is not None and section.strip():
         if len(section) > SECTION_MAX:
             raise TextAnchorError(
@@ -871,6 +874,26 @@ def carried_marks(
     return [(c, states[c.id]) for c in earlier]
 
 
+_VISIBLE_CACHE: "OrderedDict[tuple[str, int], tuple[str, str]]" = OrderedDict()
+_VISIBLE_CACHE_SIZE = 16
+_visible_lock = threading.Lock()
+
+
+def _visible_cache_get(key):
+    with _visible_lock:
+        found = _VISIBLE_CACHE.get(key)
+        if found is not None:
+            _VISIBLE_CACHE.move_to_end(key)
+        return found
+
+
+def _visible_cache_put(key, value) -> None:
+    with _visible_lock:
+        _VISIBLE_CACHE[key] = value
+        while len(_VISIBLE_CACHE) > _VISIBLE_CACHE_SIZE:
+            _VISIBLE_CACHE.popitem(last=False)
+
+
 def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
     """Every quoting row told whether its quote is still on its page.
 
@@ -887,14 +910,30 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
     if not quoting:
         return rows
     words_by_page: dict[str, tuple[str, str]] = {}
-    for artifact_id, body in conn.execute(
-        "select a.id, v.body from artifact a"  # noqa: S608 -- placeholders only
-        " join version v on v.artifact_id = a.id and v.n = a.current_version"
-        f" where a.id in {in_list(quoting)}",
+    # Visible text is worked out once per (page, version) and kept in process:
+    # a version never changes, so a listing does not re-parse the page.
+    versions = conn.execute(
+        "select id, current_version from artifact"  # noqa: S608 -- placeholders only
+        f" where id in {in_list(quoting)}",
         tuple(quoting),
-    ).fetchall():
-        words, _ = text.visible(body)
+    ).fetchall()
+    missing = []
+    for artifact_id, n in versions:
+        cached = _visible_cache_get((artifact_id, n))
+        if cached is None:
+            missing.append((artifact_id, n))
+        else:
+            words_by_page[artifact_id] = cached
+    for artifact_id, n in missing:
+        row = conn.execute(
+            "select body from version where artifact_id = %s and n = %s",
+            (artifact_id, n),
+        ).fetchone()
+        if row is None:
+            continue
+        words, _ = text.visible(row[0])
         words_by_page[artifact_id] = (words, _tight(words))
+        _visible_cache_put((artifact_id, n), words_by_page[artifact_id])
     return [
         replace(
             row, quote_state=_state_against(row.quote, *words_by_page[row.artifact_id])

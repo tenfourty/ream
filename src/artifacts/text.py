@@ -149,6 +149,9 @@ def searchable(body: str) -> str:
 
 # The most visible text a comment's quote is matched against (22 Oct 2026).
 VISIBLE_LIMIT = 2_000_000
+# The most HTML `visible` will parse, whatever the caller: the parser never sees
+# more than this.
+INPUT_LIMIT = 4_000_000
 
 
 class _Visible(HTMLParser):
@@ -193,7 +196,7 @@ def visible(body: str, limit: int = VISIBLE_LIMIT) -> tuple[str, bool]:
         words = searchable(body)
         return words, len(words) > limit
     parser = _Visible(limit)
-    parser.feed(body)
+    parser.feed(body[:INPUT_LIMIT])
     parser.close()
     return " ".join(" ".join(parser.parts).split()).lower(), parser.truncated
 

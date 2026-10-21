@@ -442,3 +442,34 @@ def test_a_non_owner_sees_only_agent_comments_and_replies_only_to_them(
         f"/api/v1/artifacts/{page.id}/comments", headers=seats["owner"]
     ).json()
     assert his.id in [r["id"] for r in owner_view]
+
+
+def test_a_non_owner_sees_nothing_of_a_thread_he_started(client, db, seats, page):
+    his = comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="his question",
+    )
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="owner",
+        agent="owner",
+        body="the owner's answer",
+        thread_root=his.id,
+    )
+    seen = client.get(
+        f"/api/v1/artifacts/{page.id}/comments", headers=seats["other"]
+    ).json()
+    assert seen == []
+
+
+def test_a_page_over_the_input_limit_refuses_a_text_anchor(monkeypatch):
+    from artifacts import text
+
+    monkeypatch.setattr(text, "INPUT_LIMIT", 100)
+    with pytest.raises(comments.TextAnchorError):
+        comments.resolve_text_anchor("<p>" + "x" * 200 + "</p>", "x")

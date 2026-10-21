@@ -1266,7 +1266,18 @@ def agent_router(
         if page.agent != agent:
             # Another office's page: only agents' comments. His words and his
             # review marks are for the page's owner.
-            rows = [row for row in rows if row.author_kind == "agent"]
+            # By thread: a thread his comment started is his, replies by the
+            # owner's agent included.
+            his = {
+                row.id
+                for row in rows
+                if row.thread_root is None and row.author_kind == "human"
+            }
+            rows = [
+                row
+                for row in rows
+                if row.author_kind == "agent" and (row.thread_root or row.id) not in his
+            ]
         return [row.__dict__ for row in rows]
 
     @router.post("/artifacts/{artifact_id}/comments", status_code=201)
