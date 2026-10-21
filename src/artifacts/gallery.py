@@ -316,6 +316,20 @@ main{display:block}
   padding:.1rem .34rem;margin-left:.45rem;white-space:nowrap}
 .relayed-note{font-size:.88rem;color:var(--muted);border-left:2px solid var(--now);
   padding-left:.7rem;margin:.2rem 0 .6rem}
+.ask.held{border-left-color:var(--line);box-shadow:none;background:transparent}
+.ask.held .q{font-weight:500;color:var(--muted);margin:0 0 .3rem}
+.ask .qctx{margin:0 0 .6rem;font-size:.9rem;color:var(--muted);white-space:pre-line}
+.ask .qmeta{margin:0 0 .65rem;font:.74rem/1.5 var(--mono);color:var(--muted);
+  display:flex;flex-wrap:wrap;gap:.2rem .7rem}
+.ask .qmeta .urg-blocking,.openlist .urg-blocking,.ask .qmeta .over,.openlist .over{
+  color:var(--now-solid)}
+.openlist{margin:0 0 1rem;padding:.7rem 1.1rem;border:1px solid var(--line);
+  border-radius:.7rem;background:var(--card)}
+.openlist h2{font:600 .74rem/1.4 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--accent);margin:0 0 .4rem}
+.openlist ul{list-style:none;margin:0;padding:0}
+.openlist li{margin:.15rem 0;font-size:.9rem}
+.openlist .lmeta{font:.74rem/1.4 var(--mono);color:var(--muted);margin-left:.5rem}
 .ask.done{border-left-color:var(--ok)}
 .ask.done .q{font-weight:500}
 .hint{margin:.1rem 0 0;font-size:.8rem;color:var(--muted)}
@@ -3215,6 +3229,59 @@ def _moment(value: datetime | str | None) -> datetime | None:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
+_URGENCY_RANK = {"blocking": 0, "by": 1, "when_you_can": 2}
+
+
+def _is_overdue(row: decisions.DecisionRow, now: datetime) -> bool:
+    needed = _moment(row.needed_by)
+    return needed is not None and needed < now
+
+
+def _inbox_key(row: decisions.DecisionRow, now: datetime) -> tuple:
+    """Inbox order: overdue first, then urgency, then soonest needed-by (none
+    last), then topic title (none last), then when it was asked."""
+    needed = _moment(row.needed_by)
+    title = (row.topic or {}).get("title")
+    return (
+        not _is_overdue(row, now),
+        _URGENCY_RANK.get(row.urgency, 2),
+        needed is None,
+        needed or now,
+        title is None,
+        (title or "").lower(),
+        row.created_at,
+        row.id,
+    )
+
+
+def _question_meta(row: decisions.DecisionRow, now: datetime) -> list[str]:
+    """The compact facts about a question, each already escaped: topic, urgency
+    (with what it is blocking and by when), overdue, and who else needs the answer."""
+    parts = []
+    if row.topic:
+        parts.append(f'<span class="qtopic">{escape(row.topic["title"])}</span>')
+    when = f"{escape(_when(row.needed_by))} UTC" if row.needed_by else ""
+    if row.urgency == "blocking":
+        label = "blocking" + (f": {escape(row.blocked_on)}" if row.blocked_on else "")
+        if when:
+            label += f", needed by {when}"
+    elif row.urgency == "by":
+        label = f"needed by {when}" if when else "needed by a set time"
+    else:
+        label = "when you can" + (f", wanted by {when}" if when else "")
+    cls = "urg-blocking" if row.urgency == "blocking" else "urg"
+    parts.append(f'<span class="{cls}">{label}</span>')
+    if _is_overdue(row, now):
+        parts.append('<span class="over">overdue</span>')
+    if row.for_offices:
+        parts.append(
+            "<span>also needed by "
+            + ", ".join(escape(o) for o in row.for_offices)
+            + "</span>"
+        )
+    return parts
+
+
 def _render_decisions(
     rows: list[decisions.DecisionRow],
     listening_since: str | None = None,
@@ -3266,6 +3333,8 @@ def _render_decisions(
 
     open_rows = [r for r in rows if r.answer is None]
     settled_rows = [r for r in rows if r.answer is not None]
+    now = datetime.now(UTC)
+    on_page = {r.id for r in open_rows}
 
     def _note_thread(row: decisions.DecisionRow) -> tuple[str, bool]:
         """The short thread under his note, and whether it holds a message from
@@ -3413,6 +3482,18 @@ def _render_decisions(
             )
         return out
 
+    def _context_block(row: decisions.DecisionRow) -> str:
+        if getattr(row, "kind", "question") == "review":
+            return ""
+        meta = _question_meta(row, now)
+        if row.urgency == "when_you_can" and not (
+            row.topic or row.for_offices or row.needed_by
+        ):
+            meta = []
+        ctx = f'<p class="qctx">{escape(row.context)}</p>' if row.context else ""
+        line = f'<p class="qmeta">{"".join(meta)}</p>' if meta else ""
+        return ctx + line
+
     def _card(row: decisions.DecisionRow, anchorable: bool = True) -> str:
         """`anchorable` carries the id the page's script matches a slot against.
         Only an OPEN decision gets one: a settled decision lives inside a collapsed
@@ -3435,6 +3516,23 @@ def _render_decisions(
             else ""
         )
         anchor = f' data-decision-id="{escape(row.id)}"' if anchorable else ""
+        if anchorable and row.answer is None and not is_review:
+            anchor += f' id="q-{escape(row.id)}"'
+        if row.held_by and row.answer is None and not is_review:
+            # Held: no form at all, one line saying what it waits on. It keeps
+            # its data-decision-id, so a slot for it still gets this note.
+            first = row.held_by[0]
+            more = f" (and {len(row.held_by) - 1} more)" if len(row.held_by) > 1 else ""
+            return (
+                f'<div class="ask held"{anchor}><p class="q">{escape(row.question)}</p>'
+                '<p class="hint">Waiting on an earlier question: '
+                + (
+                    f'<a href="#q-{escape(first)}">see it</a>'
+                    if first in on_page
+                    else "it is on another page"
+                )
+                + f"{more}. This one opens when it is answered.</p></div>"
+            )
         if is_review and row.answer is None:
             hint = _round_block(row) + hint + _mode_switch(row, held_count)
         if is_review and row.answer is not None:
@@ -3467,6 +3565,7 @@ def _render_decisions(
         return (
             f'<div class="ask"{anchor}>'
             f'<p class="q">{tag}{escape(row.question)}</p>'
+            f"{_context_block(row)}"
             f"{_since(row)}"
             f"{hint}"
             f'<form method="post" action="/d/{escape(row.id)}/answer">'
@@ -3482,6 +3581,27 @@ def _render_decisions(
     # already settled is history and belongs after it.
     above: list[str] = []
     below: list[str] = []
+
+    answerable = sorted(
+        (
+            r
+            for r in open_rows
+            if getattr(r, "kind", "question") == "question" and not r.held_by
+        ),
+        key=lambda r: _inbox_key(r, now),
+    )
+    if answerable:
+        # Its own element, outside #open-asks: gallery.js hides that section once
+        # every question has been lifted into the page, and this list must stay.
+        items = "".join(
+            f'<li><a href="#q-{escape(r.id)}">{escape(r.question)}</a>'
+            f'<span class="lmeta">{" &middot; ".join(_question_meta(r, now))}</span></li>'
+            for r in answerable
+        )
+        above.append(
+            '<nav class="openlist" id="open-list" aria-label="Open questions">'
+            f"<h2>Open questions ({len(answerable)})</h2><ul>{items}</ul></nav>"
+        )
 
     if open_rows:
         # A review's first verdict is final, so the "pick a different one" hint
@@ -5061,6 +5181,12 @@ def gallery_router(db: Database) -> APIRouter:
             raise HTTPException(503, _SCAN_FAILED_DETAIL) from exc
         except decisions.InvalidAnswer as exc:
             raise HTTPException(422, "not one of this decision's options") from exc
+        except decisions.Held as exc:
+            raise HTTPException(
+                409,
+                "this question waits on an earlier one that is not answered yet "
+                f"({', '.join(exc.by)}); answer that first, then reload the page",
+            ) from exc
         except decisions.AlreadyDecided as exc:
             return _already_decided_page(exc)
         except store.NotFound as exc:
