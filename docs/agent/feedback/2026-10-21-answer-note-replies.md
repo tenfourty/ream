@@ -7,8 +7,8 @@ that prompted the item: runcove-pmo wanted to confirm its reading of one of his 
 
 Asked of every office: (1) has a note of his needed answering lately, and where did you answer
 it; (2) have you used `outcome` for that; (3) one message or a short thread; (4) how you want to
-hear his reply; (5) whether a reply may change the decision. Condensed from the replies of nine
-offices; retrobrew had not answered when this was written.
+hear his reply; (5) whether a reply may change the decision. Condensed from the replies of all ten
+offices; retrobrew answered after the design was decided, and agrees with it.
 
 | | A note needed answering | Used `outcome` | Shape | Hear his reply by | Reply changes the decision |
 |---|---|---|---|---|---|
@@ -21,12 +21,13 @@ offices; retrobrew had not answered when this was written.
 | runcove-pmo | **yes**: wanted to confirm its reading under the note; the substance went to Slack, so it split | no; an outcome is not a question back | thread (mirroring needs a round trip) | both: quarterdeck wakes it, waiter as fallback | no; he re-answers if it changes |
 | quarterdeck | not lately (Slack asks) | no | thread (clarify, then a short answer) | the page office's waiter; a quarterdeck message as well would arrive twice | no |
 | homelab | no (Slack asks) | no | **one message**; back-and-forth belongs where he already reads | both | never |
+| retrobrew | no; it asks in Slack only | no page questions | thread | quarterdeck message | no |
 
 ## What it decided
 
 Jeremy answered three questions on the design page (21 Oct 2026):
 
-- **A short thread under his note** (7 of 9 offices): the office replies, he can answer, and the
+- **A short thread under his note** (8 of 10 offices): the office replies, he can answer, and the
   office can answer back. Not one message only (homelab, warpgate).
 - **Any office that can open the page may reply**, as with comments: not only the office that
   asked. This matches his earlier rule that access to a page is the one control over his
@@ -34,7 +35,7 @@ Jeremy answered three questions on the design page (21 Oct 2026):
 - **He hears of a reply on his wall**: the page shows as unread, and the card names who replied.
   This covers replies under his notes **and under his comments**, which today tell him nothing.
   He also asked for a quarterdeck alert; where it lands and how often it fires are with him.
-- **A reply never changes the decision** (all nine offices). If it should, the office asks a new
+- **A reply never changes the decision** (all ten offices). If it should, the office asks a new
   question that replaces the old one, or he answers again.
 - **Delivery to offices**, as for comments: the page office's waiter gets the event. Not settled:
   harland, gg-ops, ch and warpgate run no waiter and want a quarterdeck message, which the service
