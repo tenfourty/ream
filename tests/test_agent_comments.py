@@ -320,7 +320,9 @@ def test_a_sqlite_file_from_before_the_session_column_is_upgraded(
     upgraded.migrate()
     upgraded.migrate()
     assert "session" in columns()
-    assert sqlite3.connect(path).execute("pragma user_version").fetchone() == (2,)
+    assert sqlite3.connect(path).execute("pragma user_version").fetchone() == (
+        max(steps),
+    )
 
 
 def test_a_page_of_unclosed_headings_is_searched_in_linear_time(db):
