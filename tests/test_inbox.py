@@ -344,3 +344,159 @@ def test_the_item_list_takes_a_second_source_by_value():
         created_at=now,
     )
     assert [i.id for i in inbox.order([later, extra], now)] == ["x", "y"]
+
+
+# --- review round: outcomes, the count, the cap, escaping, negative arms -------
+
+
+def test_an_outcome_shows_above_the_buttons_on_the_inbox_card(db, client, page):
+    q = ask(db, page, "ship?")
+    decisions.record_outcome(db, q.id, agent="ops", body="the premise moved <b>x</b>")
+    html = inbox_html(client)
+    assert "Since you were asked" in html
+    assert "the premise moved &lt;b&gt;x&lt;/b&gt;" in html
+    assert html.index("the premise moved") < html.index(f'action="/d/{q.id}/answer"')
+
+
+def test_the_count_equals_the_list_across_a_mixed_fixture(db, client, page):
+    ask(db, page, "ready")
+    first = ask(db, page, "first")
+    ask(db, page, "held", depends_on=[first.id])
+    done = ask(db, page, "done")
+    decisions.answer(db, done.id, letter="a", note="", by="jeremy")
+    root = his(db, page)
+    client.get(f"/a/{page.id}", headers=HIM)
+    reply(db, page, root)
+    decisions.ask_review(db, agent="ops", artifact_id=page.id)
+    total, capped = inbox.count(db)
+    assert (total, capped) == (len(inbox.items(db)), False) == (4, False)
+    assert 'href="/inbox">Inbox (4)</a>' in client.get("/", headers=HIM).text
+
+
+def test_a_source_that_hits_its_cap_is_said_on_the_link_and_the_page(
+    db, client, page, monkeypatch
+):
+    monkeypatch.setattr(inbox, "_LIMIT", 2)
+    for n in range(3):
+        ask(db, page, f"q{n}")
+    items, capped = inbox.gather(db)
+    assert capped and len(items) == 2
+    assert inbox.count(db) == (3, True)
+    assert 'href="/inbox">Inbox (2+)</a>' in client.get("/", headers=HIM).text
+    assert "2+ items waiting on you" in inbox_html(client)
+
+
+def test_each_agent_string_is_escaped_on_its_own(db, client):
+    def evil(name):
+        return f"<img src=x onerror={name}>"
+
+    def gone(name):
+        return evil(name).replace("<", "&lt;").replace(">", "&gt;")
+
+    names = ["ptitle", "office", "topic", "blocked", "context", "question", "label"]
+    bad = store.publish(db, "ops", f'{evil("ptitle")} a"b', PAGE)
+    q = decisions.ask(
+        db,
+        agent="ops",
+        artifact_id=bad.id,
+        question=evil("question"),
+        options=[
+            {"letter": "a", "label": evil("label")},
+            {"letter": "b", "label": "n"},
+        ],
+        context=evil("context"),
+        topic={"id": "t", "title": evil("topic")},
+        urgency="blocking",
+        blocked_on=evil("blocked"),
+    )
+    root = his(db, bad)
+    client.get(f"/a/{bad.id}", headers=HIM)
+    reply(db, bad, root, body=evil("rbody"), session=f"{evil('office')}/1")
+    html = inbox_html(client)
+    for name in [*names, "rbody"]:
+        assert evil(name) not in html, name
+        assert gone(name) in html, name
+    assert 'a"b' not in html and "a&#34;b" in html
+    assert f'id="i-{q.id}"' in html
+
+
+def test_a_reply_on_an_archived_or_deleted_page_is_not_waiting(db, client):
+    pages = []
+    for how in ("archived", "deleted"):
+        p = store.publish(db, "ops", how, PAGE)
+        root = his(db, p)
+        client.get(f"/a/{p.id}", headers=HIM)
+        reply(db, p, root)
+        pages.append(p)
+    assert len(ids_in(inbox_html(client))) == 2
+    store.set_archived(db, pages[0].id, True, agent=None)
+    store.set_deleted(db, pages[1].id, True, agent=None)
+    assert ids_in(inbox_html(client)) == []
+    assert inbox.count(db) == (0, False)
+
+
+def test_a_withdrawn_or_held_reply_is_not_waiting(db, client, page):
+    root = his(db, page)
+    client.get(f"/a/{page.id}", headers=HIM)
+    withdrawn = reply(db, page, root, body="withdrawn")
+    held = reply(db, page, root, body="held")
+    kept = reply(db, page, root, body="kept")
+    comments.withdraw(db, withdrawn.id, kind="test")
+    with db.connect() as conn:
+        conn.execute("update comment set held = true where id = %s", (held.id,))
+    assert ids_in(inbox_html(client)) == [kept.id]
+    assert inbox.count(db)[0] == 1
+
+
+def test_a_reply_under_his_answer_note_is_waiting(db, client, seats, page):
+    q = ask(db, page, "ship?")
+    decisions.answer(db, q.id, letter="a", note="why though?", by="jeremy")
+    response = client.post(
+        f"/api/v1/decisions/{q.id}/replies",
+        json={"body": "because of the deadline"},
+        headers=seats["ops"],
+    )
+    assert response.status_code == 201, response.text
+    html = inbox_html(client)
+    assert "because of the deadline" in html and "#comments" in html
+    client.get(f"/a/{page.id}", headers=HIM)
+    assert "because of the deadline" not in inbox_html(client)
+
+
+def test_the_wall_unread_mark_follows_an_unseen_reply(db, client, page):
+    root = his(db, page)
+    client.get(f"/a/{page.id}", headers=HIM)
+    assert 'data-unread="1"' not in client.get("/", headers=HIM).text
+    reply(db, page, root)
+    wall = client.get("/", headers=HIM).text
+    assert 'data-unread="1"' in wall and "Reply from cove" in wall
+    client.get(f"/a/{page.id}", headers=HIM)
+    assert 'data-unread="1"' not in client.get("/", headers=HIM).text
+
+
+def test_open_zero_and_a_bad_scope_are_refused(client, seats):
+    assert (
+        client.get("/api/v1/questions?open=0", headers=seats["ops"]).status_code == 422
+    )
+    bad = client.get("/api/v1/questions?scope=everyone", headers=seats["ops"])
+    assert bad.status_code == 422
+
+
+@pytest.mark.parametrize("value", ["Inbox", "/inbox", "https://evil.example/"])
+def test_only_the_exact_word_returns_to_the_inbox(db, client, page, value):
+    q = ask(db, page, "ship?")
+    response = client.post(
+        f"/d/{q.id}/answer",
+        data={"letter": "a", "next": value},
+        headers={**HIM, **SAME_ORIGIN},
+        follow_redirects=False,
+    )
+    assert response.headers["location"] == f"/a/{page.id}"
+
+
+def test_own_scope_limit_counts_questions_not_reviews(db, page):
+    ask(db, page, "only question")
+    for _ in range(3):
+        decisions.ask_review(db, agent="ops", artifact_id=page.id)
+    rows = decisions.list_for_agent(db, "ops", limit=1, kind="question")
+    assert [r.question for r in rows] == ["only question"]
