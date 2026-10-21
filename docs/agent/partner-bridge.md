@@ -164,13 +164,14 @@ On the exact request bytes, never re-serialised JSON:
 | Check | Status |
 |---|---|
 | body over 64 KiB (also by `Content-Length`, before reading) | 400 |
-| not JSON, or not a JSON object | 400 |
+| not JSON (including nested too deeply for the parser), or not a JSON object | 400 |
 | a field missing or mistyped (`event_id, kind, source, question, version, key_id, at, sent_at, body`; `question` must be the id inside `source`; `at` and `sent_at` need a zone) | 422 |
 | `key_id` not in the key file | 401 |
 | signature (`X-Partner-Signature`, base64 Ed25519) does not verify, or is missing | 401 |
 | `sent_at` more than 5 minutes old, or more than 60 seconds ahead | 401 |
 | the same `event_id`, or a version not newer than the last applied for `source` | 2xx, nothing changes |
 | applied, or understood and deliberately not acted on | 2xx |
+| `answered`, `edited`, `withdrawn` or `replaced` for a `qd:` question whose `asked` has not landed | 503 with `Retry-After: 30`: "not yet, retry"; nothing is stored |
 | a failure on our side | 500 (the sender retries) |
 
 413 is not used: the sender parks a 413 and a 400 alike, and 400 is what was agreed. A
@@ -242,8 +243,11 @@ and a pending local answer.
 - `edited`: replaces the context.
 - `message_added`: ignored for now (2xx; the version counts as seen). Replies under a
   Slack question are a later slice.
-- Any event but `asked` for a copy we do not hold: 2xx, ignored, and the version does NOT
-  move, so an `asked` that arrives after it is still applied.
+- `answered`, `edited`, `withdrawn` or `replaced` for a copy we do not hold (its `asked`
+  has not landed): 503 with `Retry-After: 30`, and NOTHING is recorded: not the event id,
+  not the version. 503 is retryable (our own sender retries it too), so the event is
+  delivered again after the `asked` has applied, and then applies. `message_added` for an
+  unknown copy is still 2xx-ignored.
 
 His inbox takes the open copies as a second source (`inbox.py`, kind `slack_question`):
 the same order key as a page question, labelled "from Slack", with the context, the link
