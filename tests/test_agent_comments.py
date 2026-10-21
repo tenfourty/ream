@@ -329,9 +329,14 @@ def test_a_page_of_unclosed_headings_is_searched_in_linear_time(db):
     from artifacts import comments
 
     body = "<h2 " * 40_000 + "<h2>Shutdown</h2><p>Retries are capped</p>"
-    started = time.monotonic()
-    comments.resolve_text_anchor(body, "Retries are capped", "Shutdown")
-    assert time.monotonic() - started < 1.0
+    # The best of three: a loaded CI runner once stalled one call for 5.8 s,
+    # while the search itself takes about 0.1 s here and quadratic would take minutes.
+    times = []
+    for _ in range(3):
+        started = time.monotonic()
+        comments.resolve_text_anchor(body, "Retries are capped", "Shutdown")
+        times.append(time.monotonic() - started)
+    assert min(times) < 1.0
 
 
 # --- review fixes, 22 Oct 2026 -------------------------------------------------
