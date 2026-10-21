@@ -240,7 +240,8 @@ def parse(raw: bytes) -> Event:
         raise _Refused(400, "too_large")
     try:
         data = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # Not JSON, or nested so deeply the parser gives up: both malformed.
         raise _Refused(400, "malformed") from None
     if not isinstance(data, dict):
         raise _Refused(400, "malformed")
@@ -621,9 +622,11 @@ def _apply_foreign(db: Database, event: Event, now: datetime) -> str:
         existing = conn.execute(
             "select 1 from partner_question where source = %s", (event.source,)
         ).fetchone()
-        if existing is None and event.kind != "asked":
-            # Nothing to change, and the version does not move: the `asked` that
-            # makes this meaningful may still arrive, and must not be called old.
+        if existing is None and event.kind not in ("asked", "message_added"):
+            # The `asked` that makes this meaningful has not landed. Nothing is
+            # recorded and the answer is retryable: 503, the sender tries again.
+            raise _Refused(503, "not_yet")
+        if existing is None and event.kind == "message_added":
             again = _mark(conn, event, "unknown", now, advance=False)
             return again or "ignored"
         if event.kind == "message_added":
@@ -918,6 +921,7 @@ def create_partner_app(db: Database, inbound: Inbound) -> FastAPI:
         status, payload = await run_in_threadpool(
             process, db, inbound, raw, request.headers.get(partner.SIGNATURE_HEADER)
         )
-        return JSONResponse(payload, status_code=status)
+        headers = {"Retry-After": "30"} if status == 503 else None
+        return JSONResponse(payload, status_code=status, headers=headers)
 
     return app

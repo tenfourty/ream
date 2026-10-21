@@ -921,15 +921,47 @@ def test_edited_changes_the_context_and_message_added_is_ignored(
     assert "new context" in html and "hello" not in html
 
 
-def test_an_event_for_a_copy_we_do_not_hold_is_ignored_and_does_not_move_the_version(
+def test_an_event_before_its_asked_is_503_retryable_and_stores_nothing(
     db, bridge, client, partner_key
 ):
-    first = post(client, partner_key, make("answered", "qd:q1", 2, pressed("a")))
-    assert first.status_code == 200 and first.json() == {"result": "ignored"}
-    # The `asked` that arrives afterwards at a lower version is still applied.
+    early = make("answered", "qd:q1", 2, pressed("a"))
+    first = post(client, partner_key, early)
+    assert first.status_code == 503 and first.headers["retry-after"] == "30"
+    for kind, body in (
+        ("edited", {"context": "c"}),
+        ("withdrawn", {}),
+        ("replaced", {}),
+    ):
+        r = post(client, partner_key, make(kind, "qd:q1", 2, body))
+        assert r.status_code == 503
+    with db.connect() as conn:
+        for table in ("partner_event_seen", "partner_version_seen", "partner_question"):
+            assert conn.execute(f"select count(*) from {table}").fetchone()[0] == 0  # noqa: S608
     assert post(
         client, partner_key, make("asked", "qd:q1", 1, asked_body())
     ).json() == {"result": "applied"}
+    # The sender's retry of the very same event now applies.
+    retried = post(client, partner_key, {**early, "sent_at": stamp()})
+    assert retried.json() == {"result": "applied"}
+    with db.connect() as conn:
+        assert (
+            conn.execute("select state from partner_question").fetchone()[0]
+            == "answered"
+        )
+
+
+def test_message_added_before_its_asked_is_still_ignored(
+    db, bridge, client, partner_key
+):
+    r = post(client, partner_key, make("message_added", "qd:q1", 2, {"text": "hi"}))
+    assert r.status_code == 200 and r.json() == {"result": "ignored"}
+
+
+def test_deeply_nested_json_is_400(client, partner_key):
+    raw = b"[" * 30000 + b"]" * 30000
+    assert post(client, partner_key, None, raw=raw).status_code == 400
+    raw = b'{"a":' * 12000 + b"1" + b"}" * 12000
+    assert post(client, partner_key, None, raw=raw).status_code == 400
 
 
 def test_a_bad_asked_body_is_422(client, partner_key):
