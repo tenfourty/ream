@@ -147,6 +147,14 @@ when it is not held). The top of his page lists the open questions, overdue
 first, then blocking, by, when-you-can. Reading the question back (list, answers, wait, the API) returns all of these, with `for`
 and `replaced_by` included.
 
+Jeremy now has an INBOX on his wall: every open question, open review and unseen
+reply on every page, in one list, overdue first, then blocking, by, when-you-can,
+then soonest needed-by. It sorts on what you set, so set urgency and needed_by
+honestly: a question marked blocking that is not, or a deadline you invented, pushes
+a real one down. `GET /api/v1/questions?open=1` returns your own open questions in
+that order, held ones last and marked by held_by; a key with decisions:read-all may
+add `scope=all` for every office's.
+
 He can also COMMENT on your page, on the whole page or on text he selected.
 `artifacts-decide wait` wakes for his comments as well as his answers, and
 `artifacts-decide comments` lists your threads, marking the ones where the

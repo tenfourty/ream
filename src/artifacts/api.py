@@ -10,7 +10,7 @@ import html
 import logging
 import threading
 from contextlib import nullcontext
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import partial
 from typing import Any, Literal
 
@@ -41,6 +41,7 @@ from artifacts import (
     grants,
     hosts,
     idempotency,
+    inbox,
     keys,
     markdown,
     onboarding,
@@ -1948,6 +1949,67 @@ def agent_router(
                 include_answered=(include_answered is not False) and not open_only,
                 include_closed=include_closed,
             )
+        ]
+
+    @router.get("/questions")
+    def list_open_questions(
+        open: bool = Query(True),
+        scope: str = Query("mine", pattern="^(mine|all)$"),
+        agent: str = Depends(caller),
+    ):
+        """Open questions in the order his inbox shows them: overdue first, then
+        urgency, then soonest needed-by, then topic, then age. The calling
+        agent's own by default; `scope=all` is every office's and needs
+        `decisions:read-all`, refused exactly as `GET /decisions?scope=all` is.
+
+        A held question (one waiting on an unanswered prerequisite) is returned,
+        marked by a non-empty `held_by`, and sits after every question that is
+        ready: his inbox does not show it, but the agent that asked needs to see
+        it. Reviews are not questions and are not listed here."""
+        if not open:
+            raise HTTPException(
+                422,
+                {
+                    "field": "open",
+                    "detail": "only open questions are listed here; read answered "
+                    "ones from GET /api/v1/decisions",
+                },
+            )
+        if scope == "all":
+            if not grants.has(db, agent, grants.READ_ALL_DECISIONS):
+                raise HTTPException(
+                    403,
+                    f"this key authenticates as seat '{agent}', which does not "
+                    "have decisions:read-all. Check GET /api/v1/me — you may be "
+                    "using a different seat's key file than you intended.",
+                )
+            found = [
+                (r.decision, r.agent, r.artifact_title)
+                for r in decisions.across_seats(db, limit=1000)
+            ]
+        else:
+            with db.connect() as conn:
+                titles = dict(
+                    conn.execute(
+                        "select id, title from artifact where agent = %s",
+                        (agent,),
+                    ).fetchall()
+                )
+            found = [
+                (d, agent, titles.get(d.artifact_id, ""))
+                for d in decisions.list_for_agent(db, agent, limit=1000)
+            ]
+        now = datetime.now(UTC)
+        found = [f for f in found if f[0].kind == "question"]
+        found.sort(key=lambda f: (bool(f[0].held_by), inbox.key(f[0], now)))
+        return [
+            {
+                **decisions.public(d),
+                "agent": who,
+                "artifact_title": title,
+                "overdue": inbox.is_overdue(d, now),
+            }
+            for d, who, title in found
         ]
 
     @router.post("/decisions/{decision_id}/close")
