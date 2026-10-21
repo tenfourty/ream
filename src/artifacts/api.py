@@ -10,6 +10,7 @@ import html
 import logging
 import threading
 from datetime import datetime
+from functools import partial
 from typing import Any, Literal
 
 from fastapi import (
@@ -1390,7 +1391,10 @@ def agent_router(
                 after_commit=later,
             )
             # GitGuardian checks the saved comment straight after the response.
-            background.add_task(comments.second_scan, db, row.id)
+            if later is not None:
+                later.append(partial(comments.second_scan, db, row.id))
+            else:
+                background.add_task(comments.second_scan, db, row.id)
             return row.__dict__
         except store.NotAPage as exc:
             # 422, not 413: the body is not too much, it is not a page. Named

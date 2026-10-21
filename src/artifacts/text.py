@@ -185,13 +185,14 @@ class _Visible(HTMLParser):
         self.parts.append(data)
 
 
-def visible(body: str, limit: int = VISIBLE_LIMIT) -> tuple[str, bool]:
+def visible(body: str, limit: int | None = None) -> tuple[str, bool]:
     """A page's readable words, lowercased, with script, style, SVG and
     templates removed BEFORE any length limit is applied, and whether the text
     was cut at `limit`. Unlike `searchable`, which cuts the HTML first and so
     misses text that follows a large inline stylesheet. A small page takes the
     same quick path as `searchable`; a large one is walked once by a parser, so
     no input makes it slow."""
+    limit = VISIBLE_LIMIT if limit is None else limit
     if len(body) <= SEARCH_LIMIT:
         words = searchable(body)
         return words, len(words) > limit

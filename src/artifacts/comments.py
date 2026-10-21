@@ -143,7 +143,7 @@ class NoSuchThread(Exception): ...
 def office_of(label: str | None) -> str:
     """The part of a session label before the first "/": what the session said
     its office is. Only what it said -- nothing proves it."""
-    return (label or "").split("/", 1)[0].strip()
+    return (label or "").split("/", 1)[0].strip().casefold()
 
 
 def is_foreign(
@@ -156,6 +156,10 @@ def is_foreign(
     if author != owner:
         return True
     mine, theirs = office_of(author_session), office_of(owner_session)
+    # An office named for the key's own agent IS the owner's office: a label
+    # "harland/x" on harland's key says nothing about another office.
+    if mine == owner.strip().casefold():
+        return False
     return bool(mine and theirs and mine != theirs)
 
 
@@ -611,8 +615,12 @@ def add(
         # Which SESSION published the page, so the seat that wrote it can pick
         # its own work out of a shared feed (homelab-ij8.32). A label on the
         # event, never a scope.
+        # The LATEST version's session, as the waiter reads it (`last_session`),
+        # not the first publisher's: a republish on a shared key moves the page
+        # to the office that republished it.
         page_session = conn.execute(
-            "select session from artifact where id = %s", (artifact_id,)
+            "select session from version where artifact_id = %s and n = %s",
+            (artifact_id, version_n),
         ).fetchone()[0]
         # What the event should say. A mark carries no note of its own, so
         # "body" -- empty for a mark, per the test above -- would tell the
@@ -762,7 +770,9 @@ def quote_state(quote: str, current_body: str) -> str:
     comment cannot go stale in this sense, and claiming otherwise would put a
     warning on a comment that is perfectly fine.
     """
-    words, _ = text.visible(current_body)
+    words, cut = text.visible(current_body)
+    if cut:
+        return ""  # unknown: the page has more text than is searched
     return _state_against(quote, words, _tight(words))
 
 
@@ -818,7 +828,9 @@ def carried_state(row: CommentRow, current_body: str) -> str:
     Compared the way `quote_state` compares -- tags stripped, whitespace and
     case ignored -- so a sentence that only gained emphasis is still on page.
     """
-    words, _ = text.visible(current_body)
+    words, cut = text.visible(current_body)
+    if cut:
+        return STILL if row.resolved_at is None else ADDRESSED
     return _carried_against(row, words, _tight(words))
 
 
@@ -842,7 +854,9 @@ def _carried_against(row: CommentRow, words: str, tight_words: str) -> str:
 
 def carried_states(rows: list[CommentRow], current_body: str) -> dict[str, str]:
     """`carried_state` for many rows, reading the page once."""
-    words, _ = text.visible(current_body)
+    words, cut = text.visible(current_body)
+    if cut:
+        return {row.id: STILL if row.resolved_at is None else ADDRESSED for row in rows}
     tight_words = _tight(words)
     return {row.id: _carried_against(row, words, tight_words) for row in rows}
 
@@ -918,6 +932,7 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
         tuple(quoting),
     ).fetchall()
     missing = []
+    unknown: set[str] = set()
     for artifact_id, n in versions:
         cached = _visible_cache_get((artifact_id, n))
         if cached is None:
@@ -931,7 +946,11 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
         ).fetchone()
         if row is None:
             continue
-        words, _ = text.visible(row[0])
+        words, cut = text.visible(row[0])
+        if cut:
+            # Truncated text is not authoritative: unknown, and never cached.
+            unknown.add(artifact_id)
+            continue
         words_by_page[artifact_id] = (words, _tight(words))
         _visible_cache_put((artifact_id, n), words_by_page[artifact_id])
     return [

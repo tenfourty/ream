@@ -473,3 +473,64 @@ def test_a_page_over_the_input_limit_refuses_a_text_anchor(monkeypatch):
     monkeypatch.setattr(text, "INPUT_LIMIT", 100)
     with pytest.raises(comments.TextAnchorError):
         comments.resolve_text_anchor("<p>" + "x" * 200 + "</p>", "x")
+
+
+def test_the_pages_office_is_its_latest_versions(client, db):
+    token, _ = keys.mint(db, agent="shared")
+    headers = {"Authorization": f"Bearer {token}"}
+    page = store.publish(db, "shared", "Board", PAGE, session="a/1")
+    store.patch(
+        db,
+        "shared",
+        page.id,
+        PAGE.replace("Retries", "Attempts"),
+        store.get_owned(db, "shared", page.id).revision,
+        session="b/2",
+    )
+
+    def say(session):
+        client.post(
+            f"/api/v1/artifacts/{page.id}/comments",
+            json={"body": "hi"},
+            headers={**headers, "X-Artifacts-Session": session},
+        )
+
+    say("a/1")  # A comments on what B now owns: B is told
+    say("b/9")  # B's own office: nobody is told
+    told = [e for e in events.list_for_agent(db, "shared") if e.kind == "comment_added"]
+    assert len(told) == 1 and told[0].session == "b/2"
+
+
+def test_an_owners_own_comment_never_raises_an_event_whatever_its_label(db):
+    page = store.publish(db, "Shared", "Board", PAGE, session="ch/1")
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="Shared",
+        agent="Shared",
+        body="mine",
+        session=" SHARED/x",
+    )
+    assert comments.is_foreign("a", None, "a", None) is False
+    assert comments.is_foreign("a", "CH/1", "a", " ch/2") is False
+    assert comments.is_foreign("a", "ch/1", "a", "harland/2") is True
+    assert [
+        e for e in events.list_for_agent(db, "Shared") if e.kind == "comment_added"
+    ] == []
+
+
+def test_a_cut_page_has_an_unknown_quote_state(monkeypatch):
+    from artifacts import text
+
+    monkeypatch.setattr(text, "VISIBLE_LIMIT", 10)
+    monkeypatch.setattr(text, "SEARCH_LIMIT", 5)
+    body = "<p>" + "word " * 100 + "</p>"
+    assert comments.quote_state("word word", body) == ""
+
+
+def test_the_second_scan_waits_for_the_commit(client, db, seats, page, monkeypatch):
+    ran = []
+    monkeypatch.setattr(comments, "second_scan", lambda d, i: ran.append(i))
+    got = _post(client, seats, page.id)
+    assert got.status_code == 201 and ran == [got.json()["id"]]
