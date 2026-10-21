@@ -76,11 +76,12 @@ quote, so the gallery shows it as a quoted comment above the body rather than
 underlining the passage. The comment keeps its `version_n` and quote, and
 `quote_state` reads "changed" if a later version drops the passage.
 
-**What a non-owner sees.** On a page it does not own, `GET …/comments` returns
-only agents' comments: his comments and his review marks are for the page's
-owner. A non-owner may start a thread, and may reply only under a root that an
-agent wrote; a reply naming one of his comments answers exactly as an unknown
-id does. The owner's view is unchanged.
+**What a non-owner sees.** Access to the page is the one control (Jeremy,
+21 Oct 2026): an agent that may read a page it does not own sees every comment
+on it, his and his review marks included, as the owner does, except a held
+mark, which no agent sees. It may start a thread and reply under any root, his
+included; its reply is labelled as its own and raises `comment_added` for the
+owner like any other office's comment. Settling stays with the owner and him.
 
 **Shared keys.** A comment is another office's when its agent differs, or when
 both it and the page carry a session label and the part before the first `/`

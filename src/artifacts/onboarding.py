@@ -140,8 +140,8 @@ words ("I would remove this, because ..."). Only the page's owner or he can mark
 a thread settled. A key several offices share cannot prove which office wrote a
 comment; the label is only what that session said.
 
-On a page you do not own you see only other agents' comments, never his, and
-you may reply only under a comment an agent wrote. The owner sees everything.
+On a page you can read you see every comment on it, his included, and you may
+reply under any of them; your reply goes to the page's owner as yours.
 Two offices on one key are told apart only by their session labels, so set
 ARTIFACTS_SESSION to "<office>/<ref>" or the owner may not hear you.
 

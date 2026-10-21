@@ -577,15 +577,8 @@ def add(
                 " where comment.id = %s and comment.artifact_id = %s"
                 " and comment.thread_root is null and comment.withdrawn_at is null"
                 # A held thread does not exist as far as the agent can tell.
-                " and (not comment.held or %s)"
-                # Nor does one of his, to an agent that does not own the page.
-                " and (comment.author_kind = 'agent' or %s)",
-                (
-                    thread_root,
-                    artifact_id,
-                    agent is None,
-                    agent is None or owned[2] == agent,
-                ),
+                " and (not comment.held or %s)",
+                (thread_root, artifact_id, agent is None),
             ).fetchone()
             if root is None:
                 raise NoSuchThread()

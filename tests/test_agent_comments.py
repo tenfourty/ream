@@ -417,34 +417,7 @@ def test_section_is_capped_and_a_heading_is_found_under_its_own_section(
     assert own.status_code == 201
 
 
-def test_a_non_owner_sees_only_agent_comments_and_replies_only_to_them(
-    client, db, seats, page
-):
-    his = comments.add(
-        db,
-        artifact_id=page.id,
-        author_kind="human",
-        author="jeremy",
-        body="private to the owner",
-    )
-    theirs = _post(client, seats, page.id, who="owner").json()
-    listed = client.get(
-        f"/api/v1/artifacts/{page.id}/comments", headers=seats["other"]
-    ).json()
-    assert [r["id"] for r in listed] == [theirs["id"]]
-    to_his = _post(client, seats, page.id, thread_root=his.id)
-    unknown = _post(client, seats, page.id, thread_root="nope")
-    assert to_his.status_code == unknown.status_code == 422
-    assert to_his.json() == unknown.json()
-    ok = _post(client, seats, page.id, thread_root=theirs["id"])
-    assert ok.status_code == 201
-    owner_view = client.get(
-        f"/api/v1/artifacts/{page.id}/comments", headers=seats["owner"]
-    ).json()
-    assert his.id in [r["id"] for r in owner_view]
-
-
-def test_a_non_owner_sees_nothing_of_a_thread_he_started(client, db, seats, page):
+def test_a_non_owner_sees_his_comments_and_replies_under_them(client, db, seats, page):
     his = comments.add(
         db,
         artifact_id=page.id,
@@ -452,7 +425,7 @@ def test_a_non_owner_sees_nothing_of_a_thread_he_started(client, db, seats, page
         author="jeremy",
         body="his question",
     )
-    comments.add(
+    answer = comments.add(
         db,
         artifact_id=page.id,
         author_kind="agent",
@@ -461,10 +434,21 @@ def test_a_non_owner_sees_nothing_of_a_thread_he_started(client, db, seats, page
         body="the owner's answer",
         thread_root=his.id,
     )
-    seen = client.get(
+    theirs = _post(client, seats, page.id, who="owner").json()
+    listed = client.get(
         f"/api/v1/artifacts/{page.id}/comments", headers=seats["other"]
     ).json()
-    assert seen == []
+    assert [r["id"] for r in listed] == [his.id, answer.id, theirs["id"]]
+    under_his = _post(client, seats, page.id, thread_root=his.id)
+    assert under_his.status_code == 201
+    assert under_his.json()["author_kind"] == "agent"
+    assert under_his.json()["thread_root"] == his.id
+    owner_view = client.get(
+        f"/api/v1/artifacts/{page.id}/comments", headers=seats["owner"]
+    ).json()
+    assert under_his.json()["id"] in [r["id"] for r in owner_view]
+    unknown = _post(client, seats, page.id, thread_root="nope")
+    assert unknown.status_code == 422
 
 
 def test_a_page_over_the_input_limit_refuses_a_text_anchor(monkeypatch):

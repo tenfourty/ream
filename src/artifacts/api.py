@@ -1258,27 +1258,15 @@ def agent_router(
         # A page the caller may READ: its own, or another agent's that is open
         # to agents. A closed, deleted or unknown page answers the same 404.
         try:
-            page = store.get_owned(db, agent, artifact_id, as_reader=True)
+            store.get_owned(db, agent, artifact_id, as_reader=True)
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
+        # Another office's page shows every comment, his included: access to
+        # the page is the one control (Jeremy, 21 Oct 2026). A held mark stays
+        # out, as it does for the owner.
         rows = comments.list_for_artifact(
             db, artifact_id, include_resolved=include_resolved
         )
-        if page.agent != agent:
-            # Another office's page: only agents' comments. His words and his
-            # review marks are for the page's owner.
-            # By thread: a thread his comment started is his, replies by the
-            # owner's agent included.
-            his = {
-                row.id
-                for row in rows
-                if row.thread_root is None and row.author_kind == "human"
-            }
-            rows = [
-                row
-                for row in rows
-                if row.author_kind == "agent" and (row.thread_root or row.id) not in his
-            ]
         return [row.__dict__ for row in rows]
 
     @router.post("/artifacts/{artifact_id}/comments", status_code=201)
