@@ -86,8 +86,12 @@ def test_every_answer_carries_the_cursor_for_now(db, client, auth):
 
 
 def _event(db, n=1):
+    """His answer on a fresh page: the event a seat's waiter is woken by."""
     page = store.publish(db, "seat", f"Board {n}", PAGE)
-    decisions.ask(db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS)
+    asked = decisions.ask(
+        db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS
+    )
+    decisions.answer(db, asked.id, letter="a", by="jeremy")
 
 
 def test_safe_cursor_is_never_above_what_was_returned_on_a_full_page():
@@ -121,8 +125,8 @@ def test_a_quiet_hold_is_seen_up_to_the_latest_before_the_look(db, client, auth)
 
 
 def test_a_truncated_page_is_seen_only_to_its_last_row(db, client, auth):
-    _event(db, 1)
-    _event(db, 2)
+    for n in range(3):
+        _event(db, n)
     full = client.get("/api/v1/events?since=0", headers=auth).json()
     assert len(full) >= 3
     page = client.get("/api/v1/events?since=0&limit=2", headers=auth)
