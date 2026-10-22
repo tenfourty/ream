@@ -10,6 +10,7 @@ environment-driven read `create_app`'s router already uses in `test_router.py`.
 
 import asyncio
 import contextlib
+import http.client
 import http.server
 import json
 import re
@@ -729,6 +730,34 @@ def test_a_service_that_only_rolls_fails_naming_the_status_not_the_page(monkeypa
     assert "Bad Gateway" not in str(excinfo.value.detail)
     assert "nginx" not in str(excinfo.value.detail)
     assert "not JSON" in str(excinfo.value.detail)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        TimeoutError("The read operation timed out"),
+        http.client.RemoteDisconnected("Remote end closed connection"),
+        http.client.IncompleteRead(b"partial"),
+        ConnectionResetError("reset by peer"),
+    ],
+    ids=["read-timeout", "remote-disconnected", "incomplete-read", "reset"],
+)
+def test_a_connection_lost_mid_response_is_an_http_failure(monkeypatch, failure):
+    """urllib wraps only a failure to connect in URLError: a read that times
+    out, or a connection dropped after it was made, escapes as itself. The
+    answer waiter retries an HTTPFailure and nothing else, so on 22 Oct 2026 a
+    read timeout while baba came back from a reboot killed it with a traceback."""
+
+    class _Drops:
+        def open(self, request, timeout=None):
+            raise failure
+
+    monkeypatch.setattr(client, "_opener", _Drops())
+
+    with pytest.raises(client.HTTPFailure) as excinfo:
+        client._request("GET", "https://example.invalid/api/v1/events", "k", None)
+
+    assert excinfo.value.status == 0
 
 
 def test_the_services_own_refusal_is_shown_and_never_retried(monkeypatch):

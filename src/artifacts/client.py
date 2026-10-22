@@ -10,6 +10,7 @@ every error path below carries a status code and the server's own JSON
 """
 
 import argparse
+import http.client
 import ipaddress
 import json
 import os
@@ -568,6 +569,12 @@ def _request(
             ) from None
         except urllib.error.URLError as exc:
             raise HTTPFailure(0, str(exc.reason)) from None
+        except (OSError, http.client.HTTPException) as exc:
+            # urllib wraps only a failure to connect in URLError. A read that
+            # times out, or a connection dropped once made, escapes as itself,
+            # and every caller that retries (the answer waiter above all) knows
+            # only HTTPFailure: on 22 Oct 2026 one read timeout killed it.
+            raise HTTPFailure(0, type(exc).__name__) from None
     if not raw:
         return {}
     try:
