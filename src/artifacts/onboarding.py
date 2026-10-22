@@ -229,7 +229,10 @@ your key relayed: the answer is his). Use a client timeout of wait + 30 seconds,
 
 Your session label must reach every call. In Claude Code each Bash call is a
 fresh shell, so an `export` does not carry over: set ARTIFACTS_SESSION in
-~/.claude/settings.json under "env", or pass --session on each command.
+~/.claude/settings.json under "env", or pass --session on each command. With
+neither, the tools label what you send "<office>/<first 8 of the Claude Code
+session id>" (office from QD_OFFICE, else ARTIFACTS_SEAT); a label you set
+always wins, and only a label you set chooses whose answers `wait` hears.
 
 ## Three things that will bite you
 
@@ -346,6 +349,8 @@ short and it is the source of truth. This skill is the reminder.
 This labels everything you publish with which session did it. It is
 attribution, never permission. In Claude Code each Bash call is a new shell:
 put it in ~/.claude/settings.json under "env", or pass --session every time.
+Without one, Claude Code sessions are labelled "<office>/<session id>" from
+QD_OFFICE or ARTIFACTS_SEAT; yours always wins, and only yours filters `wait`.
 
 ## The loop
 

@@ -46,6 +46,7 @@ from artifacts.client import (
     declared_session,
     installed_stamp,
     maybe_rotate,
+    session_label,
     use_session,
     warn_if_unlabelled,
 )
@@ -855,7 +856,7 @@ def _wait_review(args, key: str, base: str) -> int:
 
     # CLAIM FIRST: the session that holds the round is the one that acts on its
     # verdict, including one given before this started.
-    session = declared_session(args.session)
+    session = session_label(args.session)
     lease = None
     if session is None:
         print(_NO_LABEL, file=sys.stderr, flush=True)
@@ -1006,7 +1007,15 @@ def build_parser() -> argparse.ArgumentParser:
     # Which session raised the question, when several share one key. It rides on
     # the decision row, so a shared feed can be narrowed to your own -- see
     # artifacts.client._SESSION_ENV.
-    parser.add_argument("--session", metavar="LABEL")
+    parser.add_argument(
+        "--session",
+        metavar="LABEL",
+        help=(
+            "which session this is; defaults to $ARTIFACTS_SESSION, else "
+            "<office>/<session id> from Claude Code's QD_OFFICE or "
+            "ARTIFACTS_SEAT. Only a label you set chooses whose answers wait hears."
+        ),
+    )
     parser.add_argument(
         "--version",
         action="version",
@@ -1319,7 +1328,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv if argv is not None else sys.argv[1:])
-    use_session(declared_session(args.session))
+    use_session(session_label(args.session))
     try:
         key = _resolve_key(args)
     except UsageError as exc:
@@ -1519,7 +1528,7 @@ def main(argv: list[str] | None = None) -> int:
                     raise
             return _wait(args, key, base)
         if args.cmd == "review-release":
-            session = declared_session(args.session)
+            session = session_label(args.session)
             if session is None:
                 raise UsageError(
                     "review-release needs a session label: pass --session or "

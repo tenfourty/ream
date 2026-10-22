@@ -544,6 +544,11 @@ def _no_inherited_office(monkeypatch, tmp_path):
     running the suite: a maintainer's own label would filter every wait test,
     and its state file would hold answers back. A test that wants either sets it."""
     monkeypatch.delenv("ARTIFACTS_SESSION", raising=False)
+    # Nor the agent tool's own markers, from which the CLIs build a default
+    # label (runcove-5t3oj.25): a suite run inside Claude Code would label
+    # every "unlabelled" request.
+    for name in ("CLAUDE_CODE_SESSION_ID", "QD_OFFICE", "ARTIFACTS_SEAT"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
 
 

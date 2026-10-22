@@ -72,6 +72,34 @@ def declared_session(explicit: str | None = None) -> str | None:
     return value or None
 
 
+def default_session() -> str | None:
+    """A label read from the agent tool's own environment, for a session that
+    declared none (runcove-5t3oj.25): "<office>/<first 8 of the Claude Code
+    session id>". The office is quarterdeck's QD_OFFICE, else the artifacts-key
+    seat with "_" as "-". Asked of every office on 22 Oct 2026
+    (docs/agent/feedback/2026-10-22-review-scope-and-session-names.md): three
+    said their pages had gone out unlabelled. None when there is no session id
+    or no office, so the caller still warns."""
+    ref = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()[:8]
+    office = os.environ.get("QD_OFFICE", "").strip()
+    if not office:
+        office = os.environ.get("ARTIFACTS_SEAT", "").strip().replace("_", "-")
+    if not ref or not office or "/" in office:
+        return None
+    return f"{office}/{ref}"
+
+
+def session_label(explicit: str | None = None) -> str | None:
+    """The label this process sends: the declared one, else the default.
+
+    Only what is SENT. Which office a waiter or a comment list listens for is
+    still `declared_session` alone: quarterdeck's office names ("artifacts",
+    "quarterdeck") differ from labels offices already publish under
+    ("artifacts-maintainer", "qd-maintainer"), so a default there would quietly
+    stop an unlabelled waiter hearing its own pages' answers."""
+    return declared_session(explicit) or default_session()
+
+
 # Set once, by `main`, from `--session` or the environment. A module-level value
 # rather than an argument threaded through eleven helpers: this is a one-shot
 # process whose identity does not change halfway through, and the alternative was
@@ -1353,7 +1381,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="LABEL",
         help=(
             "which session this is, when several share one key; defaults to "
-            f"${_SESSION_ENV}. A label, never a secret."
+            f"${_SESSION_ENV}, else <office>/<session id> from Claude Code's "
+            "QD_OFFICE or ARTIFACTS_SEAT. A label, never a secret."
         ),
     )
     # The gallery's housekeeping, for agents. Each takes the page id, and none
@@ -1476,7 +1505,7 @@ _SHELF_ACTIONS = (
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv if argv is not None else sys.argv[1:])
-    use_session(declared_session(args.session))
+    use_session(session_label(args.session))
     # BEFORE the key is read, because this is the one thing here that needs
     # none. Half the value of a pre-publish check is being able to run it in
     # CI, or on a machine that has never been given a key, or on a page nobody
