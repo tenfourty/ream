@@ -12,8 +12,10 @@ name: ci
     branches: [main, "ci/**"]
   workflow_dispatch:
 
+# One queue per branch: main's runs stay in order (each one pins an image), and a
+# ci/ branch no longer waits behind main's image and pin (runcove-5t3oj.41).
 concurrency:
-  group: artifacts-main
+  group: artifacts-${{ github.ref_name }}
   cancel-in-progress: false
 
 defaults:
@@ -22,7 +24,10 @@ defaults:
 
 jobs:
   test:
-    runs-on: docker
+    # docker-light, not docker: this job needs no docker-in-docker, only its
+    # Postgres service container, and docker-light has five slots where docker has
+    # one, so tests stop queueing behind every image build (runcove-5t3oj.41).
+    runs-on: docker-light
     # A hung job fails here instead of holding a builder for the runner's default of hours
     # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
     timeout-minutes: 20
@@ -85,9 +90,9 @@ jobs:
           # This service container exists only for this job, so the tests may
           # turn its commit flushes off (tests/conftest.py, _declared_throwaway).
           ARTIFACTS_TEST_PG_THROWAWAY: "1"
-        # -n auto, capped at 5: the docker runner's one slot has 5.5 cores
-        # (docs/services/ci-builders in the homelab repo), so more workers only
-        # queue behind each other and the Postgres service; each in its own database
+        # -n auto (one worker per core the runner gives this job), capped at 5:
+        # more workers only queue behind each other and the Postgres service
+        # (docs/services/ci-builders in the homelab repo); each in its own database
         # (artifacts_test_<worker>) on this one Postgres service.
         run: uv run pytest -q -n auto --maxprocesses 5
 
