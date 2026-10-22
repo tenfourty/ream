@@ -10,6 +10,7 @@ about thumbnails is decoration by comparison.
 
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -120,6 +121,56 @@ def test_the_flags_disable_the_network(monkeypatch):
     assert "NetworkService" in flags
     assert "--disable-background-networking" in flags
     assert "--disable-remote-fonts" in flags
+
+
+def test_the_browser_runs_under_a_kernel_data_limit(monkeypatch):
+    """The sampler can miss a page that grows faster than it polls; a hostile
+    page grew past the 1.5 GiB of a test scope with no limit (22 Oct 2026). The
+    kernel's per-process data limit stops it, and the sampler stays as well."""
+    seen = {}
+    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setattr(thumbs, "_PRLIMIT", "/usr/bin/prlimit")
+    monkeypatch.setattr(
+        thumbs,
+        "_run",
+        lambda argv, **kw: (
+            seen.setdefault("argv", argv) or subprocess.CompletedProcess(argv, 0)
+        ),
+    )
+    thumbs.render(PAGE)
+    argv = [str(a) for a in seen["argv"]]
+    assert argv[:3] == [
+        "/usr/bin/prlimit",
+        f"--data={thumbs.RENDER_MAX_DATA_BYTES}",
+        "--",
+    ]
+    assert argv[3] == "/bin/true"
+
+
+def test_without_prlimit_the_browser_still_runs(monkeypatch):
+    seen = {}
+    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setattr(thumbs, "_PRLIMIT", None)
+    monkeypatch.setattr(
+        thumbs,
+        "_run",
+        lambda argv, **kw: (
+            seen.setdefault("argv", argv) or subprocess.CompletedProcess(argv, 0)
+        ),
+    )
+    thumbs.render(PAGE)
+    assert str(seen["argv"][0]) == "/bin/true"
+
+
+@pytest.mark.skipif(thumbs._PRLIMIT is None, reason="no prlimit here")
+def test_the_data_limit_is_enforced_by_the_kernel():
+    grow = [sys.executable, "-c", "b = bytearray(256 << 20); b[-1] = 1"]
+    assert thumbs._run(grow, timeout=30).returncode == 0
+    limited = thumbs._data_limited(grow, 64 << 20)
+    done = thumbs._run(limited, timeout=30)
+    # The limit, and not prlimit or python failing to start, is what stopped it.
+    assert done.returncode != 0
+    assert b"MemoryError" in done.stderr
 
 
 # --- with a real browser, when there is one ----------------------------------

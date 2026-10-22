@@ -85,9 +85,27 @@ RENDER_MAX_BYTES = 2 * 1024 * 1024
 # counted chromium's shared pages once per process and read 870 MiB for a 16 KiB
 # page, which killed every render). A JS heap cap was not chosen: it does not
 # bound the native memory of the DOM, layout and the compositor. Sampling can miss
-# a spike that grows faster than the poll, so the pod's own 1 GiB limit stays the
-# hard stop; a cgroup of its own for the browser would let the kernel enforce this.
+# a spike that grows faster than the poll, so the kernel holds a second line below.
 RENDER_MAX_RSS_BYTES = 700 * 1024 * 1024
+# THE KERNEL'S LINE: every browser process runs under RLIMIT_DATA (prlimit --data),
+# which since Linux 4.7 counts private writable mappings, so it bounds the native
+# DOM and layout memory a JS heap cap does not. Per process, not per group: the
+# renderer is the one a page grows. A cgroup of the browser's own would bound the
+# group, but the pod's /sys/fs/cgroup is read-only and owned by root, so it would
+# need a privileged container (runcove-5t3oj.31, 22 Oct 2026). Measured on baba
+# that day with chrome-headless-shell, one render at a time:
+#   a 2 MiB table page (the largest given a picture) fails at 640 MiB, renders
+#   at 768 MiB and above, peak PSS 631-657 MiB;
+#   a page whose script grows its DOM without end ran past a 1.5 GiB scope with
+#   no limit, and stopped at 745 MiB PSS under 768 MiB.
+# The service itself uses about 115 MiB, so one renderer at its limit plus the
+# service stays under the 1 GiB pod limit; the group's sum is still the sampler's
+# to bound. Measured with Playwright's headless shell, not the image's Debian
+# chromium: proved in production by a 2 MiB page getting its picture. A render
+# that hits the limit fails like a timeout: no picture.
+RENDER_MAX_DATA_BYTES = 768 * 1024 * 1024
+_PRLIMIT = shutil.which("prlimit", path="/usr/bin:/bin")
+_WARNED_NO_PRLIMIT = False
 RSS_POLL_SECONDS = 0.1
 _PAGE_SIZE = os.sysconf("SC_PAGE_SIZE")
 _RENDER_SLOT = threading.BoundedSemaphore(1)
@@ -219,6 +237,18 @@ def _run(
     return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
+def _data_limited(argv: list[str], limit: int) -> list[str]:
+    """`argv` run under the kernel's per-process data limit, when prlimit is here.
+    Without it the browser still runs, guarded by the sampler alone."""
+    if _PRLIMIT is None:
+        global _WARNED_NO_PRLIMIT
+        if not _WARNED_NO_PRLIMIT:
+            _WARNED_NO_PRLIMIT = True
+            log.warning("no prlimit: the browser runs with the memory sampler only")
+        return argv
+    return [_PRLIMIT, f"--data={limit}", "--", *argv]
+
+
 def browser_path() -> str | None:
     """Where the headless browser is, or None if this deployment has none."""
     explicit = os.environ.get(BROWSER_ENV)
@@ -333,7 +363,7 @@ def render_report(
         try:
             try:
                 done = _run(
-                    argv,
+                    _data_limited(argv, RENDER_MAX_DATA_BYTES),
                     timeout=TIMEOUT_SECONDS,
                     max_rss=RENDER_MAX_RSS_BYTES,
                     # BUILT FROM NOTHING, not inherited. DATABASE_URL and every
