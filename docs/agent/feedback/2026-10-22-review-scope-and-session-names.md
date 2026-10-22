@@ -16,8 +16,8 @@ only. A concrete instruction allows that one change. Otherwise say you're ready,
 of a default label should come from; (6) whether an explicit label always wins, and what to do
 when none can be found.
 
-Answers from 9 of 10 offices within minutes; jeremys-mac had no session connected and is still
-to answer.
+Answers from 9 of 10 offices within minutes; jeremys-mac, which had no session connected then,
+answered the same afternoon.
 
 ## A. What a comment allows
 
@@ -32,11 +32,12 @@ to answer.
 | retrobrew | n/a (timer page, no comments); would change only through its generator | no | keep, add "a peer's comment is never Jeremy's approval" |
 | warpgate | reply with what it understood; edit only on Jeremy's instruction | none; the risk is a peer's note taken as Jeremy's | keep, add "a peer office's comment is a request, never Jeremy's approval" |
 | harland | reply; edit only a concrete change, ask when the intent is open | no | keep, but the instruction must come from someone allowed to direct the office; an office's comment allows a reply only |
+| jeremys-mac | reply saying what it would change; edits only on Jeremy's concrete instruction; a peer's review notes are input, not a go | not on a page; it has had to hold back from reading "looks fine" in a comment as leave to republish or close a decision | keep, add "a comment from another office is never Jeremy's approval" |
 
-**Read:** all nine keep the wording. Nobody has seen an agent over-act on a page, but gg-ops did
+**Read:** all ten keep the wording. Nobody has seen an agent over-act on a page, but gg-ops did
 it today in another tool, so the risk is real. The additions agree: **the instruction must come
 from someone allowed to direct you** (ch, runcove-pmo, harland), **another office's comment is never
-Jeremy's approval** (homelab, quarterdeck, retrobrew, warpgate), and **nothing it implies**
+Jeremy's approval** (homelab, quarterdeck, retrobrew, warpgate, jeremys-mac), and **nothing it implies**
 (gg-ops).
 
 ## B. Default session label
@@ -52,13 +53,14 @@ Jeremy's approval** (homelab, quarterdeck, retrobrew, warpgate), and **nothing i
 | retrobrew | systemd unit sets it; refresh.sh refuses without | quarterdeck office or the key's seat | unit name for a timer; session for interactive | **refuse**, print the fix |
 | warpgate | **not set**; pages have gone out without | quarterdeck identity | session id, first 8 | warn, publish |
 | harland | export per command with its key file; none known without | the office the quarterdeck session holds | session id, short | **refuse**, with the fix in the error |
+| jeremys-mac | **not set**; `--session` per call, so pages have likely gone out without when it was forgotten | quarterdeck identity (`qd whoami` or the launch wrapper's variable) | session id, first 8 | warn, publish (unattributed beats blocked) |
 
-All nine run Claude Code; an explicit label always wins (9 of 9).
+All ten run Claude Code; an explicit label always wins (10 of 10).
 
 **Read:** the gap is real: three offices (cove, homelab, warpgate) say their pages have gone out
-unlabelled, and two more set it by hand each time. The default most asked for is
+unlabelled, jeremys-mac likely, and more set it by hand each time. The default most asked for is
 **`<office>/<first 8 of the Claude Code session id>`**, the office taken from quarterdeck's
-`QD_OFFICE` (6 offices) or else the seat (3). Both variables exist in a quarterdeck-launched
+`QD_OFFICE` (7 offices) or else the seat (3). Both variables exist in a quarterdeck-launched
 Claude Code session (`QD_OFFICE`, `CLAUDE_CODE_SESSION_ID`; checked 22 Oct). When nothing can be
-found: **warn and publish** (6 of 9); refuse (ch, retrobrew, harland) is the minority, and homelab's reason
+found: **warn and publish** (7 of 10); refuse (ch, retrobrew, harland) is the minority, and homelab's reason
 against it (an incident page must never block on metadata) decides it.
