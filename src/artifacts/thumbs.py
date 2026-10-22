@@ -73,13 +73,17 @@ TIMEOUT_SECONDS = 20
 #     for any failed render (runcove-5t3oj.23);
 #   * one render at a time, previews included, so two big publishes in the same
 #     moment cannot stack two browsers in one limit.
-RENDER_MAX_BYTES = 2 * 1024 * 1024
+# The image's Debian chromium needs more: on 22 Oct 2026 in production a 1 MiB
+# table rendered, and 1.5 MiB and 2 MiB tables passed the sampler's ceiling
+# below (756 and 734 MB) and got no picture (runcove-5t3oj.42). So the cap is
+# the largest size proven there, not one that only fit the headless shell.
+RENDER_MAX_BYTES = 1 * 1024 * 1024
 # The input cap bounds the HTML, not what a page builds from it: a few hundred
 # bytes of script can grow a DOM far past the limit. So the browser's own memory
 # is watched while it runs (PSS summed over its process group, polled every
 # RSS_POLL_SECONDS) and the group is SIGKILLed past this ceiling; the render then
-# fails like any other and the tile is the text tile. 700 MiB sits above the 458
-# Mi a 2 MiB page measured and well under the 1 GiB pod limit, which also holds
+# fails like any other and the tile is the text tile. 700 MiB sits above a 1 MiB
+# page in production and well under the 1 GiB pod limit, which also holds
 # the service. The sum is PSS, which shares each page among the processes that map
 # it, so it is the memory the group really adds to the pod (plain resident size
 # counted chromium's shared pages once per process and read 870 MiB for a 16 KiB
@@ -94,14 +98,14 @@ RENDER_MAX_RSS_BYTES = 700 * 1024 * 1024
 # group, but the pod's /sys/fs/cgroup is read-only and owned by root, so it would
 # need a privileged container (runcove-5t3oj.31, 22 Oct 2026). Measured on baba
 # that day with chrome-headless-shell, one render at a time:
-#   a 2 MiB table page (the largest given a picture) fails at 640 MiB, renders
+#   a 2 MiB table page (then the largest given a picture) fails at 640 MiB, renders
 #   at 768 MiB and above, peak PSS 631-657 MiB;
 #   a page whose script grows its DOM without end ran past a 1.5 GiB scope with
 #   no limit, and stopped at 745 MiB PSS under 768 MiB.
 # The service itself uses about 115 MiB, so one renderer at its limit plus the
 # service stays under the 1 GiB pod limit; the group's sum is still the sampler's
 # to bound. Measured with Playwright's headless shell, not the image's Debian
-# chromium: proved in production by a 2 MiB page getting its picture. A render
+# chromium; in production a 1 MiB page renders under it (runcove-5t3oj.42). A render
 # that hits the limit fails like a timeout: no picture.
 RENDER_MAX_DATA_BYTES = 768 * 1024 * 1024
 _PRLIMIT = shutil.which("prlimit", path="/usr/bin:/bin")
