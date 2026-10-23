@@ -341,28 +341,19 @@ def _slack_view(c: partner_in.Copy, now: datetime) -> dict:
     }
 
 
-def agent_routes(router: APIRouter) -> list[tuple[str, str]]:
-    """(method, path) for every route on the agent router, sorted, HEAD left
-    out: read from the router itself, so the discovery file lists what is
-    actually served."""
-    out = set()
-    for route in router.routes:
-        for method in getattr(route, "methods", None) or ():
-            if method != "HEAD":
-                out.add((method, route.path))
-    return sorted(out, key=lambda r: (r[1], r[0]))
-
-
-def agent_card_response(router: APIRouter, request: Request) -> JSONResponse:
+def agent_card_response(request: Request) -> JSONResponse:
     """The card for the face it was asked on. Which face is decided by matching
     the Host against the CONFIGURED names (the router already refused any other
     name), so no part of the request's Host is ever written into the card."""
     public = hosts.is_api(hosts.normalise(hosts.first_host_header(request.scope)))
     return JSONResponse(
-        onboarding.agent_card(agent_routes(router), public_only=public),
+        onboarding.agent_card(public_only=public),
         headers={
             "x-content-type-options": "nosniff",
             "cache-control": "public, max-age=300",
+            # The card differs by face, so a cache must never hand one host's
+            # copy to the other.
+            "vary": "host",
         },
     )
 
@@ -534,11 +525,11 @@ def agent_router(
 
     @router.get("/agent.json")
     def discovery(request: Request):
-        """The onboarding document as data (runcove-5t3oj.28): hosts, auth and
-        every route here, for a client without the tools. Open for the same
+        """The onboarding document as data (runcove-5t3oj.28): hosts, auth, the
+        open routes and where the keyed full list is, for a client without the tools. Open for the same
         reason as agents.txt. Its hosts come from configuration, never from the
         request, which is what every office asked for."""
-        return agent_card_response(router, request)
+        return agent_card_response(request)
 
     def _base(request: Request) -> str:
         host = hosts.first_host_header(request.scope) or "artifacts.invalid"

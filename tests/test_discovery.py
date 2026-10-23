@@ -50,17 +50,27 @@ def test_an_agent_on_the_lan_reads_it_without_a_key(client, wheel):
     assert f"https://{GALLERY_HOST}/api/v1/tools/" in card["cli"]["install"]
 
 
-def test_it_lists_the_routes_actually_served(client):
+def test_it_lists_only_the_open_routes_and_each_is_served(client):
+    """The full contract stays behind a key (/api/v1/openapi.json); the card
+    names only what needs none, and every one of those answers without one."""
     card = client.get("/api/v1/agent.json", headers={"host": GALLERY_HOST}).json()
-    routes = {(r["method"], r["path"]) for r in card["api"]["routes"]}
+    assert card["api"]["all_routes"] == {
+        "path": "/api/v1/openapi.json",
+        "needs_key": True,
+    }
+    assert "routes" not in card["api"]
+    for route in card["api"]["open_routes"]:
+        assert route["method"] == "GET"
+        response = client.get(route["path"], headers={"host": GALLERY_HOST})
+        assert response.status_code in (200, 404), route  # tools/ 404s with no wheel
+        assert response.status_code != 401, route
+    keyed = client.get("/api/v1/openapi.json", headers={"host": GALLERY_HOST})
+    assert keyed.status_code == 401
 
-    assert ("POST", "/api/v1/artifacts") in routes
-    assert ("GET", "/api/v1/agent.json") in routes
-    assert ("POST", "/api/v1/decisions/{decision_id}/record") in routes
-    assert not any(method == "HEAD" for method, _ in routes)
-    assert not any(not path.startswith("/api/v1") for _, path in routes), (
-        "only the agent API; never a gallery route"
-    )
+
+def test_a_cache_keeps_each_face_s_copy_apart(client):
+    response = client.get("/api/v1/agent.json", headers={"host": GALLERY_HOST})
+    assert response.headers["vary"] == "host"
 
 
 def test_a_forged_host_never_reaches_the_card(client):

@@ -38,8 +38,11 @@ add the install line. No shared card format; plain JSON.
   `ARTIFACTS_API_HOST` when set, each listed with what it reaches (warpgate, homelab,
   runcove-pmo, quarterdeck, retrobrew, ch). On the public API host the card names only that
   host, as agents.txt there never names the house name.
-- **Routes read from the live router** (homelab's CI check, harland's "does it exist"), so the
-  list cannot drift from what is served.
+- **The routes that need no key, and where the full list is.** The full contract stays at
+  `/api/v1/openapi.json` behind a key, as decided when it was built ("the shape of this API is
+  not something any device on the LAN should be able to ask for"). Every office that wants to
+  check a route still exists (homelab's CI, harland, ch) already holds a key. A reviewer
+  caught that a full open list would have undone that decision.
 - **Auth as a scheme and a header**, never a key or where one lives (ch, runcove-pmo).
 - **Version is the tool package's** `0.1.0.post<UTC build time>`: a version and a changed-at
   date in one (homelab, quarterdeck), and the same one the install line fetches.

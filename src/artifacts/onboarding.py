@@ -21,6 +21,9 @@ written once and does not learn anything about who is asking.
 page tells a caller how to reach the service AT THE ADDRESS IT ALREADY FOUND --
 an absolute URL taken from configuration is how an onboarding document sends a
 new machine at a name that only resolves inside the house.
+
+The one exception is `agent_card`, the discovery file a CLIENT acts on: it names
+configured hosts only, never the request's (see `configured_bases`).
 """
 
 from __future__ import annotations
@@ -354,11 +357,22 @@ def configured_bases(public_only: bool = False) -> list[dict[str, str]]:
     return bases
 
 
-def agent_card(routes: list[tuple[str, str]], public_only: bool = False) -> dict:
+OPEN_ROUTES = (
+    ("GET", "/api/v1/agents.txt"),
+    ("GET", "/api/v1/skill.md"),
+    ("GET", "/api/v1/agent.json"),
+    ("GET", "/api/v1/tools/"),
+)
+
+
+def agent_card(public_only: bool = False) -> dict:
     """The machine-readable twin of agents.txt: where to call, how to
-    authenticate, and every agent route as (method, path). `routes` comes from
-    the live router, so the list cannot drift from what is served. No key,
-    no database, no per-caller variation: the same bytes for everyone."""
+    authenticate, the routes that need no key, and where the full list is.
+
+    Not every route: the full contract is /api/v1/openapi.json, behind a key on
+    purpose ("the shape of this API is not something any device on the LAN
+    should be able to ask for", api.py), and every office that wants to check a
+    route already holds one. No key, no database, no per-caller variation."""
     bases = configured_bases(public_only)
     first = bases[0]["base_url"]
     built = wheel()
@@ -377,13 +391,8 @@ def agent_card(routes: list[tuple[str, str]], public_only: bool = False) -> dict
                 "header": "Authorization",
                 "how_to_get_a_key": "see the onboarding document; never in a URL",
             },
-            "open_routes": [
-                "/api/v1/agents.txt",
-                "/api/v1/skill.md",
-                "/api/v1/agent.json",
-                "/api/v1/tools/",
-            ],
-            "routes": [{"method": m, "path": p} for m, p in routes],
+            "open_routes": [{"method": m, "path": p} for m, p in OPEN_ROUTES],
+            "all_routes": {"path": "/api/v1/openapi.json", "needs_key": True},
         },
         "cli": {
             "install": (
