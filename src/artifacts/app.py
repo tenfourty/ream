@@ -6,7 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from artifacts import hosts, onboarding, partner_in, ratelimit
-from artifacts.api import agent_router
+from artifacts.api import agent_card_response, agent_router
 from artifacts.content import create_content_app
 from artifacts.db import Database
 from artifacts.gallery import gallery_router
@@ -98,9 +98,22 @@ def create_gallery_app(
         return {"status": "ok"}
 
     if db is not None:
-        app.include_router(agent_router(db, limiter))
+        agents = agent_router(db, limiter)
+        app.include_router(agents)
         app.include_router(gallery_router(db))
+        _well_known(app, agents)
     return app
+
+
+def _well_known(app: FastAPI, agents) -> None:
+    """/.well-known/agent.json, the conventional place for a discovery file, on
+    the root of a host (runcove-5t3oj.28). On the gallery's name it sits behind
+    Authelia like everything outside /api/v1, so there an agent reads its twin,
+    /api/v1/agent.json; on the API host both answer."""
+
+    @app.get("/.well-known/agent.json")
+    def well_known_agent_json(request: Request):
+        return agent_card_response(agents, request)
 
 
 def create_api_app(
@@ -148,7 +161,9 @@ def create_api_app(
         )
 
     if db is not None:
-        app.include_router(agent_router(db, limiter))
+        agents = agent_router(db, limiter)
+        app.include_router(agents)
+        _well_known(app, agents)
     return app
 
 

@@ -253,6 +253,7 @@ purpose). Do not try other keys; ask him for the content, or to open it.
     API base      {base}/api/v1
     this document {base}/api/v1/agents.txt
     the skill     {base}/api/v1/skill.md
+    route list    {base}/api/v1/agent.json  (JSON, for a client without the tools)
 
 Everything under /api/v1 except these documents and the tools needs a key.
 """
@@ -307,6 +308,97 @@ def _tools_text(base: str) -> str:
         "\n"
         f"wheel: {url}\n"
     )
+
+
+def tools_version() -> str | None:
+    """The version of the tool package this image built, which is also when it
+    was built (0.1.0.post<UTC timestamp>), or None where there is none."""
+    built = wheel()
+    if built is None:
+        return None
+    parts = built.name.split("-")
+    return parts[1] if len(parts) > 2 else None
+
+
+def configured_bases(public_only: bool = False) -> list[dict[str, str]]:
+    """Every address this service answers agents on, FROM CONFIGURATION ONLY.
+
+    runcove-5t3oj.28, every office asked on 23 Oct 2026
+    (docs/agent/feedback/2026-10-23-discovery-file.md): a discovery file names a
+    fixed host and never the one in the request, because an agent follows it
+    without a second look and sends its key where it points. Unlike agents.txt,
+    which is prose a person or agent reads, this is what a client acts on.
+    `public_only` when it is served on the public API host, which never names
+    the house's internal name (as agents.txt there does not)."""
+    from artifacts.hosts import normalise  # hosts imports store, which is heavy
+    from artifacts.store import gallery_origin
+
+    bases = (
+        []
+        if public_only
+        else [
+            {
+                "base_url": gallery_origin().rstrip("/"),
+                "reach": "the house's own name: the LAN and its tunnel",
+            }
+        ]
+    )
+    api_host = normalise(os.environ.get("ARTIFACTS_API_HOST"))
+    if api_host:
+        bases.append(
+            {
+                "base_url": f"https://{api_host}",
+                "reach": "the public API host: the agent API only, from anywhere",
+            }
+        )
+    return bases
+
+
+def agent_card(routes: list[tuple[str, str]], public_only: bool = False) -> dict:
+    """The machine-readable twin of agents.txt: where to call, how to
+    authenticate, and every agent route as (method, path). `routes` comes from
+    the live router, so the list cannot drift from what is served. No key,
+    no database, no per-caller variation: the same bytes for everyone."""
+    bases = configured_bases(public_only)
+    first = bases[0]["base_url"]
+    built = wheel()
+    return {
+        "name": "artifacts",
+        "description": (
+            "Publish HTML pages for a person to read at stable addresses, ask "
+            "them lettered questions on a page, and read their answers back."
+        ),
+        "version": tools_version(),
+        "hosts": bases,
+        "api": {
+            "prefix": "/api/v1",
+            "auth": {
+                "scheme": "bearer",
+                "header": "Authorization",
+                "how_to_get_a_key": "see the onboarding document; never in a URL",
+            },
+            "open_routes": [
+                "/api/v1/agents.txt",
+                "/api/v1/skill.md",
+                "/api/v1/agent.json",
+                "/api/v1/tools/",
+            ],
+            "routes": [{"method": m, "path": p} for m, p in routes],
+        },
+        "cli": {
+            "install": (
+                "uv tool install --force --no-index --find-links "
+                f"{first}/api/v1/tools/ artifacts"
+            )
+            if built
+            else None,
+            "commands": ["artifacts-publish", "artifacts-decide", "artifacts-connect"],
+        },
+        "docs": {
+            "onboarding": f"{first}/api/v1/agents.txt",
+            "skill": f"{first}/api/v1/skill.md",
+        },
+    }
 
 
 def agents_txt(base: str) -> str:
