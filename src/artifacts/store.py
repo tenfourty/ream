@@ -48,10 +48,12 @@ import logging
 import os
 import re
 import secrets
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from artifacts import events, ggscan, ids, partner, scan
+from artifacts import events, ggscan, ids, packing, partner, scan
 from artifacts import rename as agent_rename
 from artifacts.db import DUPLICATE_KEY, Database, in_list, jsonb
 from artifacts.text import LEADING_DOCTYPE
@@ -449,6 +451,9 @@ def publish(
     _guard(title, MAX_TITLE_BYTES, "title", agent=agent, artifact_id=None)
     _guard(body, MAX_BODY_BYTES, "body", agent=agent, artifact_id=None)
     artifact_id, revision = ids.new_id(), _revision(body, 1)
+    # Version 1 is a full copy, encoded before the transaction opens so the write lock is
+    # not held while zstd runs.
+    packed = packing.pack(1, body, None)
     token = secrets.token_urlsafe(
         24
     )  # 192 bits; URL-safe alphabet, so it is one path segment
@@ -470,9 +475,21 @@ def publish(
             (artifact_id, title, agent, token, session, now, now),
         )
         conn.execute(
-            "insert into version (artifact_id, n, body, revision, created_by, session)"
-            " values (%s, 1, %s, %s, %s, %s)",
-            (artifact_id, body, revision, agent, session),
+            "insert into version (artifact_id, n, body, revision, created_by, session,"
+            "  packed, codec, base_n, body_bytes, body_sha256)"
+            " values (%s, 1, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                artifact_id,
+                body,
+                revision,
+                agent,
+                session,
+                packed.data,
+                packed.codec,
+                packed.base_n,
+                len(body.encode()),
+                packing.sha256(body),
+            ),
         )
         conn.execute(
             "update artifact set current_version = 1, updated_at = %s where id = %s",
@@ -641,6 +658,10 @@ def patch(
             _check_secrets(title, "title", agent=agent, artifact_id=artifact_id)
         n = current + 1
         revision = _revision(body, n)
+        # The new version is packed now, while its base (the current version) is still plain
+        # text in `body`: a write never has to rebuild anything. Encoded before the
+        # transaction, so a slow encode holds no lock.
+        packed = packing.pack(n, body, live[1])
         try:
             # One transaction: a failure between the two writes must leave the
             # artifact exactly as it was, not pointing at a version that was
@@ -662,8 +683,9 @@ def patch(
                 conn.execute(
                     "insert into version"
                     " (artifact_id, n, body, revision, created_by, session,"
-                    "  note, section, notify)"
-                    " values (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    "  note, section, notify,"
+                    "  packed, codec, base_n, body_bytes, body_sha256)"
+                    " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         artifact_id,
                         n,
@@ -674,7 +696,22 @@ def patch(
                         note,
                         section,
                         notify,
+                        packed.data,
+                        packed.codec,
+                        packed.base_n,
+                        len(body.encode()),
+                        packing.sha256(body),
                     ),
+                )
+                # The version that just stopped being current keeps its text only in
+                # `packed`. An UPDATE of an existing row, not an insert, so a duplicate
+                # key below still means a race. Only a version that IS packed is blanked:
+                # one written before this change keeps its text until the backfill
+                # (artifacts-admin pack-versions) has packed and checked it.
+                conn.execute(
+                    "update version set body = '' where artifact_id = %s and n = %s"
+                    " and packed is not null",
+                    (artifact_id, current),
                 )
                 if title is None:
                     conn.execute(
@@ -1055,7 +1092,9 @@ def list_versions(
             # any non-ASCII in it would report fewer bytes than it has --
             # which is the one number this row exists to give honestly.
             "select n, revision, created_at, created_by, session,"  # noqa: S608 -- clause from the db layer, no caller input
-            f"       {conn.byte_length('body')}, note from version"
+            # `body_bytes` is the plain text's size whatever is stored; a version not packed
+            # yet has none, and its text is still here to measure.
+            f"       coalesce(body_bytes, {conn.byte_length('body')}), note from version"
             " where artifact_id = %s order by n desc",
             (artifact_id,),
         ).fetchall()
@@ -1089,15 +1128,128 @@ def get_version_body(
         row = _owned(conn, artifact_id, agent, as_reader)
         if row is None:
             raise NotFound()
-        version = conn.execute(
-            "select n, revision, body from version where artifact_id = %s and n = %s",
+        revision = conn.execute(
+            "select revision from version where artifact_id = %s and n = %s",
             (artifact_id, n),
         ).fetchone()
-        if version is None:
+        if revision is None:
             raise NotFound()
-    return StoredBody(
-        id=artifact_id, version=version[0], revision=version[1], body=version[2]
-    )
+        body = version_bodies(conn, artifact_id, [n])[n]
+    return StoredBody(id=artifact_id, version=n, revision=revision[0], body=body)
+
+
+class _Rebuilt:
+    """A small least-recently-used store of rebuilt versions, bounded by bytes, so browsing
+    a page's history does not decode the same chain again for each click. Keyed by the
+    plain text's own hash, so an entry can never be the wrong text for its version."""
+
+    def __init__(self, limit: int) -> None:
+        self._limit = limit
+        self._size = 0
+        self._items: OrderedDict[tuple[str, int, str], str] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key: tuple[str, int, str]) -> str | None:
+        with self._lock:
+            text = self._items.get(key)
+            if text is not None:
+                self._items.move_to_end(key)
+            return text
+
+    def put(self, key: tuple[str, int, str], text: str) -> None:
+        with self._lock:
+            if key in self._items or len(text) > self._limit:
+                return
+            self._items[key] = text
+            self._size += len(text)
+            while self._size > self._limit:
+                _, old = self._items.popitem(last=False)
+                self._size -= len(old)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
+            self._size = 0
+
+
+_rebuilt = _Rebuilt(48 * 1024 * 1024)
+
+
+def forget_rebuilt() -> None:
+    """Empty the rebuilt-version store (tests, and anything that must re-read the rows)."""
+    _rebuilt.clear()
+
+
+def version_bodies(conn, artifact_id: str, ns) -> dict[int, str]:
+    """The plain text of each version in `ns` that exists (spec 2026-10-26, section 4).
+
+    A version whose `body` holds its text (the current one, or one not yet packed) is
+    returned as stored. Any other is rebuilt from `packed`: from the nearest full copy at or
+    below it (at most 99 deltas), each step checked against the stored hash, so a damaged row
+    raises `packing.PackError` and never returns wrong text. Versions in one chain share one
+    walk. A version that does not exist is absent from the result."""
+    wanted = sorted({int(n) for n in ns})
+    if not wanted:
+        return {}
+    out: dict[int, str] = {}
+    chains: dict[int, list[int]] = {}
+    for n, body, is_packed in conn.execute(
+        "select n, body, packed is not null from version"  # noqa: S608 -- placeholders only
+        f" where artifact_id = %s and n in {in_list(wanted)}",
+        (artifact_id, *wanted),
+    ).fetchall():
+        if body != "" or not is_packed:
+            out[n] = body
+        else:
+            chains.setdefault(packing.keyframe_at_or_below(n), []).append(n)
+    for start, group in chains.items():
+        out.update(_rebuild(conn, artifact_id, start, group))
+    return out
+
+
+def _rebuild(conn, artifact_id: str, start: int, group: list[int]) -> dict[int, str]:
+    top = max(group)
+    rows = conn.execute(
+        "select n, codec, packed, body_sha256 from version"
+        " where artifact_id = %s and n between %s and %s order by n",
+        (artifact_id, start, top),
+    ).fetchall()
+    shas = {r[0]: r[3] for r in rows}
+    # Begin at the newest version in the range that is already rebuilt.
+    begin, prev = start, None
+    for n in range(top, start - 1, -1):
+        sha = shas.get(n)
+        cached = _rebuilt.get((artifact_id, n, sha)) if sha else None
+        if cached is not None:
+            begin, prev = n, cached
+            break
+    found: dict[int, str] = {}
+    expected = start
+    for n, codec, packed, sha in rows:
+        if n != expected:
+            raise packing.PackError(f"version {expected} is missing from its chain")
+        expected += 1
+        if n < begin:
+            continue
+        if n == begin and prev is not None:
+            text = prev
+        elif packed is None:
+            # Not packed yet, so its text is still in `body` (a page the backfill has
+            # not reached).
+            text = conn.execute(
+                "select body from version where artifact_id = %s and n = %s",
+                (artifact_id, n),
+            ).fetchone()[0]
+        else:
+            text = packing.unpack(codec, packed, prev, sha)
+        if n in group:
+            found[n] = text
+            if sha:
+                _rebuilt.put((artifact_id, n, sha), text)
+        prev = text
+    if expected != top + 1:
+        raise packing.PackError(f"version {expected} is missing from its chain")
+    return found
 
 
 def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:

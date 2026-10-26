@@ -9,7 +9,7 @@ import os
 import signal
 import sys
 
-from artifacts import comments, events, maintenance, partner, partner_in
+from artifacts import comments, events, maintenance, partner, partner_in, repack
 from artifacts.app import create_app
 from artifacts.db import Database
 
@@ -122,6 +122,11 @@ def app_from_env():
     # turns it off, for tests that build the real app.
     if os.environ.get("ARTIFACTS_MAINTENANCE") != "off":
         maintenance.start(db)
+    # The backfill of old versions into deltas, in the background, only when asked for
+    # (ARTIFACTS_PACK_VERSIONS=startup): the first run is watched, not automatic
+    # (docs/agent/specs/2026-10-26-delta-versions-design.md, rollout step 2).
+    if os.environ.get("ARTIFACTS_PACK_VERSIONS") == "startup":
+        repack.start(db)
     # The partner bridge's sender: only when fully configured (partner.py).
     partner.start(db, partner_config)
     return _arm_shutdown_signals(create_app(db, inbound))

@@ -3908,9 +3908,10 @@ def gallery_router(db: Database) -> APIRouter:
             "          where d.artifact_id = a.id"
             "            and d.answer is null"
             "            and d.closed_at is null) as waiting,"
+            # The CURRENT version's text: the only one whose `body` is always plain.
             "       (select v.body from version v"
-            "          where v.artifact_id = a.id and v.status = 'live'"
-            "          order by v.n desc limit 1) as body,"
+            "          where v.artifact_id = a.id and v.n = a.current_version"
+            "       ) as body,"
             # The boolean only. Selecting the bytes here would pull every
             # thumbnail on the wall into memory to render a list of links.
             "       exists (select 1 from version v"
@@ -4628,13 +4629,15 @@ def gallery_router(db: Database) -> APIRouter:
 
     def _bodies(artifact_id: str, ns: list[int]) -> dict[int, str]:
         with db.connect() as conn:
-            return dict(
-                conn.execute(
-                    "select n, body from version where artifact_id = %s"  # noqa: S608 -- placeholders only
+            live = {
+                n
+                for (n,) in conn.execute(
+                    "select n from version where artifact_id = %s"  # noqa: S608 -- placeholders only
                     f" and n in {in_list(ns)} and status = 'live'",
                     (artifact_id, *ns),
                 ).fetchall()
-            )
+            }
+            return store.version_bodies(conn, artifact_id, sorted(live))
 
     @router.get("/a/{artifact_id}", response_class=HTMLResponse)
     def detail(

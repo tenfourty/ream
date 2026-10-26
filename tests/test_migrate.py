@@ -108,8 +108,27 @@ def _seed(database: Database) -> None:
         ),
         (
             "version",
-            "artifact_id, n, body, revision, created_by, created_at, render_errors, notify",
-            ["a1", 2, "<h1>two</h1>", "r2", "alpha", T1, None, False],
+            (
+                "artifact_id, n, body, revision, created_by, created_at, render_errors, notify,"
+                " packed, codec, base_n, body_bytes, body_sha256"
+            ),
+            # A packed, non-current version: its plain body is '' and its bytes are a zstd
+            # frame with a zero byte in it.
+            [
+                "a1",
+                2,
+                "",
+                "r2",
+                "alpha",
+                T1,
+                None,
+                False,
+                b"\x28\xb5\x2f\xfd\x00\xff",
+                "zstd1-delta",
+                1,
+                12,
+                "ab" * 32,
+            ],
         ),
         (
             "file",

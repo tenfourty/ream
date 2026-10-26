@@ -421,6 +421,14 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
         ),
         "create index partner_event_seen_at_idx on partner_event_seen (seen_at)",
     ),
+    # 26 Oct 2026: every version kept, stored as zstd deltas (see schema.sql).
+    7: (
+        "alter table version add column packed blob",
+        "alter table version add column codec text",
+        "alter table version add column base_n integer",
+        "alter table version add column body_bytes integer",
+        "alter table version add column body_sha256 text",
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

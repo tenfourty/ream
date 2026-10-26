@@ -287,6 +287,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     purge.set_defaults(func=cmd_purge_deleted)
 
+    pack = sub.add_parser(
+        "pack-versions",
+        help="store old versions as zstd deltas, verified, and blank their plain bodies",
+    )
+    pack.set_defaults(func=cmd_pack_versions)
+
     agents = sub.add_parser(
         "closed-to-agents",
         help="list pages closed to other agents; optionally open all but some",
@@ -504,6 +510,21 @@ def cmd_purge_deleted(args) -> None:
     for artifact_id in gone:
         print(f"destroyed {artifact_id}")
     print(f"{len(gone)} destroyed")
+
+
+def cmd_pack_versions(_args) -> None:
+    """Pack every version written before deltas existed, verify each by rebuilding it, and
+    only then blank the old bodies (docs/agent/specs/2026-10-26-delta-versions-design.md).
+    Idempotent and resumable. Space comes back only on the next VACUUM."""
+    from artifacts import repack
+
+    report = repack.pack_versions(_open_db())
+    print(
+        f"{report.pages} pages: {report.packed} packed, {report.blanked} blanked, "
+        f"{report.failed} failed, {report.saved} bytes saved"
+    )
+    if report.failed:
+        raise SystemExit(1)
 
 
 def main(argv: list[str] | None = None) -> None:

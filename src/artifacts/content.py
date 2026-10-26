@@ -619,12 +619,17 @@ def create_content_app(db: Database) -> FastAPI:
             # artifact's latest -- an older version served at /v/N must say when
             # IT was published, or an inert snapshot would claim to be as fresh
             # as the live page.
-            body = conn.execute(
-                "select body, created_at from version"
+            found = conn.execute(
+                "select created_at from version"
                 " where artifact_id = %s and n = %s and status = 'live'",
                 (artifact_id, wanted),
             ).fetchone()
-        return (body[0], wanted, body[1]) if body else None
+            if found is None:
+                return None
+            # The current version is plain in `body`; an older one is rebuilt from its
+            # packed deltas (store.version_bodies).
+            body = store.version_bodies(conn, artifact_id, [wanted])[wanted]
+        return (body, wanted, found[0])
 
     def _serve(request: Request, token: str | None) -> Response:
         artifact_id = _artifact_id(request)

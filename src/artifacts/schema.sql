@@ -917,3 +917,17 @@ create table if not exists partner_event_seen (
     seen_at     timestamptz not null
 );
 create index if not exists partner_event_seen_at_idx on partner_event_seen (seen_at);
+
+-- Every version kept, stored as zstd deltas (docs/agent/specs/2026-10-26-delta-versions-design.md,
+-- 26 Oct 2026). `body` keeps the plain text of the CURRENT version only; an older version is
+-- blanked ('') once `packed` holds it: a full copy (`zstd1-full`) at version 1 and every
+-- hundredth after, else a delta against n - 1 (`zstd1-delta`, `base_n`). `body_bytes` and
+-- `body_sha256` describe the plain text, whatever is stored. All null on a version written
+-- before this change and not yet packed (artifacts-admin pack-versions).
+alter table version add column if not exists packed bytea;
+alter table version add column if not exists codec text;
+alter table version add column if not exists base_n integer;
+alter table version add column if not exists body_bytes integer;
+alter table version add column if not exists body_sha256 text;
+-- Already compressed: TOAST must not try again.
+alter table version alter column packed set storage external;
