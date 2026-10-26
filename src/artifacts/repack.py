@@ -121,12 +121,16 @@ def _pack_page(db: Database, artifact_id: str) -> int:
 
 def _verify_and_blank(db: Database, artifact_id: str) -> tuple[int, int]:
     """(versions blanked, bytes saved). Raises PackError, changing nothing, if any version
-    of the page does not rebuild to the text held in `body`."""
-    with db.connect() as conn, conn.transaction():
-        conn.execute(
-            "select 1 from artifact where id = %s" + conn.for_update(),  # noqa: S608 -- clause from the db layer, no caller input
-            (artifact_id,),
-        )
+    of the page does not rebuild to the text held in `body`.
+
+    The decoding (tens of seconds on a big page) happens OUTSIDE any transaction, so the
+    write lock is never held while it runs. The lock is taken only to blank, and each row is
+    blanked only if it is still the row that was verified (same hash and codec) and is still
+    not the current version."""
+    verified: list[
+        tuple[int, str, str, int, int]
+    ] = []  # n, sha, codec, packed, plain bytes
+    with db.connect() as conn:
         current = conn.execute(
             "select current_version from artifact where id = %s", (artifact_id,)
         ).fetchone()
@@ -135,8 +139,6 @@ def _verify_and_blank(db: Database, artifact_id: str) -> tuple[int, int]:
             "select n from version where artifact_id = %s order by n", (artifact_id,)
         ).fetchall()
         prev = None
-        blank: list[int] = []
-        saved = 0
         for (n,) in rows:
             body, codec, data, sha = conn.execute(
                 "select body, codec, packed, body_sha256 from version"
@@ -152,15 +154,33 @@ def _verify_and_blank(db: Database, artifact_id: str) -> tuple[int, int]:
                         f"version {n} does not rebuild to its stored text"
                     )
                 if n != current:
-                    blank.append(n)
-                    saved += len(body.encode()) - len(data)
+                    verified.append((n, sha, codec, len(data), len(body.encode())))
             prev = text
-        for n in blank:
-            conn.execute(
-                "update version set body = '' where artifact_id = %s and n = %s",
-                (artifact_id, n),
-            )
-        return len(blank), saved
+    blanked = saved = 0
+    if not verified:
+        return 0, 0
+    with db.connect() as conn, conn.transaction():
+        conn.execute(
+            "select 1 from artifact where id = %s" + conn.for_update(),  # noqa: S608 -- clause from the db layer, no caller input
+            (artifact_id,),
+        )
+        now = conn.execute(
+            "select current_version from artifact where id = %s", (artifact_id,)
+        ).fetchone()
+        now = now[0] if now else None
+        for n, sha, codec, packed_len, plain_len in verified:
+            if n == now:
+                continue
+            done = conn.execute(
+                "update version set body = '' where artifact_id = %s and n = %s"
+                " and body <> '' and body_sha256 = %s and codec = %s"
+                " and packed is not null",
+                (artifact_id, n, sha, codec),
+            ).rowcount
+            if done:
+                blanked += 1
+                saved += plain_len - packed_len
+    return blanked, saved
 
 
 def pack_versions(db: Database) -> Report:

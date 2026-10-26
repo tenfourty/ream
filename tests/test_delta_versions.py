@@ -392,3 +392,83 @@ def test_the_backfill_refuses_to_blank_when_the_stored_text_differs_from_the_reb
         repack._verify_and_blank(db, artifact_id)
     for n, body in enumerate(bodies, start=1):
         assert _row(db, artifact_id, n)[0] == body
+
+
+def test_a_frame_declaring_a_huge_size_is_refused_without_decoding_it():
+    import zstandard
+
+    bomb = zstandard.ZstdCompressor(level=1).compress(bytes(200 * 1024 * 1024))
+    assert len(bomb) < 100_000
+    with pytest.raises(packing.PackError):
+        packing.unpack(packing.FULL, bomb, None, "0" * 64)
+
+
+def test_the_rebuilt_store_is_bounded_in_bytes_not_characters():
+    cache = store._Rebuilt(10)
+    cache.put(("a", 1, "x"), "é" * 4)  # 4 characters, 8 bytes
+    cache.put(("a", 2, "y"), "é" * 4)
+    assert cache.get(("a", 1, "x")) is None
+    assert cache.get(("a", 2, "y")) == "é" * 4
+    cache.put(("a", 3, "z"), "é" * 6)  # 12 bytes: over the whole bound
+    assert cache.get(("a", 3, "z")) is None
+
+
+def test_a_cache_hit_decodes_only_the_versions_after_it(db, monkeypatch):
+    bodies = _bodies(30)
+    artifact_id = _write(db, bodies)
+    store.get_version_body(db, "seat", artifact_id, 20)  # warms the cache up to 20
+    seen = []
+    real = packing.unpack
+
+    def watching(codec, data, base, sha):
+        seen.append(sha)
+        return real(codec, data, base, sha)
+
+    monkeypatch.setattr(packing, "unpack", watching)
+    assert store.get_version_body(db, "seat", artifact_id, 22).body == bodies[21]
+    assert len(seen) == 2  # versions 21 and 22 only
+
+
+def test_the_backfill_blanks_only_rows_still_as_verified(db, monkeypatch):
+    bodies = _bodies(5)
+    artifact_id = _write(db, bodies)
+    _make_legacy(db, artifact_id, bodies)
+    repack._pack_page(db, artifact_id)
+    real = packing.unpack
+    state = {"done": False}
+
+    def changes_a_row_midway(codec, data, base, sha):
+        if not state["done"]:
+            state["done"] = True
+            with db.connect() as conn:
+                conn.execute(
+                    "update version set body_sha256 = %s where artifact_id = %s and n = 1",
+                    ("f" * 64, artifact_id),
+                )
+        return real(codec, data, base, sha)
+
+    monkeypatch.setattr(packing, "unpack", changes_a_row_midway)
+    blanked, _saved = repack._verify_and_blank(db, artifact_id)
+    assert blanked == 3  # versions 2-4; 1 changed after it was verified, 5 is current
+    assert _row(db, artifact_id, 1)[0] == bodies[0]
+    assert _row(db, artifact_id, 2)[0] == ""
+
+
+def test_verifying_holds_no_write_lock(db, monkeypatch):
+    """Publishing to another page must succeed while a page is being verified."""
+    bodies = _bodies(4)
+    artifact_id = _write(db, bodies)
+    _make_legacy(db, artifact_id, bodies)
+    repack._pack_page(db, artifact_id)
+    real = packing.unpack
+    published = []
+
+    def publishes_meanwhile(codec, data, base, sha):
+        if not published:
+            published.append(None)  # first, or publish's own check would recurse here
+            published[0] = store.publish(db, "other", "Other", bodies[0]).id
+        return real(codec, data, base, sha)
+
+    monkeypatch.setattr(packing, "unpack", publishes_meanwhile)
+    repack._verify_and_blank(db, artifact_id)
+    assert published

@@ -31,7 +31,8 @@ KEYFRAME_EVERY = 100
 LEVEL = 9
 # A body is at most 8 MiB, so a delta's reach back into its base is at most 16 MiB.
 _WINDOW_LOG = 24
-_MAX_OUTPUT = 32 * 1024 * 1024
+# A body is at most 8 MiB (store.MAX_BODY_BYTES); nothing larger is ever decoded.
+_MAX_OUTPUT = 8 * 1024 * 1024
 
 
 class PackError(Exception):
@@ -105,9 +106,16 @@ def unpack(
     else:
         raise PackError(f"unknown codec {codec!r}")
     try:
+        data = bytes(data)
+        # python-zstandard ignores max_output_size when the frame DECLARES its size, so a
+        # crafted frame claiming hundreds of MiB would be decoded in full. Read the
+        # declared size first and refuse anything over the cap.
+        declared = zstandard.get_frame_parameters(data).content_size
+        if declared > _MAX_OUTPUT:
+            raise PackError("a stored version declares an impossible size")
         raw = zstandard.ZstdDecompressor(
             dict_data=dictionary, max_window_size=1 << _WINDOW_LOG
-        ).decompress(bytes(data), max_output_size=_MAX_OUTPUT)
+        ).decompress(data, max_output_size=_MAX_OUTPUT)
         text = raw.decode()
     except (zstandard.ZstdError, UnicodeDecodeError) as exc:
         raise PackError(f"a stored version is damaged: {exc}") from exc

@@ -1158,13 +1158,14 @@ class _Rebuilt:
 
     def put(self, key: tuple[str, int, str], text: str) -> None:
         with self._lock:
-            if key in self._items or len(text) > self._limit:
+            size = len(text.encode())
+            if key in self._items or size > self._limit:
                 return
             self._items[key] = text
-            self._size += len(text)
+            self._size += size
             while self._size > self._limit:
                 _, old = self._items.popitem(last=False)
-                self._size -= len(old)
+                self._size -= len(old.encode())
 
     def clear(self) -> None:
         with self._lock:
@@ -1209,12 +1210,14 @@ def version_bodies(conn, artifact_id: str, ns) -> dict[int, str]:
 
 def _rebuild(conn, artifact_id: str, start: int, group: list[int]) -> dict[int, str]:
     top = max(group)
-    rows = conn.execute(
-        "select n, codec, packed, body_sha256 from version"
-        " where artifact_id = %s and n between %s and %s order by n",
-        (artifact_id, start, top),
-    ).fetchall()
-    shas = {r[0]: r[3] for r in rows}
+    # Hashes first (small), so a cache hit means the packed blobs before it are never read.
+    shas = dict(
+        conn.execute(
+            "select n, body_sha256 from version"
+            " where artifact_id = %s and n between %s and %s order by n",
+            (artifact_id, start, top),
+        ).fetchall()
+    )
     # Begin at the newest version in the range that is already rebuilt.
     begin, prev = start, None
     for n in range(top, start - 1, -1):
@@ -1223,14 +1226,17 @@ def _rebuild(conn, artifact_id: str, start: int, group: list[int]) -> dict[int, 
         if cached is not None:
             begin, prev = n, cached
             break
+    rows = conn.execute(
+        "select n, codec, packed, body_sha256 from version"
+        " where artifact_id = %s and n between %s and %s order by n",
+        (artifact_id, begin, top),
+    ).fetchall()
     found: dict[int, str] = {}
-    expected = start
+    expected = begin
     for n, codec, packed, sha in rows:
         if n != expected:
             raise packing.PackError(f"version {expected} is missing from its chain")
         expected += 1
-        if n < begin:
-            continue
         if n == begin and prev is not None:
             text = prev
         elif packed is None:
