@@ -599,3 +599,55 @@ def test_list_json_gives_each_open_question_its_page(live, key_file, page, db, c
     assert [(r["question"], r["artifact_id"]) for r in rows] == [
         ("Which page am I on?", page.id)
     ]
+
+
+def _fill(db, page, count: int) -> None:
+    for n in range(count):
+        decisions.ask(
+            db,
+            agent="ops-seat",
+            artifact_id=page.id,
+            question=f"bulk {n}?",
+            options=[{"letter": "a", "label": "One"}, {"letter": "b", "label": "Two"}],
+            recommended="a",
+        )
+
+
+def test_list_follows_the_pages_and_json_stays_a_list(
+    live, key_file, page, db, capsys, monkeypatch
+):
+    """More rows than one page: the CLI must follow the cursor to the end and
+    print every row once, as a plain list."""
+    path, _ = key_file
+    _fill(db, page, 12)
+    real = decide._request
+
+    def small_pages(method, url, *args, **kwargs):
+        return real(method, url + "&limit=5", *args, **kwargs)
+
+    monkeypatch.setattr(decide, "_request", small_pages)
+    assert _run(["list", "--open-only", "--json"], path) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert len(rows) == len({r["id"] for r in rows}) == 12
+
+
+def test_list_warns_when_the_service_cuts_without_a_way_on(
+    live, key_file, page, db, capsys, monkeypatch
+):
+    path, _ = key_file
+
+    def cut(method, url, key, payload, **kwargs):
+        kwargs["headers_out"].update({"x-artifacts-truncated": "true"})
+        return [{"id": "d1", "question": "q", "options": []}]
+
+    monkeypatch.setattr(decide, "_request", cut)
+    assert _run(["list", "--open-only", "--json"], path) == 0
+    captured = capsys.readouterr()
+    assert "NOT complete" in captured.err
+    assert isinstance(json.loads(captured.out), list)
+
+
+def test_list_help_points_to_answers_for_one_page(capsys):
+    with pytest.raises(SystemExit):
+        decide.main(["list", "--help"])
+    assert "artifacts-decide answers PAGE" in " ".join(capsys.readouterr().out.split())

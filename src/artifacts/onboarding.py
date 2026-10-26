@@ -108,9 +108,16 @@ skills.
     artifacts-decide ask-review <page-id> [--live|--hold] # ask him to review the page
     artifacts-decide wait --review <review-id>           # 0 ok 4 notes 5 changes 6 dismissed 7 marks 8 claimed
     artifacts-decide list                                # NEW ANSWERS first, then open ones
+    artifacts-decide answers <page-id>                   # one page's questions, answered ones too
     artifacts-decide ack <decision-id>                   # say you have seen it
     artifacts-decide outcome <decision-id> "what you did about it"   # one-way record
     artifacts-decide reply-note <decision-id> "text"     # talk back under his answer's note
+
+`list` and `GET /api/v1/decisions` are paged: `limit` (1..1000, default 1000) and `after=<decision id>`. The body is
+always a plain list; when more rows exist the response says `X-Artifacts-Truncated: true` and `X-Artifacts-Next: <id>`
+(pass it as `after`). `scope=mine` is newest first, `scope=all` oldest first. `artifacts-decide list` follows the pages
+itself. A list with no truncated header is whole; never treat a short list as complete without it. For one page's
+questions use `artifacts-decide answers <page-id>`, not a filtered `list`.
 
 `reply-note` is for answering the note he left with his answer: any agent that
 can read the page may, he sees it under his note and can answer, and it never

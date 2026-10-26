@@ -809,6 +809,35 @@ def list_for_artifact(
         return _with_held(conn, [_row_to_decision(row) for row in rows])
 
 
+# The paging key of the two decision lists: (created_at, id), the order each is
+# already sorted in, so a page boundary can neither skip nor repeat a row even
+# when two questions share a timestamp. A row-value comparison against the
+# cursor row's own columns, so no timestamp is ever formatted or parsed here and
+# the SQL reads the same on Postgres and SQLite. A cursor naming no row would
+# compare as NULL and return an empty page -- indistinguishable from "the end" --
+# so the route checks it with `exists` first.
+_AFTER = (
+    " and (decision.created_at, decision.id) {op}"
+    " (select cur.created_at, cur.id from decision cur where cur.id = %s)"
+)
+
+
+def exists(db: Database, decision_id: str, *, agent: str | None = None) -> bool:
+    """Does this decision exist (and, with `agent`, sit on a page that agent
+    owns)? For validating a paging cursor; 'not yours' reads as 'no such'."""
+    sql = (
+        "select 1 from decision"
+        " join artifact on artifact.id = decision.artifact_id"
+        " where decision.id = %s"
+    )
+    params: list[object] = [decision_id]
+    if agent is not None:
+        sql += " and artifact.agent = %s"
+        params.append(agent)
+    with db.connect() as conn:
+        return conn.execute(sql, tuple(params)).fetchone() is not None
+
+
 def list_for_agent(
     db: Database,
     agent: str,
@@ -817,6 +846,7 @@ def list_for_agent(
     include_closed: bool = False,
     limit: int = 200,
     kind: str | None = None,
+    after: str | None = None,
 ) -> list[DecisionRow]:
     """Newest first -- this is the polling surface an agent uses to learn Jeremy's
     answer, so newest matters more than oldest, exactly as `comments.list_for_agent`
@@ -834,7 +864,11 @@ def list_for_agent(
     reported independently by two seats on 19 Sep for a different route).
 
     Still excluded by DEFAULT, because a withdrawn question is not waiting on
-    anybody and a poll asking "what is outstanding" should not be handed it."""
+    anybody and a poll asking "what is outstanding" should not be handed it.
+
+    `after` is a decision id from the previous page: the rows that come after it
+    in this order (older than it, here). The route asks for `limit + 1` to learn
+    whether it cut the list, and pages with the last id it returned."""
     sql = (
         f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
         " join artifact on artifact.id = decision.artifact_id"
@@ -852,6 +886,9 @@ def list_for_agent(
         # In the query, so `limit` counts only this kind.
         sql += " and decision.kind = %s"
         params.append(kind)
+    if after is not None:
+        sql += _AFTER.format(op="<")
+        params.append(after)
     sql += " order by decision.created_at desc, decision.id desc limit %s"
     with db.connect() as conn:
         rows = conn.execute(sql, (*params, limit)).fetchall()
@@ -1897,6 +1934,7 @@ def across_seats(
     include_answered: bool = False,
     include_closed: bool = False,
     limit: int = 200,
+    after: str | None = None,
 ) -> list[CrossSeatRow]:
     """Every question on every page, oldest first -- by default only the ones
     still waiting on Jeremy.
@@ -1935,6 +1973,10 @@ def across_seats(
     is -- and a queue that reads "17 hours" is telling Jeremy something the
     service is prepared to stand behind.
 
+    `limit` cuts the NEWEST rows (this is oldest first), the dangerous end for a
+    disappearance reconciler: the route therefore asks for one row more than it
+    will return and says so, in a header, whenever it cut the list. `after` is
+    the last id of the previous page.
     """
     sql = (
         f"select {_COLUMNS}, artifact.agent, artifact.title,"  # noqa: S608 -- fixed constant, not caller input
@@ -1946,9 +1988,13 @@ def across_seats(
         sql += " and decision.closed_at is null"
     if not include_answered:
         sql += " and decision.answer is null"
+    params: list[object] = []
+    if after is not None:
+        sql += _AFTER.format(op=">")
+        params.append(after)
     sql += " order by decision.created_at asc, decision.id asc limit %s"
     with db.connect() as conn:
-        rows = conn.execute(sql, (limit,)).fetchall()
+        rows = conn.execute(sql, (*params, limit)).fetchall()
         decided = _with_held(conn, [_row_to_decision(row) for row in rows])
     now = datetime.now(UTC)
     return [

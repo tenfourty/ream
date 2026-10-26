@@ -261,6 +261,31 @@ def _fmt(row: dict) -> str:
     return "\n".join(lines)
 
 
+def _get_decisions(url: str, key: str) -> list[dict]:
+    """GET /decisions, following the pages. The service cuts a long list and says
+    so in `X-Artifacts-Truncated`; a listing that stopped there without saying
+    would read as complete, which for `--all --open-only` means "nothing else is
+    waiting". So follow `X-Artifacts-Next` to the end, and if the service says
+    it cut the list but names no way on, warn loudly on stderr rather than
+    pass the partial list off as whole."""
+    rows: list[dict] = []
+    after: str | None = None
+    while True:
+        seen: dict = {}
+        page_url = url + (f"&after={after}" if after else "")
+        rows.extend(_request("GET", page_url, key, None, headers_out=seen) or [])
+        if (seen.get("x-artifacts-truncated") or "").lower() != "true":
+            return rows
+        after = seen.get("x-artifacts-next")
+        if not after:
+            print(
+                f"warning: the service cut this list at {len(rows)} rows and gave "
+                "no way to get the rest; it is NOT complete",
+                file=sys.stderr,
+            )
+            return rows
+
+
 def _print_rows(rows: list[dict], *, empty: str) -> int:
     if not rows:
         # Not silence. An empty result and a broken call look identical when
@@ -1199,6 +1224,11 @@ def build_parser() -> argparse.ArgumentParser:
     listing = subs.add_parser(
         "list",
         help="NEW ANSWERS first (answered, not yet acknowledged), then open questions",
+        description=(
+            "Lists decisions across every page of the scope, following the "
+            "service's pages to the end. To read one page's questions, "
+            "answered ones included, use: artifacts-decide answers PAGE"
+        ),
     )
     listing.add_argument(
         "--answered",
@@ -1503,11 +1533,8 @@ def main(argv: list[str] | None = None) -> int:
                     for r in rows
                 ]
             elif args.open_only:
-                rows = _request(
-                    "GET",
-                    f"{base}/decisions?include_answered=false&scope={scope}",
-                    key,
-                    None,
+                rows = _get_decisions(
+                    f"{base}/decisions?include_answered=false&scope={scope}", key
                 )
             else:
                 # NEW ANSWERS FIRST (homelab-ij8.106): the first outside agent
@@ -1515,11 +1542,8 @@ def main(argv: list[str] | None = None) -> int:
                 # answers and their notes. Answered-and-unacknowledged is what an
                 # agent must act on, so it leads; acknowledged answers only with
                 # --answered.
-                rows = _request(
-                    "GET",
-                    f"{base}/decisions?include_answered=true&scope={scope}",
-                    key,
-                    None,
+                rows = _get_decisions(
+                    f"{base}/decisions?include_answered=true&scope={scope}", key
                 )
                 fresh = _new_answers(rows)
                 still_open = [r for r in rows if not r.get("answer")]

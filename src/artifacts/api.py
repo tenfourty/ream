@@ -22,6 +22,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
 )
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import (
@@ -1944,8 +1945,32 @@ def agent_router(
         open_only: bool = False,
         include_closed: bool = False,
         scope: str = Query("mine", pattern="^(mine|all)$"),
+        # PAGING. The body stays a plain list, so a header carries the news that
+        # it was cut. The default is the maximum (1000), not the old 200: the
+        # operator's queue reconciles scope=all by DISAPPEARANCE and the rows it
+        # needs -- open ones -- number a handful; it is answered history that
+        # grows, and that is the caller who asks for it. A list still cut says
+        # so with `X-Artifacts-Truncated: true` and gives the last id returned
+        # in `X-Artifacts-Next`; pass that as `after` for the rest. Every
+        # response carries the truncated header, true or false, so a missing
+        # header is never read as "complete".
+        limit: int = Query(1000, ge=1, le=1000),
+        after: str | None = Query(None, max_length=200),
+        response: Response = None,
         agent: str = Depends(caller),
     ):
+        def _check_cursor(cursor: str | None, owner: str | None) -> None:
+            # A cursor naming nothing would page as "the end". Refuse it.
+            if cursor is not None and not decisions.exists(db, cursor, agent=owner):
+                raise HTTPException(
+                    422, {"field": "after", "detail": "no such decision to page after"}
+                )
+
+        def _mark_page(last_id: str | None, cut: bool) -> None:
+            response.headers["x-artifacts-truncated"] = "true" if cut else "false"
+            if cut and last_id:
+                response.headers["x-artifacts-next"] = last_id
+
         # This is how an agent learns Jeremy's answer -- across every artifact
         # it owns: a plain poll of this route works everywhere a key does, and
         # since homelab-ij8.33 a plain poll is enough (answers come back by
@@ -1984,6 +2009,19 @@ def agent_router(
             # &include_closed=true carries the withdrawn ones. Both stay off
             # unless asked for -- see the signature for why that matters more
             # than it looks.
+            _check_cursor(after, None)
+            seen = decisions.across_seats(
+                db,
+                include_answered=bool(include_answered) and not open_only,
+                # Deliberately NOT suppressed by open_only, because the
+                # per-artifact route above does not suppress it either and
+                # one flag pair must mean one thing on every route.
+                include_closed=include_closed,
+                limit=limit + 1,
+                after=after,
+            )
+            page = seen[:limit]
+            _mark_page(page[-1].decision.id if page else None, len(seen) > limit)
             return [
                 {
                     **decisions.public(row.decision),
@@ -1991,24 +2029,20 @@ def agent_router(
                     "artifact_title": row.artifact_title,
                     "age_seconds": row.age_seconds,
                 }
-                for row in decisions.across_seats(
-                    db,
-                    include_answered=bool(include_answered) and not open_only,
-                    # Deliberately NOT suppressed by open_only, because the
-                    # per-artifact route above does not suppress it either and
-                    # one flag pair must mean one thing on every route.
-                    include_closed=include_closed,
-                )
+                for row in page
             ]
-        return [
-            decisions.public(row)
-            for row in decisions.list_for_agent(
-                db,
-                agent,
-                include_answered=(include_answered is not False) and not open_only,
-                include_closed=include_closed,
-            )
-        ]
+        _check_cursor(after, agent)
+        mine = decisions.list_for_agent(
+            db,
+            agent,
+            include_answered=(include_answered is not False) and not open_only,
+            include_closed=include_closed,
+            limit=limit + 1,
+            after=after,
+        )
+        own = mine[:limit]
+        _mark_page(own[-1].id if own else None, len(mine) > limit)
+        return [decisions.public(row) for row in own]
 
     @router.get("/questions")
     def list_open_questions(

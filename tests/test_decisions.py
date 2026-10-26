@@ -526,3 +526,116 @@ def test_get_owned_returns_own_row_and_none_for_others_or_missing(db):
     assert decisions.get_owned(db, "seat", row.id).id == row.id
     assert decisions.get_owned(db, "other", row.id) is None
     assert decisions.get_owned(db, "seat", "nope") is None
+
+
+# ---------------------------------------------------------------------------
+# Paging of GET /decisions. It used to stop at 200 rows without saying so; the
+# operator's queue reads a row that stops appearing as closed, so a cut list
+# must never look whole.
+
+
+def _many(db, agent: str, count: int, *, answered: int = 0) -> list[str]:
+    page = store.publish(db, agent, "Board", PAGE)
+    ids = []
+    for n in range(count):
+        row = decisions.ask(
+            db,
+            agent=agent,
+            artifact_id=page.id,
+            question=f"q{n}?",
+            options=_OPTIONS,
+        )
+        ids.append(row.id)
+    for decision_id in ids[:answered]:
+        _answer(db, decision_id)
+    return ids
+
+
+def _walk(client, token: str, url: str, limit: int) -> tuple[list[str], int]:
+    seen: list[str] = []
+    pages = 0
+    after = None
+    while True:
+        suffix = f"&limit={limit}" + (f"&after={after}" if after else "")
+        response = client.get(url + suffix, headers=auth(token))
+        assert response.status_code == 200, response.text
+        pages += 1
+        seen += [row["id"] for row in response.json()]
+        if response.headers["x-artifacts-truncated"] != "true":
+            assert "x-artifacts-next" not in response.headers
+            return seen, pages
+        after = response.headers["x-artifacts-next"]
+        assert after == seen[-1]
+
+
+@pytest.mark.parametrize("scope", ["mine", "all"])
+def test_a_list_over_the_old_cap_is_whole_by_default(client, db, scope):
+    from artifacts import grants
+
+    token, _ = keys.mint(db, agent="ops-seat")
+    grants.grant(db, "ops-seat", grants.READ_ALL_DECISIONS)
+    ids = _many(db, "ops-seat", 205, answered=3)
+    response = client.get(
+        f"/api/v1/decisions?scope={scope}&include_answered=true", headers=auth(token)
+    )
+    assert response.status_code == 200
+    assert response.headers["x-artifacts-truncated"] == "false"
+    assert {row["id"] for row in response.json()} == set(ids)
+
+
+@pytest.mark.parametrize("scope", ["mine", "all"])
+def test_a_cut_list_says_so_and_paging_returns_every_row_once(client, db, scope):
+    from artifacts import grants
+
+    token, _ = keys.mint(db, agent="ops-seat")
+    grants.grant(db, "ops-seat", grants.READ_ALL_DECISIONS)
+    ids = _many(db, "ops-seat", 205, answered=5)
+    url = f"/api/v1/decisions?scope={scope}&include_answered=true"
+    first = client.get(url + "&limit=100", headers=auth(token))
+    assert len(first.json()) == 100
+    assert first.headers["x-artifacts-truncated"] == "true"
+    assert first.headers["x-artifacts-next"] == first.json()[-1]["id"]
+    seen, pages = _walk(client, token, url, 100)
+    assert pages == 3
+    assert len(seen) == len(set(seen)) == 205
+    assert set(seen) == set(ids)
+
+
+def test_open_only_under_scope_all_is_oldest_first_and_never_silently_cut(client, db):
+    from artifacts import grants
+
+    token, _ = keys.mint(db, agent="ops-seat")
+    grants.grant(db, "ops-seat", grants.READ_ALL_DECISIONS)
+    ids = _many(db, "ops-seat", 30, answered=10)
+    response = client.get("/api/v1/decisions?scope=all", headers=auth(token))
+    assert {r["id"] for r in response.json()} == set(ids[10:])
+    assert response.headers["x-artifacts-truncated"] == "false"
+    cut = client.get("/api/v1/decisions?scope=all&limit=7", headers=auth(token))
+    assert cut.headers["x-artifacts-truncated"] == "true", "a cut open list says so"
+    ages = [r["age_seconds"] for r in cut.json()]
+    assert ages == sorted(ages, reverse=True), "oldest first"
+
+
+def test_limit_is_bounded_and_a_bad_cursor_is_refused(client, db):
+    token, _ = keys.mint(db, agent="ops-seat")
+    for bad in ("0", "1001"):
+        response = client.get(f"/api/v1/decisions?limit={bad}", headers=auth(token))
+        assert response.status_code == 422
+    refused = client.get("/api/v1/decisions?after=nope", headers=auth(token))
+    assert refused.status_code == 422, "not an empty page that reads as 'the end'"
+
+
+def test_scope_all_paging_still_needs_the_grant(client, db):
+    token, _ = keys.mint(db, agent="plain-seat")
+    [first, *_] = _many(db, "ops-seat", 2)
+    response = client.get(
+        f"/api/v1/decisions?scope=all&after={first}", headers=auth(token)
+    )
+    assert response.status_code == 403
+
+
+def test_a_cursor_from_another_seat_reads_as_no_such_decision(client, db):
+    token, _ = keys.mint(db, agent="plain-seat")
+    [theirs, *_] = _many(db, "ops-seat", 2)
+    response = client.get(f"/api/v1/decisions?after={theirs}", headers=auth(token))
+    assert response.status_code == 422
