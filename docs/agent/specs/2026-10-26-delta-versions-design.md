@@ -149,3 +149,25 @@ is valid. The per-row checksum covers `packed` as hex.
    gallery.
 
 A sizeable change to stored data, so it gets one fresh reviewer round before the push.
+
+## 8. As built, steps 1 and 2 (26 Oct 2026)
+
+Deviations from the sections above, and why:
+
+- **Level 9, not 19** (`packing.LEVEL`). Measured on a 3.2 MB page of mixed text with ten small
+  edits: a delta took 2.1 s at level 19 and 0.12 s at level 9, for 414 and 453 bytes; a full copy
+  3.2 s against 0.25 s, for 807 KB against 859 KB. Section 3 allowed this fallback; 2 s on the
+  publish path was too slow, and the encode runs before the write transaction opens, so no lock is
+  held while it runs.
+- **Backfill is not started automatically at start-up.** `artifacts-admin pack-versions` runs it on
+  demand; `ARTIFACTS_PACK_VERSIONS=startup` runs it in a background thread. Section 7 wants the
+  first run watched, on a snapshot copy, before it is live.
+- **Commits.** The pack phase commits every 10 versions (`repack.BATCH`); the verify-and-blank
+  phase is one transaction per page holding the page's row lock, so a patch cannot land between
+  the check and the blanking.
+- **A patch blanks its predecessor only if that predecessor is packed**, so a page the backfill
+  has not reached keeps every body until it has.
+- **Not built yet:** the nightly `VACUUM` after the backfill, and the production check against
+  last night's snapshot (both belong to step 2's run, not its code).
+- The in-process cache of rebuilt versions (48 MiB, by text length) is keyed by the plain text's
+  hash, so an entry can never be the wrong text for its version.

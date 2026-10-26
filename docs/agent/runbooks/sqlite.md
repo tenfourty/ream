@@ -163,6 +163,17 @@ and the volume reached 95% on 25 Oct 2026. Since 26 Oct 2026 the volume keeps tw
 choice); the off-site copy and the NAS hold the history. Snapshots stay uncompressed so the
 off-site restic copy deduplicates them night to night.
 
+**Versions stored as deltas (26 Oct 2026, spec `2026-10-26-delta-versions-design.md`).** Only the
+current version of a page keeps its plain text in `version.body`; every older one lives in
+`version.packed` as zstd, a full copy at version 1 and every hundredth after, a delta against the
+previous version in between (about 2.6 KB for an hourly board against 3.4 MB plain). New versions
+pack as they are written. Versions written earlier are packed by `artifacts-admin pack-versions`
+(or at start-up with `ARTIFACTS_PACK_VERSIONS=startup`): it verifies every version by rebuilding
+it before blanking its old body, is safe to re-run, and prints counts and bytes saved. The file
+shrinks only on `VACUUM`, which rewrites the whole file and needs free space about the size of
+the new database; run it once after the backfill, not before a snapshot has been taken. Run the
+backfill first on a copy of a snapshot (`DATABASE_URL=sqlite:////tmp/copy.db`).
+
 ## Rollback (for one week after the cutover)
 
 CNPG keeps running through the week, backed up by its pg_dump CronJob, with its egress
