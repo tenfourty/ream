@@ -373,7 +373,9 @@ def test_a_deleted_page_is_packed_too(db):
     assert repack.pack_versions(db).packed == 4
 
 
-def test_the_backfill_refuses_to_blank_when_the_stored_text_differs_from_the_rebuild(db):
+def test_the_backfill_refuses_to_blank_when_the_stored_text_differs_from_the_rebuild(
+    db,
+):
     bodies = _bodies(4)
     artifact_id = _write(db, bodies)
     _make_legacy(db, artifact_id, bodies)
