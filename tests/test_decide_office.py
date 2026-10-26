@@ -231,3 +231,106 @@ def test_an_endless_waiter_shows_its_own_held_back_answer_again_when_due(
     assert _run(["wait", "--timeout", "0"], path, monkeypatch) == 0
     assert 1 < time.monotonic() - started < 10
     assert "cove note" in capsys.readouterr().out
+
+
+def _flaky_events(monkeypatch, fails: int, status: int = 503):
+    """Make the first `fails` held requests fail; return the list of sleeps."""
+    real = decide._request
+    calls: list[int] = []
+    sleeps: list[float] = []
+
+    def flaky(method, url, *args, **kwargs):
+        if "&wait=" in url:
+            calls.append(1)
+            if len(calls) <= fails:
+                raise decide.HTTPFailure(status, "gone")
+        return real(method, url, *args, **kwargs)
+
+    monkeypatch.setattr(decide, "_request", flaky)
+    monkeypatch.setattr(decide.time, "sleep", lambda s: sleeps.append(s))
+    return sleeps
+
+
+def test_a_deploy_gap_backs_off_long_and_does_not_end_the_wait(
+    db, live, key_file, page, capsys, monkeypatch
+):
+    """9 of 19 holds failed in a minute of 503s: the pause was 5 s. Now an
+    outage pauses 15-30 s however many times it repeats, spends no retries,
+    and the answer that lands after it is still heard."""
+    path, _ = key_file
+    monkeypatch.setattr(decide, "_HOLD", 1)
+    asked = _ask(db, page, "cove/1")
+    sleeps = _flaky_events(monkeypatch, fails=12)
+    flaky = decide._request
+
+    def answering(method, url, *args, **kwargs):
+        try:
+            return flaky(method, url, *args, **kwargs)
+        except decide.HTTPFailure:
+            if len(sleeps) == 11:  # the gap is over; he answers
+                _answer(db, asked, "after the deploy")
+            raise
+
+    monkeypatch.setattr(decide, "_request", answering)
+    assert _run(["wait", "--timeout", "0"], path, monkeypatch) == 0
+    assert "after the deploy" in capsys.readouterr().out
+    assert len(sleeps) == 12 and all(15 <= s <= 30 for s in sleeps)
+
+
+def test_a_waiter_gives_up_after_the_outage_limit_and_says_why(
+    db, live, key_file, page, capsys, monkeypatch
+):
+    path, _ = key_file
+    monkeypatch.setattr(decide, "_HOLD", 1)
+    now = [1000.0]
+    monkeypatch.setattr(decide, "_mono", lambda: now[0])
+    sleeps = _flaky_events(monkeypatch, fails=10_000)
+    monkeypatch.setattr(
+        decide.time,
+        "sleep",
+        lambda s: (sleeps.append(s), now.__setitem__(0, now[0] + s)),
+    )
+    code = _run(["wait", "--timeout", "0"], path, monkeypatch)
+    err = capsys.readouterr().err
+    assert code == 1
+    assert "unavailable for 5 minutes" in err and "No answer was lost" in err
+    assert all(15 <= s <= 30 for s in sleeps)
+    assert 8 <= len(sleeps) <= 21, "bounded by time (300 s), not by a try count"
+
+
+def test_a_success_resets_the_outage_clock(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(decide, "_mono", lambda: now[0])
+    outage = decide._Outage()
+    boom = decide.HTTPFailure(503, "gone")
+    assert outage.pause(boom, float("inf")) is not None
+    now[0] = 299
+    assert outage.pause(boom, float("inf")) is not None
+    outage.ok()
+    now[0] = 400
+    assert outage.pause(boom, float("inf")) is not None
+    now[0] = 700
+    assert outage.pause(boom, float("inf")) is None
+
+
+def test_other_failures_keep_the_short_pause(monkeypatch):
+    outage = decide._Outage()
+    assert (
+        outage.pause(decide.HTTPFailure(500, "x"), float("inf")) == decide._RETRY_PAUSE
+    )
+
+
+def test_the_timeout_exit_says_it_is_a_time_limit(
+    db, live, key_file, page, capsys, monkeypatch
+):
+    path, _ = key_file
+    assert _run(["wait", "--timeout", "0.1s"], path, monkeypatch) == 3
+    err = capsys.readouterr().err
+    assert "time limit (0.1s)" in err and "ARTIFACTS_WAIT_TIMEOUT" in err
+
+
+def test_the_default_timeout_can_be_raised_by_environment(monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_WAIT_TIMEOUT", "3h")
+    assert decide.build_parser().parse_args(["wait"]).timeout == "3h"
+    monkeypatch.delenv("ARTIFACTS_WAIT_TIMEOUT")
+    assert decide.build_parser().parse_args(["wait"]).timeout == "55m"

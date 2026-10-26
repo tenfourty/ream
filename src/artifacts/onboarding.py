@@ -209,8 +209,10 @@ AFTER YOU ASK, LISTEN. He often answers within minutes, and an answer nobody
 collects is the failure this service exists to prevent. If your agent can run
 a background task, start `artifacts-decide wait` in the background straight
 after asking: it exits 0 printing his answer the moment one lands (3 if
-nothing arrives by its --timeout, default 55m, or 0 for no limit; 1 if the
-key is refused). If it cannot, run `artifacts-decide list` at the start of
+nothing arrives by its --timeout, default 55m, a time limit and not a
+failure; raise it with --timeout or ARTIFACTS_WAIT_TIMEOUT, or 0 for no limit;
+1 if the key is refused or the service stays unavailable for 5 minutes: a
+deploy's 1-2 minute gap is waited out, with a 20 s back-off, and loses nothing). If it cannot, run `artifacts-decide list` at the start of
 every turn.
 
 It hears only YOUR OFFICE's answers: the part of ARTIFACTS_SESSION before the
@@ -228,7 +230,7 @@ in the X-Artifacts-Cursor header (ask with a huge `since` to learn "now"). To
 keep a cursor across holds, save X-Artifacts-Seen as your next `since` after
 every hold, quiet or not: it never skips an event, which Cursor can on a quiet
 hold. `exclude_self=true` leaves out your own actions (never an answer, even one
-your key relayed: the answer is his). Use a client timeout of wait + 30 seconds, and after a 5xx pause and ask again from the same cursor.
+your key relayed: the answer is his). Use a client timeout of wait + 30 seconds, and after a 502/503/504 or a dropped connection pause 15-30 s (a deploy leaves about a minute with no server) and ask again from the same cursor; give up only after about 5 minutes of it, and do not count that gap against a retry budget.
 
 Your session label must reach every call. In Claude Code each Bash call is a
 fresh shell, so an `export` does not carry over: set ARTIFACTS_SESSION in
@@ -490,7 +492,7 @@ session is acting on it, and if you cannot act, run artifacts-decide review-rele
 
 After you ask, start `artifacts-decide wait` in the background so you are woken
 when he answers or comments on your office's work (the ARTIFACTS_SESSION prefix
-before "/", or --office; --all-offices for everything; --timeout 0 for no limit); without background tasks, run `artifacts-decide
+before "/", or --office; --all-offices for everything; --timeout 0 for no limit; the default 55m ends with exit 3, a time limit, so re-arm it; ARTIFACTS_WAIT_TIMEOUT changes it); without background tasks, run `artifacts-decide
 list` and `artifacts-decide comments` at the start of every turn. An unread
 answer is a broken promise, and so is an unanswered comment:
 

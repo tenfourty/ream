@@ -292,6 +292,7 @@ def test_a_transient_failure_in_a_relook_does_not_end_the_wait(
 ):
     path, _page, rid = _setup(db, key_file, capsys)
     monkeypatch.setattr(decide, "_RETRY_PAUSE", 0.01)
+    monkeypatch.setattr(decide, "_UNAVAILABLE_PAUSE", 0.01)
     listener = on_first_listen(
         lambda: decisions.answer(db, rid, letter="c", by="jeremy")
     )

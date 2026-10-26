@@ -27,6 +27,7 @@ this never offers it.
 import argparse
 import json
 import os
+import random
 import re
 import sys
 import tempfile
@@ -402,6 +403,67 @@ _HOLD = 50
 # connection, Cloudflare blinking) before it asks again from the same cursor.
 _RETRY_PAUSE = 5
 
+# THE SERVICE BEING GONE is a different failure from a blip. A deploy replaces
+# the one pod (Recreate), and the ingress answers 502/503/504 for about a
+# minute; a connection error (status 0) is the same thing from the other side.
+# 26 Oct 2026: quarterdeck's waiter lost 9 of 19 holds to that gap by asking
+# again every 5 s. So an outage backs off longer, with jitter so several
+# waiters do not return together, and is bounded by TIME, not by tries: it
+# keeps asking for `_UNAVAILABLE_LIMIT` seconds of unbroken unavailability and
+# then says so and fails. The cursor only advances after a 200, so nothing is
+# lost while it waits.
+_UNAVAILABLE = (0, 502, 503, 504)
+_UNAVAILABLE_PAUSE = 20.0
+_UNAVAILABLE_LIMIT = 300.0
+# The default for --timeout; ARTIFACTS_WAIT_TIMEOUT raises it for every run.
+_DEFAULT_TIMEOUT = "55m"
+
+
+class _Outage:
+    """Tracks one unbroken stretch of the service being unavailable."""
+
+    def __init__(self) -> None:
+        self.since: float | None = None
+
+    def ok(self) -> None:
+        self.since = None
+
+    def pause(self, exc: HTTPFailure, deadline: float) -> float | None:
+        """Seconds to sleep before asking again, or None when the outage has
+        outlasted `_UNAVAILABLE_LIMIT` and the wait should give up."""
+        if exc.status not in _UNAVAILABLE:
+            self.since = None
+            return min(_RETRY_PAUSE, max(0.0, deadline - _mono()))
+        now = _mono()
+        if self.since is None:
+            self.since = now
+        if now - self.since >= _UNAVAILABLE_LIMIT:
+            return None
+        pause = _UNAVAILABLE_PAUSE * random.uniform(0.75, 1.25)  # noqa: S311
+        return max(0.0, min(pause, deadline - now))
+
+
+def _gave_up() -> int:
+    minutes = _UNAVAILABLE_LIMIT / 60
+    print(
+        f"the service has been unavailable for {minutes:g} minutes (502/503/504 "
+        "or no connection): giving up. No answer was lost; run this again"
+        " when it is back.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def _timed_out(what: str, args) -> int:
+    print(
+        f"nothing yet: no {what} before the timeout. That is this command's"
+        f" time limit ({args.timeout}), not a failure: run it again, or raise"
+        " it with --timeout (or ARTIFACTS_WAIT_TIMEOUT; 0 or forever for no"
+        " limit).",
+        file=sys.stderr,
+    )
+    return 3
+
 
 # How often an answer of this office's own that is still unacknowledged is
 # shown again (feedback, 6 Oct 2026). Every maintainer wanted it never lost
@@ -638,6 +700,7 @@ def _wait(args, key: str, base: str) -> int:
     kinds = {"decision_answered"}
     if not args.answers_only:
         kinds.add("comment_added")
+    outage = _Outage()
     while time.monotonic() < deadline:
         # Never hold past the moment a held-back answer of ours falls due, so
         # an endless waiter still shows it again on the hour.
@@ -656,8 +719,12 @@ def _wait(args, key: str, base: str) -> int:
                 raise
             # A deploy, a dropped connection, Cloudflare blinking: pause and ask
             # again from the same cursor, which loses nothing.
-            time.sleep(_RETRY_PAUSE)
+            pause = outage.pause(exc, deadline)
+            if pause is None:
+                return _gave_up()
+            time.sleep(pause)
             continue
+        outage.ok()
         if not isinstance(rows, list):
             rows = []
         for row in rows:
@@ -672,8 +739,7 @@ def _wait(args, key: str, base: str) -> int:
             found, waiting_threads = look()
             if found or waiting_threads:
                 return report(found, waiting_threads)
-    print("nothing yet: no answer before the timeout. Run it again.", file=sys.stderr)
-    return 3
+    return _timed_out("answer", args)
 
 
 # Exit code per verdict for `wait --review`; 7 (new marks) and 3 (timeout) are
@@ -945,6 +1011,7 @@ def _wait_review(args, key: str, base: str) -> int:
     )
     kinds = {"decision_answered"} | (set() if args.verdict_only else {"comment_added"})
     relook = False
+    outage = _Outage()
     while True:
         now_drift = _wall() - _mono()
         if abs(now_drift - drift) > _SUSPEND_GAP:
@@ -979,6 +1046,7 @@ def _wait_review(args, key: str, base: str) -> int:
                     rows = []
                 for row in rows:
                     cursor = max(cursor, int(row.get("seq", cursor)))
+                outage.ok()
                 relook = any(r.get("kind") in kinds for r in rows)
             if relook:
                 done = look()
@@ -990,9 +1058,11 @@ def _wait_review(args, key: str, base: str) -> int:
                 raise
             # A deploy or a dropped connection: ask again, and look again if the
             # failure was in the look, since its event is already consumed.
-            time.sleep(min(_RETRY_PAUSE, max(0, deadline - _mono())))
-    print("nothing yet: no verdict before the timeout. Run it again.", file=sys.stderr)
-    return 3
+            pause = outage.pause(exc, deadline)
+            if pause is None:
+                return _gave_up()
+            time.sleep(pause)
+    return _timed_out("verdict", args)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1223,8 +1293,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     waiting.add_argument(
         "--timeout",
-        default="55m",
-        help="how long to wait (default 55m; 0 or forever: no limit)",
+        default=os.environ.get("ARTIFACTS_WAIT_TIMEOUT") or _DEFAULT_TIMEOUT,
+        help="how long to wait before exiting 3, a time limit and not a failure"
+        " (default 55m, or ARTIFACTS_WAIT_TIMEOUT; 0 or forever: no limit)",
     )
     waiting.add_argument(
         "--office",
