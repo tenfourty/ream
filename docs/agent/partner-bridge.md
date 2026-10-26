@@ -54,6 +54,13 @@ thread replies under a question are a later slice.
 `answered_by.verified_by` is `artifacts` for his own tap on the page, `quarterdeck` for a press in Slack it vouched for, and `agent` for a
 relay: artifacts saw only a seat's word, and `recorded_by` names the seat.
 
+`asking_office` is the **artifacts agent name** of the key that asked (`artifacts-maintainer`,
+`homelab-maintainer`, `runcove-pmo`, …), not an office id: artifacts does not know the
+partner's offices, and some of its agents are not offices at all. `for` is what the agent
+passed to `--for`, unchecked. The partner maps both to its own offices (quarterdeck:
+`partner.agents` in the hub's config, agreed 26 Oct 2026); a name it cannot map gets no
+Slack copy.
+
 A question closed after it was answered (the agent finishing its work) sends nothing.
 A question asked before the bridge was switched on is never announced late: its later
 events are not sent either, because the partner never saw it.
