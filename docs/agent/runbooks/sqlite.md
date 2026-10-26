@@ -157,10 +157,11 @@ The SQLite file is much larger than Postgres reports, because Postgres stores th
 TOAST-compressed and SQLite stores them raw. On 20 Oct 2026 Postgres reported `version` at
 1.5 GB; the SQLite file was **3.23 GB**. The 16 Oct rehearsal's "1.3 GB" was the compressed dump,
 not the database. On the volume: the live file, its WAL, a `VACUUM INTO` temporary during each
-nightly snapshot, and the kept snapshots (`maintenance.KEEP`, 7, uncompressed), so about
-(KEEP + 2) times the file. At 3.2 GB that is about 29 GB: the 30Gi volume is close to full once
-seven nights have run. Grow the volume, or keep fewer snapshots on it (the off-site copy and the
-NAS hold the history).
+nightly snapshot, and the kept snapshots (`maintenance.KEEP`, uncompressed), so about
+(KEEP + 2) times the file. With seven kept that came to 23 GB of snapshots beside a 4.7 GB file,
+and the volume reached 95% on 25 Oct 2026. Since 26 Oct 2026 the volume keeps two (Jeremy's
+choice); the off-site copy and the NAS hold the history. Snapshots stay uncompressed so the
+off-site restic copy deduplicates them night to night.
 
 ## Rollback (for one week after the cutover)
 
@@ -189,7 +190,7 @@ NetworkPolicy. The rollback copies SQLite back, so writes made on SQLite are kep
 
 The app writes one snapshot a night at 04:00 UTC (`VACUUM INTO`), then purges; at start-up it takes
 one at once if the newest is over 24 h old. Snapshots are `/data/backups/artifacts-sqlite-<UTC
-date>.db`, uncompressed, seven kept. Homelab's CronJob copies new ones to the backup share. List
+date>.db`, uncompressed, two kept. Homelab's CronJob copies new ones to the backup share. List
 them from the running pod:
 
 ```bash

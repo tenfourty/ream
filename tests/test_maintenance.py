@@ -33,7 +33,7 @@ def test_a_snapshot_is_a_database_holding_the_rows(tmp_path):
     assert not list((tmp_path / "backups").glob(".tmp-*"))
 
 
-def test_seven_snapshots_are_kept_and_nothing_else_is_touched(tmp_path):
+def test_two_snapshots_are_kept_and_nothing_else_is_touched(tmp_path):
     db = _sqlite(tmp_path)
     folder = tmp_path / "backups"
     folder.mkdir()
@@ -43,7 +43,7 @@ def test_seven_snapshots_are_kept_and_nothing_else_is_touched(tmp_path):
         maintenance.backup(db, folder, now=start + timedelta(days=day))
     names = sorted(p.name for p in folder.iterdir())
     assert names == ["artifacts-db-2026-01-01.sql.gz"] + [
-        f"artifacts-sqlite-2026-10-{d:02d}.db" for d in range(3, 10)
+        f"artifacts-sqlite-2026-10-{d:02d}.db" for d in range(8, 10)
     ]
 
 

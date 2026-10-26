@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 _log = logging.getLogger("artifacts.maintenance")
 
 RUN_HOUR_UTC = 4
-KEEP = 7
+KEEP = 2  # on the data volume; off-site holds the history (Jeremy, 26 Oct 2026)
 PREFIX = "artifacts-sqlite-"
 STALE_AFTER = timedelta(hours=24)
 
