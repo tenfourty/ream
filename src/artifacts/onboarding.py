@@ -163,7 +163,10 @@ then soonest needed-by. It sorts on what you set, so set urgency and needed_by
 honestly: a question marked blocking that is not, or a deadline you invented, pushes
 a real one down. `GET /api/v1/questions?open=1` returns your own open questions in
 that order, held ones last and marked by held_by; a key with decisions:read-all may
-add `scope=all` for every office's.
+add `scope=all` for every office's. Like `GET /decisions` it is paged: `limit` (1..1000, default 1000) and
+`after=<question id>`; a cut list says `X-Artifacts-Truncated: true` and `X-Artifacts-Next: <id>` (pass it as `after`),
+and every response carries the truncated header, so a missing one is never "complete". A cursor that is not an open
+question of yours answers 422.
 
 He can also COMMENT on your page, on the whole page or on text he selected.
 `artifacts-decide wait` wakes for his comments as well as his answers, and

@@ -309,6 +309,11 @@ def _refused_detail(field: str, findings) -> dict:
     }
 
 
+# Source reads for GET /questions are not cut at the page size: the ranking is
+# in Python and needs every open question. Far above any real queue.
+_ALL_OPEN = 1_000_000
+
+
 def _slack_view(c: partner_in.Copy, now: datetime) -> dict:
     """A question whose home is the partner, as an agent reads it: the fields a
     page question has, plus `source` and `home`. Read-only: no route here
@@ -2048,6 +2053,17 @@ def agent_router(
     def list_open_questions(
         open: bool = Query(True),
         scope: str = Query("mine", pattern="^(mine|all)$"),
+        # PAGING, as on GET /decisions: `limit` (1..1000, default 1000), `after`
+        # a question id from the previous page, `X-Artifacts-Truncated` on every
+        # response and `X-Artifacts-Next` when cut. The order here is the
+        # inbox's RANKING (computed in Python, not a column), so the page is a
+        # slice of the whole ranked list, past the cursor's own position; the
+        # source reads are not capped at the page size, so ranking sees every
+        # open question. A cursor that is not in the caller's open list (never
+        # existed, not theirs, or answered since the last page) answers 422.
+        limit: int = Query(1000, ge=1, le=1000),
+        after: str | None = Query(None, max_length=200),
+        response: Response = None,
         agent: str = Depends(caller),
     ):
         """Open questions in the order his inbox shows them: overdue first, then
@@ -2078,7 +2094,7 @@ def agent_router(
                 )
             found = [
                 (r.decision, r.agent, r.artifact_title)
-                for r in decisions.across_seats(db, limit=1000)
+                for r in decisions.across_seats(db, limit=_ALL_OPEN)
             ]
         else:
             with db.connect() as conn:
@@ -2091,7 +2107,7 @@ def agent_router(
             found = [
                 (d, agent, titles.get(d.artifact_id, ""))
                 for d in decisions.list_for_agent(
-                    db, agent, limit=1000, kind="question"
+                    db, agent, limit=_ALL_OPEN, kind="question"
                 )
             ]
         now = datetime.now(UTC)
@@ -2114,10 +2130,25 @@ def agent_router(
             # ready ones. One he has already answered here shows its pending
             # answer until the home settles it.
             for waiting in (True, False):
-                for c in partner_in.open_copies(db, 1000, waiting_on_him=waiting):
+                for c in partner_in.open_copies(db, _ALL_OPEN, waiting_on_him=waiting):
                     ranked.append(((False, inbox.key(c, now)), _slack_view(c, now)))
         ranked.sort(key=lambda r: r[0])
-        return [view for _, view in ranked]
+        views = [view for _, view in ranked]
+        start = 0
+        if after is not None:
+            at = next((n for n, view in enumerate(views) if view["id"] == after), None)
+            if at is None:
+                raise HTTPException(
+                    422,
+                    {"field": "after", "detail": "no such open question to page after"},
+                )
+            start = at + 1
+        page = views[start : start + limit]
+        cut = len(views) > start + limit
+        response.headers["x-artifacts-truncated"] = "true" if cut else "false"
+        if cut:
+            response.headers["x-artifacts-next"] = page[-1]["id"]
+        return page
 
     @router.post("/decisions/{decision_id}/close")
     def close_decision(decision_id: str, agent: str = Depends(caller)):

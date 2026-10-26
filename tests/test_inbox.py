@@ -500,3 +500,84 @@ def test_own_scope_limit_counts_questions_not_reviews(db, page):
         decisions.ask_review(db, agent="ops", artifact_id=page.id)
     rows = decisions.list_for_agent(db, "ops", limit=1, kind="question")
     assert [r.question for r in rows] == ["only question"]
+
+
+# ---------------------------------------------------------------------------
+# Paging of GET /api/v1/questions, the same contract as GET /decisions: a cut
+# list says so, and `after` walks the inbox's own ranking.
+
+
+def _walk_questions(client, headers, url: str, limit: int) -> tuple[list[str], int]:
+    seen: list[str] = []
+    pages = 0
+    after = None
+    while True:
+        sep = "&" if "?" in url else "?"
+        suffix = f"{sep}limit={limit}" + (f"&after={after}" if after else "")
+        response = client.get(url + suffix, headers=headers)
+        assert response.status_code == 200, response.text
+        pages += 1
+        seen += [row["id"] for row in response.json()]
+        if response.headers["x-artifacts-truncated"] != "true":
+            assert "x-artifacts-next" not in response.headers
+            return seen, pages
+        after = response.headers["x-artifacts-next"]
+        assert after == seen[-1]
+
+
+@pytest.mark.parametrize("scope", ["mine", "all"])
+def test_questions_past_the_default_limit_say_so_and_the_rest_is_one_page_on(
+    db, client, seats, page, scope
+):
+    grants.grant(db, "ops", grants.READ_ALL_DECISIONS)
+    ids = {ask(db, page, f"q{n}?").id for n in range(1005)}
+    url = f"/api/v1/questions?scope={scope}"
+    first = client.get(url, headers=seats["ops"])
+    assert first.status_code == 200
+    assert len(first.json()) == 1000
+    assert first.headers["x-artifacts-truncated"] == "true"
+    rest = client.get(
+        url + "&after=" + first.headers["x-artifacts-next"], headers=seats["ops"]
+    )
+    assert rest.headers["x-artifacts-truncated"] == "false"
+    assert len(rest.json()) == 5
+    assert {r["id"] for r in first.json() + rest.json()} == ids
+
+
+@pytest.mark.parametrize("scope", ["mine", "all"])
+def test_a_cut_question_list_says_so_and_paging_returns_each_once_in_rank_order(
+    db, client, seats, page, scope
+):
+    grants.grant(db, "ops", grants.READ_ALL_DECISIONS)
+    for n in range(22):
+        # Ties on urgency and age mix with distinct ones: the id breaks them.
+        if n % 3 == 0:
+            ask(db, page, f"q{n}?", urgency="blocking", blocked_on="x")
+        else:
+            ask(db, page, f"q{n}?")
+    url = f"/api/v1/questions?scope={scope}"
+    whole = [r["id"] for r in client.get(url, headers=seats["ops"]).json()]
+    first = client.get(url + "&limit=10", headers=seats["ops"])
+    assert len(first.json()) == 10
+    assert first.headers["x-artifacts-truncated"] == "true"
+    assert first.headers["x-artifacts-next"] == first.json()[-1]["id"]
+    seen, pages = _walk_questions(client, seats["ops"], url, 10)
+    assert pages == 3
+    assert seen == whole and len(set(seen)) == 22
+
+
+def test_question_limit_is_bounded_and_a_bad_cursor_is_refused_identically(
+    db, client, seats, page
+):
+    for bad in ("0", "1001"):
+        got = client.get(f"/api/v1/questions?limit={bad}", headers=seats["ops"])
+        assert got.status_code == 422
+    theirs = store.publish(db, "other", "Theirs", PAGE)
+    other = ask(db, theirs, "not mine", agent="other")
+    answered = ask(db, page, "done")
+    decisions.answer(db, answered.id, letter="a", note="", by="jeremy")
+    nothing = client.get("/api/v1/questions?after=nope", headers=seats["ops"])
+    foreign = client.get(f"/api/v1/questions?after={other.id}", headers=seats["ops"])
+    closed = client.get(f"/api/v1/questions?after={answered.id}", headers=seats["ops"])
+    assert nothing.status_code == foreign.status_code == closed.status_code == 422
+    assert nothing.json() == foreign.json() == closed.json()
