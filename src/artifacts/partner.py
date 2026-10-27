@@ -51,6 +51,10 @@ _log = logging.getLogger("artifacts.partner")
 
 # The one place the header's name is written.
 SIGNATURE_HEADER = "X-Partner-Signature"
+# The signing key's id, also inside the signed body: the receiver picks the key from
+# this header and verifies the raw bytes before parsing them, then refuses a body
+# whose key_id differs.
+KEY_ID_HEADER = "X-Partner-Key-Id"
 
 ENV_NAME = "ARTIFACTS_PARTNER_NAME"
 ENV_URL = "ARTIFACTS_PARTNER_EVENTS_URL"
@@ -472,6 +476,7 @@ def _attempt(config: Config, row: dict, post: PostFn, now: datetime) -> str | No
     headers = {
         "Content-Type": "application/json",
         SIGNATURE_HEADER: sign(config.private_key, body),
+        KEY_ID_HEADER: config.key_id,
         "User-Agent": "artifacts-service/1",
     }
     try:

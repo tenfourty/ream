@@ -83,7 +83,10 @@ copier carries it.
 ## Signing
 
 Ed25519 over the exact bytes of the request body, base64, in the header named by
-`partner.SIGNATURE_HEADER` (`X-Partner-Signature`). The receiver refuses a body whose
+`partner.SIGNATURE_HEADER` (`X-Partner-Signature`). The signing key's id goes in
+`partner.KEY_ID_HEADER` (`X-Partner-Key-Id`) as well as in the signed body's `key_id`, so
+the receiver can pick the key and verify the raw bytes before parsing them; it refuses
+(400) a body whose `key_id` differs from the header. The receiver refuses a body whose
 `sent_at` is more than five minutes old.
 
 ## Delivery

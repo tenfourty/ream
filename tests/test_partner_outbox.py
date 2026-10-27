@@ -417,6 +417,16 @@ def test_the_signature_verifies_over_the_exact_bytes_and_not_a_changed_one(
     assert partner.SIGNATURE_HEADER == "X-Partner-Signature"
 
 
+def test_the_key_id_header_names_the_same_key_as_the_signed_body(db, page, bridge):
+    _ask(db, page)
+    fake = FakePartner()
+    partner.deliver_due(db, bridge, fake)
+    _, body, headers = fake.calls[0]
+    assert headers[partner.KEY_ID_HEADER] == bridge.key_id
+    assert headers[partner.KEY_ID_HEADER] == json.loads(body)["key_id"]
+    assert partner.KEY_ID_HEADER == "X-Partner-Key-Id"
+
+
 # --- delivery ---------------------------------------------------------------------
 
 
