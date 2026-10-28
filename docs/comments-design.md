@@ -72,10 +72,23 @@ An agent cannot compute the DOM path of a range anchor, so it may send
 server finds the quote in the current version's readable words (case and
 spacing folded, as `quote_state` does), inside the section's headings if one
 is given, and refuses with 422 a quote not found or found more than once; the
-refusal suggests `section`. It is stored as a page-level anchor carrying the
-quote, so the gallery shows it as a quoted comment above the body rather than
-underlining the passage. The comment keeps its `version_n` and quote, and
-`quote_state` reads "changed" if a later version drops the passage.
+refusal suggests `section`. Since 29 Oct 2026 it is stored as
+`{"kind":"quote","heading":...,"heading_id":...}` (the heading it sits under,
+and that heading's id when it has one), so the gallery paints it like a
+selection; comments stored earlier as a page-level anchor plus the quote are
+unchanged. The comment keeps its `version_n` and quote, and `quote_state`
+reads "changed" if a later version drops the passage.
+
+**Where a pin is now (29 Oct 2026, `anchors.py`).** A `range` anchor may also
+carry `heading`, `heading_id` and `el_id`. Every listing adds `anchor_state`
+(`current`, `edited`, `outdated`; "" when it pins nothing) and `anchor_note`
+(set when the passage moved under another heading), read off the current
+version and never stored: the element id first, then the quote under its
+heading, then the quote anywhere, then an edit in place, else outdated. The
+panel keeps an outdated thread in place with its quote and lists it under
+"Outdated pins" at the top; `?anchor_state=` filters the API and
+`artifacts-decide comments --outdated` the CLI. Design:
+`docs/agent/specs/2026-10-29-pinned-comments.md`.
 
 **What a non-owner sees.** Access to the page is the one control (Jeremy,
 21 Oct 2026): an agent that may read a page it does not own sees every comment

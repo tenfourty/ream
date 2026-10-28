@@ -34,6 +34,7 @@ from fastapi.responses import (
 from pydantic import BaseModel, Field
 
 from artifacts import (
+    anchors,
     comments,
     connect,
     csp,
@@ -1340,13 +1341,33 @@ def agent_router(
             raise HTTPException(404, "no such artifact")
         return {"id": artifact_id, "destroyed": True}
 
+    def _check_anchor_state(value: str | None) -> None:
+        if value not in (None, *anchors.STATES):
+            raise HTTPException(
+                422,
+                {
+                    "field": "anchor_state",
+                    "detail": "anchor_state is current, edited or outdated",
+                },
+            )
+
+    def _in_state(row, wanted: str | None) -> bool:
+        return wanted is None or row.anchor_state == wanted
+
     @router.get("/artifacts/{artifact_id}/comments")
     def list_comments(
-        artifact_id: str, include_resolved: bool = False, agent: str = Depends(caller)
+        artifact_id: str,
+        include_resolved: bool = False,
+        anchor_state: str | None = None,
+        agent: str = Depends(caller),
     ):
         """Every comment thread on a page the caller may read. Threads under
         his decision notes (`anchor.kind == "decision"`) are included on
-        purpose: they are comments, and `artifacts-decide` labels them."""
+        purpose: they are comments, and `artifacts-decide` labels them.
+        Each row says where its pin is on the page as it is now (`anchor_state`:
+        current, edited or outdated; `anchor_note` when it moved);
+        `?anchor_state=outdated` lists only the spots that are gone."""
+        _check_anchor_state(anchor_state)
         # A page the caller may READ: its own, or another agent's that is open
         # to agents. A closed, deleted or unknown page answers the same 404.
         try:
@@ -1359,7 +1380,7 @@ def agent_router(
         rows = comments.list_for_artifact(
             db, artifact_id, include_resolved=include_resolved
         )
-        return [row.__dict__ for row in rows]
+        return [row.__dict__ for row in rows if _in_state(row, anchor_state)]
 
     @router.post("/artifacts/{artifact_id}/comments", status_code=201)
     def create_comment(
@@ -1413,10 +1434,11 @@ def agent_router(
         return response
 
     def _text_anchor(artifact_id, payload, agent) -> tuple[dict | None, str]:
-        """Turn an agent's `text` anchor into the stored shape: a page-level
-        anchor carrying the quote, which the gallery shows as a quoted comment
-        (an agent cannot compute the DOM path the browser's range anchor needs).
-        Anything else passes through unchanged."""
+        """Turn an agent's `text` anchor into the stored shape: a `quote` anchor
+        carrying the heading the server found the passage under, which the
+        gallery paints and re-finds after a republish (an agent cannot compute
+        the DOM path the browser's range anchor needs). Anything else passes
+        through unchanged."""
         anchor = payload.anchor
         if (
             payload.thread_root is not None
@@ -1457,7 +1479,13 @@ def agent_router(
                     "matches": exc.matches,
                 },
             ) from exc
-        return {"kind": "page"}, quote
+        heading, heading_id = anchors.heading_for_quote(current.body, quote, section)
+        found: dict = {"kind": "quote"}
+        if heading:
+            found["heading"] = heading
+        if heading_id:
+            found["heading_id"] = heading_id
+        return found, quote
 
     def _add_comment(
         artifact_id,
@@ -1583,15 +1611,22 @@ def agent_router(
             raise HTTPException(404, "no such comment") from exc
 
     @router.get("/comments")
-    def list_all_comments(include_resolved: bool = False, agent: str = Depends(caller)):
+    def list_all_comments(
+        include_resolved: bool = False,
+        anchor_state: str | None = None,
+        agent: str = Depends(caller),
+    ):
         """Every comment across the pages the caller owns, newest first.
         Threads under his decision notes (`anchor.kind == "decision"`) are
-        included on purpose; `artifacts-decide` labels them."""
+        included on purpose; `artifacts-decide` labels them. `anchor_state` as
+        on a page's comments."""
+        _check_anchor_state(anchor_state)
         return [
             row.__dict__
             for row in comments.list_for_agent(
                 db, agent, include_resolved=include_resolved
             )
+            if _in_state(row, anchor_state)
         ]
 
     @router.post("/artifacts/{artifact_id}/reviews", status_code=201)

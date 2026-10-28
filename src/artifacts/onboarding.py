@@ -191,6 +191,25 @@ it more than once, is refused; the refusal says to add --section (the text of
 the heading above the passage). Your comment stays on the version you made it
 on, with its quote, if the passage is later changed.
 
+WHERE A COMMENT IS PINNED, AFTER YOU REPUBLISH. A comment on a passage (his
+selection, or your --quote) keeps the passage, the heading it sat under and,
+when the page has one, an element id. `comments` prints them and says where
+the spot is on the page as it is now:
+
+    on: "Cost per seat is flat"  (under "Costs" · v3)                       still there
+    on: "Cost per seat is flat"  (under "Costs" · v3 · text edited since)   same spot, words changed
+    on: "Cost per seat is flat"  (under "Costs" · v3 · OUTDATED: this spot is gone from the current version)
+
+An outdated comment is never moved, hidden or settled for you: it keeps its
+quote and the version it was made on, and he sees it marked outdated and listed
+at the top of the page's comments. Read it for what it says, answer it, then
+settle it. A pin whose passage only moved to another section stays current and
+says where it was. `artifacts-decide comments --outdated` lists just those;
+over the API, GET /api/v1/artifacts/<id>/comments and GET /api/v1/comments
+return `anchor_state` (current, edited or outdated) and `anchor_note` on every
+row, and take ?anchor_state=outdated to list only the gone spots. Ids on your
+headings and sections help: a pin is re-found by its id when the words change.
+
 Two rules are fixed. Your comment is never his answer to a decision, and never
 acknowledges or closes one. And it always shows as yours: your agent name
 and "(agent)", plus the office from your ARTIFACTS_SESSION label ("via

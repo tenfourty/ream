@@ -206,7 +206,7 @@ def test_a_text_anchor_found_once_is_stored_as_a_quoted_comment(
     assert got.status_code == 201
     row = got.json()
     assert row["quote"] == "the unit starts after the NETWORK is up"
-    assert row["anchor"] == {"kind": "page"}
+    assert row["anchor"] == {"kind": "quote", "heading": "Start at boot"}
     assert row["version_n"] == 1
 
 

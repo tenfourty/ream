@@ -23,6 +23,7 @@ An unknown artifact and someone else's look identical either way (both `NotFound
 matching `store.publish`/`store.patch`.
 """
 
+import json
 import logging
 import threading
 import time
@@ -31,9 +32,15 @@ from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from html.parser import HTMLParser
 
-from artifacts import events, ggscan, holds, ids, nudge, store, text
+from artifacts import anchors, events, ggscan, holds, ids, nudge, store, text
+from artifacts.anchors import (
+    SECTION_MAX,
+    SECTION_PAGE_MAX,
+    _section_slices,
+    _state_against,
+    _tight,
+)
 from artifacts.db import Connection, Database, in_list, jsonb
 
 # A comment is a remark about a page, not a page in itself -- 8 KB is generous for
@@ -112,6 +119,12 @@ class CommentRow:
     # storing it would make it a fact about the page as it was when somebody
     # last looked.
     quote_state: str = ""
+    # Where a pinned comment is on the page as it is NOW: "current", "edited"
+    # (the spot is there, its words changed) or "outdated" (the spot is gone);
+    # "" when the comment pins nothing or the page is too large to say. Read,
+    # not stored, like `quote_state`; `anchor_note` says when a pin moved.
+    anchor_state: str = ""
+    anchor_note: str = ""
     # Written by Jeremy while his page's review was held: the agent cannot see it yet.
     held: bool = False
     # The review round open when he made it (page review step 4); None outside
@@ -213,76 +226,6 @@ class TextAnchorError(Exception):
         super().__init__(detail)
         self.detail = detail
         self.matches = matches
-
-
-class _Headings(HTMLParser):
-    """Every CLOSED heading as (level, start, end, name): `start` is where its
-    opening tag begins, `end` where its closing tag ends, both offsets into the
-    body. One linear pass, so a page of unclosed `<h2` openers costs no more than
-    any other page; an opener never closed before the next heading is dropped."""
-
-    def __init__(self, body: str) -> None:
-        super().__init__()
-        self._body = body
-        # HTMLParser counts a line at each "\n" and nothing else.
-        self._lines = [0]
-        at = body.find("\n")
-        while at >= 0:
-            self._lines.append(at + 1)
-            at = body.find("\n", at + 1)
-        self.found: list[tuple[int, int, int, str]] = []
-        self._open: tuple[int, int] | None = None
-        self._text: list[str] = []
-
-    def _offset(self) -> int:
-        line, col = self.getpos()
-        return self._lines[line - 1] + col
-
-    def handle_starttag(self, tag, attrs):
-        if len(tag) == 2 and tag[0] == "h" and tag[1] in "123456":
-            self._open = (int(tag[1]), self._offset())
-            self._text = []
-
-    def handle_data(self, data):
-        if self._open is not None:
-            self._text.append(data)
-
-    def handle_endtag(self, tag):
-        if self._open is not None and tag == f"h{self._open[0]}":
-            at = self._offset()
-            stop = self._body.find(">", at)
-            end = len(self._body) if stop < 0 else stop + 1
-            name = " ".join("".join(self._text).split()).lower()
-            self.found.append((self._open[0], self._open[1], end, name))
-            self._open = None
-
-
-SECTION_MAX = 200
-# A page this large is not searched by heading: the parse is linear but not free.
-SECTION_PAGE_MAX = 2_000_000
-
-
-def _section_slices(body: str, section: str) -> list[str]:
-    """The HTML of every heading named `section` (case and spacing folded) and
-    what follows it, to the next heading of the same or a higher rank. The
-    heading itself is included, so a quote that is the heading's own words is
-    found under its own section."""
-    want = " ".join(section.split()).lower()
-    parser = _Headings(body)
-    parser.feed(body)
-    parser.close()
-    heads = parser.found
-    out = []
-    for i, (level, start, _, name) in enumerate(heads):
-        if name != want:
-            continue
-        stop = len(body)
-        for later_level, later_start, _, _ in heads[i + 1 :]:
-            if later_level <= level:
-                stop = later_start
-                break
-        out.append(body[start:stop])
-    return out
 
 
 _TOO_MUCH_TEXT = (
@@ -391,6 +334,33 @@ def _reject_lone_surrogate(value: str) -> None:
         raise InvalidAnchor() from None
 
 
+# Where on the page a pin was, beside what it quotes (slice 1 of the pinned
+# comments spec): the nearest heading and its id, and the id of the pinned
+# element. Optional, and absent rather than empty.
+_CONTEXT_KEYS = frozenset({"heading", "heading_id", "el_id"})
+
+
+def _context(anchor: dict) -> dict:
+    """The optional heading and id keys of an anchor, validated; a bare
+    `InvalidAnchor` for any of them wrong."""
+    out = {}
+    for key in ("heading", "heading_id", "el_id"):
+        if key not in anchor:
+            continue
+        value = anchor[key]
+        if not isinstance(value, str) or not value:
+            raise InvalidAnchor()
+        if key == "heading":
+            # Heading text reaches a terminal through `artifacts-decide comments`.
+            if len(value) > anchors.HEADING_MAX or not value.isprintable():
+                raise InvalidAnchor()
+            _reject_lone_surrogate(value)
+        elif not anchors.ID_RE.fullmatch(value):
+            raise InvalidAnchor()
+        out[key] = value
+    return out
+
+
 def validate_anchor(anchor: dict | None) -> dict:
     """Normalise and validate an anchor. `None` -- the default for a caller who
     doesn't mention where a comment belongs -- means a whole-page comment. Anything
@@ -435,7 +405,7 @@ def validate_anchor(anchor: dict | None) -> dict:
         if not (
             {"kind", "path", "start", "end"}
             <= keys
-            <= {"kind", "path", "start", "end", "prefix", "suffix"}
+            <= {"kind", "path", "start", "end", "prefix", "suffix"} | _CONTEXT_KEYS
         ):
             raise InvalidAnchor()
         path, start, end = anchor["path"], anchor["start"], anchor["end"]
@@ -457,6 +427,24 @@ def validate_anchor(anchor: dict | None) -> dict:
                     raise InvalidAnchor()
                 _reject_lone_surrogate(value)
                 out[side] = value
+        out.update(_context(anchor))
+        return out
+
+    if kind == "quote":
+        # An agent's quote, found by the server on the version it commented on:
+        # no DOM path, because an agent cannot compute one. The quote itself
+        # is the comment's `quote`, so `add()` requires one.
+        if not anchor.keys() <= {"kind", "prefix", "suffix"} | _CONTEXT_KEYS:
+            raise InvalidAnchor()
+        out = {"kind": "quote"}
+        for side in ("prefix", "suffix"):
+            if side in anchor:
+                value = anchor[side]
+                if not isinstance(value, str) or len(value) > ANCHOR_CONTEXT_MAX:
+                    raise InvalidAnchor()
+                _reject_lone_surrogate(value)
+                out[side] = value
+        out.update(_context(anchor))
         return out
 
     if kind == "decision":
@@ -596,6 +584,8 @@ def add(
             effective_anchor.get("kind") != "range" or not quote.strip()
         ):
             raise InvalidKind()
+        if effective_anchor.get("kind") == "quote" and not quote.strip():
+            raise InvalidAnchor()  # a quote anchor is evidence only with the quote
 
     callers_txn = conn is not None
     # The caller's connection, or one of our own: the same name below either way.
@@ -902,43 +892,9 @@ def quote_state(quote: str, current_body: str) -> str:
     return _state_against(quote, words, _tight(words))
 
 
-def _tight(value: str) -> str:
-    """Lowercased with every space removed.
-
-    Tag stripping turns `<em>midnight</em>.` into `midnight .`, so a sentence
-    that only gained emphasis would read as changed against a quote taken
-    before it -- the exact false alarm this must not raise, since the words
-    the reader selected have not moved at all. Neither side's spacing is
-    something a reader chose, so neither side keeps it.
-    """
-    return "".join(value.split()).lower()
-
-
-def _state_against(quote: str, words: str, tight_words: str) -> str:
-    """`quote_state`'s comparison, against words already extracted.
-
-    Separate because `text.searchable` walks the whole page: a thread of
-    twenty comments would walk it twenty times if each row called
-    `quote_state` itself. Same rule, one reading of the page.
-    """
-    needle = " ".join(quote.split()).lower()
-    if not needle:
-        return ""
-    if needle in words or _tight(quote) in tight_words:
-        return "current"
-    return "changed"
-
-
 STILL = "still on page"
 TEXT_CHANGED = "text changed"
 ADDRESSED = "addressed/removed"
-
-# How much of a quote's surroundings, or of the quote itself, must still be on
-# the page (spaces removed) for its absence to read as an edit in place rather
-# than a removal. Short enough to survive an edit next to it, long enough that
-# a few common letters do not count.
-_CONTEXT_CHARS = 32
-_CONTEXT_MIN = 8
 
 
 def carried_state(row: CommentRow, current_body: str) -> str:
@@ -965,15 +921,7 @@ def _carried_against(row: CommentRow, words: str, tight_words: str) -> str:
         return ADDRESSED
     if _state_against(row.quote, words, tight_words) != "changed":
         return STILL
-    anchor = row.anchor or {}
-    hints = [
-        _tight(anchor.get("prefix") or "")[-_CONTEXT_CHARS:],
-        _tight(anchor.get("suffix") or "")[:_CONTEXT_CHARS],
-    ]
-    quote = _tight(row.quote)
-    half = len(quote) // 2
-    hints += [quote[:half], quote[half:]]
-    if any(len(h) >= _CONTEXT_MIN and h in tight_words for h in hints):
+    if anchors.edited_in_place(row.anchor or {}, row.quote, tight_words):
         return TEXT_CHANGED
     return ADDRESSED
 
@@ -1034,36 +982,48 @@ def _visible_cache_put(key, value) -> None:
             _VISIBLE_CACHE.popitem(last=False)
 
 
-def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
-    """Every quoting row told whether its quote is still on its page.
+def _context_of(anchor: dict | None) -> bool:
+    """Does this anchor carry a heading or an id, which only the page's HTML
+    (not its words) can be read against?"""
+    return isinstance(anchor, dict) and any(
+        anchor.get(k) for k in ("heading", "heading_id", "el_id")
+    )
 
-    ONE query for every page that has a quoting comment, never one per comment
+
+def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
+    """Every pinning row told whether its quote is still on its page
+    (`quote_state`) and where its pin is now (`anchor_state`, `anchor_note`).
+
+    ONE query for every page that has a pinning comment, never one per comment
     and never one per page: a body here is tens of kilobytes, most comments
     quote nothing, and this runs on a listing that can span the whole wall.
-    Pages with no quoting comment are not read at all.
+    Pages with no pinning comment are not read at all. A page's HTML is read
+    only for a comment that names a heading or an id, and is not kept.
 
     `replace`, not assignment: CommentRow is frozen, which is right -- a row
     read out of the database is a record, and code that can edit one in place
     is code that can silently disagree with it.
     """
-    quoting = sorted({row.artifact_id for row in rows if row.quote})
-    if not quoting:
+    pinning = [row for row in rows if row.quote or (row.anchor or {}).get("el_id")]
+    if not pinning:
         return rows
+    pages = sorted({row.artifact_id for row in pinning})
     words_by_page: dict[str, tuple[str, str]] = {}
     # Visible text is worked out once per (page, version) and kept in process:
     # a version never changes, so a listing does not re-parse the page.
     versions = conn.execute(
         "select id, current_version from artifact"  # noqa: S608 -- placeholders only
-        f" where id in {in_list(quoting)}",
-        tuple(quoting),
+        f" where id in {in_list(pages)}",
+        tuple(pages),
     ).fetchall()
+    needs_html = {row.artifact_id for row in pinning if _context_of(row.anchor)}
+    bodies: dict[str, str] = {}
     missing = []
-    unknown: set[str] = set()
     for artifact_id, n in versions:
         cached = _visible_cache_get((artifact_id, n))
-        if cached is None:
+        if cached is None or artifact_id in needs_html:
             missing.append((artifact_id, n))
-        else:
+        if cached is not None:
             words_by_page[artifact_id] = cached
     for artifact_id, n in missing:
         row = conn.execute(
@@ -1072,21 +1032,44 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
         ).fetchone()
         if row is None:
             continue
+        if artifact_id in needs_html:
+            bodies[artifact_id] = row[0]
+        if artifact_id in words_by_page:
+            continue
         words, cut = text.visible(row[0])
         if cut:
             # Truncated text is not authoritative: unknown, and never cached.
-            unknown.add(artifact_id)
             continue
         words_by_page[artifact_id] = (words, _tight(words))
         _visible_cache_put((artifact_id, n), words_by_page[artifact_id])
-    return [
-        replace(
-            row, quote_state=_state_against(row.quote, *words_by_page[row.artifact_id])
+    seen: dict[tuple[str, str, str], tuple[str, str]] = {}
+    out = []
+    for row in rows:
+        if row.artifact_id not in words_by_page or not (
+            row.quote or (row.anchor or {}).get("el_id")
+        ):
+            out.append(row)
+            continue
+        words = words_by_page[row.artifact_id]
+        # A reply carries its root's anchor and quote: resolve each once.
+        key = (row.artifact_id, json.dumps(row.anchor, sort_keys=True), row.quote)
+        if key not in seen:
+            seen[key] = anchors.resolve(
+                row.anchor,
+                row.quote,
+                bodies.get(row.artifact_id, ""),
+                facts=words,
+            )
+        state, note = seen[key]
+        out.append(
+            replace(
+                row,
+                quote_state=_state_against(row.quote, *words) if row.quote else "",
+                anchor_state=state,
+                anchor_note=note,
+            )
         )
-        if row.quote and row.artifact_id in words_by_page
-        else row
-        for row in rows
-    ]
+    return out
 
 
 def list_for_artifact(
@@ -1128,7 +1111,7 @@ def marks_for_page(db: Database, artifact_id: str) -> list[dict]:
     NEVER the note -- the page is agent HTML on its own origin and must not read
     what Jeremy wrote about it (page review design, Security).
 
-    Open ROOT comments with a `range` anchor, oldest first. A reply carries its
+    Open ROOT comments with a `range` or `quote` anchor, oldest first. A reply carries its
     root's anchor and quote, so it is the same place on the page, not a second
     mark; a settled thread has nothing left to point at; and a page-level or
     point anchor has no text to paint.
@@ -1140,7 +1123,7 @@ def marks_for_page(db: Database, artifact_id: str) -> list[dict]:
             "select id, kind, quote, anchor, held from comment"
             " where artifact_id = %s and thread_root is null"
             " and resolved_at is null and withdrawn_at is null"
-            " and anchor->>'kind' = 'range'"
+            " and anchor->>'kind' in ('range', 'quote')"
             " order by created_at asc, id asc",
             (artifact_id,),
         ).fetchall()

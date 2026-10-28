@@ -278,7 +278,7 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         'if(typeof location!=="undefined"&&location.protocol==="file:"){'
         "window.__arPlace=function(m){"
         'if(!m||typeof m!=="object"||typeof m.quote!=="string"||!m.quote||'
-        '!m.anchor||typeof m.anchor!=="object"||typeof m.anchor.path!=="string")'
+        '!m.anchor||typeof m.anchor!=="object")'
         "return null;"
         "try{return place(m,{v:null})}catch(x){return null}}}"
         "function paint(list){var G={comment:new Highlight(),remove:new Highlight(),"
@@ -294,7 +294,7 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "if(mi>=200){unplaced.push(m.id);return}"
         "var r=null;"
         'if(typeof m.quote==="string"&&m.quote&&m.anchor&&typeof m.anchor==="object"'
-        '&&typeof m.anchor.path==="string"){try{r=place(m,ix)}catch(x){r=null}}'
+        "){try{r=place(m,ix)}catch(x){r=null}}"
         # hasOwnProperty, not `G[m.kind]||`: a kind of "constructor" would
         # otherwise pick Object and throw on .add().
         # A held mark arrives with kind "" (the page never learns the kind)
@@ -377,8 +377,26 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         # selection: the quoted text (capped), an anchor the service already
         # validates -- an element path plus character offsets within that
         # element's text -- and where it sits, so the gallery can put a Comment
-        # button under it. Nothing else from the page is ever sent, and only to
+        # button under it. Nothing else from the page is ever sent -- the heading
+        # text and the ids below are the page's own words, capped -- and only to
         # the gallery's origin. An empty selection says so, so the button goes.
+        # Where the selection sits, beside what it quotes: the nearest heading
+        # at or above `n` (its text and id) and the id of `n` or its nearest
+        # ancestor that has one. Evidence the service re-finds the spot by after
+        # a republish; omitted when absent, never empty. Capped, and in the
+        # charset the service accepts, so a stray id is left out rather than
+        # refused.
+        "var IDR=/^[A-Za-z0-9_.:-]{1,200}$/;"
+        'function ctx(an,n){try{var hs=document.querySelectorAll("h1,h2,h3,h4,h5,h6"),'
+        "hd=null,i,h;for(i=0;i<hs.length&&i<2000;i++){h=hs[i];if(DX(h))continue;"
+        "if(h===n||h.contains(n)||(h.compareDocumentPosition(n)&4))hd=h;else break}"
+        'if(hd){var ht=(hd.textContent||"").replace(/\\s+/g," ").trim().slice(0,200);'
+        "var lc=ht.charCodeAt(ht.length-1);if(lc>=0xd800&&lc<=0xdbff)ht=ht.slice(0,-1);"
+        "if(ht.length)an.heading=ht;"
+        'if(IDR.test(hd.id||""))an.heading_id=hd.id}'
+        "var e=n;while(e&&e.nodeType===1&&e!==document.body){"
+        'if(IDR.test(e.id||"")){an.el_id=e.id;break}e=e.parentElement}}catch(x){}'
+        "return an}"
         "var st=0;function sel(){var s=getSelection(),"
         't=s&&s.rangeCount?String(s).trim():"";'
         'if(!t){parent.postMessage({type:"artifact-selection",quote:""},'
@@ -425,7 +443,7 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "suffix.charCodeAt(suffix.length-1)<=0xdbff)suffix=suffix.slice(0,-1);"
         "var b=r.getBoundingClientRect();"
         'parent.postMessage({type:"artifact-selection",quote:t.slice(0,500),'
-        'anchor:{kind:"range",path:path,start:a,end:z,prefix:prefix,suffix:suffix},'
+        'anchor:ctx({kind:"range",path:path,start:a,end:z,prefix:prefix,suffix:suffix},n),'
         # vt/vl: where the frame SHOWS it, for full screen, where the frame
         # scrolls itself and top/left (page offsets) cannot place the bar.
         "rect:{top:b.top+scrollY,left:b.left+scrollX,width:b.width,height:b.height,"

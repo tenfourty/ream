@@ -18,6 +18,15 @@ def test_the_selection_carries_context_either_side():
     assert "prefix:" in source and "suffix:" in source
 
 
+def test_the_selection_carries_its_heading_and_ids_and_marks_need_no_path():
+    """Pinned comments, slice 1: the evidence a pin is re-found by, and an
+    agent's quote anchor (no DOM path) is painted like any other."""
+    source = content._viewer_report()
+    for key in ("heading", "heading_id", "el_id"):
+        assert f"an.{key}=" in source
+    assert 'typeof m.anchor.path==="string"' not in source
+
+
 def test_the_gallery_offers_three_actions_on_a_selection():
     js = gallery._COMMENTS_JS
     for label in ("Comment", "Remove this", "Looks good"):

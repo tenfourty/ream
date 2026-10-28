@@ -333,6 +333,13 @@ def _threads(
         thread["artifact_id"] = first.get("artifact_id")
         thread["quote"] = first.get("quote") or ""
         thread["kind"] = first.get("kind") or "comment"
+        thread["version_n"] = first.get("version_n")
+        thread["anchor_state"] = first.get("anchor_state") or ""
+        thread["anchor_note"] = first.get("anchor_note") or ""
+        pin = first.get("anchor")
+        thread["heading"] = (
+            pin.get("heading") if isinstance(pin, dict) and pin.get("heading") else ""
+        )
         anchor = first.get("anchor")
         thread["decision_id"] = (
             anchor.get("decision_id")
@@ -369,6 +376,26 @@ def _threads(
     return out
 
 
+def _where(thread: dict) -> str:
+    """Where a pinned comment sits, as a parenthesis after its quote: the
+    heading it was under, the version it was made on, and, if the page has
+    moved on, whether the spot is edited or gone. Empty for a comment that
+    says nothing of the sort (an older row, a whole-page comment)."""
+    parts = []
+    if thread.get("heading"):
+        parts.append(f'under "{thread["heading"]}"')
+    if thread.get("version_n") is not None:
+        parts.append(f"v{thread['version_n']}")
+    state = thread.get("anchor_state")
+    if state == "outdated":
+        parts.append("OUTDATED: this spot is gone from the current version")
+    elif state == "edited":
+        parts.append("text edited since")
+    if thread.get("anchor_note"):
+        parts.append(thread["anchor_note"])
+    return f"  ({' · '.join(parts)})" if parts and state else ""
+
+
 def _fmt_thread(thread: dict, *, on_page: bool = False) -> str:
     head = "NEEDS YOUR REPLY" if thread["needs_reply"] else "replied"
     lines = [
@@ -380,7 +407,7 @@ def _fmt_thread(thread: dict, *, on_page: bool = False) -> str:
         label = {"remove": "REMOVE THIS", "looks_good": "LOOKS GOOD"}.get(
             thread.get("kind"), "on"
         )
-        lines.append(f'  {label}: "{thread["quote"]}"')
+        lines.append(f'  {label}: "{thread["quote"]}"{_where(thread)}')
     for m in thread["messages"]:
         who = (
             "HE SAID"
@@ -1516,9 +1543,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     threads = subs.add_parser(
         "comments",
-        help="comment threads on your pages; NEEDS YOUR REPLY marks his last word",
+        help="comment threads on your pages; NEEDS YOUR REPLY marks his last word."
+        " A pinned comment says what it is pinned to and whether a republish left"
+        " the spot current, edited or OUTDATED",
     )
     threads.add_argument("--page", metavar="ARTIFACT-ID", help="only this page")
+    threads.add_argument(
+        "--outdated",
+        action="store_true",
+        help="only the threads whose pinned spot a republish removed",
+    )
     reply = subs.add_parser(
         "reply",
         help="answer a comment thread: on one of your pages, or with --page on"
@@ -1554,7 +1588,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--quote",
         metavar="TEXT",
         help="the passage you mean, as it reads on the current version. Refused "
-        "if it is not found, or found more than once",
+        "if it is not found, or found more than once. The comment is pinned to it "
+        "and to the heading it sits under, and is marked outdated if a republish "
+        "removes the passage",
     )
     comment.add_argument(
         "--section",
@@ -1793,9 +1829,13 @@ def main(argv: list[str] | None = None) -> int:
             found = _open_threads(
                 key, base, args.page, _office_of(declared_session(args.session))
             )
+            if args.outdated:
+                found = [t for t in found if t["anchor_state"] == "outdated"]
             if not found:
                 print(
-                    "no open comment threads" + (" on that page" if args.page else "")
+                    "no open comment threads"
+                    + (" with an outdated pin" if args.outdated else "")
+                    + (" on that page" if args.page else "")
                 )
                 return 0
             found.sort(key=lambda t: not t["needs_reply"])

@@ -513,6 +513,12 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
    the words were on. */
 .cmoved{display:block;margin-top:.3rem;font-style:normal;font-size:.75rem;
   color:var(--muted)}
+.cwhere{margin-right:.4rem}
+.coutdated-list{margin:0 0 .75rem;padding:.5rem .7rem;border:1px solid var(--line);
+  border-radius:.4rem;font-size:.8125rem}
+.coutdated-list h3{margin:0 0 .3rem;font-size:.8125rem}
+.coutdated-list ul{margin:0;padding-left:1rem}
+.coutdated-list span{color:var(--muted);font-size:.75rem}
 .cmt{padding:.35rem 0;border-left:2px solid var(--line);padding-left:.7rem;
   margin:0 0 .35rem}
 .cmt.human{border-left-color:var(--accent)}
@@ -2729,6 +2735,34 @@ def _render_comments(
 
     bubble = _bubble
 
+    def pin_note(root) -> str:
+        """Where the pin is on the page as it is now: said plainly, never
+        hidden, and never re-attached to words it was not about. `anchor_state`
+        is the server's reading of the pin's evidence (quote, heading, id);
+        `quote_state` is the older quote-only reading, used when the pin's
+        state is not known."""
+        version = int(root.version_n)
+        state = getattr(root, "anchor_state", "")
+        where = ""
+        heading = (root.anchor or {}).get("heading")
+        if heading:
+            where = f'<span class="cwhere">under {escape(heading)}</span>'
+        if state == "outdated" or (not state and root.quote_state == "changed"):
+            what = (
+                "Outdated: this spot is gone from the current version &mdash; "
+                f"it was there in version {version}."
+            )
+        elif state == "edited":
+            what = f"Text edited since version {version}."
+        else:
+            what = ""
+        moved = getattr(root, "anchor_note", "")
+        extra = f" {escape(moved)}." if moved else ""
+        if not (what or extra):
+            return f'<span class="cmoved">{where}</span>' if where else ""
+        cls = " coutdated" if state == "outdated" or not state else ""
+        return f'<span class="cmoved{cls}">{where}{" " if where else ""}{what}{extra}</span>'
+
     def quoted(root) -> str:
         """What the thread is about, when it is about a particular passage.
 
@@ -2743,14 +2777,7 @@ def _render_comments(
         """
         if not root.quote:
             return ""
-        note = (
-            ""
-            if root.quote_state != "changed"
-            else (
-                '<span class="cmoved">This text is no longer on the page &mdash; '
-                f"it was there in version {int(root.version_n)}.</span>"
-            )
-        )
+        note = pin_note(root)
         label = {"remove": "Remove this", "looks_good": "Looks good"}.get(
             getattr(root, "kind", "comment"), ""
         )
@@ -2792,7 +2819,7 @@ def _render_comments(
             # `data-mark-id` is what a hover card is copied by: the page names
             # a mark, and comments.js clones THIS escaped markup for it.
             f'<li class="thread{" settled" if resolved else ""}"'
-            f' data-mark-id="{escape(root.id)}">'
+            f' id="thread-{escape(root.id)}" data-mark-id="{escape(root.id)}">'
             f"{quoted(root)}"
             f'<ul class="bubbles">{bubble(root)}{kids}</ul>{reply}{action}</li>'
         )
@@ -2890,6 +2917,26 @@ def _render_comments(
             )
         out.append("</aside>")
         return "".join(out)
+    gone = [r for r in open_roots if getattr(r, "anchor_state", "") == "outdated"]
+    if gone:
+        # Page level, always at the top, so a pin whose spot a republish
+        # removed cannot be missed. Each thread is also in its place below.
+        out.append(
+            '<section class="coutdated-list" aria-label="Outdated pins">'
+            f"<h3>Outdated pins ({len(gone)})</h3><ul>"
+            + "".join(
+                f'<li><a href="#thread-{escape(r.id)}">&ldquo;{escape(r.quote[:120])}'
+                f"&rdquo;</a> <span>"
+                + (
+                    f"under {escape(r.anchor['heading'])}, "
+                    if (r.anchor or {}).get("heading")
+                    else ""
+                )
+                + f"version {int(r.version_n)}</span></li>"
+                for r in gone
+            )
+            + "</ul></section>"
+        )
     if open_roots:
         out.append(
             '<ul class="threads">' + "".join(thread(r) for r in open_roots) + "</ul>"
