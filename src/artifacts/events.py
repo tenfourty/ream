@@ -234,11 +234,12 @@ def safe_cursor(since: int, pre: int, rows: list[EventRow], limit: int) -> int:
     return max(pre, top)
 
 
-# How long past the end of a hold a session still reads as waiting. A waiter asks
-# again within a second or two of a hold ending (a quiet timeout, or an answer it
-# acts on first); this covers that gap and no more. A waiter backing off 20 s
-# after a dropped connection is deliberately not covered: that session is not
-# listening at that moment, and the page should not say it is.
+# How long past a hold's planned end a session still reads as waiting, when the
+# hold never reports its end (the process died mid-hold, so note_hold_end never
+# ran). A hold that returns normally is pulled back to now by note_hold_end, so a
+# waiter between two holds reads as not waiting for that round trip. A waiter
+# backing off 20 s after a dropped connection is deliberately not covered: that
+# session is not listening at that moment, and the page should not say it is.
 HOLD_GRACE_SECONDS = 30
 
 

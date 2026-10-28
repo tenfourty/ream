@@ -2526,12 +2526,14 @@ def agent_router(
         # `cf-ray` is set by Cloudflare on every request it forwards.
         if request.headers.get("cf-ray"):
             wait = min(wait, PUBLIC_MAX_WAIT)
+        exclude = agent if exclude_self else None
+        # Before the first look, never after the hold: see events.safe_cursor.
+        # Read before the session is marked as waiting, so that a failure here
+        # cannot leave a mark that nothing clears.
+        pre = events.latest_seq(db, agent)
         # Still before the first look, as the comment above says. A hold (wait > 0)
         # also marks the session as waiting until it returns: see events.note_read.
         held_until = events.note_read(db, agent, seat_session, hold_seconds=wait)
-        exclude = agent if exclude_self else None
-        # Before the first look, never after the hold: see events.safe_cursor.
-        pre = events.latest_seq(db, agent)
         try:
             rows = events.list_for_agent(
                 db,
