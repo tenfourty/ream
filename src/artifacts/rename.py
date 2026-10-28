@@ -105,6 +105,7 @@ def rename_agent(db: Database, old: str, new: str, *, dry_run: bool) -> dict[str
         counts["seat_grant.agent"] = _merge_grants(conn, old, new)
         counts["seat_read.agent"] = _merge_reads(conn, old, new)
         counts["idempotency.agent"] = _merge_idempotency(conn, old, new)
+        counts["agent_pickup.agent"] = _merge_pickup(conn, old, new)
 
         moved = sum(counts.values())
         already = conn.execute(
@@ -143,6 +144,26 @@ def _merge_grants(conn, old: str, new: str) -> int:
         "update seat_grant set agent = %s where agent = %s", (new, old)
     ).rowcount
     return dropped + moved
+
+
+def _merge_pickup(conn, old: str, new: str) -> int:
+    """The newer of the two declared pickup lines survives; the old row goes."""
+    conn.execute(
+        "update agent_pickup set pickup = (select o.pickup from agent_pickup o"
+        "   where o.agent = %s),"
+        " updated_at = (select o.updated_at from agent_pickup o where o.agent = %s)"
+        " where agent = %s and exists (select 1 from agent_pickup o"
+        "   where o.agent = %s and o.updated_at > agent_pickup.updated_at)",
+        (old, old, new, old),
+    )
+    conn.execute(
+        "delete from agent_pickup where agent = %s and exists (select 1"
+        " from agent_pickup n where n.agent = %s)",
+        (old, new),
+    )
+    return conn.execute(
+        "update agent_pickup set agent = %s where agent = %s", (new, old)
+    ).rowcount
 
 
 def _merge_reads(conn, old: str, new: str) -> int:

@@ -647,6 +647,23 @@ def _listening(args, key: str, base: str) -> int:
     return 0 if waiting else 3
 
 
+def _pickup(args, key: str, base: str) -> int:
+    """Set, clear or show this agent's declared pickup line."""
+    if args.line is not None and args.clear:
+        raise UsageError("give a line or --clear, not both")
+    if args.clear:
+        _request("DELETE", f"{base}/listening/pickup", key, None)
+        print('pickup cleared; questions say "at its next check"')
+        return 0
+    if args.line is None:
+        current = (_request("GET", f"{base}/listening", key, None) or {}).get("pickup")
+        print(current if current else "no pickup line set")
+        return 0
+    kept = _request("PUT", f"{base}/listening/pickup", key, {"pickup": args.line})
+    print(f"pickup set: {kept['pickup']}")
+    return 0
+
+
 def _wait(args, key: str, base: str) -> int:
     """Block until Jeremy answers, print the answer(s), exit 0.
 
@@ -1470,6 +1487,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="the service's answer, as JSON"
     )
 
+    pick = subs.add_parser(
+        "pickup",
+        help="say when your office acts on his answer; shown on his page as"
+        ' "<agent> says: ..."',
+        description=(
+            "Declares one short line (at most 120 characters, one line, plain "
+            "text) for when your office acts on his answer, e.g. `artifacts-"
+            'decide pickup "within the hour"`. His page then reads "<agent> '
+            'says: within the hour" under your open questions, in place of "acted '
+            'on at its next check". It is your word: the service does not check '
+            "or promise it, so keep it true or clear it. One line per agent (key), "
+            "replacing any earlier one. --clear removes it; with neither a line "
+            "nor --clear, prints the current one."
+        ),
+    )
+    pick.add_argument("line", nargs="?", metavar="LINE", help="the line to show")
+    pick.add_argument("--clear", action="store_true", help="remove the line")
+
     release = subs.add_parser(
         "review-release",
         help="hand a review round back: this session cannot act on it",
@@ -1731,6 +1766,8 @@ def main(argv: list[str] | None = None) -> int:
             return _wait(args, key, base)
         if args.cmd == "listening":
             return _listening(args, key, base)
+        if args.cmd == "pickup":
+            return _pickup(args, key, base)
         if args.cmd == "review-release":
             session = session_label(args.session)
             if session is None:

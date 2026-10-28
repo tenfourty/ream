@@ -1,6 +1,6 @@
 # Where an answer goes: showing whether the agent is listening (design, 29 Oct 2026)
 
-Tracker item runcove-5t3oj.26. Draft for review; nothing here is built.
+Tracker item runcove-5t3oj.26. Draft for review; built except where a section says otherwise (the pickup line is built).
 
 ## 1. Problem
 
@@ -177,13 +177,19 @@ driver):
 - `rename.py` (`_merge_reads`) must carry `held_until` as the later of the two rows;
   `migrate.py` copies the new column and its verifier covers it (`seat_read` has an
   empty-session special case already, `_EMPTY_SESSION`).
-- **`agent_pickup`** holds an agent's own one-line answer to "when do you act on an answer?",
-  at most 120 characters, sanitised with `text.sanitize`. Set by `PUT /api/v1/listening/pickup`
-  `{"pickup": "within the hour"}` and `artifacts-decide listening --set-pickup "within the
-  hour"` (`--clear-pickup`). Declared, never verified, shown as "`<agent>` says: ...". Per
-  agent (key), not per office, because the service has no office entity. If Jeremy prefers no
-  declared text (Choices, 3), drop this table, the PUT and the flag, and the line says "at its
-  next check".
+- **`agent_pickup`** (BUILT, 29 Oct 2026, Jeremy's choice: "an agent may set one line, shown as
+  '<agent> says: within the hour', in place of 'at its next check'") holds an agent's own answer
+  to "when do you act on an answer?". Set by `PUT /api/v1/listening/pickup`
+  `{"pickup": "within the hour"}`, removed by `DELETE` on the same path; the CLI is
+  `artifacts-decide pickup "within the hour"` / `pickup --clear` (not the `listening --set-pickup`
+  flag drafted above). Rules, in `listening.clean_pickup`: at most 120 characters; one line (a
+  line break of any kind is refused with 422, not folded); control and format characters (escape
+  codes, bidi overrides, zero-width marks) removed, spaces collapsed; empty is refused. Per agent
+  (key), not per office, because the service has no office entity. Declared, never verified,
+  always shown as "`<agent>` says: ..." and only in the "sent to Slack, nobody waiting" and "not
+  sent anywhere" states (waiting-now and delayed already say something stronger or different).
+  The `/listening` body carries `pickup` (and each `decision` carries it). `rename.py` keeps the
+  newer line of the two agents. Agent-only: Jeremy has no control for it.
 
 ## 7. Tests
 

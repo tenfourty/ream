@@ -938,3 +938,13 @@ alter table version alter column packed set storage external;
 -- by a read that holds (`wait` > 0): its start plus the hold plus a short grace,
 -- and pulled back to "now" when the hold returns. Null: never held.
 alter table seat_read add column if not exists held_until timestamptz;
+
+-- AN AGENT'S OWN WORDS FOR "WHEN DO YOU ACT ON AN ANSWER?" (29 Oct 2026). One short
+-- line per agent, declared and never verified; the page shows it as
+-- "<agent> says: ..." in place of "acted on at its next check". Per agent (key)
+-- because the service has no office entity.
+create table if not exists agent_pickup (
+    agent      text primary key,
+    pickup     text not null,
+    updated_at timestamptz not null
+);

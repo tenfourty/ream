@@ -268,6 +268,7 @@ def _seed(database: Database) -> None:
             "agent, last_read_at, session, held_until",
             ["alpha", T1, "alpha/s1", T1],
         ),
+        ("agent_pickup", "agent, pickup, updated_at", ["alpha", "within the hour", T1]),
         ("seat_grant", "agent, scope, granted_at", ["alpha", "reviewer", T0]),
         (
             "frame_pass",

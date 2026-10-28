@@ -431,6 +431,15 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
     ),
     # 29 Oct 2026: a session holding an /events wait right now (see schema.sql).
     8: ("alter table seat_read add column held_until timestamptz",),
+    # 29 Oct 2026: an agent's own pickup line (see schema.sql).
+    9: (
+        (
+            "create table agent_pickup ("
+            " agent text primary key,"
+            " pickup text not null,"
+            " updated_at timestamptz not null)"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

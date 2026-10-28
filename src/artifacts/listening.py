@@ -20,6 +20,7 @@ Session labels are declared by the caller (`api.session`), so this is a display
 and never a permission; scoping uses the key's agent alone.
 """
 
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -31,6 +32,9 @@ SENT_TO_SLACK = "sent_to_slack"
 SLACK_DELAYED = "slack_delayed"
 NOT_SENT = "not_sent"
 STATES = (WAITING_NOW, SENT_TO_SLACK, SLACK_DELAYED, NOT_SENT)
+# Wording keys for the two states that can carry an agent's own pickup line.
+SENT_TO_SLACK_PICKUP = "sent_to_slack_pickup"
+NOT_SENT_PICKUP = "not_sent_pickup"
 
 # How far back `recent` looks, and how many it lists.
 RECENT_WINDOW = timedelta(hours=24)
@@ -47,6 +51,12 @@ WORDING = {
         "No session is waiting. Your answer is delivered to {agent} in Slack, "
         "and acted on at its next check.{seen}"
     ),
+    # The agent declared its own pickup line (`set_pickup`): its words replace
+    # "acted on at its next check". Never a promise of this service.
+    SENT_TO_SLACK_PICKUP: (
+        "No session is waiting. Your answer is delivered to {agent} in Slack. "
+        "{says}{seen}"
+    ),
     SLACK_DELAYED: (
         "No session is waiting, and the copy of this question for {agent} in "
         "Slack has not been delivered yet. Your answer is saved; the agent "
@@ -56,7 +66,12 @@ WORDING = {
         "No session is waiting and this question is not in Slack. Your answer "
         "is saved; the agent reads it when it next looks.{seen}"
     ),
+    NOT_SENT_PICKUP: (
+        "No session is waiting and this question is not in Slack. Your answer "
+        "is saved. {says}{seen}"
+    ),
 }
+SAYS = "{agent} says: {pickup}{stop}"
 SEEN = " Last seen {age}."
 NEVER_SEEN = " It has not been seen asking for events."
 SEEN_TITLE = "Last time a session of this agent asked for its events"
@@ -71,6 +86,66 @@ class Route:
     last_seen: str | None
     announced: bool
     delivered: bool
+    pickup: str | None = None
+
+
+PICKUP_LIMIT = 120
+
+
+class BadPickup(ValueError):
+    """A pickup line the service will not keep, with a reason fit to show."""
+
+
+def clean_pickup(text) -> str:
+    """The agent's one line, or `BadPickup`. Single line only (a line break of
+    any kind is refused, not folded); control and format characters (escape
+    codes, bidi overrides, zero-width marks) are removed; runs of spaces
+    collapse; at most PICKUP_LIMIT characters after that. Plain text: the page
+    escapes it."""
+    if not isinstance(text, str):
+        raise BadPickup("pickup must be text")
+    if any(c in text for c in "\n\r\x0b\x0c\x85\u2028\u2029"):
+        raise BadPickup("pickup must be a single line")
+    kept = "".join(
+        c for c in text if unicodedata.category(c) not in ("Cc", "Cf", "Cs", "Co", "Cn")
+    )
+    cleaned = " ".join(kept.split())
+    if not cleaned:
+        raise BadPickup("pickup is empty; use clear to remove it")
+    if len(cleaned) > PICKUP_LIMIT:
+        raise BadPickup(f"pickup is {len(cleaned)} characters; at most {PICKUP_LIMIT}")
+    return cleaned
+
+
+def get_pickup(db: Database, agent: str) -> str | None:
+    with db.connect() as conn:
+        row = conn.execute(
+            "select pickup from agent_pickup where agent = %s", (agent,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def set_pickup(db: Database, agent: str, text) -> str:
+    """Keep `text` as this agent's pickup line (replacing any); returns the
+    cleaned line. Per agent (key), because the service has no office entity."""
+    cleaned = clean_pickup(text)
+    with db.connect() as conn:
+        conn.execute(
+            "insert into agent_pickup (agent, pickup, updated_at) values (%s, %s, %s)"
+            " on conflict (agent) do update"
+            " set pickup = excluded.pickup, updated_at = excluded.updated_at",
+            (agent, cleaned, datetime.now(UTC)),
+        )
+    return cleaned
+
+
+def clear_pickup(db: Database, agent: str) -> bool:
+    """Remove the line; True when there was one."""
+    with db.connect() as conn:
+        return (
+            conn.execute("delete from agent_pickup where agent = %s", (agent,)).rowcount
+            > 0
+        )
 
 
 def office_of(label: str | None) -> str:
@@ -173,6 +248,7 @@ def for_decisions(
             ).fetchall():
                 delivered[decision_id] = at is not None
     readers = _readers(db, agent)
+    pickup = get_pickup(db, agent)
     bridge_on = partner.enabled()
     out: dict[str, Route] = {}
     for decision_id, label, version in found:
@@ -201,6 +277,7 @@ def for_decisions(
             last_seen=max(seen).isoformat() if seen else None,
             announced=announced,
             delivered=sent,
+            pickup=pickup,
         )
     return out
 
@@ -215,7 +292,13 @@ def line(route: Route, now: datetime | None = None) -> str:
     last = _moment(route.last_seen)
     seen = SEEN.format(age=_age(last, now)) if last else NEVER_SEEN
     session = f" ({route.waiting_session})" if route.waiting_session else ""
-    return WORDING[route.state].format(agent=route.agent, session=session, seen=seen)
+    key = route.state
+    says = ""
+    if route.pickup and key in (SENT_TO_SLACK, NOT_SENT):
+        key = SENT_TO_SLACK_PICKUP if key == SENT_TO_SLACK else NOT_SENT_PICKUP
+        stop = "" if route.pickup[-1] in ".!?" else "."
+        says = SAYS.format(agent=route.agent, pickup=route.pickup, stop=stop)
+    return WORDING[key].format(agent=route.agent, session=session, seen=seen, says=says)
 
 
 def route_view(route: Route, now: datetime | None = None) -> dict:
@@ -230,6 +313,7 @@ def route_view(route: Route, now: datetime | None = None) -> dict:
             "announced": route.announced,
             "delivered": route.delivered,
         },
+        "pickup": route.pickup,
         "last_seen": route.last_seen,
         "line": line(route, now),
     }
@@ -245,6 +329,7 @@ def status(db: Database, agent: str, decision_id: str | None = None) -> dict | N
         "ttl_grace_seconds": events.HOLD_GRACE_SECONDS,
         **sessions(db, agent, now),
         "bridge": {"enabled": partner.enabled()},
+        "pickup": get_pickup(db, agent),
     }
     if decision_id is not None:
         route = for_decision(db, agent, decision_id)

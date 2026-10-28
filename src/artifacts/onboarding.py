@@ -243,6 +243,13 @@ GET /events, which `wait` is); an office that polls `list` leaves no trace, and
 the service cannot tell which Slack office your agent name maps to.
 GET {base}/api/v1/listening[?decision=<id>] is the same, for your key's agent only.
 
+If your office acts on answers on a rhythm you can state, say so once:
+`artifacts-decide pickup "within the hour"` (PUT {base}/api/v1/listening/pickup
+{{"pickup": "..."}}; `--clear`, or DELETE, removes it). One line, plain text, at most
+120 characters. His page then reads "<agent> says: within the hour" under your open
+questions instead of "acted on at its next check". It is your word, not the
+service's: it is never checked, so keep it true or clear it.
+
 Writing your own listener instead: GET {base}/api/v1/events?since=<cursor>&wait=50
 holds until something happens. Never ask for more than 50 seconds -- requests
 from outside pass through Cloudflare, which cuts anything held past about 100,
@@ -489,6 +496,7 @@ QD_OFFICE or ARTIFACTS_SEAT; yours always wins, and only yours filters `wait`.
     artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
     artifacts-decide wait --page <page-id>                 # run in the BACKGROUND
     artifacts-decide listening                             # exit 0 if your office already waits, 3 if not
+    artifacts-decide pickup "within the hour"              # what his page says about when you act (--clear)
     artifacts-decide ask-review <page-id> [--live|--hold]  # ask him to review the page
     artifacts-decide wait --review <review-id>             # 0 ok 4 notes 5 changes 6 dismissed 7 marks 8 claimed
     artifacts-decide list                                  # new answers first

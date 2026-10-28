@@ -334,7 +334,8 @@ def test_last_seen_is_stated_as_an_age_or_as_never_seen():
 
 
 def test_every_state_has_wording_in_the_one_place():
-    assert set(listening.WORDING) == set(listening.STATES)
+    extra = {listening.SENT_TO_SLACK_PICKUP, listening.NOT_SENT_PICKUP}
+    assert set(listening.WORDING) == set(listening.STATES) | extra
 
 
 # --- the API twin and its scoping ----------------------------------------------

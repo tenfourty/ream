@@ -80,6 +80,10 @@ class AgentsBody(BaseModel):
     can_read: bool
 
 
+class PickupBody(BaseModel):
+    pickup: str = Field(max_length=2000)
+
+
 class ConnectBody(BaseModel):
     name: str | None = None
 
@@ -2599,6 +2603,25 @@ def agent_router(
         if body is None:
             raise HTTPException(404, "no such decision")
         return body
+
+    @router.put("/listening/pickup")
+    def put_pickup(body: PickupBody, agent: str = Depends(caller)):
+        """Say, in one short line, when your office acts on his answer ("within
+        the hour"). Shown under each of your open questions as "<agent> says:
+        ...", in place of "acted on at its next check". Your own words, never
+        verified or promised by this service. One line per agent (key); a new
+        one replaces the old. Plain text, single line, at most
+        `listening.PICKUP_LIMIT` characters after control and format characters
+        are removed. The agent-only twin of nothing on his side: he cannot set it."""
+        try:
+            return {"pickup": listening.set_pickup(db, agent, body.pickup)}
+        except listening.BadPickup as exc:
+            raise HTTPException(422, str(exc)) from None
+
+    @router.delete("/listening/pickup")
+    def delete_pickup(agent: str = Depends(caller)):
+        """Remove your pickup line; the questions go back to "at its next check"."""
+        return {"pickup": None, "cleared": listening.clear_pickup(db, agent)}
 
     # --- the 404 that tells you what DOES exist -----------------------------
     #
