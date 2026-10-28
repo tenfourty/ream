@@ -11,7 +11,7 @@ session is waiting; (3) whether you would read the status through an API; (4) wh
 act on a pinned comment; (5) whether you can read an attached image, and what size or format
 troubles you; (6) what should happen to a pinned comment when a republish removes its spot.
 
-Ten offices answered within a minute; ch had not answered when this was written.
+Ten offices answered within a minute; ch followed about three minutes later.
 
 | | (1) How it waits | (2) Page says, when nobody waits | (3) Status API | (4) Pinned comment needs | (5) Images | (6) Spot gone |
 |---|---|---|---|---|---|---|
@@ -25,27 +25,28 @@ Ten offices answered within a minute; ch had not answered when this was written.
 | homelab | quarterdeck asks, woken by its mailbox watcher; no open wait | "delivered to the homelab maintainer in Slack; it acts at its next wake" | yes, read-only given a page id | quote + heading; decision-card ids are stable, others not | local path; URL only without auth; PNG/JPEG under ~5 MB; tall captures lose detail | outdated in place with quote; never moved silently |
 | retrobrew | not on pages; quarterdeck asks | "delivered to the office in Slack" | n/a today | quote + heading; bead ids are its stable anchors | local path, PNG/JPEG/WebP; over ~5 MB is a problem | outdated with quote; its board is redrawn every 30 min, so spots move often |
 | quarterdeck | `artifacts-wait --session`, 40 rounds of 280 s (~3 h), re-armed while the session lives | "delivered to the office in Slack" | yes, to see if another session already waits | quote + heading; would add section ids if anchors key on them | local path, PNG/JPEG, a few MB; scale down phone captures | outdated in place with quote, **and** at page level |
+| ch | not at all; quarterdeck buttons in #hq-ch, never blocked on a page | "delivered to the ch office in Slack" | yes, read-only, so a second session doesn't ask or wait twice | quote + heading; element id when one exists (ids on headings only) | local path, PNG/JPEG under ~5 MB; huge or animated images not useful | outdated, pinned to its quote, **and** shown at page level |
 
 ## What it shapes
 
 **Listening (runcove-5t3oj.26)**
 
-- **Every one of the ten says the same about the empty state:** a bare "not listening" reads to
+- **Every one of the eleven says the same about the empty state:** a bare "not listening" reads to
   Jeremy as "your answer is lost". The page must say **where the answer goes and when it is
   acted on**, e.g. "no session is waiting; your answer is delivered to cove in Slack, acted on
   at its next check". So the item is "where your answer goes", of which "a session is waiting
   now" is the best case, not a listening light.
-- **Most offices don't hold a wait open at all.** Seven route Jeremy's questions through
+- **Most offices don't hold a wait open at all.** Eight route Jeremy's questions through
   quarterdeck asks, or read `list` at their next check. Only pmo, cove and quarterdeck hold a
   long background wait, and theirs die with the session. "Waiting right now" will be false most
   of the time, which is why the delivery route has to carry the message.
-- **Nine of ten would read the status through the API**, almost all for one reason: a fresh
+- **Ten of eleven would read the status through the API**, almost all for one reason: a fresh
   session checking whether another session of the same office already waits, before arming a
   second one. Read-only and scoped to the calling key's own agent (cove), as every agent route is.
 
 **Pinned comments (runcove-5t3oj.53)**
 
-- **Anchor on the quoted text and the nearest heading.** All ten name these two first; element
+- **Anchor on the quoted text and the nearest heading.** All eleven name these two first; element
   ids are a bonus, and most pages carry stable ids only on headings, sections or tables. A CSS
   selector alone would break on generated pages (gg-ops, retrobrew, homelab). Several would add
   section ids if the anchor uses them, so prefer an id when the page has one.
@@ -53,6 +54,6 @@ Ten offices answered within a minute; ch had not answered when this was written.
   authenticated URL is a problem for most sessions, so the CLI should fetch images to a path.
   Very tall full-page captures lose detail when downscaled; HEIC is unreadable to one office.
 - **A comment whose spot is gone stays where it was, marked "outdated", showing its quote.**
-  None want it moved silently. Five (pmo, wolff, cove, jeremys-mac, quarterdeck) also want it
+  None want it moved silently. Six (pmo, wolff, cove, jeremys-mac, quarterdeck, ch) also want it
   listed at page level so it can't be missed; gg-ops would re-find the quote if it moved.
 - A screenshot of the spot is wanted only for layout or chart comments, so it is optional.
