@@ -157,6 +157,17 @@ def _merge_reads(conn, old: str, new: str) -> int:
         "   and o.last_read_at > seat_read.last_read_at)",
         (old, new, old),
     )
+    # The later hold wins too, so a rename never shortens a live wait.
+    conn.execute(
+        "update seat_read set held_until = (select o.held_until"
+        "   from seat_read o where o.agent = %s and o.session = seat_read.session)"
+        " where agent = %s and exists (select 1 from seat_read o"
+        "   where o.agent = %s and o.session = seat_read.session"
+        "   and o.held_until is not null"
+        "   and (seat_read.held_until is null"
+        "        or o.held_until > seat_read.held_until))",
+        (old, new, old),
+    )
     dropped = conn.execute(
         "delete from seat_read where agent = %s and exists (select 1"
         " from seat_read n where n.agent = %s and n.session = seat_read.session)",

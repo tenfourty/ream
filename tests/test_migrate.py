@@ -263,7 +263,11 @@ def _seed(database: Database) -> None:
             [2, "a1", "alpha", "jeremy", "comment_added", T1, "alpha/s1"],
         ),
         ("seat_read", "agent, last_read_at, session", ["alpha", T0, ""]),
-        ("seat_read", "agent, last_read_at, session", ["alpha", T1, "alpha/s1"]),
+        (
+            "seat_read",
+            "agent, last_read_at, session, held_until",
+            ["alpha", T1, "alpha/s1", T1],
+        ),
         ("seat_grant", "agent, scope, granted_at", ["alpha", "reviewer", T0]),
         (
             "frame_pass",

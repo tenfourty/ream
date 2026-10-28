@@ -44,6 +44,7 @@ from artifacts import (
     idempotency,
     inbox,
     keys,
+    listening,
     markdown,
     onboarding,
     partner_in,
@@ -2515,7 +2516,7 @@ def agent_router(
         # stranded-answer alert reports a live reader while the asker is gone.
         # Recorded for whatever the caller declared, including nothing -- an
         # unlabelled reader is a real reader and shares one row.
-        events.note_read(db, agent, seat_session)
+        # Moved below the cap on `wait`: what is stamped as held is what is held.
         # THROUGH CLOUDFLARE, NEVER HOLD PAST 50 SECONDS (homelab-ij8.106).
         # Measured 23 Sep 2026: wait=60 came back as Cloudflare's 524 after 125 s.
         # The public ingress gives up on an upstream after nginx's default 60 s
@@ -2525,27 +2526,34 @@ def agent_router(
         # `cf-ray` is set by Cloudflare on every request it forwards.
         if request.headers.get("cf-ray"):
             wait = min(wait, PUBLIC_MAX_WAIT)
+        # Still before the first look, as the comment above says. A hold (wait > 0)
+        # also marks the session as waiting until it returns: see events.note_read.
+        held_until = events.note_read(db, agent, seat_session, hold_seconds=wait)
         exclude = agent if exclude_self else None
         # Before the first look, never after the hold: see events.safe_cursor.
         pre = events.latest_seq(db, agent)
-        rows = events.list_for_agent(
-            db,
-            agent,
-            since=since,
-            limit=limit,
-            session=session_filter,
-            exclude_actor=exclude,
-        )
-        if not rows and wait:
-            rows = events.wait_for_agent(
+        try:
+            rows = events.list_for_agent(
                 db,
                 agent,
                 since=since,
                 limit=limit,
-                seconds=wait,
                 session=session_filter,
                 exclude_actor=exclude,
             )
+            if not rows and wait:
+                rows = events.wait_for_agent(
+                    db,
+                    agent,
+                    since=since,
+                    limit=limit,
+                    seconds=wait,
+                    session=session_filter,
+                    exclude_actor=exclude,
+                )
+        finally:
+            if held_until is not None:
+                events.note_hold_end(db, agent, seat_session, held_until)
         # Free text goes out without terminal control characters (homelab-ij8.55):
         # a comment body is anybody's words, and it lands in an agent's terminal.
         cleaned = [
@@ -2566,6 +2574,29 @@ def agent_router(
                 "x-artifacts-max-wait": str(int(PUBLIC_MAX_WAIT)),
             },
         )
+
+    @router.get("/listening")
+    def get_listening(
+        decision: str | None = Query(None, max_length=120),
+        agent: str = Depends(caller),
+    ):
+        """Whether a session of THIS key's agent is waiting for Jeremy's answer
+        right now, and with `?decision=<id>`, where his answer to that question
+        goes. The agent's twin of the line under a question on its page.
+
+        `waiting` is the sessions holding an /events wait that has not lapsed;
+        `recent` the others that asked for events in the last day. Scoped to the
+        calling agent: no other agent's session appears, and a decision that is
+        not this agent's answers exactly as one that does not exist. Read-only,
+        and it does not record the caller as a listener.
+
+        It cannot see an office that holds no wait (one that polls `list`), nor
+        which Slack office a question maps to, so `state` says "sent", never
+        "received"."""
+        body = listening.status(db, agent, decision)
+        if body is None:
+            raise HTTPException(404, "no such decision")
+        return body
 
     # --- the 404 that tells you what DOES exist -----------------------------
     #

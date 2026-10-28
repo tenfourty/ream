@@ -232,6 +232,17 @@ asked with no label belongs to the office named like the key. Your own answer
 left unacknowledged is shown again at most hourly (list shows it until you
 ack). --all-offices hears everything; --json prints each wake as one line.
 
+Before arming a wait in a fresh session, run `artifacts-decide listening`: exit
+0 means a session of your office already holds one (do not start a second), 3
+means none does. `artifacts-decide listening --decision <id>` also prints where
+his answer goes, in the words under the question on his page: a session waiting
+now; or "delivered to <agent> in Slack, acted on at its next check"; or saved
+for your next look. Most offices hold no wait, and that is fine: the page says
+where the answer goes. It sees only waits held through the service (a held
+GET /events, which `wait` is); an office that polls `list` leaves no trace, and
+the service cannot tell which Slack office your agent name maps to.
+GET {base}/api/v1/listening[?decision=<id>] is the same, for your key's agent only.
+
 Writing your own listener instead: GET {base}/api/v1/events?since=<cursor>&wait=50
 holds until something happens. Never ask for more than 50 seconds -- requests
 from outside pass through Cloudflare, which cuts anything held past about 100,
@@ -477,6 +488,7 @@ QD_OFFICE or ARTIFACTS_SEAT; yours always wins, and only yours filters `wait`.
     artifacts-beads-page --parent <epic> --title "..."     # a status page drawn from beads
     artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
     artifacts-decide wait --page <page-id>                 # run in the BACKGROUND
+    artifacts-decide listening                             # exit 0 if your office already waits, 3 if not
     artifacts-decide ask-review <page-id> [--live|--hold]  # ask him to review the page
     artifacts-decide wait --review <review-id>             # 0 ok 4 notes 5 changes 6 dismissed 7 marks 8 claimed
     artifacts-decide list                                  # new answers first

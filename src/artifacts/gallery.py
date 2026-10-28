@@ -38,6 +38,7 @@ from artifacts import (
     holds,
     inbox,
     keys,
+    listening,
     mail,
     pagediff,
     partner_in,
@@ -320,6 +321,8 @@ main{display:block}
   padding-left:.7rem;margin:.2rem 0 .6rem}
 .ask.held{border-left-color:var(--line);box-shadow:none;background:transparent}
 .ask.held .q{font-weight:500;color:var(--muted);margin:0 0 .3rem}
+.ask .qroute{margin:0 0 .65rem;font-size:.82rem;color:var(--muted)}
+.ask .qroute.waiting_now{color:var(--ok)}
 .ask .qctx{margin:0 0 .6rem;font-size:.9rem;color:var(--muted);white-space:pre-line}
 .ask .qmeta{margin:0 0 .65rem;font:.74rem/1.5 var(--mono);color:var(--muted);
   display:flex;flex-wrap:wrap;gap:.2rem .7rem}
@@ -3413,6 +3416,7 @@ def _render_decisions(
     presence: dict | None = None,
     note_threads: dict[str, list] | None = None,
     prev_read_at: datetime | str | None = None,
+    routes: dict[str, listening.Route] | None = None,
 ) -> tuple[str, str]:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
@@ -3609,6 +3613,19 @@ def _render_decisions(
         line = f'<p class="qmeta">{"".join(meta)}</p>' if meta else ""
         return ctx + line
 
+    def _route_line(row: decisions.DecisionRow) -> str:
+        """Where his answer goes and whether anyone waits for it: one line under
+        an OPEN question, worded in `listening.WORDING`. Nothing when the caller
+        gave no route (a settled card, a review, a page that does not look)."""
+        route = (routes or {}).get(row.id)
+        if route is None or row.answer is not None:
+            return ""
+        return (
+            f'<p class="qroute {escape(route.state)}"'
+            f' title="{escape(listening.SEEN_TITLE)}">'
+            f"{escape(listening.line(route, now))}</p>"
+        )
+
     def _card(row: decisions.DecisionRow, anchorable: bool = True) -> str:
         """`anchorable` carries the id the page's script matches a slot against.
         Only an OPEN decision gets one: a settled decision lives inside a collapsed
@@ -3681,6 +3698,7 @@ def _render_decisions(
             f'<div class="ask"{anchor}>'
             f'<p class="q">{tag}{escape(row.question)}</p>'
             f"{_context_block(row)}"
+            f"{_route_line(row)}"
             f"{_since(row)}"
             f"{hint}"
             f'<form method="post" action="/d/{escape(row.id)}/answer">'
@@ -4748,6 +4766,15 @@ def gallery_router(db: Database) -> APIRouter:
             round_view=round_view,
             presence=presence,
             listening_since=events.last_read(db, row[2]),
+            routes=listening.for_decisions(
+                db,
+                row[2],
+                [
+                    r.id
+                    for r in shown_rows
+                    if getattr(r, "kind", "question") == "question" and r.answer is None
+                ],
+            ),
             outcomes=decisions.outcomes_for_artifact(db, artifact_id),
             held_count=(
                 holds.held_count(db, artifact_id)

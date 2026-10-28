@@ -21,7 +21,7 @@ with `since=<last seq it saw>` can never skip or repeat a row.
 import threading
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from artifacts import text
 from artifacts.db import TRANSIENT, Database
@@ -234,7 +234,17 @@ def safe_cursor(since: int, pre: int, rows: list[EventRow], limit: int) -> int:
     return max(pre, top)
 
 
-def note_read(db: Database, agent: str, session: str | None = None) -> None:
+# How long past the end of a hold a session still reads as waiting. A waiter asks
+# again within a second or two of a hold ending (a quiet timeout, or an answer it
+# acts on first); this covers that gap and no more. A waiter backing off 20 s
+# after a dropped connection is deliberately not covered: that session is not
+# listening at that moment, and the page should not say it is.
+HOLD_GRACE_SECONDS = 30
+
+
+def note_read(
+    db: Database, agent: str, session: str | None = None, hold_seconds: float = 0
+) -> datetime | None:
     """Record that this seat -- and this SESSION -- asked for its events, just now.
 
     Called at the START of a read, before anything is looked up, because a
@@ -254,12 +264,24 @@ def note_read(db: Database, agent: str, session: str | None = None) -> None:
     the agent is gone, so someone else has to collect it, or the agent is alive
     and stuck. Without this, those two are indistinguishable.
 
+    `hold_seconds` > 0 says this read is a HOLD: it also sets `held_until` to
+    now + hold + `HOLD_GRACE_SECONDS`, which is what "a session is waiting now"
+    means on a page. A plain poll (`hold_seconds` 0) never touches it, so a glance
+    at the feed cannot pass for a wait. A later `held_until` is never replaced by
+    an earlier one. Returns the `held_until` it set, for `note_hold_end`, or None.
+
     Never raises. This is bookkeeping ALONGSIDE a read, not part of it: an agent
     asking for its events must still get them if the bookkeeping write fails, and
     a failure here degrades the alert, which is a safety net, rather than the feed,
     which is the feature. The cost of being wrong in the other direction is an
     agent that cannot read its answers because a statistics table was unhappy.
     """
+    now = datetime.now(UTC)
+    until = (
+        now + timedelta(seconds=hold_seconds + HOLD_GRACE_SECONDS)
+        if hold_seconds > 0
+        else None
+    )
     try:
         with db.connect() as conn:
             # An unlabelled caller is stored as session '' (not NULL), so
@@ -267,13 +289,37 @@ def note_read(db: Database, agent: str, session: str | None = None) -> None:
             # no session into one row on both Postgres and SQLite, which has no
             # NULLS NOT DISTINCT.
             conn.execute(
-                "insert into seat_read (agent, session, last_read_at)"
-                " values (%s, %s, %s)"
+                "insert into seat_read (agent, session, last_read_at, held_until)"
+                " values (%s, %s, %s, %s)"
                 " on conflict (agent, session)"
-                " do update set last_read_at = excluded.last_read_at",
-                (agent, session or "", datetime.now(UTC)),
+                " do update set last_read_at = excluded.last_read_at,"
+                " held_until = case"
+                "   when excluded.held_until is null then seat_read.held_until"
+                "   when seat_read.held_until is null"
+                "     or seat_read.held_until < excluded.held_until"
+                "   then excluded.held_until"
+                "   else seat_read.held_until end",
+                (agent, session or "", now, until),
             )
     except Exception:  # noqa: BLE001 -- see the docstring: this must never fail a read
+        return None
+    return until
+
+
+def note_hold_end(
+    db: Database, agent: str, session: str | None, until: datetime
+) -> None:
+    """The hold that set `held_until = until` has returned: stop reading as
+    waiting, now, rather than at the end of the grace. A newer hold by the same
+    session (a later `held_until`) is left alone. Never raises, like `note_read`."""
+    try:
+        with db.connect() as conn:
+            conn.execute(
+                "update seat_read set held_until = %s"
+                " where agent = %s and session = %s and held_until <= %s",
+                (datetime.now(UTC), agent, session or "", until),
+            )
+    except Exception:  # noqa: BLE001 -- bookkeeping beside a read, never a failure of it
         return
 
 

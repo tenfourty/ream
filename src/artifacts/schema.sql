@@ -931,3 +931,10 @@ alter table version add column if not exists body_bytes integer;
 alter table version add column if not exists body_sha256 text;
 -- Already compressed: TOAST must not try again.
 alter table version alter column packed set storage external;
+
+-- WHICH SESSION HOLDS A WAIT RIGHT NOW (29 Oct 2026, the "where an answer goes" slice).
+-- `last_read_at` is stamped at the START of every /events read, a plain poll
+-- included, so it cannot tell a listener from a glance. `held_until` is set only
+-- by a read that holds (`wait` > 0): its start plus the hold plus a short grace,
+-- and pulled back to "now" when the hold returns. Null: never held.
+alter table seat_read add column if not exists held_until timestamptz;

@@ -291,3 +291,11 @@ version above the home's last) only `out_version` changes.
 by the inbox's order, and carries `pending_answer` when he has answered it here. Nothing
 in the API answers one: an agent has no more right to answer Slack's question than to
 answer as him. The default scope never lists them.
+
+## What the page says about delivery
+
+The line under an open question (`listening.WORDING`) says "delivered to `<agent>` in Slack" once
+the `asked` event is delivered. `<agent>` is the artifacts agent name, because that is all this
+service knows: it cannot see whether the partner mapped the name to an office, or whether that
+office is running. If the partner could acknowledge which office a question mapped to, the line
+could name the office; that is not built. See `runbooks/is-anyone-listening.md`.

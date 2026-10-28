@@ -429,6 +429,8 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
         "alter table version add column body_bytes integer",
         "alter table version add column body_sha256 text",
     ),
+    # 29 Oct 2026: a session holding an /events wait right now (see schema.sql).
+    8: ("alter table seat_read add column held_until timestamptz",),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

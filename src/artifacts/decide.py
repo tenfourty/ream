@@ -581,6 +581,72 @@ def _thread_mark(thread: dict) -> str:
     return f"t:{thread['id']}@{thread['messages'][-1].get('id', '')}"
 
 
+def _hears(session: str, office: str | None) -> bool:
+    """Whether a waiter labelled `session` hears `office`'s answers: its label is
+    the office or starts with `office/`, or it has no label and so hears every
+    office. No office named: any waiter. (The service applies the same rule to
+    the line under a question; `listening._reads_for`.)"""
+    if office is None or session == "":
+        return True
+    return session == office or session.startswith(office + "/")
+
+
+def _already_waiting(base: str, key: str, office: str | None) -> list[str]:
+    """Labels of this office's sessions already holding a wait. Best effort: an
+    older server without the route, or any failure, says nothing."""
+    try:
+        found = _request("GET", f"{base}/listening", key, None) or {}
+    except HTTPFailure:
+        return []
+    return [
+        w.get("session") or "(unlabelled)"
+        for w in found.get("waiting", [])
+        if _hears(w.get("session") or "", office)
+    ]
+
+
+def _listening(args, key: str, base: str) -> int:
+    """Whether a session of this office is waiting for Jeremy's answer, and with
+    --decision where his answer to that question goes. Exit 0 when one is
+    waiting, 3 when none is (not a failure: the same 3 as a quiet `wait`), 1
+    when the service refuses. Read-only; it does not count as a listener."""
+    office = args.office.strip() or None if args.office is not None else None
+    if args.office is None:
+        session = declared_session(args.session)
+        office = (session.split("/", 1)[0].strip() or None) if session else None
+    url = f"{base}/listening"
+    if args.decision:
+        url += f"?decision={args.decision}"
+    found = _request("GET", url, key, None) or {}
+    mine = [
+        w for w in found.get("waiting", []) if _hears(w.get("session") or "", office)
+    ]
+    if args.json:
+        print(json.dumps({**found, "office": office, "office_waiting": bool(mine)}))
+    else:
+        whose = f"of {office} " if office else ""
+        if mine:
+            names = ", ".join(w.get("session") or "(unlabelled)" for w in mine)
+            print(f"waiting now: {names}")
+        else:
+            print(f"no session {whose}is waiting for his answer")
+        seen = [
+            r["last_read_at"]
+            for r in mine + found.get("recent", [])
+            if _hears(r.get("session") or "", office) and r.get("last_read_at")
+        ]
+        if seen and not mine:
+            print(f"last asked for events: {max(seen)}")
+        if "decision" in found:
+            print(found["decision"]["line"])
+    waiting = (
+        found["decision"]["state"] == "waiting_now"
+        if "decision" in found
+        else bool(mine)
+    )
+    return 0 if waiting else 3
+
+
 def _wait(args, key: str, base: str) -> int:
     """Block until Jeremy answers, print the answer(s), exit 0.
 
@@ -611,6 +677,17 @@ def _wait(args, key: str, base: str) -> int:
     if office is not None:
         key_agent = (_request("GET", f"{base}/me", key, None) or {}).get("agent")
         surfaced = _Surfaced(office)
+        # Another session of this office may already hold a wait. Say so and
+        # carry on: two waiters are harmless, and refusing would strand an
+        # office whose waiter has just died inside the service's grace window.
+        others = _already_waiting(base, key, office)
+        if others:
+            print(
+                f"note: {', '.join(others)} already waiting for {office}'s answers; "
+                "waiting as well. Run `artifacts-decide listening` first to avoid "
+                "a second wait.",
+                file=sys.stderr,
+            )
     page_sessions: dict[str, str | None] | None = None
 
     def thread_session(thread: dict) -> str | None:
@@ -1363,6 +1440,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="with --review: ignore new marks, wake only for the verdict",
     )
 
+    listen = subs.add_parser(
+        "listening",
+        help="is a session of your office waiting for his answer? exit 0 yes, 3 no",
+        description=(
+            "Asks the service whether a session of your office holds a wait for "
+            "his answers right now (a held `artifacts-decide wait`, or any client "
+            "holding GET /events?wait=...). Exit 0: one does. Exit 3: none does "
+            "-- not a failure. Run it before arming a wait, so a restarted "
+            "session does not start a second one: "
+            "`artifacts-decide listening || artifacts-decide wait`. With "
+            "--decision ID it also prints where his answer to that question "
+            "goes, in the words his page uses. It sees only waits held through "
+            "the service: an office that polls `list` leaves no trace, and which "
+            "Slack office a question maps to is not known here. Your own agent's "
+            "sessions only."
+        ),
+    )
+    listen.add_argument(
+        "--decision", metavar="DECISION-ID", help="also say where his answer goes"
+    )
+    listen.add_argument(
+        "--office",
+        metavar="NAME",
+        help="the office to check (default: ARTIFACTS_SESSION before the first /;"
+        " '' for any session of this key)",
+    )
+    listen.add_argument(
+        "--json", action="store_true", help="the service's answer, as JSON"
+    )
+
     release = subs.add_parser(
         "review-release",
         help="hand a review round back: this session cannot act on it",
@@ -1622,6 +1729,8 @@ def main(argv: list[str] | None = None) -> int:
                         return _refuse(str(exc))
                     raise
             return _wait(args, key, base)
+        if args.cmd == "listening":
+            return _listening(args, key, base)
         if args.cmd == "review-release":
             session = session_label(args.session)
             if session is None:
