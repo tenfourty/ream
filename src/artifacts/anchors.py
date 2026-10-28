@@ -21,8 +21,8 @@ EDITED = "edited"
 OUTDATED = "outdated"
 STATES = (CURRENT, EDITED, OUTDATED)
 
-# An id the anchor may record: the same charset `sections` addresses, up to 200.
-ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,200}")
+# An id the anchor may record: the charset and length `sections` addresses (`sections.ELEMENT_ID`).
+ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 HEADING_MAX = 200
 
 # How much of a quote's surroundings, or of the quote itself, must still be on
@@ -159,43 +159,92 @@ def edited_in_place(anchor: dict, quote: str, tight_words: str) -> bool:
 
 
 def _clean(value: str) -> str:
-    return text.sanitize(value, HEADING_MAX).strip()
+    """Collapsed, capped and printable: every character `str.isprintable` refuses
+    (format characters such as a zero-width joiner or soft hyphen, private use,
+    unassigned, lone surrogates) is dropped, so the stored heading is safe on a
+    terminal and a page that uses such characters still pins."""
+    kept = "".join(ch for ch in value if ch.isprintable() or ch.isspace())
+    return text.sanitize(kept, HEADING_MAX).strip()
 
 
-def _id_region(body: str, element_id: str) -> str | None:
-    """The HTML of the one element with this id, or None if the id is absent,
-    repeated, unclosed or not an id this service addresses."""
-    try:
-        return sections.locate(body, element_id).outer(body)
-    except sections.SectionError:
-        return None
+class PageIndex:
+    """A page body read ONCE for everything `resolve` asks of its HTML: the
+    headings (parsed on first use), the regions of the ids it was told to
+    expect (one pass), and the visible words of each region (memoised). A
+    listing builds one per (page, version) and hands it to every pin on it."""
 
+    def __init__(self, body: str, ids: set[str] | frozenset[str] = frozenset()):
+        self.body = body
+        self.small = len(body) <= SECTION_PAGE_MAX
+        self._ids = frozenset(ids)
+        self._located: dict | None = None
+        self._heads: _Headings | None = None
+        self._words: dict[tuple, tuple[str, bool]] = {}
 
-def _heading_regions(body: str, heading: str, heading_id: str) -> list[str]:
-    """Where the pin's heading is now: by id first, then by its text."""
-    if heading_id:
-        heads = _headings(body)
-        for i, hid in enumerate(heads.found_ids):
-            if hid == heading_id:
-                return [_region(body, heads.found, i)]
-        region = _id_region(body, heading_id)
-        if region is not None:
-            return [region]
-    return _section_slices(body, heading) if heading else []
+    @property
+    def heads(self) -> _Headings:
+        if self._heads is None:
+            self._heads = _headings(self.body)
+        return self._heads
 
+    def id_span(self, element_id: str) -> tuple[int, int] | None:
+        """(start, end) of the one element with this id, or None if the id is
+        absent, repeated, unclosed or not an id this service addresses."""
+        if self._located is None:
+            self._located = sections.locate_many(self.body, set(self._ids))
+        if element_id not in self._located and element_id not in self._ids:
+            # An id the caller did not announce: found by itself, still correct.
+            try:
+                found = sections.locate(self.body, element_id)
+            except sections.SectionError:
+                return None
+            return found.start, found.end
+        found = self._located.get(element_id)
+        return None if found is None else (found.start, found.end)
 
-def _holds(quote: str, html: str) -> bool | None:
-    """Does this piece of page hold the quote? None when it has too much text."""
-    words, cut = text.visible(html)
-    if cut:
-        return None
-    return _state_against(quote, words, _tight(words)) == CURRENT
+    def heading_spans(self, heading: str, heading_id: str) -> list[tuple]:
+        """Where the pin's heading is now, as (key, start, stop): by id first,
+        then by its text."""
+        heads = self.heads.found
+        if heading_id:
+            for i, hid in enumerate(self.heads.found_ids):
+                if hid == heading_id:
+                    return [self._heading_span(i)]
+            span = self.id_span(heading_id)
+            if span is not None:
+                return [(("id", heading_id), *span)]
+        if not heading:
+            return []
+        want = " ".join(heading.split()).lower()
+        return [self._heading_span(i) for i, h in enumerate(heads) if h[3] == want]
+
+    def _heading_span(self, i: int) -> tuple:
+        """Heading `i` and what follows it, to the next heading of the same or a
+        higher rank."""
+        heads = self.heads.found
+        level, start = heads[i][0], heads[i][1]
+        stop = len(self.body)
+        for later_level, later_start, _, _ in heads[i + 1 :]:
+            if later_level <= level:
+                stop = later_start
+                break
+        return ("h", i), start, stop
+
+    def holds(self, quote: str, key: tuple, start: int, stop: int) -> bool | None:
+        """Does this stretch of page hold the quote? None when it has too much
+        text. The stretch's words are read once per index."""
+        if key not in self._words:
+            self._words[key] = text.visible(self.body[start:stop])
+        words, cut = self._words[key]
+        if cut:
+            return None
+        return _state_against(quote, words, _tight(words)) == CURRENT
 
 
 def resolve(
     anchor: dict,
     quote: str,
-    body: str,
+    body: "str | PageIndex",
     facts: tuple[str, str] | None = None,
 ) -> tuple[str, str]:
     """(state, note) for a pin against the current `body`.
@@ -212,6 +261,9 @@ def resolve(
     ("", "") when nothing is known: no evidence on the pin, or more page text
     than is searched. `note` is "" unless a pin moved.
 
+    `body` may be a `PageIndex` already built for the page, so many pins on one
+    page parse it once; a plain string gets an index of its own.
+
     `facts` is the page's (visible words, the same with spaces removed), when
     the caller has them already; `body` may then be "" for a pin that names no
     heading and no id, which are the only evidence read from the HTML."""
@@ -220,18 +272,19 @@ def resolve(
     needle = " ".join(quote.split()).lower()
     if not needle and not element_id:
         return "", ""
+    index = body if isinstance(body, PageIndex) else PageIndex(body, {element_id})
     if facts is None:
-        words, cut = text.visible(body)
+        words, cut = text.visible(index.body)
         if cut:
             return "", ""
         tight_words = _tight(words)
     else:
         words, tight_words = facts
-    small = len(body) <= SECTION_PAGE_MAX
+    small = index.small
     if element_id and small:
-        region = _id_region(body, element_id)
-        if region is not None:
-            held = _holds(quote, region) if needle else True
+        span = index.id_span(element_id)
+        if span is not None:
+            held = index.holds(quote, ("id", element_id), *span) if needle else True
             if held is None:
                 return "", ""
             return (CURRENT if held else EDITED), ""
@@ -241,8 +294,8 @@ def resolve(
         heading = anchor.get("heading") or ""
         heading_id = anchor.get("heading_id") or ""
         if (heading or heading_id) and small:
-            for region in _heading_regions(body, heading, heading_id):
-                held = _holds(quote, region)
+            for key, start, stop in index.heading_spans(heading, heading_id):
+                held = index.holds(quote, key, start, stop)
                 if held is None:
                     return "", ""
                 if held:
@@ -265,13 +318,13 @@ def heading_for_quote(
     named = _clean(section or "")
     if len(body) > SECTION_PAGE_MAX:
         return named, ""
-    heads = _headings(body)
+    index = PageIndex(body)
+    heads = index.heads
     found = heads.found[:_HEADINGS_MAX]
     hits = []
     for i, head in enumerate(found):
         stop = found[i + 1][1] if i + 1 < len(found) else len(body)
-        held = _holds(quote, body[head[1] : stop])
-        if held:
+        if index.holds(quote, ("s", i), head[1], stop):
             hits.append(i)
     if len(hits) == 1:
         i = hits[0]

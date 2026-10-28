@@ -172,3 +172,49 @@ def test_a_named_section_is_the_heading_when_none_is_found_alone():
 @pytest.mark.parametrize("state", anchors.STATES)
 def test_the_states_are_the_three_named_ones(state):
     assert state in ("current", "edited", "outdated")
+
+
+# --- one parse per page, however many pins ------------------------------------
+
+
+def test_many_pins_on_one_page_parse_its_body_once(monkeypatch):
+    calls = {"headings": 0, "locate": 0}
+    real_headings, real_locate = anchors._headings, anchors.sections.locate_many
+
+    def headings(body):
+        calls["headings"] += 1
+        return real_headings(body)
+
+    def locate_many(body, ids):
+        calls["locate"] += 1
+        return real_locate(body, ids)
+
+    monkeypatch.setattr(anchors, "_headings", headings)
+    monkeypatch.setattr(anchors.sections, "locate_many", locate_many)
+    index = anchors.PageIndex(PAGE, {"plans", "costs"})
+    pins = [
+        _pin(heading="Costs", heading_id="costs"),
+        _pin(heading="Hosting"),
+        _pin(el_id="plans"),
+        _pin(el_id="plans", heading="Costs"),
+        _pin(heading_id="costs"),
+    ] * 20
+    got = {anchors.resolve(p, QUOTE, index)[0] for p in pins}
+    assert got <= set(anchors.STATES)
+    assert calls == {"headings": 1, "locate": 1}
+
+
+def test_an_index_answers_as_the_plain_body_does():
+    for pin in (
+        _pin(heading="Costs"),
+        _pin(heading="Hosting"),
+        _pin(el_id="plans"),
+        _pin(heading_id="costs"),
+    ):
+        index = anchors.PageIndex(PAGE, {"plans"})
+        assert anchors.resolve(pin, QUOTE, index) == anchors.resolve(pin, QUOTE, PAGE)
+
+
+def test_an_id_longer_than_sections_address_is_refused():
+    assert anchors.ID_RE.fullmatch("x" * 128)
+    assert not anchors.ID_RE.fullmatch("x" * 129)

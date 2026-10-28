@@ -351,10 +351,13 @@ def _context(anchor: dict) -> dict:
         if not isinstance(value, str) or not value:
             raise InvalidAnchor()
         if key == "heading":
-            # Heading text reaches a terminal through `artifacts-decide comments`.
-            if len(value) > anchors.HEADING_MAX or not value.isprintable():
+            # Heading text reaches a terminal through `artifacts-decide comments`:
+            # cleaned, not refused, so a heading with an emoji joiner still pins.
+            if len(value) > anchors.HEADING_MAX:
                 raise InvalidAnchor()
-            _reject_lone_surrogate(value)
+            value = anchors._clean(value)
+            if not value:
+                raise InvalidAnchor()
         elif not anchors.ID_RE.fullmatch(value):
             raise InvalidAnchor()
         out[key] = value
@@ -990,6 +993,25 @@ def _context_of(anchor: dict | None) -> bool:
     )
 
 
+# Distinct pins per page, in one listing, read against the page's HTML. More
+# than this come back with no state (unknown) rather than costing the listing.
+HTML_PINS_MAX = 200
+
+
+def _resolve_pin(row, words, bodies, indexes, html_resolved, wanted_ids):
+    """`anchors.resolve` for one row, against the page's shared index."""
+    page = row.artifact_id
+    if page not in bodies:
+        return anchors.resolve(row.anchor, row.quote, "", facts=words)
+    if _context_of(row.anchor):
+        html_resolved[page] = html_resolved.get(page, 0) + 1
+        if html_resolved[page] > HTML_PINS_MAX:
+            return "", ""
+    if page not in indexes:
+        indexes[page] = anchors.PageIndex(bodies[page], wanted_ids.get(page, set()))
+    return anchors.resolve(row.anchor, row.quote, indexes[page], facts=words)
+
+
 def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
     """Every pinning row told whether its quote is still on its page
     (`quote_state`) and where its pin is now (`anchor_state`, `anchor_note`).
@@ -1019,6 +1041,13 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
     needs_html = {row.artifact_id for row in pinning if _context_of(row.anchor)}
     bodies: dict[str, str] = {}
     missing = []
+    # The ids each page's pins name, so one pass over a body finds them all.
+    wanted_ids: dict[str, set[str]] = {}
+    for row in pinning:
+        anchor = row.anchor or {}
+        for key in ("el_id", "id", "heading_id"):
+            if anchor.get(key):
+                wanted_ids.setdefault(row.artifact_id, set()).add(anchor[key])
     for artifact_id, n in versions:
         cached = _visible_cache_get((artifact_id, n))
         if cached is None or artifact_id in needs_html:
@@ -1042,6 +1071,9 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
             continue
         words_by_page[artifact_id] = (words, _tight(words))
         _visible_cache_put((artifact_id, n), words_by_page[artifact_id])
+    # One index per page: the body is parsed once however many pins it carries.
+    indexes: dict[str, anchors.PageIndex] = {}
+    html_resolved: dict[str, int] = {}
     seen: dict[tuple[str, str, str], tuple[str, str]] = {}
     out = []
     for row in rows:
@@ -1054,11 +1086,8 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
         # A reply carries its root's anchor and quote: resolve each once.
         key = (row.artifact_id, json.dumps(row.anchor, sort_keys=True), row.quote)
         if key not in seen:
-            seen[key] = anchors.resolve(
-                row.anchor,
-                row.quote,
-                bodies.get(row.artifact_id, ""),
-                facts=words,
+            seen[key] = _resolve_pin(
+                row, words, bodies, indexes, html_resolved, wanted_ids
             )
         state, note = seen[key]
         out.append(

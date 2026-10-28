@@ -162,10 +162,18 @@ class Located:
 class _Walker(HTMLParser):
     """Tracks the open-element stack with absolute offsets into `src`."""
 
-    def __init__(self, src: str, target: str | None = None, foreign: bool = False):
+    def __init__(
+        self,
+        src: str,
+        target: str | None = None,
+        foreign: bool = False,
+        wanted: frozenset[str] | None = None,
+    ):
         super().__init__(convert_charrefs=False)
         self.src = src
         self.target = target
+        # Many ids in one pass (`locate_many`): every match carries its "id".
+        self.wanted = wanted
         # Absolute offset of each line's first character, for getpos().
         self._lines = [0]
         for m in re.finditer("\n", src):
@@ -186,8 +194,8 @@ class _Walker(HTMLParser):
     # Stack entries: [tag, start, inner_start, is_target, is_heading]
     def _close(self, entry: list, inner_end: int, end: int) -> None:
         if entry[3]:
-            self._current["inner_end"] = inner_end
-            self._current["end"] = end
+            entry[3]["inner_end"] = inner_end
+            entry[3]["end"] = end
         if entry[4]:
             self._heading["done"] = True
 
@@ -215,7 +223,10 @@ class _Walker(HTMLParser):
         # foreign content (inline SVG and MathML: `<path/>`), as in a browser.
         foreign = tag in _FOREIGN or any(e[0] in _FOREIGN for e in self.stack)
         closed = tag in _VOID or (foreign and raw.rstrip().endswith("/>"))
-        is_target = self.target is not None and attr.get("id") == self.target
+        if self.wanted is not None:
+            is_target = attr.get("id") in self.wanted
+        else:
+            is_target = self.target is not None and attr.get("id") == self.target
         if is_target:
             self._current = {
                 "tag": tag,
@@ -226,6 +237,7 @@ class _Walker(HTMLParser):
                 "void": closed,
                 "foreign": foreign,
                 "title": attr.get("data-section-title"),
+                "id": attr.get("id"),
             }
             self.matches.append(self._current)
         # The target's first heading names the part on his wall.
@@ -233,13 +245,22 @@ class _Walker(HTMLParser):
             tag in _HEADINGS
             and not closed
             and self._heading is None
+            and self.wanted is None
             and len(self.matches) == 1
             and any(e[3] for e in self.stack)
         )
         if is_heading:
             self._heading = {"text": [], "done": False}
         if not closed:
-            self.stack.append([tag, start, inner_start, is_target, is_heading])
+            self.stack.append(
+                [
+                    tag,
+                    start,
+                    inner_start,
+                    self._current if is_target else None,
+                    is_heading,
+                ]
+            )
 
     # `<x/>` reaches here, not handle_starttag; the default would also call
     # handle_endtag and record a stray end tag.
@@ -290,6 +311,36 @@ def _clean_label(raw: str) -> str:
 # narrow charset keeps the id safe to echo into a version note, a URL and a
 # terminal, with no escaping anywhere it travels.
 ELEMENT_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
+
+
+def locate_many(body: str, ids: set[str]) -> dict[str, Located]:
+    """One pass over `body`: the element for each id that is present exactly
+    once and closed. An id that is absent, repeated, unclosed or not addressable
+    is simply missing from the answer (`locate` says which, with an error)."""
+    wanted = frozenset(i for i in ids if ELEMENT_ID.fullmatch(i))
+    if not wanted:
+        return {}
+    walker = _Walker(body, wanted=wanted)
+    walker.finish()
+    by_id: dict[str, list[dict]] = {}
+    for m in walker.matches:
+        by_id.setdefault(m["id"], []).append(m)
+    out = {}
+    for element_id, found in by_id.items():
+        if len(found) != 1 or found[0]["end"] is None:
+            continue
+        m = found[0]
+        out[element_id] = Located(
+            tag=m["tag"],
+            start=m["start"],
+            inner_start=m["inner_start"],
+            inner_end=m["inner_end"],
+            end=m["end"],
+            void=m["void"],
+            foreign=m["foreign"],
+            label=element_id,
+        )
+    return out
 
 
 def locate(body: str, element_id: str) -> Located:

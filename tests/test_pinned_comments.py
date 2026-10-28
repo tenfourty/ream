@@ -9,7 +9,7 @@ covers the wiring around them, on whichever database the run uses.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, decide, gallery, keys, store
+from artifacts import anchors, comments, decide, gallery, keys, store
 from artifacts.app import create_gallery_app
 
 PAGE = (
@@ -75,6 +75,52 @@ def _only(db, page):
     return row
 
 
+def _pin_many(db, page, n):
+    """`n` pins at distinct spots (a different element id each), all on `page`."""
+    for i in range(n):
+        _pin(
+            db,
+            page,
+            anchor={
+                "kind": "range",
+                "path": "p",
+                "start": 0,
+                "end": len(QUOTE),
+                "heading": "Costs",
+                "el_id": f"spot{i}",
+            },
+        )
+
+
+def test_a_listing_parses_a_page_once_however_many_pins_it_has(db, page, monkeypatch):
+    _pin_many(db, page, 8)
+    calls = {"headings": 0, "locate": 0}
+    real_headings, real_locate = anchors._headings, anchors.sections.locate_many
+
+    def headings(body):
+        calls["headings"] += 1
+        return real_headings(body)
+
+    def locate_many(body, ids):
+        calls["locate"] += 1
+        return real_locate(body, ids)
+
+    monkeypatch.setattr(anchors, "_headings", headings)
+    monkeypatch.setattr(anchors.sections, "locate_many", locate_many)
+    rows = comments.list_for_artifact(db, page.id)
+    assert len(rows) == 8
+    assert {r.anchor_state for r in rows} == {"current"}
+    assert calls["headings"] <= 1 and calls["locate"] == 1
+
+
+def test_pins_past_the_html_cap_are_unknown_not_slow(db, page, monkeypatch):
+    monkeypatch.setattr(comments, "HTML_PINS_MAX", 3)
+    _pin_many(db, page, 5)
+    rows = comments.list_for_artifact(db, page.id)
+    states = sorted(r.anchor_state for r in rows)
+    assert states == ["", "", "current", "current", "current"]
+
+
 # --- what an anchor may carry -------------------------------------------------
 
 
@@ -103,8 +149,8 @@ def test_a_range_anchor_keeps_the_heading_and_ids_it_carries():
         pytest.param({"heading_id": "has space"}, id="id-outside-the-charset"),
         pytest.param({"el_id": "x" * 201}, id="long-id"),
         pytest.param({"el_id": ""}, id="empty-id"),
-        pytest.param({"heading": "bad\ud800"}, id="lone-surrogate"),
-        pytest.param({"heading": "\x1b[31mred"}, id="terminal-escape"),
+        pytest.param({"heading": "\u200d\u00ad\ud800"}, id="nothing-printable"),
+        pytest.param({"el_id": "x" * 129}, id="id-longer-than-sections-address"),
         pytest.param({"colour": "red"}, id="unknown-key"),
     ],
 )
@@ -113,6 +159,30 @@ def test_a_bad_heading_or_id_is_refused_without_saying_which(extra):
     with pytest.raises(comments.InvalidAnchor) as raised:
         comments.validate_anchor(anchor)
     assert str(raised.value) == str(comments.InvalidAnchor())
+
+
+def test_a_heading_with_unprintable_characters_is_cleaned_not_refused():
+    heading = "Team \U0001f469\u200d\U0001f4bb no\u00adtes\ud800\x1b!"
+    got = comments.validate_anchor(
+        {"kind": "range", "path": "p", "start": 0, "end": 5, "heading": heading}
+    )
+    assert got["heading"] == "Team \U0001f469\U0001f4bb notes!"
+    assert got["heading"].isprintable()
+
+
+def test_an_agent_quote_under_a_heading_with_a_joiner_still_pins(client, db, seats):
+    body = PAGE.replace(
+        "<h2>Hosting</h2>", "<h2>Team \U0001f469\u200d\U0001f4bb no\u00adtes</h2>"
+    )
+    page = store.publish(db, "owner", "Costs", body)
+    got = _post(
+        client,
+        seats,
+        page.id,
+        anchor={"kind": "text", "quote": "Hosting is billed monthly"},
+    )
+    assert got.status_code == 201, got.text
+    assert got.json()["anchor"]["heading"] == "Team \U0001f469\U0001f4bb notes"
 
 
 def test_a_quote_anchor_takes_context_and_nothing_else():

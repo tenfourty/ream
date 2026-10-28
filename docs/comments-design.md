@@ -87,7 +87,15 @@ version and never stored: the element id first, then the quote under its
 heading, then the quote anywhere, then an edit in place, else outdated. The
 panel keeps an outdated thread in place with its quote and lists it under
 "Outdated pins" at the top; `?anchor_state=` filters the API and
-`artifacts-decide comments --outdated` the CLI. Design:
+`artifacts-decide comments --outdated` the CLI. A listing parses each page's
+HTML once (a `PageIndex`: headings, the regions of every id its pins name, and
+each region's words), however many pins it carries, and reads at most 200
+distinct pins per page against that HTML (`comments.HTML_PINS_MAX`); pins past
+the cap come back with `anchor_state` "" (unknown), as for a page with more
+than 400 headings. A heading with characters a terminal cannot show (joiners,
+soft hyphens, private-use, unassigned code points) is stored with them dropped,
+not refused. An element id is at most 128 characters, as `sections` addresses.
+Design:
 `docs/agent/specs/2026-10-29-pinned-comments.md`.
 
 **What a non-owner sees.** Access to the page is the one control (Jeremy,
