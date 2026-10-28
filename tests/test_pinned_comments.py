@@ -301,7 +301,11 @@ def test_an_id_on_the_pin_is_read_against_the_page_html(db, page):
     _pin(
         db, page, quote="Hosting is billed monthly", anchor={**_range(), "el_id": "h1"}
     )
-    _republish(db, page, PAGE.replace("<h2>Hosting</h2>", '<h2 id="h1">Hosting</h2>'))
+    _republish(
+        db,
+        page,
+        PAGE.replace("<p>Hosting is billed", '<p id="h1">Hosting is billed'),
+    )
     assert _only(db, page).anchor_state == "current"
     _republish(
         db,
@@ -440,6 +444,7 @@ def test_a_page_that_is_not_yours_answers_the_filter_like_no_such_page(
     client, db, seats
 ):
     closed = store.publish(db, "owner", "Closed", PAGE)
+    store.set_agents_can_read(db, closed.id, False, agent="owner")
     got = client.get(
         f"/api/v1/artifacts/{closed.id}/comments?anchor_state=outdated",
         headers=seats["other"],

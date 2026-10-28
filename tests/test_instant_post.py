@@ -155,8 +155,8 @@ def test_each_thread_names_its_mark_so_a_hover_card_can_copy_it(client, db, page
         anchor=ANCHOR,
     )
     html = client.get(f"/a/{page.id}").text
-    assert f'<li class="thread" data-mark-id="{root.id}">' in html
+    assert f'<li class="thread" data-mark-id="{root.id}" id="thread-{root.id}">' in html
     got = _post(client, page, {"body": "Thanks", "thread_root": root.id})
     assert got.json()["html"].startswith(
-        f'<li class="thread" data-mark-id="{root.id}">'
+        f'<li class="thread" data-mark-id="{root.id}" id="thread-{root.id}">'
     )

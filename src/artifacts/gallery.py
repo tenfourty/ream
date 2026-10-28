@@ -2819,7 +2819,7 @@ def _render_comments(
             # `data-mark-id` is what a hover card is copied by: the page names
             # a mark, and comments.js clones THIS escaped markup for it.
             f'<li class="thread{" settled" if resolved else ""}"'
-            f' id="thread-{escape(root.id)}" data-mark-id="{escape(root.id)}">'
+            f' data-mark-id="{escape(root.id)}" id="thread-{escape(root.id)}">'
             f"{quoted(root)}"
             f'<ul class="bubbles">{bubble(root)}{kids}</ul>{reply}{action}</li>'
         )
