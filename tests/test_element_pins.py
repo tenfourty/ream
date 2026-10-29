@@ -54,6 +54,28 @@ def test_an_image_or_chart_is_named_by_its_alt_text_or_label():
     assert anchors.element_quote(svg) == "Latency"
 
 
+def test_an_svg_title_is_found_in_one_pass_and_an_unclosed_one_names_nothing():
+    import time
+
+    assert anchors.element_label(
+        '<svg><TITLE lang="en">Rate &amp; <b>p95</b></TITLE></svg>'
+    ) == ("Rate & p95")
+    assert anchors.element_label("<svg><title>never closed</svg>") == ""
+    hostile = "<svg>" + "<title>x" * 200_000 + "</svg>"
+    began = time.monotonic()
+    assert anchors.element_label(hostile) == ""
+    assert time.monotonic() - began < 1.0
+
+
+def test_the_gallery_moves_focus_only_for_a_pin_mode_turned_on_in_the_gallery():
+    from pathlib import Path
+
+    source = Path(gallery.__file__).read_text(encoding="utf-8")
+    assert "if(hand)i.focus()" in source
+    assert 'd.type==="artifact-pin-toggle")pinMode(!pinOn)' in source
+    assert "pinMode(!pinOn,true)" in source
+
+
 def test_an_element_with_text_is_named_by_the_text_not_its_label():
     assert anchors.element_quote('<p title="tip">Hello there</p>') == "Hello there"
 

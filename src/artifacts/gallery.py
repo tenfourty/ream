@@ -2158,8 +2158,11 @@ bar.addEventListener("click",function(e){
 // corner, from the rectangles the frame reports. Nothing the page sends is
 // markup: it arrives as text and numbers, is checked, and is drawn with
 // textContent and style.
-var pb=document.querySelector(".pinbtn"),po=null,pbs=[],prects=Object.create(null);
-function pinMode(on){on=!!on;if(on===pinOn)return;pinOn=on;
+// byHand: pin mode was turned on here, by the Pin button or a key on the
+// gallery. Only then does a pick move focus into the comment box: the page in
+// the frame can send any message, so a pick it reports is shown, never typed into.
+var pb=document.querySelector(".pinbtn"),po=null,pbs=[],prects=Object.create(null),byHand=false;
+function pinMode(on,hand){on=!!on;if(on===pinOn)return;pinOn=on;byHand=on&&!!hand;
   try{f.contentWindow.postMessage({type:"artifact-pin-mode",on:on},o)}catch(e){}
   if(pb){pb.setAttribute("aria-pressed",on?"true":"false");pb.classList.toggle("on",on)}
   if(on){bar.hidden=true;last=null;hide()}else outline(null)}
@@ -2173,7 +2176,7 @@ function outline(r){
   po.style.width=Math.max(0,r.width)+"px";po.style.height=Math.max(0,r.height)+"px";po.hidden=false}
 function rectOk(r){return !!r&&typeof r==="object"&&num(r.top)&&num(r.left)&&num(r.width)&&num(r.height)}
 function takePin(d){
-  var a=d.anchor;
+  var a=d.anchor,hand=byHand;
   if(!a||typeof a!=="object"||a.kind!=="element"||typeof d.quote!=="string"||!rectOk(d.rect))return;
   var js;try{js=JSON.stringify(a)}catch(e){return}
   if(js.length>4000)return;
@@ -2185,7 +2188,7 @@ function takePin(d){
   bq.textContent=q||(typeof a.tag==="string"&&a.tag?a.tag:"element");
   panel(true);
   var i=form.querySelector("input[name=body]");
-  if(i){i.placeholder="Comment on the pinned spot";i.focus()}}
+  if(i){i.placeholder="Comment on the pinned spot";if(hand)i.focus()}}
 // Badges: the numbers are the element pins' order among this page's marks, the
 // same number written into each thread so the two can be matched by eye.
 function badges(rs){
@@ -2213,13 +2216,13 @@ function spot(e,on){try{var li=e.target&&e.target.closest?e.target.closest(".thr
 if(P&&P.addEventListener){
   P.addEventListener("mouseover",function(e){spot(e,true)});P.addEventListener("focusin",function(e){spot(e,true)});
   P.addEventListener("mouseout",function(e){spot(e,false)});P.addEventListener("focusout",function(e){spot(e,false)})}
-if(pb){pb.hidden=false;pb.addEventListener("click",function(){pinMode(!pinOn)})}
+if(pb){pb.hidden=false;pb.addEventListener("click",function(){pinMode(!pinOn,true)})}
 // C, as in Figma and Vercel's comments: never while typing, never with a modifier.
 document.addEventListener("keydown",function(e){try{
   if(!e||(e.key!=="c"&&e.key!=="C")||e.ctrlKey||e.metaKey||e.altKey)return;
   var t=e.target,nm=t&&t.nodeName?String(t.nodeName).toUpperCase():"";
   if(nm==="INPUT"||nm==="TEXTAREA"||nm==="SELECT"||(t&&t.isContentEditable))return;
-  pinMode(!pinOn)}catch(x){}});
+  pinMode(!pinOn,true)}catch(x){}});
 document.addEventListener("fullscreenchange",function(){drop(po);po=null;pbs.forEach(drop);pbs=[]});
 window.addEventListener("message",function(e){try{
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;

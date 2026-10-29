@@ -56,7 +56,6 @@ _ANY_LABEL = re.compile(
     r"""(?<![\w-])(?:alt|aria-label|title)\s*=\s*(?:"([^"]*)"|'([^']*)')""",
     re.IGNORECASE,
 )
-_SVG_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 # Labels looked at when an element with no id is found by its alt text.
 _LABELS_MAX = 2000
 
@@ -409,6 +408,21 @@ def heading_for_quote(
     return named, ""
 
 
+def _svg_title(outer: str) -> str:
+    """The inner HTML of an SVG's first `<title>`, "" when it has none or never
+    closes it. Three finds, so a page of unclosed `<title` openers costs one
+    pass, where a lazy regex would rescan to the end from each of them."""
+    low = outer.lower()
+    at = low.find("<title")
+    if at < 0:
+        return ""
+    gt = low.find(">", at)
+    if gt < 0:
+        return ""
+    end = low.find("</title", gt)
+    return outer[gt + 1 : end] if end >= 0 else ""
+
+
 def element_label(outer: str) -> str:
     """What names an element that has no words of its own: the alt text,
     aria-label or title on its start tag, else an inline SVG's `<title>`, else
@@ -423,9 +437,9 @@ def element_label(outer: str) -> str:
             if label:
                 return label[:QUOTE_MAX]
     if start[:4].lower() == "<svg":
-        m = _SVG_TITLE.search(outer)
-        if m:
-            label = _clean(html.unescape(re.sub(r"<[^>]*>", "", m.group(1))))
+        inner = _svg_title(outer)
+        if inner:
+            label = _clean(html.unescape(re.sub(r"<[^>]*>", "", inner)))
             if label:
                 return label[:QUOTE_MAX]
     for m in _ANY_LABEL.finditer(outer, len(start)):
