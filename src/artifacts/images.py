@@ -44,6 +44,16 @@ BODY_SLACK = 16 * 1024
 _ID = re.compile(r"[a-z2-7]{26}")
 _NAMED = "send PNG, JPEG or WebP"
 
+# A real picture has a handful of chunks or segments; a crafted one can have hundreds of
+# thousands, each a pass round a Python loop.
+MAX_CHUNKS = 10_000
+
+
+def _too_many() -> ImageRefused:
+    return ImageRefused(
+        f"the image has more than {MAX_CHUNKS} chunks or segments: it is not taken"
+    )
+
 
 class ImageRefused(Exception):
     """A picture (or an attach) that cannot be taken. `status` is 413 for size, else 422.
@@ -167,7 +177,11 @@ def _png(data: bytes) -> tuple[int, int, bytes]:
     width = height = 0
     first = True
     idat = ended = False
+    chunks = 0
     while pos < size and not ended:
+        chunks += 1
+        if chunks > MAX_CHUNKS:
+            raise _too_many()
         if pos + 8 > size:
             raise _truncated()
         (length,) = struct.unpack(">I", data[pos : pos + 4])
@@ -216,10 +230,23 @@ def _png(data: bytes) -> tuple[int, int, bytes]:
 
 # --- JPEG ---------------------------------------------------------------------------------
 
-# Only the application segments that change how the picture is DRAWN are kept: JFIF (APP0),
-# the ICC profile (APP2) and Adobe's colour flag (APP14). Every other APPn (EXIF and XMP in
-# APP1, Photoshop's APP13, the vendors' APP3-12) and every comment is dropped.
-_JPEG_KEEP_APP = frozenset({0xE0, 0xE2, 0xEE})
+# An allowlist. Kept: the table, frame and scan markers a decoder needs, and only those
+# application segments that change how the picture is DRAWN AND whose payload begins with the
+# signature that proves it: JFIF (APP0), the ICC profile (APP2) and Adobe's colour flag
+# (APP14). Every other APPn (EXIF and XMP in APP1, Photoshop's APP13, an APP2 that is not ICC),
+# every comment and the reserved markers (0x02-0xBF, 0xF0-0xFD) are dropped.
+_JPEG_APP_SIGNATURE = {0xE0: b"JFIF\x00", 0xE2: b"ICC_PROFILE\x00", 0xEE: b"Adobe"}
+_JPEG_FILL = re.compile(rb"\xff+")
+_JPEG_SCAN_END = re.compile(rb"\xff[^\x00\xd0-\xd7\xff]")
+
+
+def _jpeg_keeps(marker: int, segment: bytes) -> bool:
+    if 0xE0 <= marker <= 0xEF:
+        signature = _JPEG_APP_SIGNATURE.get(marker)
+        return signature is not None and segment[2:].startswith(signature)
+    return not (marker == 0xFE or 0x02 <= marker <= 0xBF or 0xF0 <= marker <= 0xFD)
+
+
 _JPEG_SOF = frozenset({0xC0, 0xC1, 0xC2})
 _JPEG_OTHER_SOF = frozenset(
     {0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
@@ -231,11 +258,14 @@ def _jpeg(data: bytes) -> tuple[int, int, bytes]:
     out = [b"\xff\xd8"]
     width = height = 0
     framed = scanned = False
+    segments = 0
     while True:
+        segments += 1
+        if segments > MAX_CHUNKS:
+            raise _too_many()
         if pos >= size or data[pos] != 0xFF:
             raise _truncated()
-        while pos < size and data[pos] == 0xFF:  # fill bytes
-            pos += 1
+        pos = _JPEG_FILL.match(data, pos).end()  # fill bytes
         if pos >= size:
             raise _truncated()
         marker = data[pos]
@@ -264,10 +294,7 @@ def _jpeg(data: bytes) -> tuple[int, int, bytes]:
             _precision, height, width = struct.unpack(">BHH", segment[2:7])
             _check_size(width, height)
             framed = True
-        keep = not (0xE0 <= marker <= 0xEF or marker == 0xFE) or (
-            marker in _JPEG_KEEP_APP
-        )
-        if keep:
+        if _jpeg_keeps(marker, segment):
             out.append(b"\xff" + bytes([marker]) + segment)
         pos = end
         if (
@@ -275,20 +302,11 @@ def _jpeg(data: bytes) -> tuple[int, int, bytes]:
         ):  # SOS: entropy-coded data follows, up to the next real marker
             if not framed:
                 raise _truncated()
-            stop = pos
-            while True:
-                at = data.find(b"\xff", stop)
-                if at < 0 or at + 1 >= size:
-                    raise _truncated()
-                follower = data[at + 1]
-                if follower == 0x00 or 0xD0 <= follower <= 0xD7:
-                    stop = at + 2
-                elif follower == 0xFF:
-                    stop = at + 1
-                else:
-                    break
-            out.append(data[pos:at])
-            pos = at
+            found = _JPEG_SCAN_END.search(data, pos)
+            if found is None:
+                raise _truncated()
+            out.append(data[pos : found.start()])
+            pos = found.start()
             scanned = True
 
 
@@ -316,6 +334,8 @@ def _webp(data: bytes) -> tuple[int, int, bytes]:
     vp8x: bytes | None = None
     chunks = 0
     while pos < total:
+        if chunks >= MAX_CHUNKS:
+            raise _too_many()
         if pos + 8 > total:
             raise _truncated()
         fourcc = data[pos : pos + 4]
@@ -362,7 +382,8 @@ def _webp(data: bytes) -> tuple[int, int, bytes]:
     head = b""
     if vp8x is not None:
         # The flags no longer promise EXIF (0x08) or XMP (0x04): both chunks are gone.
-        rewritten = bytes([flags & ~0x0C & 0xFF]) + vp8x[1:]
+        # Only the fixed 10 bytes are kept: anything after them is not part of the format.
+        rewritten = bytes([flags & ~0x0C & 0xFF]) + vp8x[1:10]
         head = b"VP8X" + struct.pack("<I", len(rewritten)) + rewritten
         head += b"\x00" * (len(rewritten) & 1)
     payload = head + b"".join(kept)

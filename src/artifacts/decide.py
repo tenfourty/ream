@@ -472,6 +472,9 @@ def _private_dir(path: str) -> None:
     os.chmod(path, 0o700)
 
 
+_SERVER_ID = re.compile(r"[a-z2-7]{26}")
+
+
 def _fetch_images(threads: list[dict], key: str, base: str) -> None:
     """Download every picture of the printed threads into the cache and set `local` on
     each: `<cache>/artifacts/images/<comment id>/<n>-<sha256 start>.<ext>`, directory 0700,
@@ -482,6 +485,17 @@ def _fetch_images(threads: list[dict], key: str, base: str) -> None:
         for message in thread["messages"]:
             for n, pic in enumerate(message.get("images") or [], start=1):
                 digest = str(pic.get("sha256") or "")
+                # Both ids come from the server and become a path and a URL: only the
+                # service's own id shape (26 base32 characters) is ever used for either.
+                if not (
+                    _SERVER_ID.fullmatch(str(message.get("id") or ""))
+                    and _SERVER_ID.fullmatch(str(pic.get("id") or ""))
+                ):
+                    print(
+                        "warning: skipped a picture with an unexpected id",
+                        file=sys.stderr,
+                    )
+                    continue
                 ext = _EXTENSIONS.get(pic.get("content_type"), "bin")
                 folder = os.path.join(_image_cache(), message["id"])
                 target = os.path.join(folder, f"{n}-{digest[:16]}.{ext}")

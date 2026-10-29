@@ -1679,11 +1679,13 @@ def agent_router(
             if len(received) > cap:
                 raise too_big  # stops reading: never held whole
         try:
-            found = images.inspect(
-                images.file_from_multipart(
-                    request.headers.get("content-type"), bytes(received)
-                )
+            # Walking a hostile file is CPU work: off the event loop, like the store.
+            file = await run_in_threadpool(
+                images.file_from_multipart,
+                request.headers.get("content-type"),
+                bytes(received),
             )
+            found = await run_in_threadpool(images.inspect, file)
             return await run_in_threadpool(
                 image_store.stage, db, artifact_id, agent, found
             )

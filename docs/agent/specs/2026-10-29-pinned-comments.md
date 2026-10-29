@@ -438,9 +438,20 @@ Differences from the text above, and why:
   not read from the `frame_pass` secret store: `frame_pass` keeps hashed one-time passes in the
   database and has no key. A table needs no deployment change and is the same on every replica
   and after a restart. It is copied by `migrate.py` like any table.
-- **JPEG keeps only APP0, APP2 and APP14** (JFIF, ICC profile, Adobe colour flag); every other
-  application segment is dropped, not just APP1 and APP13, because vendors write metadata in
-  APP3 to APP12 too. Data after EOI is dropped.
+- **JPEG metadata is an allowlist.** APP0 is kept only if it begins `JFIF\0`, APP2 only if it
+  begins `ICC_PROFILE\0`, APP14 only if it begins `Adobe`; every other APPn, COM and the
+  reserved markers 0x02-0xBF and 0xF0-0xFD are dropped, so a vendor's APP2 or a JPGn marker
+  cannot carry text through. A WebP VP8X keeps its fixed 10 bytes and nothing after them.
+  Data after EOI is dropped.
+- **Hostile files cost bounded work.** A file with more than 10,000 PNG chunks, JPEG segments
+  or WebP chunks is refused by name (`images.MAX_CHUNKS`); the JPEG scan is one compiled regex
+  search, not a byte loop; the upload route runs `file_from_multipart` and `inspect` in
+  `run_in_threadpool`, as `stage`, so a crafted 5 MB file cannot stall the event loop.
+- **The 40-per-page cap is held in `attach`** under a per-page lock, counting the batch: 39
+  attached plus 2 is refused whole. Staged bytes per key are already bounded by 12 staged
+  pictures at 5 MB each.
+- **The CLI trusts no id from the server**: `_fetch_images` skips (with a warning) any comment
+  or picture id that is not 26 characters of `[a-z2-7]` before building a path or a URL.
 - **A multipart envelope adds up to 16 KB** to the 5 MB before a body is refused unread; the file
   itself is held to exactly 5 MB.
 - **`sha256` is on each image row** in the comment listing (the spec's list has no digest); the

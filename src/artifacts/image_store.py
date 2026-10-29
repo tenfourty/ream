@@ -107,6 +107,24 @@ def attach(
     ALL OR NOTHING: one id that is unknown, someone else's, already attached, staged on another
     page or expired refuses the whole comment, and the answer never says which of those it was."""
     cutoff = datetime.now(UTC) - STAGED_TTL
+    if not wanted:
+        return
+    # The page's cap is held here, where it is final: `stage` checks it too, but staging is
+    # locked per author and two authors can both stage under it. One lock per page orders
+    # the attaches, and the count includes this batch.
+    conn.advisory_lock(
+        int.from_bytes(hashlib.sha256(artifact_id.encode()).digest()[:7])
+    )
+    (onpage,) = conn.execute(
+        "select count(*) from comment_image where artifact_id = %s"
+        " and comment_id is not null",
+        (artifact_id,),
+    ).fetchone()
+    if onpage + len(wanted) > PER_PAGE:
+        raise ImageRefused(
+            f"this page already has {onpage} pictures and takes at most {PER_PAGE}",
+            field="images",
+        )
     for position, image_id in enumerate(wanted, start=1):
         done = conn.execute(
             "update comment_image set comment_id = %s, position = %s, staged_by = null"

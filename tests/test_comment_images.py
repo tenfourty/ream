@@ -219,6 +219,107 @@ def test_a_plain_lossy_webp_is_read_for_its_size():
     assert (got.width, got.height) == (640, 480)
 
 
+def test_a_jpeg_keeps_an_app_segment_only_when_it_carries_its_signature():
+    def seg(marker, body):
+        return b"\xff" + bytes([marker]) + struct.pack(">H", len(body) + 2) + body
+
+    not_icc = seg(0xE2, b"NOTICC" + GPS[:4])
+    not_jfif = seg(0xE0, b"EXTRA" + b"GPSX")
+    not_adobe = seg(0xEE, b"Other" + b"GPSX")
+    reserved = seg(0x02, b"JPGN")  # a reserved marker (JPGn range)
+    reserved_high = seg(0xF4, b"JPGN")
+    got = images.inspect(
+        jpeg(extra=not_icc + not_jfif + not_adobe + reserved + reserved_high)
+    )
+    for gone in (b"NOTICC", b"EXTRA", b"Other", b"JPGN", b"GPS"):
+        assert gone not in got.data
+    assert got.data.count(b"JFIF\x00") == 1  # only the real one
+    adobe = seg(0xEE, b"Adobe\x00\x64\x00\x00\x00\x00\x01")
+    assert b"Adobe" in images.inspect(jpeg(extra=adobe)).data
+
+
+def test_a_webp_vp8x_loses_bytes_beyond_its_fixed_ten():
+    vp8x = _wchunk(
+        b"VP8X",
+        b"\x00\x00\x00\x00"
+        + (3).to_bytes(3, "little")
+        + (2).to_bytes(3, "little")
+        + b"HIDDEN",
+    )
+    got = images.inspect(_riff(vp8x + _vp8l(4, 3)))
+    assert b"HIDDEN" not in got.data
+    assert struct.unpack("<I", got.data[16:20])[0] == 10
+    assert images.inspect(got.data).data == got.data
+
+
+def _timed(data):
+    import time
+
+    started = time.monotonic()
+    with pytest.raises(images.ImageRefused) as caught:
+        images.inspect(data)
+    return caught.value, time.monotonic() - started
+
+
+def test_a_png_of_zero_length_chunks_is_refused_fast_and_by_name():
+    head = png()[:33]  # signature + IHDR
+    data = head + _chunk(b"tEXt", b"") * 400_000
+    assert len(data) < images.MAX_BYTES
+    err, took = _timed(data)
+    assert "chunks or segments" in err.detail and took < 1
+
+
+def test_a_jpeg_of_endless_segments_is_refused_fast_and_by_name():
+    data = jpeg(extra=b"\xff\xe1\x00\x02" * 400_000)
+    err, took = _timed(data)
+    assert "chunks or segments" in err.detail and took < 1
+
+
+def test_a_webp_of_endless_chunks_is_refused_fast_and_by_name():
+    data = _riff(_vp8l(4, 3) + _wchunk(b"JUNK", b"") * 400_000)
+    err, took = _timed(data)
+    assert "chunks or segments" in err.detail and took < 1
+
+
+def test_a_jpeg_scan_of_stuffed_bytes_is_walked_fast():
+    import time
+
+    stuffed = b"\xff\x00" * 2_400_000
+    data = jpeg().replace(b"\x12\x34\xff\x00\x56\xff\xd0\x78", stuffed)
+    started = time.monotonic()
+    got = images.inspect(data)
+    assert time.monotonic() - started < 1 and got.width == 3
+    # and the same through the route, which hands the walk to a thread
+    assert images.inspect(got.data).data == got.data
+
+
+def test_attaching_past_the_pages_forty_is_refused_whole(db, page, monkeypatch):
+    monkeypatch.setattr(image_store, "STAGED_PER_AUTHOR", 100)
+
+    def stage(n):
+        return image_store.stage(db, page.id, "owner", images.inspect(varied(n)))[
+            "image_id"
+        ]
+
+    def attach(batch):
+        root = comments.add(
+            db, artifact_id=page.id, author_kind="agent", author="owner", body="x"
+        )
+        with db.connect() as conn, conn.transaction():
+            image_store.attach(conn, page.id, root.id, "owner", batch)
+
+    for first in range(0, 36, 4):
+        attach([stage(n) for n in range(first, first + 4)])
+    attach([stage(n) for n in range(36, 39)])  # 39 attached
+    pair = [stage(40), stage(41)]
+    with pytest.raises(images.ImageRefused):
+        attach(pair)
+    assert _count(db, "comment_id is not null") == 39
+    assert _count(db, "comment_id is null") == 2  # nothing was half attached
+    attach(pair[:1])
+    assert _count(db, "comment_id is not null") == 40
+
+
 # --- what is refused, with a name ------------------------------------------------------------
 
 
@@ -1167,7 +1268,7 @@ def test_comments_downloads_at_most_twenty_pictures_a_call(monkeypatch, tmp_path
     )
     messages = [
         {
-            "id": f"{n:026d}".replace("0", "a"),
+            "id": "a" * 24 + "abcdefghijklmnopqrstuvwxyz"[n % 26] + "c",
             "images": [
                 {"id": "b" * 26, "sha256": "0" * 64, "content_type": "image/png"}
             ],
@@ -1192,3 +1293,35 @@ def test_image_flags_are_on_comment_and_reply_and_comments_has_no_images():
     helps = parser._subparsers._group_actions[0].choices
     assert "--image" in helps["comment"].format_help()
     assert "--no-images" in helps["comments"].format_help()
+
+
+def test_a_server_supplied_id_that_is_not_an_id_never_reaches_a_path_or_a_url(
+    db, live, key_file, capsys, monkeypatch, tmp_path
+):
+    cache = tmp_path / "xdg"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
+    calls = []
+    monkeypatch.setattr(decide, "_download", lambda *a, **k: calls.append(a) or b"")
+    sha = "a" * 64
+    threads = [
+        {
+            "messages": [
+                {
+                    "id": "../../x",
+                    "images": [
+                        {"id": "a" * 26, "sha256": sha, "content_type": "image/png"}
+                    ],
+                },
+                {
+                    "id": "a" * 26,
+                    "images": [
+                        {"id": "../../y", "sha256": sha, "content_type": "image/png"}
+                    ],
+                },
+            ]
+        }
+    ]
+    decide._fetch_images(threads, "key", "http://base")
+    assert calls == [] and not cache.exists()
+    assert "local" not in threads[0]["messages"][0]["images"][0]
+    assert capsys.readouterr().err.count("unexpected id") == 2
