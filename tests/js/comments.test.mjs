@@ -90,8 +90,8 @@ function build({ noPinBtn = false, marks = "[]", fetchImpl = null, noForm = fals
   panel.querySelectorAll = (q) => (q === "li.thread" ? tlist.children.slice() : []);
   const cbtn = el("a"); cbtn.className = "cbtn";
   const byId = { "artifact-frame": iframe, "artifact-marks": marksEl, "marks-unplaced": unplacedEl, comments: noPanel ? null : panel };
-  const pinbtn = el("button"); pinbtn.className = "pinbtn"; pinbtn.hidden = true;
-  const docOn = {}, extra = { ".cbtn": cbtn, ...(noPinBtn ? {} : { ".pinbtn": pinbtn }) };
+  const pinbtn = el("button"); pinbtn.className = "pinmodebtn"; pinbtn.hidden = true;
+  const docOn = {}, extra = { ".cbtn": cbtn, ...(noPinBtn ? {} : { ".pinmodebtn": pinbtn }) };
   const doc = { getElementById: (id) => byId[id] || null,
                 createElement: (t) => { const n = el(t); if (t === "template") Object.defineProperty(n, "innerHTML", { set(h) { n.content = { firstElementChild: { html: h } }; } }); return n; },
                 body: docBody,
