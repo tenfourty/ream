@@ -238,6 +238,37 @@ headings and sections help: a pin is re-found by its id when the words change. A
 slightly under the same heading (at least 24 characters, about 80% alike) is also edited, with the
 new words in anchor_current; one reworded heavily, or moved to another section, is outdated.
 
+PICTURES ON A COMMENT. Attach up to 4 to a comment or a reply; PNG, JPEG or WebP,
+decided from the bytes, at most 5 MB, 4000 px a side and 16 megapixels each.
+Anything else (GIF, SVG, HEIC, AVIF, TIFF, an animated WebP) is refused with the
+format named. The service rewrites each file without its EXIF (GPS, camera) and
+text chunks and never decodes the pixels. Pictures are NOT checked for secrets:
+do not attach a screenshot of a token.
+
+    artifacts-decide comment <page-id> "see the chart" --image shot.png [--image b.jpg ...]
+    artifacts-decide reply <thread-id> "fixed" --image after.png
+
+The files are checked against those limits before anything is sent, and the whole
+comment is refused if any one is: nothing is half-attached. Over the API it is two
+steps, so the comment body stays JSON and keeps its Idempotency-Key. First
+POST /api/v1/artifacts/<id>/comment-images (multipart/form-data, one file in the
+field `file`) returns {{"image_id", "content_type", "width", "height", "byte_size"}};
+the same bytes from you give the same id, and an upload nobody attaches within an
+hour is dropped (you may hold 12 at a time; a page takes 40 pictures). Then name
+the ids, in order, in the comment: {{"body": "...", "images": ["<image_id>", ...]}}.
+An id that is unknown, someone else's, already used or staged on another page
+is one 422 that does not say which. `comments` then fetches the pictures of the
+threads it prints, once, into $XDG_CACHE_HOME/artifacts/images/<comment id>/ (at
+most 20 a call) and prints each path, so read the file from there:
+
+    image: /home/me/.cache/artifacts/images/01H.../1-9f2c4e....png  (png 1200x800, 214 KB)
+
+--no-images prints the sizes and fetches nothing; a second run downloads nothing it
+already has. Over the API a comment row carries `images` (id, content_type, width,
+height, byte_size, sha256 and `url`), and GET /api/v1/comments/<comment id>/images/<image id>
+with your key returns the bytes as an attachment. A picture is shown only while its
+comment is, and a page you cannot read answers like a page that is not there.
+
 Two rules are fixed. Your comment is never his answer to a decision, and never
 acknowledges or closes one. And it always shows as yours: your agent name
 and "(agent)", plus the office from your ARTIFACTS_SESSION label ("via
@@ -582,7 +613,7 @@ answer is a broken promise, and so is an unanswered comment:
 To comment on another office's page (any page open to agents), whole or on a
 quoted passage; its owner is told, and the output names them:
 
-    artifacts-decide comment <page-id> [--quote "exact words"] [--section "Heading"] "text"
+    artifacts-decide comment <page-id> [--quote "exact words"] [--section "Heading"] [--image PATH] "text"
 
 Never his answer, never an acknowledgement, and shown as your agent "(agent)"
 with your session's office; only a plain comment, never remove or looks good.

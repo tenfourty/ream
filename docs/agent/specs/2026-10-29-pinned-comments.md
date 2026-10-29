@@ -316,8 +316,10 @@ pinned comment as on any comment.
 2. **Element pins** (built, 29 Oct 2026; see "As built, slice 2" below). `element` kind, pin mode
    and outline and badges in the shim and gallery, `--element ID` and `{"kind":"element"}` for
    agents.
-3. **Images.** `images.py`, `comment_image`, upload and download routes, content-origin serving,
-   gallery attach control and thumbnails, `--image` and the cached paths in `comments`.
+3. **Images** (server half built, 29 Oct 2026; see "As built, slice 3 (server)" below; the gallery
+   half is not built). `images.py`, `comment_image`, upload and download routes, content-origin
+   serving, `--image` and the cached paths in `comments`; the gallery's attach control and
+   thumbnails come next.
 4. **Spot screenshot** (optional, only if Jeremy asks): for element pins, a server-side render of
    that version cropped to the element through `thumbs.py`, attached automatically. Not designed
    here beyond that; it is the one slice with real rendering cost and quality risk.
@@ -404,6 +406,58 @@ Differences from the text above, and why:
   the agent route, the CLI and the panel) rather than extending `test_anchors.py` and
   `test_comments.py`; the shim and gallery cases are in `tests/js/marks.test.mjs` and
   `comments.test.mjs`.
+
+### As built, slice 3 (server) (29 Oct 2026)
+
+**Gallery half not built.** The gallery's attach control (paste, drop, choose up to 4, removable
+thumbnails, shrink in the browser, the "Images are not checked for secrets" note), the gallery
+twin `POST /c/{artifact_id}/image` and the repeated `image` form fields, the thumbnails in the
+panel, and the `img-src` addition to the gallery CSP are left to the next helper. The pieces it
+needs are in place: `image_store.stage(db, artifact_id, author, images.inspect(bytes))`,
+`comments.add(..., image_ids=[...])`, `image_store.mint_token(db, image_id)` and
+`image_store.origin_url(artifact_id, image_id, token)`. Because the content origin is one host
+per page (`<artifact id>.<content domain>`), the CSP entry must name that wildcard, not one origin.
+
+Built as written in sections 6, 7 and 9. How each limit is enforced:
+
+| Limit | Where |
+|---|---|
+| Body read stops at 5 MB (plus 16 KB of multipart framing) | `api.upload_comment_image` streams the body and refuses at the cap, or on a larger `Content-Length` before reading; the file is then held to exactly 5 MB in `images.inspect` (413) |
+| PNG, JPEG, WebP from the bytes; named refusals | `images._sniff`; GIF, SVG, HEIC, AVIF, TIFF, BMP named; animated WebP and APNG refused by their markers |
+| 4000 px a side, 16 megapixels | read from `IHDR`, `SOF0/1/2`, `VP8`/`VP8L`/`VP8X` before the file is walked (`images._check_size`) |
+| Metadata stripped, file walked to its end | `images._png`, `_jpeg`, `_webp` rewrite the file; CRCs checked for PNG; a file that does not reach IEND/EOI/its RIFF size is refused |
+| 12 staged per author, swept at one hour | `image_store.stage` (counts only rows under an hour old) and `image_store.sweep` (hourly thread in `maintenance`, and nightly) |
+| 40 per page, 4 per comment | `image_store.stage`; `images.check_ids` and `image_store.attach` |
+| Not yours, unknown, used, other page, expired | one 422 from `image_store.attach`; one 404 (`no such image`) from the download route |
+
+Differences from the text above, and why:
+
+- **SQLite schema.** `schema_sqlite.sql` is step 1 and never edited, so the SQLite tables are step
+  10 in `db.py` (`_SQLITE_STEPS`); the columns are the same as `schema.sql`.
+- **The signing key** is stored in a new table `server_secret` (named secrets, made on first use),
+  not read from the `frame_pass` secret store: `frame_pass` keeps hashed one-time passes in the
+  database and has no key. A table needs no deployment change and is the same on every replica
+  and after a restart. It is copied by `migrate.py` like any table.
+- **JPEG keeps only APP0, APP2 and APP14** (JFIF, ICC profile, Adobe colour flag); every other
+  application segment is dropped, not just APP1 and APP13, because vendors write metadata in
+  APP3 to APP12 too. Data after EOI is dropped.
+- **A multipart envelope adds up to 16 KB** to the 5 MB before a body is refused unread; the file
+  itself is held to exactly 5 MB.
+- **`sha256` is on each image row** in the comment listing (the spec's list has no digest); the
+  CLI names its cached file by it. The cached name is `<n>-<first 16 of sha256>.<ext>`, so a
+  repeat run finds the file and downloads nothing.
+- **The 40 a page counts attached pictures only.** Pictures waiting to be attached count against
+  their uploader's 12, not the page's, so an agent cannot fill another office's page with uploads.
+- **No separate rate limiter.** `ratelimit.py` counts failed keys only; the staged-per-author and
+  per-page quotas bound uploads. A throughput limit per author would be a new mechanism.
+- **The content origin does not check `held`.** The token is the gallery's decision (it mints one
+  for Jeremy's own held comment, which he may see); an agent never gets one, and the agent route
+  refuses held and withdrawn comments. A withdrawn comment, a deleted page and a picture not
+  attached to a comment are 404 on the content origin.
+- `images.py` imports nothing from the service, so `artifacts-decide` runs the same
+  `images.inspect` before it uploads; storage and tokens are in `image_store.py`.
+- Tests: `tests/test_comment_images.py` (formats, limits, access, the content origin, the CLI) and
+  rows for the two new tables in `tests/test_migrate.py`.
 
 ## 9. Tests (written first; run by CI on a `ci/<name>` branch, never on baba)
 

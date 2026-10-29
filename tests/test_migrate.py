@@ -269,6 +269,49 @@ def _seed(database: Database) -> None:
             ["alpha", T1, "alpha/s1", T1],
         ),
         ("agent_pickup", "agent, pickup, updated_at", ["alpha", "within the hour", T1]),
+        (
+            "comment_image",
+            (
+                "id, artifact_id, comment_id, position, staged_by, content_type, width,"
+                " height, byte_size, sha256, bytes, created_at"
+            ),
+            [
+                "i" * 26,
+                "a1",
+                "c1",
+                1,
+                None,
+                "image/png",
+                2,
+                2,
+                8,
+                "d" * 64,
+                b"\x89PNG\r\n\x1a\n",
+                T1,
+            ],
+        ),
+        (
+            "comment_image",
+            (
+                "id, artifact_id, comment_id, position, staged_by, content_type, width,"
+                " height, byte_size, sha256, bytes, created_at"
+            ),
+            [
+                "j" * 26,
+                "a1",
+                None,
+                None,
+                "alpha",
+                "image/jpeg",
+                3,
+                2,
+                4,
+                "e" * 64,
+                b"\xff\xd8\xff\xd9",
+                T0,
+            ],
+        ),
+        ("server_secret", "name, value, created_at", ["image_token", "ab" * 32, T0]),
         ("seat_grant", "agent, scope, granted_at", ["alpha", "reviewer", T0]),
         (
             "frame_pass",

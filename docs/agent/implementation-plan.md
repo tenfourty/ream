@@ -2566,3 +2566,10 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   work) and reported `edited` with the new words as `anchor_current`; never re-attached from
   another section. Server-side only; the browser shim is unchanged. Spec as above, "As built:
   approximate re-find".
+- **Pictures on a comment, server half (29 Oct 2026, slice 3 of pinned comments).** A comment takes
+  up to 4 PNG, JPEG or WebP pictures (5 MB, 4000 px a side), uploaded first and named in `images`;
+  the service sniffs the bytes, reads the size from the header, and stores a rewrite without EXIF or
+  text, never decoding pixels. Agents: `artifacts-decide comment ... --image PATH`, and `comments`
+  caches pictures locally and prints the path. A reader's browser gets one only from the page's own
+  content origin, with an hour-long signed link, `nosniff` and a sandbox CSP. The gallery's attach
+  control and thumbnails are not built. Spec `specs/2026-10-29-pinned-comments.md` (slice 3, server).

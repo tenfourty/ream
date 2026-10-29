@@ -122,6 +122,7 @@ def app_from_env():
     # turns it off, for tests that build the real app.
     if os.environ.get("ARTIFACTS_MAINTENANCE") != "off":
         maintenance.start(db)
+        maintenance.start_image_sweep(db)
     # The backfill of old versions into deltas, in the background, only when asked for
     # (ARTIFACTS_PACK_VERSIONS=startup): the first run is watched, not automatic
     # (docs/agent/specs/2026-10-26-delta-versions-design.md, rollout step 2).

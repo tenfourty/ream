@@ -440,6 +440,38 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " updated_at timestamptz not null)"
         ),
     ),
+    # 29 Oct 2026: pictures on a comment, and the service's own named secrets
+    # (see schema.sql).
+    10: (
+        (
+            "create table comment_image ("
+            " id text primary key,"
+            " artifact_id text not null references artifact (id) on delete cascade,"
+            " comment_id text references comment (id) on delete cascade,"
+            " position integer check (position between 1 and 4),"
+            " staged_by text,"
+            " content_type text not null"
+            " check (content_type in ('image/png', 'image/jpeg', 'image/webp')),"
+            " width integer not null,"
+            " height integer not null,"
+            " byte_size integer not null,"
+            " sha256 text not null,"
+            " bytes blob not null,"
+            " created_at timestamptz not null default (artifacts_now()),"
+            " unique (comment_id, position))"
+        ),
+        "create index comment_image_artifact_idx on comment_image (artifact_id)",
+        (
+            "create index comment_image_staged_idx"
+            " on comment_image (staged_by, created_at) where comment_id is null"
+        ),
+        (
+            "create table server_secret ("
+            " name text primary key,"
+            " value text not null,"
+            " created_at timestamptz not null default (artifacts_now()))"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

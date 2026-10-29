@@ -32,6 +32,7 @@ from fastapi.responses import (
     PlainTextResponse,
 )
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from artifacts import (
     anchors,
@@ -43,6 +44,8 @@ from artifacts import (
     grants,
     hosts,
     idempotency,
+    image_store,
+    images,
     inbox,
     keys,
     listening,
@@ -246,6 +249,9 @@ class CommentBody(BaseModel):
     anchor: dict | None = None
     thread_root: str | None = None
     kind: str = "comment"
+    # Ids from POST /artifacts/{id}/comment-images, at most four; the comment is
+    # refused whole if any is unknown, someone else's, already used or on another page.
+    images: list[str] = Field(default_factory=list)
 
 
 class DecisionBody(BaseModel):
@@ -1545,6 +1551,7 @@ def agent_router(
                 kind=payload.kind,
                 session=seat_session,
                 after_commit=later,
+                image_ids=payload.images,
             )
             # Where the pin stands on the page now, in the reply: the agent
             # learns at write time, not on its next listing.
@@ -1593,6 +1600,10 @@ def agent_router(
             raise HTTPException(
                 503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
             ) from exc
+        except images.ImageRefused as exc:
+            raise HTTPException(
+                exc.status, {"field": exc.field, "detail": exc.detail}
+            ) from exc
         except comments.InvalidAnchor as exc:
             raise HTTPException(
                 422, {"field": exc.field, "detail": "not a valid anchor"}
@@ -1632,6 +1643,75 @@ def agent_router(
             raise HTTPException(404, "no such decision") from exc
         except store.NotFound as exc:
             raise HTTPException(404, "no such artifact") from exc
+
+    @router.post("/artifacts/{artifact_id}/comment-images", status_code=201)
+    async def upload_comment_image(
+        artifact_id: str, request: Request, agent: str = Depends(caller)
+    ):
+        """Stage one picture for a comment on a page the caller may read: multipart,
+        one file in the field `file`. PNG, JPEG or WebP, decided from the bytes; at most
+        5 MB, 4000 px a side and 16 megapixels. The stored file is a rewrite without
+        EXIF or text chunks. Returns `{image_id, content_type, width, height, byte_size}`;
+        name the id in `images` on a comment within the hour. The same bytes from the same
+        caller give the same id. Pictures are not checked for secrets."""
+
+        def readable() -> bool:
+            with db.connect() as conn:
+                return store._owned(conn, artifact_id, agent, True) is not None
+
+        # Cheapest first: a page the caller cannot read costs no body.
+        if not await run_in_threadpool(readable):
+            raise HTTPException(404, "no such artifact")
+        cap = images.MAX_BYTES + images.BODY_SLACK
+        too_big = HTTPException(
+            413,
+            {
+                "field": "image",
+                "detail": f"the image is over {images.MAX_BYTES // (1024 * 1024)} MB",
+            },
+        )
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > cap:
+            raise too_big
+        received = bytearray()
+        async for chunk in request.stream():
+            received += chunk
+            if len(received) > cap:
+                raise too_big  # stops reading: never held whole
+        try:
+            found = images.inspect(
+                images.file_from_multipart(
+                    request.headers.get("content-type"), bytes(received)
+                )
+            )
+            return await run_in_threadpool(
+                image_store.stage, db, artifact_id, agent, found
+            )
+        except images.ImageRefused as exc:
+            raise HTTPException(
+                exc.status, {"field": exc.field, "detail": exc.detail}
+            ) from exc
+
+    @router.get("/comments/{comment_id}/images/{image_id}")
+    def download_comment_image(
+        comment_id: str, image_id: str, agent: str = Depends(caller)
+    ):
+        """A picture on a comment, for a caller that may read the comment's page and
+        sees the comment (not held, not withdrawn). Anything else, an unknown picture
+        included, is the same 404. Sent as an attachment with the type taken from the
+        bytes, `nosniff` and a sandbox CSP; this origin sets no cookie."""
+        found = image_store.for_reader(db, agent, comment_id, image_id)
+        if found is None:
+            raise HTTPException(404, "no such image")
+        return Response(
+            found[1],
+            media_type=found[0],
+            headers={
+                **image_store.SERVE_HEADERS,
+                "content-disposition": "attachment",
+                "cache-control": "private, no-store",
+            },
+        )
 
     @router.post("/comments/{comment_id}/resolve")
     def resolve_comment(comment_id: str, agent: str = Depends(caller)):

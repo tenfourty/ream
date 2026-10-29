@@ -29,11 +29,22 @@ import threading
 import time
 from collections import OrderedDict
 from contextlib import nullcontext
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 
-from artifacts import anchors, events, ggscan, holds, ids, nudge, store, text
+from artifacts import (
+    anchors,
+    events,
+    ggscan,
+    holds,
+    ids,
+    image_store,
+    images,
+    nudge,
+    store,
+    text,
+)
 from artifacts.anchors import (
     SECTION_MAX,
     SECTION_PAGE_MAX,
@@ -140,6 +151,10 @@ class CommentRow:
     # several offices share cannot tell them apart, so the gallery says "via
     # session ..." rather than naming an office as fact.
     session: str | None = None
+    # The pictures attached to this comment, in order: id, content_type, width,
+    # height, byte_size, sha256 and the API path to fetch each by (never a token).
+    # Read, not a column of `comment`; see `images.with_images`.
+    images: list = field(default_factory=list)
 
 
 class InvalidAnchor(Exception):
@@ -582,6 +597,7 @@ def add(
     conn: Connection | None = None,
     session: str | None = None,
     after_commit: list | None = None,
+    image_ids: list[str] | None = None,
 ) -> CommentRow:
     """Write a comment. `agent`, when given, is the identity the artifact must be
     owned by -- an agent answering comments on its OWN pages, via the keyed API.
@@ -623,7 +639,11 @@ def add(
     here touches a decision: no answer, acknowledgement or closing.
 
     `session` is the caller's declared label, stored on an agent's comment.
+
+    `image_ids` are pictures the author staged on this page (`image_store.stage`), attached
+    in order, all or nothing: `images.ImageRefused` rolls the whole comment back.
     """
+    wanted_images = images.check_ids(image_ids)
     if second_opinion is None:
         second_opinion = False
     is_reply = thread_root is not None
@@ -811,6 +831,8 @@ def add(
                     session if author_kind == "agent" else None,
                 ),
             )
+            if wanted_images:
+                image_store.attach(conn, artifact_id, comment_id, author, wanted_images)
             # THE HALF THAT WAS MISSING. The comment table, the anchor
             # validator and the agent API have existed since 19 Sep; what did
             # not exist was anything that TOLD the agent. Jeremy ruled (a) on
@@ -1125,6 +1147,12 @@ def _current_of(conn, row, bodies, indexes, current_n, wanted_ids, budget) -> st
 
 
 def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
+    """Every row told its pin's state (`_pin_states`) and its pictures. The one funnel
+    every listing passes through."""
+    return image_store.with_images(conn, _pin_states(conn, rows))
+
+
+def _pin_states(conn, rows: list[CommentRow]) -> list[CommentRow]:
     """Every pinning row told whether its quote is still on its page
     (`quote_state`) and where its pin is now (`anchor_state`, `anchor_note`).
 

@@ -17,6 +17,7 @@ from artifacts import (
     email_share,
     frame_pass,
     hosts,
+    image_store,
     mail,
     pagediff,
     stamp,
@@ -915,6 +916,34 @@ def create_content_app(db: Database) -> FastAPI:
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers=headers)
         return Response(css, media_type="text/css; charset=utf-8", headers=headers)
+
+    # A PICTURE ON A COMMENT (pinned comments, slice 3). The only way a reader's
+    # browser gets one: this page's own origin, which holds no session of his, never
+    # the gallery's. The token is the gallery's capability, minted for a reader who may
+    # read the page and signed over the picture id and an expiry (image_store.mint_token).
+    # No token, a bad or expired one, another page's picture, a withdrawn comment's and
+    # an unknown id all get the one 404.
+    @app.get("/ci/{image_id}")
+    def comment_image(request: Request, image_id: str, t: str = "") -> Response:
+        artifact_id = _artifact_id(request)
+        found = (
+            image_store.for_origin(db, artifact_id, image_id)
+            if artifact_id and image_store.token_valid(db, image_id, t)
+            else None
+        )
+        if found is None:
+            return Response("not found", status_code=404, media_type="text/plain")
+        return Response(
+            found[1],
+            media_type=found[0],
+            headers={
+                **image_store.SERVE_HEADERS,
+                "content-disposition": "inline",
+                "cache-control": "private, max-age=3600",
+                # The gallery's page embeds it from another origin; the token is the gate.
+                "cross-origin-resource-policy": "cross-origin",
+            },
+        )
 
     @app.get("/")
     def bare(request: Request) -> Response:

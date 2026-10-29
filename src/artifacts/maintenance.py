@@ -94,13 +94,14 @@ def next_run(now: datetime) -> datetime:
 def nightly(db: Database) -> None:
     """The snapshot (SQLite only), then the purge. A failed snapshot stops the
     purge: nothing is destroyed that is not in a backup."""
-    from artifacts import store
+    from artifacts import image_store, store
 
     folder = backup_folder(db)
     if folder is not None:
         made = backup(db, folder)
         _log.info("backup written: %s", made.name)
     gone = store.purge_expired(db)
+    image_store.sweep(db)
     # After the purge, so the statistics describe what is left.
     db.optimize()
     _log.info("purge: %d destroyed%s", len(gone), "".join(f" {g}" for g in gone))
@@ -125,5 +126,27 @@ def start(db: Database) -> threading.Thread:
             run_once()
 
     thread = threading.Thread(target=loop, name="nightly-maintenance", daemon=True)
+    thread.start()
+    return thread
+
+
+IMAGE_SWEEP_EVERY_SECONDS = 3600
+
+
+def start_image_sweep(db: Database) -> threading.Thread:
+    """Once an hour, drop pictures staged for a comment and never attached (an hour after
+    upload they no longer count against anyone's quota; this frees their bytes). Never dies
+    of an exception."""
+    from artifacts import image_store
+
+    def loop() -> None:
+        while True:
+            time.sleep(IMAGE_SWEEP_EVERY_SECONDS)
+            try:
+                image_store.sweep(db)
+            except Exception:  # noqa: BLE001 -- the loop must outlive one bad hour
+                _log.error("staged picture sweep failed", exc_info=True)
+
+    thread = threading.Thread(target=loop, name="staged-image-sweep", daemon=True)
     thread.start()
     return thread

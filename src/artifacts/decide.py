@@ -25,6 +25,7 @@ this never offers it.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -36,14 +37,16 @@ import uuid
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
-from artifacts import news
+from artifacts import images, news
 from artifacts.client import (
     Conflict,
     HTTPFailure,
     UsageError,
     _api_base,
+    _download,
     _request,
     _resolve_key,
+    _upload_image,
     declared_session,
     installed_stamp,
     maybe_rotate,
@@ -421,6 +424,100 @@ def _element_line(pin: dict) -> str:
     return line
 
 
+def _read_pictures(paths: list[str] | None) -> list[bytes]:
+    """The pictures named by --image, read and checked with the service's own limits
+    BEFORE anything is uploaded, so a bad third file costs no upload of the first two.
+    Nothing is sent unless all of them pass."""
+    paths = list(paths or [])
+    if len(paths) > images.PER_COMMENT:
+        raise UsageError(f"a comment takes at most {images.PER_COMMENT} pictures")
+    found = []
+    for path in paths:
+        try:
+            with open(path, "rb") as handle:
+                data = handle.read(images.MAX_BYTES + 1)
+        except OSError:
+            raise UsageError(f"{path}: cannot read that file") from None
+        try:
+            images.inspect(data)
+        except images.ImageRefused as exc:
+            raise UsageError(f"{path}: {exc.detail}") from None
+        found.append(data)
+    return found
+
+
+def _upload_pictures(
+    page: str, base: str, key: str, pictures: list[bytes]
+) -> list[str]:
+    return [
+        _upload_image(f"{base}/artifacts/{page}/comment-images", key, data)["image_id"]
+        for data in pictures
+    ]
+
+
+_EXTENSIONS = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+# The most pictures one `comments` call downloads; the rest are listed with their sizes.
+_IMAGES_PER_CALL = 20
+
+
+def _image_cache() -> str:
+    root = os.environ.get("XDG_CACHE_HOME") or os.path.join(
+        os.path.expanduser("~"), ".cache"
+    )
+    return os.path.join(root, "artifacts", "images")
+
+
+def _private_dir(path: str) -> None:
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    os.chmod(path, 0o700)
+
+
+def _fetch_images(threads: list[dict], key: str, base: str) -> None:
+    """Download every picture of the printed threads into the cache and set `local` on
+    each: `<cache>/artifacts/images/<comment id>/<n>-<sha256 start>.<ext>`, directory 0700,
+    files 0600. The name carries the sha256 of the bytes, so a repeat run finds the file
+    and downloads nothing. At most `_IMAGES_PER_CALL` a call; no URL is ever printed."""
+    budget = _IMAGES_PER_CALL
+    for thread in threads:
+        for message in thread["messages"]:
+            for n, pic in enumerate(message.get("images") or [], start=1):
+                digest = str(pic.get("sha256") or "")
+                ext = _EXTENSIONS.get(pic.get("content_type"), "bin")
+                folder = os.path.join(_image_cache(), message["id"])
+                target = os.path.join(folder, f"{n}-{digest[:16]}.{ext}")
+                if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    continue
+                if os.path.isfile(target):
+                    pic["local"] = target
+                    continue
+                if budget <= 0:
+                    continue
+                budget -= 1
+                data = _download(
+                    f"{base}/comments/{message['id']}/images/{pic['id']}", key
+                )
+                if hashlib.sha256(data).hexdigest() != digest:
+                    continue  # not the picture the listing named: keep nothing
+                _private_dir(os.path.dirname(os.path.dirname(target)))
+                _private_dir(folder)
+                part = f"{target}.part"
+                fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "wb") as out:
+                    out.write(data)
+                os.replace(part, target)
+                pic["local"] = target
+
+
+def _picture_line(pic: dict) -> str:
+    kind = (pic.get("content_type") or "image/?").split("/", 1)[-1]
+    sized = (
+        f"{kind} {pic.get('width')}x{pic.get('height')}, "
+        f"{max(1, round((pic.get('byte_size') or 0) / 1024))} KB"
+    )
+    where = pic.get("local") or "(not downloaded)"
+    return f"  image: {where}  ({sized})"
+
+
 def _fmt_thread(thread: dict, *, on_page: bool = False) -> str:
     head = "NEEDS YOUR REPLY" if thread["needs_reply"] else "replied"
     lines = [
@@ -438,6 +535,7 @@ def _fmt_thread(thread: dict, *, on_page: bool = False) -> str:
         if thread.get("anchor_state") == "edited" and thread.get("anchor_current"):
             lines.append(f'  now: "{thread["anchor_current"]}"')
     for m in thread["messages"]:
+        lines.extend(_picture_line(pic) for pic in m.get("images") or [])
         who = (
             "HE SAID"
             if m.get("author_kind") == "human"
@@ -1586,6 +1684,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="only the threads whose pinned spot a republish removed",
     )
+    threads.add_argument(
+        "--no-images",
+        action="store_true",
+        help="do not download the pictures on the comments; print their sizes only."
+        " Otherwise each is fetched once into $XDG_CACHE_HOME/artifacts/images/"
+        "<comment id>/ (at most 20 a call) and its path is printed",
+    )
     reply = subs.add_parser(
         "reply",
         help="answer a comment thread: on one of your pages, or with --page on"
@@ -1598,10 +1703,21 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ARTIFACT-ID",
         help="the page the thread is on; needed on another office's page",
     )
+    reply.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="attach a picture (PNG, JPEG or WebP, 5 MB, 4000 px a side); repeat for"
+        " up to 4. Checked here against the service's limits first, and all or"
+        " nothing. Metadata (EXIF, GPS) is stripped by the service. Pictures are not"
+        " checked for secrets: do not attach a screenshot of one",
+    )
     reply.add_argument("--idempotency-key", metavar="KEY", help=_IDEMPOTENCY_HELP)
     comment = subs.add_parser(
         "comment",
-        help="comment on any page you can read, whole, on a quoted passage or on an element",
+        help="comment on any page you can read, whole, on a quoted passage or on an"
+        " element, with up to 4 pictures",
         description=(
             "Comment on a page another office published (or your own), the way "
             "Jeremy does. The page's owner is told and answers in the thread. "
@@ -1639,6 +1755,16 @@ def build_parser() -> argparse.ArgumentParser:
         "must be on the current version exactly once. Its text, or an image's "
         "alt text, becomes the quote, and the comment is marked edited or "
         "outdated if a republish changes or removes it",
+    )
+    comment.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="attach a picture (PNG, JPEG or WebP, 5 MB, 4000 px a side); repeat for"
+        " up to 4. Checked here against the service's limits first, and all or"
+        " nothing. Metadata (EXIF, GPS) is stripped by the service. Pictures are not"
+        " checked for secrets: do not attach a screenshot of one",
     )
     comment.add_argument("--idempotency-key", metavar="KEY", help=_IDEMPOTENCY_HELP)
     settle = subs.add_parser("settle", help="mark a comment thread done")
@@ -1881,6 +2007,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 0
             found.sort(key=lambda t: not t["needs_reply"])
+            if not args.no_images:
+                _fetch_images(found, key, base)
             print("\n\n".join(_fmt_thread(t, on_page=bool(args.page)) for t in found))
             return 0
         if args.cmd == "comment":
@@ -1891,8 +2019,11 @@ def main(argv: list[str] | None = None) -> int:
             text = sys.stdin.read() if args.text == "-" else args.text
             if not text.strip():
                 raise UsageError("nothing to say: the comment text is empty")
+            pictures = _read_pictures(args.image)
             page = _request("GET", f"{base}/artifacts/{args.page}", key, None)
             payload: dict = {"body": text}
+            if pictures:
+                payload["images"] = _upload_pictures(args.page, base, key, pictures)
             if args.element:
                 payload["anchor"] = {"kind": "element", "id": args.element}
             elif args.quote:
@@ -1930,6 +2061,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             }
             thread = mine.get(args.thread)
+            pictures = _read_pictures(getattr(args, "image", None))
             if thread is None:
                 where = "on that page" if page else "on your pages"
                 hint = (
@@ -1949,7 +2081,19 @@ def main(argv: list[str] | None = None) -> int:
                 "POST",
                 f"{base}/artifacts/{thread['artifact_id']}/comments",
                 key,
-                {"body": args.text, "thread_root": args.thread},
+                {
+                    "body": args.text,
+                    "thread_root": args.thread,
+                    **(
+                        {
+                            "images": _upload_pictures(
+                                thread["artifact_id"], base, key, pictures
+                            )
+                        }
+                        if pictures
+                        else {}
+                    ),
+                },
                 idempotency_key=args.idempotency_key or str(uuid.uuid4()),
             )
             print(f"replied on {args.thread}; he sees it in the page's comments")

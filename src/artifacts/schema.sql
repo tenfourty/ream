@@ -948,3 +948,39 @@ create table if not exists agent_pickup (
     pickup     text not null,
     updated_at timestamptz not null
 );
+
+-- PICTURES ON A COMMENT (pinned comments, slice 3, 29 Oct 2026;
+-- docs/agent/specs/2026-10-29-pinned-comments.md section 6). One row per picture, the REWRITTEN
+-- file (images.py keeps only the chunks that draw it: no EXIF, no text). `comment_id` is null
+-- while the picture is staged (uploaded, not yet attached to a comment): `staged_by` then
+-- names the uploader and `created_at` starts the hour after which the sweep drops it.
+-- Deleting a page or a comment deletes its pictures with it. Not the `file` table (that is
+-- per page version and served as page content) and not `packing` (already compressed).
+create table if not exists comment_image (
+    id           text primary key,
+    artifact_id  text not null references artifact(id) on delete cascade,
+    comment_id   text references comment(id) on delete cascade,
+    position     integer check (position between 1 and 4),
+    staged_by    text,
+    content_type text not null
+        check (content_type in ('image/png', 'image/jpeg', 'image/webp')),
+    width        integer not null,
+    height       integer not null,
+    byte_size    integer not null,
+    sha256       text not null,
+    bytes        bytea not null,
+    created_at   timestamptz not null default now(),
+    unique (comment_id, position)
+);
+alter table comment_image alter column bytes set storage external;
+create index if not exists comment_image_artifact_idx on comment_image (artifact_id);
+create index if not exists comment_image_staged_idx
+    on comment_image (staged_by, created_at) where comment_id is null;
+
+-- SECRETS THE SERVICE MAKES FOR ITSELF, by name, so every replica and every restart
+-- agrees on them (the picture links' signing key, images.py). Made on first use.
+create table if not exists server_secret (
+    name       text primary key,
+    value      text not null,
+    created_at timestamptz not null default now()
+);

@@ -24,6 +24,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -542,9 +543,25 @@ def _request(
         request.add_unredirected_header("Idempotency-Key", idempotency_key)
     if data is not None:
         request.add_header("Content-Type", "application/json")
+    raw = _exchange(request, timeout or _REQUEST_TIMEOUT, headers_out)
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # A 2xx that isn't JSON is not something to guess at or half-parse --
+        # treat it exactly like any other failure to get a usable answer.
+        raise HTTPFailure(0, "unexpected response") from None
+
+
+def _exchange(
+    request: urllib.request.Request, timeout: float, headers_out: dict | None
+) -> bytes:
+    """Send `request`, retrying through a rolling deploy, and return the body bytes.
+    Raises HTTPFailure for anything but a 2xx."""
     for attempt in range(_ROLLING_ATTEMPTS):
         try:
-            with _opener.open(request, timeout=timeout or _REQUEST_TIMEOUT) as response:
+            with _opener.open(request, timeout=timeout) as response:
                 raw = response.read()
                 if headers_out is not None:
                     headers_out.update(
@@ -575,14 +592,54 @@ def _request(
             # and every caller that retries (the answer waiter above all) knows
             # only HTTPFailure: on 22 Oct 2026 one read timeout killed it.
             raise HTTPFailure(0, type(exc).__name__) from None
-    if not raw:
-        return {}
+    return raw
+
+
+def _raw_request(
+    method: str,
+    url: str,
+    key: str,
+    data: bytes | None = None,
+    content_type: str | None = None,
+) -> urllib.request.Request:
+    """A request carrying the key (and the declared session) like `_request`, for a
+    body that is not JSON."""
+    _check_url_scheme(url)
+    request = urllib.request.Request(url, data=data, method=method)  # noqa: S310 -- the operator's https API address, see _request
+    request.add_header("User-Agent", _USER_AGENT)
+    request.add_unredirected_header("Authorization", f"Bearer {key}")
+    if _session:
+        request.add_unredirected_header(_SESSION_HEADER, _session)
+    if content_type:
+        request.add_header("Content-Type", content_type)
+    return request
+
+
+def _upload_image(url: str, key: str, data: bytes) -> dict:
+    """POST one picture to `/artifacts/<id>/comment-images` as multipart/form-data."""
+    boundary = "----artifacts-" + uuid.uuid4().hex
+    body = (
+        (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file"; filename="image"\r\n'
+            "Content-Type: application/octet-stream\r\n\r\n"
+        ).encode()
+        + data
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
+    request = _raw_request(
+        "POST", url, key, body, f"multipart/form-data; boundary={boundary}"
+    )
+    raw = _exchange(request, _REQUEST_TIMEOUT, None)
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        # A 2xx that isn't JSON is not something to guess at or half-parse --
-        # treat it exactly like any other failure to get a usable answer.
         raise HTTPFailure(0, "unexpected response") from None
+
+
+def _download(url: str, key: str) -> bytes:
+    """GET a picture's bytes. The key rides the header only, never the URL."""
+    return _exchange(_raw_request("GET", url, key), _REQUEST_TIMEOUT, None)
 
 
 def _read_page(file_path: str) -> str:
