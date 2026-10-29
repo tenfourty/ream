@@ -342,3 +342,17 @@ def test_the_cache_is_bounded(monkeypatch):
         index = anchors.PageIndex(f"<h2>Costs</h2><p>{SENTENCE} {n}</p>")
         index.fuzzy({"heading": "Costs"}, SENTENCE + " tail")
     assert len(anchors._FUZZY_CACHE) <= 3
+
+
+def test_a_very_short_element_quote_is_not_searched_for_anywhere():
+    """An element pin whose evidence is one letter must not read current just
+    because the letter is on the page or in some label."""
+    pin = {"kind": "element", "id": "gone"}
+    body = PAGE + '<svg><title>A chart</title></svg><img alt="Revenue chart">'
+    assert anchors.resolve(pin, "A", body) == ("outdated", "")
+    assert anchors.resolve(pin, "Pr", body) == ("outdated", "")
+    # By id it still resolves, and a long enough quote is still found.
+    assert anchors.resolve({"kind": "element", "id": "plans"}, "Q", PAGE)[0] == "edited"
+    assert anchors.resolve(pin, "Revenue chart", body) == ("current", "")
+    # A short quote is still searched for a quote-kind pin.
+    assert anchors.resolve({"kind": "quote"}, "Cost", PAGE)[0] == "current"

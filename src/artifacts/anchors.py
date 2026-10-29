@@ -41,6 +41,10 @@ _HEADINGS_MAX = 400
 # an edited one.
 QUOTE_MAX = 200
 CURRENT_MAX = 500
+# An element pin's evidence must be at least this many visible characters
+# (spaces removed) before it is searched for in the page's text or labels: one
+# or two letters are found almost anywhere and would read current.
+ELEMENT_QUOTE_MIN = 4
 # A tag name an anchor may record (lower case; a custom element past this is
 # simply not named).
 TAG_RE = re.compile(r"[a-z][a-z0-9-]{0,15}")
@@ -478,6 +482,8 @@ def resolve(
                 return "", ""
             return (CURRENT if held else EDITED), ""
     if not needle:
+        return OUTDATED, ""
+    if anchor.get("kind") == "element" and len(_tight(quote)) < ELEMENT_QUOTE_MIN:
         return OUTDATED, ""
     if _state_against(quote, words, tight_words) == CURRENT:
         heading = anchor.get("heading") or ""

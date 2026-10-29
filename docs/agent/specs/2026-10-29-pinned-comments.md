@@ -326,6 +326,10 @@ pinned comment as on any comment.
 
 ### As built, slice 2 (29 Oct 2026)
 
+Follow-up (29 Oct 2026): an element pin whose evidence has fewer than `anchors.ELEMENT_QUOTE_MIN` (4)
+visible characters skips the quote and label search, so "A" no longer reads current; it resolves by
+id or is outdated.
+
 Built as written in sections 3, 4, 5 and 7, with the prior-art additions Jeremy accepted
 (`2026-10-29-pinned-comments-prior-art.md`) folded in:
 

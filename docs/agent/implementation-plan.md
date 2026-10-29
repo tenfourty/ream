@@ -2573,3 +2573,4 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   caches pictures locally and prints the path. A reader's browser gets one only from the page's own
   content origin, with an hour-long signed link, `nosniff` and a sandbox CSP. The gallery's attach
   control and thumbnails are not built. Spec `specs/2026-10-29-pinned-comments.md` (slice 3, server).
+- **Small fixes (29 Oct 2026).** A pickup line of only invisible filler is refused like an empty one; `artifacts-decide pickup` takes a line starting with "-" (after `--`); an element pin with under 4 visible characters of evidence no longer reads current from a stray match. Specs `where-an-answer-goes` section 6 and `pinned-comments` slice 2.
