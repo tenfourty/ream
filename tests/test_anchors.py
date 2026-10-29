@@ -300,14 +300,26 @@ def test_a_hostile_section_is_searched_in_bounded_time():
     assert time.monotonic() - began < 1.0
 
 
-def test_a_listing_over_many_pages_shares_one_budget_and_a_repeat_is_cached():
+def test_a_listing_over_many_pages_shares_one_budget_and_a_repeat_is_cached(
+    monkeypatch,
+):
+    # Counted in searches run, not seconds: a loaded CI runner made a 0.6 s bound flaky.
     import time
 
     anchors._FUZZY_CACHE.clear()
     pin = {"kind": "quote", "heading": "Costs"}
     quote = "x " * 100 + "y"
+    real = anchors._fuzzy_text
+    runs = []
+
+    def counted(section, needle, budget):
+        runs.append(1)
+        return real(section, needle, budget)
+
+    monkeypatch.setattr(anchors, "_fuzzy_text", counted)
 
     def listing():
+        runs.clear()
         budget = anchors.FuzzyBudget()
         began = time.monotonic()
         for n in range(60):
@@ -315,10 +327,13 @@ def test_a_listing_over_many_pages_shares_one_budget_and_a_repeat_is_cached():
             index = anchors.PageIndex(body, budget=budget)
             anchors.resolve(pin, quote, index)
             anchors.current_quote(pin, quote, index)
-        return time.monotonic() - began
+        return len(runs), budget, time.monotonic() - began
 
-    assert listing() < 0.6
-    assert listing() < 0.6  # a search cut short is never cached as "no match"
+    for _ in range(2):  # a search cut short is never cached as "no match"
+        searched, budget, took = listing()
+        assert 0 < searched <= anchors.FUZZY_SEARCHES
+        assert budget.searches >= 0
+        assert took < 10  # a backstop against a runaway, not a speed check
 
 
 def test_a_finished_search_is_served_from_the_cache_next_time(monkeypatch):
