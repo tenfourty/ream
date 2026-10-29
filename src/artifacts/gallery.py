@@ -2094,7 +2094,7 @@ var form=document.querySelector("form.cnew");
 // server holds the same limits and says so if not. Everything the user or the
 // server supplies goes in by textContent. With scripts off the form is the
 // plain one: the control stays hidden (.cpics-on is set below).
-var MAXN=4,MAXB=5*1024*1024,MAXS=4000,MAXP=16000000,held=typeof WeakMap==="function"?new WeakMap():null;
+var MAXN=4,MAXB=5*1024*1024,MAXF=25*1024*1024,MAXS=4000,MAXP=16000000,MAXD=300000000,held=typeof WeakMap==="function"?new WeakMap():null;
 function pics(fm){var a=held&&held.get(fm);if(!a){a=[];if(held)held.set(fm,a)}return a}
 function say(fm,t){var p=fm.querySelector?fm.querySelector(".cpics-say"):null;if(p)p.textContent=t||""}
 function paint(fm){var s=fm.querySelector?fm.querySelector(".cpics"):null;if(!s)return;
@@ -2112,19 +2112,49 @@ function paint(fm){var s=fm.querySelector?fm.querySelector(".cpics"):null;if(!s)
     b.addEventListener("click",function(){var l=pics(fm),j=l.indexOf(p);if(j>=0)l.splice(j,1);say(fm,"");paint(fm)});
     w.appendChild(t);w.appendChild(b);s.appendChild(w)})}
 function add(fm,files){
-  var l=pics(fm),over=false,odd=false;
+  var l=pics(fm),over=false,odd=false,big=false;
   Array.prototype.forEach.call(files||[],function(f){
     if(!f||String(f.type||"").indexOf("image/")!==0){odd=true;return}
     if(l.length>=MAXN){over=true;return}
-    var p={file:f,bmp:null,id:null};l.push(p);
-    if(typeof createImageBitmap==="function")createImageBitmap(f).then(function(b){p.bmp=b;paint(fm)},function(){})});
-  say(fm,over?"Four pictures at most on one comment.":odd?"Only pictures can be attached.":"");paint(fm)}
+    if(f.size>MAXF){big=true;return}
+    var p={file:f,bmp:null,id:null,ready:null};l.push(p);
+    p.ready=decode(fm,p)});
+  say(fm,big?"A picture over 25 MB is too large to attach (5 MB at most).":over?"Four pictures at most on one comment.":odd?"Only pictures can be attached.":"");paint(fm)}
+// The size a picture declares, read from its first megabyte (PNG, JPEG, WebP); null when
+// it cannot be told. A file is decoded only once this is known, and then at no more than
+// the limits: a 30000 x 30000 PNG is never decoded at full size.
+async function dims(f){
+  var u=new Uint8Array(await f.slice(0,1048576).arrayBuffer()),v=new DataView(u.buffer),n=u.length;
+  if(n>24&&u[0]===0x89&&u[1]===0x50)return[v.getUint32(16),v.getUint32(20)];
+  if(n>3&&u[0]===0xFF&&u[1]===0xD8){var i=2;
+    while(i+9<n){if(u[i]!==0xFF){i++;continue}
+      var m=u[i+1];if(m===0xFF){i++;continue}
+      if(m>=0xC0&&m<=0xCF&&m!==0xC4&&m!==0xC8&&m!==0xCC)return[v.getUint16(i+7),v.getUint16(i+5)];
+      if(m===0xD8||m===0x01||(m>=0xD0&&m<=0xD7)){i+=2;continue}
+      i+=2+v.getUint16(i+2)}
+    return null}
+  if(n>30&&u[0]===0x52&&u[8]===0x57){var k=String.fromCharCode(u[12],u[13],u[14],u[15]);
+    if(k==="VP8X")return[1+(u[24]|u[25]<<8|u[26]<<16),1+(u[27]|u[28]<<8|u[29]<<16)];
+    if(k==="VP8L")return[1+(((u[22]&63)<<8)|u[21]),1+(((u[24]&15)<<10)|(u[23]<<2)|((u[22]&192)>>6))];
+    if(k==="VP8 ")return[v.getUint16(26,true)&16383,v.getUint16(28,true)&16383]}
+  return null}
+function decode(fm,p){
+  if(typeof createImageBitmap!=="function")return Promise.resolve();
+  return (async function(){
+    var d=await dims(p.file);if(!d||!d[0]||!d[1])return;
+    if(d[0]*d[1]>MAXD){var l=pics(fm),j=l.indexOf(p);if(j>=0)l.splice(j,1);
+      say(fm,"That picture is too large to attach.");paint(fm);return}
+    var s=Math.min(1,MAXS/Math.max(d[0],d[1]),Math.sqrt(MAXP/(d[0]*d[1])));
+    p.scaled=s<1;
+    p.bmp=await createImageBitmap(p.file,s<1?{resizeWidth:Math.max(1,Math.floor(d[0]*s)),resizeHeight:Math.max(1,Math.floor(d[1]*s)),resizeQuality:"high"}:undefined)
+  })().catch(function(){}).then(function(){paint(fm)})}
 function clearPics(fm){pics(fm).length=0;say(fm,"");paint(fm)}
 function enc(c,type,q){return new Promise(function(ok){c.toBlob(ok,type,q)})}
 async function shrink(p){
-  var f=p.file,b=p.bmp;if(!b)return f;
+  var f=p.file;if(p.ready)await p.ready;
+  var b=p.bmp;if(!b)return f;
   var s=Math.min(1,MAXS/Math.max(b.width,b.height),Math.sqrt(MAXP/(b.width*b.height)));
-  if(s>=1&&f.size<=MAXB)return f;
+  if(s>=1&&f.size<=MAXB&&!p.scaled)return f;
   var png=f.type==="image/png";
   for(var k=0;k<5;k++){
     var c=document.createElement("canvas");c.width=Math.max(1,Math.floor(b.width*s));c.height=Math.max(1,Math.floor(b.height*s));
@@ -2900,19 +2930,19 @@ _ATTACH = (
 )
 
 
-def _pictures(row, db: Database | None) -> str:
+def _pictures(row, tokens: dict[str, str] | None) -> str:
     """The pictures on a comment, as thumbnails that open larger in place. Each `src` is
     the page's content origin with a one-hour token minted here for this reader; the
     gallery origin never serves a byte of them. Without scripts the thumbnail is a plain
     link to the same picture."""
     shown = getattr(row, "images", None)
-    if not shown or db is None:
+    if not shown or not tokens:
         return ""
     out = []
     for n, pic in enumerate(shown, start=1):
-        url = image_store.origin_url(
-            row.artifact_id, pic["id"], image_store.mint_token(db, pic["id"])
-        )
+        if pic["id"] not in tokens:
+            continue
+        url = image_store.origin_url(row.artifact_id, pic["id"], tokens[pic["id"]])
         out.append(
             f'<a class="cimg" href="{escape(url)}" target="_blank" rel="noopener noreferrer">'
             f'<img class="cthumb" src="{escape(url)}" loading="lazy" decoding="async"'
@@ -2922,9 +2952,9 @@ def _pictures(row, db: Database | None) -> str:
     return f'<div class="cpicsrow">{"".join(out)}</div>'
 
 
-def _bubble(row, db: Database | None = None) -> str:
-    """One message in a thread: who, via which session, when, and what. With `db`, the
-    pictures it carries."""
+def _bubble(row, tokens: dict[str, str] | None = None) -> str:
+    """One message in a thread: who, via which session, when, and what. With `tokens` (one
+    per picture id, minted together by the caller), the pictures it carries."""
     who = "Jeremy" if row.author_kind == "human" else escape(row.author) + " (agent)"
     # The office is the part of the caller's session label before the first
     # "/", and only what the caller said: a key several offices share cannot
@@ -2957,7 +2987,7 @@ def _bubble(row, db: Database | None = None) -> str:
         f"{via}"
         f'<span class="cwhen">{escape(when)}</span>'
         f"{held}"
-        f"{note}{_pictures(row, db)}</li>"
+        f"{note}{_pictures(row, tokens)}</li>"
     )
 
 
@@ -2995,8 +3025,16 @@ def _render_comments(
         if row.thread_root:
             replies.setdefault(row.thread_root, []).append(row)
 
+    # Every picture's token in one go, on one connection: a panel can show up to 40.
+    tokens: dict[str, str] = {}
+    if db is not None:
+        shown = list(rows) + [r for page in everywhere or [] for r in page.rows]
+        tokens = image_store.mint_tokens(
+            db, [p["id"] for r in shown for p in getattr(r, "images", None) or []]
+        )
+
     def bubble(row) -> str:
-        return _bubble(row, db)
+        return _bubble(row, tokens)
 
     def element_spot(pin: dict) -> str:
         """What an element pin is on, in the page's terms and escaped: a cell by

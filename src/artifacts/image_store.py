@@ -292,14 +292,25 @@ def _sign(key: bytes, image_id: str, expires: int) -> str:
     return base64.urlsafe_b64encode(mac).decode().rstrip("=")
 
 
-def mint_token(db: Database, image_id: str, *, now: float | None = None) -> str:
-    """A link token for one picture, good for an hour: HMAC over the id and the expiry. The
-    gallery mints one for each picture of a comment it shows a reader who may read the page."""
+def mint_tokens(
+    db: Database, image_ids: list[str], *, now: float | None = None
+) -> dict[str, str]:
+    """Link tokens for several pictures on ONE connection, each good for an hour: HMAC over
+    the id and the expiry. The gallery mints one for each picture of the comments it renders
+    for a reader who may read the page."""
+    if not image_ids:
+        return {}
     expires = int(
         (now if now is not None else time.time()) + TOKEN_LIFETIME.total_seconds()
     )
     with db.connect() as conn:
-        return f"{expires}.{_sign(_secret(conn), image_id, expires)}"
+        key = _secret(conn)
+    return {i: f"{expires}.{_sign(key, i, expires)}" for i in dict.fromkeys(image_ids)}
+
+
+def mint_token(db: Database, image_id: str, *, now: float | None = None) -> str:
+    """A link token for one picture; see `mint_tokens`."""
+    return mint_tokens(db, [image_id], now=now)[image_id]
 
 
 def token_valid(

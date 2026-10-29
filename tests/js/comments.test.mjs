@@ -324,6 +324,29 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
   { const r = rig((url) => Promise.resolve(url.endsWith("/image") ? { status: 201, json: async () => ({ image_id: "img" }) } : { status: 422, json: async () => ({ detail: "not one of yours" }) }));
     r.choose([pic("a")]); r.g.submit(r.f); await tick(); await tick(); await tick(); await tick(); await tick(); await tick();
     ok(r.sayEl.textContent === "not one of yours" && r.f.submitted === 0, "a refused comment with pictures is told, never re-sent as a plain form"); }
+  // A file's declared size is read from its header before anything is decoded.
+  const header = (w, h) => { const b = new Uint8Array(33); b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+    const v = new DataView(b.buffer); v.setUint32(16, w); v.setUint32(20, h); return b.buffer; };
+  const sized = (n, w, h, size = 10) => ({ type: "image/png", name: n + ".png", size, slice: () => ({ arrayBuffer: async () => header(w, h) }) });
+  { const seen = []; globalThis.createImageBitmap = (f, o) => { seen.push(o); return Promise.resolve({ width: 1, height: 1 }); };
+    const r = rig(() => Promise.resolve({ status: 201, json: async () => ({ image_id: "i" }) }));
+    r.choose([sized("huge", 1000, 1000, 26 * 1024 * 1024)]); await tick();
+    ok(seen.length === 0 && /25 MB/.test(r.sayEl.textContent), "a file over 25 MB is refused before it is decoded, with a line saying so: " + r.sayEl.textContent);
+    r.choose([sized("bomb", 30000, 30000)]); await tick(); await tick();
+    ok(seen.length === 0 && /too large/.test(r.sayEl.textContent), "a picture declaring more than 300 megapixels is never decoded");
+    r.choose([sized("big", 30000, 10000)]); await tick(); await tick();
+    ok(seen.length === 1 && seen[0].resizeWidth === 4000 && seen[0].resizeHeight === 1333,
+       "a big one is decoded already scaled to the limits: " + JSON.stringify(seen[0]));
+    delete globalThis.createImageBitmap; }
+  // Send pressed before the decode finishes: the upload waits for it.
+  { let finish; globalThis.createImageBitmap = () => new Promise((res) => { finish = () => res({ width: 100, height: 100 }); });
+    const r = rig((url) => Promise.resolve(url.endsWith("/image") ? { status: 201, json: async () => ({ image_id: "i" }) } : OKRESP([])));
+    r.choose([sized("slow", 100, 100)]); await tick();
+    r.g.submit(r.f); await tick(); await tick();
+    ok(r.calls.length === 0, "nothing is uploaded while the picture is still being decoded");
+    finish(); await tick(); await tick(); await tick(); await tick(); await tick();
+    ok(r.calls.length === 2 && r.calls[0][0] === "/c/abc/image", "it goes once the decode is done");
+    delete globalThis.createImageBitmap; }
 }
 { const g = build({ fetchImpl: () => { throw new Error("must not"); } });
   const other = el("form"); other.className = "cresolve";

@@ -559,7 +559,8 @@ Built as written in sections 4 (Attach images), 6.5 and 6.6. What each piece is:
   is not stored. The in-place (JSON) reply renders the thread with its thumbnails.
 - **Panel.** `_pictures` draws, for each picture of a comment, a link and an `<img class="cthumb">`
   whose address is `image_store.origin_url(...)` with a token minted for this render (valid an
-  hour; a page left open longer needs a reload). His own held comments show their pictures, as
+  hour; a page left open longer needs a reload). `_render_comments` mints all of a render's tokens
+  in one `image_store.mint_tokens` call on one connection (`mint_token` stays for single ids). His own held comments show their pictures, as
   planned. Clicking a thumbnail toggles it larger in the panel (a `big` class); without scripts
   it is a link to the same picture on the content origin.
 - **CSP.** The gallery's policy changes in one place: `img-src 'self' https://*.<content domain>`
@@ -569,7 +570,11 @@ Built as written in sections 4 (Attach images), 6.5 and 6.6. What each piece is:
   drop on it, or the "Attach pictures" button; at most 4 per comment (a fifth, or a file that is
   not an image, is refused with a line under the control). Each shows as a removable thumbnail.
   On send the pictures are staged one at a time, then the comment is posted with the ids; a
-  picture over 4000 px a side, 16 megapixels or 5 MB is redrawn on a canvas first (PNG stays PNG
+  file over 25 MB is refused before it is decoded; for the rest the declared size is read from
+  the header (PNG, JPEG, WebP; unreadable means no preview and no decode), a picture declaring over
+  300 megapixels is refused, and anything over the limits is decoded already scaled
+  (`createImageBitmap` with `resizeWidth`/`resizeHeight`), never at full size. Send waits for a
+  decode still running. A picture over 4000 px a side, 16 megapixels or 5 MB is redrawn on a canvas first (PNG stays PNG
   if that fits, else JPEG at falling quality and size) and sent as it is when the browser cannot
   decode it, for the server to judge. A refusal at any step is written under the control (by
   `textContent`), the words stay in the box, and the comment is never re-sent as a plain form

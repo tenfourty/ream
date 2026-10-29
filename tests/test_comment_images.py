@@ -1538,3 +1538,20 @@ def test_the_gallery_csp_allows_the_content_origin_wildcard_for_images_and_nothi
     assert "data:" not in csp and "blob:" not in csp
     assert "script-src 'self';" in csp and "default-src 'none'" in csp
     assert "connect-src 'self';" in csp
+
+
+def test_a_panel_mints_every_token_in_one_batch(client, db, page, monkeypatch):
+    pics = [_his_staged(client, page.id, varied(n)) for n in range(3)]
+    _his_comment(client, page.id, *pics)
+    batches = []
+    real = image_store.mint_tokens
+
+    def counted(database, ids, **kw):
+        batches.append(list(ids))
+        return real(database, ids, **kw)
+
+    monkeypatch.setattr(image_store, "mint_tokens", counted)
+    html = client.get(f"/a/{page.id}").text
+    assert batches == [pics]
+    assert all(f"/ci/{pic}?t=" in html for pic in pics)
+    assert image_store.mint_tokens(db, []) == {}
