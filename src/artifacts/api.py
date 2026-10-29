@@ -1662,33 +1662,8 @@ def agent_router(
         # Cheapest first: a page the caller cannot read costs no body.
         if not await run_in_threadpool(readable):
             raise HTTPException(404, "no such artifact")
-        cap = images.MAX_BYTES + images.BODY_SLACK
-        too_big = HTTPException(
-            413,
-            {
-                "field": "image",
-                "detail": f"the image is over {images.MAX_BYTES // (1024 * 1024)} MB",
-            },
-        )
-        declared = request.headers.get("content-length", "")
-        if declared.isdigit() and int(declared) > cap:
-            raise too_big
-        received = bytearray()
-        async for chunk in request.stream():
-            received += chunk
-            if len(received) > cap:
-                raise too_big  # stops reading: never held whole
         try:
-            # Walking a hostile file is CPU work: off the event loop, like the store.
-            file = await run_in_threadpool(
-                images.file_from_multipart,
-                request.headers.get("content-type"),
-                bytes(received),
-            )
-            found = await run_in_threadpool(images.inspect, file)
-            return await run_in_threadpool(
-                image_store.stage, db, artifact_id, agent, found
-            )
+            return await image_store.stage_upload(request, db, artifact_id, agent)
         except images.ImageRefused as exc:
             raise HTTPException(
                 exc.status, {"field": exc.field, "detail": exc.detail}

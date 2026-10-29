@@ -15,7 +15,10 @@ import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
-from artifacts import ids, store
+from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
+
+from artifacts import ids, images, store
 from artifacts.db import Connection, Database, in_list
 from artifacts.images import (
     _ID,
@@ -98,6 +101,34 @@ def stage(db: Database, artifact_id: str, author: str, found: Inspected) -> dict
         "height": found.height,
         "byte_size": len(found.data),
     }
+
+
+async def stage_upload(
+    request: Request, db: Database, artifact_id: str, author: str
+) -> dict:
+    """Read one multipart picture from `request` and stage it for `author`: the body is
+    streamed and refused at the cap (or on a larger `Content-Length`, before a byte is read),
+    then lifted, inspected and staged off the event loop (walking a hostile file is CPU work).
+    The one reader for the agent route and the gallery twin. Raises `ImageRefused`."""
+    cap = images.MAX_BYTES + images.BODY_SLACK
+    too_big = ImageRefused(
+        f"the image is over {images.MAX_BYTES // (1024 * 1024)} MB", status=413
+    )
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > cap:
+        raise too_big
+    received = bytearray()
+    async for chunk in request.stream():
+        received += chunk
+        if len(received) > cap:
+            raise too_big  # stops reading: never held whole
+    file = await run_in_threadpool(
+        images.file_from_multipart,
+        request.headers.get("content-type"),
+        bytes(received),
+    )
+    found = await run_in_threadpool(images.inspect, file)
+    return await run_in_threadpool(stage, db, artifact_id, author, found)
 
 
 def attach(

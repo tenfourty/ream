@@ -105,7 +105,8 @@ function build({ noPinBtn = false, marks = "[]", fetchImpl = null, noForm = fals
   const win = { scrollX: 0, scrollY: 50, innerWidth: 1000, innerHeight: 700, localStorage, history,
                 addEventListener: (t, f, c) => (((c ? capture : listeners)[t] ||= []).push(f)) };
   const location = { hash, pathname: "/a/" + page, search: "" };
-  const FD = function (f) { this.form = f; };
+  const FD = function (f) { this.form = f; this.fields = []; };
+  FD.prototype.append = function (k, v) { this.fields.push([k, v]); };
   const clk = clock();
   new Function("document", "window", "location", "URL", "fetch", "FormData", "setTimeout", "clearTimeout", src)(
     doc, win, location, URL, fetchImpl || undefined, FD, clk.setTimeout, clk.clearTimeout);
@@ -287,6 +288,43 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
     const btn = { disabled: false }; f.querySelectorAll = () => [btn];
     g.submit(f); await tick(); await tick(); await tick();
     ok(f.submitted === 1 && btn.disabled === false, "a failed post falls back to the plain form submit"); } }
+
+// Pictures on a comment: chosen files are held (four at most, pictures only), each is
+// staged with POST <action>/image when the comment is sent, and the comment names them in
+// repeated `image` fields. A refusal is said on the form and the words are not sent
+// without them; the plain submit is never the fallback for a comment that has pictures.
+{ const pic = (n) => ({ type: "image/png", name: n + ".png", size: 10 });
+  const rig = (fetchImpl) => {
+    const calls = [];
+    const g = build({ fetchImpl: (url, o) => { calls.push([url, o]); return fetchImpl(url, o, calls.length); } });
+    const f = g.form; f.className = "cnew"; f.action = "/c/abc"; f.submitted = 0; f.submit = () => { f.submitted++; };
+    const btn = { disabled: false }; f.querySelectorAll = () => [btn];
+    const list = el("ul"); list.appended = []; list.appendChild = (c) => list.appended.push(c);
+    g.extra["#comments > ul.threads"] = list;
+    const sayEl = { textContent: "" }, base = f.querySelector;
+    f.querySelector = (q) => (q === ".cpics-say" ? sayEl : base(q));
+    const choose = (files) => { const t = { files, value: "x", closest: (sel) => (sel.includes("input.cfile") ? t : sel.includes("form.cnew") ? f : null) };
+      (g.docOn.change || []).forEach((fn) => fn({ target: t })); return t; };
+    return { g, f, btn, sayEl, calls, choose };
+  };
+  { const r = rig((url, o, n) => Promise.resolve(n === 5 ? OKRESP([]) : { status: 201, json: async () => ({ image_id: "img" + n }) }));
+    r.choose([pic("a"), { type: "text/plain", name: "n.txt" }, pic("b"), pic("c"), pic("d"), pic("e")]);
+    ok(r.sayEl.textContent === "Four pictures at most on one comment.", "a fifth picture is refused with a line saying so");
+    r.choose([pic("f")]);
+    r.g.body.value = "see";
+    r.g.submit(r.f); await tick(); await tick(); await tick(); await tick(); await tick(); await tick(); await tick(); await tick();
+    ok(r.calls.length === 5 && r.calls.slice(0, 4).every((c) => c[0] === "/c/abc/image" && c[1].method === "POST"), "each picture is staged at the form's action plus /image, one by one");
+    const sent = r.calls[4][1].body.fields.filter((x) => x[0] === "image").map((x) => x[1]);
+    ok(r.calls[4][0] === "/c/abc" && sent.join() === "img1,img2,img3,img4", "the comment names the staged ids in order in repeated image fields: " + sent);
+    ok(r.f.submitted === 0 && r.btn.disabled === false, "no native submit, and the form is usable again"); }
+  { const r = rig(() => Promise.resolve({ status: 422, json: async () => ({ detail: { field: "image", detail: "send PNG, JPEG or WebP" } }) }));
+    r.choose([pic("a")]); r.g.submit(r.f); await tick(); await tick(); await tick(); await tick();
+    ok(r.calls.length === 1 && r.sayEl.textContent === "send PNG, JPEG or WebP", "a refused picture is said on the form: " + r.sayEl.textContent);
+    ok(r.f.submitted === 0 && r.btn.disabled === false, "and the words are not sent without it"); }
+  { const r = rig((url) => Promise.resolve(url.endsWith("/image") ? { status: 201, json: async () => ({ image_id: "img" }) } : { status: 422, json: async () => ({ detail: "not one of yours" }) }));
+    r.choose([pic("a")]); r.g.submit(r.f); await tick(); await tick(); await tick(); await tick(); await tick(); await tick();
+    ok(r.sayEl.textContent === "not one of yours" && r.f.submitted === 0, "a refused comment with pictures is told, never re-sent as a plain form"); }
+}
 { const g = build({ fetchImpl: () => { throw new Error("must not"); } });
   const other = el("form"); other.className = "cresolve";
   const ev = g.submit(other);

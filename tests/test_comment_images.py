@@ -1325,3 +1325,216 @@ def test_a_server_supplied_id_that_is_not_an_id_never_reaches_a_path_or_a_url(
     assert calls == [] and not cache.exists()
     assert "local" not in threads[0]["messages"][0]["images"][0]
     assert capsys.readouterr().err.count("unexpected id") == 2
+
+
+# --- the gallery half: his twin route, his form, his thumbnails ----------------------------
+
+HIS = {"Sec-Fetch-Site": "same-origin"}
+
+
+def _his_upload(client, page_id, data=GOOD_PNG, headers=HIS, name="file"):
+    return client.post(
+        f"/c/{page_id}/image",
+        files={name: ("anything.svg", data, "image/png")},
+        headers=headers,
+    )
+
+
+def _his_staged(client, page_id, data=GOOD_PNG) -> str:
+    got = _his_upload(client, page_id, data)
+    assert got.status_code == 201, got.text
+    return got.json()["image_id"]
+
+
+def _his_comment(client, page_id, *ids, accept=None, **fields):
+    headers = dict(HIS)
+    if accept:
+        headers["Accept"] = accept
+    return client.post(
+        f"/c/{page_id}",
+        data={"body": "look at this", "image": list(ids), **fields},
+        headers=headers,
+        follow_redirects=False,
+    )
+
+
+def test_he_stages_a_picture_through_the_gallery_twin(client, db, page):
+    got = _his_upload(client, page.id)
+    assert got.status_code == 201
+    meta = got.json()
+    assert set(meta) == {"image_id", "content_type", "width", "height", "byte_size"}
+    assert meta["content_type"] == "image/png"
+    assert _count(db, "staged_by = %s and comment_id is null", ("jeremy",)) == 1
+    again = _his_upload(client, page.id)
+    assert again.json()["image_id"] == meta["image_id"]  # same bytes, same id
+
+
+def test_the_twin_wears_the_gallerys_same_origin_guard(client, page):
+    for headers in ({"Sec-Fetch-Site": "cross-site"}, {}):
+        got = _his_upload(client, page.id, headers=headers)
+        assert got.status_code == 403
+
+
+def test_the_twin_holds_the_agent_routes_limits_and_error_shapes(
+    client, db, seats, page
+):
+    agent = _upload(client, seats, page.id, b"GIF89a" + b"\0" * 20)
+    his = _his_upload(client, page.id, b"GIF89a" + b"\0" * 20)
+    assert his.status_code == agent.status_code == 422
+    assert his.json() == agent.json()
+    assert _his_upload(client, page.id, GOOD_PNG, name="other").status_code == 422
+    big = _padded_png(images.MAX_BYTES + 1)
+    assert _his_upload(client, page.id, big).status_code == 413
+    assert _count(db) == 0
+
+
+def test_the_twin_streams_and_stops_at_the_cap(db, page, monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    app = create_gallery_app(db)
+    chunk = b"x" * 65536
+    read = []
+
+    async def endless():
+        read.append(len(chunk))
+        return {"type": "http.request", "body": chunk, "more_body": True}
+
+    scope_headers = [
+        (b"content-type", b"multipart/form-data; boundary=B"),
+        (b"sec-fetch-site", b"same-origin"),
+    ]
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    async def run():
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": f"/c/{page.id}/image",
+            "raw_path": f"/c/{page.id}/image".encode(),
+            "query_string": b"",
+            "headers": scope_headers,
+            "server": ("testserver", 443),
+            "scheme": "https",
+        }
+        await app(scope, endless, send)
+
+    asyncio.run(run())
+    status = next(m["status"] for m in sent if m["type"] == "http.response.start")
+    assert status == 413
+    assert sum(read) <= images.MAX_BYTES + images.BODY_SLACK + 2 * len(chunk)
+
+
+def test_an_unknown_page_and_a_deleted_one_are_the_same_404(client, db, seats, page):
+    gone = store.publish(db, "owner", "Gone", PAGE)
+    assert store.destroy(db, gone.id, agent="owner")
+    unknown = _his_upload(client, "a" * 26)
+    deleted = _his_upload(client, gone.id)
+    assert unknown.status_code == deleted.status_code == 404
+    assert _same(unknown, deleted)
+
+
+def test_a_picture_staged_by_an_agent_cannot_be_attached_by_him(
+    client, db, seats, page
+):
+    theirs = _staged(client, seats, page.id)
+    unknown = _his_comment(client, page.id, "a" * 26)
+    other = _his_comment(client, page.id, theirs)
+    assert unknown.status_code == other.status_code == 422
+    assert _same(unknown, other)
+    assert comments.list_for_artifact(db, page.id) == []  # all or nothing
+
+
+def test_the_form_attaches_repeated_image_fields_in_order(client, db, page):
+    first, second = (
+        _his_staged(client, page.id),
+        _his_staged(client, page.id, varied(1)),
+    )
+    got = _his_comment(client, page.id, second, first)
+    assert got.status_code == 303
+    [row] = comments.list_for_artifact(db, page.id)
+    assert [pic["id"] for pic in row.images] == [second, first]
+
+
+def test_a_refused_id_on_the_form_is_one_error_and_no_comment(client, db, page):
+    good = _his_staged(client, page.id)
+    got = _his_comment(client, page.id, good, "a" * 26)
+    assert got.status_code == 422
+    assert comments.list_for_artifact(db, page.id) == []
+    assert _count(db, "comment_id is null") == 1  # the good one is still staged
+    five = [_his_staged(client, page.id, varied(n)) for n in range(5)]
+    assert _his_comment(client, page.id, *five).status_code == 422
+
+
+def test_a_reply_may_carry_pictures_too(client, db, page):
+    root = _his_comment(client, page.id)
+    assert root.status_code == 303
+    [first] = comments.list_for_artifact(db, page.id)
+    pic = _his_staged(client, page.id)
+    got = _his_comment(client, page.id, pic, thread_root=first.id)
+    assert got.status_code == 303
+    rows = comments.list_for_artifact(db, page.id)
+    assert [len(r.images) for r in rows] == [0, 1]
+
+
+def test_the_panel_shows_each_picture_from_the_content_origin_with_a_token(
+    client, db, page, origin
+):
+    pic = _his_staged(client, page.id)
+    _his_comment(client, page.id, pic)
+    html = client.get(f"/a/{page.id}").text
+    start = html.index(f"https://{page.id}.tenfourty.com/ci/{pic}?t=")
+    url = html[start : html.index('"', start)].replace("&amp;", "&")
+    assert f'<img class="cthumb" src="{url}"' in html
+    assert f'class="cimg" href="{url}"' in html
+    token = url.split("?t=")[1]
+    assert image_store.token_valid(db, pic, token)
+    got = origin.get(f"/ci/{pic}", params={"t": token})
+    assert got.status_code == 200 and got.content == images.inspect(GOOD_PNG).data
+    assert "Images are not checked for secrets." in html
+    assert 'type="file"' in html and 'class="cattachbtn"' in html
+
+
+def test_a_held_comment_of_his_own_shows_its_pictures(client, db, page):
+    pic = _his_staged(client, page.id)
+    posted = _his_comment(client, page.id, pic)
+    assert posted.status_code == 303
+    [row] = comments.list_for_artifact(db, page.id)
+    with db.connect() as conn:
+        conn.execute("update comment set held = %s where id = %s", (True, row.id))
+    html = client.get(f"/a/{page.id}").text
+    assert f"/ci/{pic}?t=" in html
+
+
+def test_the_in_place_post_returns_the_thread_with_its_thumbnails(client, page):
+    pic = _his_staged(client, page.id)
+    got = _his_comment(client, page.id, pic, accept="application/json")
+    assert got.status_code == 201
+    assert f"https://{page.id}.tenfourty.com/ci/{pic}?t=" in got.json()["html"]
+
+
+def test_the_gallery_origin_serves_no_picture_bytes(client, db, seats, page):
+    pic = _his_staged(client, page.id)
+    _his_comment(client, page.id, pic)
+    [row] = comments.list_for_artifact(db, page.id)
+    token = image_store.mint_token(db, pic)
+    for path in (
+        f"/ci/{pic}",
+        f"/c/{row.id}/images/{pic}",
+        f"/c/{page.id}/image/{pic}",
+        f"/a/{page.id}/images/{pic}",
+    ):
+        got = client.get(path, params={"t": token})
+        assert got.status_code in (404, 405), path
+        assert images.inspect(GOOD_PNG).data not in got.content
+
+
+def test_the_gallery_csp_allows_the_content_origin_wildcard_for_images_and_nothing_more(
+    client, page
+):
+    csp = client.get(f"/a/{page.id}").headers["content-security-policy"]
+    assert "img-src 'self' https://*.tenfourty.com;" in csp
+    assert "data:" not in csp and "blob:" not in csp
+    assert "script-src 'self';" in csp and "default-src 'none'" in csp
+    assert "connect-src 'self';" in csp

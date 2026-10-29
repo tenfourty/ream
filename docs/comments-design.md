@@ -144,6 +144,15 @@ quote; the DOM is never touched.
 Design:
 `docs/agent/specs/2026-10-29-pinned-comments.md`.
 
+**Pictures on a comment (29 Oct 2026).** The new-comment form and every reply form carry an
+attach control that `/comments.js` reveals: paste, drop or "Attach pictures", up to four, a
+removable thumbnail each, a picture over 4000 px a side or 5 MB shrunk in the browser when it
+can be, and the line "Images are not checked for secrets." On send each is staged through
+`POST /c/{id}/image` and the comment names the ids in repeated `image` fields. Pictures show as
+thumbnails in the panel, loaded from the page's content origin only (the gallery CSP allows
+`img-src 'self' https://*.<content domain>`), and open larger when clicked. Without scripts the
+form is the plain one and takes no pictures.
+
 **What a non-owner sees.** Access to the page is the one control (Jeremy,
 21 Oct 2026): an agent that may read a page it does not own sees every comment
 on it, his and his review marks included, as the owner does, except a held

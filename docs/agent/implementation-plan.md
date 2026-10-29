@@ -2574,3 +2574,13 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   content origin, with an hour-long signed link, `nosniff` and a sandbox CSP. The gallery's attach
   control and thumbnails are not built. Spec `specs/2026-10-29-pinned-comments.md` (slice 3, server).
 - **Small fixes (29 Oct 2026).** A pickup line of only invisible filler is refused like an empty one; `artifacts-decide pickup` takes a line starting with "-" (after `--`); an element pin with under 4 visible characters of evidence no longer reads current from a stray match. Specs `where-an-answer-goes` section 6 and `pinned-comments` slice 2.
+  content origin, with an hour-long signed link, `nosniff` and a sandbox CSP. Spec
+  `specs/2026-10-29-pinned-comments.md` (slice 3, server).
+- **Pictures on a comment, gallery half (29 Oct 2026, slice 3 of pinned comments).** He can paste,
+  drop or choose up to four pictures on a comment or a reply, see a removable thumbnail for each,
+  and send them with his words; a picture over 4000 px a side, 16 megapixels or 5 MB is shrunk in
+  the browser first when it can be. Pictures show as thumbnails in the comments panel (his own held
+  comments too) and open larger in place; they load only from the page's content origin, which the
+  gallery CSP now names (`img-src 'self' https://*.<content domain>`). Under the control: "Images
+  are not checked for secrets." Without scripts the form is the plain one. Spec as above, "As
+  built, slice 3 (gallery)".

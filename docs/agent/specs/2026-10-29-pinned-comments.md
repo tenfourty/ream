@@ -316,10 +316,9 @@ pinned comment as on any comment.
 2. **Element pins** (built, 29 Oct 2026; see "As built, slice 2" below). `element` kind, pin mode
    and outline and badges in the shim and gallery, `--element ID` and `{"kind":"element"}` for
    agents.
-3. **Images** (server half built, 29 Oct 2026; see "As built, slice 3 (server)" below; the gallery
-   half is not built). `images.py`, `comment_image`, upload and download routes, content-origin
-   serving, `--image` and the cached paths in `comments`; the gallery's attach control and
-   thumbnails come next.
+3. **Images** (built, 29 Oct 2026; see "As built, slice 3 (server)" and "(gallery)" below).
+   `images.py`, `comment_image`, upload and download routes, content-origin serving, `--image` and
+   the cached paths in `comments`; the gallery's attach control, thumbnails and CSP entry.
 4. **Spot screenshot** (optional, only if Jeremy asks): for element pins, a server-side render of
    that version cropped to the element through `thumbs.py`, attached automatically. Not designed
    here beyond that; it is the one slice with real rendering cost and quality risk.
@@ -413,14 +412,7 @@ Differences from the text above, and why:
 
 ### As built, slice 3 (server) (29 Oct 2026)
 
-**Gallery half not built.** The gallery's attach control (paste, drop, choose up to 4, removable
-thumbnails, shrink in the browser, the "Images are not checked for secrets" note), the gallery
-twin `POST /c/{artifact_id}/image` and the repeated `image` form fields, the thumbnails in the
-panel, and the `img-src` addition to the gallery CSP are left to the next helper. The pieces it
-needs are in place: `image_store.stage(db, artifact_id, author, images.inspect(bytes))`,
-`comments.add(..., image_ids=[...])`, `image_store.mint_token(db, image_id)` and
-`image_store.origin_url(artifact_id, image_id, token)`. Because the content origin is one host
-per page (`<artifact id>.<content domain>`), the CSP entry must name that wildcard, not one origin.
+The gallery half is described under "As built, slice 3 (gallery)" below.
 
 Built as written in sections 6, 7 and 9. How each limit is enforced:
 
@@ -551,3 +543,47 @@ annotation; video; a reader identity beyond the author string comments already u
   later for element pins if you find yourself wanting it.
 - (b) Build it with the first release of pinning, accepting that it will be slower to arrive and
   may not match what you saw on pages that change as they load.
+
+### As built, slice 3 (gallery) (29 Oct 2026)
+
+Built as written in sections 4 (Attach images), 6.5 and 6.6. What each piece is:
+
+- **Twin route** `POST /c/{artifact_id}/image` (`gallery.add_comment_image`): behind the gallery's
+  same-origin guard, one multipart file in `file`, staged for author `jeremy`. A page that does
+  not exist or is deleted is `404 no such artifact`. Answers and limits are the agent route's;
+  both call `image_store.stage_upload`, the one place that streams the body to the 5 MB + 16 KB
+  cap (or refuses on `Content-Length` first) and runs the lift, inspect and stage in the thread
+  pool.
+- **Form.** `POST /c/{artifact_id}` takes repeated `image` fields into `comments.add(image_ids=)`.
+  A refusal is one `422` with the same plain-string text the agent route gives, and the comment
+  is not stored. The in-place (JSON) reply renders the thread with its thumbnails.
+- **Panel.** `_pictures` draws, for each picture of a comment, a link and an `<img class="cthumb">`
+  whose address is `image_store.origin_url(...)` with a token minted for this render (valid an
+  hour; a page left open longer needs a reload). His own held comments show their pictures, as
+  planned. Clicking a thumbnail toggles it larger in the panel (a `big` class); without scripts
+  it is a link to the same picture on the content origin.
+- **CSP.** The gallery's policy changes in one place: `img-src 'self' https://*.<content domain>`
+  (the domain is `store.content_domain()`, as for `frame-src`). No `data:` and no `blob:`.
+- **Attach control** (in `/comments.js`; markup from `gallery._ATTACH`, in the new-comment form and
+  in every reply form): hidden until the script sets `cpics-on` on `<html>`. Paste into the form,
+  drop on it, or the "Attach pictures" button; at most 4 per comment (a fifth, or a file that is
+  not an image, is refused with a line under the control). Each shows as a removable thumbnail.
+  On send the pictures are staged one at a time, then the comment is posted with the ids; a
+  picture over 4000 px a side, 16 megapixels or 5 MB is redrawn on a canvas first (PNG stays PNG
+  if that fits, else JPEG at falling quality and size) and sent as it is when the browser cannot
+  decode it, for the server to judge. A refusal at any step is written under the control (by
+  `textContent`), the words stay in the box, and the comment is never re-sent as a plain form
+  without its pictures. The note under the control is "Images are not checked for secrets."
+
+Differences from the text above, and why:
+
+- **Thumbnails in the attach row are canvases, not `<img>`.** A local preview as `<img>` would need
+  `blob:` or `data:` in `img-src`; the spec allows nothing but the content origin. A decoded
+  bitmap is drawn on a 56 px canvas instead; when the browser cannot decode the file the chip
+  shows its name.
+- **A comment needs words.** A picture alone is not a comment: the gallery form still refuses an
+  empty body (kind `comment`), as it did before.
+- **"Not yours" for the twin** is only "no such page": he owns every page, so nothing is hidden
+  from him. An id staged by an agent is refused at attach with the same `422` as an unknown one.
+- **No rate limiter** on the twin, for the reason given for the agent route: the 12 staged per
+  author and 40 per page quotas bound it.

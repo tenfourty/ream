@@ -22,11 +22,13 @@ import logging
 import threading
 import time
 from datetime import UTC, datetime, timedelta
+from typing import Annotated
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from markupsafe import escape
+from starlette.concurrency import run_in_threadpool
 
 from artifacts import (
     comments,
@@ -36,6 +38,8 @@ from artifacts import (
     events,
     frame_pass,
     holds,
+    image_store,
+    images,
     inbox,
     keys,
     listening,
@@ -77,7 +81,10 @@ def gallery_headers() -> dict[str, str]:
     at call time (store.content_domain())."""
     return {
         "content-security-policy": (
-            "default-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self'; "
+            "default-src 'none'; style-src 'self' 'unsafe-inline'; "
+            # Pictures on a comment are shown from the page's own content origin
+            # (one host per page), never from here: this origin holds his session.
+            f"img-src 'self' https://*.{content_domain()}; "
             # script-src is 'self' ONLY -- no 'unsafe-inline', no CDN. gallery.js is
             # the one file this loads, served by this same router; the viewer script
             # moves and sizes the decisions block, it never becomes the thing that
@@ -549,6 +556,25 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
   color:var(--ink);font:.8125rem/1.4 ui-sans-serif,system-ui,sans-serif}
 .cnew button{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .cresolve{margin:.5rem 0 0}
+.cnew,.creply{flex-wrap:wrap}
+.cattach{display:none;flex:1 1 100%;flex-wrap:wrap;align-items:center;gap:.4rem}
+.cpics-on .cattach{display:flex}
+.cattach .cattachbtn{background:var(--chip);color:var(--ink);border-color:var(--line)}
+.cnote{font-size:.75rem;color:var(--muted)}
+.cpics{display:flex;flex:1 1 100%;flex-wrap:wrap;gap:.4rem}
+.cpics:empty{display:none}
+.cpic{position:relative;display:inline-block}
+.cpic canvas,.cpic .cpicname{display:block;width:3.5rem;height:3.5rem;border:1px solid var(--line);
+  border-radius:.35rem;background:var(--chip);font-size:.65rem;overflow:hidden;overflow-wrap:anywhere}
+.cpic .cpicx{position:absolute;top:-.4rem;right:-.4rem;padding:0 .35rem;line-height:1.2;border-radius:1rem}
+.cpics-say{flex:1 1 100%;margin:0;font-size:.75rem;color:var(--now)}
+.cpics-say:empty{display:none}
+.cpicsrow{display:flex;flex-wrap:wrap;gap:.4rem;margin:.35rem 0 0}
+.cpicsrow .cimg{display:inline-block;line-height:0}
+.cthumb{max-width:6rem;max-height:6rem;object-fit:cover;border:1px solid var(--line);
+  border-radius:.35rem;cursor:zoom-in}
+.cthumb.big{max-width:100%;max-height:none;object-fit:contain;cursor:zoom-out}
+.cpicsrow .cimg.big{flex:1 1 100%}
 .nthread{margin:.2rem .35rem .6rem}
 .nthread .nhead{font-size:.8125rem;color:var(--muted);margin:0 0 .3rem}
 .nthread .ntag{margin-left:.5rem;color:var(--now);font-weight:600}
@@ -2059,6 +2085,91 @@ var form=document.querySelector("form.cnew");
 // form arrives with an in-place thread. ANY failure falls back to the plain
 // form submit, so a comment is never lost, and the form is disabled while a
 // post is in flight so a fast Enter plus a click cannot post twice.
+// PICTURES ON A COMMENT. Up to four, pasted, dropped or chosen; a removable
+// thumbnail for each; sent to POST /c/{id}/image one at a time when the comment
+// is sent, and the comment then names them in repeated `image` fields. The
+// thumbnails are canvases, not <img>: the gallery's img-src allows only itself
+// and the content origin, so a local preview is drawn, never loaded. A picture
+// over 4000 px a side, 16 megapixels or 5 MB is shrunk here when it can be; the
+// server holds the same limits and says so if not. Everything the user or the
+// server supplies goes in by textContent. With scripts off the form is the
+// plain one: the control stays hidden (.cpics-on is set below).
+var MAXN=4,MAXB=5*1024*1024,MAXS=4000,MAXP=16000000,held=typeof WeakMap==="function"?new WeakMap():null;
+function pics(fm){var a=held&&held.get(fm);if(!a){a=[];if(held)held.set(fm,a)}return a}
+function say(fm,t){var p=fm.querySelector?fm.querySelector(".cpics-say"):null;if(p)p.textContent=t||""}
+function paint(fm){var s=fm.querySelector?fm.querySelector(".cpics"):null;if(!s)return;
+  while(s.firstChild)s.removeChild(s.firstChild);
+  pics(fm).forEach(function(p,i){
+    var w=document.createElement("span");w.className="cpic";var t;
+    if(p.bmp){t=document.createElement("canvas");t.width=56;t.height=56;
+      var x=t.getContext?t.getContext("2d"):null;
+      if(x){var k=Math.max(56/p.bmp.width,56/p.bmp.height);
+        x.drawImage(p.bmp,(56-p.bmp.width*k)/2,(56-p.bmp.height*k)/2,p.bmp.width*k,p.bmp.height*k)}
+      t.setAttribute("role","img");t.setAttribute("aria-label",p.file.name||"Picture")}
+    else{t=document.createElement("span");t.className="cpicname";t.textContent=p.file.name||"Picture"}
+    var b=document.createElement("button");b.type="button";b.className="cpicx";
+    b.setAttribute("aria-label","Remove picture");b.textContent="\u00d7";
+    b.addEventListener("click",function(){var l=pics(fm),j=l.indexOf(p);if(j>=0)l.splice(j,1);say(fm,"");paint(fm)});
+    w.appendChild(t);w.appendChild(b);s.appendChild(w)})}
+function add(fm,files){
+  var l=pics(fm),over=false,odd=false;
+  Array.prototype.forEach.call(files||[],function(f){
+    if(!f||String(f.type||"").indexOf("image/")!==0){odd=true;return}
+    if(l.length>=MAXN){over=true;return}
+    var p={file:f,bmp:null,id:null};l.push(p);
+    if(typeof createImageBitmap==="function")createImageBitmap(f).then(function(b){p.bmp=b;paint(fm)},function(){})});
+  say(fm,over?"Four pictures at most on one comment.":odd?"Only pictures can be attached.":"");paint(fm)}
+function clearPics(fm){pics(fm).length=0;say(fm,"");paint(fm)}
+function enc(c,type,q){return new Promise(function(ok){c.toBlob(ok,type,q)})}
+async function shrink(p){
+  var f=p.file,b=p.bmp;if(!b)return f;
+  var s=Math.min(1,MAXS/Math.max(b.width,b.height),Math.sqrt(MAXP/(b.width*b.height)));
+  if(s>=1&&f.size<=MAXB)return f;
+  var png=f.type==="image/png";
+  for(var k=0;k<5;k++){
+    var c=document.createElement("canvas");c.width=Math.max(1,Math.floor(b.width*s));c.height=Math.max(1,Math.floor(b.height*s));
+    var x=c.getContext("2d");if(!x)return f;
+    if(!png||k>0){x.fillStyle="#fff";x.fillRect(0,0,c.width,c.height)}
+    x.drawImage(b,0,0,c.width,c.height);
+    var out=await enc(c,png&&k===0?"image/png":"image/jpeg",0.88);
+    if(out&&out.size<=MAXB)return out;
+    s*=0.75}
+  return f}
+async function refusal(r){var m="";
+  try{var e=await r.json(),d=e&&e.detail;m=typeof d==="string"?d:(d&&typeof d.detail==="string"?d.detail:"")}catch(x){}
+  return m||"The picture was not accepted."}
+async function upload(fm,list){
+  var ids=[];
+  for(var i=0;i<list.length;i++){var p=list[i];
+    if(!p.id){var d=new FormData();d.append("file",await shrink(p),"picture");
+      var r=await fetch(fm.action+"/image",{method:"POST",body:d,headers:{"Accept":"application/json"},credentials:"same-origin"});
+      if(r.status!==201)throw new Error(await refusal(r));
+      var j=await r.json();if(!j||typeof j.image_id!=="string")throw new Error("The picture was not accepted.");
+      p.id=j.image_id}
+    ids.push(p.id)}
+  return ids}
+try{if(document.documentElement&&document.documentElement.classList&&typeof Promise==="function"&&typeof FormData==="function"&&typeof fetch==="function")
+  document.documentElement.classList.add("cpics-on")}catch(x){}
+function formOf(n){return n&&n.closest?n.closest("form.cnew,form.creply"):null}
+if(document.addEventListener){
+  document.addEventListener("click",function(e){
+    var t=e.target;if(!t||!t.closest)return;
+    var bt=t.closest(".cattachbtn");
+    if(bt){var fm=formOf(bt),inp=fm&&fm.querySelector("input.cfile");if(inp&&inp.click)inp.click();return}
+    var im=t.closest(".cimg");
+    if(im&&im.classList){e.preventDefault();var on=!im.classList.contains("big");
+      im.classList.toggle("big",on);var th=im.querySelector?im.querySelector(".cthumb"):null;if(th&&th.classList)th.classList.toggle("big",on)}});
+  document.addEventListener("change",function(e){
+    var t=e.target;if(!t||!t.closest||!t.closest("input.cfile"))return;
+    var fm=formOf(t);if(fm)add(fm,t.files);t.value=""});
+  document.addEventListener("paste",function(e){
+    var fm=formOf(e.target),cd=e.clipboardData;if(!fm||!cd||!cd.files||!cd.files.length)return;
+    e.preventDefault();add(fm,cd.files)});
+  document.addEventListener("dragover",function(e){
+    var fm=formOf(e.target);if(fm&&e.dataTransfer&&e.dataTransfer.types&&Array.prototype.indexOf.call(e.dataTransfer.types,"Files")>=0)e.preventDefault()});
+  document.addEventListener("drop",function(e){
+    var fm=formOf(e.target);if(!fm||!e.dataTransfer||!e.dataTransfer.files||!e.dataTransfer.files.length)return;
+    e.preventDefault();add(fm,e.dataTransfer.files)})}
 function controls(fm){return fm.querySelectorAll?fm.querySelectorAll("button,input[type=submit]"):[]}
 function setBusy(fm,on){fm.dataset.busy=on?"1":"";
   Array.prototype.forEach.call(controls(fm),function(c){c.disabled=on})}
@@ -2077,7 +2188,7 @@ function place(fm,html,root){
 function bump(){var c=document.querySelector(".cbtn .cn");
   if(c){var n=parseInt(c.textContent,10);c.textContent=String((isFinite(n)?n:0)+1)}}
 function cleared(fm){
-  var b=fm.querySelector("input[name=body]");if(b)b.value="";
+  var b=fm.querySelector("input[name=body]");if(b)b.value="";clearPics(fm);
   if(fm===form){["quote","anchor","kind"].forEach(function(n){drop(fm.querySelector("input[name="+n+"]"))});
     drop(fm.querySelector(".cquote"));if(b)b.placeholder="Comment on this page"}}
 // A reply from a hover card that has since gone is sent through the panel's
@@ -2094,24 +2205,35 @@ if(document.addEventListener)document.addEventListener("submit",function(e){
   var fm=e.target;
   if(!fm||!/(^|\\s)(cnew|creply)(\\s|$)/.test(fm.className||"")||typeof fetch!=="function"||typeof FormData!=="function")return;
   e.preventDefault();if(fm.dataset&&fm.dataset.busy)return;
-  var body=new FormData(fm),saved=false;setBusy(fm,true);
-  fetch(fm.action,{method:"POST",body:body,headers:{"Accept":"application/json"},credentials:"same-origin"})
-  .then(function(r){if(r.status!==201)throw new Error("status "+r.status);saved=true;return r.json()})
-  .then(function(d){
-    if(d&&d.reload){location.reload();return}
-    if(!d||typeof d.html!=="string"||!Array.isArray(d.marks))throw new Error("shape");
-    var isRoot=place(fm,d.html,d.thread_root);
-    if(isRoot)bump();
-    // In the all-pages view a reply may belong to another page: the frame's
-    // marks are this page's, so they are only replaced where this page is.
-    if(form){marks=d.marks;known=Object.create(null);
-      marks.forEach(function(m){if(m&&typeof m.id==="string")known[m.id]=1});
-      sent=false}
-    cleared(fm);setBusy(fm,false);sendMarks()})
-  .catch(function(){
-    // Once the server has said 201 the comment IS saved: never post it again.
-    if(saved){location.reload();return}
-    fail(fm)})});
+  var mine=pics(fm).slice(),saved=false;setBusy(fm,true);
+  function go(ids){
+    var body=new FormData(fm);ids.forEach(function(i){body.append("image",i)});
+    fetch(fm.action,{method:"POST",body:body,headers:{"Accept":"application/json"},credentials:"same-origin"})
+    .then(function(r){
+      if(r.status===201){saved=true;return r.json()}
+      // With pictures, a refusal is told to the user: the plain submit below
+      // would send the words without them.
+      if(!ids.length)throw new Error("status "+r.status);
+      return refusal(r).then(function(m){var x=new Error(m);x.say=m;throw x})})
+    .then(function(d){
+      if(d&&d.reload){location.reload();return}
+      if(!d||typeof d.html!=="string"||!Array.isArray(d.marks))throw new Error("shape");
+      var isRoot=place(fm,d.html,d.thread_root);
+      if(isRoot)bump();
+      // In the all-pages view a reply may belong to another page: the frame's
+      // marks are this page's, so they are only replaced where this page is.
+      if(form){marks=d.marks;known=Object.create(null);
+        marks.forEach(function(m){if(m&&typeof m.id==="string")known[m.id]=1});
+        sent=false}
+      cleared(fm);setBusy(fm,false);sendMarks()})
+    .catch(function(err){
+      // Once the server has said 201 the comment IS saved: never post it again.
+      if(saved){location.reload();return}
+      if(ids.length){mine.forEach(function(p){p.id=null});
+        say(fm,(err&&err.say)||"The comment was not sent. Your pictures are still here.");setBusy(fm,false);return}
+      fail(fm)})}
+  if(!mine.length){go([]);return}
+  upload(fm,mine).then(go,function(err){say(fm,(err&&err.message)||"The picture was not sent.");setBusy(fm,false)})});
 if(!form)return;
 bar=document.createElement("div");bar.className="selbar";bar.hidden=true;
 [["comment","Comment"],["remove","Remove this"],["looks_good","Looks good"]].forEach(function(k){
@@ -2768,8 +2890,41 @@ def _wall_meta(waiting: int, hidden: int = 0, inbox_count: int | str = 0) -> str
     return out
 
 
-def _bubble(row) -> str:
-    """One message in a thread: who, via which session, when, and what."""
+_ATTACH = (
+    # Hidden until /comments.js says it can do the work (a `cpics-on` class on <html>);
+    # without scripts the form is the plain one. The note is the whole privacy warning.
+    '<div class="cattach"><button type="button" class="cattachbtn">Attach pictures</button>'
+    '<input type="file" class="cfile" accept="image/png,image/jpeg,image/webp" multiple hidden>'
+    '<span class="cnote">Images are not checked for secrets.</span>'
+    '<div class="cpics"></div><p class="cpics-say" role="alert"></p></div>'
+)
+
+
+def _pictures(row, db: Database | None) -> str:
+    """The pictures on a comment, as thumbnails that open larger in place. Each `src` is
+    the page's content origin with a one-hour token minted here for this reader; the
+    gallery origin never serves a byte of them. Without scripts the thumbnail is a plain
+    link to the same picture."""
+    shown = getattr(row, "images", None)
+    if not shown or db is None:
+        return ""
+    out = []
+    for n, pic in enumerate(shown, start=1):
+        url = image_store.origin_url(
+            row.artifact_id, pic["id"], image_store.mint_token(db, pic["id"])
+        )
+        out.append(
+            f'<a class="cimg" href="{escape(url)}" target="_blank" rel="noopener noreferrer">'
+            f'<img class="cthumb" src="{escape(url)}" loading="lazy" decoding="async"'
+            f' alt="Picture {n} on this comment" width="{int(pic["width"])}"'
+            f' height="{int(pic["height"])}"></a>'
+        )
+    return f'<div class="cpicsrow">{"".join(out)}</div>'
+
+
+def _bubble(row, db: Database | None = None) -> str:
+    """One message in a thread: who, via which session, when, and what. With `db`, the
+    pictures it carries."""
     who = "Jeremy" if row.author_kind == "human" else escape(row.author) + " (agent)"
     # The office is the part of the caller's session label before the first
     # "/", and only what the caller said: a key several offices share cannot
@@ -2802,7 +2957,7 @@ def _bubble(row) -> str:
         f"{via}"
         f'<span class="cwhen">{escape(when)}</span>'
         f"{held}"
-        f"{note}</li>"
+        f"{note}{_pictures(row, db)}</li>"
     )
 
 
@@ -2811,6 +2966,7 @@ def _render_comments(
     artifact_id: str,
     everywhere: list | None = None,
     only_thread: str | None = None,
+    db: Database | None = None,
 ) -> str:
     """The conversation on a page: threads, replies, and a box to start one --
     and, with `everywhere`, every page's conversations in the same drawer.
@@ -2839,7 +2995,8 @@ def _render_comments(
         if row.thread_root:
             replies.setdefault(row.thread_root, []).append(row)
 
-    bubble = _bubble
+    def bubble(row) -> str:
+        return _bubble(row, db)
 
     def element_spot(pin: dict) -> str:
         """What an element pin is on, in the page's terms and escaped: a cell by
@@ -2952,7 +3109,7 @@ def _render_comments(
                 f'<form class="creply" method="post" action="/c/{escape(root.artifact_id)}">'
                 f'<input type="hidden" name="thread_root" value="{escape(root.id)}">'
                 '<input name="body" placeholder="Reply" aria-label="Reply">'
-                '<button type="submit">Send</button></form>'
+                f'<button type="submit">Send</button>{_ATTACH}</form>'
             )
         )
         return (
@@ -3090,7 +3247,7 @@ def _render_comments(
         f'<form class="cnew" method="post" action="/c/{ident}">'
         '<input name="body" placeholder="Comment on this page" '
         'aria-label="Comment on this page">'
-        '<button type="submit">Send</button></form>'
+        f'<button type="submit">Send</button>{_ATTACH}</form>'
     )
     if settled:
         out.append(settled_fold(settled))
@@ -5046,7 +5203,7 @@ def gallery_router(db: Database) -> APIRouter:
                 # about a page is read once you have read the page; putting it
                 # above would be the mistake Jeremy already named about the
                 # questions -- "it feels odd to have the questions at the top".
-                f"{_render_comments(comment_rows, artifact_id, everywhere)}"
+                f"{_render_comments(comment_rows, artifact_id, everywhere, db=db)}"
                 f"{_rename_dialog(artifact_id, row[0])}"
                 f"{_link_dialog(artifact_id)}"
                 # The open marks /comments.js posts into the frame to be
@@ -5630,6 +5787,8 @@ def gallery_router(db: Database) -> APIRouter:
         quote: str = Form(""),
         anchor: str = Form(""),
         kind: str = Form("comment"),
+        # Pictures staged through POST /c/{id}/image, one repeated field each.
+        image: Annotated[list[str] | None, Form()] = None,
         _guard: None = Depends(_same_origin_write),
     ):
         if kind == "comment" and not body.strip():
@@ -5651,6 +5810,7 @@ def gallery_router(db: Database) -> APIRouter:
                 quote=quote[:500],
                 anchor=parsed_anchor,
                 kind=kind,
+                image_ids=image,
             )
         except store.BodyTooLarge as exc:
             raise HTTPException(413, f"{exc.field} exceeds the size limit") from exc
@@ -5662,6 +5822,8 @@ def gallery_router(db: Database) -> APIRouter:
             ) from exc
         except store.ScanFailed as exc:
             raise HTTPException(503, _SCAN_FAILED_DETAIL) from exc
+        except images.ImageRefused as exc:
+            raise HTTPException(exc.status, exc.detail) from exc
         except comments.InvalidAnchor:
             raise HTTPException(422, "not a valid anchor") from None
         except comments.InvalidKind:
@@ -5696,7 +5858,9 @@ def gallery_router(db: Database) -> APIRouter:
                     db, artifact_id, include_resolved=True, include_held=True
                 )
                 payload = {
-                    "html": _render_comments(rows, artifact_id, only_thread=root),
+                    "html": _render_comments(
+                        rows, artifact_id, only_thread=root, db=db
+                    ),
                     "thread_root": root,
                     "marks": comments.marks_for_page(db, artifact_id),
                 }
@@ -5709,6 +5873,25 @@ def gallery_router(db: Database) -> APIRouter:
                 return JSONResponse({"reload": True}, status_code=201)
             return JSONResponse(payload, status_code=201)
         return RedirectResponse(f"/a/{artifact_id}#comments", status_code=303)
+
+    @router.post("/c/{artifact_id}/image", status_code=201)
+    async def add_comment_image(
+        artifact_id: str,
+        request: Request,
+        _guard: None = Depends(_same_origin_write),
+    ):
+        """Stage one picture for a comment he is writing on this page: multipart, one
+        file in the field `file`, the same limits and answers as the agent route
+        (`api.upload_comment_image`). Returns `{image_id, ...}`; the comment form names
+        the id in a repeated `image` field. Pictures are not checked for secrets."""
+        if not await run_in_threadpool(store.exists, db, artifact_id):
+            raise HTTPException(404, "no such artifact")
+        try:
+            return await image_store.stage_upload(request, db, artifact_id, "jeremy")
+        except images.ImageRefused as exc:
+            raise HTTPException(
+                exc.status, {"field": exc.field, "detail": exc.detail}
+            ) from exc
 
     @router.post("/c/{comment_id}/resolve")
     def resolve_comment(
