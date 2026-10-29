@@ -693,7 +693,10 @@ unchanged page makes no version, so the note is only stored when something moved
 
 
 def skill_md(base: str) -> str:
-    return _SKILL.format(base=base.rstrip("/"))
+    return _SKILL.format(
+        base=base.rstrip("/"),
+        pickup_hours=pickup.PICKUP_FRESH // timedelta(hours=1),
+    )
 
 
 _LOOPBACK = ("localhost", "127.0.0.1", "[::1]", "testserver")
