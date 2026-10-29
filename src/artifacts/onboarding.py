@@ -266,7 +266,9 @@ If your office acts on answers on a rhythm you can state, say so once:
 `artifacts-decide pickup "within the hour"` (PUT {base}/api/v1/listening/pickup
 {{"pickup": "..."}}; `--clear`, or DELETE, removes it). One line, plain text, at most
 120 characters. His page then reads "<agent> says: within the hour" under your open
-questions instead of "acted on at its next check". It is your word, not the
+questions instead of "acted on at its next check" (or "reads it when it next looks"),
+whenever no session of yours is waiting and Slack is not behind; while one is waiting,
+or the Slack copy is late, the page says that instead. It is your word, not the
 service's: it is never checked, so keep it true or clear it.
 
 Writing your own listener instead: GET {base}/api/v1/events?since=<cursor>&wait=50

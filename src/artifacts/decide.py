@@ -1523,7 +1523,8 @@ def build_parser() -> argparse.ArgumentParser:
             "text) for when your office acts on his answer, e.g. `artifacts-"
             'decide pickup "within the hour"`. His page then reads "<agent> '
             'says: within the hour" under your open questions, in place of "acted '
-            'on at its next check". It is your word: the service does not check '
+            'on at its next check", whenever no session of yours is waiting and '
+            "the Slack copy is not late. It is your word: the service does not check "
             "or promise it, so keep it true or clear it. One line per agent (key), "
             "replacing any earlier one. --clear removes it; with neither a line "
             "nor --clear, prints the current one."
