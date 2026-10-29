@@ -32,7 +32,9 @@ request bytes (never re-serialised JSON):
 
 Nothing of the body, the signature or any key reaches a response or a log: a
 response is `{"error": "<fixed word>"}` or `{"result": "<fixed word>"}`; a log
-line names a reason and, once the signature has verified, the event id.
+line names a reason and, for a 422, the NAME of the field that failed (a fixed
+string from our code, never its value), and, once the signature has verified, the
+event id.
 """
 
 from __future__ import annotations
@@ -191,9 +193,13 @@ def load_public_keys(raw: bytes) -> dict:
 
 
 class _Refused(Exception):
-    def __init__(self, status: int, word: str) -> None:
+    """A request refused. `field` names the input that failed (a fixed string
+    from our code, never a value); it goes in the log, not in the response."""
+
+    def __init__(self, status: int, word: str, field: str | None = None) -> None:
         self.status = status
         self.word = word
+        self.field = field
 
 
 @dataclass(frozen=True)
@@ -210,25 +216,25 @@ class Event:
     body: dict
 
 
-def _text(value, limit: int, *, required: bool = False) -> str | None:
+def _text(value, limit: int, field: str, *, required: bool = False) -> str | None:
     if value is None and not required:
         return None
     if not isinstance(value, str) or (required and not value.strip()):
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", field)
     return value[:limit]
 
 
-def _moment(value, *, required: bool = False) -> datetime | None:
+def _moment(value, field: str, *, required: bool = False) -> datetime | None:
     if value is None and not required:
         return None
     if not isinstance(value, str):
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", field)
     try:
         when = datetime.fromisoformat(value)
     except ValueError:
-        raise _Refused(422, "malformed") from None
+        raise _Refused(422, "malformed", field) from None
     if when.tzinfo is None:
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", field)
     return when.astimezone(UTC)
 
 
@@ -247,26 +253,26 @@ def parse(raw: bytes) -> Event:
         raise _Refused(400, "malformed")
     event_id = data.get("event_id")
     if not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id):
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", "event_id")
     kind = data.get("kind")
     if kind not in KINDS:
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", "kind")
     source = data.get("source")
     match = _SOURCE.fullmatch(source) if isinstance(source, str) else None
     if match is None:
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", "source")
     question = data.get("question")
     if question != match.group(2):
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", "question")
     version = data.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version < 1:
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", "version")
     key_id = data.get("key_id")
     if not isinstance(key_id, str) or not _ID.fullmatch(key_id):
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", "key_id")
     body = data.get("body")
     if not isinstance(body, dict):
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", "body")
     return Event(
         event_id=event_id,
         kind=kind,
@@ -275,8 +281,8 @@ def parse(raw: bytes) -> Event:
         question=question,
         version=version,
         key_id=key_id,
-        at=_moment(data.get("at"), required=True),
-        sent_at=_moment(data.get("sent_at"), required=True),
+        at=_moment(data.get("at"), "at", required=True),
+        sent_at=_moment(data.get("sent_at"), "sent_at", required=True),
         body=body,
     )
 
@@ -313,13 +319,27 @@ def process(
     """One request to one status and one fixed-word body."""
     now = now or datetime.now(UTC)
     try:
-        event = parse(raw)
+        try:
+            event = parse(raw)
+        except _Refused as exc:
+            if exc.status == 422:
+                # Before the signature: no event id (the body is not trusted yet).
+                _log.warning("refused: malformed %s", exc.field or "?")
+            raise
         authenticate(inbound, event, raw, signature, now)
         try:
             result = apply(db, event, now)
         except _Refused as exc:
             # Authenticated and malformed: now the id may be named.
-            _log.warning("event %s refused: %s", event.event_id, exc.word)
+            if exc.status == 422:
+                _log.warning(
+                    "event %s refused: %s %s",
+                    event.event_id,
+                    exc.word,
+                    exc.field or "?",
+                )
+            else:
+                _log.warning("event %s refused: %s", event.event_id, exc.word)
             raise
         _log.info("event %s %s", event.event_id, result)
         return 200, {"result": result}
@@ -327,6 +347,7 @@ def process(
         return exc.status, {"error": exc.word}
     except dbmod.DataError:
         # A string no column can hold (a NUL, a lone surrogate): malformed.
+        _log.warning("refused: malformed (a value no column can hold)")
         return 422, {"error": "malformed"}
     except Exception as exc:  # noqa: BLE001 -- a 500 is retried by the sender; never echo
         _log.error("inbound event failed: %s", type(exc).__name__)
@@ -432,21 +453,21 @@ def _answer_fields(body: dict) -> tuple[str, str, dict]:
     event record and never shown, logged or sent on."""
     letter = body.get("answer")
     if not isinstance(letter, str) or not _LETTER.fullmatch(letter):
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", "body.answer")
     note = body.get("note", "")
     if not isinstance(note, str):
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", "body.note")
     who = body.get("answered_by")
     if not isinstance(who, dict) or who.get("verified_by") != "quarterdeck":
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", "body.answered_by")
     name = who.get("name")
     slack_id = who.get("slack_id", who.get("slack_user_id"))
     if not isinstance(name, str) or not name.strip():
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", "body.answered_by.name")
     if slack_id is not None and not (
         isinstance(slack_id, str) and _ID.fullmatch(slack_id)
     ):
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", "body.answered_by.slack_id")
     return (
         letter,
         note,
@@ -514,13 +535,13 @@ def _apply_artifacts(db: Database, event: Event, now: datetime) -> str:
 _SETTLED = {"answered": "answered", "withdrawn": "withdrawn", "replaced": "replaced"}
 
 
-def _options(value) -> list[dict]:
+def _options(value, field: str) -> list[dict]:
     if not isinstance(value, list) or not 1 <= len(value) <= 26:
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", field)
     out, seen = [], set()
     for option in value:
         if not isinstance(option, dict):
-            raise _Refused(422, "malformed")
+            raise _Refused(422, "malformed", field)
         letter = option.get("letter")
         label = option.get("text", option.get("label"))
         if (
@@ -530,19 +551,19 @@ def _options(value) -> list[dict]:
             or not isinstance(label, str)
             or not label.strip()
         ):
-            raise _Refused(422, "malformed")
+            raise _Refused(422, "malformed", field)
         seen.add(letter)
         out.append({"letter": letter, "label": label[:1000]})
     return out
 
 
-def _strings(value, limit: int = 50) -> list[str]:
+def _strings(value, field: str, limit: int = 50) -> list[str]:
     if value is None:
         return []
     if not isinstance(value, list) or len(value) > limit:
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", field)
     if not all(isinstance(v, str) for v in value):
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", field)
     return [v[:200] for v in value]
 
 
@@ -557,34 +578,36 @@ def _safe_link(value) -> str | None:
 
 
 def _asked_fields(body: dict) -> dict:
-    options = _options(body.get("options"))
+    options = _options(body.get("options"), "body.options")
     letters = {o["letter"] for o in options}
-    recommended = _text(body.get("recommended"), 3)
+    recommended = _text(body.get("recommended"), 3, "body.recommended")
     urgency = body.get("urgency", "when_you_can")
     if urgency not in URGENCIES:
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", "body.urgency")
     topic = body.get("topic")
     if topic is not None and not (
         isinstance(topic, dict)
         and isinstance(topic.get("id"), str)
-        and isinstance(topic.get("title"), str)
+        and (topic.get("title") is None or isinstance(topic.get("title"), str))
     ):
-        raise _Refused(422, "malformed")
+        raise _Refused(422, "malformed", "body.topic")
     return {
-        "asking_office": _text(body.get("asking_office"), 200, required=True),
-        "title": _text(body.get("title"), 1000, required=True),
+        "asking_office": _text(
+            body.get("asking_office"), 200, "body.asking_office", required=True
+        ),
+        "title": _text(body.get("title"), 1000, "body.title", required=True),
         "options": options,
         "recommended": recommended if recommended in letters else None,
-        "context": _text(body.get("context", ""), 4000) or "",
+        "context": _text(body.get("context", ""), 4000, "body.context") or "",
         "link": _safe_link(body.get("link")),
         "topic_id": topic["id"][:200] if topic else None,
-        "topic_title": topic["title"][:500] if topic else None,
-        "depends_on": _strings(body.get("depends_on")),
-        "replaces": _text(body.get("replaces"), 200),
+        "topic_title": topic["title"][:500] if topic and topic.get("title") else None,
+        "depends_on": _strings(body.get("depends_on"), "body.depends_on"),
+        "replaces": _text(body.get("replaces"), 200, "body.replaces"),
         "urgency": urgency,
-        "blocked_on": _text(body.get("blocked_on"), 500),
-        "needed_by": _moment(body.get("needed_by")),
-        "for_offices": _strings(body.get("for"), 20),
+        "blocked_on": _text(body.get("blocked_on"), 500, "body.blocked_on"),
+        "needed_by": _moment(body.get("needed_by"), "body.needed_by"),
+        "for_offices": _strings(body.get("for"), "body.for", 20),
     }
 
 
@@ -602,20 +625,29 @@ def _apply_foreign(db: Database, event: Event, now: datetime) -> str:
             or not isinstance(note, str)
             or not (name is None or isinstance(name, str))
         ):
-            raise _Refused(422, "malformed")
+            bad = (
+                "body.answer"
+                if not isinstance(letter, str) or not _LETTER.fullmatch(letter)
+                else "body.note"
+                if not isinstance(note, str)
+                else "body.answered_by"
+            )
+            raise _Refused(422, "malformed", bad)
         answer = (
             letter,
             note[:20000],
             (name or "")[:200],
-            _moment(event.body.get("answered_at")) or event.at,
+            _moment(event.body.get("answered_at"), "body.answered_at") or event.at,
         )
     edited = None
     if event.kind == "edited":
-        edited = _text(event.body.get("context"), 4000, required=True)
+        edited = _text(event.body.get("context"), 4000, "body.context", required=True)
     replaced_by = None
     if event.kind == "replaced":
         replaced_by = _text(
-            event.body.get("replaced_by_source", event.body.get("replaced_by")), 200
+            event.body.get("replaced_by_source", event.body.get("replaced_by")),
+            200,
+            "body.replaced_by",
         )
 
     with db.connect() as conn, conn.transaction():
@@ -785,7 +817,7 @@ def _copy(r) -> Copy:
         recommended=r[5],
         context=r[6],
         link=r[7],
-        topic={"id": r[8], "title": r[9]} if r[9] else None,
+        topic={"id": r[8], "title": r[9]} if r[8] else None,
         depends_on=r[10],
         replaces=r[11],
         replaced_by=r[12],

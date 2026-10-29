@@ -522,6 +522,50 @@ def test_a_refusal_never_echoes_the_body_or_a_key(client, partner_key, caplog):
     assert "BEGIN" not in everything and KEY_ID not in "\n".join(seen)
 
 
+def test_a_topic_with_no_title_is_applied(client, partner_key, gallery):
+    for n, topic in enumerate(({"id": "t1"}, {"id": "t2", "title": None})):
+        body = asked_body(topic=topic)
+        r = post(client, partner_key, make("asked", f"qd:notitle{n}", 1, body))
+        assert r.status_code == 200, r.text
+    for bad in ({"id": "t1", "title": 5}, {"title": "x"}, "t1"):
+        r = post(
+            client, partner_key, make("asked", "qd:badtopic", 1, asked_body(topic=bad))
+        )
+        assert r.status_code == 422
+
+
+def test_a_parse_stage_422_logs_the_field_name_and_the_response_is_unchanged(
+    client, partner_key, caplog
+):
+    caplog.set_level(logging.DEBUG)
+    event = make("asked", "qd:q1", 1, asked_body(context="PRIVATE-CONTEXT-TEXT"))
+    del event["version"]
+    r = post(client, partner_key, event)
+    assert r.status_code == 422 and r.json() == {"error": "malformed"}
+    assert "refused: malformed version" in caplog.text
+    assert event["event_id"] not in caplog.text  # the body is not trusted yet
+    mistyped = make("asked", "qd:q1", 1, asked_body(), version="VERSION-VALUE")
+    r = post(client, partner_key, mistyped)
+    assert r.json() == {"error": "malformed"}
+    assert "VERSION-VALUE" not in caplog.text and "PRIVATE" not in caplog.text
+
+
+def test_an_apply_stage_422_logs_the_event_id_and_the_field_name(
+    db, bridge, client, partner_key, page, caplog
+):
+    caplog.set_level(logging.DEBUG)
+    q = ask(db, page)
+    event = make(
+        "answered", f"artifacts:{q.id}", 1, pressed("a", verified_by="WRONG-VERIFIER")
+    )
+    r = post(client, partner_key, event)
+    assert r.status_code == 422 and r.json() == {"error": "malformed"}
+    assert (
+        f"event {event['event_id']} refused: malformed body.answered_by" in caplog.text
+    )
+    assert "WRONG-VERIFIER" not in caplog.text
+
+
 # --- a question whose home is artifacts --------------------------------------------
 
 

@@ -3626,7 +3626,9 @@ def _question_meta(row: decisions.DecisionRow, now: datetime) -> list[str]:
     (with what it is blocking and by when), overdue, and who else needs the answer."""
     parts = []
     if row.topic:
-        parts.append(f'<span class="qtopic">{escape(row.topic["title"])}</span>')
+        parts.append(
+            f'<span class="qtopic">{escape(row.topic["title"] or row.topic["id"])}</span>'
+        )
     when = f"{escape(_when(row.needed_by))} UTC" if row.needed_by else ""
     if row.urgency == "blocking":
         label = "blocking" + (f": {escape(row.blocked_on)}" if row.blocked_on else "")
