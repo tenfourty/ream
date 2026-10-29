@@ -75,20 +75,16 @@ def test_a_refused_line_leaves_the_old_one(db):
 # --- rendering ---------------------------------------------------------------
 
 
-def test_the_line_says_who_says_it_in_both_states_that_carry_it(db, bridge):
+def test_the_line_says_who_says_it_once_delivered_to_slack(db, bridge):
     _, sent = _ask(db)
     _deliver(db, sent.id)
-    _, unsent = _ask(db, agent="other")
     listening.set_pickup(db, "cove", "within the hour")
-    listening.set_pickup(db, "other", "by tomorrow!")
     a = listening.line(listening.for_decision(db, "cove", sent.id))
     assert a.startswith(
         "No session is waiting. Your answer is delivered to cove in Slack. "
     )
     assert "cove says: within the hour." in a
     assert "next check" not in a
-    b = listening.line(listening.for_decision(db, "other", unsent.id))
-    assert "other says: by tomorrow!" in b and "by tomorrow!." not in b
     assert "not in Slack" not in a
 
 
@@ -98,6 +94,13 @@ def test_not_sent_state_carries_it_without_a_bridge(db):
     line = listening.line(listening.for_decision(db, "cove", asked.id))
     assert "not in Slack" in line and "cove says: within the hour." in line
     assert "reads it when it next looks" not in line
+
+
+def test_a_line_that_ends_its_own_sentence_gets_no_extra_stop(db):
+    _, asked = _ask(db, agent="other")
+    listening.set_pickup(db, "other", "by tomorrow!")
+    line = listening.line(listening.for_decision(db, "other", asked.id))
+    assert "other says: by tomorrow!" in line and "by tomorrow!." not in line
 
 
 def test_the_other_states_ignore_it(db, bridge):

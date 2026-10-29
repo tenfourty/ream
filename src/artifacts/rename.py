@@ -156,14 +156,15 @@ def _merge_pickup(conn, old: str, new: str) -> int:
         "   where o.agent = %s and o.updated_at > agent_pickup.updated_at)",
         (old, old, new, old),
     )
-    conn.execute(
+    merged = conn.execute(
         "delete from agent_pickup where agent = %s and exists (select 1"
         " from agent_pickup n where n.agent = %s)",
         (old, new),
-    )
-    return conn.execute(
+    ).rowcount
+    moved = conn.execute(
         "update agent_pickup set agent = %s where agent = %s", (new, old)
     ).rowcount
+    return merged + moved
 
 
 def _merge_reads(conn, old: str, new: str) -> int:
