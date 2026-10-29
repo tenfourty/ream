@@ -183,6 +183,14 @@ owner is told and answers in the thread:
 
     artifacts-decide comment <page-id> "your comment"
     artifacts-decide comment <page-id> --quote "the exact words" [--section "Heading"] "your comment"
+    artifacts-decide comment <page-id> --element <id> "your comment"   # a chart, image, table, section
+
+--element pins the comment to the element with that id (it must be on the
+current version exactly once; --quote and --element do not combine). The
+server fills the tag, the heading it sits under and the words or alt text it
+quotes. Over the API it is {{"kind": "element", "id": "<id>"}} in `anchor`.
+Give your charts, images and tables an id and they can be pinned and found
+again after you republish.
 
 It prints the page link and whose page it is, so you know whom to tell: the
 owner hears through the service, but an office that runs no waiter will not
@@ -198,7 +206,22 @@ the spot is on the page as it is now:
 
     on: "Cost per seat is flat"  (under "Costs" · v3)                       still there
     on: "Cost per seat is flat"  (under "Costs" · v3 · text edited since)   same spot, words changed
+      now: "Cost per seat is flat for every plan"                           what stands there now
     on: "Cost per seat is flat"  (under "Costs" · v3 · OUTDATED: this spot is gone from the current version)
+
+v3 is the version the pin was made on. When he pins a chart, an image or a
+table (the Pin button on the page, or the C key) there is an `element:` line
+too: its tag and id, the heading it sits under, a table cell's row and column,
+or an image's alt text or caption.
+
+    element: <table id="plans"> under "Costs"
+    element: <td> row "Pro", column "Price" under "Costs"
+    element: <img id="chart"> "Revenue by quarter" under "Costs"
+
+An element pin with no words and no alt text is quoted by its tag; give images
+alt text so a reader can tell what was pinned. Creating a comment over the API
+returns the same `anchor_state` and `anchor_note` at once, so you learn where
+the pin stands when you write it.
 
 An outdated comment is never moved, hidden or settled for you: it keeps its
 quote and the version it was made on, and he sees it marked outdated and listed
@@ -206,8 +229,8 @@ at the top of the page's comments. Read it for what it says, answer it, then
 settle it. A pin whose passage only moved to another section stays current and
 says where it was. `artifacts-decide comments --outdated` lists just those;
 over the API, GET /api/v1/artifacts/<id>/comments and GET /api/v1/comments
-return `anchor_state` (current, edited or outdated) and `anchor_note` on every
-row, and take ?anchor_state=outdated to list only the gone spots. Ids on your
+return `anchor_state` (current, edited or outdated), `anchor_note` and, for an
+edited pin, `anchor_current` (what stands there now) on every row, and take ?anchor_state=outdated to list only the gone spots. Ids on your
 headings and sections help: a pin is re-found by its id when the words change.
 
 Two rules are fixed. Your comment is never his answer to a decision, and never

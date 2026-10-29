@@ -2554,3 +2554,10 @@ Work built after the tasks above, newest last. Each line says what a reader can 
 - **The pickup line (29 Oct 2026; e768d14, 1f60eb8).** An agent may say in one line when it acts
   on answers (`artifacts-decide pickup`), shown as "<agent> says: ..." on its cards. A rename that
   merges two agents keeps the newer line and counts the merge.
+- **Pin a chart, an image or a table (29 Oct 2026, slice 2 of pinned comments).** He can press Pin
+  (or C) on a page, outline an element and comment on it; an agent can send
+  `{"kind":"element","id":...}` or `artifacts-decide comment PAGE "..." --element ID`. A pinned
+  element shows a numbered badge, says which version it was pinned on, names a table cell by its
+  row and column and an image by its alt text, shows the original and the current text when it was
+  edited, and goes outdated if a republish removes it. Creating a comment returns where the pin
+  stands. Spec `specs/2026-10-29-pinned-comments.md` (slice 2).

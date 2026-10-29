@@ -95,6 +95,52 @@ the cap come back with `anchor_state` "" (unknown), as for a page with more
 than 400 headings. A heading with characters a terminal cannot show (joiners,
 soft hyphens, private-use, unassigned code points) is stored with them dropped,
 not refused. An element id is at most 128 characters, as `sections` addresses.
+**Element pins (29 Oct 2026, slice 2).** A fifth anchor kind, `element`, pins a
+comment to a chart, an image, a table, a cell or a paragraph rather than to
+words. Every key is optional and every one is evidence, not position: `id`
+(the element's id, at most 128 characters), `tag`, `ordinal` (the n-th
+`img`/`svg`/`canvas` with that tag under the heading, for one with no id and no
+words), `path` (a fast path only), `heading` and `heading_id`, `label` (alt
+text, aria-label, title, SVG title or the figure's caption, for something with
+no words), `row` and `column` (a table cell's header names, left out when a
+spanning cell makes them ambiguous), and `prefix`/`suffix` (32 characters of
+the page's words either side). `add()` requires an `id`, a `heading` or a
+quote; `remove` and `looks_good` stay `range`-only. The `comment.quote` column
+holds the element's visible text (first 200 characters) or its label. Where the
+pin is now follows the same order as a text pin (`anchors.resolve`): the id
+present exactly once (its text or label still holding the quote is `current`,
+else `edited`), then the quote under its heading, the quote anywhere, an
+image's label anywhere, else `outdated`. An element's own prefix and suffix are
+the words AROUND it, so they never make a removed element read as `edited`. An
+`edited` pin also carries `anchor_current`: the element's text now, or the
+words now between a quote's prefix and suffix, shown beside the original and
+never guessed from elsewhere. A listing tells at most 50 edited pins what
+stands there (`comments.EDITED_NOW_MAX`). The reply to creating a comment
+carries `anchor_state`, `anchor_note` and `anchor_current` too.
+
+Agents send `{"kind":"element","id":"<id>"}` (and nothing else); the id must be on
+the current version exactly once (`sections.locate`: a missing or repeated id
+is a 422 `{"field":"anchor","detail"}`), and the server fills in the tag, the
+heading, the label, the words either side and the quote. `artifacts-decide
+comment PAGE "text" --element ID` sends it.
+
+**Pin mode.** The page bar has a Pin button (and the `C` key, in the gallery or
+inside the frame; never while typing in a field or with a modifier). While it
+is on, the shim swallows the page's clicks (capture phase, only while on),
+reports the smallest block-level element under the pointer that is not a
+wrapper around the whole page (an ancestor with an id wins when it is not much
+larger), and the gallery outlines it over the frame; the up and down arrows
+widen to the parent and narrow back, a click picks, Escape or the button again
+leaves. A pick fills the composer exactly as a text selection does. An element
+with no id, no heading, no words and no label cannot be found again and is not
+pinned. Pins on the page show as numbered badges at the element's corner (drawn
+by the gallery from rectangles the shim reports in `artifact-marks-placed` and
+again, on a resize, in `artifact-pin-rects`), with the same number written into
+the thread; hovering or focusing a thread outlines its spot. The shim places an
+element pin by id (present once), then by tag and ordinal under its heading
+(only if the element still holds the quote), then by alt text, then by its
+quote; the DOM is never touched.
+
 Design:
 `docs/agent/specs/2026-10-29-pinned-comments.md`.
 

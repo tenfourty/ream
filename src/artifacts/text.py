@@ -202,6 +202,17 @@ def visible(body: str, limit: int | None = None) -> tuple[str, bool]:
     return " ".join(" ".join(parser.parts).split()).lower(), parser.truncated
 
 
+def readable(body: str, limit: int | None = None) -> tuple[str, bool]:
+    """`visible`, with the page's own capitals: the words a reader sees, spaces
+    collapsed, for text that is shown back rather than searched. The same
+    parser, the same limits."""
+    limit = VISIBLE_LIMIT if limit is None else limit
+    parser = _Visible(limit)
+    parser.feed(body[:INPUT_LIMIT])
+    parser.close()
+    return " ".join(" ".join(parser.parts).split()), parser.truncated
+
+
 def describe(body: str) -> str:
     """One line saying what a page is about, or "" when the page does not say.
 

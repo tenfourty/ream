@@ -336,7 +336,11 @@ def _threads(
         thread["version_n"] = first.get("version_n")
         thread["anchor_state"] = first.get("anchor_state") or ""
         thread["anchor_note"] = first.get("anchor_note") or ""
+        thread["anchor_current"] = first.get("anchor_current") or ""
         pin = first.get("anchor")
+        thread["element"] = (
+            pin if isinstance(pin, dict) and pin.get("kind") == "element" else None
+        )
         thread["heading"] = (
             pin.get("heading") if isinstance(pin, dict) and pin.get("heading") else ""
         )
@@ -396,6 +400,27 @@ def _where(thread: dict) -> str:
     return f"  ({' · '.join(parts)})" if parts and state else ""
 
 
+def _element_line(pin: dict) -> str:
+    """What an element pin is on, in the page's own terms: the tag and id, the
+    heading it sits under, a table cell's row and column, and the alt text or
+    label of an image or chart. Every part is optional; none is invented."""
+    tag = pin.get("tag") or "element"
+    ident = f' id="{pin["id"]}"' if pin.get("id") else ""
+    line = f"<{tag}{ident}>"
+    if pin.get("row") or pin.get("column"):
+        cell = [
+            f'{name} "{pin[key]}"'
+            for name, key in (("row", "row"), ("column", "column"))
+            if pin.get(key)
+        ]
+        line += " " + ", ".join(cell)
+    if pin.get("label"):
+        line += f' "{pin["label"]}"'
+    if pin.get("heading"):
+        line += f' under "{pin["heading"]}"'
+    return line
+
+
 def _fmt_thread(thread: dict, *, on_page: bool = False) -> str:
     head = "NEEDS YOUR REPLY" if thread["needs_reply"] else "replied"
     lines = [
@@ -403,11 +428,15 @@ def _fmt_thread(thread: dict, *, on_page: bool = False) -> str:
     ]
     if thread.get("decision_id"):
         lines.append(f"  under his answer on decision {thread['decision_id']}")
+    if thread.get("element"):
+        lines.append(f"  element: {_element_line(thread['element'])}")
     if thread["quote"]:
         label = {"remove": "REMOVE THIS", "looks_good": "LOOKS GOOD"}.get(
             thread.get("kind"), "on"
         )
         lines.append(f'  {label}: "{thread["quote"]}"{_where(thread)}')
+        if thread.get("anchor_state") == "edited" and thread.get("anchor_current"):
+            lines.append(f'  now: "{thread["anchor_current"]}"')
     for m in thread["messages"]:
         who = (
             "HE SAID"
@@ -1545,8 +1574,11 @@ def build_parser() -> argparse.ArgumentParser:
     threads = subs.add_parser(
         "comments",
         help="comment threads on your pages; NEEDS YOUR REPLY marks his last word."
-        " A pinned comment says what it is pinned to and whether a republish left"
-        " the spot current, edited or OUTDATED",
+        " A pinned comment says what it is pinned to (an `element:` line for a"
+        " chart, image or table: tag, id, heading, a cell's row and column, an"
+        " image's alt text; a quote otherwise), the version it was pinned on, and"
+        " whether a republish left the spot current, edited (with a `now:` line"
+        " for what stands there) or OUTDATED",
     )
     threads.add_argument("--page", metavar="ARTIFACT-ID", help="only this page")
     threads.add_argument(
@@ -1569,7 +1601,7 @@ def build_parser() -> argparse.ArgumentParser:
     reply.add_argument("--idempotency-key", metavar="KEY", help=_IDEMPOTENCY_HELP)
     comment = subs.add_parser(
         "comment",
-        help="comment on any page you can read, whole or on a quoted passage",
+        help="comment on any page you can read, whole, on a quoted passage or on an element",
         description=(
             "Comment on a page another office published (or your own), the way "
             "Jeremy does. The page's owner is told and answers in the thread. "
@@ -1598,6 +1630,15 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="HEADING",
         help="with --quote: look only under the heading with this text, for a "
         "phrase that repeats",
+    )
+    comment.add_argument(
+        "--element",
+        metavar="ID",
+        help="pin the comment to the element with this id (a chart, an image, a "
+        "table, a section) instead of to a passage; not with --quote. The id "
+        "must be on the current version exactly once. Its text, or an image's "
+        "alt text, becomes the quote, and the comment is marked edited or "
+        "outdated if a republish changes or removes it",
     )
     comment.add_argument("--idempotency-key", metavar="KEY", help=_IDEMPOTENCY_HELP)
     settle = subs.add_parser("settle", help="mark a comment thread done")
@@ -1845,12 +1886,16 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "comment":
             if args.section and not args.quote:
                 raise UsageError("--section needs --quote")
+            if args.element and (args.quote or args.section):
+                raise UsageError("--element and --quote cannot be used together")
             text = sys.stdin.read() if args.text == "-" else args.text
             if not text.strip():
                 raise UsageError("nothing to say: the comment text is empty")
             page = _request("GET", f"{base}/artifacts/{args.page}", key, None)
             payload: dict = {"body": text}
-            if args.quote:
+            if args.element:
+                payload["anchor"] = {"kind": "element", "id": args.element}
+            elif args.quote:
                 payload["anchor"] = {"kind": "text", "quote": args.quote}
                 if args.section:
                     payload["anchor"]["section"] = args.section

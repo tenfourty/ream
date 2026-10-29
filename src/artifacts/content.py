@@ -78,6 +78,165 @@ DIFF_STYLE = (
 )
 
 
+PIN_JS = r"""// ELEMENT PINS (pinned comments, slice 2). The gallery turns pin mode on with
+// `artifact-pin-mode` {on}; while it is on, the page's clicks are swallowed
+// (capture phase, preventDefault, only while on) and the element under the
+// pointer is reported as a rectangle for the gallery to outline
+// (`artifact-pin-hover` {rect, tag}). A click reports the pick
+// (`artifact-pin` {anchor, quote, rect}); C and Escape, pressed inside the
+// frame, ask the gallery to toggle or leave the mode, because the keys go to
+// the frame when it has focus. Nothing is written into the page: the only DOM
+// touched is one <style> for the cursor, and what leaves the page is capped
+// evidence -- text 200, ids 128, 32 characters of words either side -- to the
+// gallery's origin only.
+var pm=0,cand=null,stk=[],hk="",EP=[],rt=0;
+var TAGR=/^[a-z][a-z0-9-]{0,15}$/,BLK={IMG:1,SVG:1,CANVAS:1,VIDEO:1,PICTURE:1,IFRAME:1,OBJECT:1};
+function tn(e){return String(e&&e.nodeName||"").toLowerCase()}
+function fixend(s){var c=s.charCodeAt(s.length-1);return c>=0xd800&&c<=0xdbff?s.slice(0,-1):s}
+function clip(v){return fixend(String(v).replace(/\s+/g," ").trim().slice(0,200))}
+function etext(el,n){var w=document.createTreeWalker(el,4),t,p,s="";
+  while((t=w.nextNode())){p=t.parentNode;if(DX(t)||(p&&SK[String(p.nodeName).toUpperCase()]))continue;
+    s+=t.nodeValue+" ";if(s.length>n*4)break}
+  return clip(s)}
+function elabel(el){var k=["alt","aria-label","title"],i,v,n=tn(el);
+  for(i=0;i<3;i++){v=el.getAttribute?el.getAttribute(k[i]):null;if(v&&v.trim())return clip(v)}
+  if(n==="svg"&&el.querySelector){var ti=el.querySelector("title");v=ti?ti.textContent:"";if(v&&v.trim())return clip(v)}
+  if(n==="img"||n==="svg"||n==="canvas"||n==="picture"){
+    var fg=el.closest?el.closest("figure"):null,fc=fg&&fg.querySelector?fg.querySelector("figcaption"):null;
+    if(fc){v=etext(fc,200);if(v)return v}}
+  return ""}
+function cellOf(c){var n=tn(c);return n==="td"||n==="th"}
+function cells(tr){return tr&&tr.children?Array.prototype.filter.call(tr.children,cellOf):[]}
+function span(c){var v=c.getAttribute?parseInt(c.getAttribute("colspan"),10):1;return isFinite(v)&&v>1}
+// A table cell's row and column names. Left out when they cannot be told
+// (a spanning cell in the way, no header row): less descriptive, never wrong.
+function cellNames(an,c){var tr=c.parentNode,row=cells(tr),at=row.indexOf(c),t=tr,v;
+  if(at<0||!tr)return;
+  if(at>0&&!span(c)){v=etext(row[0],200);if(v)an.row=v}
+  while(t&&tn(t)!=="table")t=t.parentNode;
+  if(!t||!t.querySelectorAll)return;
+  var hr=t.querySelectorAll("tr")[0],hc=cells(hr);
+  if(!hr||hr===tr||hc.length!==row.length||hc.some(span)||row.some(span))return;
+  v=etext(hc[at],200);if(v)an.column=v}
+function fits(el,q){var t=tight(etext(el,200)||elabel(el)),w=tight(q);return !w||t.indexOf(w)>=0}
+function findHd(a){var h=null,hs,i,n=0,hit=null,want,t;
+  if(typeof a.heading_id==="string"&&IDR.test(a.heading_id)){h=document.getElementById(a.heading_id);
+    if(h&&/^H[1-6]$/.test(String(h.nodeName).toUpperCase()))return h}
+  if(typeof a.heading!=="string"||!a.heading)return null;
+  want=a.heading.replace(/\s+/g," ").trim().toLowerCase();hs=document.querySelectorAll("h1,h2,h3,h4,h5,h6");
+  for(i=0;i<hs.length&&i<2000;i++){if(DX(hs[i]))continue;
+    t=(hs[i].textContent||"").replace(/\s+/g," ").trim().toLowerCase().slice(0,200);
+    if(t===want){n++;hit=hs[i]}}
+  return n===1?hit:null}
+// The elements with this tag under heading `hd` (to the next heading of its
+// rank or higher), or on the whole page when there is none, in order.
+function peers(tag,hd){var all=document.querySelectorAll(tag),out=[],i,x,h,end=null,hs;
+  if(hd){var lv=+String(hd.nodeName).charAt(1);hs=document.querySelectorAll("h1,h2,h3,h4,h5,h6");
+    for(i=0;i<hs.length&&i<2000;i++){h=hs[i];
+      if(h!==hd&&!DX(h)&&!hd.contains(h)&&(hd.compareDocumentPosition(h)&4)&&+String(h.nodeName).charAt(1)<=lv){end=h;break}}}
+  for(i=0;i<all.length&&i<5000;i++){x=all[i];if(DK(x))continue;
+    if(hd&&!(hd.compareDocumentPosition(x)&4))continue;
+    if(end&&!(end.compareDocumentPosition(x)&2))continue;
+    out.push(x)}
+  return out}
+function byLabel(m){var q=tight(m.quote),a=m.anchor,l=document.querySelectorAll("[alt],[aria-label],[title]"),
+    i,j,x,v,k=["alt","aria-label","title"],hit=null,n=0;
+  if(!q)return null;
+  for(i=0;i<l.length&&i<2000;i++){x=l[i];if(DK(x)||(typeof a.tag==="string"&&a.tag&&tn(x)!==a.tag))continue;
+    for(j=0;j<3;j++){v=x.getAttribute(k[j]);if(v&&tight(v).indexOf(q)>=0){n++;hit=x;break}}}
+  return n===1?hit:null}
+// Where an element pin is now: by its id (present once), then by tag and
+// ordinal under its heading, then by its alt text, then by its quote. A hit
+// by position must still hold the quote it was made on; the DOM is not touched.
+function placeEl(m,ix){var a=m.anchor,el=null,q=typeof m.quote==="string"?m.quote:"",l,hd=null,ps,hasH;
+  if(typeof a.id==="string"&&IDR.test(a.id)){l=document.querySelectorAll('[id="'+a.id+'"]');if(l.length===1)el=l[0]}
+  if(!el&&typeof a.tag==="string"&&TAGR.test(a.tag)&&isn(a.ordinal)&&a.ordinal>0){
+    hasH=(typeof a.heading==="string"&&a.heading)||(typeof a.heading_id==="string"&&a.heading_id);
+    hd=hasH?findHd(a):null;
+    if(!hasH||hd){ps=peers(a.tag,hd);el=ps[a.ordinal-1]||null;if(el&&q&&!fits(el,q))el=null}}
+  if(!el&&q&&typeof a.label==="string"&&a.label)el=byLabel(m);
+  if(!el&&q)el=search(m,ix);
+  if(!el&&q)el=byLabel(m);
+  return el}
+function rectsOf(){var out=[],i,b;
+  for(i=0;i<EP.length&&i<200;i++){b=EP[i].e.getBoundingClientRect();
+    out.push({id:EP[i].id,top:b.top+scrollY,left:b.left+scrollX,width:b.width,height:b.height})}
+  return out}
+function isBlock(e){var d;if(BLK[String(e.nodeName).toUpperCase()])return true;
+  try{d=getComputedStyle(e).display}catch(x){return false}
+  return typeof d==="string"&&d!==""&&d!=="none"&&d!=="contents"&&d.indexOf("inline")!==0}
+function isWrap(e){var b=document.body,h=document.documentElement;if(!e||e===b||e===h)return true;
+  var H=Math.max(b.scrollHeight||0,h.scrollHeight||0),W=Math.max(b.scrollWidth||0,h.scrollWidth||0),r;
+  if(!H||!W)return false;r=e.getBoundingClientRect();return r.height>=H*.9&&r.width>=W*.9}
+function area(e){var r=e.getBoundingClientRect();return r.width*r.height}
+// The smallest block-level element under the pointer that is not a wrapper
+// around the whole page; an ancestor with an id wins when it is not much bigger.
+function pick(x,y){var e=document.elementFromPoint(x,y),p,i,a;
+  while(e&&e.nodeType===1&&!isBlock(e))e=e.parentElement;
+  if(!e||e.nodeType!==1||isWrap(e))return null;
+  if(!IDR.test(e.id||"")){p=e.parentElement;
+    for(i=0;i<3&&p&&!isWrap(p)&&isBlock(p);i++,p=p.parentElement){
+      if(IDR.test(p.id||"")){a=area(e);if(a>0&&area(p)<=a*3)e=p;break}}}
+  return e}
+function crect(e){var b=e.getBoundingClientRect();
+  return{top:b.top+scrollY,left:b.left+scrollX,width:b.width,height:b.height,vt:b.top,vl:b.left}}
+function hover(){var k=cand?tn(cand)+"|"+JSON.stringify(crect(cand)):"";
+  if(k===hk)return;hk=k;
+  parent.postMessage({type:"artifact-pin-hover",rect:cand?crect(cand):null,tag:cand?tn(cand):""},__ORIGIN__)}
+function pl(){try{cand=pick(px,py);stk=[];hover()}catch(x){}}
+function words(el,after){var w=document.createTreeWalker(document.body,4),t,p,s="",o;
+  while((t=w.nextNode())){p=t.parentNode;if(DX(t)||(p&&SK[String(p.nodeName).toUpperCase()])||el.contains(t))continue;
+    o=el.compareDocumentPosition(t);
+    if(after){if(o&4){s+=t.nodeValue+" ";if(s.length>200)break}}
+    else if(o&2)s=(s+t.nodeValue+" ").slice(-200)}
+  return s.replace(/\s+/g," ")}
+function pin(c){var q=etext(c,200),lb="",n=tn(c),an={kind:"element"},b,pre,suf,ps;
+  if(!q){lb=elabel(c);q=lb}
+  if(IDR.test(c.id||""))an.id=c.id;
+  if(TAGR.test(n))an.tag=n;
+  ctx(an,c);delete an.el_id;
+  an.path=pth(c);
+  if(lb)an.label=lb;
+  if(cellOf(c))cellNames(an,c);
+  if(!an.id&&!etext(c,1)&&(n==="img"||n==="svg"||n==="canvas")){
+    ps=peers(n,hdOf(c));b=ps.indexOf(c);if(b>=0)an.ordinal=b+1}
+  pre=words(c,0).replace(/\s+$/,"").slice(-32).replace(/^\s+/,"");
+  suf=words(c,1).replace(/^\s+/,"").slice(0,32).replace(/\s+$/,"");
+  if(pre.charCodeAt(0)>=0xdc00&&pre.charCodeAt(0)<=0xdfff)pre=pre.slice(1);
+  suf=fixend(suf);
+  if(pre)an.prefix=pre;if(suf)an.suffix=suf;
+  // A spot nothing identifies (no id, no heading, no words, no label) cannot be
+  // found again, and the service would refuse it: nothing is sent.
+  if(!an.id&&!an.heading&&!q)return;
+  parent.postMessage({type:"artifact-pin",anchor:an,quote:q,rect:crect(c)},__ORIGIN__)}
+function pinStyle(on){var s=document.getElementById("ar-pin-style");
+  if(!s){if(!on)return;s=document.createElement("style");s.id="ar-pin-style";
+    (document.head||document.documentElement).appendChild(s)}
+  s.textContent=on?"*{cursor:crosshair!important}":""}
+addEventListener("message",function(e){try{
+  if(e.origin!==__ORIGIN__)return;var d=e.data;
+  if(!d||typeof d!=="object"||d.type!=="artifact-pin-mode")return;
+  pm=d.on===true?1:0;cand=null;stk=[];hk="";pinStyle(!!pm)}catch(x){}});
+addEventListener("click",function(e){try{if(!pm||!e)return;
+  e.preventDefault();e.stopPropagation();if(e.stopImmediatePropagation)e.stopImmediatePropagation();
+  var c=cand;
+  if(typeof e.clientX==="number"&&typeof e.clientY==="number"){var h=pick(e.clientX,e.clientY);
+    c=cand&&h&&cand.contains(h)?cand:h}
+  if(c)pin(c)}catch(x){}},true);
+addEventListener("keydown",function(e){try{if(!e||e.ctrlKey||e.metaKey||e.altKey)return;
+  var k=e.key,t=e.target,nm=t&&t.nodeName?String(t.nodeName).toUpperCase():"",c;
+  if(k==="c"||k==="C"){if(nm==="INPUT"||nm==="TEXTAREA"||nm==="SELECT"||(t&&t.isContentEditable))return;
+    parent.postMessage({type:"artifact-pin-toggle"},__ORIGIN__);return}
+  if(!pm)return;
+  if(k==="Escape"){e.preventDefault();parent.postMessage({type:"artifact-pin-exit"},__ORIGIN__);return}
+  if(k==="ArrowUp"&&cand){c=cand.parentElement;
+    if(c&&!isWrap(c)){e.preventDefault();stk.push(cand);cand=c;hover()}else e.preventDefault()}
+  else if(k==="ArrowDown"){e.preventDefault();if(stk.length){cand=stk.pop();hover()}}}catch(x){}},true);
+addEventListener("resize",function(){try{if(!EP.length)return;clearTimeout(rt);
+  rt=setTimeout(function(){try{parent.postMessage({type:"artifact-pin-rects",rects:rectsOf()},__ORIGIN__)}catch(x){}},150)}catch(x){}});
+"""
+
+
 def _viewer_report(missing: Sequence[str] = ()) -> str:
     """The other half of what gets injected on a LIVE page -- unrelated to the
     `window.claude` contract above, so it is a separate `<script>`, concatenated onto
@@ -282,7 +441,7 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "return null;"
         "try{return place(m,{v:null})}catch(x){return null}}}"
         "function paint(list){var G={comment:new Highlight(),remove:new Highlight(),"
-        "looks_good:new Highlight()},held=new Highlight(),placed=[],unplaced=[],ix={v:null},hr=[];"
+        "looks_good:new Highlight()},held=new Highlight(),placed=[],unplaced=[],ix={v:null},hr=[],er=[];"
         # Only the first 200 are ever placed or painted -- a real cost, worth
         # capping. Past that, a mark with a usable id is still reported
         # unplaced rather than vanishing: the gallery's list of open marks and
@@ -292,16 +451,20 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "list.forEach(function(m,mi){"
         'if(!m||typeof m!=="object"||typeof m.id!=="string")return;'
         "if(mi>=200){unplaced.push(m.id);return}"
-        "var r=null;"
-        'if(typeof m.quote==="string"&&m.quote&&m.anchor&&typeof m.anchor==="object"'
-        "){try{r=place(m,ix)}catch(x){r=null}}"
+        "var r=null,pe=null;"
+        'if(m.anchor&&typeof m.anchor==="object"){'
+        'if(m.anchor.kind==="element"){try{pe=placeEl(m,ix)}catch(x){pe=null}}'
+        'else if(typeof m.quote==="string"&&m.quote){try{r=place(m,ix)}catch(x){r=null}}}'
         # hasOwnProperty, not `G[m.kind]||`: a kind of "constructor" would
         # otherwise pick Object and throw on .add().
         # A held mark arrives with kind "" (the page never learns the kind)
         # and is drawn dotted, in a highlight of its own.
         "var g=m.held===true?held:Object.prototype.hasOwnProperty.call(G,m.kind)?G[m.kind]:G.comment;"
-        "if(r){g.add(r);placed.push(m.id);hr.push({id:m.id,r:r})}else unplaced.push(m.id)});"
-        "MR=hr;"
+        # An element pin paints nothing here: the gallery draws its badge from the
+        # rectangle reported below.
+        "if(pe){placed.push(m.id);er.push({id:m.id,e:pe})}"
+        "else if(r){g.add(r);placed.push(m.id);hr.push({id:m.id,r:r})}else unplaced.push(m.id)});"
+        "MR=hr;EP=er;"
         'CSS.highlights.set("ar-comment",G.comment);CSS.highlights.set("ar-remove",G.remove);'
         'CSS.highlights.set("ar-good",G.looks_good);CSS.highlights.set("ar-held",held);'
         'if(!document.getElementById("ar-mark-style")){var st=document.createElement("style");'
@@ -324,6 +487,7 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "ov=unplaced.length>200?unplaced.length-200:0;"
         'var pm={type:"artifact-marks-placed",placed:placed,unplaced:un};'
         "if(ov>0)pm.overflow=ov;"
+        "if(er.length)pm.rects=rectsOf();"
         "parent.postMessage(pm,"
         f"{origin})}}"
         # The whole handler body is in a try: the top-level try/catch wraps
@@ -361,7 +525,7 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "return null}"
         'function out(){if(hv){hv=null;hk="";'
         f'parent.postMessage({{type:"artifact-mark-leave"}},{origin})}}}}'
-        "function look(){raf=0;try{var h=hit();if(!h){out();return}"
+        "function look(){raf=0;if(pm)pl();try{var h=hit();if(!h){out();return}"
         'var k=h.id+"|"+h.rect.top+"|"+h.rect.left;if(k===hk)return;hv=h.id;hk=k;'
         'parent.postMessage({type:"artifact-mark-hover",id:h.id,rect:h.rect},'
         f"{origin})}}catch(x){{}}}}"
@@ -372,6 +536,14 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         'addEventListener("pointerdown",function(e){try{if(at(e)&&e.pointerType==="touch")look()}catch(x){}});'
         'addEventListener("pointerout",function(e){try{if(e&&!e.relatedTarget)out()}catch(x){}});'
         'addEventListener("scroll",function(){try{out();hk=""}catch(x){}});'
+        # The element path a selection or a pin reports: a fast path only, as the
+        # service verifies it against the quote before relying on it.
+        "function pth(n){var p=[],e=n;while(e&&e!==document.body&&e.nodeType===1){"
+        "var i=1,x=e;while((x=x.previousElementSibling))if(x.tagName===e.tagName&&!DK(x))i++;"
+        'p.unshift(e.tagName.toLowerCase()+":nth-of-type("+i+")");e=e.parentElement}'
+        'return("body"+(p.length?">"+p.join(">"):"")).slice(0,512)}'
+        + PIN_JS.replace("__ORIGIN__", origin)
+        +
         # SELECTING TEXT TO COMMENT ON IT (homelab-ij8.18). The gallery cannot
         # read inside this cross-origin page, by design, so the page reports a
         # selection: the quoted text (capped), an anchor the service already
@@ -386,10 +558,12 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         # a republish; omitted when absent, never empty. Capped, and in the
         # charset the service accepts, so a stray id is left out rather than
         # refused.
-        "var IDR=/^[A-Za-z0-9_.:-]{1,200}$/;"
-        'function ctx(an,n){try{var hs=document.querySelectorAll("h1,h2,h3,h4,h5,h6"),'
+        "var IDR=/^[A-Za-z0-9_.:-]{1,128}$/;"
+        'function hdOf(n){var hs=document.querySelectorAll("h1,h2,h3,h4,h5,h6"),'
         "hd=null,i,h;for(i=0;i<hs.length&&i<2000;i++){h=hs[i];if(DX(h))continue;"
         "if(h===n||h.contains(n)||(h.compareDocumentPosition(n)&4))hd=h;else break}"
+        "return hd}"
+        "function ctx(an,n){try{var hd=hdOf(n);"
         'if(hd){var ht=(hd.textContent||"").replace(/\\s+/g," ").trim().slice(0,200);'
         "var lc=ht.charCodeAt(ht.length-1);if(lc>=0xd800&&lc<=0xdbff)ht=ht.slice(0,-1);"
         "if(ht.length)an.heading=ht;"
@@ -403,10 +577,7 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         f"{origin});return}}"
         "var r=s.getRangeAt(0),n=r.commonAncestorContainer;"
         "if(n.nodeType!==1)n=n.parentElement;while(n&&DK(n))n=n.parentElement;if(!n)return;"
-        "var p=[],e=n;while(e&&e!==document.body&&e.nodeType===1){"
-        "var i=1,x=e;while((x=x.previousElementSibling))if(x.tagName===e.tagName&&!DK(x))i++;"
-        'p.unshift(e.tagName.toLowerCase()+":nth-of-type("+i+")");e=e.parentElement}'
-        'var path=("body"+(p.length?">"+p.join(">"):"")).slice(0,512);'
+        "var path=pth(n);"
         # Offsets into `n`'s text as the LIVE page has it: counted by one walk
         # that leaves deleted text out (on any other page, the same numbers
         # a Range's own toString would give). Where deleted text was inside

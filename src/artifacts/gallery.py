@@ -211,6 +211,14 @@ main{display:block}
   cursor:pointer}
 .sharebtn:hover,.fsbtn:hover{background:var(--chip-hover);color:var(--ink)}
 .fsbtn[hidden]{display:none}
+/* Pin mode (pinned comments, slice 2): a button like the bar's others, and a
+   filled one while the mode is on. */
+.pinbtn{display:inline-flex;align-items:center;height:1.75rem;padding:0 .5rem;
+  border:0;border-radius:.45rem;background:transparent;color:var(--muted);
+  font:inherit;font-size:.8125rem;cursor:pointer}
+.pinbtn:hover{background:var(--chip-hover);color:var(--ink)}
+.pinbtn.on{background:var(--chip);color:var(--ink)}
+.pinbtn[hidden]{display:none}
 .acts .mi{width:1rem;height:1rem;opacity:1}
 @media (max-width:34rem){.sharebtn span{display:none}}
 /* The PAGE view only (the wall and the lists keep .wrap as it was): the agent's
@@ -694,6 +702,20 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
    `hidden` property, never applies a stylesheet, so it cannot catch this --
    caught in review instead (page review step 1, homelab-ij8.108). */
 .selbar[hidden]{display:none}
+/* The outline over the frame while picking a spot, and the numbered badges at
+   pinned elements' corners: drawn here, over the page, never in it. The
+   outline lets the pointer through, so the frame keeps hearing it. */
+.pinout{position:absolute;z-index:60;box-sizing:border-box;pointer-events:none;
+  border:2px solid var(--accent);background:rgba(217,164,0,.12);border-radius:.25rem}
+.pinout[hidden]{display:none}
+.pinbadge{position:absolute;z-index:59;min-width:1.25rem;height:1.25rem;padding:0 .3rem;
+  border:0;border-radius:.65rem;background:var(--accent);color:var(--on-accent);
+  font:600 .6875rem/1.25rem var(--mono);text-align:center;cursor:pointer;
+  box-shadow:0 1px 4px rgba(0,0,0,.3)}
+.cpinno{display:inline-block;margin-right:.4rem;min-width:1.1rem;padding:0 .3rem;
+  border-radius:.6rem;background:var(--accent);color:var(--on-accent);
+  font:600 .6875rem/1.1rem var(--mono);text-align:center}
+.cspot{margin-right:.4rem;font-style:normal;font-weight:600}
 /* A HOVER CARD: the comment on marked text, beside it, drawn by the gallery
    (comments.js) from the panel's own thread. Tokens only, so it follows the
    theme; fixed, because a scroll closes it. */
@@ -1913,7 +1935,7 @@ window.addEventListener("message",function(e){try{
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
   if(!d||typeof d!=="object")return;
   if(d.type==="artifact-state")sendMarks();
-  else if(d.type==="artifact-marks-placed"&&Array.isArray(d.unplaced))unplacedLine(d.unplaced,d.overflow)
+  else if(d.type==="artifact-marks-placed"&&Array.isArray(d.unplaced)){unplacedLine(d.unplaced,d.overflow);badges(d.rects)}
 }catch(x){}});
 // THE DOCKED PANEL. Opened and closed by a class on <body>, never by the
 // fragment: no navigation, no history entry, nothing laid over the page. The
@@ -1955,6 +1977,7 @@ if(P&&B&&B.classList){
   // Capture, so this runs before gallery.js: an open dialog or menu is what
   // Escape closes first, and the panel only when nothing else is open.
   window.addEventListener("keydown",function(e){
+    if(e.key==="Escape"&&pinOn){pinMode(false);if(e.stopPropagation)e.stopPropagation();return}
     if(e.key==="Escape"&&hc){hide();if(e.stopPropagation)e.stopPropagation();return}
     if(e.key!=="Escape"||!isOpen()||document.querySelector(".dlg:target,details.menu[open]"))return;
     var back=P.contains(document.activeElement);panel(false);
@@ -1976,7 +1999,7 @@ if(P&&B&&B.classList){
 // card then goes only on Escape (which is the card's alone), Open, a sent
 // reply, or a press outside it. In full screen it lives inside the
 // full-screen element, the one part of the page that is drawn.
-var hc=null,hid=null,ht=0,hg=0,pend=null;
+var hc=null,hid=null,ht=0,hg=0,pend=null,pinOn=false;
 function host(){return document.fullscreenElement||document.body}
 function busy(){var i=hc&&hc.querySelector?hc.querySelector("input[name=body]"):null;
   return !!(i&&(document.activeElement===i||i.value))}
@@ -2011,7 +2034,7 @@ function show(id,r){var li=thread(id);if(!li)return;hide();
 window.addEventListener("message",function(e){try{
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
   if(!d||typeof d!=="object")return;
-  if(d.type!=="artifact-mark-leave"&&d.type!=="artifact-mark-hover"||busy())return;
+  if(d.type!=="artifact-mark-leave"&&d.type!=="artifact-mark-hover"||busy()||pinOn)return;
   if(d.type==="artifact-mark-leave"){clearTimeout(ht);ht=0;pend=null;if(hc)grace();return}
   if(typeof d.id!=="string"||!known[d.id])return;
   var q=d.rect;if(!q||typeof q!=="object"||!fin(q.top)||!fin(q.left)||!fin(q.width)||!fin(q.height))return;
@@ -2101,7 +2124,7 @@ function field(n,v){var x=form.querySelector("input[name="+n+"]");
   if(!x){x=document.createElement("input");x.type="hidden";x.name=n;form.appendChild(x)}x.value=v}
 window.addEventListener("message",function(e){
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
-  if(!d||typeof d!=="object"||d.type!=="artifact-selection")return;
+  if(!d||typeof d!=="object"||d.type!=="artifact-selection"||pinOn)return;
   if(typeof d.quote!=="string"||!d.quote||!d.anchor||!d.rect||!num(d.rect.top)||!num(d.rect.left)||!num(d.rect.height)){
     bar.hidden=true;last=null;return}
   last=d;var r=f.getBoundingClientRect();
@@ -2127,6 +2150,86 @@ bar.addEventListener("click",function(e){
   }else{
     if(i){i.placeholder="Add a note (optional)";if(!i.value){form.requestSubmit()}}
   }});
+// ELEMENT PINS (pinned comments, slice 2). The Pin button and the C key turn
+// pin mode on in the frame; while it is on the frame reports the element under
+// the pointer (`artifact-pin-hover`, an outline drawn HERE over the frame) and
+// the one clicked (`artifact-pin`), which fills the composer exactly as a text
+// selection does. Pins already made get a numbered badge at the element's
+// corner, from the rectangles the frame reports. Nothing the page sends is
+// markup: it arrives as text and numbers, is checked, and is drawn with
+// textContent and style.
+var pb=document.querySelector(".pinbtn"),po=null,pbs=[],prects=Object.create(null);
+function pinMode(on){on=!!on;if(on===pinOn)return;pinOn=on;
+  try{f.contentWindow.postMessage({type:"artifact-pin-mode",on:on},o)}catch(e){}
+  if(pb){pb.setAttribute("aria-pressed",on?"true":"false");pb.classList.toggle("on",on)}
+  if(on){bar.hidden=true;last=null;hide()}else outline(null)}
+function outline(r){
+  if(!r){if(po)po.hidden=true;return}
+  if(!po){po=document.createElement("div");po.className="pinout";po.hidden=true;host().appendChild(po)}
+  var fr=f.getBoundingClientRect();
+  if(document.fullscreenElement&&num(r.vt)&&num(r.vl)){po.style.position="fixed";
+    po.style.top=(fr.top+r.vt)+"px";po.style.left=(fr.left+r.vl)+"px"}
+  else{po.style.position="";po.style.top=(fr.top+window.scrollY+r.top)+"px";po.style.left=(fr.left+window.scrollX+r.left)+"px"}
+  po.style.width=Math.max(0,r.width)+"px";po.style.height=Math.max(0,r.height)+"px";po.hidden=false}
+function rectOk(r){return !!r&&typeof r==="object"&&num(r.top)&&num(r.left)&&num(r.width)&&num(r.height)}
+function takePin(d){
+  var a=d.anchor;
+  if(!a||typeof a!=="object"||a.kind!=="element"||typeof d.quote!=="string"||!rectOk(d.rect))return;
+  var js;try{js=JSON.stringify(a)}catch(e){return}
+  if(js.length>4000)return;
+  var q=d.quote.slice(0,200);
+  pinMode(false);bar.hidden=true;last=null;
+  field("quote",q);field("anchor",js);field("kind","comment");
+  var bq=form.querySelector(".cquote");
+  if(!bq){bq=document.createElement("blockquote");bq.className="cquote";form.insertBefore(bq,form.firstChild)}
+  bq.textContent=q||(typeof a.tag==="string"&&a.tag?a.tag:"element");
+  panel(true);
+  var i=form.querySelector("input[name=body]");
+  if(i){i.placeholder="Comment on the pinned spot";i.focus()}}
+// Badges: the numbers are the element pins' order among this page's marks, the
+// same number written into each thread so the two can be matched by eye.
+function badges(rs){
+  if(!bar)return;
+  pbs.forEach(drop);pbs=[];prects=Object.create(null);
+  if(!Array.isArray(rs)||document.fullscreenElement)return;
+  var n=0,nums=Object.create(null),fr=f.getBoundingClientRect();
+  marks.forEach(function(m){if(m&&typeof m.id==="string"&&m.anchor&&m.anchor.kind==="element")nums[m.id]=++n});
+  rs.slice(0,200).forEach(function(r){
+    if(!rectOk(r)||typeof r.id!=="string"||!nums[r.id])return;
+    prects[r.id]=r;
+    var b=document.createElement("button");b.type="button";b.className="pinbadge";
+    b.textContent=String(nums[r.id]);b.setAttribute("aria-label","Pinned comment "+nums[r.id]);
+    b.style.top=(fr.top+window.scrollY+r.top)+"px";b.style.left=(fr.left+window.scrollX+r.left)+"px";
+    b.addEventListener("click",function(){panel(true);var t=thread(r.id);
+      if(t&&t.scrollIntoView)t.scrollIntoView({block:"nearest"})});
+    document.body.appendChild(b);pbs.push(b);
+    var t=thread(r.id);
+    if(t){var no=t.querySelector(".cpinno");
+      if(!no){no=document.createElement("span");no.className="cpinno";t.insertBefore(no,t.firstChild)}
+      no.textContent=String(nums[r.id])}})}
+// A thread hovered or focused outlines its spot on the page.
+function spot(e,on){try{var li=e.target&&e.target.closest?e.target.closest(".thread"):null,
+  id=li?li.getAttribute("data-mark-id"):null;outline(on&&id&&prects[id]?prects[id]:null)}catch(x){}}
+if(P&&P.addEventListener){
+  P.addEventListener("mouseover",function(e){spot(e,true)});P.addEventListener("focusin",function(e){spot(e,true)});
+  P.addEventListener("mouseout",function(e){spot(e,false)});P.addEventListener("focusout",function(e){spot(e,false)})}
+if(pb){pb.hidden=false;pb.addEventListener("click",function(){pinMode(!pinOn)})}
+// C, as in Figma and Vercel's comments: never while typing, never with a modifier.
+document.addEventListener("keydown",function(e){try{
+  if(!e||(e.key!=="c"&&e.key!=="C")||e.ctrlKey||e.metaKey||e.altKey)return;
+  var t=e.target,nm=t&&t.nodeName?String(t.nodeName).toUpperCase():"";
+  if(nm==="INPUT"||nm==="TEXTAREA"||nm==="SELECT"||(t&&t.isContentEditable))return;
+  pinMode(!pinOn)}catch(x){}});
+document.addEventListener("fullscreenchange",function(){drop(po);po=null;pbs.forEach(drop);pbs=[]});
+window.addEventListener("message",function(e){try{
+  if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
+  if(!d||typeof d!=="object")return;
+  if(d.type==="artifact-pin-toggle")pinMode(!pinOn);
+  else if(d.type==="artifact-pin-exit")pinMode(false);
+  else if(d.type==="artifact-pin-rects")badges(d.rects);
+  else if(d.type==="artifact-pin-hover"){if(pinOn)outline(rectOk(d.rect)?d.rect:null)}
+  else if(d.type==="artifact-pin"&&pinOn)takePin(d)
+}catch(x){}});
 })();
 // Full screen: the sheet, not the page, so the bar's own chrome drops away and
 // the framed page has the whole window. Shown only where the API exists.
@@ -2735,6 +2838,27 @@ def _render_comments(
 
     bubble = _bubble
 
+    def element_spot(pin: dict) -> str:
+        """What an element pin is on, in the page's terms and escaped: a cell by
+        its row and column, an image or chart by its alt text or label, else
+        the tag and id."""
+        if pin.get("kind") != "element":
+            return ""
+        tag = pin.get("tag") or "element"
+        cell = []
+        if pin.get("row"):
+            cell.append(f"Row {pin['row']}")
+        if pin.get("column"):
+            cell.append(f"{'column' if cell else 'Column'} {pin['column']}")
+        if cell:
+            return escape(", ".join(cell))
+        if pin.get("label"):
+            kind = {"img": "Image", "picture": "Image", "svg": "Chart"}.get(
+                tag, "Chart" if tag == "canvas" else "Element"
+            )
+            return escape(f"{kind}: {pin['label']}")
+        return escape(f"{tag}#{pin['id']}" if pin.get("id") else tag)
+
     def pin_note(root) -> str:
         """Where the pin is on the page as it is now: said plainly, never
         hidden, and never re-attached to words it was not about. `anchor_state`
@@ -2743,10 +2867,13 @@ def _render_comments(
         state is not known."""
         version = int(root.version_n)
         state = getattr(root, "anchor_state", "")
-        where = ""
-        heading = (root.anchor or {}).get("heading")
-        if heading:
-            where = f'<span class="cwhere">under {escape(heading)}</span>'
+        pin = root.anchor or {}
+        parts = []
+        if pin.get("heading"):
+            parts.append(f"under {escape(pin['heading'])}")
+        if pin.get("kind") in ("range", "quote", "element") and state != "outdated":
+            parts.append(f"Pinned on version {version}")
+        where = "".join(f'<span class="cwhere">{p}</span>' for p in parts)
         if state == "outdated" or (not state and root.quote_state == "changed"):
             what = (
                 "Outdated: this spot is gone from the current version &mdash; "
@@ -2754,6 +2881,9 @@ def _render_comments(
             )
         elif state == "edited":
             what = f"Text edited since version {version}."
+            now = getattr(root, "anchor_current", "")
+            if now:
+                what += f" Now: &ldquo;{escape(now)}&rdquo;"
         else:
             what = ""
         moved = getattr(root, "anchor_note", "")
@@ -2775,7 +2905,8 @@ def _render_comments(
         rather than silently re-attaching to text it was never about
         (homelab-ij8.18's re-anchoring rule).
         """
-        if not root.quote:
+        pin = root.anchor or {}
+        if not root.quote and pin.get("kind") != "element":
             return ""
         note = pin_note(root)
         label = {"remove": "Remove this", "looks_good": "Looks good"}.get(
@@ -2786,9 +2917,15 @@ def _render_comments(
             if label
             else ""
         )
-        return (
-            f'<blockquote class="cquote">{tag}{escape(root.quote)}{note}</blockquote>'
+        spot = element_spot(pin)
+        shown = escape(root.quote) if root.quote else spot
+        # What the quote is OF, for a pin on something that is not a passage.
+        of = (
+            f'<span class="cspot">{spot}</span> '
+            if spot and root.quote and pin.get("kind") == "element"
+            else ""
         )
+        return f'<blockquote class="cquote">{tag}{of}{shown}{note}</blockquote>'
 
     def thread(root) -> str:
         kids = "".join(bubble(r) for r in replies.get(root.id, []))
@@ -2968,6 +3105,10 @@ def _comments_button(artifact_id: str, open_count: int) -> str:
     return (
         f'<a class="cbtn{" has" if open_count else ""}" href="#comments"'
         f' aria-controls="comments" aria-label="Comments">{_icon("comment")}{count}</a>'
+        # Revealed by comments.js once it has a composer to fill; the C key does the same.
+        '<button type="button" class="pinbtn" hidden aria-pressed="false"'
+        ' aria-label="Pin a comment to a spot on the page (C)"'
+        ' title="Pin a comment to a spot on the page (C)">Pin</button>'
     )
 
 

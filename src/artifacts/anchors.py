@@ -11,6 +11,7 @@ Pure functions over a page body. The lower layer of `comments`, which imports
 from here, so nothing in this file may import `comments`.
 """
 
+import html
 import re
 from html.parser import HTMLParser
 
@@ -33,6 +34,31 @@ CONTEXT_CHARS = 32
 CONTEXT_MIN = 8
 # Headings searched when finding the one a quote sits under.
 _HEADINGS_MAX = 400
+
+# An element pin's evidence text, and the most of "what is there now" shown for
+# an edited one.
+QUOTE_MAX = 200
+CURRENT_MAX = 500
+# A tag name an anchor may record (lower case; a custom element past this is
+# simply not named).
+TAG_RE = re.compile(r"[a-z][a-z0-9-]{0,15}")
+# An element's first start tag, and the attributes that name what has no text:
+# an image, a chart (canvas, svg) or a labelled control.
+_START_TAG = re.compile(r"""<[a-zA-Z](?:"[^"]*"|'[^']*'|[^>"'])*>""")
+_LABEL_ATTRS = ("alt", "aria-label", "title")
+_ATTR = {
+    name: re.compile(
+        r"(?<![\w-])" + name + r"""\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.IGNORECASE
+    )
+    for name in _LABEL_ATTRS
+}
+_ANY_LABEL = re.compile(
+    r"""(?<![\w-])(?:alt|aria-label|title)\s*=\s*(?:"([^"]*)"|'([^']*)')""",
+    re.IGNORECASE,
+)
+_SVG_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+# Labels looked at when an element with no id is found by its alt text.
+_LABELS_MAX = 2000
 
 
 class _Headings(HTMLParser):
@@ -180,6 +206,44 @@ class PageIndex:
         self._located: dict | None = None
         self._heads: _Headings | None = None
         self._words: dict[tuple, tuple[str, bool]] = {}
+        self._labels: list[str] | None = None
+        self._plain: tuple[str, list[int], str] | None = None
+
+    @property
+    def labels(self) -> list[str]:
+        """Every alt text, aria-label and title on the page, spaces removed and
+        lowered (`_tight`), so an image pin with no id can be found by its words."""
+        if self._labels is None:
+            found = []
+            for m in _ANY_LABEL.finditer(self.body):
+                found.append(_tight(html.unescape(m.group(1) or m.group(2) or "")))
+                if len(found) >= _LABELS_MAX:
+                    break
+            self._labels = found
+        return self._labels
+
+    def has_label(self, quote: str) -> bool:
+        needle = _tight(quote)
+        return bool(self.body and needle) and any(needle in t for t in self.labels)
+
+    def plain(self) -> tuple[str, list[int], str]:
+        """The page's readable text with its own capitals, and the same with
+        every space removed and lowered, with where each kept character came
+        from. Built once; ("", [], "") for a page with too much text."""
+        if self._plain is None:
+            words, cut = text.readable(self.body)
+            if cut:
+                self._plain = ("", [], "")
+            else:
+                at, kept = [], []
+                for i, ch in enumerate(words):
+                    if ch.isspace():
+                        continue
+                    low = ch.lower()
+                    kept.append(low if len(low) == 1 else ch)
+                    at.append(i)
+                self._plain = (words, at, "".join(kept))
+        return self._plain
 
     @property
     def heads(self) -> _Headings:
@@ -234,7 +298,13 @@ class PageIndex:
         """Does this stretch of page hold the quote? None when it has too much
         text. The stretch's words are read once per index."""
         if key not in self._words:
-            self._words[key] = text.visible(self.body[start:stop])
+            outer = self.body[start:stop]
+            words, cut = text.visible(outer)
+            if key[0] == "id":
+                # An image or chart has no words: its alt text or label is what
+                # the pin quoted.
+                words = f"{words} {element_label(outer).lower()}".strip()
+            self._words[key] = (words, cut)
         words, cut = self._words[key]
         if cut:
             return None
@@ -302,7 +372,13 @@ def resolve(
                     return CURRENT, ""
             return CURRENT, f'moved: no longer under "{heading or heading_id}"'
         return CURRENT, ""
-    if edited_in_place(anchor, quote, tight_words):
+    if anchor.get("kind") == "element" and small and index.has_label(quote):
+        return CURRENT, ""
+    # An element's prefix and suffix are the words AROUND it, so their surviving
+    # says the neighbours are there, not that the element was edited rather than
+    # removed: only the element's own words count.
+    hints = {} if anchor.get("kind") == "element" else anchor
+    if edited_in_place(hints, quote, tight_words):
         return EDITED, ""
     return OUTDATED, ""
 
@@ -331,3 +407,116 @@ def heading_for_quote(
         hid = heads.found_ids[i]
         return _clean(heads.found_text[i]), hid if ID_RE.fullmatch(hid) else ""
     return named, ""
+
+
+def element_label(outer: str) -> str:
+    """What names an element that has no words of its own: the alt text,
+    aria-label or title on its start tag, else an inline SVG's `<title>`, else
+    the first such label inside it (a chart wrapper around an image). "" when
+    there is none. `outer` is the element's HTML, starting at its `<`."""
+    tag = _START_TAG.match(outer)
+    start = tag.group(0) if tag else ""
+    for name in _LABEL_ATTRS:
+        m = _ATTR[name].search(start)
+        if m:
+            label = _clean(html.unescape(m.group(1) or m.group(2) or ""))
+            if label:
+                return label[:QUOTE_MAX]
+    if start[:4].lower() == "<svg":
+        m = _SVG_TITLE.search(outer)
+        if m:
+            label = _clean(html.unescape(re.sub(r"<[^>]*>", "", m.group(1))))
+            if label:
+                return label[:QUOTE_MAX]
+    for m in _ANY_LABEL.finditer(outer, len(start)):
+        label = _clean(html.unescape(m.group(1) or m.group(2) or ""))
+        if label:
+            return label[:QUOTE_MAX]
+    return ""
+
+
+def element_quote(outer: str) -> str:
+    """The evidence text of an element: its visible words (the first 200
+    characters), or with none its alt text or label. "" when it has neither."""
+    words, _ = text.readable(outer, QUOTE_MAX * 4)
+    return _clean(words)[:QUOTE_MAX] or element_label(outer)
+
+
+def heading_before(body: str, pos: int) -> tuple[str, str]:
+    """(heading, heading_id) of the nearest heading that starts at or before
+    offset `pos`: the one a pinned element sits under. ("", "") above the first
+    heading, or on a page too large to search by heading."""
+    if len(body) > SECTION_PAGE_MAX:
+        return "", ""
+    heads = _headings(body)
+    best = -1
+    for i, head in enumerate(heads.found[:_HEADINGS_MAX]):
+        if head[1] > pos:
+            break
+        best = i
+    if best < 0:
+        return "", ""
+    hid = heads.found_ids[best]
+    return _clean(heads.found_text[best]), hid if ID_RE.fullmatch(hid) else ""
+
+
+def element_anchor(body: str, element_id: str, found) -> tuple[dict, str]:
+    """(anchor, quote) for an agent pinning the element `found`
+    (`sections.locate`) by its id: the server fills what a browser would have
+    measured -- the tag, the heading it sits under, 32 characters of the page's
+    words either side, and the quote (its text, or the label of an image or
+    chart)."""
+    outer = body[found.start : found.end]
+    quote = element_quote(outer)
+    anchor: dict = {"kind": "element", "id": element_id}
+    tag = found.tag.lower()
+    if TAG_RE.fullmatch(tag):
+        anchor["tag"] = tag
+    heading, heading_id = heading_before(body, found.start)
+    if heading:
+        anchor["heading"] = heading
+    if heading_id:
+        anchor["heading_id"] = heading_id
+    label = element_label(outer)
+    if label and label == quote:
+        anchor["label"] = label
+    near = 2000
+    before, _ = text.readable(body[max(0, found.start - near) : found.start])
+    after, _ = text.readable(body[found.end : found.end + near])
+    if before[-CONTEXT_CHARS:].strip():
+        anchor["prefix"] = before[-CONTEXT_CHARS:].lstrip()
+    if after[:CONTEXT_CHARS].strip():
+        anchor["suffix"] = after[:CONTEXT_CHARS].rstrip()
+    return anchor, quote
+
+
+def current_quote(anchor: dict, quote: str, body: "str | PageIndex") -> str:
+    """What stands where an EDITED pin's words were, so a reader sees both the
+    original and the current: an element's text now, or for a quote the words
+    now between its prefix and its suffix. "" when neither can be told -- never
+    a guess from elsewhere on the page, so it cannot show words the pin was not
+    about. Capped at 500 characters."""
+    anchor = anchor if isinstance(anchor, dict) else {}
+    element_id = anchor.get("el_id") or anchor.get("id") or ""
+    index = body if isinstance(body, PageIndex) else PageIndex(body, {element_id})
+    if not index.small or not index.body:
+        return ""
+    if element_id and anchor.get("kind") == "element":
+        span = index.id_span(element_id)
+        if span is not None:
+            return element_quote(index.body[span[0] : span[1]])
+    pre = _tight(anchor.get("prefix") or "")[-CONTEXT_CHARS:]
+    suf = _tight(anchor.get("suffix") or "")[:CONTEXT_CHARS]
+    if len(pre) < CONTEXT_MIN or len(suf) < CONTEXT_MIN:
+        return ""
+    words, at, tight = index.plain()
+    if tight.count(pre) != 1:
+        return ""
+    i = tight.index(pre) + len(pre)
+    j = tight.find(suf, i)
+    if j < 0:
+        return ""
+    between = words[at[i - 1] + 1 : at[j]].strip()
+    if not between or len(between) > 2 * len(quote) + 120:
+        return ""
+    return text.sanitize(between, CURRENT_MAX).strip()

@@ -57,7 +57,7 @@ Anchors stay JSON on `comment.anchor`. Every key set is exact, and every failure
 | `kind` | Made by | Keys |
 |---|---|---|
 | `range` (exists) | reader, selecting text | `path`, `start`, `end`, optional `prefix`, `suffix`; **new optional** `heading`, `heading_id`, `el_id` |
-| `element` (new) | reader, picking a spot; agent, by id | at least one of `id`, `heading`, or a non-empty `quote`; also optional `tag`, `path`, `ordinal` |
+| `element` (new, **built, slice 2**) | reader, picking a spot; agent, by id | at least one of `id`, `heading`, or a non-empty `quote` (the quote is the comment's own column); also optional `tag`, `path`, `ordinal`, `label`, `row`, `column`, `prefix`, `suffix` |
 | `quote` (new) | agent, quoting text | `prefix`, `suffix` optional, `heading`, `heading_id` optional; no DOM path |
 | `page`, `point`, `decision` | unchanged | unchanged |
 
@@ -308,17 +308,67 @@ pinned comment as on any comment.
 
 ## 8. Slices (each shippable alone, in order)
 
-1. **Evidence and outdated.** Section 3's `range` extension and `quote` kind, `anchors.py`,
+1. **Evidence and outdated** (built, 29 Oct 2026). Section 3's `range` extension and `quote` kind, `anchors.py`,
    `anchor_state`/`anchor_note` in the API and CLI, the shim's heading and id context, the
    thread chip and the "Outdated pins" list. No new interaction; every existing comment gets a
    state. Agent text anchors become paintable.
-2. **Element pins.** `element` kind, pin mode and outline and badges in the shim and gallery,
-   `--element ID` and `{"kind":"element"}` for agents.
+2. **Element pins** (built, 29 Oct 2026; see "As built, slice 2" below). `element` kind, pin mode
+   and outline and badges in the shim and gallery, `--element ID` and `{"kind":"element"}` for
+   agents.
 3. **Images.** `images.py`, `comment_image`, upload and download routes, content-origin serving,
    gallery attach control and thumbnails, `--image` and the cached paths in `comments`.
 4. **Spot screenshot** (optional, only if Jeremy asks): for element pins, a server-side render of
    that version cropped to the element through `thumbs.py`, attached automatically. Not designed
    here beyond that; it is the one slice with real rendering cost and quality risk.
+
+### As built, slice 2 (29 Oct 2026)
+
+Built as written in sections 3, 4, 5 and 7, with the prior-art additions Jeremy accepted
+(`2026-10-29-pinned-comments-prior-art.md`) folded in:
+
+- **An edited spot shows both quotes.** An `edited` row carries `anchor_current`: the element's
+  text (or alt text) now for an element pin found by its id, or for a quote the words now between
+  its stored prefix and suffix. The panel prints `Text edited since version N. Now: "..."` under
+  the original quote; the CLI prints a `now:` line. Never taken from elsewhere on the page, so it
+  cannot show words the pin was not about; "" when it cannot be told. A listing fills at most 50
+  per call (`comments.EDITED_NOW_MAX`).
+- **32-character prefix and suffix.** An element pin carries 32 characters of the page's words
+  either side (the shim measures them; for an agent's id the server reads them off the body).
+  The prefix and suffix of an *element* are the words around it, so they are not evidence that it
+  was edited rather than removed: step 4 of the resolution order uses the element's own words only.
+- **The version stamp.** The thread says `Pinned on version N` for every text and element pin
+  (and `it was there in version N` once outdated); the CLI prints `vN`.
+- **Row and column labels** for a table cell (`row`, `column`): the first cell of its row and the
+  header row's cell at the same position; left out, never guessed, when either row has a spanning
+  cell or the cell is itself the header.
+- **Alt text and captions** (`label`) for an image, chart or canvas: `alt`, `aria-label`, `title`,
+  an SVG's `<title>`, else its `<figure>`'s caption (the caption only from the browser; the
+  server, reading by id, uses the first three and the SVG title). The label is the quote when the
+  element has no words, and an image with no id is re-found by it.
+- **The state on create.** The reply to `POST /artifacts/{id}/comments` carries `anchor_state`,
+  `anchor_note` and `anchor_current`, read as a listing reads them.
+- Still not built, as agreed: automatic spot capture, and fuzzy matching of an edited quote inside
+  its section (an `edited` pin without a surviving prefix/suffix has no current quote).
+
+Differences from the text above, and why:
+
+- An id is at most **128** characters, not 200 (the limit `sections` addresses, fixed in slice 1);
+  the shim's id pattern was brought into line.
+- An `element` anchor names its element `id`, never `el_id` (which stays `range`'s); `heading_id`
+  is the heading's own id, as in slice 1.
+- Three shim messages beyond the spec's list, because the keys go to the frame when it has focus
+  and the frame resizes: `artifact-pin-toggle` (C pressed in the frame), `artifact-pin-exit`
+  (Escape in the mode) and `artifact-pin-rects` (the badges' rectangles again after a resize).
+- The shim places by tag and ordinal only if the element still holds the quote it was pinned
+  with (principle 3: never by position alone); an image is also re-found by its alt text.
+- A pick of an element with no id, no heading, no words and no label is swallowed but not sent: the
+  service would refuse an anchor nothing can find again.
+- Element pins are placed, not painted, so a pin the shim cannot place and the server calls
+  `current` is shown in the list only, as for text.
+- Tests: `tests/test_element_pins.py` holds the Python tests for this slice (resolution, anchors,
+  the agent route, the CLI and the panel) rather than extending `test_anchors.py` and
+  `test_comments.py`; the shim and gallery cases are in `tests/js/marks.test.mjs` and
+  `comments.test.mjs`.
 
 ## 9. Tests (written first; run by CI on a `ci/<name>` branch, never on baba)
 

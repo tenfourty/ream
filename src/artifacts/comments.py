@@ -125,6 +125,10 @@ class CommentRow:
     # not stored, like `quote_state`; `anchor_note` says when a pin moved.
     anchor_state: str = ""
     anchor_note: str = ""
+    # For an EDITED pin: what stands there now (an element's text, or the words
+    # between a quote's prefix and suffix), so a reader sees the original quote
+    # and the current one. "" when it cannot be told.
+    anchor_current: str = ""
     # Written by Jeremy while his page's review was held: the agent cannot see it yet.
     held: bool = False
     # The review round open when he made it (page review step 4); None outside
@@ -338,6 +342,23 @@ def _reject_lone_surrogate(value: str) -> None:
 # comments spec): the nearest heading and its id, and the id of the pinned
 # element. Optional, and absent rather than empty.
 _CONTEXT_KEYS = frozenset({"heading", "heading_id", "el_id"})
+# An `element` anchor's keys (slice 2): `id` stands where `range` has `el_id`.
+_ELEMENT_KEYS = frozenset(
+    {
+        "kind",
+        "id",
+        "tag",
+        "path",
+        "ordinal",
+        "label",
+        "row",
+        "column",
+        "prefix",
+        "suffix",
+        "heading",
+        "heading_id",
+    }
+)
 
 
 def _context(anchor: dict) -> dict:
@@ -448,6 +469,57 @@ def validate_anchor(anchor: dict | None) -> dict:
                 _reject_lone_surrogate(value)
                 out[side] = value
         out.update(_context(anchor))
+        return out
+
+    if kind == "element":
+        # A spot picked in pin mode (or named by an agent by its id): a
+        # chart, an image, a table, a paragraph. Every key is optional because
+        # what a page offers varies -- `add()` requires an id, a heading or a
+        # quote -- and every one is evidence, never trusted position: `path` is
+        # a fast path only.
+        if not anchor.keys() <= _ELEMENT_KEYS:
+            raise InvalidAnchor()
+        out = {"kind": "element"}
+        if "id" in anchor:
+            value = anchor["id"]
+            if not isinstance(value, str) or not anchors.ID_RE.fullmatch(value):
+                raise InvalidAnchor()
+            out["id"] = value
+        if "tag" in anchor:
+            value = anchor["tag"]
+            if not isinstance(value, str) or not anchors.TAG_RE.fullmatch(value):
+                raise InvalidAnchor()
+            out["tag"] = value
+        if "ordinal" in anchor:
+            value = anchor["ordinal"]
+            if not _is_int(value) or not 1 <= value <= 10_000:
+                raise InvalidAnchor()
+            out["ordinal"] = value
+        if "path" in anchor:
+            value = anchor["path"]
+            if not isinstance(value, str) or len(value) > 512:
+                raise InvalidAnchor()
+            _reject_lone_surrogate(value)
+            out["path"] = value
+        # Words from the page that reach a terminal: cleaned, not refused,
+        # like a heading.
+        for key in ("label", "row", "column"):
+            if key in anchor:
+                value = anchor[key]
+                if not isinstance(value, str) or len(value) > anchors.HEADING_MAX:
+                    raise InvalidAnchor()
+                value = anchors._clean(value)
+                if not value:
+                    raise InvalidAnchor()
+                out[key] = value
+        for side in ("prefix", "suffix"):
+            if side in anchor:
+                value = anchor[side]
+                if not isinstance(value, str) or len(value) > ANCHOR_CONTEXT_MAX:
+                    raise InvalidAnchor()
+                _reject_lone_surrogate(value)
+                out[side] = value
+        out.update(_context({k: v for k, v in anchor.items() if k != "id"}))
         return out
 
     if kind == "decision":
@@ -589,6 +661,12 @@ def add(
             raise InvalidKind()
         if effective_anchor.get("kind") == "quote" and not quote.strip():
             raise InvalidAnchor()  # a quote anchor is evidence only with the quote
+        if effective_anchor.get("kind") == "element" and not (
+            effective_anchor.get("id")
+            or effective_anchor.get("heading")
+            or quote.strip()
+        ):
+            raise InvalidAnchor()  # nothing to find the spot by
 
     callers_txn = conn is not None
     # The caller's connection, or one of our own: the same name below either way.
@@ -985,11 +1063,19 @@ def _visible_cache_put(key, value) -> None:
             _VISIBLE_CACHE.popitem(last=False)
 
 
+def _pin_id(anchor: dict | None) -> str:
+    """The id of the element a pin is on: a `range`'s `el_id`, an `element`'s `id`."""
+    if not isinstance(anchor, dict):
+        return ""
+    return anchor.get("el_id") or anchor.get("id") or ""
+
+
 def _context_of(anchor: dict | None) -> bool:
     """Does this anchor carry a heading or an id, which only the page's HTML
     (not its words) can be read against?"""
-    return isinstance(anchor, dict) and any(
-        anchor.get(k) for k in ("heading", "heading_id", "el_id")
+    return isinstance(anchor, dict) and (
+        anchor.get("kind") == "element"  # found by label, which lives in the HTML
+        or any(anchor.get(k) for k in ("heading", "heading_id", "el_id", "id"))
     )
 
 
@@ -1012,6 +1098,28 @@ def _resolve_pin(row, words, bodies, indexes, html_resolved, wanted_ids):
     return anchors.resolve(row.anchor, row.quote, indexes[page], facts=words)
 
 
+# Edited pins in one listing that are also told what stands there now (each
+# costs a read of the page's words); the rest are still `edited`, unlabelled.
+EDITED_NOW_MAX = 50
+
+
+def _current_of(conn, row, bodies, indexes, current_n, wanted_ids) -> str:
+    """`anchors.current_quote` for an edited pin, reading the page's HTML now
+    if this listing had not needed it yet."""
+    page = row.artifact_id
+    if page not in bodies:
+        got = conn.execute(
+            "select body from version where artifact_id = %s and n = %s",
+            (page, current_n[page]),
+        ).fetchone()
+        if got is None:
+            return ""
+        bodies[page] = got[0]
+    if page not in indexes:
+        indexes[page] = anchors.PageIndex(bodies[page], wanted_ids.get(page, set()))
+    return anchors.current_quote(row.anchor, row.quote, indexes[page])
+
+
 def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
     """Every pinning row told whether its quote is still on its page
     (`quote_state`) and where its pin is now (`anchor_state`, `anchor_note`).
@@ -1026,7 +1134,7 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
     read out of the database is a record, and code that can edit one in place
     is code that can silently disagree with it.
     """
-    pinning = [row for row in rows if row.quote or (row.anchor or {}).get("el_id")]
+    pinning = [row for row in rows if row.quote or _pin_id(row.anchor)]
     if not pinning:
         return rows
     pages = sorted({row.artifact_id for row in pinning})
@@ -1074,11 +1182,13 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
     # One index per page: the body is parsed once however many pins it carries.
     indexes: dict[str, anchors.PageIndex] = {}
     html_resolved: dict[str, int] = {}
-    seen: dict[tuple[str, str, str], tuple[str, str]] = {}
+    seen: dict[tuple[str, str, str], tuple[str, str, str]] = {}
+    edited: set = set()
+    current_n = dict(versions)
     out = []
     for row in rows:
         if row.artifact_id not in words_by_page or not (
-            row.quote or (row.anchor or {}).get("el_id")
+            row.quote or _pin_id(row.anchor)
         ):
             out.append(row)
             continue
@@ -1086,19 +1196,38 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
         # A reply carries its root's anchor and quote: resolve each once.
         key = (row.artifact_id, json.dumps(row.anchor, sort_keys=True), row.quote)
         if key not in seen:
-            seen[key] = _resolve_pin(
+            state, note = _resolve_pin(
                 row, words, bodies, indexes, html_resolved, wanted_ids
             )
-        state, note = seen[key]
+            now = ""
+            if state == anchors.EDITED and len(edited) < EDITED_NOW_MAX:
+                edited.add(key)
+                now = _current_of(conn, row, bodies, indexes, current_n, wanted_ids)
+            seen[key] = (state, note, now)
+        state, note, now = seen[key]
         out.append(
             replace(
                 row,
                 quote_state=_state_against(row.quote, *words) if row.quote else "",
                 anchor_state=state,
                 anchor_note=note,
+                anchor_current=now,
             )
         )
     return out
+
+
+def with_state(
+    db: Database, row: CommentRow, conn: Connection | None = None
+) -> CommentRow:
+    """`row` told where its pin stands on its page now (`anchor_state`,
+    `anchor_note`, `anchor_current`), as a listing would tell it. Reads the
+    page only, never the comment, so `conn` may be the transaction that wrote
+    it."""
+    if conn is not None:
+        return _with_quote_state(conn, [row])[0]
+    with db.connect() as own:
+        return _with_quote_state(own, [row])[0]
 
 
 def list_for_artifact(
@@ -1140,9 +1269,9 @@ def marks_for_page(db: Database, artifact_id: str) -> list[dict]:
     NEVER the note -- the page is agent HTML on its own origin and must not read
     what Jeremy wrote about it (page review design, Security).
 
-    Open ROOT comments with a `range` or `quote` anchor, oldest first. A reply carries its
-    root's anchor and quote, so it is the same place on the page, not a second
-    mark; a settled thread has nothing left to point at; and a page-level or
+    Open ROOT comments with a `range`, `quote` or `element` anchor, oldest
+    first. A reply carries its root's anchor and quote, so it is the same place
+    on the page, not a second mark; a settled thread has nothing left to point at; and a page-level or
     point anchor has no text to paint.
 
     A held mark's quote is still visible to page scripts, because the dotted
@@ -1152,7 +1281,7 @@ def marks_for_page(db: Database, artifact_id: str) -> list[dict]:
             "select id, kind, quote, anchor, held from comment"
             " where artifact_id = %s and thread_root is null"
             " and resolved_at is null and withdrawn_at is null"
-            " and anchor->>'kind' in ('range', 'quote')"
+            " and anchor->>'kind' in ('range', 'quote', 'element')"
             " order by created_at asc, id asc",
             (artifact_id,),
         ).fetchall()

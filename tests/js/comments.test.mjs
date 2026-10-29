@@ -58,7 +58,7 @@ function clock() {
                if (!next) break; const [t, fn] = due.get(next); due.delete(next); now = t; fn(); }
              now = end; } };
 }
-function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false, threads = [], page = "abc", seed = null } = {}) {
+function build({ noPinBtn = false, marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false, threads = [], page = "abc", seed = null } = {}) {
   const framePosts = [];
   const frameWin = { postMessage: (m, o) => framePosts.push([m, o]) };
   const frameOn = {};
@@ -90,7 +90,8 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
   panel.querySelectorAll = (q) => (q === "li.thread" ? tlist.children.slice() : []);
   const cbtn = el("a"); cbtn.className = "cbtn";
   const byId = { "artifact-frame": iframe, "artifact-marks": marksEl, "marks-unplaced": unplacedEl, comments: noPanel ? null : panel };
-  const docOn = {}, extra = { ".cbtn": cbtn };
+  const pinbtn = el("button"); pinbtn.className = "pinbtn"; pinbtn.hidden = true;
+  const docOn = {}, extra = { ".cbtn": cbtn, ...(noPinBtn ? {} : { ".pinbtn": pinbtn }) };
   const doc = { getElementById: (id) => byId[id] || null,
                 createElement: (t) => { const n = el(t); if (t === "template") Object.defineProperty(n, "innerHTML", { set(h) { n.content = { firstElementChild: { html: h } }; } }); return n; },
                 body: docBody,
@@ -120,7 +121,7 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
   const tap = (target) => { const ev = { target, prevented: false, preventDefault() { ev.prevented = true; } };
     (docOn.click || []).forEach((fn) => fn(ev)); return ev; };
   // One event through capture, then bubble; stopPropagation ends its trip.
-  const key = (k) => { const ev = { key: k, stopped: false, stopPropagation() { ev.stopped = true; } };
+  const key = (k, more = {}) => { const ev = { key: k, stopped: false, stopPropagation() { ev.stopped = true; }, ...more };
     for (const fn of (capture.keydown || []).concat(listeners.keydown || [], docOn.keydown || [])) { if (ev.stopped) break; fn(ev); }
     return ev; };
   const press = (target) => (docOn.pointerdown || []).forEach((fn) => fn({ target }));
@@ -129,7 +130,7 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
   const card = () => docBody.children.filter((c) => c.className === "hovercard");
   const scroll = () => (listeners.scroll || []).concat(capture.scroll || []).forEach((fn) => fn({}));
   return { bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload, submit, extra, doc,
-           panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist, press, fsChange };
+           panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist, press, fsChange, pinbtn, win, docOn };
 }
 const SEL = { type: "artifact-selection", quote: "the plan",
               anchor: { kind: "range", path: "body>p:nth-of-type(1)", start: 4, end: 12 },
@@ -571,6 +572,162 @@ const btnOf = (c, label) => c.querySelectorAll("button").find((b) => b.textConte
   ok(g.bar.parentNode === g.docBody && g.bar.hidden === true, "back in the page when full screen ends");
   g.send(SEL);
   ok(g.bar.style.position === "" && g.bar.style.top === "204px", "placed in page coordinates again"); }
+
+// ===== ELEMENT PINS (pinned comments, slice 2) ===============================
+// The page bar's Pin button, the C key, an outline over the frame while the
+// pointer moves, a pick that fills the composer, and numbered badges drawn from
+// the rectangles the shim reports. Everything the page sends goes in through
+// textContent and numbers; nothing from it is markup.
+const PIN = { type: "artifact-pin", quote: "Plan Price Pro $12 a month",
+              anchor: { kind: "element", id: "plans", tag: "table", heading: "Costs", path: "body>table:nth-of-type(1)" },
+              rect: { top: 60, left: 12, width: 300, height: 80, vt: 60, vl: 12 } };
+const modeMsgs = (g) => g.framePosts.filter(([m]) => m && m.type === "artifact-pin-mode");
+const outlineOf = (g) => g.docBody.children.find((c) => c.className === "pinout");
+const badgesOf = (g) => g.docBody.children.filter((c) => c.className === "pinbadge");
+
+{ const g = build();
+  ok(g.pinbtn.hidden === false, "the Pin button is revealed once the composer is there");
+  g.pinbtn.on.click({});
+  ok(modeMsgs(g).length === 1 && modeMsgs(g)[0][0].on === true && modeMsgs(g)[0][1] === "https://abc.tenfourty.com",
+     "pressing it turns pin mode on in the frame, at the frame's origin");
+  ok(g.pinbtn.attrs["aria-pressed"] === "true" && g.pinbtn.classList.contains("on"), "and shows it is on");
+  g.pinbtn.on.click({});
+  ok(modeMsgs(g)[1][0].on === false && g.pinbtn.attrs["aria-pressed"] === "false", "pressing it again leaves the mode");
+  const n = build({ noForm: true });
+  ok(n.pinbtn.hidden === true, "with no composer on the page there is nothing to pin to: the button stays hidden");
+  ok(build({ noPinBtn: true }) !== null, "a page bar without the button does not break the script"); }
+
+// the C key
+{ const g = build();
+  g.key("c", { target: { nodeName: "BODY" } });
+  ok(modeMsgs(g).length === 1 && modeMsgs(g)[0][0].on === true, "C turns pin mode on");
+  g.key("C", { target: { nodeName: "BODY" } });
+  ok(modeMsgs(g).length === 2 && modeMsgs(g)[1][0].on === false, "and off");
+  for (const target of [{ nodeName: "INPUT" }, { nodeName: "TEXTAREA" }, { nodeName: "SELECT" }, { nodeName: "DIV", isContentEditable: true }])
+    g.key("c", { target });
+  g.key("c", { target: { nodeName: "BODY" }, ctrlKey: true });
+  g.key("c", { target: { nodeName: "BODY" }, metaKey: true });
+  ok(modeMsgs(g).length === 2, "never while typing in a field, nor with a modifier");
+  g.key("c", { target: { nodeName: "BODY" } });
+  const esc = g.key("Escape");
+  ok(modeMsgs(g).length === 4 && modeMsgs(g)[3][0].on === false && esc.stopped, "Escape leaves the mode, and is not also the panel's");
+  g.key("c", { target: { nodeName: "BODY" } });
+  g.panel.classList.add("cpanel-open"); g.docBody.classList.add("cpanel-open");
+  g.key("Escape");
+  ok(g.isOpen(), "with the mode on, Escape leaves the mode first and the panel stays open");
+  g.key("Escape");
+  ok(!g.isOpen(), "and the next one closes the panel as before"); }
+
+// the frame's own keys
+{ const g = build();
+  g.send({ type: "artifact-pin-toggle" });
+  ok(modeMsgs(g).length === 1 && modeMsgs(g)[0][0].on === true, "C pressed inside the frame toggles the mode");
+  g.send({ type: "artifact-pin-exit" });
+  ok(modeMsgs(g)[1][0].on === false, "and Escape inside the frame leaves it");
+  g.send({ type: "artifact-pin-toggle" }, { origin: "https://evil.example" });
+  g.send({ type: "artifact-pin-toggle" }, { source: {} });
+  ok(modeMsgs(g).length === 2, "only the frame, at its own origin, is heard"); }
+
+// the outline
+{ const g = build();
+  g.send({ type: "artifact-pin-hover", rect: { top: 20, left: 8, width: 100, height: 30 }, tag: "p" });
+  ok(!outlineOf(g) || outlineOf(g).hidden, "no outline when pin mode is off");
+  g.pinbtn.on.click({});
+  g.send({ type: "artifact-pin-hover", rect: { top: 20, left: 8, width: 100, height: 30 }, tag: "p" });
+  const o = outlineOf(g);
+  ok(o && o.hidden === false && o.style.top === "170px" && o.style.left === "28px" && o.style.width === "100px" && o.style.height === "30px",
+     "an outline over the frame, in page coordinates: " + (o && JSON.stringify(o.style)));
+  g.send({ type: "artifact-pin-hover", rect: null, tag: "" });
+  ok(outlineOf(g).hidden === true, "no candidate hides it");
+  g.send({ type: "artifact-pin-hover", rect: { top: "20", left: 8, width: 100, height: 30 }, tag: "p" });
+  ok(outlineOf(g).hidden === true, "a rectangle that is not four numbers is ignored");
+  g.send({ type: "artifact-pin-hover", rect: { top: 1, left: 1, width: 5, height: 5 }, tag: "p" });
+  g.pinbtn.on.click({});
+  ok(outlineOf(g).hidden === true, "leaving the mode hides it");
+  g.pinbtn.on.click({});
+  g.send({ type: "artifact-mark-hover", id: "m1", rect: { top: 30, left: 10, width: 60, height: 18 } });
+  ok(g.card().length === 0, "no hover cards over marks while picking"); }
+
+// a pick fills the composer
+{ const g = build({ threads: [] });
+  g.send(PIN);
+  ok(!g.form.children.find((c) => c.name === "anchor"), "a pick that was not asked for is ignored");
+  g.pinbtn.on.click({});
+  g.send(PIN);
+  const field = (n) => g.form.children.find((c) => c.name === n);
+  ok(field("quote") && field("quote").value === "Plan Price Pro $12 a month", "the quote goes into the form");
+  ok(field("anchor") && JSON.parse(field("anchor").value).id === "plans" && JSON.parse(field("anchor").value).kind === "element", "and the anchor");
+  ok(field("kind") && field("kind").value === "comment", "as a plain comment");
+  const q = g.form.children.find((c) => c.className === "cquote");
+  ok(q && q.textContent === "Plan Price Pro $12 a month", "the spot is quoted above the box, as text");
+  ok(g.isOpen() && g.body.focused === true && /pinned/i.test(g.body.placeholder), "the panel opens with the cursor in the box");
+  ok(modeMsgs(g).slice(-1)[0][0].on === false, "and pin mode is left, so the page's own buttons work again");
+  ok(g.bar.hidden === true, "the selection bar is not also offered"); }
+{ const g = build();
+  g.pinbtn.on.click({});
+  g.send({ ...PIN, quote: "", anchor: { kind: "element", tag: "img", ordinal: 2, heading: "Costs" } });
+  const q = g.form.children.find((c) => c.className === "cquote");
+  ok(q && q.textContent === "img", "an element with no words is named by its tag");
+  const h = build();
+  for (const bad of [{ ...PIN, anchor: { kind: "range", path: "p" } }, { ...PIN, anchor: null }, { ...PIN, quote: 5 },
+                     { ...PIN, rect: null }, { ...PIN, anchor: { kind: "element", pad: "x".repeat(5000) } }]) {
+    h.pinbtn.on.click({}); h.send(bad);
+    ok(!h.form.children.find((c) => c.name === "anchor"), "a malformed pick fills nothing: " + JSON.stringify(bad).slice(0, 50));
+    if (modeMsgs(h).slice(-1)[0][0].on) h.pinbtn.on.click({});
+  }
+  const long = build(); long.pinbtn.on.click({});
+  long.send({ ...PIN, quote: "w".repeat(900) });
+  ok(long.form.children.find((c) => c.name === "quote").value.length === 200, "a long quote is cut at 200"); }
+
+// selection is not offered while picking
+{ const g = build();
+  g.pinbtn.on.click({});
+  g.send(SEL);
+  ok(g.bar.hidden === true, "text selected in the frame during pin mode offers no action bar"); }
+
+// badges
+const EMARKS = JSON.stringify([
+  { id: "t1", kind: "comment", quote: "some words", anchor: SEL.anchor },
+  { id: "e1", kind: "comment", quote: "", anchor: { kind: "element", id: "plans" } },
+  { id: "e2", kind: "comment", quote: "", anchor: { kind: "element", id: "chart" } }]);
+const placed = (rects, extra = {}) => ({ type: "artifact-marks-placed", placed: ["t1", "e1", "e2"], unplaced: [], rects, ...extra });
+{ const g = build({ marks: EMARKS, threads: [threadLi("e1"), threadLi("e2")] });
+  g.send(placed([{ id: "e1", top: 100, left: 10, width: 300, height: 50 }, { id: "e2", top: 400, left: 20, width: 50, height: 50 }]));
+  const bs = badgesOf(g);
+  ok(bs.length === 2 && bs[0].textContent === "1" && bs[1].textContent === "2", "a numbered badge for each element pin, in order");
+  ok(bs[0].style.top === "250px" && bs[0].style.left === "30px", "at the element's corner, in page coordinates: " + JSON.stringify(bs[0].style));
+  const li = g.tlist.children[0];
+  ok(li.querySelector(".cpinno") && li.querySelector(".cpinno").textContent === "1", "and the same number in its thread");
+  g.send(placed([{ id: "e2", top: 410, left: 20, width: 50, height: 50 }]));
+  ok(badgesOf(g).length === 1 && badgesOf(g)[0].textContent === "2", "the next report replaces them (numbers stay with their pins)");
+  ok(g.tlist.children[1].querySelector(".cpinno").textContent === "2", "e2 keeps the number 2 in its thread");
+  g.send(placed([{ id: "t1", top: 1, left: 1, width: 1, height: 1 }, { id: "zz", top: 1, left: 1, width: 1, height: 1 },
+                 { id: "e1", top: "x", left: 1, width: 1, height: 1 }, null, { id: "e1", top: 1, left: 1, width: NaN, height: 1 }]));
+  ok(badgesOf(g).length === 0, "rects for text marks, unknown ids or non-numbers draw nothing");
+  g.send(placed(Array.from({ length: 500 }, () => ({ id: "e1", top: 1, left: 1, width: 1, height: 1 }))));
+  ok(badgesOf(g).length <= 200, "capped");
+  g.send({ type: "artifact-pin-rects", rects: [{ id: "e1", top: 130, left: 10, width: 300, height: 50 }] });
+  ok(badgesOf(g).length === 1 && badgesOf(g)[0].style.top === "280px", "a resize report moves them");
+  badgesOf(g)[0].on.click({});
+  ok(g.isOpen() && g.tlist.children[0].scrolled === true, "pressing a badge opens the panel at its thread");
+  g.send(placed([{ id: "e1", top: 100, left: 10, width: 300, height: 50 }], { placed: ["e1"] }), { origin: "https://evil.example" });
+  g.send({ type: "artifact-marks-placed", placed: [], unplaced: [] });
+  ok(badgesOf(g).length === 1 || badgesOf(g).length === 0, "a report with no rects is not an error"); }
+{ const g = build({ marks: EMARKS, threads: [threadLi("e1")] });
+  g.send(placed([{ id: "e1", top: 100, left: 10, width: 300, height: 50 }]));
+  const t = g.tlist.children[0];
+  g.panel.on.mouseover({ target: t });
+  const o = outlineOf(g);
+  ok(o && o.hidden === false && o.style.top === "250px" && o.style.width === "300px", "hovering a thread outlines its spot: " + (o && JSON.stringify(o.style)));
+  g.panel.on.mouseout({ target: t });
+  ok(outlineOf(g).hidden === true, "leaving it hides the outline");
+  g.panel.on.focusin({ target: t });
+  ok(outlineOf(g).hidden === false, "focus does the same");
+}
+{ const g = build({ marks: EMARKS, threads: [threadLi("e1")] });
+  g.doc.fullscreenElement = g.docBody;
+  g.send(placed([{ id: "e1", top: 100, left: 10, width: 300, height: 50 }]));
+  ok(badgesOf(g).length === 0, "no badges in full screen, where page offsets would point at nothing"); }
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

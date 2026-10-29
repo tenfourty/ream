@@ -51,6 +51,7 @@ from artifacts import (
     partner_in,
     ratelimit,
     review,
+    sections,
     store,
     templates,
     text,
@@ -1433,6 +1434,36 @@ def agent_router(
             background.add_task(send)
         return response
 
+    def _element_anchor(artifact_id, anchor, agent) -> tuple[dict, str]:
+        """An agent's `element` anchor, `{"kind": "element", "id": "..."}`, into
+        the stored shape: the id must be on the current version exactly once
+        (`sections.locate` says if it is not), and the server fills the tag,
+        the heading it sits under, the words either side and the quote from
+        the page, which an agent cannot measure."""
+        bad = HTTPException(
+            422,
+            {
+                "field": "anchor",
+                "detail": 'an element anchor is {"kind": "element", "id": "<the '
+                "element's id, which is on the page exactly once>\"}",
+            },
+        )
+        element_id = anchor.get("id")
+        if (
+            set(anchor) - {"kind", "id"}
+            or not isinstance(element_id, str)
+            or not anchors.ID_RE.fullmatch(element_id)
+        ):
+            raise bad
+        current = store.get_body(db, agent, artifact_id, as_reader=True)
+        try:
+            found = sections.locate(current.body, element_id)
+        except sections.SectionError as exc:
+            raise HTTPException(
+                422, {"field": "anchor", "detail": str(exc), "matches": 0}
+            ) from exc
+        return anchors.element_anchor(current.body, element_id, found)
+
     def _text_anchor(artifact_id, payload, agent) -> tuple[dict | None, str]:
         """Turn an agent's `text` anchor into the stored shape: a `quote` anchor
         carrying the heading the server found the passage under, which the
@@ -1443,9 +1474,11 @@ def agent_router(
         if (
             payload.thread_root is not None
             or not isinstance(anchor, dict)
-            or anchor.get("kind") != "text"
+            or anchor.get("kind") not in ("text", "element")
         ):
             return anchor, payload.quote
+        if anchor.get("kind") == "element":
+            return _element_anchor(artifact_id, anchor, agent)
         quote, section = anchor.get("quote"), anchor.get("section")
         if (
             set(anchor) - {"kind", "quote", "section"}
@@ -1513,6 +1546,9 @@ def agent_router(
                 session=seat_session,
                 after_commit=later,
             )
+            # Where the pin stands on the page now, in the reply: the agent
+            # learns at write time, not on its next listing.
+            row = comments.with_state(db, row, conn)
             # GitGuardian checks the saved comment straight after the response.
             if later is not None:
                 later.append(partial(comments.second_scan, db, row.id))
