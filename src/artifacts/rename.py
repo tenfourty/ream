@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from artifacts.db import Database, Rollback
-from artifacts.keys import AGENT_NAME
+from artifacts.keys import AGENT_NAME, RESERVED_REASON, is_reserved_agent_name
 
 # Fixed, and distinct from db._MIGRATE_LOCK_KEY and idempotency's hashed keys
 # (which are spread over the whole bigint range, so a collision is as likely as
@@ -75,6 +75,8 @@ def rename_agent(db: Database, old: str, new: str, *, dry_run: bool) -> dict[str
             raise Refused(
                 f"invalid agent name {name!r}: must match {AGENT_NAME.pattern!r}"
             )
+    if is_reserved_agent_name(new):
+        raise Refused(f"invalid agent name {new!r}: {RESERVED_REASON}")
     if old == new:
         raise Refused(f"{old} is already called {new}")
 

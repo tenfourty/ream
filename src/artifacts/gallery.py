@@ -5544,6 +5544,13 @@ def gallery_router(db: Database) -> APIRouter:
                     "Use 2 to 40 letters, digits or hyphens for the name.",
                     name=name,
                 )
+            elif keys.is_reserved_agent_name(agent):
+                body = _connect_page(
+                    code,
+                    pending,
+                    f"{agent} is {keys.RESERVED_REASON}. Pick another.",
+                    name=name,
+                )
             elif connect.name_in_use(db, agent):
                 body = _connect_page(
                     code,

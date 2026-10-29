@@ -139,6 +139,13 @@ def test_a_name_already_connected_is_refused_until_its_key_is_revoked(db, galler
     assert "Approved" in _approve(gallery, started["code"], name="laptop").text
 
 
+def test_the_reserved_name_cannot_be_approved_for_a_machine(gallery):
+    started = _ask(gallery)
+    refused = _approve(gallery, started["code"], name="jeremy")
+    assert "reserved" in refused.text and "Approved" not in refused.text
+    assert "Approved" in _approve(gallery, started["code"], name="laptop").text
+
+
 def test_approving_needs_his_own_page_not_another_site(gallery):
     started = _ask(gallery)
     forged = _approve(

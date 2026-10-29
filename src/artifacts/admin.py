@@ -38,6 +38,8 @@ def _check_agent(agent: str) -> None:
         raise SystemExit(
             f"invalid agent name {agent!r}: must match {_AGENT_NAME.pattern!r}"
         )
+    if keys.is_reserved_agent_name(agent):
+        raise SystemExit(f"invalid agent name {agent!r}: {keys.RESERVED_REASON}")
 
 
 def _current(db: Database, agent: str) -> str:

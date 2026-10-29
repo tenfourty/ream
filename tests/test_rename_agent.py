@@ -289,6 +289,8 @@ def test_refusals(db):
         rename.rename_agent(db, "cove-seat", "cove-seat", dry_run=False)
     with pytest.raises(rename.Refused, match="invalid agent name"):
         rename.rename_agent(db, "cove-seat", "Cove_Maintainer", dry_run=False)
+    with pytest.raises(rename.Refused, match="reserved"):
+        rename.rename_agent(db, "cove-seat", "jeremy", dry_run=False)
     with pytest.raises(rename.Refused, match="no agent named"):
         rename.rename_agent(db, "cove-sea", "cove-maintainer", dry_run=False)
     assert rename.resolve(db, "cove-sea") == "cove-sea"

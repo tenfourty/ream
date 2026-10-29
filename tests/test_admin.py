@@ -81,6 +81,17 @@ def test_new_key_rejects_bad_agent_names(tmp_path, bad_agent):
     assert not (tmp_path / "key").exists()
 
 
+def test_new_key_and_register_key_refuse_the_reserved_name(tmp_path, db, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    with pytest.raises(SystemExit, match="reserved"):
+        main(["new-key", "--agent", "jeremy", "--out", str(tmp_path / "key")])
+    assert not (tmp_path / "key").exists()
+    with pytest.raises(SystemExit, match="reserved"):
+        main(["register-key", "--agent", "jeremy", "--sha256", "a" * 64])
+    with db.connect() as conn:
+        assert conn.execute("select count(*) from agent_key").fetchone()[0] == 0
+
+
 def test_register_key_inserts_and_verify_finds_the_agent(db, monkeypatch, tmp_path):
     monkeypatch.setenv("DATABASE_URL", db.dsn)
     out = tmp_path / "key"

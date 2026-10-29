@@ -19,6 +19,17 @@ ROTATING_MAX_AGE = timedelta(days=14)
 # against this, and so does a rename.
 AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
+# Names no agent may take: the gallery stores the reader's own comments, pictures
+# and answers under "jeremy", so an agent called that would read as his work.
+# The pattern forces lower case, so no case variants arise.
+RESERVED_AGENT_NAMES = frozenset({"jeremy"})
+RESERVED_REASON = "reserved: it is the reader's own name"
+
+
+def is_reserved_agent_name(name: str) -> bool:
+    """Whether `name` is one no agent may be minted, connected or renamed to."""
+    return name in RESERVED_AGENT_NAMES
+
 
 @dataclass(frozen=True)
 class AgentKey:
