@@ -298,3 +298,47 @@ def test_a_hostile_section_is_searched_in_bounded_time():
     began = time.monotonic()
     _fz(spaced, quote="x " * 100 + "y")
     assert time.monotonic() - began < 1.0
+
+
+def test_a_listing_over_many_pages_shares_one_budget_and_a_repeat_is_cached():
+    import time
+
+    anchors._FUZZY_CACHE.clear()
+    pin = {"kind": "quote", "heading": "Costs"}
+    quote = "x " * 100 + "y"
+
+    def listing():
+        budget = anchors.FuzzyBudget()
+        began = time.monotonic()
+        for n in range(60):
+            body = f"<h2>Costs</h2><p>{'x ' * (1000 + n)}</p>"
+            index = anchors.PageIndex(body, budget=budget)
+            anchors.resolve(pin, quote, index)
+            anchors.current_quote(pin, quote, index)
+        return time.monotonic() - began
+
+    assert listing() < 0.6
+    assert listing() < 0.6  # a search cut short is never cached as "no match"
+
+
+def test_a_finished_search_is_served_from_the_cache_next_time(monkeypatch):
+    anchors._FUZZY_CACHE.clear()
+    body = FUZZ_PAGE.replace("flat", "fixed")
+    pin = {"kind": "quote", "heading": "Costs"}
+    first = anchors.PageIndex(body).fuzzy(pin, SENTENCE)
+    assert first and len(anchors._FUZZY_CACHE) == 1
+
+    def refuse(*a, **k):
+        raise AssertionError("searched again")
+
+    monkeypatch.setattr(anchors, "_fuzzy_text", refuse)
+    assert anchors.PageIndex(body).fuzzy(pin, SENTENCE) == first
+
+
+def test_the_cache_is_bounded(monkeypatch):
+    anchors._FUZZY_CACHE.clear()
+    monkeypatch.setattr(anchors, "FUZZY_CACHE_MAX", 3)
+    for n in range(10):
+        index = anchors.PageIndex(f"<h2>Costs</h2><p>{SENTENCE} {n}</p>")
+        index.fuzzy({"heading": "Costs"}, SENTENCE + " tail")
+    assert len(anchors._FUZZY_CACHE) <= 3

@@ -1084,7 +1084,7 @@ def _context_of(anchor: dict | None) -> bool:
 HTML_PINS_MAX = 200
 
 
-def _resolve_pin(row, words, bodies, indexes, html_resolved, wanted_ids):
+def _resolve_pin(row, words, bodies, indexes, html_resolved, wanted_ids, budget):
     """`anchors.resolve` for one row, against the page's shared index."""
     page = row.artifact_id
     if page not in bodies:
@@ -1094,7 +1094,9 @@ def _resolve_pin(row, words, bodies, indexes, html_resolved, wanted_ids):
         if html_resolved[page] > HTML_PINS_MAX:
             return "", ""
     if page not in indexes:
-        indexes[page] = anchors.PageIndex(bodies[page], wanted_ids.get(page, set()))
+        indexes[page] = anchors.PageIndex(
+            bodies[page], wanted_ids.get(page, set()), budget
+        )
     return anchors.resolve(row.anchor, row.quote, indexes[page], facts=words)
 
 
@@ -1103,7 +1105,7 @@ def _resolve_pin(row, words, bodies, indexes, html_resolved, wanted_ids):
 EDITED_NOW_MAX = 50
 
 
-def _current_of(conn, row, bodies, indexes, current_n, wanted_ids) -> str:
+def _current_of(conn, row, bodies, indexes, current_n, wanted_ids, budget) -> str:
     """`anchors.current_quote` for an edited pin, reading the page's HTML now
     if this listing had not needed it yet."""
     page = row.artifact_id
@@ -1116,7 +1118,9 @@ def _current_of(conn, row, bodies, indexes, current_n, wanted_ids) -> str:
             return ""
         bodies[page] = got[0]
     if page not in indexes:
-        indexes[page] = anchors.PageIndex(bodies[page], wanted_ids.get(page, set()))
+        indexes[page] = anchors.PageIndex(
+            bodies[page], wanted_ids.get(page, set()), budget
+        )
     return anchors.current_quote(row.anchor, row.quote, indexes[page])
 
 
@@ -1181,6 +1185,7 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
         _visible_cache_put((artifact_id, n), words_by_page[artifact_id])
     # One index per page: the body is parsed once however many pins it carries.
     indexes: dict[str, anchors.PageIndex] = {}
+    budget = anchors.FuzzyBudget()  # one for the whole listing, every page
     html_resolved: dict[str, int] = {}
     seen: dict[tuple[str, str, str], tuple[str, str, str]] = {}
     edited: set = set()
@@ -1197,12 +1202,14 @@ def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
         key = (row.artifact_id, json.dumps(row.anchor, sort_keys=True), row.quote)
         if key not in seen:
             state, note = _resolve_pin(
-                row, words, bodies, indexes, html_resolved, wanted_ids
+                row, words, bodies, indexes, html_resolved, wanted_ids, budget
             )
             now = ""
             if state == anchors.EDITED and len(edited) < EDITED_NOW_MAX:
                 edited.add(key)
-                now = _current_of(conn, row, bodies, indexes, current_n, wanted_ids)
+                now = _current_of(
+                    conn, row, bodies, indexes, current_n, wanted_ids, budget
+                )
             seen[key] = (state, note, now)
         state, note, now = seen[key]
         out.append(

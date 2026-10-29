@@ -372,10 +372,14 @@ Built as written in sections 3, 4, 5 and 7, with the prior-art additions Jeremy 
   five changed: looser starts matching a neighbouring sentence of the same shape, tighter misses a
   reworded clause. Standard library only.
 - Minimum: a quote under 24 characters or 4 words is never matched approximately.
-- Bounds: section HTML read 200,000 chars, its words compared 4,000, at most 1,500 windows
-  scored, total scoring work (window length x quote length) 1.5 million, at most 10 searches per
-  page index (one listing). `autojunk` is off and cheap upper bounds (`real_quick_ratio`,
-  `quick_ratio`) run first. A hostile section of repeated characters costs about 0.2 s a search.
+- Bounds: section HTML read 200,000 chars, its words compared 4,000, quote capped at 200,
+  at most 1,500 windows scored per search. One `anchors.FuzzyBudget` per listing, shared by every
+  page's index, allows 20 searches and 1.5 million work (each window charged its length plus the
+  quote's, each scored window also length x quote length): about 0.15 s for a whole wall, however
+  many pages it spans. Finished searches are cached across requests (a page version never
+  changes) by hash of the section words and the quote, 4,000 entries, cleared when full; a search
+  cut short by the budget is not cached and reads as no answer. `autojunk` is off and the cheap
+  upper bounds (`real_quick_ratio`, `quick_ratio`) run first.
 - Out of scope, server-side state only: the browser shim does not place a fuzzy-matched quote
   (the gallery still paints from its own exact placement and lists such a pin unpainted with the
   server's `edited` label), and the carry-forward state of a comment (`comments.carried_state`)

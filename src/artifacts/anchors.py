@@ -12,6 +12,7 @@ from here, so nothing in this file may import `comments`.
 """
 
 import difflib
+import hashlib
 import html
 import re
 from html.parser import HTMLParser
@@ -195,37 +196,58 @@ FUZZY_WORDS_MIN = 4
 FUZZY_SECTION_HTML = 200_000  # of a section's HTML read
 FUZZY_SECTION_TEXT = 4_000  # of its words compared
 FUZZY_CANDIDATES = 1_500  # word windows scored per search
-FUZZY_WORK = 1_500_000  # window length x quote length summed over scored windows
-FUZZY_SEARCHES = 10  # per page index, i.e. per listing
+FUZZY_WORK = (
+    1_500_000  # per listing: every window's size, plus the scored ones' size x quote's
+)
+FUZZY_SEARCHES = 20  # per listing
 
 
-def _fuzzy_text(section: str, needle: str) -> str:
-    """The stretch of `section` (words, spaces collapsed) most like `needle`
-    at or over FUZZY_RATIO, or "". Windows of as many words as the quote has,
-    one fewer and one more; the cheap upper bounds go first."""
+class FuzzyBudget:
+    """What one listing may spend on approximate searches, shared by every
+    PageIndex it builds: a hostile wall cannot multiply the per-search bound by
+    its page count. Worst case about 0.15 s of matching for a whole listing."""
+
+    def __init__(self, searches: int = FUZZY_SEARCHES, work: int = FUZZY_WORK) -> None:
+        self.searches = searches
+        self.work = work
+
+
+# Finished searches, kept across requests: a page version never changes, so the
+# same section and quote always give the same answer. Keyed by a hash of the
+# words searched, not the words; cleared when full.
+FUZZY_CACHE_MAX = 4_000
+_FUZZY_CACHE: dict[tuple[bytes, str], str] = {}
+
+
+def _fuzzy_text(section: str, needle: str, budget: FuzzyBudget) -> tuple[str, bool]:
+    """(the stretch of `section` most like `needle` at or over FUZZY_RATIO or "",
+    whether the search ran to its end). Windows of as many words as the quote
+    has, one fewer and one more; every window is charged to `budget`, the cheap
+    upper bounds go first, and a scored one is charged by its size too."""
     tokens = section[:FUZZY_SECTION_TEXT].split()
     want = len(needle.split())
-    best, best_ratio, seen, work = "", FUZZY_RATIO, 0, 0
+    best, best_ratio, seen = "", FUZZY_RATIO, 0
     matcher = difflib.SequenceMatcher(None, autojunk=False)
     matcher.set_seq2(needle)
     for size in (want, want - 1, want + 1):
         for i in range(len(tokens) - size + 1):
             seen += 1
-            if seen > FUZZY_CANDIDATES:
-                return best
             window = " ".join(tokens[i : i + size])
+            budget.work -= len(window) + len(needle)
+            if seen > FUZZY_CANDIDATES or budget.work < 0:
+                return best, False
             matcher.set_seq1(window.lower())
             if (
                 matcher.real_quick_ratio() >= best_ratio
                 and matcher.quick_ratio() >= best_ratio
             ):
-                work += len(window) * len(needle)
-                if work > FUZZY_WORK:
-                    return best
+                budget.work -= len(window) * len(needle)
+                if budget.work < 0:
+                    return best, False
                 ratio = matcher.ratio()
                 if ratio >= best_ratio and (ratio > best_ratio or not best):
                     best, best_ratio = window, ratio
-    return best
+    return best, True
 
 
 def _clean(value: str) -> str:
@@ -243,8 +265,14 @@ class PageIndex:
     expect (one pass), and the visible words of each region (memoised). A
     listing builds one per (page, version) and hands it to every pin on it."""
 
-    def __init__(self, body: str, ids: set[str] | frozenset[str] = frozenset()):
+    def __init__(
+        self,
+        body: str,
+        ids: set[str] | frozenset[str] = frozenset(),
+        budget: FuzzyBudget | None = None,
+    ):
         self.body = body
+        self.budget = budget or FuzzyBudget()
         self.small = len(body) <= SECTION_PAGE_MAX
         self._ids = frozenset(ids)
         self._located: dict | None = None
@@ -343,8 +371,8 @@ class PageIndex:
         """The words under the pin's own heading that are approximately the
         quote, or "". Only that section is read, never the rest of the page, so
         a pin is never re-attached elsewhere; a quote too short to be told from
-        other text is not searched; at most FUZZY_SEARCHES run per index."""
-        needle = " ".join(quote.split()).lower()
+        other text is not searched; what it may spend is the listing's `budget`."""
+        needle = " ".join(quote.split()).lower()[:QUOTE_MAX]
         heading = anchor.get("heading") or ""
         heading_id = anchor.get("heading_id") or ""
         if (
@@ -356,16 +384,30 @@ class PageIndex:
             return ""
         key = (needle, heading, heading_id)
         if key not in self._fuzzy:
-            if len(self._fuzzy) >= FUZZY_SEARCHES:
-                return ""
-            found = ""
+            found, done = "", True
             for _, start, stop in self.heading_spans(heading, heading_id)[:3]:
                 words, _ = text.readable(
                     self.body[start : min(stop, start + FUZZY_SECTION_HTML)]
                 )
-                found = _fuzzy_text(words, needle)
+                words = words[:FUZZY_SECTION_TEXT]
+                ck = (hashlib.sha256(words.encode()).digest(), needle)
+                if ck in _FUZZY_CACHE:
+                    found = _FUZZY_CACHE[ck]
+                else:
+                    if self.budget.searches <= 0:
+                        return ""
+                    self.budget.searches -= 1
+                    found, whole = _fuzzy_text(words, needle, self.budget)
+                    if whole:
+                        if len(_FUZZY_CACHE) >= FUZZY_CACHE_MAX:
+                            _FUZZY_CACHE.clear()
+                        _FUZZY_CACHE[ck] = found
+                    else:
+                        done = False
                 if found:
                     break
+            if not done and not found:
+                return ""  # out of budget: not remembered as "no match"
             self._fuzzy[key] = found
         return self._fuzzy[key]
 
