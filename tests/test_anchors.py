@@ -218,3 +218,83 @@ def test_an_index_answers_as_the_plain_body_does():
 def test_an_id_longer_than_sections_address_is_refused():
     assert anchors.ID_RE.fullmatch("x" * 128)
     assert not anchors.ID_RE.fullmatch("x" * 129)
+
+
+# --- an edited quote found approximately, inside its own section ---------------
+
+SENTENCE = "Cost per seat is flat across all of the plans we offer."
+FUZZ_PAGE = (
+    "<html><body><h2>Costs</h2><p>" + SENTENCE + "</p>"
+    "<h2>Hosting</h2><p>Hosting is billed monthly in advance, per cluster.</p>"
+    "</body></html>"
+)
+
+
+def _fz(body, quote=SENTENCE, heading="Costs", **extra):
+    pin = {"kind": "quote", "heading": heading, **extra}
+    return anchors.resolve(pin, quote, body), anchors.current_quote(pin, quote, body)
+
+
+def test_a_word_changed_in_the_quote_is_edited_and_shows_what_stands_there():
+    body = FUZZ_PAGE.replace("flat", "fixed")
+    got, now = _fz(body)
+    assert got == ("edited", "")
+    assert now == "Cost per seat is fixed across all of the plans we offer."
+
+
+def test_a_slightly_reworded_sentence_is_edited_not_current():
+    body = FUZZ_PAGE.replace(
+        "across all of the plans we offer", "across every plan we offer"
+    )
+    got, now = _fz(body)
+    assert got[0] == "edited"
+    assert "every plan" in now
+
+
+def test_a_quote_reworded_into_another_section_is_not_re_attached():
+    reworded = "Rates per seat are fixed across every one of the plans we sell."
+    body = FUZZ_PAGE.replace(SENTENCE, "").replace(
+        "per cluster.", "per cluster. " + reworded
+    )
+    assert (
+        anchors.resolve({"kind": "quote", "heading": "Costs"}, reworded, body)[0]
+        == "current"
+    )
+    got, now = _fz(body, quote="Seat prices are fixed over each of the plans we sell.")
+    assert got[0] == "outdated"
+    assert now == ""
+
+
+def test_a_very_short_quote_is_never_matched_approximately():
+    body = FUZZ_PAGE.replace("Cost per seat is flat", "Cost per seats are flat")
+    got, now = _fz(body, quote="Cost per seat")  # still a substring: current
+    assert got[0] == "current"
+    body = FUZZ_PAGE.replace(SENTENCE, "Cost per sea is.")
+    got, now = _fz(body, quote="Cost per seas is")
+    assert got[0] == "outdated" and now == ""
+
+
+def test_a_quote_that_is_gone_from_its_section_is_outdated():
+    body = FUZZ_PAGE.replace(SENTENCE, "Nothing here about pricing at all, sorry.")
+    assert _fz(body) == (("outdated", ""), "")
+
+
+def test_a_pin_with_no_heading_has_no_section_to_search():
+    index = anchors.PageIndex(FUZZ_PAGE.replace("flat", "fixed"))
+    assert index.fuzzy({"kind": "quote"}, SENTENCE) == ""
+    assert index.fuzzy({"kind": "quote", "heading": "Costs"}, SENTENCE) != ""
+
+
+def test_a_hostile_section_is_searched_in_bounded_time():
+    import time
+
+    hostile = "<html><body><h2>Costs</h2><p>" + "a b " * 60_000 + "</p></body></html>"
+    quote = "alpha beta gamma delta epsilon zeta eta theta " * 4
+    began = time.monotonic()
+    got, _ = _fz(hostile, quote=quote.strip())
+    assert time.monotonic() - began < 1.0
+    assert got[0] == "outdated"
+    spaced = "<html><body><h2>Costs</h2><p>" + "x " * 100_000 + "</p></body></html>"
+    began = time.monotonic()
+    _fz(spaced, quote="x " * 100 + "y")
+    assert time.monotonic() - began < 1.0

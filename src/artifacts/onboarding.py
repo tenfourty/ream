@@ -234,7 +234,9 @@ says where it was. `artifacts-decide comments --outdated` lists just those;
 over the API, GET /api/v1/artifacts/<id>/comments and GET /api/v1/comments
 return `anchor_state` (current, edited or outdated), `anchor_note` and, for an
 edited pin, `anchor_current` (what stands there now) on every row, and take ?anchor_state=outdated to list only the gone spots. Ids on your
-headings and sections help: a pin is re-found by its id when the words change.
+headings and sections help: a pin is re-found by its id when the words change. A quote reworded
+slightly under the same heading (at least 24 characters, about 80% alike) is also edited, with the
+new words in anchor_current; one reworded heavily, or moved to another section, is outdated.
 
 Two rules are fixed. Your comment is never his answer to a decision, and never
 acknowledges or closes one. And it always shows as yours: your agent name

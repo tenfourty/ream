@@ -2561,3 +2561,8 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   row and column and an image by its alt text, shows the original and the current text when it was
   edited, and goes outdated if a republish removes it. Creating a comment returns where the pin
   stands. Spec `specs/2026-10-29-pinned-comments.md` (slice 2).
+- **A slightly reworded pinned quote is `edited` (29 Oct 2026).** Under its own heading, a quote
+  gone from the page is found approximately (similarity 0.8, at least 24 characters, bounded
+  work) and reported `edited` with the new words as `anchor_current`; never re-attached from
+  another section. Server-side only; the browser shim is unchanged. Spec as above, "As built:
+  approximate re-find".

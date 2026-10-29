@@ -109,7 +109,8 @@ Order of evidence, first hit wins, each step checked:
 3. **Quote anywhere.** As step 2's second half, for pins with no heading.
 4. **Edit in place.** Quote absent but `prefix`, `suffix` or half the quote survives: `edited`
    (the existing `carried_state` rule, reused as is).
-5. Otherwise `outdated`.
+5. **Approximate, in its own section** (added after slice 2; see "As built: approximate
+   re-find"). Otherwise `outdated`.
 
 `quote_state` stays on every comment unchanged (`current`/`changed`); `anchor_state` and
 `anchor_note` are new fields beside it. The gallery paints from the shim's own placement (which
@@ -357,8 +358,28 @@ Built as written in sections 3, 4, 5 and 7, with the prior-art additions Jeremy 
   element has no words, and an image with no id is re-found by it.
 - **The state on create.** The reply to `POST /artifacts/{id}/comments` carries `anchor_state`,
   `anchor_note` and `anchor_current`, read as a listing reads them.
-- Still not built, as agreed: automatic spot capture, and fuzzy matching of an edited quote inside
-  its section (an `edited` pin without a surviving prefix/suffix has no current quote).
+- Still not built, as agreed: automatic spot capture.
+
+### As built: approximate re-find of an edited quote
+
+- When the quote is gone and no prefix, suffix or half of it survives, `anchors.PageIndex.fuzzy`
+  looks for it **approximately inside the pin's own heading section** (found by `heading_id`, then
+  heading text; the first three matches). A match is `edited`, never `current`, and its text is
+  the pin's `anchor_current`, beside the original quote. No match: `outdated`. It never searches
+  outside the section, so a pin is never re-attached elsewhere. Quote pins only, not element pins.
+- Matcher: `difflib.SequenceMatcher.ratio() >= 0.8` on case-folded text, over windows of the
+  section's words (as many words as the quote, one fewer, one more). 0.8 is about one word in
+  five changed: looser starts matching a neighbouring sentence of the same shape, tighter misses a
+  reworded clause. Standard library only.
+- Minimum: a quote under 24 characters or 4 words is never matched approximately.
+- Bounds: section HTML read 200,000 chars, its words compared 4,000, at most 1,500 windows
+  scored, total scoring work (window length x quote length) 1.5 million, at most 10 searches per
+  page index (one listing). `autojunk` is off and cheap upper bounds (`real_quick_ratio`,
+  `quick_ratio`) run first. A hostile section of repeated characters costs about 0.2 s a search.
+- Out of scope, server-side state only: the browser shim does not place a fuzzy-matched quote
+  (the gallery still paints from its own exact placement and lists such a pin unpainted with the
+  server's `edited` label), and the carry-forward state of a comment (`comments.carried_state`)
+  still uses the exact evidence only.
 
 Differences from the text above, and why:
 

@@ -11,6 +11,7 @@ Pure functions over a page body. The lower layer of `comments`, which imports
 from here, so nothing in this file may import `comments`.
 """
 
+import difflib
 import html
 import re
 from html.parser import HTMLParser
@@ -183,6 +184,50 @@ def edited_in_place(anchor: dict, quote: str, tight_words: str) -> bool:
     return any(len(h) >= CONTEXT_MIN and h in tight_words for h in hints)
 
 
+# Approximate re-finding of an edited quote, inside the pin's own section only.
+# SequenceMatcher.ratio() >= 0.8: roughly one word in five changed. Looser
+# starts matching a different sentence of the same shape; tighter misses a
+# reworded clause. Standard library only, and every input is capped so the cost
+# is a fixed ceiling whatever the page holds.
+FUZZY_RATIO = 0.8
+FUZZY_QUOTE_MIN = 24  # characters, spaces folded: a shorter quote matches too much
+FUZZY_WORDS_MIN = 4
+FUZZY_SECTION_HTML = 200_000  # of a section's HTML read
+FUZZY_SECTION_TEXT = 4_000  # of its words compared
+FUZZY_CANDIDATES = 1_500  # word windows scored per search
+FUZZY_WORK = 1_500_000  # window length x quote length summed over scored windows
+FUZZY_SEARCHES = 10  # per page index, i.e. per listing
+
+
+def _fuzzy_text(section: str, needle: str) -> str:
+    """The stretch of `section` (words, spaces collapsed) most like `needle`
+    at or over FUZZY_RATIO, or "". Windows of as many words as the quote has,
+    one fewer and one more; the cheap upper bounds go first."""
+    tokens = section[:FUZZY_SECTION_TEXT].split()
+    want = len(needle.split())
+    best, best_ratio, seen, work = "", FUZZY_RATIO, 0, 0
+    matcher = difflib.SequenceMatcher(None, autojunk=False)
+    matcher.set_seq2(needle)
+    for size in (want, want - 1, want + 1):
+        for i in range(len(tokens) - size + 1):
+            seen += 1
+            if seen > FUZZY_CANDIDATES:
+                return best
+            window = " ".join(tokens[i : i + size])
+            matcher.set_seq1(window.lower())
+            if (
+                matcher.real_quick_ratio() >= best_ratio
+                and matcher.quick_ratio() >= best_ratio
+            ):
+                work += len(window) * len(needle)
+                if work > FUZZY_WORK:
+                    return best
+                ratio = matcher.ratio()
+                if ratio >= best_ratio and (ratio > best_ratio or not best):
+                    best, best_ratio = window, ratio
+    return best
+
+
 def _clean(value: str) -> str:
     """Collapsed, capped and printable: every character `str.isprintable` refuses
     (format characters such as a zero-width joiner or soft hyphen, private use,
@@ -207,6 +252,7 @@ class PageIndex:
         self._words: dict[tuple, tuple[str, bool]] = {}
         self._labels: list[str] | None = None
         self._plain: tuple[str, list[int], str] | None = None
+        self._fuzzy: dict[tuple, str] = {}
 
     @property
     def labels(self) -> list[str]:
@@ -293,6 +339,36 @@ class PageIndex:
                 break
         return ("h", i), start, stop
 
+    def fuzzy(self, anchor: dict, quote: str) -> str:
+        """The words under the pin's own heading that are approximately the
+        quote, or "". Only that section is read, never the rest of the page, so
+        a pin is never re-attached elsewhere; a quote too short to be told from
+        other text is not searched; at most FUZZY_SEARCHES run per index."""
+        needle = " ".join(quote.split()).lower()
+        heading = anchor.get("heading") or ""
+        heading_id = anchor.get("heading_id") or ""
+        if (
+            not self.small
+            or not (heading or heading_id)
+            or len(needle) < FUZZY_QUOTE_MIN
+            or len(needle.split()) < FUZZY_WORDS_MIN
+        ):
+            return ""
+        key = (needle, heading, heading_id)
+        if key not in self._fuzzy:
+            if len(self._fuzzy) >= FUZZY_SEARCHES:
+                return ""
+            found = ""
+            for _, start, stop in self.heading_spans(heading, heading_id)[:3]:
+                words, _ = text.readable(
+                    self.body[start : min(stop, start + FUZZY_SECTION_HTML)]
+                )
+                found = _fuzzy_text(words, needle)
+                if found:
+                    break
+            self._fuzzy[key] = found
+        return self._fuzzy[key]
+
     def holds(self, quote: str, key: tuple, start: int, stop: int) -> bool | None:
         """Does this stretch of page hold the quote? None when it has too much
         text. The stretch's words are read once per index."""
@@ -325,7 +401,9 @@ def resolve(
        elsewhere on the page: `current` with a note saying it moved;
     3. the quote anywhere: `current`;
     4. the quote edited in place (prefix, suffix or half of it survives): `edited`;
-    5. otherwise `outdated`.
+    5. the quote approximately (ratio 0.8) within its own heading's section:
+       `edited`, never `current`, never from elsewhere on the page;
+    6. otherwise `outdated`.
 
     ("", "") when nothing is known: no evidence on the pin, or more page text
     than is searched. `note` is "" unless a pin moved.
@@ -378,6 +456,8 @@ def resolve(
     # removed: only the element's own words count.
     hints = {} if anchor.get("kind") == "element" else anchor
     if edited_in_place(hints, quote, tight_words):
+        return EDITED, ""
+    if anchor.get("kind") != "element" and small and index.fuzzy(anchor, quote):
         return EDITED, ""
     return OUTDATED, ""
 
@@ -522,15 +602,23 @@ def current_quote(anchor: dict, quote: str, body: "str | PageIndex") -> str:
     pre = _tight(anchor.get("prefix") or "")[-CONTEXT_CHARS:]
     suf = _tight(anchor.get("suffix") or "")[:CONTEXT_CHARS]
     if len(pre) < CONTEXT_MIN or len(suf) < CONTEXT_MIN:
-        return ""
+        return _fuzzy_current(anchor, quote, index)
     words, at, tight = index.plain()
     if tight.count(pre) != 1:
-        return ""
+        return _fuzzy_current(anchor, quote, index)
     i = tight.index(pre) + len(pre)
     j = tight.find(suf, i)
     if j < 0:
-        return ""
+        return _fuzzy_current(anchor, quote, index)
     between = words[at[i - 1] + 1 : at[j]].strip()
     if not between or len(between) > 2 * len(quote) + 120:
-        return ""
+        return _fuzzy_current(anchor, quote, index)
     return text.sanitize(between, CURRENT_MAX).strip()
+
+
+def _fuzzy_current(anchor: dict, quote: str, index: "PageIndex") -> str:
+    """The approximate match under the pin's heading, as `anchor_current`, when
+    the words between its prefix and suffix cannot be told."""
+    if anchor.get("kind") == "element":
+        return ""
+    return text.sanitize(index.fuzzy(anchor, quote), CURRENT_MAX).strip()
