@@ -85,9 +85,11 @@ Reuse `seat_read`; add one column, `held_until timestamptz null`.
 - **Waiting now** for a question = some `seat_read` row for the question's agent with
   `held_until > now` and a session that belongs to the asking office. "Belongs" is
   `decide._belongs`: the label equals the office or starts with `office + "/"`, where the office
-  is the part of the question's own `session` before `/`. A question with no session matches the
-  unlabelled row (`''`), as the existing `coalesce(decision.session, '')` join does. A waiter
-  hears its whole office, so ANY session of the office waiting counts, not just the one that asked.
+  is the part of the question's own `session` before `/`. A question with no session goes to the
+  key's own office, the one named like the agent. An unlabelled reader (`''`) names no office and
+  hears every office's answers under its key, so it counts for every question (as built in
+  `listening._reads_for`). A waiter hears its whole office, so ANY session of the office waiting
+  counts, not just the one that asked.
 
 Known limits, stated in the code comment and the runbook:
 
