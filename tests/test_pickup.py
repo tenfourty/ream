@@ -2,12 +2,14 @@
 2026-10-29-where-an-answer-goes.md, section 6): set, clear, scoping, validation,
 rendering and escaping, rename, the API key and the CLI."""
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 from test_client import key_file, live  # noqa: F401
 from test_listening import _ask, _deliver, _run, auth, bridge, client  # noqa: F401
 
-from artifacts import keys, listening, onboarding, rename
+from artifacts import events, keys, listening, onboarding, rename
 from artifacts.app import create_gallery_app
 
 
@@ -15,6 +17,16 @@ def _put(client, token, text):
     return client.put(
         "/api/v1/listening/pickup", json={"pickup": text}, headers=auth(token)
     )
+
+
+def _seen(db, agent="cove", session="cove/1", ago=timedelta(minutes=5)):
+    """A reader of this agent who last asked for its events `ago` ago."""
+    events.note_read(db, agent, session)
+    with db.connect() as conn:
+        conn.execute(
+            "update seat_read set last_read_at = %s where agent = %s and session = %s",
+            (datetime.now(UTC) - ago, agent, session),
+        )
 
 
 # --- the rules on the text ---------------------------------------------------
@@ -89,6 +101,7 @@ def test_a_refused_line_leaves_the_old_one(db):
 
 def test_the_line_says_who_says_it_once_delivered_to_slack(db, bridge):
     _, sent = _ask(db)
+    _seen(db, "cove")
     _deliver(db, sent.id)
     listening.set_pickup(db, "cove", "within the hour")
     a = listening.line(listening.for_decision(db, "cove", sent.id))
@@ -102,6 +115,7 @@ def test_the_line_says_who_says_it_once_delivered_to_slack(db, bridge):
 
 def test_not_sent_state_carries_it_without_a_bridge(db):
     _, asked = _ask(db)
+    _seen(db, "cove")
     listening.set_pickup(db, "cove", "within the hour")
     line = listening.line(listening.for_decision(db, "cove", asked.id))
     assert "not in Slack" in line and "cove says: within the hour." in line
@@ -109,7 +123,8 @@ def test_not_sent_state_carries_it_without_a_bridge(db):
 
 
 def test_a_line_that_ends_its_own_sentence_gets_no_extra_stop(db):
-    _, asked = _ask(db, agent="other")
+    _, asked = _ask(db, agent="other", session="other/1")
+    _seen(db, "other", "other/1")
     listening.set_pickup(db, "other", "by tomorrow!")
     line = listening.line(listening.for_decision(db, "other", asked.id))
     assert "other says: by tomorrow!" in line and "by tomorrow!." not in line
@@ -135,6 +150,7 @@ def test_without_a_line_the_wording_is_unchanged(db, bridge):
 
 def test_the_page_shows_it_escaped(db, client, bridge):
     page, asked = _ask(db)
+    _seen(db)
     _deliver(db, asked.id)
     listening.set_pickup(db, "cove", '<script>alert(1)</script> & "x"')
     html = TestClient(create_gallery_app(db)).get(f"/a/{page.id}").text
@@ -150,6 +166,71 @@ def test_one_agents_line_never_shows_on_anothers_question(db, bridge):
     assert "within the hour" not in listening.line(
         listening.for_decision(db, "other", asked.id)
     )
+
+
+# --- the line lapses ----------------------------------------------------------
+
+
+def _route(db):
+    _, asked = _ask(db)
+    listening.set_pickup(db, "cove", "within the hour")
+    return asked
+
+
+def test_a_fresh_reader_shows_the_line(db):
+    asked = _route(db)
+    _seen(db, ago=timedelta(hours=23))
+    route = listening.for_decision(db, "cove", asked.id)
+    assert route.pickup == "within the hour" and not route.pickup_stale
+    assert "cove says: within the hour." in listening.line(route)
+
+
+def test_a_reader_last_seen_25_hours_ago_gets_the_plain_wording(db):
+    asked = _route(db)
+    _seen(db, ago=timedelta(hours=25))
+    route = listening.for_decision(db, "cove", asked.id)
+    assert route.pickup is None and route.pickup_stale
+    text = listening.line(route)
+    assert "says" not in text and "Last seen 1 d ago" in text
+    assert listening.get_pickup(db, "cove") == "within the hour", "not deleted"
+    view = listening.route_view(route)
+    assert view["pickup"] is None and view["pickup_stale"] is True
+
+
+def test_never_seen_gets_the_plain_wording(db):
+    asked = _route(db)
+    route = listening.for_decision(db, "cove", asked.id)
+    assert route.pickup is None and route.pickup_stale
+    assert "says" not in listening.line(route)
+    assert "has not been seen" in listening.line(route)
+
+
+def test_a_fresh_check_brings_the_line_back(db):
+    asked = _route(db)
+    _seen(db, ago=timedelta(hours=30))
+    assert listening.for_decision(db, "cove", asked.id).pickup is None
+    events.note_read(db, "cove", "cove/1")
+    route = listening.for_decision(db, "cove", asked.id)
+    assert route.pickup == "within the hour" and not route.pickup_stale
+
+
+def test_no_stored_line_is_not_stale(db):
+    _, asked = _ask(db)
+    route = listening.for_decision(db, "cove", asked.id)
+    assert route.pickup is None and not route.pickup_stale
+
+
+def test_the_body_states_the_rule_and_the_stored_line(db, client):
+    token, _ = keys.mint(db, agent="cove")
+    asked = _route(db)
+    _seen(db, ago=timedelta(hours=26))
+    body = client.get(
+        f"/api/v1/listening?decision={asked.id}", headers=auth(token)
+    ).json()
+    assert body["pickup"] == "within the hour"
+    assert body["pickup_fresh_hours"] == 24
+    assert body["decision"]["pickup"] is None
+    assert body["decision"]["pickup_stale"] is True
 
 
 # --- the API ------------------------------------------------------------------
@@ -171,6 +252,7 @@ def test_put_sets_get_shows_delete_clears(db, client):
 
 def test_the_decision_in_the_body_carries_the_pickup_and_its_line(db, client, bridge):
     _, asked = _ask(db)
+    _seen(db, "cove")
     _deliver(db, asked.id)
     token, _ = keys.mint(db, agent="cove")
     _put(client, token, "within the hour")

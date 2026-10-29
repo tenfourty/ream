@@ -40,6 +40,10 @@ NOT_SENT_PICKUP = "not_sent_pickup"
 RECENT_WINDOW = timedelta(hours=24)
 RECENT_LIMIT = 20
 
+# How long a pickup line is shown after the agent last asked for its events:
+# the reader's choice of window (may become 2 hours); the only place it is set.
+PICKUP_FRESH = timedelta(hours=24)
+
 # THE WORDING. Edit here and nowhere else; {agent} is the artifacts agent that
 # asked, {session} the waiting session's label, {seen} the "last seen" sentence.
 WORDING = {
@@ -87,6 +91,8 @@ class Route:
     announced: bool
     delivered: bool
     pickup: str | None = None
+    # A line is stored but not shown, because the agent has not checked lately.
+    pickup_stale: bool = False
 
 
 PICKUP_LIMIT = 120
@@ -256,7 +262,7 @@ def for_decisions(
             ).fetchall():
                 delivered[decision_id] = at is not None
     readers = _readers(db, agent)
-    pickup = get_pickup(db, agent)
+    stored = get_pickup(db, agent)
     bridge_on = partner.enabled()
     out: dict[str, Route] = {}
     for decision_id, label, version in found:
@@ -267,6 +273,7 @@ def for_decisions(
             reverse=True,
         )
         seen = [r[1] for r in mine if r[1] is not None]
+        fresh = bool(seen) and now - max(seen) <= PICKUP_FRESH
         announced = bridge_on and (version or 0) > 0
         sent = announced and delivered.get(decision_id, False)
         if holding:
@@ -285,7 +292,8 @@ def for_decisions(
             last_seen=max(seen).isoformat() if seen else None,
             announced=announced,
             delivered=sent,
-            pickup=pickup,
+            pickup=stored if fresh else None,
+            pickup_stale=bool(stored) and not fresh,
         )
     return out
 
@@ -322,6 +330,7 @@ def route_view(route: Route, now: datetime | None = None) -> dict:
             "delivered": route.delivered,
         },
         "pickup": route.pickup,
+        "pickup_stale": route.pickup_stale,
         "last_seen": route.last_seen,
         "line": line(route, now),
     }
@@ -338,6 +347,7 @@ def status(db: Database, agent: str, decision_id: str | None = None) -> dict | N
         **sessions(db, agent, now),
         "bridge": {"enabled": partner.enabled()},
         "pickup": get_pickup(db, agent),
+        "pickup_fresh_hours": PICKUP_FRESH // timedelta(hours=1),
     }
     if decision_id is not None:
         route = for_decision(db, agent, decision_id)

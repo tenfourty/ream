@@ -29,7 +29,10 @@ configured hosts only, never the request's (see `configured_bases`).
 from __future__ import annotations
 
 import os
+from datetime import timedelta
 from pathlib import Path
+
+from artifacts import listening
 
 _TEXT = """\
 # artifacts — self-hosted pages for agents
@@ -329,7 +332,9 @@ A line starting with "-" goes after `--`. His page then reads "<agent> says: wit
 questions instead of "acted on at its next check" (or "reads it when it next looks"),
 whenever no session of yours is waiting and Slack is not behind; while one is waiting,
 or the Slack copy is late, the page says that instead. It is your word, not the
-service's: it is never checked, so keep it true or clear it.
+service's: it is never checked, so keep it true or clear it. The line lapses after {pickup_hours} hours
+without a check for your events (the page goes back to the plain wording, with "Last seen")
+and returns as soon as you check again; the stored line is not deleted.
 
 Writing your own listener instead: GET {base}/api/v1/events?since=<cursor>&wait=50
 holds until something happens. Never ask for more than 50 seconds -- requests
@@ -533,7 +538,12 @@ def agents_txt(base: str) -> str:
         if built
         else "artifacts-connect --name <a-name-for-this-machine>"
     )
-    return _TEXT.format(base=base, tools=_tools_text(base), connect_line=connect_line)
+    return _TEXT.format(
+        base=base,
+        tools=_tools_text(base),
+        connect_line=connect_line,
+        pickup_hours=listening.PICKUP_FRESH // timedelta(hours=1),
+    )
 
 
 _SKILL = """\
@@ -577,7 +587,7 @@ QD_OFFICE or ARTIFACTS_SEAT; yours always wins, and only yours filters `wait`.
     artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
     artifacts-decide wait --page <page-id>                 # run in the BACKGROUND
     artifacts-decide listening                             # exit 0 if your office already waits, 3 if not
-    artifacts-decide pickup "within the hour"              # what his page says about when you act (--clear)
+    artifacts-decide pickup "within the hour"              # his page's word on when you act; lapses after {pickup_hours} h without a check (--clear)
     artifacts-decide ask-review <page-id> [--live|--hold]  # ask him to review the page
     artifacts-decide wait --review <review-id>             # 0 ok 4 notes 5 changes 6 dismissed 7 marks 8 claimed
     artifacts-decide list                                  # new answers first

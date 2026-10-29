@@ -34,10 +34,10 @@ import sys
 import tempfile
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
-from artifacts import images, news
+from artifacts import images, listening, news
 from artifacts.client import (
     Conflict,
     HTTPFailure,
@@ -815,6 +815,12 @@ def _listening(args, key: str, base: str) -> int:
     return 0 if waiting else 3
 
 
+_PICKUP_LAPSE = (
+    "It shows only while you have checked for your events in the last "
+    f"{listening.PICKUP_FRESH // timedelta(hours=1)} hours; it returns when you check again."
+)
+
+
 def _pickup(args, key: str, base: str) -> int:
     """Set, clear or show this agent's declared pickup line."""
     # Words after the subcommand are one line, so quoting is optional.
@@ -828,9 +834,12 @@ def _pickup(args, key: str, base: str) -> int:
     if args.line is None:
         current = (_request("GET", f"{base}/listening", key, None) or {}).get("pickup")
         print(current if current else "no pickup line set")
+        if current:
+            print(_PICKUP_LAPSE, file=sys.stderr)  # stdout stays the bare line
         return 0
     kept = _request("PUT", f"{base}/listening/pickup", key, {"pickup": args.line})
     print(f"pickup set: {kept['pickup']}")
+    print(_PICKUP_LAPSE)
     return 0
 
 
@@ -1668,7 +1677,9 @@ def build_parser() -> argparse.ArgumentParser:
             'says: within the hour" under your open questions, in place of "acted '
             'on at its next check", whenever no session of yours is waiting and '
             "the Slack copy is not late. It is your word: the service does not check "
-            "or promise it, so keep it true or clear it. One line per agent (key), "
+            "or promise it, so keep it true or clear it. It shows only while you have "
+            f"checked for your events in the last {listening.PICKUP_FRESH // timedelta(hours=1)} "
+            "hours, and returns when you check again. One line per agent (key), "
             "replacing any earlier one. --clear removes it; with neither a line "
             'nor --clear, prints the current one. A line that starts with "-" '
             'goes after "--" (`pickup -- "- reading it now"`); a line with a '
