@@ -817,6 +817,8 @@ def _listening(args, key: str, base: str) -> int:
 
 def _pickup(args, key: str, base: str) -> int:
     """Set, clear or show this agent's declared pickup line."""
+    # Words after the subcommand are one line, so quoting is optional.
+    args.line = " ".join(args.line) if args.line else None
     if args.line is not None and args.clear:
         raise UsageError("give a line or --clear, not both")
     if args.clear:
@@ -1668,10 +1670,18 @@ def build_parser() -> argparse.ArgumentParser:
             "the Slack copy is not late. It is your word: the service does not check "
             "or promise it, so keep it true or clear it. One line per agent (key), "
             "replacing any earlier one. --clear removes it; with neither a line "
-            "nor --clear, prints the current one."
+            'nor --clear, prints the current one. A line that starts with "-" '
+            'goes after "--" (`pickup -- "- reading it now"`); a line with a '
+            'space in it needs no "--".'
         ),
     )
-    pick.add_argument("line", nargs="?", metavar="LINE", help="the line to show")
+    pick.add_argument(
+        "line",
+        nargs="*",
+        metavar="LINE",
+        help="the line to show (words are joined; put -- before a line that"
+        " starts with a dash)",
+    )
     pick.add_argument("--clear", action="store_true", help="remove the line")
 
     release = subs.add_parser(

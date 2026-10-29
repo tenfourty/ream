@@ -96,6 +96,12 @@ class BadPickup(ValueError):
     """A pickup line the service will not keep, with a reason fit to show."""
 
 
+# Characters that draw nothing but are not removed from the stored text: a line
+# made only of these (and of blanks) is as empty as "" and is refused.
+_BLANK = ("Cc", "Cf", "Zs", "Zl", "Zp")
+_FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")
+
+
 def clean_pickup(text) -> str:
     """The agent's one line, or `BadPickup`. Single line only (a line break of
     any kind is refused, not folded); control and format characters (escape
@@ -110,7 +116,9 @@ def clean_pickup(text) -> str:
         c for c in text if unicodedata.category(c) not in ("Cc", "Cf", "Cs", "Co", "Cn")
     )
     cleaned = " ".join(kept.split())
-    if not cleaned:
+    if not any(
+        c not in _FILLERS and unicodedata.category(c) not in _BLANK for c in cleaned
+    ):
         raise BadPickup("pickup is empty; use clear to remove it")
     if len(cleaned) > PICKUP_LIMIT:
         raise BadPickup(f"pickup is {len(cleaned)} characters; at most {PICKUP_LIMIT}")

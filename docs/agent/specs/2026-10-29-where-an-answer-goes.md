@@ -186,7 +186,9 @@ driver):
   `artifacts-decide pickup "within the hour"` / `pickup --clear` (not the `listening --set-pickup`
   flag drafted above). Rules, in `listening.clean_pickup`: at most 120 characters; one line (a
   line break of any kind is refused with 422, not folded); control and format characters (escape
-  codes, bidi overrides, zero-width marks) removed, spaces collapsed; empty is refused. Per agent
+  codes, bidi overrides, zero-width marks) removed, spaces collapsed; empty is refused, and so is a line with no visible character left (only
+  blanks, format characters or fillers such as U+3164). `artifacts-decide pickup` joins its words and
+  takes a line starting with "-" after `--`. Per agent
   (key), not per office, because the service has no office entity. Declared, never verified,
   always shown as "`<agent>` says: ..." and only in the "sent to Slack, nobody waiting" and "not
   sent anywhere" states (waiting-now and delayed already say something stronger or different).

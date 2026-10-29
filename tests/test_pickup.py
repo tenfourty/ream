@@ -35,7 +35,19 @@ def test_clean_refuses_a_line_break_of_any_kind(sep):
         listening.clean_pickup(f"a{sep}b")
 
 
-@pytest.mark.parametrize("text", ["", "   ", "\u200b\x1b"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "   ",
+        "\u200b\x1b",
+        "\u3164",
+        "\u3164 \u200b",
+        "\u115f\u1160\uffa0",
+        "\u2800",
+        "\u00a0\u3000",
+    ],
+)
 def test_clean_refuses_an_empty_line(text):
     with pytest.raises(listening.BadPickup, match="empty"):
         listening.clean_pickup(text)
@@ -177,6 +189,14 @@ def test_put_refuses_a_bad_line_with_422_and_changes_nothing(db, client, text):
     assert listening.get_pickup(db, "cove") == "kept"
 
 
+def test_put_refuses_an_all_filler_line_like_an_empty_one(db, client):
+    token, _ = keys.mint(db, agent="cove")
+    _put(client, token, "kept")
+    for text in ("", "\u3164", "\u3164 \u200b"):
+        assert _put(client, token, text).status_code == 422
+    assert listening.get_pickup(db, "cove") == "kept"
+
+
 def test_put_refuses_a_missing_or_non_text_pickup(db, client):
     token, _ = keys.mint(db, agent="cove")
     for body in ({}, {"pickup": None}, {"pickup": 5}):
@@ -264,6 +284,28 @@ def test_cli_help_says_it_is_the_agents_word(capsys):
         decide.main(["pickup", "--help"])
     out = capsys.readouterr().out
     assert "your word" in out and "--clear" in out
+
+
+def test_cli_takes_a_line_that_starts_with_a_dash(
+    db, live, key_file, capsys, monkeypatch
+):
+    path, _ = key_file
+    for argv in (
+        ["pickup", "--", "- reading it now"],
+        ["pickup", "- reading it now"],
+        ["pickup", "-", "reading", "now"],
+    ):
+        assert _run(argv, path, monkeypatch) == 0
+    out = capsys.readouterr().out
+    assert "pickup set: - reading it now" in out and "pickup set: - reading now" in out
+
+
+def test_cli_help_says_how_to_pass_a_dash_line(capsys):
+    from artifacts import decide
+
+    with pytest.raises(SystemExit):
+        decide.main(["pickup", "--help"])
+    assert "starts with" in capsys.readouterr().out
 
 
 def test_onboarding_names_the_command_and_that_it_is_unchecked():
