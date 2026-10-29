@@ -326,6 +326,16 @@ pinned comment as on any comment.
 Built as written in sections 3, 4, 5 and 7, with the prior-art additions Jeremy accepted
 (`2026-10-29-pinned-comments-prior-art.md`) folded in:
 
+- Focus: a pick moves the cursor into the comment box only when pin mode was turned on in the
+  gallery (the Pin button or a key there). The page can send any message, so a pin mode it
+  turns on (the C key while the frame has focus, or a forged toggle) shows the pick and leaves
+  the cursor where it was. Found in a security review; tested in `test_element_pins.py`.
+- An SVG's `<title>` is found with three linear finds, not a lazy regex that rescanned to the
+  end from every unclosed opener.
+- The bar's Pin button is `.pinmodebtn`; `.pinbtn` stays the wall's pin-to-wall form.
+- An element with no words and no label is stored with an empty quote; only the gallery composer
+  shows its tag. Captions (`figcaption`) are read by the browser only, so an agent's `--element`
+  pin is labelled by alt text, aria-label or title.
 - **An edited spot shows both quotes.** An `edited` row carries `anchor_current`: the element's
   text (or alt text) now for an element pin found by its id, or for a quote the words now between
   its stored prefix and suffix. The panel prints `Text edited since version N. Now: "..."` under

@@ -559,9 +559,9 @@ def test_the_gallery_script_has_the_pin_mode_and_draws_with_text_content_only():
 
 def test_the_page_bar_offers_a_pin_button_beside_comment():
     bar = gallery._comments_button("p1", 0)
-    assert 'class="pinbtn"' in bar and "hidden" in bar and "Pin" in bar
-    assert bar.index("cbtn") < bar.index("pinbtn")
-    for rule in (".pinbtn", ".pinout", ".pinbadge"):
+    assert 'class="pinmodebtn"' in bar and "hidden" in bar and "Pin" in bar
+    assert bar.index("cbtn") < bar.index("pinmodebtn")
+    for rule in (".pinmodebtn", ".pinout", ".pinbadge"):
         assert rule in gallery._CSS
 
 

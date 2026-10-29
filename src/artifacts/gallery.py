@@ -213,12 +213,12 @@ main{display:block}
 .fsbtn[hidden]{display:none}
 /* Pin mode (pinned comments, slice 2): a button like the bar's others, and a
    filled one while the mode is on. */
-.pinbtn{display:inline-flex;align-items:center;height:1.75rem;padding:0 .5rem;
+.pinmodebtn{display:inline-flex;align-items:center;height:1.75rem;padding:0 .5rem;
   border:0;border-radius:.45rem;background:transparent;color:var(--muted);
   font:inherit;font-size:.8125rem;cursor:pointer}
-.pinbtn:hover{background:var(--chip-hover);color:var(--ink)}
-.pinbtn.on{background:var(--chip);color:var(--ink)}
-.pinbtn[hidden]{display:none}
+.pinmodebtn:hover{background:var(--chip-hover);color:var(--ink)}
+.pinmodebtn.on{background:var(--chip);color:var(--ink)}
+.pinmodebtn[hidden]{display:none}
 .acts .mi{width:1rem;height:1rem;opacity:1}
 @media (max-width:34rem){.sharebtn span{display:none}}
 /* The PAGE view only (the wall and the lists keep .wrap as it was): the agent's
@@ -2161,7 +2161,7 @@ bar.addEventListener("click",function(e){
 // byHand: pin mode was turned on here, by the Pin button or a key on the
 // gallery. Only then does a pick move focus into the comment box: the page in
 // the frame can send any message, so a pick it reports is shown, never typed into.
-var pb=document.querySelector(".pinbtn"),po=null,pbs=[],prects=Object.create(null),byHand=false;
+var pb=document.querySelector(".pinmodebtn"),po=null,pbs=[],prects=Object.create(null),byHand=false;
 function pinMode(on,hand){on=!!on;if(on===pinOn)return;pinOn=on;byHand=on&&!!hand;
   try{f.contentWindow.postMessage({type:"artifact-pin-mode",on:on},o)}catch(e){}
   if(pb){pb.setAttribute("aria-pressed",on?"true":"false");pb.classList.toggle("on",on)}
@@ -3109,7 +3109,7 @@ def _comments_button(artifact_id: str, open_count: int) -> str:
         f'<a class="cbtn{" has" if open_count else ""}" href="#comments"'
         f' aria-controls="comments" aria-label="Comments">{_icon("comment")}{count}</a>'
         # Revealed by comments.js once it has a composer to fill; the C key does the same.
-        '<button type="button" class="pinbtn" hidden aria-pressed="false"'
+        '<button type="button" class="pinmodebtn" hidden aria-pressed="false"'
         ' aria-label="Pin a comment to a spot on the page (C)"'
         ' title="Pin a comment to a spot on the page (C)">Pin</button>'
     )
