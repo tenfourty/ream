@@ -37,7 +37,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
-from artifacts import images, listening, news
+from artifacts import images, news, pickup
 from artifacts.client import (
     Conflict,
     HTTPFailure,
@@ -817,7 +817,7 @@ def _listening(args, key: str, base: str) -> int:
 
 _PICKUP_LAPSE = (
     "It shows only while you have checked for your events in the last "
-    f"{listening.PICKUP_FRESH // timedelta(hours=1)} hours; it returns when you check again."
+    f"{pickup.PICKUP_FRESH // timedelta(hours=1)} hours; it returns when you check again."
 )
 
 
@@ -1678,7 +1678,7 @@ def build_parser() -> argparse.ArgumentParser:
             'on at its next check", whenever no session of yours is waiting and '
             "the Slack copy is not late. It is your word: the service does not check "
             "or promise it, so keep it true or clear it. It shows only while you have "
-            f"checked for your events in the last {listening.PICKUP_FRESH // timedelta(hours=1)} "
+            f"checked for your events in the last {pickup.PICKUP_FRESH // timedelta(hours=1)} "
             "hours, and returns when you check again. One line per agent (key), "
             "replacing any earlier one. --clear removes it; with neither a line "
             'nor --clear, prints the current one. A line that starts with "-" '

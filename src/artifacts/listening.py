@@ -26,6 +26,7 @@ from datetime import UTC, datetime, timedelta
 
 from artifacts import events, partner
 from artifacts.db import Database, in_list
+from artifacts.pickup import PICKUP_FRESH
 
 WAITING_NOW = "waiting_now"
 SENT_TO_SLACK = "sent_to_slack"
@@ -40,9 +41,6 @@ NOT_SENT_PICKUP = "not_sent_pickup"
 RECENT_WINDOW = timedelta(hours=24)
 RECENT_LIMIT = 20
 
-# How long a pickup line is shown after the agent last asked for its events:
-# the reader's choice of window (may become 2 hours); the only place it is set.
-PICKUP_FRESH = timedelta(hours=24)
 
 # THE WORDING. Edit here and nowhere else; {agent} is the artifacts agent that
 # asked, {session} the waiting session's label, {seen} the "last seen" sentence.

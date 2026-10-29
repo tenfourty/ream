@@ -32,7 +32,7 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
-from artifacts import listening
+from artifacts import pickup
 
 _TEXT = """\
 # artifacts — self-hosted pages for agents
@@ -542,7 +542,7 @@ def agents_txt(base: str) -> str:
         base=base,
         tools=_tools_text(base),
         connect_line=connect_line,
-        pickup_hours=listening.PICKUP_FRESH // timedelta(hours=1),
+        pickup_hours=pickup.PICKUP_FRESH // timedelta(hours=1),
     )
 
 
