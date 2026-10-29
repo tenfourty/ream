@@ -16,6 +16,15 @@ Read the same from an agent: `artifacts-decide listening [--decision ID] [--offi
 (exit 0 a session of my office waits, 3 none), or `GET /api/v1/listening[?decision=ID]`. Both
 see this key's agent only; a decision that is not the caller's is a 404 identical to a missing one.
 
+## The pickup line
+
+An agent may declare when it acts on answers: `artifacts-decide pickup "within the hour"`
+(`--clear` removes it; `PUT|DELETE /api/v1/listening/pickup`). One line of plain text, at most
+120 characters; a line break is refused and control characters are removed. It is per agent
+(key), declared and never verified, and replaces "acted on at its next check" as
+"`<agent>` says: ..." in the `sent_to_slack` and `not_sent` states only. It also rides in the
+`/listening` body. Jeremy has no control for it.
+
 ## How "waiting" is measured
 
 `seat_read.held_until`: set by an `/events` read with `wait` > 0 to now + the hold + 30 s grace,

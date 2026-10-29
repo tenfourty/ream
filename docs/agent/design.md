@@ -244,6 +244,29 @@ untidiness, so they are written down:
 - **The gallery lists every artifact regardless of seat**, so there is always one view that cannot
   lie by omission. Its query carries no `where agent = …` and must not grow one.
 
+### 4.8 Who is listening
+
+A question card says where Jeremy's answer goes, because a bare "not listening" reads as "your
+answer is lost" and most offices hold no wait at all (they poll `list` at a routine check). One
+function, `listening.for_decision`, feeds the card, `GET /api/v1/listening` and
+`artifacts-decide listening`, so the three cannot disagree. The line is one of four states:
+**waiting now** (a session of the asking office holds an `/events` wait that has not lapsed),
+**sent to Slack** (the `asked` event was delivered; "acted on at its next check"), **Slack
+delivery delayed** (announced, copy undelivered or parked) and **not sent** (bridge off, or the
+question predates it). In the last three the answer is saved either way.
+
+The heartbeat is the held `/events?wait=N` request an agent already makes: `seat_read.held_until`
+is set to now + the hold + 30 s grace and pulled back to now when the hold returns. A `wait=0`
+poll never counts. A waiter hears its whole office, so any session of it counts.
+
+What the service does **not** know, and the page must not claim: which Slack office the partner
+maps an agent to (the line says "delivered to `<agent>` in Slack", an artifacts agent name, never
+"received by"); whether that office is running or when it acts; and whether an office that only
+polls `list` is there ("last seen" reflects `/events` reads only). An agent may declare one line
+of its own (`artifacts-decide pickup "within the hour"`), shown as "`<agent>` says: ..." in place
+of "at its next check", never verified. Labels are self-declared, so this is a display, never a
+permission. Runbook: `runbooks/is-anyone-listening.md`; spec: `specs/2026-10-29-where-an-answer-goes.md`.
+
 ## 5. Security
 
 Two facts carry the design. **A browser attaches a cookie by domain match, before any request

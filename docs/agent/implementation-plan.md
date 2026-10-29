@@ -2541,3 +2541,16 @@ And one consequence of this part that the deployment part must carry:
 - **Type consistency:** `Published` and `ArtifactRow` are used with the same field names in Tasks
   5–8; `store.get_owned`, `store.list_for_agent`, `state.get`, `state.get_scanned` and
   `state.collection` are named identically wherever they appear.
+
+## Ledger
+
+Work built after the tasks above, newest last. Each line says what a reader can now do.
+
+- **Where an answer goes (29 Oct 2026; 9a5cbed, f485a33).** An open question says whether a
+  session of the asking office is waiting now, or where the answer goes otherwise (Slack, delayed,
+  or nowhere). `GET /api/v1/listening` and `artifacts-decide listening` say the same for the
+  calling key's agent, and a fresh session can check before arming a second wait. Liveness is
+  `seat_read.held_until`, read before the hold starts. Spec `specs/2026-10-29-where-an-answer-goes.md`.
+- **The pickup line (29 Oct 2026; e768d14, 1f60eb8).** An agent may say in one line when it acts
+  on answers (`artifacts-decide pickup`), shown as "<agent> says: ..." on its cards. A rename that
+  merges two agents keeps the newer line and counts the merge.

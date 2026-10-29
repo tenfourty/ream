@@ -1,5 +1,7 @@
 # Feedback: is the agent listening, and comments pinned to a spot (28 Oct 2026)
 
+Design that came of the listening answers: `docs/agent/specs/2026-10-29-where-an-answer-goes.md`.
+
 Two items, asked together before either was designed:
 
 - **runcove-5t3oj.26**, showing on a page whether the agent that asked is waiting for an answer;
