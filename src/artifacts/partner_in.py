@@ -492,7 +492,7 @@ def _apply_artifacts(db: Database, event: Event, now: datetime) -> str:
             (event.question,),
         ).fetchone()
     # An id that is not ours, not a question, closed, SET ASIDE (its page is archived
-    # or binned: he cannot answer it from Slack either) or never announced to the
+    # or binned, answered or not: he cannot answer it from Slack either) or never announced to the
     # partner: indistinguishable from "no such decision", and not recorded as a
     # version (the partner has no business advancing a counter on it).
     if (
@@ -500,7 +500,7 @@ def _apply_artifacts(db: Database, event: Event, now: datetime) -> str:
         or row[0] != "question"
         or row[1] is not None
         or row[2] < 1
-        or (row[3] is None and row[5])
+        or row[5]
     ):
         return _record_only(db, event, "unknown", now, advance=False)
     if row[3] == letter and row[4] == note:

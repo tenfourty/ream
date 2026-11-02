@@ -697,6 +697,20 @@ def test_a_set_aside_question_is_not_settled_from_slack(
     assert _row(db, parked.id).answer == "a"
 
 
+def test_an_answered_question_on_an_archived_page_is_unknown_not_refused(
+    db, bridge, client, partner_key, page
+):
+    from artifacts import store
+
+    done = ask(db, page, "done?")
+    decisions.answer(db, done.id, letter="a", note="", by="jeremy")
+    store.set_archived(db, page.id, True, agent="owner")
+    event = make("answered", f"artifacts:{done.id}", 1, pressed("b"))
+    r = post(client, partner_key, event)
+    assert r.status_code == 200
+    assert _seen(db, event["event_id"])[0] == "unknown"
+
+
 def test_a_held_question_is_not_settled_and_the_refusal_is_recorded(
     db, bridge, client, partner_key, page
 ):

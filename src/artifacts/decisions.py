@@ -767,24 +767,42 @@ def ask(
                         for_offices=fields.for_offices,
                     ),
                 )
-                # Asked on a page that is already archived or binned: set aside from
-                # birth, so the hub is told straight after `asked` and takes the
-                # Slack buttons away.
-                away = conn.execute(
-                    "select archived_at is not null, deleted_at is not null"
-                    " from artifact where id = %s",
-                    (artifact_id,),
-                ).fetchone()
-                if away and (away[0] or away[1]):
+            # Asked on a page that is already archived or binned: set aside from
+            # birth. The hub is told straight after `asked` (and takes the Slack
+            # buttons away), and the agent gets the same `decision_set_aside` event
+            # an archive would have sent, or the unarchive's `decision_reopened`
+            # would arrive for a question it was never told was parked.
+            away = conn.execute(
+                "select archived_at is not null, deleted_at is not null"
+                " from artifact where id = %s",
+                (artifact_id,),
+            ).fetchone()
+            if away and (away[0] or away[1]):
+                what = "binned" if away[1] else "archived"
+                if partner.enabled():
                     partner.enqueue(
                         conn,
                         decision_id,
                         "set_aside",
-                        {
-                            "reason": "The page holding this question was "
-                            + ("binned." if away[1] else "archived.")
-                        },
+                        {"reason": f"The page holding this question was {what}."},
                     )
+                events.append(
+                    conn,
+                    artifact_id=artifact_id,
+                    agent=agent,
+                    actor=agent,
+                    kind="decision_set_aside",
+                    summary=f"{what}: {question}",
+                    ref_id=decision_id,
+                    note=(
+                        f"The page holding this question is {what}, so the question "
+                        "is SET ASIDE from the start -- Jeremy is not shown it and it "
+                        "cannot be answered. It is NOT closed: if the page is "
+                        "unarchived or restored it comes back open with the same id, "
+                        "and you will get a decision_reopened event."
+                    ),
+                    session=session,
+                )
             if old is not None:
                 _close_row(conn, agent, old, replaced_by=decision_id)
         created = conn.execute(
@@ -1080,6 +1098,28 @@ def _already(conn, decision_row, asked_round: int | None = None) -> AlreadyDecid
     ):
         named = earlier
     return AlreadyDecided(row, round=named, current=current)
+
+
+def _require_live_page(conn, decision_id: str, artifact_id: str) -> None:
+    """Take the decision row `for update`, THEN read the page in a fresh statement,
+    and refuse if it is archived or binned. Archive and bin lock the page's open
+    decision rows first (`store._lock_open_decisions`) and the artifact after, so
+    this takes them in the same order: row, then artifact, never the reverse. The
+    point is the order of the read: the write's own `exists (...)` subselect keeps
+    the snapshot the UPDATE began with, and under READ COMMITTED an UPDATE that
+    waited on a concurrent archive's row lock rechecks only its target row, so
+    that subselect still sees the page live. A new statement issued after the lock
+    is granted sees the archive's commit."""
+    conn.execute(
+        "select id from decision where id = %s" + conn.for_update(),  # noqa: S608 -- clause from the db layer, no caller input
+        (decision_id,),
+    ).fetchall()
+    page = conn.execute(
+        "select archived_at, deleted_at from artifact where id = %s",
+        (artifact_id,),
+    ).fetchone()
+    if page is None or page[0] is not None or page[1] is not None:
+        raise store.NotFound()
 
 
 def _lock_review_and_settle_letter(
@@ -1441,6 +1481,7 @@ def record_elsewhere(
         store._check_secrets(note, "note", agent=recorded_by, artifact_id=artifact_id)
 
         with conn.transaction():
+            _require_live_page(conn, decision_id, artifact_id)
             if row[_KIND_IDX] == "review":
                 letter = _lock_review_and_settle_letter(
                     conn, decision_id, artifact_id, letter, round
@@ -1630,6 +1671,7 @@ def answer(
         # never be sent for an answer that a later failure in this block undid,
         # and the journal must never gain a row whose cause never happened.
         with conn.transaction():
+            _require_live_page(conn, decision_id, artifact_id)
             if row[_KIND_IDX] == "review":
                 letter = _lock_review_and_settle_letter(
                     conn, decision_id, artifact_id, letter, round

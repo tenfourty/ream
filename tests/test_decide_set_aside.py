@@ -91,6 +91,16 @@ def test_wait_on_a_page_whose_questions_are_parked_exits_9(
     assert "SET ASIDE" in out and asked.id in out
 
 
+def test_wait_on_a_binned_page_exits_9_instead_of_waiting_out_the_timeout(
+    db, live, key_file, page, capsys, monkeypatch
+):
+    path, _ = key_file
+    _ask(db, page)
+    store.set_deleted(db, page.id, True, agent=None)
+    assert _run(["wait", "--page", page.id, "--timeout", "5s"], path, monkeypatch) == 9
+    assert "SET ASIDE" in capsys.readouterr().out
+
+
 def test_wait_on_a_page_exits_9_when_it_is_set_aside_while_waiting(
     db, live, key_file, page, capsys, monkeypatch, on_first_listen
 ):

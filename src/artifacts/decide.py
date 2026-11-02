@@ -1077,8 +1077,11 @@ def _wait(args, key: str, base: str) -> int:
     if found or waiting_threads:
         return report(found, waiting_threads)
 
+    page_gone = False
+
     def page_questions() -> list[dict]:
         """This office's questions and reviews on the waited page."""
+        nonlocal page_gone
         try:
             rows = (
                 _request("GET", f"{base}/artifacts/{page}/decisions", key, None) or []
@@ -1089,6 +1092,7 @@ def _wait(args, key: str, base: str) -> int:
             if exc.status != 404:
                 raise
             rows = []
+            page_gone = True
         return [
             r
             for r in rows
@@ -1106,6 +1110,15 @@ def _wait(args, key: str, base: str) -> int:
             for r in mine
             if not r.get("set_aside") and not r.get("answer") and not r.get("closed_at")
         ]
+        if page_gone and not live:
+            # A binned page lists nothing, so there is no row to print: say so
+            # and exit as a parked page does, instead of waiting out the timeout.
+            print(
+                f"SET ASIDE: page {page} is binned or gone; nothing on it can "
+                "be answered now",
+                flush=True,
+            )
+            return _SET_ASIDE_EXIT
         if parked and not live:
             _print_aside(
                 [

@@ -40,7 +40,7 @@ Every request body is one JSON object (compact, UTF-8):
 {event_id, kind, source, question, version, key_id, at, sent_at, body}
 ```
 
-`kind` is `asked`, `answered`, `withdrawn` or `replaced`. `edited` and `message_added`
+`kind` is `asked`, `answered`, `withdrawn`, `replaced`, `set_aside` or `reopened`. `edited` and `message_added`
 are in the contract but not sent yet: artifacts has no path that edits a question, and
 thread replies under a question are a later slice.
 
@@ -48,7 +48,9 @@ thread replies under a question are a later slice.
 |---|---|---|
 | `asked` | an agent asks a question | `asking_office, title, options [{letter,text}], recommended, context, link (page#q-<id>), topic {id,title}, depends_on, replaces, urgency, blocked_on, needed_by, for` |
 | `answered` | he answers on the page (a changed answer is a new event); an agent records an answer given elsewhere | `answer, note, answered_by {name, verified_by}, answered_at, answer_source`, plus `recorded_by` and `said_at` for a relayed answer |
-| `withdrawn` | a question is closed with no answer, including when its page is archived or deleted | `reason` |
+| `withdrawn` | a question is closed with no answer: an agent closes it, a replace, or the 30-day purge of a binned page | `reason` |
+| `set_aside` | an open question's page is archived or binned (the question is parked, not closed) | `{"reason": str}` |
+| `reopened` | the page is unarchived or restored and is now neither archived nor binned (the parked question is live again, same id) | `{"reason": str}` |
 | `replaced` | a question is replaced by a new one (sent on the OLD question) | `replaced_by, replaced_by_source` |
 
 `answered_by.verified_by` is `artifacts` for his own tap on the page, `quarterdeck` for a press in Slack it vouched for, and `agent` for a
