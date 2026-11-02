@@ -97,6 +97,26 @@ const snap = (values, load = false) => ({ type: "artifact-form", form: "rollout"
   ok(JSON.parse(g.store["artifact-form:art1:rollout"]).region === "b", "the draft is kept in the tab's sessionStorage");
 }
 {
+  // A report from the page while the sheet is open must never change what Confirm posts.
+  const g = build();
+  g.send(snap({ region: "a", why: "one", pets: [] }));
+  g.go().click();
+  const open = () => all(g.body).filter((n) => n.className === "fscrim");
+  const sheet = open()[0];
+  const confirm = all(sheet).find((n) => n.className === "fgo");
+  g.send(snap({ region: "a", why: "one", pets: [] }));
+  ok(open().length === 1, "an identical report leaves the sheet open");
+  g.send(snap({ region: "b", why: "two", pets: ["cat"] }));
+  ok(open().length === 0, "a report that changes the values closes the open sheet");
+  confirm.click();
+  const posted = g.fetched.length ? JSON.parse(g.fetched[0][1].body).values : null;
+  ok(posted === null || (posted.region === "a" && posted.why === "one" && posted.pets === undefined),
+     "Confirm, even if it fires, posts exactly the values the sheet showed");
+  g.go().click();
+  const text = all(open()[0]).map((n) => n.textContent).join("|");
+  ok(text.includes("two") && text.includes("Cat"), "reopening shows the new values");
+}
+{
   let resolve;
   const g = build({ fetchImpl: () => new Promise((r) => (resolve = r)) });
   g.send(snap({ region: "a", why: "<img src=x onerror=1>", pets: ["dog"] }));

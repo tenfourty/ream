@@ -227,14 +227,19 @@ function body(f){var out=Object.create(null);
     if(v===null)return;out[spec.name]=v});
   var o={};for(var k in out)o[k]=out[k];return o}
 function sheet(f){
-  var scrim=el("div","fscrim"),box=el("div","fsheet"),h=el("h2","",f.title+" — send these answers?"),
+  // What the sheet shows is exactly what Confirm posts: one frozen copy, taken now. A
+  // later report from the page cannot swap it (see the message handler, which closes
+  // the sheet if the values move while it is open).
+  var sent=body(f),scrim=el("div","fscrim"),box=el("div","fsheet"),h=el("h2","",f.title+" — send these answers?"),
     dl=el("dl"),err=el("p","ferr"),btns=el("div","fbtns"),no=el("button","","Back"),go=el("button","fgo","Confirm and send");
   box.setAttribute("role","dialog");box.setAttribute("aria-modal","true");err.hidden=true;
-  f.fields.forEach(function(spec){var dt=el("dt","",spec.label||spec.name),dd,s=shown(spec,value(f,spec));
+  f.fields.forEach(function(spec){var dt=el("dt","",spec.label||spec.name),dd,s=shown(spec,sent[spec.name]);
     dd=s===null?el("dd","fblank","(blank)"):el("dd","",s);dl.appendChild(dt);dl.appendChild(dd)});
   no.type="button";go.type="button";btns.appendChild(no);btns.appendChild(go);
   [h,dl,err,btns].forEach(function(n){box.appendChild(n)});scrim.appendChild(box);
-  function close(){scrim.remove();document.removeEventListener("keydown",esc,true)}
+  function close(){scrim.remove();document.removeEventListener("keydown",esc,true);
+    if(f.closeSheet===close)f.closeSheet=null}
+  f.closeSheet=close;
   function esc(e){if(e.key==="Escape"){e.preventDefault();close()}}
   document.addEventListener("keydown",esc,true);
   no.addEventListener("click",close);
@@ -242,7 +247,7 @@ function sheet(f){
   go.addEventListener("click",function(){go.disabled=true;err.hidden=true;
     fetch("/a/"+encodeURIComponent(data.artifact_id)+"/forms/"+encodeURIComponent(f.form),{
       method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","Accept":"application/json"},
-      body:JSON.stringify({version:f.version,values:body(f)})})
+      body:JSON.stringify({version:f.version,values:sent})})
     .then(function(r){return r.json().catch(function(){return{}}).then(function(j){return{r:r,j:j}})})
     .then(function(x){
       if(x.r.ok){f.answered={answered_at:x.j.answered_at};close();refresh(f);return}
@@ -266,6 +271,12 @@ addEventListener("message",function(e){
   var f=by[d.form];if(!f)return;
   if(d.load===true){var draft=load(f);
     if(draft){f.awaiting=true;frame.contentWindow.postMessage({type:"artifact-form-fill",form:f.form,values:draft},origin);return}}
-  f.awaiting=false;f.values=clean(f,d.values);save(f);refresh(f)});
+  f.awaiting=false;
+  var before=f.closeSheet?JSON.stringify(body(f)):null;
+  f.values=clean(f,d.values);save(f);
+  // The sheet is open on an earlier set of values: close it rather than let it say one
+  // thing and send another; he reopens it to review the new ones.
+  if(f.closeSheet&&JSON.stringify(body(f))!==before)f.closeSheet();
+  refresh(f)});
 })();
 """
