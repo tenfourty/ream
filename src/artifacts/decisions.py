@@ -1641,7 +1641,13 @@ def answer(
                 "update decision set answer = %s, answer_note = %s, answered_at = %s,"
                 " answered_by = %s, answer_source = %s, recorded_by = %s,"
                 " said_at = null where id = %s and closed_at is null"
-                " and (kind <> 'review' or answer is null)",
+                " and (kind <> 'review' or answer is null)"
+                # The page must still be live AT THE WRITE: the set-aside check
+                # above read the row before this transaction, and an archive in
+                # between must not let an answer land on a parked question.
+                " and exists (select 1 from artifact a"
+                " where a.id = decision.artifact_id"
+                " and a.archived_at is null and a.deleted_at is null)",
                 (letter, note, answered_at, by, source, recorded_by, decision_id),
             )
             if written.rowcount == 0:
@@ -1650,7 +1656,11 @@ def answer(
                     f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
                     (decision_id,),
                 ).fetchone()
-                if current is None or current[11] is not None:
+                if (
+                    current is None
+                    or current[11] is not None
+                    or _set_aside_fields(current)["set_aside"]
+                ):
                     # Closed (withdrawn, or replaced) between the read above
                     # and this write: answered exactly as a closed decision is.
                     raise store.NotFound()

@@ -267,3 +267,24 @@ def test_setting_aside_a_review_releases_its_holds(db, page):
     row = _row(db, review.id)
     assert row.set_aside and row.closed_at is None
     assert _kinds(db) == ["decision_set_aside"]
+
+
+def test_an_archive_between_the_read_and_the_write_refuses_the_answer(
+    db, page, monkeypatch
+):
+    """`answer` checks set-aside on a row read before its write transaction; the
+    write itself must also require a live page, or an archive in between lets an
+    answer land on a parked question."""
+    asked = _ask(db, page)
+    real = decisions._set_aside_fields
+
+    def archive_after_the_read(row):
+        out = real(row)
+        monkeypatch.setattr(decisions, "_set_aside_fields", real)
+        store.set_archived(db, page.id, True, agent="seat")
+        return out
+
+    monkeypatch.setattr(decisions, "_set_aside_fields", archive_after_the_read)
+    with pytest.raises(store.NotFound):
+        decisions.answer(db, asked.id, letter="a", note="", by="jeremy")
+    assert _row(db, asked.id).answer is None
