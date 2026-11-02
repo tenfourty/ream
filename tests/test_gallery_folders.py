@@ -189,3 +189,26 @@ def test_a_hostile_folder_title_is_escaped(client, db):
         assert "<script>alert(1)</script>" not in html
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
     assert re.search(r'href="/f/[^"<>]+"', client.get("/").text)
+
+
+def test_empty_state_links_inside_a_folder_stay_in_the_folder(client, db):
+    put(db, "bosun", "Pg-alpha", folder="digests")
+    fid = folder_id(db, "digests")
+    html = client.get(f"/f/{fid}?q=zzznomatch&view=list").text
+    assert "Nothing here matches" in html
+    assert f'<a href="/f/{fid}?view=list">Show everything</a>' in html
+    assert '<a href="/?view=list">Show everything' not in html
+
+
+def test_the_tabs_narrow_an_archived_folder_too(client, db):
+    one = put(db, "bosun", "Pg-pinned", folder="digests")
+    put(db, "bosun", "Pg-plain", folder="digests")
+    store.set_pinned(db, one.id, True, agent="bosun")
+    store.set_folder_archived(db, "bosun", "digests", True, confirm=True)
+    fid = folder_id(db, "digests")
+    both = client.get(f"/f/{fid}").text
+    assert "Pg-pinned" in both and "Pg-plain" in both
+    pinned = client.get(f"/f/{fid}?filter=pinned").text
+    assert "Pg-pinned" in pinned and "Pg-plain" not in pinned
+    waiting = client.get(f"/f/{fid}?filter=waiting").text
+    assert "Pg-pinned" not in waiting and "Pg-plain" not in waiting

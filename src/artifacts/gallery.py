@@ -4804,6 +4804,11 @@ def gallery_router(db: Database) -> APIRouter:
             rows = [r for r in rows if r[5]]
         elif active == "pinned":
             rows = [r for r in rows if r[8]]
+        if in_folder and active in ("waiting", "pinned"):
+            # An archived folder lists its archived pages: the tab narrows those too.
+            archived_rows = [
+                r for r in archived_rows if r[5 if active == "waiting" else 8]
+            ]
 
         # WHO published, as a filter. The list of choices is taken from the
         # LIVE wall before any filtering, so picking a seat never empties the
@@ -4888,6 +4893,7 @@ def gallery_router(db: Database) -> APIRouter:
                 r[0],
             )
 
+        base = f"/f/{folder_id}" if in_folder else "/"
         archived_shown = (
             sorted([*archived_rows, *in_archived], key=rank, reverse=True)
             if in_archived
@@ -4925,7 +4931,7 @@ def gallery_router(db: Database) -> APIRouter:
                 " It is not in the archived pages either."
                 if not archived_rows
                 else (
-                    ' There <a href="/?filter=archived&q='
+                    f' There <a href="{base}?filter=archived&q='
                     + quote(query)
                     + f'&view={view}">is a match in the archived pages</a>.'
                 )
@@ -4933,7 +4939,7 @@ def gallery_router(db: Database) -> APIRouter:
             main = (
                 f'<p class="empty">Nothing here matches '
                 f"<b>{escape(query)}</b>.{found_archived} "
-                f'<a href="/?view={view}">Show everything</a>.</p>'
+                f'<a href="{base}?view={view}">Show everything</a>.</p>'
             )
         elif archived_shown:
             main = (
@@ -4952,7 +4958,6 @@ def gallery_router(db: Database) -> APIRouter:
             visible = archived_pages
         elif active not in ("deleted",):
             visible += folder_pages - len(folder_items)
-        base = f"/f/{folder_id}" if in_folder else "/"
         response = HTMLResponse(
             _shell(
                 in_folder[1] if in_folder else "Artifacts",
