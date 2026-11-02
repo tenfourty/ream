@@ -22,7 +22,7 @@ import logging
 import threading
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, NamedTuple
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -2572,6 +2572,20 @@ def _page_menu(
     )
 
 
+class _FolderItem(NamedTuple):
+    """A folder as one item on the wall. Index 2 is the newest page's time, where a page row
+    keeps its own, so the day headings of the list view group both the same way."""
+
+    id: str
+    title: str
+    newest: datetime | None
+    agents: list
+    count: int
+    waiting: int
+    pinned: int
+    unread: bool
+
+
 def _matches(row, needle: str) -> bool:
     """Does this page match? Title, owning agent, and the page's own words.
 
@@ -2598,7 +2612,7 @@ def _matches(row, needle: str) -> bool:
     return needle in text_module.searchable(body or "")
 
 
-def _search_box(query: str, view: str) -> str:
+def _search_box(query: str, view: str, base: str = "/") -> str:
     """A GET form whose result is the same gallery, filtered -- so a search is a
     URL he can keep, and it works with scripts off.
 
@@ -2607,13 +2621,13 @@ def _search_box(query: str, view: str) -> str:
     something odd rather than as a control losing state."""
     value = escape(query)
     clear = (
-        f'<a class="clearq" href="/?view={view}" aria-label="Clear the search">'
+        f'<a class="clearq" href="{base}?view={view}" aria-label="Clear the search">'
         "&times;</a>"
         if query
         else ""
     )
     return (
-        '<form class="find" method="get" action="/" role="search">'
+        f'<form class="find" method="get" action="{base}" role="search">'
         f'<input type="hidden" name="view" value="{escape(view)}">'
         f"{_icon('find')}"
         f'<input type="search" name="q" value="{value}" placeholder="Search"'
@@ -2622,7 +2636,7 @@ def _search_box(query: str, view: str) -> str:
     )
 
 
-def _view_toggle(view: str) -> str:
+def _view_toggle(view: str, base: str = "/") -> str:
     """The grid/list switch. The icon shows the view you would SWITCH TO, which
     is what the reference does and what every such control does -- an icon
     showing the state you are already in reads as a label and gets ignored.
@@ -2633,7 +2647,7 @@ def _view_toggle(view: str) -> str:
     target = "list" if to_list else "grid"
     label = "Show as a list" if to_list else "Show as a grid"
     return (
-        f'<a class="vtoggle" href="/?view={target}" title="{label}"'
+        f'<a class="vtoggle" href="{base}?view={target}" title="{label}"'
         f' aria-label="{label}">{_icon("list" if to_list else "grid")}</a>'
     )
 
@@ -2725,7 +2739,12 @@ def _deleted_view(rows) -> str:
 
 
 def _tabs(
-    active: str, waiting: int, pinned: int, deleted: int = 0, archived: int = 0
+    active: str,
+    waiting: int,
+    pinned: int,
+    deleted: int = 0,
+    archived: int = 0,
+    base: str = "/",
 ) -> str:
     """All / Waiting on you / Pinned / Archived / Deleted.
 
@@ -2755,12 +2774,14 @@ def _tabs(
             continue
         cls = "tab on" if key == active else "tab"
         suffix = f'<span class="tn">{count}</span>' if count else ""
-        href = "/" if key == "all" else f"/?filter={key}"
+        href = base if key == "all" else f"{base}?filter={key}"
         out.append(f'<a class="{cls}" href="{href}">{label}{suffix}</a>')
     return f'<nav class="tabs">{"".join(out)}</nav>'
 
 
-def _agent_pick(agents: list[str], chosen: str, view: str, query: str) -> str:
+def _agent_pick(
+    agents: list[str], chosen: str, view: str, query: str, base: str = "/"
+) -> str:
     """Filter the wall by who published. Jeremy, 21 Sep: "ideally we can filter
     on the gallery by agent as well as search", and then "make it subtle in the
     design and look good".
@@ -2794,7 +2815,7 @@ def _agent_pick(agents: list[str], chosen: str, view: str, query: str) -> str:
             bits.append(f"q={quote(query)}")
         if view and view != "grid":
             bits.append(f"view={quote(view)}")
-        href = "/?" + "&amp;".join(bits) if bits else "/"
+        href = f"{base}?" + "&amp;".join(bits) if bits else base
         mark = ' aria-current="true"' if value == chosen else ""
         return f'<a class="mrow" href="{href}"{mark}>{escape(label)}</a>'
 
@@ -2830,18 +2851,19 @@ def _controls_row(
     agents: list[str] | None = None,
     agent: str = "",
     archived: int = 0,
+    base: str = "/",
 ) -> str:
     """The row under the title: WHAT to show on the left, how to find it and how
     to see it on the right."""
     pages_text = f"{pages} page" if pages == 1 else f"{pages} pages"
     return (
         '<div class="controls">'
-        f"{_tabs(active, waiting, pinned, deleted, archived)}"
+        f"{_tabs(active, waiting, pinned, deleted, archived, base)}"
         '<div class="cright">'
-        f"{_agent_pick(agents or [], agent, view, query)}"
-        f"{_search_box(query, view)}"
+        f"{_agent_pick(agents or [], agent, view, query, base)}"
+        f"{_search_box(query, view, base)}"
         f'<span class="count">{pages_text}</span>'
-        f"{_view_toggle(view)}"
+        f"{_view_toggle(view, base)}"
         "</div></div>"
     )
 
@@ -4277,7 +4299,28 @@ def gallery_router(db: Database) -> APIRouter:
             headers={**gallery_headers(), "cache-control": "no-cache"},
         )
 
-    def _wall(conn, archived: bool):
+    def _wall(
+        conn, archived: bool, folder_id: str | None = None, grouped: bool = False
+    ):
+        """The pages of the live wall, or the archived ones.
+
+        `folder_id` lists only that folder's pages. `grouped` leaves out the pages a folder
+        tile stands for: a page in a folder that is not archived (live wall), or in an
+        ARCHIVED folder (archived tab). A page archived on its own out of a live folder
+        has no tile to hide behind, so it stays in the flat archived list.
+        """
+        if folder_id is not None:
+            scope, extra = " and a.folder_id = %s", (folder_id,)
+        elif grouped:
+            scope = (
+                " and (a.folder_id is null or "  # noqa: S608
+                + ("not " if archived else "")
+                + "exists (select 1 from folder f where f.id = a.folder_id"
+                "  and f.archived_at is not null))"
+            )
+            extra = ()
+        else:
+            scope, extra = "", ()
         return conn.execute(
             # Bounded: an unpaginated list is fine at ten artifacts and a
             # page nobody can load at ten thousand. `, id desc` breaks a tie
@@ -4337,6 +4380,7 @@ def gallery_router(db: Database) -> APIRouter:
             f"       {_WALL_REPLIED_BY} as replied_by"
             "  from artifact a"
             " where (a.archived_at is null) = %s and a.deleted_at is null"
+            + scope
             # THE WALL SORTS ITSELF BY WHAT NEEDS HIM. Pinned first, because
             # that is him saying so explicitly. Then anything with an
             # unanswered question, because this service exists so he can
@@ -4352,7 +4396,7 @@ def gallery_router(db: Database) -> APIRouter:
             # UNpinned page above every pinned one -- precisely backwards, and
             # it would look like pinning had done nothing rather than like a
             # broken sort.
-            " order by a.pinned_at desc nulls last,"
+            + " order by a.pinned_at desc nulls last,"  # noqa: S608
             "          (select count(*) from decision d"
             "             where d.artifact_id = a.id"
             "               and d.answer is null and d.kind <> 'form'"
@@ -4362,8 +4406,101 @@ def gallery_router(db: Database) -> APIRouter:
             # it drops back into the order below (homelab-ij8.103, his ruling).
             f"          {_WALL_UNREAD} desc,"
             "          a.updated_at desc, a.id desc limit 200",
-            (not archived,),
+            (not archived, *extra),
         ).fetchall()
+
+    def _folder_pages(conn):
+        """Every page that is in a folder and not binned, one line each, with the folder's
+        own fields: the facts a folder tile is made of. Not capped like `_wall`, so a folder
+        of a thousand daily digests still counts them all."""
+        return conn.execute(
+            "select f.id, f.title, f.archived_at, a.agent, a.updated_at,"  # noqa: S608
+            "       (a.archived_at is not null) as page_archived,"
+            "       (a.pinned_at is not null) as pinned,"
+            f"       {_WALL_UNREAD} as unread,"
+            "       (select count(*) from decision d"
+            "          where d.artifact_id = a.id"
+            "            and d.answer is null and d.kind <> 'form'"
+            "            and a.archived_at is null"
+            "            and d.closed_at is null) as waiting"
+            "  from artifact a join folder f on f.id = a.folder_id"
+            " where a.deleted_at is null"
+        ).fetchall()
+
+    def _folder_items(pages, archived: bool) -> list:
+        """The folder tiles for the live wall (`archived` False: folders not archived, their
+        live pages) or for the Archived tab (archived folders, their archived pages). A
+        folder with no such page is not drawn."""
+        found: dict = {}
+        for (
+            fid,
+            title,
+            f_arch,
+            agent,
+            updated,
+            p_arch,
+            pinned,
+            unread,
+            waiting,
+        ) in pages:
+            if bool(f_arch) != archived or bool(p_arch) != archived:
+                continue
+            f = found.setdefault(fid, [title, 0, None, set(), 0, 0, False])
+            f[1] += 1
+            if f[2] is None or updated > f[2]:
+                f[2] = updated
+            f[3].add(agent)
+            f[4] += waiting or 0
+            f[5] += 1 if pinned else 0
+            f[6] = f[6] or bool(unread)
+        return [
+            _FolderItem(fid, f[0], f[2], sorted(f[3]), f[1], f[4], f[5], f[6])
+            for fid, f in found.items()
+        ]
+
+    def _folder_tile(item, archived: bool = False) -> str:
+        """A folder as one tile: its title, how many pages, the newest page's age, who
+        published them, and how many questions wait. The same card as a page's, with no
+        menu or pin (his controls for a folder are a later slice)."""
+        ident = escape(item.id)
+        flag = ""
+        if item.waiting:
+            flag = f'<span class="wait">{item.waiting} waiting</span>'
+        when = _ago(item.newest)
+        exact = stamp.format_for_display(item.newest) if item.newest else ""
+        noun = "page" if item.count == 1 else "pages"
+        bits = [f"{item.count} {noun}", ", ".join(escape(a) for a in item.agents)]
+        if when:
+            bits.append(f'<time title="{escape(exact)}">Edited {escape(when)}</time>')
+        return (
+            f'<li class="tile-wrap folder{" asking" if item.waiting else ""}'
+            f'{" archived" if archived else ""}">'
+            f'<a href="/f/{ident}"><span class="frame">'
+            f'<span class="shot none">{_icon("all")}'
+            f'<span class="d">{item.count} {noun}</span></span>{flag}</span>'
+            f'<span class="body"><span class="t">{escape(item.title)}</span>'
+            f'<span class="m">{_SEP.join(bits)}</span></span></a></li>'
+        )
+
+    def _folder_row(item, archived: bool = False) -> str:
+        right = []
+        if item.waiting:
+            right.append(f'<span class="wait">{item.waiting} waiting</span>')
+        noun = "page" if item.count == 1 else "pages"
+        names = ", ".join(escape(a) for a in item.agents)
+        right.append(f'<span class="who">{names}</span>')
+        right.append(f"<span>{item.count} {noun}</span>")
+        when = _ago(item.newest)
+        if when:
+            exact = stamp.format_for_display(item.newest) if item.newest else ""
+            right.append(f'<time title="{escape(exact)}">Edited {escape(when)}</time>')
+        return (
+            f'<li class="row-wrap folder{" asking" if item.waiting else ""}">'
+            f'<a class="row" href="/f/{escape(item.id)}">'
+            f'<span class="rshot none">{_icon("all")}</span>'
+            f'<span class="rt">{escape(item.title)}</span>'
+            f'<span class="rmeta">{"".join(right)}</span></a></li>'
+        )
 
     def _row_view(row, archived: bool = False) -> str:
         """One page as a line, for the list view.
@@ -4434,9 +4571,51 @@ def gallery_router(db: Database) -> APIRouter:
 
     @router.get("/", response_class=HTMLResponse)
     def index(request: Request) -> HTMLResponse:
+        return _wall_page(request)
+
+    @router.get("/f/{folder_id}", response_class=HTMLResponse)
+    def open_folder(folder_id: str, request: Request) -> HTMLResponse:
+        # The opaque id, never the slug: a slug is only unique per owner.
+        return _wall_page(request, folder_id)
+
+    def _wall_page(request: Request, folder_id: str | None = None) -> HTMLResponse:
+        query = (request.query_params.get("q") or "").strip()
+        chosen_agent = (request.query_params.get("agent") or "").strip()
+        chosen = request.query_params.get("filter")
+        # THE WALL GROUPS, A SEARCH DOES NOT. A page in a folder is hidden behind its folder
+        # tile only while he is looking at the plain wall (or the plain Archived tab). Any
+        # question put to the wall -- a search, an agent, "Waiting on you", "Pinned" -- is
+        # about pages, and a folder tile cannot answer it: those list the matching pages
+        # flat, folders or not.
+        flat = bool(query or chosen_agent or chosen in ("waiting", "pinned"))
+        folder_items: list = []
+        in_folder = None
         with db.connect() as conn:
-            rows = _wall(conn, archived=False)
-            archived_rows = _wall(conn, archived=True)
+            if folder_id is not None:
+                in_folder = conn.execute(
+                    "select id, title, archived_at from folder where id = %s",
+                    (folder_id,),
+                ).fetchone()
+                if in_folder is None:
+                    raise HTTPException(404, "no such folder")
+                shelved = in_folder[2] is not None
+                rows = [] if shelved else _wall(conn, False, folder_id)
+                archived_rows = _wall(conn, True, folder_id) if shelved else []
+                pages = []
+            else:
+                rows = _wall(conn, archived=False, grouped=not flat)
+                archived_rows = _wall(conn, archived=True, grouped=not flat)
+                pages = [] if flat else _folder_pages(conn)
+        # Before grouping: what is waiting on him and what is pinned count the pages in
+        # folders too, so the header never says fewer than there are.
+        in_live = [] if flat else _folder_items(pages, False)
+        in_archived = [] if flat else _folder_items(pages, True)
+        folder_waiting = sum(f.waiting for f in in_live)
+        folder_pinned = sum(f.pinned for f in in_live)
+        folder_agents = sorted({a for f in in_live for a in f.agents})
+        folder_pages = sum(f.count for f in in_live)
+        archived_folder_pages = sum(f.count for f in in_archived)
+        folder_items = in_live
 
         # A tile per page rather than a line per page: a wall Jeremy recognises
         # the board he wants in. Jeremy chose a real rendered thumbnail (19 Sep)
@@ -4606,14 +4785,21 @@ def gallery_router(db: Database) -> APIRouter:
         # Counted BEFORE filtering: the tabs have to say how many there ARE,
         # not how many survived the tab you are already on -- otherwise the
         # number on a tab changes when you press it, and stops meaning anything.
-        waiting_total = sum(r[5] for r in rows)
-        pinned_total = sum(1 for r in rows if r[8])
+        waiting_total = sum(r[5] for r in rows) + folder_waiting
+        pinned_total = sum(1 for r in rows if r[8]) + folder_pinned
 
-        chosen = request.query_params.get("filter")
-        active = (
-            chosen if chosen in ("waiting", "pinned", "deleted", "archived") else "all"
+        shown = (
+            ("waiting", "pinned")
+            if in_folder
+            else (
+                "waiting",
+                "pinned",
+                "deleted",
+                "archived",
+            )
         )
-        deleted_rows = store.list_deleted(db)
+        active = chosen if chosen in shown else "all"
+        deleted_rows = [] if in_folder else store.list_deleted(db)
         if active == "waiting":
             rows = [r for r in rows if r[5]]
         elif active == "pinned":
@@ -4625,15 +4811,13 @@ def gallery_router(db: Database) -> APIRouter:
         # options is a control you cannot get out of without editing the URL.
         # Archived pages do not add names of their own: a seat whose only pages
         # are archived is not somebody you filter the wall by.
-        agents = sorted({r[3] for r in rows})
-        chosen_agent = (request.query_params.get("agent") or "").strip()
+        agents = sorted({r[3] for r in rows} | set(folder_agents))
         if chosen_agent:
             # A link saved before an agent was renamed still finds its pages.
             chosen_agent = rename.resolve(db, chosen_agent)
             rows = [r for r in rows if r[3] == chosen_agent]
             archived_rows = [r for r in archived_rows if r[3] == chosen_agent]
 
-        query = (request.query_params.get("q") or "").strip()
         needle = query.lower()
         if needle:
             # Both walls are filtered. Searching only the live one would hide
@@ -4667,7 +4851,11 @@ def gallery_router(db: Database) -> APIRouter:
                         f'<h2 class="daygroup">{escape(group)}</h2><ul class="rows">'
                     )
                     current = group
-                out.append(_row_view(row, archived))
+                out.append(
+                    _folder_row(row, archived)
+                    if isinstance(row, _FolderItem)
+                    else _row_view(row, archived)
+                )
             if current is not None:
                 out.append("</ul>")
             return "".join(out)
@@ -4675,17 +4863,48 @@ def gallery_router(db: Database) -> APIRouter:
         def render(these, archived: bool = False) -> str:
             if view == "list":
                 return listing(these, archived)
-            tiles = "".join(tile(r, archived) for r in these)
+            tiles = "".join(
+                _folder_tile(r, archived)
+                if isinstance(r, _FolderItem)
+                else tile(r, archived)
+                for r in these
+            )
             return f'<ul class="tiles">{tiles}</ul>'
+
+        # The folder tiles take their place among the pages, in the same order the wall
+        # keeps: pinned first, then whatever waits on him, then what he has not read,
+        # then newest. A folder sorts by its newest page and "waits" when it holds a
+        # question. Inside a folder there are no unread bumps: newest publish first,
+        # with pinned and waiting above.
+        def rank(r):
+            if isinstance(r, _FolderItem):
+                return (0, 0, bool(r.waiting), r.unread, r.newest, r.id)
+            pinned = (1, r[8]) if r[8] else (0, 0)
+            return (
+                *pinned,
+                bool(r[5]),
+                False if in_folder else bool(r[10]),
+                r[2],
+                r[0],
+            )
+
+        archived_shown = (
+            sorted([*archived_rows, *in_archived], key=rank, reverse=True)
+            if in_archived
+            else archived_rows
+        )
+        archived_pages = len(archived_rows) + archived_folder_pages
+        if folder_items or in_folder:
+            rows = sorted([*rows, *folder_items], key=rank, reverse=True)
 
         # Archived pages are their own tab (Jeremy, 21 Sep: put it up with the
         # others). Still rendered in the archived skin -- dimmed thumbnails,
         # quieter titles -- so a page that is off the wall never looks like one
         # that is on it, whichever tab you reached it through.
-        if active == "archived":
+        if active == "archived" or (in_folder and archived_shown):
             main = (
-                f'<div class="archived-body">{render(archived_rows, archived=True)}</div>'
-                if archived_rows
+                f'<div class="archived-body">{render(archived_shown, archived=True)}</div>'
+                if archived_shown
                 else (
                     f'<p class="empty">Nothing archived matches <b>{escape(query)}</b>. '
                     f'<a href="/?filter=archived&view={view}">Show everything '
@@ -4716,18 +4935,27 @@ def gallery_router(db: Database) -> APIRouter:
                 f"<b>{escape(query)}</b>.{found_archived} "
                 f'<a href="/?view={view}">Show everything</a>.</p>'
             )
-        elif archived_rows:
+        elif archived_shown:
             main = (
                 '<p class="empty">Nothing on the wall. '
                 f'<a href="/?filter=archived&view={view}">'
-                f"{len(archived_rows)} archived</a>.</p>"
+                f"{archived_pages} archived</a>.</p>"
             )
+        elif in_folder:
+            main = '<p class="empty">Nothing in this folder.</p>'
         else:
             main = '<p class="empty">No pages published yet.</p>'
         body = main
+        # "N pages" counts pages, not tiles: a folder tile stands for all of its pages.
+        visible = _visible_count(active, rows, archived_rows, deleted_rows)
+        if active == "archived" or (in_folder and archived_shown):
+            visible = archived_pages
+        elif active not in ("deleted",):
+            visible += folder_pages - len(folder_items)
+        base = f"/f/{folder_id}" if in_folder else "/"
         response = HTMLResponse(
             _shell(
-                "Artifacts",
+                in_folder[1] if in_folder else "Artifacts",
                 body,
                 meta_html=_wall_meta(waiting_total, inbox.label(*inbox.count(db))),
                 controls=_controls_row(
@@ -4736,11 +4964,12 @@ def gallery_router(db: Database) -> APIRouter:
                     active,
                     waiting_total,
                     pinned_total,
-                    _visible_count(active, rows, archived_rows, deleted_rows),
+                    visible,
                     len(deleted_rows),
                     agents,
                     chosen_agent,
-                    len(archived_rows),
+                    0 if in_folder else archived_pages,
+                    base,
                 ),
                 home=False,
             ),
