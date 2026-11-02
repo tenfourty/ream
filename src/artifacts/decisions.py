@@ -112,7 +112,7 @@ _COLUMNS = (
     " (select x.archived_at from artifact x where x.id = decision.artifact_id)"
     ' as "archived_at [TIMESTAMPTZ]",'
     " (select x.deleted_at from artifact x where x.id = decision.artifact_id)"
-    ' as "deleted_at [TIMESTAMPTZ],"'
+    ' as "deleted_at [TIMESTAMPTZ]",'
     " decision.answer_record"
 )
 # Positions in `_COLUMNS` that are read by index outside `_row_to_decision`.
