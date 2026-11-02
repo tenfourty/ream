@@ -315,12 +315,13 @@ def test_a_transfer_takes_the_page_out_of_the_old_owners_folder(db):
     assert store.get_owned(db, "beta", page.id).folder is None
 
 
-def test_the_wall_is_unchanged_by_a_folder(client, tokens):
+def test_a_foldered_page_leaves_the_wall_for_its_folder_tile(client, tokens):
     page = publish(
         client, tokens["alpha"], title="Foldered page", folder="roadmap"
     ).json()
     wall = client.get("/").text
-    assert page["id"] in wall, "slice 1: a foldered page is still on the wall"
+    assert f'href="/a/{page["id"]}"' not in wall, "the page is behind its folder tile"
+    assert 'href="/f/' in wall
 
 
 # --- rename ---------------------------------------------------------------------
