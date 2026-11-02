@@ -246,7 +246,7 @@ FORM_JS = r"""// FORM CONTROLS (forms slice 2). The page's own controls inside a
 // checkbox = true or false, every other control = its string. The gallery may write a
 // draft back with `artifact-form-fill` {form, values}: property writes only, so no input
 // event fires, at most 200 fields and 2000 characters a value. Both legs check the
-// gallery's origin, and the report goes to that origin only, never "*".
+// gallery's origin, and the report goes to that origin only, never a wildcard.
 var FMX=200,FMV=2000;
 function fcut(s){return fixend(String(s).slice(0,FMV))}
 function fnm(f){return String(f.getAttribute("data-artifact-form")||"").slice(0,100)}

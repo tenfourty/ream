@@ -62,7 +62,7 @@ const sample = () => [
   const g = build(c);
   g.fire("load", {});
   const [m, origin] = g.forms()[0];
-  ok(g.forms().length === 1 && origin === GALLERY, "one snapshot at load, never to '*'");
+  ok(g.forms().length === 1 && origin === GALLERY, "one snapshot at load, never to a wildcard origin");
   ok(m.form === "rollout" && m.load === true, "names the form and says it is the load report");
   ok(JSON.stringify(m.values) === JSON.stringify({
     region: "b", pets: ["dog"], ack: false, why: "because", size: "", count: "3" }),
