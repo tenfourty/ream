@@ -700,3 +700,19 @@ def test_mismatched_but_matchable_end_tag_still_closes_inner_elements():
     body = '<div id="a"><p>one<span>two</div>tail'
     found = sections.locate(body, "a")
     assert body[found.start : found.end] == '<div id="a"><p>one<span>two</div>'
+
+
+def test_many_headings_after_a_closed_target_parse_quickly():
+    import time
+
+    body = '<p id="a">x</p>' + "<div>" * 20000 + "<h2>t</h2>" * 20000
+    t = time.monotonic()
+    found = sections.locate(body, "a")
+    assert time.monotonic() - t < 10
+    assert body[found.start : found.end] == '<p id="a">x</p>'
+
+
+def test_first_heading_inside_a_target_is_still_captured():
+    body = '<div id="a"><h2>Title <b>one</b></h2><h2>two</h2></div>'
+    found = sections.locate(body, "a")
+    assert found.label == "Title one"

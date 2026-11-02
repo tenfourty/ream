@@ -185,6 +185,8 @@ class _Walker(HTMLParser):
         # Open count per tag name, so an end tag that matches nothing is a
         # constant-time miss rather than a scan of the stack.
         self._open: dict[str, int] = {"svg": 1} if foreign else {}
+        # Stack entries that are a target, for the heading check.
+        self._targets_open = 0
         self.matches: list[dict] = []
         self.stray_end: list[str] = []
         self._heading: dict | None = None  # capturing the target's first heading
@@ -210,6 +212,8 @@ class _Walker(HTMLParser):
     def _pop(self) -> list:
         entry = self.stack.pop()
         self._open[entry[0]] -= 1
+        if entry[3]:
+            self._targets_open -= 1
         return entry
 
     # -- handlers ---------------------------------------------------------------
@@ -255,12 +259,14 @@ class _Walker(HTMLParser):
             and self._heading is None
             and self.wanted is None
             and len(self.matches) == 1
-            and any(e[3] for e in self.stack)
+            and self._targets_open
         )
         if is_heading:
             self._heading = {"text": [], "done": False}
         if not closed:
             self._open[tag] = self._open.get(tag, 0) + 1
+            if is_target:
+                self._targets_open += 1
             self.stack.append(
                 [
                     tag,
