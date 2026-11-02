@@ -496,7 +496,13 @@ def test_gallery_js_is_served_from_self_with_no_dependency(db):
     # back/forward. 396 bytes ask the gallery for a fresh pass when the frame
     # says its pass is spent -- without them, every reload in Firefox would
     # leave a page reading "expired". The argument lives above `_GALLERY_JS`.
-    assert len(text.encode()) < 8192
+    #
+    # 8448 on 2 Nov 2026 (8290): on an iPhone a page scrolled only from below its
+    # frame, because the frame kept every swipe over the page (runcove-5t3oj.62).
+    # 274 bytes tell a frame that holds the whole page that it has nothing to
+    # scroll, and give it its scrollbar back when it does not. The argument
+    # lives above `_GALLERY_JS`.
+    assert len(text.encode()) < 8448
     assert "http://" not in text and "https://" not in text  # no CDN, nothing fetched
     assert "eval(" not in text
     assert "new Function(" not in text

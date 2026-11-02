@@ -1286,6 +1286,14 @@ _HOME_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6
 #    then shows the expired page's own words, which name what to do. The new
 #    src must be on the SAME content origin the frame already has, so nothing
 #    this fetch returns can point the frame anywhere else.
+# `frameScroll`: on an iPhone a swipe over the frame went to the frame's own
+# scroller, which had nothing to scroll, so the gallery page did not move and
+# Jeremy could scroll a page only from below it (2 Nov 2026, runcove-5t3oj.62).
+# Once the frame holds the whole page it is told it has nothing to scroll
+# (`scrolling="no"`), and the swipe scrolls the gallery. It keeps scrolling when
+# it does not hold the whole page: before the first height arrives (the 78vh
+# floor), past the cap, when the page is wider than its frame (the right of it
+# would be unreachable; the shim reports `wide`), and in fullscreen (100vh).
 _GALLERY_JS = """(function(){
 "use strict";
 var iframe=document.getElementById("artifact-frame");
@@ -1300,17 +1308,8 @@ document.querySelectorAll("[data-decision-id]").forEach(function(el){
 });
 function isNum(v){return typeof v==="number"&&isFinite(v)}
 var homes=new Map();var fits=true;
-// On an iPhone a swipe over the frame went to the frame's own scroller, which had
-// nothing to scroll, and the gallery page did not move: Jeremy could scroll a page
-// only from below it (2 Nov 2026, runcove-5t3oj.62). Once the frame holds the whole
-// page it has nothing to scroll, so it is told so and the swipe scrolls the gallery.
-// It keeps scrolling when it does not hold the whole page: before the first height
-// arrives (the 78vh floor), past the cap, when the page is wider than its frame
-// (the right of it would be unreachable), and in fullscreen (100vh).
 var sized=false,wide=false;
-function frameScroll(){try{
-  iframe.setAttribute("scrolling",sized&&fits&&!wide&&!document.fullscreenElement?"no":"auto")
-}catch(e){}}
+function frameScroll(){try{iframe.setAttribute("scrolling",sized&&fits&&!wide&&!document.fullscreenElement?"no":"auto")}catch(e){}}
 document.addEventListener("fullscreenchange",frameScroll);
 function liftsHere(){try{if(window.matchMedia)return window.matchMedia("(min-width:56rem)").matches}catch(e){}return window.innerWidth>=896}
 function isStatic(el){try{return window.getComputedStyle(el).position==="static"}catch(e){return false}}
