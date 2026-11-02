@@ -223,19 +223,22 @@ def create_his(conn, title: str) -> tuple[str, str]:
     and takes a numeric suffix when he already has one by that name, so naming a second
     folder "Roadmap" makes another rather than silently reusing the first."""
     base = slug_from_title(title)
-    n = 1
-    while True:
+    # Two "New folder" clicks with one name can both see a free slug; the unique (owner, slug)
+    # decides, and the loser takes the next suffix instead of a 500.
+    for n in range(1, 101):
         suffix = "" if n == 1 else f"-{n}"
         slug = base[: 40 - len(suffix)].rstrip("-") + suffix
-        if find(conn, HIS, slug) is None:
-            break
-        n += 1
-    folder_id = ids.new_id()
-    conn.execute(
-        "insert into folder (id, owner, slug, title, created_at) values (%s, %s, %s, %s, %s)",
-        (folder_id, HIS, slug, title, datetime.now(UTC)),
-    )
-    return folder_id, slug
+        if find(conn, HIS, slug) is not None:
+            continue
+        folder_id = ids.new_id()
+        done = conn.execute(
+            "insert into folder (id, owner, slug, title, created_at)"
+            " values (%s, %s, %s, %s, %s) on conflict (owner, slug) do nothing",
+            (folder_id, HIS, slug, title, datetime.now(UTC)),
+        )
+        if done.rowcount > 0:
+            return folder_id, slug
+    raise SlugTaken(base)
 
 
 def get(conn, folder_id: str):

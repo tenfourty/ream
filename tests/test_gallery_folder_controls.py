@@ -287,3 +287,34 @@ def test_agents_cannot_publish_into_his_folder_or_see_or_change_it(client, db):
     assert got.json()["pages"] == 1
     assert folder_of(db, seed.id)[0] == fid
     assert count(db, "select archived_at from folder where id = %s", fid) is None
+
+
+def test_a_page_in_his_folder_reads_back_folder_null_to_its_agent(client, db):
+    page = put(db, "alpha", "Filed", folder="mine")
+    assert store.get_owned(db, "alpha", page.id).folder == "mine"
+    fid = his_folder(client, db, page, "Roadmap")[0]
+    assert post(client, f"/a/{page.id}/folder", folder=fid).status_code == 303
+    assert store.get_owned(db, "alpha", page.id).folder is None
+    assert [r.folder for r in store.list_for_agent(db, "alpha")] == [None]
+    assert [r.folder for r in store.list_readable(db, "alpha")] == [None]
+
+
+def test_new_his_folder_takes_the_next_suffix_when_the_slug_is_taken_under_it(db):
+    from artifacts import folders
+
+    with db.connect() as conn, conn.transaction():
+        first = folders.create_his(conn, "Roadmap")
+        # a rival wins the race for the next free slug after our find() saw it free
+        real_find = folders.find
+        seen = {"n": 0}
+
+        def stale_find(c, owner, slug):
+            seen["n"] += 1
+            return None if seen["n"] <= 2 else real_find(c, owner, slug)
+
+        folders.find = stale_find
+        try:
+            second = folders.create_his(conn, "Roadmap")
+        finally:
+            folders.find = real_find
+    assert first[1] == "roadmap" and second[1] == "roadmap-2"

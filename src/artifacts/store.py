@@ -1061,7 +1061,7 @@ def get_owned(
         folder = (
             conn.execute(
                 "select f.slug from artifact a join folder f on f.id = a.folder_id"
-                " where a.id = %s",
+                " where a.id = %s and f.owner = a.agent",
                 (row[0],),
             ).fetchone()
             if row[2] == agent
@@ -1339,7 +1339,7 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             " artifact.current_version, version.revision, artifact.updated_at,"
             " artifact.archived_at, artifact.pinned_at, version.session,"
             " page_read.read_version, page_read.read_at, artifact.agents_can_read,"
-            " folder.slug"
+            " case when folder.owner = artifact.agent then folder.slug end"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
@@ -1395,7 +1395,7 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
             " artifact.current_version, version.revision, artifact.updated_at,"
             " artifact.archived_at, artifact.pinned_at, version.session,"
             " page_read.read_version, page_read.read_at, artifact.agents_can_read,"
-            " folder.slug"
+            " case when folder.owner = artifact.agent then folder.slug end"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
@@ -2002,7 +2002,15 @@ def file_page_for_reader(
             row = folders.get(conn, folder_id)
             if row is None or row[1] not in (folders.HIS, page[0]):
                 raise NotFound()
-            if row[4] is not None:
+            # Lock the folder row, then read archived_at again: a folder archive that
+            # commits between the first read and the update must not be raced past.
+            locked = conn.execute(
+                "select archived_at from folder where id = %s" + conn.for_update(),  # noqa: S608 -- for_update() is a fixed clause
+                (folder_id,),
+            ).fetchone()
+            if locked is None:
+                raise NotFound()
+            if locked[0] is not None:
                 raise folders.FolderArchived(row[2])
             target = row[0]
         conn.execute(
