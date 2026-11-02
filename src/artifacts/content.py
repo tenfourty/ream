@@ -299,6 +299,11 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "b.getBoundingClientRect().bottom+scrollY)+m+x)}"
         'function send(){parent.postMessage({type:"artifact-state",'
         "height:h(),"
+        # `wide`: the page is wider than its frame. The gallery then leaves the frame
+        # able to scroll, because turning scrolling off would cut the right of the
+        # page off with no way to reach it (runcove-5t3oj.62).
+        "wide:(function(){try{var d=document.documentElement;"
+        "return d.scrollWidth>d.clientWidth}catch(e){return false}})(),"
         'slots:Array.from(document.querySelectorAll("[data-artifact-decision]"),b)},'
         f"{origin})}}"
         'addEventListener("load",send);addEventListener("resize",send);'

@@ -525,6 +525,21 @@ def test_gallery_js_clamps_height_to_the_documented_range(db):
     assert "isFinite" in text
 
 
+def test_gallery_js_stops_the_frame_scrolling_once_it_holds_the_whole_page(db):
+    """On an iPhone a swipe over the frame went to the frame's own scroller, which had
+    nothing to scroll, so the page around it never moved (runcove-5t3oj.62). Once the
+    frame is sized to the whole page it is told it has nothing to scroll -- but never
+    before a height arrives, past the cap, for a page wider than its frame, or in
+    fullscreen, where the frame still needs its own scrollbar."""
+    text = TestClient(create_gallery_app(db)).get("/gallery.js").text
+    assert (
+        'setAttribute("scrolling",sized&&fits&&!wide&&!document.fullscreenElement?"no":"auto")'
+        in text
+    )
+    assert "wide=data.wide===true" in text
+    assert 'addEventListener("fullscreenchange",frameScroll)' in text
+
+
 def test_gallery_js_never_polls(db):
     """No timer of any kind, still. The "has this page been republished" watch
     added on 21 Sep (homelab-ij8.74) is a HELD request -- the server waits, so

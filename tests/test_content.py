@@ -148,6 +148,9 @@ def test_the_live_page_reports_height_and_decision_slots_to_the_gallery(content,
     assert 'addEventListener("resize"' in text
     assert "postMessage" in text
     assert "getBoundingClientRect" in text
+    # whether the page is wider than its frame, so the gallery leaves such a frame
+    # able to scroll sideways (runcove-5t3oj.62)
+    assert "wide:" in text and "d.scrollWidth>d.clientWidth" in text
 
 
 def test_the_viewer_report_posts_only_to_the_gallery_origin_never_to_star(
