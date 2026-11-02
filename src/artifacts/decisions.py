@@ -892,6 +892,10 @@ def list_for_agent(
         # In the query, so `limit` counts only this kind.
         sql += " and decision.kind = %s"
         params.append(kind)
+    else:
+        # A form is not a question waiting on him yet (design 2026-10-29 §6):
+        # it reads back through the page's forms, not the agent's queue.
+        sql += " and decision.kind <> 'form'"
     if after is not None:
         sql += _AFTER.format(op="<")
         params.append(after)

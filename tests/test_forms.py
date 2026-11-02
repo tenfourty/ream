@@ -372,7 +372,7 @@ def test_a_bad_form_on_update_is_a_422_and_leaves_the_page_alone(client, db):
         headers=auth(token),
     )
     assert response.status_code == 422
-    assert response.json()["detail"]["control"] is None
+    assert "control" not in response.json()["detail"]
     assert [f["form"] for f in read_forms(client, token, made["id"]).json()] == [
         "rollout"
     ]
@@ -513,7 +513,11 @@ def test_a_question_cannot_replace_or_wait_on_a_form(client, db):
 def test_archiving_the_page_closes_its_forms(client, db):
     token, _ = keys.mint(db, agent="ops")
     made = publish(client, token, page(ROLLOUT)).json()
-    client.post(f"/api/v1/artifacts/{made['id']}/archive", headers=auth(token))
+    client.post(
+        f"/api/v1/artifacts/{made['id']}/archive",
+        json={"archived": True},
+        headers=auth(token),
+    )
     assert read_forms(client, token, made["id"]).json() == []
 
 

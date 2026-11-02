@@ -330,6 +330,11 @@ def _widen_decision_kinds(conn) -> None:
             + _sql_text(new)
             + ") where type = 'table' and name = 'decision'"
         )
+        # The step's own `alter table` leaves this connection's parsed schema
+        # unchanged by the edit above, so it would keep enforcing the old CHECK
+        # until the file's schema cookie moves: bump it to force a re-read.
+        (cookie,) = conn.execute("pragma schema_version").fetchone()
+        conn.execute(f"pragma schema_version = {cookie + 1}")
     finally:
         conn.execute("pragma writable_schema = off")
     row = conn.execute(
