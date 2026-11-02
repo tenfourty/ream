@@ -1,6 +1,6 @@
 # Form controls inside a page, submitted as one batch (design, 29 Oct 2026)
 
-Tracker item runcove-5t3oj.54. Draft for Jeremy's decisions (section 8); nothing built yet.
+Tracker item runcove-5t3oj.54. Design settled: Jeremy answered all four decisions in section 8 on 2 Nov 2026, each (a).
 Shaped by the offices' answers (`docs/agent/feedback/2026-10-29-form-controls-and-receipts.md`,
 ten offices) and the lavish-axi study (`docs/agent/specs/2026-10-29-form-controls-prior-art.md`).
 Delivery receipts (runcove-5t3oj.55) are designed separately; only the one choice that would
@@ -209,6 +209,13 @@ show` prints a form's record; `--help`; runcove `skills/artifacts/SKILL.md` and 
   and publish warns, as `form_element` does today.
 
 ## 8. Decisions for Jeremy
+
+**Answered 2 Nov 2026 (10:45-10:47 UTC, on page `rxvurj7cjqfsh2g32hzbw7hl4t`): (a) on all four.**
+He types in the page's own controls and the gallery's summary confirms what is sent; partial
+sends are allowed, blanks marked and `data-complete="all"` available; "seen" means picked up or
+marked seen, never a plain read; one decision of kind `form` per form. Sections 3-6 already
+assume 8.1, 8.2 and 8.4; the one addition is `data-complete="all"` on a form, parsed and stored in
+slice 1 and enforced at Submit in slice 2. 8.3 binds the receipts work (runcove-5t3oj.55).
 
 8.1 **Where he types his answers.**
 (a) In the page, in the controls the agent wrote; the gallery confirms what will be sent in its
