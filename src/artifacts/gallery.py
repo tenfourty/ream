@@ -770,6 +770,14 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
 .ckind-looks_good{color:var(--ok)}
 .cunplaced{margin:0 0 .6rem;font-size:.8rem;opacity:.8}
 .bar .profile{margin-left:auto}.bar .profile .mpanel{right:0;left:auto}
+/* THE PAGE BAR ON A PHONE. The title menu is the one thing in the bar that may give
+   way: it shrinks to an ellipsis rather than push the bar past the screen. When the
+   bar was wider than a 390px phone, Safari zoomed the whole page out to fit it, and the
+   framed page -- sized to the real screen -- filled only two thirds of what Jeremy saw
+   (2 Nov 2026). Full screen is dropped there too: the phone is already all page. */
+.bar.bleed > .menu:not(.profile){flex:1 1 auto;min-width:0}
+.bar.bleed > .menu:not(.profile) > summary{max-width:100%}
+@media (max-width:34rem){.bar.bleed{gap:.4rem}.bar.bleed .fsbtn{display:none}}
 [data-unread] .t::before,[data-unread] .rt::before{content:"";display:inline-block;
   width:.55em;height:.55em;border-radius:50%;background:var(--accent);
   margin-right:.4em;vertical-align:.1em}
