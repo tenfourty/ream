@@ -2914,7 +2914,7 @@ def _select_toggle(request: Request, selecting: bool, active: str) -> str:
     params = [
         (k, v)
         for k, v in request.query_params.multi_items()
-        if k not in ("select", "note")
+        if k not in ("select", "done", "n")
     ]
     if not selecting:
         params.append(("select", "1"))
@@ -2924,6 +2924,25 @@ def _select_toggle(request: Request, selecting: bool, active: str) -> str:
         ' style="width:auto;padding:0 .6rem;font-size:.8125rem">'
         f"{'Done' if selecting else 'Select'}</a>"
     )
+
+
+_SELECT_DONE = {
+    "moved": "Moved {pages} into the folder.",
+    "new": "Moved {pages} into a new folder.",
+    "out": "Moved {pages} out of their folders.",
+    "none": "Tick at least one page first.",
+}
+
+
+def _select_message(code: str, n: str) -> str:
+    """The result line for `?done=<code>&n=<count>`. Only a known code shows anything, and the
+    count is an integer clamped to 0..200, so a crafted link cannot put its own words on the wall."""
+    template = _SELECT_DONE.get(code)
+    if template is None:
+        return ""
+    count = int(n) if n.isascii() and n.isdigit() and len(n) <= 6 else 0
+    count = min(count, 200)
+    return template.format(pages=f"{count} page" if count == 1 else f"{count} pages")
 
 
 def _select_form(main: str, back: str, note: str = "") -> str:
@@ -5087,7 +5106,14 @@ def gallery_router(db: Database) -> APIRouter:
             back = (f"/f/{folder_id}" if in_folder else "/") + (
                 "?" + urlencode(keep) if keep else ""
             )
-            body = _select_form(main, back, request.query_params.get("note", ""))
+            body = _select_form(
+                main,
+                back,
+                _select_message(
+                    request.query_params.get("done", ""),
+                    request.query_params.get("n", ""),
+                ),
+            )
         # "N pages" counts pages, not tiles: a folder tile stands for all of its pages.
         visible = _visible_count(active, rows, archived_rows, deleted_rows)
         if active == "archived" or (in_folder and archived_shown):
@@ -5418,15 +5444,16 @@ def gallery_router(db: Database) -> APIRouter:
             return back
         return "/"
 
-    def _select_back(back: str, note: str) -> RedirectResponse:
-        """Back to the wall in select mode with a one-line result, so he can keep going."""
+    def _select_back(back: str, done: str, n: int = 0) -> RedirectResponse:
+        """Back to the wall in select mode with a result code (never free text), so he can
+        keep going."""
         base, _, query = _back_url(back).partition("?")
         params = [
             p
             for p in query.split("&")
-            if p and p.split("=")[0] not in ("select", "note")
+            if p and p.split("=")[0] not in ("select", "done", "n")
         ]
-        params += ["select=1", "note=" + quote(note[:160])]
+        params += ["select=1", f"done={done}", f"n={n}"]
         return RedirectResponse(f"{base}?{'&'.join(params)}", status_code=303)
 
     def _noun(n: int) -> str:
@@ -5447,7 +5474,7 @@ def gallery_router(db: Database) -> APIRouter:
         _same_origin_write(request)
         pages = list(dict.fromkeys(p for p in (page or []) if p))
         if not pages:
-            return _select_back(back, "Tick at least one page first.")
+            return _select_back(back, "none")
         if len(pages) > store.MAX_FILE_BATCH:
             raise HTTPException(
                 422, f"at most {store.MAX_FILE_BATCH} pages can be moved at once"
@@ -5460,7 +5487,8 @@ def gallery_router(db: Database) -> APIRouter:
             return _select_choices(pages, agents, choices, back)
         if do not in ("out", "move"):
             raise HTTPException(422, "unknown action")
-        name = new_title.strip()
+        # `out` never creates or chooses a folder, whatever else was posted with it.
+        name = new_title.strip() if do == "move" else ""
         if do == "move" and new_title and not name:
             raise HTTPException(422, "a folder needs a name")
         if do == "move" and not name and not folder:
@@ -5486,8 +5514,9 @@ def gallery_router(db: Database) -> APIRouter:
             raise HTTPException(
                 409, "that folder is archived: unarchive it first"
             ) from None
-        what = "out of their folders" if do == "out" else "into the folder"
-        return _select_back(back, f"Moved {_noun(moved)} {what}.")
+        return _select_back(
+            back, "out" if do == "out" else ("new" if name else "moved"), moved
+        )
 
     def _select_choices(
         pages: list[str], agents: list[str], choices: list, back: str

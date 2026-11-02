@@ -112,7 +112,7 @@ def test_batch_move_into_his_folder_is_one_request(client, db):
     a, b = put(db, "alpha", "A"), put(db, "beta", "B")
     got = select(client, [a, b], do="move", folder=fid, back="/")
     assert got.status_code == 303
-    assert got.headers["location"].startswith("/?select=1&note=Moved%202%20pages")
+    assert got.headers["location"].startswith("/?select=1&done=moved&n=2")
     assert folder_of(db, a.id)[0] == fid and folder_of(db, b.id)[0] == fid
     assert folder_of(db, b.id)[1] == "jeremy"
 
@@ -192,12 +192,39 @@ def test_nothing_ticked_goes_back_with_a_note_and_back_is_never_an_open_redirect
 ):
     got = select(client, [], do="out", back="//evil.example/x")
     assert got.status_code == 303
-    assert got.headers["location"].startswith("/?select=1&note=Tick")
+    assert got.headers["location"].startswith("/?select=1&done=none&n=0")
     a = put(db, "alpha", "A")
     got = select(client, [a], do="out", back="https://evil.example/")
     assert got.headers["location"].startswith("/?")
 
 
-def test_the_note_is_escaped(client):
-    html = client.get("/?select=1&note=<script>x</script>").text
-    assert "<script>x</script>" not in html and "&lt;script&gt;" in html
+def test_free_text_and_unknown_codes_render_nothing(client):
+    for q in ("note=hello+world", "done=hello+world&n=3", "done=<script>x</script>"):
+        html = client.get(f"/?select=1&{q}").text
+        assert "hello world" not in html and "<script>x</script>" not in html
+        assert 'role="status"' not in html
+
+
+def test_known_codes_render_their_sentence_with_a_clamped_count(client):
+    html = client.get("/?select=1&done=moved&n=3").text
+    assert "Moved 3 pages into the folder." in html
+    assert (
+        "Moved 1 page out of their folders."
+        in client.get("/?select=1&done=out&n=1").text
+    )
+    assert (
+        "Moved 3 pages into a new folder." in client.get("/?select=1&done=new&n=3").text
+    )
+    assert "Moved 200 pages" in client.get("/?select=1&done=out&n=99999").text
+    assert "Moved 0 pages" in client.get("/?select=1&done=out&n=-5").text
+
+
+def test_out_never_creates_or_chooses_a_folder(client, db):
+    a = put(db, "alpha", "A", folder="digests", folder_title="Digests")
+    seed = put(db, "alpha", "Seed")
+    fid = his_folder(client, db, seed)
+    before = count(db, "select count(*) from folder")
+    got = select(client, [a], do="out", new_title="Sneaky", folder=fid, back="/")
+    assert got.status_code == 303 and "done=out&n=1" in got.headers["location"]
+    assert folder_of(db, a.id) is None
+    assert count(db, "select count(*) from folder") == before
