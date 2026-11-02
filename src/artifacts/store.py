@@ -2021,6 +2021,96 @@ def file_page_for_reader(
     return True
 
 
+MAX_FILE_BATCH = 200  # pages one wall multi-select may move (the agent twin's cap)
+
+
+class BatchTooLarge(Exception):
+    """A multi-select of more than `MAX_FILE_BATCH` pages."""
+
+
+def file_pages_for_reader(
+    db: Database,
+    artifact_ids: list[str],
+    folder_id: str | None,
+    new_title: str | None = None,
+) -> int:
+    """`file_page_for_reader` for a whole multi-select, in ONE transaction: all of the pages
+    move or none do. Returns how many moved. Same rules: `folder_id` None takes them out,
+    `new_title` makes ONE new folder of his and files them all there, a folder must be his or
+    belong to the one agent whose pages these all are (else NotFound: agents' folders stay one
+    agent each), an archived one is `folders.FolderArchived`. A page that is gone (or binned)
+    is NotFound, and nothing moves. `BatchTooLarge` over `MAX_FILE_BATCH`."""
+    wanted = list(dict.fromkeys(artifact_ids))
+    if len(wanted) > MAX_FILE_BATCH:
+        raise BatchTooLarge()
+    if not wanted:
+        raise NotFound()
+    if new_title is not None:
+        _guard(new_title, MAX_TITLE_BYTES, "title", agent=folders.HIS, artifact_id=None)
+    with db.connect() as conn, conn.transaction():
+        agents = {
+            r[0]: r[1]
+            for r in conn.execute(
+                "select id, agent from artifact"  # noqa: S608 -- placeholders only
+                f" where deleted_at is null and id in {in_list(wanted)}",
+                tuple(wanted),
+            ).fetchall()
+        }
+        if len(agents) != len(wanted):
+            raise NotFound()
+        if new_title is not None:
+            target, _slug = folders.create_his(conn, new_title)
+        elif folder_id is None:
+            target = None
+        else:
+            row = folders.get(conn, folder_id)
+            if row is None or (
+                row[1] != folders.HIS and set(agents.values()) != {row[1]}
+            ):
+                raise NotFound()
+            locked = conn.execute(
+                "select archived_at from folder where id = %s" + conn.for_update(),  # noqa: S608 -- for_update() is a fixed clause
+                (folder_id,),
+            ).fetchone()
+            if locked is None:
+                raise NotFound()
+            if locked[0] is not None:
+                raise folders.FolderArchived(row[2])
+            target = row[0]
+        conn.execute(
+            "update artifact set folder_id = %s, archived_via_folder = null"  # noqa: S608 -- placeholders only
+            f" where id in {in_list(wanted)}",
+            (target, *wanted),
+        )
+    return len(wanted)
+
+
+def folders_for_pages(db: Database, artifact_ids: list[str]):
+    """For the multi-select's "Move to folder": `(agents, choices)` for these pages, or None
+    when one is gone. `choices` is `[(id, title, mine)]`: his folders always, and the one
+    agent's folders only when every page is that agent's. Live folders only, his first."""
+    wanted = list(dict.fromkeys(artifact_ids))
+    if not wanted or len(wanted) > MAX_FILE_BATCH:
+        return None
+    with db.connect() as conn:
+        found = conn.execute(
+            "select id, agent from artifact"  # noqa: S608 -- placeholders only
+            f" where deleted_at is null and id in {in_list(wanted)}",
+            tuple(wanted),
+        ).fetchall()
+        if len(found) != len(wanted):
+            return None
+        agents = sorted({r[1] for r in found})
+        owners = [folders.HIS, *(agents if len(agents) == 1 else [])]
+        rows = conn.execute(
+            "select id, title, owner from folder where archived_at is null"  # noqa: S608 -- placeholders only
+            f" and owner in {in_list(owners)}"
+            " order by (owner = %s) desc, lower(title), slug",
+            (*owners, folders.HIS),
+        ).fetchall()
+    return agents, [(r[0], r[1], r[2] == folders.HIS) for r in rows]
+
+
 def rename_folder(
     db: Database, agent: str, slug: str, new_slug: str | None, title: str | None
 ) -> dict | None:

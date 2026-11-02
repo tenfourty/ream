@@ -128,6 +128,14 @@ else is a `422` naming `folder`. `title` is the display name, defaulting to the 
   `/f/{id}/archive`, a page that shows the same `would_archive` preview the API returns and
   changes nothing until its Archive button. Agent keys cannot name `jeremy`, so no agent route
   reaches his folders; a slug he uses that an agent also publishes with is the agent's own folder.
+- **As built (multi-select).** A "Select" link beside the view toggle reloads the same wall (grid,
+  list, or `/f/{id}`) as `?select=1`: a tick on each page tile or row, no pin or dots, folder tiles
+  unticked, all inside one form with a sticky bar ("Move to folder", "Take out of folder", "Done").
+  It works without script. `POST /select` (same-origin guard) takes "Take out" at once; "Move to
+  folder" first shows the choices for exactly the ticked pages (his folders, plus the one agent's
+  when all are that agent's, or a new folder) and moves nothing until one is pressed. One
+  transaction, at most 200 pages, an archived folder is a 409, and it lands back in select mode
+  with a one-line result.
 - An archived folder is one tile in the Archived tab (8.5), with its pages inside it; its
   "Unarchive" restores it (3.4).
 - A folder with no pages (all moved out, none yet in) is not drawn; it exists until archived.

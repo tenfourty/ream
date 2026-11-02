@@ -19,11 +19,12 @@ of read from something a request could forge.
 
 import json
 import logging
+import re
 import threading
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, NamedTuple
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -1104,6 +1105,20 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
   background:var(--chip)}
 .row-wrap .menu[open]{z-index:30}
 .row-wrap.asking .row{box-shadow:inset 2px 0 0 var(--now-solid)}
+/* SELECT MODE (folders design 3.3): a checkbox per page on the corner where the dots were,
+   inside one form; the bar is stuck to the foot of the screen so it is under his thumb. */
+.pick{position:absolute;z-index:6;margin:0;display:flex;align-items:center;
+  justify-content:center;cursor:pointer}
+.pick input{width:22px;height:22px;margin:0;accent-color:var(--accent)}
+.tile-wrap > .pick{top:10px;left:10px;width:40px;height:40px;background:var(--chip);
+  border-radius:8px}
+.row-wrap > .pick{top:50%;left:0;width:44px;height:44px;transform:translateY(-50%)}
+.row-wrap.sel .row{padding-left:2.9rem}
+.selbar{position:sticky;bottom:0;z-index:50;display:flex;flex-wrap:wrap;gap:.5rem;
+  align-items:center;padding:.6rem .75rem;margin-top:1rem;background:var(--card);
+  border:1px solid var(--line);border-radius:12px;box-shadow:0 -2px 10px rgba(20,20,15,.12)}
+.selbar .btn{min-height:40px}
+.selnote{margin:.5rem 0;color:var(--muted);font-size:.875rem}
 /* WHAT GOES FIRST WHEN THERE IS NO ROOM. A list is scanned for titles, so the
    title wins and the metadata yields -- in order: the agent, then the waiting
    badge (the amber edge on the row still says a question is there), then the
@@ -2882,6 +2897,55 @@ def _visible_count(active: str, rows: list, archived: list, deleted: list) -> in
     return len(rows)
 
 
+def _pick(artifact_id: str, title: str) -> str:
+    """The tick on a page's tile or row in select mode. The value is the page id, the label
+    names the page for a screen reader; a label, so the whole corner is the target."""
+    return (
+        '<label class="pick"><input type="checkbox" name="page" '
+        f'value="{escape(artifact_id)}" aria-label="Select {escape(title)}"></label>'
+    )
+
+
+def _select_toggle(request: Request, selecting: bool, active: str) -> str:
+    """ "Select" (or "Done") beside the view toggle: a plain link to the same wall with
+    `select=1` added or removed, so select mode is a URL and works with scripts off."""
+    if active == "deleted":
+        return ""
+    params = [
+        (k, v)
+        for k, v in request.query_params.multi_items()
+        if k not in ("select", "note")
+    ]
+    if not selecting:
+        params.append(("select", "1"))
+    href = request.url.path + ("?" + urlencode(params) if params else "")
+    return (
+        f'<a class="vtoggle selecttoggle" href="{escape(href)}"'
+        ' style="width:auto;padding:0 .6rem;font-size:.8125rem">'
+        f"{'Done' if selecting else 'Select'}</a>"
+    )
+
+
+def _select_form(main: str, back: str, note: str = "") -> str:
+    """The wall's tiles inside ONE form, and the action bar under them. Both buttons post the
+    ticked pages to /select: "Move to folder" opens a page of choices (nothing moves yet),
+    "Take out of folder" moves at once. Folder tiles carry no tick."""
+    shown = f'<p class="selnote" role="status">{escape(note)}</p>' if note else ""
+    return (
+        '<form method="post" action="/select" class="selectform">'
+        f'<input type="hidden" name="back" value="{escape(back)}">'
+        f'{shown}<p class="selnote">Tick pages, then choose what to do with them '
+        "(at most 200 at once).</p>"
+        f"{main}"
+        '<div class="selbar">'
+        '<button class="btn primary" type="submit" name="do" value="choose">'
+        "Move to folder</button>"
+        '<button class="btn" type="submit" name="do" value="out">Take out of folder</button>'
+        f'<a class="btn" href="{escape(back)}">Done</a>'
+        "</div></form>"
+    )
+
+
 def _controls_row(
     view: str,
     query: str,
@@ -2894,6 +2958,7 @@ def _controls_row(
     agent: str = "",
     archived: int = 0,
     base: str = "/",
+    select_html: str = "",
 ) -> str:
     """The row under the title: WHAT to show on the left, how to find it and how
     to see it on the right."""
@@ -2906,6 +2971,7 @@ def _controls_row(
         f"{_search_box(query, view, base)}"
         f'<span class="count">{pages_text}</span>'
         f"{_view_toggle(view, base)}"
+        f"{select_html}"
         "</div></div>"
     )
 
@@ -4500,7 +4566,7 @@ def gallery_router(db: Database) -> APIRouter:
             for fid, f in found.items()
         ]
 
-    def _folder_tile(item, archived: bool = False) -> str:
+    def _folder_tile(item, archived: bool = False, plain: bool = False) -> str:
         """A folder as one tile: its title, how many pages, the newest page's age, who
         published them, and how many questions wait. The same card as a page's, with a menu
         of its own (rename, archive) and no pin."""
@@ -4522,10 +4588,10 @@ def gallery_router(db: Database) -> APIRouter:
             f'<span class="d">{item.count} {noun}</span></span>{flag}</span>'
             f'<span class="body"><span class="t">{escape(item.title)}</span>'
             f'<span class="m">{_SEP.join(bits)}</span></span></a>'
-            f"{_folder_menu(item.id, item.title, archived)}</li>"
+            f"{'' if plain else _folder_menu(item.id, item.title, archived)}</li>"
         )
 
-    def _folder_row(item, archived: bool = False) -> str:
+    def _folder_row(item, archived: bool = False, plain: bool = False) -> str:
         right = []
         if item.waiting:
             right.append(f'<span class="wait">{item.waiting} waiting</span>')
@@ -4543,10 +4609,12 @@ def gallery_router(db: Database) -> APIRouter:
             f'<span class="rshot none">{_icon("all")}</span>'
             f'<span class="rt">{escape(item.title)}</span>'
             f'<span class="rmeta">{"".join(right)}</span></a>'
-            f"{_folder_menu(item.id, item.title, archived)}</li>"
+            f"{'' if plain else _folder_menu(item.id, item.title, archived)}</li>"
         )
 
-    def _row_view(row, archived: bool = False, folder_id: str | None = None) -> str:
+    def _row_view(
+        row, archived: bool = False, folder_id: str | None = None, select: bool = False
+    ) -> str:
         """One page as a line, for the list view.
 
         The same facts as a tile in a quarter of the height: the point of the
@@ -4604,13 +4672,19 @@ def gallery_router(db: Database) -> APIRouter:
         # This row had only a "Pinned" label, so the list was the one view
         # where pinning meant opening a menu.
         return (
-            f'<li class="row-wrap{" asking" if waiting else ""}"{_UNREAD_ATTR if unread else ""}>'
+            f'<li class="row-wrap{" sel" if select else ""}{" asking" if waiting else ""}"'
+            f"{_UNREAD_ATTR if unread else ''}>"
+            f"{_pick(artifact_id, title) if select else ''}"
             f'<a class="row" href="/a/{ident}">'
             f'{badge}<span class="rt">{escape(title)}</span>'
             f'<span class="rmeta">{"".join(right)}</span></a>'
-            f"{_pin_button(artifact_id, bool(pinned_at))}"
-            f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin(), archived, folder_id)}"
-            "</li>"
+            + (
+                ""
+                if select
+                else f"{_pin_button(artifact_id, bool(pinned_at))}"
+                f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin(), archived, folder_id)}"
+            )
+            + "</li>"
         )
 
     @router.get("/", response_class=HTMLResponse)
@@ -4632,6 +4706,9 @@ def gallery_router(db: Database) -> APIRouter:
         # about pages, and a folder tile cannot answer it: those list the matching pages
         # flat, folders or not.
         flat = bool(query or chosen_agent or chosen in ("waiting", "pinned"))
+        # SELECT MODE: `?select=1` renders the same wall with a checkbox per page inside one
+        # form (below). A GET that only draws; the move itself is the POST at /select.
+        selecting = request.query_params.get("select") == "1" and chosen != "deleted"
         folder_items: list = []
         in_folder = None
         with db.connect() as conn:
@@ -4746,6 +4823,7 @@ def gallery_router(db: Database) -> APIRouter:
                     f'<li class="tile-wrap{" pinned" if pinned_at else ""}'
                     f'{" asking" if waiting else ""}"{_UNREAD_ATTR if unread else ""}>'
                 ),
+                _pick(artifact_id, title) if selecting else "",
                 f'<a href="/a/{escape(artifact_id)}">',
                 f'<span class="frame">{shot}{flag}</span>',
                 '<span class="body">',
@@ -4816,9 +4894,13 @@ def gallery_router(db: Database) -> APIRouter:
                 )
                 + "</span>"
                 "</span></a>"
-                f"{pin_button}"
-                f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin(), archived, folder_id)}"
-                "</li>"
+                + (
+                    ""
+                    if selecting
+                    else f"{pin_button}"
+                    f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin(), archived, folder_id)}"
+                )
+                + "</li>"
             )
             return "".join(bits)
 
@@ -4901,9 +4983,9 @@ def gallery_router(db: Database) -> APIRouter:
                     )
                     current = group
                 out.append(
-                    _folder_row(row, archived)
+                    _folder_row(row, archived, selecting)
                     if isinstance(row, _FolderItem)
-                    else _row_view(row, archived, folder_id)
+                    else _row_view(row, archived, folder_id, selecting)
                 )
             if current is not None:
                 out.append("</ul>")
@@ -4913,7 +4995,7 @@ def gallery_router(db: Database) -> APIRouter:
             if view == "list":
                 return listing(these, archived)
             tiles = "".join(
-                _folder_tile(r, archived)
+                _folder_tile(r, archived, selecting)
                 if isinstance(r, _FolderItem)
                 else tile(r, archived)
                 for r in these
@@ -4996,6 +5078,16 @@ def gallery_router(db: Database) -> APIRouter:
         else:
             main = '<p class="empty">No pages published yet.</p>'
         body = main
+        if selecting:
+            keep = {
+                k: v
+                for k, v in request.query_params.items()
+                if k in ("view", "q", "agent", "filter")
+            }
+            back = (f"/f/{folder_id}" if in_folder else "/") + (
+                "?" + urlencode(keep) if keep else ""
+            )
+            body = _select_form(main, back, request.query_params.get("note", ""))
         # "N pages" counts pages, not tiles: a folder tile stands for all of its pages.
         visible = _visible_count(active, rows, archived_rows, deleted_rows)
         if active == "archived" or (in_folder and archived_shown):
@@ -5019,6 +5111,7 @@ def gallery_router(db: Database) -> APIRouter:
                     chosen_agent,
                     0 if in_folder else archived_pages,
                     base,
+                    _select_toggle(request, selecting, active),
                 ),
                 home=False,
             ),
@@ -5311,6 +5404,138 @@ def gallery_router(db: Database) -> APIRouter:
         if not done:
             raise HTTPException(404, "no such artifact")
         return RedirectResponse("/", status_code=303)
+
+    # ---- Multi-select (docs/agent/specs/2026-11-02-folders-design.md 3.3, 8.3b). The wall's
+    # `?select=1` draws a tick per page inside one form; this is where it lands. Agent twin:
+    # POST /api/v1/artifacts/move. Same guard, same store rules, one transaction per batch.
+
+    def _back_url(back: str) -> str:
+        """Where to return to: only this wall (`/` or `/f/<id>`, with a plain query), never a
+        caller-chosen address."""
+        if re.fullmatch(
+            r"/(f/[A-Za-z0-9_-]{1,64})?(\?[A-Za-z0-9_=&.%+-]{0,300})?", back
+        ):
+            return back
+        return "/"
+
+    def _select_back(back: str, note: str) -> RedirectResponse:
+        """Back to the wall in select mode with a one-line result, so he can keep going."""
+        base, _, query = _back_url(back).partition("?")
+        params = [
+            p
+            for p in query.split("&")
+            if p and p.split("=")[0] not in ("select", "note")
+        ]
+        params += ["select=1", "note=" + quote(note[:160])]
+        return RedirectResponse(f"{base}?{'&'.join(params)}", status_code=303)
+
+    def _noun(n: int) -> str:
+        return f"{n} page" if n == 1 else f"{n} pages"
+
+    @router.post("/select")
+    def select_pages(
+        request: Request,
+        page: Annotated[list[str] | None, Form()] = None,
+        do: str = Form("choose"),
+        folder: str = Form(""),
+        new_title: str = Form(""),
+        back: str = Form("/"),
+    ):
+        """What the ticked pages do. `do=choose` draws a page of choices and changes nothing;
+        `do=out` takes them out of their folders; `do=move` files them in `folder` or in a
+        new folder called `new_title`. All of the pages move or none."""
+        _same_origin_write(request)
+        pages = list(dict.fromkeys(p for p in (page or []) if p))
+        if not pages:
+            return _select_back(back, "Tick at least one page first.")
+        if len(pages) > store.MAX_FILE_BATCH:
+            raise HTTPException(
+                422, f"at most {store.MAX_FILE_BATCH} pages can be moved at once"
+            )
+        if do == "choose":
+            found = store.folders_for_pages(db, pages)
+            if found is None:
+                raise HTTPException(404, "one of those pages is gone")
+            agents, choices = found
+            return _select_choices(pages, agents, choices, back)
+        if do not in ("out", "move"):
+            raise HTTPException(422, "unknown action")
+        name = new_title.strip()
+        if do == "move" and new_title and not name:
+            raise HTTPException(422, "a folder needs a name")
+        if do == "move" and not name and not folder:
+            raise HTTPException(422, "choose a folder")
+        try:
+            moved = store.file_pages_for_reader(
+                db,
+                pages,
+                None if (do == "out" or name) else folder,
+                name or None,
+            )
+        except store.BatchTooLarge:
+            raise HTTPException(
+                422, f"at most {store.MAX_FILE_BATCH} pages can be moved at once"
+            ) from None
+        except (store.BodyTooLarge, store.InvalidText, store.SecretFound) as exc:
+            raise _text_refused(exc) from None
+        except store.NotFound:
+            raise HTTPException(
+                404, "a page or folder is gone, or that folder is not for all of them"
+            ) from None
+        except folders.FolderArchived:
+            raise HTTPException(
+                409, "that folder is archived: unarchive it first"
+            ) from None
+        what = "out of their folders" if do == "out" else "into the folder"
+        return _select_back(back, f"Moved {_noun(moved)} {what}.")
+
+    def _select_choices(
+        pages: list[str], agents: list[str], choices: list, back: str
+    ) -> HTMLResponse:
+        """Where a batch can go: his folders, and the one agent's when all the pages are that
+        agent's (agents' folders stay one agent each), or a new folder named here."""
+
+        def hidden() -> str:
+            return (
+                "".join(
+                    f'<input type="hidden" name="page" value="{escape(p)}">'
+                    for p in pages
+                )
+                + f'<input type="hidden" name="back" value="{escape(_back_url(back))}">'
+            )
+
+        buttons = "".join(
+            '<form method="post" action="/select" class="row">'
+            f'{hidden()}<input type="hidden" name="do" value="move">'
+            f'<input type="hidden" name="folder" value="{escape(fid)}">'
+            f'<button class="btn" type="submit">{escape(title)}</button>'
+            f'<span class="who">{"yours" if mine else escape(agents[0]) + "&#39;s"}</span></form>'
+            for fid, title, mine in choices
+        )
+        body = (
+            _CONNECT_CSS
+            + '<div class="cx">'
+            + f"<section><h2>Move {_noun(len(pages))} to a folder</h2>"
+            + (buttons or "<p>There is no folder to move them to yet.</p>")
+            + (
+                ""
+                if len(agents) == 1
+                else "<p>These pages are from several agents, so only your own folders "
+                "are offered.</p>"
+            )
+            + "</section><section><h2>New folder</h2>"
+            '<form method="post" action="/select" class="row">'
+            f'{hidden()}<input type="hidden" name="do" value="move">'
+            '<input name="new_title" aria-label="Folder name" autocomplete="off"'
+            ' placeholder="Folder name" required>'
+            '<button class="btn primary" type="submit">Make it and move them</button>'
+            "</form></section>"
+            f'<p><a class="btn" href="{escape(_back_url(back))}">Cancel</a></p></div>'
+        )
+        return HTMLResponse(
+            _shell("Move to folder", body),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
 
     def _folder_or_404(folder_id: str):
         row = store.folder_by_id(db, folder_id)
