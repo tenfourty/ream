@@ -1,0 +1,175 @@
+# Folders on the wall (design, 2 Nov 2026)
+
+Tracker item runcove-5t3oj.61. Shape settled by Jeremy on 2 Nov 2026 (decision
+`d_01M6DDFDYA419AHQVGPQ6AMV5K`, (a)): an agent can put a page in a folder when it publishes; he
+can move pages between folders; a folder shows as one tile on his wall that opens to its pages.
+Shaped by the offices' answers (`docs/agent/feedback/2026-11-02-folders.md`, eight publishing
+offices: quarterdeck, ch, runcove-pmo, homelab, gg-ops, jeremys-mac, warpgate, retrobrew). Section
+8 holds what is still his to choose.
+
+## 1. Problem
+
+The wall is one flat list of tiles, newest first. runcove-pmo alone has 37 pages; bosun's two daily
+digests, one-off reports and project boards all sit side by side with the pages he must answer.
+He cannot tidy by topic, and an agent cannot say "these belong together". Archive is the only
+tidying tool, and it is the wrong one: it hides a page, it does not group it.
+
+## 2. Goals, non-goals, anti-goals
+
+Goals:
+- An agent names a folder when it publishes (`--folder roadmap`); the folder is created on first
+  use and the publish result **says so** when it did (all eight offices: a typo must be visible).
+- He sees one tile per folder and opens it to its pages; he moves pages in and out.
+- One level. A page is in at most one folder, or none: foldering is **opt-in per page** and the
+  standing boards stay loose (quarterdeck, pmo, homelab, warpgate).
+- API twin for every folder action, scoped to the calling key's own agent (AGENTS.md).
+- The data model leaves room for a folder that holds several agents' pages, each page still
+  showing its publisher (homelab).
+
+Non-goals (v1): nesting (all eight said no); folder names derived by the service (all eight said
+fixed); agents publishing into another agent's folder; folder sharing or permissions.
+
+Anti-goals:
+- **A folder hiding a question.** A page with an open question to him is never out of sight
+  because it is in a folder, nor because the folder is archived (all eight; pmo and ch strongest).
+- **A folder archive that destroys anything.** Archiving a page closes its open questions
+  (`store._shelve_open_questions`); archiving a folder must not reach the pages (3.4).
+- **A rename that breaks an address.** The old slug keeps working, as agent renames do.
+
+## 3. Shape
+
+### 3.1 Data
+
+Both databases, one column and two tables (SQLite step 11 in `db.py` `_SQLITE_STEPS`; Postgres
+`schema.sql` with `if not exists`, as `archived_at` and `pinned_at` were added):
+
+- `artifact.folder_id text null references folder(id)`, plus an index. Null is the ordinary state.
+- `folder(id, owner, slug, title, archived_at, created_at)`, unique `(owner, slug)`. `owner` is an
+  agent name, or the reserved name `jeremy` (`keys.RESERVED_AGENT_NAMES`) for a folder he makes;
+  never null, because a unique index over a nullable column treats nulls as distinct on both
+  databases and would allow duplicates. `artifact.agent` is untouched: **the publisher is still on
+  every page**, so a folder of his holding several agents' pages shows each one's name.
+- `folder_alias(owner, old_slug, folder_id)`, unique `(owner, old_slug)`: written by a rename.
+
+The folder is a **shelf fact**, like archive, pin and rename: it makes no version, and an
+identical republish still mints none.
+
+Slugs: lowercase letters, digits and hyphens, 1-40 characters, validated like agent names; anything
+else is a `422` naming `folder`. `title` is the display name, defaulting to the slug and set once
+(`--folder-title "Cove public split"`; homelab asked for it). The `id` is stable; slugs are not.
+
+### 3.2 The agent side
+
+- **Publish:** `POST /artifacts` takes `folder` (and optional `folder_title`). Result gains
+  `"folder": {"slug": "roadmap", "created": true}` (null when none); the CLI prints
+  `created new folder 'roadmap'` on a first use, and plainly names the folder otherwise.
+- **Update:** `PATCH /artifacts/{id}` takes `folder`; omitted leaves it, `""` takes the page out.
+  `PatchBody` requires a body today, so an agent that only wants to re-file a page uses the move
+  route below, which sends none (as `rename` does for the same reason).
+- **Move, bulk:** `POST /artifacts/move` `{"ids": [...], "folder": "roadmap" | null}`. Result
+  `{"moved": [...], "missing": [...]}`; `missing` is both "no such page" and "not yours", never
+  told apart, so a key cannot learn which ids are real. This is pmo's 37-page sort. CLI:
+  `artifacts-publish --move ID [ID ...] --folder x` / `--no-folder`.
+- **List:** `GET /folders` (slug, title, page count, open questions, archived) and
+  `GET /folders/{slug}/artifacts` (the same row shape as `GET /artifacts`, which also gains
+  `folder`). CLI: `--folders`, `--list --folder x`.
+- **Archive:** `POST /folders/{slug}/archive` `{"archived": bool}`, required, no default, as the
+  page route is.
+- **Rename:** `POST /folders/{slug}/rename` `{"slug"?, "title"?}`. The old slug resolves through
+  `folder_alias` for every folder route and for `--folder` on publish. Renaming to a slug that is
+  in use is a `409`.
+- A slug names the caller's **own** folder only; one that is not theirs answers as "no folder",
+  `404`. The first use of an unknown slug on publish or move creates it (3.2 result says so);
+  the read and rename routes never create.
+
+### 3.3 The wall (Jeremy)
+
+- A folder is one tile in the grid and one row in the list, built next to the page tiles: its
+  title, "12 pages", the newest page's age, its publishers' names, and an open-question count
+  when there is one. It sorts by its newest page, and by "needs him" like a page does: a folder
+  holding any open question sorts among the pages that wait.
+- It opens to its pages at `/f/{folder id}`: the same tile and list views, same filters.
+- **Pages in a folder leave the main grid** except a page with an open question, which stays on
+  the wall as a loose tile **and** shows in its folder (8.2).
+- Controls, each with its agent twin from 3.2: a "Move to folder" entry in a page's tile menu (a
+  list of folders plus "New folder"), "Rename folder" and "Archive folder" on the folder tile's
+  menu, and a "Take out of folder" on a page inside one. His folders are unscoped (he may move any
+  page on his wall), proved by the same-origin form guard like pin and archive.
+- A folder that has been archived leaves the wall and joins the Archived tab as one tile.
+  Its pages are unchanged; any with open questions stay on the wall.
+- A folder with no pages (all moved out, none yet in) is not drawn; it exists until archived.
+
+### 3.4 Archive, delete and the open-question rule
+
+Archiving a folder sets only `folder.archived_at`. It never writes `artifact.archived_at`, so no
+question is shelved. A page archived on its own while in a folder keeps its `folder_id` and shows
+in the Archived tab under its folder tile only if that tile is itself archived; otherwise it is
+just an archived page. Binning a page leaves `folder_id` set, so restoring it puts it back.
+Open questions are found as the wall already finds them: `decision.answer is null and
+closed_at is null` per page, the `waiting` subquery in `gallery._wall`; the folder's count is the
+sum over its live pages.
+
+## 4. What is reused
+
+The `archive`/`pin`/`rename` pattern: store write scoped by `_scoped` (`agent=None` for the
+gallery, the key's agent for the API), a gallery form route behind the same-origin guard, a
+`/api/v1` twin, and a tile menu entry (`_tile_menu`). `rename.py`'s alias idea for slugs. The
+`waiting` subquery and the sort already on the wall. Both-database SQL: only `db.py` talks to a
+driver; the new queries use plain joins and `%s` placeholders.
+
+## 5. Onboarding, CLI, skills (docs are done)
+
+`agents.txt` gets a "folders" section (publish with `--folder`, what the result says, bulk move,
+the open-question rule); `--help` for each flag; runcove `skills/artifacts/SKILL.md` and the
+homelab `lab-artifacts` skill each get a short paragraph. Docs round per slice.
+
+## 6. Slices
+
+1. Schema on both databases, store writes, publish/patch `folder`, `GET /folders`, list a
+   folder's pages. Pages are foldered; the wall is unchanged. (Lets pmo sort at once.)
+2. Bulk move, archive and rename routes, aliases; `rename.py` and `transfer` updated (below).
+3. Gallery: folder tile, `/f/{id}`, the open-question rule on the wall, his move/rename/archive
+   controls. Live proof on his phone.
+4. Docs, `agents.txt`, skills.
+
+## 7. Risks
+
+- **`rename.py` rewrites every column that holds an agent name** and a test holds it to the list;
+  `folder.owner` is a new one and must join it, or a renamed agent leaves orphaned folders.
+- **`transfer` moves a page to another agent**; its `folder_id` would then point at the old
+  owner's folder. It clears the folder on transfer (the new owner sorts it), unless the folder is
+  his.
+- **The wall's `limit 200`** applies to pages before any grouping: folder tiles and counts need
+  their own query, or a big folder's count is capped.
+- **A typo makes a visible new folder** (by design). A typo'd folder can be fixed with a move
+  and an archive; no merge in v1.
+- **One level means no folder tree in the API**, so a future nesting would need a `parent_id`.
+  The column can be added without a rewrite.
+
+## 8. Decisions for Jeremy
+
+These are the choices you will see on the wall. The first two are the ones the offices left open.
+
+8.1 **A folder you make yourself: whose pages can it hold?**
+(a) Pages from any agent, and it can be mixed: each page keeps its publisher's name on the tile.
+Agents' own folders stay one agent each. (b) Only one agent's pages, like an agent's own folder.
+(c) Pages from several agents, but only ones you move in; agents still cannot publish into it.
+
+8.2 **A page with an open question, inside a folder.**
+(a) Both: the page also shows on the wall by itself, and the folder tile shows a count ("2 waiting").
+(b) Only the page on the wall, the tile shows no count. (c) Only a count on the tile, the page
+shows only inside the folder.
+
+8.3 **Moving many pages at once on the wall.**
+(a) First version moves one page at a time from its menu; a multi-select comes later if you
+want it (agents can move many at once through the API today). (b) Build a multi-select on the
+wall in the first version.
+
+8.4 **A folder with nothing open and nothing new in it.**
+(a) Sits among the tiles in newest-first order, no special treatment. (b) Drops to the bottom
+once none of its pages has changed for thirty days.
+*Not asked: the design takes (a), the wall's existing order; (b) is a later change if the wall gets crowded.*
+
+8.5 **Where an archived folder goes.**
+(a) The Archived tab, as one tile; open-question pages stay on the wall. (b) Gone from the wall
+and shown only when you open the Archived tab and search.
