@@ -1343,7 +1343,6 @@ def test_move_misuse_is_a_usage_error(live, key_file, tmp_path, capsys):
         ([], "--move needs --folder"),
         (["--folder", "x", "--no-folder"], "cannot be used together"),
         (["--folder", ""], "--no-folder"),
-        (["--folder", "x", "--folder-title", "X"], "--move goes with"),
         (["--no-folder", "--list"], "--move goes with"),
     ):
         assert client.main([*base, *extra]) == 2
@@ -1357,3 +1356,46 @@ def test_the_top_usage_line_names_the_folder_flags(live, key_file, capsys):
     assert client.main(["--key-file", str(path)]) == 2
     err = capsys.readouterr().err
     assert "--move ID" in err and "--folder SLUG" in err and "--folders" in err
+
+
+def test_move_folder_title_and_the_folder_rename_and_archive_flags(
+    live, key_file, tmp_path, capsys
+):
+    path, _ = key_file
+    base = ["--key-file", str(path)]
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>hi</body></html>")
+    client.main([*base, str(page), "--title", "One"])
+    one = json.loads(capsys.readouterr().out)["id"]
+    moved = client.main(
+        [*base, "--move", one, "--folder", "cps", "--folder-title", "Cove"]
+    )
+    assert moved == 0
+    assert "created new folder 'cps'" in capsys.readouterr().err
+    client.main([*base, "--folders"])
+    assert capsys.readouterr().out.strip().split("\t")[:2] == ["cps", "Cove"]
+    # title only
+    assert client.main([*base, "--rename-folder", "cps", "--folder-title", "Cv"]) == 0
+    assert "titled" in capsys.readouterr().err
+    # slug
+    assert client.main([*base, "--rename-folder", "cps", "--to", "split"]) == 0
+    assert "'cps' to 'split'" in capsys.readouterr().err
+    assert client.main([*base, "--list", "--folder", "cps"]) == 0
+    assert capsys.readouterr().out.startswith(one)
+    # nothing to change, and misuse
+    assert client.main([*base, "--rename-folder", "split"]) == 2
+    assert client.main([*base, "--archive-folder", "split", "--to", "x"]) == 2
+    assert client.main([*base, "--confirm"]) == 2
+    both = [*base, "--archive-folder", "a", "--unarchive-folder", "a"]
+    assert client.main(both) == 2
+    capsys.readouterr()
+    # two steps
+    assert client.main([*base, "--archive-folder", "cps"]) == 0
+    out = capsys.readouterr()
+    assert "NOT archived yet" in out.err and "would_archive" in out.out
+    assert client.main([*base, "--archive-folder", "split", "--confirm"]) == 0
+    assert "archived folder 'split': 1 page(s)" in capsys.readouterr().err
+    assert client.main([*base, "--unarchive-folder", "split"]) == 0
+    assert "1 page(s) restored" in capsys.readouterr().err
+    assert client.main([*base, "--archive-folder", "ghost"]) == 1
+    assert "404" in capsys.readouterr().err

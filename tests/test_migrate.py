@@ -76,7 +76,7 @@ def _seed(database: Database) -> None:
             (
                 "id, title, agent, visibility, read_token, current_version, created_at,"
                 " updated_at, archived_at, pinned_at, deleted_at, session, agents_can_read,"
-                " folder_id"
+                " folder_id, archived_via_folder"
             ),
             [
                 "a1",
@@ -92,6 +92,7 @@ def _seed(database: Database) -> None:
                 None,
                 "alpha/s1",
                 False,
+                "f1",
                 "f1",
             ],
         ),

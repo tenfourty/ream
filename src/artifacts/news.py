@@ -18,6 +18,10 @@ from pathlib import Path
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-02d",
+        "Folders, rename and archive: artifacts-publish --rename-folder SLUG [--to NEW] [--folder-title NAME] (POST /api/v1/folders/SLUG/rename {slug?, title?}) renames a folder or only its title; the old slug keeps working as an alias, and a slug already in use is 409. --archive-folder SLUG shows what it would archive and how many open questions it would set aside; --archive-folder SLUG --confirm does it (POST /api/v1/folders/SLUG/archive {archived, confirm?}), setting questions aside exactly as a page archive does. --unarchive-folder SLUG restores only the pages that archive archived and reopens their questions. --move ... --folder SLUG now also takes --folder-title NAME (API: folder_title on /artifacts/move) for a folder the move creates.",
+    ),
+    (
         "2026-11-02c",
         "Folders, bulk move: artifacts-publish --move ID [ID ...] --folder SLUG (or --no-folder) re-files up to 200 of your own pages in one request; POST /api/v1/artifacts/move {ids, folder|null} answers {moved, missing, folder}. missing is no such page and not yours alike; a new slug is made on first use and the result says so.",
     ),

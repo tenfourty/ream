@@ -550,3 +550,363 @@ def test_a_move_into_an_archived_folder_is_a_409_and_changes_nothing(
     got = move(client, tokens["alpha"], [one], "roadmap")
     assert got.status_code == 409
     assert folder_of(client, tokens["alpha"], one) is None
+
+
+# --- slice 2: rename, aliases, archive ----------------------------------------------
+
+
+def _ask(db, agent, page_id, question="Which?"):
+    return decisions.ask(
+        db,
+        agent=agent,
+        artifact_id=page_id,
+        question=question,
+        options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
+        recommended="a",
+    )
+
+
+def post(client, token, path, **body):
+    return client.post(f"/api/v1{path}", json=body, headers=auth(token))
+
+
+def rename_folder(client, token, old, **body):
+    return post(client, token, f"/folders/{old}/rename", **body)
+
+
+def archive_folder(client, token, slug, archived=True, **extra):
+    return post(client, token, f"/folders/{slug}/archive", archived=archived, **extra)
+
+
+def page_archived(db, page_id):
+    with db.connect() as conn:
+        return conn.execute(
+            "select archived_at, archived_via_folder from artifact where id = %s",
+            (page_id,),
+        ).fetchone()
+
+
+def kinds(db, agent):
+    from artifacts import events
+
+    return [r.kind for r in events.list_for_agent(db, agent, since=0, limit=100)]
+
+
+def test_rename_changes_the_slug_and_the_old_slug_still_resolves_everywhere(
+    client, tokens
+):
+    t = tokens["alpha"]
+    one = publish(client, t, folder="roadmap").json()["id"]
+    got = rename_folder(client, t, "roadmap", slug="plan")
+    assert got.status_code == 200
+    assert got.json() == {
+        "slug": "plan",
+        "title": "roadmap",
+        "previous_slug": "roadmap",
+    }
+    assert set(_folders(client, t)) == {"plan"}
+    # list route, publish and bulk move all take the old slug and make nothing new
+    listed = client.get("/api/v1/folders/roadmap/artifacts", headers=auth(t))
+    assert [r["id"] for r in listed.json()] == [one]
+    again = publish(client, t, title="Q", folder="roadmap").json()
+    assert again["folder"] == {"slug": "plan", "created": False}
+    other = publish(client, t, title="loose").json()["id"]
+    moved = move(client, t, [other], "roadmap").json()
+    assert moved["folder"] == {"slug": "plan", "created": False}
+    assert set(_folders(client, t)) == {"plan"}
+    # the old slug renames too
+    assert rename_folder(client, t, "roadmap", title="Plan").json()["title"] == "Plan"
+
+
+def test_a_title_only_rename_keeps_the_slug_and_makes_no_alias(client, db, tokens):
+    t = tokens["alpha"]
+    publish(client, t, folder="cps")
+    got = rename_folder(client, t, "cps", title="Cove public split")
+    assert got.json() == {
+        "slug": "cps",
+        "title": "Cove public split",
+        "previous_slug": None,
+    }
+    (row,) = client.get("/api/v1/folders", headers=auth(t)).json()
+    assert row["title"] == "Cove public split"
+    with db.connect() as conn:
+        assert conn.execute("select count(*) from folder_alias").fetchone()[0] == 0
+
+
+def test_rename_to_a_used_slug_or_another_folders_old_slug_is_409(client, tokens):
+    t = tokens["alpha"]
+    publish(client, t, folder="a")
+    publish(client, t, folder="b")
+    assert rename_folder(client, t, "a", slug="b").status_code == 409
+    rename_folder(client, t, "b", slug="c")  # b is now an alias of c
+    clash = rename_folder(client, t, "a", slug="b")
+    assert clash.status_code == 409 and clash.json()["detail"]["field"] == "slug"
+    assert set(_folders(client, t)) == {"a", "c"}, "the refusals changed nothing"
+    # another agent's same names are no clash
+    publish(client, tokens["beta"], folder="x")
+    assert rename_folder(client, tokens["beta"], "x", slug="b").status_code == 200
+
+
+def test_renaming_back_to_its_own_old_slug_and_to_itself_is_fine(client, tokens):
+    t = tokens["alpha"]
+    publish(client, t, folder="a")
+    rename_folder(client, t, "a", slug="b")
+    assert rename_folder(client, t, "b", slug="b").json()["previous_slug"] is None
+    back = rename_folder(client, t, "b", slug="a")
+    assert back.status_code == 200 and back.json()["slug"] == "a"
+    assert set(_folders(client, t)) == {"a"}
+    assert publish(client, t, folder="b").json()["folder"] == {
+        "slug": "a",
+        "created": False,
+    }, "b is still an old name of the folder"
+
+
+def test_rename_needs_something_and_a_good_slug_and_scans_the_title(client, tokens):
+    t = tokens["alpha"]
+    publish(client, t, folder="a")
+    assert rename_folder(client, t, "a").status_code == 422
+    assert rename_folder(client, t, "a", slug="Bad Slug").status_code == 422
+    assert rename_folder(client, t, "a", slug="").status_code == 422
+    secret = rename_folder(client, t, "a", title="AKIA" + "IOSFODNN7EXAMPLE")
+    assert secret.status_code >= 400
+    assert set(_folders(client, t)) == {"a"}
+
+
+def test_read_and_rename_routes_never_create_and_other_agents_get_404(client, tokens):
+    t = tokens["alpha"]
+    assert rename_folder(client, t, "ghost", title="x").status_code == 404
+    assert archive_folder(client, t, "ghost").status_code == 404
+    listing = client.get("/api/v1/folders/ghost/artifacts", headers=auth(t))
+    assert listing.status_code == 404
+    assert _folders(client, t) == {}
+    publish(client, tokens["beta"], folder="theirs")
+    for got in (
+        rename_folder(client, t, "theirs", title="mine"),
+        archive_folder(client, t, "theirs", confirm=True),
+        archive_folder(client, t, "theirs", archived=False),
+    ):
+        assert got.status_code == 404
+    assert _folders(client, t) == {}
+    assert _folders(client, tokens["beta"]) == {"theirs": 1}
+    ghost = rename_folder(client, t, "ghost", title="x")
+    theirs = rename_folder(client, t, "theirs", title="x")
+    assert ghost.json() == theirs.json(), "identical answers"
+
+
+def test_archive_without_confirm_changes_nothing_and_counts(client, db, tokens):
+    t = tokens["alpha"]
+    one = publish(client, t, folder="f").json()["id"]
+    two = publish(client, t, title="two", folder="f").json()["id"]
+    _ask(db, "alpha", one)
+    _ask(db, "alpha", one, "Also?")
+    _ask(db, "alpha", two)
+    got = archive_folder(client, t, "f")
+    assert got.status_code == 200
+    assert got.json()["would_archive"] == {"pages": 2, "questions_set_aside": 3}
+    assert page_archived(db, one) == (None, None)
+    assert _folders(client, t) == {"f": 2}
+    assert client.get("/api/v1/folders", headers=auth(t)).json()[0]["archived"] is False
+    assert "decision_set_aside" not in kinds(db, "alpha")
+    # `archived` is required
+    assert post(client, t, "/folders/f/archive").status_code == 422
+
+
+def test_archive_confirm_archives_pages_sets_questions_aside_and_tells_the_agent(
+    client, db, tokens
+):
+    t = tokens["alpha"]
+    one = publish(client, t, folder="f").json()["id"]
+    two = publish(client, t, title="two", folder="f").json()["id"]
+    outside = publish(client, t, title="loose").json()["id"]
+    _ask(db, "alpha", one)
+    _ask(db, "alpha", two)
+    _ask(db, "alpha", outside)
+    got = archive_folder(client, t, "f", confirm=True).json()
+    assert got == {"slug": "f", "archived": True, "pages": 2, "questions_set_aside": 2}
+    with db.connect() as conn:
+        fid = conn.execute("select id from folder").fetchone()[0]
+    for pid in (one, two):
+        at, via = page_archived(db, pid)
+        assert at is not None and via == fid
+    assert page_archived(db, outside) == (None, None)
+    assert kinds(db, "alpha").count("decision_set_aside") == 2
+    (row,) = client.get("/api/v1/folders", headers=auth(t)).json()
+    assert row["archived"] is True and row["open_questions"] == 0
+    # it is an archived folder now: publish and move refuse
+    assert publish(client, t, folder="f").status_code == 409
+    assert move(client, t, [outside], "f").status_code == 409
+
+
+def test_unarchive_restores_only_its_pages_and_reopens_their_questions(
+    client, db, tokens
+):
+    t = tokens["alpha"]
+    one = publish(client, t, folder="f").json()["id"]
+    mine = publish(client, t, title="by hand", folder="f").json()["id"]
+    _ask(db, "alpha", one)
+    _ask(db, "alpha", mine)
+    post(client, t, f"/artifacts/{mine}/archive", archived=True)  # before the folder
+    got = archive_folder(client, t, "f", confirm=True).json()
+    assert got["pages"] == 1 and got["questions_set_aside"] == 1, (
+        "only the page that was live: the other's question was set aside long ago"
+    )
+    assert page_archived(db, mine)[1] is None
+    back = archive_folder(client, t, "f", archived=False).json()
+    assert back == {
+        "slug": "f",
+        "archived": False,
+        "pages_restored": 1,
+        "questions_reopened": 1,
+    }
+    assert page_archived(db, one) == (None, None)
+    assert page_archived(db, mine)[0] is not None, "his own archive survives"
+    assert kinds(db, "alpha").count("decision_reopened") == 1
+    (row,) = client.get("/api/v1/folders", headers=auth(t)).json()
+    assert row["archived"] is False and row["open_questions"] == 1
+    assert publish(client, t, title="new", folder="f").status_code == 201
+
+
+def test_page_level_archive_unarchive_or_a_move_out_clears_the_marker(
+    client, db, tokens
+):
+    t = tokens["alpha"]
+    a, b, c = (
+        publish(client, t, title=n, folder="f").json()["id"] for n in ("a", "b", "c")
+    )
+    archive_folder(client, t, "f", confirm=True)
+    post(client, t, f"/artifacts/{a}/archive", archived=False)  # unarchive by itself
+    post(client, t, f"/artifacts/{b}/archive", archived=True)  # archive again by itself
+    assert page_archived(db, a) == (None, None)
+    assert page_archived(db, b)[1] is None and page_archived(db, b)[0] is not None
+    assert move(client, t, [c], None).status_code == 200  # out, still archived
+    assert page_archived(db, c)[0] is not None and page_archived(db, c)[1] is None
+    back = archive_folder(client, t, "f", archived=False).json()
+    assert back["pages_restored"] == 0
+    assert page_archived(db, b)[0] is not None
+    assert page_archived(db, c)[0] is not None
+
+
+def test_a_patch_out_of_the_folder_and_a_transfer_clear_the_marker(client, db, tokens):
+    t = tokens["alpha"]
+    a = publish(client, t, title="a", folder="f").json()
+    b = publish(client, t, title="b", folder="f").json()["id"]
+    archive_folder(client, t, "f", confirm=True)
+    store.transfer(db, b, "beta", agent="alpha")
+    assert page_archived(db, b)[1] is None and page_archived(db, b)[0] is not None
+    got = _patch(client, t, a["id"], a["revision"], folder="")
+    assert got.status_code == 200
+    assert page_archived(db, a["id"])[1] is None
+    assert page_archived(db, a["id"])[0] is not None
+
+
+def test_a_folder_is_archived_and_refuses_through_the_old_slug_after_a_rename(
+    client, db, tokens
+):
+    t = tokens["alpha"]
+    one = publish(client, t, folder="old").json()["id"]
+    rename_folder(client, t, "old", slug="new")
+    assert archive_folder(client, t, "old", confirm=True).json()["slug"] == "new"
+    assert page_archived(db, one)[0] is not None
+    assert publish(client, t, folder="old").status_code == 409
+    assert move(client, t, [one], "old").status_code == 409
+    assert archive_folder(client, t, "old", archived=False).status_code == 200
+    assert page_archived(db, one)[0] is None
+
+
+def test_a_binned_page_is_left_out_of_an_archive(client, db, tokens):
+    t = tokens["alpha"]
+    one = publish(client, t, folder="f").json()["id"]
+    binned = publish(client, t, title="bin", folder="f").json()["id"]
+    store.set_deleted(db, binned, True, agent="alpha")
+    assert archive_folder(client, t, "f", confirm=True).json()["pages"] == 1
+    assert page_archived(db, binned) == (None, None)
+    assert page_archived(db, one)[0] is not None
+
+
+def test_archiving_twice_is_harmless(client, tokens):
+    t = tokens["alpha"]
+    publish(client, t, folder="f")
+    assert archive_folder(client, t, "f", confirm=True).json()["pages"] == 1
+    again = archive_folder(client, t, "f", confirm=True).json()
+    assert again["pages"] == 0 and again["questions_set_aside"] == 0
+    assert archive_folder(client, t, "f", archived=False).json()["pages_restored"] == 1
+
+
+def test_move_with_a_folder_title_names_a_new_folder_only(client, tokens):
+    t = tokens["alpha"]
+    one = publish(client, t, title="one").json()["id"]
+    two = publish(client, t, title="two").json()["id"]
+    got = client.post(
+        "/api/v1/artifacts/move",
+        json={"ids": [one], "folder": "cps", "folder_title": "Cove public split"},
+        headers=auth(t),
+    )
+    assert got.json()["folder"] == {"slug": "cps", "created": True}
+    client.post(
+        "/api/v1/artifacts/move",
+        json={"ids": [two], "folder": "cps", "folder_title": "Ignored"},
+        headers=auth(t),
+    )
+    (row,) = client.get("/api/v1/folders", headers=auth(t)).json()
+    assert row["title"] == "Cove public split"
+
+
+def test_agent_rename_merge_keeps_an_archived_survivor_and_carries_aliases(
+    client, db, tokens
+):
+    from artifacts import rename
+
+    a, b = tokens["alpha"], tokens["beta"]
+    publish(client, a, title="p", folder="solo")
+    rename_folder(client, a, "solo", slug="solo2")  # alias solo -> solo2
+    publish(client, a, title="x", folder="shared")
+    publish(client, b, title="y", folder="shared")
+    rename_folder(client, a, "shared", slug="mine")  # alpha alias `shared`
+    publish(client, a, title="clash", folder="clash")
+    publish(client, b, title="clash", folder="clash")
+    archive_folder(client, b, "clash", confirm=True)
+    rename.rename_agent(db, "alpha", "beta", dry_run=False)
+    with db.connect() as conn:
+        rows = dict(
+            conn.execute("select slug, archived_at is not null from folder").fetchall()
+        )
+        assert rows == {
+            "solo2": False,
+            "shared": False,
+            "mine": False,
+            "clash": True,
+        }, "the archived survivor stays archived"
+        survivor = conn.execute(
+            "select id from folder where slug = 'clash'"
+        ).fetchone()[0]
+        via = conn.execute(
+            "select archived_via_folder from artifact"
+            " where archived_via_folder is not null"
+        ).fetchall()
+        assert via == [(survivor,)], "the survivor's own archived page keeps its marker"
+        aliases = dict(conn.execute("select old_slug, folder_id from folder_alias"))
+        assert "solo" in aliases, "an old alias moves over"
+        assert "shared" not in aliases, "an alias shadowed by a real slug is dropped"
+    got = client.get("/api/v1/folders/shared/artifacts", headers=auth(b)).json()
+    assert [r["title"] for r in got] == ["y"], "the real folder wins"
+    old = client.get("/api/v1/folders/solo/artifacts", headers=auth(b)).json()
+    assert [r["title"] for r in old] == ["p"]
+
+
+def test_agent_rename_merge_of_an_archived_old_folder_into_a_live_one(
+    client, db, tokens
+):
+    from artifacts import rename
+
+    a, b = tokens["alpha"], tokens["beta"]
+    publish(client, b, title="live", folder="clash")
+    old = publish(client, a, title="old", folder="clash").json()["id"]
+    archive_folder(client, a, "clash", confirm=True)
+    rename.rename_agent(db, "alpha", "beta", dry_run=False)
+    at, via = page_archived(db, old)
+    assert at is not None, "still archived"
+    assert via is None, "on its own now: the live folder's archive never touches it"
+    assert archive_folder(client, b, "clash", confirm=True).json()["pages"] == 1
+    back = archive_folder(client, b, "clash", archived=False).json()
+    assert back["pages_restored"] == 1
+    assert page_archived(db, old)[0] is not None

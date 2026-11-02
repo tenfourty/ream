@@ -24,6 +24,15 @@ class BadSlug(Exception):
     field = "folder"
 
 
+class SlugTaken(Exception):
+    """A rename to a slug the owner already uses, as a folder or as another folder's old
+    slug (409)."""
+
+    def __init__(self, slug: str) -> None:
+        super().__init__(slug)
+        self.slug = slug
+
+
 class FolderArchived(Exception):
     """A publish or move named an archived folder: unarchive it first (409)."""
 
@@ -87,14 +96,66 @@ def file_page(
     page out. Returns what the API reports: `{"slug", "created"}`, or None for no folder."""
     if slug == "":
         conn.execute(
-            "update artifact set folder_id = null where id = %s", (artifact_id,)
+            "update artifact set folder_id = null, archived_via_folder = null"
+            " where id = %s",
+            (artifact_id,),
         )
         return None
     folder_id, canonical, created = resolve_or_create(conn, owner, slug, title)
     conn.execute(
-        "update artifact set folder_id = %s where id = %s", (folder_id, artifact_id)
+        "update artifact set folder_id = %s, archived_via_folder = null where id = %s",
+        (folder_id, artifact_id),
     )
     return {"slug": canonical, "created": created}
+
+
+def rename_folder(
+    conn, owner: str, slug: str, new_slug: str | None, title: str | None
+) -> dict | None:
+    """Give `owner`'s folder `slug` (an old slug resolves) a new slug and/or title. The old
+    slug is kept as an alias, so every route and `--folder` still finds the folder by it.
+    None when `owner` has no such folder; `SlugTaken` when `new_slug` is another folder's slug
+    or alias of this owner. Renaming to the folder's own current slug changes nothing; renaming
+    back to one of its own old slugs drops that alias. Never creates a folder."""
+    if new_slug is not None:
+        clean_slug(new_slug)
+    row = find(conn, owner, slug)
+    if row is None:
+        return None
+    folder_id, current = row[0], row[1]
+    previous = None
+    if new_slug is not None and new_slug != current:
+        taken = conn.execute(
+            "select 1 from folder where owner = %s and slug = %s", (owner, new_slug)
+        ).fetchone()
+        alias = conn.execute(
+            "select folder_id from folder_alias where owner = %s and old_slug = %s",
+            (owner, new_slug),
+        ).fetchone()
+        if taken is not None or (alias is not None and alias[0] != folder_id):
+            raise SlugTaken(new_slug)
+        if alias is not None:
+            conn.execute(
+                "delete from folder_alias where owner = %s and old_slug = %s",
+                (owner, new_slug),
+            )
+        conn.execute("update folder set slug = %s where id = %s", (new_slug, folder_id))
+        conn.execute(
+            "insert into folder_alias (owner, old_slug, folder_id) values (%s, %s, %s)"
+            " on conflict (owner, old_slug) do nothing",
+            (owner, current, folder_id),
+        )
+        previous = current
+        current = new_slug
+    if title is not None:
+        conn.execute("update folder set title = %s where id = %s", (title, folder_id))
+    return {
+        "slug": current,
+        "title": conn.execute(
+            "select title from folder where id = %s", (folder_id,)
+        ).fetchone()[0],
+        "previous_slug": previous,
+    }
 
 
 def list_for_agent(db, agent: str) -> list[dict]:

@@ -1055,3 +1055,11 @@ create table if not exists folder_alias (
 );
 alter table artifact add column if not exists folder_id text references folder(id);
 create index if not exists artifact_folder_idx on artifact (folder_id) where folder_id is not null;
+
+-- FOLDER ARCHIVE (2 Nov 2026, slice 2): the folder a page was archived THROUGH, set on exactly the
+-- pages a folder archive archived and cleared by every page-level archive, unarchive and move.
+-- Unarchiving the folder restores only the pages that still carry its id. No foreign key: it is a
+-- marker, and the rename merge repoints it by hand. SQLite does the same as its schema step 15.
+alter table artifact add column if not exists archived_via_folder text;
+create index if not exists artifact_archived_via_folder_idx on artifact (archived_via_folder)
+    where archived_via_folder is not null;

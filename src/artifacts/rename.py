@@ -244,6 +244,25 @@ def _merge_folders(conn, old: str, new: str) -> tuple[int, int]:
         conn.execute(
             "update artifact set folder_id = %s where folder_id = %s", (new_id, old_id)
         )
+        # The archive marker follows its pages to the surviving folder only when that folder
+        # is archived too, so unarchiving it restores them. A surviving LIVE folder takes
+        # `old`'s archived pages as they are -- they stay archived, on their own: the marker
+        # goes, so a later archive/unarchive of the merged folder never revives them.
+        survivor_archived = conn.execute(
+            "select archived_at from folder where id = %s", (new_id,)
+        ).fetchone()[0]
+        if survivor_archived is not None:
+            conn.execute(
+                "update artifact set archived_via_folder = %s"
+                " where archived_via_folder = %s",
+                (new_id, old_id),
+            )
+        else:
+            conn.execute(
+                "update artifact set archived_via_folder = null"
+                " where archived_via_folder = %s",
+                (old_id,),
+            )
         conn.execute(
             "update folder_alias set folder_id = %s where folder_id = %s",
             (new_id, old_id),
@@ -260,5 +279,12 @@ def _merge_folders(conn, old: str, new: str) -> tuple[int, int]:
     ).rowcount
     aliases += conn.execute(
         "update folder_alias set owner = %s where owner = %s", (new, old)
+    ).rowcount
+    # An alias that now names a folder's real slug is dead weight (a real slug wins) and would
+    # make a later rename to it look like a clash with another folder.
+    aliases += conn.execute(
+        "delete from folder_alias where owner = %s and exists (select 1 from folder f"
+        " where f.owner = %s and f.slug = folder_alias.old_slug)",
+        (new, new),
     ).rowcount
     return folders, aliases

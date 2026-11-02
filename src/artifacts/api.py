@@ -234,6 +234,23 @@ class MoveBody(BaseModel):
 
     ids: list[str] = Field(min_length=1, max_length=MAX_MOVE_IDS)
     folder: str | None
+    # As on publish: the display name of a NEW folder, set when this move makes it.
+    folder_title: str | None = None
+
+
+class FolderRenameBody(BaseModel):
+    """At least one of the two; a slug rename keeps the old slug working as an alias."""
+
+    slug: str | None = None
+    title: str | None = None
+
+
+class FolderArchiveBody(BaseModel):
+    """`archived` is required, as on the page route; archiving changes nothing without
+    `confirm: true` and says what it would do."""
+
+    archived: bool
+    confirm: bool = False
 
 
 class ArchiveBody(BaseModel):
@@ -1257,14 +1274,83 @@ def agent_router(
             raise HTTPException(404, "no such folder")
         return [row.__dict__ for row in rows]
 
+    @router.post("/folders/{slug}/rename")
+    def folder_rename(
+        slug: str, payload: FolderRenameBody, agent: str = Depends(caller)
+    ):
+        """Give one of this agent's folders a new slug and/or title. The old slug keeps
+        resolving. A slug already in use (or another folder's old slug) is a 409; a folder
+        that is not this agent's is a 404, as is one that does not exist. Never creates."""
+        if payload.slug is None and payload.title is None:
+            raise HTTPException(
+                422,
+                {"field": "slug", "detail": "send a new slug, a new title, or both"},
+            )
+        try:
+            got = store.rename_folder(db, agent, slug, payload.slug, payload.title)
+        except store.InvalidText as exc:
+            raise HTTPException(
+                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+            ) from exc
+        except store.SecretFound as found:
+            raise HTTPException(
+                422, _refused_detail(found.field, found.findings)
+            ) from found
+        except store.ScanFailed as exc:
+            raise HTTPException(
+                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+            ) from exc
+        except folders.BadSlug as exc:
+            raise HTTPException(422, _BAD_SLUG) from exc
+        except folders.SlugTaken as exc:
+            raise HTTPException(
+                409,
+                {
+                    "field": "slug",
+                    "detail": f"folder name {exc.slug!r} is already in use (as a folder"
+                    " or as the old name of another)",
+                },
+            ) from exc
+        if got is None:
+            raise HTTPException(404, "no such folder")
+        return got
+
+    @router.post("/folders/{slug}/archive")
+    def folder_archive(
+        slug: str, payload: FolderArchiveBody, agent: str = Depends(caller)
+    ):
+        """Archive one of this agent's folders and every live page in it (two steps: without
+        `confirm: true` it only says what it would do), or unarchive it."""
+        try:
+            got = store.set_folder_archived(
+                db, agent, slug, payload.archived, confirm=payload.confirm
+            )
+        except folders.BadSlug as exc:
+            raise HTTPException(422, _BAD_SLUG) from exc
+        if got is None:
+            raise HTTPException(404, "no such folder")
+        return got
+
     @router.post("/artifacts/move")
     def move_pages(payload: MoveBody, agent: str = Depends(caller)):
         """File several of this agent's own pages in one of its folders in one go, or take
         them out (`folder: null`). `missing` covers "no such page" and "not yours" alike."""
         try:
             moved, missing, filed = store.move_many(
-                db, agent, payload.ids, payload.folder
+                db, agent, payload.ids, payload.folder, payload.folder_title
             )
+        except store.InvalidText as exc:
+            raise HTTPException(
+                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+            ) from exc
+        except store.SecretFound as found:
+            raise HTTPException(
+                422, _refused_detail(found.field, found.findings)
+            ) from found
+        except store.ScanFailed as exc:
+            raise HTTPException(
+                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+            ) from exc
         except folders.BadSlug as exc:
             raise HTTPException(422, _BAD_SLUG) from exc
         except folders.FolderArchived as exc:

@@ -1668,7 +1668,11 @@ def _scoped(
 
 
 def move_many(
-    db: Database, agent: str, artifact_ids: list[str], folder: str | None
+    db: Database,
+    agent: str,
+    artifact_ids: list[str],
+    folder: str | None,
+    folder_title: str | None = None,
 ) -> tuple[list[str], list[str], dict | None]:
     """File several of the agent's own pages in its folder `folder` (None takes them out), in
     one transaction. Returns `(moved, missing, folder)`; `missing` is both "no such page" and
@@ -1676,8 +1680,7 @@ def move_many(
     when at least one page is going into it: a batch of ids that are all missing leaves nothing
     behind. `folders.BadSlug` / `folders.FolderArchived` as for publish; nothing is written then.
     """
-    if folder is not None:
-        folders.clean_slug(folder)
+    _check_folder(folder, folder_title, agent=agent, artifact_id=None)
     wanted = list(dict.fromkeys(artifact_ids))
     with db.connect() as conn, conn.transaction():
         mine = {
@@ -1695,12 +1698,12 @@ def move_many(
             target = None
         elif moved:
             target, canonical, created = folders.resolve_or_create(
-                conn, agent, folder, None
+                conn, agent, folder, folder_title
             )
             filed = {"slug": canonical, "created": created}
         if moved:
             conn.execute(
-                "update artifact set folder_id = %s"  # noqa: S608 -- placeholders only
+                "update artifact set folder_id = %s, archived_via_folder = null"  # noqa: S608 -- placeholders only
                 f" where agent = %s and deleted_at is null and id in {in_list(moved)}",
                 (target, agent, *moved),
             )
@@ -1928,7 +1931,8 @@ def set_archived(
             _lock_open_decisions(conn, artifact_id)
         before = _set_aside_state(conn, artifact_id)
         done = conn.execute(
-            f"update artifact set archived_at = %s {where}",  # noqa: S608 -- _scoped emits a fixed clause with placeholders, never caller text
+            # A page archived or unarchived by itself is no longer the folder's doing.
+            f"update artifact set archived_at = %s, archived_via_folder = null {where}",  # noqa: S608 -- _scoped emits a fixed clause with placeholders, never caller text
             (datetime.now(UTC) if archived else None, *params),
         )
         if done.rowcount > 0 and before is not None:
@@ -1942,6 +1946,100 @@ def set_archived(
             elif not archived and was and deleted_at is None:
                 _reopen_set_aside_questions(conn, artifact_id, "unarchived", actor)
         return done.rowcount > 0
+
+
+def rename_folder(
+    db: Database, agent: str, slug: str, new_slug: str | None, title: str | None
+) -> dict | None:
+    """`folders.rename_folder` in one transaction, with the title guarded like any text that
+    reaches storage. None for no such folder of this agent's; `folders.SlugTaken` on a clash."""
+    _check_folder(new_slug, title, agent=agent, artifact_id=None)
+    with db.connect() as conn, conn.transaction():
+        return folders.rename_folder(conn, agent, slug, new_slug, title)
+
+
+def set_folder_archived(
+    db: Database, agent: str, slug: str, archived: bool, *, confirm: bool
+) -> dict | None:
+    """Archive or unarchive one of the agent's own folders (an old slug resolves), in one
+    transaction (docs/agent/specs/2026-11-02-folders-design.md 3.4). None for no such folder.
+
+    Archiving without `confirm` changes nothing and returns `{"would_archive": {"pages",
+    "questions_set_aside"}}`. With it, every live, unarchived page of the agent's in the folder
+    is archived through the same mechanism as a single-page archive (questions set aside, the
+    asking agents told) and marked `archived_via_folder`; pages already archived on their own
+    are left as they were, unmarked. Unarchiving restores only the pages carrying the marker and
+    brings their questions back; a page that is binned is restored as a page restore does it
+    (its questions stay set aside until the bin is emptied the other way)."""
+    with db.connect() as conn, conn.transaction():
+        found = folders.find(conn, agent, slug)
+        if found is None:
+            return None
+        folder_id, canonical = found[0], found[1]
+        if archived:
+            page_rows = conn.execute(
+                "select id from artifact where folder_id = %s and agent = %s"
+                " and deleted_at is null and archived_at is null order by id",
+                (folder_id, agent),
+            ).fetchall()
+            pages = [r[0] for r in page_rows]
+            if not confirm:
+                waiting = 0
+                for pid in pages:
+                    waiting += conn.execute(
+                        "select count(*) from decision where artifact_id = %s"
+                        " and answered_at is null and closed_at is null",
+                        (pid,),
+                    ).fetchone()[0]
+                return {
+                    "slug": canonical,
+                    "would_archive": {
+                        "pages": len(pages),
+                        "questions_set_aside": waiting,
+                    },
+                }
+            now = datetime.now(UTC)
+            conn.execute(
+                "update folder set archived_at = %s where id = %s and archived_at is null",
+                (now, folder_id),
+            )
+            aside = 0
+            for pid in pages:
+                _lock_open_decisions(conn, pid)
+                conn.execute(
+                    "update artifact set archived_at = %s, archived_via_folder = %s"
+                    " where id = %s",
+                    (now, folder_id, pid),
+                )
+                aside += _set_aside_open_questions(conn, pid, "archived", agent)
+            return {
+                "slug": canonical,
+                "archived": True,
+                "pages": len(pages),
+                "questions_set_aside": aside,
+            }
+        conn.execute("update folder set archived_at = null where id = %s", (folder_id,))
+        restored = conn.execute(
+            "select id, deleted_at from artifact where archived_via_folder = %s"
+            " and folder_id = %s order by id",
+            (folder_id, folder_id),
+        ).fetchall()
+        reopened = 0
+        for pid, deleted_at in restored:
+            conn.execute(
+                "update artifact set archived_at = null, archived_via_folder = null"
+                " where id = %s",
+                (pid,),
+            )
+            if deleted_at is None:
+                reopened += _reopen_set_aside_questions(conn, pid, "unarchived", agent)
+        # A marker on a page that has since left the folder cannot exist (moving clears it).
+        return {
+            "slug": canonical,
+            "archived": False,
+            "pages_restored": len(restored),
+            "questions_reopened": reopened,
+        }
 
 
 def rename(db: Database, artifact_id: str, title: str, *, agent: str | None) -> bool:
@@ -2166,7 +2264,8 @@ def transfer(
         # An agent's folder holds that agent's pages: the new owner sorts it itself. A folder
         # of his (owner 'jeremy') may hold anyone's, so the page stays in it.
         conn.execute(
-            "update artifact set folder_id = null where id = %s and folder_id in"
+            "update artifact set folder_id = null, archived_via_folder = null"
+            " where id = %s and folder_id in"
             " (select id from folder where owner <> 'jeremy')",
             (artifact_id,),
         )

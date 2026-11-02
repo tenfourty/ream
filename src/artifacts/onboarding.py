@@ -747,7 +747,19 @@ that does not exist. API: `POST /api/v1/artifacts` and `PATCH /api/v1/artifacts/
 one request: `POST /api/v1/artifacts/move` `{{"ids": [...], "folder": "roadmap" | null}}` (null
 takes them out; up to 200 ids) answers `{{"moved": [...], "missing": [...], "folder": ...}}`;
 `missing` is "no such page" and "not yours" alike, and the folder is made on first use and says so
-as on publish. An archived folder refuses with 409. Jeremy's wall is
+as on publish (`"folder_title"` names a new folder, as on publish). An archived folder refuses
+with 409. To rename a folder (title only, slug only, or both; the old slug keeps working as an
+alias for `--folder` and every folder call; a slug already in use or held as another folder's old
+name is 409): `artifacts-publish --rename-folder old [--to new] [--folder-title "Name"]` or
+`POST /api/v1/folders/<slug>/rename` `{{"slug"?, "title"?}}`. To archive a whole folder, two steps:
+`artifacts-publish --archive-folder SLUG` changes nothing and says how many pages it would archive
+and how many open questions it would set aside; add `--confirm` to do it (API: `POST
+/api/v1/folders/<slug>/archive` `{{"archived": true, "confirm": true}}`, without `confirm` it answers
+`{{"would_archive": {{"pages", "questions_set_aside"}}}}`). Its questions are set aside exactly as
+when you archive a page (you get decision_set_aside events). `--unarchive-folder SLUG` brings back
+only the pages that archive archived, and reopens their questions; a page you had archived yourself
+stays archived. Archiving or unarchiving a page on its own, or moving it out, detaches it from the
+folder's archive. Jeremy's wall is
 unchanged for now: it will show a folder as one tile that opens to its pages.
 
 ## Rules that save you

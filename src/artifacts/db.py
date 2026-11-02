@@ -602,6 +602,14 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " where folder_id is not null"
         ),
     ),
+    # 2 Nov 2026: the folder a page was archived through (folders slice 2; see schema.sql).
+    15: (
+        "alter table artifact add column archived_via_folder text",
+        (
+            "create index artifact_archived_via_folder_idx on artifact"
+            " (archived_via_folder) where archived_via_folder is not null"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

@@ -674,12 +674,137 @@ def _folder_fields(folder: str | None, folder_title: str | None) -> dict:
     return out
 
 
-def _move(ids: list[str], key: str, folder: str | None) -> dict:
+def _move(
+    ids: list[str], key: str, folder: str | None, folder_title: str | None = None
+) -> dict:
     """`--move ID ... --folder SLUG` (or `--no-folder`, `folder` None): file several of this
-    key's own pages in one request. The service answers `{moved, missing, folder}`."""
-    return _request(
-        "POST", f"{_api_base()}/artifacts/move", key, {"ids": ids, "folder": folder}
+    key's own pages in one request. The service answers `{moved, missing, folder}`.
+    `folder_title` names the folder if this move makes it."""
+    body: dict = {"ids": ids, "folder": folder}
+    if folder_title and folder is not None:
+        body["folder_title"] = folder_title
+    return _request("POST", f"{_api_base()}/artifacts/move", key, body)
+
+
+def _folder_action(args, key: str) -> int | None:
+    """`--rename-folder`, `--archive-folder`, `--unarchive-folder`: act on one of this key's own
+    folders (an old slug resolves). None when none of them was asked for."""
+    chosen = [
+        flag
+        for flag, value in (
+            ("--rename-folder", args.rename_folder),
+            ("--archive-folder", args.archive_folder),
+            ("--unarchive-folder", args.unarchive_folder),
+        )
+        if value
+    ]
+    if not chosen:
+        if args.confirm:
+            print("--confirm goes with --archive-folder SLUG", file=sys.stderr)
+            return 2
+        return None
+    if len(chosen) > 1:
+        print(f"{' and '.join(chosen)} cannot be used together", file=sys.stderr)
+        return 2
+    other = [
+        flag
+        for flag, value in (
+            ("FILE", args.file),
+            ("--update", args.update),
+            ("--list", args.list),
+            ("--folders", args.folders),
+            ("--folder", args.folder is not None),
+            ("--no-folder", args.no_folder),
+            ("--move", args.move),
+            ("--archive", args.archive),
+            ("--unarchive", args.unarchive),
+            ("--pin", args.pin),
+            ("--unpin", args.unpin),
+            ("--rename", args.rename),
+            ("--fetch", args.fetch),
+            ("--duplicate", args.duplicate),
+            ("--give", args.give),
+            ("--title", args.title),
+        )
+        if value
+    ]
+    if other:
+        print(
+            f"{chosen[0]} goes with its own options only, not with " + ", ".join(other),
+            file=sys.stderr,
+        )
+        return 2
+    if args.rename_folder:
+        if not args.to and not args.folder_title:
+            print(
+                "--rename-folder SLUG needs --to NEW-SLUG, --folder-title NAME, or both",
+                file=sys.stderr,
+            )
+            return 2
+        if args.confirm:
+            print("--confirm goes with --archive-folder only", file=sys.stderr)
+            return 2
+        body = {}
+        if args.to:
+            body["slug"] = args.to
+        if args.folder_title:
+            body["title"] = args.folder_title
+        slug = args.rename_folder
+        result = _request(
+            "POST", f"{_api_base()}/folders/{quote(slug, safe='')}/rename", key, body
+        )
+        print(json.dumps(result))
+        if result.get("previous_slug"):
+            print(
+                f"renamed folder '{_printable(result['previous_slug'])}' to"
+                f" '{_printable(result['slug'])}' (the old name still works)",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"folder '{_printable(result['slug'])}' is now titled"
+                f" '{_printable(result['title'])}'",
+                file=sys.stderr,
+            )
+        return 0
+    if args.to or args.folder_title:
+        print(f"{chosen[0]} takes no --to or --folder-title", file=sys.stderr)
+        return 2
+    archiving = bool(args.archive_folder)
+    if args.confirm and not archiving:
+        print("--confirm goes with --archive-folder only", file=sys.stderr)
+        return 2
+    slug = args.archive_folder or args.unarchive_folder
+    result = _request(
+        "POST",
+        f"{_api_base()}/folders/{quote(slug, safe='')}/archive",
+        key,
+        {"archived": archiving, "confirm": bool(args.confirm)},
     )
+    print(json.dumps(result))
+    name = _printable(result["slug"])
+    if "would_archive" in result:
+        w = result["would_archive"]
+        print(
+            f"NOT archived yet: archiving folder '{name}' would archive {w['pages']} page(s)"
+            f" and set aside {w['questions_set_aside']} open question(s) (the asking agents"
+            " are told; they come back when the folder is unarchived). Run again with"
+            " --confirm to do it.",
+            file=sys.stderr,
+        )
+    elif archiving:
+        print(
+            f"archived folder '{name}': {result['pages']} page(s), "
+            f"{result['questions_set_aside']} question(s) set aside",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"unarchived folder '{name}': {result['pages_restored']} page(s) restored, "
+            f"{result['questions_reopened']} question(s) reopened",
+            file=sys.stderr,
+        )
+    return 0
 
 
 def _publish(
@@ -1484,7 +1609,42 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--folder-title",
         metavar="NAME",
-        help="with --folder: the display name of a NEW folder (set once; default the slug)",
+        help=(
+            "with --folder (publish, --update, or --move): the display name of a NEW"
+            " folder (default the slug); with --rename-folder: the folder's new title"
+        ),
+    )
+    parser.add_argument(
+        "--rename-folder",
+        metavar="SLUG",
+        help=(
+            "rename one of your folders: --rename-folder SLUG [--to NEW-SLUG]"
+            " [--folder-title NAME], at least one of the two. The old slug keeps working"
+            " for --folder, --list and every folder call; a slug already in use is refused"
+            " (409). Title only: --rename-folder SLUG --folder-title NAME."
+        ),
+    )
+    parser.add_argument(
+        "--archive-folder",
+        metavar="SLUG",
+        help=(
+            "archive a folder and every live page in it. Two steps: without --confirm it"
+            " changes nothing and prints how many pages it would archive and how many"
+            " open questions it would set aside (the asking agents are told)"
+        ),
+    )
+    parser.add_argument(
+        "--unarchive-folder",
+        metavar="SLUG",
+        help=(
+            "unarchive a folder: restores the pages its archive archived (not ones you"
+            " had archived yourself) and reopens their questions"
+        ),
+    )
+    parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="with --archive-folder: really do it",
     )
     parser.add_argument(
         "--no-folder",
@@ -1576,7 +1736,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--to",
         metavar="AGENT",
         help="with --give: the agent receiving it, as the page list names it "
-        "(homelab-ops; homelab_ops also works)",
+        "(homelab-ops; homelab_ops also works); with --rename-folder: the new slug",
     )
     shelf.add_argument(
         "--close-to-agents",
@@ -1685,7 +1845,19 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     key = maybe_rotate(args, key)
 
+    try:
+        acted = _folder_action(args, key)
+    except HTTPFailure as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
+        print(f"{exc.status} {detail}", file=sys.stderr)
+        return 1
+    if acted is not None:
+        return acted
+
     if args.move:
+        if args.folder_title and args.no_folder:
+            print("--folder-title goes with --folder, not --no-folder", file=sys.stderr)
+            return 2
         if args.folder is not None and args.no_folder:
             print("--folder and --no-folder cannot be used together", file=sys.stderr)
             return 2
@@ -1708,8 +1880,10 @@ def main(argv: list[str] | None = None) -> int:
                 ("FILE", args.file),
                 ("--update", args.update),
                 ("--list", args.list),
-                ("--folder-title", args.folder_title),
                 ("--folders", args.folders),
+                ("--archive-folder", args.archive_folder),
+                ("--unarchive-folder", args.unarchive_folder),
+                ("--rename-folder", args.rename_folder),
                 ("--archive", args.archive),
                 ("--unarchive", args.unarchive),
                 ("--pin", args.pin),
@@ -1730,7 +1904,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         try:
-            result = _move(args.move, key, None if args.no_folder else args.folder)
+            result = _move(
+                args.move,
+                key,
+                None if args.no_folder else args.folder,
+                args.folder_title,
+            )
         except HTTPFailure as exc:
             detail = (
                 exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
@@ -2018,7 +2197,9 @@ def main(argv: list[str] | None = None) -> int:
             " [--folder SLUG [--folder-title NAME]]"
             " | FILE --update ID [--title TITLE] [--folder SLUG | --no-folder]"
             " | --list [--folder SLUG] | --folders"
-            " | --move ID [ID ...] (--folder SLUG | --no-folder)"
+            " | --move ID [ID ...] (--folder SLUG [--folder-title NAME] | --no-folder)"
+            " | --rename-folder SLUG [--to NEW] [--folder-title NAME]"
+            " | --archive-folder SLUG [--confirm] | --unarchive-folder SLUG"
             " | --rename ID --title TITLE | --archive ID | --unarchive ID"
             " | --pin ID | --unpin ID | --duplicate ID | --fetch ID [FILE]",
             file=sys.stderr,
