@@ -100,14 +100,15 @@ def file_page(
 def list_for_agent(db, agent: str) -> list[dict]:
     """The calling agent's own folders: slug, title, page count (pages not in the bin), open
     questions (on live, unarchived pages: an archived page's questions are set aside, not
-    waiting), and whether the folder is archived. Newest folder first."""
+    waiting), and whether the folder is archived. Newest folder first. Only the owner's own pages count, so a
+    folder's metadata never reveals another publisher's page."""
     with db.connect() as conn:
         rows = conn.execute(
             "select f.id, f.slug, f.title, f.archived_at, f.created_at,"
             " (select count(*) from artifact a"
-            "   where a.folder_id = f.id and a.deleted_at is null),"
+            "   where a.folder_id = f.id and a.deleted_at is null and a.agent = f.owner),"
             " (select count(*) from decision d join artifact a on a.id = d.artifact_id"
-            "   where a.folder_id = f.id and a.deleted_at is null"
+            "   where a.folder_id = f.id and a.deleted_at is null and a.agent = f.owner"
             "   and a.archived_at is null"
             "   and d.answer is null and d.closed_at is null)"
             " from folder f where f.owner = %s order by f.created_at desc, f.slug",

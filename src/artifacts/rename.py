@@ -104,6 +104,9 @@ def rename_agent(db: Database, old: str, new: str, *, dry_run: bool) -> dict[str
                 (new, old),
             ).rowcount
 
+        counts["folder.owner"], counts["folder_alias.owner"] = _merge_folders(
+            conn, old, new
+        )
         counts["seat_grant.agent"] = _merge_grants(conn, old, new)
         counts["seat_read.agent"] = _merge_reads(conn, old, new)
         counts["idempotency.agent"] = _merge_idempotency(conn, old, new)
@@ -222,3 +225,40 @@ def _merge_idempotency(conn, old: str, new: str) -> int:
         "update idempotency set agent = %s where agent = %s", (new, old)
     ).rowcount
     return dropped + moved
+
+
+def _merge_folders(conn, old: str, new: str) -> tuple[int, int]:
+    """`old`'s folders become `new`'s. A slug `new` already has is one folder: `old`'s pages
+    are filed in it, its aliases move over (an alias `new` already holds keeps its own row), and
+    `old`'s emptied folder row goes. The reserved `jeremy` owner is never touched: it is not an
+    agent name, and a rename of it is refused upstream. Returns (folder rows, alias rows)."""
+    if is_reserved_agent_name(old):
+        return 0, 0
+    folders = 0
+    clashes = conn.execute(
+        "select o.id, n.id from folder o join folder n on n.slug = o.slug"
+        " where o.owner = %s and n.owner = %s",
+        (old, new),
+    ).fetchall()
+    for old_id, new_id in clashes:
+        conn.execute(
+            "update artifact set folder_id = %s where folder_id = %s", (new_id, old_id)
+        )
+        conn.execute(
+            "update folder_alias set folder_id = %s where folder_id = %s",
+            (new_id, old_id),
+        )
+        folders += conn.execute("delete from folder where id = %s", (old_id,)).rowcount
+    folders += conn.execute(
+        "update folder set owner = %s where owner = %s", (new, old)
+    ).rowcount
+    # An alias that would collide with one `new` already holds is dropped, not moved.
+    aliases = conn.execute(
+        "delete from folder_alias where owner = %s and exists (select 1"
+        " from folder_alias n where n.owner = %s and n.old_slug = folder_alias.old_slug)",
+        (old, new),
+    ).rowcount
+    aliases += conn.execute(
+        "update folder_alias set owner = %s where owner = %s", (new, old)
+    ).rowcount
+    return folders, aliases

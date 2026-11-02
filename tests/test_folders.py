@@ -321,3 +321,111 @@ def test_the_wall_is_unchanged_by_a_folder(client, tokens):
     ).json()
     wall = client.get("/").text
     assert page["id"] in wall, "slice 1: a foldered page is still on the wall"
+
+
+# --- rename ---------------------------------------------------------------------
+
+
+def _folders(client, token):
+    got = client.get("/api/v1/folders", headers=auth(token)).json()
+    return {f["slug"]: f["pages"] for f in got}
+
+
+def test_renaming_an_agent_moves_its_folders_and_its_old_key_still_finds_them(
+    client, db, tokens
+):
+    from artifacts import rename
+
+    page = publish(client, tokens["alpha"], folder="roadmap").json()
+    rename.rename_agent(db, "alpha", "gamma", dry_run=False)
+    assert _folders(client, tokens["alpha"]) == {"roadmap": 1}  # old key, new name
+    with db.connect() as conn:
+        assert (
+            conn.execute(
+                "select count(*) from folder where owner = 'alpha'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert conn.execute("select owner from folder").fetchone()[0] == "gamma"
+        assert (
+            conn.execute(
+                "select f.owner from artifact a join folder f on f.id = a.folder_id"
+                " where a.id = %s",
+                (page["id"],),
+            ).fetchone()[0]
+            == "gamma"
+        )
+    # A new agent given the old name inherits nothing.
+    fresh = keys.mint(db, agent="alpha-new")[0]
+    assert _folders(client, fresh) == {}
+
+
+def test_a_rename_merge_with_a_clashing_slug_files_both_agents_pages_in_one_folder(
+    client, db, tokens
+):
+    from artifacts import rename
+
+    publish(client, tokens["alpha"], folder="roadmap")
+    publish(client, tokens["alpha"], title="only-a", folder="solo")
+    publish(client, tokens["beta"], folder="roadmap")
+    with db.connect() as conn, conn.transaction():
+        fid = conn.execute(
+            "select id from folder where owner = 'alpha' and slug = 'roadmap'"
+        ).fetchone()[0]
+        conn.execute(
+            "insert into folder_alias (owner, old_slug, folder_id) values ('alpha', 'rm', %s)",
+            (fid,),
+        )
+    rename.rename_agent(db, "alpha", "beta", dry_run=False)
+    assert _folders(client, tokens["beta"]) == {"roadmap": 2, "solo": 1}
+    with db.connect() as conn:
+        assert conn.execute("select count(*) from folder").fetchone()[0] == 2
+        assert (
+            conn.execute(
+                "select f.slug from folder_alias a join folder f on f.id = a.folder_id"
+                " where a.owner = 'beta' and a.old_slug = 'rm'"
+            ).fetchone()[0]
+            == "roadmap"
+        )
+
+
+def test_a_rename_never_touches_a_jeremy_folder(client, db, tokens):
+    from artifacts import rename
+
+    with db.connect() as conn, conn.transaction():
+        conn.execute(
+            "insert into folder (id, owner, slug, title, created_at)"
+            " values ('f1', 'jeremy', 'mine', 'mine', %s)",
+            (datetime.now(UTC),),
+        )
+    publish(client, tokens["alpha"], folder="x")
+    rename.rename_agent(db, "alpha", "gamma", dry_run=False)
+    with db.connect() as conn:
+        assert (
+            conn.execute("select owner from folder where id = 'f1'").fetchone()[0]
+            == "jeremy"
+        )
+
+
+def test_folder_counts_ignore_a_page_another_publisher_put_in_an_agent_folder(
+    client, db, tokens
+):
+    publish(client, tokens["alpha"], folder="roadmap")
+    foreign = publish(client, tokens["beta"], title="theirs").json()
+    one = publish(client, tokens["beta"], title="theirs2").json()
+    with db.connect() as conn, conn.transaction():
+        fid = conn.execute("select id from folder where owner = 'alpha'").fetchone()[0]
+        for pid in (foreign["id"], one["id"]):
+            conn.execute("update artifact set folder_id = %s where id = %s", (fid, pid))
+    decisions.ask(
+        db,
+        agent="beta",
+        artifact_id=foreign["id"],
+        question="Which?",
+        options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
+        recommended="a",
+    )
+    got = client.get("/api/v1/folders", headers=auth(tokens["alpha"])).json()
+    assert [(f["slug"], f["pages"], f["open_questions"]) for f in got] == [
+        ("roadmap", 1, 0)
+    ]
