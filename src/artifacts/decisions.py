@@ -110,7 +110,8 @@ _COLUMNS = (
     " (select x.archived_at from artifact x where x.id = decision.artifact_id)"
     ' as "archived_at [TIMESTAMPTZ]",'
     " (select x.deleted_at from artifact x where x.id = decision.artifact_id)"
-    ' as "deleted_at [TIMESTAMPTZ]"'
+    ' as "deleted_at [TIMESTAMPTZ],"'
+    " decision.answer_record"
 )
 # Positions in `_COLUMNS` that are read by index outside `_row_to_decision`.
 # Tied to its order: `session` is the 18th column, `kind` the 19th. Appending
@@ -166,6 +167,8 @@ class DecisionRow:
     blocked_on: str | None = None
     needed_by: str | None = None
     for_offices: list = dataclasses.field(default_factory=list)
+    # A form decision's submitted answers (forms.submit); None for every other kind.
+    answer_record: dict | None = None
     # The still-unanswered questions this one waits on, in `depends_on` order;
     # empty when it is not held (see `held_by`). Derived on read, never stored,
     # so a held question is released the moment its prerequisite is answered.
@@ -500,6 +503,7 @@ def _row_to_decision(row) -> DecisionRow:
         for_offices=row[29],
         reopened_at=row[30].isoformat() if row[30] is not None else None,
         **_set_aside_fields(row),
+        answer_record=row[33],
     )
 
 
@@ -510,6 +514,7 @@ def _set_aside_fields(row) -> dict:
     archived_at, deleted_at = row[31], row[32]
     if (
         row[6] is not None
+        or row[8] is not None  # answered_at: a submitted form has no `answer`
         or row[11] is not None
         or (archived_at is None and deleted_at is None)
     ):
@@ -887,7 +892,7 @@ def list_for_artifact(
     `comments`'s own listing helpers do."""
     sql = f"select {_COLUMNS} from decision where decision.artifact_id = %s"  # noqa: S608 -- fixed constant, not caller input
     if not include_answered:
-        sql += " and decision.answer is null"
+        sql += " and decision.answer is null and decision.answer_record is null"
     if not include_closed:
         sql += " and decision.closed_at is null"
     sql += " order by decision.created_at asc, decision.id asc"
@@ -900,7 +905,7 @@ def list_for_artifact(
 # binned page). `artifact` must be joined. See `_set_aside_fields` for the same rule
 # read off a row.
 _NOT_SET_ASIDE = (
-    " and not (decision.answer is null and decision.closed_at is null"
+    " and not (decision.answered_at is null and decision.closed_at is null"
     " and (artifact.archived_at is not null or artifact.deleted_at is not null))"
 )
 
@@ -983,13 +988,13 @@ def list_for_agent(
         # binned page stay out as before.
         sql = sql.replace(
             "artifact.deleted_at is null",
-            "(artifact.deleted_at is null or (decision.answer is null"
+            "(artifact.deleted_at is null or (decision.answered_at is null"
             " and decision.closed_at is null))",
         )
     if not include_closed:
         sql += " and decision.closed_at is null"
     if not include_answered:
-        sql += " and decision.answer is null"
+        sql += " and decision.answer is null and decision.answer_record is null"
     if not include_set_aside:
         sql += _NOT_SET_ASIDE
     params: list[object] = [agent]
@@ -998,9 +1003,10 @@ def list_for_agent(
         sql += " and decision.kind = %s"
         params.append(kind)
     else:
-        # A form is not a question waiting on him yet (design 2026-10-29 §6):
-        # it reads back through the page's forms, not the agent's queue.
-        sql += " and decision.kind <> 'form'"
+        # An unsubmitted form is not a question waiting on him (design
+        # 2026-10-29 §6): it reads back through the page's forms. A submitted one
+        # is an answer, and `wait` finds it here.
+        sql += " and (decision.kind <> 'form' or decision.answered_at is not null)"
     if after is not None:
         sql += _AFTER.format(op="<")
         params.append(after)

@@ -1,0 +1,322 @@
+"""Answering a form (docs/agent/specs/2026-10-29-form-controls-design.md, 3.3-3.4).
+
+The gallery posts one batch of values for a form; `validate` checks every one against the
+field list STORED at publish (never the page's own labels or controls) and `submit` records
+the answer on the form's decision, writes the `decision_answered` event in the same
+transaction, and nudges the agent.
+
+PURE FIRST. `validate` touches no database and is what the tests pin. `submit` is the one
+write.
+
+WHAT A SUBMIT KEEPS. The decision's `answer_record` is the merged record the agent reads:
+the later non-blank value wins per field, a blank never erases an earlier answer (a second
+sitting that leaves a field alone leaves it alone), and every submit is kept in `history`.
+Answers are merged only within one stored version of the form: after a republish a new
+record starts, so an answer is never carried onto a question that may have changed (the
+carry and stale rules are the next slice). The earlier record stays in `history`.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+import unicodedata
+from datetime import UTC, date, datetime
+
+from artifacts import events, forms, ids, nudge, store
+from artifacts.db import jsonb
+
+MAX_HISTORY = 50
+DEFAULT_TEXT = 2000
+MAX_FIELDS_SENT = 200
+
+_DATETIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?\Z")
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
+
+
+class SubmitRefused(Exception):
+    """A batch that cannot be stored. `field` names the control at fault; `status`
+    is the HTTP status the gallery answers with (422 a bad value, 409 a form that
+    changed under him)."""
+
+    def __init__(self, detail: str, *, field: str | None = None, status: int = 422):
+        super().__init__(detail)
+        self.detail = detail
+        self.field = field
+        self.status = status
+
+
+def _blank_of(spec: dict):
+    return [] if spec["type"] == "checkbox" and spec.get("options") else ""
+
+
+def _clean_text(value, name: str, *, multiline: bool) -> str:
+    if not isinstance(value, str):
+        raise SubmitRefused("a text value is expected", field=name)
+    for ch in value:
+        if unicodedata.category(ch) in ("Cc", "Cs", "Co") and not (
+            ch in "\t" or (multiline and ch in "\r\n")
+        ):
+            raise SubmitRefused("the value has a control character", field=name)
+    return value
+
+
+def _one(spec: dict, value):
+    """(stored value, is_blank) for one field, or SubmitRefused."""
+    name, typ = spec["name"], spec["type"]
+    options = [o["value"] for o in spec.get("options") or []]
+    if typ == "checkbox" and not options:
+        if value is None:
+            return False, False
+        if not isinstance(value, bool):
+            raise SubmitRefused("a checkbox is true or false", field=name)
+        return value, False
+    if typ == "checkbox":
+        if value is None:
+            return [], True
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise SubmitRefused("a checkbox group is a list of values", field=name)
+        if len(set(value)) != len(value):
+            raise SubmitRefused("a value is chosen twice", field=name)
+        bad = [v for v in value if v not in options]
+        if bad:
+            raise SubmitRefused(
+                f"{bad[0][:40]!r} is not one of this field's options", field=name
+            )
+        # Kept in the order the page lists them, whatever order they arrived in.
+        ordered = [v for v in options if v in value]
+        return ordered, not ordered
+    if value is None or value == "":
+        return "", True
+    if typ in ("radio", "select"):
+        if not isinstance(value, str) or value not in options:
+            raise SubmitRefused("not one of this field's options", field=name)
+        return value, False
+    if typ in ("text", "textarea"):
+        text = _clean_text(value, name, multiline=typ == "textarea")
+        cap = spec.get("maxlength") or DEFAULT_TEXT
+        if len(text) > cap:
+            raise SubmitRefused(f"longer than {cap} characters", field=name)
+        if not text.strip():
+            return "", True
+        return text, False
+    if typ == "number":
+        if isinstance(value, bool) or not isinstance(value, int | float | str):
+            raise SubmitRefused("a number is expected", field=name)
+        try:
+            n = float(value.strip() if isinstance(value, str) else value)
+        except ValueError:
+            raise SubmitRefused("not a number", field=name) from None
+        if not math.isfinite(n):
+            raise SubmitRefused("not a finite number", field=name)
+        lo, hi, step = spec.get("min"), spec.get("max"), spec.get("step")
+        if lo is not None and n < lo:
+            raise SubmitRefused(f"below the minimum of {lo}", field=name)
+        if hi is not None and n > hi:
+            raise SubmitRefused(f"above the maximum of {hi}", field=name)
+        if step:
+            ratio = (n - (lo or 0)) / step
+            if abs(ratio - round(ratio)) > 1e-9:
+                raise SubmitRefused(f"not a multiple of the step {step}", field=name)
+        return (int(n) if n == int(n) else n), False
+    if typ == "date":
+        if not isinstance(value, str) or not _DATE.match(value):
+            raise SubmitRefused("a date is YYYY-MM-DD", field=name)
+        try:
+            date.fromisoformat(value)
+        except ValueError:
+            raise SubmitRefused("not a real date", field=name) from None
+        return value, False
+    if typ == "datetime-local":
+        if not isinstance(value, str) or not _DATETIME.match(value):
+            raise SubmitRefused("a date and time is YYYY-MM-DDTHH:MM", field=name)
+        try:
+            datetime.fromisoformat(value)
+        except ValueError:
+            raise SubmitRefused("not a real date and time", field=name) from None
+        return value, False
+    raise SubmitRefused("an unsupported field type", field=name)  # pragma: no cover
+
+
+def validate(fields: list[dict], complete_all: bool, values) -> tuple[dict, list[str]]:
+    """Check a posted batch against the stored field list. Returns (answers, blank):
+    every stored field has an entry, a blank one as "" (a checkbox group as []), and
+    `blank` names them. Refuses, naming the field: a name the form does not have, a
+    value outside a field's options or limits, a blank `required` field and, when the
+    form is `data-complete="all"`, any blank field."""
+    if not isinstance(values, dict):
+        raise SubmitRefused("values must be an object of field name to value")
+    if len(values) > MAX_FIELDS_SENT:
+        raise SubmitRefused(f"more than {MAX_FIELDS_SENT} fields sent")
+    known = {f["name"]: f for f in fields}
+    for name in values:
+        if name not in known:
+            raise SubmitRefused("this form has no such field", field=str(name)[:100])
+    answers: dict = {}
+    blank: list[str] = []
+    for spec in fields:
+        stored, is_blank = _one(spec, values.get(spec["name"]))
+        answers[spec["name"]] = stored
+        if is_blank:
+            blank.append(spec["name"])
+            if spec.get("required"):
+                raise SubmitRefused("this field is required", field=spec["name"])
+            if complete_all:
+                raise SubmitRefused(
+                    "this form needs every field answered", field=spec["name"]
+                )
+    return answers, blank
+
+
+def _stamp(moment: datetime) -> str:
+    return moment.astimezone(UTC).isoformat()
+
+
+def merged(previous: dict | None, version: int, fields: list[dict], answers: dict):
+    """The record's `answers` after this submit: only a record of the SAME stored
+    version is merged into (see the module docstring)."""
+    base = (
+        dict(previous["answers"])
+        if previous and previous.get("version") == version
+        else {}
+    )
+    out: dict = {}
+    for spec in fields:
+        name = spec["name"]
+        new = answers[name]
+        blank_new = new in ("", []) and new is not False
+        out[name] = base[name] if blank_new and name in base else new
+    return out
+
+
+def submit(
+    db,
+    decision_id: str,
+    *,
+    version: int,
+    values,
+    by: str = "jeremy",
+) -> dict:
+    """Record one submit of a form and return the merged record. `store.NotFound` for
+    a form that does not exist or is closed (its agent said it is no longer needed);
+    `SubmitRefused` for a batch the stored field list does not allow, including a
+    `version` that is no longer the form's latest (409: he answered a question that
+    has since changed, and nothing is carried silently)."""
+    with db.connect() as conn:
+        row = conn.execute(
+            "select d.artifact_id, d.form_name, d.session, d.answer_record,"
+            " a.agent, a.title from decision d"
+            " join artifact a on a.id = d.artifact_id"
+            " where d.id = %s and d.kind = 'form' and d.closed_at is null"
+            " and a.deleted_at is null",
+            (decision_id,),
+        ).fetchone()
+        if row is None:
+            raise store.NotFound()
+        artifact_id, form_name, asking_session, _record, owner, title = row
+        latest = conn.execute(
+            "select max(version_n) from decision_form where decision_id = %s",
+            (decision_id,),
+        ).fetchone()[0]
+        if latest is None:
+            raise store.NotFound()
+        if version != latest:
+            raise SubmitRefused(
+                f"this form was changed (version {latest}); reload the page",
+                status=409,
+            )
+        complete = bool(
+            conn.execute(
+                "select complete_all from decision_form"
+                " where decision_id = %s and version_n = %s",
+                (decision_id, latest),
+            ).fetchone()[0]
+        )
+        fields = forms._fields(conn, decision_id, latest)
+        content_hash = conn.execute(
+            "select body_sha256 from version where artifact_id = %s and n = %s",
+            (artifact_id, latest),
+        ).fetchone()
+    answers, blank = validate(fields, complete, values)
+    # The local secret scanner, as for a comment: a hit refuses, naming the field.
+    for spec in fields:
+        v = answers[spec["name"]]
+        if spec["type"] in ("text", "textarea") and v:
+            try:
+                store._check_secrets(
+                    v, f"field {spec['name']}", agent=by, artifact_id=artifact_id
+                )
+            except store.SecretFound as exc:
+                raise SubmitRefused(
+                    "looks like it contains a secret", field=spec["name"]
+                ) from exc
+
+    with db.connect() as conn, conn.transaction():
+        current = conn.execute(
+            "select answer_record, closed_at from decision where id = %s"  # noqa: S608 -- fixed text
+            + conn.for_update(" of decision"),
+            (decision_id,),
+        ).fetchone()
+        if current is None or current[1] is not None:
+            raise store.NotFound()
+        previous = current[0]
+        now = datetime.now(UTC)
+        submit_id = ids.new_id()
+        total = merged(previous, latest, fields, answers)
+        total_blank = [
+            f["name"]
+            for f in fields
+            if total[f["name"]] in ("", []) and total[f["name"]] is not False
+        ]
+        entry = {
+            "submit_id": submit_id,
+            "version": latest,
+            "answered_by": by,
+            "answered_at": _stamp(now),
+            "answers": answers,
+            "blank": blank,
+        }
+        history = ((previous or {}).get("history") or [])[-(MAX_HISTORY - 1) :]
+        record = {
+            "decision_id": decision_id,
+            "kind": "form",
+            "form": form_name,
+            "version": latest,
+            "content_hash": content_hash[0] if content_hash else None,
+            "submit_id": submit_id,
+            "answered_by": by,
+            "answered_at": entry["answered_at"],
+            "answers": total,
+            "blank": total_blank,
+            "stale": [],
+            "sent": [n for n in answers if n not in blank],
+            "history": [*history, entry],
+        }
+        conn.execute(
+            "update decision set answer_record = %s, answered_at = %s,"
+            " answered_by = %s, answer_source = 'page', recorded_by = null,"
+            " said_at = null, acknowledged_at = null, acknowledged_by = null"
+            " where id = %s and closed_at is null",
+            (jsonb(record), now, by, decision_id),
+        )
+        answered = len(fields) - len(total_blank)
+        summary = f"form {form_name}: {answered} of {len(fields)} answered"
+        seq = events.append(
+            conn,
+            artifact_id=artifact_id,
+            agent=owner,
+            actor=by,
+            kind="decision_answered",
+            summary=summary,
+            ref_id=decision_id,
+            session=asking_session,
+        )
+    nudge.emit(
+        kind="decision_answered",
+        artifact_id=artifact_id,
+        title=title,
+        agent=owner,
+        summary=summary,
+        event_id=str(seq),
+    )
+    return record

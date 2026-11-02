@@ -1399,7 +1399,7 @@ def _lock_open_decisions(conn, artifact_id: str) -> None:
     it. Same id order as `decisions._advance_rounds` and `holds.page_mode`."""
     conn.execute(
         "select id from decision where artifact_id = %s"  # noqa: S608 -- clause from the db layer, no caller input
-        " and answer is null and closed_at is null order by id" + conn.for_update(),
+        " and answered_at is null and closed_at is null order by id" + conn.for_update(),
         (artifact_id,),
     ).fetchall()
 
@@ -1448,7 +1448,7 @@ def _set_aside_open_questions(conn, artifact_id: str, what: str, actor: str) -> 
     now = datetime.now(UTC)
     rows = conn.execute(
         "select id, question, session, kind from decision"  # noqa: S608 -- clause from the db layer, no caller input
-        " where artifact_id = %s and answer is null and closed_at is null"
+        " where artifact_id = %s and answered_at is null and closed_at is null"
         " order by created_at, id" + conn.for_update(),
         (artifact_id,),
     ).fetchall()
@@ -1510,7 +1510,7 @@ def _reopen_set_aside_questions(conn, artifact_id: str, what: str, actor: str) -
     now = datetime.now(UTC)
     rows = conn.execute(
         "update decision set reopened_at = %s"
-        " where artifact_id = %s and answer is null and closed_at is null"
+        " where artifact_id = %s and answered_at is null and closed_at is null"
         " returning id, question, session, kind",
         (now, artifact_id),
     ).fetchall()

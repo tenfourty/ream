@@ -1026,3 +1026,8 @@ create table if not exists decision_field (
 -- above (`decision_shelved` stays for history and is no longer written); SQLite does both
 -- as its schema step 12.
 alter table decision add column if not exists reopened_at timestamptz;
+
+-- A form's submitted answers (forms.submit): one merged record per form decision,
+-- its history inside it. Null until he submits. `answer` and `answer_note` stay
+-- null for a form; `answered_at`/`answered_by` move with every submit.
+alter table decision add column if not exists answer_record jsonb;

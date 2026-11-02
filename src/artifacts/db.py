@@ -574,6 +574,9 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
         "alter table decision add column reopened_at timestamptz",
         _widen_event_kinds,
     ),
+    # 2 Nov 2026: a form's submitted answers (forms.submit), one merged record
+    # per form decision; the submits themselves ride inside it as `history`.
+    13: ("alter table decision add column answer_record jsonb",),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 
