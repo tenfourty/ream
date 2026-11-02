@@ -53,7 +53,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from artifacts import events, forms, ggscan, ids, packing, partner, scan
+from artifacts import events, folders, forms, ggscan, ids, packing, partner, scan
 from artifacts import rename as agent_rename
 from artifacts.db import DUPLICATE_KEY, Database, in_list, jsonb
 from artifacts.text import LEADING_DOCTYPE
@@ -149,6 +149,11 @@ class Published:
     # catch a whole class of that for the price of two fields.
     title: str = ""
     bytes: int = 0
+    # THE FOLDER THIS CALL FILED THE PAGE IN, and whether it made it: `{"slug", "created"}`,
+    # or None when the call named none (or took the page out). `created` is how a typo
+    # shows: `--folder raodmap` prints "created new folder", which no one meant (all eight
+    # publishing offices asked for exactly this).
+    folder: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -216,6 +221,9 @@ class ArtifactRow:
     # Whether other agents in his space may read it (homelab-ij8.105): True by
     # default, False when he or the publisher has closed it to the two of them.
     agents_can_read: bool = True
+    # The slug of the folder the page is in, None for a loose page. Only on the caller's own
+    # rows: another agent's folder is not this agent's to see.
+    folder: str | None = None
 
 
 def content_domain() -> str:
@@ -431,6 +439,23 @@ def _guard(
     _check_secrets(value, field, agent=agent, artifact_id=artifact_id)
 
 
+def _check_folder(
+    folder: str | None, folder_title: str | None, *, agent: str, artifact_id: str | None
+) -> None:
+    """The folder slug and its display name, checked before any write. `""` is a slug only on
+    an update (it takes the page out); `folders.BadSlug` for anything else that is not one."""
+    if folder:
+        folders.clean_slug(folder)
+    if folder_title is not None:
+        _guard(
+            folder_title,
+            MAX_TITLE_BYTES,
+            "folder_title",
+            agent=agent,
+            artifact_id=artifact_id,
+        )
+
+
 def publish(
     db: Database,
     agent: str,
@@ -438,8 +463,14 @@ def publish(
     body: str,
     *,
     session: str | None = None,
+    folder: str | None = None,
+    folder_title: str | None = None,
 ) -> Published:
-    """`session` is a LABEL the caller declared about itself, not a credential --
+    """`folder` files the new page in the agent's own folder of that slug, creating it on first
+    use (`folder_title` names a NEW folder, once; it defaults to the slug). A bad slug is
+    refused before anything is stored (`folders.BadSlug`).
+
+    `session` is a LABEL the caller declared about itself, not a credential --
     see `api.session`. It is stored on the artifact (who first published it) and
     on the version (who published THAT one), because a page three sessions have
     edited has three answers to "who did this" and only the per-version one is
@@ -449,6 +480,7 @@ def publish(
     """
     _guard(title, MAX_TITLE_BYTES, "title", agent=agent, artifact_id=None)
     _guard(body, MAX_BODY_BYTES, "body", agent=agent, artifact_id=None)
+    _check_folder(folder, folder_title, agent=agent, artifact_id=None)
     # A bad form is refused before anything is stored (FormRefused -> 422).
     parsed_forms = forms.parse(body)
     artifact_id, revision = ids.new_id(), _revision(body, 1)
@@ -497,6 +529,11 @@ def publish(
             (now, artifact_id),
         )
         forms.sync(conn, artifact_id, 1, parsed_forms, session)
+        filed = (
+            folders.file_page(conn, artifact_id, agent, folder, folder_title)
+            if folder
+            else None
+        )
     return Published(
         id=artifact_id,
         version=1,
@@ -505,6 +542,7 @@ def publish(
         page_url=page_url_for(artifact_id),
         title=title,
         bytes=len(body.encode()),
+        folder=filed,
     )
 
 
@@ -574,8 +612,15 @@ def patch(
     notify: bool = False,
     guard=None,
     scanned: set[str] | None = None,
+    folder: str | None = None,
+    folder_title: str | None = None,
 ) -> Published:
     """`title=None` leaves the page's name alone; a string renames it.
+
+    `folder=None` leaves the page's folder alone, a slug files it in the agent's own folder of
+    that name (created on first use), `""` takes it out. A shelf fact: it makes no version, and
+    it rides in the same transaction as the write, so a refused one (an archived folder, 409)
+    changes nothing else.
 
     `note`, `section` and `notify` are written on the new version by a section
     update (`patch_section`); a whole-page update leaves them NULL/false.
@@ -598,6 +643,7 @@ def patch(
         _check_size(
             title, MAX_TITLE_BYTES, "title", agent=agent, artifact_id=artifact_id
         )
+    _check_folder(folder, folder_title, agent=agent, artifact_id=artifact_id)
     # A bad form is refused before anything is stored (FormRefused -> 422).
     parsed_forms = forms.parse(body)
     with db.connect() as conn:
@@ -634,13 +680,20 @@ def patch(
             # title sailed through 200 while the same title on a changed body
             # was refused 422. The body itself needs no re-scan — it is the
             # bytes already stored, already checked when they were.
-            if title is not None:
-                _check_secrets(title, "title", agent=agent, artifact_id=artifact_id)
-                conn.execute(
-                    "update artifact set title = %s, updated_at = %s where id = %s",
-                    (title, datetime.now(UTC), artifact_id),
-                )
+            filed = None
+            with conn.transaction():
+                if title is not None:
+                    _check_secrets(title, "title", agent=agent, artifact_id=artifact_id)
+                    conn.execute(
+                        "update artifact set title = %s, updated_at = %s where id = %s",
+                        (title, datetime.now(UTC), artifact_id),
+                    )
+                if folder is not None:
+                    filed = folders.file_page(
+                        conn, artifact_id, agent, folder, folder_title
+                    )
             return Published(
+                folder=filed,
                 id=artifact_id,
                 url=url_for(artifact_id),
                 page_url=page_url_for(artifact_id),
@@ -739,6 +792,11 @@ def patch(
 
                 decisions._advance_rounds(conn, artifact_id, n)
                 forms.sync(conn, artifact_id, n, parsed_forms, session)
+                filed = (
+                    folders.file_page(conn, artifact_id, agent, folder, folder_title)
+                    if folder is not None
+                    else None
+                )
         except DUPLICATE_KEY as exc:
             # Two patches raced the same `expected_revision`: both passed the
             # check above (nothing here takes a lock), but only one of them
@@ -768,6 +826,7 @@ def patch(
         page_url=page_url_for(artifact_id),
         title=title if title is not None else row[1],
         bytes=len(body.encode()),
+        folder=filed,
     )
 
 
@@ -999,6 +1058,15 @@ def get_owned(
             if row[2] == agent
             else None
         ) or (None, None)
+        folder = (
+            conn.execute(
+                "select f.slug from artifact a join folder f on f.id = a.folder_id"
+                " where a.id = %s",
+                (row[0],),
+            ).fetchone()
+            if row[2] == agent
+            else None
+        )
     return ArtifactRow(
         id=row[0],
         title=row[1],
@@ -1015,6 +1083,7 @@ def get_owned(
         seen_version=seen[0],
         seen_at=seen[1],
         agents_can_read=row[8],
+        folder=folder[0] if folder else None,
     )
 
 
@@ -1269,11 +1338,13 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"
             " artifact.current_version, version.revision, artifact.updated_at,"
             " artifact.archived_at, artifact.pinned_at, version.session,"
-            " page_read.read_version, page_read.read_at, artifact.agents_can_read"
+            " page_read.read_version, page_read.read_at, artifact.agents_can_read,"
+            " folder.slug"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
             " left join page_read on page_read.artifact_id = artifact.id"
+            " left join folder on folder.id = artifact.folder_id"
             " where artifact.agent = %s and artifact.deleted_at is null"
             " order by artifact.updated_at desc",
             (agent,),
@@ -1295,9 +1366,22 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             seen_version=row[10],
             seen_at=row[11],
             agents_can_read=row[12],
+            folder=row[13],
         )
         for row in rows
     ]
+
+
+def list_in_folder(db: Database, agent: str, slug: str) -> list[ArtifactRow] | None:
+    """The agent's own pages in its folder `slug` (an old slug resolves too), newest change
+    first; None when the agent has no such folder. 'Not yours' and 'no such folder' are one
+    answer: a folder is found by owner and slug together."""
+    with db.connect() as conn:
+        found = folders.find(conn, agent, slug)
+    if found is None:
+        return None
+    wanted = set(folders.page_ids(db, agent, found[1]) or ())
+    return [row for row in list_for_agent(db, agent) if row.id in wanted]
 
 
 def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
@@ -1310,11 +1394,13 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
             "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"
             " artifact.current_version, version.revision, artifact.updated_at,"
             " artifact.archived_at, artifact.pinned_at, version.session,"
-            " page_read.read_version, page_read.read_at, artifact.agents_can_read"
+            " page_read.read_version, page_read.read_at, artifact.agents_can_read,"
+            " folder.slug"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
             " left join page_read on page_read.artifact_id = artifact.id"
+            " left join folder on folder.id = artifact.folder_id"
             " where artifact.deleted_at is null"
             " and (artifact.agent = %s or artifact.agents_can_read)"
             " order by artifact.updated_at desc",
@@ -1337,6 +1423,7 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
             seen_version=row[10] if row[2] == agent else None,
             seen_at=row[11] if row[2] == agent else None,
             agents_can_read=row[12],
+            folder=row[13] if row[2] == agent else None,
         )
         for row in rows
     ]
@@ -2035,6 +2122,13 @@ def transfer(
         conn.execute(
             "update event set agent = %s where artifact_id = %s and agent = %s",
             (to_agent, artifact_id, old),
+        )
+        # An agent's folder holds that agent's pages: the new owner sorts it itself. A folder
+        # of his (owner 'jeremy') may hold anyone's, so the page stays in it.
+        conn.execute(
+            "update artifact set folder_id = null where id = %s and folder_id in"
+            " (select id from folder where owner <> 'jeremy')",
+            (artifact_id,),
         )
     return old
 

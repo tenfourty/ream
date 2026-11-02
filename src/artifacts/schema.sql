@@ -1031,3 +1031,27 @@ alter table decision add column if not exists reopened_at timestamptz;
 -- its history inside it. Null until he submits. `answer` and `answer_note` stay
 -- null for a form; `answered_at`/`answered_by` move with every submit.
 alter table decision add column if not exists answer_record jsonb;
+
+-- FOLDERS (2 Nov 2026; docs/agent/specs/2026-11-02-folders-design.md, slice 1). A page is in at
+-- most one folder, or none. `owner` is an agent name, or the reserved `jeremy` for a folder he
+-- makes; never null, because a unique index over a nullable column treats nulls as distinct.
+-- `artifact.agent` is untouched: the publisher stays on every page, so a folder of his can hold
+-- several agents' pages. A folder is a shelf fact like archive and pin: it makes no version.
+-- SQLite does the same as its schema step 14.
+create table if not exists folder (
+    id          text primary key,
+    owner       text not null,
+    slug        text not null,
+    title       text not null,
+    archived_at timestamptz,
+    created_at  timestamptz not null default now(),
+    unique (owner, slug)
+);
+create table if not exists folder_alias (
+    owner     text not null,
+    old_slug  text not null,
+    folder_id text not null references folder(id) on delete cascade,
+    primary key (owner, old_slug)
+);
+alter table artifact add column if not exists folder_id text references folder(id);
+create index if not exists artifact_folder_idx on artifact (folder_id) where folder_id is not null;

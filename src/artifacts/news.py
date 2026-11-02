@@ -18,6 +18,10 @@ from pathlib import Path
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-02b",
+        "Folders, agent side: artifacts-publish FILE --folder SLUG (and --folder-title NAME) files a page in your own folder when you publish or --update it; the folder is made on first use and the result says 'created new folder' so a typo shows. --no-folder takes it out; --folders lists yours (pages, questions waiting); --list --folder SLUG lists one; the API has folder on POST and PATCH, GET /folders and GET /folders/SLUG/artifacts. His wall does not group them yet.",
+    ),
+    (
         "2026-11-02",
         "Archiving or binning a page now SETS ASIDE its open questions instead of closing them: you get a decision_set_aside event, and unarchiving or restoring brings them back open with the same ids and a decision_reopened event. artifacts-decide wait --page exits 9 when everything it waits on is set aside (re-arm it on decision_reopened); list shows them in a SET ASIDE section; GET /decisions and /questions leave them out unless include_set_aside=true. Only close withdraws a question now.",
     ),

@@ -663,9 +663,31 @@ def _format_of(file_path: str | None) -> dict:
     return {"format": "markdown"} if _is_markdown(file_path) else {}
 
 
-def _publish(file_path: str, title: str | None, key: str) -> dict:
+def _folder_fields(folder: str | None, folder_title: str | None) -> dict:
+    """The request fields for `--folder` / `--no-folder` (`""` takes a page out) and the
+    display name of a new folder."""
+    out: dict = {}
+    if folder is not None:
+        out["folder"] = folder
+        if folder_title:
+            out["folder_title"] = folder_title
+    return out
+
+
+def _publish(
+    file_path: str,
+    title: str | None,
+    key: str,
+    folder: str | None = None,
+    folder_title: str | None = None,
+) -> dict:
     body = _read_page(file_path)
-    payload = {"title": title or "", "body": body, **_format_of(file_path)}
+    payload = {
+        "title": title or "",
+        "body": body,
+        **_format_of(file_path),
+        **_folder_fields(folder, folder_title),
+    }
     return _request("POST", f"{_api_base()}/artifacts", key, payload)
 
 
@@ -692,6 +714,8 @@ def _patch(
     key: str,
     title: str | None = None,
     note: str | None = None,
+    folder: str | None = None,
+    folder_title: str | None = None,
 ) -> dict:
     """PATCH with `expected_revision`, and REFUSE on a conflict rather than
     retrying.
@@ -726,6 +750,7 @@ def _patch(
         payload["title"] = title
     if note:
         payload["note"] = note
+    payload.update(_folder_fields(folder, folder_title))
     try:
         return _request("PATCH", f"{_api_base()}/artifacts/{artifact_id}", key, payload)
     except HTTPFailure as exc:
@@ -749,6 +774,8 @@ def _update(
     *,
     note: str | None = None,
     if_revision: str | None = None,
+    folder: str | None = None,
+    folder_title: str | None = None,
 ) -> dict:
     """A whole-page update. With `if_revision` (the hash or version number the
     caller last published or read), refuse if the page has moved on since: a
@@ -771,7 +798,16 @@ def _update(
                 "  ...see what changed and re-apply your change...\n"
                 f"  artifacts-publish page.html --update {artifact_id}"
             )
-    return _patch(file_path, artifact_id, current["revision"], key, title, note)
+    return _patch(
+        file_path,
+        artifact_id,
+        current["revision"],
+        key,
+        title,
+        note,
+        folder=folder,
+        folder_title=folder_title,
+    )
 
 
 def _versions(artifact_id: str, key: str) -> list[dict]:
@@ -992,9 +1028,17 @@ def _preview(file_path: str | None, out: str, width: int, key: str) -> int:
     return 0
 
 
-def _list(key: str, everyone: bool = False) -> list[dict]:
+def _list(key: str, everyone: bool = False, folder: str | None = None) -> list[dict]:
     # `everyone`: every page this key may read, other agents' open pages
-    # included (homelab-ij8.105), not only its own.
+    # included (homelab-ij8.105), not only its own. `folder`: only the pages in
+    # this key's own folder of that slug.
+    if folder is not None:
+        return _request(
+            "GET",
+            f"{_api_base()}/folders/{quote(folder, safe='')}/artifacts",
+            key,
+            None,
+        )
     scope = "?scope=all" if everyone else ""
     return _request("GET", f"{_api_base()}/artifacts{scope}", key, None)
 
@@ -1271,6 +1315,13 @@ def _print_published(result: dict) -> None:
             f'stored "{result["title"]}", {result["bytes"]} bytes',
             file=sys.stderr,
         )
+    # A folder, said in words on stderr: a first use is the one line that shows a typo.
+    filed = result.get("folder")
+    if filed:
+        if filed.get("created"):
+            print(f"created new folder '{_printable(filed['slug'])}'", file=sys.stderr)
+        else:
+            print(f"in folder '{_printable(filed['slug'])}'", file=sys.stderr)
     if result.get("unchanged"):
         print(
             "unchanged -- the body was identical, so no new version was minted. "
@@ -1401,6 +1452,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--update", metavar="ID")
     parser.add_argument("--list", action="store_true")
+    parser.add_argument(
+        "--folder",
+        metavar="SLUG",
+        help=(
+            "your own folder (lowercase letters, digits, hyphens; up to 40): with a"
+            " FILE it files the page there when it publishes or with --update; the"
+            " folder is made on first use and the result says 'created new folder',"
+            " so a typo shows. With --list it lists that folder's pages."
+        ),
+    )
+    parser.add_argument(
+        "--folder-title",
+        metavar="NAME",
+        help="with --folder: the display name of a NEW folder (set once; default the slug)",
+    )
+    parser.add_argument(
+        "--no-folder",
+        action="store_true",
+        help="with FILE --update ID: take the page out of its folder",
+    )
+    parser.add_argument(
+        "--folders",
+        action="store_true",
+        help="list your folders: slug, pages, questions waiting on him, archived",
+    )
     parser.add_argument(
         "--all",
         action="store_true",
@@ -1587,13 +1663,42 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     key = maybe_rotate(args, key)
 
+    if args.folder is not None and not args.list and not args.file:
+        print(
+            "--folder goes with FILE (publish or --update ID) or with --list;"
+            " to re-file a page without its file, publish it again with --update",
+            file=sys.stderr,
+        )
+        return 2
+    if args.no_folder and args.folder is not None:
+        print("--folder and --no-folder cannot be used together", file=sys.stderr)
+        return 2
     try:
+        if args.folders:
+            rows = _request("GET", f"{_api_base()}/folders", key, None)
+            print(
+                "# slug  title  pages  waiting  [archived]  (tab-separated)",
+                file=sys.stderr,
+            )
+            for item in rows:
+                print(
+                    "\t".join(
+                        (
+                            _printable(item["slug"]),
+                            _printable(item["title"]),
+                            str(item["pages"]),
+                            str(item["open_questions"]),
+                            *(("archived",) if item.get("archived") else ()),
+                        )
+                    )
+                )
+            return 0
         if args.list:
             # The column names, on stderr so stdout stays exactly the rows every
             # caller splits on. Asked for by a seat on 24 Sep 2026 after reading
             # a date column as a version and a session label as an agent.
             # After the fetch, so a failure is the only thing on stderr.
-            rows = _list(key, everyone=args.all)
+            rows = _list(key, everyone=args.all, folder=args.folder)
             print(
                 "# id  title  address  [updated  session  pinned,archived,closed]"
                 "  (tab-separated; the bracketed columns appear only when set)",
@@ -1791,6 +1896,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.title,
                 note=args.note,
                 if_revision=args.if_revision,
+                folder="" if args.no_folder else args.folder,
+                folder_title=args.folder_title,
             )
             _print_published(updated)
             if not updated.get("unchanged"):
@@ -1800,7 +1907,9 @@ def main(argv: list[str] | None = None) -> int:
             # A markdown page may go without --title: its first `# heading`
             # names it, and the service refuses one that has neither.
             warn_if_unlabelled("publish")
-            published = _publish(args.file, args.title, key)
+            published = _publish(
+                args.file, args.title, key, args.folder, args.folder_title
+            )
             _print_published(published)
             _report_render(published["id"], key)
             return 0

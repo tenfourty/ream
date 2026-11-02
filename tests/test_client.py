@@ -1202,3 +1202,78 @@ def test_a_page_goes_over_the_wire_as_utf8_not_escapes(
     import inspect
 
     assert "ensure_ascii=False" in inspect.getsource(client._request)
+
+
+# --- folders (slice 1) ---------------------------------------------------------
+
+
+def test_folder_on_publish_says_created_once_and_names_it_after(
+    live, key_file, tmp_path, capsys
+):
+    path, _ = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>hi</body></html>")
+    args = ["--key-file", str(path), str(page), "--title", "Board", "--folder", "road"]
+
+    assert client.main(args) == 0
+    first = capsys.readouterr()
+    assert "created new folder 'road'" in first.err
+    assert set(json.loads(first.out)) <= {
+        "id",
+        "page_url",
+        "url",
+        "revision",
+        "title",
+        "bytes",
+    }, "stdout stays the whitelist: the folder is said on stderr"
+
+    assert client.main(args) == 0
+    second = capsys.readouterr()
+    assert "created new folder" not in second.err
+    assert "in folder 'road'" in second.err
+
+
+def test_folders_and_list_folder_and_no_folder(live, key_file, tmp_path, capsys):
+    path, _ = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>hi</body></html>")
+    base = ["--key-file", str(path)]
+    client.main([*base, str(page), "--title", "In", "--folder", "road"])
+    inside = json.loads(capsys.readouterr().out)["id"]
+    client.main([*base, str(page), "--title", "Out"])
+    capsys.readouterr()
+
+    assert client.main([*base, "--folders"]) == 0
+    assert capsys.readouterr().out.strip().split("\t") == ["road", "road", "1", "0"]
+
+    assert client.main([*base, "--list", "--folder", "road"]) == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert len(lines) == 1 and lines[0].startswith(inside)
+
+    assert client.main([*base, "--list", "--folder", "nonesuch"]) == 1
+    assert "404" in capsys.readouterr().err
+
+    page.write_text("<!doctype html><body>hello</body></html>")
+    assert client.main([*base, str(page), "--update", inside, "--no-folder"]) == 0
+    capsys.readouterr()
+    client.main([*base, "--list", "--folder", "road"])
+    assert capsys.readouterr().out.strip() == ""
+
+
+def test_a_bad_folder_slug_is_refused_by_the_service_with_a_message(
+    live, key_file, tmp_path, capsys
+):
+    path, _ = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>hi</body></html>")
+    rc = client.main(
+        ["--key-file", str(path), str(page), "--title", "B", "--folder", "Road Map"]
+    )
+    assert rc == 1
+    assert "folder" in capsys.readouterr().err
+
+
+def test_folder_alone_without_a_file_or_list_is_a_usage_error(live, key_file, capsys):
+    path, _ = key_file
+    assert client.main(["--key-file", str(path), "--folder", "road"]) == 2
+    assert "--folder goes with FILE" in capsys.readouterr().err

@@ -577,6 +577,31 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
     # 2 Nov 2026: a form's submitted answers (forms.submit), one merged record
     # per form decision; the submits themselves ride inside it as `history`.
     13: ("alter table decision add column answer_record jsonb",),
+    # 2 Nov 2026: folders (see schema.sql): two tables and `artifact.folder_id`.
+    14: (
+        (
+            "create table folder ("
+            " id text primary key,"
+            " owner text not null,"
+            " slug text not null,"
+            " title text not null,"
+            " archived_at timestamptz,"
+            " created_at timestamptz not null default (artifacts_now()),"
+            " unique (owner, slug))"
+        ),
+        (
+            "create table folder_alias ("
+            " owner text not null,"
+            " old_slug text not null,"
+            " folder_id text not null references folder (id) on delete cascade,"
+            " primary key (owner, old_slug))"
+        ),
+        "alter table artifact add column folder_id text references folder (id)",
+        (
+            "create index artifact_folder_idx on artifact (folder_id)"
+            " where folder_id is not null"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

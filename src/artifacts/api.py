@@ -41,6 +41,7 @@ from artifacts import (
     csp,
     decisions,
     events,
+    folders,
     forms,
     grants,
     hosts,
@@ -150,6 +151,26 @@ class PublishBody(BaseModel):
     # "markdown": the service renders `body` into a page in the house look
     # (markdown.py, runcove-5t3oj.33). The default keeps every existing caller.
     format: Literal["html", "markdown"] = "html"
+    # The calling agent's own folder to file the page in; created on first use, and the result
+    # says so (`folder.created`). `folder_title` names a NEW folder, once.
+    folder: str | None = None
+    folder_title: str | None = None
+
+
+_BAD_SLUG = {
+    "field": "folder",
+    "detail": (
+        "a folder name is lowercase letters, digits and hyphens, 1 to 40 characters, "
+        "starting with a letter or digit"
+    ),
+}
+
+
+def _archived_folder(slug: str) -> dict:
+    return {
+        "field": "folder",
+        "detail": f"folder {slug!r} is archived: unarchive it first",
+    }
 
 
 class RecordBody(BaseModel):
@@ -181,6 +202,9 @@ class PatchBody(BaseModel):
     # nothing, because it makes no version.
     note: str | None = None
     format: Literal["html", "markdown"] = "html"
+    # Omitted leaves the page's folder; a slug files it (created on first use); "" takes it out.
+    folder: str | None = None
+    folder_title: str | None = None
 
 
 class SectionBody(BaseModel):
@@ -772,77 +796,14 @@ def agent_router(
                 )
             title = named
         try:
-            published = store.publish(db, agent, title, body, session=seat_session)
-            # After the write, never inside it: a publish must not wait on a
-            # browser, nor fail because of one. See thumbs.render_in_background.
-            thumbs.render_in_background(db, published.id, published.version, body)
-            return {
-                **published.__dict__,
-                "warnings": _warnings_for(published.id, body),
-            }
-        except store.NotAPage as exc:
-            # 422, not 413: the body is not too much, it is not a page. Named
-            # like every other refusal so a caller can tell them apart without
-            # reading prose (homelab-ij8.28 -- a builder script's "wrote
-            # <path>" log line was published as a status page).
-            raise HTTPException(
-                422,
-                {
-                    "field": exc.field,
-                    "detail": (
-                        "body does not look like an HTML page: no doctype and "
-                        "no HTML tag anywhere in it. If a command's output "
-                        "reached this call instead of your file, that is the "
-                        "usual cause."
-                    ),
-                },
-            ) from exc
-        except store.BodyTooLarge as exc:
-            raise HTTPException(
-                413,
-                {
-                    "field": exc.field,
-                    "size": exc.size,
-                    "detail": f"{exc.field} exceeds the size limit",
-                },
-            ) from exc
-        except store.InvalidText as exc:
-            raise HTTPException(
-                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
-            ) from exc
-        except store.SecretFound as found:
-            raise HTTPException(
-                422, _refused_detail(found.field, found.findings)
-            ) from found
-        except store.ScanFailed as exc:
-            raise HTTPException(
-                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
-            ) from exc
-
-    @router.patch("/artifacts/{artifact_id}")
-    def update(
-        artifact_id: str,
-        payload: PatchBody,
-        agent: str = Depends(caller),
-        seat_session: str | None = Depends(session),
-    ):
-        body = payload.body
-        if payload.format == "markdown":
-            # The title keeps its usual rule on update: omitted keeps the name
-            # the page has. The masthead and <title> follow the markdown.
-            body, _ = _markdown_page(payload.body, payload.title)
-        try:
-            published = store.patch(
+            published = store.publish(
                 db,
                 agent,
-                artifact_id,
+                title,
                 body,
-                payload.expected_revision,
-                title=payload.title,
                 session=seat_session,
-                note=store.page_note(
-                    payload.note, agent=agent, artifact_id=artifact_id
-                ),
+                folder=payload.folder,
+                folder_title=payload.folder_title,
             )
             # After the write, never inside it: a publish must not wait on a
             # browser, nor fail because of one. See thumbs.render_in_background.
@@ -889,6 +850,87 @@ def agent_router(
             raise HTTPException(
                 503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
             ) from exc
+        except folders.BadSlug as exc:
+            raise HTTPException(422, _BAD_SLUG) from exc
+        except folders.FolderArchived as exc:
+            raise HTTPException(409, _archived_folder(exc.slug)) from exc
+
+    @router.patch("/artifacts/{artifact_id}")
+    def update(
+        artifact_id: str,
+        payload: PatchBody,
+        agent: str = Depends(caller),
+        seat_session: str | None = Depends(session),
+    ):
+        body = payload.body
+        if payload.format == "markdown":
+            # The title keeps its usual rule on update: omitted keeps the name
+            # the page has. The masthead and <title> follow the markdown.
+            body, _ = _markdown_page(payload.body, payload.title)
+        try:
+            published = store.patch(
+                db,
+                agent,
+                artifact_id,
+                body,
+                payload.expected_revision,
+                title=payload.title,
+                session=seat_session,
+                note=store.page_note(
+                    payload.note, agent=agent, artifact_id=artifact_id
+                ),
+                folder=payload.folder,
+                folder_title=payload.folder_title,
+            )
+            # After the write, never inside it: a publish must not wait on a
+            # browser, nor fail because of one. See thumbs.render_in_background.
+            thumbs.render_in_background(db, published.id, published.version, body)
+            return {
+                **published.__dict__,
+                "warnings": _warnings_for(published.id, body),
+            }
+        except store.NotAPage as exc:
+            # 422, not 413: the body is not too much, it is not a page. Named
+            # like every other refusal so a caller can tell them apart without
+            # reading prose (homelab-ij8.28 -- a builder script's "wrote
+            # <path>" log line was published as a status page).
+            raise HTTPException(
+                422,
+                {
+                    "field": exc.field,
+                    "detail": (
+                        "body does not look like an HTML page: no doctype and "
+                        "no HTML tag anywhere in it. If a command's output "
+                        "reached this call instead of your file, that is the "
+                        "usual cause."
+                    ),
+                },
+            ) from exc
+        except store.BodyTooLarge as exc:
+            raise HTTPException(
+                413,
+                {
+                    "field": exc.field,
+                    "size": exc.size,
+                    "detail": f"{exc.field} exceeds the size limit",
+                },
+            ) from exc
+        except store.InvalidText as exc:
+            raise HTTPException(
+                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+            ) from exc
+        except store.SecretFound as found:
+            raise HTTPException(
+                422, _refused_detail(found.field, found.findings)
+            ) from found
+        except store.ScanFailed as exc:
+            raise HTTPException(
+                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+            ) from exc
+        except folders.BadSlug as exc:
+            raise HTTPException(422, _BAD_SLUG) from exc
+        except folders.FolderArchived as exc:
+            raise HTTPException(409, _archived_folder(exc.slug)) from exc
         except store.RevisionMismatch as exc:
             raise HTTPException(
                 409, "the artifact moved on; read it and patch again"
@@ -1188,6 +1230,20 @@ def agent_router(
             if scope == "all"
             else store.list_for_agent(db, agent)
         )
+        return [row.__dict__ for row in rows]
+
+    @router.get("/folders")
+    def folder_index(agent: str = Depends(caller)):
+        """This agent's own folders: slug, title, page count, open questions, archived."""
+        return folders.list_for_agent(db, agent)
+
+    @router.get("/folders/{slug}/artifacts")
+    def folder_pages(slug: str, agent: str = Depends(caller)):
+        """The pages in one of this agent's folders, in the row shape of `GET /artifacts`.
+        A folder that is not this agent's answers exactly as one that does not exist."""
+        rows = store.list_in_folder(db, agent, slug)
+        if rows is None:
+            raise HTTPException(404, "no such folder")
         return [row.__dict__ for row in rows]
 
     @router.post("/artifacts/{artifact_id}/transfer")

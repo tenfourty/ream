@@ -62,10 +62,21 @@ def _seed(database: Database) -> None:
             ["k2", "alpha", "b" * 64, T0.replace(microsecond=0), T1, False, "lost"],
         ),
         (
+            "folder",
+            "id, owner, slug, title, archived_at, created_at",
+            ["f1", "alpha", "road-map", "Road map ☃", None, T0],
+        ),
+        (
+            "folder_alias",
+            "owner, old_slug, folder_id",
+            ["alpha", "roadmap", "f1"],
+        ),
+        (
             "artifact",
             (
                 "id, title, agent, visibility, read_token, current_version, created_at,"
-                " updated_at, archived_at, pinned_at, deleted_at, session, agents_can_read"
+                " updated_at, archived_at, pinned_at, deleted_at, session, agents_can_read,"
+                " folder_id"
             ),
             [
                 "a1",
@@ -81,6 +92,7 @@ def _seed(database: Database) -> None:
                 None,
                 "alpha/s1",
                 False,
+                "f1",
             ],
         ),
         (

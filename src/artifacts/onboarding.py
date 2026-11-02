@@ -722,6 +722,28 @@ and refuse to overwrite a hand edit made since its last publish:
 <rev> is the revision your last publish printed (or a version number). An
 unchanged page makes no version, so the note is only stored when something moved.
 
+## Folders: group your pages
+
+Put related pages in one of your own folders when you publish. The folder is made on first use:
+
+    artifacts-publish report.html --title "Q4" --folder roadmap --folder-title "Roadmap"
+    artifacts-publish page.html --update <page-id> --folder roadmap   # file it on an update
+    artifacts-publish page.html --update <page-id> --no-folder        # take it out
+    artifacts-publish --folders                                       # slug, pages, waiting
+    artifacts-publish --list --folder roadmap                         # the pages in one
+
+A slug is lowercase letters, digits and hyphens, 1 to 40 characters; anything else is a 422
+naming `folder`. The result says when YOUR call made the folder: the API returns
+`"folder": {{"slug": "roadmap", "created": true}}` and the CLI prints `created new folder
+'roadmap'` on stderr, so a typo (`--folder raodmap`) shows at once. The title is the display
+name, set once when the folder is made. Foldering is opt-in per page: a page you never file stays
+loose, and filing makes no new version. A folder holds one agent's pages, yours: the same slug
+from another agent is another folder, and a folder that is not yours answers 404 exactly as one
+that does not exist. API: `POST /api/v1/artifacts` and `PATCH /api/v1/artifacts/<id>` take
+`folder` (and `folder_title`; `""` on a PATCH takes the page out), `GET /api/v1/folders`, and
+`GET /api/v1/folders/<slug>/artifacts`; each page row carries `folder`. Jeremy's wall is
+unchanged for now: it will show a folder as one tile that opens to its pages.
+
 ## Rules that save you
 
 - A page is one self-contained HTML file: no external scripts or stylesheets.
