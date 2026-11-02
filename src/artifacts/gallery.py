@@ -36,6 +36,7 @@ from artifacts import (
     decisions,
     email_share,
     events,
+    folders,
     forms_ui,
     frame_pass,
     holds,
@@ -1590,7 +1591,12 @@ def _go(href: str, icon: str, label: str, extra: str = "") -> str:
 
 
 def _tile_menu(
-    artifact_id: str, title: str, pinned: bool, origin: str, archived: bool = False
+    artifact_id: str,
+    title: str,
+    pinned: bool,
+    origin: str,
+    archived: bool = False,
+    folder_id: str | None = None,
 ) -> str:
     """The dots on a tile: the three things worth doing without opening a page.
 
@@ -1624,6 +1630,22 @@ def _tile_menu(
         _go(f"/a/{ident}#rename", "rename", "Rename"),
         _act(f"/a/{ident}/duplicate", "copy", "Duplicate"),
         _go(f"/a/{ident}#link", "link", "Copy link"),
+        # Folders (docs/agent/specs/2026-11-02-folders-design.md 3.3). "Move to folder" opens
+        # a page of choices (`/a/{id}/folder`), never a list drawn into every tile of a wall.
+        # Inside a folder the same menu can take the page straight out.
+        _go(f"/a/{ident}/folder", "all", "Move to folder"),
+        *(
+            [
+                _act(
+                    f"/a/{ident}/folder",
+                    "unarchive",
+                    "Take out of folder",
+                    {"folder": ""},
+                )
+            ]
+            if folder_id
+            else []
+        ),
         # ARCHIVE BELONGS HERE. It was left off on the grounds that the tile
         # menu should be the short one -- which is true, and was the wrong
         # conclusion: archiving is a WALL action. Its whole purpose is to take
@@ -1645,6 +1667,26 @@ def _tile_menu(
     ]
     return (
         '<details class="menu tmenu"><summary aria-label="Actions for '
+        f'{escape(title)}"><span class="dots" aria-hidden="true"></span></summary>'
+        f'<div class="mpanel right">{"".join(rows)}</div></details>'
+    )
+
+
+def _folder_menu(folder_id: str, title: str, archived: bool = False) -> str:
+    """The dots on a folder's tile or row: rename it, archive it, or (in the Archived tab) bring
+    it back. Same shape as a page's menu, and a SIBLING of the tile's link for the same reason.
+    Both entries lead to a page of their own: a name has to be typed, and archiving asks first."""
+    ident = escape(folder_id)
+    rows = (
+        [_act(f"/f/{ident}/archive", "unarchive", "Unarchive", {"archived": "0"})]
+        if archived
+        else [
+            _go(f"/f/{ident}/rename", "rename", "Rename folder"),
+            _go(f"/f/{ident}/archive", "archive", "Archive folder"),
+        ]
+    )
+    return (
+        '<details class="menu tmenu"><summary aria-label="Actions for folder '
         f'{escape(title)}"><span class="dots" aria-hidden="true"></span></summary>'
         f'<div class="mpanel right">{"".join(rows)}</div></details>'
     )
@@ -4460,8 +4502,8 @@ def gallery_router(db: Database) -> APIRouter:
 
     def _folder_tile(item, archived: bool = False) -> str:
         """A folder as one tile: its title, how many pages, the newest page's age, who
-        published them, and how many questions wait. The same card as a page's, with no
-        menu or pin (his controls for a folder are a later slice)."""
+        published them, and how many questions wait. The same card as a page's, with a menu
+        of its own (rename, archive) and no pin."""
         ident = escape(item.id)
         flag = ""
         if item.waiting:
@@ -4479,7 +4521,8 @@ def gallery_router(db: Database) -> APIRouter:
             f'<span class="shot none">{_icon("all")}'
             f'<span class="d">{item.count} {noun}</span></span>{flag}</span>'
             f'<span class="body"><span class="t">{escape(item.title)}</span>'
-            f'<span class="m">{_SEP.join(bits)}</span></span></a></li>'
+            f'<span class="m">{_SEP.join(bits)}</span></span></a>'
+            f"{_folder_menu(item.id, item.title, archived)}</li>"
         )
 
     def _folder_row(item, archived: bool = False) -> str:
@@ -4499,10 +4542,11 @@ def gallery_router(db: Database) -> APIRouter:
             f'<a class="row" href="/f/{escape(item.id)}">'
             f'<span class="rshot none">{_icon("all")}</span>'
             f'<span class="rt">{escape(item.title)}</span>'
-            f'<span class="rmeta">{"".join(right)}</span></a></li>'
+            f'<span class="rmeta">{"".join(right)}</span></a>'
+            f"{_folder_menu(item.id, item.title, archived)}</li>"
         )
 
-    def _row_view(row, archived: bool = False) -> str:
+    def _row_view(row, archived: bool = False, folder_id: str | None = None) -> str:
         """One page as a line, for the list view.
 
         The same facts as a tile in a quarter of the height: the point of the
@@ -4565,7 +4609,7 @@ def gallery_router(db: Database) -> APIRouter:
             f'{badge}<span class="rt">{escape(title)}</span>'
             f'<span class="rmeta">{"".join(right)}</span></a>'
             f"{_pin_button(artifact_id, bool(pinned_at))}"
-            f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin(), archived)}"
+            f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin(), archived, folder_id)}"
             "</li>"
         )
 
@@ -4773,7 +4817,7 @@ def gallery_router(db: Database) -> APIRouter:
                 + "</span>"
                 "</span></a>"
                 f"{pin_button}"
-                f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin(), archived)}"
+                f"{_tile_menu(artifact_id, title, bool(pinned_at), gallery_origin(), archived, folder_id)}"
                 "</li>"
             )
             return "".join(bits)
@@ -4859,7 +4903,7 @@ def gallery_router(db: Database) -> APIRouter:
                 out.append(
                     _folder_row(row, archived)
                     if isinstance(row, _FolderItem)
-                    else _row_view(row, archived)
+                    else _row_view(row, archived, folder_id)
                 )
             if current is not None:
                 out.append("</ul>")
@@ -5181,6 +5225,187 @@ def gallery_router(db: Database) -> APIRouter:
         if not found:
             raise HTTPException(404, "no such artifact")
         return RedirectResponse(f"/a/{artifact_id}", status_code=303)
+
+    # ---- Folder controls (docs/agent/specs/2026-11-02-folders-design.md 3.3). His, so unscoped,
+    # and behind the same same-origin guard as pin and archive. Each has an agent twin on the
+    # /api/v1 folder routes; none of them is reachable with an agent key.
+
+    def _text_refused(exc: Exception) -> HTTPException:
+        if isinstance(exc, store.SecretFound):
+            return HTTPException(422, "that name looks like it contains a secret")
+        return HTTPException(422, "that name is too long")
+
+    @router.get("/a/{artifact_id}/folder", response_class=HTMLResponse)
+    def folder_choices(artifact_id: str) -> HTMLResponse:
+        """Where a page can go: his folders (any agent's page fits), the page's own agent's
+        folders, or a new folder he names here. No script: every choice is a button."""
+        found = store.folders_for_page(db, artifact_id)
+        if found is None:
+            raise HTTPException(404, "no such artifact")
+        agent, current, choices = found
+        with db.connect() as conn:
+            row = conn.execute(
+                "select title from artifact where id = %s", (artifact_id,)
+            ).fetchone()
+        ident = escape(artifact_id)
+        buttons = "".join(
+            f'<form method="post" action="/a/{ident}/folder" class="row">'
+            f'<input type="hidden" name="folder" value="{escape(fid)}">'
+            f'<button class="btn{" primary" if fid == current else ""}" type="submit">'
+            f"{escape(title)}{' (here)' if fid == current else ''}</button>"
+            f'<span class="who">{"yours" if mine else escape(agent) + "&#39;s"}</span></form>'
+            for fid, title, mine in choices
+        )
+        out = (
+            f'<form method="post" action="/a/{ident}/folder" class="row">'
+            '<input type="hidden" name="folder" value="">'
+            '<button class="btn" type="submit">Take out of folder</button></form>'
+            if current
+            else ""
+        )
+        body = (
+            _CONNECT_CSS
+            + '<div class="cx">'
+            + f"<section><h2>Move {escape(row[0])} to a folder</h2>"
+            + (buttons or "<p>There is no folder to move it to yet.</p>")
+            + out
+            + "</section>"
+            + "<section><h2>New folder</h2>"
+            f'<form method="post" action="/a/{ident}/folder" class="row">'
+            '<input name="new_title" aria-label="Folder name" autocomplete="off"'
+            ' placeholder="Folder name" required>'
+            '<button class="btn primary" type="submit">Make it and move the page</button>'
+            "</form></section>"
+            f'<p><a class="btn" href="/a/{ident}">Cancel</a></p></div>'
+        )
+        return HTMLResponse(
+            _shell("Move to folder", body),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.post("/a/{artifact_id}/folder")
+    def folder_page(
+        artifact_id: str,
+        request: Request,
+        folder: str = Form(""),
+        new_title: str = Form(""),
+    ):
+        """File a page in a folder, make a new folder for it, or take it out (`folder` empty).
+        Lands on the wall: the answer to "did that work?" is the page gone behind its folder."""
+        _same_origin_write(request)
+        name = new_title.strip()
+        if new_title and not name:
+            raise HTTPException(422, "a folder needs a name")
+        try:
+            done = store.file_page_for_reader(
+                db, artifact_id, None if name else (folder or None), name or None
+            )
+        except (store.BodyTooLarge, store.InvalidText, store.SecretFound) as exc:
+            raise _text_refused(exc) from None
+        except store.NotFound:
+            raise HTTPException(404, "no such folder for that page") from None
+        except folders.FolderArchived:
+            raise HTTPException(
+                409, "that folder is archived: unarchive it first"
+            ) from None
+        if not done:
+            raise HTTPException(404, "no such artifact")
+        return RedirectResponse("/", status_code=303)
+
+    def _folder_or_404(folder_id: str):
+        row = store.folder_by_id(db, folder_id)
+        if row is None:
+            raise HTTPException(404, "no such folder")
+        return row
+
+    @router.get("/f/{folder_id}/rename", response_class=HTMLResponse)
+    def folder_rename_form(folder_id: str) -> HTMLResponse:
+        _fid, _owner, _slug, title, _archived = _folder_or_404(folder_id)
+        ident = escape(folder_id)
+        body = (
+            _CONNECT_CSS + '<div class="cx"><section><h2>Rename folder</h2>'
+            f'<form method="post" action="/f/{ident}/rename" class="row">'
+            f'<input name="title" value="{escape(title)}" aria-label="Folder name"'
+            ' autofocus autocomplete="off" required>'
+            '<button class="btn primary" type="submit">Save</button>'
+            f'<a class="btn" href="/f/{ident}">Cancel</a></form>'
+            "</section></div>"
+        )
+        return HTMLResponse(
+            _shell("Rename folder", body),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.post("/f/{folder_id}/rename")
+    def folder_rename(folder_id: str, request: Request, title: str = Form(...)):
+        """Rename a folder's title. The slug, which agents type, is left alone."""
+        _same_origin_write(request)
+        _fid, owner, slug, _title, _archived = _folder_or_404(folder_id)
+        cleaned = title.strip()
+        if not cleaned:
+            raise HTTPException(422, "a folder needs a name")
+        try:
+            store.rename_folder(db, owner, slug, None, cleaned)
+        except (store.BodyTooLarge, store.InvalidText, store.SecretFound) as exc:
+            raise _text_refused(exc) from None
+        return RedirectResponse(f"/f/{folder_id}", status_code=303)
+
+    @router.get("/f/{folder_id}/archive", response_class=HTMLResponse)
+    def folder_archive_sheet(folder_id: str):
+        """Archive folder asks first: the page count and the questions it will set aside, from
+        the same preview the agent API uses. Nothing changes until the Archive button."""
+        _fid, owner, slug, title, archived = _folder_or_404(folder_id)
+        ident = escape(folder_id)
+        if archived is not None:
+            return RedirectResponse(f"/f/{folder_id}", status_code=303)
+        preview = store.set_folder_archived(
+            db, owner, slug, True, confirm=False, actor=folders.HIS
+        )
+        if preview is None:
+            raise HTTPException(404, "no such folder")
+        pages = preview["would_archive"]["pages"]
+        asked = preview["would_archive"]["questions_set_aside"]
+        text = f"{pages} {'page goes' if pages == 1 else 'pages go'} to Archived. "
+        if asked:
+            text += (
+                f"{asked} {'question' if asked == 1 else 'questions'} waiting on you will "
+                "be set aside, and the agents that asked are told; they come back when "
+                "you unarchive."
+            )
+        else:
+            text += "No questions are waiting on you. Unarchive brings the pages back."
+        body = (
+            _CONNECT_CSS + '<div class="cx"><section class="archive-sheet">'
+            f"<h2>Archive &lsquo;{escape(title)}&rsquo;?</h2><p>{escape(text)}</p>"
+            f'<form method="post" action="/f/{ident}/archive" class="row">'
+            '<input type="hidden" name="archived" value="1">'
+            '<input type="hidden" name="confirm" value="1">'
+            '<button class="btn primary" type="submit">Archive</button>'
+            f'<a class="btn" href="/f/{ident}">Cancel</a></form>'
+            "</section></div>"
+        )
+        return HTMLResponse(
+            _shell("Archive folder", body),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.post("/f/{folder_id}/archive")
+    def folder_archive(
+        folder_id: str,
+        request: Request,
+        archived: str = Form("1"),
+        confirm: str = Form(""),
+    ):
+        """Archive a folder and its pages (questions set aside, agents told), or unarchive it.
+        Archiving without `confirm` changes nothing and sends him to the sheet."""
+        _same_origin_write(request)
+        _fid, owner, slug, _title, _archived = _folder_or_404(folder_id)
+        if archived == "1" and confirm != "1":
+            return RedirectResponse(f"/f/{folder_id}/archive", status_code=303)
+        store.set_folder_archived(
+            db, owner, slug, archived == "1", confirm=True, actor=folders.HIS
+        )
+        return RedirectResponse("/", status_code=303)
 
     def conn_current(artifact_id: str):
         with db.connect() as conn:

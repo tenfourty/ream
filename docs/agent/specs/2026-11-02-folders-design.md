@@ -122,6 +122,12 @@ else is a `422` naming `folder`. `title` is the display name, defaulting to the 
   'roadmap'? 12 pages go to Archived. 2 questions waiting on you will be set aside, and the agents
   that asked are told; they come back when you unarchive." With Archive and Cancel. Zero open
   questions still shows the page count.
+- **As built (controls).** A folder he makes is owned by the reserved `jeremy`; "Move to folder"
+  (`/a/{id}/folder`) offers his folders plus the page's own agent's, and "New folder" makes one of
+  his. Rename changes the title only (the slug is what agents type). Archive goes through
+  `/f/{id}/archive`, a page that shows the same `would_archive` preview the API returns and
+  changes nothing until its Archive button. Agent keys cannot name `jeremy`, so no agent route
+  reaches his folders; a slug he uses that an agent also publishes with is the agent's own folder.
 - An archived folder is one tile in the Archived tab (8.5), with its pages inside it; its
   "Unarchive" restores it (3.4).
 - A folder with no pages (all moved out, none yet in) is not drawn; it exists until archived.

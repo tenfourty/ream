@@ -1948,6 +1948,71 @@ def set_archived(
         return done.rowcount > 0
 
 
+def folder_by_id(db: Database, folder_id: str):
+    """`(id, owner, slug, title, archived_at)` of a folder, found by its opaque id (the wall
+    names folders that way), or None."""
+    with db.connect() as conn:
+        return folders.get(conn, folder_id)
+
+
+def folders_for_page(db: Database, artifact_id: str):
+    """For the wall's "Move to folder": `(agent, current folder id, choices)` for a page, or
+    None for no such page. `choices` is `[(id, title, mine)]`: his own folders (any agent's page
+    may go in) and the page's own agent's folders, live ones only, his first."""
+    with db.connect() as conn:
+        page = conn.execute(
+            "select agent, folder_id from artifact where id = %s and deleted_at is null",
+            (artifact_id,),
+        ).fetchone()
+        if page is None:
+            return None
+        rows = conn.execute(
+            "select id, title, owner from folder where archived_at is null"
+            " and owner in (%s, %s) order by (owner = %s) desc, lower(title), slug",
+            (folders.HIS, page[0], folders.HIS),
+        ).fetchall()
+    return page[0], page[1], [(r[0], r[1], r[2] == folders.HIS) for r in rows]
+
+
+def file_page_for_reader(
+    db: Database,
+    artifact_id: str,
+    folder_id: str | None,
+    new_title: str | None = None,
+) -> bool:
+    """He files a page, unscoped (his wall, behind the same-origin guard). `folder_id` None
+    takes it out; `new_title` (with no id) makes a NEW folder of his, named so, and files it
+    there. A folder must be his or the page's own agent's, else NotFound (agents' folders stay
+    one agent each); an archived one is `folders.FolderArchived`. False for no such page.
+    Filing is a shelf fact: no version, and the archived-via-folder marker is cleared."""
+    if new_title is not None:
+        _guard(new_title, MAX_TITLE_BYTES, "title", agent=folders.HIS, artifact_id=None)
+    with db.connect() as conn, conn.transaction():
+        page = conn.execute(
+            "select agent from artifact where id = %s and deleted_at is null",
+            (artifact_id,),
+        ).fetchone()
+        if page is None:
+            return False
+        if new_title is not None:
+            target, _slug = folders.create_his(conn, new_title)
+        elif folder_id is None:
+            target = None
+        else:
+            row = folders.get(conn, folder_id)
+            if row is None or row[1] not in (folders.HIS, page[0]):
+                raise NotFound()
+            if row[4] is not None:
+                raise folders.FolderArchived(row[2])
+            target = row[0]
+        conn.execute(
+            "update artifact set folder_id = %s, archived_via_folder = null"
+            " where id = %s",
+            (target, artifact_id),
+        )
+    return True
+
+
 def rename_folder(
     db: Database, agent: str, slug: str, new_slug: str | None, title: str | None
 ) -> dict | None:
@@ -1959,7 +2024,13 @@ def rename_folder(
 
 
 def set_folder_archived(
-    db: Database, agent: str, slug: str, archived: bool, *, confirm: bool
+    db: Database,
+    agent: str,
+    slug: str,
+    archived: bool,
+    *,
+    confirm: bool,
+    actor: str | None = None,
 ) -> dict | None:
     """Archive or unarchive one of the agent's own folders (an old slug resolves), in one
     transaction (docs/agent/specs/2026-11-02-folders-design.md 3.4). None for no such folder.
@@ -1970,7 +2041,15 @@ def set_folder_archived(
     asking agents told) and marked `archived_via_folder`; pages already archived on their own
     are left as they were, unmarked. Unarchiving restores only the pages carrying the marker and
     brings their questions back; a page that is binned is restored as a page restore does it
-    (its questions stay set aside until the bin is emptied the other way)."""
+    (its questions stay set aside until the bin is emptied the other way).
+
+    `agent` is the folder's OWNER. For his own folder (`folders.HIS`) the pages are any
+    agent's, so the page filter drops the publisher clause; the gallery passes `actor="jeremy"`
+    so the set-aside and the told agents name who archived it."""
+    actor = actor or agent
+    unscoped = agent == folders.HIS
+    who = "" if unscoped else " and agent = %s"
+    who_params: tuple = () if unscoped else (agent,)
     with db.connect() as conn, conn.transaction():
         found = folders.find(conn, agent, slug)
         if found is None:
@@ -1978,10 +2057,10 @@ def set_folder_archived(
         folder_id, canonical = found[0], found[1]
         if archived:
             page_rows = conn.execute(
-                "select id from artifact where folder_id = %s and agent = %s"  # noqa: S608 -- clause from the db layer, no caller input
-                " and deleted_at is null and archived_at is null order by id"
+                "select id from artifact where folder_id = %s"  # noqa: S608 -- clause from the db layer, no caller input
+                f"{who} and deleted_at is null and archived_at is null order by id"
                 + (conn.for_update() if confirm else ""),
-                (folder_id, agent),
+                (folder_id, *who_params),
             ).fetchall()
             pages = [r[0] for r in page_rows]
             if not confirm:
@@ -2014,14 +2093,14 @@ def set_folder_archived(
                 # stale marker.
                 _lock_open_decisions(conn, pid)
                 changed = conn.execute(
-                    "update artifact set archived_at = %s, archived_via_folder = %s"
-                    " where id = %s and folder_id = %s and agent = %s"
+                    "update artifact set archived_at = %s, archived_via_folder = %s"  # noqa: S608 -- `who` is a fixed clause
+                    f" where id = %s and folder_id = %s{who}"
                     " and deleted_at is null and archived_at is null",
-                    (now, folder_id, pid, folder_id, agent),
+                    (now, folder_id, pid, folder_id, *who_params),
                 ).rowcount
                 if changed:
                     done_pages += 1
-                    aside += _set_aside_open_questions(conn, pid, "archived", agent)
+                    aside += _set_aside_open_questions(conn, pid, "archived", actor)
             return {
                 "slug": canonical,
                 "archived": True,
@@ -2048,7 +2127,7 @@ def set_folder_archived(
                 restored_pages += 1
                 if deleted_at is None:
                     reopened += _reopen_set_aside_questions(
-                        conn, pid, "unarchived", agent
+                        conn, pid, "unarchived", actor
                     )
         return {
             "slug": canonical,

@@ -17,6 +17,10 @@ from artifacts import ids
 # Validated like agent names, shorter: a slug is typed on a command line every publish.
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
+# The owner of a folder HE makes (`keys.RESERVED_AGENT_NAMES`: no agent can be called this, so
+# no agent key reaches these folders). It holds any agent's pages, each keeping its publisher.
+HIS = "jeremy"
+
 
 class BadSlug(Exception):
     """A folder slug that is not lowercase letters, digits and hyphens, 1-40 long."""
@@ -205,3 +209,38 @@ def page_ids(db, agent: str, slug: str) -> list[str] | None:
                 (row[0], agent),
             ).fetchall()
         ]
+
+
+def slug_from_title(title: str) -> str:
+    """A valid slug for a name he typed: lowercase letters and digits, runs of anything else
+    one hyphen, at most 40 characters; "folder" when nothing usable is left."""
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:40].strip("-")
+    return slug or "folder"
+
+
+def create_his(conn, title: str) -> tuple[str, str]:
+    """`(folder id, slug)` of a NEW folder of his, named `title`. The slug comes from the title
+    and takes a numeric suffix when he already has one by that name, so naming a second
+    folder "Roadmap" makes another rather than silently reusing the first."""
+    base = slug_from_title(title)
+    n = 1
+    while True:
+        suffix = "" if n == 1 else f"-{n}"
+        slug = base[: 40 - len(suffix)].rstrip("-") + suffix
+        if find(conn, HIS, slug) is None:
+            break
+        n += 1
+    folder_id = ids.new_id()
+    conn.execute(
+        "insert into folder (id, owner, slug, title, created_at) values (%s, %s, %s, %s, %s)",
+        (folder_id, HIS, slug, title, datetime.now(UTC)),
+    )
+    return folder_id, slug
+
+
+def get(conn, folder_id: str):
+    """`(id, owner, slug, title, archived_at)` of a folder by its opaque id, or None."""
+    return conn.execute(
+        "select id, owner, slug, title, archived_at from folder where id = %s",
+        (folder_id,),
+    ).fetchone()
