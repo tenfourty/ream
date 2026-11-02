@@ -99,10 +99,14 @@ else is a `422` naming `folder`. `title` is the display name, defaulting to the 
 
 ### 3.3 The wall (Jeremy)
 
-- A folder is one tile in the grid and one row in the list, built next to the page tiles: its
-  title, "12 pages", the newest page's age, its publishers' names, and an open-question count
-  when there is one. It sorts by its newest page, and by "needs him" like a page does: a folder
-  holding any open question sorts among the pages that wait.
+- A folder is one compact card in the grid and one row in the list: its title, "12 pages", the
+  newest page's age, its publishers' names, and an open-question count when there is one.
+  **Folders come first, in their own row above the pages, sorted by name** (Jeremy, 2 Nov 2026,
+  d_01M6F64DXRZ7YFFFJNDYFKQQVJ, option a, after "the order is odd and it's hard to see the
+  folders amongst all the files"). The first version mixed them in by newest page and "needs
+  him"; that is what he found odd. A folder holding a question keeps its "N waiting" badge and
+  gains a left rule. "Folders" and "Pages" labels show only when both are there. Prior art:
+  `2026-11-02-folder-row-prior-art.md`.
 - It opens to its pages at `/f/{folder id}`: the same tile and list views, same filters. Inside
   a folder, pages sort **newest first** (by last publish), with pinned pages and pages that wait
   on him above the rest as on the wall (promised to Bosun, whose daily digests fill one folder).
@@ -251,6 +255,8 @@ wall in the first version.
 (a) Sits among the tiles in newest-first order, no special treatment. (b) Drops to the bottom
 once none of its pages has changed for thirty days.
 *Not asked: the design takes (a), the wall's existing order; (b) is a later change if the wall gets crowded.*
+*Superseded 2 Nov 2026: folders now sit in their own row by name (3.3), so a quiet folder neither
+moves nor drops.*
 
 8.5 **Where an archived folder goes.**
 (a) The Archived tab, as one tile; open-question pages stay on the wall. (b) Gone from the wall

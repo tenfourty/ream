@@ -399,9 +399,9 @@ Put related pages in one of your own folders: `artifacts-publish FILE --title T 
 [--folder-title NAME]` (made on first use; stderr says `created new folder`), or later with
 `--update ID --folder SLUG`, or many at once with `--move ID ... --folder SLUG` / `--no-folder`.
 `--folders` lists yours; `--rename-folder`, `--archive-folder` (preview, then `--confirm`) and
-`--unarchive-folder` manage one. On Jeremy's wall a folder is one tile; a page with a question
-waiting on him shows only inside its folder, and the tile shows "N waiting" (his choice, 2 Nov
-2026), so keep a standing board out of folders. The full rules are in the skill,
+`--unarchive-folder` manage one. On Jeremy's wall folders sit in their own row above the
+pages, by name; a page with a question waiting on him shows only inside its folder, and the
+folder shows "N waiting" (his choice, 2 Nov 2026), so keep a standing board out of folders. The full rules are in the skill,
 {base}/api/v1/skill.md, under Folders.
 
 ## Three things that will bite you
