@@ -1433,9 +1433,9 @@ def _set_aside_open_questions(conn, artifact_id: str, what: str, actor: str) -> 
     """
     now = datetime.now(UTC)
     rows = conn.execute(
-        "select id, question, session, kind from decision"
+        "select id, question, session, kind from decision"  # noqa: S608 -- clause from the db layer, no caller input
         " where artifact_id = %s and answer is null and closed_at is null"
-        " order by created_at, id",
+        " order by created_at, id" + conn.for_update(),
         (artifact_id,),
     ).fetchall()
     if not rows:

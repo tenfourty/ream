@@ -297,18 +297,14 @@ def test_scoping_still_uses_the_agent_from_the_key(client, key, db):
     assert got.status_code == 404
 
 
-# --- a withdrawn question stays readable on the polling route ----------------
+# --- a set-aside question stays readable on the polling route ----------------
 
 
-def test_the_polling_route_can_see_a_withdrawn_question(client, key, db):
-    """homelab-ij8.44's second report: decisions.list_for_agent excluded closed
-    rows with NO escape hatch, so the cross-artifact poll -- the surface an
-    agent actually uses -- could never show one.
-
-    The reason written in its docstring was "the agent withdrew it, so there is
-    nothing left to learn". That stopped being true on 21 Sep, when the SERVICE
-    started withdrawing questions whose page was archived or deleted.
-    """
+def test_the_polling_route_can_see_a_set_aside_question(client, key, db):
+    """homelab-ij8.44's second report: the cross-artifact poll -- the surface an
+    agent actually uses -- must be able to show a question whose page is away.
+    Since 2 Nov 2026 it is SET ASIDE (open, not closed): out of the default poll,
+    in with include_set_aside=true."""
     page = client.post(
         "/api/v1/artifacts",
         json={"title": "Mine", "body": PAGE},
@@ -327,18 +323,18 @@ def test_the_polling_route_can_see_a_withdrawn_question(client, key, db):
 
     plain = client.get("/api/v1/decisions", headers=_h(key)).json()
     assert asked.id not in [d["id"] for d in plain], (
-        "a withdrawn question is not waiting on anybody and must not be in the "
+        "a set-aside question is not waiting on anybody and must not be in the "
         "default poll"
     )
 
-    withdrawn = client.get(
-        "/api/v1/decisions?include_closed=true&include_answered=true",
+    aside = client.get(
+        "/api/v1/decisions?include_set_aside=true&include_answered=true",
         headers=_h(key),
     ).json()
-    assert asked.id in [d["id"] for d in withdrawn]
-    row = next(d for d in withdrawn if d["id"] == asked.id)
-    assert row["closed_at"] is not None
-    assert row["answer"] is None, "withdrawn, not answered -- different events"
+    row = next(d for d in aside if d["id"] == asked.id)
+    assert row["closed_at"] is None
+    assert row["set_aside"] is True
+    assert row["answer"] is None, "set aside, not answered"
 
 
 # --- the listing says WHICH SESSION, because a shared key cannot -------------
