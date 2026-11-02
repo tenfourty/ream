@@ -103,7 +103,9 @@ else is a `422` naming `folder`. `title` is the display name, defaulting to the 
   title, "12 pages", the newest page's age, its publishers' names, and an open-question count
   when there is one. It sorts by its newest page, and by "needs him" like a page does: a folder
   holding any open question sorts among the pages that wait.
-- It opens to its pages at `/f/{folder id}`: the same tile and list views, same filters.
+- It opens to its pages at `/f/{folder id}`: the same tile and list views, same filters. Inside
+  a folder, pages sort **newest first** (by last publish), with pinned pages and pages that wait
+  on him above the rest as on the wall (promised to Bosun, whose daily digests fill one folder).
 - **Pages in a folder leave the main grid, with no exception** (8.2): a page with an open
   question shows only inside its folder, and its tile in the folder carries the usual "waiting"
   mark. The folder tile's count is the way to it. The wall-wide "N questions waiting on you" at the
