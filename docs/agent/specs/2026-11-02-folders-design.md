@@ -5,7 +5,8 @@ Tracker item runcove-5t3oj.61. Shape settled by Jeremy on 2 Nov 2026 (decision
 can move pages between folders; a folder shows as one tile on his wall that opens to its pages.
 Shaped by the offices' answers (`docs/agent/feedback/2026-11-02-folders.md`, eight publishing
 offices: quarterdeck, ch, runcove-pmo, homelab, gg-ops, jeremys-mac, warpgate, retrobrew). Section
-8 holds what is still his to choose.
+8 records his answers of 2 Nov 2026; two of them (8.2, and the archive rule in 3.4) go against what
+the offices asked for.
 
 ## 1. Problem
 
@@ -19,7 +20,8 @@ tidying tool, and it is the wrong one: it hides a page, it does not group it.
 Goals:
 - An agent names a folder when it publishes (`--folder roadmap`); the folder is created on first
   use and the publish result **says so** when it did (all eight offices: a typo must be visible).
-- He sees one tile per folder and opens it to its pages; he moves pages in and out.
+- He sees one tile per folder and opens it to its pages; he moves pages in and out, several at
+  once by a multi-select on the wall.
 - One level. A page is in at most one folder, or none: foldering is **opt-in per page** and the
   standing boards stay loose (quarterdeck, pmo, homelab, warpgate).
 - API twin for every folder action, scoped to the calling key's own agent (AGENTS.md).
@@ -30,10 +32,16 @@ Non-goals (v1): nesting (all eight said no); folder names derived by the service
 fixed); agents publishing into another agent's folder; folder sharing or permissions.
 
 Anti-goals:
-- **A folder hiding a question.** A page with an open question to him is never out of sight
-  because it is in a folder, nor because the folder is archived (all eight; pmo and ch strongest).
-- **A folder archive that destroys anything.** Archiving a page closes its open questions
-  (`store._shelve_open_questions`); archiving a folder must not reach the pages (3.4).
+- **A folder hiding a question.** A question open to him is never invisible because its page is
+  in a folder: the folder tile carries the count ("2 waiting") and the wall-wide "questions
+  waiting on you" total still includes foldered pages. The offices (all eight; pmo and ch
+  strongest) asked for the page to also stay loose on the wall; he chose the count alone (8.2),
+  so the page shows only inside its folder.
+- **A folder archive that closes questions unseen.** Archiving a folder archives every page in it,
+  and archiving a page closes its open questions and tells the asking agent
+  (`store._shelve_open_questions`). So he is **warned first**, with the number of pages and of
+  questions that will close, and an agent confirms in a second call (3.2, 3.4). Jeremy's ruling of
+  2 Nov 2026, extending his 21 Sep rule that an archived page's questions are dropped.
 - **A rename that breaks an address.** The old slug keeps working, as agent renames do.
 
 ## 3. Shape
@@ -73,8 +81,11 @@ else is a `422` naming `folder`. `title` is the display name, defaulting to the 
 - **List:** `GET /folders` (slug, title, page count, open questions, archived) and
   `GET /folders/{slug}/artifacts` (the same row shape as `GET /artifacts`, which also gains
   `folder`). CLI: `--folders`, `--list --folder x`.
-- **Archive:** `POST /folders/{slug}/archive` `{"archived": bool}`, required, no default, as the
-  page route is.
+- **Archive:** `POST /folders/{slug}/archive` `{"archived": bool, "confirm"?: bool}`; `archived`
+  is required and has no default, as on the page route. Archiving is **two steps**: without
+  `confirm: true` the call changes nothing and returns `{"would_archive": {"pages": 12,
+  "open_questions": 2}}`; with it, the folder and its pages are archived as 3.4 says, and the
+  result reports the same two numbers as done. Unarchiving needs no confirm.
 - **Rename:** `POST /folders/{slug}/rename` `{"slug"?, "title"?}`. The old slug resolves through
   `folder_alias` for every folder route and for `--folder` on publish. Renaming to a slug that is
   in use is a `409`.
@@ -89,25 +100,56 @@ else is a `422` naming `folder`. `title` is the display name, defaulting to the 
   when there is one. It sorts by its newest page, and by "needs him" like a page does: a folder
   holding any open question sorts among the pages that wait.
 - It opens to its pages at `/f/{folder id}`: the same tile and list views, same filters.
-- **Pages in a folder leave the main grid** except a page with an open question, which stays on
-  the wall as a loose tile **and** shows in its folder (8.2).
+- **Pages in a folder leave the main grid, with no exception** (8.2): a page with an open
+  question shows only inside its folder, and its tile in the folder carries the usual "waiting"
+  mark. The folder tile's count is the way to it. The wall-wide "N questions waiting on you" at the
+  top counts **before** grouping, so it includes foldered pages, and its link (`?filter=waiting`)
+  lists those pages flat, folders or not (my call: that link is "show me them").
+- **Multi-select** (8.3, new UI, no equivalent on the wall today): a select mode that ticks tiles
+  or rows, then "Move to folder" (an existing one, or New folder) or "Take out of folder" for the
+  whole batch in one request. Its agent twin is the bulk move in 3.2.
 - Controls, each with its agent twin from 3.2: a "Move to folder" entry in a page's tile menu (a
   list of folders plus "New folder"), "Rename folder" and "Archive folder" on the folder tile's
   menu, and a "Take out of folder" on a page inside one. His folders are unscoped (he may move any
   page on his wall), proved by the same-origin form guard like pin and archive.
-- A folder that has been archived leaves the wall and joins the Archived tab as one tile.
-  Its pages are unchanged; any with open questions stay on the wall.
+- **Archive folder asks first.** A gallery-drawn sheet, not a browser `confirm()`: "Archive
+  'roadmap'? 12 pages go to Archived. 2 questions waiting on you will be closed, and the agents
+  that asked are told; closed questions do not come back." With Archive and Cancel. Zero open
+  questions still shows the page count.
+- An archived folder is one tile in the Archived tab (8.5), with its pages inside it; its
+  "Unarchive" restores it (3.4).
 - A folder with no pages (all moved out, none yet in) is not drawn; it exists until archived.
 
-### 3.4 Archive, delete and the open-question rule
+### 3.4 Archive, unarchive, delete
 
-Archiving a folder sets only `folder.archived_at`. It never writes `artifact.archived_at`, so no
-question is shelved. A page archived on its own while in a folder keeps its `folder_id` and shows
-in the Archived tab under its folder tile only if that tile is itself archived; otherwise it is
-just an archived page. Binning a page leaves `folder_id` set, so restoring it puts it back.
+> **Pending his answer (2 Nov 2026):** whether archiving should close questions at all. The
+> alternative on the table is to **set them aside** instead: the asking agent is told, every
+> waiting list leaves them out while the page is archived, and unarchiving brings them back open.
+> That would change single-page archive as well as folder archive, and would drop the "closed
+> questions never come back" lines below and in 2, 3.3 and 7. Not designed here; the text below
+> is the current rule (close).
+
+**Archiving a folder** (Jeremy, 2 Nov 2026) sets `folder.archived_at` and archives every live page
+in it, exactly as a single-page archive does: each page's `archived_at` is set and
+`_shelve_open_questions` closes its open questions and tells the asking agent. Closed questions
+never come back. It runs in one transaction. Pages already archived on their own are left as they
+were. A new column `artifact.archived_via_folder text null` records the folder id on exactly the
+pages this archive archived.
+
+**Unarchiving a folder** clears `folder.archived_at` and unarchives only the pages with
+`archived_via_folder = that folder`, clearing the marker. A page that was archived on its own
+**before** the folder was archived stays archived (my call: he archived it on purpose, the folder
+did not). Unarchiving or archiving a page by itself, or moving it out of the folder, clears its
+marker, so a later folder unarchive never touches it. The questions closed at archive stay closed;
+the asking agent must ask again.
+
+An archived folder takes no new pages: a publish or move naming it is a `409` that says it is
+archived and to unarchive it first, rather than silently reviving or hiding the page.
+Binning a page leaves `folder_id` set, so restoring it puts it back.
+
 Open questions are found as the wall already finds them: `decision.answer is null and
-closed_at is null` per page, the `waiting` subquery in `gallery._wall`; the folder's count is the
-sum over its live pages.
+closed_at is null` per page (the `waiting` subquery in `gallery._wall`); a folder's count is the
+sum over its live pages, and the same query gives the "would close" number for the warning.
 
 ## 4. What is reused
 
@@ -127,10 +169,12 @@ homelab `lab-artifacts` skill each get a short paragraph. Docs round per slice.
 
 1. Schema on both databases, store writes, publish/patch `folder`, `GET /folders`, list a
    folder's pages. Pages are foldered; the wall is unchanged. (Lets pmo sort at once.)
-2. Bulk move, archive and rename routes, aliases; `rename.py` and `transfer` updated (below).
-3. Gallery: folder tile, `/f/{id}`, the open-question rule on the wall, his move/rename/archive
-   controls. Live proof on his phone.
-4. Docs, `agents.txt`, skills.
+2. Bulk move, rename routes, aliases; archive with its two-step confirm and unarchive
+   (`archived_via_folder`); `rename.py` and `transfer` updated (7).
+3. Gallery: folder tile with the waiting count, `/f/{id}`, the wall's grouping and total, his
+   move/rename controls and the archive warning sheet. Live proof on his phone.
+4. Gallery: the multi-select on the wall (its own slice, new UI, and a second live proof).
+5. Docs, `agents.txt`, skills.
 
 ## 7. Risks
 
@@ -143,12 +187,27 @@ homelab `lab-artifacts` skill each get a short paragraph. Docs round per slice.
   their own query, or a big folder's count is capped.
 - **A typo makes a visible new folder** (by design). A typo'd folder can be fixed with a move
   and an archive; no merge in v1.
+- **Closing questions in bulk.** Archiving a folder can close many questions at once and tell
+  several agents. The warning and the agent's two-step confirm are the guard; an agent that
+  confirms blind is the agent's own act, recorded as an event on each page like a single archive.
+- **A question he never sees.** With 8.2 (c) a waiting page is only inside its folder. The tile
+  count, the wall-wide total and the Waiting link are what keep it visible; a folder tile that
+  failed to show its count would hide a question, so it needs a test of its own.
+- **`archived_via_folder` drift.** Every path that writes a page's `archived_at` (archive, bin,
+  restore, transfer, duplicate) must clear or ignore it; a missed one lets a folder unarchive
+  revive a page he archived by hand.
 - **One level means no folder tree in the API**, so a future nesting would need a `parent_id`.
   The column can be added without a rewrite.
 
 ## 8. Decisions for Jeremy
 
-These are the choices you will see on the wall. The first two are the ones the offices left open.
+**Answered 2 Nov 2026: (a) on 8.1, (c) on 8.2, (b) on 8.3, (a) on 8.5; 8.4 not asked.** One line
+each: a folder he makes holds any agent's pages, mixed, each keeping its publisher's name (agents'
+own folders stay one agent each); a page with an open question shows only in its folder, the tile
+carries the count, and the wall-wide waiting total still includes it (the offices asked otherwise);
+the multi-select ships in the first version; an archived folder is one tile in the Archived tab.
+The same day he ruled that archiving a folder warns first and then archives its pages, closing
+their questions; sections 2, 3.2, 3.4 and 7 carry it, extending his 21 Sep rule.
 
 8.1 **A folder you make yourself: whose pages can it hold?**
 (a) Pages from any agent, and it can be mixed: each page keeps its publisher's name on the tile.
@@ -173,3 +232,4 @@ once none of its pages has changed for thirty days.
 8.5 **Where an archived folder goes.**
 (a) The Archived tab, as one tile; open-question pages stay on the wall. (b) Gone from the wall
 and shown only when you open the Archived tab and search.
+*As asked, before the archive rule: (a)'s "open-question pages stay on the wall" no longer applies, because archiving a folder now closes those questions (3.4).*
