@@ -910,3 +910,21 @@ def test_agent_rename_merge_of_an_archived_old_folder_into_a_live_one(
     back = archive_folder(client, b, "clash", archived=False).json()
     assert back["pages_restored"] == 1
     assert page_archived(db, old)[0] is not None
+
+
+def test_an_oversize_folder_title_is_a_413_on_move_and_rename(client, tokens):
+    t = tokens["alpha"]
+    one = publish(client, t, folder="f").json()["id"]
+    big = "x" * 600
+    got = rename_folder(client, t, "f", title=big)
+    assert got.status_code == 413
+    assert got.json()["detail"]["field"] == "title"
+    assert got.json()["detail"]["size"] == 600
+    moved = client.post(
+        "/api/v1/artifacts/move",
+        json={"ids": [one], "folder": "g", "folder_title": big},
+        headers=auth(t),
+    )
+    assert moved.status_code == 413
+    assert moved.json()["detail"]["field"] == "folder_title"
+    assert set(_folders(client, t)) == {"f"}, "nothing was created or renamed"

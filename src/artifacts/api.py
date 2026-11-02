@@ -1288,6 +1288,16 @@ def agent_router(
             )
         try:
             got = store.rename_folder(db, agent, slug, payload.slug, payload.title)
+        except store.BodyTooLarge as exc:
+            # The request's own name for it: this route takes `title`.
+            raise HTTPException(
+                413,
+                {
+                    "field": "title",
+                    "size": exc.size,
+                    "detail": "title exceeds the size limit",
+                },
+            ) from exc
         except store.InvalidText as exc:
             raise HTTPException(
                 422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
@@ -1339,6 +1349,15 @@ def agent_router(
             moved, missing, filed = store.move_many(
                 db, agent, payload.ids, payload.folder, payload.folder_title
             )
+        except store.BodyTooLarge as exc:
+            raise HTTPException(
+                413,
+                {
+                    "field": exc.field,
+                    "size": exc.size,
+                    "detail": f"{exc.field} exceeds the size limit",
+                },
+            ) from exc
         except store.InvalidText as exc:
             raise HTTPException(
                 422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}

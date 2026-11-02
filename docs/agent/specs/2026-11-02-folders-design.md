@@ -147,6 +147,12 @@ An archived folder takes no new pages: a publish or move naming it is a `409` th
 archived and to unarchive it first, rather than silently reviving or hiding the page.
 Binning a page leaves `folder_id` set, so restoring it puts it back.
 
+When an agent rename merges a folder into a same-slug folder the new name already owns, the
+survivor keeps its own state: if it is archived, the other folder's live pages join it and stay
+live (an identity rename must not archive pages and set questions aside as a side effect), and
+if it is live, the other folder's archived pages stay archived on their own, their marker
+cleared so a later folder archive or unarchive never touches them.
+
 Open questions are found as the wall already finds them: `decision.answer is null and
 closed_at is null` per page (the `waiting` subquery in `gallery._wall`, which .64 makes ignore
 set-aside questions); a folder's count is the sum over its live pages, and the same query over the

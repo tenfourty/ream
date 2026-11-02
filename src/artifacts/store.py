@@ -1978,8 +1978,9 @@ def set_folder_archived(
         folder_id, canonical = found[0], found[1]
         if archived:
             page_rows = conn.execute(
-                "select id from artifact where folder_id = %s and agent = %s"
-                " and deleted_at is null and archived_at is null order by id",
+                "select id from artifact where folder_id = %s and agent = %s"  # noqa: S608 -- clause from the db layer, no caller input
+                " and deleted_at is null and archived_at is null order by id"
+                + (conn.for_update() if confirm else ""),
                 (folder_id, agent),
             ).fetchall()
             pages = [r[0] for r in page_rows]
@@ -2004,40 +2005,55 @@ def set_folder_archived(
                 (now, folder_id),
             )
             aside = 0
+            done_pages = 0
             for pid in pages:
+                # Decisions first, then the artifact row, as every archive does
+                # (`_lock_open_decisions`: the reverse order can deadlock with a mark). The
+                # update re-checks everything the select saw, so a page a concurrent move-out,
+                # bin or page-level archive got to in between is left alone, not given a
+                # stale marker.
                 _lock_open_decisions(conn, pid)
-                conn.execute(
+                changed = conn.execute(
                     "update artifact set archived_at = %s, archived_via_folder = %s"
-                    " where id = %s",
-                    (now, folder_id, pid),
-                )
-                aside += _set_aside_open_questions(conn, pid, "archived", agent)
+                    " where id = %s and folder_id = %s and agent = %s"
+                    " and deleted_at is null and archived_at is null",
+                    (now, folder_id, pid, folder_id, agent),
+                ).rowcount
+                if changed:
+                    done_pages += 1
+                    aside += _set_aside_open_questions(conn, pid, "archived", agent)
             return {
                 "slug": canonical,
                 "archived": True,
-                "pages": len(pages),
+                "pages": done_pages,
                 "questions_set_aside": aside,
             }
         conn.execute("update folder set archived_at = null where id = %s", (folder_id,))
         restored = conn.execute(
-            "select id, deleted_at from artifact where archived_via_folder = %s"
-            " and folder_id = %s order by id",
+            "select id, deleted_at from artifact where archived_via_folder = %s"  # noqa: S608 -- clause from the db layer, no caller input
+            " and folder_id = %s order by id" + conn.for_update(),
             (folder_id, folder_id),
         ).fetchall()
         reopened = 0
+        restored_pages = 0
         for pid, deleted_at in restored:
-            conn.execute(
+            # Re-checked in the update: a page a concurrent move-out or page-level action
+            # already detached (marker cleared) is not touched.
+            changed = conn.execute(
                 "update artifact set archived_at = null, archived_via_folder = null"
-                " where id = %s",
-                (pid,),
-            )
-            if deleted_at is None:
-                reopened += _reopen_set_aside_questions(conn, pid, "unarchived", agent)
-        # A marker on a page that has since left the folder cannot exist (moving clears it).
+                " where id = %s and archived_via_folder = %s and folder_id = %s",
+                (pid, folder_id, folder_id),
+            ).rowcount
+            if changed:
+                restored_pages += 1
+                if deleted_at is None:
+                    reopened += _reopen_set_aside_questions(
+                        conn, pid, "unarchived", agent
+                    )
         return {
             "slug": canonical,
             "archived": False,
-            "pages_restored": len(restored),
+            "pages_restored": restored_pages,
             "questions_reopened": reopened,
         }
 
