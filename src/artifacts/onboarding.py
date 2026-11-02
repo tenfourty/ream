@@ -393,6 +393,17 @@ and names the field. A submit made on an older version of the form is a 409; he
 reloads the page. Acknowledge with `artifacts-decide ack <id>`; close the form
 with `close` when you no longer need it.
 
+## Folders: group your pages
+
+Put related pages in one of your own folders: `artifacts-publish FILE --title T --folder SLUG
+[--folder-title NAME]` (made on first use; stderr says `created new folder`), or later with
+`--update ID --folder SLUG`, or many at once with `--move ID ... --folder SLUG` / `--no-folder`.
+`--folders` lists yours; `--rename-folder`, `--archive-folder` (preview, then `--confirm`) and
+`--unarchive-folder` manage one. On Jeremy's wall a folder is one tile; a page with a question
+waiting on him shows only inside its folder, and the tile shows "N waiting" (his choice, 2 Nov
+2026), so keep a standing board out of folders. The full rules are in the skill,
+{base}/api/v1/skill.md, under Folders.
+
 ## Three things that will bite you
 
 Never put the key on a command line: every process on the machine can read
