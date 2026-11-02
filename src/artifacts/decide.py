@@ -1017,11 +1017,21 @@ def _wait(args, key: str, base: str) -> int:
         ]
 
     next_due = [float("inf")]
+    page_gone = False
 
     def look() -> tuple[list[dict], list[dict]]:
         """This office's news, less anything already shown within the hour;
         notes when the earliest held-back item falls due."""
-        answers, threads = current(), owed()
+        nonlocal page_gone
+        try:
+            answers, threads = current(), owed()
+        except HTTPFailure as exc:
+            # A BINNED page answers 404 like a missing one: nothing on it is
+            # waiting. Noted, so the caller can say why instead of failing.
+            if not page or exc.status != 404:
+                raise
+            page_gone = True
+            return [], []
         if surfaced is None:
             return answers, threads
         now = time.time()
@@ -1076,8 +1086,6 @@ def _wait(args, key: str, base: str) -> int:
     found, waiting_threads = look()
     if found or waiting_threads:
         return report(found, waiting_threads)
-
-    page_gone = False
 
     def page_questions() -> list[dict]:
         """This office's questions and reviews on the waited page."""

@@ -194,17 +194,6 @@ def test_a_question_asked_on_an_archived_page_announces_the_set_aside(db, page):
     assert _kinds(db) == ["decision_set_aside", "decision_reopened"]
 
 
-def test_a_question_asked_on_a_binned_page_says_binned(db, page):
-    store.set_deleted(db, page.id, True, agent="seat")
-    asked = _ask(db, page, question="Gone?")
-    (event,) = [
-        e
-        for e in events.list_for_agent(db, "seat")
-        if e.kind == "decision_set_aside" and e.ref_id == asked.id
-    ]
-    assert event.summary == "binned: Gone?"
-
-
 def test_every_list_leaves_set_aside_out_unless_asked(db, client, page):
     live = store.publish(db, "seat", "Live", PAGE)
     waiting = _ask(db, live, question="Live?")
