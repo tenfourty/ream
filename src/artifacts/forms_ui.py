@@ -24,24 +24,27 @@ _STYLE = (
     "#artifact-forms-bar{position:fixed;left:0;right:0;bottom:0;z-index:30;display:flex;"
     "flex-direction:column;gap:1px}"
     "#artifact-forms-bar .fbar{display:flex;align-items:center;gap:.8rem;padding:.55rem 1rem;"
-    "background:var(--surface,#fff);color:var(--text,#111);border-top:1px solid rgba(127,127,127,.35);"
+    "background:var(--card,#fff);color:var(--ink,#111);border-top:1px solid var(--line,rgba(127,127,127,.35));"
     "font:.9rem/1.3 system-ui,sans-serif}"
     "#artifact-forms-bar .ftitle{font-weight:600;flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;"
     "white-space:nowrap}"
     "#artifact-forms-bar .fcount{flex:1 1 auto;opacity:.75}"
     "#artifact-forms-bar button,.fsheet button{font:inherit;padding:.35rem .9rem;border-radius:.4rem;"
     "border:1px solid rgba(127,127,127,.5);background:transparent;color:inherit;cursor:pointer}"
-    "#artifact-forms-bar button.fgo,.fsheet button.fgo{background:#2a6df4;border-color:#2a6df4;color:#fff}"
+    "#artifact-forms-bar button.fgo,.fsheet button.fgo{background:var(--accent,#2a6df4);"
+    "border-color:var(--accent,#2a6df4);color:var(--on-accent,#fff)}"
+    "#artifact-forms-bar .fbar.fsent .fcount{opacity:1;color:var(--ok,#2f7a45);font-weight:600}"
     "#artifact-forms-bar button[disabled],.fsheet button[disabled]{opacity:.45;cursor:not-allowed}"
     ".fscrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:40;display:flex;"
     "align-items:center;justify-content:center;padding:1rem}"
-    ".fsheet{background:var(--surface,#fff);color:var(--text,#111);max-width:42rem;width:100%;"
+    ".fsheet{background:var(--card,#fff);color:var(--ink,#111);max-width:42rem;width:100%;"
     "max-height:85vh;overflow:auto;border-radius:.6rem;padding:1.2rem;font:.95rem/1.4 system-ui,sans-serif}"
     ".fsheet h2{margin:0 0 .8rem;font-size:1.1rem}"
     ".fsheet dl{margin:0 0 1rem}.fsheet dt{font-weight:600;margin-top:.6rem}"
     ".fsheet dd{margin:.1rem 0 0;white-space:pre-wrap;overflow-wrap:anywhere}"
     ".fsheet .fblank{opacity:.6;font-style:italic}"
-    ".fsheet .ferr{color:#c0392b;margin:0 0 .8rem}"
+    ".fsheet .ferr{color:var(--danger,#c0392b);margin:0 0 .8rem}"
+    ".fsheet .fok{color:var(--ok,#2f7a45);font-weight:600;margin:0 0 .8rem}"
     ".fsheet .fbtns{display:flex;gap:.6rem;justify-content:flex-end}"
     "body.fhas{padding-bottom:4.5rem}"
     "</style>"
@@ -220,7 +223,11 @@ function counts(f){var done=0,missing=false;
 function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;
   if(text!==undefined)e.textContent=text;return e}
 function refresh(f){var c=counts(f);
-  f.count.textContent=c.done+" of "+c.total+" answered"+(f.answered?" · last sent "+when(f.answered.answered_at):"");
+  // Once sent, the bar says so plainly and Submit becomes "Send again": a quiet
+  // "last sent" suffix read as nothing having happened (Jeremy, 2 Nov 2026).
+  f.count.textContent=(f.answered?"\u2713 Sent "+when(f.answered.answered_at)+" \u00b7 ":"")+c.done+" of "+c.total+" answered";
+  f.row.className=f.answered?"fbar fsent":"fbar";
+  f.go.textContent=f.answered?"Send again":"Submit";
   f.go.disabled=!f.values||c.missing;
   f.go.title=c.missing?(f.complete==="all"?"Every field needs an answer":"A required field is blank"):""}
 function when(iso){try{return new Date(iso).toLocaleString([],{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
@@ -264,7 +271,13 @@ function sheet(f){
       body:JSON.stringify({version:f.version,values:sent})})
     .then(function(r){return r.json().catch(function(){return{}}).then(function(j){return{r:r,j:j}})})
     .then(function(x){
-      if(x.r.ok){f.answered={answered_at:x.j.answered_at};close();refresh(f);return}
+      if(x.r.ok){f.answered={answered_at:x.j.answered_at};refresh(f);
+        // Say it was sent, in the sheet he is looking at, and leave it open until he closes it.
+        h.textContent="\u2713 Sent \u2014 "+f.title;
+        var okp=el("p","fok","Your answers were sent"+(x.j.answered_at?" at "+when(x.j.answered_at):"")+". You can change them and send again.");
+        box.insertBefore(okp,dl);no.remove();go.remove();
+        var done=el("button","fgo","Close");done.type="button";done.addEventListener("click",close);
+        btns.appendChild(done);done.focus();return}
       var lab="";f.fields.forEach(function(s){if(s.name===x.j.field)lab=s.label||s.name});
       err.textContent=(lab?lab+": ":"")+(x.j.detail||("It was not sent ("+x.r.status+")"));
       err.hidden=false;go.disabled=false})
@@ -273,7 +286,7 @@ function sheet(f){
   document.body.appendChild(scrim);go.focus()}
 data.forms.forEach(function(f){
   f.values=null;f.awaiting=false;by[f.form]=f;
-  var row=el("div","fbar"),t=el("span","ftitle",f.title);
+  var row=el("div","fbar"),t=el("span","ftitle",f.title);f.row=row;
   f.count=el("span","fcount");f.go=el("button","fgo","Submit");f.go.type="button";
   f.go.addEventListener("click",function(){if(!f.go.disabled)sheet(f)});
   row.appendChild(t);row.appendChild(f.count);row.appendChild(f.go);bar.appendChild(row);refresh(f)});

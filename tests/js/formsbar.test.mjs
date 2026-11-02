@@ -13,6 +13,7 @@ function node(tag) {
     set textContent(v) { this._text = String(v); }, get textContent() { return this._text; },
     set innerHTML(v) { throw new Error("innerHTML must never be used"); },
     appendChild(c) { this.children.push(c); c.parent = this; return c; },
+    insertBefore(c, ref) { const i = this.children.indexOf(ref); this.children.splice(i < 0 ? this.children.length : i, 0, c); c.parent = this; return c; },
     remove() { if (this.parent) this.parent.children = this.parent.children.filter((x) => x !== this); },
     setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k] ?? null; },
     addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); },
@@ -142,6 +143,25 @@ const snap = (values, load = false) => ({ type: "artifact-form", form: "rollout"
   await new Promise((r) => setTimeout(r, 10));
   const err = all(sheet).find((n) => n.className === "ferr");
   ok(err.textContent === "Region: this field is required" && err.hidden === false, "a 422 shows the stored label and the server's detail");
+}
+{
+  // A successful send says so: the sheet stays open with a Sent line and one Close button,
+  // and the bar shows the sent time and offers "Send again".
+  const g = build({ fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ ok: true, answered_at: "2026-11-02T22:25:54Z" }) }) });
+  g.send(snap({ region: "a", why: "", pets: [] }));
+  g.go().click();
+  const sheet = all(g.body).find((n) => n.className === "fscrim");
+  all(sheet).find((n) => n.className === "fgo").click();
+  await new Promise((r) => setTimeout(r, 10));
+  ok(all(g.body).filter((n) => n.className === "fscrim").length === 1, "the sheet stays open after a successful send");
+  const okp = all(sheet).find((n) => n.className === "fok");
+  ok(okp && okp.textContent.startsWith("Your answers were sent"), "the sheet says the answers were sent");
+  const btns = all(sheet).filter((n) => n.tag === "button");
+  ok(btns.length === 1 && btns[0].textContent === "Close", "only a Close button is left");
+  ok(g.count().startsWith("\u2713 Sent ") && g.count().endsWith("1 of 3 answered"), "the bar shows it was sent");
+  ok(g.go().textContent === "Send again" && g.bar.children[0].className === "fbar fsent", "Submit becomes Send again");
+  btns[0].click();
+  ok(all(g.body).filter((n) => n.className === "fscrim").length === 0, "Close closes the sheet");
 }
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
