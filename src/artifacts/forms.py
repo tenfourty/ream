@@ -155,6 +155,9 @@ class _Walk(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.stack: list[str] = []
+        # Open count per tag, so an unmatched end tag is an O(1) miss: a page of
+        # a million stray `</x>` would otherwise scan the stack once each.
+        self._open: dict[str, int] = {}
         self.forms: list[_FormBuild] = []
         self.names: set[str] = set()
         self.form: _FormBuild | None = None
@@ -199,6 +202,7 @@ class _Walk(HTMLParser):
             self._control_or_void(tag, a)
             return
         self.stack.append(tag)
+        self._open[tag] = self._open.get(tag, 0) + 1
         if self.form is None:
             # Still count strays among the non-void controls.
             if tag in ("textarea", "select") and self.stray_line is None:
@@ -331,12 +335,13 @@ class _Walk(HTMLParser):
             self._labels[-1].text.append(data)
 
     def handle_endtag(self, tag):
-        if tag in _VOID or tag not in self.stack:
+        if tag in _VOID or not self._open.get(tag):
             return
         # Pop to the matching open element: `</td>` closes an unclosed `<p>`.
         while self.stack:
             depth = len(self.stack)
             top = self.stack.pop()
+            self._open[top] -= 1
             if self.form is not None:
                 self._closed(top, depth)
             if top == tag:
