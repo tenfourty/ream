@@ -5051,7 +5051,7 @@ def gallery_router(db: Database) -> APIRouter:
         with db.connect() as conn:
             row = conn.execute(
                 "select title, read_token, agent, archived_at, updated_at,"
-                " current_version, agents_can_read"
+                " current_version, agents_can_read, deleted_at"
                 " from artifact where id = %s",
                 (artifact_id,),
             ).fetchone()
@@ -5233,7 +5233,9 @@ def gallery_router(db: Database) -> APIRouter:
                 f' data-version="{int(row[5])}"><iframe id="artifact-frame"'
                 f' src="{src}" sandbox="{sandbox}" title="{escape(row[0])}"></iframe></div>'
                 f"{f'''<div class="col">{settled_below}</div>''' if settled_below else ''}"
-                f"{forms_ui.block(db, artifact_id)}"
+                # No Submit bar on a page that is archived or binned: nothing there can
+                # take an answer.
+                f"{'' if row[3] is not None or row[7] is not None else forms_ui.block(db, artifact_id)}"
                 # AFTER the page, with the settled decisions. A conversation
                 # about a page is read once you have read the page; putting it
                 # above would be the mistake Jeremy already named about the

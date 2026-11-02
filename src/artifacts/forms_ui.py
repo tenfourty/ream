@@ -9,6 +9,7 @@ the field list stored at publish, never from the page.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 from fastapi import APIRouter, HTTPException, Request
@@ -97,6 +98,9 @@ def block(db, artifact_id: str) -> str:
     )
 
 
+_MAX_BODY = 1_000_000
+
+
 def register(
     router: APIRouter,
     db,
@@ -118,8 +122,18 @@ def register(
         ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
         if ctype != "application/json":
             raise HTTPException(415, "send application/json")
+        # Cap the body before parsing: a form's values are small, and a client
+        # that streams without a Content-Length is cut off as it reads.
+        declared = request.headers.get("content-length")
+        if declared is not None and declared.isdigit() and int(declared) > _MAX_BODY:
+            raise HTTPException(413, "the submission is too large")
+        raw = b""
+        async for chunk in request.stream():
+            raw += chunk
+            if len(raw) > _MAX_BODY:
+                raise HTTPException(413, "the submission is too large")
         try:
-            body = await request.json()
+            body = json.loads(raw)
         except ValueError:
             raise HTTPException(400, "not JSON") from None
         version = body.get("version") if isinstance(body, dict) else None
@@ -175,7 +189,7 @@ var data=null,frame=document.getElementById("artifact-frame"),bar=document.getEl
 try{data=JSON.parse(document.getElementById("artifact-forms").textContent)}catch(e){}
 if(!data||!frame||!bar||!Array.isArray(data.forms)||!data.forms.length)return;
 var origin;try{origin=new URL(frame.getAttribute("src"),location.href).origin}catch(e){return}
-var FMX=200,FMV=2000,by=Object.create(null);
+var FMX=200,FMV=10000,by=Object.create(null);
 document.body.classList.add("fhas");
 function key(f){return"artifact-form:"+data.artifact_id+":"+f.form}
 function isBlank(spec,v){

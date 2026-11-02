@@ -105,7 +105,7 @@ def _one(spec: dict, value):
             raise SubmitRefused("a number is expected", field=name)
         try:
             n = float(value.strip() if isinstance(value, str) else value)
-        except ValueError:
+        except (ValueError, OverflowError):
             raise SubmitRefused("not a number", field=name) from None
         if not math.isfinite(n):
             raise SubmitRefused("not a finite number", field=name)

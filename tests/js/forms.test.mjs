@@ -94,14 +94,14 @@ const sample = () => [
 }
 // 4. values and names are capped
 {
-  const big = "x".repeat(5000);
+  const big = "x".repeat(15000);
   const c = [ctl("text", "t", big)];
   for (let i = 0; i < 250; i++) c.push(ctl("text", "f" + i, "v"));
   c.push(ctl("text", "__proto__", "evil"));
   const g = build(c);
   g.fire("load", {});
   const v = g.forms()[0][0].values;
-  ok(v.t.length === 2000, "a value is cut to 2000 characters");
+  ok(v.t.length === 10000, "a value is cut to 10000 characters");
   ok(Object.keys(v).length === 200, "at most 200 fields are reported");
   ok(!Object.prototype.hasOwnProperty.call(v, "__proto__") && ({}).evil === undefined,
      "a __proto__ name is never reported");
@@ -134,8 +134,8 @@ const sample = () => [
   ok(wrong.forms().length === 0, "ignores a fill for a form the page does not have");
 
   const huge = build(sample());
-  huge.fire("message", fillMsg({ values: { why: "y".repeat(5000) } }));
-  ok(huge.form.querySelectorAll()[5].value.length === 2000, "cuts a filled value to 2000 characters");
+  huge.fire("message", fillMsg({ values: { why: "y".repeat(15000) } }));
+  ok(huge.form.querySelectorAll()[5].value.length === 10000, "cuts a filled value to 10000 characters");
 
   const many = {};
   for (let i = 0; i < 300; i++) many["k" + i] = "v";

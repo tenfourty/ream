@@ -17,6 +17,7 @@ form and the control, so the agent learns when it publishes and not when Jeremy 
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass, field
@@ -634,11 +635,18 @@ def warnings(body: str) -> list[dict]:
 # --- storage ------------------------------------------------------------------
 
 
+def _canon(fields: list) -> str:
+    return json.dumps(fields, sort_keys=True, separators=(",", ":"), default=str)
+
+
 def sync(conn, artifact_id: str, version_n: int, parsed: Parsed, session) -> None:
     """Make the page's open `form` decisions match `parsed`, inside the caller's
     transaction. A form keeps its decision across republishes (keyed by page and
     name); a new name mints one; a form no longer on the page is closed, its
-    answers (none yet) kept. The field list is stored per version."""
+    answers kept. The field list is stored per version, and only when it changed:
+    a republish whose fields for a form are identical to its latest stored version
+    keeps that version, so an unrelated page edit does not turn an open submit
+    into a 409."""
     existing = dict(
         conn.execute(
             "select form_name, id from decision"
@@ -671,6 +679,18 @@ def sync(conn, artifact_id: str, version_n: int, parsed: Parsed, session) -> Non
                 "update decision set question = %s where id = %s",
                 (form.title, decision_id),
             )
+        latest = conn.execute(
+            "select f.version_n, f.complete_all, f.position from decision_form f"
+            " where f.decision_id = %s order by f.version_n desc limit 1",
+            (decision_id,),
+        ).fetchone()
+        if latest is not None and (
+            bool(latest[1]) == bool(form.complete_all)
+            and latest[2] == page_position
+            and _canon(_fields(conn, decision_id, latest[0]))
+            == _canon([spec for spec in form.fields])
+        ):
+            continue
         conn.execute(
             "insert into decision_form (decision_id, version_n, complete_all, position)"
             " values (%s, %s, %s, %s)",

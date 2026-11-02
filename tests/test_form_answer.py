@@ -122,6 +122,7 @@ def test_number_limits_and_step():
     refused({"region": "a", "count": "abc"}, "count")
     refused({"region": "a", "count": "nan"}, "count")
     refused({"region": "a", "count": True}, "count")
+    refused({"region": "a", "count": 10**400}, "count")  # float() overflows: a 422
     assert check({"region": "a", "count": 5})[0]["count"] == 5
 
 
@@ -466,3 +467,76 @@ def test_an_unsubmitted_form_is_set_aside_and_reopened(db, made):
     back = decisions.get_owned(db, "ops", made["id"])
     assert not back.set_aside and back.reopened_at is not None
     assert _aside_events(db, made["id"]) == ["decision_set_aside", "decision_reopened"]
+
+
+def _patch(client, made, body):
+    return client.patch(
+        f"/api/v1/artifacts/{made['page']['id']}",
+        json={"body": body, "expected_revision": made["page"]["revision"]},
+        headers=auth(made["token"]),
+    )
+
+
+def test_a_submitted_form_survives_a_republish_without_it_until_acknowledged(
+    client, db, made
+):
+    formanswer.submit(db, made["id"], version=1, values={"region": "a"})
+    assert _patch(client, made, page("<p>no form now</p>")).status_code == 200
+    listed = client.get("/api/v1/decisions", headers=auth(made["token"])).json()
+    assert [r["id"] for r in listed] == [made["id"]]
+    assert listed[0]["answer_record"]["answers"]["region"] == "a"
+    assert [r.id for r in decisions.list_for_agent(db, "ops")] == [made["id"]]
+    ack = client.post(
+        f"/api/v1/decisions/{made['id']}/acknowledge", headers=auth(made["token"])
+    )
+    assert ack.status_code == 200
+    assert client.get("/api/v1/decisions", headers=auth(made["token"])).json() == []
+    assert decisions.list_for_agent(db, "ops") == []
+
+
+def test_an_unrelated_republish_keeps_the_form_version_and_a_changed_field_does_not(
+    client, db, made
+):
+    assert (
+        _patch(client, made, page(FORM + "<p>an unrelated edit</p>")).status_code == 200
+    )
+    (form,) = client.get(
+        f"/api/v1/artifacts/{made['page']['id']}/forms", headers=auth(made["token"])
+    ).json()
+    assert form["version"] == 1
+    rec = formanswer.submit(db, made["id"], version=1, values={"region": "a"})
+    assert rec["version"] == 1
+    rev = client.get(
+        f"/api/v1/artifacts/{made['page']['id']}", headers=auth(made["token"])
+    ).json()["revision"]
+    changed = client.patch(
+        f"/api/v1/artifacts/{made['page']['id']}",
+        json={
+            "body": page(FORM.replace("Notes", "Remarks")),
+            "expected_revision": rev,
+        },
+        headers=auth(made["token"]),
+    )
+    assert changed.status_code == 200, changed.text
+    with pytest.raises(formanswer.SubmitRefused) as caught:
+        formanswer.submit(db, made["id"], version=1, values={"region": "b"})
+    assert caught.value.status == 409
+
+
+def test_the_route_refuses_a_body_over_a_megabyte(client, db, made):
+    big = {"version": 1, "values": {"region": "a", "notes": "x" * 1_100_000}}
+    assert post(client, made, big).status_code == 413
+    assert record_of(db, made["id"]) is None
+    raw = client.post(
+        f"/a/{made['page']['id']}/forms/rollout",
+        content=b"{" + b" " * 1_100_000 + b"}",
+        headers={**SAME, "content-type": "application/json"},
+    )
+    assert raw.status_code == 413
+
+
+def test_an_archived_pages_gallery_view_draws_no_submit_bar(client, db, made):
+    assert 'id="artifact-forms"' in client.get(f"/a/{made['page']['id']}").text
+    assert store.set_archived(db, made["page"]["id"], True, agent="ops")
+    html = client.get(f"/a/{made['page']['id']}").text
+    assert 'id="artifact-forms"' not in html and "/forms.js" not in html

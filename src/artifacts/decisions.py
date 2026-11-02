@@ -994,7 +994,14 @@ def list_for_agent(
             " and decision.closed_at is null))",
         )
     if not include_closed:
-        sql += " and decision.closed_at is null"
+        # A submitted form the agent has not acknowledged stays listed even when its
+        # page was republished without the form (which closes it): the answer must
+        # not vanish from the queue before the agent has seen it.
+        sql += (
+            " and (decision.closed_at is null or (decision.kind = 'form'"
+            " and decision.answer_record is not null"
+            " and decision.acknowledged_at is null))"
+        )
     if not include_answered:
         sql += " and decision.answer is null and decision.answer_record is null"
     if not include_set_aside:

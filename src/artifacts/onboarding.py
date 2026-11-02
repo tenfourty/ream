@@ -378,7 +378,8 @@ He answers in the page's own controls; blanks are allowed unless a field is
 `required` or the form says `data-complete="all"` (the gallery refuses to send,
 and the service answers 422 naming the field). A radio group or select is the
 chosen value, a checkbox group a list of the checked values, a lone checkbox
-true or false (never blank). A form stays open after a submit: a second sitting
+true or false (never blank), so a required lone checkbox is always
+answered. A text value is at most 10000 characters (more is a 422). A form stays open after a submit: a second sitting
 is a new submit and the later non-blank value wins per field. Each submit is one
 `decision_answered` event, so `artifacts-decide wait` wakes once per submit.
 
