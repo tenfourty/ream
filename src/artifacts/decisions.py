@@ -1434,6 +1434,8 @@ def record_elsewhere(
         # found by the first outside agent (homelab-ij8.106).
         asking_session = row[_SESSION_IDX]
 
+        if _set_aside_fields(row)["set_aside"]:
+            raise store.NotFound()
         if letter not in {option["letter"] for option in options}:
             raise InvalidAnswer()
         store._check_secrets(note, "note", agent=recorded_by, artifact_id=artifact_id)
@@ -1452,7 +1454,12 @@ def record_elsewhere(
                 "update decision set answer = %s, answer_note = %s,"
                 " answered_at = %s, answered_by = 'jeremy',"
                 " answer_source = %s, recorded_by = %s, said_at = %s"
-                " where id = %s and (kind <> 'review' or answer is null)",
+                " where id = %s and (kind <> 'review' or answer is null)"
+                # Live page at the write, as in `answer`: a relay is no more
+                # storable on a set-aside question than a tap is.
+                " and exists (select 1 from artifact a"
+                " where a.id = decision.artifact_id"
+                " and a.archived_at is null and a.deleted_at is null)",
                 (
                     letter,
                     note,
@@ -1468,6 +1475,8 @@ def record_elsewhere(
                     f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
                     (decision_id,),
                 ).fetchone()
+                if current is None or _set_aside_fields(current)["set_aside"]:
+                    raise store.NotFound()
                 raise _already(conn, current, round)
             if row[_KIND_IDX] == "review":
                 _close_round(conn, decision_id, letter)

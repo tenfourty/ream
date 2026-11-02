@@ -288,3 +288,29 @@ def test_an_archive_between_the_read_and_the_write_refuses_the_answer(
     with pytest.raises(store.NotFound):
         decisions.answer(db, asked.id, letter="a", note="", by="jeremy")
     assert _row(db, asked.id).answer is None
+
+
+def test_an_archive_between_the_read_and_the_write_refuses_a_relay(
+    db, page, monkeypatch
+):
+    """The same guard on `record_elsewhere`: refused, and nothing stored."""
+    asked = _ask(db, page)
+    real = decisions._set_aside_fields
+
+    def archive_after_the_read(row):
+        out = real(row)
+        monkeypatch.setattr(decisions, "_set_aside_fields", real)
+        store.set_archived(db, page.id, True, agent="seat")
+        return out
+
+    monkeypatch.setattr(decisions, "_set_aside_fields", archive_after_the_read)
+    with pytest.raises(store.NotFound):
+        decisions.record_elsewhere(
+            db,
+            asked.id,
+            letter="a",
+            note="his words",
+            source="terminal",
+            recorded_by="seat",
+        )
+    assert _row(db, asked.id).answer is None
