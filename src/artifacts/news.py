@@ -18,6 +18,10 @@ from pathlib import Path
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-02c",
+        "Folders, bulk move: artifacts-publish --move ID [ID ...] --folder SLUG (or --no-folder) re-files up to 200 of your own pages in one request; POST /api/v1/artifacts/move {ids, folder|null} answers {moved, missing, folder}. missing is no such page and not yours alike; a new slug is made on first use and the result says so.",
+    ),
+    (
         "2026-11-02b",
         "Folders, agent side: artifacts-publish FILE --folder SLUG (and --folder-title NAME) files a page in your own folder when you publish or --update it; the folder is made on first use and the result says 'created new folder' so a typo shows. --no-folder takes it out; --folders lists yours (pages, questions waiting); --list --folder SLUG lists one; the API has folder on POST and PATCH, GET /folders and GET /folders/SLUG/artifacts. His wall does not group them yet.",
     ),

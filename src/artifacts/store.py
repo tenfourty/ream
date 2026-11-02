@@ -1667,6 +1667,46 @@ def _scoped(
     return clause, params
 
 
+def move_many(
+    db: Database, agent: str, artifact_ids: list[str], folder: str | None
+) -> tuple[list[str], list[str], dict | None]:
+    """File several of the agent's own pages in its folder `folder` (None takes them out), in
+    one transaction. Returns `(moved, missing, folder)`; `missing` is both "no such page" and
+    "not yours" (and a binned page), never told apart. An unknown slug is created, but only
+    when at least one page is going into it: a batch of ids that are all missing leaves nothing
+    behind. `folders.BadSlug` / `folders.FolderArchived` as for publish; nothing is written then.
+    """
+    if folder is not None:
+        folders.clean_slug(folder)
+    wanted = list(dict.fromkeys(artifact_ids))
+    with db.connect() as conn, conn.transaction():
+        mine = {
+            r[0]
+            for r in conn.execute(
+                "select id from artifact"  # noqa: S608 -- placeholders only
+                f" where agent = %s and deleted_at is null and id in {in_list(wanted)}",
+                (agent, *wanted),
+            ).fetchall()
+        }
+        moved = [i for i in wanted if i in mine]
+        missing = [i for i in wanted if i not in mine]
+        filed = None
+        if folder is None:
+            target = None
+        elif moved:
+            target, canonical, created = folders.resolve_or_create(
+                conn, agent, folder, None
+            )
+            filed = {"slug": canonical, "created": created}
+        if moved:
+            conn.execute(
+                "update artifact set folder_id = %s"  # noqa: S608 -- placeholders only
+                f" where agent = %s and deleted_at is null and id in {in_list(moved)}",
+                (target, agent, *moved),
+            )
+        return moved, missing, filed
+
+
 MAX_COPY_TITLE_SUFFIX = " (copy)"
 
 

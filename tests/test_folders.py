@@ -443,3 +443,110 @@ def test_a_form_is_not_an_open_question_in_the_folder_count(client, db, tokens):
     assert [(f["slug"], f["pages"], f["open_questions"]) for f in got] == [
         ("roadmap", 1, 0)
     ]
+
+
+# --- bulk move (slice 2) ------------------------------------------------------
+
+
+def move(client, token, ids, folder):
+    return client.post(
+        "/api/v1/artifacts/move",
+        json={"ids": ids, "folder": folder},
+        headers=auth(token),
+    )
+
+
+def folder_of(client, token, page_id):
+    rows = client.get("/api/v1/artifacts", headers=auth(token)).json()
+    return next(r["folder"] for r in rows if r["id"] == page_id)
+
+
+def test_a_move_into_a_new_folder_creates_it_and_says_so(client, tokens):
+    one = publish(client, tokens["alpha"], title="one").json()["id"]
+    two = publish(client, tokens["alpha"], title="two").json()["id"]
+    got = move(client, tokens["alpha"], [one, two], "roadmap")
+    assert got.status_code == 200
+    assert got.json() == {
+        "moved": [one, two],
+        "missing": [],
+        "folder": {"slug": "roadmap", "created": True},
+    }
+    assert folder_of(client, tokens["alpha"], one) == "roadmap"
+    assert folder_of(client, tokens["alpha"], two) == "roadmap"
+
+
+def test_a_move_into_an_existing_folder_says_created_false(client, tokens):
+    publish(client, tokens["alpha"], folder="roadmap")
+    one = publish(client, tokens["alpha"], title="one").json()["id"]
+    got = move(client, tokens["alpha"], [one], "roadmap").json()
+    assert got["folder"] == {"slug": "roadmap", "created": False}
+    assert got["moved"] == [one]
+
+
+def test_a_move_with_null_takes_pages_out_and_makes_no_version(client, tokens):
+    one = publish(client, tokens["alpha"], folder="roadmap").json()
+    got = move(client, tokens["alpha"], [one["id"]], None)
+    assert got.json() == {"moved": [one["id"]], "missing": [], "folder": None}
+    assert folder_of(client, tokens["alpha"], one["id"]) is None
+    versions = client.get(
+        f"/api/v1/artifacts/{one['id']}/versions", headers=auth(tokens["alpha"])
+    ).json()
+    assert len(versions) == 1, "filing is a shelf fact"
+
+
+def test_another_agents_id_and_an_unknown_id_are_both_missing(client, tokens):
+    mine = publish(client, tokens["alpha"], title="mine").json()["id"]
+    theirs = publish(client, tokens["beta"], title="theirs").json()["id"]
+    got = move(client, tokens["alpha"], [mine, theirs, "nonesuch"], "roadmap").json()
+    assert got["moved"] == [mine]
+    assert got["missing"] == [theirs, "nonesuch"], "not yours reads as no such page"
+    assert folder_of(client, tokens["beta"], theirs) is None
+
+
+def test_all_missing_creates_no_folder_and_changes_nothing(client, tokens):
+    theirs = publish(client, tokens["beta"]).json()["id"]
+    got = move(client, tokens["alpha"], [theirs, "nonesuch"], "roadmap").json()
+    assert got == {"moved": [], "missing": [theirs, "nonesuch"], "folder": None}
+    assert client.get("/api/v1/folders", headers=auth(tokens["alpha"])).json() == []
+
+
+def test_a_binned_page_is_missing_and_a_repeated_id_moves_once(client, db, tokens):
+    one = publish(client, tokens["alpha"], title="one").json()["id"]
+    two = publish(client, tokens["alpha"], title="two").json()["id"]
+    assert store.set_deleted(db, two, True, agent="alpha")
+    got = move(client, tokens["alpha"], [one, one, two], "roadmap").json()
+    assert got["moved"] == [one]
+    assert got["missing"] == [two]
+
+
+def test_more_than_200_ids_is_a_422_and_an_empty_list_too(client, tokens):
+    over = [f"x{i}" for i in range(201)]
+    assert move(client, tokens["alpha"], over, "a").status_code == 422
+    assert move(client, tokens["alpha"], [], "a").status_code == 422
+    assert move(client, tokens["alpha"], over[:200], "a").status_code == 200
+
+
+def test_a_move_needs_the_folder_field_and_a_good_slug_and_a_key(client, tokens):
+    one = publish(client, tokens["alpha"]).json()["id"]
+    bare = client.post(
+        "/api/v1/artifacts/move", json={"ids": [one]}, headers=auth(tokens["alpha"])
+    )
+    assert bare.status_code == 422
+    bad = move(client, tokens["alpha"], [one], "Road Map")
+    assert bad.status_code == 422
+    assert "folder" in str(bad.json())
+    assert folder_of(client, tokens["alpha"], one) is None
+    nokey = client.post("/api/v1/artifacts/move", json={"ids": [one], "folder": None})
+    assert nokey.status_code in (401, 403)
+
+
+def test_a_move_into_an_archived_folder_is_a_409_and_changes_nothing(
+    client, db, tokens
+):
+    publish(client, tokens["alpha"], folder="roadmap")
+    one = publish(client, tokens["alpha"], title="one").json()["id"]
+    with db.connect() as conn:
+        conn.execute("update folder set archived_at = %s", (datetime.now(UTC),))
+    got = move(client, tokens["alpha"], [one], "roadmap")
+    assert got.status_code == 409
+    assert folder_of(client, tokens["alpha"], one) is None

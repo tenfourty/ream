@@ -225,6 +225,17 @@ class SectionBody(BaseModel):
     format: Literal["html", "markdown"] = "html"
 
 
+MAX_MOVE_IDS = 200
+
+
+class MoveBody(BaseModel):
+    """`ids` is capped so one request is one bounded transaction; `folder` is required (null
+    takes the pages out), so an empty body is a 422 rather than a silent un-filing."""
+
+    ids: list[str] = Field(min_length=1, max_length=MAX_MOVE_IDS)
+    folder: str | None
+
+
 class ArchiveBody(BaseModel):
     """`archived` is required and has no default.
 
@@ -1245,6 +1256,20 @@ def agent_router(
         if rows is None:
             raise HTTPException(404, "no such folder")
         return [row.__dict__ for row in rows]
+
+    @router.post("/artifacts/move")
+    def move_pages(payload: MoveBody, agent: str = Depends(caller)):
+        """File several of this agent's own pages in one of its folders in one go, or take
+        them out (`folder: null`). `missing` covers "no such page" and "not yours" alike."""
+        try:
+            moved, missing, filed = store.move_many(
+                db, agent, payload.ids, payload.folder
+            )
+        except folders.BadSlug as exc:
+            raise HTTPException(422, _BAD_SLUG) from exc
+        except folders.FolderArchived as exc:
+            raise HTTPException(409, _archived_folder(exc.slug)) from exc
+        return {"moved": moved, "missing": missing, "folder": filed}
 
     @router.post("/artifacts/{artifact_id}/transfer")
     def transfer(artifact_id: str, payload: TransferBody, agent: str = Depends(caller)):

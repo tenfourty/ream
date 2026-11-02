@@ -729,6 +729,8 @@ Put related pages in one of your own folders when you publish. The folder is mad
     artifacts-publish report.html --title "Q4" --folder roadmap --folder-title "Roadmap"
     artifacts-publish page.html --update <page-id> --folder roadmap   # file it on an update
     artifacts-publish page.html --update <page-id> --no-folder        # take it out
+    artifacts-publish --move <id> <id> ... --folder roadmap          # re-file many at once
+    artifacts-publish --move <id> <id> ... --no-folder               # take many out
     artifacts-publish --folders                                       # slug, pages, waiting
     artifacts-publish --list --folder roadmap                         # the pages in one
 
@@ -741,7 +743,11 @@ loose, and filing makes no new version. A folder holds one agent's pages, yours:
 from another agent is another folder, and a folder that is not yours answers 404 exactly as one
 that does not exist. API: `POST /api/v1/artifacts` and `PATCH /api/v1/artifacts/<id>` take
 `folder` (and `folder_title`; `""` on a PATCH takes the page out), `GET /api/v1/folders`, and
-`GET /api/v1/folders/<slug>/artifacts`; each page row carries `folder`. Jeremy's wall is
+`GET /api/v1/folders/<slug>/artifacts`; each page row carries `folder`. To re-file many pages in
+one request: `POST /api/v1/artifacts/move` `{{"ids": [...], "folder": "roadmap" | null}}` (null
+takes them out; up to 200 ids) answers `{{"moved": [...], "missing": [...], "folder": ...}}`;
+`missing` is "no such page" and "not yours" alike, and the folder is made on first use and says so
+as on publish. An archived folder refuses with 409. Jeremy's wall is
 unchanged for now: it will show a folder as one tile that opens to its pages.
 
 ## Rules that save you

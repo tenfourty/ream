@@ -1293,3 +1293,56 @@ def test_no_folder_and_all_misuse_are_usage_errors(live, key_file, tmp_path, cap
         assert "--no-folder" in capsys.readouterr().err
     assert client.main([*base, "--list", "--folder", "road", "--all"]) == 2
     assert "--all cannot be combined with --folder" in capsys.readouterr().err
+
+
+# --- folders, bulk move (slice 2) ---------------------------------------------
+
+
+def test_move_files_pages_and_says_created_and_missing(
+    live, key_file, tmp_path, capsys
+):
+    path, _ = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>hi</body></html>")
+    base = ["--key-file", str(path)]
+    ids = []
+    for i in range(2):
+        client.main([*base, str(page), "--title", f"P{i}"])
+        ids.append(json.loads(capsys.readouterr().out)["id"])
+
+    assert client.main([*base, "--move", *ids, "nonesuch", "--folder", "road"]) == 0
+    got = capsys.readouterr()
+    assert json.loads(got.out) == {"moved": ids, "missing": ["nonesuch"]}
+    assert "created new folder 'road'" in got.err
+
+    assert client.main([*base, "--move", ids[0], "--folder", "road"]) == 0
+    assert "in folder 'road'" in capsys.readouterr().err
+
+    assert client.main([*base, "--move", *ids, "--no-folder"]) == 0
+    assert json.loads(capsys.readouterr().out)["moved"] == ids
+    assert client.main([*base, "--move", "nonesuch", "--no-folder"]) == 1
+
+
+def test_move_misuse_is_a_usage_error(live, key_file, tmp_path, capsys):
+    path, _ = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>hi</body></html>")
+    base = ["--key-file", str(path), "--move", "abc"]
+    for extra, word in (
+        ([], "--move needs --folder"),
+        (["--folder", "x", "--no-folder"], "cannot be used together"),
+        (["--folder", ""], "--no-folder"),
+        (["--folder", "x", "--folder-title", "X"], "--move goes with"),
+        (["--no-folder", "--list"], "--move goes with"),
+    ):
+        assert client.main([*base, *extra]) == 2
+        assert word in capsys.readouterr().err
+    assert client.main([*base, "--folder", "x", str(page)]) == 2
+    capsys.readouterr()
+
+
+def test_the_top_usage_line_names_the_folder_flags(live, key_file, capsys):
+    path, _ = key_file
+    assert client.main(["--key-file", str(path)]) == 2
+    err = capsys.readouterr().err
+    assert "--move ID" in err and "--folder SLUG" in err and "--folders" in err

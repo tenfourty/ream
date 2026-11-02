@@ -674,6 +674,14 @@ def _folder_fields(folder: str | None, folder_title: str | None) -> dict:
     return out
 
 
+def _move(ids: list[str], key: str, folder: str | None) -> dict:
+    """`--move ID ... --folder SLUG` (or `--no-folder`, `folder` None): file several of this
+    key's own pages in one request. The service answers `{moved, missing, folder}`."""
+    return _request(
+        "POST", f"{_api_base()}/artifacts/move", key, {"ids": ids, "folder": folder}
+    )
+
+
 def _publish(
     file_path: str,
     title: str | None,
@@ -1463,6 +1471,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--move",
+        nargs="+",
+        metavar="ID",
+        help=(
+            "file several of your own pages in one go: --move ID [ID ...] --folder SLUG"
+            " (made on first use, and says so) or --move ID [ID ...] --no-folder to take"
+            " them out; up to 200 ids. Prints which moved and which are missing (no such"
+            " page, or not yours)."
+        ),
+    )
+    parser.add_argument(
         "--folder-title",
         metavar="NAME",
         help="with --folder: the display name of a NEW folder (set once; default the slug)",
@@ -1470,7 +1489,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-folder",
         action="store_true",
-        help="with FILE --update ID: take the page out of its folder",
+        help="with FILE --update ID, or with --move: take the page(s) out of their folder",
     )
     parser.add_argument(
         "--folders",
@@ -1663,6 +1682,50 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     key = maybe_rotate(args, key)
 
+    if args.move:
+        if args.folder is not None and args.no_folder:
+            print("--folder and --no-folder cannot be used together", file=sys.stderr)
+            return 2
+        if args.folder is None and not args.no_folder:
+            print(
+                "--move needs --folder SLUG (to file the pages) or --no-folder"
+                " (to take them out)",
+                file=sys.stderr,
+            )
+            return 2
+        if args.folder == "":
+            print(
+                '--folder "" is empty: use --no-folder to take pages out',
+                file=sys.stderr,
+            )
+            return 2
+        if args.file or args.update or args.list or args.folder_title:
+            print(
+                "--move goes with --folder SLUG or --no-folder only: no FILE,"
+                " --update, --list or --folder-title",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            result = _move(args.move, key, None if args.no_folder else args.folder)
+        except HTTPFailure as exc:
+            detail = (
+                exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
+            )
+            print(f"{exc.status} {detail}", file=sys.stderr)
+            return 1
+        print(json.dumps({"moved": result["moved"], "missing": result["missing"]}))
+        filed = result.get("folder")
+        if filed and filed.get("created"):
+            print(f"created new folder '{_printable(filed['slug'])}'", file=sys.stderr)
+        elif filed:
+            print(f"in folder '{_printable(filed['slug'])}'", file=sys.stderr)
+        print(
+            f"moved {len(result['moved'])}, missing {len(result['missing'])}"
+            " (missing: no such page, or not yours)",
+            file=sys.stderr,
+        )
+        return 0 if result["moved"] else 1
     if args.folder is not None and not args.list and not args.file:
         print(
             "--folder goes with FILE (publish or --update ID) or with --list;"
@@ -1929,7 +1992,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         print(
             "usage: artifacts-publish FILE --title TITLE"
-            " | FILE --update ID [--title TITLE] | --list"
+            " [--folder SLUG [--folder-title NAME]]"
+            " | FILE --update ID [--title TITLE] [--folder SLUG | --no-folder]"
+            " | --list [--folder SLUG] | --folders"
+            " | --move ID [ID ...] (--folder SLUG | --no-folder)"
             " | --rename ID --title TITLE | --archive ID | --unarchive ID"
             " | --pin ID | --unpin ID | --duplicate ID | --fetch ID [FILE]",
             file=sys.stderr,
