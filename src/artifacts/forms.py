@@ -647,7 +647,7 @@ def sync(conn, artifact_id: str, version_n: int, parsed: Parsed, session) -> Non
         ).fetchall()
     )
     now = datetime.now(UTC)
-    for form in parsed.forms:
+    for page_position, form in enumerate(parsed.forms):
         decision_id = existing.pop(form.name, None)
         if decision_id is None:
             decision_id = ids.new_id()
@@ -672,9 +672,9 @@ def sync(conn, artifact_id: str, version_n: int, parsed: Parsed, session) -> Non
                 (form.title, decision_id),
             )
         conn.execute(
-            "insert into decision_form (decision_id, version_n, complete_all)"
-            " values (%s, %s, %s)",
-            (decision_id, version_n, form.complete_all),
+            "insert into decision_form (decision_id, version_n, complete_all, position)"
+            " values (%s, %s, %s, %s)",
+            (decision_id, version_n, form.complete_all, page_position),
         )
         for position, spec in enumerate(form.fields):
             conn.execute(
@@ -749,7 +749,7 @@ def for_page(db, artifact_id: str, *, include_closed: bool = False) -> list[dict
                 (did,),
             ).fetchone()[0]
             complete = conn.execute(
-                "select complete_all from decision_form"
+                "select complete_all, position from decision_form"
                 " where decision_id = %s and version_n = %s",
                 (did, latest),
             ).fetchone()
@@ -763,6 +763,13 @@ def for_page(db, artifact_id: str, *, include_closed: bool = False) -> list[dict
                     "complete": "all" if complete and complete[0] else None,
                     "closed_at": closed.isoformat() if closed is not None else None,
                     "fields": _fields(conn, did, latest) if latest is not None else [],
+                    "_order": (closed is not None, complete[1] if complete else 0),
                 }
             )
+    # Page order: forms minted in one publish share created_at, so the SQL order
+    # alone ties them on a random id. Open forms first, each in the order it sits
+    # on the page at its latest version.
+    out.sort(key=lambda f: f["_order"])
+    for f in out:
+        del f["_order"]
     return out

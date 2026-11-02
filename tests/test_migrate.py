@@ -246,8 +246,8 @@ def _seed(database: Database) -> None:
         ),
         (
             "decision_form",
-            "decision_id, version_n, complete_all",
-            ["d3", 2, True],
+            "decision_id, version_n, complete_all, position",
+            ["d3", 2, True, 1],
         ),
         (
             "decision_field",

@@ -518,6 +518,7 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " decision_id text not null references decision (id) on delete cascade,"
             " version_n integer not null,"
             " complete_all boolean not null default 0,"
+            " position integer not null default 0,"
             " primary key (decision_id, version_n))"
         ),
         (

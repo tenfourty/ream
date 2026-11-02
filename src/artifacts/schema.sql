@@ -1002,6 +1002,7 @@ create table if not exists decision_form (
     decision_id  text not null references decision(id) on delete cascade,
     version_n    integer not null,
     complete_all boolean not null default false,
+    position     integer not null default 0,
     primary key (decision_id, version_n)
 );
 create table if not exists decision_field (
