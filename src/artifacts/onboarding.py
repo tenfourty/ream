@@ -763,8 +763,10 @@ and how many open questions it would set aside; add `--confirm` to do it (API: `
 when you archive a page (you get decision_set_aside events). `--unarchive-folder SLUG` brings back
 only the pages that archive archived, and reopens their questions; a page you had archived yourself
 stays archived. Archiving or unarchiving a page on its own, or moving it out, detaches it from the
-folder's archive. Jeremy's wall is
-unchanged for now: it will show a folder as one tile that opens to its pages.
+folder's archive. On Jeremy's wall a folder is one tile that opens to its pages, with "N waiting"
+when any of them has an open question: such a page shows only inside its folder, so keep a
+standing board out of folders. He can also make folders of his own, holding any agent's pages;
+you cannot publish into those, and a page he files there reads back with no folder for you.
 
 ## Rules that save you
 
