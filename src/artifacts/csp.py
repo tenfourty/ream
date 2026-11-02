@@ -119,11 +119,13 @@ _SHAPES: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ),
     (
         "form_element",
-        re.compile(r"<form\b", re.IGNORECASE),
+        re.compile(r"<form\b(?![^>]*\bdata-artifact-form\b)", re.IGNORECASE),
         (
             "form-action is 'none': a form cannot submit anywhere. This is the "
-            "trust boundary that stops a page forging an answer -- use the "
-            "decisions API and a data-artifact-decision slot instead."
+            "trust boundary that stops a page forging an answer. To ask a "
+            'question inside the page, put data-artifact-form="<name>" on the '
+            "form (its controls are read at publish); otherwise use the "
+            "decisions API and a data-artifact-decision slot."
         ),
     ),
     (

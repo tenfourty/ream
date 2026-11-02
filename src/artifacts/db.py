@@ -315,6 +315,33 @@ def _widen_answer_sources(conn) -> None:
         )
 
 
+def _widen_decision_kinds(conn) -> None:
+    """Step 11: add 'form' to the decision.kind CHECK, in place as step 6 does, and
+    prove it: the stored table text must contain the widened list afterwards or the
+    migration rolls back and fails start-up loudly."""
+    old = "'question', 'review')"
+    new = "'question', 'review', 'form')"
+    conn.execute("pragma writable_schema = on")
+    try:
+        conn.execute(
+            "update sqlite_master set sql = replace(sql, "  # noqa: S608 -- fixed text
+            + _sql_text(old)
+            + ", "
+            + _sql_text(new)
+            + ") where type = 'table' and name = 'decision'"
+        )
+    finally:
+        conn.execute("pragma writable_schema = off")
+    row = conn.execute(
+        "select sql from sqlite_master where type = 'table' and name = 'decision'"
+    ).fetchone()
+    if row is None or new not in row[0]:
+        raise RuntimeError(
+            "schema step 11 could not widen decision.kind's CHECK to include "
+            "'form': the stored table text is not the expected shape"
+        )
+
+
 def _sql_text(text: str) -> str:
     """`text` as an SQL string literal (fixed text only, never caller input)."""
     return "'" + text.replace("'", "''") + "'"
@@ -470,6 +497,32 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " name text primary key,"
             " value text not null,"
             " created_at timestamptz not null default (artifacts_now()))"
+        ),
+    ),
+    # 2 Nov 2026: form controls inside a page (see schema.sql): the 'form' decision
+    # kind, the form's name, and the stored field lists.
+    11: (
+        "alter table decision add column form_name text",
+        _widen_decision_kinds,
+        (
+            "create index decision_form_name_idx on decision (artifact_id, form_name)"
+            " where kind = 'form'"
+        ),
+        (
+            "create table decision_form ("
+            " decision_id text not null references decision (id) on delete cascade,"
+            " version_n integer not null,"
+            " complete_all boolean not null default 0,"
+            " primary key (decision_id, version_n))"
+        ),
+        (
+            "create table decision_field ("
+            " decision_id text not null references decision (id) on delete cascade,"
+            " version_n integer not null,"
+            " position integer not null,"
+            " name text not null,"
+            " spec jsonb not null check (json_valid(spec)),"
+            " primary key (decision_id, version_n, name))"
         ),
     ),
 }

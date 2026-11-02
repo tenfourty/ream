@@ -4324,7 +4324,7 @@ def gallery_router(db: Database) -> APIRouter:
             "          where v.artifact_id = a.id) as versions,"
             "       (select count(*) from decision d"
             "          where d.artifact_id = a.id"
-            "            and d.answer is null"
+            "            and d.answer is null and d.kind <> 'form'"
             "            and d.closed_at is null) as waiting,"
             # The CURRENT version's text: the only one whose `body` is always plain.
             "       (select v.body from version v"
@@ -4377,7 +4377,7 @@ def gallery_router(db: Database) -> APIRouter:
             " order by a.pinned_at desc nulls last,"
             "          (select count(*) from decision d"
             "             where d.artifact_id = a.id"
-            "               and d.answer is null"
+            "               and d.answer is null and d.kind <> 'form'"
             "               and d.closed_at is null) > 0 desc,"
             # Then what he has not read yet, newest first; once he opens a page
             # it drops back into the order below (homelab-ij8.103, his ruling).
@@ -5099,6 +5099,8 @@ def gallery_router(db: Database) -> APIRouter:
         every_row = decisions.list_for_artifact(
             db, artifact_id, include_answered=True, include_closed=True
         )
+        # A form decision is not drawn until the gallery can submit it (forms, slice 2).
+        every_row = [r for r in every_row if r.kind != "form"]
         decision_rows = [r for r in every_row if r.closed_at is None]
         note_threads = comments.note_threads(db, artifact_id)
         shown_rows = decision_rows + [

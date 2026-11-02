@@ -53,7 +53,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from artifacts import events, ggscan, ids, packing, partner, scan
+from artifacts import events, forms, ggscan, ids, packing, partner, scan
 from artifacts import rename as agent_rename
 from artifacts.db import DUPLICATE_KEY, Database, in_list, jsonb
 from artifacts.text import LEADING_DOCTYPE
@@ -450,6 +450,8 @@ def publish(
     """
     _guard(title, MAX_TITLE_BYTES, "title", agent=agent, artifact_id=None)
     _guard(body, MAX_BODY_BYTES, "body", agent=agent, artifact_id=None)
+    # A bad form is refused before anything is stored (FormRefused -> 422).
+    parsed_forms = forms.parse(body)
     artifact_id, revision = ids.new_id(), _revision(body, 1)
     # Version 1 is a full copy, encoded before the transaction opens so the write lock is
     # not held while zstd runs.
@@ -495,6 +497,7 @@ def publish(
             "update artifact set current_version = 1, updated_at = %s where id = %s",
             (now, artifact_id),
         )
+        forms.sync(conn, artifact_id, 1, parsed_forms, session)
     return Published(
         id=artifact_id,
         version=1,
@@ -596,6 +599,8 @@ def patch(
         _check_size(
             title, MAX_TITLE_BYTES, "title", agent=agent, artifact_id=artifact_id
         )
+    # A bad form is refused before anything is stored (FormRefused -> 422).
+    parsed_forms = forms.parse(body)
     with db.connect() as conn:
         row = _owned(conn, artifact_id, agent)
         if row is None:
@@ -734,6 +739,7 @@ def patch(
                 from artifacts import decisions
 
                 decisions._advance_rounds(conn, artifact_id, n)
+                forms.sync(conn, artifact_id, n, parsed_forms, session)
         except DUPLICATE_KEY as exc:
             # Two patches raced the same `expected_revision`: both passed the
             # check above (nothing here takes a lock), but only one of them

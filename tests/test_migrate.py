@@ -237,6 +237,30 @@ def _seed(database: Database) -> None:
             ["d2", "a1", 2, "Review", j([]), T0, "review", "held"],
         ),
         (
+            "decision",
+            (
+                "id, artifact_id, version_n, question, options, created_at, kind,"
+                " form_name"
+            ),
+            ["d3", "a1", 2, "Rollout ☃", j([]), T0, "form", "rollout"],
+        ),
+        (
+            "decision_form",
+            "decision_id, version_n, complete_all",
+            ["d3", 2, True],
+        ),
+        (
+            "decision_field",
+            "decision_id, version_n, position, name, spec",
+            [
+                "d3",
+                2,
+                0,
+                "region",
+                j({"name": "region", "type": "radio", "required": False}),
+            ],
+        ),
+        (
             "decision_outcome",
             "id, decision_id, body, agent, session, created_at",
             ["o1", "d1", "done", "alpha", None, T1],

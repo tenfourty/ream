@@ -984,3 +984,31 @@ create table if not exists server_secret (
     value      text not null,
     created_at timestamptz not null default now()
 );
+
+-- FORM CONTROLS INSIDE A PAGE (slice 1, 2 Nov 2026;
+-- docs/agent/specs/2026-10-29-form-controls-design.md). A `data-artifact-form` subtree in a page
+-- becomes ONE decision of kind 'form', keyed by (page, form_name) and kept across republishes;
+-- its question column holds the form's title and its options '[]'. The kind CHECK is widened
+-- here (SQLite does it as its schema step 11). The fields live per version in decision_field:
+-- `spec` is the parsed field (name, type, label, options, required, limits); decision_form
+-- carries the form-level flag (data-complete="all"). Nothing answers a form yet.
+alter table decision add column if not exists form_name text;
+alter table decision drop constraint if exists decision_kind_check;
+alter table decision add constraint decision_kind_check
+    check (kind in ('question', 'review', 'form'));
+create index if not exists decision_form_name_idx on decision (artifact_id, form_name)
+    where kind = 'form';
+create table if not exists decision_form (
+    decision_id  text not null references decision(id) on delete cascade,
+    version_n    integer not null,
+    complete_all boolean not null default false,
+    primary key (decision_id, version_n)
+);
+create table if not exists decision_field (
+    decision_id text not null references decision(id) on delete cascade,
+    version_n   integer not null,
+    position    integer not null,
+    name        text not null,
+    spec        jsonb not null,
+    primary key (decision_id, version_n, name)
+);

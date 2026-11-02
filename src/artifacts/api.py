@@ -41,6 +41,7 @@ from artifacts import (
     csp,
     decisions,
     events,
+    forms,
     grants,
     hosts,
     idempotency,
@@ -500,7 +501,7 @@ def agent_router(
         given (homelab-ij8.35). Publish time is the one moment the author is
         definitely looking (homelab-ij8.50).
         """
-        out = csp.as_json(body) + traps.as_json(body)
+        out = csp.as_json(body) + traps.as_json(body) + forms.warnings(body)
         for slot, line in decisions.unresolved_slots(db, artifact_id, body):
             out.append(
                 {
@@ -2051,11 +2052,17 @@ def agent_router(
                 1 for d in shown if d.answer
             )
         notes = comments.note_threads(db, artifact_id) if can_read else {}
+        form_info = forms.for_decisions(db, [d.id for d in shown if d.kind == "form"])
         return JSONResponse(
             jsonable_encoder(
                 [
                     {
                         **decisions.public(row),
+                        **(
+                            {"form": form_info.get(row.id)}
+                            if row.kind == "form"
+                            else {}
+                        ),
                         "outcomes": [o.__dict__ for o in outcomes.get(row.id, [])],
                         "replies": [r.__dict__ for r in notes.get(row.id, [])],
                     }
@@ -2064,6 +2071,22 @@ def agent_router(
             ),
             headers={"x-artifacts-answered-omitted": str(omitted)},
         )
+
+    @router.get("/artifacts/{artifact_id}/forms")
+    def page_forms(
+        artifact_id: str,
+        include_closed: bool = False,
+        agent: str = Depends(caller),
+    ):
+        """The forms a page declares (`data-artifact-form`) and the fields each
+        has now, as stored at publish: name, type, label, options with their
+        values, required, limits. Only the owning key reads this; not yours and
+        no such page answer identically."""
+        try:
+            store.get_owned(db, agent, artifact_id)
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such artifact") from exc
+        return forms.for_page(db, artifact_id, include_closed=include_closed)
 
     @router.get("/decisions")
     def list_all_decisions(

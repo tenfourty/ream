@@ -5,11 +5,20 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from artifacts import hosts, onboarding, partner_in, ratelimit
+from artifacts import forms, hosts, onboarding, partner_in, ratelimit
 from artifacts.api import agent_card_response, agent_router
 from artifacts.content import create_content_app
 from artifacts.db import Database
 from artifacts.gallery import gallery_router
+
+
+def _refuse_bad_forms(app: FastAPI) -> None:
+    """A page whose form cannot be stored is a 422 naming the form and the control,
+    from whichever publish route met it (publish, update, section update, restore)."""
+
+    @app.exception_handler(forms.FormRefused)
+    async def _on_form_refused(_request: Request, exc: forms.FormRefused):
+        return JSONResponse(status_code=422, content={"detail": exc.as_detail()})
 
 
 def create_gallery_app(
@@ -52,6 +61,8 @@ def create_gallery_app(
             {"loc": list(error["loc"]), "type": error["type"]} for error in exc.errors()
         ]
         return JSONResponse(status_code=422, content={"detail": errors})
+
+    _refuse_bad_forms(app)
 
     @app.middleware("http")
     async def _log_gallery_requests(request: Request, call_next):
@@ -134,6 +145,7 @@ def create_api_app(
     exactly as it does on the gallery host.
     """
     app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
+    _refuse_bad_forms(app)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

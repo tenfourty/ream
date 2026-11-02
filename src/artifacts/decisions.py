@@ -62,7 +62,13 @@ MAX_NOTE_BYTES = 1_000
 # decisions and should be asked as such.
 MAX_OPTIONS = 6
 
-KINDS = ("question", "review")
+# 'form' (2 Nov 2026): one decision per `data-artifact-form` subtree (forms.py). Until
+# the gallery can draw and submit it (slice 2) a form is NOT a question waiting on
+# Jeremy: every queue of "what is waiting" below leaves it out. A form can be read
+# back and closed like any decision; it cannot be a question's prerequisite or
+# replacement (`_owned_row` stays question-only on purpose) and it cannot be
+# answered yet (no options to pick, so an answer or a relay is refused as invalid).
+KINDS = ("question", "review", "form")
 
 # The four verdicts, in the order his buttons show them. A review asks
 # nothing he must choose between: there is no recommended letter.
@@ -1982,7 +1988,7 @@ def across_seats(
         f"select {_COLUMNS}, artifact.agent, artifact.title,"  # noqa: S608 -- fixed constant, not caller input
         " decision.created_at from decision"
         " join artifact on artifact.id = decision.artifact_id"
-        " where true"
+        " where decision.kind <> 'form'"
     )
     if not include_closed:
         sql += " and decision.closed_at is null"
@@ -2217,7 +2223,7 @@ def open_counts(db: Database) -> tuple[int, int, int]:
     with db.connect() as conn:
         found = conn.execute(
             "select id, kind, depends_on from decision"
-            " where closed_at is null and answer is null"
+            " where closed_at is null and answer is null and kind <> 'form'"
         ).fetchall()
         reviews = sum(1 for r in found if r[1] == "review")
         waiting = [
