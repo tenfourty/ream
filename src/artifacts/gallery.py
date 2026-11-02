@@ -36,6 +36,7 @@ from artifacts import (
     decisions,
     email_share,
     events,
+    forms_ui,
     frame_pass,
     holds,
     image_store,
@@ -4259,6 +4260,9 @@ def _render_decisions(
 
 def gallery_router(db: Database) -> APIRouter:
     router = APIRouter()
+    forms_ui.register(
+        router, db, same_origin=_same_origin_write, headers=gallery_headers
+    )
 
     @router.get("/gallery.js")
     def gallery_script() -> Response:
@@ -5229,6 +5233,7 @@ def gallery_router(db: Database) -> APIRouter:
                 f' data-version="{int(row[5])}"><iframe id="artifact-frame"'
                 f' src="{src}" sandbox="{sandbox}" title="{escape(row[0])}"></iframe></div>'
                 f"{f'''<div class="col">{settled_below}</div>''' if settled_below else ''}"
+                f"{forms_ui.block(db, artifact_id)}"
                 # AFTER the page, with the settled decisions. A conversation
                 # about a page is read once you have read the page; putting it
                 # above would be the mistake Jeremy already named about the

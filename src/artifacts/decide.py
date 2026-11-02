@@ -170,6 +170,46 @@ def _set_aside_line(row: dict) -> str:
     )
 
 
+def _answered(row: dict) -> bool:
+    """He has answered: a letter, or (a form) a submitted record. A form's `answer` stays
+    null, so a test of `answer` alone calls a submitted form unanswered."""
+    return bool(row.get("answer") or row.get("answer_record"))
+
+
+def _fmt_form(row: dict) -> list[str]:
+    """A form's merged record: who and when, one `name: value` line per field, then the
+    blanks and the stale fields, then the ack hint."""
+    rec = row["answer_record"]
+    by = rec.get("answered_by") or "?"
+    source = row.get("answer_source")
+    how = "he submitted it" if source in (None, "page") else f"relayed from {source}"
+    head = f"  FORM {rec.get('form', row.get('form_name', '?'))} "
+    head += f"(version {rec.get('version', '?')}, {how}, by {by}, "
+    head += f"{rec.get('answered_at', '?')})"
+    lines = [head]
+    for name, value in (rec.get("answers") or {}).items():
+        if name in (rec.get("blank") or []):
+            shown = "(blank)"
+        elif isinstance(value, list):
+            shown = ", ".join(str(v) for v in value)
+        elif isinstance(value, bool):
+            shown = "yes" if value else "no"
+        else:
+            shown = str(value)
+        lines.append(f"  {name}: {shown}")
+    if rec.get("blank"):
+        lines.append(f"  blank: {', '.join(rec['blank'])}")
+    if rec.get("stale"):
+        names = ", ".join(
+            str(x.get("name", x)) if isinstance(x, dict) else str(x)
+            for x in rec["stale"]
+        )
+        lines.append(f"  stale (answered on an earlier version): {names}")
+    if not row.get("acknowledged_at"):
+        lines.append("  NOT YET ACKNOWLEDGED -- artifacts-decide ack " + row["id"])
+    return lines
+
+
 def _fmt(row: dict) -> str:
     """One decision, as the reader needs it rather than as it is stored.
 
@@ -207,7 +247,9 @@ def _fmt(row: dict) -> str:
     lines.append("  " + " · ".join(where))
     lines.extend(_carries(row))
 
-    if row.get("answer"):
+    if row.get("kind") == "form" and row.get("answer_record"):
+        lines.extend(_fmt_form(row))
+    elif row.get("answer"):
         chosen = row["answer"]
         source = row.get("answer_source") or "?"
         # Said plainly, because it is the difference between him and us. A tap
@@ -336,7 +378,7 @@ def _print_rows(rows: list[dict], *, empty: str, section=None) -> int:
 
 def _new_answers(rows: list[dict]) -> list[dict]:
     """Answered and not yet acknowledged: what an agent must act on."""
-    return [r for r in rows if r.get("answer") and not r.get("acknowledged_at")]
+    return [r for r in rows if _answered(r) and not r.get("acknowledged_at")]
 
 
 # The two events that say a question was parked or came back (2 Nov 2026), and the
@@ -1116,7 +1158,9 @@ def _wait(args, key: str, base: str) -> int:
         live = [
             r
             for r in mine
-            if not r.get("set_aside") and not r.get("answer") and not r.get("closed_at")
+            if not r.get("set_aside")
+            and not _answered(r)
+            and not r.get("closed_at")
         ]
         if page_gone and not live:
             # A binned page lists nothing, so there is no row to print: say so
@@ -1575,6 +1619,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = _StaleAwareParser(
         prog="artifacts-decide",
         description="ask Jeremy a lettered question on a page, and read the answer",
+        epilog=(
+            "A form published in a page (data-artifact-form) is answered in the gallery: "
+            "`list`, `answers` and `wait` print its submitted record, one `name: value` "
+            "line per field with blank and stale fields named. Read it by "
+            "answer_record, never by `answer`, which stays empty for a form."
+        ),
     )
     parser.add_argument("--key-file")
     # Same as artifacts-publish: a key from an open descriptor never touches
@@ -2144,12 +2194,12 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 fresh = _new_answers(rows)
                 still_open = [
-                    r for r in rows if not r.get("answer") and not r.get("set_aside")
+                    r for r in rows if not _answered(r) and not r.get("set_aside")
                 ]
                 # Their own section, after the open ones: parked, never counted as
                 # waiting (2 Nov 2026).
-                parked = [r for r in rows if not r.get("answer") and r.get("set_aside")]
-                done = [r for r in rows if r.get("answer") and r.get("acknowledged_at")]
+                parked = [r for r in rows if not _answered(r) and r.get("set_aside")]
+                done = [r for r in rows if _answered(r) and r.get("acknowledged_at")]
                 rows = fresh + still_open + (done if args.answered else []) + parked
             if args.stranded:
                 empty = "no uncollected answers" + (

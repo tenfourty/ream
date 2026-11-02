@@ -62,12 +62,14 @@ MAX_NOTE_BYTES = 1_000
 # decisions and should be asked as such.
 MAX_OPTIONS = 6
 
-# 'form' (2 Nov 2026): one decision per `data-artifact-form` subtree (forms.py). Until
-# the gallery can draw and submit it (slice 2) a form is NOT a question waiting on
-# Jeremy: every queue of "what is waiting" below leaves it out. A form can be read
-# back and closed like any decision; it cannot be a question's prerequisite or
-# replacement (`_owned_row` stays question-only on purpose) and it cannot be
-# answered yet (no options to pick, so an answer or a relay is refused as invalid).
+# 'form' (2 Nov 2026): one decision per `data-artifact-form` subtree (forms.py). An
+# unsubmitted form is NOT a question waiting on Jeremy: every queue of "what is waiting"
+# below leaves it out; once he submits (formanswer.py) it is an answer and shows to the
+# agent. `answer` stays null for a form: its answer is `answer_record`, so a test of
+# "open" written as `answer is null` misclassifies a submitted one (use `answered_at`).
+# A form can be read back and closed like any decision; it cannot be a question's
+# prerequisite or replacement (`_owned_row` stays question-only on purpose) and an agent
+# cannot answer it with a letter (no options to pick).
 KINDS = ("question", "review", "form")
 
 # The four verdicts, in the order his buttons show them. A review asks

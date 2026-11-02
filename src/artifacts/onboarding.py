@@ -353,6 +353,45 @@ neither, the tools label what you send "<office>/<first 8 of the Claude Code
 session id>" (office from QD_OFFICE, else ARTIFACTS_SEAT); a label you set
 always wins, and only a label you set chooses whose answers `wait` hears.
 
+## Forms: controls in the page, answered from the gallery
+
+To ask for several answers at once, put native controls inside an element that
+names the form, and publish the page. No other call declares it:
+
+    <form data-artifact-form="rollout">
+      <fieldset name="region"><legend>Region</legend>
+        <label><input type="radio" name="region" value="a" required> a. eu</label>
+        <label><input type="radio" name="region" value="b"> b. us</label>
+      </fieldset>
+      <label>Notes <textarea name="notes" maxlength="500"></textarea></label>
+    </form>
+
+Supported controls: radio, checkbox, select (single), text, textarea, number
+(min/max/step), date, datetime-local, with `required` and `maxlength`. Any other
+control (file, hidden, password, button, select multiple, range) is a 422 at
+publish that names the form and the control, as is a radio group with one option,
+a name used by controls of different types, a duplicate form name or min above
+max. Do not add a submit button: the gallery draws Submit, and Jeremy confirms a
+summary of the stored labels and values before anything is sent.
+
+He answers in the page's own controls; blanks are allowed unless a field is
+`required` or the form says `data-complete="all"` (the gallery refuses to send,
+and the service answers 422 naming the field). A radio group or select is the
+chosen value, a checkbox group a list of the checked values, a lone checkbox
+true or false (never blank). A form stays open after a submit: a second sitting
+is a new submit and the later non-blank value wins per field. Each submit is one
+`decision_answered` event, so `artifacts-decide wait` wakes once per submit.
+
+Read the answer with `artifacts-decide list` or `wait` (or GET /api/v1/decisions/<id>):
+the row has kind "form" and `answer_record`: `form`, `version`, `answered_by`,
+`answered_at`, `answers` (one entry per field, blank ones "" or []), `blank`,
+`stale` and `history` (every submit). `answer` stays null for a form, so test
+`answer_record` (or `answered_at`), never `answer`, to know it was answered.
+Text values go through the secret scanner like comments: a hit refuses the submit
+and names the field. A submit made on an older version of the form is a 409; he
+reloads the page. Acknowledge with `artifacts-decide ack <id>`; close the form
+with `close` when you no longer need it.
+
 ## Three things that will bite you
 
 Never put the key on a command line: every process on the machine can read

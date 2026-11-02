@@ -238,6 +238,58 @@ addEventListener("resize",function(){try{if(!EP.length)return;clearTimeout(rt);
 """
 
 
+FORM_JS = r"""// FORM CONTROLS (forms slice 2). The page's own controls inside an element marked
+// `data-artifact-form="<name>"` are reported to the gallery as ONE full snapshot
+// (`artifact-form` {form, values}, `load: true` on the first) on load and after every input or change; the gallery
+// draws the Submit bar and the summary sheet, the page never submits anything. radio =
+// the checked value or null, a checkbox group = the list of checked values, a lone
+// checkbox = true or false, every other control = its string. The gallery may write a
+// draft back with `artifact-form-fill` {form, values}: property writes only, so no input
+// event fires, at most 200 fields and 2000 characters a value. Both legs check the
+// gallery's origin, and the report goes to that origin only, never "*".
+var FMX=200,FMV=2000;
+function fcut(s){return fixend(String(s).slice(0,FMV))}
+function fnm(f){return String(f.getAttribute("data-artifact-form")||"").slice(0,100)}
+function ffrm(n){while(n&&n.nodeType===1){
+  if(n.getAttribute&&n.getAttribute("data-artifact-form")!==null)return n;n=n.parentNode}return null}
+function fctl(f){return Array.prototype.slice.call(f.querySelectorAll("input,select,textarea"))}
+function ftype(e){return String(e.type||"").toLowerCase()}
+function fsnap(f){var v=Object.create(null),cnt=Object.create(null),c=fctl(f),i,e,n,t,k=0;
+  for(i=0;i<c.length;i++){e=c[i];n=e.name;
+    if(n&&n!=="__proto__"&&ftype(e)==="checkbox")cnt[n]=(cnt[n]||0)+1}
+  for(i=0;i<c.length;i++){e=c[i];n=e.name;if(!n||n==="__proto__")continue;t=ftype(e);
+    if(!(n in v)&&k>=FMX)continue;
+    if(t==="radio"){if(!(n in v)){v[n]=null;k++}if(e.checked)v[n]=fcut(e.value)}
+    else if(t==="checkbox"){
+      if(cnt[n]>1){if(!(n in v)){v[n]=[];k++}if(e.checked)v[n].push(fcut(e.value))}
+      else{v[n]=!!e.checked;k++}}
+    else{if(!(n in v))k++;v[n]=fcut(e.value)}}
+  var o={};for(n in v)o[n]=v[n];return o}
+function fpost(f,first){var n=fnm(f);if(!n)return;
+  var m={type:"artifact-form",form:n,values:fsnap(f)};if(first)m.load=true;
+  parent.postMessage(m,__ORIGIN__)}
+function fedit(e){try{var f=ffrm(e&&e.target);if(f)fpost(f)}catch(x){}}
+addEventListener("input",fedit,true);addEventListener("change",fedit,true);
+addEventListener("load",function(){try{
+  var a=document.querySelectorAll("[data-artifact-form]"),i;
+  for(i=0;i<a.length&&i<20;i++)fpost(a[i],true)}catch(x){}});
+addEventListener("message",function(m){try{
+  if(m.origin!==__ORIGIN__)return;var d=m.data;
+  if(!d||typeof d!=="object"||d.type!=="artifact-form-fill"||typeof d.form!=="string")return;
+  if(!d.values||typeof d.values!=="object")return;
+  var a=document.querySelectorAll("[data-artifact-form]"),f=null,i;
+  for(i=0;i<a.length;i++)if(fnm(a[i])===d.form){f=a[i];break}
+  if(!f)return;
+  var ks=Object.keys(d.values).slice(0,FMX),want=Object.create(null),c=fctl(f),e,n,v,t;
+  for(i=0;i<ks.length;i++)want[ks[i]]=1;
+  for(i=0;i<c.length;i++){e=c[i];n=e.name;if(!n||!want[n])continue;v=d.values[n];t=ftype(e);
+    if(t==="radio")e.checked=typeof v==="string"&&fcut(v)===e.value;
+    else if(t==="checkbox")e.checked=Array.isArray(v)?v.slice(0,FMX).indexOf(e.value)>=0:v===true;
+    else if(typeof v==="string"||typeof v==="number")e.value=fcut(v)}
+  fpost(f)}catch(x){}});
+"""
+
+
 def _viewer_report(missing: Sequence[str] = ()) -> str:
     """The other half of what gets injected on a LIVE page -- unrelated to the
     `window.claude` contract above, so it is a separate `<script>`, concatenated onto
@@ -549,6 +601,7 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         'p.unshift(e.tagName.toLowerCase()+":nth-of-type("+i+")");e=e.parentElement}'
         'return("body"+(p.length?">"+p.join(">"):"")).slice(0,512)}'
         + PIN_JS.replace("__ORIGIN__", origin)
+        + FORM_JS.replace("__ORIGIN__", origin)
         +
         # SELECTING TEXT TO COMMENT ON IT (homelab-ij8.18). The gallery cannot
         # read inside this cross-origin page, by design, so the page reports a
