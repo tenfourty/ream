@@ -182,6 +182,9 @@ class _Walker(HTMLParser):
         # a base entry the fragment must never close.
         self._base = ["svg", 0, 0, False, False] if foreign else None
         self.stack: list[list] = [self._base] if foreign else []
+        # Open count per tag name, so an end tag that matches nothing is a
+        # constant-time miss rather than a scan of the stack.
+        self._open: dict[str, int] = {"svg": 1} if foreign else {}
         self.matches: list[dict] = []
         self.stray_end: list[str] = []
         self._heading: dict | None = None  # capturing the target's first heading
@@ -202,7 +205,12 @@ class _Walker(HTMLParser):
     def _pop_to(self, index: int, at: int) -> None:
         """Implicitly close everything above `index` (exclusive) at `at`."""
         while len(self.stack) > index:
-            self._close(self.stack.pop(), at, at)
+            self._close(self._pop(), at, at)
+
+    def _pop(self) -> list:
+        entry = self.stack.pop()
+        self._open[entry[0]] -= 1
+        return entry
 
     # -- handlers ---------------------------------------------------------------
     def handle_starttag(self, tag, attrs):
@@ -221,7 +229,7 @@ class _Walker(HTMLParser):
         # `<div id="a"/>text` is an OPEN div holding "text". Only void
         # elements have no content. The one place `/>` does self-close is
         # foreign content (inline SVG and MathML: `<path/>`), as in a browser.
-        foreign = tag in _FOREIGN or any(e[0] in _FOREIGN for e in self.stack)
+        foreign = tag in _FOREIGN or any(self._open.get(f) for f in _FOREIGN)
         closed = tag in _VOID or (foreign and raw.rstrip().endswith("/>"))
         if self.wanted is not None:
             is_target = attr.get("id") in self.wanted
@@ -252,6 +260,7 @@ class _Walker(HTMLParser):
         if is_heading:
             self._heading = {"text": [], "done": False}
         if not closed:
+            self._open[tag] = self._open.get(tag, 0) + 1
             self.stack.append(
                 [
                     tag,
@@ -270,10 +279,13 @@ class _Walker(HTMLParser):
         at = self._pos()
         gt = self.src.find(">", at)
         end = gt + 1 if gt >= 0 else len(self.src)
+        if not self._open.get(tag):
+            self.stray_end.append(tag)
+            return
         for index in range(len(self.stack) - 1, -1, -1):
             if self.stack[index][0] == tag:
                 self._pop_to(index + 1, at)
-                self._close(self.stack.pop(), at, end)
+                self._close(self._pop(), at, end)
                 return
         self.stray_end.append(tag)
 

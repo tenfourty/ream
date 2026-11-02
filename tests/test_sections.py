@@ -682,3 +682,26 @@ def test_a_huge_fragment_on_a_small_page_is_refused_before_parsing(monkeypatch):
     huge = "<p>" + "x" * (sections.SECTION_PAGE_MAX + 1) + "</p>"
     with pytest.raises(sections.TooLargeError, match="republish the whole page"):
         sections.apply(small, "log", "append", huge)
+
+
+def test_many_unmatched_end_tags_parse_quickly():
+    import time
+
+    body = (
+        '<div id="a">'
+        + "<span>" * 20000
+        + "</em>" * 20000
+        + "</span>" * 20000
+        + "</div>"
+    )
+    t = time.monotonic()
+    found = sections.locate(body, "a")
+    sections.locate_many(body, {"a"})
+    assert time.monotonic() - t < 2
+    assert found.end == len(body)
+
+
+def test_mismatched_but_matchable_end_tag_still_closes_inner_elements():
+    body = '<div id="a"><p>one<span>two</div>tail'
+    found = sections.locate(body, "a")
+    assert body[found.start : found.end] == '<div id="a"><p>one<span>two</div>'
