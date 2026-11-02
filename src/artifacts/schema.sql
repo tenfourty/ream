@@ -368,7 +368,8 @@ create index if not exists artifact_live_idx on artifact (deleted_at)
 alter table event drop constraint if exists event_kind_check;
 alter table event add constraint event_kind_check
     check (kind in ('decision_answered', 'comment_added', 'thread_resolved',
-                    'decision_shelved', 'comment_withdrawn'));
+                    'decision_shelved', 'comment_withdrawn',
+                    'decision_set_aside', 'decision_reopened'));
 
 -- WHO, when three seats share one key (homelab-ij8.32, 21 Sep 2026).
 --
@@ -1013,3 +1014,13 @@ create table if not exists decision_field (
     spec        jsonb not null,
     primary key (decision_id, version_n, name)
 );
+
+-- ARCHIVING SETS A PAGE'S QUESTIONS ASIDE (2 Nov 2026;
+-- docs/agent/specs/2026-11-02-archive-sets-aside-design.md; Jeremy's rule of 2 Nov replaces
+-- his 21 Sep one that closed them). "Set aside" is DERIVED, never stored: a question is set
+-- aside exactly when it is open (no answer, not closed) and its page is archived or binned.
+-- The one new column is `reopened_at`, stamped when the page comes back and the question
+-- with it. The event kinds `decision_set_aside` and `decision_reopened` are in the CHECK
+-- above (`decision_shelved` stays for history and is no longer written); SQLite does both
+-- as its schema step 12.
+alter table decision add column if not exists reopened_at timestamptz;

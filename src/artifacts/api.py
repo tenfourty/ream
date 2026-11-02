@@ -1906,7 +1906,13 @@ def agent_router(
                 needed_by=payload.needed_by,
                 for_offices=payload.for_offices,
             )
-            return decisions.public(row)
+            out = decisions.public(row)
+            if row.set_aside:
+                out["warning"] = (
+                    f"this page is {row.set_aside_why}; the question is set aside "
+                    "until it is unarchived"
+                )
+            return out
         except store.NotAPage as exc:
             # 422, not 413: the body is not too much, it is not a page. Named
             # like every other refusal so a caller can tell them apart without
@@ -1995,8 +2001,10 @@ def agent_router(
         # A withdrawn question is part of a page's record and was unreadable on
         # every route an agent could reach (homelab-ij8.44). It matters more
         # since 21 Sep, when archiving or deleting a page started withdrawing
-        # its open questions -- so most withdrawals are now the service's doing
-        # and the agent never chose them.
+        # its open questions. Since 2 Nov that is no longer so: archiving or
+        # binning SETS THEM ASIDE (rows carry `set_aside`, `set_aside_since`,
+        # `reopened_at`) and they come back on unarchive or restore; a
+        # withdrawal is an agent's own `close`.
         include_closed: bool = False,
         agent: str = Depends(caller),
     ):
@@ -2105,6 +2113,10 @@ def agent_router(
         include_answered: bool | None = None,
         open_only: bool = False,
         include_closed: bool = False,
+        # A question SET ASIDE (open, its page archived or binned) is left out of
+        # every list of what waits on him unless asked for (2 Nov 2026). Rows carry
+        # `set_aside`, `set_aside_since` and `reopened_at` either way.
+        include_set_aside: bool = False,
         scope: str = Query("mine", pattern="^(mine|all)$"),
         # PAGING. The body stays a plain list, so a header carries the news that
         # it was cut. The default is the maximum (1000), not the old 200: the
@@ -2178,6 +2190,7 @@ def agent_router(
                 # per-artifact route above does not suppress it either and
                 # one flag pair must mean one thing on every route.
                 include_closed=include_closed,
+                include_set_aside=include_set_aside,
                 limit=limit + 1,
                 after=after,
             )
@@ -2198,6 +2211,7 @@ def agent_router(
             agent,
             include_answered=(include_answered is not False) and not open_only,
             include_closed=include_closed,
+            include_set_aside=include_set_aside,
             limit=limit + 1,
             after=after,
         )
@@ -2208,6 +2222,10 @@ def agent_router(
     @router.get("/questions")
     def list_open_questions(
         open: bool = Query(True),
+        # Set-aside questions (open, page archived or binned) are left out unless asked
+        # for, as on GET /decisions; each carries `set_aside: true` and sorts after
+        # every question that is waiting.
+        include_set_aside: bool = False,
         scope: str = Query("mine", pattern="^(mine|all)$"),
         # PAGING, as on GET /decisions: `limit` (1..1000, default 1000), `after`
         # a question id from the previous page, `X-Artifacts-Truncated` on every
@@ -2250,7 +2268,9 @@ def agent_router(
                 )
             found = [
                 (r.decision, r.agent, r.artifact_title)
-                for r in decisions.across_seats(db, limit=_ALL_OPEN)
+                for r in decisions.across_seats(
+                    db, limit=_ALL_OPEN, include_set_aside=include_set_aside
+                )
             ]
         else:
             with db.connect() as conn:
@@ -2263,14 +2283,18 @@ def agent_router(
             found = [
                 (d, agent, titles.get(d.artifact_id, ""))
                 for d in decisions.list_for_agent(
-                    db, agent, limit=_ALL_OPEN, kind="question"
+                    db,
+                    agent,
+                    limit=_ALL_OPEN,
+                    kind="question",
+                    include_set_aside=include_set_aside,
                 )
             ]
         now = datetime.now(UTC)
         found = [f for f in found if f[0].kind == "question"]
         ranked = [
             (
-                (bool(d.held_by), inbox.key(d, now)),
+                (d.set_aside, bool(d.held_by), inbox.key(d, now)),
                 {
                     **decisions.public(d),
                     "agent": who,
@@ -2287,7 +2311,9 @@ def agent_router(
             # answer until the home settles it.
             for waiting in (True, False):
                 for c in partner_in.open_copies(db, _ALL_OPEN, waiting_on_him=waiting):
-                    ranked.append(((False, inbox.key(c, now)), _slack_view(c, now)))
+                    ranked.append(
+                        ((False, False, inbox.key(c, now)), _slack_view(c, now))
+                    )
         ranked.sort(key=lambda r: r[0])
         views = [view for _, view in ranked]
         start = 0

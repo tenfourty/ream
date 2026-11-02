@@ -81,7 +81,9 @@ _PROXY_HEADERS = (
     "true-client-ip",
 )
 
-KINDS = partner.KINDS
+# What the partner may SEND us. `set_aside` and `reopened` run only outbound (2 Nov 2026):
+# artifacts is the one that knows when a page is archived.
+KINDS = tuple(k for k in partner.KINDS if k not in ("set_aside", "reopened"))
 _ID = re.compile(r"[A-Za-z0-9_.-]{1,100}")
 _EVENT_ID = re.compile(r"[A-Za-z0-9_.:-]{1,100}")
 _SOURCE = re.compile(r"(artifacts|qd):([A-Za-z0-9_.-]{1,100})")
@@ -483,14 +485,23 @@ def _apply_artifacts(db: Database, event: Event, now: datetime) -> str:
     letter, note, audit = _answer_fields(event.body)
     with db.connect() as conn:
         row = conn.execute(
-            "select kind, closed_at, partner_version, answer, answer_note"
-            " from decision where id = %s",
+            "select d.kind, d.closed_at, d.partner_version, d.answer, d.answer_note,"
+            " (a.archived_at is not null or a.deleted_at is not null)"
+            " from decision d join artifact a on a.id = d.artifact_id"
+            " where d.id = %s",
             (event.question,),
         ).fetchone()
-    # An id that is not ours, not a question, closed, or never announced to the
+    # An id that is not ours, not a question, closed, SET ASIDE (its page is archived
+    # or binned: he cannot answer it from Slack either) or never announced to the
     # partner: indistinguishable from "no such decision", and not recorded as a
     # version (the partner has no business advancing a counter on it).
-    if row is None or row[0] != "question" or row[1] is not None or row[2] < 1:
+    if (
+        row is None
+        or row[0] != "question"
+        or row[1] is not None
+        or row[2] < 1
+        or (row[3] is None and row[5])
+    ):
         return _record_only(db, event, "unknown", now, advance=False)
     if row[3] == letter and row[4] == note:
         return _record_only(db, event, "unchanged", now)

@@ -101,7 +101,16 @@ _COLUMNS = (
     " decision.context, decision.topic_id, decision.topic_title,"
     " decision.depends_on, decision.replaces, decision.replaced_by,"
     " decision.urgency, decision.blocked_on, decision.needed_by,"
-    " decision.for_offices"
+    " decision.for_offices, decision.reopened_at,"
+    # The page's own state, read here so a decision row can say whether it is SET
+    # ASIDE (open on an archived or binned page) wherever it is read, joined or not.
+    # No comma inside either subquery: `len(_COLUMNS.split(","))` is the row's width.
+    # The aliases carry the SQLite column-type tag, since an expression has no
+    # declared type to convert by.
+    " (select x.archived_at from artifact x where x.id = decision.artifact_id)"
+    ' as "archived_at [TIMESTAMPTZ]",'
+    " (select x.deleted_at from artifact x where x.id = decision.artifact_id)"
+    ' as "deleted_at [TIMESTAMPTZ]"'
 )
 # Positions in `_COLUMNS` that are read by index outside `_row_to_decision`.
 # Tied to its order: `session` is the 18th column, `kind` the 19th. Appending
@@ -161,6 +170,16 @@ class DecisionRow:
     # empty when it is not held (see `held_by`). Derived on read, never stored,
     # so a held question is released the moment its prerequisite is answered.
     held_by: list = dataclasses.field(default_factory=list)
+    # SET ASIDE (2 Nov 2026): open, and its page is archived or binned. Derived on
+    # read from the page's own state, never stored (see
+    # docs/agent/specs/2026-11-02-archive-sets-aside-design.md). `set_aside_since` is
+    # when the page went away, `set_aside_why` is "archived" or "binned"; both None
+    # unless set aside. `reopened_at` is when the page came back and the question
+    # with it (None until a reopen).
+    set_aside: bool = False
+    set_aside_since: str | None = None
+    set_aside_why: str | None = None
+    reopened_at: str | None = None
 
 
 def public(row: DecisionRow) -> dict:
@@ -479,7 +498,30 @@ def _row_to_decision(row) -> DecisionRow:
             row[28].astimezone(UTC).isoformat() if row[28] is not None else None
         ),
         for_offices=row[29],
+        reopened_at=row[30].isoformat() if row[30] is not None else None,
+        **_set_aside_fields(row),
     )
+
+
+def _set_aside_fields(row) -> dict:
+    """`set_aside`, `set_aside_since` and `set_aside_why` for a row read with
+    `_COLUMNS`: set aside exactly when it is open and its page is archived or binned
+    (binned wins when both)."""
+    archived_at, deleted_at = row[31], row[32]
+    if (
+        row[6] is not None
+        or row[11] is not None
+        or (archived_at is None and deleted_at is None)
+    ):
+        return {"set_aside": False, "set_aside_since": None, "set_aside_why": None}
+    since, why = (
+        (deleted_at, "binned") if deleted_at is not None else (archived_at, "archived")
+    )
+    return {
+        "set_aside": True,
+        "set_aside_since": since.isoformat(),
+        "set_aside_why": why,
+    }
 
 
 def held_map(conn, rows: list[DecisionRow]) -> dict[str, list[str]]:
@@ -487,9 +529,10 @@ def held_map(conn, rows: list[DecisionRow]) -> dict[str, list[str]]:
     waits on (runcove-5t3oj.39.2). Absent from the result means not held.
 
     A prerequisite holds only while it is itself open and unanswered. Answered
-    releases it. CLOSED WITHOUT AN ANSWER (withdrawn, replaced, or its page
-    archived) also releases it, and so does an id that no longer resolves: an
-    answer that will never come must not hold a question for ever.
+    releases it. CLOSED WITHOUT AN ANSWER (withdrawn or replaced) also releases it,
+    and so does a prerequisite SET ASIDE (its page archived or binned: nobody can
+    answer it while the page is away) and an id that no longer resolves: an answer
+    that will not come must not hold a question for ever.
     """
     waiting = {
         r.id: r.depends_on
@@ -503,8 +546,10 @@ def held_map(conn, rows: list[DecisionRow]) -> dict[str, list[str]]:
     if not wanted:
         return {}
     found = conn.execute(
-        "select id from decision where answer is null and closed_at is null"  # noqa: S608 -- placeholders only
-        f" and id in {in_list(wanted)}",
+        "select d.id from decision d join artifact a on a.id = d.artifact_id"  # noqa: S608 -- placeholders only
+        " where d.answer is null and d.closed_at is null"
+        " and a.archived_at is null and a.deleted_at is null"
+        f" and d.id in {in_list(wanted)}",
         tuple(wanted),
     ).fetchall()
     unanswered = {r[0] for r in found}
@@ -722,6 +767,24 @@ def ask(
                         for_offices=fields.for_offices,
                     ),
                 )
+                # Asked on a page that is already archived or binned: set aside from
+                # birth, so the hub is told straight after `asked` and takes the
+                # Slack buttons away.
+                away = conn.execute(
+                    "select archived_at is not null, deleted_at is not null"
+                    " from artifact where id = %s",
+                    (artifact_id,),
+                ).fetchone()
+                if away and (away[0] or away[1]):
+                    partner.enqueue(
+                        conn,
+                        decision_id,
+                        "set_aside",
+                        {
+                            "reason": "The page holding this question was "
+                            + ("binned." if away[1] else "archived.")
+                        },
+                    )
             if old is not None:
                 _close_row(conn, agent, old, replaced_by=decision_id)
         created = conn.execute(
@@ -815,6 +878,14 @@ def list_for_artifact(
         return _with_held(conn, [_row_to_decision(row) for row in rows])
 
 
+# The one clause every "what waits on him" list adds: not (open on an archived or
+# binned page). `artifact` must be joined. See `_set_aside_fields` for the same rule
+# read off a row.
+_NOT_SET_ASIDE = (
+    " and not (decision.answer is null and decision.closed_at is null"
+    " and (artifact.archived_at is not null or artifact.deleted_at is not null))"
+)
+
 # The paging key of the two decision lists: (created_at, id), the order each is
 # already sorted in, so a page boundary can neither skip nor repeat a row even
 # when two questions share a timestamp. A row-value comparison against the
@@ -853,6 +924,7 @@ def list_for_agent(
     limit: int = 200,
     kind: str | None = None,
     after: str | None = None,
+    include_set_aside: bool = False,
 ) -> list[DecisionRow]:
     """Newest first -- this is the polling surface an agent uses to learn Jeremy's
     answer, so newest matters more than oldest, exactly as `comments.list_for_agent`
@@ -863,14 +935,18 @@ def list_for_agent(
     did not was written here in full -- "the agent withdrew it, so there is
     nothing left here for that agent to learn" -- and that reason STOPPED BEING
     TRUE the same morning, when Jeremy ruled that archiving or deleting a page
-    withdraws its open questions. The SERVICE withdraws them now, not the agent,
-    so the agent did not know and there is a great deal left to learn. A
+    withdraws its open questions. (On 2 Nov 2026 he changed that rule: they are SET
+    ASIDE now, not closed, and `include_set_aside` is how an agent reads them.) The
+    SERVICE withdrew them, not the agent, so the agent did not know and there was a
+    great deal left to learn. A
     withdrawn question was then unreadable on every route a polling agent could
     reach: not wrong, not redacted, simply no longer listed (homelab-ij8.44,
     reported independently by two seats on 19 Sep for a different route).
 
     Still excluded by DEFAULT, because a withdrawn question is not waiting on
-    anybody and a poll asking "what is outstanding" should not be handed it.
+    anybody and a poll asking "what is outstanding" should not be handed it. A SET
+    ASIDE question (open, its page archived) is left out the same way unless
+    `include_set_aside`: a poll for "what is waiting on him" must not count it.
 
     `after` is a decision id from the previous page: the rows that come after it
     in this order (older than it, here). The route asks for `limit + 1` to learn
@@ -887,6 +963,8 @@ def list_for_agent(
         sql += " and decision.closed_at is null"
     if not include_answered:
         sql += " and decision.answer is null"
+    if not include_set_aside:
+        sql += _NOT_SET_ASIDE
     params: list[object] = [agent]
     if kind is not None:
         # In the query, so `limit` counts only this kind.
@@ -1505,6 +1583,11 @@ def answer(
         # events.list_for_agent's `session`.
         asking_session = row[_SESSION_IDX]
 
+        # SET ASIDE (open, its page archived or binned): he cannot answer it, from the
+        # page or from Slack. Indistinguishable from "no such decision", as closed is.
+        if _set_aside_fields(row)["set_aside"]:
+            raise store.NotFound()
+
         letters = {option["letter"] for option in options}
         if letter not in letters:
             raise InvalidAnswer()
@@ -1945,6 +2028,7 @@ def across_seats(
     include_closed: bool = False,
     limit: int = 200,
     after: str | None = None,
+    include_set_aside: bool = False,
 ) -> list[CrossSeatRow]:
     """Every question on every page, oldest first -- by default only the ones
     still waiting on Jeremy.
@@ -1998,6 +2082,10 @@ def across_seats(
         sql += " and decision.closed_at is null"
     if not include_answered:
         sql += " and decision.answer is null"
+    if not include_set_aside:
+        # A question set aside (open, its page archived or binned) is not waiting on
+        # him: it is off every list of what is, exactly as the reconciler wants it.
+        sql += _NOT_SET_ASIDE
     params: list[object] = []
     if after is not None:
         sql += _AFTER.format(op=">")
@@ -2223,11 +2311,14 @@ def outcomes_for_decisions(
 def open_counts(db: Database) -> tuple[int, int, int]:
     """(open reviews, open questions that are not held, every open row), counted without reading
     any question text: the same rows `across_seats` returns by default, and the
-    same held rule, so a count and a list cannot disagree."""
+    same held rule, so a count and a list cannot disagree. Set-aside questions (their
+    page archived or binned) are not open here."""
     with db.connect() as conn:
         found = conn.execute(
-            "select id, kind, depends_on from decision"
-            " where closed_at is null and answer is null and kind <> 'form'"
+            "select d.id, d.kind, d.depends_on from decision d"
+            " join artifact a on a.id = d.artifact_id"
+            " where d.closed_at is null and d.answer is null and d.kind <> 'form'"
+            " and a.archived_at is null and a.deleted_at is null"
         ).fetchall()
         reviews = sum(1 for r in found if r[1] == "review")
         waiting = [

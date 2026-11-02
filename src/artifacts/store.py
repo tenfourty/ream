@@ -187,9 +187,8 @@ class ArtifactRow:
     # Set only on a row from `list_deleted`: every other listing here excludes
     # deleted pages outright, so on those it is always None and says so.
     deleted_at: datetime | None = None
-    # Only filled by `list_deleted`: how many questions on this page he has
-    # still not answered. A deleted page holding one was the single place that
-    # fact was invisible anywhere in the gallery.
+    # Only filled by `list_deleted`: how many questions on this binned page are
+    # SET ASIDE (open, unanswered). Shown as such in the bin, never as waiting.
     open_questions: int = 0
     # WHICH SESSION published the version that is live right now.
     #
@@ -1391,118 +1390,145 @@ def live_thumbnail(db: Database, artifact_id: str) -> bytes | None:
     return bytes(row[0]) if row and row[0] is not None else None
 
 
-def _shelve_open_questions(conn, artifact_id: str, what: str, actor: str) -> int:
-    """Close the page's open questions, and tell the owning agent they are gone.
+def _set_aside_state(conn, artifact_id: str) -> tuple[bool, object] | None:
+    """(is the page archived or binned right now, its archived_at), read inside the
+    caller's transaction BEFORE the write that moves it, so the caller can tell a
+    page that is going away from one that already had. None if there is no such page.
+    Archiving an archived page, or binning a binned one, must not tell the agent
+    twice."""
+    row = conn.execute(
+        "select archived_at, deleted_at from artifact where id = %s"  # noqa: S608 -- clause from the db layer, no caller input
+        + conn.for_update(),
+        (artifact_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return (row[0] is not None or row[1] is not None), row[0]
 
-    Called from inside the caller's transaction, on the same connection as the
-    archive or delete it describes, so the event and its cause commit together.
-    An event for a write that then rolls back would tell an agent about
-    something that never happened; a rollback that kept the event is worse.
 
-    WHY IT EXISTS: before it, an agent that armed a waiter on a decision whose
-    page was then archived waited until its own timeout, every time, with no way
-    to tell "not answered yet" from "he is never going to be shown this". A seat
-    can lose a shift to that. Found by walking the gallery as a user
-    (homelab-ij8.84.10), not by reading it.
+def _set_aside_open_questions(conn, artifact_id: str, what: str, actor: str) -> int:
+    """Tell the world that the page's open questions are SET ASIDE, and close nothing.
 
-    WHY IT NOW CLOSES THEM. Jeremy, 21 Sep 2026, answering the question of where
-    a question on a tidied-away page should live -- he tapped (a) "leave the UI
-    as it is" and wrote: "Drop the question if the page is archived or deleted
-    the agent needs to ask it again."
+    `what` is "archived" or "binned". Called from inside the caller's transaction,
+    on the same connection as the archive or bin it describes, so the events and
+    their cause commit together. An event for a write that then rolls back would
+    tell an agent about something that never happened.
 
-    So the limbo state is gone rather than displayed better. It was a real state
-    with real cost: on 21 Sep the operator's waiting list registered a question
-    at 06:30 on a page that had been archived at 06:06, and put it in front of
-    Jeremy twenty-four minutes after it left his wall. His rule removes the
-    whole class -- a question that is not on the wall is not open.
+    THE RULE (Jeremy, 2 Nov 2026, replacing his 21 Sep 2026 one that closed them):
+    archiving or binning a page SETS ASIDE every question on it that is still open,
+    of every kind. Nothing that shows him what waits on him shows them while the
+    page is archived or binned, and unarchiving or restoring brings them back open
+    and unanswered, with the same id and the original asked-at
+    (`_reopen_set_aside_questions`). "Set aside" is DERIVED -- an open question whose
+    page is archived or binned (docs/agent/specs/2026-11-02-archive-sets-aside-design.md
+    section 2) -- so this writes no state on the decision: it releases a review's held
+    marks, tells the partner hub, and tells the asking agent.
 
-    It does NOT come back if the page is unarchived. That is his instruction
-    read literally ("the agent needs to ask it again") and it is also the only
-    honest option: a question reopened after days is a question whose context
-    has moved, and an agent that re-asks says so in the asking.
+    WHY AN EVENT AT ALL: before the first such event (homelab-ij8.84.10) an agent
+    that armed a waiter on a decision whose page was then archived waited until its
+    own timeout, every time, unable to tell "not answered yet" from "he is not being
+    shown this". A seat can lose a shift to that. Found by walking the gallery.
 
-    The UI he voted to keep stays exactly where it was. Because the count it
-    reports is now always zero, it simply never renders -- which turns a feature
-    into a silent consistency check, and if it ever DOES render, something here
-    has stopped working.
-
-    Returns how many questions it dropped, so a caller can report a number.
+    Returns how many questions it set aside, so a caller can report a number.
     """
-    # The close and the release share ONE transaction of their own. The caller
-    # (`set_archived`, `set_deleted`) runs under autocommit, so this is not the
-    # archive's transaction; what it guarantees is that a mark inserted while
-    # this runs is either seen by the release (the close waits for the insert's
-    # share lock on the open review) or born unheld (the review is already
-    # closed). The order matters and matches `decisions.close`: close first,
-    # then release.
-    #
-    # Releasing on delete too is deliberate: it matches `decision_shelved`,
-    # which is also written on delete, and a restore brings the marks back.
-    #
-    # `acknowledged_at` is coalesced rather than set, matching decisions.close:
-    # an earlier and truer "seen at" must never be overwritten by this.
-    with conn.transaction():
-        # The close returns exactly the rows it closed, so what is reported,
-        # what is released and what is closed can never disagree, even if a
-        # review opens while this runs. `session` comes along so the
-        # withdrawal lands in the feed of the session that ASKED, not merely
-        # of the machine it ran on. Without it, three seats sharing a key
-        # would each be woken by the other two's withdrawals -- the precise
-        # noise the filter exists to remove.
-        now = datetime.now(UTC)
-        rows = conn.execute(
-            "update decision set closed_at = %s,"
-            " acknowledged_at = coalesce(acknowledged_at, %s)"
-            " where artifact_id = %s and answer is null and closed_at is null"
-            " returning id, question, session, kind",
-            (now, now, artifact_id),
-        ).fetchall()
-        if rows:
-            owner = conn.execute(
-                "select agent from artifact where id = %s", (artifact_id,)
-            ).fetchone()[0]
-            if any(kind == "review" for *_, kind in rows):
-                # A shelved review will never get a verdict; his held marks go
-                # to the agent now rather than stay invisible forever.
-                from artifacts import holds
+    now = datetime.now(UTC)
+    rows = conn.execute(
+        "select id, question, session, kind from decision"
+        " where artifact_id = %s and answer is null and closed_at is null"
+        " order by created_at, id",
+        (artifact_id,),
+    ).fetchall()
+    if not rows:
+        return 0
+    owner = conn.execute(
+        "select agent from artifact where id = %s", (artifact_id,)
+    ).fetchone()[0]
+    if any(kind == "review" for *_, kind in rows):
+        # A set-aside review gets no verdict while the page is away; his held
+        # marks go to the agent now rather than stay invisible. A reopened review
+        # starts with none held.
+        from artifacts import holds
 
-                holds.release(conn, artifact_id, emit=True)
-            for decision_id, question, asked_by_session, kind in rows:
-                if kind == "question" and partner.enabled():
-                    partner.enqueue(
-                        conn,
-                        decision_id,
-                        "withdrawn",
-                        {"reason": f"The page holding this question was {what}."},
-                        at=now,
-                    )
-                events.append(
-                    conn,
-                    artifact_id=artifact_id,
-                    agent=owner,
-                    actor=actor,
-                    kind="decision_shelved",
-                    summary=f"{what}: {question}",
-                    ref_id=decision_id,
-                    # Said in full, because the agent reading this has to decide what to
-                    # do and "shelved" alone does not tell it whether to give up.
-                    #
-                    # This note USED TO SAY "if the page comes back, so does the
-                    # question", which was true until Jeremy ruled on 21 Sep that the
-                    # question is dropped. A note that outlives the behaviour it
-                    # describes is worse than no note: an agent would wait for a return
-                    # that is never coming, which is the exact failure this event was
-                    # created to end.
-                    note=(
-                        f"The page holding this question was {what}, so it has been "
-                        "WITHDRAWN -- Jeremy will not be shown it and it will not come "
-                        "back on its own, even if the page does. Nothing he said has "
-                        "been lost; the question simply never got an answer. If you "
-                        "still need one, ASK IT AGAIN on a page that is on his wall. "
-                        "Stop waiting on this one."
-                    ),
-                    session=asked_by_session,
-                )
+        holds.release(conn, artifact_id, emit=True)
+    for decision_id, question, asked_by_session, kind in rows:
+        if kind == "question" and partner.enabled():
+            partner.enqueue(
+                conn,
+                decision_id,
+                "set_aside",
+                {"reason": f"The page holding this question was {what}."},
+                at=now,
+            )
+        events.append(
+            conn,
+            artifact_id=artifact_id,
+            agent=owner,
+            actor=actor,
+            kind="decision_set_aside",
+            summary=f"{what}: {question}",
+            ref_id=decision_id,
+            # Said in full, because the agent reading this has to decide what to do and
+            # "set aside" alone does not say whether to give up. It does not: the
+            # question is parked, not dropped.
+            note=(
+                f"The page holding this question was {what}, so the question is SET "
+                "ASIDE -- Jeremy is not shown it while the page is away, and it cannot "
+                "be answered. It is NOT closed: if the page is unarchived or restored "
+                "it comes back open and unanswered with the same id, and you will get "
+                "a decision_reopened event. Stop waiting on it for now; re-arm your "
+                "waiter when it reopens. To withdraw it for good, close it."
+            ),
+            session=asked_by_session,
+        )
+    return len(rows)
+
+
+def _reopen_set_aside_questions(conn, artifact_id: str, what: str, actor: str) -> int:
+    """Bring back the questions that were set aside: stamp `reopened_at`, tell the
+    partner hub and the asking agent. `what` is "unarchived" or "restored".
+
+    Called only when the page was archived or binned and now is neither (a page
+    still binned, or still archived, reopens nothing). Every open question on the
+    page was set aside, including one asked while it was away (born set aside).
+    The id, the asked-at and the order he sees them in are untouched: the wall
+    orders by asked-at, so a parked question does not jump the queue.
+    """
+    now = datetime.now(UTC)
+    rows = conn.execute(
+        "update decision set reopened_at = %s"
+        " where artifact_id = %s and answer is null and closed_at is null"
+        " returning id, question, session, kind",
+        (now, artifact_id),
+    ).fetchall()
+    if not rows:
+        return 0
+    owner = conn.execute(
+        "select agent from artifact where id = %s", (artifact_id,)
+    ).fetchone()[0]
+    for decision_id, question, asked_by_session, kind in rows:
+        if kind == "question" and partner.enabled():
+            partner.enqueue(
+                conn,
+                decision_id,
+                "reopened",
+                {"reason": f"The page holding this question was {what}."},
+                at=now,
+            )
+        events.append(
+            conn,
+            artifact_id=artifact_id,
+            agent=owner,
+            actor=actor,
+            kind="decision_reopened",
+            summary=f"{what}: {question}",
+            ref_id=decision_id,
+            note=(
+                f"The page holding this question was {what}, so the question is OPEN "
+                "again, unanswered, with the same id and the original asked-at. "
+                "Re-arm your waiter on it if you are still waiting for an answer."
+            ),
+            session=asked_by_session,
+        )
     return len(rows)
 
 
@@ -1618,13 +1644,19 @@ def set_deleted(
     # deleting an already-deleted one (a no-op that should report False rather
     # than 404). The default clause excludes exactly the rows this call is for.
     where, params = _scoped(artifact_id, agent, live=False)
-    with db.connect() as conn:
+    with db.connect() as conn, conn.transaction():
+        before = _set_aside_state(conn, artifact_id)
         done = conn.execute(
             f"update artifact set deleted_at = %s {where}",  # noqa: S608 -- see _scoped
             (datetime.now(UTC) if deleted else None, *params),
         )
-        if done.rowcount > 0 and deleted:
-            _shelve_open_questions(conn, artifact_id, "deleted", agent or "jeremy")
+        if done.rowcount > 0 and before is not None:
+            was, archived_at = before
+            actor = agent or "jeremy"
+            if deleted and not was:
+                _set_aside_open_questions(conn, artifact_id, "binned", actor)
+            elif not deleted and was and archived_at is None:
+                _reopen_set_aside_questions(conn, artifact_id, "restored", actor)
         return done.rowcount > 0
 
 
@@ -1649,36 +1681,6 @@ def destroy(db: Database, artifact_id: str, *, agent: str | None) -> bool:
         return done.rowcount > 0
 
 
-def open_questions_off_the_wall(db: Database) -> int:
-    """Unanswered questions on pages that are archived or deleted.
-
-    SHOULD ALWAYS BE ZERO, and is kept for the day it is not.
-
-    It was a feature. The page left the wall, the question stayed open, the
-    agent that asked was still waiting, and nothing on the gallery mentioned it
-    again -- so this counted them and the header said how many. Found by
-    walking the interface rather than by reading it.
-
-    Jeremy ruled on 21 Sep 2026 that the limbo state should not exist at all:
-    "Drop the question if the page is archived or deleted the agent needs to
-    ask it again." `_shelve_open_questions` now closes them, so nothing can be
-    in this set.
-
-    He also voted to keep the display as it was, and keeping both is not a
-    contradiction -- the line only renders above zero, so it now never renders,
-    and what was a feature has become a self-check. If the gallery ever DOES
-    show "N tidied away", something has stopped closing questions and the wall
-    is the thing telling us. Deleting this would be deleting the alarm because
-    the fire is out.
-    """
-    with db.connect() as conn:
-        return conn.execute(
-            "select count(*) from decision d join artifact a on a.id = d.artifact_id"
-            " where d.answer is null and d.closed_at is null"
-            "   and (a.archived_at is not null or a.deleted_at is not null)"
-        ).fetchone()[0]
-
-
 def list_deleted(db: Database, agent: str | None = None) -> list[ArtifactRow]:
     """What is in the window, soonest to go first.
 
@@ -1698,8 +1700,10 @@ def list_deleted(db: Database, agent: str | None = None) -> list[ArtifactRow]:
             " artifact.visibility, artifact.current_version, version.revision,"
             " artifact.updated_at, artifact.archived_at, artifact.pinned_at,"
             " artifact.deleted_at, version.session,"
+            # Questions set aside while the page sits in the bin: shown to him as such,
+            # never counted as waiting.
             " (select count(*) from decision d where d.artifact_id = artifact.id"
-            "    and d.answer is null and d.closed_at is null)"
+            "    and d.answer is null and d.closed_at is null and d.kind <> 'form')"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
@@ -1736,8 +1740,27 @@ def purge_expired(db: Database, *, window: timedelta = DELETE_WINDOW) -> list[st
     find out afterwards what went. This is the one operation here that cannot
     be undone, so it says exactly what it did.
     """
-    cutoff = datetime.now(UTC) - window
-    with db.connect() as conn:
+    now = datetime.now(UTC)
+    cutoff = now - window
+    with db.connect() as conn, conn.transaction():
+        # A question still open at the purge was set aside while its page sat in the
+        # bin; the purge closes it for good, so the partner hub is told `withdrawn`
+        # BEFORE the delete takes the decision rows (the outbox keeps no foreign key
+        # to them, but `enqueue` bumps the decision's own counter).
+        if partner.enabled():
+            for (decision_id,) in conn.execute(
+                "select d.id from decision d join artifact a on a.id = d.artifact_id"
+                " where a.deleted_at is not null and a.deleted_at < %s"
+                " and d.kind = 'question' and d.answer is null and d.closed_at is null",
+                (cutoff,),
+            ).fetchall():
+                partner.enqueue(
+                    conn,
+                    decision_id,
+                    "withdrawn",
+                    {"reason": "The page holding this question was deleted for good."},
+                    at=now,
+                )
         rows = conn.execute(
             "delete from artifact where deleted_at is not null and deleted_at < %s"
             " returning id",
@@ -1756,13 +1779,22 @@ def set_archived(
     are all exactly where they were.
     """
     where, params = _scoped(artifact_id, agent)
-    with db.connect() as conn:
+    with db.connect() as conn, conn.transaction():
+        before = _set_aside_state(conn, artifact_id)
         done = conn.execute(
             f"update artifact set archived_at = %s {where}",  # noqa: S608 -- _scoped emits a fixed clause with placeholders, never caller text
             (datetime.now(UTC) if archived else None, *params),
         )
-        if done.rowcount > 0 and archived:
-            _shelve_open_questions(conn, artifact_id, "archived", agent or "jeremy")
+        if done.rowcount > 0 and before is not None:
+            was, _ = before
+            deleted_at = conn.execute(
+                "select deleted_at from artifact where id = %s", (artifact_id,)
+            ).fetchone()[0]
+            actor = agent or "jeremy"
+            if archived and not was:
+                _set_aside_open_questions(conn, artifact_id, "archived", actor)
+            elif not archived and was and deleted_at is None:
+                _reopen_set_aside_questions(conn, artifact_id, "unarchived", actor)
         return done.rowcount > 0
 
 

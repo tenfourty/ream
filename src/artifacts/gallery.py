@@ -274,11 +274,6 @@ main{display:block}
   padding:.2rem .6rem .2rem .62rem}
 .bar .waiting::after{content:"→";font-weight:400}
 .bar .waiting:hover{filter:brightness(.94)}
-/* Questions on pages he has tidied away. Deliberately quieter than the pill
-   and deliberately NOT added to its count: it is a different fact, and one
-   number covering both would send him to a wall that does not show them all. */
-.bar .hiddenq{font-size:.8125rem;color:var(--now-solid);cursor:help;
-  border-bottom:1px dotted currentColor}
 /* Landing on the tile should not put it under the top edge of the window. */
 
 /* asks */
@@ -1097,6 +1092,7 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
    be illegible against. */
 .rows .wait{position:static;box-shadow:none;background:transparent;
   color:var(--now);border:1px solid currentColor;padding:.1rem .36rem}
+.rows .setaside{color:var(--muted);font-size:.7rem;margin-left:.4rem}
 .row-wrap .menu{position:absolute;top:50%;right:.35rem;transform:translateY(-50%);
   z-index:5}
 .row-wrap .menu > summary{display:flex;align-items:center;justify-content:center;
@@ -2691,12 +2687,11 @@ def _deleted_view(rows) -> str:
     for row in rows:
         ident = escape(row.id)
         remaining = _left(row.deleted_at)
-        # The archived fold has shown this since it was built; the bin did not,
-        # so a deleted page holding an unanswered question was the one place it
-        # was completely invisible.
+        # Questions set aside while the page sits in the bin, said quietly: they
+        # are not waiting on him, and they come back if he restores the page.
         asking = (
-            f'<span class="wait">{row.open_questions} question'
-            f"{'' if row.open_questions == 1 else 's'} unanswered</span>"
+            f'<span class="setaside">{row.open_questions} question'
+            f"{'' if row.open_questions == 1 else 's'} set aside</span>"
             if getattr(row, "open_questions", 0)
             else ""
         )
@@ -2886,7 +2881,7 @@ def _inbox_link(count: int | str) -> str:
     return f'<a class="inboxlink{some}" href="/inbox">Inbox ({escape(str(count))})</a>'
 
 
-def _wall_meta(waiting: int, hidden: int = 0, inbox_count: int | str = 0) -> str:
+def _wall_meta(waiting: int, inbox_count: int | str = 0) -> str:
     """What sits beside the title, and it is only ever one thing.
 
     "5 pages" is a fact about the service and belongs in the controls row below.
@@ -2905,29 +2900,6 @@ def _wall_meta(waiting: int, hidden: int = 0, inbox_count: int | str = 0) -> str
         out += (
             f'<a class="waiting" href="/?filter=waiting">'
             f"{waiting} {noun} waiting on you</a>"
-        )
-    if hidden:
-        # THIS SHOULD NEVER RENDER ANY MORE, and it stays for the day it does.
-        #
-        # It was a feature: archive or delete a page with an open question and
-        # it simply disappeared, question still open, asking agent still
-        # waiting, and the gallery silent. This line was the fix, deliberately
-        # SEPARATE from the count above, because "3 questions waiting" leading
-        # to a wall that shows two would be a worse lie than the silence.
-        #
-        # Jeremy then ruled (21 Sep 2026) that the state itself should not
-        # exist -- "Drop the question if the page is archived or deleted the
-        # agent needs to ask it again" -- and store._shelve_open_questions now
-        # closes them. So `hidden` is zero by construction and this branch is
-        # dead in the ordinary case. He voted in the same breath to leave the
-        # display as it was, which is what makes keeping it right rather than
-        # merely harmless: it is now the alarm on the mechanism that closes
-        # them. If he ever sees this line, that mechanism has stopped.
-        noun = "question" if hidden == 1 else "questions"
-        out += (
-            f'<span class="hiddenq" title="On pages that are archived or '
-            f"deleted. They are still unanswered, and whoever asked is still "
-            f'waiting.">{hidden} {noun} tidied away, still unanswered</span>'
         )
     return out
 
@@ -4325,6 +4297,8 @@ def gallery_router(db: Database) -> APIRouter:
             "       (select count(*) from decision d"
             "          where d.artifact_id = a.id"
             "            and d.answer is null and d.kind <> 'form'"
+            # A question SET ASIDE (its page archived or binned) is not waiting.
+            "            and a.archived_at is null and a.deleted_at is null"
             "            and d.closed_at is null) as waiting,"
             # The CURRENT version's text: the only one whose `body` is always plain.
             "       (select v.body from version v"
@@ -4378,6 +4352,7 @@ def gallery_router(db: Database) -> APIRouter:
             "          (select count(*) from decision d"
             "             where d.artifact_id = a.id"
             "               and d.answer is null and d.kind <> 'form'"
+            "               and a.archived_at is null and a.deleted_at is null"
             "               and d.closed_at is null) > 0 desc,"
             # Then what he has not read yet, newest first; once he opens a page
             # it drops back into the order below (homelab-ij8.103, his ruling).
@@ -4635,7 +4610,6 @@ def gallery_router(db: Database) -> APIRouter:
             chosen if chosen in ("waiting", "pinned", "deleted", "archived") else "all"
         )
         deleted_rows = store.list_deleted(db)
-        hidden_questions = store.open_questions_off_the_wall(db)
         if active == "waiting":
             rows = [r for r in rows if r[5]]
         elif active == "pinned":
@@ -4751,9 +4725,7 @@ def gallery_router(db: Database) -> APIRouter:
             _shell(
                 "Artifacts",
                 body,
-                meta_html=_wall_meta(
-                    waiting_total, hidden_questions, inbox.label(*inbox.count(db))
-                ),
+                meta_html=_wall_meta(waiting_total, inbox.label(*inbox.count(db))),
                 controls=_controls_row(
                     view,
                     query,
@@ -5101,7 +5073,11 @@ def gallery_router(db: Database) -> APIRouter:
         )
         # A form decision is not drawn until the gallery can submit it (forms, slice 2).
         every_row = [r for r in every_row if r.kind != "form"]
-        decision_rows = [r for r in every_row if r.closed_at is None]
+        # SET ASIDE (open, the page archived): no card while the page is away; he
+        # cannot answer it, and it comes back on unarchive. Answered ones still show.
+        decision_rows = [
+            r for r in every_row if r.closed_at is None and not r.set_aside
+        ]
         note_threads = comments.note_threads(db, artifact_id)
         shown_rows = decision_rows + [
             r

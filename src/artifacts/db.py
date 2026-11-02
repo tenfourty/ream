@@ -347,6 +347,43 @@ def _widen_decision_kinds(conn) -> None:
         )
 
 
+def _widen_event_kinds(conn) -> None:
+    """Step 12: add 'decision_set_aside' and 'decision_reopened' to the event.kind
+    CHECK, in place as steps 6 and 11 do, and prove it: the stored table text must
+    contain the widened list afterwards or the migration rolls back and fails
+    start-up loudly. A fresh file already has the widened list (step 1), where the
+    replace finds nothing and the proof still holds."""
+    old = "'decision_shelved', 'comment_withdrawn')"
+    new = (
+        "'decision_shelved', 'comment_withdrawn',"
+        " 'decision_set_aside', 'decision_reopened')"
+    )
+    conn.execute("pragma writable_schema = on")
+    try:
+        conn.execute(
+            "update sqlite_master set sql = replace(sql, "  # noqa: S608 -- fixed text
+            + _sql_text(old)
+            + ", "
+            + _sql_text(new)
+            + ") where type = 'table' and name = 'event'"
+        )
+        # Bump the schema cookie so this connection re-reads the edited CHECK (see
+        # `_widen_decision_kinds`).
+        (cookie,) = conn.execute("pragma schema_version").fetchone()
+        conn.execute(f"pragma schema_version = {cookie + 1}")
+    finally:
+        conn.execute("pragma writable_schema = off")
+    row = conn.execute(
+        "select sql from sqlite_master where type = 'table' and name = 'event'"
+    ).fetchone()
+    if row is None or "'decision_set_aside'" not in row[0]:
+        raise RuntimeError(
+            "schema step 12 could not widen event.kind's CHECK to include "
+            "'decision_set_aside' and 'decision_reopened': the stored table text is "
+            "not the expected shape"
+        )
+
+
 def _sql_text(text: str) -> str:
     """`text` as an SQL string literal (fixed text only, never caller input)."""
     return "'" + text.replace("'", "''") + "'"
@@ -530,6 +567,12 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " spec jsonb not null check (json_valid(spec)),"
             " primary key (decision_id, version_n, name))"
         ),
+    ),
+    # 2 Nov 2026: archiving sets a page's questions aside (see schema.sql): when it
+    # comes back, `reopened_at`; and the two event kinds that say so.
+    12: (
+        "alter table decision add column reopened_at timestamptz",
+        _widen_event_kinds,
     ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)

@@ -35,14 +35,20 @@ KINDS = (
     "decision_answered",
     "comment_added",
     "thread_resolved",
-    # The page holding an open question left the wall -- archived or deleted.
-    # Its own kind rather than a flavour of the others because it is the only
-    # one that means "stop waiting": an agent holding a waiter on that decision
-    # will otherwise sit until its own timeout, every time, unable to tell
-    # "not yet" from "he is never going to be shown this".
+    # Written until 2 Nov 2026, when archiving stopped closing questions: the page
+    # holding an open question left the wall and the question was closed. Kept in
+    # the CHECK for the history; nothing writes it any more.
     "decision_shelved",
     # GitGuardian flagged the agent's own comment after it was saved.
     "comment_withdrawn",
+    # The page holding an open question was archived or binned (2 Nov 2026): the
+    # question is SET ASIDE, not closed. The kind that means "stop waiting for now":
+    # an agent holding a waiter on that decision would otherwise sit until its own
+    # timeout, unable to tell "not yet" from "he is not being shown this".
+    "decision_set_aside",
+    # The page came back (unarchived or restored) and the question with it, open and
+    # unanswered, same id. The agent re-arms its waiter on this.
+    "decision_reopened",
 )
 
 # A note is his own words and must survive the trip whole. 1000 is the same

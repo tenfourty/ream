@@ -2,7 +2,8 @@
 
 A question has one home. When artifacts is the home, the partner service
 (quarterdeck, on the homelab) holds a copy that says `source: "artifacts:<id>"`
-and is told what happens to the question: asked, answered, withdrawn, replaced.
+and is told what happens to the question: asked, answered, withdrawn, replaced,
+set aside, reopened.
 This module is how it is told, and nothing else: the receiving side, and what
 the partner sends back, are another slice.
 
@@ -64,7 +65,19 @@ _ENV_ALL = (ENV_NAME, ENV_URL, ENV_KEY_FILE, ENV_KEY_ID)
 # Optional, outside the all-or-none set: plain http only when asked for by name.
 ENV_ALLOW_HTTP = "ARTIFACTS_PARTNER_ALLOW_HTTP"
 
-KINDS = ("asked", "answered", "withdrawn", "replaced", "message_added", "edited")
+KINDS = (
+    "asked",
+    "answered",
+    "withdrawn",
+    "replaced",
+    "message_added",
+    "edited",
+    # The page holding the question was archived or binned (2 Nov 2026): the hub takes
+    # the Slack copy's buttons away; `reopened` puts them back. Body {"reason": str},
+    # like `withdrawn`.
+    "set_aside",
+    "reopened",
+)
 
 REQUEST_TIMEOUT_SECONDS = 10
 # How long a claimed row is the claimer's. Longer than a request can take, short

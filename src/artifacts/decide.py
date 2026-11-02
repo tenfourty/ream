@@ -158,6 +158,18 @@ def _carries(row: dict) -> list[str]:
     return lines
 
 
+def _set_aside_line(row: dict) -> str:
+    """`SET ASIDE since 2026-11-02 13:40, page archived`: an open question whose page
+    is archived or binned (2 Nov 2026). Said apart from "unanswered" because the two
+    need opposite responses: this one cannot be answered until the page is back."""
+    since = (row.get("set_aside_since") or "")[:16]
+    by = f" by {row['set_aside_by']}" if row.get("set_aside_by") else ""
+    return (
+        f"  SET ASIDE since {since}, page {row.get('set_aside_why') or 'archived'}"
+        f"{by} -- not waiting on him; it is open again if the page comes back"
+    )
+
+
 def _fmt(row: dict) -> str:
     """One decision, as the reader needs it rather than as it is stored.
 
@@ -236,11 +248,18 @@ def _fmt(row: dict) -> str:
         # to print identically -- `close` answered with the word "unanswered",
         # which is true and reads as "nothing happened". Caught by running the
         # command against the live service rather than by reading it.
-        lines.append(
-            f"  WITHDRAWN at {row['closed_at']}, never answered"
-            if row.get("closed_at")
-            else "  unanswered"
-        )
+        if row.get("closed_at"):
+            lines.append(f"  WITHDRAWN at {row['closed_at']}, never answered")
+        elif row.get("set_aside"):
+            # Parked, not dropped: not waiting on him, and not closed either.
+            lines.append(_set_aside_line(row))
+        else:
+            lines.append("  unanswered")
+        if row.get("reopened_at") and not row.get("set_aside"):
+            lines.append(
+                f"  REOPENED {row['reopened_at'][:16]}: the page came back, "
+                "and this question with it"
+            )
     # WHAT HAPPENED SINCE, under answered and unanswered alike. An outcome on an
     # OPEN question is the one with teeth: if the framing was corrected after it
     # was posed, Jeremy could answer the old question by accident.
@@ -289,7 +308,12 @@ def _get_decisions(url: str, key: str) -> list[dict]:
             return rows
 
 
-def _print_rows(rows: list[dict], *, empty: str) -> int:
+def _aside_section(row: dict) -> str | None:
+    """The heading `list` puts before the first set-aside row."""
+    return "SET ASIDE (not waiting on him; open again if the page comes back)"
+
+
+def _print_rows(rows: list[dict], *, empty: str, section=None) -> int:
     if not rows:
         # Not silence. An empty result and a broken call look identical when
         # both print nothing, and this repo has already lost a shift to exactly
@@ -297,13 +321,70 @@ def _print_rows(rows: list[dict], *, empty: str) -> int:
         # handed). Say which one it is.
         print(empty)
         return 0
-    print("\n\n".join(_fmt(row) for row in rows))
+    if section is None:
+        print("\n\n".join(_fmt(row) for row in rows))
+        return 0
+    blocks, heading_shown = [], False
+    for row in rows:
+        if row.get("set_aside") and not heading_shown:
+            heading_shown = True
+            blocks.append(section(row))
+        blocks.append(_fmt(row))
+    print("\n\n".join(blocks))
     return 0
 
 
 def _new_answers(rows: list[dict]) -> list[dict]:
     """Answered and not yet acknowledged: what an agent must act on."""
     return [r for r in rows if r.get("answer") and not r.get("acknowledged_at")]
+
+
+# The two events that say a question was parked or came back (2 Nov 2026), and the
+# name each goes by on a line and in --json.
+_ASIDE_EVENTS = {"decision_set_aside": "set_aside", "decision_reopened": "reopened"}
+
+# Exit code of a `wait --page` that has nothing left to wait on because every
+# question it was waiting on is set aside. Distinct from 3 (timeout) and 4-8 (review).
+_SET_ASIDE_EXIT = 9
+
+
+def _aside_view(row: dict) -> dict:
+    """An event row as the `--json` shape a waiter prints for it."""
+    why = (row.get("summary") or "").split(": ", 1)[0]
+    return {
+        "event": _ASIDE_EVENTS[row["kind"]],
+        "decision": row.get("ref_id"),
+        "page": row.get("artifact_id"),
+        "why": why,
+        "by": row.get("actor"),
+        "at": row.get("created_at"),
+        "session": row.get("session"),
+    }
+
+
+def _aside_text(view: dict, question: str) -> str:
+    """`SET ASIDE <id>  <question>` / `REOPENED ...`, two lines, for a terminal."""
+    label = "SET ASIDE" if view["event"] == "set_aside" else "REOPENED"
+    tail = (
+        "not closed: it comes back open if the page does"
+        if view["event"] == "set_aside"
+        else "open again and unanswered, same id: re-arm your wait"
+    )
+    by = f" by {view['by']}" if view.get("by") else ""
+    at = f" at {view['at'][:16]}" if view.get("at") else ""
+    asked = view.get("session") or "an unlabelled session"
+    return (
+        f"{label} {view['decision']}  {question}\n"
+        f"  page {view['page']} {view['why']}{by}{at}; asked by {asked}; {tail}"
+    )
+
+
+def _print_aside(views: list[tuple[dict, str]], args) -> None:
+    for view, question in views:
+        if args.json:
+            print(json.dumps(view, separators=(",", ":")), flush=True)
+        else:
+            print(_aside_text(view, question), flush=True)
 
 
 def _duration(text: str) -> float:
@@ -851,8 +932,16 @@ def _wait(args, key: str, base: str) -> int:
     read them -- and every agent was left to hand-write its own listener.
 
     Exit codes a caller can branch on: 0 answers printed; 3 nothing by the
-    timeout (ask again); 1 refused (the key); 2 usage. Built to run as a
-    background task that wakes its agent when it exits.
+    timeout (ask again); 9 set aside (below); 1 refused (the key); 2 usage. Built
+    to run as a background task that wakes its agent when it exits.
+
+    SET ASIDE (2 Nov 2026). Archiving or binning a page parks its open questions
+    (they are not closed). A waiter with `--page` whose every open question there
+    is set aside prints the set-aside lines and exits 9; it does not come back by
+    itself, so re-arm it when you read the `decision_reopened` event. An
+    office-wide waiter (no `--page`) prints one SET ASIDE line per question, and
+    one REOPENED line when it comes back, and keeps waiting: other pages' answers
+    still have to reach it.
 
     STARTS BY LOOKING, not by listening: an answer that landed before this ran
     is printed at once, so starting the waiter late never loses one.
@@ -987,6 +1076,47 @@ def _wait(args, key: str, base: str) -> int:
     found, waiting_threads = look()
     if found or waiting_threads:
         return report(found, waiting_threads)
+
+    def page_questions() -> list[dict]:
+        """This office's questions and reviews on the waited page."""
+        rows = _request("GET", f"{base}/artifacts/{page}/decisions", key, None) or []
+        return [
+            r
+            for r in rows
+            if r.get("kind", "question") in ("question", "review")
+            and _belongs(r.get("session"), office, key_agent)
+        ]
+
+    if page:
+        # Started on a page whose questions are all parked already: say so now,
+        # rather than hold for a timeout on something that cannot be answered.
+        mine = page_questions()
+        parked = [r for r in mine if r.get("set_aside")]
+        live = [
+            r
+            for r in mine
+            if not r.get("set_aside") and not r.get("answer") and not r.get("closed_at")
+        ]
+        if parked and not live:
+            _print_aside(
+                [
+                    (
+                        {
+                            "event": "set_aside",
+                            "decision": r["id"],
+                            "page": page,
+                            "why": r.get("set_aside_why"),
+                            "by": r.get("set_aside_by"),
+                            "at": r.get("set_aside_since"),
+                            "session": r.get("session"),
+                        },
+                        r.get("question", ""),
+                    )
+                    for r in parked
+                ],
+                args,
+            )
+            return _SET_ASIDE_EXIT
     whose = f" for {office}" if office else ""
     limit = "with no limit" if endless else f"up to {int(timeout // 60)}m"
     print(
@@ -1033,10 +1163,39 @@ def _wait(args, key: str, base: str) -> int:
             and _belongs(r.get("session"), office, key_agent)
             for r in rows
         )
+        aside = [
+            r
+            for r in rows
+            if r.get("kind") in _ASIDE_EVENTS
+            and (not page or r.get("artifact_id") == page)
+            and _belongs(r.get("session"), office, key_agent)
+        ]
+        if aside:
+            _print_aside(
+                [
+                    (
+                        _aside_view(r),
+                        (r.get("summary") or "").split(": ", 1)[-1],
+                    )
+                    for r in aside
+                ],
+                args,
+            )
         if woke or time.monotonic() >= next_due[0]:
             found, waiting_threads = look()
             if found or waiting_threads:
                 return report(found, waiting_threads)
+        if (
+            page
+            and any(r["kind"] == "decision_set_aside" for r in aside)
+            and not any(
+                not r.get("set_aside")
+                and not r.get("answer")
+                and not r.get("closed_at")
+                for r in page_questions()
+            )
+        ):
+            return _SET_ASIDE_EXIT
     return _timed_out("answer", args)
 
 
@@ -1184,8 +1343,9 @@ def _wait_review(args, key: str, base: str) -> int:
     """Block until Jeremy gives a verdict on a review; exit by verdict.
 
     0 approved, 4 approved with notes, 5 changes requested, 6 dismissed, 7 new
-    marks and no verdict yet, 8 another session holds the round, 3 timeout, 1
-    refused, 2 usage. `--require-approval` folds 0/4 to 0 and 5/6/7/8 to 1.
+    marks and no verdict yet, 8 another session holds the round, 9 the page was
+    archived or binned and the review set aside (no verdict is coming until it is
+    back: re-arm on the `decision_reopened` event), 3 timeout, 1 refused, 2 usage. `--require-approval` folds 0/4 to 0 and 5/6/7/8 to 1.
 
     STARTS BY LOOKING, then long-polls the events feed exactly as `_wait` does,
     so a verdict given earlier is printed at once and a later one wakes it."""
@@ -1345,6 +1505,24 @@ def _wait_review(args, key: str, base: str) -> int:
                 for row in rows:
                     cursor = max(cursor, int(row.get("seq", cursor)))
                 outage.ok()
+                parked = [
+                    r
+                    for r in rows
+                    if r.get("kind") == "decision_set_aside"
+                    and r.get("ref_id") == review_id
+                ]
+                if parked:
+                    _print_aside(
+                        [
+                            (
+                                _aside_view(r),
+                                (r.get("summary") or "").split(": ", 1)[-1],
+                            )
+                            for r in parked
+                        ],
+                        args,
+                    )
+                    return 1 if args.require_approval else _SET_ASIDE_EXIT
                 relook = any(r.get("kind") in kinds for r in rows)
             if relook:
                 done = look()
@@ -1878,6 +2056,9 @@ def main(argv: list[str] | None = None) -> int:
                 key,
                 None,
             )
+            if args.open_only:
+                # Set aside is not waiting (the service returns them, flagged).
+                rows = [r for r in rows if not r.get("set_aside")]
             return _print_rows(
                 rows,
                 empty=(
@@ -1924,12 +2105,19 @@ def main(argv: list[str] | None = None) -> int:
                 # agent must act on, so it leads; acknowledged answers only with
                 # --answered.
                 rows = _get_decisions(
-                    f"{base}/decisions?include_answered=true&scope={scope}", key
+                    f"{base}/decisions?include_answered=true&scope={scope}"
+                    "&include_set_aside=true",
+                    key,
                 )
                 fresh = _new_answers(rows)
-                still_open = [r for r in rows if not r.get("answer")]
+                still_open = [
+                    r for r in rows if not r.get("answer") and not r.get("set_aside")
+                ]
+                # Their own section, after the open ones: parked, never counted as
+                # waiting (2 Nov 2026).
+                parked = [r for r in rows if not r.get("answer") and r.get("set_aside")]
                 done = [r for r in rows if r.get("answer") and r.get("acknowledged_at")]
-                rows = fresh + still_open + (done if args.answered else [])
+                rows = fresh + still_open + (done if args.answered else []) + parked
             if args.stranded:
                 empty = "no uncollected answers" + (
                     "" if args.all else " on this seat's pages"
@@ -1945,7 +2133,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.json:
                 print(json.dumps(rows))
                 return 0
-            return _print_rows(rows, empty=empty)
+            return _print_rows(rows, empty=empty, section=_aside_section)
         if args.cmd == "record":
             payload = {
                 "letter": args.letter.strip().lower(),
