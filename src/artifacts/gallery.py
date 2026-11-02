@@ -836,6 +836,37 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
 .tiles{list-style:none;margin:0;padding:0;display:grid;gap:1.5rem;
   grid-template-columns:repeat(auto-fill,minmax(17rem,1fr))}
 .tiles li{margin:0}
+/* THE FOLDER ROW (d_01M6F64DXRZ7YFFFJNDYFKQQVJ). Folders sit above the pages, as short
+   one-line cards: a different shape from a page card, so a folder reads as a place
+   and not as a page with its picture missing. It wraps rather than scrolls sideways
+   on a phone (one to a row at 390px, three on a laptop): a folder hidden off the edge is the problem
+   this fixes. A folder that holds a question gets a left rule as well as its badge,
+   so the cue is never colour alone. Prior art: 2026-11-02-folder-row-prior-art.md. */
+.wsec{font:600 .7rem var(--mono);text-transform:uppercase;letter-spacing:.08em;
+  color:var(--muted);margin:0 0 .6rem}
+.folders + .wsec{margin-top:1.6rem}
+.folders{list-style:none;margin:0;padding:0;display:grid;gap:.6rem;
+  grid-template-columns:repeat(auto-fill,minmax(min(16rem,100%),1fr))}
+.folders li{margin:0}
+.folders > li > a{display:flex;align-items:center;gap:.65rem;min-height:3.4rem;
+  padding:.55rem 2.6rem .55rem .7rem;background:var(--card);border:1px solid var(--line);
+  border-radius:10px;text-decoration:none;color:var(--ink);transition:border-color .12s}
+.folders > li > a:hover{border-color:var(--line-hover)}
+.folders > li.asking > a{box-shadow:inset 3px 0 0 var(--accent)}
+.folders .fic{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  width:2rem;height:2rem;border-radius:.5rem;background:var(--accent-soft);color:var(--accent)}
+.folders .fic .mi{width:1.15rem;height:1.15rem;fill:currentColor}
+.folders .body{display:flex;flex-direction:column;min-width:0;flex:1 1 auto}
+.folders .t{font-weight:600;font-size:.9rem;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.folders .m{font-size:.75rem;color:var(--muted);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.folders .m .dot{margin:0 .3rem;opacity:.7}
+.folders .wait{flex:0 0 auto;font:600 .6875rem/1rem ui-sans-serif,system-ui,-apple-system,
+  sans-serif;color:var(--on-now);background:var(--now-solid);border-radius:.3rem;
+  padding:.2rem .45rem;white-space:nowrap}
+.folders .tile-wrap .menu{top:50%;right:.5rem;transform:translateY(-50%)}
+.folders .tile-wrap .menu[open]{transform:none;top:.6rem}
 /* The card clips its own corners so the preview can bleed to three edges
    without needing a radius of its own -- that is how the reference does it, and
    it is why the picture never shows a seam.
@@ -1495,6 +1526,7 @@ _ICON = {
     "unarchive": '<path d="M8 2.2 3.4 6.8h2.8v4.6h3.6V6.8h2.8L8 2.2ZM2.5 12.8h11v1.3h-11v-1.3Z"/>',
     "open": '<path d="M9.4 1.6v1.3h2.8L6.5 8.6l.9.9 5.7-5.7v2.8h1.3V1.6H9.4ZM2.8 3.3h3.9v1.3H3.3v8.1h8.1V9.3h1.3v4a.7.7 0 0 1-.7.7H2.8a.7.7 0 0 1-.7-.7V4a.7.7 0 0 1 .7-.7Z"/>',
     "all": '<path d="M2 2.5h5v5H2v-5Zm7 0h5v5H9v-5Zm-7 6h5v5H2v-5Zm7 0h5v5H9v-5Z"/>',
+    "folder": '<path d="M1.5 3.6c0-.6.5-1.1 1.1-1.1h3.5c.3 0 .6.1.8.3l1.2 1.2h5.3c.6 0 1.1.5 1.1 1.1v7.3c0 .6-.5 1.1-1.1 1.1H2.6c-.6 0-1.1-.5-1.1-1.1V3.6Z"/>',
     "lock": '<path d="M4.5 7V5a3.5 3.5 0 0 1 7 0v2h.7c.4 0 .8.4.8.8v6.4c0 .4-.4.8-.8.8H3.8a.8.8 0 0 1-.8-.8V7.8c0-.4.4-.8.8-.8h.7Zm1.4 0h4.2V5a2.1 2.1 0 0 0-4.2 0v2Z"/>',
     "trash": '<path d="M6.4 1.6h3.2a.8.8 0 0 1 .8.8v.8h2.8a.65.65 0 0 1 0 1.3h-.5l-.7 8.2a1.6 1.6 0 0 1-1.6 1.5H5.6a1.6 1.6 0 0 1-1.6-1.5l-.7-8.2h-.5a.65.65 0 0 1 0-1.3h2.8v-.8a.8.8 0 0 1 .8-.8Zm.5 1.6h2.2v-.3H6.9v.3ZM4.6 4.5l.7 8.1a.3.3 0 0 0 .3.3h4.8a.3.3 0 0 0 .3-.3l.7-8.1H4.6Zm2 1.5h1.2v5.4H6.6V6Zm2.6 0h1.2v5.4H9.2V6Z"/>',
     "restore": '<path d="M8 2.4a5.6 5.6 0 1 0 5.4 7.1.7.7 0 0 0-1.34-.38A4.2 4.2 0 1 1 8 3.8c1.1 0 2.1.42 2.85 1.1l-1.6.02a.65.65 0 0 0 .01 1.3l3.2-.04a.65.65 0 0 0 .64-.66l-.04-3.2a.65.65 0 1 0-1.3.02l.01 1.35A5.58 5.58 0 0 0 8 2.4Z"/>',
@@ -4610,11 +4642,13 @@ def gallery_router(db: Database) -> APIRouter:
         return (
             f'<li class="tile-wrap folder{" asking" if item.waiting else ""}'
             f'{" archived" if archived else ""}">'
-            f'<a href="/f/{ident}"><span class="frame">'
-            f'<span class="shot none">{_icon("all")}'
-            f'<span class="d">{item.count} {noun}</span></span>{flag}</span>'
+            # A compact card, not a page card with no picture: a folder is a place, and
+            # it must read as one at a glance among thumbnails (Jeremy, 2 Nov 2026,
+            # d_01M6F64DXRZ7YFFFJNDYFKQQVJ; prior art in
+            # docs/agent/specs/2026-11-02-folder-row-prior-art.md).
+            f'<a href="/f/{ident}"><span class="fic">{_icon("folder")}</span>'
             f'<span class="body"><span class="t">{escape(item.title)}</span>'
-            f'<span class="m">{_SEP.join(bits)}</span></span></a>'
+            f'<span class="m">{_SEP.join(bits)}</span></span>{flag}</a>'
             f"{'' if plain else _folder_menu(item.id, item.title, archived)}</li>"
         )
 
@@ -5019,21 +5053,55 @@ def gallery_router(db: Database) -> APIRouter:
             return "".join(out)
 
         def render(these, archived: bool = False) -> str:
-            if view == "list":
-                return listing(these, archived)
-            tiles = "".join(
-                _folder_tile(r, archived, selecting)
-                if isinstance(r, _FolderItem)
-                else tile(r, archived)
-                for r in these
+            # FOLDERS FIRST, IN THEIR OWN ROW, BY NAME (Jeremy, 2 Nov 2026,
+            # d_01M6F64DXRZ7YFFFJNDYFKQQVJ). Mixed in among the pages by the page
+            # order, a folder landed wherever its newest page would and was hard to
+            # find. The pages below keep their own order. The labels appear only
+            # when both kinds are there, so a wall with no folders reads as before.
+            folders_here = sorted(
+                (r for r in these if isinstance(r, _FolderItem)),
+                key=lambda f: (f.title.casefold(), f.id),
             )
-            return f'<ul class="tiles">{tiles}</ul>'
+            pages_here = [r for r in these if not isinstance(r, _FolderItem)]
+            both = bool(folders_here and pages_here)
+            out = []
+            if folders_here:
+                if both:
+                    out.append('<h2 class="wsec">Folders</h2>')
+                if view == "list":
+                    out.append(
+                        '<ul class="rows">'
+                        + "".join(
+                            _folder_row(f, archived, selecting) for f in folders_here
+                        )
+                        + "</ul>"
+                    )
+                else:
+                    out.append(
+                        '<ul class="folders">'
+                        + "".join(
+                            _folder_tile(f, archived, selecting) for f in folders_here
+                        )
+                        + "</ul>"
+                    )
+            if pages_here:
+                if both:
+                    out.append('<h2 class="wsec">Pages</h2>')
+                if view == "list":
+                    out.append(listing(pages_here, archived))
+                else:
+                    out.append(
+                        '<ul class="tiles">'
+                        + "".join(tile(r, archived) for r in pages_here)
+                        + "</ul>"
+                    )
+            return "".join(out)
 
-        # The folder tiles take their place among the pages, in the same order the wall
-        # keeps: pinned first, then whatever waits on him, then what he has not read,
-        # then newest. A folder sorts by its newest page and "waits" when it holds a
-        # question. Inside a folder there are no unread bumps: newest publish first,
-        # with pinned and waiting above.
+        # The pages keep the wall's order: pinned first, then whatever waits on him,
+        # then what he has not read, then newest. Folders are drawn apart, first and
+        # by name (render, above); the folder arm of this key is kept so a mixed
+        # list still sorts without error. Inside a folder there are no unread bumps:
+        # newest publish first, with pinned and waiting above.
         def rank(r):
             if isinstance(r, _FolderItem):
                 return (0, 0, bool(r.waiting), r.unread, r.newest, r.id)

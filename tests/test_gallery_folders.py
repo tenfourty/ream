@@ -88,21 +88,46 @@ def test_filter_waiting_lists_the_pages_flat(client, db):
     assert 'href="/f/' not in html
 
 
-def test_a_folder_that_waits_sorts_among_waiting_items_above_newer_pages(client, db):
+def test_folders_come_first_in_their_own_row_by_name(client, db):
+    # Jeremy, 2 Nov 2026 (d_01M6F64DXRZ7YFFFJNDYFKQQVJ): folders as their own row at the
+    # top, by name, whatever their pages' age; loose pages below in the wall's order.
+    put(db, "seat-b", "Pg-oldest")
+    put(db, "bosun", "Pg-in-zeta", folder="zeta", folder_title="zeta shelf")
+    put(db, "bosun", "Pg-in-alpha", folder="alpha", folder_title="Alpha shelf")
+    put(db, "seat-b", "Pg-newest")
+    html = client.get("/").text
+    assert html.index('<ul class="folders">') < html.index('<ul class="tiles">')
+    assert (
+        html.index("Alpha shelf") < html.index("zeta shelf") < html.index("Pg-newest")
+    )
+    assert html.index("Pg-newest") < html.index("Pg-oldest")
+    assert (
+        '<h2 class="wsec">Folders</h2>' in html
+        and '<h2 class="wsec">Pages</h2>' in html
+    )
+    listed = client.get("/?view=list").text
+    assert (
+        listed.index("Alpha shelf")
+        < listed.index("zeta shelf")
+        < listed.index("Pg-newest")
+    )
+
+
+def test_a_waiting_folder_still_sits_in_the_folder_row_and_says_so(client, db):
     old = put(db, "bosun", "Old asker", folder="digests", folder_title="Digests")
     ask(db, "bosun", old)
     put(db, "seat-b", "Newer loose")
     html = client.get("/").text
     assert html.index("Digests") < html.index("Newer loose")
+    assert "1 waiting" in html and 'class="tile-wrap folder asking"' in html
 
 
-def test_a_folder_sorts_by_its_newest_page_otherwise(client, db):
-    put(db, "bosun", "Pg-early", folder="digests", folder_title="Digests")
-    put(db, "seat-b", "Pg-middle")
-    put(db, "bosun", "Pg-late", folder="digests")
-    put(db, "seat-b", "Pg-latest")
-    html = client.get("/").text
-    assert html.index("Pg-latest") < html.index("Digests") < html.index("Pg-middle")
+def test_no_section_labels_without_both_folders_and_pages(client, db):
+    put(db, "seat-b", "Pg-only")
+    assert 'class="wsec"' not in client.get("/").text
+    put(db, "bosun", "Pg-in", folder="digests", folder_title="Digests")
+    db_html = client.get("/").text
+    assert 'class="wsec"' in db_html
 
 
 def test_an_open_folder_shows_its_pages_newest_first_with_waiting_above(client, db):
