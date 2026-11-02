@@ -61,6 +61,10 @@ MAX_OPTIONS = 200
 MAX_LABEL = 200
 MAX_VALUE = 200
 MAX_MAXLENGTH = 10_000
+# Open labels and fieldsets inside one form. Each holds per-element state, so an
+# unbounded run of unclosed `<label>`s would cost memory per request; real forms
+# nest two or three deep.
+MAX_NESTING = 64
 
 # A cheap test before any parse: most pages have no control at all.
 _MAYBE = re.compile(
@@ -208,6 +212,12 @@ class _Walk(HTMLParser):
             if tag in ("textarea", "select") and self.stray_line is None:
                 self.stray_line = self._line()
             return
+        if tag in ("label", "fieldset") and (
+            len(self._labels) + len(self._fieldsets) >= MAX_NESTING
+        ):
+            raise self._refuse(
+                f"labels and fieldsets nest more than {MAX_NESTING} deep in one form"
+            )
         if tag == "label":
             self._labels.append(_Label(a.get("for", "")))
         elif tag == "fieldset":

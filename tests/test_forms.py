@@ -269,6 +269,12 @@ def test_the_limits_on_forms_and_fields():
         forms.parse(page(many_forms))
 
 
+def test_nesting_inside_a_form_is_capped():
+    deep = "<label>" * (forms.MAX_NESTING + 1)
+    with pytest.raises(forms.FormRefused, match="nest more than"):
+        forms.parse(page(f'<form data-artifact-form="f"><input name="a">{deep}</form>'))
+
+
 def test_text_in_a_script_is_not_a_control():
     parsed = forms.parse(page('<script>document.write("<input name=a>")</script>'))
     assert parsed.stray_line is None and parsed.forms == []

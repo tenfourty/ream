@@ -119,7 +119,9 @@ _SHAPES: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ),
     (
         "form_element",
-        re.compile(r"<form\b(?![^>]*\bdata-artifact-form\b)", re.IGNORECASE),
+        # Bounded: an unbounded [^>]* rescans to the end of the body from every
+        # `<form` when no `>` follows, which is quadratic on a crafted page.
+        re.compile(r"<form\b(?![^>]{0,2000}\bdata-artifact-form\b)", re.IGNORECASE),
         (
             "form-action is 'none': a form cannot submit anywhere. This is the "
             "trust boundary that stops a page forging an answer. To ask a "
