@@ -1277,3 +1277,19 @@ def test_folder_alone_without_a_file_or_list_is_a_usage_error(live, key_file, ca
     path, _ = key_file
     assert client.main(["--key-file", str(path), "--folder", "road"]) == 2
     assert "--folder goes with FILE" in capsys.readouterr().err
+
+
+def test_no_folder_and_all_misuse_are_usage_errors(live, key_file, tmp_path, capsys):
+    path, _ = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>hi</body></html>")
+    base = ["--key-file", str(path)]
+    for extra in (
+        [str(page), "--title", "T", "--no-folder"],
+        [str(page), "--title", "T", "--folder", ""],
+        ["--no-folder"],
+    ):
+        assert client.main([*base, *extra]) == 2
+        assert "--no-folder" in capsys.readouterr().err
+    assert client.main([*base, "--list", "--folder", "road", "--all"]) == 2
+    assert "--all cannot be combined with --folder" in capsys.readouterr().err

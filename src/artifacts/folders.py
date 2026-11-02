@@ -110,7 +110,7 @@ def list_for_agent(db, agent: str) -> list[dict]:
             " (select count(*) from decision d join artifact a on a.id = d.artifact_id"
             "   where a.folder_id = f.id and a.deleted_at is null and a.agent = f.owner"
             "   and a.archived_at is null"
-            "   and d.answer is null and d.closed_at is null)"
+            "   and d.kind <> 'form' and d.answer is null and d.closed_at is null)"
             " from folder f where f.owner = %s order by f.created_at desc, f.slug",
             (agent,),
         ).fetchall()

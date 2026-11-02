@@ -429,3 +429,17 @@ def test_folder_counts_ignore_a_page_another_publisher_put_in_an_agent_folder(
     assert [(f["slug"], f["pages"], f["open_questions"]) for f in got] == [
         ("roadmap", 1, 0)
     ]
+
+
+def test_a_form_is_not_an_open_question_in_the_folder_count(client, db, tokens):
+    page = publish(client, tokens["alpha"], folder="roadmap").json()
+    with db.connect() as conn, conn.transaction():
+        conn.execute(
+            "insert into decision (id, artifact_id, version_n, question, options,"
+            " kind, form_name) values ('df', %s, 1, 'q', '[]', 'form', 'f')",
+            (page["id"],),
+        )
+    got = client.get("/api/v1/folders", headers=auth(tokens["alpha"])).json()
+    assert [(f["slug"], f["pages"], f["open_questions"]) for f in got] == [
+        ("roadmap", 1, 0)
+    ]

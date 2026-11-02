@@ -1673,6 +1673,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_folder and args.folder is not None:
         print("--folder and --no-folder cannot be used together", file=sys.stderr)
         return 2
+    if (args.no_folder or args.folder == "") and not args.update:
+        print(
+            '--no-folder (or --folder "") takes a page out of its folder, so it goes'
+            " with --update ID and FILE; a new page starts with no folder anyway",
+            file=sys.stderr,
+        )
+        return 2
+    if args.list and args.folder is not None and args.all:
+        print(
+            "--all cannot be combined with --folder: a folder is your own, and"
+            " --all lists everyone's pages",
+            file=sys.stderr,
+        )
+        return 2
     try:
         if args.folders:
             rows = _request("GET", f"{_api_base()}/folders", key, None)
