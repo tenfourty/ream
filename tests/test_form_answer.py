@@ -485,13 +485,15 @@ def test_a_submitted_form_survives_a_republish_without_it_until_acknowledged(
     listed = client.get("/api/v1/decisions", headers=auth(made["token"])).json()
     assert [r["id"] for r in listed] == [made["id"]]
     assert listed[0]["answer_record"]["answers"]["region"] == "a"
-    assert [r.id for r in decisions.list_for_agent(db, "ops")] == [made["id"]]
+    assert [
+        r.id for r in decisions.list_for_agent(db, "ops", include_answered=True)
+    ] == [made["id"]]
     ack = client.post(
         f"/api/v1/decisions/{made['id']}/acknowledge", headers=auth(made["token"])
     )
     assert ack.status_code == 200
     assert client.get("/api/v1/decisions", headers=auth(made["token"])).json() == []
-    assert decisions.list_for_agent(db, "ops") == []
+    assert decisions.list_for_agent(db, "ops", include_answered=True) == []
 
 
 def test_an_unrelated_republish_keeps_the_form_version_and_a_changed_field_does_not(
