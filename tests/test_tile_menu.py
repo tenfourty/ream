@@ -366,7 +366,7 @@ def test_an_archived_tile_offers_the_way_back_not_the_way_out(client, db):
 
     page = client.get("/?filter=archived").text
     body = page.split('<div class="archived-body">', 1)[1]
-    assert "Put back on the wall" in body
+    assert "Unarchive" in body
     assert ">Archive<" not in body
     assert 'name="archived" value="0"' in body, "and it would unarchive it"
 

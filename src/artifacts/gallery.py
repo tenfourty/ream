@@ -1671,7 +1671,7 @@ def _tile_menu(
         _act(
             f"/a/{ident}/archive",
             "unarchive" if archived else "archive",
-            "Put back on the wall" if archived else "Archive",
+            "Unarchive" if archived else "Archive",
             {"archived": "0" if archived else "1"},
         ),
         (
@@ -2576,7 +2576,7 @@ def _page_menu(
             f'<form method="post" action="/a/{ident}/archive">'
             '<input type="hidden" name="archived" value="0">'
             f'<button class="mrow" type="submit">{_icon("unarchive")}'
-            "Put back on the wall</button></form>"
+            "Unarchive</button></form>"
         )
     else:
         rows.append(

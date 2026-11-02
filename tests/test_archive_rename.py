@@ -106,7 +106,7 @@ def test_the_page_offers_the_opposite_action_once_archived(client, page):
         headers=SAME_ORIGIN,
         follow_redirects=False,
     )
-    assert "Put back on the wall" in client.get(f"/a/{page.id}").text
+    assert "Unarchive" in client.get(f"/a/{page.id}").text
 
 
 # --- renaming ----------------------------------------------------------------
@@ -212,7 +212,7 @@ def test_an_archived_page_offers_the_opposite_action_in_the_menu(client, page):
         headers=SAME_ORIGIN,
         follow_redirects=False,
     )
-    assert "Put back on the wall" in client.get(f"/a/{page.id}").text
+    assert "Unarchive" in client.get(f"/a/{page.id}").text
 
 
 def test_delete_is_offered_and_destroys_nothing(client, db, page):
