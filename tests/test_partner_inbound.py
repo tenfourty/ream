@@ -673,6 +673,30 @@ def test_a_review_or_closed_or_unannounced_decision_is_not_settled(
     assert r.status_code == 200 and _row(db, old.id).answer is None
 
 
+def test_a_set_aside_question_is_not_settled_from_slack(
+    db, bridge, client, partner_key, page
+):
+    from artifacts import store
+
+    parked = ask(db, page, "parked?")
+    store.set_archived(db, page.id, True, agent="owner")
+    r = post(
+        client,
+        partner_key,
+        make("answered", f"artifacts:{parked.id}", 1, pressed("a")),
+    )
+    assert r.status_code == 200
+    assert _row(db, parked.id).answer is None
+    store.set_archived(db, page.id, False, agent="owner")
+    again = post(
+        client,
+        partner_key,
+        make("answered", f"artifacts:{parked.id}", 1, pressed("a")),
+    )
+    assert again.json() == {"result": "applied"}
+    assert _row(db, parked.id).answer == "a"
+
+
 def test_a_held_question_is_not_settled_and_the_refusal_is_recorded(
     db, bridge, client, partner_key, page
 ):

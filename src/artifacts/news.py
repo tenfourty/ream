@@ -18,6 +18,10 @@ from pathlib import Path
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-02",
+        "Archiving or binning a page now SETS ASIDE its open questions instead of closing them: you get a decision_set_aside event, and unarchiving or restoring brings them back open with the same ids and a decision_reopened event. artifacts-decide wait --page exits 9 when everything it waits on is set aside (re-arm it on decision_reopened); list shows them in a SET ASIDE section; GET /decisions and /questions leave them out unless include_set_aside=true. Only close withdraws a question now.",
+    ),
+    (
         "2026-10-22b",
         "If you set no session label, the tools now send one from Claude Code's environment: <office>/<first 8 of the session id>, the office from QD_OFFICE or else ARTIFACTS_SEAT. --session or ARTIFACTS_SESSION always wins, and only a label you set chooses whose answers wait hears.",
     ),

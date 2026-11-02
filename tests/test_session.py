@@ -190,8 +190,8 @@ def test_a_withdrawal_reaches_the_session_that_asked(client, key, db):
     )
     store.set_archived(db, page["id"], True, agent=None)
 
-    shelved = events.list_for_agent(db, "baba-operator", session=SEAT_A)
-    assert [e.kind for e in shelved] == ["decision_shelved"]
+    parked = events.list_for_agent(db, "baba-operator", session=SEAT_A)
+    assert [e.kind for e in parked] == ["decision_set_aside"]
 
 
 def test_the_filter_is_reachable_over_http(client, key, db):

@@ -343,7 +343,7 @@ def test_replacing_a_question_says_replaced_on_the_old_one(db, page, bridge):
 
 
 @pytest.mark.parametrize("how", ["archived", "deleted"])
-def test_shelving_the_page_withdraws_its_open_questions(db, page, bridge, how):
+def test_shelving_the_page_sets_its_open_questions_aside(db, page, bridge, how):
     open_one = _ask(db, page)
     answered = _ask(db, page)
     decisions.answer(db, answered.id, letter="a", by="jeremy")
@@ -352,8 +352,9 @@ def test_shelving_the_page_withdraws_its_open_questions(db, page, bridge, how):
         assert store.set_archived(db, page.id, True, agent="owner")
     else:
         assert store.set_deleted(db, page.id, True, agent="owner")
-    assert _kinds(db, open_one.id) == [(1, "asked"), (2, "withdrawn")]
-    assert f"was {how}" in _rows(db, open_one.id)[1][3]["reason"]
+    word = "archived" if how == "archived" else "binned"
+    assert _kinds(db, open_one.id) == [(1, "asked"), (2, "set_aside")]
+    assert f"was {word}" in _rows(db, open_one.id)[1][3]["reason"]
     assert _kinds(db, answered.id) == [(1, "asked"), (2, "answered")]
     assert _rows(db, review.id) == []
 

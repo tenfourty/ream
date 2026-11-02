@@ -162,7 +162,7 @@ def test_an_event_landing_during_a_hold_is_returned_and_seen(db, client, auth):
 
 
 def test_an_agent_can_leave_out_its_own_actions(db, client, auth):
-    # Binning its own page shelves its open question: an event whose actor
+    # Binning its own page sets aside its open question: an event whose actor
     # is the seat itself, and one it did not need telling about.
     page = store.publish(db, "seat", "Board", PAGE)
     decisions.ask(db, agent="seat", artifact_id=page.id, question="q?", options=OPTIONS)

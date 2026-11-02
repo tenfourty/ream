@@ -702,9 +702,9 @@ def test_a_resolved_root_is_released_without_an_event(db, nudges):
     assert not any(_held_flags(db, page).values())
 
 
-def test_a_review_opened_while_shelving_is_still_released(db, monkeypatch, nudges):
-    """The shelve's own close decides what it shelves: a review that appears
-    after the page's decisions were first looked at is closed and released."""
+def test_a_review_is_released_when_its_page_is_set_aside(db, nudges):
+    """Archiving sets a review's question aside (it stays open): the marks he
+    held go to the agent now, and the question and review both count as set aside."""
     page = _page(db)
     decisions.ask(
         db,
@@ -713,24 +713,23 @@ def test_a_review_opened_while_shelving_is_still_released(db, monkeypatch, nudge
         question="Q?",
         options=[{"letter": "a", "label": "x"}, {"letter": "b", "label": "y"}],
     )
-    real = store._shelve_open_questions
-    opened = {}
-
-    def late(conn, artifact_id, what, actor):
-        row = decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
-        opened["mark"] = _mark(db, page)
-        opened["row"] = row
-        return real(conn, artifact_id, what, actor)
-
-    monkeypatch.setattr(store, "_shelve_open_questions", late)
+    row = decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
+    mark = _mark(db, page)
+    assert mark.held is True
     assert store.set_archived(db, page.id, True, agent="seat")
-    assert opened["mark"].held is True
     assert not any(_held_flags(db, page).values())
-    assert len(_comment_events(db, [opened["mark"].id])) == 1
+    assert len(_comment_events(db, [mark.id])) == 1
     with db.connect() as conn:
-        shelved = conn.execute(
-            "select count(*) from event where kind = 'decision_shelved'"
+        aside = conn.execute(
+            "select count(*) from event where kind = 'decision_set_aside'"
             " and artifact_id = %s",
             (page.id,),
         ).fetchone()[0]
-    assert shelved == 2
+        closed = conn.execute(
+            "select count(*) from decision where artifact_id = %s"
+            " and closed_at is not null",
+            (page.id,),
+        ).fetchone()[0]
+    assert aside == 2
+    assert closed == 0
+    assert row.id

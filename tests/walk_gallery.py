@@ -303,14 +303,14 @@ def walk(dsn: str) -> list[str]:
         tidy(db, a.id)
         wall = c.get("/").text
         still_open = decisions.list_for_artifact(db, a.id)
-        # Either the ordinary pill or the "tidied away" line -- both are the
-        # gallery telling him the question is still open somewhere.
-        announced = "waiting on you" in wall or "still unanswered" in wall
-        if still_open and not announced:
+        # Set aside, not closed (2 Nov 2026): the row stays open but the wall must
+        # not count it as waiting on him while the page is away.
+        if not still_open or still_open[0].closed_at is not None:
+            note(f"{label} + open question", "the question was closed, not set aside")
+        if "waiting on you" in wall:
             note(
                 f"{label} + open question",
-                "the question is still unanswered and the wall no longer mentions "
-                "it -- the agent that asked waits for ever and he never sees it",
+                "the wall still counts a question set aside with its page",
             )
 
     # --- journey 12: pressing the same button twice --------------------------

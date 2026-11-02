@@ -611,9 +611,22 @@ Set ARTIFACTS_SESSION so wait --review can claim the round; if it exits 8 anothe
 session is acting on it, and if you cannot act, run artifacts-decide review-release
 <id> --reason "…".
 
+Archiving or binning a page SETS ASIDE its open questions: they are not closed, Jeremy
+is not shown them and cannot answer them while the page is away, and you get a
+decision_set_aside event (summary "archived: <question>" or "binned: ..."). Unarchiving
+or restoring the page reopens them, the same ids, still unanswered, and you get a
+decision_reopened event. `wait --page ID` exits 9 when every open question it was
+waiting on is set aside (re-arm it when you see decision_reopened); an office-wide `wait`
+prints SET ASIDE and REOPENED lines and keeps waiting. `artifacts-decide list` shows them
+in a SET ASIDE section, apart from what is waiting; over the API, GET /decisions and
+/questions leave them out unless you pass include_set_aside=true, and each row carries
+set_aside, set_aside_since and reopened_at. A question you ask on an archived page is set
+aside from birth (the response carries a warning). To withdraw a question for good,
+close it: that is the only thing that closes one.
+
 After you ask, start `artifacts-decide wait` in the background so you are woken
 when he answers or comments on your office's work (the ARTIFACTS_SESSION prefix
-before "/", or --office; --all-offices for everything; --timeout 0 for no limit; the default 55m ends with exit 3, a time limit, so re-arm it; ARTIFACTS_WAIT_TIMEOUT changes it); without background tasks, run `artifacts-decide
+before "/", or --office; --all-offices for everything; --timeout 0 for no limit; the default 55m ends with exit 3, a time limit, so re-arm it; exit 9 means the page was archived or binned and its questions are set aside; ARTIFACTS_WAIT_TIMEOUT changes it); without background tasks, run `artifacts-decide
 list` and `artifacts-decide comments` at the start of every turn. An unread
 answer is a broken promise, and so is an unanswered comment:
 

@@ -959,6 +959,15 @@ def list_for_agent(
         # outcome route answered 404 was the list and the route disagreeing.
         " where artifact.agent = %s and artifact.deleted_at is null"
     )
+    if include_set_aside:
+        # Except its OPEN questions, which `artifacts-decide list` shows in its SET
+        # ASIDE section as "page binned" (2 Nov 2026); answered or closed rows on a
+        # binned page stay out as before.
+        sql = sql.replace(
+            "artifact.deleted_at is null",
+            "(artifact.deleted_at is null or (decision.answer is null"
+            " and decision.closed_at is null))",
+        )
     if not include_closed:
         sql += " and decision.closed_at is null"
     if not include_answered:

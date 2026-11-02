@@ -349,6 +349,8 @@ create index if not exists artifact_live_idx on artifact (deleted_at)
 
 -- A FOURTH EVENT KIND: the page holding an open question left the wall
 -- (homelab-ij8.84.10, 21 Sep 2026).
+-- (Superseded 2 Nov 2026: `decision_shelved` is no longer written; archiving or binning
+-- now emits `decision_set_aside`, and restoring emits `decision_reopened`.)
 --
 -- Found by walking the gallery as a user. Archive or delete a page with an
 -- unanswered question and the question stayed open, Jeremy stopped being shown

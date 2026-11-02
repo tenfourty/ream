@@ -430,12 +430,10 @@ def test_a_question_withdrawn_with_its_page_is_still_readable(
 ):
     """homelab-ij8.44, and this morning made it sharper.
 
-    Jeremy ruled on 21 Sep that archiving or deleting a page withdraws its open
-    questions. So most withdrawals are now the SERVICE\'s doing and the agent
-    never chose them -- and a withdrawn question used to be unreadable on every
-    route an agent could reach. Not wrong, not redacted: simply no longer
-    listed. A seat would be told "your question is gone" by an event and then
-    find no trace of it anywhere.
+    A question on an archived page (set aside since 2 Nov 2026; withdrawn before)
+    used to be unreadable on every route an agent could reach. Not wrong, not
+    redacted: simply no longer listed. A seat would be told "your question is
+    set aside" by an event and then find no trace of it anywhere.
     """
     path, _ = key_file
     asked = decisions.ask(
@@ -451,10 +449,11 @@ def test_a_question_withdrawn_with_its_page_is_still_readable(
     assert _run(["answers", page.id], path) == 0
     out = capsys.readouterr().out
     assert asked.id in out, "the withdrawn question vanished from its own page"
-    assert "WITHDRAWN" in out, "and it must not look like one still waiting"
+    assert "SET ASIDE" in out, "and it must not look like one still waiting"
+    assert "WITHDRAWN" not in out, "it is parked, not closed"
 
 
-def test_open_only_still_leaves_a_withdrawn_question_out(
+def test_open_only_still_leaves_a_set_aside_question_out(
     live,
     key_file,
     page,

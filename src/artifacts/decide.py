@@ -1678,7 +1678,9 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Lists decisions across every page of the scope, following the "
             "service's pages to the end. To read one page's questions, "
-            "answered ones included, use: artifacts-decide answers PAGE"
+            "answered ones included, use: artifacts-decide answers PAGE. Questions "
+            "on an archived or binned page are SET ASIDE, not closed: they are "
+            "listed last in a SET ASIDE section and are not counted as waiting."
         ),
     )
     listing.add_argument(
@@ -1767,7 +1769,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     waiting = subs.add_parser(
         "wait",
-        help="block until he answers, print the answer, exit 0 (3 if nothing by --timeout)",
+        help="block until he answers, print the answer, exit 0 (3 if nothing by --timeout;"
+        " 9 if --page's questions are all set aside because the page was archived or binned)",
     )
     waiting.add_argument(
         "--page", metavar="ARTIFACT-ID", help="only answers on this page"
@@ -2041,11 +2044,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  wait: artifacts-decide wait --review {row['id']}")
             return 0
         if args.cmd == "answers":
-            # WITHDRAWN ONES INCLUDED. A question withdrawn because its page
-            # was archived is part of that page's record, and since 21 Sep the
-            # service withdraws them rather than the agent -- so hiding them
-            # here would mean a seat could be told "your question is gone" by
-            # an event and then find no trace of it anywhere (homelab-ij8.44).
+            # WITHDRAWN ONES INCLUDED. A withdrawn question is part of its
+            # page's record -- hiding it would mean a seat could be told "your
+            # question is gone" by an event and then find no trace of it anywhere
+            # (homelab-ij8.44). Archiving no longer withdraws (2 Nov 2026): it
+            # sets questions aside, and `list` has the SET ASIDE section.
             # --open-only is the one case that excludes them, because a
             # withdrawn question is not waiting on anybody.
             keep = "false" if args.open_only else "true"

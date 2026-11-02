@@ -516,7 +516,7 @@ def test_a_question_cannot_replace_or_wait_on_a_form(client, db):
         assert response.status_code == 422, response.text
 
 
-def test_archiving_the_page_closes_its_forms(client, db):
+def test_archiving_the_page_sets_its_forms_aside_without_closing_them(client, db):
     token, _ = keys.mint(db, agent="ops")
     made = publish(client, token, page(ROLLOUT)).json()
     client.post(
@@ -524,7 +524,16 @@ def test_archiving_the_page_closes_its_forms(client, db):
         json={"archived": True},
         headers=auth(token),
     )
-    assert read_forms(client, token, made["id"]).json() == []
+    # Set aside, not closed (2 Nov 2026): the form is still there to read, and it
+    # is the same one after the page comes back.
+    (aside,) = read_forms(client, token, made["id"]).json()
+    client.post(
+        f"/api/v1/artifacts/{made['id']}/archive",
+        json={"archived": False},
+        headers=auth(token),
+    )
+    (back,) = read_forms(client, token, made["id"]).json()
+    assert back["decision_id"] == aside["decision_id"]
 
 
 def test_a_duplicate_of_a_page_mints_its_own_forms(client, db):
