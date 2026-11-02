@@ -96,11 +96,9 @@ def test_wait_on_a_page_exits_9_when_it_is_set_aside_while_waiting(
 ):
     path, _ = key_file
     asked = _ask(db, page)
-    listener = on_first_listen(
-        lambda: store.set_deleted(db, page.id, True, agent="ops-seat")
-    )
+    listener = on_first_listen(lambda: store.set_deleted(db, page.id, True, agent=None))
     assert _run(["wait", "--page", page.id, "--timeout", "40s"], path, monkeypatch) == 9
-    listener.join()
+    listener.thread.join()
     assert asked.id in capsys.readouterr().out
 
 
@@ -113,12 +111,12 @@ def test_the_office_wide_wait_prints_set_aside_and_reopened_lines(
     both = _ask(db, other, question="other?")
 
     def park_and_answer():
-        store.set_archived(db, page.id, True, agent="ops-seat")
+        store.set_archived(db, page.id, True, agent=None)
         decisions.answer(db, both.id, letter="a", note="n", by="jeremy")
 
     listener = on_first_listen(park_and_answer)
     code = _run(["wait", "--timeout", "40s", "--json"], path, monkeypatch)
-    listener.join()
+    listener.thread.join()
     out = capsys.readouterr().out
     assert code == 0, "an answer on the other page still wakes it with exit 0"
     assert "set_aside" in out and mine.id in out

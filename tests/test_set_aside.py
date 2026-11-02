@@ -188,9 +188,9 @@ def test_every_list_leaves_set_aside_out_unless_asked(db, client, page):
     head = {"Authorization": f"Bearer {token}"}
 
     assert decisions.open_counts(db)[2] == 1
-    ids = [r.id for r in decisions.across_seats(db)]
+    ids = [r.decision.id for r in decisions.across_seats(db)]
     assert ids == [waiting.id]
-    ids = [r.id for r in decisions.across_seats(db, include_set_aside=True)]
+    ids = [r.decision.id for r in decisions.across_seats(db, include_set_aside=True)]
     assert set(ids) == {waiting.id, parked.id}
     assert [r.id for r in decisions.list_for_agent(db, "seat")] == [waiting.id]
     both = decisions.list_for_agent(db, "seat", include_set_aside=True)

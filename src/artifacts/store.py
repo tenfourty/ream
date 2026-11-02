@@ -1390,6 +1390,20 @@ def live_thumbnail(db: Database, artifact_id: str) -> bytes | None:
     return bytes(row[0]) if row and row[0] is not None else None
 
 
+def _lock_open_decisions(conn, artifact_id: str) -> None:
+    """Row-lock the page's open decisions, in id order, BEFORE anything touches the
+    artifact row. A mark takes a share lock on an open review (`holds.page_mode`) and
+    then inserts a comment, which key-shares the artifact; an archive that locked the
+    artifact first and the review second would deadlock with it. Taking the decisions
+    first makes the archive wait for the mark to commit, so `holds.release` then sees
+    it. Same id order as `decisions._advance_rounds` and `holds.page_mode`."""
+    conn.execute(
+        "select id from decision where artifact_id = %s"  # noqa: S608 -- clause from the db layer, no caller input
+        " and answer is null and closed_at is null order by id" + conn.for_update(),
+        (artifact_id,),
+    ).fetchall()
+
+
 def _set_aside_state(conn, artifact_id: str) -> tuple[bool, object] | None:
     """(is the page archived or binned right now, its archived_at), read inside the
     caller's transaction BEFORE the write that moves it, so the caller can tell a
@@ -1645,6 +1659,8 @@ def set_deleted(
     # than 404). The default clause excludes exactly the rows this call is for.
     where, params = _scoped(artifact_id, agent, live=False)
     with db.connect() as conn, conn.transaction():
+        if deleted:
+            _lock_open_decisions(conn, artifact_id)
         before = _set_aside_state(conn, artifact_id)
         done = conn.execute(
             f"update artifact set deleted_at = %s {where}",  # noqa: S608 -- see _scoped
@@ -1780,6 +1796,8 @@ def set_archived(
     """
     where, params = _scoped(artifact_id, agent)
     with db.connect() as conn, conn.transaction():
+        if archived:
+            _lock_open_decisions(conn, artifact_id)
         before = _set_aside_state(conn, artifact_id)
         done = conn.execute(
             f"update artifact set archived_at = %s {where}",  # noqa: S608 -- _scoped emits a fixed clause with placeholders, never caller text

@@ -1079,7 +1079,16 @@ def _wait(args, key: str, base: str) -> int:
 
     def page_questions() -> list[dict]:
         """This office's questions and reviews on the waited page."""
-        rows = _request("GET", f"{base}/artifacts/{page}/decisions", key, None) or []
+        try:
+            rows = (
+                _request("GET", f"{base}/artifacts/{page}/decisions", key, None) or []
+            )
+        except HTTPFailure as exc:
+            # A BINNED page answers 404 like a missing one: nothing on it is
+            # waiting, and the set-aside event already said why.
+            if exc.status != 404:
+                raise
+            rows = []
         return [
             r
             for r in rows
