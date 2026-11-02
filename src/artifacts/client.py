@@ -1669,6 +1669,9 @@ def main(argv: list[str] | None = None) -> int:
     # none. Half the value of a pre-publish check is being able to run it in
     # CI, or on a machine that has never been given a key, or on a page nobody
     # has decided to publish yet.
+    if args.check and args.move:
+        print("--move cannot be combined with --check", file=sys.stderr)
+        return 2
     if args.check:
         try:
             return _check_page(args.check)
@@ -1699,10 +1702,30 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
-        if args.file or args.update or args.list or args.folder_title:
+        other = [
+            flag
+            for flag, value in (
+                ("FILE", args.file),
+                ("--update", args.update),
+                ("--list", args.list),
+                ("--folder-title", args.folder_title),
+                ("--folders", args.folders),
+                ("--archive", args.archive),
+                ("--unarchive", args.unarchive),
+                ("--pin", args.pin),
+                ("--unpin", args.unpin),
+                ("--rename", args.rename),
+                ("--fetch", args.fetch),
+                ("--duplicate", args.duplicate),
+                ("--check", args.check),
+                ("--preview", args.preview),
+            )
+            if value
+        ]
+        if other:
             print(
-                "--move goes with --folder SLUG or --no-folder only: no FILE,"
-                " --update, --list or --folder-title",
+                "--move goes with --folder SLUG or --no-folder only, not with "
+                + ", ".join(other),
                 file=sys.stderr,
             )
             return 2

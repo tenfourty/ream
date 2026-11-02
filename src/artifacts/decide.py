@@ -1849,6 +1849,13 @@ def build_parser() -> argparse.ArgumentParser:
         "wait",
         help="block until he answers, print the answer, exit 0 (3 if nothing by --timeout;"
         " 9 if --page's questions are all set aside because the page was archived or binned)",
+        description=(
+            "Block until he answers, print the answer. Exit codes: 0 an answer was"
+            " printed; 3 nothing by --timeout (a time limit, not a failure: re-arm it);"
+            " 9 the question was set aside because its page was archived or binned"
+            " (unarchiving or restoring reopens it: re-arm when you see"
+            " decision_reopened); 1 refused (the key); 2 usage."
+        ),
     )
     waiting.add_argument(
         "--page", metavar="ARTIFACT-ID", help="only answers on this page"

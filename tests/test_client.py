@@ -1328,6 +1328,17 @@ def test_move_misuse_is_a_usage_error(live, key_file, tmp_path, capsys):
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>hi</body></html>")
     base = ["--key-file", str(path), "--move", "abc"]
+    for flag in ("--archive", "--unarchive", "--pin", "--unpin", "--duplicate"):
+        assert client.main([*base, "--folder", "x", flag, "c"]) == 2
+        assert flag in capsys.readouterr().err
+    assert client.main([*base, "--folder", "x", "--rename", "c", "--title", "T"]) == 2
+    assert "--rename" in capsys.readouterr().err
+    assert client.main([*base, "--folder", "x", "--fetch", "c"]) == 2
+    assert "--fetch" in capsys.readouterr().err
+    assert client.main([*base, "--folder", "x", "--folders"]) == 2
+    assert "--folders" in capsys.readouterr().err
+    assert client.main([*base, "--folder", "x", "--check", str(page)]) == 2
+    assert "--check" in capsys.readouterr().err
     for extra, word in (
         ([], "--move needs --folder"),
         (["--folder", "x", "--no-folder"], "cannot be used together"),
