@@ -427,3 +427,42 @@ def test_decide_counts_a_submitted_form_as_a_new_answer_until_acknowledged():
     stale = _row()
     stale["answer_record"] = {**stale["answer_record"], "stale": ["count"]}
     assert "stale" in decide._fmt(stale)
+
+
+def _aside_events(db, decision_id):
+    return [
+        e.kind
+        for e in events.list_for_agent(db, "ops")
+        if e.kind in ("decision_set_aside", "decision_reopened")
+        and e.ref_id == decision_id
+    ]
+
+
+def test_a_submit_on_an_archived_pages_form_is_refused(db, made):
+    assert store.set_archived(db, made["page"]["id"], True, agent="ops")
+    with pytest.raises(store.NotFound):
+        formanswer.submit(db, made["id"], version=1, values={"region": "a"})
+    assert record_of(db, made["id"]) is None
+    # Back on the wall, it takes a submit again.
+    assert store.set_archived(db, made["page"]["id"], False, agent="ops")
+    formanswer.submit(db, made["id"], version=1, values={"region": "a"})
+    assert record_of(db, made["id"]) is not None
+
+
+def test_archiving_a_page_with_a_submitted_form_does_not_set_it_aside(db, made):
+    formanswer.submit(db, made["id"], version=1, values={"region": "a"})
+    assert store.set_archived(db, made["page"]["id"], True, agent="ops")
+    row = decisions.get_owned(db, "ops", made["id"])
+    assert not row.set_aside
+    assert store.set_archived(db, made["page"]["id"], False, agent="ops")
+    assert decisions.get_owned(db, "ops", made["id"]).reopened_at is None
+    assert _aside_events(db, made["id"]) == []
+
+
+def test_an_unsubmitted_form_is_set_aside_and_reopened(db, made):
+    assert store.set_archived(db, made["page"]["id"], True, agent="ops")
+    assert decisions.get_owned(db, "ops", made["id"]).set_aside
+    assert store.set_archived(db, made["page"]["id"], False, agent="ops")
+    back = decisions.get_owned(db, "ops", made["id"])
+    assert not back.set_aside and back.reopened_at is not None
+    assert _aside_events(db, made["id"]) == ["decision_set_aside", "decision_reopened"]

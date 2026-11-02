@@ -1399,7 +1399,8 @@ def _lock_open_decisions(conn, artifact_id: str) -> None:
     it. Same id order as `decisions._advance_rounds` and `holds.page_mode`."""
     conn.execute(
         "select id from decision where artifact_id = %s"  # noqa: S608 -- clause from the db layer, no caller input
-        " and answered_at is null and closed_at is null order by id" + conn.for_update(),
+        " and answered_at is null and closed_at is null order by id"
+        + conn.for_update(),
         (artifact_id,),
     ).fetchall()
 

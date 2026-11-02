@@ -1158,9 +1158,7 @@ def _wait(args, key: str, base: str) -> int:
         live = [
             r
             for r in mine
-            if not r.get("set_aside")
-            and not _answered(r)
-            and not r.get("closed_at")
+            if not r.get("set_aside") and not _answered(r) and not r.get("closed_at")
         ]
         if page_gone and not live:
             # A binned page lists nothing, so there is no row to print: say so

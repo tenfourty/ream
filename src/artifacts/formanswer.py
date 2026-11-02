@@ -23,7 +23,7 @@ import re
 import unicodedata
 from datetime import UTC, date, datetime
 
-from artifacts import events, forms, ids, nudge, store
+from artifacts import decisions, events, forms, ids, nudge, store
 from artifacts.db import jsonb
 
 MAX_HISTORY = 50
@@ -208,7 +208,7 @@ def submit(
             " a.agent, a.title from decision d"
             " join artifact a on a.id = d.artifact_id"
             " where d.id = %s and d.kind = 'form' and d.closed_at is null"
-            " and a.deleted_at is null",
+            " and a.deleted_at is null and a.archived_at is null",
             (decision_id,),
         ).fetchone()
         if row is None:
@@ -252,6 +252,11 @@ def submit(
                 ) from exc
 
     with db.connect() as conn, conn.transaction():
+        # A form on an archived or binned page is set aside (or its answer would land
+        # on a page nobody can see): lock the row, THEN re-read the page, as
+        # `decisions.answer` does, so an archive between the read above and this
+        # write refuses the submit (NotFound -> 404).
+        decisions._require_live_page(conn, decision_id, artifact_id)
         current = conn.execute(
             "select answer_record, closed_at from decision where id = %s"  # noqa: S608 -- fixed text
             + conn.for_update(" of decision"),
