@@ -648,7 +648,10 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
 /* MENUS: the title dropdown and the per-tile dots. Modelled on the claude.ai
    artifact bar Jeremy sent through — a compact bar whose title carries the
    actions, rather than controls parked at the bottom of the page.
-   <details>, not script: everything else here works with scripts off. */
+   <details>, not script: everything else here works with scripts off.
+   Every menu carries name="menu", one exclusive group, so opening one closes the
+   last: the wall loads no script, and two folders' dots stayed open side by side
+   (Jeremy, 3 Nov 2026). gallery.js still adds click-away on a page. */
 .menu{position:relative;display:inline-block}
 /* The agent filter. It borrows .menu wholesale -- same <details>, same panel,
    same rows as the tile dots -- so it is one mechanism rather than a second
@@ -1721,7 +1724,7 @@ def _tile_menu(
         ),
     ]
     return (
-        '<details class="menu tmenu"><summary aria-label="Actions for '
+        '<details class="menu tmenu" name="menu"><summary aria-label="Actions for '
         f'{escape(title)}"><span class="dots" aria-hidden="true"></span></summary>'
         f'<div class="mpanel right">{"".join(rows)}</div></details>'
     )
@@ -1741,7 +1744,7 @@ def _folder_menu(folder_id: str, title: str, archived: bool = False) -> str:
         ]
     )
     return (
-        '<details class="menu tmenu"><summary aria-label="Actions for folder '
+        '<details class="menu tmenu" name="menu"><summary aria-label="Actions for folder '
         f'{escape(title)}"><span class="dots" aria-hidden="true"></span></summary>'
         f'<div class="mpanel right">{"".join(rows)}</div></details>'
     )
@@ -2663,7 +2666,7 @@ def _page_menu(
         "Delete</button></form>"
     )
     return (
-        '<details class="menu"><summary aria-label="Page actions">'
+        '<details class="menu" name="menu"><summary aria-label="Page actions">'
         f'{escape(title)}<span class="chev" aria-hidden="true"></span></summary>'
         f'<div class="mpanel">{"".join(rows)}</div></details>'
     )
@@ -2818,7 +2821,7 @@ def _deleted_view(rows) -> str:
             f'<form method="post" action="/a/{ident}/restore">'
             f'<button class="restore" type="submit">{_icon("restore")}'
             "Put back</button></form>"
-            '<details class="menu tmenu"><summary aria-label="Destroy this page">'
+            '<details class="menu tmenu" name="menu"><summary aria-label="Destroy this page">'
             '<span class="dots" aria-hidden="true"></span></summary>'
             '<div class="mpanel right">'
             f'<form class="mdanger destroyform" method="post" '
@@ -2919,7 +2922,7 @@ def _agent_pick(
     rows = link("", "Everyone") + "".join(link(a, a) for a in agents)
     summary = escape(chosen) if chosen else "Everyone"
     return (
-        f'<details class="menu pick{" on" if chosen else ""}">'
+        f'<details class="menu pick{" on" if chosen else ""}" name="menu">'
         f'<summary title="Filter by who published">{summary}'
         '<span class="chev" aria-hidden="true"></span></summary>'
         f'<div class="mpanel">{rows}</div></details>'
@@ -3507,7 +3510,7 @@ _FS_BUTTON = (
 # subject here, and the app does not trust an identity header it cannot prove
 # was set by the ingress (see the module docstring).
 _PROFILE = (
-    '<details class="menu profile"><summary aria-label="Your account">Jeremy'
+    '<details class="menu profile" name="menu"><summary aria-label="Your account">Jeremy'
     '<span class="chev" aria-hidden="true"></span></summary><div class="mpanel">'
     '<a class="mrow" href="/machines">Machines and keys</a>'
     '<a class="mrow" href="/connect">Connect a machine</a>'
@@ -5215,7 +5218,10 @@ def gallery_router(db: Database) -> APIRouter:
                     base,
                     _select_toggle(request, selecting, active),
                 ),
-                home=False,
+                # Inside a folder the way back is the labelled pill every other index
+                # page has: "All" there means all of THIS folder, and is no way out
+                # (Jeremy, 3 Nov 2026: "no real obvious way to get back").
+                home=bool(in_folder),
             ),
             headers=gallery_headers(),
         )

@@ -237,3 +237,24 @@ def test_the_tabs_narrow_an_archived_folder_too(client, db):
     assert "Pg-pinned" in pinned and "Pg-plain" not in pinned
     waiting = client.get(f"/f/{fid}?filter=waiting").text
     assert "Pg-pinned" not in waiting and "Pg-plain" not in waiting
+
+
+def test_an_open_folder_has_a_labelled_way_back_to_the_wall(client, db):
+    put(db, "bosun", "Pg-alpha", folder="digests")
+    fid = folder_id(db, "digests")
+    bar = client.get(f"/f/{fid}").text.split('<header class="bar">', 1)[1]
+    bar = bar.split("</header>", 1)[0]
+    assert re.search(r'<a class="home" href="/">.*Gallery</a>', bar)
+    wall = client.get("/").text.split('<header class="bar">', 1)[1]
+    assert 'class="home"' not in wall.split("</header>", 1)[0], "the wall is home"
+
+
+def test_every_menu_on_the_wall_is_one_exclusive_group(client, db):
+    put(db, "bosun", "Pg-alpha", folder="digests")
+    put(db, "quill", "Pg-beta", folder="notes")
+    put(db, "bosun", "Pg-loose")
+    for url in ("/", "/?view=list", f"/f/{folder_id(db, 'digests')}"):
+        html = client.get(url).text
+        menus = re.findall(r'<details class="menu[^"]*"[^>]*>', html)
+        assert len(menus) >= 2, url
+        assert all('name="menu"' in m for m in menus), (url, menus)

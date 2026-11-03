@@ -110,6 +110,10 @@ else is a `422` naming `folder`. `title` is the display name, defaulting to the 
 - It opens to its pages at `/f/{folder id}`: the same tile and list views, same filters. Inside
   a folder, pages sort **newest first** (by last publish), with pinned pages and pages that wait
   on him above the rest as on the wall (promised to Bosun, whose daily digests fill one folder).
+  Its top bar carries the labelled "Gallery" link back to the wall, as every other index page
+  does: "All" inside a folder means all of that folder, and he found no way out (Jeremy, 3 Nov
+  2026). Only one menu is open at a time, on the wall and everywhere else: every `<details>`
+  menu shares `name="menu"`, so the browser closes the last one with no script.
 - **Pages in a folder leave the main grid, with no exception** (8.2): a page with an open
   question shows only inside its folder, and its tile in the folder carries the usual "waiting"
   mark. The folder tile's count is the way to it. The wall-wide "N questions waiting on you" at the
