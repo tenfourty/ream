@@ -822,3 +822,60 @@ def test_decide_record_refuses_both_or_neither_of_letter_and_field():
     parser = decide.build_parser()
     ns = parser.parse_args(["record", "d1", "--note", "n", "--source", "terminal"])
     assert ns.letter is None and ns.field == []
+
+
+# --- a submit or relay racing a republish ---------------------------------------
+
+
+def _republish_between_read_and_lock(monkeypatch, client, made, target, name):
+    """Run a republish that changes the "why" wording after `target.name` has read the
+    form's version and before it takes the decision row lock: the window the review of
+    this slice found (3 Nov 2026)."""
+    real = getattr(target, name)
+
+    def racing(*args, **kwargs):
+        out = real(*args, **kwargs)
+        monkeypatch.setattr(target, name, real)
+        republish(client, made, FORM.replace("Why <", "Because <"))
+        return out
+
+    monkeypatch.setattr(target, name, racing)
+
+
+def test_a_submit_that_raced_a_republish_is_a_409_and_writes_nothing(
+    client, db, made, monkeypatch
+):
+    submit(db, made, region="a", why="first")
+    _republish_between_read_and_lock(monkeypatch, client, made, formanswer, "validate")
+    with pytest.raises(formanswer.SubmitRefused) as refused:
+        submit(db, made, region="b", why="old words")
+    assert refused.value.status == 409
+    rec = record_of(db, made)
+    assert rec["version"] == 2, "the record stays on the republished version"
+    assert rec["answers"]["why"] == "" and stale_names(rec)["why"]["value"] == "first"
+    assert rec["answers"]["region"] == "a"
+
+
+def test_a_relay_that_raced_a_republish_is_a_409_and_writes_nothing(
+    client, db, made, monkeypatch
+):
+    submit(db, made, region="a", why="first")
+    _republish_between_read_and_lock(
+        monkeypatch, client, made, formanswer, "_relay_value"
+    )
+    with pytest.raises(formanswer.SubmitRefused) as refused:
+        formanswer.relay(
+            db,
+            made["id"],
+            fields_given={"why": "old words"},
+            note="his words",
+            source="telegram",
+            recorded_by="ops",
+        )
+    assert refused.value.status == 409
+    rec = record_of(db, made)
+    assert rec["version"] == 2 and rec["answers"]["why"] == ""
+    assert (
+        "why" not in (rec.get("sources") or {})
+        or rec["sources"]["why"]["source"] != "telegram"
+    )

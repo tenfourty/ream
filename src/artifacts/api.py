@@ -2642,8 +2642,9 @@ def agent_router(
                 said_at=said_at,
             )
         except formanswer.SubmitRefused as exc:
+            # 422 a bad value; 409 the form changed while this was relayed: send it again.
             raise HTTPException(
-                422, {"detail": exc.detail, "field": exc.field}
+                exc.status, {"detail": exc.detail, "field": exc.field}
             ) from None
         except store.NotFound:
             raise HTTPException(404, "no such open decision") from None

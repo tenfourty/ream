@@ -171,12 +171,33 @@ def _stamp(moment: datetime) -> str:
     return moment.astimezone(UTC).isoformat()
 
 
+def _still_latest(conn, decision_id, latest) -> None:
+    """Called with the decision row locked. The version read before the lock may be gone:
+    a republish holds the same lock while `forms.sync` stores the new version and moves the
+    record onto it, so a submit or relay that waited on it must not write the old version's
+    answers onto the new questions. 409, and the caller reads the form again."""
+    now = conn.execute(
+        "select max(version_n) from decision_form where decision_id = %s",
+        (decision_id,),
+    ).fetchone()[0]
+    if now != latest:
+        raise SubmitRefused(
+            f"this form was changed (version {now}); reload the page", status=409
+        )
+
+
 def _on_latest(conn, decision_id, record, latest, fields, complete):
     """The record brought onto the form's latest stored version. `forms.sync` does this
     at a republish; this catches a record left on an older version (one written before
-    the carry rules existed)."""
+    the carry rules existed). Only ever forwards: a record already past `latest` means the
+    caller's read is stale (`_still_latest` refuses that first)."""
     if not record or record.get("version") == latest:
         return record
+    if (record.get("version") or 0) > latest:
+        raise SubmitRefused(
+            f"this form was changed (version {record.get('version')}); reload the page",
+            status=409,
+        )
     old = forms._fields(conn, decision_id, record.get("version") or 0)
     return formrecord.reconcile(record, old, fields, latest, complete)
 
@@ -256,6 +277,7 @@ def submit(
         ).fetchone()
         if current is None or current[1] is not None:
             raise store.NotFound()
+        _still_latest(conn, decision_id, latest)
         previous = _on_latest(conn, decision_id, current[0], latest, fields, complete)
         now = datetime.now(UTC)
         submit_id = ids.new_id()
@@ -412,6 +434,7 @@ def relay(
         ).fetchone()
         if current is None or current[1] is not None:
             raise store.NotFound()
+        _still_latest(conn, decision_id, latest)
         previous = _on_latest(conn, decision_id, current[0], latest, fields, complete)
         now = datetime.now(UTC)
         grown, applied, skipped = formrecord.apply_relay(
