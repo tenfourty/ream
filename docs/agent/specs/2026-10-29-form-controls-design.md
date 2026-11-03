@@ -166,6 +166,13 @@ Nothing is ever moved silently. The form re-opens if any required field is now u
   named. A page script cannot add a question.
 - **Per-field `record`.** The relay is stored per field with its source; a relayed field never
   counts as his own and never overwrites a value he submitted later than the relay.
+- **`required` is not part of "unchanged".** An answer to an optional field is still a valid answer when it becomes required, so a change to `required` alone carries it.
+- **A `data-complete="all"` form reopens when any field is unanswered.** "All" means all, so a blank field (a new one, or a staled one) puts the form back to unanswered.
+- **A form relay is scoped to the owner's key.** "Not yours" answers like "no such page", as every agent route does, so ids cannot be walked.
+- **Relayed values are shown in the gallery, never written into the page's controls.** A relay is an agent's word, and the page's controls are his to fill.
+- **Tab drafts override carried values only when non-blank.** A blank draft would otherwise erase a stored answer he never meant to clear.
+- **A republish that newly stales a field or reopens the form clears the agent's acknowledgement.** It must look again, and no new event kind is needed because `decision_reopened` and the record already say it.
+- **A relay whose fields are all older than a later submit of his changes nothing and sends no event.** His later word stands, and a no-op must not wake the agent.
 - **Events.** A submit emits `decision_answered` with `kind: form` in its payload, so `wait` works
   unchanged; the partner bridge skips form events in v1.
 
@@ -196,7 +203,7 @@ show` prints a form's record; `--help`; runcove `skills/artifacts/SKILL.md` and 
    form shows on the page as plain controls; no Submit yet.
 2. Gallery: shim listener, draft, Submit bar, summary sheet, the submit route, validation, the
    event and `wait`. Live proof: a real form answered by Jeremy.
-3. Republish rules (3.5), stale display, `record` per field, docs round.
+3. Republish rules (3.5), stale display, `record` per field, docs round. **Done (3 Nov 2026).**
 
 ## 7. Risks
 

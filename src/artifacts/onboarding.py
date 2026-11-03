@@ -393,6 +393,25 @@ and names the field. A submit made on an older version of the form is a 409; he
 reloads the page. Acknowledge with `artifacts-decide ack <id>`; close the form
 with `close` when you no longer need it.
 
+When you republish a form, each field is compared with the version his record was on.
+Same name, type, options with their labels, limits and label text: his answer is
+CARRIED and still current (`required` is not compared). Changed, renamed or removed:
+the field starts empty and his earlier answer moves to the record's `stale` list, one
+entry per field: `name`, `value`, `text`, `version` (the one it was given on), `label`
+(the wording it answered) and `reason` ("changed" or "removed"). Nothing is dropped
+silently, and he sees both in the gallery. Surrounding prose is NOT compared, only the
+controls and their labels, so if you change the question in a paragraph, change the
+label too. `sources` says, per answered field, whether it is his submit or a relay,
+and on which version; `reopened` is true while a required field (any field, on a
+`data-complete="all"` form) has no current answer, and a republish that does that
+clears your acknowledgement.
+
+If he answers a form somewhere that is not the page, relay it per field:
+POST /api/v1/decisions/<id>/record with {{"fields": {{"name": value, ...}}, "note": "his
+words"}}, or `artifacts-decide record <id> --field NAME=VALUE ... --note "..."` (repeat
+a name for a checkbox group). A relay is stored with its source, never counts as his own
+submit, and never overwrites a value he submitted later.
+
 ## Folders: group your pages
 
 Put related pages in one of your own folders: `artifacts-publish FILE --title T --folder SLUG

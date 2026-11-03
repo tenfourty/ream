@@ -1633,7 +1633,10 @@ def build_parser() -> argparse.ArgumentParser:
             "A form published in a page (data-artifact-form) is answered in the gallery: "
             "`list`, `answers` and `wait` print its submitted record, one `name: value` "
             "line per field with blank and stale fields named. Read it by "
-            "answer_record, never by `answer`, which stays empty for a form."
+            "answer_record, never by `answer`, which stays empty for a form. A republish "
+            "that changes a field's wording or options moves his old answer to the "
+            "record's `stale` list; relay a form answer given elsewhere with "
+            "`record ID --field NAME=VALUE ... --note`."
         ),
     )
     parser.add_argument("--key-file")
@@ -1805,7 +1808,9 @@ def build_parser() -> argparse.ArgumentParser:
             "takes --letter. A FORM takes one --field NAME=VALUE per field he answered "
             "(repeat a name for a checkbox group, or give a,b; a lone checkbox is "
             "true or false): each field is stored with its source, never counts as his "
-            "own submit, and never overwrites a value he submitted after --said-at."
+            "own submit, and never overwrites a value he submitted after --said-at. "
+            "A field answered on an older wording of the form is stale: relay it again "
+            "for the current wording."
         ),
     )
     record.add_argument("decision", metavar="DECISION-ID")

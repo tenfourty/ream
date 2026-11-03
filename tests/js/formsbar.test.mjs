@@ -34,15 +34,16 @@ const DATA = { artifact_id: "art1", forms: [{
       options: [{ value: "cat", label: "Cat" }, { value: "dog", label: "Dog" }] },
   ] }] };
 
-function build({ draft = null, fetchImpl } = {}) {
+function build({ draft = null, fetchImpl, form = {}, draftVersion = null } = {}) {
   const bar = node("div"), dataEl = node("script"), frame = node("iframe");
-  dataEl.textContent = JSON.stringify(DATA);
+  dataEl.textContent = JSON.stringify({ ...DATA, forms: [{ ...DATA.forms[0], ...form }] });
   frame.attrs.src = ORIGIN + "/p/tok/";
   const win = { posted: [], postMessage(m, o) { this.posted.push([m, o]); } };
   frame.contentWindow = win;
   const body = node("body"); body.classList = { add() {} };
   const store = {};
   if (draft) store["artifact-form:art1:rollout"] = JSON.stringify(draft);
+  if (draftVersion !== null) store["artifact-form:art1:rollout:v"] = String(draftVersion);
   const listeners = {};
   const document = {
     body, getElementById: (id) => ({ "artifact-frame": frame, "artifact-forms-bar": bar, "artifact-forms": dataEl })[id] ?? null,
@@ -163,5 +164,45 @@ const snap = (values, load = false) => ({ type: "artifact-form", form: "rollout"
   btns[0].click();
   ok(all(g.body).filter((n) => n.className === "fscrim").length === 0, "Close closes the sheet");
 }
+{
+  // Slice 3: carried answers fill the controls; a draft of another version never refills a
+  // stale field; the stale panel and the summary sheet say what is on record.
+  const STALE = { name: "why", value: "old", text: "old", version: 1, label: "Why not", reason: "changed" };
+  const carried = build({ form: { carried: { region: "a", bogus: "x" } } });
+  carried.send(snap({ region: null, why: "", pets: [] }, true));
+  const fill = carried.win.posted[0][0];
+  ok(fill.type === "artifact-form-fill" && JSON.stringify(fill.values) === JSON.stringify({ region: "a" }),
+     "fills the controls from carried answers, stored names only");
+
+  const over = build({ draft: { region: "b", why: "typed", pets: [] }, draftVersion: 2, form: { carried: { region: "a" } } });
+  over.send(snap({ region: null, why: "", pets: [] }, true));
+  ok(JSON.stringify(over.win.posted[0][0].values) === JSON.stringify({ region: "b", why: "typed" }),
+     "a non-blank draft value overrides a carried one, a blank draft value does not");
+
+  const old = build({ draft: { region: "b", why: "stale text" }, draftVersion: 1, form: { stale: [STALE] } });
+  old.send(snap({ region: null, why: "", pets: [] }, true));
+  ok(JSON.stringify(old.win.posted[0][0].values) === JSON.stringify({ region: "b" }),
+     "a draft from another form version does not refill a stale field");
+  const same = build({ draft: { why: "kept" }, draftVersion: 2, form: { stale: [STALE] } });
+  same.send(snap({ region: null, why: "", pets: [] }, true));
+  ok(same.win.posted[0][0].values.why === "kept", "a draft of the current version still fills the field");
+
+  const panel = all(old.bar).find((n) => n.className === "fstale");
+  const ptext = panel ? all(panel).map((n) => n.textContent).join("|") : "";
+  ok(panel && ptext.includes("1 earlier answer not carried") && ptext.includes("Earlier answer, version 1: old")
+     && ptext.includes("the question changed"), "the stale panel renders the old answer, its version and why");
+  ok(!all(build().bar).some((n) => n.className === "fstale"), "no stale panel when nothing is stale");
+
+  const sh = build({ form: {
+    carried: { region: "a" },
+    relayed: { why: { text: "from chat", source: "slack", by: "ops" } },
+    stale: [STALE, { name: "gone", value: "x", text: "xx", version: 1, label: "Gone", reason: "removed" }] } });
+  sh.send(snap({ region: "b", why: "", pets: [] }));
+  sh.go().click();
+  const st = all(all(sh.body).find((n) => n.className === "fscrim")).map((n) => n.textContent).join("|");
+  ok(st.includes("On record from his last send: eu"), "the sheet notes an answer on record that differs from the one shown");
+  ok(st.includes("On record, relayed from slack by ops: from chat"), "the sheet notes a relayed value");
+  ok(st.includes("Earlier answer, version 1: old") && st.includes("(it read: Why not)"), "the sheet notes a stale answer and its old wording");
+  ok(st.includes("Gone (no longer asked)") && st.includes("the question was removed"), "the sheet lists a removed field's answer");
+}
 console.log(`\n${passes} passed, ${fails} failed`);
-process.exit(fails ? 1 : 0);

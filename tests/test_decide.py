@@ -650,3 +650,56 @@ def test_list_help_points_to_answers_for_one_page(capsys):
     with pytest.raises(SystemExit):
         decide.main(["list", "--help"])
     assert "artifacts-decide answers PAGE" in " ".join(capsys.readouterr().out.split())
+
+
+# --- a form relay, per field (stubbed HTTP: only the payload is under test) --
+
+
+def _stub_record(monkeypatch, tmp_path, args):
+    seen = []
+
+    def fake(method, url, key, payload=None, **kwargs):
+        seen.append((method, url, payload))
+        return {
+            "id": "d1",
+            "question": "Rollout",
+            "kind": "form",
+            "relayed": {"skipped": []},
+        }
+
+    monkeypatch.setattr(decide, "_request", fake)
+    path = tmp_path / "key"
+    path.write_text("art_" + "x" * 43)
+    path.chmod(0o600)
+    return decide.main(
+        ["--key-file", str(path), "record", "d1", "--source", "telegram", *args]
+    ), seen
+
+
+def test_record_field_sends_the_fields_and_a_repeated_name_makes_a_list(
+    monkeypatch, tmp_path, capsys
+):
+    rc, seen = _stub_record(
+        monkeypatch,
+        tmp_path,
+        ["--field", "region=a", "--field", "pets=cat", "--field", "pets=dog",
+         "--field", "why=a=b", "--note", "on a call"],
+    )  # fmt: skip
+    capsys.readouterr()
+    assert rc == 0 and len(seen) == 1
+    method, url, payload = seen[0]
+    assert method == "POST" and url.endswith("/decisions/d1/record")
+    assert payload["fields"] == {"region": "a", "pets": ["cat", "dog"], "why": "a=b"}
+    assert payload["note"] == "on a call" and "letter" not in payload
+
+
+def test_record_refuses_a_field_without_a_value_or_both_forms(
+    monkeypatch, tmp_path, capsys
+):
+    rc, seen = _stub_record(monkeypatch, tmp_path, ["--field", "region", "--note", "x"])
+    assert rc != 0 and seen == []
+    rc, seen = _stub_record(
+        monkeypatch, tmp_path, ["--letter", "a", "--field", "r=a", "--note", "x"]
+    )
+    assert rc != 0 and seen == []
+    capsys.readouterr()
