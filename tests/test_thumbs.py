@@ -268,9 +268,20 @@ def test_group_rss_counts_only_the_group():
         proc.wait()
 
 
-def test_a_group_over_the_memory_ceiling_is_killed(tmp_path):
+def test_a_group_over_the_memory_ceiling_is_killed(tmp_path, monkeypatch):
     pidfile = tmp_path / "child.pid"
     script = f"sleep 300 & echo $! > {pidfile}; wait"
+    # The ceiling is read only once the shell has written its child's pid: on a loaded runner
+    # the first 0.1 s poll could kill the group before the echo, leaving no pid to check
+    # (CI run on e991163, 3 Nov 2026). Before that the group reads as using nothing.
+    real = thumbs._group_rss
+    monkeypatch.setattr(
+        thumbs,
+        "_group_rss",
+        lambda pid: (
+            real(pid) if pidfile.exists() and pidfile.read_text().strip() else 0
+        ),
+    )
     started = time.monotonic()
     with pytest.raises(thumbs.RenderTooBig):
         thumbs._run(["/bin/sh", "-c", script], timeout=30, max_rss=1)
