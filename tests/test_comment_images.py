@@ -253,12 +253,15 @@ def test_a_webp_vp8x_loses_bytes_beyond_its_fixed_ten():
 
 
 def _timed(data):
+    """CPU seconds, not wall seconds: the bound is there to catch a walk that does too much
+    work, and a CI runner that starves this worker of a CPU is not that (3 Nov 2026: 1.15 s on
+    the wall for a scan that costs 0.05 s)."""
     import time
 
-    started = time.monotonic()
+    started = time.process_time()
     with pytest.raises(images.ImageRefused) as caught:
         images.inspect(data)
-    return caught.value, time.monotonic() - started
+    return caught.value, time.process_time() - started
 
 
 def test_a_png_of_zero_length_chunks_is_refused_fast_and_by_name():
@@ -286,9 +289,9 @@ def test_a_jpeg_scan_of_stuffed_bytes_is_walked_fast():
 
     stuffed = b"\xff\x00" * 2_400_000
     data = jpeg().replace(b"\x12\x34\xff\x00\x56\xff\xd0\x78", stuffed)
-    started = time.monotonic()
+    started = time.process_time()  # CPU time, as in _timed above
     got = images.inspect(data)
-    assert time.monotonic() - started < 1 and got.width == 3
+    assert time.process_time() - started < 1 and got.width == 3
     # and the same through the route, which hands the walk to a thread
     assert images.inspect(got.data).data == got.data
 
