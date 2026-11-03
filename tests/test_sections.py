@@ -688,11 +688,12 @@ def test_many_unmatched_end_tags_parse_quickly():
     import time
 
     body = '<div id="a">' + "<span>" * 20000 + "</em>" * 20000 + "</div>"
-    t = time.monotonic()
+    t = time.process_time()
     found = sections.locate(body, "a")
     # A scan of the stack per end tag takes tens of seconds here; the bound is
-    # generous for a loaded runner.
-    assert time.monotonic() - t < 10
+    # generous for a loaded runner, and counts CPU time so that a runner starving
+    # this worker is not read as a slow parse (3 Nov 2026).
+    assert time.process_time() - t < 10
     assert found.end == len(body)
 
 
@@ -706,9 +707,9 @@ def test_many_headings_after_a_closed_target_parse_quickly():
     import time
 
     body = '<p id="a">x</p>' + "<div>" * 20000 + "<h2>t</h2>" * 20000
-    t = time.monotonic()
+    t = time.process_time()  # CPU time, as above
     found = sections.locate(body, "a")
-    assert time.monotonic() - t < 10
+    assert time.process_time() - t < 10
     assert body[found.start : found.end] == '<p id="a">x</p>'
 
 
