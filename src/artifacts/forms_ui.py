@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from artifacts import formanswer, forms, store
+from artifacts import formanswer, formrecord, forms, store
 from artifacts.content import _script_json
 
 _STYLE = (
@@ -43,22 +43,16 @@ _STYLE = (
     ".fsheet dl{margin:0 0 1rem}.fsheet dt{font-weight:600;margin-top:.6rem}"
     ".fsheet dd{margin:.1rem 0 0;white-space:pre-wrap;overflow-wrap:anywhere}"
     ".fsheet .fblank{opacity:.6;font-style:italic}"
+    ".fsheet .fnote{opacity:.75;font-size:.85em;margin-top:.1rem}"
+    "#artifact-forms-bar .fstale{padding:.35rem 1rem;background:var(--card,#fff);color:var(--ink,#111);"
+    "border-top:1px solid var(--line,rgba(127,127,127,.35));font:.85rem/1.35 system-ui,sans-serif}"
+    "#artifact-forms-bar .fstale p{margin:.2rem 0 0;opacity:.85}"
     ".fsheet .ferr{color:var(--danger,#c0392b);margin:0 0 .8rem}"
     ".fsheet .fok{color:var(--ok,#2f7a45);font-weight:600;margin:0 0 .8rem}"
     ".fsheet .fbtns{display:flex;gap:.6rem;justify-content:flex-end}"
     "body.fhas{padding-bottom:4.5rem}"
     "</style>"
 )
-
-
-def _answer_view(record: dict | None) -> dict | None:
-    if not record:
-        return None
-    return {
-        "answered_at": record.get("answered_at"),
-        "answered_by": record.get("answered_by"),
-        "version": record.get("version"),
-    }
 
 
 def block(db, artifact_id: str) -> str:
@@ -86,7 +80,10 @@ def block(db, artifact_id: str) -> str:
                 "version": f["version"],
                 "complete": f["complete"],
                 "fields": f["fields"],
-                "answered": _answer_view(records.get(f["decision_id"])),
+                # answered (his own submit still standing, else None), carried (written
+                # back into the page's controls), relayed and stale (shown, never
+                # written into the page): formrecord.gallery_view.
+                **formrecord.gallery_view(records.get(f["decision_id"]), f["fields"]),
             }
             for f in shown
         ],
@@ -211,10 +208,23 @@ function clean(f,raw){var out=Object.create(null),n=0;
     else if(typeof v!=="boolean"&&typeof v!=="number"&&v!==null)return;
     out[spec.name]=v});
   var o={};for(var k in out)o[k]=out[k];return o}
+// A draft written against another version of the form never fills a field whose earlier
+// answer went stale: the changed question starts empty (design 3.5).
 function load(f){try{var s=sessionStorage.getItem(key(f));if(!s)return null;
   var d=JSON.parse(s);if(!d||typeof d!=="object")return null;
-  d=clean(f,d);return Object.keys(d).length?d:null}catch(e){return null}}
-function save(f){try{sessionStorage.setItem(key(f),JSON.stringify(f.values))}catch(e){}}
+  d=clean(f,d);
+  if(sessionStorage.getItem(key(f)+":v")!==String(f.version))(f.stale||[]).forEach(function(x){delete d[x.name]});
+  return Object.keys(d).length?d:null}catch(e){return null}}
+function save(f){try{sessionStorage.setItem(key(f),JSON.stringify(f.values));sessionStorage.setItem(key(f)+":v",String(f.version))}catch(e){}}
+// What the page's controls are filled with on load: his own stored answers (carried over a
+// republish included), and over them any non-blank value of the tab's draft. Relayed answers
+// and stale ones are shown by the gallery but never written into the page.
+function fillOf(f,draft){var o={},k,c=f.carried||{},have=false;
+  for(k in c)if(Object.prototype.hasOwnProperty.call(c,k))o[k]=c[k];
+  if(draft)f.fields.forEach(function(spec){
+    if(Object.prototype.hasOwnProperty.call(draft,spec.name)&&!isBlank(spec,draft[spec.name]))o[spec.name]=draft[spec.name]});
+  o=clean(f,o);for(k in o){have=true;break}
+  return have?o:null}
 function value(f,spec){return f.values?f.values[spec.name]:undefined}
 function counts(f){var done=0,missing=false;
   f.fields.forEach(function(spec){
@@ -239,6 +249,10 @@ function shown(spec,v){
   if(Array.isArray(v))return v.map(function(x){return optLabel(spec,x)}).join(", ");
   if(spec.type==="radio"||spec.type==="select")return optLabel(spec,v);
   return String(v)}
+// An earlier answer that was not carried: what he answered, on which version, and why it starts empty.
+function staleLine(x,now){
+  var why=x.reason==="removed"?"the question was removed":"the question changed"+(now&&x.label&&now!==x.label?" (it read: "+x.label+")":"");
+  return"Earlier answer, version "+x.version+": "+(x.text||"")+" \u2014 not carried, "+why}
 function body(f){var out=Object.create(null);
   f.fields.forEach(function(spec){var v=value(f,spec);
     if(spec.type==="radio"&&(v===undefined||v===""))v=null;
@@ -254,8 +268,17 @@ function sheet(f){
   var sent=body(f),scrim=el("div","fscrim"),box=el("div","fsheet"),h=el("h2","",f.title+" — send these answers?"),
     dl=el("dl"),err=el("p","ferr"),btns=el("div","fbtns"),no=el("button","","Back"),go=el("button","fgo","Confirm and send");
   box.setAttribute("role","dialog");box.setAttribute("aria-modal","true");err.hidden=true;
-  f.fields.forEach(function(spec){var dt=el("dt","",spec.label||spec.name),dd,s=shown(spec,sent[spec.name]);
-    dd=s===null?el("dd","fblank","(blank)"):el("dd","",s);dl.appendChild(dt);dl.appendChild(dd)});
+  f.fields.forEach(function(spec){var dt=el("dt","",spec.label||spec.name),dd,s=shown(spec,sent[spec.name]),
+      c=f.carried&&Object.prototype.hasOwnProperty.call(f.carried,spec.name)?shown(spec,f.carried[spec.name]):null,
+      r=f.relayed&&Object.prototype.hasOwnProperty.call(f.relayed,spec.name)?f.relayed[spec.name]:null;
+    dd=s===null?el("dd","fblank","(blank)"):el("dd","",s);dl.appendChild(dt);dl.appendChild(dd);
+    if(c!==null&&c!==s)dl.appendChild(el("dd","fnote","On record from his last send: "+c));
+    if(r&&r.text!==s)dl.appendChild(el("dd","fnote","On record, relayed from "+r.source+(r.by?" by "+r.by:"")+": "+r.text));
+    (f.stale||[]).forEach(function(x){if(x.name===spec.name)dl.appendChild(el("dd","fnote",staleLine(x,spec.label)))})});
+  var names=Object.create(null);f.fields.forEach(function(spec){names[spec.name]=1});
+  (f.stale||[]).forEach(function(x){if(names[x.name])return;
+    dl.appendChild(el("dt","",(x.label||x.name)+" (no longer asked)"));
+    dl.appendChild(el("dd","fnote",staleLine(x)))});
   no.type="button";go.type="button";btns.appendChild(no);btns.appendChild(go);
   [h,dl,err,btns].forEach(function(n){box.appendChild(n)});scrim.appendChild(box);
   function close(){scrim.remove();document.removeEventListener("keydown",esc,true);
@@ -289,15 +312,20 @@ data.forms.forEach(function(f){
   var row=el("div","fbar"),t=el("span","ftitle",f.title);f.row=row;
   f.count=el("span","fcount");f.go=el("button","fgo","Submit");f.go.type="button";
   f.go.addEventListener("click",function(){if(!f.go.disabled)sheet(f)});
-  row.appendChild(t);row.appendChild(f.count);row.appendChild(f.go);bar.appendChild(row);refresh(f)});
+  row.appendChild(t);row.appendChild(f.count);row.appendChild(f.go);bar.appendChild(row);refresh(f);
+  if(f.stale&&f.stale.length){
+    var box=el("details","fstale"),sum=el("summary","",f.title+": "+f.stale.length+" earlier answer"+(f.stale.length>1?"s":"")+" not carried");
+    box.appendChild(sum);
+    f.stale.forEach(function(x){box.appendChild(el("p","",(x.label||x.name)+" \u2014 "+staleLine(x)))});
+    bar.appendChild(box)}});
 addEventListener("message",function(e){
   if(e.source!==frame.contentWindow||e.origin!==origin)return;
   var d=e.data;
   if(!d||typeof d!=="object"||d.type!=="artifact-form"||typeof d.form!=="string")return;
   if(!d.values||typeof d.values!=="object")return;
   var f=by[d.form];if(!f)return;
-  if(d.load===true){var draft=load(f);
-    if(draft){f.awaiting=true;frame.contentWindow.postMessage({type:"artifact-form-fill",form:f.form,values:draft},origin);return}}
+  if(d.load===true){var fill=fillOf(f,load(f));
+    if(fill){f.awaiting=true;frame.contentWindow.postMessage({type:"artifact-form-fill",form:f.form,values:fill},origin);return}}
   f.awaiting=false;
   var before=f.closeSheet?JSON.stringify(body(f)):null;
   f.values=clean(f,d.values);save(f);

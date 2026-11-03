@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 
-from artifacts import ids, text
+from artifacts import formrecord, ids, text
 from artifacts.db import jsonb
 
 # Elements that never have content or an end tag.
@@ -702,10 +702,41 @@ def sync(conn, artifact_id: str, version_n: int, parsed: Parsed, session) -> Non
                 " values (%s, %s, %s, %s, %s)",
                 (decision_id, version_n, position, spec["name"], jsonb(spec)),
             )
+        _reconcile_record(conn, decision_id, form, version_n)
     for decision_id in existing.values():
         conn.execute(
             "update decision set closed_at = %s where id = %s and closed_at is null",
             (now, decision_id),
+        )
+
+
+def _reconcile_record(conn, decision_id: str, form: Form, version_n: int) -> None:
+    """The form has a new stored version: bring its submitted record onto it (3.5). Each
+    answer whose question is unchanged is carried; a changed, renamed or removed one
+    becomes stale. The agent is told by the record itself, so when something went stale
+    or the form reopened its acknowledgement is cleared and it reads as new again."""
+    row = conn.execute(
+        "select answer_record from decision where id = %s"  # noqa: S608 -- fixed text
+        + conn.for_update(" of decision"),
+        (decision_id,),
+    ).fetchone()
+    record = row[0] if row else None
+    if not record or record.get("version") == version_n:
+        return
+    old = _fields(conn, decision_id, record.get("version") or 0)
+    grown = formrecord.reconcile(record, old, form.fields, version_n, form.complete_all)
+    news = grown["stale"] != (record.get("stale") or []) or (
+        grown["reopened"] and not record.get("reopened")
+    )
+    conn.execute(
+        "update decision set answer_record = %s where id = %s",
+        (jsonb(grown), decision_id),
+    )
+    if news:
+        conn.execute(
+            "update decision set acknowledged_at = null, acknowledged_by = null"
+            " where id = %s",
+            (decision_id,),
         )
 
 

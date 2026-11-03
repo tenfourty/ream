@@ -42,6 +42,7 @@ from artifacts import (
     decisions,
     events,
     folders,
+    formanswer,
     forms,
     grants,
     hosts,
@@ -182,12 +183,16 @@ class RecordBody(BaseModel):
     every one of his notes so far has qualified the letter it came with.
     """
 
-    letter: str
+    # A question's lettered answer. Absent for a form, which is relayed per field.
+    letter: str | None = None
     note: str
     source: str
     said_at: str | None = None
     # A review's round the verdict is for; a later round refuses it (409).
     round: int | None = None
+    # A form's fields, {name: value}: each stored with its source, none of them his own
+    # submit (a checkbox group is a list, or "a,b"; a lone checkbox true or false).
+    fields: dict | None = None
 
 
 class PatchBody(BaseModel):
@@ -2551,6 +2556,15 @@ def agent_router(
                 raise HTTPException(
                     422, "said_at must be an ISO 8601 timestamp"
                 ) from None
+        found = decisions.get_owned(db, agent, decision_id)
+        if found is not None and found.kind == "form":
+            return _record_form(found, payload, said_at, agent)
+        if payload.fields is not None:
+            if found is None:
+                raise HTTPException(404, "no such open decision")
+            raise HTTPException(422, "`fields` is for a form; send a letter")
+        if payload.letter is None:
+            raise HTTPException(422, "send the letter he chose")
         try:
             row = decisions.record_elsewhere(
                 db,
@@ -2602,6 +2616,52 @@ def agent_router(
         except store.NotFound:
             raise HTTPException(404, "no such open decision") from None
         return decisions.public(row)
+
+    def _record_form(found, payload: RecordBody, said_at, agent: str):
+        """The per-field relay of a form (formanswer.relay): every field stored with its
+        source, none of it his own submit, none over a later submit of his."""
+        if payload.source not in decisions.ANSWER_SOURCES:
+            raise HTTPException(
+                422,
+                "source must be one of "
+                f"{', '.join(decisions.ANSWER_SOURCES)} — 'page' is refused, "
+                "because it means Jeremy answered on the page himself",
+            )
+        if payload.letter is not None or not payload.fields:
+            raise HTTPException(
+                422, "a form is relayed per field: send fields {name: value}"
+            )
+        try:
+            done = formanswer.relay(
+                db,
+                found.id,
+                fields_given=payload.fields,
+                note=payload.note,
+                source=payload.source,
+                recorded_by=agent,
+                said_at=said_at,
+            )
+        except formanswer.SubmitRefused as exc:
+            raise HTTPException(
+                422, {"detail": exc.detail, "field": exc.field}
+            ) from None
+        except store.NotFound:
+            raise HTTPException(404, "no such open decision") from None
+        except store.BodyTooLarge as exc:
+            raise HTTPException(
+                413,
+                {"field": exc.field, "detail": f"{exc.field} exceeds the size limit"},
+            ) from None
+        except store.SecretFound as hit:
+            raise HTTPException(422, _refused_detail(hit.field, hit.findings)) from hit
+        except store.ScanFailed as exc:
+            raise HTTPException(
+                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+            ) from exc
+        row = decisions.get_owned(db, agent, found.id)
+        out = decisions.public(row)
+        out["relayed"] = {"applied": done["applied"], "skipped": done["skipped"]}
+        return out
 
     @router.post("/decisions/{decision_id}/outcome", status_code=201)
     def add_outcome(

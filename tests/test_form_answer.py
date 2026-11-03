@@ -241,7 +241,7 @@ def test_a_blank_in_a_second_sitting_never_erases_an_earlier_answer(db, made):
     assert rec["history"][0]["answers"]["region"] == "a"
 
 
-def test_a_republish_starts_a_fresh_record_and_an_old_version_is_a_409(
+def test_a_republish_carries_unchanged_answers_and_an_old_version_is_a_409(
     client, db, made
 ):
     formanswer.submit(db, made["id"], version=1, values={"region": "a", "why": "old"})
@@ -258,8 +258,9 @@ def test_a_republish_starts_a_fresh_record_and_an_old_version_is_a_409(
         formanswer.submit(db, made["id"], version=1, values={"region": "a"})
     assert caught.value.status == 409
     rec = formanswer.submit(db, made["id"], version=2, values={"region": "b"})
-    assert rec["version"] == 2 and rec["answers"]["why"] == ""  # not carried
-    assert rec["answers"]["region"] == "b"
+    # `why` is the same question on version 2, so his answer to it stands (3.5).
+    assert rec["version"] == 2 and rec["answers"]["why"] == "old"
+    assert rec["answers"]["region"] == "b" and rec["stale"] == []
     assert len(rec["history"]) == 2 and rec["history"][0]["version"] == 1
 
 

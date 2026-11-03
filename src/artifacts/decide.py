@@ -177,8 +177,9 @@ def _answered(row: dict) -> bool:
 
 
 def _fmt_form(row: dict) -> list[str]:
-    """A form's merged record: who and when, one `name: value` line per field, then the
-    blanks and the stale fields, then the ack hint."""
+    """A form's merged record: who and when, one `name: value` line per field (a relayed
+    field says who relayed it from where), then the blanks, the stale fields with the
+    version each was given on, a reopened form, and the ack hint."""
     rec = row["answer_record"]
     by = rec.get("answered_by") or "?"
     source = row.get("answer_source")
@@ -187,6 +188,7 @@ def _fmt_form(row: dict) -> list[str]:
     head += f"(version {rec.get('version', '?')}, {how}, by {by}, "
     head += f"{rec.get('answered_at', '?')})"
     lines = [head]
+    sources = rec.get("sources") or {}
     for name, value in (rec.get("answers") or {}).items():
         if name in (rec.get("blank") or []):
             shown = "(blank)"
@@ -196,15 +198,25 @@ def _fmt_form(row: dict) -> list[str]:
             shown = "yes" if value else "no"
         else:
             shown = str(value)
+        src = sources.get(name) or {}
+        if src.get("source") not in (None, "page"):
+            shown += f"   [relayed from {src['source']} by {src.get('by', '?')}]"
         lines.append(f"  {name}: {shown}")
     if rec.get("blank"):
         lines.append(f"  blank: {', '.join(rec['blank'])}")
-    if rec.get("stale"):
-        names = ", ".join(
-            str(x.get("name", x)) if isinstance(x, dict) else str(x)
-            for x in rec["stale"]
+    if rec.get("reopened"):
+        lines.append("  REOPENED: a required field has no current answer")
+    for item in rec.get("stale") or []:
+        if not isinstance(item, dict):
+            lines.append(f"  stale: {item}")
+            continue
+        why = "removed" if item.get("reason") == "removed" else "changed"
+        text = item.get("text") or item.get("value")
+        lines.append(
+            f"  stale (answered on version {item.get('version', '?')}, question {why}"
+            f" since): {item.get('name', '?')} = {text}"
+            + (f"   [was: {item['label']}]" if item.get("label") else "")
         )
-        lines.append(f"  stale (answered on an earlier version): {names}")
     if not row.get("acknowledged_at"):
         lines.append("  NOT YET ACKNOWLEDGED -- artifacts-decide ack " + row["id"])
     return lines
@@ -1788,9 +1800,23 @@ def build_parser() -> argparse.ArgumentParser:
     record = subs.add_parser(
         "record",
         help="write down an answer he gave somewhere that is not the page",
+        description=(
+            "Write down an answer he gave somewhere that is not the page. A question "
+            "takes --letter. A FORM takes one --field NAME=VALUE per field he answered "
+            "(repeat a name for a checkbox group, or give a,b; a lone checkbox is "
+            "true or false): each field is stored with its source, never counts as his "
+            "own submit, and never overwrites a value he submitted after --said-at."
+        ),
     )
     record.add_argument("decision", metavar="DECISION-ID")
-    record.add_argument("--letter", required=True)
+    record.add_argument("--letter", help="a question's lettered answer")
+    record.add_argument(
+        "--field",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="a form field he answered (repeatable)",
+    )
     record.add_argument(
         "--note",
         required=True,
@@ -2223,17 +2249,40 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             return _print_rows(rows, empty=empty, section=_aside_section)
         if args.cmd == "record":
-            payload = {
-                "letter": args.letter.strip().lower(),
-                "note": args.note,
-                "source": args.source,
-            }
+            if bool(args.letter) == bool(args.field):
+                raise UsageError(
+                    "give --letter (a question) or one or more --field NAME=VALUE (a form)"
+                )
+            payload = {"note": args.note, "source": args.source}
+            if args.letter:
+                payload["letter"] = args.letter.strip().lower()
+            else:
+                given: dict = {}
+                for item in args.field:
+                    name, sep, value = item.partition("=")
+                    if not sep or not name:
+                        raise UsageError(f"--field wants NAME=VALUE, not {item!r}")
+                    if name in given:
+                        prior = given[name]
+                        given[name] = [
+                            *(prior if isinstance(prior, list) else [prior]),
+                            value,
+                        ]
+                    else:
+                        given[name] = value
+                payload["fields"] = given
             if args.said_at:
                 payload["said_at"] = args.said_at
             row = _request(
                 "POST", f"{base}/decisions/{args.decision}/record", key, payload
             )
             print(_fmt(row))
+            skipped = (row.get("relayed") or {}).get("skipped")
+            if skipped:
+                print(
+                    "  NOT STORED (he submitted a later answer on the page): "
+                    + ", ".join(skipped)
+                )
             return 0
         if args.cmd == "outcome":
             written = _request(
