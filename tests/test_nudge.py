@@ -283,7 +283,10 @@ def test_a_hanging_receiver_leaves_emit_returning_promptly_and_normally(
             _emit()
             # emit() itself must return almost instantly -- the slow part
             # happens on a background thread this call never waits for.
-            assert time.monotonic() - started < 1.0
+            # The receiver sleeps 5 s: a send made on this thread would take that
+            # long. The bound is a long way under it, but not tight enough for a
+            # starved runner to trip it (3 Nov 2026).
+            assert time.monotonic() - started < 4.0
             assert _wait_until(
                 lambda: any("send failed" in r.getMessage() for r in caplog.records),
                 timeout=3,

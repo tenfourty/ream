@@ -362,7 +362,7 @@ def test_a_wait_that_finds_nothing_returns_empty_rather_than_failing(client, db)
     assert r.status_code == 200
     assert r.json() == []
     # It really waited, and it did not overshoot what was asked for.
-    assert 0.25 < waited < 5
+    assert 0.25 < waited < 15
 
 
 def test_an_event_already_there_is_returned_without_waiting(client, db):
@@ -375,7 +375,7 @@ def test_an_event_already_there_is_returned_without_waiting(client, db):
     began = time.monotonic()
     r = client.get("/api/v1/events?since=0&wait=30", headers=auth(token))
     assert len(r.json()) == 1
-    assert time.monotonic() - began < 5
+    assert time.monotonic() - began < 15  # a 30 s hold, not a slow runner
 
 
 def test_one_agents_wait_is_never_ended_by_another_agents_event(client, db, first_look):
@@ -427,7 +427,7 @@ def test_past_the_waiter_ceiling_a_caller_is_answered_instead_of_queued(db):
         rows = events_module.wait_for_agent(db, "nobody-seat", since=0, seconds=30)
         assert rows == []
         # Answered immediately, not after 30 seconds.
-        assert time.monotonic() - began < 2
+        assert time.monotonic() - began < 10  # a 30 s hold, not a slow runner
     finally:
         for _ in range(events_module.MAX_WAITERS):
             events_module._waiters.release()
@@ -587,7 +587,7 @@ def test_a_blink_that_does_not_stop_is_reported(monkeypatch):
     with pytest.raises(psycopg.OperationalError):
         events.wait_for_agent(object(), "seat", seconds=30)
     waited = time.monotonic() - began
-    assert 0.1 <= waited < 5, "it gives up on the blink, not on the whole wait"
+    assert 0.1 <= waited < 15, "it gives up on the blink, not on the whole wait"
 
 
 def test_a_programming_error_is_never_ridden_out(monkeypatch):

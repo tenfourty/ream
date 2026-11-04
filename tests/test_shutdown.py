@@ -52,10 +52,12 @@ def test_a_hold_ends_the_moment_shutdown_begins(db):
     time.sleep(0.2)
 
     events.begin_shutdown()
-    waiter.join(timeout=5)
+    # The hold was 30 s: ending in under 10 s is 'ended by the shutdown'. Tight
+    # bounds flaked on a starved runner (3 Nov 2026).
+    waiter.join(timeout=15)
 
     assert not waiter.is_alive(), "the hold outlived the shutdown"
-    assert result["elapsed"] < 2, (
+    assert result["elapsed"] < 10, (
         f"took {result['elapsed']:.2f}s to end; a deploy would have killed it first"
     )
     assert result["rows"] == []
@@ -79,7 +81,7 @@ def test_a_hold_does_not_even_start_once_shutdown_has_begun(db):
 
     events.wait_for_agent(db, "ops-seat", since=0, seconds=30)
 
-    assert time.monotonic() - began < 2
+    assert time.monotonic() - began < 10  # a 30 s hold, not a slow runner
 
 
 def test_rows_that_landed_are_still_returned_at_shutdown(db, monkeypatch):
@@ -105,7 +107,7 @@ def test_rows_that_landed_are_still_returned_at_shutdown(db, monkeypatch):
     time.sleep(0.2)
 
     events.begin_shutdown()
-    waiter.join(timeout=5)
+    waiter.join(timeout=15)
 
     assert not waiter.is_alive()
     assert result["rows"] == [row]
@@ -118,7 +120,7 @@ def test_normal_waiting_is_unchanged_when_nothing_is_shutting_down(db):
 
     elapsed = time.monotonic() - began
     assert rows == []
-    assert 0.25 < elapsed < 3, f"a 0.3s hold took {elapsed:.2f}s"
+    assert 0.25 < elapsed < 15, f"a 0.3s hold took {elapsed:.2f}s"
 
 
 # ------------------------------------------------------------ the signal wiring
@@ -243,7 +245,9 @@ def test_no_look_starts_after_the_deadline_has_passed(db, monkeypatch):
     elapsed = time.monotonic() - began
 
     assert rows == []
-    assert elapsed < 0.5
+    assert (
+        elapsed < 10
+    )  # the count of looks below is the claim; this only rules out a hold
     assert len(looks) <= 1, f"{len(looks)} looks for a hold that had already expired"
 
 

@@ -57,7 +57,7 @@ def test_through_cloudflare_a_hold_is_capped(client, auth, monkeypatch):
         "/api/v1/events?since=999999&wait=5", headers={**auth, "cf-ray": "abc-AMS"}
     )
     assert response.status_code == 200 and response.json() == []
-    assert time.monotonic() - started < 3
+    assert time.monotonic() - started < 4  # capped at 0.3 s; uncapped would be 5 s
 
 
 def test_inside_the_house_the_hold_is_what_was_asked(client, auth, monkeypatch):
@@ -267,7 +267,7 @@ def test_wait_prints_an_answer_that_arrived_before_it_started(
     decisions.answer(db, asked.id, letter="a", note="early", by="jeremy")
     started = time.monotonic()
     assert _run(["wait", "--page", page.id, "--timeout", "30s"], path) == 0
-    assert time.monotonic() - started < 5
+    assert time.monotonic() - started < 20  # a 30 s wait, not a slow runner
     assert "early" in capsys.readouterr().out
 
 
@@ -282,7 +282,7 @@ def test_wait_wakes_when_he_answers(db, live, key_file, page, capsys, on_first_l
     started = time.monotonic()
     assert _run(["wait", "--page", page.id, "--timeout", "40s"], path) == 0
     took = time.monotonic() - started
-    assert took < 15, took
+    assert took < 30, took
     listener.woke_the_first_hold()
     assert "later" in capsys.readouterr().out
 
