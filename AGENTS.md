@@ -52,6 +52,7 @@ new name; published pages never change owner by accident.
 | Deployment values | the homelab repo (`k8s/apps/artifacts/artifacts/app/`); `deploy/` here is no longer applied |
 | CI -> image -> pin PR | `.forgejo/workflows/ci.yml`, `.forgejo/scripts/pin-pr.sh` |
 | The design this argues from | `docs/agent/design.md` |
+| What was decided and why the other options lost | `docs/decisions.md` |
 | The build plan and its ledger | `docs/agent/implementation-plan.md` |
 
 ## HOW
