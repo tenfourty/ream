@@ -150,21 +150,30 @@ def test_blocked_and_wont_do_need_a_reason(client, db, token, state):
     assert ok.json()["state"] == state.replace("-", "_")
 
 
-def test_a_link_belongs_to_done_only_and_must_be_a_web_address(client, db, token):
+def _answered(db):
     d = _decision(db)
+    decisions.answer(db, d.id, letter="a", note="", by="jeremy")
+    return d
+
+
+def test_a_link_belongs_to_done_only_and_must_be_a_web_address(client, db, token):
+    d = _answered(db)
     assert (
         _declare(client, token, d.id, "blocked", note="n", link="https://x.test/1")
     ).status_code == 422
     assert (
         _declare(client, token, d.id, "done", link="javascript:alert(1)")
     ).status_code == 422
+    for bad in ("https://x.test/1\n", "https://x.test/\x1b[31m", "https://x.test/a b"):
+        r = _declare(client, token, d.id, "done", link=bad)
+        assert r.status_code == 422, bad
     assert (
         _declare(client, token, d.id, "done", link="https://x.test/pr/1")
     ).status_code == 200
 
 
 def test_done_records_an_outcome_with_the_link_and_closes_nothing(client, db, token):
-    d = _decision(db)
+    d = _answered(db)
     r = _declare(
         client, token, d.id, "done", note="shipped in PR 9", link="https://x.test/9"
     )
@@ -299,3 +308,100 @@ def test_a_form_answer_after_a_receipt_reads_as_not_picked_up_again(client, db):
     history = client.get(f"/api/v1/decisions/{did}/receipts", headers=auth(token))
     assert [h["state"] for h in history.json()] == ["seen", "done"], "kept, as history"
     assert not any(h["current"] for h in history.json())
+
+
+def test_a_new_answer_to_a_plain_question_voids_receipts_set_before_it(
+    client, db, token
+):
+    d = _decision(db)
+    _declare(client, token, d.id, "seen")
+    _declare(client, token, d.id, "working", note="early")
+    assert _read(client, token, d.id)["receipt"]["state"] == "working"
+
+    decisions.answer(db, d.id, letter="a", note="", by="jeremy")
+
+    row = decisions.get_owned(db, "ops-seat", d.id)
+    assert row.receipt is None and row.acknowledged_at is None
+    history = client.get(f"/api/v1/decisions/{d.id}/receipts", headers=auth(token))
+    assert [h["state"] for h in history.json()] == ["seen", "working"]
+    assert not any(h["current"] for h in history.json())
+
+
+def test_done_needs_an_answer_first_but_the_other_states_do_not(client, db, token):
+    d = _decision(db)
+    refused = _declare(client, token, d.id, "done", note="n")
+    assert refused.status_code == 409
+    assert "not answered" in refused.json()["detail"]
+    for state, extra in (
+        ("seen", {}),
+        ("working", {}),
+        ("blocked", {"note": "x"}),
+        ("wont-do", {"note": "x"}),
+    ):
+        assert _declare(client, token, d.id, state, **extra).status_code == 200
+    decisions.answer(db, d.id, letter="a", note="", by="jeremy")
+    assert _declare(client, token, d.id, "done", note="n").status_code == 200
+
+
+def test_a_form_reconcile_that_reopens_voids_receipts(client, db):
+    token = keys.mint(db, agent="ops")[0]
+    page_ = client.post(
+        "/api/v1/artifacts",
+        json={"title": "F", "body": FORM_PAGE},
+        headers=auth(token),
+    ).json()
+    (form,) = client.get(
+        f"/api/v1/artifacts/{page_['id']}/forms", headers=auth(token)
+    ).json()
+    did = form["decision_id"]
+    formanswer.submit(db, did, version=1, values={"why": "go"})
+    _declare(client, token, did, "seen")
+    _declare(client, token, did, "done", note="once")
+    changed = FORM_PAGE.replace("Why", "Why now")
+    r = client.patch(
+        f"/api/v1/artifacts/{page_['id']}",
+        json={"body": changed, "expected_revision": page_["revision"]},
+        headers=auth(token),
+    )
+    assert r.status_code in (200, 201), r.text
+    row = decisions.get_owned(db, "ops", did)
+    assert row.acknowledged_at is None
+    assert row.receipt is None, "the reopened form no longer carries the old done"
+
+
+def _receipt_count(db, did):
+    with db.connect() as conn:
+        return conn.execute(
+            "select count(*) from receipt where subject_id = %s", (did,)
+        ).fetchone()[0]
+
+
+def test_purging_a_binned_page_takes_its_receipts_with_it(client, db, token):
+    d = _decision(db)
+    _declare(client, token, d.id, "working", note="n")
+    _declare(client, token, d.id, "seen")
+    assert _receipt_count(db, d.id) == 2
+    store.set_deleted(db, d.artifact_id, True, agent="ops-seat")
+    with db.connect() as conn:
+        conn.execute(
+            "update artifact set deleted_at = %s where id = %s",
+            (datetime.now(UTC) - timedelta(days=60), d.artifact_id),
+        )
+    assert store.purge_expired(db) == [d.artifact_id]
+    assert _receipt_count(db, d.id) == 0
+
+
+def test_destroying_a_page_takes_its_receipts_with_it(client, db, token):
+    d = _decision(db)
+    _declare(client, token, d.id, "working", note="n")
+    assert store.destroy(db, d.artifact_id, agent="ops-seat")
+    assert _receipt_count(db, d.id) == 0
+
+
+def test_the_history_of_a_binned_page_answers_404_like_the_post(client, db, token):
+    d = _decision(db)
+    _declare(client, token, d.id, "working", note="n")
+    store.set_deleted(db, d.artifact_id, True, agent="ops-seat")
+    got = client.get(f"/api/v1/decisions/{d.id}/receipts", headers=auth(token))
+    assert got.status_code == 404
+    assert _declare(client, token, d.id, "seen").status_code == 404

@@ -1823,7 +1823,14 @@ def destroy(db: Database, artifact_id: str, *, agent: str | None) -> bool:
     # window. Destroying a live page is allowed too -- "this must not exist
     # anywhere" does not require deleting it first.
     where, params = _scoped(artifact_id, agent, live=False)
-    with db.connect() as conn:
+    with db.connect() as conn, conn.transaction():
+        # No foreign key on `receipt` (see purge_expired): its rows go with the page.
+        conn.execute(
+            "delete from receipt where subject_kind = 'decision' and subject_id in"  # noqa: S608 -- see _scoped
+            f" (select d.id from decision d where d.artifact_id in"
+            f" (select id from artifact {where}))",
+            params,
+        )
         done = conn.execute(f"delete from artifact {where}", params)  # noqa: S608 -- see _scoped
         return done.rowcount > 0
 
@@ -1908,6 +1915,14 @@ def purge_expired(db: Database, *, window: timedelta = DELETE_WINDOW) -> list[st
                     {"reason": "The page holding this question was deleted for good."},
                     at=now,
                 )
+        # `receipt` has no foreign key (a subject may be a thread later), so the decisions'
+        # receipts go in this transaction, before the cascade takes the decisions.
+        conn.execute(
+            "delete from receipt where subject_kind = 'decision' and subject_id in"
+            " (select d.id from decision d join artifact a on a.id = d.artifact_id"
+            "  where a.deleted_at is not null and a.deleted_at < %s)",
+            (cutoff,),
+        )
         rows = conn.execute(
             "delete from artifact where deleted_at is not null and deleted_at < %s"
             " returning id",

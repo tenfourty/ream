@@ -39,6 +39,7 @@ def test_receipt_done_with_a_link_and_wont_do_spelled_with_a_dash(
     db,
 ):
     path, _ = key_file
+    decisions.answer(db, asked.id, letter="a", note="", by="jeremy")
     assert _run(["receipt", asked.id, "done", "--link", "https://x.test/1"], path) == 0
     assert _run(["receipt", asked.id, "wont-do", "--note", "no"], path) == 0
     assert decisions.get_owned(db, "ops-seat", asked.id).receipt["state"] == "wont_do"

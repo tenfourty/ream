@@ -738,6 +738,10 @@ def _reconcile_record(conn, decision_id: str, form: Form, version_n: int) -> Non
             " where id = %s",
             (decision_id,),
         )
+        # Reads as new again, so what was said about the old answer is history.
+        from artifacts import receipts  # late: receipts reads store, which reads forms
+
+        receipts.void(conn, decision_id)
 
 
 def _fields(conn, decision_id: str, version_n: int) -> list[dict]:

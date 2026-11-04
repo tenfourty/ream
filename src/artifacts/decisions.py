@@ -1566,6 +1566,14 @@ def record_elsewhere(
                 if current is None or _set_aside_fields(current)["set_aside"]:
                     raise store.NotFound()
                 raise _already(conn, current, round)
+            # A new human act: what was declared about an earlier answer (or before
+            # any) is history, and the acknowledgement reads as new again.
+            conn.execute(
+                "update decision set acknowledged_at = null, acknowledged_by = null"
+                " where id = %s",
+                (decision_id,),
+            )
+            receipts.void(conn, decision_id)
             if row[_KIND_IDX] == "review":
                 _close_round(conn, decision_id, letter)
                 # His verdict carries every mark in its message, so releasing
@@ -1763,6 +1771,14 @@ def answer(
                     # and this write: answered exactly as a closed decision is.
                     raise store.NotFound()
                 raise _already(conn, current, round)
+            # A new human act: what was declared about an earlier answer (or before
+            # any) is history, and the acknowledgement reads as new again.
+            conn.execute(
+                "update decision set acknowledged_at = null, acknowledged_by = null"
+                " where id = %s",
+                (decision_id,),
+            )
+            receipts.void(conn, decision_id)
             if row[_KIND_IDX] == "review":
                 _close_round(conn, decision_id, letter, version)
                 # His verdict carries every mark in its message, so releasing
@@ -2009,12 +2025,17 @@ def _acknowledge(
     ).fetchone()
     if row is None:
         raise store.NotFound()
-    if row[12] is None:  # acknowledged_at
-        conn.execute(
+    first = (
+        row[12] is None  # acknowledged_at
+        and conn.execute(
+            # Conditional, so two simultaneous acks write one seen row.
             "update decision set acknowledged_at = %s, acknowledged_by = %s"
-            " where id = %s",
+            " where id = %s and acknowledged_at is null",
             (datetime.now(UTC), agent, decision_id),
-        )
+        ).rowcount
+        > 0
+    )
+    if first:
         # Seen is a receipt: one journal row, only when this call is what set it.
         # `receipt_set` never wakes a waiter (events.list_for_agent).
         receipts.insert(conn, decision_id, "seen", agent=agent, session=session)

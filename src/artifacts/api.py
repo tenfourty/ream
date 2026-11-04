@@ -2864,6 +2864,8 @@ def agent_router(
                 )
             except receipts.Refused as exc:
                 raise HTTPException(422, str(exc)) from exc
+            except receipts.NotAnswered as exc:
+                raise HTTPException(409, str(exc)) from exc
             except store.SecretFound as found:
                 raise HTTPException(
                     422, _refused_detail(found.field, found.findings)
@@ -2885,10 +2887,11 @@ def agent_router(
         """Every receipt on one of your decisions, oldest first, each marked
         `current` or history (a new answer from him makes earlier ones history).
         Seen is the decision's own `acknowledged_at`, not a row here."""
-        if decisions.get_owned(db, agent, decision_id) is None:
-            raise HTTPException(404, "no such decision")
         with db.connect() as conn:
-            return receipts.history(conn, decision_id)
+            found = receipts.history_owned(conn, agent, decision_id)
+        if found is None:
+            raise HTTPException(404, "no such decision")
+        return found
 
     @router.post("/decisions/{decision_id}/acknowledge")
     def acknowledge_decision(

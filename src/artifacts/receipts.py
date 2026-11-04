@@ -43,11 +43,17 @@ MAX_LINK = 500
 WORKING_DEFAULT = timedelta(hours=4)
 WORKING_MAX = timedelta(hours=12)
 
+# fullmatch, and no control character or space anywhere: `$` would let a trailing newline by.
+_LINK = re.compile(r"https?://[^\x00-\x20\x7f]+")
 _DURATION = re.compile(r"^(\d+)\s*([mh])$")
 
 
 class Refused(Exception):
     """A receipt the service will not take, with a reason fit to print (422)."""
+
+
+class NotAnswered(Exception):
+    """`done` on a decision he has not answered yet (409)."""
 
 
 def normalise_state(state: str) -> str:
@@ -73,7 +79,7 @@ def parse_lifetime(value: str | None) -> timedelta:
 def _check_link(link: str | None) -> str | None:
     if link is None or link == "":
         return None
-    if len(link) > MAX_LINK or not re.match(r"^https?://[^\s]+$", link):
+    if len(link) > MAX_LINK or not _LINK.fullmatch(link):
         raise Refused("link must be an http(s) address, at most 500 characters")
     return link
 
@@ -151,6 +157,18 @@ def void(conn, decision_id: str) -> None:
         " where subject_kind = 'decision' and subject_id = %s and voided_at is null",
         (datetime.now(UTC), decision_id),
     )
+
+
+def history_owned(conn, agent: str, decision_id: str) -> list[dict] | None:
+    """`history` for `agent`'s own decision on a live page; None (a 404) for a missing
+    one, someone else's, or one whose page is in the bin, as the POST answers."""
+    found = conn.execute(
+        "select 1 from decision join artifact on artifact.id = decision.artifact_id"
+        " where decision.id = %s and artifact.agent = %s"
+        "   and artifact.deleted_at is null",
+        (decision_id, agent),
+    ).fetchone()
+    return None if found is None else history(conn, decision_id)
 
 
 def history(conn, decision_id: str) -> list[dict]:
@@ -242,16 +260,21 @@ def declare(
         raise Refused(f"note is over {MAX_NOTE} characters")
     span = parse_lifetime(lifetime) if state == "working" else None
 
+    # Locked, so a declare cannot interleave with a concurrent void (a new answer).
     owned = conn.execute(
-        "select decision.artifact_id from decision"
+        "select decision.artifact_id, decision.answered_at from decision"  # noqa: S608 -- fixed text, placeholders only
         " join artifact on artifact.id = decision.artifact_id"
         " where decision.id = %s and artifact.agent = %s"
-        "   and artifact.deleted_at is null",
+        "   and artifact.deleted_at is null" + conn.for_update(" of decision"),
         (decision_id, agent),
     ).fetchone()
     if owned is None:
         raise store.NotFound()
     artifact_id = owned[0]
+    if state == "done" and owned[1] is None:
+        raise NotAnswered(
+            "he has not answered this yet, so there is nothing to be done"
+        )
 
     if state == "seen":
         row = decisions._acknowledge(conn, agent, decision_id, session=session)
