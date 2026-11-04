@@ -703,3 +703,17 @@ def test_record_refuses_a_field_without_a_value_or_both_forms(
     )
     assert rc != 0 and seen == []
     capsys.readouterr()
+
+
+def test_a_seat_set_on_a_bare_command_names_the_wrapper_call(
+    live, tmp_path, capsys, monkeypatch
+):
+    """ARTIFACTS_SEAT is read by `artifacts-key`, never by the CLI itself: a
+    bare `ARTIFACTS_SEAT=x artifacts-…` finds no key, and the error says the
+    exact wrapped command instead of a generic hint."""
+    monkeypatch.setenv("ARTIFACTS_SEAT", "homelab_maintainer")
+    monkeypatch.delenv("ARTIFACTS_KEY_FD", raising=False)
+    assert decide.main(["--key-file", str(tmp_path / "nope"), "list"]) == 2
+    err = capsys.readouterr().err
+    assert "cannot read key file" in err
+    assert "ARTIFACTS_SEAT=homelab_maintainer artifacts-key -- " in err

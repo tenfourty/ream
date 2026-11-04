@@ -415,12 +415,25 @@ def _read_key(path: Path) -> str:
         # reason this file is missing is that it is GONE ON PURPOSE -- and
         # "no such file" alone sends the reader looking for a lost key, or
         # minting a second one for an identity that already exists.
+        #
+        # ARTIFACTS_SEAT set on a bare command is the commonest way here: the
+        # seat is read by the `artifacts-key` wrapper, never by this program,
+        # so name the exact command the caller meant (homelab, 4 Nov 2026).
+        seat = os.environ.get("ARTIFACTS_SEAT", "").strip()
+        prog = Path(sys.argv[0]).name or "artifacts-publish"
+        if seat:
+            raise UsageError(
+                f"cannot read key file {path}: {exc.strerror}. ARTIFACTS_SEAT "
+                f"is {seat!r}, but only the `artifacts-key` wrapper reads it, "
+                "not this command: run "
+                f"`ARTIFACTS_SEAT={seat} artifacts-key -- {prog} …`."
+            ) from None
         raise UsageError(
-            f"cannot read key file {path}: {exc.strerror}. On baba the keys "
-            "are vaulted: run the command through "
-            "`ARTIFACTS_SEAT=<seat> artifacts-key -- …` (seats: baba_operator, "
-            "homelab_ops, warpgate_arc, cove_seat). Elsewhere, point "
-            "--key-file or --key-fd at your own store."
+            f"cannot read key file {path}: {exc.strerror}. Where keys are "
+            "vaulted (as on baba), run the command through "
+            "`ARTIFACTS_SEAT=<seat> artifacts-key -- …`; `artifacts-key "
+            "--help` lists the seats. Elsewhere, point --key-file or "
+            "--key-fd at your own store."
         ) from None
     if mode & 0o077:
         raise UsageError(
