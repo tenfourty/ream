@@ -23,7 +23,16 @@ import re
 import unicodedata
 from datetime import UTC, date, datetime
 
-from artifacts import decisions, events, formrecord, forms, ids, nudge, store
+from artifacts import (
+    decisions,
+    events,
+    formrecord,
+    forms,
+    ids,
+    nudge,
+    receipts,
+    store,
+)
 from artifacts.db import jsonb
 
 MAX_HISTORY = 50
@@ -316,6 +325,7 @@ def submit(
             " where id = %s and closed_at is null",
             (jsonb(record), now, by, decision_id),
         )
+        receipts.void(conn, decision_id)
         answered = len(fields) - len(total_blank)
         summary = f"form {form_name}: {answered} of {len(fields)} answered"
         seq = events.append(
@@ -498,6 +508,7 @@ def relay(
             " where id = %s and closed_at is null",
             (jsonb(record), now, source, recorded_by, said_at, decision_id),
         )
+        receipts.void(conn, decision_id)
         answered = len(fields) - len(record["blank"])
         summary = (
             f"form {form_name}: {len(applied)} field(s) relayed from {source}, "

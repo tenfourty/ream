@@ -56,6 +56,7 @@ from artifacts import (
     onboarding,
     partner_in,
     ratelimit,
+    receipts,
     review,
     sections,
     store,
@@ -293,6 +294,18 @@ class OutcomeBody(BaseModel):
     outcome is a sentence somebody writes, not a form."""
 
     body: str
+
+
+class ReceiptBody(BaseModel):
+    """What the agent did with his answer. `state` is seen, working, done, blocked or
+    wont-do; blocked and wont-do need a note, only done takes a link, only working
+    takes `for` (a duration like 30m or 4h, at most 12h, default 4h)."""
+
+    state: str
+    note: str = ""
+    link: str | None = None
+    comment_id: str | None = None
+    for_: str | None = Field(default=None, alias="for")
 
 
 class ReplyBody(BaseModel):
@@ -2824,16 +2837,74 @@ def agent_router(
             raise HTTPException(404, "no such decision")
         return [row.__dict__ for row in decisions.outcomes_for(db, decision_id)]
 
+    @router.post("/decisions/{decision_id}/receipt")
+    def declare_receipt(
+        decision_id: str,
+        payload: ReceiptBody,
+        agent: str = Depends(caller),
+        seat_session: str | None = Depends(session),
+        idempotency_key: str | None = Header(default=None),
+    ):
+        """Say what you did with his answer: seen, working, done, blocked or
+        wont-do. Your own statement, labelled with your agent and session and
+        never verified. `done` does not close the decision. Returns the current
+        receipt. `seen` is what `acknowledge` does."""
+
+        def write(conn) -> tuple[int, object]:
+            try:
+                return 200, receipts.declare_on(
+                    db,
+                    conn,
+                    agent,
+                    decision_id,
+                    state=payload.state,
+                    note=payload.note,
+                    link=payload.link,
+                    comment_id=payload.comment_id,
+                    lifetime=payload.for_,
+                    session=seat_session,
+                )
+            except receipts.Refused as exc:
+                raise HTTPException(422, str(exc)) from exc
+            except store.SecretFound as found:
+                raise HTTPException(
+                    422, _refused_detail(found.field, found.findings)
+                ) from found
+            except store.NotFound as exc:
+                raise HTTPException(404, "no such decision") from exc
+
+        return idempotency.run(
+            db,
+            agent,
+            f"receipt:{decision_id}",
+            idempotency_key,
+            payload.model_dump(),
+            write,
+        )
+
+    @router.get("/decisions/{decision_id}/receipts")
+    def list_receipts(decision_id: str, agent: str = Depends(caller)):
+        """Every receipt on one of your decisions, oldest first, each marked
+        `current` or history (a new answer from him makes earlier ones history).
+        Seen is the decision's own `acknowledged_at`, not a row here."""
+        if decisions.get_owned(db, agent, decision_id) is None:
+            raise HTTPException(404, "no such decision")
+        with db.connect() as conn:
+            return receipts.history(conn, decision_id)
+
     @router.post("/decisions/{decision_id}/acknowledge")
     def acknowledge_decision(
         decision_id: str,
         agent: str = Depends(caller),
+        seat_session: str | None = Depends(session),
         idempotency_key: str | None = Header(default=None),
     ):
         def write(conn) -> tuple[int, object]:
             try:
                 return 200, decisions.public(
-                    decisions.acknowledge(db, agent, decision_id, conn=conn)
+                    decisions.acknowledge(
+                        db, agent, decision_id, conn=conn, session=seat_session
+                    )
                 )
             except store.NotFound as exc:
                 raise HTTPException(404, "no such decision") from exc
@@ -2907,6 +2978,9 @@ def agent_router(
         session_filter: str | None = Query(None, alias="session", max_length=120),
         # Leave out this agent's own actions (homelab-ij8.106).
         exclude_self: bool = False,
+        # `include=receipts` adds the agent's own `receipt_set` rows. They never end a
+        # `wait`, and a plain read does not return them (receipts.py).
+        include: str | None = Query(None, pattern="^receipts$"),
         agent: str = Depends(caller),
         seat_session: str | None = Depends(session),
     ):
@@ -2963,6 +3037,9 @@ def agent_router(
         # also marks the session as waiting until it returns: see events.note_read.
         held_until = events.note_read(db, agent, seat_session, hold_seconds=wait)
         try:
+            # The look that decides whether to hold never counts a receipt, so a
+            # declaration cannot end a wait; with `include=receipts` they are added
+            # to whatever comes back.
             rows = events.list_for_agent(
                 db,
                 agent,
@@ -2980,6 +3057,16 @@ def agent_router(
                     seconds=wait,
                     session=session_filter,
                     exclude_actor=exclude,
+                )
+            if include == "receipts":
+                rows = events.list_for_agent(
+                    db,
+                    agent,
+                    since=since,
+                    limit=limit,
+                    session=session_filter,
+                    exclude_actor=exclude,
+                    include_receipts=True,
                 )
         finally:
             if held_until is not None:
@@ -3093,6 +3180,8 @@ def agent_router(
         "outcomes",
         "record",
         "acknowledge",
+        "receipt",
+        "receipts",
         "close",
         "replies",
     )

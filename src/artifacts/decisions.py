@@ -40,7 +40,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from artifacts import csp, events, holds, ids, keys, nudge, partner, store, text
+from artifacts import (
+    csp,
+    events,
+    holds,
+    ids,
+    keys,
+    nudge,
+    partner,
+    receipts,
+    store,
+    text,
+)
 from artifacts.db import Connection, Database, in_list, jsonb
 
 # A decision's question is a single line Jeremy reads on a card, not a page body -- 500
@@ -185,6 +196,10 @@ class DecisionRow:
     set_aside_since: str | None = None
     set_aside_why: str | None = None
     reopened_at: str | None = None
+    # What the owning agent says it did with his answer (receipts.py): the current
+    # receipt as {state, note, link, agent, session, comment_id, at, expires_at,
+    # lapsed}, or None when it has said nothing. Derived on read, like `held_by`.
+    receipt: dict | None = None
 
 
 def public(row: DecisionRow) -> dict:
@@ -570,9 +585,25 @@ def held_map(conn, rows: list[DecisionRow]) -> dict[str, list[str]]:
 
 def _with_held(conn, rows: list[DecisionRow]) -> list[DecisionRow]:
     held = held_map(conn, rows)
+    got = receipts.current_map(conn, rows)
     return [
-        dataclasses.replace(r, held_by=held[r.id]) if r.id in held else r for r in rows
+        dataclasses.replace(r, held_by=held.get(r.id, r.held_by), receipt=got.get(r.id))
+        for r in rows
     ]
+
+
+def raw_in(conn, decision_id: str):
+    """One decision's raw `_COLUMNS` row on the caller's connection, or None.
+    Ownership is the caller's job."""
+    return conn.execute(
+        f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
+        (decision_id,),
+    ).fetchone()
+
+
+def get_in(conn, decision_id: str) -> DecisionRow:
+    """One decision as a row, with its receipt, on the caller's connection."""
+    return _with_held(conn, [_row_to_decision(raw_in(conn, decision_id))])[0]
 
 
 class Held(Exception):
@@ -1258,6 +1289,7 @@ def _advance_rounds(conn, artifact_id: str, version_n: int) -> None:
                 " acknowledged_by = null where id = %s",
                 (review_id,),
             )
+            receipts.void(conn, review_id)
 
 
 # CLAIMS (page review step 5). One session acts on a round: `wait --review`
@@ -1931,7 +1963,12 @@ def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
 
 
 def acknowledge(
-    db: Database, agent: str, decision_id: str, *, conn=None
+    db: Database,
+    agent: str,
+    decision_id: str,
+    *,
+    conn=None,
+    session: str | None = None,
 ) -> DecisionRow:
     """ "I have seen this answer" -- a different fact from "the work is done".
 
@@ -1956,12 +1993,14 @@ def acknowledge(
     request), so the acknowledgement commits with the stored response.
     """
     if conn is not None:
-        return _acknowledge(conn, agent, decision_id)
+        return _acknowledge(conn, agent, decision_id, session=session)
     with db.connect() as own:
-        return _acknowledge(own, agent, decision_id)
+        return _acknowledge(own, agent, decision_id, session=session)
 
 
-def _acknowledge(conn, agent: str, decision_id: str) -> DecisionRow:
+def _acknowledge(
+    conn, agent: str, decision_id: str, *, session: str | None = None
+) -> DecisionRow:
     row = conn.execute(
         f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
         " join artifact on artifact.id = decision.artifact_id"
@@ -1976,11 +2015,24 @@ def _acknowledge(conn, agent: str, decision_id: str) -> DecisionRow:
             " where id = %s",
             (datetime.now(UTC), agent, decision_id),
         )
+        # Seen is a receipt: one journal row, only when this call is what set it.
+        # `receipt_set` never wakes a waiter (events.list_for_agent).
+        receipts.insert(conn, decision_id, "seen", agent=agent, session=session)
+        events.append(
+            conn,
+            artifact_id=row[1],
+            agent=agent,
+            actor=agent,
+            kind="receipt_set",
+            summary=f"{agent} seen",
+            ref_id=decision_id,
+            session=session,
+        )
         row = conn.execute(
             f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
             (decision_id,),
         ).fetchone()
-    return _row_to_decision(row)
+    return _with_held(conn, [_row_to_decision(row)])[0]
 
 
 # How long an answer may sit uncollected before it is worth saying so. Ten
@@ -2210,6 +2262,8 @@ class OutcomeRow:
     agent: str
     session: str | None
     created_at: str
+    # Set when the outcome is a `done` receipt's (receipts.py); None otherwise.
+    link: str | None = None
 
 
 def _row_to_outcome(row) -> OutcomeRow:
@@ -2223,6 +2277,7 @@ def _row_to_outcome(row) -> OutcomeRow:
         agent=row[3],
         session=row[4],
         created_at=row[5].isoformat(),
+        link=row[6],
     )
 
 
@@ -2275,7 +2330,7 @@ def record_outcome(
             (outcome_id, decision_id, body, agent, session),
         )
         row = conn.execute(
-            "select id, decision_id, body, agent, session, created_at"
+            "select id, decision_id, body, agent, session, created_at, link"
             " from decision_outcome where id = %s",
             (outcome_id,),
         ).fetchone()
@@ -2290,7 +2345,7 @@ def outcomes_for(db: Database, decision_id: str) -> list[OutcomeRow]:
     """
     with db.connect() as conn:
         rows = conn.execute(
-            "select id, decision_id, body, agent, session, created_at"
+            "select id, decision_id, body, agent, session, created_at, link"
             " from decision_outcome where decision_id = %s"
             " order by created_at asc, id asc",
             (decision_id,),
@@ -2365,7 +2420,7 @@ def outcomes_for_artifact(
     out: dict[str, list[OutcomeRow]] = {}
     with db.connect() as conn:
         rows = conn.execute(
-            "select o.id, o.decision_id, o.body, o.agent, o.session, o.created_at"
+            "select o.id, o.decision_id, o.body, o.agent, o.session, o.created_at, o.link"
             " from decision_outcome o"
             " join decision d on d.id = o.decision_id"
             " where d.artifact_id = %s"
@@ -2387,7 +2442,7 @@ def outcomes_for_decisions(
     out: dict[str, list[OutcomeRow]] = {}
     with db.connect() as conn:
         rows = conn.execute(
-            "select id, decision_id, body, agent, session, created_at"  # noqa: S608 -- placeholders only
+            "select id, decision_id, body, agent, session, created_at, link"  # noqa: S608 -- placeholders only
             f" from decision_outcome where decision_id in {in_list(decision_ids)}"
             " order by created_at asc, id asc",
             tuple(decision_ids),

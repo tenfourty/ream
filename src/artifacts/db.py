@@ -384,6 +384,35 @@ def _widen_event_kinds(conn) -> None:
         )
 
 
+def _widen_event_kinds_receipt(conn) -> None:
+    """Step 16: add 'receipt_set' to the event.kind CHECK, in place as step 12 does,
+    and prove it. Matches the list's tail alone, since a file made by step 1 has the
+    list spread over lines and one migrated by step 12 has it on one."""
+    old = "'decision_reopened')"
+    new = "'decision_reopened', 'receipt_set')"
+    conn.execute("pragma writable_schema = on")
+    try:
+        conn.execute(
+            "update sqlite_master set sql = replace(sql, "  # noqa: S608 -- fixed text
+            + _sql_text(old)
+            + ", "
+            + _sql_text(new)
+            + ") where type = 'table' and name = 'event'"
+        )
+        (cookie,) = conn.execute("pragma schema_version").fetchone()
+        conn.execute(f"pragma schema_version = {cookie + 1}")
+    finally:
+        conn.execute("pragma writable_schema = off")
+    row = conn.execute(
+        "select sql from sqlite_master where type = 'table' and name = 'event'"
+    ).fetchone()
+    if row is None or "'receipt_set'" not in row[0]:
+        raise RuntimeError(
+            "schema step 16 could not widen event.kind's CHECK to include "
+            "'receipt_set': the stored table text is not the expected shape"
+        )
+
+
 def _sql_text(text: str) -> str:
     """`text` as an SQL string literal (fixed text only, never caller input)."""
     return "'" + text.replace("'", "''") + "'"
@@ -609,6 +638,32 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             "create index artifact_archived_via_folder_idx on artifact"
             " (archived_via_folder) where archived_via_folder is not null"
         ),
+    ),
+    # 4 Nov 2026: delivery receipts, slice 1 (see schema.sql): the `receipt` table,
+    # the link on an outcome, and the event kind `receipt_set`.
+    16: (
+        (
+            "create table receipt ("
+            " id text primary key,"
+            " subject_kind text not null check (subject_kind in ('decision', 'thread')),"
+            " subject_id text not null,"
+            " state text not null check (state in"
+            " ('seen', 'working', 'blocked', 'wont_do', 'done')),"
+            " note text not null default '',"
+            " link text,"
+            " agent text not null,"
+            " session text,"
+            " comment_id text,"
+            " created_at timestamptz not null default (artifacts_now()),"
+            " expires_at timestamptz,"
+            " voided_at timestamptz)"
+        ),
+        (
+            "create index receipt_subject_idx on receipt"
+            " (subject_kind, subject_id, created_at)"
+        ),
+        "alter table decision_outcome add column link text",
+        _widen_event_kinds_receipt,
     ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)

@@ -29,6 +29,7 @@ COLUMNS = [
     ("decision", "recorded_by", ""),
     ("decision", "acknowledged_by", ""),
     ("decision_outcome", "agent", ""),
+    ("receipt", "agent", ""),
     ("event", "agent", ""),
     ("event", "actor", ""),
     ("connect_request", "agent", ""),

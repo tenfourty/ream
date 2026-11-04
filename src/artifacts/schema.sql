@@ -371,7 +371,7 @@ alter table event drop constraint if exists event_kind_check;
 alter table event add constraint event_kind_check
     check (kind in ('decision_answered', 'comment_added', 'thread_resolved',
                     'decision_shelved', 'comment_withdrawn',
-                    'decision_set_aside', 'decision_reopened'));
+                    'decision_set_aside', 'decision_reopened', 'receipt_set'));
 
 -- WHO, when three seats share one key (homelab-ij8.32, 21 Sep 2026).
 --
@@ -1063,3 +1063,32 @@ create index if not exists artifact_folder_idx on artifact (folder_id) where fol
 alter table artifact add column if not exists archived_via_folder text;
 create index if not exists artifact_archived_via_folder_idx on artifact (archived_via_folder)
     where archived_via_folder is not null;
+
+-- DELIVERY RECEIPTS, slice 1 (4 Nov 2026; docs/agent/specs/2026-11-04-receipts-design.md).
+-- What an agent says it did with his answer. Whether it has SEEN a decision stays
+-- `decision.acknowledged_at/by` (first wins, cleared on reopen); a `seen` row is written
+-- beside it only to carry the session. Every state is an append-only row here; the CURRENT receipt is the latest row that is not voided.
+-- `voided_at` is stamped on every row of a subject when a new human act reopens it (a form
+-- submit or relay, a review sent back), so an old "done" never covers a new answer; the
+-- rows stay as history. `expires_at` is set for `working` only; a lapsed one is computed on
+-- read. `subject_kind` is 'decision' now, 'thread' in slice 4. The event kind `receipt_set`
+-- is in the event CHECK above (SQLite: schema step 16).
+create table if not exists receipt (
+    id           text primary key,
+    subject_kind text not null check (subject_kind in ('decision', 'thread')),
+    subject_id   text not null,
+    state        text not null check (state in ('seen', 'working', 'blocked', 'wont_do', 'done')),
+    note         text not null default '',
+    link         text,
+    agent        text not null,
+    session      text,
+    comment_id   text,
+    created_at   timestamptz not null default now(),
+    expires_at   timestamptz,
+    voided_at    timestamptz
+);
+create index if not exists receipt_subject_idx
+    on receipt (subject_kind, subject_id, created_at);
+
+-- A `done` receipt on a decision also writes an outcome row; this is its link.
+alter table decision_outcome add column if not exists link text;

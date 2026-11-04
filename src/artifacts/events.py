@@ -49,6 +49,10 @@ KINDS = (
     # The page came back (unarchived or restored) and the question with it, open and
     # unanswered, same id. The agent re-arms its waiter on this.
     "decision_reopened",
+    # An agent stated what it did with his answer (receipts.py). Never wakes a waiter and
+    # is left out of /events unless the caller asks for it: it is the agent's own
+    # statement, not something that happened to the agent.
+    "receipt_set",
 )
 
 # A note is his own words and must survive the trip whole. 1000 is the same
@@ -169,6 +173,7 @@ def list_for_agent(
     limit: int = 100,
     session: str | None = None,
     exclude_actor: str | None = None,
+    include_receipts: bool = False,
 ) -> list[EventRow]:
     """Every event recorded for `agent`, strictly above `since`, oldest first --
     the order a cursor needs: a caller that stores the last `seq` it saw and asks
@@ -194,6 +199,11 @@ def list_for_agent(
     filter is for. A caller that wants them omits the filter."""
     sql = f"select {_COLUMNS} from event where event.agent = %s and event.seq > %s"  # noqa: S608 -- _COLUMNS is a fixed module constant, never caller input
     params: tuple = (agent, since)
+    # `receipt_set` is the agent's own statement about its work (receipts.py). It is
+    # left out unless asked for, so no existing reader changes and no waiter wakes on
+    # it: `wait_for_agent` never passes `include_receipts`.
+    if not include_receipts:
+        sql += " and event.kind <> 'receipt_set'"
     if session is not None:
         sql += " and event.session = %s"
         params += (session,)
