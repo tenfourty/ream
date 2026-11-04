@@ -157,6 +157,9 @@ class PublishBody(BaseModel):
     # says so (`folder.created`). `folder_title` names a NEW folder, once.
     folder: str | None = None
     folder_title: str | None = None
+    # How often this publisher promises to vouch for the page, in seconds (60 to a year); a page
+    # that goes quiet for 2.5 of them is flagged. Omitted, null or 0 declares nothing.
+    refresh_every: int | None = None
 
 
 _BAD_SLUG = {
@@ -165,6 +168,12 @@ _BAD_SLUG = {
         "a folder name is lowercase letters, digits and hyphens, 1 to 40 characters, "
         "starting with a letter or digit"
     ),
+}
+
+
+_BAD_INTERVAL = {
+    "field": "refresh_every",
+    "detail": "refresh_every is seconds, 60 to 31536000 (a year); 0 or null clears it",
 }
 
 
@@ -211,6 +220,19 @@ class PatchBody(BaseModel):
     # Omitted leaves the page's folder; a slug files it (created on first use); "" takes it out.
     folder: str | None = None
     folder_title: str | None = None
+    # Omitted keeps the declared interval; a number declares it; null or 0 clears it.
+    refresh_every: int | None = None
+
+
+class TouchBody(BaseModel):
+    """ "Checked, still current" -- every field optional, so `{}` is a good touch."""
+
+    status: Literal["ok", "failed"] = "ok"
+    note: str | None = None
+    # Vouch only if the page is still this revision (the hash, or the version number): 409 if not.
+    if_revision: str | None = None
+    # Omitted keeps the declared interval; a number declares it; null or 0 clears it.
+    refresh_every: int | None = None
 
 
 class SectionBody(BaseModel):
@@ -849,6 +871,7 @@ def agent_router(
                 session=seat_session,
                 folder=payload.folder,
                 folder_title=payload.folder_title,
+                refresh_every=payload.refresh_every,
             )
             # After the write, never inside it: a publish must not wait on a
             # browser, nor fail because of one. See thumbs.render_in_background.
@@ -857,6 +880,8 @@ def agent_router(
                 **published.__dict__,
                 "warnings": _warnings_for(published.id, body),
             }
+        except store.BadInterval as exc:
+            raise HTTPException(422, _BAD_INTERVAL) from exc
         except store.NotAPage as exc:
             # 422, not 413: the body is not too much, it is not a page. Named
             # like every other refusal so a caller can tell them apart without
@@ -926,6 +951,11 @@ def agent_router(
                 ),
                 folder=payload.folder,
                 folder_title=payload.folder_title,
+                refresh_every=(
+                    payload.refresh_every
+                    if "refresh_every" in payload.model_fields_set
+                    else store.KEEP
+                ),
             )
             # After the write, never inside it: a publish must not wait on a
             # browser, nor fail because of one. See thumbs.render_in_background.
@@ -934,6 +964,8 @@ def agent_router(
                 **published.__dict__,
                 "warnings": _warnings_for(published.id, body),
             }
+        except store.BadInterval as exc:
+            raise HTTPException(422, _BAD_INTERVAL) from exc
         except store.NotAPage as exc:
             # 422, not 413: the body is not too much, it is not a page. Named
             # like every other refusal so a caller can tell them apart without
@@ -1498,6 +1530,73 @@ def agent_router(
         if not store.set_pinned(db, artifact_id, payload.pinned, agent=agent):
             raise HTTPException(404, "no such artifact")
         return store.get_owned(db, agent, artifact_id).__dict__
+
+    @router.post("/artifacts/{artifact_id}/touch")
+    def touch(
+        artifact_id: str,
+        payload: TouchBody | None = None,
+        agent: str = Depends(caller),
+        idempotency_key: str | None = Header(default=None),
+    ):
+        """Vouch for one of this agent's own pages without sending it: "checked, still current",
+        or `status: failed` with a note. Makes no version, does not reorder the wall and marks
+        nothing unread. `if_revision` refuses (409) a page that has moved on. Declaring
+        `refresh_every` here counts as a check. A page that is not the caller's answers
+        exactly as a missing one."""
+        payload = payload or TouchBody()
+
+        def write(conn) -> tuple[int, object]:
+            try:
+                done = store.touch(
+                    db,
+                    agent,
+                    artifact_id,
+                    status=payload.status,
+                    note=payload.note,
+                    if_revision=payload.if_revision,
+                    refresh_every=(
+                        payload.refresh_every
+                        if "refresh_every" in payload.model_fields_set
+                        else store.KEEP
+                    ),
+                    conn=conn,
+                )
+            except store.NotFound as exc:
+                raise HTTPException(404, "no such artifact") from exc
+            except store.PageChanged as exc:
+                raise HTTPException(
+                    409, f"page changed since revision {exc.given}, re-fetch"
+                ) from exc
+            except store.BadInterval as exc:
+                raise HTTPException(422, _BAD_INTERVAL) from exc
+            except store.SecretFound as found:
+                raise HTTPException(
+                    422, _refused_detail(found.field, found.findings)
+                ) from found
+            except store.ScanFailed as exc:
+                raise HTTPException(
+                    503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+                ) from exc
+            return 200, {
+                "checked_at": done.checked_at,
+                "changed_at": done.changed_at,
+                "revision": done.revision,
+                "version": done.version,
+                "status": done.status,
+                "note": done.note,
+                "refresh_every": done.refresh_every,
+                "lapsed": done.lapsed,
+                "lapses_at": done.lapses_at,
+            }
+
+        return idempotency.run(
+            db,
+            agent,
+            f"touch:{artifact_id}",
+            idempotency_key,
+            payload.model_dump(),
+            write,
+        )
 
     @router.post("/artifacts/{artifact_id}/duplicate", status_code=201)
     def duplicate(artifact_id: str, agent: str = Depends(caller)):

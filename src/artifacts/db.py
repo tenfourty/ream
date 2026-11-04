@@ -665,6 +665,17 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
         "alter table decision_outcome add column link text",
         _widen_event_kinds_receipt,
     ),
+    # 4 Nov 2026: generated pages (see schema.sql): a declared refresh interval and the last
+    # check, four nullable shelf facts on `artifact`.
+    17: (
+        "alter table artifact add column refresh_every integer",
+        "alter table artifact add column checked_at timestamptz",
+        (
+            "alter table artifact add column check_status text"
+            " check (check_status in ('ok', 'failed'))"
+        ),
+        "alter table artifact add column check_note text",
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

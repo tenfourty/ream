@@ -224,6 +224,97 @@ class ArtifactRow:
     # The slug of the folder the page is in, None for a loose page. Only on the caller's own
     # rows: another agent's folder is not this agent's to see.
     folder: str | None = None
+    # GENERATED PAGES (4 Nov 2026): when the publisher last vouched for the page and what it said,
+    # the interval it declared, and the verdict worked out from them (`check_state`). `changed_at`
+    # is when the live version was made -- the time the page's marker already shows. Unset on a
+    # row from `list_deleted`, which says nothing of checks.
+    refresh_every: int | None = None
+    checked_at: datetime | None = None
+    changed_at: datetime | None = None
+    check_status: str | None = None
+    check_note: str | None = None
+    lapsed: bool = False
+    lapses_at: datetime | None = None
+
+
+# The declared refresh interval's bounds, in seconds (one minute to a year), and how many
+# intervals of silence make a page lapse (retrobrew's number, fixed for v1).
+REFRESH_MIN = 60
+REFRESH_MAX = 31_536_000
+LAPSE_AFTER = 2.5
+CHECK_NOTE_MAX = 200
+
+
+class BadInterval(Exception):
+    """`refresh_every` is outside one minute to one year."""
+
+
+class _Keep:
+    """The default of an interval argument: leave what the page has."""
+
+    def __repr__(self) -> str:
+        return "KEEP"
+
+
+KEEP = _Keep()
+
+
+def valid_interval(value: int | None) -> int | None:
+    """A declared interval ready to store: 0 or None is "no promise" (None), anything else must
+    be 60 to 31 536 000 seconds."""
+    if value is None or value == 0:
+        return None
+    if not REFRESH_MIN <= value <= REFRESH_MAX:
+        raise BadInterval()
+    return value
+
+
+def check_state(
+    *,
+    refresh_every: int | None,
+    checked_at: datetime | None,
+    check_status: str | None,
+    changed_at: datetime | None,
+    archived_at: datetime | None,
+    now: datetime,
+) -> dict:
+    """Whether a page is flagged, and when its interval runs out. In Python rather than SQL:
+    timestamp arithmetic differs between the two drivers and only db.py talks to one.
+
+    The last good check is the later of the change and the check. `lapsed` is a failed last
+    check (flagged at once, interval or not) or silence beyond 2.5 intervals; an archived page
+    is never flagged. `lapses_at` is None without an interval."""
+    good = [t for t in (changed_at, checked_at) if t is not None]
+    lapses_at = (
+        max(good) + timedelta(seconds=refresh_every * LAPSE_AFTER)
+        if refresh_every and good
+        else None
+    )
+    lapsed = archived_at is None and (
+        check_status == "failed" or (lapses_at is not None and now > lapses_at)
+    )
+    return {"lapsed": lapsed, "lapses_at": lapses_at}
+
+
+def _check_fields(row, archived_at, now: datetime) -> dict:
+    """The ArtifactRow keywords for a page's checks, from (refresh_every, checked_at,
+    check_status, check_note, changed_at)."""
+    refresh_every, checked_at, status, note, changed_at = row
+    return {
+        "refresh_every": refresh_every,
+        "checked_at": checked_at,
+        "changed_at": changed_at,
+        "check_status": status,
+        "check_note": note,
+        **check_state(
+            refresh_every=refresh_every,
+            checked_at=checked_at,
+            check_status=status,
+            changed_at=changed_at,
+            archived_at=archived_at,
+            now=now,
+        ),
+    }
 
 
 def content_domain() -> str:
@@ -465,8 +556,12 @@ def publish(
     session: str | None = None,
     folder: str | None = None,
     folder_title: str | None = None,
+    refresh_every: int | None = None,
 ) -> Published:
-    """`folder` files the new page in the agent's own folder of that slug, creating it on first
+    """`refresh_every` declares how often the publisher promises to vouch for the page (seconds,
+    60 to a year; `BadInterval` otherwise). The publish itself is the first check.
+
+    `folder` files the new page in the agent's own folder of that slug, creating it on first
     use (`folder_title` names a NEW folder, once; it defaults to the slug). A bad slug is
     refused before anything is stored (`folders.BadSlug`).
 
@@ -481,6 +576,7 @@ def publish(
     _guard(title, MAX_TITLE_BYTES, "title", agent=agent, artifact_id=None)
     _guard(body, MAX_BODY_BYTES, "body", agent=agent, artifact_id=None)
     _check_folder(folder, folder_title, agent=agent, artifact_id=None)
+    interval = valid_interval(refresh_every)
     # A bad form is refused before anything is stored (FormRefused -> 422).
     parsed_forms = forms.parse(body)
     artifact_id, revision = ids.new_id(), _revision(body, 1)
@@ -503,9 +599,9 @@ def publish(
         conn.execute(
             "insert into artifact"
             " (id, title, agent, read_token, current_version, session,"
-            "  created_at, updated_at)"
-            " values (%s, %s, %s, %s, null, %s, %s, %s)",
-            (artifact_id, title, agent, token, session, now, now),
+            "  created_at, updated_at, refresh_every, checked_at, check_status)"
+            " values (%s, %s, %s, %s, null, %s, %s, %s, %s, %s, 'ok')",
+            (artifact_id, title, agent, token, session, now, now, interval, now),
         )
         conn.execute(
             "insert into version (artifact_id, n, body, revision, created_by, session,"
@@ -614,8 +710,13 @@ def patch(
     scanned: set[str] | None = None,
     folder: str | None = None,
     folder_title: str | None = None,
+    refresh_every: int | None | _Keep = KEEP,
 ) -> Published:
-    """`title=None` leaves the page's name alone; a string renames it.
+    """Every call is also a check: it records that the publisher vouched for the page just now
+    (`_record_check`), including an identical body and a section update. `refresh_every` omitted
+    keeps the declared interval; None or 0 clears it; a number declares it.
+
+    `title=None` leaves the page's name alone; a string renames it.
 
     `folder=None` leaves the page's folder alone, a slug files it in the agent's own folder of
     that name (created on first use), `""` takes it out. A shelf fact: it makes no version, and
@@ -644,6 +745,7 @@ def patch(
             title, MAX_TITLE_BYTES, "title", agent=agent, artifact_id=artifact_id
         )
     _check_folder(folder, folder_title, agent=agent, artifact_id=artifact_id)
+    interval = _interval_arg(refresh_every)
     # A bad form is refused before anything is stored (FormRefused -> 422).
     parsed_forms = forms.parse(body)
     with db.connect() as conn:
@@ -692,6 +794,7 @@ def patch(
                     filed = folders.file_page(
                         conn, artifact_id, agent, folder, folder_title
                     )
+                _record_check(conn, artifact_id, interval)
             return Published(
                 folder=filed,
                 id=artifact_id,
@@ -797,6 +900,7 @@ def patch(
                     if folder is not None
                     else None
                 )
+                _record_check(conn, artifact_id, interval)
         except DUPLICATE_KEY as exc:
             # Two patches raced the same `expected_revision`: both passed the
             # check above (nothing here takes a lock), but only one of them
@@ -828,6 +932,118 @@ def patch(
         bytes=len(body.encode()),
         folder=filed,
     )
+
+
+def _interval_arg(value) -> int | None | _Keep:
+    return value if isinstance(value, _Keep) else valid_interval(value)
+
+
+def _record_check(
+    conn, artifact_id: str, interval, *, status: str = "ok", note: str | None = None
+) -> datetime:
+    """Write "the publisher vouched for this page just now" on the artifact row, from the
+    service's clock. `interval` is KEEP to leave the declared interval. A shelf fact: no version,
+    and `updated_at` is not touched, so the wall's order and every unread marker stay put."""
+    now = datetime.now(UTC)
+    if isinstance(interval, _Keep):
+        conn.execute(
+            "update artifact set checked_at = %s, check_status = %s, check_note = %s"
+            " where id = %s",
+            (now, status, note, artifact_id),
+        )
+    else:
+        conn.execute(
+            "update artifact set checked_at = %s, check_status = %s, check_note = %s,"
+            " refresh_every = %s where id = %s",
+            (now, status, note, interval, artifact_id),
+        )
+    return now
+
+
+@dataclass(frozen=True)
+class Touched:
+    checked_at: datetime
+    changed_at: datetime | None
+    revision: str
+    version: int
+    status: str
+    note: str | None
+    refresh_every: int | None
+    lapsed: bool
+    lapses_at: datetime | None
+
+
+def touch(
+    db: Database,
+    agent: str,
+    artifact_id: str,
+    *,
+    status: str = "ok",
+    note: str | None = None,
+    if_revision: str | None = None,
+    refresh_every: int | None | _Keep = KEEP,
+    conn=None,
+) -> Touched:
+    """ "Checked, still current" (or "failed"): the publisher vouches for its own page without
+    sending it. No version, no `updated_at`, no unread marker; the check time is the service's.
+
+    `if_revision` says "current as of this revision": a page that has moved on raises
+    `PageChanged` and nothing is written, so a timer never vouches for a hand edit. A page that is
+    not the agent's, or is deleted, is `NotFound` -- the same answer as a missing one."""
+    if status not in ("ok", "failed"):
+        raise ValueError(status)
+    interval = _interval_arg(refresh_every)
+    if note is not None and not note.strip():
+        note = None
+    if note is not None:
+        from artifacts import text as text_module
+
+        note = text_module.sanitize(note, CHECK_NOTE_MAX)
+        _check_secrets(
+            note, "note", agent=agent, artifact_id=artifact_id, gitguardian=True
+        )
+    if status == "ok":
+        note = None  # a note says why it failed; a good check has nothing to explain
+
+    def write(conn) -> Touched:
+        row = _owned(conn, artifact_id, agent)
+        if row is None:
+            raise NotFound()
+        live = conn.execute(
+            "select revision, created_at from version where artifact_id = %s and n = %s",
+            (artifact_id, row[4]),
+        ).fetchone()
+        if if_revision is not None and not _matches_revision(
+            if_revision, row[4], live[0]
+        ):
+            raise PageChanged(if_revision)
+        checked = _record_check(conn, artifact_id, interval, status=status, note=note)
+        declared = conn.execute(
+            "select refresh_every from artifact where id = %s", (artifact_id,)
+        ).fetchone()[0]
+        state = check_state(
+            refresh_every=declared,
+            checked_at=checked,
+            check_status=status,
+            changed_at=live[1],
+            archived_at=row[6],
+            now=checked,
+        )
+        return Touched(
+            checked_at=checked,
+            changed_at=live[1],
+            revision=live[0],
+            version=row[4],
+            status=status,
+            note=note,
+            refresh_every=declared,
+            **state,
+        )
+
+    if conn is not None:
+        return write(conn)
+    with db.connect() as own, own.transaction():
+        return write(own)
 
 
 class PageChanged(Exception):
@@ -1067,6 +1283,12 @@ def get_owned(
             if row[2] == agent
             else None
         )
+        checks = conn.execute(
+            "select a.refresh_every, a.checked_at, a.check_status, a.check_note,"
+            " v.created_at from artifact a join version v on v.artifact_id = a.id"
+            " and v.n = a.current_version where a.id = %s",
+            (row[0],),
+        ).fetchone()
     return ArtifactRow(
         id=row[0],
         title=row[1],
@@ -1084,6 +1306,7 @@ def get_owned(
         seen_at=seen[1],
         agents_can_read=row[8],
         folder=folder[0] if folder else None,
+        **_check_fields(checks, row[6], datetime.now(UTC)),
     )
 
 
@@ -1339,7 +1562,9 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             " artifact.current_version, version.revision, artifact.updated_at,"
             " artifact.archived_at, artifact.pinned_at, version.session,"
             " page_read.read_version, page_read.read_at, artifact.agents_can_read,"
-            " case when folder.owner = artifact.agent then folder.slug end"
+            " case when folder.owner = artifact.agent then folder.slug end,"
+            " artifact.refresh_every, artifact.checked_at, artifact.check_status,"
+            " artifact.check_note, version.created_at"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
@@ -1349,6 +1574,7 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             " order by artifact.updated_at desc",
             (agent,),
         ).fetchall()
+    now = datetime.now(UTC)
     return [
         ArtifactRow(
             id=row[0],
@@ -1367,6 +1593,7 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             seen_at=row[11],
             agents_can_read=row[12],
             folder=row[13],
+            **_check_fields(row[14:19], row[7], now),
         )
         for row in rows
     ]
@@ -1395,7 +1622,9 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
             " artifact.current_version, version.revision, artifact.updated_at,"
             " artifact.archived_at, artifact.pinned_at, version.session,"
             " page_read.read_version, page_read.read_at, artifact.agents_can_read,"
-            " case when folder.owner = artifact.agent then folder.slug end"
+            " case when folder.owner = artifact.agent then folder.slug end,"
+            " artifact.refresh_every, artifact.checked_at, artifact.check_status,"
+            " artifact.check_note, version.created_at"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
@@ -1406,6 +1635,7 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
             " order by artifact.updated_at desc",
             (agent,),
         ).fetchall()
+    now = datetime.now(UTC)
     return [
         ArtifactRow(
             id=row[0],
@@ -1424,6 +1654,7 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
             seen_at=row[11] if row[2] == agent else None,
             agents_can_read=row[12],
             folder=row[13] if row[2] == agent else None,
+            **_check_fields(row[14:19], row[7], now),
         )
         for row in rows
     ]

@@ -25,6 +25,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -736,6 +737,7 @@ def _folder_action(args, key: str) -> int | None:
             ("--rename", args.rename),
             ("--fetch", args.fetch),
             ("--duplicate", args.duplicate),
+            ("--touch", args.touch),
             ("--give", args.give),
             ("--title", args.title),
         )
@@ -826,6 +828,7 @@ def _publish(
     key: str,
     folder: str | None = None,
     folder_title: str | None = None,
+    refresh_every: int | None = None,
 ) -> dict:
     body = _read_page(file_path)
     payload = {
@@ -834,6 +837,8 @@ def _publish(
         **_format_of(file_path),
         **_folder_fields(folder, folder_title),
     }
+    if refresh_every:
+        payload["refresh_every"] = refresh_every
     return _request("POST", f"{_api_base()}/artifacts", key, payload)
 
 
@@ -862,6 +867,7 @@ def _patch(
     note: str | None = None,
     folder: str | None = None,
     folder_title: str | None = None,
+    refresh_every: int | None = None,
 ) -> dict:
     """PATCH with `expected_revision`, and REFUSE on a conflict rather than
     retrying.
@@ -897,6 +903,8 @@ def _patch(
     if note:
         payload["note"] = note
     payload.update(_folder_fields(folder, folder_title))
+    if refresh_every is not None:
+        payload["refresh_every"] = refresh_every  # 0 clears it
     try:
         return _request("PATCH", f"{_api_base()}/artifacts/{artifact_id}", key, payload)
     except HTTPFailure as exc:
@@ -922,6 +930,7 @@ def _update(
     if_revision: str | None = None,
     folder: str | None = None,
     folder_title: str | None = None,
+    refresh_every: int | None = None,
 ) -> dict:
     """A whole-page update. With `if_revision` (the hash or version number the
     caller last published or read), refuse if the page has moved on since: a
@@ -953,7 +962,93 @@ def _update(
         note,
         folder=folder,
         folder_title=folder_title,
+        refresh_every=refresh_every,
     )
+
+
+_INTERVAL_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def parse_interval(text: str) -> int:
+    """`--refresh-every` as seconds: a plain number of seconds, or a number with s, m, h or d
+    (`30m`, `2h`, `1d`). The service holds the range (a minute to a year) and says so."""
+    match = re.fullmatch(r"(\d+)([smhd]?)", text.strip())
+    if not match:
+        raise UsageError(
+            f"--refresh-every {text!r} is not a duration: use seconds or a number with"
+            " s, m, h or d, e.g. 30m, 2h, 1d"
+        )
+    return int(match.group(1)) * _INTERVAL_UNITS[match.group(2) or "s"]
+
+
+def _since(stamp: str | None) -> str:
+    """How long ago an ISO time was, in the coarsest honest unit."""
+    if not stamp:
+        return "unknown"
+    try:
+        then = datetime.fromisoformat(stamp)
+    except ValueError:
+        return "unknown"
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=UTC)
+    seconds = max(0, int((datetime.now(UTC) - then).total_seconds()))
+    for limit, size, word in ((90, 1, "s"), (5400, 60, "min"), (172800, 3600, "h")):
+        if seconds < limit:
+            return f"{seconds // size} {word} ago"
+    return f"{seconds // 86400} d ago"
+
+
+def _touch(args, key: str) -> int:
+    """`--touch ID`: vouch for one of your own pages without sending it. Exit 0 only when the
+    service recorded the check; a refusal (409 `--if-revision`, 404, 422) is exit 1, so a timer
+    script that checks `$?` catches a rejection."""
+    payload: dict = {"status": args.status or "ok"}
+    if args.note:
+        payload["note"] = args.note
+    if args.if_revision:
+        payload["if_revision"] = args.if_revision
+    if args.no_refresh:
+        payload["refresh_every"] = 0
+    elif args.refresh_every:
+        payload["refresh_every"] = parse_interval(args.refresh_every)
+    try:
+        done = _request(
+            "POST", f"{_api_base()}/artifacts/{args.touch}/touch", key, payload
+        )
+    except HTTPFailure as exc:
+        if exc.status != 409:
+            raise
+        raise Conflict(
+            f"{args.touch} has changed since revision {args.if_revision} -- it was NOT"
+            " vouched for. Look at it before you vouch for it again:\n"
+            f"  artifacts-publish --fetch {args.touch} page.html"
+        ) from exc
+    print(
+        json.dumps(
+            {
+                field: done.get(field)
+                for field in (
+                    "status",
+                    "checked_at",
+                    "changed_at",
+                    "revision",
+                    "version",
+                    "note",
+                    "refresh_every",
+                    "lapses_at",
+                )
+            }
+        )
+    )
+    if done["status"] == "failed":
+        note = f": {_printable(done['note'])}" if done.get("note") else ""
+        print(f"marked failed{note}", file=sys.stderr)
+    else:
+        print(
+            f"checked, still current (changed {_since(done.get('changed_at'))})",
+            file=sys.stderr,
+        )
+    return 0
 
 
 def _versions(artifact_id: str, key: str) -> list[dict]:
@@ -1725,6 +1820,40 @@ def build_parser() -> argparse.ArgumentParser:
     shelf.add_argument(
         "--rename", metavar="ID", help="rename a page; needs --title, sends no body"
     )
+    shelf.add_argument(
+        "--touch",
+        metavar="ID",
+        help=(
+            "say a page of yours is checked and still current, without sending it:"
+            " no new version, the wall does not reorder, nothing becomes unread. A timer"
+            " that regenerates a page calls this on a round where nothing changed. Takes"
+            " --status, --note, --if-revision, --refresh-every, --no-refresh. Exits"
+            " non-zero if the service refuses (a script should check it)."
+        ),
+    )
+    shelf.add_argument(
+        "--status",
+        choices=("ok", "failed"),
+        help=(
+            "with --touch: 'failed' says the job that keeps this page current failed;"
+            " the wall flags it at once until a later ok check or a publish (default ok)"
+        ),
+    )
+    shelf.add_argument(
+        "--refresh-every",
+        metavar="DURATION",
+        help=(
+            "how often you promise to check this page: 30m, 2h, 1d or seconds (a minute"
+            " to a year). With FILE, FILE --update ID, or --touch ID. A page silent for"
+            " 2.5 of these is flagged as stale. Never inferred; clear it with"
+            " --no-refresh."
+        ),
+    )
+    shelf.add_argument(
+        "--no-refresh",
+        action="store_true",
+        help="with FILE --update ID or --touch ID: stop promising an interval (no flag)",
+    )
     shelf.add_argument("--pin", metavar="ID", help="pin a page to the front")
     shelf.add_argument("--unpin", metavar="ID", help="unpin it")
     shelf.add_argument("--duplicate", metavar="ID", help="copy a page to a new address")
@@ -1835,6 +1964,59 @@ _SHELF_ACTIONS = (
 )
 
 
+def _touch_misuse(args) -> str | None:
+    """The ways `--touch`, `--status`, `--refresh-every` and `--no-refresh` go wrong on the command
+    line, as the sentence to print (exit 2), or None. One verb at a time, as `--move` is."""
+    if args.refresh_every and args.no_refresh:
+        return "--refresh-every and --no-refresh cannot be used together"
+    if args.touch:
+        other = [
+            flag
+            for flag, value in (
+                ("FILE", args.file),
+                ("--update", args.update),
+                ("--list", args.list),
+                ("--folders", args.folders),
+                ("--folder", args.folder is not None),
+                ("--no-folder", args.no_folder),
+                ("--move", args.move),
+                ("--archive", args.archive),
+                ("--unarchive", args.unarchive),
+                ("--pin", args.pin),
+                ("--unpin", args.unpin),
+                ("--rename", args.rename),
+                ("--fetch", args.fetch),
+                ("--duplicate", args.duplicate),
+                ("--delete", args.delete),
+                ("--restore", args.restore),
+                ("--give", args.give),
+                ("--section", args.section),
+                ("--versions", args.versions),
+                ("--preview", args.preview),
+                ("--check", args.check),
+            )
+            if value
+        ]
+        if other:
+            return "--touch goes with its own options only, not with " + ", ".join(
+                other
+            )
+        return None
+    if args.status:
+        return "--status goes with --touch ID"
+    if args.refresh_every or args.no_refresh:
+        flag = "--refresh-every" if args.refresh_every else "--no-refresh"
+        if args.section:
+            return (
+                f"{flag} does not go with a section update; use a whole-page --update"
+            )
+        if args.no_refresh and not args.update:
+            return "--no-refresh goes with FILE --update ID or --touch ID"
+        if not args.file:
+            return f"{flag} goes with FILE (publish or --update ID) or --touch ID"
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv if argv is not None else sys.argv[1:])
     use_session(session_label(args.session))
@@ -1904,6 +2086,7 @@ def main(argv: list[str] | None = None) -> int:
                 ("--rename", args.rename),
                 ("--fetch", args.fetch),
                 ("--duplicate", args.duplicate),
+                ("--touch", args.touch),
                 ("--check", args.check),
                 ("--preview", args.preview),
             )
@@ -1941,6 +2124,10 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 0 if result["moved"] else 1
+    misuse = _touch_misuse(args)
+    if misuse:
+        print(misuse, file=sys.stderr)
+        return 2
     if args.folder is not None and not args.list and not args.file:
         print(
             "--folder goes with FILE (publish or --update ID) or with --list;"
@@ -2049,6 +2236,8 @@ def main(argv: list[str] | None = None) -> int:
                 where = item.get("page_url") or item["url"]
                 print(f"{item['id']}\t{item['title']}\t{where}{suffix}")
             return 0
+        if args.touch:
+            return _touch(args, key)
         for flag, route, payload in _SHELF_ACTIONS:
             artifact_id = getattr(args, flag)
             if artifact_id:
@@ -2190,6 +2379,13 @@ def main(argv: list[str] | None = None) -> int:
                 if_revision=args.if_revision,
                 folder="" if args.no_folder else args.folder,
                 folder_title=args.folder_title,
+                refresh_every=(
+                    0
+                    if args.no_refresh
+                    else parse_interval(args.refresh_every)
+                    if args.refresh_every
+                    else None
+                ),
             )
             _print_published(updated)
             if not updated.get("unchanged"):
@@ -2200,7 +2396,12 @@ def main(argv: list[str] | None = None) -> int:
             # names it, and the service refuses one that has neither.
             warn_if_unlabelled("publish")
             published = _publish(
-                args.file, args.title, key, args.folder, args.folder_title
+                args.file,
+                args.title,
+                key,
+                args.folder,
+                args.folder_title,
+                parse_interval(args.refresh_every) if args.refresh_every else None,
             )
             _print_published(published)
             _report_render(published["id"], key)
@@ -2214,7 +2415,9 @@ def main(argv: list[str] | None = None) -> int:
             " | --rename-folder SLUG [--to NEW] [--folder-title NAME]"
             " | --archive-folder SLUG [--confirm] | --unarchive-folder SLUG"
             " | --rename ID --title TITLE | --archive ID | --unarchive ID"
-            " | --pin ID | --unpin ID | --duplicate ID | --fetch ID [FILE]",
+            " | --pin ID | --unpin ID | --duplicate ID | --fetch ID [FILE]"
+            " | --touch ID [--status ok|failed] [--note TEXT] [--if-revision REV]"
+            " [--refresh-every 30m | --no-refresh]",
             file=sys.stderr,
         )
         return 2

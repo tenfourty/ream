@@ -765,6 +765,26 @@ and refuse to overwrite a hand edit made since its last publish:
 <rev> is the revision your last publish printed (or a version number). An
 unchanged page makes no version, so the note is only stored when something moved.
 
+Say how often you promise to keep it current, and vouch for it on a round where nothing changed:
+
+    artifacts-publish board.html --update <page-id> --refresh-every 30m   # also 2h, 1d, or seconds
+    artifacts-publish --touch <page-id>                                   # checked, still current
+    artifacts-publish --touch <page-id> --if-revision <rev>               # ...only if still that revision
+    artifacts-publish --touch <page-id> --status failed --note "renderer exited 2"
+    artifacts-publish --touch <page-id> --no-refresh                      # stop promising an interval
+
+A touch makes no version, does not move the page on the wall and marks nothing unread; the time
+is the service's, never yours. Any publish, even an identical one, counts as a check too, so a
+timer that already republishes needs no extra call. A page silent for 2.5 intervals, or whose last
+check was `failed`, reads `lapsed: true` (with `lapses_at`, `checked_at`, `changed_at`,
+`check_status`, `check_note`, `refresh_every`) on GET /api/v1/artifacts/<id> and the listings; a
+later ok check or publish clears it. The interval is only ever what you declare (60 seconds to a
+year). `--touch` exits non-zero on any refusal (a moved `--if-revision` is 409), so check it in
+your timer script: `artifacts-publish --touch <page-id> || echo "touch refused" >&2`.
+
+API: POST /api/v1/artifacts/<id>/touch {{status?: "ok"|"failed", note?, if_revision?,
+refresh_every?: seconds, 0 clears}}; refresh_every also on POST and PATCH /api/v1/artifacts.
+
 ## Folders: group your pages
 
 Put related pages in one of your own folders when you publish. The folder is made on first use:

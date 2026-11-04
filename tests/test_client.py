@@ -1399,3 +1399,129 @@ def test_move_folder_title_and_the_folder_rename_and_archive_flags(
     assert "1 page(s) restored" in capsys.readouterr().err
     assert client.main([*base, "--archive-folder", "ghost"]) == 1
     assert "404" in capsys.readouterr().err
+
+
+# --- generated pages: --touch and the declared interval (slice 2) -------------
+
+
+def _published(client_main, base, page, capsys, *extra):
+    assert client_main([*base, str(page), "--title", "Board", *extra]) == 0
+    return json.loads(capsys.readouterr().out)["id"]
+
+
+def _page(tmp_path, text="hi"):
+    page = tmp_path / "page.html"
+    page.write_text(f"<!doctype html><body>{text}</body></html>")
+    return page
+
+
+def test_touch_says_checked_and_makes_no_version(live, key_file, tmp_path, capsys):
+    path, _ = key_file
+    base = ["--key-file", str(path)]
+    aid = _published(client.main, base, _page(tmp_path), capsys)
+    assert client.main([*base, "--touch", aid]) == 0
+    got = capsys.readouterr()
+    assert "checked, still current (changed " in got.err
+    assert json.loads(got.out)["status"] == "ok"
+    assert client.main([*base, "--versions", aid]) == 0
+    assert len(capsys.readouterr().out.strip().splitlines()) == 1, "no new version"
+
+
+def test_touch_failed_with_a_note_says_so(live, key_file, tmp_path, capsys):
+    path, _ = key_file
+    base = ["--key-file", str(path)]
+    aid = _published(client.main, base, _page(tmp_path), capsys)
+    rc = client.main(
+        [*base, "--touch", aid, "--status", "failed", "--note", "renderer exited 2"]
+    )
+    assert rc == 0
+    got = capsys.readouterr()
+    assert "marked failed: renderer exited 2" in got.err
+    assert json.loads(got.out)["note"] == "renderer exited 2"
+
+
+def test_touch_if_revision_refusal_exits_non_zero(live, key_file, tmp_path, capsys):
+    path, _ = key_file
+    base = ["--key-file", str(path)]
+    page = _page(tmp_path)
+    aid = _published(client.main, base, page, capsys)
+    assert client.main([*base, "--touch", aid, "--if-revision", "1"]) == 0
+    capsys.readouterr()
+    page.write_text("<!doctype html><body>edited</body></html>")
+    assert client.main([*base, str(page), "--update", aid]) == 0
+    capsys.readouterr()
+    assert client.main([*base, "--touch", aid, "--if-revision", "1"]) == 1
+    assert "NOT vouched for" in capsys.readouterr().err
+
+
+def test_touch_of_a_missing_page_exits_non_zero(live, key_file, capsys):
+    path, _ = key_file
+    assert client.main(["--key-file", str(path), "--touch", "nonesuch"]) == 1
+    assert "404" in capsys.readouterr().err
+
+
+def test_refresh_every_is_declared_on_publish_update_and_touch_and_cleared(
+    live, key_file, tmp_path, capsys
+):
+    path, _ = key_file
+    base = ["--key-file", str(path)]
+    page = _page(tmp_path)
+    aid = _published(client.main, base, page, capsys, "--refresh-every", "30m")
+
+    def declared():
+        assert client.main([*base, "--touch", aid]) == 0
+        return json.loads(capsys.readouterr().out)["refresh_every"]
+
+    assert declared() == 1800, "30m is 1800 seconds, kept by a plain touch"
+    assert (
+        client.main([*base, str(page), "--update", aid, "--refresh-every", "2h"]) == 0
+    )
+    capsys.readouterr()
+    assert declared() == 7200
+    assert client.main([*base, "--touch", aid, "--refresh-every", "1d"]) == 0
+    assert json.loads(capsys.readouterr().out)["refresh_every"] == 86400
+    assert client.main([*base, str(page), "--update", aid, "--no-refresh"]) == 0
+    capsys.readouterr()
+    assert declared() is None
+    assert client.main([*base, "--touch", aid, "--refresh-every", "90"]) == 0
+    assert client.main([*base, "--touch", aid, "--no-refresh"]) == 0
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["refresh_every"] is None
+
+
+def test_a_refused_interval_exits_non_zero(live, key_file, tmp_path, capsys):
+    path, _ = key_file
+    base = ["--key-file", str(path)]
+    aid = _published(client.main, base, _page(tmp_path), capsys)
+    assert client.main([*base, "--touch", aid, "--refresh-every", "10s"]) == 1
+    assert "refresh_every" in capsys.readouterr().err
+    assert client.main([*base, "--touch", aid, "--refresh-every", "soon"]) == 2
+    assert "refresh-every" in capsys.readouterr().err
+
+
+def test_touch_misuse_is_a_usage_error(live, key_file, tmp_path, capsys):
+    path, _ = key_file
+    base = ["--key-file", str(path)]
+    page = _page(tmp_path)
+    assert client.main([*base, "--touch", "abc", str(page), "--update", "abc"]) == 2
+    assert "--touch" in capsys.readouterr().err
+    for flag in ("--pin", "--archive", "--rename", "--fetch"):
+        assert client.main([*base, "--touch", "abc", flag, "x"]) == 2
+        assert "--touch" in capsys.readouterr().err
+    assert client.main([*base, "--status", "failed"]) == 2
+    assert "--touch" in capsys.readouterr().err
+    both = [*base, "--touch", "abc", "--refresh-every", "5m", "--no-refresh"]
+    assert client.main(both) == 2
+    assert client.main([*base, str(page), "--title", "T", "--no-refresh"]) == 2
+    capsys.readouterr()
+    assert client.main([*base, "--refresh-every", "5m"]) == 2
+
+
+def test_parse_interval():
+    assert client.parse_interval("90") == 90
+    assert client.parse_interval("90s") == 90
+    assert client.parse_interval("30m") == 1800
+    assert client.parse_interval("2h") == 7200
+    assert client.parse_interval("1d") == 86400
+    for bad in ("", "m", "1.5h", "-5m", "5x", "h5"):
+        with pytest.raises(client.UsageError):
+            client.parse_interval(bad)

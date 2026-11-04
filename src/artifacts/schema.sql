@@ -1092,3 +1092,16 @@ create index if not exists receipt_subject_idx
 
 -- A `done` receipt on a decision also writes an outcome row; this is its link.
 alter table decision_outcome add column if not exists link text;
+
+-- GENERATED PAGES (4 Nov 2026; docs/agent/specs/2026-11-04-generated-pages-design.md, slice 1).
+-- Four nullable shelf facts, like archive and pin: they make no version and never touch
+-- `updated_at`. `refresh_every` is the interval the publisher declared, in seconds (null is no
+-- promise and no flag); `checked_at` is the last time the publisher vouched for the page (a touch,
+-- any publish, declaring an interval), set from the service's clock; `check_status` is that
+-- vouching's verdict and `check_note` its one line (200 characters). Whether a page has lapsed is
+-- worked out in Python from these and the live version's `created_at`, never in SQL.
+-- SQLite does the same as its schema step 17.
+alter table artifact add column if not exists refresh_every integer;
+alter table artifact add column if not exists checked_at timestamptz;
+alter table artifact add column if not exists check_status text check (check_status in ('ok', 'failed'));
+alter table artifact add column if not exists check_note text;
