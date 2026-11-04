@@ -87,6 +87,24 @@ def test_select_mode_renders_a_checkbox_per_page_in_grid_and_list_not_on_folders
     assert f'value="{held.id}"' in client.get(f"/f/{fid}?select=1&view=list").text
 
 
+def test_the_tick_and_the_agent_filter_do_not_share_a_class(client, db):
+    """Both were `.pick`; the select-mode rule (position:absolute) came later in the
+    sheet and pulled the agent filter out of flow, over the search box, and showed it on
+    a phone. Two controls, two classes."""
+    import re
+
+    put(db, "alpha", "One")
+    put(db, "beta", "Two")
+    html = client.get("/?select=1&view=grid").text
+    assert '<label class="sel-pick">' in html
+    assert '<label class="pick"' not in html
+    assert '<details class="menu pick' in html
+    for rule in re.findall(r"([^{}]+)\{([^{}]*)\}", html):
+        selector, body = rule
+        if "position:absolute" in body.replace(" ", ""):
+            assert not re.search(r"\.pick(?![\w-])", selector), selector
+
+
 def test_a_get_changes_nothing(client, db):
     p = put(db, "alpha", "P")
     client.get("/?select=1")

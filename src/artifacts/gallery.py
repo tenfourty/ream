@@ -1149,12 +1149,12 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
 .row-wrap.asking .row{box-shadow:inset 2px 0 0 var(--now-solid)}
 /* SELECT MODE (folders design 3.3): a checkbox per page on the corner where the dots were,
    inside one form; the bar is stuck to the foot of the screen so it is under his thumb. */
-.pick{position:absolute;z-index:6;margin:0;display:flex;align-items:center;
+.sel-pick{position:absolute;z-index:6;margin:0;display:flex;align-items:center;
   justify-content:center;cursor:pointer}
-.pick input{width:22px;height:22px;margin:0;accent-color:var(--accent)}
-.tile-wrap > .pick{top:10px;left:10px;width:40px;height:40px;background:var(--chip);
+.sel-pick input{width:22px;height:22px;margin:0;accent-color:var(--accent)}
+.tile-wrap > .sel-pick{top:10px;left:10px;width:40px;height:40px;background:var(--chip);
   border-radius:8px}
-.row-wrap > .pick{top:50%;left:0;width:44px;height:44px;transform:translateY(-50%)}
+.row-wrap > .sel-pick{top:50%;left:0;width:44px;height:44px;transform:translateY(-50%)}
 .row-wrap.sel .row{padding-left:2.9rem}
 .selbar{position:sticky;bottom:0;z-index:50;display:flex;flex-wrap:wrap;gap:.5rem;
   align-items:center;padding:.6rem .75rem;margin-top:1rem;background:var(--card);
@@ -2944,7 +2944,7 @@ def _pick(artifact_id: str, title: str) -> str:
     """The tick on a page's tile or row in select mode. The value is the page id, the label
     names the page for a screen reader; a label, so the whole corner is the target."""
     return (
-        '<label class="pick"><input type="checkbox" name="page" '
+        '<label class="sel-pick"><input type="checkbox" name="page" '
         f'value="{escape(artifact_id)}" aria-label="Select {escape(title)}"></label>'
     )
 
