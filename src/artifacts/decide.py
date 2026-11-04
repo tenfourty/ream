@@ -222,6 +222,22 @@ def _fmt_form(row: dict) -> list[str]:
     return lines
 
 
+def _receipt_lines(row: dict) -> list[str]:
+    """`RECEIPT <state>: <note>` for what the asking agent said it did with his answer."""
+    rec = row.get("receipt")
+    if not isinstance(rec, dict) or not rec.get("state"):
+        return []
+    state = str(rec["state"]).replace("_", "-")
+    if rec.get("lapsed"):
+        state += " (lapsed)"
+    line = f"  RECEIPT {state}"
+    if rec.get("note"):
+        line += f": {rec['note']}"
+    if rec.get("link"):
+        line += f" <{rec['link']}>"
+    return [line]
+
+
 def _fmt(row: dict) -> str:
     """One decision, as the reader needs it rather than as it is stored.
 
@@ -258,6 +274,7 @@ def _fmt(row: dict) -> str:
         )
     lines.append("  " + " · ".join(where))
     lines.extend(_carries(row))
+    lines.extend(_receipt_lines(row))
 
     if row.get("kind") == "form" and row.get("answer_record"):
         lines.extend(_fmt_form(row))
@@ -1869,9 +1886,32 @@ def build_parser() -> argparse.ArgumentParser:
     reply_note.add_argument("text", metavar="TEXT")
     reply_note.add_argument("--idempotency-key", metavar="KEY", help=_IDEMPOTENCY_HELP)
 
-    ack = subs.add_parser("ack", help="say you have seen an answer")
+    ack = subs.add_parser(
+        "ack", help="say you have seen an answer (the same as `receipt seen`)"
+    )
     ack.add_argument("decision", metavar="DECISION-ID")
     ack.add_argument("--idempotency-key", metavar="KEY", help=_IDEMPOTENCY_HELP)
+
+    receipt = subs.add_parser(
+        "receipt",
+        help="say what you did with his answer: seen, working, done, blocked, wont-do",
+        description=(
+            "Your own statement about his answer, shown to him and never verified. "
+            "blocked and wont-do need --note; --link only with done; --for only with "
+            "working (30m, 4h; at most 12h, default 4h). done does not close the "
+            "decision. `seen` is what `ack` does."
+        ),
+    )
+    receipt.add_argument("decision", metavar="DECISION-ID")
+    receipt.add_argument(
+        "state", choices=["seen", "working", "done", "blocked", "wont-do"]
+    )
+    receipt.add_argument(
+        "--note", default="", help="one line; needed for blocked, wont-do"
+    )
+    receipt.add_argument("--link", help="a URL for the work (done only)")
+    receipt.add_argument("--for", dest="lifetime", help="how long working holds")
+    receipt.add_argument("--idempotency-key", metavar="KEY", help=_IDEMPOTENCY_HELP)
 
     close = subs.add_parser("close", help="withdraw a question you no longer need")
     close.add_argument("decision", metavar="DECISION-ID")
@@ -2137,6 +2177,7 @@ def main(argv: list[str] | None = None) -> int:
         "outcome",
         "reply-note",
         "ack",
+        "receipt",
         "close",
         "reply",
         "comment",
@@ -2462,6 +2503,24 @@ def main(argv: list[str] | None = None) -> int:
                 idempotency_key=args.idempotency_key or str(uuid.uuid4()),
             )
             print(f"replied on {args.thread}; he sees it in the page's comments")
+            return 0
+        if args.cmd == "receipt":
+            body: dict = {"state": args.state, "note": args.note}
+            if args.link:
+                body["link"] = args.link
+            if args.lifetime:
+                body["for"] = args.lifetime
+            row = _request(
+                "POST",
+                f"{base}/decisions/{args.decision}/receipt",
+                key,
+                body,
+                idempotency_key=args.idempotency_key or str(uuid.uuid4()),
+            )
+            note = f": {row['note']}" if row.get("note") else ""
+            print(
+                f"{args.decision}: receipt {str(row['state']).replace('_', '-')}{note}"
+            )
             return 0
         if args.cmd in ("ack", "close"):
             route = "acknowledge" if args.cmd == "ack" else "close"

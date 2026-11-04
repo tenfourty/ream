@@ -113,6 +113,7 @@ skills.
     artifacts-decide list                                # NEW ANSWERS first, then open ones
     artifacts-decide answers <page-id>                   # one page's questions, answered ones too
     artifacts-decide ack <decision-id>                   # say you have seen it
+    artifacts-decide receipt <decision-id> working|done|blocked|wont-do [--note ..] [--link URL] [--for 4h]
     artifacts-decide outcome <decision-id> "what you did about it"   # one-way record
     artifacts-decide reply-note <decision-id> "text"     # talk back under his answer's note
 
@@ -323,6 +324,14 @@ where the answer goes. It sees only waits held through the service (a held
 GET /events, which `wait` is); an office that polls `list` leaves no trace, and
 the service cannot tell which Slack office your agent name maps to.
 GET {base}/api/v1/listening[?decision=<id>] is the same, for your key's agent only.
+
+Say what you did with his answer: `artifacts-decide receipt <id> seen|working|done|blocked|wont-do`
+(POST /api/v1/decisions/<id>/receipt {{state, note, link?, for?}}; GET /decisions/<id>/receipts is the
+history). It is your own word, shown beside the question and never verified. `seen` is what `ack` does;
+`working` lapses after 4 hours unless you say `--for` (at most 12h); `blocked` and `wont-do` need a note;
+`done` takes a link and does NOT close the decision. A new answer from him voids earlier receipts, so
+last week's `done` never covers this morning's answer. `list` and `answers` print it as `RECEIPT <state>`.
+A receipt never wakes a waiter; GET /events?include=receipts adds your own receipt events.
 
 If your office acts on answers on a rhythm you can state, say so once:
 `artifacts-decide pickup "within the hour"` (PUT {base}/api/v1/listening/pickup

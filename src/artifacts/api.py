@@ -304,7 +304,6 @@ class ReceiptBody(BaseModel):
     state: str
     note: str = ""
     link: str | None = None
-    comment_id: str | None = None
     for_: str | None = Field(default=None, alias="for")
 
 
@@ -2860,7 +2859,6 @@ def agent_router(
                     state=payload.state,
                     note=payload.note,
                     link=payload.link,
-                    comment_id=payload.comment_id,
                     lifetime=payload.for_,
                     session=seat_session,
                 )

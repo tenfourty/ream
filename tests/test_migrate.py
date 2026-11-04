@@ -279,6 +279,27 @@ def _seed(database: Database) -> None:
             ["o1", "d1", "done", "alpha", None, T1],
         ),
         (
+            "receipt",
+            (
+                "id, subject_kind, subject_id, state, note, link, agent, session,"
+                " comment_id, created_at, expires_at, voided_at"
+            ),
+            [
+                "r1",
+                "decision",
+                "d1",
+                "working",
+                "x",
+                None,
+                "alpha",
+                None,
+                None,
+                T1,
+                T1,
+                None,
+            ],
+        ),
+        (
             "review_round",
             (
                 "review_id, n, version_n, base_version, opened_at, closed_at, verdict,"

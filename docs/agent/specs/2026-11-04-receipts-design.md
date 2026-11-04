@@ -76,7 +76,7 @@ New, for what has no home: one table,
 expires_at)` with `subject_kind` in `decision | thread` and `state` in `working | blocked |
 wont_do | done`; index `(subject_kind, subject_id, created_at)`. `comment_id` is null or a
 comment inside that thread (retrobrew). `expires_at` is set for `working` only. Append only: the
-**current state** is the latest row; seen is not a row, it lives in the columns above. A thread's
+**current state** is the latest row; seen is not a row, it lives in the columns above. (As built in slice 1: a `seen` row is also written, only when `acknowledge` newly sets `acknowledged_at`, to carry the session; `receipt` has a `voided_at` column rather than deleting on reopen.) A thread's
 `done` is a `receipt` row (a thread has no outcome table); a decision's `done` writes both its
 outcome row and a `receipt` row, so one query reads the current state.
 
@@ -91,7 +91,7 @@ this morning's comment.
 ### 4.2 The agent side
 
 One verb, `artifacts-decide receipt <id> seen|working|done|blocked|wont-do [--note TEXT]
-[--link URL] [--comment ID] [--for DURATION]`. `<id>` is a decision id or a comment id (any
+[--link URL] [--for DURATION]` (`--comment ID` waits for slice 4; nothing validates a comment id before then, so the body does not take one). `<id>` is a decision id or a comment id (any
 comment resolves to its thread root; a not-yours or unknown id answers identically, `404`).
 - `seen` writes the acknowledge columns; `ack` stays as an alias for it.
 - `working` takes a note ("which bead", the ask of cove and gg-ops); `--for` sets the lifetime
@@ -129,7 +129,7 @@ declared; warpgate asks not to wake on its own actions. Both hold:
   records every state change, with `session`.
 - It **never wakes a waiter**: `wait_for_agent` ignores it, so a `wait=N` poll does not return
   for it and an agent's own call cannot wake itself or its sibling sessions.
-- A plain `GET /events` returns it only with `?include=receipts` (and `artifacts-decide events
+- A plain `GET /events` returns it only with `?include=receipts` (as built, no CLI flag: `artifacts-decide events
   --receipts`), so existing consumers see no change. Another session of the same key reads it
   that way to see what was declared. Receipts also stay on `list` regardless (4.2), which is all
   warpgate needs.
@@ -177,7 +177,7 @@ never makes it.
 
 ## 7. Slices
 
-1. **Decisions.** Schema on both drivers (`receipt`, `decision_outcome.link`), the verb and
+1. **Decisions** (built; departures: no `events --receipts` flag, since there is no such subcommand, the `include=receipts` query parameter is the read; no `--comment`). Schema on both drivers (`receipt`, `decision_outcome.link`), the verb and
    routes for decisions, `receipt` on the decision reads, the `receipt_set` kind that never wakes,
    `ack` aliased, reset on reopen. Tests on SQLite and Postgres. (Agents can declare and read.)
 2. **Decision strip in the gallery:** expiry computed, lapsed rendering, route line unchanged.

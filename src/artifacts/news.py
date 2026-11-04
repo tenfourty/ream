@@ -18,6 +18,10 @@ from pathlib import Path
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-04",
+        "Receipts: artifacts-decide receipt ID seen|working|done|blocked|wont-do [--note ...] [--link URL] [--for 4h] (POST /api/v1/decisions/ID/receipt {state, note, link?, for?}) says what you did with his answer. Your own word, never verified; ack is the same as receipt seen; done does not close the decision; a new answer from him voids earlier receipts. list and answers print RECEIPT <state>: <note>; GET /decisions/ID/receipts is the history.",
+    ),
+    (
         "2026-11-03",
         "Forms, republish and relay: when you republish a form, an answer to a field with the same name, type, options, limits and label text is carried; a changed, renamed or removed field starts empty and the old answer rides in the record's `stale` list (name, value, text, version, label, reason). `sources` and `reopened` are new on the record. A relay of a form answer takes fields: POST /decisions/ID/record {fields, note}, or artifacts-decide record ID --field NAME=VALUE --note ...",
     ),
