@@ -86,7 +86,11 @@ outcome row and a `receipt` row, so one query reads the current state.
 **Reset on a new human act.** A new human comment in a thread, or a form republish that reopens
 a decision, makes every earlier receipt history, not current: the thread reads "new, not picked
 up" again (the existing reopen rule, extended). Without this a "done" from last week would cover
-this morning's comment.
+this morning's comment. Any new human act voids, not only a reopen: his first answer to a plain
+question also makes receipts set before it history (and clears the acknowledgement), as a
+re-answer, a form submit or relay, a review sent back, or a form republish that reopens it do.
+`receipt` has no foreign key (a subject may be a thread), so purging or destroying a page deletes
+its decisions' receipts in the same transaction.
 
 ### 4.2 The agent side
 
@@ -98,6 +102,8 @@ comment resolves to its thread root; a not-yours or unknown id answers identical
   (default 4 hours, at most 12). Calling `working` again **renews** it (quarterdeck).
 - `done` takes `--link`; `blocked` and `wont-do` require `--note`.
 - `done` on a decision closes nothing: closing stays its own act.
+- `done` needs an answer: on a decision he has not answered yet it is refused (`409`, "he has
+  not answered this yet"). `seen`, `working`, `blocked` and `wont-do` are allowed before one.
 
 API: `POST /decisions/{id}/receipt` and `POST /comments/{id}/receipt`, body `{state, note?, link?,
 comment_id?, for?}`, honouring `Idempotency-Key` as `acknowledge` does. Result: the current
@@ -193,6 +199,8 @@ never makes it.
 
 - **Reset on a new human act** is easy to miss on one path (a held or withdrawn comment, a form
   republish, a set-aside question coming back). Each needs a test.
+- **A declare races a new answer**: `declare` locks the decision row, and the acknowledge
+  write is conditional, so two simultaneous `seen` write one row.
 - **`receipt_set` is a CHECK change** on `events.kind` on both drivers; the SQLite step rewrites
   the table. Order it first in its slice.
 - **An agent that sets "working" and dies.** Expiry handles it; lapsed is computed, so there is

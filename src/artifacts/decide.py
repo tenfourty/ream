@@ -1898,8 +1898,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Your own statement about his answer, shown to him and never verified. "
             "blocked and wont-do need --note; --link only with done; --for only with "
-            "working (30m, 4h; at most 12h, default 4h). done does not close the "
-            "decision. `seen` is what `ack` does."
+            "working (30m, 4h; at most 12h, default 4h). done needs his answer first "
+            "and does not close the decision. `seen` is what `ack` does."
         ),
     )
     receipt.add_argument("decision", metavar="DECISION-ID")

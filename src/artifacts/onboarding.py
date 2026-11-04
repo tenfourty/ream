@@ -329,7 +329,7 @@ Say what you did with his answer: `artifacts-decide receipt <id> seen|working|do
 (POST /api/v1/decisions/<id>/receipt {{state, note, link?, for?}}; GET /decisions/<id>/receipts is the
 history). It is your own word, shown beside the question and never verified. `seen` is what `ack` does;
 `working` lapses after 4 hours unless you say `--for` (at most 12h); `blocked` and `wont-do` need a note;
-`done` takes a link and does NOT close the decision. A new answer from him voids earlier receipts, so
+`done` takes a link, needs his answer first (409 before one), and does NOT close the decision. A new answer from him voids earlier receipts, so
 last week's `done` never covers this morning's answer. `list` and `answers` print it as `RECEIPT <state>`.
 A receipt never wakes a waiter; GET /events?include=receipts adds your own receipt events.
 
