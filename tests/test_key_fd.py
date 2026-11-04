@@ -174,5 +174,5 @@ def test_a_missing_key_file_says_where_a_key_comes_from_now(
     assert client.main(["--list"]) == 2
     err = capsys.readouterr().err
     assert "artifacts-key" in err, "it names the wrapper"
-    assert "baba_operator" in err, "and the seats it takes"
+    assert "artifacts-key --help" in err, "and where the seats are listed"
     assert "--key-fd" in err, "and what to do somewhere that has no vault"
