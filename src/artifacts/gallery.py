@@ -1030,6 +1030,7 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
   color:var(--on-accent)}
 .btn.primary:hover{filter:brightness(1.06)}
 .empty a{color:var(--accent-ink)}
+.older{margin:1.5rem 0;text-align:center}.older a{color:var(--accent-ink)}
 
 /* --- the controls row -------------------------------------------------------
    Its own row beneath the title, 16px below it and 32px tall, which is the
@@ -2929,6 +2930,81 @@ def _agent_pick(
     )
 
 
+_WALL_PAGE = 200
+
+# The wall's "has an open question" test, spelled once: it orders the wall and it is one
+# of the keys the "Older pages" cursor compares.
+_WALL_WAITING = (
+    "((select count(*) from decision d"
+    "   where d.artifact_id = a.id"
+    "     and d.answer is null and d.kind <> 'form'"
+    "     and a.archived_at is null and a.deleted_at is null"
+    "     and d.closed_at is null) > 0)"
+)
+
+
+class _WallRows(list):
+    """The rows of one wall page, plus whether older pages follow and the cursor for them."""
+
+    more: bool = False
+    cursor: str = ""
+
+
+def _wall_cursor(row) -> str:
+    """The sort key of a wall row, as the `older` query parameter: pinned_at, waiting,
+    unread, updated_at, id. Keyset, not OFFSET, so a page published meanwhile does not
+    shift the rows under the reader."""
+    pinned = row[8].isoformat() if row[8] else ""
+    return "|".join(
+        [
+            pinned,
+            str(int(bool(row[5]))),
+            str(int(bool(row[10]))),
+            row[2].isoformat(),
+            row[0],
+        ]
+    )
+
+
+def _after_cursor(cursor: str) -> tuple[str, tuple]:
+    """The where-clause fragment (and its parameters) for the rows that sort after
+    `cursor` in the wall's order, or ("", ()) when the cursor is not one of ours."""
+    try:
+        pinned, waiting, unread, updated, ident = cursor.split("|", 4)
+        pin_at = datetime.fromisoformat(pinned) if pinned else None
+        at = datetime.fromisoformat(updated)
+    except ValueError:
+        return "", ()
+    if not ident or waiting not in ("0", "1") or unread not in ("0", "1"):
+        return "", ()
+    tail = "(a.updated_at < %s or (a.updated_at = %s and a.id < %s))"
+    params: list = [at, at, ident]
+    after = tail
+    # Each flag sorts true first: past a true one comes false, or the same flag and what
+    # follows it; past a false one only false.
+    after = (
+        f"(not {_WALL_UNREAD} or ({_WALL_UNREAD} and {after}))"
+        if unread == "1"
+        else f"(not {_WALL_UNREAD} and {after})"
+    )
+    after = (
+        f"(not {_WALL_WAITING} or ({_WALL_WAITING} and {after}))"
+        if waiting == "1"
+        else f"(not {_WALL_WAITING} and {after})"
+    )
+    # The flags' text repeats once per use, so the parameters are laid out in text order:
+    # only `tail` carries any, and it sits innermost, once.
+    if pin_at is not None:
+        after = (
+            "(a.pinned_at is null or a.pinned_at < %s"
+            f" or (a.pinned_at = %s and {after}))"
+        )
+        params = [pin_at, pin_at, *params]
+    else:
+        after = f"(a.pinned_at is null and {after})"
+    return " and " + after, tuple(params)
+
+
 def _visible_count(active: str, rows: list, archived: list, deleted: list) -> int:
     """How many pages the tab you are on is showing -- the number beside the
     search box. It has to follow the tab, not the live wall: "9 pages" next to
@@ -4470,7 +4546,11 @@ def gallery_router(db: Database) -> APIRouter:
         )
 
     def _wall(
-        conn, archived: bool, folder_id: str | None = None, grouped: bool = False
+        conn,
+        archived: bool,
+        folder_id: str | None = None,
+        grouped: bool = False,
+        older: str = "",
     ):
         """The pages of the live wall, or the archived ones.
 
@@ -4478,7 +4558,11 @@ def gallery_router(db: Database) -> APIRouter:
         tile stands for: a page in a folder that is not archived (live wall), or in an
         ARCHIVED folder (archived tab). A page archived on its own out of a live folder
         has no tile to hide behind, so it stays in the flat archived list.
+
+        At most `_WALL_PAGE` rows come back; `.more` says there are older ones and `.cursor`
+        is what the "Older pages" link carries to fetch the next lot (`older`).
         """
+        after, after_params = _after_cursor(older) if older else ("", ())
         if folder_id is not None:
             scope, extra = " and a.folder_id = %s", (folder_id,)
         elif grouped:
@@ -4491,7 +4575,7 @@ def gallery_router(db: Database) -> APIRouter:
             extra = ()
         else:
             scope, extra = "", ()
-        return conn.execute(
+        fetched = conn.execute(
             # Bounded: an unpaginated list is fine at ten artifacts and a
             # page nobody can load at ten thousand. `, id desc` breaks a tie
             # on `updated_at` (two rows can share one, e.g. re-touched by
@@ -4551,6 +4635,7 @@ def gallery_router(db: Database) -> APIRouter:
             "  from artifact a"
             " where (a.archived_at is null) = %s and a.deleted_at is null"
             + scope
+            + after
             # THE WALL SORTS ITSELF BY WHAT NEEDS HIM. Pinned first, because
             # that is him saying so explicitly. Then anything with an
             # unanswered question, because this service exists so he can
@@ -4566,18 +4651,20 @@ def gallery_router(db: Database) -> APIRouter:
             # UNpinned page above every pinned one -- precisely backwards, and
             # it would look like pinning had done nothing rather than like a
             # broken sort.
-            + " order by a.pinned_at desc nulls last,"  # noqa: S608
-            "          (select count(*) from decision d"
-            "             where d.artifact_id = a.id"
-            "               and d.answer is null and d.kind <> 'form'"
-            "               and a.archived_at is null and a.deleted_at is null"
-            "               and d.closed_at is null) > 0 desc,"
+            + " order by a.pinned_at desc nulls last,"
+            f"          {_WALL_WAITING} desc,"
             # Then what he has not read yet, newest first; once he opens a page
             # it drops back into the order below (homelab-ij8.103, his ruling).
             f"          {_WALL_UNREAD} desc,"
-            "          a.updated_at desc, a.id desc limit 200",
-            (not archived, *extra),
+            # One more than a page, to know whether an older page exists.
+            f"          a.updated_at desc, a.id desc limit {_WALL_PAGE + 1}",
+            (not archived, *extra, *after_params),
         ).fetchall()
+        rows = _WallRows(fetched[:_WALL_PAGE])
+        if len(fetched) > _WALL_PAGE:
+            rows.more = True
+            rows.cursor = _wall_cursor(rows[-1])
+        return rows
 
     def _folder_pages(conn):
         """Every page that is in a folder and not binned, one line each, with the folder's
@@ -4775,6 +4862,9 @@ def gallery_router(db: Database) -> APIRouter:
         selecting = request.query_params.get("select") == "1" and chosen != "deleted"
         folder_items: list = []
         in_folder = None
+        # "Older pages": the sort key of the last row of the page before. It pages the tab on
+        # screen; the other tab keeps its first page.
+        older = (request.query_params.get("older") or "").strip()
         with db.connect() as conn:
             if folder_id is not None:
                 in_folder = conn.execute(
@@ -4784,13 +4874,36 @@ def gallery_router(db: Database) -> APIRouter:
                 if in_folder is None:
                     raise HTTPException(404, "no such folder")
                 shelved = in_folder[2] is not None
-                rows = [] if shelved else _wall(conn, False, folder_id)
-                archived_rows = _wall(conn, True, folder_id) if shelved else []
+                # A shelved folder lists its archived pages; a live one its live pages.
+                on_archived = shelved
+                grouped = False
+                rows = [] if shelved else _wall(conn, False, folder_id, older=older)
+                archived_rows = (
+                    _wall(conn, True, folder_id, older=older) if shelved else []
+                )
                 pages = []
             else:
-                rows = _wall(conn, archived=False, grouped=not flat)
-                archived_rows = _wall(conn, archived=True, grouped=not flat)
+                on_archived = chosen == "archived"
+                grouped = not flat
+                rows = _wall(
+                    conn, False, grouped=grouped, older="" if on_archived else older
+                )
+                archived_rows = _wall(
+                    conn, True, grouped=grouped, older=older if on_archived else ""
+                )
                 pages = [] if flat else _folder_pages(conn)
+            # On a later page the header counts still describe the first page, so they do
+            # not change under the reader as they page.
+            count_rows, count_archived = rows, archived_rows
+            if older:
+                if on_archived:
+                    count_archived = _wall(conn, True, folder_id, grouped=grouped)
+                else:
+                    count_rows = _wall(conn, False, folder_id, grouped=grouped)
+        later = bool(older)
+        paged = (
+            archived_rows if on_archived else rows
+        )  # before any filter drops the marks
         # Before grouping: what is waiting on him and what is pinned count the pages in
         # folders too, so the header never says fewer than there are.
         in_live = [] if flat else _folder_items(pages, False)
@@ -4800,7 +4913,13 @@ def gallery_router(db: Database) -> APIRouter:
         folder_agents = sorted({a for f in in_live for a in f.agents})
         folder_pages = sum(f.count for f in in_live)
         archived_folder_pages = sum(f.count for f in in_archived)
-        folder_items = in_live
+        # Folder tiles belong to the first page only: they are not part of the paged
+        # query, so repeating them on every later page would draw them again and again.
+        folder_items = [] if later else in_live
+        if later:
+            in_archived_shown = []
+        else:
+            in_archived_shown = in_archived
 
         # A tile per page rather than a line per page: a wall Jeremy recognises
         # the board he wants in. Jeremy chose a real rendered thumbnail (19 Sep)
@@ -4975,8 +5094,8 @@ def gallery_router(db: Database) -> APIRouter:
         # Counted BEFORE filtering: the tabs have to say how many there ARE,
         # not how many survived the tab you are already on -- otherwise the
         # number on a tab changes when you press it, and stops meaning anything.
-        waiting_total = sum(r[5] for r in rows) + folder_waiting
-        pinned_total = sum(1 for r in rows if r[8]) + folder_pinned
+        waiting_total = sum(r[5] for r in count_rows) + folder_waiting
+        pinned_total = sum(1 for r in count_rows if r[8]) + folder_pinned
 
         shown = (
             ("waiting", "pinned")
@@ -5006,7 +5125,7 @@ def gallery_router(db: Database) -> APIRouter:
         # options is a control you cannot get out of without editing the URL.
         # Archived pages do not add names of their own: a seat whose only pages
         # are archived is not somebody you filter the wall by.
-        agents = sorted({r[3] for r in rows} | set(folder_agents))
+        agents = sorted({r[3] for r in count_rows} | set(folder_agents))
         if chosen_agent:
             # A link saved before an agent was renamed still finds its pages.
             chosen_agent = rename.resolve(db, chosen_agent)
@@ -5119,11 +5238,11 @@ def gallery_router(db: Database) -> APIRouter:
 
         base = f"/f/{folder_id}" if in_folder else "/"
         archived_shown = (
-            sorted([*archived_rows, *in_archived], key=rank, reverse=True)
-            if in_archived
+            sorted([*archived_rows, *in_archived_shown], key=rank, reverse=True)
+            if in_archived_shown
             else archived_rows
         )
-        archived_pages = len(archived_rows) + archived_folder_pages
+        archived_pages = len(count_archived) + archived_folder_pages
         if folder_items or in_folder:
             rows = sorted([*rows, *folder_items], key=rank, reverse=True)
 
@@ -5175,6 +5294,16 @@ def gallery_router(db: Database) -> APIRouter:
             main = '<p class="empty">Nothing in this folder.</p>'
         else:
             main = '<p class="empty">No pages published yet.</p>'
+        # OLDER PAGES (Jeremy, 4 Nov 2026, d_01M6… option a): the wall holds 200 pages at a
+        # time; when the tab on screen has more, a link under it shows the next 200 in the
+        # same view (same search, filters, folder and tab), as the cursor of the last row
+        # shown. Never on the Deleted tab, which is not paged.
+        if active != "deleted" and getattr(paged, "more", False):
+            keep = [
+                (k, v) for k, v in request.query_params.multi_items() if k != "older"
+            ]
+            href = base + "?" + urlencode([*keep, ("older", paged.cursor)])
+            main += f'<p class="older"><a href="{escape(href)}" rel="next">Older pages</a></p>'
         body = main
         if selecting:
             keep = {
@@ -5198,7 +5327,7 @@ def gallery_router(db: Database) -> APIRouter:
         if active == "archived" or (in_folder and archived_shown):
             visible = archived_pages
         elif active not in ("deleted",):
-            visible += folder_pages - len(folder_items)
+            visible += 0 if later else folder_pages - len(folder_items)
         response = HTMLResponse(
             _shell(
                 in_folder[1] if in_folder else "Artifacts",

@@ -19,6 +19,10 @@ from pathlib import Path
 NEWS: tuple[tuple[str, str], ...] = (
     (
         "2026-11-04",
+        "His wall no longer stops at 200 pages: an Older pages link under the last page shows the next 200 in the same view (same search, filters, folder and tab). The API and artifacts-publish --list were never capped and are unchanged.",
+    ),
+    (
+        "2026-11-04",
         "Pages a script keeps current: artifacts-publish --touch ID says a page is checked and still current without sending it (no new version, the wall does not reorder, nothing becomes unread); --status failed --note TEXT says your job failed; --if-revision REV refuses (exit 1) if the page has moved on. --refresh-every 30m (also 2h, 1d, or seconds) on a publish, --update or --touch declares how often you promise to check it, --no-refresh clears it. Any publish, even an identical one, now counts as a check. Pages and listings carry checked_at, changed_at, check_status, check_note, refresh_every, lapsed and lapses_at (lapsed: silent for 2.5 intervals, or the last check failed). API: POST /api/v1/artifacts/ID/touch {status?, note?, if_revision?, refresh_every?}; refresh_every on POST and PATCH /artifacts. His wall does not show it yet.",
     ),
     (
