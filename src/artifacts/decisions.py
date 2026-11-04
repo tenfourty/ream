@@ -1770,10 +1770,14 @@ def answer(
                 # the question can pick its own answer out of a shared feed.
                 session=asking_session,
             )
-        updated = conn.execute(
-            f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
-            (decision_id,),
-        ).fetchone()
+            # Read back INSIDE the transaction, while it still holds the row:
+            # after the commit a republish that was waiting on the lock can
+            # open the next round and clear the answer, and this call would
+            # return (and nudge with) None instead of the verdict it wrote.
+            updated = conn.execute(
+                f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
+                (decision_id,),
+            ).fetchone()
 
     # Read back as a row rather than indexed by position, because the fields
     # below are exactly the ones a positional read gets wrong: the comment above
