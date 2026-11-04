@@ -290,14 +290,16 @@ def test_a_hostile_section_is_searched_in_bounded_time():
 
     hostile = "<html><body><h2>Costs</h2><p>" + "a b " * 60_000 + "</p></body></html>"
     quote = "alpha beta gamma delta epsilon zeta eta theta " * 4
-    began = time.monotonic()
+    # CPU time, not wall time: a runner starving this worker is not a slow
+    # search (4 Nov 2026; failed at 1.29 s wall on a capped CI builder).
+    began = time.process_time()
     got, _ = _fz(hostile, quote=quote.strip())
-    assert time.monotonic() - began < 1.0
+    assert time.process_time() - began < 1.0
     assert got[0] == "outdated"
     spaced = "<html><body><h2>Costs</h2><p>" + "x " * 100_000 + "</p></body></html>"
-    began = time.monotonic()
+    began = time.process_time()
     _fz(spaced, quote="x " * 100 + "y")
-    assert time.monotonic() - began < 1.0
+    assert time.process_time() - began < 1.0
 
 
 def test_a_listing_over_many_pages_shares_one_budget_and_a_repeat_is_cached(
