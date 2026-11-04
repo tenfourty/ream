@@ -5125,7 +5125,9 @@ def gallery_router(db: Database) -> APIRouter:
         # options is a control you cannot get out of without editing the URL.
         # Archived pages do not add names of their own: a seat whose only pages
         # are archived is not somebody you filter the wall by.
-        agents = sorted({r[3] for r in count_rows} | set(folder_agents))
+        agents = sorted(
+            {r[3] for r in (count_rows if later else rows)} | set(folder_agents)
+        )
         if chosen_agent:
             # A link saved before an agent was renamed still finds its pages.
             chosen_agent = rename.resolve(db, chosen_agent)
@@ -5242,7 +5244,9 @@ def gallery_router(db: Database) -> APIRouter:
             if in_archived_shown
             else archived_rows
         )
-        archived_pages = len(count_archived) + archived_folder_pages
+        archived_pages = (
+            len(count_archived if later else archived_rows) + archived_folder_pages
+        )
         if folder_items or in_folder:
             rows = sorted([*rows, *folder_items], key=rank, reverse=True)
 
