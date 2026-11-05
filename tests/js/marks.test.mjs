@@ -781,6 +781,17 @@ const elMark = (over = {}) => ({ id: "e1", kind: "comment", quote: "", anchor: {
   ok(sent("artifact-pin-toggle").length === 2, "nor with a modifier (copy is copy)");
   g.fire("keydown", ev({ key: "Escape" }));
   ok(sent("artifact-pin-exit").length === 0, "Escape outside the mode says nothing");
+  // the one commenting shortcut: Ctrl/Cmd+Shift+M, forwarded to the gallery at its origin only
+  const ck = (more) => g.posted.filter(([m]) => m && m.type === "artifact-comment-key");
+  k = ev({ key: "M", target: E("p"), ctrlKey: true, shiftKey: true }); g.fire("keydown", k);
+  ok(ck().length === 1 && ck()[0][1] === GALLERY && Object.keys(ck()[0][0]).length === 1, "Ctrl+Shift+M tells the gallery, with only its type");
+  g.fire("keydown", ev({ key: "m", target: E("p"), metaKey: true, shiftKey: true }));
+  ok(ck().length === 2, "Cmd+Shift+M the same");
+  g.fire("keydown", ev({ key: "m", target: E("p") }));
+  g.fire("keydown", ev({ key: "M", target: E("p"), shiftKey: true }));
+  g.fire("keydown", ev({ key: "m", target: E("p"), ctrlKey: true }));
+  g.fire("keydown", ev({ key: "M", target: E("p"), ctrlKey: true, shiftKey: true, altKey: true }));
+  ok(ck().length === 2, "no single letter, and no other modifier mix, does it");
   g.raw({ type: "artifact-pin-mode", on: true });
   g.fire("pointermove", { clientX: 15, clientY: 15 }); g.flush();
   const tops = () => sent("artifact-pin-hover").map(([m]) => m.rect.width);

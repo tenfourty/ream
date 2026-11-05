@@ -130,6 +130,13 @@ set to the whole page (any selection or pin it held is dropped, as is pin mode)
 and focuses the field. Without scripts it is a link to the panel's form
 (`#cwhole`).
 
+**Keyboard.** The only commenting shortcut is Ctrl+Shift+M (Cmd+Shift+M on a
+Mac): with words selected it does what the selection bar's Comment button does.
+The framed page forwards the chord as `artifact-comment-key` (type only, posted
+to the gallery's origin; the gallery checks the frame and origin as for its other
+messages), and the gallery also hears it directly. With nothing selected a short
+hint shows and nothing else happens. No single letter does anything new.
+
 **Pin mode.** The page bar has a Pin button (and the `C` key, in the gallery or
 inside the frame; never while typing in a field or with a modifier). While it
 is on, the shim swallows the page's clicks (capture phase, only while on),

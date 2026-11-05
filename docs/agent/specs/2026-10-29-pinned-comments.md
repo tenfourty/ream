@@ -605,3 +605,7 @@ redesign; their notes follow when they land.
 Piece 3 landed: a "Comment on page" button in the page bar (`.pagecbtn`, a link to
 `#cwhole` without scripts) opens the panel on Open with the composer set to the
 whole page.
+
+Piece 2 landed: Ctrl+Shift+M (Cmd+Shift+M) comments on the selection, from inside
+the page (forwarded as `artifact-comment-key`) or in the gallery. Pin mode and the
+C key are still present until their own piece removes them.

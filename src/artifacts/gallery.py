@@ -746,6 +746,9 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    `hidden` property, never applies a stylesheet, so it cannot catch this --
    caught in review instead (page review step 1, homelab-ij8.108). */
 .selbar[hidden]{display:none}
+.cchordhint{position:fixed;left:50%;bottom:1.5rem;transform:translateX(-50%);z-index:70;
+  padding:.5rem .8rem;border-radius:.5rem;background:var(--ink);color:var(--paper);font-size:.8125rem}
+.cchordhint[hidden]{display:none}
 /* The outline over the frame while picking a spot, and the numbered badges at
    pinned elements' corners: drawn here, over the page, never in it. The
    outline lets the pointer through, so the frame keeps hearing it. */
@@ -2432,18 +2435,37 @@ window.addEventListener("message",function(e){
   bar.hidden=false});
 bar.addEventListener("click",function(e){
   var b=e.target&&e.target.closest?e.target.closest("button"):null;
-  if(!b||!last)return;
+  if(b)chosen(b.dataset.kind)});
+function chosen(kind){
+  if(!last)return;
   field("quote",last.quote.slice(0,500));field("anchor",JSON.stringify(last.anchor));
-  field("kind",b.dataset.kind);
+  field("kind",kind);
   var q=form.querySelector(".cquote");
   if(!q){q=document.createElement("blockquote");q.className="cquote";form.insertBefore(q,form.firstChild)}
   q.textContent=last.quote.slice(0,500);panel(true);
   var i=form.querySelector("input[name=body]");
-  if(b.dataset.kind==="comment"){
+  if(kind==="comment"){
     if(i){i.placeholder="Comment on the selected text";i.focus()}
   }else{
     if(i){i.placeholder="Add a note (optional)";if(!i.value){form.requestSubmit()}}
-  }});
+  }}
+// CTRL+SHIFT+M (Cmd+Shift+M on a Mac) is the one keyboard shortcut: with words
+// selected it does what the bar's Comment button does. It arrives either as a
+// key here or as `artifact-comment-key` from the frame, where focus usually is.
+// Nothing selected: a short hint, nothing else. No single letter does this.
+function chord(){
+  if(last&&!bar.hidden){chosen("comment");return}
+  var h=document.querySelector(".cchordhint");
+  if(!h){h=document.createElement("div");h.className="cchordhint";h.setAttribute("role","status");
+    host().appendChild(h)}
+  h.textContent="Select some words on the page first, then press Ctrl+Shift+M to comment on them.";
+  h.hidden=false;setTimeout(function(){h.hidden=true},3000)}
+document.addEventListener("keydown",function(e){try{
+  if(!e||!(e.ctrlKey||e.metaKey)||!e.shiftKey||e.altKey||(e.key!=="M"&&e.key!=="m"&&e.code!=="KeyM"))return;
+  if(e.preventDefault)e.preventDefault();chord()}catch(x){}});
+window.addEventListener("message",function(e){try{
+  if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
+  if(d&&typeof d==="object"&&d.type==="artifact-comment-key")chord()}catch(x){}});
 // ELEMENT PINS (pinned comments, slice 2). The Pin button and the C key turn
 // pin mode on in the frame; while it is on the frame reports the element under
 // the pointer (`artifact-pin-hover`, an outline drawn HERE over the frame) and

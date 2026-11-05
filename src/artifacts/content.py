@@ -224,6 +224,11 @@ addEventListener("click",function(e){try{if(!pm||!e)return;
   if(typeof e.clientX==="number"&&typeof e.clientY==="number"){var h=pick(e.clientX,e.clientY);
     c=cand&&h&&cand.contains(h)?cand:h}
   if(c)pin(c)}catch(x){}},true);
+// Ctrl+Shift+M (Cmd+Shift+M): comment on the selection. The gallery owns the
+// selection bar, so the page only forwards the chord, type and nothing else.
+addEventListener("keydown",function(e){try{
+  if(!e||!(e.ctrlKey||e.metaKey)||!e.shiftKey||e.altKey||(e.key!=="M"&&e.key!=="m"&&e.code!=="KeyM"))return;
+  e.preventDefault();parent.postMessage({type:"artifact-comment-key"},__ORIGIN__)}catch(x){}},true);
 addEventListener("keydown",function(e){try{if(!e||e.ctrlKey||e.metaKey||e.altKey)return;
   var k=e.key,t=e.target,nm=t&&t.nodeName?String(t.nodeName).toUpperCase():"",c;
   if(k==="c"||k==="C"){if(nm==="INPUT"||nm==="TEXTAREA"||nm==="SELECT"||(t&&t.isContentEditable))return;

@@ -712,6 +712,32 @@ const badgesOf = (g) => g.docBody.children.filter((c) => c.className === "pinbad
   g.pagebtn.on.click(ev);
   ok(modeMsgs(g).at(-1)[0].on === false, "it also leaves pin mode"); }
 
+// CTRL+SHIFT+M
+const CHORD = { key: "M", ctrlKey: true, shiftKey: true };
+{ const g = build();
+  g.send(SEL);
+  let focused = 0; g.body.focus = () => focused++;
+  const ev = g.key("M", { ...CHORD, preventDefault() {} });
+  ok(g.form.querySelector(".cquote").textContent === "the plan" && g.body.placeholder === "Comment on the selected text" && focused === 1 && g.isOpen(),
+     "with words selected the chord does what the bar's Comment button does");
+  const h = build(); h.send(SEL);
+  h.send({ type: "artifact-comment-key" });
+  ok(h.form.querySelector(".cquote") && h.isOpen(), "and so does the frame forwarding it");
+  const bad = build(); bad.send(SEL);
+  bad.send({ type: "artifact-comment-key" }, { origin: "https://evil.example" });
+  bad.send({ type: "artifact-comment-key" }, { source: {} });
+  ok(!bad.form.querySelector(".cquote"), "a forward from another origin or window is ignored");
+  const m = build(); m.send(SEL);
+  m.key("m", { metaKey: true, shiftKey: true });
+  ok(m.form.querySelector(".cquote"), "Cmd+Shift+M on a Mac");
+  const n = build();
+  n.key("M", CHORD); n.send({ type: "artifact-comment-key" });
+  ok(!n.form.querySelector(".cquote") && !n.isOpen() && n.docBody.children.some((c) => c.className === "cchordhint"),
+     "with nothing selected: a hint, and nothing else happens");
+  const o2 = build(); o2.send(SEL);
+  for (const k of ["m", "M"]) o2.key(k, {}); o2.key("M", { shiftKey: true }); o2.key("m", { ctrlKey: true }); o2.key("M", { ...CHORD, altKey: true });
+  ok(!o2.form.querySelector(".cquote"), "no single letter and no other modifier mix"); }
+
 // the C key
 { const g = build();
   g.key("c", { target: { nodeName: "BODY" } });
