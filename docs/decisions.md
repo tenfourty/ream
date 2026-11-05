@@ -77,3 +77,29 @@ redesigned from the best existing tools, and that redesign may replace pin mode 
   plainly asked for, which is to comment on the words selected.
 
 **Evidence:** confirmed (Jeremy, 5 Nov 2026)
+
+## Commenting: a corner button replaces pin mode, one chord shortcut, a page button, Open and Resolved tabs (5 Nov 2026)
+
+**Chosen:** commenting on a chart, table or picture is a small Comment button in that element's
+corner, shown when the pointer is over it (or it has keyboard focus, or after a first tap on
+touch); pressing it starts a comment on that element. Pin mode, the Pin button and the bare C key
+are removed. The only commenting shortcut is Ctrl+Shift+M (Cmd+Shift+M), which comments on the
+selected words. A "Comment on page" button in the page bar starts a whole-page comment. The
+comments panel has Open and Resolved tabs, and a resolved thread can be reopened. Why: pin mode
+was a loud state the reader entered by accident, could not see the way out of, and blocked the
+page's own clicks and the selection bar while on (it left Jeremy unable to comment on 5 Nov);
+a button next to the thing itself needs no mode and no key to learn, and what agents receive is
+unchanged.
+
+**Not chosen:**
+- A loud picking mode that ends after one comment: still a mode to enter, to see and to leave,
+  and still swallows the page's clicks while it lasts.
+- Both the corner button and a picking mode: two ways to do one thing, and the mode's faults stay.
+- Keeping C as a shortcut shown on the button: a single letter fires by accident, in a page that
+  has its own keys, and was how the mode got turned on unmeant.
+- A whole-page comment only at the panel's foot: not found by a reader who has not opened the
+  panel.
+- A resolved fold at the bottom of the panel: resolved threads sit below every open one and are
+  not found again; tabs keep both lists in view one click apart.
+
+**Evidence:** confirmed (Jeremy, 5 Nov 2026)

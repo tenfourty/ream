@@ -487,7 +487,7 @@ def validate_anchor(anchor: dict | None) -> dict:
         return out
 
     if kind == "element":
-        # A spot picked in pin mode (or named by an agent by its id): a
+        # A spot picked with an element's corner Comment button (or named by an agent by its id): a
         # chart, an image, a table, a paragraph. Every key is optional because
         # what a page offers varies -- `add()` requires an id, a heading or a
         # quote -- and every one is evidence, never trusted position: `path` is

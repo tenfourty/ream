@@ -215,7 +215,7 @@ the spot is on the page as it is now:
     on: "Cost per seat is flat"  (under "Costs" · v3 · OUTDATED: this spot is gone from the current version)
 
 v3 is the version the pin was made on. When he pins a chart, an image or a
-table (the Pin button on the page, or the C key) there is an `element:` line
+table (the Comment button in the element's corner) there is an `element:` line
 too: its tag and id, the heading it sits under, a table cell's row and column,
 or an image's alt text (or its caption, when he pinned it in the browser).
 
@@ -225,9 +225,8 @@ or an image's alt text (or its caption, when he pinned it in the browser).
 
 An element pin with no words and no alt text has an empty quote, and only its
 `element:` line says what it is; give images alt text so a reader can tell what
-was pinned. When pin mode was turned on from inside the page (the C key while
-the page has focus), the gallery shows the pick but does not move the cursor
-into the comment box: he clicks it. Creating a comment over the API
+was pinned. The gallery shows the pick in the comment box but does not move the
+cursor into it: he clicks it. Creating a comment over the API
 returns the same `anchor_state` and `anchor_note` at once, so you learn where
 the pin stands when you write it.
 

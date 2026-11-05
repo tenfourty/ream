@@ -19,7 +19,7 @@ const GALLERY = "https://artifacts.tenfourty.site";
 
 // ---- a minimal DOM ------------------------------------------------------
 // Document order, for compareDocumentPosition: set by build() to the tree it makes.
-let ROOT = null;
+let ROOT = null, FOCUSED = null;
 function order() { const out = []; (function w(n) { out.push(n); (n.childNodes || []).forEach(w); })(ROOT); return out; }
 function cmp(a, b) {
   if (a === b) return 0;
@@ -53,7 +53,14 @@ function E(tag, ...kids) {
               },
               // Only for the shim's height report, which the `load` in case 11 also fires.
               getBoundingClientRect() { return this.rect || { top: 0, left: 0, width: 0, height: 0, bottom: 0 }; },
-              appendChild(c) { this.childNodes.push(c); c.parentNode = this; return c; } };
+              appendChild(c) { this.childNodes.push(c); c.parentNode = this; return c; },
+              // What the comment button's host needs: listeners, attributes, focus and a closed shadow root.
+              ls: {},
+              addEventListener(t, fn) { (this.ls[t] ||= []).push(fn); },
+              setAttribute(k, v) { this.attrs[k] = String(v); },
+              focus() { FOCUSED = this; },
+              matches(sel) { return sel === ":focus-visible" && !!this.fv; },
+              attachShadow(o) { this.shadow = { mode: o.mode, childNodes: [], appendChild(c) { this.childNodes.push(c); c.parentNode = this; return c; } }; return this.shadow; } };
   Object.defineProperty(e, "textContent", {
     get() { return texts(e).map((t) => t.nodeValue).join(""); },
     set(v) { e.childNodes = [T(v)]; e.childNodes[0].parentNode = e; } });
@@ -158,7 +165,7 @@ function build(body, paths, { highlights = true, readyState = "complete", immedi
     (listeners.message || []).forEach((fn) => fn({ origin, data: { type: "artifact-marks", marks } }));
   const reports = () => posted.filter(([m]) => m && m.type === "artifact-marks-placed");
   const raw = (data) => (listeners.message || []).forEach((fn) => fn({ origin: GALLERY, data }));
-  return { head, body, doc, registry, posted, reports, send, raw, Range,
+  return { head, body, doc, registry, posted, focused: () => FOCUSED, reports, send, raw, Range,
            fire: (t, ev = {}) => (listeners[t] || []).forEach((fn) => fn(ev)),
            flush: () => { const fs = frames.splice(0); fs.forEach((fn) => fn(0)); return fs.length; },
            fireDoc: (t) => (docListeners[t] || []).forEach((fn) => fn({})),
@@ -649,57 +656,90 @@ const elMark = (over = {}) => ({ id: "e1", kind: "comment", quote: "", anchor: {
   ok(g.reports()[0][0].placed.length === 0, "and place nothing");
 }
 
-// 24. PIN MODE: swallows clicks only while on, and only for the gallery's say-so
+// 24. THE COMMENT BUTTON: one host element outside the page's own content, shown while
+// the pointer is over a chart, a table or a picture, and a click on it reports the pick
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const hostOf = (g) => g.doc.documentElement.childNodes.find((n) => n.nodeName === "AR-COMMENT-HOST");
+const btnOf = (g) => hostOf(g) && hostOf(g).shadow.childNodes.find((n) => n.nodeName === "BUTTON");
+const shown = (g) => !!hostOf(g) && !/display:none/.test(hostOf(g).style.cssText);
+const hover = (g, x = 30, y = 25, pointerType = "mouse") => { g.fire("pointermove", { clientX: x, clientY: y, pointerType }); g.flush(); };
+const pins = (g) => g.posted.filter(([m]) => m && m.type === "artifact-pin");
+const pickWith = (g, x, y) => { hover(g, x, y); const b = btnOf(g); const c = ev(); b.ls.click.forEach((f) => f(c)); return pins(g).at(-1); };
+const sized = (g) => { g.doc.documentElement.clientWidth = 800; g.doc.documentElement.clientHeight = 600; return g; };
 {
+  const chart = el("svg", "revenue", { "aria-label": "Revenue by quarter" });
+  chart.rect = rectOf(20, 10, 300, 150);
   const p = el("p", "intro", {}, "Hello there");
-  p.rect = rectOf(20, 8, 300, 30);
-  const g = build(E("body", E("h2", "Costs"), p), {}, { hit: () => p });
-  const clicks = () => g.posted.filter(([m]) => m && m.type === "artifact-pin");
-  let c = ev();
-  g.fire("click", c);
-  ok(c.prevented === 0 && c.stopped === 0, "a click on the page is the page's own while pin mode is off");
+  p.rect = rectOf(200, 8, 300, 30);
+  let target = p;
+  const body = E("body", E("h2", "Costs"), chart, p);
+  const g = sized(build(body, {}, { hit: () => target }));
+  ok(!hostOf(g), "nothing is added to the page until a chart, table or picture is pointed at");
+  hover(g);
+  ok(!hostOf(g) && pins(g).length === 0, "pointing at a paragraph shows nothing: text is commented on by selecting it");
+  target = chart; hover(g, 30, 30);
+  ok(shown(g) && hostOf(g).parentNode === g.doc.documentElement, "pointing at a chart shows the button, on the document element");
+  ok(!body.children.includes(hostOf(g)) && hostOf(g).childNodes.length === 0, "not in the page's body, and no light-tree text for any walk to find");
+  ok(hostOf(g).shadow.mode === "closed", "its shadow root is closed, so the page cannot reach into it");
+  const css = hostOf(g).style.cssText;
+  ok(/position:fixed/.test(css) && /top:26px/.test(css) && /right:496px/.test(css), "in the chart's top right corner, in viewport terms: " + css);
+  ok(btnOf(g).textContent === "Comment" && btnOf(g).getAttribute("aria-label") === "Comment on chart", "it says Comment and is named for what it is: " + btnOf(g).getAttribute("aria-label"));
+  ok(hostOf(g).shadow.childNodes[0].nodeName === "STYLE" && /all:initial/.test(hostOf(g).shadow.childNodes[0].textContent), "with styles of its own inside the shadow root, cut off from the page's CSS");
+  chart.rect = rectOf(60, 10, 300, 150);
+  g.fire("scroll", {});
+  ok(/top:66px/.test(hostOf(g).style.cssText), "it follows the chart when the frame scrolls");
+  g.fire("resize", {});
+  chart.rect = rectOf(60, 10, 200, 150); g.fire("resize", {});
+  ok(/right:596px/.test(hostOf(g).style.cssText), "and when the frame is resized");
+  const c0 = ev(); g.fire("click", c0);
+  ok(c0.prevented === 0 && c0.stopped === 0 && pins(g).length === 0, "a click on the page is the page's own: nothing is swallowed, nothing posted");
+  const c = ev(); btnOf(g).ls.click.forEach((f) => f(c));
+  ok(c.prevented === 1 && c.stopped === 1, "pressing the button does not reach the page");
+  ok(pins(g).length === 1 && pins(g)[0][1] === GALLERY, "and reports a pin, to the gallery only");
+  const m = pins(g)[0][0];
+  ok(m.anchor.kind === "element" && m.anchor.id === "revenue" && m.anchor.tag === "svg" && m.anchor.label === "Revenue by quarter" && m.quote === "Revenue by quarter", "the anchor a pick always produced: " + JSON.stringify(m.anchor));
+  ok(!shown(g), "the button goes once it is used");
+  target = p; hover(g, 30, 205);
+  target = chart; hover(g, 30, 30);
+  target = p; hover(g, 30, 205);
+  ok(shown(g), "moving off a chart does not drop the button at once (the pointer may be heading for it)");
+  await sleep(380);
+  ok(!shown(g), "but it goes a moment later");
+  target = hostOf(g); hover(g, 300, 30);
+  ok(!shown(g), "pointing at the button itself (the host) never re-picks");
+  target = chart; hover(g, 30, 30); target = hostOf(g); hover(g, 300, 30);
+  await sleep(380);
+  ok(shown(g), "the pointer on the button keeps it");
+}
+{
+  const t = el("table", "plans", {}, E("tr", E("td", "Pro")));
+  t.rect = rectOf(100, 10, 300, 50);
+  const g = sized(build(E("body", E("p", "x"), t), {}, { hit: () => t }));
   g.raw({ type: "artifact-pin-mode", on: true });
-  g.fire("pointermove", { clientX: 30, clientY: 25 }); g.flush();
-  const hov = g.posted.filter(([m]) => m && m.type === "artifact-pin-hover");
-  ok(hov.length === 1 && hov[0][1] === GALLERY, "moving over the page reports the candidate, to the gallery only");
-  ok(hov[0][0].tag === "p" && hov[0][0].rect.top === 20 && hov[0][0].rect.width === 300, "its tag and rectangle: " + JSON.stringify(hov[0][0]));
-  ok(JSON.stringify(Object.keys(hov[0][0]).sort()) === '["rect","tag","type"]', "and nothing else");
-  g.fire("pointermove", { clientX: 31, clientY: 25 }); g.flush();
-  ok(g.posted.filter(([m]) => m && m.type === "artifact-pin-hover").length === 1, "the same candidate is not re-sent");
-  c = ev({ clientX: 30, clientY: 25 });
-  g.fire("click", c);
-  ok(c.prevented === 1 && c.stopped >= 1, "a click while on is swallowed, so the page's buttons and links do nothing");
-  ok(clicks().length === 1 && clicks()[0][1] === GALLERY, "and reported as a pin, to the gallery only");
-  g.raw({ type: "artifact-pin-mode", on: false });
-  c = ev();
-  g.fire("click", c);
-  ok(c.prevented === 0 && clicks().length === 1, "off again: the page's clicks are its own, nothing posted");
-  const h = build(E("body", p), {}, { hit: () => p });
-  const fromElsewhere = (data) => h.fire("message", { origin: "https://evil.example", data });
-  fromElsewhere({ type: "artifact-pin-mode", on: true });
-  const c2 = ev(); h.fire("click", c2);
-  ok(c2.prevented === 0, "pin mode is turned on only from the gallery's origin");
+  const c = ev({ clientX: 30, clientY: 105 }); g.fire("click", c);
+  ok(c.prevented === 0 && pins(g).length === 0, "the gallery can no longer switch a mode on: the page's clicks stay its own");
+  for (const k of ["c", "C", "Escape", "ArrowUp", "ArrowDown"]) g.fire("keydown", ev({ key: k, target: E("p") }));
+  ok(g.posted.length === 0, "no single-letter key, Escape or arrow says anything to the gallery");
+  ok(!/artifact-pin-(mode|toggle|exit|hover)|crosshair/.test(src), "the pin-mode messages, the cursor style and the C key are gone from the shim");
 }
 
 // 25. what a pin carries: capped evidence, in the charset the service accepts
 {
   const long = "word ".repeat(80);
-  const p = el("p", "intro", {}, long);
-  p.rect = rectOf(20, 8, 300, 30);
+  const t = el("table", "intro", {}, long);
+  t.rect = rectOf(20, 8, 300, 30);
   const h = E("h2", "Costs"); h.id = "costs";
-  const g = build(E("body", E("p", "Before the spot, a long run of words that go on."), h, p, E("p", "After the spot comes this sentence, also long.")), {}, { hit: () => p });
-  g.raw({ type: "artifact-pin-mode", on: true });
-  g.fire("click", ev({ clientX: 30, clientY: 25 }));
-  const [[msg]] = g.posted.filter(([m]) => m && m.type === "artifact-pin");
+  const g = sized(build(E("body", E("p", "Before the spot, a long run of words that go on."), h, t, E("p", "After the spot comes this sentence, also long.")), {}, { hit: () => t }));
+  const msg = pickWith(g, 30, 25)[0];
   ok(JSON.stringify(Object.keys(msg).sort()) === '["anchor","quote","rect","type"]', "a pin message is the anchor, the quote and the rectangle");
   ok(msg.quote.length <= 200 && msg.quote.startsWith("word word"), "the quote is the element's text, capped at 200: " + msg.quote.length);
   const a = msg.anchor;
-  ok(a.kind === "element" && a.id === "intro" && a.tag === "p", "kind, id and tag: " + JSON.stringify(a));
+  ok(a.kind === "element" && a.id === "intro" && a.tag === "table", "kind, id and tag: " + JSON.stringify(a));
   ok(a.heading === "Costs" && a.heading_id === "costs", "the heading it sits under, and that heading's id");
   ok(!("el_id" in a) && !("path" in a && a.path.length > 512), "no key the service would refuse");
   ok(typeof a.prefix === "string" && a.prefix.length <= 32 && a.prefix.endsWith("Costs"), "32 characters of the words before: " + JSON.stringify(a.prefix));
   ok(typeof a.suffix === "string" && a.suffix.length <= 32 && a.suffix.startsWith("After the spot"), "and after: " + JSON.stringify(a.suffix));
-  ok(a.path === "body>p:nth-of-type(2)", "a fast path, only: " + a.path);
+  ok(a.path === "body>table:nth-of-type(1)", "a fast path, only: " + a.path);
   ok(!("ordinal" in a), "no ordinal for an element with an id and text");
   ok(JSON.stringify(msg).length < 2000, "and the whole message is small");
 }
@@ -711,17 +751,14 @@ const elMark = (over = {}) => ({ id: "e1", kind: "comment", quote: "", anchor: {
   fig.appendChild(bare); fig.appendChild(cap);
   const both = E("body", E("h2", "Costs"), img, fig);
   let pick = img;
-  const g = build(both, {}, { hit: () => pick });
+  const g = sized(build(both, {}, { hit: () => pick }));
   img.rect = rectOf(10, 0, 100, 100); bare.rect = rectOf(200, 0, 100, 100);
-  g.raw({ type: "artifact-pin-mode", on: true });
-  g.fire("click", ev({ clientX: 5, clientY: 5 }));
-  let [[m1]] = g.posted.filter(([m]) => m && m.type === "artifact-pin");
+  let m1 = pickWith(g, 5, 5)[0];
   ok(m1.quote === "Revenue by quarter" && m1.anchor.label === "Revenue by quarter" && m1.anchor.tag === "img", "an image is quoted by its alt text, which is also its label: " + JSON.stringify(m1.anchor));
   ok(m1.anchor.ordinal === 1 && m1.anchor.heading === "Costs", "with no id, its place among the images under its heading");
-  pick = bare; g.posted.length = 0;
-  g.fire("pointermove", { clientX: 5, clientY: 205 }); g.flush();
-  g.fire("click", ev({ clientX: 5, clientY: 205 }));
-  [[m1]] = g.posted.filter(([m]) => m && m.type === "artifact-pin");
+  ok(btnOf(g).getAttribute("aria-label") === "Comment on picture", "a picture is named a picture");
+  pick = bare;
+  m1 = pickWith(g, 5, 205)[0];
   ok(m1.quote === "Revenue, 2026" && m1.anchor.label === "Revenue, 2026" && m1.anchor.ordinal === 2, "an image with no alt text takes its figure's caption: " + JSON.stringify(m1.anchor));
 }
 
@@ -731,59 +768,59 @@ const elMark = (over = {}) => ({ id: "e1", kind: "comment", quote: "", anchor: {
   const c1 = E("td", "Pro"), c2 = E("td", "$12 a month");
   const table = E("table", E("thead", E("tr", th1, th2)), E("tbody", E("tr", c1, c2)));
   let pick = c2;
-  const g = build(E("body", E("h2", "Costs"), table), {}, { hit: () => pick });
-  c2.rect = rectOf(60, 100, 80, 20);
-  g.raw({ type: "artifact-pin-mode", on: true });
-  g.fire("click", ev({ clientX: 110, clientY: 65 }));
-  let [[m]] = g.posted.filter(([x]) => x && x.type === "artifact-pin");
+  const g = sized(build(E("body", E("h2", "Costs"), table), {}, { hit: () => pick }));
+  c2.rect = rectOf(60, 100, 80, 20); c1.rect = rectOf(60, 10, 80, 20);
+  let [m] = [pickWith(g, 110, 65)[0]];
   ok(m.anchor.tag === "td" && m.anchor.row === "Pro" && m.anchor.column === "Price" && m.quote === "$12 a month", "a cell names its row and column: " + JSON.stringify(m.anchor));
-  g.posted.length = 0; pick = c1;
-  g.fire("click", ev({ clientX: 10, clientY: 65 }));
-  [[m]] = g.posted.filter(([x]) => x && x.type === "artifact-pin");
+  ok(btnOf(g) && btnOf(g).getAttribute("aria-label") === "Comment on table cell", "and the button says it is on a table cell");
+  pick = c1; m = pickWith(g, 10, 65)[0];
   ok(!("row" in m.anchor) && m.anchor.column === "Plan", "the first cell is its own row header: no row label");
-  th2.attrs.colspan = "2"; g.posted.length = 0; pick = c2;
-  g.fire("click", ev({ clientX: 110, clientY: 65 }));
-  [[m]] = g.posted.filter(([x]) => x && x.type === "artifact-pin");
+  th2.attrs.colspan = "2"; pick = c2; m = pickWith(g, 110, 65)[0];
   ok(!("column" in m.anchor) && m.anchor.row === "Pro", "a colspan in the header makes the column ambiguous: left out, never mislabelled");
 }
 
-// 28. an element with nothing to go by is not pinned
+// 28. an element with nothing to go by gets no button
 {
-  const lone = el("div");
+  const lone = el("img");
   lone.rect = rectOf(0, 0, 10, 10);
-  const g = build(E("body", lone), {}, { hit: () => lone });
-  g.raw({ type: "artifact-pin-mode", on: true });
-  const c = ev(); g.fire("click", c);
-  ok(c.prevented === 1 && g.posted.filter(([m]) => m && m.type === "artifact-pin").length === 0,
-     "no id, no heading, no text, no label: the click is swallowed and nothing is posted");
+  const plain = el("div"); plain.rect = rectOf(20, 0, 10, 10);
+  let pick = lone;
+  const g = sized(build(E("body", lone, plain), {}, { hit: () => pick }));
+  hover(g, 5, 5);
+  ok(!shown(g), "no id, no heading, no text, no label: no button, so nothing that could not be found again");
+  pick = plain; hover(g, 5, 25);
+  ok(!shown(g) && pins(g).length === 0, "and a plain block that is no chart, table or picture gets none either");
 }
 
-// 29. the keys: C toggles, Escape leaves, the arrows widen and narrow
+// 29. the keyboard: a focused chart, table or picture offers its button
 {
-  const inner = el("span", "", {}, "inner"), p = E("p", "x");
-  p.appendChild(inner);
-  const sec = el("section", "sec", {}, p);
-  sec.rect = rectOf(0, 0, 500, 200); p.rect = rectOf(10, 10, 400, 50); inner.rect = rectOf(10, 10, 40, 20);
-  inner.display = "block";
-  const g = build(E("body", sec), {}, { hit: () => inner });
-  const sent = (t) => g.posted.filter(([m]) => m && m.type === t);
-  let k = ev({ key: "c", target: E("p") });
-  g.fire("keydown", k);
-  ok(sent("artifact-pin-toggle").length === 1 && sent("artifact-pin-toggle")[0][1] === GALLERY, "C asks the gallery to toggle pin mode");
-  k = ev({ key: "C", target: E("p"), shiftKey: true });
-  g.fire("keydown", k);
-  ok(sent("artifact-pin-toggle").length === 2, "in either case");
-  for (const target of [E("input"), E("textarea"), E("select"), Object.assign(E("div"), { isContentEditable: true })]) {
-    g.fire("keydown", ev({ key: "c", target }));
-  }
-  ok(sent("artifact-pin-toggle").length === 2, "never from a field: typing a c in a form is the form's");
-  for (const mod of ["ctrlKey", "metaKey", "altKey"]) g.fire("keydown", ev({ key: "c", target: E("p"), [mod]: true }));
-  ok(sent("artifact-pin-toggle").length === 2, "nor with a modifier (copy is copy)");
-  g.fire("keydown", ev({ key: "Escape" }));
-  ok(sent("artifact-pin-exit").length === 0, "Escape outside the mode says nothing");
-  // the one commenting shortcut: Ctrl/Cmd+Shift+M, forwarded to the gallery at its origin only
-  const ck = (more) => g.posted.filter(([m]) => m && m.type === "artifact-comment-key");
-  k = ev({ key: "M", target: E("p"), ctrlKey: true, shiftKey: true }); g.fire("keydown", k);
+  const fig = el("figure", "fig", { tabindex: "0" }, E("figcaption", "Latency"));
+  fig.rect = rectOf(10, 10, 300, 120);
+  const link = el("a", "", {}, "a link"); link.rect = rectOf(300, 10, 40, 10);
+  const g = sized(build(E("body", fig, link), {}, { hit: () => null }));
+  g.fire("focusin", { target: fig });
+  ok(!shown(g), "focus that came from a mouse click (not focus-visible) shows nothing");
+  fig.fv = true; g.fire("focusin", { target: fig });
+  ok(shown(g) && btnOf(g).getAttribute("aria-label") === "Comment on figure", "keyboard focus on a figure shows its button, labelled for it");
+  const k = ev({ key: "Tab", target: fig }); g.fire("keydown", k);
+  ok(k.prevented === 1 && g.focused() === btnOf(g), "Tab from the focused figure lands on its button");
+  let b = ev({ key: "Escape" }); btnOf(g).ls.keydown.forEach((f) => f(b));
+  ok(b.prevented === 1 && g.focused() === fig && !shown(g), "Escape on the button gives focus back to the figure and puts the button away");
+  g.fire("focusin", { target: fig });
+  const o = ev({ key: "Tab", target: link }); g.fire("keydown", o);
+  ok(o.prevented === 0, "Tab from anything else is the page's own");
+  btnOf(g).ls.click.forEach((f) => f(ev()));
+  ok(pins(g).length === 1 && pins(g)[0][0].anchor.id === "fig", "pressing it with the keyboard reports the same pin");
+  fig.fv = true; g.fire("focusin", { target: fig });
+  g.fire("focusin", { target: Object.assign(E("p"), { fv: true }) });
+  ok(!shown(g), "focus moving to text takes the button away");
+  ok(g.posted.filter(([m]) => m.type === "artifact-comment-key").length === 0, "no chord was needed");
+}
+// the chord is still forwarded, and nothing else is
+{
+  const g = sized(build(E("body", E("p", "x")), {}));
+  const ck = () => g.posted.filter(([m]) => m && m.type === "artifact-comment-key");
+  let k = ev({ key: "M", target: E("p"), ctrlKey: true, shiftKey: true }); g.fire("keydown", k);
   ok(ck().length === 1 && ck()[0][1] === GALLERY && Object.keys(ck()[0][0]).length === 1, "Ctrl+Shift+M tells the gallery, with only its type");
   g.fire("keydown", ev({ key: "m", target: E("p"), metaKey: true, shiftKey: true }));
   ok(ck().length === 2, "Cmd+Shift+M the same");
@@ -792,46 +829,54 @@ const elMark = (over = {}) => ({ id: "e1", kind: "comment", quote: "", anchor: {
   g.fire("keydown", ev({ key: "m", target: E("p"), ctrlKey: true }));
   g.fire("keydown", ev({ key: "M", target: E("p"), ctrlKey: true, shiftKey: true, altKey: true }));
   ok(ck().length === 2, "no single letter, and no other modifier mix, does it");
-  g.raw({ type: "artifact-pin-mode", on: true });
-  g.fire("pointermove", { clientX: 15, clientY: 15 }); g.flush();
-  const tops = () => sent("artifact-pin-hover").map(([m]) => m.rect.width);
-  ok(tops().join() === "40", "the smallest block under the pointer: " + tops());
-  k = ev({ key: "ArrowUp" }); g.fire("keydown", k);
-  ok(k.prevented === 1 && tops().join() === "40,400", "the up arrow widens to the parent");
-  g.fire("keydown", ev({ key: "ArrowUp" }));
-  ok(tops().join() === "40,400,500", "and again");
-  g.fire("keydown", ev({ key: "ArrowUp" }));
-  ok(tops().length === 3, "but never to the page itself");
-  g.fire("keydown", ev({ key: "ArrowDown" }));
-  ok(tops().join() === "40,400,500,400", "the down arrow narrows back, the way it came");
-  k = ev({ key: "Escape" }); g.fire("keydown", k);
-  ok(sent("artifact-pin-exit").length === 1 && k.prevented === 1, "Escape in the mode asks the gallery to leave it");
-  g.raw({ type: "artifact-pin-mode", on: false });
-  g.fire("keydown", ev({ key: "ArrowUp" }));
-  ok(tops().length === 4, "the arrows are the page's own once the mode is off");
 }
 
-// 30. a wrapper around the whole page is no candidate; an id is preferred; a flood is one check a frame
+// 30. touch: a first tap shows the button and the page still gets its tap; wrappers are no candidate; an id is preferred
 {
-  const para = el("p", "", {}, "text"), box = el("div", "card", {}, para), wrapper = el("div", "app", {}, box);
+  const pic = el("img", "", { alt: "Map" }), para = el("p", "", {}, "text"), box = el("div", "card", {}, pic, para), wrapper = el("div", "app", {}, box);
   const body = E("body", wrapper);
   body.scrollHeight = 1000; body.scrollWidth = 800;
-  wrapper.rect = rectOf(0, 0, 800, 1000); box.rect = rectOf(100, 100, 300, 40); para.rect = rectOf(110, 110, 280, 20);
+  wrapper.rect = rectOf(0, 0, 800, 1000); box.rect = rectOf(100, 100, 300, 40); para.rect = rectOf(110, 110, 280, 20); pic.rect = rectOf(100, 100, 30, 30);
   let pick = wrapper;
-  const g = build(body, {}, { hit: () => pick });
-  g.raw({ type: "artifact-pin-mode", on: true });
-  const hovers = () => g.posted.filter(([m]) => m && m.type === "artifact-pin-hover");
-  g.fire("pointermove", { clientX: 5, clientY: 5 }); g.flush();
-  ok(hovers().length === 0 || hovers()[0][0].rect === null, "over a wrapper that is the whole page: no candidate");
-  const before = g.posted.length;
-  const c = ev(); g.fire("click", c);
-  ok(c.prevented === 1 && g.posted.slice(before).filter(([m]) => m.type === "artifact-pin").length === 0, "and a click there pins nothing");
-  pick = para;
-  g.fire("pointermove", { clientX: 120, clientY: 115 }); g.flush();
-  const last = hovers()[hovers().length - 1][0];
-  ok(last.rect.width === 300 && last.tag === "div", "the nearest ancestor with an id is preferred when it is not much larger: " + JSON.stringify(last));
-  for (let i = 0; i < 20; i++) g.fire("pointermove", { clientX: 120 + i, clientY: 115 });
+  const g = sized(build(body, {}, { hit: () => pick }));
+  hover(g, 5, 5);
+  ok(!shown(g), "over a wrapper that is the whole page: no button");
+  pick = para; hover(g, 120, 115);
+  ok(shown(g) && /top:106px/.test(hostOf(g).style.cssText) && /right:406px/.test(hostOf(g).style.cssText), "the nearest ancestor with an id is preferred when it is not much larger, and holds a picture: " + hostOf(g).style.cssText);
+  for (let i = 0; i < 20; i++) g.fire("pointermove", { clientX: 120 + i, clientY: 115, pointerType: "mouse" });
   ok(g.flush() === 1, "a burst of moves is one check per animation frame");
+}
+{
+  const link = el("a", "", { href: "/x" }, "Open"), cell = E("td", link), table = el("table", "t", {}, E("tr", cell));
+  table.rect = rectOf(50, 10, 300, 60); cell.rect = rectOf(50, 10, 100, 30);
+  let pick = link;
+  const g = sized(build(E("body", E("p", "x"), table), {}, { hit: () => pick }));
+  const d = ev({ clientX: 20, clientY: 60, pointerType: "touch" });
+  g.fire("pointerdown", d);
+  ok(shown(g) && d.prevented === 0 && d.stopped === 0, "a first tap on a table shows its button, and the tap itself is untouched: links and controls still work");
+  await sleep(380);
+  ok(shown(g), "on touch it stays until the next tap elsewhere");
+  pick = null; g.fire("pointerdown", { clientX: 600, clientY: 500, pointerType: "touch" });
+  ok(!shown(g), "a tap elsewhere puts it away");
+}
+
+// 30b. the button is never in what the page reports: not in a quote, a path or a selection
+{
+  const t = el("table", "plans", {}, "Plan Pro costs twelve dollars");
+  t.rect = rectOf(100, 10, 300, 50);
+  const p = E("p", "Rotate the keys every 90 days.");
+  const g = sized(build(E("body", p, t), {}, { immediateTimers: true, hit: () => t }));
+  hover(g, 30, 105);
+  ok(shown(g), "(the button is up)");
+  g.setSelection({ rangeCount: 1, toString: () => "Rotate the keys", getRangeAt: () => { const r = new g.Range(); r.setStart(p.childNodes[0], 0); r.setEnd(p.childNodes[0], 15); return r; } });
+  g.fireDoc("selectionchange");
+  const [[sm]] = g.posted.filter(([m]) => m && m.type === "artifact-selection");
+  ok(sm.quote === "Rotate the keys" && !/Comment/.test(JSON.stringify(sm)), "a selection report never carries the button's word");
+  ok(sm.anchor.path === "body>p:nth-of-type(1)", "nor does it move the path");
+  const m = pickWith(g, 30, 105)[0];
+  ok(!/Comment/.test(JSON.stringify(m)) && m.quote === "Plan Pro costs twelve dollars", "a pin's quote and evidence never carry it either");
+  ok(g.send && (g.send([mark({ quote: "Comment", anchor: { path: "nope" } })]), g.reports().at(-1)[0].unplaced.join() === "m1"), "and text searches cannot find 'Comment' on the page");
+  ok(g.doc.documentElement.childNodes.filter((n) => n.nodeName === "AR-COMMENT-HOST").length === 1, "there is exactly one host, however often it is shown");
 }
 
 // 31. the rectangles are sent again when the frame is resized

@@ -123,16 +123,14 @@ listing; a page over the existing search limits (`text.INPUT_LIMIT`, `SECTION_PA
 
 ## 4. What the reader does and sees
 
-The frame stays as is; the comments panel gains a pin mode, a picker and an attach control.
+The frame stays as is; the comments panel gains a corner Comment button on charts, tables and pictures (first built as a pin mode, replaced 5 Nov 2026), a picker and an attach control.
 
-- **Pin to a spot.** A "Pin" button in the page bar next to Comment turns pin mode on. In pin
-  mode the shim stops page clicks (capture phase, `preventDefault`, only while the mode is on),
-  and as the pointer moves reports the candidate element's rectangle; the gallery draws an outline
-  over the frame. The candidate is the smallest block-level element under the pointer that is not
-  a whole-page wrapper, preferring one with an `id`; the up arrow widens to the parent, down
-  narrows back. A click reports `artifact-pin` (anchor, evidence text, rectangle); the gallery
-  opens the panel with the spot quoted, exactly as for a text selection. Escape or the button again
-  leaves the mode. Selecting text still works without the mode and is unchanged. (Changed 5 Nov 2026: a text selection made while the mode is on now leaves the mode and shows the selection bar; until then it was silently ignored, which left Jeremy unable to comment.)
+- **Pin to a spot.** (Replaced 5 Nov 2026: there is no pin mode, Pin button or C key; see "As
+  built: the comment redesign" at the end.) A chart, table or picture shows a Comment button in
+  its corner while pointed at; pressing it reports `artifact-pin` (anchor, evidence text,
+  rectangle) and the gallery opens the panel with the spot quoted, exactly as for a text
+  selection. The candidate is the smallest block-level element under the pointer that is not a
+  whole-page wrapper, preferring one with an `id`.
 - **Pins on the page.** Text pins keep the highlight. Element pins show a numbered badge at the
   element's corner, drawn by the gallery from rectangles the shim reports in
   `artifact-marks-placed` (extended with `rects`, capped like `unplaced`). Hover or focus on a
@@ -166,13 +164,13 @@ The frame stays as is; the comments panel gains a pin mode, a picker and an atta
 - `content.py` selection leg: add `heading`, `heading_id`, `el_id` to the `range` anchor it posts
   (nearest preceding heading by walking previous siblings and parents; ids as in section 3).
 - New shim messages, still posting only to the gallery origin, still behind the origin check:
-  from the gallery `artifact-pin-mode` `{on}`; to the gallery `artifact-pin-hover` `{rect, tag}`
-  and `artifact-pin` `{anchor, quote, rect}`. Evidence sent is capped (quote 200, heading 200,
+  to the gallery `artifact-pin` `{anchor, quote, rect}` (the pin-mode messages this spec first
+  listed were removed 5 Nov 2026). Evidence sent is capped (quote 200, heading 200,
   ids 200); nothing else from the page leaves it.
 - `place()` accepts `quote` anchors (no `path`): the `typeof m.anchor.path==="string"` guard in
   `paint` is relaxed to "quote non-empty or element id present". Element pins are placed by
   `id`, then heading plus tag plus ordinal, then quote search; the DOM is not touched.
-- `_COMMENTS_JS` (the gallery's own file): pin button, outline overlay, badges, attach control,
+- `_COMMENTS_JS` (the gallery's own file): outline overlay, badges, attach control,
   outdated section. Everything the page sends goes in via `textContent`, as the file's rule says.
 - Tests for the shim: `tests/js/marks.test.mjs` already runs the shim source against a fake DOM;
   new cases there. Unchanged rule: no browser test is run on this machine; CI runs them.
@@ -313,7 +311,7 @@ pinned comment as on any comment.
    `anchor_state`/`anchor_note` in the API and CLI, the shim's heading and id context, the
    thread chip and the "Outdated pins" list. No new interaction; every existing comment gets a
    state. Agent text anchors become paintable.
-2. **Element pins** (built, 29 Oct 2026; see "As built, slice 2" below). `element` kind, pin mode
+2. **Element pins** (built, 29 Oct 2026; see "As built, slice 2" below). `element` kind, the corner Comment button (first a pin mode)
    and outline and badges in the shim and gallery, `--element ID` and `{"kind":"element"}` for
    agents.
 3. **Images** (built, 29 Oct 2026; see "As built, slice 3 (server)" and "(gallery)" below).
@@ -332,13 +330,13 @@ id or is outdated.
 Built as written in sections 3, 4, 5 and 7, with the prior-art additions Jeremy accepted
 (`2026-10-29-pinned-comments-prior-art.md`) folded in:
 
-- Focus: a pick moves the cursor into the comment box only when pin mode was turned on in the
-  gallery (the Pin button or a key there). The page can send any message, so a pin mode it
-  turns on (the C key while the frame has focus, or a forged toggle) shows the pick and leaves
-  the cursor where it was. Found in a security review; tested in `test_element_pins.py`.
+- Focus: a pick never moves the cursor into the comment box (since 5 Nov 2026 no pick is
+  known to come from the gallery's own controls). The page can send any message, so a pick it
+  reports is shown and the cursor is left where it was. Found in a security review; tested in
+  `test_element_pins.py`.
 - An SVG's `<title>` is found with three linear finds, not a lazy regex that rescanned to the
   end from every unclosed opener.
-- The bar's Pin button is `.pinmodebtn`; `.pinbtn` stays the wall's pin-to-wall form.
+- `.pinbtn` is the wall's pin-to-wall form (the page bar's former `.pinmodebtn` is gone).
 - An element with no words and no label is stored with an empty quote; only the gallery composer
   shows its tag. Captions (`figcaption`) are read by the browser only, so an agent's `--element`
   pin is labelled by alt text, aria-label or title.
@@ -397,8 +395,7 @@ Differences from the text above, and why:
 - An `element` anchor names its element `id`, never `el_id` (which stays `range`'s); `heading_id`
   is the heading's own id, as in slice 1.
 - Three shim messages beyond the spec's list, because the keys go to the frame when it has focus
-  and the frame resizes: `artifact-pin-toggle` (C pressed in the frame), `artifact-pin-exit`
-  (Escape in the mode) and `artifact-pin-rects` (the badges' rectangles again after a resize).
+  and the frame resizes: `artifact-pin-rects` (the badges' rectangles again after a resize).
 - The shim places by tag and ordinal only if the element still holds the quote it was pinned
   with (principle 3: never by position alone); an image is also re-found by its alt text.
 - A pick of an element with no id, no heading, no words and no label is swallowed but not sent: the
@@ -487,7 +484,7 @@ Differences from the text above, and why:
   origin serves nothing without a valid, unexpired token and serves with `nosniff` and the sandbox
   CSP; the gallery origin serves no image bytes at all.
 - `tests/js/marks.test.mjs`: `quote` anchors place without a path; element placement by id, then
-  heading and ordinal; pin mode swallows clicks only while on; nothing but capped evidence is posted.
+  heading and ordinal; the corner button never swallows a click; nothing but capped evidence is posted.
 - CLI: `comment --element`, `--image` local limit errors, `comments` prints anchors, outdated
   chips and cached paths, `--no-images` prints none, a repeat run downloads nothing.
 
@@ -497,7 +494,7 @@ Differences from the text above, and why:
   `--outdated` forms; what an anchor line and an image path mean; the 5 MB / 4000 px / three-format
   limits; that an outdated pin keeps its quote.
 - `decide.py` `--help` for `comment`, `reply`, `comments`.
-- `docs/comments-design.md`: the anchor kinds and the pin mode; `docs/agent/design.md`: images
+- `docs/comments-design.md`: the anchor kinds and the corner Comment button; `docs/agent/design.md`: images
   served from the content origin only.
 - The `lab-artifacts` skill (runcove) and the office doc `artifacts-maintainer.md`: the new commands
   and the image path behaviour, as a runcove change.
@@ -599,13 +596,24 @@ See `docs/comments-design.md` ("As built: Open and Resolved tabs, and reopening"
 and the entry in `docs/decisions.md`. In this spec's terms: the panel's resolved
 fold became Open and Resolved tabs, and threads can be reopened (gallery form,
 `POST /api/v1/comments/{id}/reopen`, `artifacts-decide reopen`). The pin mode,
-Pin button and C key described above are replaced by other pieces of the same
-redesign; their notes follow when they land.
+Pin button and C key described above are replaced by the corner Comment button
+(last piece, below).
 
 Piece 3 landed: a "Comment on page" button in the page bar (`.pagecbtn`, a link to
 `#cwhole` without scripts) opens the panel on Open with the composer set to the
 whole page.
 
 Piece 2 landed: Ctrl+Shift+M (Cmd+Shift+M) comments on the selection, from inside
-the page (forwarded as `artifact-comment-key`) or in the gallery. Pin mode and the
-C key are still present until their own piece removes them.
+the page (forwarded as `artifact-comment-key`) or in the gallery. 
+Piece 1 landed: pin mode goes entirely (the Pin button, the pin-mode state and
+outline, the `artifact-pin-mode`, `-toggle`, `-exit` and `-hover` messages, the bare C
+key, and the swallowing of page clicks). In its place the shim draws a Comment
+button in the corner of a chart, table or picture: one host element
+(`ar-comment-host`) appended to the document element with a closed shadow root and
+its own styles, positioned `fixed` from the element's rectangle and kept in place on
+scroll and resize. It appears while pointing at the element, on keyboard focus
+(`:focus-visible`; Tab from a focused element reaches it, Escape or Shift+Tab goes
+back) and, on touch, after a first tap on it (the tap is never swallowed). Pressing it
+posts the same `artifact-pin` {anchor, quote, rect}; the gallery, the anchor model,
+re-anchoring, badges and what agents receive are unchanged. `artifact-pin-rects` stays,
+for the badges.

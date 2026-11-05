@@ -617,3 +617,82 @@ def test_a_mark_made_across_a_deletion_stores_the_live_words(browser, served, db
         assert not errors, errors
     finally:
         ctx.close()
+
+
+CHART_PAGE = (
+    "<!doctype html><html><head><title>C</title></head><body>"
+    "<h2>Latency</h2><p>Before the chart comes a sentence.</p>"
+    '<figure id="chart" style="margin:20px 0;width:420px">'
+    '<svg width="400" height="160" viewBox="0 0 400 160">'
+    "<title>Latency by region</title>"
+    '<rect x="10" y="40" width="80" height="110" fill="#0f6f63"/>'
+    '<rect x="120" y="70" width="80" height="80" fill="#5ec9b8"/></svg>'
+    "<figcaption>Latency, p95</figcaption></figure>"
+    "<p>After the chart comes another sentence.</p></body></html>"
+)
+
+
+def test_hovering_a_chart_offers_a_corner_comment_that_starts_a_comment_on_it(
+    browser, served, db
+):
+    """Point at a chart: a Comment button appears in its corner, drawn by the
+    page's own shim (one host on the document element, closed shadow root).
+    Pressing it opens the composer on that element, as a pin-mode pick used to.
+    The paragraph beside it gets no button."""
+    origin, _ = served
+    page = store.publish(db, "seat", "Chart", CHART_PAGE)
+    ctx, pg, errors = _open_page(browser, origin, page.id, 1400)
+    try:
+        _frame_height_settled(pg)
+        frame = pg.frames[1]
+        box = pg.locator("#artifact-frame").bounding_box()
+        host_state = """() => { const h = document.documentElement.lastElementChild;
+            return h && h.nodeName === 'AR-COMMENT-HOST'
+              ? getComputedStyle(h).display : 'none' }"""
+        assert frame.evaluate(host_state) == "none"
+        rect = frame.evaluate(
+            """() => { const b = document.getElementById('chart').getBoundingClientRect();
+                      return {l: b.left, t: b.top, r: b.right, b: b.bottom} }"""
+        )
+        para = frame.evaluate(
+            """() => { const b = document.querySelectorAll('p')[0].getBoundingClientRect();
+                      return {x: b.left + 20, y: b.top + b.height / 2} }"""
+        )
+        pg.mouse.move(box["x"] + para["x"], box["y"] + para["y"])
+        pg.wait_for_timeout(300)
+        assert frame.evaluate(host_state) == "none", "text gets no button"
+        pg.mouse.move(box["x"] + rect["l"] + 120, box["y"] + rect["t"] + 90)
+        frame.wait_for_function(
+            "() => document.documentElement.lastElementChild.nodeName"
+            " === 'AR-COMMENT-HOST' && getComputedStyle("
+            "document.documentElement.lastElementChild).display === 'block'",
+            timeout=5000,
+        )
+        host = frame.evaluate(
+            """() => { const b = document.documentElement.lastElementChild
+                         .getBoundingClientRect();
+                      return {l: b.left, t: b.top, r: b.right, b: b.bottom,
+                              inbody: !!document.body.querySelector('ar-comment-host')} }"""
+        )
+        assert not host["inbody"], "the button is outside the page's own content"
+        assert rect["t"] <= host["t"] <= rect["t"] + 20
+        assert rect["r"] - 20 <= host["r"] <= rect["r"] + 1
+        # The page's own text is untouched by it.
+        assert "Comment" not in frame.evaluate("() => document.body.innerText")
+        pg.mouse.click(
+            box["x"] + (host["l"] + host["r"]) / 2,
+            box["y"] + (host["t"] + host["b"]) / 2,
+        )
+        quote = pg.locator(".cquote")
+        quote.wait_for(state="visible", timeout=5000)
+        assert "Latency" in quote.inner_text()
+        anchor = json.loads(
+            pg.locator("form input[name=anchor]").first.get_attribute("value")
+        )
+        assert anchor["kind"] == "element" and anchor["id"] == "chart"
+        assert "pinned" in pg.locator("form input[name=body]").first.get_attribute(
+            "placeholder"
+        )
+        assert not errors, errors
+    finally:
+        ctx.close()

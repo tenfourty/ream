@@ -67,13 +67,14 @@ def test_an_svg_title_is_found_in_one_pass_and_an_unclosed_one_names_nothing():
     assert time.monotonic() - began < 1.0
 
 
-def test_the_gallery_moves_focus_only_for_a_pin_mode_turned_on_in_the_gallery():
+def test_the_gallery_never_moves_focus_for_a_pick_the_page_reports():
     from pathlib import Path
 
     source = Path(gallery.__file__).read_text(encoding="utf-8")
-    assert "if(hand)i.focus()" in source
-    assert 'd.type==="artifact-pin-toggle")pinMode(!pinOn)' in source
-    assert "pinMode(!pinOn,true)" in source
+    assert (
+        "i.focus()"
+        not in source[source.index("function takePin") : source.index("// Badges:")]
+    )
 
 
 def test_an_element_with_text_is_named_by_the_text_not_its_label():
@@ -539,29 +540,44 @@ def test_an_agents_element_pin_goes_outdated_with_the_element(client, db, seats,
 # --- the shim and the gallery script carry the pin messages -----------------------
 
 
-def test_the_shim_speaks_the_pin_messages_to_the_gallery_only(monkeypatch):
+def test_the_shim_speaks_the_pin_message_to_the_gallery_only(monkeypatch):
     monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     source = content._viewer_report()
-    for name in ("artifact-pin-mode", "artifact-pin-hover", "artifact-pin"):
-        assert f'"{name}"' in source
+    assert '"artifact-pin"' in source
     assert '"*"' not in source
     assert "outerHTML" not in source and "innerHTML" not in source
 
 
-def test_the_gallery_script_has_the_pin_mode_and_draws_with_text_content_only():
+def test_there_is_no_pin_mode_in_the_shim_the_gallery_script_or_the_page_bar(
+    monkeypatch,
+):
+    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    source = content._viewer_report()
     js = gallery._COMMENTS_JS
-    for name in ("artifact-pin-mode", "artifact-pin-hover", "artifact-pin"):
-        assert f'"{name}"' in js
+    for name in ("mode", "toggle", "exit", "hover"):
+        assert f"artifact-pin-{name}" not in source and f"artifact-pin-{name}" not in js
+    assert "crosshair" not in source
+    for gone in ("pinMode", "pinOn", "byHand", "pinmodebtn"):
+        assert gone not in js
+    assert "pinmodebtn" not in gallery._comments_button("p1", 0)
+    assert "pinmodebtn" not in gallery._CSS
+
+
+def test_the_shim_draws_its_comment_button_in_one_closed_shadow_host(monkeypatch):
+    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    source = content._viewer_report()
+    assert 'attachShadow({mode:"closed"})' in source
+    assert "document.documentElement.appendChild(h)" in source
+    assert "document.body.appendChild" not in source
+
+
+def test_the_gallery_script_draws_pins_with_text_content_only():
+    js = gallery._COMMENTS_JS
+    assert '"artifact-pin"' in js and '"artifact-pin-rects"' in js
     block = js[js.index("// ELEMENT PINS") : js.index("// Full screen:")]
     assert "innerHTML" not in block and "insertAdjacentHTML" not in block
     assert "textContent" in block
-
-
-def test_the_page_bar_offers_a_pin_button_beside_comment():
-    bar = gallery._comments_button("p1", 0)
-    assert 'class="pinmodebtn"' in bar and "hidden" in bar and "Pin" in bar
-    assert bar.index("cbtn") < bar.index("pinmodebtn")
-    for rule in (".pinmodebtn", ".pinout", ".pinbadge"):
+    for rule in (".pinout", ".pinbadge"):
         assert rule in gallery._CSS
 
 

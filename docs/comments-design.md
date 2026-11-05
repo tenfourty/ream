@@ -126,7 +126,7 @@ comment PAGE "text" --element ID` sends it.
 
 **Comment on page.** A "Comment on page" button always sits in the page bar,
 before Comments. Pressing it opens the panel on the Open tab with the composer
-set to the whole page (any selection or pin it held is dropped, as is pin mode)
+set to the whole page (any selection or pin it held is dropped)
 and focuses the field. Without scripts it is a link to the panel's form
 (`#cwhole`).
 
@@ -137,14 +137,20 @@ to the gallery's origin; the gallery checks the frame and origin as for its othe
 messages), and the gallery also hears it directly. With nothing selected a short
 hint shows and nothing else happens. No single letter does anything new.
 
-**Pin mode.** The page bar has a Pin button (and the `C` key, in the gallery or
-inside the frame; never while typing in a field or with a modifier). While it
-is on, the shim swallows the page's clicks (capture phase, only while on),
-reports the smallest block-level element under the pointer that is not a
+**Comment on a chart, table or picture.** There is no pin mode, Pin button or
+`C` key (5 Nov 2026). Pointing at a chart, table or picture shows a small "Comment"
+button in its corner; on touch, a first tap on it does (the tap is the page's own as
+well: links and controls still work), and with the keyboard, focus on it does, and
+Tab from the focused element reaches the button, labelled "Comment on chart" (or
+table, picture, table cell, figure). The shim draws the button itself, as ONE host
+element on the document element with a closed shadow root and its own styles: it
+never changes the page's layout or text, is never in a quote, an anchor path or a
+selection report, and the page's CSS cannot reach it. The element is the one a
+pick always chose: the smallest block-level element under the pointer that is not a
 wrapper around the whole page (an ancestor with an id wins when it is not much
-larger), and the gallery outlines it over the frame; the up and down arrows
-widen to the parent and narrow back, a click picks, Escape or the button again
-leaves. Selecting text while it is on leaves the mode and offers the selection bar as usual: a selection is never held back (5 Nov 2026, after the bar silently failed to appear for Jeremy). A pick fills the composer exactly as a text selection does. An element
+larger), kept only if it is, or sits in or around, a table, figure, svg, img, canvas,
+picture or video. Pressing the button posts `artifact-pin` and nothing else changed:
+A pick fills the composer exactly as a text selection does. An element
 with no id, no heading, no words and no label cannot be found again and is not
 pinned. Pins on the page show as numbered badges at the element's corner (drawn
 by the gallery from rectangles the shim reports in `artifact-marks-placed` and

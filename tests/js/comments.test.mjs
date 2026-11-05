@@ -58,7 +58,7 @@ function clock() {
                if (!next) break; const [t, fn] = due.get(next); due.delete(next); now = t; fn(); }
              now = end; } };
 }
-function build({ noPinBtn = false, marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false, threads = [], page = "abc", seed = null } = {}) {
+function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false, threads = [], page = "abc", seed = null } = {}) {
   const framePosts = [];
   const frameWin = { postMessage: (m, o) => framePosts.push([m, o]) };
   const frameOn = {};
@@ -93,9 +93,8 @@ function build({ noPinBtn = false, marks = "[]", fetchImpl = null, noForm = fals
   panel.querySelectorAll = (q) => (q === "li.thread" ? tlist.children.slice() : q === ".ctab" ? tabBtns : []);
   const cbtn = el("a"); cbtn.className = "cbtn";
   const byId = { "artifact-frame": iframe, "artifact-marks": marksEl, "marks-unplaced": unplacedEl, comments: noPanel ? null : panel };
-  const pinbtn = el("button"); pinbtn.className = "pinmodebtn"; pinbtn.hidden = true;
   const pagebtn = el("a"); pagebtn.className = "pagecbtn";
-  const docOn = {}, extra = { ".cbtn": cbtn, ".pagecbtn": pagebtn, ...(noPinBtn ? {} : { ".pinmodebtn": pinbtn }) };
+  const docOn = {}, extra = { ".cbtn": cbtn, ".pagecbtn": pagebtn };
   const doc = { getElementById: (id) => byId[id] || null,
                 createElement: (t) => { const n = el(t); if (t === "template") Object.defineProperty(n, "innerHTML", { set(h) { n.content = { firstElementChild: { html: h } }; } }); return n; },
                 body: docBody,
@@ -135,7 +134,7 @@ function build({ noPinBtn = false, marks = "[]", fetchImpl = null, noForm = fals
   const card = () => docBody.children.filter((c) => c.className === "hovercard");
   const scroll = () => (listeners.scroll || []).concat(capture.scroll || []).forEach((fn) => fn({}));
   return { bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload, submit, extra, doc,
-           panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist, press, fsChange, pinbtn, pagebtn, win, docOn, tabBtns };
+           panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist, press, fsChange, pagebtn, win, docOn, tabBtns };
 }
 const SEL = { type: "artifact-selection", quote: "the plan",
               anchor: { kind: "range", path: "body>p:nth-of-type(1)", start: 4, end: 12 },
@@ -670,29 +669,21 @@ const btnOf = (c, label) => c.querySelectorAll("button").find((b) => b.textConte
   g.send(SEL);
   ok(g.bar.style.position === "" && g.bar.style.top === "204px", "placed in page coordinates again"); }
 
-// ===== ELEMENT PINS (pinned comments, slice 2) ===============================
-// The page bar's Pin button, the C key, an outline over the frame while the
-// pointer moves, a pick that fills the composer, and numbered badges drawn from
-// the rectangles the shim reports. Everything the page sends goes in through
-// textContent and numbers; nothing from it is markup.
+// ===== ELEMENT PINS (pinned comments) ========================================
+// A pick the frame reports (its corner Comment button, drawn by the page's own shim)
+// fills the composer; there is no pin mode, Pin button or C key here any more.
+// Numbered badges are drawn from the rectangles the shim reports. Everything the
+// page sends goes in through textContent and numbers; nothing from it is markup.
 const PIN = { type: "artifact-pin", quote: "Plan Price Pro $12 a month",
               anchor: { kind: "element", id: "plans", tag: "table", heading: "Costs", path: "body>table:nth-of-type(1)" },
               rect: { top: 60, left: 12, width: 300, height: 80, vt: 60, vl: 12 } };
-const modeMsgs = (g) => g.framePosts.filter(([m]) => m && m.type === "artifact-pin-mode");
 const outlineOf = (g) => g.docBody.children.find((c) => c.className === "pinout");
 const badgesOf = (g) => g.docBody.children.filter((c) => c.className === "pinbadge");
 
-{ const g = build();
-  ok(g.pinbtn.hidden === false, "the Pin button is revealed once the composer is there");
-  g.pinbtn.on.click({});
-  ok(modeMsgs(g).length === 1 && modeMsgs(g)[0][0].on === true && modeMsgs(g)[0][1] === "https://abc.tenfourty.com",
-     "pressing it turns pin mode on in the frame, at the frame's origin");
-  ok(g.pinbtn.attrs["aria-pressed"] === "true" && g.pinbtn.classList.contains("on"), "and shows it is on");
-  g.pinbtn.on.click({});
-  ok(modeMsgs(g)[1][0].on === false && g.pinbtn.attrs["aria-pressed"] === "false", "pressing it again leaves the mode");
-  const n = build({ noForm: true });
-  ok(n.pinbtn.hidden === true, "with no composer on the page there is nothing to pin to: the button stays hidden");
-  ok(build({ noPinBtn: true }) !== null, "a page bar without the button does not break the script"); }
+// there is no pin mode left to turn on
+{ ok(!/pinmodebtn|pinMode|pinOn|byHand|artifact-pin-(mode|toggle|exit|hover)/.test(src), "the gallery script has no pin mode: no button, state or message for it");
+  const g = build();
+  ok(g.extra[".pinmodebtn"] === undefined, "the page bar has no Pin button to find"); }
 
 // COMMENT ON PAGE
 { const g = build();
@@ -707,10 +698,7 @@ const badgesOf = (g) => g.docBody.children.filter((c) => c.className === "pinbad
   ok(!g.form.querySelector(".cquote") && !g.form.querySelector("input[name=anchor]") && !g.form.querySelector("input[name=quote]"),
      "the composer is the whole page again: no quote, no anchor");
   ok(g.body.placeholder === "Comment on this page" && focused === 1, "with its own placeholder, and focus in the field");
-  ok(g.bar.hidden === true, "and the selection bar goes");
-  g.key("c", { target: { nodeName: "BODY" } });
-  g.pagebtn.on.click(ev);
-  ok(modeMsgs(g).at(-1)[0].on === false, "it also leaves pin mode"); }
+  ok(g.bar.hidden === true, "and the selection bar goes"); }
 
 // CTRL+SHIFT+M
 const CHORD = { key: "M", ctrlKey: true, shiftKey: true };
@@ -738,62 +726,19 @@ const CHORD = { key: "M", ctrlKey: true, shiftKey: true };
   for (const k of ["m", "M"]) o2.key(k, {}); o2.key("M", { shiftKey: true }); o2.key("m", { ctrlKey: true }); o2.key("M", { ...CHORD, altKey: true });
   ok(!o2.form.querySelector(".cquote"), "no single letter and no other modifier mix"); }
 
-// the C key
+// no single-letter key: C does nothing, here or from the frame
 { const g = build();
-  g.key("c", { target: { nodeName: "BODY" } });
-  ok(modeMsgs(g).length === 1 && modeMsgs(g)[0][0].on === true, "C turns pin mode on");
-  g.key("C", { target: { nodeName: "BODY" } });
-  ok(modeMsgs(g).length === 2 && modeMsgs(g)[1][0].on === false, "and off");
-  for (const target of [{ nodeName: "INPUT" }, { nodeName: "TEXTAREA" }, { nodeName: "SELECT" }, { nodeName: "DIV", isContentEditable: true }])
-    g.key("c", { target });
-  g.key("c", { target: { nodeName: "BODY" }, ctrlKey: true });
-  g.key("c", { target: { nodeName: "BODY" }, metaKey: true });
-  ok(modeMsgs(g).length === 2, "never while typing in a field, nor with a modifier");
-  g.key("c", { target: { nodeName: "BODY" } });
-  const esc = g.key("Escape");
-  ok(modeMsgs(g).length === 4 && modeMsgs(g)[3][0].on === false && esc.stopped, "Escape leaves the mode, and is not also the panel's");
-  g.key("c", { target: { nodeName: "BODY" } });
+  g.key("c", { target: { nodeName: "BODY" } }); g.key("C", { target: { nodeName: "BODY" } });
+  ok(g.framePosts.length === 0 && !g.isOpen() && !g.form.querySelector(".cquote"), "the bare C key does nothing");
+  g.send({ type: "artifact-pin-toggle" }); g.send({ type: "artifact-pin-exit" });
+  g.send({ type: "artifact-pin-hover", rect: { top: 20, left: 8, width: 100, height: 30 }, tag: "p" });
+  ok(g.framePosts.length === 0 && (!outlineOf(g) || outlineOf(g).hidden), "pin-mode messages from the frame are ignored: nothing is sent back, nothing outlined");
   g.panel.classList.add("cpanel-open"); g.docBody.classList.add("cpanel-open");
   g.key("Escape");
-  ok(g.isOpen(), "with the mode on, Escape leaves the mode first and the panel stays open");
-  g.key("Escape");
-  ok(!g.isOpen(), "and the next one closes the panel as before"); }
-
-// the frame's own keys
-{ const g = build();
-  g.send({ type: "artifact-pin-toggle" });
-  ok(modeMsgs(g).length === 1 && modeMsgs(g)[0][0].on === true, "C pressed inside the frame toggles the mode");
-  g.send({ type: "artifact-pin-exit" });
-  ok(modeMsgs(g)[1][0].on === false, "and Escape inside the frame leaves it");
-  g.send({ type: "artifact-pin-toggle" }, { origin: "https://evil.example" });
-  g.send({ type: "artifact-pin-toggle" }, { source: {} });
-  ok(modeMsgs(g).length === 2, "only the frame, at its own origin, is heard"); }
-
-// the outline
-{ const g = build();
-  g.send({ type: "artifact-pin-hover", rect: { top: 20, left: 8, width: 100, height: 30 }, tag: "p" });
-  ok(!outlineOf(g) || outlineOf(g).hidden, "no outline when pin mode is off");
-  g.pinbtn.on.click({});
-  g.send({ type: "artifact-pin-hover", rect: { top: 20, left: 8, width: 100, height: 30 }, tag: "p" });
-  const o = outlineOf(g);
-  ok(o && o.hidden === false && o.style.top === "170px" && o.style.left === "28px" && o.style.width === "100px" && o.style.height === "30px",
-     "an outline over the frame, in page coordinates: " + (o && JSON.stringify(o.style)));
-  g.send({ type: "artifact-pin-hover", rect: null, tag: "" });
-  ok(outlineOf(g).hidden === true, "no candidate hides it");
-  g.send({ type: "artifact-pin-hover", rect: { top: "20", left: 8, width: 100, height: 30 }, tag: "p" });
-  ok(outlineOf(g).hidden === true, "a rectangle that is not four numbers is ignored");
-  g.send({ type: "artifact-pin-hover", rect: { top: 1, left: 1, width: 5, height: 5 }, tag: "p" });
-  g.pinbtn.on.click({});
-  ok(outlineOf(g).hidden === true, "leaving the mode hides it");
-  g.pinbtn.on.click({});
-  g.send({ type: "artifact-mark-hover", id: "m1", rect: { top: 30, left: 10, width: 60, height: 18 } });
-  ok(g.card().length === 0, "no hover cards over marks while picking"); }
+  ok(!g.isOpen(), "Escape closes the panel as it always did"); }
 
 // a pick fills the composer
 { const g = build({ threads: [] });
-  g.send(PIN);
-  ok(!g.form.children.find((c) => c.name === "anchor"), "a pick that was not asked for is ignored");
-  g.pinbtn.on.click({});
   g.send(PIN);
   const field = (n) => g.form.children.find((c) => c.name === n);
   ok(field("quote") && field("quote").value === "Plan Price Pro $12 a month", "the quote goes into the form");
@@ -801,38 +746,25 @@ const CHORD = { key: "M", ctrlKey: true, shiftKey: true };
   ok(field("kind") && field("kind").value === "comment", "as a plain comment");
   const q = g.form.children.find((c) => c.className === "cquote");
   ok(q && q.textContent === "Plan Price Pro $12 a month", "the spot is quoted above the box, as text");
-  ok(g.isOpen() && g.body.focused === true && /pinned/i.test(g.body.placeholder), "the panel opens with the cursor in the box");
-  ok(modeMsgs(g).slice(-1)[0][0].on === false, "and pin mode is left, so the page's own buttons work again");
-  ok(g.bar.hidden === true, "the selection bar is not also offered"); }
+  ok(g.isOpen() && /pinned/i.test(g.body.placeholder), "the panel opens on the composer");
+  ok(g.body.focused !== true, "the page can send any message, so a pick it reports is shown, never typed into");
+  ok(g.framePosts.length === 0 && g.bar.hidden === true, "nothing is sent back to the frame, and the selection bar is not also offered");
+  const x = build();
+  x.send(PIN, { origin: "https://evil.example" }); x.send(PIN, { source: {} });
+  ok(!x.form.children.find((c) => c.name === "anchor"), "a pick from another origin or window is ignored"); }
 { const g = build();
-  g.pinbtn.on.click({});
   g.send({ ...PIN, quote: "", anchor: { kind: "element", tag: "img", ordinal: 2, heading: "Costs" } });
   const q = g.form.children.find((c) => c.className === "cquote");
   ok(q && q.textContent === "img", "an element with no words is named by its tag");
   const h = build();
   for (const bad of [{ ...PIN, anchor: { kind: "range", path: "p" } }, { ...PIN, anchor: null }, { ...PIN, quote: 5 },
                      { ...PIN, rect: null }, { ...PIN, anchor: { kind: "element", pad: "x".repeat(5000) } }]) {
-    h.pinbtn.on.click({}); h.send(bad);
+    h.send(bad);
     ok(!h.form.children.find((c) => c.name === "anchor"), "a malformed pick fills nothing: " + JSON.stringify(bad).slice(0, 50));
-    if (modeMsgs(h).slice(-1)[0][0].on) h.pinbtn.on.click({});
   }
-  const long = build(); long.pinbtn.on.click({});
+  const long = build();
   long.send({ ...PIN, quote: "w".repeat(900) });
   ok(long.form.children.find((c) => c.name === "quote").value.length === 200, "a long quote is cut at 200"); }
-
-// Selecting text always offers the bar, even while picking (Jeremy, 5 Nov 2026:
-// pin mode held the bar back with nothing on screen saying why, and he was stuck).
-// The selection says what he wants: pin mode is left, then the bar shows.
-{ const g = build();
-  g.pinbtn.on.click({});
-  g.send(SEL);
-  ok(g.bar.hidden === false, "text selected in the frame during pin mode still offers the action bar");
-  ok(modeMsgs(g).slice(-1)[0][0].on === false && g.pinbtn.attrs["aria-pressed"] === "false",
-     "and pin mode is left, in the frame and on the button");
-  const h = build();
-  h.pinbtn.on.click({});
-  h.send({ type: "artifact-selection", quote: "" });
-  ok(modeMsgs(h).slice(-1)[0][0].on === true, "an empty selection (a click to pick) leaves pin mode on"); }
 
 // badges
 const EMARKS = JSON.stringify([

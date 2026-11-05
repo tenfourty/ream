@@ -79,19 +79,19 @@ DIFF_STYLE = (
 )
 
 
-PIN_JS = r"""// ELEMENT PINS (pinned comments, slice 2). The gallery turns pin mode on with
-// `artifact-pin-mode` {on}; while it is on, the page's clicks are swallowed
-// (capture phase, preventDefault, only while on) and the element under the
-// pointer is reported as a rectangle for the gallery to outline
-// (`artifact-pin-hover` {rect, tag}). A click reports the pick
-// (`artifact-pin` {anchor, quote, rect}); C and Escape, pressed inside the
-// frame, ask the gallery to toggle or leave the mode, because the keys go to
-// the frame when it has focus. Nothing is written into the page: the only DOM
-// touched is one <style> for the cursor, and what leaves the page is capped
-// evidence -- text 200, ids 128, 32 characters of words either side -- to the
-// gallery's origin only.
-var pm=0,cand=null,stk=[],hk="",EP=[],rt=0;
+PIN_JS = r"""// ELEMENT COMMENTS (pinned comments). A chart, a table or a picture shows a small
+// "Comment" button in its corner while the pointer is over it (or it has keyboard
+// focus; on touch, after a first tap on it). Pressing it reports the element
+// (`artifact-pin` {anchor, quote, rect}) and the gallery opens the composer on it.
+// The button is ONE host element appended to the document element, outside the
+// page's own content, with a closed shadow root and its own styles: it never
+// changes the page's layout or text, is never in a quote, a path or a selection,
+// and the page's CSS cannot reach it. What leaves the page is capped evidence --
+// text 200, ids 128, 32 characters of words either side -- to the gallery's
+// origin only.
+var EP=[],rt=0,obH=null,obB=null,obC=null,obK=0,obT=0,obTouch=0;
 var TAGR=/^[a-z][a-z0-9-]{0,15}$/,BLK={IMG:1,SVG:1,CANVAS:1,VIDEO:1,PICTURE:1,IFRAME:1,OBJECT:1};
+var VIS=["table","figure","svg","img","canvas","picture","video"];
 function tn(e){return String(e&&e.nodeName||"").toLowerCase()}
 function fixend(s){var c=s.charCodeAt(s.length-1);return c>=0xd800&&c<=0xdbff?s.slice(0,-1):s}
 function clip(v){return fixend(String(v).replace(/\s+/g," ").trim().slice(0,200))}
@@ -172,7 +172,7 @@ function isWrap(e){var b=document.body,h=document.documentElement;if(!e||e===b||
 function area(e){var r=e.getBoundingClientRect();return r.width*r.height}
 // The smallest block-level element under the pointer that is not a wrapper
 // around the whole page; an ancestor with an id wins when it is not much bigger.
-function pick(x,y){var e=document.elementFromPoint(x,y),p,i,a;
+function pickEl(e){var p,i,a;
   while(e&&e.nodeType===1&&!isBlock(e))e=e.parentElement;
   if(!e||e.nodeType!==1||isWrap(e))return null;
   if(!IDR.test(e.id||"")){p=e.parentElement;
@@ -181,17 +181,13 @@ function pick(x,y){var e=document.elementFromPoint(x,y),p,i,a;
   return e}
 function crect(e){var b=e.getBoundingClientRect();
   return{top:b.top+scrollY,left:b.left+scrollX,width:b.width,height:b.height,vt:b.top,vl:b.left}}
-function hover(){var k=cand?tn(cand)+"|"+JSON.stringify(crect(cand)):"";
-  if(k===hk)return;hk=k;
-  parent.postMessage({type:"artifact-pin-hover",rect:cand?crect(cand):null,tag:cand?tn(cand):""},__ORIGIN__)}
-function pl(){try{cand=pick(px,py);stk=[];hover()}catch(x){}}
 function words(el,after){var w=document.createTreeWalker(document.body,4),t,p,s="",o;
   while((t=w.nextNode())){p=t.parentNode;if(DX(t)||(p&&SK[String(p.nodeName).toUpperCase()])||el.contains(t))continue;
     o=el.compareDocumentPosition(t);
     if(after){if(o&4){s+=t.nodeValue+" ";if(s.length>200)break}}
     else if(o&2)s=(s+t.nodeValue+" ").slice(-200)}
   return s.replace(/\s+/g," ")}
-function pin(c){var q=etext(c,200),lb="",n=tn(c),an={kind:"element"},b,pre,suf,ps;
+function pinMsg(c){var q=etext(c,200),lb="",n=tn(c),an={kind:"element"},b,pre,suf,ps;
   if(!q){lb=elabel(c);q=lb}
   if(IDR.test(c.id||""))an.id=c.id;
   if(TAGR.test(n))an.tag=n;
@@ -208,36 +204,72 @@ function pin(c){var q=etext(c,200),lb="",n=tn(c),an={kind:"element"},b,pre,suf,p
   if(pre)an.prefix=pre;if(suf)an.suffix=suf;
   // A spot nothing identifies (no id, no heading, no words, no label) cannot be
   // found again, and the service would refuse it: nothing is sent.
-  if(!an.id&&!an.heading&&!q)return;
-  parent.postMessage({type:"artifact-pin",anchor:an,quote:q,rect:crect(c)},__ORIGIN__)}
-function pinStyle(on){var s=document.getElementById("ar-pin-style");
-  if(!s){if(!on)return;s=document.createElement("style");s.id="ar-pin-style";
-    (document.head||document.documentElement).appendChild(s)}
-  s.textContent=on?"*{cursor:crosshair!important}":""}
-addEventListener("message",function(e){try{
-  if(e.origin!==__ORIGIN__)return;var d=e.data;
-  if(!d||typeof d!=="object"||d.type!=="artifact-pin-mode")return;
-  pm=d.on===true?1:0;cand=null;stk=[];hk="";pinStyle(!!pm)}catch(x){}});
-addEventListener("click",function(e){try{if(!pm||!e)return;
-  e.preventDefault();e.stopPropagation();if(e.stopImmediatePropagation)e.stopImmediatePropagation();
-  var c=cand;
-  if(typeof e.clientX==="number"&&typeof e.clientY==="number"){var h=pick(e.clientX,e.clientY);
-    c=cand&&h&&cand.contains(h)?cand:h}
-  if(c)pin(c)}catch(x){}},true);
+  if(!an.id&&!an.heading&&!q)return null;
+  return{type:"artifact-pin",anchor:an,quote:q,rect:crect(c)}}
+function pin(c){var m=pinMsg(c);if(m)parent.postMessage(m,__ORIGIN__)}
+// What the button is for: a chart, table or picture, or something inside or around
+// one. The element itself is chosen as a pick always was (the smallest block under
+// the pointer, an ancestor with an id preferred), then kept only if it is one.
+function visual(e){var i,n=String(e.nodeName).toUpperCase();
+  for(i=0;i<VIS.length;i++){
+    if(n===VIS[i].toUpperCase()||(e.closest&&e.closest(VIS[i]))||(e.querySelector&&e.querySelector(VIS[i])))return 1}
+  return 0}
+function oname(e){var n=tn(e);
+  return n==="svg"||n==="canvas"?"chart":n==="img"||n==="picture"?"picture":n==="td"||n==="th"?"table cell":n}
+// Offered only where a comment can be kept: something to identify the spot by.
+function sayable(c){return !!(IDR.test(c.id||"")||etext(c,1)||elabel(c)||hdOf(c))}
+function obMake(){if(obH)return obH;
+  try{var h=document.createElement("ar-comment-host"),r=h.attachShadow({mode:"closed"}),
+      st=document.createElement("style"),b=document.createElement("button");
+    st.textContent="button{all:initial;box-sizing:border-box;display:inline-flex;align-items:center;"+
+      "font:500 12.5px/1.4 system-ui,sans-serif;padding:3px 10px;border-radius:14px;border:1px solid #0f6f63;"+
+      "background:#fff;color:#0b4f46;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.22);"+
+      "-webkit-tap-highlight-color:transparent}"+
+      "button:hover{background:#e7f3f1}button:focus-visible{outline:2px solid #0f6f63;outline-offset:2px}";
+    b.type="button";b.textContent="Comment";
+    b.addEventListener("mousedown",function(e){try{if(e.preventDefault)e.preventDefault()}catch(x){}});
+    b.addEventListener("click",function(e){try{if(e.preventDefault)e.preventDefault();
+      if(e.stopPropagation)e.stopPropagation();var c=obC;obHide();if(c)pin(c)}catch(x){}});
+    b.addEventListener("keydown",function(e){try{
+      if(e.key==="Escape"||(e.key==="Tab"&&e.shiftKey)){var c=obC;
+        if(e.preventDefault)e.preventDefault();obHide();if(c&&c.focus)c.focus()}}catch(x){}});
+    b.addEventListener("blur",function(){try{if(!obTouch)obHide()}catch(x){}});
+    r.appendChild(st);r.appendChild(b);
+    h.style.cssText="display:none!important";
+    document.documentElement.appendChild(h);obH=h;obB=b;return h}catch(x){obH=null;return null}}
+function obHide(){clearTimeout(obT);obT=0;obC=null;obK=0;if(obH)obH.style.cssText="display:none!important"}
+function obPos(){try{if(!obC||!obH)return;
+  var r=obC.getBoundingClientRect(),d=document.documentElement,W=d.clientWidth||window.innerWidth||0,H=d.clientHeight||window.innerHeight||0;
+  if(!(r.width>0&&r.height>0)||r.bottom<=0||(H&&r.top>=H)||(W&&r.left>=W)){obH.style.cssText="display:none!important";return}
+  var t=Math.max(r.top,0)+6,rt2=(W?Math.max(0,W-Math.min(r.right,W)):0)+6;
+  obH.style.cssText="all:initial!important;display:block!important;position:fixed!important;z-index:2147483647!important;"+
+    "top:"+Math.round(t)+"px!important;right:"+Math.round(rt2)+"px!important"}catch(x){}}
+function obShow(c,kb){clearTimeout(obT);obT=0;
+  if(!c||!sayable(c)){obHide();return}
+  if(!obMake())return;
+  obC=c;obK=kb?1:0;obB.setAttribute("aria-label","Comment on "+oname(c));obPos()}
+function obLook(){try{if(obK)return;
+  var e=document.elementFromPoint(px,py),c;
+  if(e&&obH&&e===obH)return;
+  c=e?pickEl(e):null;
+  if(c&&visual(c)){if(c===obC){clearTimeout(obT);obT=0;obPos()}else obShow(c,0)}
+  else if(obC){if(obTouch)obHide();else if(!obT)obT=setTimeout(obHide,300)}}catch(x){}}
+addEventListener("focusin",function(e){try{var t=e&&e.target,c;
+  if(!t||t===obH||t.nodeType!==1)return;
+  c=t.matches&&t.matches(":focus-visible")?pickEl(t):null;
+  if(c&&visual(c))obShow(c,1);else if(obK)obHide()}catch(x){}},true);
+// Tab from a focused chart, table or picture goes to its button; the page's own
+// Tab order is otherwise left alone.
+addEventListener("keydown",function(e){try{
+  if(!e||e.key!=="Tab"||e.shiftKey||e.ctrlKey||e.metaKey||e.altKey||!obK||!obC||e.target!==obC||!obB||!obB.focus)return;
+  e.preventDefault();obB.focus()}catch(x){}},true);
+addEventListener("scroll",obPos,true);
+addEventListener("resize",obPos);
 // Ctrl+Shift+M (Cmd+Shift+M): comment on the selection. The gallery owns the
 // selection bar, so the page only forwards the chord, type and nothing else.
 addEventListener("keydown",function(e){try{
   if(!e||!(e.ctrlKey||e.metaKey)||!e.shiftKey||e.altKey||(e.key!=="M"&&e.key!=="m"&&e.code!=="KeyM"))return;
   e.preventDefault();parent.postMessage({type:"artifact-comment-key"},__ORIGIN__)}catch(x){}},true);
-addEventListener("keydown",function(e){try{if(!e||e.ctrlKey||e.metaKey||e.altKey)return;
-  var k=e.key,t=e.target,nm=t&&t.nodeName?String(t.nodeName).toUpperCase():"",c;
-  if(k==="c"||k==="C"){if(nm==="INPUT"||nm==="TEXTAREA"||nm==="SELECT"||(t&&t.isContentEditable))return;
-    parent.postMessage({type:"artifact-pin-toggle"},__ORIGIN__);return}
-  if(!pm)return;
-  if(k==="Escape"){e.preventDefault();parent.postMessage({type:"artifact-pin-exit"},__ORIGIN__);return}
-  if(k==="ArrowUp"&&cand){c=cand.parentElement;
-    if(c&&!isWrap(c)){e.preventDefault();stk.push(cand);cand=c;hover()}else e.preventDefault()}
-  else if(k==="ArrowDown"){e.preventDefault();if(stk.length){cand=stk.pop();hover()}}}catch(x){}},true);
 addEventListener("resize",function(){try{if(!EP.length)return;clearTimeout(rt);
   rt=setTimeout(function(){try{parent.postMessage({type:"artifact-pin-rects",rects:rectsOf()},__ORIGIN__)}catch(x){}},150)}catch(x){}});
 """
@@ -588,16 +620,16 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "return null}"
         'function out(){if(hv){hv=null;hk="";'
         f'parent.postMessage({{type:"artifact-mark-leave"}},{origin})}}}}'
-        "function look(){raf=0;if(pm)pl();try{var h=hit();if(!h){out();return}"
+        "function look(){raf=0;obLook();try{var h=hit();if(!h){out();return}"
         'var k=h.id+"|"+h.rect.top+"|"+h.rect.left;if(k===hk)return;hv=h.id;hk=k;'
         'parent.postMessage({type:"artifact-mark-hover",id:h.id,rect:h.rect},'
         f"{origin})}}catch(x){{}}}}"
         'function at(e){if(!e||typeof e.clientX!=="number"||typeof e.clientY!=="number")return 0;'
         "px=e.clientX;py=e.clientY;return 1}"
-        'addEventListener("pointermove",function(e){try{if(!at(e)||raf)return;raf=1;'
+        'addEventListener("pointermove",function(e){try{if(!at(e)||raf)return;obTouch=e.pointerType==="touch"?1:0;raf=1;'
         'if(typeof requestAnimationFrame==="function")requestAnimationFrame(look);else look()}catch(x){}});'
-        'addEventListener("pointerdown",function(e){try{if(at(e)&&e.pointerType==="touch")look()}catch(x){}});'
-        'addEventListener("pointerout",function(e){try{if(e&&!e.relatedTarget)out()}catch(x){}});'
+        'addEventListener("pointerdown",function(e){try{if(at(e)&&e.pointerType==="touch"){obTouch=1;look()}}catch(x){}});'
+        'addEventListener("pointerout",function(e){try{if(e&&!e.relatedTarget){out();if(obC&&!obK&&!obTouch&&!obT)obT=setTimeout(obHide,300)}}catch(x){}});'
         'addEventListener("scroll",function(){try{out();hk=""}catch(x){}});'
         # The element path a selection or a pin reports: a fast path only, as the
         # service verifies it against the quote before relying on it.
