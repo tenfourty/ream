@@ -717,3 +717,46 @@ def test_a_seat_set_on_a_bare_command_names_the_wrapper_call(
     err = capsys.readouterr().err
     assert "cannot read key file" in err
     assert "ARTIFACTS_SEAT=homelab_maintainer artifacts-key -- " in err
+
+
+def _relay_row(**over):
+    row = {
+        "id": "d1",
+        "question": "Which?",
+        "options": [{"letter": "a", "label": "First"}],
+        "answer": "a",
+        "answer_source": "telegram",
+        "answered_by": "jeremy",
+        "recorded_by": "ops-seat",
+        "answered_at": "2026-11-02T10:00:00+00:00",
+        "acknowledged_at": "2026-11-02T10:01:00+00:00",
+    }
+    row.update(over)
+    return row
+
+
+def test_a_relayed_single_answer_names_the_person_and_the_relaying_seat():
+    out = decide._fmt(_relay_row())
+    assert "ANSWER (relayed from telegram, by jeremy (relayed by ops-seat))" in out
+
+
+def test_a_relayed_form_answer_names_the_person_and_the_relaying_seat():
+    record = {
+        "form": "rollout",
+        "version": 3,
+        "answered_by": "jeremy",
+        "answered_at": "2026-11-02T10:00:00+00:00",
+        "answers": {"region": "a"},
+        "blank": [],
+        "stale": [],
+    }
+    out = decide._fmt(_relay_row(kind="form", answer=None, answer_record=record))
+    assert (
+        "FORM rollout (version 3, relayed from telegram, "
+        "by jeremy (relayed by ops-seat), 2026-11-02" in out
+    )
+
+
+def test_a_tapped_answer_has_no_relayer():
+    row = _relay_row(answer_source="page", recorded_by=None)
+    assert "relayed by" not in decide._fmt(row)

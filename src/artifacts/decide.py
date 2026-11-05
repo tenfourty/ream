@@ -176,13 +176,27 @@ def _answered(row: dict) -> bool:
     return bool(row.get("answer") or row.get("answer_record"))
 
 
+def _speaker(person: str | None, source: str | None, relayer: str | None) -> str:
+    """Whose answer it is, and, when a seat relayed it, which seat: `jeremy (relayed by
+    ops-seat)`. The person is the speaker in a form and in a single answer alike; the
+    relaying seat is only ever the relayer."""
+    who = person or "?"
+    if source in (None, "page") or not relayer:
+        return who
+    return f"{who} (relayed by {relayer})"
+
+
 def _fmt_form(row: dict) -> list[str]:
     """A form's merged record: who and when, one `name: value` line per field (a relayed
     field says who relayed it from where), then the blanks, the stale fields with the
     version each was given on, a reopened form, and the ack hint."""
     rec = row["answer_record"]
-    by = rec.get("answered_by") or "?"
     source = row.get("answer_source")
+    by = _speaker(
+        rec.get("answered_by") or row.get("answered_by"),
+        source,
+        row.get("recorded_by"),
+    )
     how = "he submitted it" if source in (None, "page") else f"relayed from {source}"
     head = f"  FORM {rec.get('form', row.get('form_name', '?'))} "
     head += f"(version {rec.get('version', '?')}, {how}, by {by}, "
@@ -285,9 +299,11 @@ def _fmt(row: dict) -> str:
         # is 'page'; anything else was relayed by a seat, and the reader has to
         # be able to tell without knowing the vocabulary.
         how = "he tapped it" if source == "page" else f"relayed from {source}"
-        by = row.get("recorded_by")
+        by = _speaker(
+            row.get("answered_by") or "jeremy", source, row.get("recorded_by")
+        )
         lines.append(
-            f"  ANSWER ({how}{f', by {by}' if by and source != 'page' else ''}): "
+            f"  ANSWER ({how}{f', by {by}' if source != 'page' else ''}): "
             f"({chosen}) {letters.get(chosen, '')}"
         )
         if row.get("answer_note"):
