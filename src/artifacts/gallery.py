@@ -2386,7 +2386,12 @@ function field(n,v){var x=form.querySelector("input[name="+n+"]");
   if(!x){x=document.createElement("input");x.type="hidden";x.name=n;form.appendChild(x)}x.value=v}
 window.addEventListener("message",function(e){
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
-  if(!d||typeof d!=="object"||d.type!=="artifact-selection"||pinOn)return;
+  if(!d||typeof d!=="object"||d.type!=="artifact-selection")return;
+  // Selecting text says what the reader wants, so it always offers the bar: a
+  // non-empty selection made in pin mode leaves pin mode first. Holding the bar
+  // back, with nothing on screen saying why, left Jeremy unable to comment
+  // (5 Nov 2026). An empty one (the click that picks an element) leaves it on.
+  if(pinOn){if(typeof d.quote!=="string"||!d.quote)return;pinMode(false)}
   if(typeof d.quote!=="string"||!d.quote||!d.anchor||!d.rect||!num(d.rect.top)||!num(d.rect.left)||!num(d.rect.height)){
     bar.hidden=true;last=null;return}
   last=d;var r=f.getBoundingClientRect();

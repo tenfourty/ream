@@ -132,7 +132,7 @@ The frame stays as is; the comments panel gains a pin mode, a picker and an atta
   a whole-page wrapper, preferring one with an `id`; the up arrow widens to the parent, down
   narrows back. A click reports `artifact-pin` (anchor, evidence text, rectangle); the gallery
   opens the panel with the spot quoted, exactly as for a text selection. Escape or the button again
-  leaves the mode. Selecting text still works without the mode and is unchanged.
+  leaves the mode. Selecting text still works without the mode and is unchanged. (Changed 5 Nov 2026: a text selection made while the mode is on now leaves the mode and shows the selection bar; until then it was silently ignored, which left Jeremy unable to comment.)
 - **Pins on the page.** Text pins keep the highlight. Element pins show a numbered badge at the
   element's corner, drawn by the gallery from rectangles the shim reports in
   `artifact-marks-placed` (extended with `rects`, capped like `unplaced`). Hover or focus on a

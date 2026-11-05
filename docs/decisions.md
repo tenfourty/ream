@@ -61,3 +61,19 @@ scattered over two threads and partly overtaken by later work.
   threads for one design, which is what made the open questions hard to follow.
 
 **Evidence:** confirmed (Jeremy, 5 Nov 2026)
+
+## Selecting text always offers Comment, even in pin mode, until commenting is redesigned (5 Nov 2026)
+
+**Chosen:** a text selection made while pin mode is on leaves pin mode and shows the selection bar
+(Comment, Remove this, Looks good). A click that picks an element still works as before. Why: pin
+mode held the bar back with nothing on screen saying so, and Jeremy, who never meant to turn it on,
+could not comment on any page. This is a stopgap. The whole reader-side comment experience is being
+redesigned from the best existing tools, and that redesign may replace pin mode entirely.
+
+**Not chosen:**
+- No stopgap, wait for the redesign: leaves a reader who presses C by accident unable to comment
+  for days.
+- Keep holding the bar back but show a strip saying pin mode is on: still blocks what the reader
+  plainly asked for, which is to comment on the words selected.
+
+**Evidence:** confirmed (Jeremy, 5 Nov 2026)

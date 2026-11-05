@@ -740,11 +740,19 @@ const badgesOf = (g) => g.docBody.children.filter((c) => c.className === "pinbad
   long.send({ ...PIN, quote: "w".repeat(900) });
   ok(long.form.children.find((c) => c.name === "quote").value.length === 200, "a long quote is cut at 200"); }
 
-// selection is not offered while picking
+// Selecting text always offers the bar, even while picking (Jeremy, 5 Nov 2026:
+// pin mode held the bar back with nothing on screen saying why, and he was stuck).
+// The selection says what he wants: pin mode is left, then the bar shows.
 { const g = build();
   g.pinbtn.on.click({});
   g.send(SEL);
-  ok(g.bar.hidden === true, "text selected in the frame during pin mode offers no action bar"); }
+  ok(g.bar.hidden === false, "text selected in the frame during pin mode still offers the action bar");
+  ok(modeMsgs(g).slice(-1)[0][0].on === false && g.pinbtn.attrs["aria-pressed"] === "false",
+     "and pin mode is left, in the frame and on the button");
+  const h = build();
+  h.pinbtn.on.click({});
+  h.send({ type: "artifact-selection", quote: "" });
+  ok(modeMsgs(h).slice(-1)[0][0].on === true, "an empty selection (a click to pick) leaves pin mode on"); }
 
 // badges
 const EMARKS = JSON.stringify([

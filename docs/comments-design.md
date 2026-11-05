@@ -131,7 +131,7 @@ reports the smallest block-level element under the pointer that is not a
 wrapper around the whole page (an ancestor with an id wins when it is not much
 larger), and the gallery outlines it over the frame; the up and down arrows
 widen to the parent and narrow back, a click picks, Escape or the button again
-leaves. A pick fills the composer exactly as a text selection does. An element
+leaves. Selecting text while it is on leaves the mode and offers the selection bar as usual: a selection is never held back (5 Nov 2026, after the bar silently failed to appear for Jeremy). A pick fills the composer exactly as a text selection does. An element
 with no id, no heading, no words and no label cannot be found again and is not
 pinned. Pins on the page show as numbered badges at the element's corner (drawn
 by the gallery from rectangles the shim reports in `artifact-marks-placed` and
