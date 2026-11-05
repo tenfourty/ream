@@ -70,6 +70,12 @@ The service runs on Postgres or SQLite, chosen by `DATABASE_URL` (`postgresql://
 `sqlite:////data/artifacts.db`). Only `src/artifacts/db.py` talks to a driver; SQL elsewhere must
 read the same on both (`docs/agent/specs/2026-10-09-sqlite-design.md`). CI runs the suite on both.
 
+The browser tests (comments panel, hover cards, thumbnails, shim placement) need a headless
+chromium: `ARTIFACTS_BROWSER=<path>`, or `chromium`/`chrome-headless-shell` on PATH; without one they
+skip (`-rs` names them). CI installs Debian's chromium and runs those four files serially in their own
+step with `ARTIFACTS_REQUIRE_BROWSER=1` (the parallel runs hide the browser: `ARTIFACTS_BROWSER=/nonexistent/browser`), which
+makes a missing browser fail the run at start instead of skipping -- so a green CI run means they ran.
+
 **On baba, never run the test suite** (Jeremy, 13 Oct 2026: no test-suite runs there). Push the
 change to a `ci/<name>` branch instead: CI runs the full suite on it and never builds an image or
 deploys from it. Land on `main` once that run is green, then delete the branch.

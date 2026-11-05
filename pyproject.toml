@@ -60,7 +60,8 @@ dev = [
 # worker's last chunk does. Inert without -n. See pytest_collection_modifyitems
 # in tests/conftest.py for where the slow tests go.
 # -rs: the summary names every skipped test and why. Browser tests skip where
-# there is no headless browser (CI is one such place), and a bare "13 skipped"
+# there is no headless browser (a laptop without one; CI installs chromium and sets
+# ARTIFACTS_REQUIRE_BROWSER=1, so there a missing browser fails), and a bare "13 skipped"
 # hid that for weeks (runcove-5t3oj.77).
 addopts = "--dist=worksteal -rs"
 # A test that hangs fails after 5 minutes with every thread's stack printed,

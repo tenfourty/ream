@@ -7,7 +7,8 @@ and that the address never changes. That is the whole claim of "comments open
 beside the page at once", so it is checked where it is true or false.
 
 Needs the system's headless browser (`ARTIFACTS_BROWSER`, found the same way as
-the thumbnail tests); without one -- CI -- it skips. playwright is a dev
+the thumbnail tests); without one it skips -- except where ARTIFACTS_REQUIRE_BROWSER=1
+(CI), where a missing browser fails the whole run at start (tests/conftest.py). playwright is a dev
 dependency and drives that browser; it never downloads one of its own.
 
 The frame's content origin (`<id>.tenfourty.com`) is routed back to the same
@@ -109,7 +110,13 @@ def _forward(origin):
 @pytest.fixture()
 def browser():
     with sync_api.sync_playwright() as p:
-        b = p.chromium.launch(executable_path=thumbs.browser_path())
+        # CI's job container runs as root, where chromium refuses to start without
+        # --no-sandbox (thumbs.py passes it for the same reason); a person's shell
+        # is not root and keeps the sandbox.
+        b = p.chromium.launch(
+            executable_path=thumbs.browser_path(),
+            args=["--no-sandbox"] if os.geteuid() == 0 else [],
+        )
         try:
             yield b
         finally:

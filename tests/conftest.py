@@ -417,6 +417,26 @@ def _declared_throwaway(env) -> str | None:
     return None
 
 
+def pytest_sessionstart(session) -> None:
+    """CI sets ARTIFACTS_REQUIRE_BROWSER=1: a run with no headless browser is then
+    a failure, not a pile of skips. The browser tests (comments panel, hover cards,
+    thumbnails) skip when `thumbs.available()` is false, and for a long time CI had
+    no browser, so they passed only on a maintainer's machine (runcove-5t3oj.81).
+    Checked once, in the controller, before any test patches `thumbs.available`."""
+    if os.environ.get("ARTIFACTS_REQUIRE_BROWSER") != "1" or _is_worker(session.config):
+        return
+    from artifacts import thumbs
+
+    if not thumbs.available():
+        pytest.exit(
+            "ARTIFACTS_REQUIRE_BROWSER=1 but there is no headless browser "
+            f"(ARTIFACTS_BROWSER={os.environ.get('ARTIFACTS_BROWSER')!r}, "
+            "else chrome-headless-shell/chromium on PATH): the browser tests would "
+            "skip, and in CI a skip is a failure",
+            returncode=1,
+        )
+
+
 def pytest_configure(config) -> None:
     """Under -n the controller starts the server before it spawns workers,
     and they inherit its address. Serially it starts on first use instead.
