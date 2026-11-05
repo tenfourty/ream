@@ -2006,6 +2006,15 @@ def agent_router(
         except store.NotFound as exc:
             raise HTTPException(404, "no such comment") from exc
 
+    @router.post("/comments/{comment_id}/reopen")
+    def reopen_comment(comment_id: str, agent: str = Depends(caller)):
+        try:
+            # `agent=` EXPLICITLY, for the reason spelled out on resolve above:
+            # the default would skip the ownership check.
+            return comments.reopen(db, comment_id, agent=agent).__dict__
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such comment") from exc
+
     @router.get("/comments")
     def list_all_comments(
         include_resolved: bool = False,

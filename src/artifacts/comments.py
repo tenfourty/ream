@@ -1559,6 +1559,53 @@ def resolve(
     return _row_to_comment(row)
 
 
+def reopen(db: Database, comment_id: str, *, agent: str | None = None) -> CommentRow:
+    """Put a resolved thread back among the open ones: the other half of `resolve`.
+
+    `comment_id` may name the root or any reply, as with `resolve`; the root and
+    every reply alongside it lose `resolved_at` and `resolved_by` together, so the
+    thread is open or resolved as a whole. `agent` is as in `resolve`: the owner of
+    the page for the keyed API (anyone else, and a missing comment, are the same
+    `NotFound`), None for the gallery acting for Jeremy.
+
+    Idempotent: an open thread is returned as it stands.
+
+    No event is written, though `resolve` writes one when somebody other than the
+    owner settles a thread. That event wakes the owner for a conversation that is
+    over; a reopened thread needs no wake-up of its own, because it shows again in
+    the owner's open `comments` list. (The journal's kinds are also enforced by a
+    CHECK on both databases, and widening it is a migration.)"""
+    with db.connect() as conn:
+        if agent is None:
+            row = conn.execute(
+                f"select {_COLUMNS} from comment where comment.id = %s"  # noqa: S608 -- fixed constant, not caller input
+                f" and {_VISIBLE}",
+                (comment_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                f"select {_COLUMNS} from comment"  # noqa: S608 -- fixed constant, not caller input
+                " join artifact on artifact.id = comment.artifact_id"
+                " where comment.id = %s and artifact.agent = %s"
+                f" and not comment.held and {_VISIBLE}",
+                (comment_id, agent),
+            ).fetchone()
+        if row is None:
+            raise store.NotFound()
+        root_id = row[3] if row[3] is not None else row[0]
+        with conn.transaction():
+            conn.execute(
+                "update comment set resolved_at = null, resolved_by = null"
+                " where id = %s or thread_root = %s",
+                (root_id, root_id),
+            )
+        row = conn.execute(
+            f"select {_COLUMNS} from comment where comment.id = %s",  # noqa: S608 -- fixed constant, not caller input
+            (comment_id,),
+        ).fetchone()
+    return _row_to_comment(row)
+
+
 def withdraw(db: Database, comment_id: str, *, kind: str) -> bool:
     """Take a comment GitGuardian flagged out of every read, and blank its text so
     the secret does not sit in the database. `kind` names the shape (e.g.

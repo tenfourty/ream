@@ -93,6 +93,17 @@ def test_list_reply_and_settle_a_thread(db, live, key_file, page, capsys):
     assert "no open comment threads" in capsys.readouterr().out
 
 
+def test_an_agent_can_reopen_a_thread_it_settled(live, key_file, db, page, capsys):
+    path, _ = key_file
+    root = _he_comments(db, page, "why this order?")
+    assert _run(["settle", root.id], path) == 0
+    capsys.readouterr()
+    assert _run(["reopen", root.id], path) == 0
+    assert f"reopened {root.id}" in capsys.readouterr().out
+    assert _run(["comments"], path) == 0
+    assert "NEEDS YOUR REPLY" in capsys.readouterr().out
+
+
 def test_replying_to_a_thread_that_is_not_yours_is_refused(live, key_file, capsys):
     path, _ = key_file
     assert _run(["reply", "nope", "hello"], path) == 2

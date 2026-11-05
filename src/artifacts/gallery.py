@@ -576,21 +576,33 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
 .nthread{margin:.2rem .35rem .6rem}
 .nthread .nhead{font-size:.8125rem;color:var(--muted);margin:0 0 .3rem}
 .nthread .ntag{margin-left:.5rem;color:var(--now);font-weight:600}
-.settled-cmts{margin:.6rem 0 0}
-.settled-cmts > summary{cursor:pointer;list-style:none;display:inline-flex;
-  align-items:center;gap:.5rem;font:.8125rem/1.4 ui-sans-serif,system-ui,sans-serif;
-  color:var(--muted)}
-.settled-cmts > summary::-webkit-details-marker{display:none}
-.settled-cmts > summary:hover{color:var(--ink)}
-.settled-cmts .n{font-size:.75rem;color:var(--muted)}
-/* The same triangle the settled-comments fold uses, and for the same reason:
-   without
-   a marker the summary reads as a caption and nobody presses it. Rendered
-   once and looked at -- "Settled  1 conversation" sat there looking inert. */
-.settled-cmts > summary .chev{display:inline-block;width:0;height:0;flex:0 0 auto;
-  border-left:5px solid currentColor;border-top:4px solid transparent;
-  border-bottom:4px solid transparent;transition:transform .12s}
-.settled-cmts[open] > summary .chev{transform:rotate(90deg)}
+/* OPEN / RESOLVED. Both lists are in the markup. With scripts (body.cjs) the
+   tabs show and `data-ctab` on the panel picks the list; without them the tabs
+   are hidden and both lists show, each under its small label. A resolved
+   thread is one tap away and never hidden: the count is on its tab. */
+.ctabs{display:none;gap:.15rem;margin:0 0 .9rem}
+body.cjs .ctabs{display:flex}
+.ctab{display:inline-flex;align-items:center;gap:.4rem;height:32px;padding:0 .75rem;
+  border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer;
+  font:500 .875rem/1.25rem ui-sans-serif,system-ui,-apple-system,sans-serif}
+.ctab:hover{color:var(--ink);background:var(--card)}
+.ctab[aria-selected="true"]{color:var(--ink);background:var(--card);
+  box-shadow:inset 0 0 0 1px var(--line)}
+.ctab .tn{font-size:.75rem;color:var(--muted);background:var(--paper);
+  border-radius:999px;padding:.05rem .36rem;box-shadow:inset 0 0 0 1px var(--line)}
+.cpane-h{font:600 .7rem/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);margin:.8rem 0 .5rem}
+body.cjs .cpane-h{display:none}
+body.cjs .cpanel[data-ctab="open"] .cpane-resolved,
+body.cjs .cpanel[data-ctab="resolved"] .cpane-open{display:none}
+body.cjs .cpanel[data-ctab="open"] .cgroup:not(:has(.cpane-open)),
+body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){display:none}
+.cgroup + .cgroup{margin-top:1.1rem}
+.cgroup > .cpage{margin-top:0}
+.creopen{margin:.5rem 0 0}
+.creopen button{padding:.4rem .7rem;cursor:pointer;border:1px solid var(--line);
+  border-radius:.45rem;background:var(--chip);color:var(--ink);
+  font:.8125rem/1.4 ui-sans-serif,system-ui,sans-serif}
 
 .since{margin:.5rem 0 .75rem;padding:.45rem .7rem;border-left:2px solid var(--line);
   background:var(--bg);border-radius:.3rem}
@@ -2091,6 +2103,11 @@ function panel(on,keep){if(!P)return;B.classList.toggle("cpanel-open",on);
   // a selection bar placed against the old layout would point at nothing.
   if(bar)bar.hidden=true;if(!busy())hide();
   if(!keep)try{window.localStorage.setItem(K,on?"1":"0")}catch(x){}}
+// OPEN / RESOLVED: which list the panel shows is `data-ctab` on the panel, and the
+// tab buttons say so with aria-selected. Not remembered: a visit starts on Open.
+function tab(n){if(!P||(n!=="open"&&n!=="resolved"))return;P.setAttribute("data-ctab",n);
+  var bs=P.querySelectorAll?P.querySelectorAll(".ctab"):[];
+  for(var i=0;i<bs.length;i++)bs[i].setAttribute("aria-selected",bs[i].getAttribute("data-ctab")===n?"true":"false")}
 if(P&&B&&B.classList){
   B.classList.add("cjs");
   var x0=P.querySelector(".cclose");
@@ -2101,7 +2118,8 @@ if(P&&B&&B.classList){
   if(linked)try{window.history.replaceState(null,"",location.pathname+location.search)}catch(x){}
   panel(linked||st==="1",true);
   document.addEventListener("click",function(e){
-    var t=e.target&&e.target.closest?e.target.closest(".cbtn,.cclose"):null;
+    var t=e.target&&e.target.closest?e.target.closest(".cbtn,.cclose,.ctab"):null;
+    if(t&&t.getAttribute("data-ctab")){e.preventDefault();tab(t.getAttribute("data-ctab"));return}
     if(t){e.preventDefault();var shut=t.className==="cclose";panel(!shut&&!isOpen());
       // The close button is inside what just hid: keyboard focus would fall
       // to <body>, so it goes back to the control that opens the panel.
@@ -2155,7 +2173,7 @@ function show(id,r){var li=thread(id);if(!li)return;hide();
   function btn(t,fn){var b=document.createElement("button");b.type="button";b.textContent=t;
     b.addEventListener("click",fn);row.appendChild(b)}
   if(rc)btn("Reply",function(){rc.hidden=false;var i=rc.querySelector("input[name=body]");if(i)i.focus()});
-  btn("Open",function(){hide();panel(true);var t=thread(id);
+  btn("Open",function(){hide();panel(true);tab("open");var t=thread(id);
     if(t&&t.scrollIntoView)t.scrollIntoView({block:"nearest"})});
   c.addEventListener("pointerenter",function(){clearTimeout(hg);hg=0});
   c.addEventListener("pointerleave",grace);
@@ -2320,13 +2338,17 @@ function place(fm,html,root){
   var old=fm.closest?fm.closest("li.thread"):null,hx=fm.closest?fm.closest(".hovercard"):null;
   if(hx){old=thread(hx.getAttribute("data-mark-id"));hide();if(!old)throw new Error("gone")}
   if(old&&old.parentNode){old.parentNode.replaceChild(li,old);return false}
-  var list=document.querySelector("#comments > ul.threads");
+  // A new thread goes to the end of the OPEN list, and the panel shows that list.
+  var list=document.querySelector("#comments .cpane-open > ul.threads");
   if(!list){list=document.createElement("ul");list.className="threads";
-    form.parentNode.insertBefore(list,form)}
-  drop(document.querySelector("#comments .cempty"));
-  list.appendChild(li);return true}
+    var pane=document.querySelector("#comments .cpane-open");
+    if(pane)pane.appendChild(list);else form.parentNode.insertBefore(list,form)}
+  drop(document.querySelector("#comments .cpane-open .cempty"));
+  tab("open");list.appendChild(li);return true}
 function bump(){var c=document.querySelector(".cbtn .cn");
-  if(c){var n=parseInt(c.textContent,10);c.textContent=String((isFinite(n)?n:0)+1)}}
+  if(c){var n=parseInt(c.textContent,10);c.textContent=String((isFinite(n)?n:0)+1)}
+  var o=document.querySelector("#ctab-open .tn");
+  if(o){var m=parseInt(o.textContent,10);o.textContent=String((isFinite(m)?m:0)+1)}}
 function cleared(fm){
   var b=fm.querySelector("input[name=body]");if(b)b.value="";clearPics(fm);
   if(fm===form){["quote","anchor","kind"].forEach(function(n){drop(fm.querySelector("input[name="+n+"]"))});
@@ -2470,7 +2492,7 @@ function badges(rs){
     var b=document.createElement("button");b.type="button";b.className="pinbadge";
     b.textContent=String(nums[r.id]);b.setAttribute("aria-label","Pinned comment "+nums[r.id]);
     b.style.top=(fr.top+window.scrollY+r.top)+"px";b.style.left=(fr.left+window.scrollX+r.left)+"px";
-    b.addEventListener("click",function(){panel(true);var t=thread(r.id);
+    b.addEventListener("click",function(){panel(true);tab("open");var t=thread(r.id);
       if(t&&t.scrollIntoView)t.scrollIntoView({block:"nearest"})});
     document.body.appendChild(b);pbs.push(b);
     var t=thread(r.id);
@@ -3267,9 +3289,12 @@ def _render_comments(
     newest-first is right for a list of pages, where you want what changed, and
     wrong for a thread, where you want what was said.
 
-    A RESOLVED THREAD IS FOLDED, NOT HIDDEN. It is the record of something that
-    was settled, and this service loses nothing: the count is on the summary so
-    "out of the way" never becomes "gone", exactly as the archived fold works.
+    A RESOLVED THREAD HAS ITS OWN TAB, NOT A HIDING PLACE. The panel opens on
+    Open and Resolved is one tap away, with the count on the tab so "out of the
+    way" never becomes "gone" (it was a fold until 5 Nov 2026, with the same
+    rule). Both lists are always in the markup; with scripts a class on the
+    panel shows one, without them both show, each under its own label. A
+    resolved thread carries a Reopen button, the twin of Mark settled.
 
     Always renders the composer, even with nothing to show -- an empty section
     with a box is an invitation; an empty section with no box is a fault.
@@ -3387,7 +3412,8 @@ def _render_comments(
         kids = "".join(bubble(r) for r in replies.get(root.id, []))
         resolved = root.resolved_at is not None
         action = (
-            ""
+            f'<form class="creopen" method="post" action="/c/{escape(root.id)}/reopen">'
+            '<button type="submit">Reopen</button></form>'
             if resolved
             else (
                 f'<form class="cresolve" method="post" action="/c/{escape(root.id)}/resolve">'
@@ -3417,15 +3443,31 @@ def _render_comments(
             f'<ul class="bubbles">{bubble(root)}{kids}</ul>{reply}{action}</li>'
         )
 
-    def settled_fold(settled_roots: list) -> str:
-        noun = "conversation" if len(settled_roots) == 1 else "conversations"
+    def tabs(n_open: int, n_resolved: int) -> str:
+        """Open and Resolved, switched by script (`data-ctab` on the panel).
+        Hidden until the script has marked the page `.cjs`."""
+
+        def one(name: str, label: str, n: int, on: bool) -> str:
+            return (
+                f'<button type="button" role="tab" class="ctab" id="ctab-{name}"'
+                f' data-ctab="{name}" aria-controls="cpane-{name}"'
+                f' aria-selected="{"true" if on else "false"}">{label}'
+                f'<span class="tn">{n}</span></button>'
+            )
+
         return (
-            f'<details class="settled-cmts"><summary>'
-            '<span class="chev" aria-hidden="true"></span>Settled'
-            f'<span class="n">{len(settled_roots)} {noun}</span></summary>'
-            '<ul class="threads">'
-            + "".join(thread(r) for r in settled_roots)
-            + "</ul></details>"
+            '<div class="ctabs" role="tablist" aria-label="Comments">'
+            + one("open", "Open", n_open, True)
+            + one("resolved", "Resolved", n_resolved, False)
+            + "</div>"
+        )
+
+    def pane(name: str, inner: str) -> str:
+        label = "Open" if name == "open" else "Resolved"
+        return (
+            f'<div class="cpane cpane-{name}" id="cpane-{name}" role="tabpanel"'
+            f' aria-labelledby="ctab-{name}"><h3 class="cpane-h">{label}</h3>'
+            f"{inner}</div>"
         )
 
     if only_thread is not None:
@@ -3433,6 +3475,13 @@ def _render_comments(
 
     open_roots = [r for r in roots if r.resolved_at is None]
     settled = [r for r in roots if r.resolved_at is not None]
+
+    if everywhere is not None:
+        every_roots = [r for page in everywhere for r in page.rows if not r.thread_root]
+        n_open = sum(1 for r in every_roots if r.resolved_at is None)
+        n_resolved = len(every_roots) - n_open
+    else:
+        n_open, n_resolved = len(open_roots), len(settled)
 
     ident = escape(artifact_id)
     # THIS PAGE / ALL PAGES, the filter the reference's comments panel carries
@@ -3465,13 +3514,13 @@ def _render_comments(
     # real button. No backdrop link: there is no backdrop.
     out = [
         (
-            '<aside class="cpanel" id="comments" aria-label="Comments">'
+            '<aside class="cpanel" id="comments" aria-label="Comments" data-ctab="open">'
             '<div class="chead"><h2>Comments</h2>'
             '<a class="cclose" href="#_" aria-label="Close comments">\u00d7</a></div>'
             # Filled by /comments.js from the page's own report of the marks
             # it could not place; empty and hidden until then.
             '<p class="cunplaced" id="marks-unplaced" hidden></p>'
-            f"{scope}"
+            f"{scope}{tabs(n_open, n_resolved)}"
         )
     ]
     if on_all:
@@ -3491,30 +3540,48 @@ def _render_comments(
             page_open = [r for r in page_roots if r.resolved_at is None]
             page_settled = [r for r in page_roots if r.resolved_at is not None]
             flag = '<span class="carch">archived</span>' if page.archived else ""
+            # One group per page; each tab hides the lists of the other, and a
+            # group with nothing in the tab shown hides itself (`:has` in the CSS).
             out.append(
+                '<section class="cgroup">'
                 f'<h3 class="cpage"><a href="/a/{escape(page.artifact_id)}#comments">'
                 f"{escape(page.artifact_title)}</a>{flag}</h3>"
-            )
-            if page_open:
-                out.append(
-                    '<ul class="threads">'
+                + (
+                    '<ul class="threads cpane-open">'
                     + "".join(thread(r) for r in page_open)
                     + "</ul>"
+                    if page_open
+                    else ""
                 )
-            if page_settled:
-                out.append(settled_fold(page_settled))
+                + (
+                    '<ul class="threads cpane-resolved">'
+                    + "".join(thread(r) for r in page_settled)
+                    + "</ul>"
+                    if page_settled
+                    else ""
+                )
+                + "</section>"
+            )
         if not everywhere:
             out.append(
                 '<p class="cempty">No conversations on any page yet. Open a page '
                 "and say something; the agent that published it will read it.</p>"
             )
+        else:
+            if not n_open:
+                out.append('<p class="cempty cpane-open">Nothing open on any page.</p>')
+            if not n_resolved:
+                out.append(
+                    '<p class="cempty cpane-resolved">Nothing resolved on any page yet.</p>'
+                )
         out.append("</aside>")
         return "".join(out)
     gone = [r for r in open_roots if getattr(r, "anchor_state", "") == "outdated"]
+    open_html = ""
     if gone:
         # Page level, always at the top, so a pin whose spot a republish
         # removed cannot be missed. Each thread is also in its place below.
-        out.append(
+        open_html += (
             '<section class="coutdated-list" aria-label="Outdated pins">'
             f"<h3>Outdated pins ({len(gone)})</h3><ul>"
             + "".join(
@@ -3531,22 +3598,31 @@ def _render_comments(
             + "</ul></section>"
         )
     if open_roots:
-        out.append(
+        open_html += (
             '<ul class="threads">' + "".join(thread(r) for r in open_roots) + "</ul>"
         )
     elif not settled:
-        out.append(
+        open_html += (
             '<p class="cempty">Nothing yet. Say something and the agent that '
             "published this page will read it.</p>"
         )
+    else:
+        open_html += '<p class="cempty">Nothing open. Everything is under Resolved.</p>'
+    out.append(pane("open", open_html))
+    out.append(
+        pane(
+            "resolved",
+            '<ul class="threads">' + "".join(thread(r) for r in settled) + "</ul>"
+            if settled
+            else '<p class="cempty">Nothing resolved yet.</p>',
+        )
+    )
     out.append(
         f'<form class="cnew" method="post" action="/c/{ident}">'
         '<input name="body" placeholder="Comment on this page" '
         'aria-label="Comment on this page">'
         f'<button type="submit">Send</button>{_ATTACH}</form>'
     )
-    if settled:
-        out.append(settled_fold(settled))
     out.append("</aside>")
     return "".join(out)
 
@@ -6880,6 +6956,18 @@ def gallery_router(db: Database) -> APIRouter:
             # sense, and Jeremy owns everything in the sense that matters. Same
             # call `add` already makes for writing.
             row = comments.resolve(db, comment_id, by="jeremy", agent=None)
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such comment") from exc
+        return RedirectResponse(f"/a/{row.artifact_id}#comments", status_code=303)
+
+    @router.post("/c/{comment_id}/reopen")
+    def reopen_comment(
+        comment_id: str,
+        _guard: None = Depends(_same_origin_write),
+    ):
+        try:
+            # agent=None, as for resolve: the gallery acts for Jeremy.
+            row = comments.reopen(db, comment_id, agent=None)
         except store.NotFound as exc:
             raise HTTPException(404, "no such comment") from exc
         return RedirectResponse(f"/a/{row.artifact_id}#comments", status_code=303)

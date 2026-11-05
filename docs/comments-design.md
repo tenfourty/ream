@@ -224,3 +224,22 @@ the owner.
    the panel pins and highlights them, re-anchoring on republish.
 4. **Telling the agent** — pending Jeremy's decision: a live nudge to the
    owning session, or pick-up on its next turn (both plus the digest).
+
+## As built: Open and Resolved tabs, and reopening (5 Nov 2026)
+
+The comments panel opens on an **Open** tab and has a **Resolved** tab beside it,
+each with its count; the old "Settled" fold is gone. Both lists are always in the
+page's markup, so a resolved thread is one tap away and never hidden. With scripts
+`data-ctab` on the panel picks the list (not remembered: a visit starts on Open);
+without them both lists show, each under its own label. A new comment returns the
+panel to Open. The All pages view has the same two tabs, counted across pages.
+
+A resolved thread has a **Reopen** button. Reopening clears `resolved_at` and
+`resolved_by` on the root and every reply (`comments.reopen`), the exact inverse
+of resolve. Routes: `POST /c/{id}/reopen` (the gallery, same-origin only, acting
+for Jeremy), `POST /api/v1/comments/{id}/reopen` (scoped like resolve: the page's
+owner only, and a comment that is not yours answers exactly like one that does not
+exist), and `artifacts-decide reopen <thread-id>`. Reopening writes no journal
+event: the `thread_resolved` event wakes the owner for a finished conversation,
+and a reopened thread simply shows again in its open `comments` list.
+Pointing at or focusing a thread lights its spot on the page in either tab.

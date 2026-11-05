@@ -117,6 +117,41 @@ def test_marking_it_settled_works_for_him(client, db, page):
     assert settled.resolved_by == "jeremy"
 
 
+def test_reopening_a_settled_thread_works_for_him(client, db, page):
+    root = comments.add(
+        db, artifact_id=page.id, author_kind="human", author="jeremy", body="q"
+    )
+    comments.resolve(db, root.id, by="jeremy", agent=None)
+    got = client.post(
+        f"/c/{root.id}/reopen", headers=_same_origin(), follow_redirects=False
+    )
+    assert got.status_code == 303
+    assert got.headers["location"] == f"/a/{page.id}#comments"
+    back = comments.list_for_artifact(db, page.id, include_resolved=False)[0]
+    assert back.resolved_at is None and back.resolved_by is None
+
+
+def test_reopening_needs_the_same_origin_and_a_real_comment(client, db, page):
+    root = comments.add(
+        db, artifact_id=page.id, author_kind="human", author="jeremy", body="q"
+    )
+    comments.resolve(db, root.id, by="jeremy", agent=None)
+    assert (
+        client.post(
+            f"/c/{root.id}/reopen",
+            headers={"Sec-Fetch-Site": "cross-site"},
+            follow_redirects=False,
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/c/no-such/reopen", headers=_same_origin(), follow_redirects=False
+        ).status_code
+        == 404
+    )
+
+
 # --- what he sees -------------------------------------------------------------
 
 
@@ -135,30 +170,57 @@ def test_the_bar_carries_a_comments_control_with_a_count(client, db, page):
     assert '<span class="cn">1</span>' in with_one
 
 
-def test_a_settled_thread_is_folded_not_hidden(client, db, page):
-    """Out of the way must never become gone -- the count is on the summary,
-    exactly as the archived wall works."""
+def test_the_panel_has_open_and_resolved_tabs_with_counts(client, db, page):
+    """Resolved is one tap away, never hidden: the tab names how many are in it,
+    exactly as the old fold did, and the threads are in the page either way."""
     root = comments.add(
         db, artifact_id=page.id, author_kind="human", author="jeremy", body="old thing"
     )
-    comments.resolve(db, root.id, by="jeremy", agent=None)
-    body = client.get(f"/a/{page.id}").text
-    assert "old thing" in body, "a settled conversation was thrown away"
-    assert 'class="settled-cmts"' in body
-    assert "1 conversation" in body
-    assert '<span class="cn">' not in body, "a settled thread is not waiting on anyone"
-
-
-def test_the_fold_looks_like_something_you_can_open(client, db, page):
-    """Without a marker the summary reads as a caption and nobody presses it.
-    Rendered and looked at: "Settled 1 conversation" sat there looking inert."""
-    root = comments.add(
-        db, artifact_id=page.id, author_kind="human", author="jeremy", body="x"
+    comments.add(
+        db, artifact_id=page.id, author_kind="human", author="jeremy", body="live one"
     )
     comments.resolve(db, root.id, by="jeremy", agent=None)
     body = client.get(f"/a/{page.id}").text
-    fold = body[body.index('class="settled-cmts"') :][:400]
-    assert 'class="chev"' in fold
+    assert 'role="tablist"' in body
+    open_tab = re.search(
+        r'<button[^>]*id="ctab-open"[^>]*>(.*?)</button>', body, re.DOTALL
+    )
+    done_tab = re.search(
+        r'<button[^>]*id="ctab-resolved"[^>]*>(.*?)</button>', body, re.DOTALL
+    )
+    assert open_tab and ">1<" in open_tab.group(1) and "Open" in open_tab.group(1)
+    assert done_tab and ">1<" in done_tab.group(1) and "Resolved" in done_tab.group(1)
+    assert 'aria-selected="true"' in open_tab.group(0)
+    assert 'aria-selected="false"' in done_tab.group(0)
+    assert "old thing" in body, "a resolved conversation was thrown away"
+    assert "settled-cmts" not in body, "the fold is gone"
+    resolved_pane = body[body.index('id="cpane-resolved"') :]
+    assert "old thing" in resolved_pane and "live one" not in resolved_pane
+    open_pane = body[body.index('id="cpane-open"') : body.index('id="cpane-resolved"')]
+    assert "live one" in open_pane and "old thing" not in open_pane
+    assert '<span class="cn">1</span>' in body, "the bar counts only the open ones"
+
+
+def test_a_resolved_thread_has_a_reopen_button_and_an_open_one_does_not(
+    client, db, page
+):
+    done = comments.add(
+        db, artifact_id=page.id, author_kind="human", author="jeremy", body="done"
+    )
+    live = comments.add(
+        db, artifact_id=page.id, author_kind="human", author="jeremy", body="live"
+    )
+    comments.resolve(db, done.id, by="jeremy", agent=None)
+    body = client.get(f"/a/{page.id}").text
+    assert f'class="creopen" method="post" action="/c/{done.id}/reopen"' in body
+    assert f"/c/{live.id}/reopen" not in body
+    assert f"/c/{live.id}/resolve" in body and f"/c/{done.id}/resolve" not in body
+
+
+def test_an_empty_tab_says_so(client, db, page):
+    body = client.get(f"/a/{page.id}").text
+    assert "Nothing yet" in body
+    assert "Nothing resolved yet" in body
 
 
 def test_agent_text_is_escaped_into_his_signed_in_origin(client, db, page):
@@ -399,7 +461,7 @@ def test_an_archived_pages_conversations_are_here_and_flagged(client, db, page, 
     assert 'class="carch"' in everywhere
 
 
-def test_settled_conversations_stay_folded_in_the_all_pages_view(
+def test_resolved_conversations_are_under_the_resolved_tab_in_the_all_pages_view(
     client, db, page, other
 ):
     root = comments.add(
@@ -414,8 +476,9 @@ def test_settled_conversations_stay_folded_in_the_all_pages_view(
     everywhere = client.get(f"/a/{page.id}?comments=all").text
 
     assert "settled elsewhere" in everywhere
-    assert 'class="settled-cmts"' in everywhere
-    assert "1 conversation" in everywhere
+    assert 'id="ctab-resolved"' in everywhere
+    assert f"/c/{root.id}/reopen" in everywhere
+    assert "settled-cmts" not in everywhere
 
 
 def test_the_all_pages_view_says_so_when_there_is_nothing_anywhere(client, db, page):

@@ -650,6 +650,107 @@ def test_the_gallery_resolves_for_jeremy_who_owns_nothing(db):
     assert done.resolved_by == "jeremy"
 
 
+# --- reopening: the other half of resolve ------------------------------------
+
+
+def _resolved_thread(db):
+    keys.mint(db, agent="seat-a")
+    page = store.publish(db, "seat-a", "A's page", PAGE)
+    root = comments.add(
+        db, artifact_id=page.id, author_kind="human", author="jeremy", body="q"
+    )
+    reply = comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="seat-a",
+        body="a",
+        thread_root=root.id,
+    )
+    comments.resolve(db, root.id, by="jeremy", agent=None)
+    return page, root, reply
+
+
+def test_reopening_puts_the_whole_thread_back_among_the_open_ones(db):
+    page, root, reply = _resolved_thread(db)
+    assert comments.list_for_artifact(db, page.id, include_resolved=False) == []
+
+    done = comments.reopen(db, reply.id, agent=None)
+
+    assert done.resolved_at is None and done.resolved_by is None
+    rows = comments.list_for_artifact(db, page.id, include_resolved=False)
+    assert {r.id for r in rows} == {root.id, reply.id}
+    assert all(r.resolved_at is None and r.resolved_by is None for r in rows)
+
+
+def test_reopening_an_open_thread_changes_nothing(db):
+    _page, root, _ = _resolved_thread(db)
+    comments.reopen(db, root.id, agent=None)
+    again = comments.reopen(db, root.id, agent=None)
+    assert again.resolved_at is None
+
+
+def test_a_thread_can_be_settled_again_after_it_was_reopened(db):
+    _page, root, _ = _resolved_thread(db)
+    comments.reopen(db, root.id, agent=None)
+    again = comments.resolve(db, root.id, by="seat-a", agent="seat-a")
+    assert again.resolved_at is not None and again.resolved_by == "seat-a"
+
+
+def test_a_key_cannot_reopen_another_seats_thread_and_it_looks_like_no_comment(db):
+    keys.mint(db, agent="seat-b")
+    page, root, _ = _resolved_thread(db)
+
+    with pytest.raises(store.NotFound):
+        comments.reopen(db, root.id, agent="seat-b")
+    with pytest.raises(store.NotFound):
+        comments.reopen(db, "no-such-comment", agent="seat-b")
+
+    still = comments.list_for_artifact(db, page.id, include_resolved=True)
+    assert all(r.resolved_at is not None for r in still)
+    assert comments.reopen(db, root.id, agent="seat-a").resolved_at is None
+
+
+def test_the_api_reopens_a_settled_thread_for_its_owner(client, db):
+    token, _ = keys.mint(db, agent="ops-seat")
+    page = _publish(client, token)
+    root = client.post(
+        f"/api/v1/artifacts/{page['id']}/comments",
+        json={"body": "root"},
+        headers=auth(token),
+    ).json()
+    client.post(f"/api/v1/comments/{root['id']}/resolve", headers=auth(token))
+
+    got = client.post(f"/api/v1/comments/{root['id']}/reopen", headers=auth(token))
+    assert got.status_code == 200
+    assert got.json()["resolved_at"] is None and got.json()["resolved_by"] is None
+    open_now = client.get(
+        f"/api/v1/artifacts/{page['id']}/comments", headers=auth(token)
+    ).json()
+    assert [c["id"] for c in open_now] == [root["id"]]
+
+
+def test_the_api_answers_not_yours_exactly_like_no_such_comment(client, db):
+    token_a, _ = keys.mint(db, agent="seat-a")
+    token_b, _ = keys.mint(db, agent="seat-b")
+    page = _publish(client, token_a)
+    mine = client.post(
+        f"/api/v1/artifacts/{page['id']}/comments",
+        json={"body": "a comment"},
+        headers=auth(token_a),
+    ).json()
+    client.post(f"/api/v1/comments/{mine['id']}/resolve", headers=auth(token_a))
+
+    theirs = client.post(f"/api/v1/comments/{mine['id']}/reopen", headers=auth(token_b))
+    nothing = client.post("/api/v1/comments/no-such/reopen", headers=auth(token_b))
+    assert theirs.status_code == nothing.status_code == 404
+    assert theirs.json() == nothing.json()
+    assert client.post(f"/api/v1/comments/{mine['id']}/reopen").status_code in (
+        401,
+        403,
+    )
+
+
 # --- the text a comment is about, and whether it is still there ---------------
 #
 # homelab-ij8.18's re-anchoring rule. A comment is words about OTHER words, and

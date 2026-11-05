@@ -2141,6 +2141,10 @@ def build_parser() -> argparse.ArgumentParser:
     comment.add_argument("--idempotency-key", metavar="KEY", help=_IDEMPOTENCY_HELP)
     settle = subs.add_parser("settle", help="mark a comment thread done")
     settle.add_argument("thread", metavar="THREAD-ID")
+    reopen = subs.add_parser(
+        "reopen", help="put a settled comment thread back among the open ones"
+    )
+    reopen.add_argument("thread", metavar="THREAD-ID")
 
     return parser
 
@@ -2182,6 +2186,7 @@ def main(argv: list[str] | None = None) -> int:
         "reply",
         "comment",
         "settle",
+        "reopen",
     ):
         warn_if_unlabelled(args.cmd)
     try:
@@ -2455,6 +2460,12 @@ def main(argv: list[str] | None = None) -> int:
                 "  they are told through the service; if they run no waiter, "
                 "tell them yourself"
             )
+            return 0
+        if args.cmd == "reopen":
+            # No open-thread lookup first: a settled thread is exactly what this
+            # is for, and the service answers 404 for one that is not yours.
+            _request("POST", f"{base}/comments/{args.thread}/reopen", key, {})
+            print(f"reopened {args.thread}")
             return 0
         if args.cmd in ("reply", "settle"):
             # Your own pages by default; another office's page by --page,

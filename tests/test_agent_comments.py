@@ -191,6 +191,23 @@ def test_only_the_owner_may_settle_a_thread(client, db, seats, page):
     )
 
 
+def test_only_the_owner_may_reopen_a_thread(client, db, seats, page):
+    row = _post(client, seats, page.id).json()
+    client.post(f"/api/v1/comments/{row['id']}/resolve", headers=seats["owner"])
+    assert (
+        client.post(
+            f"/api/v1/comments/{row['id']}/reopen", headers=seats["other"]
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            f"/api/v1/comments/{row['id']}/reopen", headers=seats["owner"]
+        ).status_code
+        == 200
+    )
+
+
 # --- the text anchor ----------------------------------------------------------
 
 

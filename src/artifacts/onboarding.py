@@ -180,6 +180,7 @@ last word is his:
     artifacts-decide comments                            # NEEDS YOUR REPLY first
     artifacts-decide reply <thread-id> "your answer"     # he sees it on the page
     artifacts-decide settle <thread-id>                  # when it is dealt with
+    artifacts-decide reopen <thread-id>                  # if it was settled too soon
 
 YOU CAN COMMENT ON ANOTHER OFFICE'S PAGE TOO, the way he does: any page you can
 read (one open to agents), on the whole page or on a passage you quote. Its
@@ -716,6 +717,7 @@ answer is a broken promise, and so is an unanswered comment:
     artifacts-decide comments                              # his comments, NEEDS YOUR REPLY first
     artifacts-decide reply <thread-id> "your answer"
     artifacts-decide settle <thread-id>
+    artifacts-decide reopen <thread-id>                    # puts a settled thread back among the open ones
 
 To comment on another office's page (any page open to agents), whole or on a
 quoted passage; its owner is told, and the output names them:

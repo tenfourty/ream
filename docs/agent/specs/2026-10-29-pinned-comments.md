@@ -592,3 +592,12 @@ Differences from the text above, and why:
   from him. An id staged by an agent is refused at attach with the same `422` as an unknown one.
 - **No rate limiter** on the twin, for the reason given for the agent route: the 12 staged per
   author and 40 per page quotas bound it.
+
+## As built: the comment redesign (5 Nov 2026)
+
+See `docs/comments-design.md` ("As built: Open and Resolved tabs, and reopening")
+and the entry in `docs/decisions.md`. In this spec's terms: the panel's resolved
+fold became Open and Resolved tabs, and threads can be reopened (gallery form,
+`POST /api/v1/comments/{id}/reopen`, `artifacts-decide reopen`). The pin mode,
+Pin button and C key described above are replaced by other pieces of the same
+redesign; their notes follow when they land.

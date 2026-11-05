@@ -87,7 +87,10 @@ function build({ noPinBtn = false, marks = "[]", fetchImpl = null, noForm = fals
   panel.appendChild(close);
   panel.querySelector = (q) => (q === ".cclose" ? panel.children.find((c) => c.className === "cclose") || null : null);
   const tlist = el("ul"); tlist.className = "threads"; threads.forEach((t) => tlist.appendChild(t)); panel.appendChild(tlist);
-  panel.querySelectorAll = (q) => (q === "li.thread" ? tlist.children.slice() : []);
+  const tabBtns = ["open", "resolved"].map((n) => { const b = el("button"); b.className = "ctab"; b.attrs["data-ctab"] = n;
+    b.attrs["aria-selected"] = n === "open" ? "true" : "false"; return b; });
+  panel.setAttribute("data-ctab", "open");
+  panel.querySelectorAll = (q) => (q === "li.thread" ? tlist.children.slice() : q === ".ctab" ? tabBtns : []);
   const cbtn = el("a"); cbtn.className = "cbtn";
   const byId = { "artifact-frame": iframe, "artifact-marks": marksEl, "marks-unplaced": unplacedEl, comments: noPanel ? null : panel };
   const pinbtn = el("button"); pinbtn.className = "pinmodebtn"; pinbtn.hidden = true;
@@ -131,7 +134,7 @@ function build({ noPinBtn = false, marks = "[]", fetchImpl = null, noForm = fals
   const card = () => docBody.children.filter((c) => c.className === "hovercard");
   const scroll = () => (listeners.scroll || []).concat(capture.scroll || []).forEach((fn) => fn({}));
   return { bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload, submit, extra, doc,
-           panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist, press, fsChange, pinbtn, win, docOn };
+           panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist, press, fsChange, pinbtn, win, docOn, tabBtns };
 }
 const SEL = { type: "artifact-selection", quote: "the plan",
               anchor: { kind: "range", path: "body>p:nth-of-type(1)", start: 4, end: 12 },
@@ -264,7 +267,7 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
   const f = g.form; f.className = "cnew"; f.action = "/c/abc"; f.submitted = 0; f.submit = () => { f.submitted++; };
   const btn = { disabled: false }; f.querySelectorAll = () => [btn];
   const list = el("ul"); list.appended = []; list.appendChild = (c) => list.appended.push(c);
-  g.extra["#comments > ul.threads"] = list;
+  g.extra["#comments .cpane-open > ul.threads"] = list;
   g.body.value = "hello";
   g.send({ type: "artifact-state" });
   const before = g.framePosts.length;
@@ -300,7 +303,7 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
     const f = g.form; f.className = "cnew"; f.action = "/c/abc"; f.submitted = 0; f.submit = () => { f.submitted++; };
     const btn = { disabled: false }; f.querySelectorAll = () => [btn];
     const list = el("ul"); list.appended = []; list.appendChild = (c) => list.appended.push(c);
-    g.extra["#comments > ul.threads"] = list;
+    g.extra["#comments .cpane-open > ul.threads"] = list;
     const sayEl = { textContent: "" }, base = f.querySelector;
     f.querySelector = (q) => (q === ".cpics-say" ? sayEl : base(q));
     const choose = (files) => { const t = { files, value: "x", closest: (sel) => (sel.includes("input.cfile") ? t : sel.includes("form.cnew") ? f : null) };
@@ -375,7 +378,7 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
   const f = g.form; f.className = "cnew"; f.action = "/c/abc";
   f.querySelectorAll = () => [];
   const cn = { textContent: "2" }; g.extra[".cbtn .cn"] = cn;
-  const list = el("ul"); g.extra["#comments > ul.threads"] = list;
+  const list = el("ul"); g.extra["#comments .cpane-open > ul.threads"] = list;
   g.submit(f); await tick(); await tick(); await tick();
   ok(cn.textContent === "3", "a new root thread bumps the count on the bar"); }
 // The all-pages view has no new-comment form, and replies still post in place.
@@ -458,6 +461,38 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
 { const g = build();
   g.send(SEL); g.tap(g.cbtn);
   ok(g.bar.hidden === true, "toggling the panel hides a selection bar whose position the reflow just made wrong"); }
+
+// OPEN / RESOLVED tabs: a press picks the list by `data-ctab` on the panel and
+// says so with aria-selected; the panel's open state and memory are untouched.
+{ const g = build();
+  const [open, done] = g.tabBtns;
+  let ev = g.tap(done);
+  ok(ev.prevented && g.panel.getAttribute("data-ctab") === "resolved", "the Resolved tab shows the resolved list");
+  ok(done.attrs["aria-selected"] === "true" && open.attrs["aria-selected"] === "false", "and is the selected tab");
+  ok(!g.isOpen() && g.store.size === 0, "without opening, closing or remembering the panel");
+  g.tap(open);
+  ok(g.panel.getAttribute("data-ctab") === "open" && open.attrs["aria-selected"] === "true", "the Open tab brings the open list back");
+  const bad = el("button"); bad.className = "ctab"; bad.attrs["data-ctab"] = "evil";
+  g.tap(bad);
+  ok(g.panel.getAttribute("data-ctab") === "open", "a tab name that is not one of the two is ignored"); }
+// A new comment lands in the open list, so the panel goes back to it.
+{ const g = build({ fetchImpl: () => Promise.resolve(OKRESP([])) });
+  const f = g.form; f.className = "cnew"; f.action = "/c/abc"; f.querySelectorAll = () => [];
+  const list = el("ul"); g.extra["#comments .cpane-open > ul.threads"] = list;
+  const cn = { textContent: "0" }, tn = { textContent: "2" };
+  g.extra["#ctab-open .tn"] = tn; g.extra[".cbtn .cn"] = cn;
+  g.tap(g.tabBtns[1]);
+  g.submit(f); await tick(); await tick(); await tick();
+  ok(g.panel.getAttribute("data-ctab") === "open", "posting a comment shows the Open tab");
+  ok(tn.textContent === "3", "and the Open tab's count goes up"); }
+// Pointing at a thread lights its spot whichever tab it is in.
+{ const g = build({ marks: JSON.stringify([{ id: "e1", kind: "comment", quote: "", anchor: { kind: "element", id: "plans" } }]),
+                    threads: [threadLi("e1")] });
+  g.send({ type: "artifact-marks-placed", placed: ["e1"], unplaced: [], rects: [{ id: "e1", top: 100, left: 10, width: 300, height: 50 }] });
+  g.tap(g.tabBtns[1]);
+  g.panel.on.mouseover({ target: g.tlist.children[0] });
+  const o = g.docBody.children.find((c) => c.className === "pinout");
+  ok(o && o.hidden === false, "a thread's spot still lights up with the Resolved tab showing"); }
 
 // HOVER CARDS. The page says only WHICH mark the pointer rests on and WHERE;
 // the card is the panel's own (already escaped) thread markup, cloned, drawn
