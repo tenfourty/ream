@@ -40,3 +40,24 @@ passes 200 pages. Why: no view in production holds more than 200 pages yet (the 
   with nothing left to do on it, and puts the check on him when the maintainer can make it.
 
 **Evidence:** confirmed (Jeremy, 5 Nov 2026)
+
+## The company deployment's design restarts now, and building waits for the core clean-up (5 Nov 2026)
+
+**Chosen:** design work on the company deployment (artifacts for the whole of GitGuardian)
+restarts now. Every question still open on it (four from 26 Oct and four from his 27 Oct page
+comments) is withdrawn from where it was asked and asked again in one new thread in
+#hq-artifacts. Each question is first revised against what has changed since then, and any that
+newer work already settles is dropped. The existing design page is republished as a new version,
+not replaced by a new page. That version takes in what has shipped since 27 Oct (pinned comments,
+forms, receipts), the core-and-plug-ins design, and the 4 Nov ruling that the core stays
+single-reader until this design adds many readers. Building the company deployment comes after
+the core clean-up. Why: he expects to start the company deployment soon, and its questions were
+scattered over two threads and partly overtaken by later work.
+
+**Not chosen:**
+- Build the company deployment before the core clean-up: it would add many readers on top of
+  the household-specific code the clean-up removes, so that code would have to be untangled twice.
+- Move only the four 27 Oct questions and leave the 26 Oct four in their own thread: keeps two
+  threads for one design, which is what made the open questions hard to follow.
+
+**Evidence:** confirmed (Jeremy, 5 Nov 2026)
