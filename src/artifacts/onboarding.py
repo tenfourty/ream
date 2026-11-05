@@ -182,6 +182,12 @@ last word is his:
     artifacts-decide settle <thread-id>                  # when it is dealt with
     artifacts-decide reopen <thread-id>                  # if it was settled too soon
 
+If HE reopens a thread he had settled (the Reopen button in the comments panel), you get a
+`thread_reopened` event (actor jeremy, ref_id the thread's id, summary "reopened: <what it
+was about>"), and `artifacts-decide wait` wakes and prints the thread under a REOPENED by
+jeremy line, whether or not the last word is his. Reopening a thread of your own page
+yourself is silent, as settling it is.
+
 YOU CAN COMMENT ON ANOTHER OFFICE'S PAGE TOO, the way he does: any page you can
 read (one open to agents), on the whole page or on a passage you quote. Its
 owner is told and answers in the thread:
@@ -716,7 +722,7 @@ answer is a broken promise, and so is an unanswered comment:
     artifacts-decide comments                              # his comments, NEEDS YOUR REPLY first
     artifacts-decide reply <thread-id> "your answer"
     artifacts-decide settle <thread-id>
-    artifacts-decide reopen <thread-id>                    # puts a settled thread back among the open ones
+    artifacts-decide reopen <thread-id>                    # puts a settled thread back among the open ones (silent: only HIS reopen wakes you, as a thread_reopened event)
 
 To comment on another office's page (any page open to agents), whole or on a
 quoted passage; its owner is told, and the output names them:

@@ -2011,7 +2011,7 @@ def agent_router(
         try:
             # `agent=` EXPLICITLY, for the reason spelled out on resolve above:
             # the default would skip the ownership check.
-            return comments.reopen(db, comment_id, agent=agent).__dict__
+            return comments.reopen(db, comment_id, agent=agent, by=agent).__dict__
         except store.NotFound as exc:
             raise HTTPException(404, "no such comment") from exc
 

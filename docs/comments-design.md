@@ -258,7 +258,10 @@ A resolved thread has a **Reopen** button. Reopening clears `resolved_at` and
 of resolve. Routes: `POST /c/{id}/reopen` (the gallery, same-origin only, acting
 for Jeremy), `POST /api/v1/comments/{id}/reopen` (scoped like resolve: the page's
 owner only, and a comment that is not yours answers exactly like one that does not
-exist), and `artifacts-decide reopen <thread-id>`. Reopening writes no journal
-event: the `thread_resolved` event wakes the owner for a finished conversation,
-and a reopened thread simply shows again in its open `comments` list.
+exist), and `artifacts-decide reopen <thread-id>`. Reopening a thread that was
+resolved writes a `thread_reopened` event (5 Nov 2026; ref_id the root, actor who
+reopened it) for the page's owner, in the same transaction, unless the owner did it
+itself (the keyed API only lets the owner, so it is always silent there) or the root
+is held back; reopening an open thread writes nothing. `artifacts-decide wait` wakes
+on it and prints the thread under a `REOPENED by <who>` line.
 Pointing at or focusing a thread lights its spot on the page in either tab.

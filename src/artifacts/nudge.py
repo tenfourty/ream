@@ -76,6 +76,7 @@ _ALERTNAMES = {
     "decision_answered": "Jeremy answered a decision",
     "comment_added": "Jeremy left a comment",
     "thread_resolved": "Jeremy resolved a thread",
+    "thread_reopened": "Jeremy reopened a thread",
 }
 
 # Sanitising lives in `artifacts.text`, not here. It used to live here and

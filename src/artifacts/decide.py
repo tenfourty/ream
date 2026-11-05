@@ -689,6 +689,10 @@ def _fmt_thread(thread: dict, *, on_page: bool = False) -> str:
     lines = [
         f"{thread['id']}  comment thread on page {thread['artifact_id']}  [{head}]"
     ]
+    if thread.get("reopened_by"):
+        lines.append(
+            f"  REOPENED by {thread['reopened_by']}: it was settled, and is open again"
+        )
     if thread.get("decision_id"):
         lines.append(f"  under his answer on decision {thread['decision_id']}")
     if thread.get("element"):
@@ -1014,6 +1018,11 @@ def _wait(args, key: str, base: str) -> int:
     one REOPENED line when it comes back, and keeps waiting: other pages' answers
     still have to reach it.
 
+    REOPENED THREADS (5 Nov 2026). When he reopens a comment thread he had settled, the
+    journal gets a `thread_reopened` event and this wakes and prints that thread under a
+    `REOPENED by <who>` line, even if the last word in it is yours. (Not with
+    --answers-only.) Your own reopen of your own thread is silent.
+
     STARTS BY LOOKING, not by listening: an answer that landed before this ran
     is printed at once, so starting the waiter late never loses one.
 
@@ -1228,7 +1237,7 @@ def _wait(args, key: str, base: str) -> int:
     )
     kinds = {"decision_answered"}
     if not args.answers_only:
-        kinds.add("comment_added")
+        kinds.update(("comment_added", "thread_reopened"))
     outage = _Outage()
     while time.monotonic() < deadline:
         # Never hold past the moment a held-back answer of ours falls due, so
@@ -1284,6 +1293,27 @@ def _wait(args, key: str, base: str) -> int:
             )
         if woke or time.monotonic() >= next_due[0]:
             found, waiting_threads = look()
+            # A reopened thread is reported whether or not it is owed a reply and
+            # whatever was shown within the hour: it is the news itself.
+            reopened = {
+                r["ref_id"]: r.get("actor") or "someone"
+                for r in rows
+                if r.get("kind") == "thread_reopened"
+                and r.get("ref_id")
+                and (not page or r.get("artifact_id") == page)
+                and _belongs(r.get("session"), office, key_agent)
+            }
+            if reopened and not args.answers_only:
+                have = {t["id"] for t in waiting_threads}
+                for t in _open_threads(key, base, page, office):
+                    if t["id"] in reopened:
+                        t["reopened_by"] = reopened[t["id"]]
+                        if t["id"] in have:
+                            waiting_threads = [
+                                t if w["id"] == t["id"] else w for w in waiting_threads
+                            ]
+                        else:
+                            waiting_threads.append(t)
             if found or waiting_threads:
                 return report(found, waiting_threads)
         if (
@@ -2142,7 +2172,9 @@ def build_parser() -> argparse.ArgumentParser:
     settle = subs.add_parser("settle", help="mark a comment thread done")
     settle.add_argument("thread", metavar="THREAD-ID")
     reopen = subs.add_parser(
-        "reopen", help="put a settled comment thread back among the open ones"
+        "reopen",
+        help="put a settled comment thread back among the open ones (silent for"
+        " your own page: only his reopen wakes you, as a thread_reopened event)",
     )
     reopen.add_argument("thread", metavar="THREAD-ID")
 

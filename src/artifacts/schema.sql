@@ -371,7 +371,8 @@ alter table event drop constraint if exists event_kind_check;
 alter table event add constraint event_kind_check
     check (kind in ('decision_answered', 'comment_added', 'thread_resolved',
                     'decision_shelved', 'comment_withdrawn',
-                    'decision_set_aside', 'decision_reopened', 'receipt_set'));
+                    'decision_set_aside', 'decision_reopened', 'receipt_set',
+                    'thread_reopened'));
 
 -- WHO, when three seats share one key (homelab-ij8.32, 21 Sep 2026).
 --

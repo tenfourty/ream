@@ -53,6 +53,9 @@ KINDS = (
     # is left out of /events unless the caller asks for it: it is the agent's own
     # statement, not something that happened to the agent.
     "receipt_set",
+    # He reopened a resolved comment thread (5 Nov 2026; `comments.reopen`). ref_id is the
+    # thread's root. Like `thread_resolved` it is never written for the owner's own act.
+    "thread_reopened",
 )
 
 # A note is his own words and must survive the trip whole. 1000 is the same

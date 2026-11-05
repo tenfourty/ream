@@ -413,6 +413,34 @@ def _widen_event_kinds_receipt(conn) -> None:
         )
 
 
+def _widen_event_kinds_reopened(conn) -> None:
+    """Step 18: add 'thread_reopened' to the event.kind CHECK, in place as step 16
+    does, and prove it. Matches the list's tail, which step 16 left as `'receipt_set')`."""
+    old = "'receipt_set')"
+    new = "'receipt_set', 'thread_reopened')"
+    conn.execute("pragma writable_schema = on")
+    try:
+        conn.execute(
+            "update sqlite_master set sql = replace(sql, "  # noqa: S608 -- fixed text
+            + _sql_text(old)
+            + ", "
+            + _sql_text(new)
+            + ") where type = 'table' and name = 'event'"
+        )
+        (cookie,) = conn.execute("pragma schema_version").fetchone()
+        conn.execute(f"pragma schema_version = {cookie + 1}")
+    finally:
+        conn.execute("pragma writable_schema = off")
+    row = conn.execute(
+        "select sql from sqlite_master where type = 'table' and name = 'event'"
+    ).fetchone()
+    if row is None or "'thread_reopened'" not in row[0]:
+        raise RuntimeError(
+            "schema step 18 could not widen event.kind's CHECK to include "
+            "'thread_reopened': the stored table text is not the expected shape"
+        )
+
+
 def _sql_text(text: str) -> str:
     """`text` as an SQL string literal (fixed text only, never caller input)."""
     return "'" + text.replace("'", "''") + "'"
@@ -676,6 +704,8 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
         ),
         "alter table artifact add column check_note text",
     ),
+    # 5 Nov 2026: the event kind `thread_reopened` (see schema.sql).
+    18: (_widen_event_kinds_reopened,),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

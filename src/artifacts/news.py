@@ -18,6 +18,10 @@ from pathlib import Path
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-05",
+        'When he reopens a comment thread he had settled, you now get a thread_reopened event (actor, ref_id = the thread id, summary "reopened: ..."), and artifacts-decide wait wakes and prints the thread under a REOPENED by line. Reopening your own thread (artifacts-decide reopen, POST /api/v1/comments/ID/reopen) stays silent.',
+    ),
+    (
         "2026-11-04",
         "His wall no longer stops at 200 pages: an Older pages link under the last page shows the next 200 in the same view (same search, filters, folder and tab). The API and artifacts-publish --list were never capped and are unchanged.",
     ),

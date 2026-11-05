@@ -1559,22 +1559,38 @@ def resolve(
     return _row_to_comment(row)
 
 
-def reopen(db: Database, comment_id: str, *, agent: str | None = None) -> CommentRow:
+def _reopened_summary(quote: str, body: str) -> str:
+    """Which conversation was reopened, in words: as `_settled_summary`."""
+    about = (quote or "").strip() or (body or "").strip()
+    return f"reopened: {about[:160]}" if about else "reopened"
+
+
+def reopen(
+    db: Database,
+    comment_id: str,
+    *,
+    agent: str | None = None,
+    by: str | None = None,
+) -> CommentRow:
     """Put a resolved thread back among the open ones: the other half of `resolve`.
 
     `comment_id` may name the root or any reply, as with `resolve`; the root and
     every reply alongside it lose `resolved_at` and `resolved_by` together, so the
     thread is open or resolved as a whole. `agent` is as in `resolve`: the owner of
     the page for the keyed API (anyone else, and a missing comment, are the same
-    `NotFound`), None for the gallery acting for Jeremy.
+    `NotFound`), None for the gallery acting for Jeremy. `by` is who reopened it,
+    for the event; it defaults to `agent`, or to Jeremy when the gallery acts.
 
-    Idempotent: an open thread is returned as it stands.
+    Idempotent: an open thread is returned as it stands, with no event.
 
-    No event is written, though `resolve` writes one when somebody other than the
-    owner settles a thread. That event wakes the owner for a conversation that is
-    over; a reopened thread needs no wake-up of its own, because it shows again in
-    the owner's open `comments` list. (The journal's kinds are also enforced by a
-    CHECK on both databases, and widening it is a migration.)"""
+    A `thread_reopened` event wakes the page's owner (5 Nov 2026: reopening used
+    to be silent, so an agent that had been told "settled" was never told it was
+    not), written in the same transaction as the update, and pushed afterwards, as
+    for `resolve`. The same two silences as `resolve` apply: an owner reopening its
+    own thread (the keyed API only ever lets the owner), and a thread whose root is
+    still held back."""
+    actor = by or agent or "jeremy"
+    event_seq = None
     with db.connect() as conn:
         if agent is None:
             row = conn.execute(
@@ -1593,16 +1609,46 @@ def reopen(db: Database, comment_id: str, *, agent: str | None = None) -> Commen
         if row is None:
             raise store.NotFound()
         root_id = row[3] if row[3] is not None else row[0]
+        owning_agent, title, page_session, root_body, root_quote, root_held, was = (
+            conn.execute(
+                "select artifact.agent, artifact.title, artifact.session,"
+                " root.body, root.quote, root.held, root.resolved_at"
+                " from comment root join artifact on artifact.id = root.artifact_id"
+                " where root.id = %s",
+                (root_id,),
+            ).fetchone()
+        )
+        summary = _reopened_summary(root_quote, root_body)
         with conn.transaction():
             conn.execute(
                 "update comment set resolved_at = null, resolved_by = null"
                 " where id = %s or thread_root = %s",
                 (root_id, root_id),
             )
+            if was is not None and actor != owning_agent and not root_held:
+                event_seq = events.append(
+                    conn,
+                    artifact_id=row[1],
+                    agent=owning_agent,
+                    actor=actor,
+                    kind="thread_reopened",
+                    summary=summary,
+                    ref_id=root_id,
+                    session=page_session,
+                )
         row = conn.execute(
             f"select {_COLUMNS} from comment where comment.id = %s",  # noqa: S608 -- fixed constant, not caller input
             (comment_id,),
         ).fetchone()
+        if event_seq is not None:
+            nudge.emit(
+                kind="thread_reopened",
+                artifact_id=row[1],
+                title=title,
+                agent=owning_agent,
+                summary=summary,
+                event_id=str(event_seq),
+            )
     return _row_to_comment(row)
 
 

@@ -7001,7 +7001,7 @@ def gallery_router(db: Database) -> APIRouter:
     ):
         try:
             # agent=None, as for resolve: the gallery acts for Jeremy.
-            row = comments.reopen(db, comment_id, agent=None)
+            row = comments.reopen(db, comment_id, agent=None, by="jeremy")
         except store.NotFound as exc:
             raise HTTPException(404, "no such comment") from exc
         return RedirectResponse(f"/a/{row.artifact_id}#comments", status_code=303)
