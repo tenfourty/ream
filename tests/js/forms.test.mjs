@@ -149,5 +149,67 @@ const sample = () => [
     junk.fire("message", { origin: GALLERY, data });
   ok(junk.forms().length === 0, "survives malformed messages");
 }
+// 6. the summary leg: a sent form is swapped for a plain-text summary and a Change answers button
+{
+  const mk = (tag) => ({ tag, nodeType: 1, children: [], attrs: {}, style: {}, className: "", _t: "", listeners: {}, parentNode: null,
+    set textContent(v) { this._t = String(v); }, get textContent() { return this._t; },
+    set innerHTML(v) { throw new Error("innerHTML must never be used"); },
+    setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; },
+    removeAttribute(k) { delete this.attrs[k]; },
+    appendChild(c) { this.children.push(c); c.parentNode = this; return c; },
+    removeChild(c) { this.children = this.children.filter((x) => x !== c); c.parentNode = null; },
+    insertBefore(c, ref) { const i = this.children.indexOf(ref); this.children.splice(i < 0 ? this.children.length : i, 0, c); c.parentNode = this; return c; },
+    get nextSibling() { const p = this.parentNode; return p ? p.children[p.children.indexOf(this) + 1] || null : null; },
+    addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); },
+    click() { (this.listeners.click || []).forEach((fn) => fn({})); },
+    focus() { this.focused = true; } });
+  const flat = (n, out = []) => { out.push(n); n.children.forEach((c) => flat(c, out)); return out; };
+  const root = mk("body"), form = mk("form"), first = Object.assign(mk("input"), { type: "text", name: "why", value: "x" });
+  form.setAttribute("data-artifact-form", "rollout");
+  form.querySelectorAll = () => [first];
+  form.style.display = "block";
+  first.parentNode = form; root.appendChild(form);
+  const doc = { documentElement: { scrollHeight: 10 }, body: { scrollHeight: 10, offsetHeight: 10, getBoundingClientRect: () => ({ bottom: 10 }) },
+    createElement: mk,
+    querySelectorAll: (sel) => sel === "[data-artifact-form]" ? [form]
+      : sel === "[data-artifact-form-summary]" ? flat(root).filter((n) => n.attrs["data-artifact-form-summary"] !== undefined) : [],
+    querySelector: () => null };
+  const listeners = {}, posted = [];
+  const scope = { document: doc, parent: { postMessage: (m, o) => posted.push([m, o]) }, scrollX: 0, scrollY: 0,
+    addEventListener: (t, fn) => (listeners[t] ||= []).push(fn), getComputedStyle: () => ({ marginBottom: "0px" }),
+    Array, JSON, Math, Object, String, CSS: undefined };
+  scope.window = scope;
+  const names = Object.keys(scope);
+  new Function(...names, src)(...names.map((n) => scope[n]));
+  const send = (data, origin = GALLERY) => listeners.message.forEach((fn) => fn({ origin, data }));
+  const summary = { title: "Rollout", when: "5 Nov, 10:00", rows: [{ label: "Why", text: "<img src=x onerror=1>" }, { label: "Pets", text: "(no answer)" }] };
+
+  send({ type: "artifact-form-summary", form: "rollout", summary }, "https://evil.example");
+  ok(form.style.display === "block" && !flat(root).some((n) => n.tag === "section"), "a summary from another origin is ignored");
+  send({ type: "artifact-form-summary", form: "other", summary });
+  ok(form.style.display === "block", "a summary for a form the page lacks is ignored");
+  send({ type: "artifact-form-summary", form: "rollout", summary: { title: 1 } });
+  ok(form.style.display === "block", "a malformed summary is ignored");
+
+  send({ type: "artifact-form-summary", form: "rollout", summary });
+  const sec = flat(root).find((n) => n.tag === "section");
+  ok(form.style.display === "none" && sec && form.parentNode.children[1] === sec, "the form is hidden and the summary sits right after it");
+  const text = flat(sec).map((n) => n.textContent).join("|");
+  ok(text.includes("Rollout") && text.includes("5 Nov, 10:00") && text.includes("Why") && text.includes("<img src=x onerror=1>") && text.includes("(no answer)"),
+     "the summary shows the title, when, each label and answer as plain text");
+  ok(sec.attrs.role === "group" && sec.attrs["aria-label"] === "Answers sent: Rollout", "the summary is a labelled group");
+  const btn = flat(sec).find((n) => n.tag === "button");
+  ok(btn && btn.textContent === "Change answers" && btn.type === "button", "a real button says Change answers");
+  btn.click();
+  const edit = posted.map(([m]) => m).filter((m) => m.type === "artifact-form-edit");
+  ok(edit.length === 1 && edit[0].form === "rollout" && posted.at(-1)[1] === GALLERY, "the button asks the gallery, at its origin only");
+
+  send({ type: "artifact-form-summary", form: "rollout", summary: { ...summary, rows: [{ label: "Why", text: "two" }] }, focus: false });
+  ok(flat(root).filter((n) => n.tag === "section").length === 1, "a second summary replaces the first, never stacks");
+  send({ type: "artifact-form-summary", form: "rollout", summary: null, focus: true });
+  ok(form.style.display === "block" && !flat(root).some((n) => n.tag === "section"), "summary null removes it and restores the form's own display");
+  ok(first.focused === true, "focus goes to the form's first control");
+  ok(form.getAttribute("data-artifact-was") === null, "no bookkeeping attribute is left behind");
+}
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

@@ -284,6 +284,12 @@ FORM_JS = r"""// FORM CONTROLS (forms slice 2). The page's own controls inside a
 // draft back with `artifact-form-fill` {form, values}: property writes only, so no input
 // event fires, at most 200 fields and 10000 characters a value. Both legs check the
 // gallery's origin, and the report goes to that origin only, never a wildcard.
+// Once he has sent a form the gallery may swap it for a read-only summary
+// (`artifact-form-summary` {form, summary:{title,when,rows:[{label,text}]}|null, focus}):
+// the form element is hidden (its controls stay, so the snapshot keeps reporting) and a
+// plain-text summary with a "Change answers" button is drawn after it, every string through
+// textContent. The button posts `artifact-form-edit` {form}; summary null brings the form
+// back and, with focus true, puts the focus on its first control.
 var FMX=200,FMV=10000;
 function fcut(s){return fixend(String(s).slice(0,FMV))}
 function fnm(f){return String(f.getAttribute("data-artifact-form")||"").slice(0,100)}
@@ -310,8 +316,40 @@ addEventListener("input",fedit,true);addEventListener("change",fedit,true);
 addEventListener("load",function(){try{
   var a=document.querySelectorAll("[data-artifact-form]"),i;
   for(i=0;i<a.length&&i<20;i++)fpost(a[i],true)}catch(x){}});
+function fel(t,c,s){var e=document.createElement(t);if(c)e.className=c;if(s!==undefined)e.textContent=s;return e}
+function fsm(n){var a=document.querySelectorAll("[data-artifact-form-summary]"),i;
+  for(i=0;i<a.length;i++)if(a[i].getAttribute("data-artifact-form-summary")===n)return a[i];return null}
+function fshow(d){
+  var a=document.querySelectorAll("[data-artifact-form]"),f=null,i,s=d.summary,old,sec,dl,b,was,c;
+  for(i=0;i<a.length;i++)if(fnm(a[i])===d.form){f=a[i];break}
+  if(!f)return;
+  old=fsm(d.form);if(old&&old.parentNode)old.parentNode.removeChild(old);
+  if(s===null){was=f.getAttribute("data-artifact-was");
+    if(was!==null){f.style.display=was;f.removeAttribute("data-artifact-was")}
+    if(d.focus===true){c=fctl(f);for(i=0;i<c.length;i++)if(ftype(c[i])!=="hidden"&&!c[i].disabled){c[i].focus();break}}
+    return}
+  if(!s||typeof s!=="object"||typeof s.title!=="string"||typeof s.when!=="string"||!Array.isArray(s.rows))return;
+  if(f.getAttribute("data-artifact-was")===null)f.setAttribute("data-artifact-was",f.style.display||"");
+  f.style.display="none";
+  sec=fel("section");sec.setAttribute("data-artifact-form-summary",d.form);
+  sec.setAttribute("role","group");sec.setAttribute("aria-label","Answers sent: "+fcut(s.title).slice(0,200));
+  sec.style.cssText="border:1px solid rgba(127,127,127,.45);border-radius:.5rem;padding:.8rem 1rem;margin:1rem 0;font:inherit;color:inherit";
+  sec.appendChild(fel("p","",fcut(s.title)+" \u2014 sent"+(s.when?" "+fcut(s.when):"")));
+  dl=fel("dl");
+  s.rows.slice(0,FMX).forEach(function(r){
+    if(!r||typeof r.label!=="string"||typeof r.text!=="string")return;
+    dl.appendChild(fel("dt","",fcut(r.label)));
+    var dd=fel("dd","",fcut(r.text));dd.style.cssText="margin:.1rem 0 .6rem;white-space:pre-wrap;overflow-wrap:anywhere";dl.appendChild(dd)});
+  sec.appendChild(dl);
+  b=fel("button","","Change answers");b.type="button";
+  b.style.cssText="font:inherit;padding:.35rem .9rem;border-radius:.4rem;border:1px solid rgba(127,127,127,.6);background:transparent;color:inherit;cursor:pointer";
+  b.addEventListener("click",function(){try{parent.postMessage({type:"artifact-form-edit",form:d.form},__ORIGIN__)}catch(x){}});
+  sec.appendChild(b);
+  if(f.parentNode)f.parentNode.insertBefore(sec,f.nextSibling);
+  if(d.focus===true)b.focus()}
 addEventListener("message",function(m){try{
   if(m.origin!==__ORIGIN__)return;var d=m.data;
+  if(d&&typeof d==="object"&&d.type==="artifact-form-summary"&&typeof d.form==="string"){fshow(d);return}
   if(!d||typeof d!=="object"||d.type!=="artifact-form-fill"||typeof d.form!=="string")return;
   if(!d.values||typeof d.values!=="object")return;
   var a=document.querySelectorAll("[data-artifact-form]"),f=null,i;

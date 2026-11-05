@@ -238,8 +238,24 @@ function refresh(f){var c=counts(f);
   f.count.textContent=(f.answered?"\u2713 Sent "+when(f.answered.answered_at)+" \u00b7 ":"")+c.done+" of "+c.total+" answered";
   f.row.className=f.answered?"fbar fsent":"fbar";
   f.go.textContent=f.answered?"Send again":"Submit";
+  // Sent and not being changed: the page shows a read-only summary instead of the form, so
+  // there is nothing to submit until he presses Change answers.
+  f.go.hidden=summaryOn(f);
   f.go.disabled=!f.values||c.missing;
   f.go.title=c.missing?(f.complete==="all"?"Every field needs an answer":"A required field is blank"):""}
+function summaryOn(f){return!!(f.answered&&!f.editing)}
+// What he sent, one row per stored field, read from the answers on record.
+function summaryOf(f){var rows=[],c=f.carried||{};
+  f.fields.forEach(function(spec){
+    var s=Object.prototype.hasOwnProperty.call(c,spec.name)?shown(spec,c[spec.name]):null;
+    rows.push({label:spec.label||spec.name,text:s===null?"(no answer)":s})});
+  return{title:f.title,when:f.answered?when(f.answered.answered_at):"",rows:rows}}
+// Tell the page which of the two it shows. Posts only on a change (or when focus is wanted)
+// and only once the page has reported, so a page that is not listening yet is never sent to.
+function sync(f,focus){if(!f.ready)return;
+  var on=summaryOn(f),s=on?summaryOf(f):null,key=on?JSON.stringify(s):"";
+  if(key===f.shown&&!focus)return;f.shown=key;
+  frame.contentWindow.postMessage({type:"artifact-form-summary",form:f.form,summary:s,focus:!!focus},origin)}
 function when(iso){try{return new Date(iso).toLocaleString([],{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}catch(e){return""}}
 function optLabel(spec,v){var o=(spec.options||[]).filter(function(x){return x.value===v})[0];
   return o?o.label:String(v)}
@@ -294,12 +310,12 @@ function sheet(f){
       body:JSON.stringify({version:f.version,values:sent})})
     .then(function(r){return r.json().catch(function(){return{}}).then(function(j){return{r:r,j:j}})})
     .then(function(x){
-      if(x.r.ok){f.answered={answered_at:x.j.answered_at};refresh(f);
+      if(x.r.ok){f.answered={answered_at:x.j.answered_at};f.carried=sent;f.editing=false;refresh(f);sync(f,false);
         // Say it was sent, in the sheet he is looking at, and leave it open until he closes it.
         h.textContent="\u2713 Sent \u2014 "+f.title;
-        var okp=el("p","fok","Your answers were sent"+(x.j.answered_at?" at "+when(x.j.answered_at):"")+". You can change them and send again.");
+        var okp=el("p","fok","Your answers were sent"+(x.j.answered_at?" at "+when(x.j.answered_at):"")+". Use Change answers on the page to edit them.");
         box.insertBefore(okp,dl);no.remove();go.remove();
-        var done=el("button","fgo","Close");done.type="button";done.addEventListener("click",close);
+        var done=el("button","fgo","Close");done.type="button";done.addEventListener("click",function(){close();sync(f,true)});
         btns.appendChild(done);done.focus();return}
       var lab="";f.fields.forEach(function(s){if(s.name===x.j.field)lab=s.label||s.name});
       err.textContent=(lab?lab+": ":"")+(x.j.detail||("It was not sent ("+x.r.status+")"));
@@ -308,7 +324,7 @@ function sheet(f){
       err.hidden=false;go.disabled=false})});
   document.body.appendChild(scrim);go.focus()}
 data.forms.forEach(function(f){
-  f.values=null;f.awaiting=false;by[f.form]=f;
+  f.values=null;f.awaiting=false;f.editing=false;f.ready=false;f.shown="";by[f.form]=f;
   var row=el("div","fbar"),t=el("span","ftitle",f.title);f.row=row;
   f.count=el("span","fcount");f.go=el("button","fgo","Submit");f.go.type="button";
   f.go.addEventListener("click",function(){if(!f.go.disabled)sheet(f)});
@@ -321,17 +337,21 @@ data.forms.forEach(function(f){
 addEventListener("message",function(e){
   if(e.source!==frame.contentWindow||e.origin!==origin)return;
   var d=e.data;
-  if(!d||typeof d!=="object"||d.type!=="artifact-form"||typeof d.form!=="string")return;
+  if(!d||typeof d!=="object"||typeof d.form!=="string")return;
+  if(d.type==="artifact-form-edit"){var g=by[d.form];
+    if(g&&g.answered&&!g.editing){g.editing=true;refresh(g);sync(g,true)}return}
+  if(d.type!=="artifact-form")return;
   if(!d.values||typeof d.values!=="object")return;
   var f=by[d.form];if(!f)return;
+  f.ready=true;if(d.load===true)f.shown="";
   if(d.load===true){var fill=fillOf(f,load(f));
-    if(fill){f.awaiting=true;frame.contentWindow.postMessage({type:"artifact-form-fill",form:f.form,values:fill},origin);return}}
+    if(fill){f.awaiting=true;frame.contentWindow.postMessage({type:"artifact-form-fill",form:f.form,values:fill},origin);sync(f,false);return}}
   f.awaiting=false;
   var before=f.closeSheet?JSON.stringify(body(f)):null;
   f.values=clean(f,d.values);save(f);
   // The sheet is open on an earlier set of values: close it rather than let it say one
   // thing and send another; he reopens it to review the new ones.
   if(f.closeSheet&&JSON.stringify(body(f))!==before)f.closeSheet();
-  refresh(f)});
+  refresh(f);sync(f,false)});
 })();
 """

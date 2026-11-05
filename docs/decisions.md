@@ -119,3 +119,22 @@ nothing; the label now says what it covers, and a button that can do nothing is 
   takes for a way out.
 
 **Evidence:** confirmed (Jeremy, 5 Nov 2026)
+
+## A sent form shows as a read-only summary with a Change answers button (5 Nov 2026)
+
+**Chosen:** once Jeremy has sent a form, the page replaces it with a read-only summary: plain text,
+each question and the answer he sent, and when. A Change answers button under it brings the form
+back with his answers filled in, and the page bar then offers Send again; after he sends, the
+summary returns. Reloading the page shows the summary again while his send stands. The button is a
+real button, reachable by Tab, and focus lands on it (or on the form's first field) when the view
+changes. What agents receive and the API do not change: only what the gallery draws. Why: a filled
+form with a Sent bar and a Send again button read to him as strange, as if something were still
+to be filled in.
+
+**Not chosen:**
+- Keep the form but locked read-only, with an Edit button: it still looks like a form to fill in,
+  and the strangeness he named stays.
+- Keep it as it was (an editable filled form, a Sent bar and Send again): the thing he found
+  strange.
+
+**Evidence:** confirmed (Jeremy, 5 Nov 2026)

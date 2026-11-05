@@ -32,7 +32,7 @@ def test_the_form_listener_behaves_when_actually_run(tmp_path, monkeypatch):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
-    assert passed >= 18, result.stdout
+    assert passed >= 32, result.stdout
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node runtime here")
@@ -55,4 +55,4 @@ def test_the_gallerys_submit_bar_behaves_when_actually_run(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
-    assert passed >= 15, result.stdout
+    assert passed >= 24, result.stdout

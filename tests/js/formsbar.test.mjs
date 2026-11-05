@@ -160,9 +160,41 @@ const snap = (values, load = false) => ({ type: "artifact-form", form: "rollout"
   const btns = all(sheet).filter((n) => n.tag === "button");
   ok(btns.length === 1 && btns[0].textContent === "Close", "only a Close button is left");
   ok(g.count().startsWith("\u2713 Sent ") && g.count().endsWith("1 of 3 answered"), "the bar shows it was sent");
-  ok(g.go().textContent === "Send again" && g.bar.children[0].className === "fbar fsent", "Submit becomes Send again");
+  ok(g.go().hidden === true && g.bar.children[0].className === "fbar fsent", "the bar drops Submit once the page shows the summary");
+  const sums = () => g.win.posted.map(([m]) => m).filter((m) => m.type === "artifact-form-summary");
+  ok(sums().length === 1 && sums()[0].summary.rows.some((r) => r.label === "Region" && r.text === "eu")
+     && sums()[0].summary.rows.some((r) => r.label === "Pets" && r.text === "(no answer)") && sums()[0].summary.when !== "",
+     "the page is told to show a summary of what was sent, with the sent time");
   btns[0].click();
   ok(all(g.body).filter((n) => n.className === "fscrim").length === 0, "Close closes the sheet");
+  ok(sums().length === 2 && sums()[1].summary !== null && sums()[1].focus === true, "Close puts focus on the summary's button");
+  // Change answers brings the form back, and Send again is offered.
+  g.send({ type: "artifact-form-edit", form: "rollout" });
+  ok(sums().length === 3 && sums()[2].summary === null && sums()[2].focus === true, "Change answers asks the page for the form back, focused");
+  ok(g.go().hidden === false && g.go().textContent === "Send again", "the bar offers Send again while the answers are being changed");
+  g.send({ type: "artifact-form-edit", form: "rollout" });
+  ok(sums().length === 3, "a second edit request changes nothing");
+  g.send(snap({ region: "b", why: "", pets: [] }));
+  ok(sums().length === 3, "reports while editing do not bring the summary back");
+}
+{
+  // A form already sent opens as a summary, once the page has reported; an unsent one never gets one.
+  const g = build({ form: { answered: { answered_at: "2026-11-02T22:25:54Z" }, carried: { region: "a", pets: ["dog"] } } });
+  const sums = () => g.win.posted.map(([m]) => m).filter((m) => m.type === "artifact-form-summary");
+  ok(sums().length === 0, "nothing is posted before the page reports");
+  g.send(snap({ region: null, why: "", pets: [] }, true));
+  ok(g.win.posted[0][0].type === "artifact-form-fill" && sums().length === 1, "the load report is answered with the fill, then the summary");
+  const rows = sums()[0].summary.rows;
+  ok(rows[0].text === "eu" && rows[2].text === "Dog" && rows[1].text === "(no answer)" && sums()[0].focus === false,
+     "the summary has stored labels and the sent answers, and does not steal focus on load");
+  g.send(snap({ region: "a", why: "", pets: ["dog"] }));
+  ok(sums().length === 1, "an identical state is not posted again");
+  g.send(snap({ region: "a", why: "", pets: ["dog"] }, true));
+  ok(sums().length === 2, "a reloaded page gets its summary again");
+  const plain = build();
+  plain.send(snap({ region: "a", why: "", pets: [] }, true));
+  ok(!plain.win.posted.some(([m]) => m.type === "artifact-form-summary"), "a form never sent gets no summary");
+  ok(plain.go().hidden === false, "and keeps its Submit button");
 }
 {
   // Slice 3: carried answers fill the controls; a draft of another version never refills a
