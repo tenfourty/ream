@@ -124,6 +124,12 @@ is a 422 `{"field":"anchor","detail"}`), and the server fills in the tag, the
 heading, the label, the words either side and the quote. `artifacts-decide
 comment PAGE "text" --element ID` sends it.
 
+**Comment on page.** A "Comment on page" button always sits in the page bar,
+before Comments. Pressing it opens the panel on the Open tab with the composer
+set to the whole page (any selection or pin it held is dropped, as is pin mode)
+and focuses the field. Without scripts it is a link to the panel's form
+(`#cwhole`).
+
 **Pin mode.** The page bar has a Pin button (and the `C` key, in the gallery or
 inside the frame; never while typing in a field or with a modifier). While it
 is on, the shim swallows the page's clicks (capture phase, only while on),

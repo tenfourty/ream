@@ -601,3 +601,7 @@ fold became Open and Resolved tabs, and threads can be reopened (gallery form,
 `POST /api/v1/comments/{id}/reopen`, `artifacts-decide reopen`). The pin mode,
 Pin button and C key described above are replaced by other pieces of the same
 redesign; their notes follow when they land.
+
+Piece 3 landed: a "Comment on page" button in the page bar (`.pagecbtn`, a link to
+`#cwhole` without scripts) opens the panel on Open with the composer set to the
+whole page.

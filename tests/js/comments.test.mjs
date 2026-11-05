@@ -94,7 +94,8 @@ function build({ noPinBtn = false, marks = "[]", fetchImpl = null, noForm = fals
   const cbtn = el("a"); cbtn.className = "cbtn";
   const byId = { "artifact-frame": iframe, "artifact-marks": marksEl, "marks-unplaced": unplacedEl, comments: noPanel ? null : panel };
   const pinbtn = el("button"); pinbtn.className = "pinmodebtn"; pinbtn.hidden = true;
-  const docOn = {}, extra = { ".cbtn": cbtn, ...(noPinBtn ? {} : { ".pinmodebtn": pinbtn }) };
+  const pagebtn = el("a"); pagebtn.className = "pagecbtn";
+  const docOn = {}, extra = { ".cbtn": cbtn, ".pagecbtn": pagebtn, ...(noPinBtn ? {} : { ".pinmodebtn": pinbtn }) };
   const doc = { getElementById: (id) => byId[id] || null,
                 createElement: (t) => { const n = el(t); if (t === "template") Object.defineProperty(n, "innerHTML", { set(h) { n.content = { firstElementChild: { html: h } }; } }); return n; },
                 body: docBody,
@@ -134,7 +135,7 @@ function build({ noPinBtn = false, marks = "[]", fetchImpl = null, noForm = fals
   const card = () => docBody.children.filter((c) => c.className === "hovercard");
   const scroll = () => (listeners.scroll || []).concat(capture.scroll || []).forEach((fn) => fn({}));
   return { bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload, submit, extra, doc,
-           panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist, press, fsChange, pinbtn, win, docOn, tabBtns };
+           panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist, press, fsChange, pinbtn, pagebtn, win, docOn, tabBtns };
 }
 const SEL = { type: "artifact-selection", quote: "the plan",
               anchor: { kind: "range", path: "body>p:nth-of-type(1)", start: 4, end: 12 },
@@ -692,6 +693,24 @@ const badgesOf = (g) => g.docBody.children.filter((c) => c.className === "pinbad
   const n = build({ noForm: true });
   ok(n.pinbtn.hidden === true, "with no composer on the page there is nothing to pin to: the button stays hidden");
   ok(build({ noPinBtn: true }) !== null, "a page bar without the button does not break the script"); }
+
+// COMMENT ON PAGE
+{ const g = build();
+  g.send(SEL); g.click("comment");
+  ok(g.form.querySelector(".cquote") && g.form.querySelector("input[name=anchor]"), "a selection filled the composer");
+  g.panel.setAttribute("data-ctab", "resolved");
+  let focused = 0; g.body.focus = () => focused++;
+  const ev = { prevented: false, preventDefault() { ev.prevented = true; } };
+  g.pagebtn.on.click(ev);
+  ok(ev.prevented, "the link's jump is replaced by the script");
+  ok(g.isOpen() && g.panel.getAttribute("data-ctab") === "open", "the panel opens on the Open tab");
+  ok(!g.form.querySelector(".cquote") && !g.form.querySelector("input[name=anchor]") && !g.form.querySelector("input[name=quote]"),
+     "the composer is the whole page again: no quote, no anchor");
+  ok(g.body.placeholder === "Comment on this page" && focused === 1, "with its own placeholder, and focus in the field");
+  ok(g.bar.hidden === true, "and the selection bar goes");
+  g.key("c", { target: { nodeName: "BODY" } });
+  g.pagebtn.on.click(ev);
+  ok(modeMsgs(g).at(-1)[0].on === false, "it also leaves pin mode"); }
 
 // the C key
 { const g = build();

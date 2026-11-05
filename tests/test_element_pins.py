@@ -565,6 +565,13 @@ def test_the_page_bar_offers_a_pin_button_beside_comment():
         assert rule in gallery._CSS
 
 
+def test_the_page_bar_has_a_comment_on_page_button_that_works_without_scripts():
+    bar = gallery._comments_button("p1", 0)
+    assert 'class="pagecbtn"' in bar and "Comment on page" in bar
+    assert 'href="#cwhole"' in bar and bar.index("pagecbtn") < bar.index('class="cbtn')
+    assert ".pagecbtn" in gallery._CSS
+
+
 # --- the CLI -------------------------------------------------------------------------
 
 

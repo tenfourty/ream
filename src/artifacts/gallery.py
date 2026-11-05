@@ -223,6 +223,11 @@ main{display:block}
 .fsbtn[hidden]{display:none}
 /* Pin mode (pinned comments, slice 2): a button like the bar's others, and a
    filled one while the mode is on. */
+.pagecbtn{display:inline-flex;align-items:center;height:1.75rem;padding:0 .5rem;
+  border:1px solid var(--line);border-radius:.45rem;background:var(--card);color:var(--ink);
+  font:inherit;font-size:.8125rem;text-decoration:none;white-space:nowrap}
+.pagecbtn:hover{border-color:var(--accent)}
+@media (max-width:34rem){.pagecbtn{padding:0 .4rem}}
 .pinmodebtn{display:inline-flex;align-items:center;height:1.75rem;padding:0 .5rem;
   border:0;border-radius:.45rem;background:transparent;color:var(--muted);
   font:inherit;font-size:.8125rem;cursor:pointer}
@@ -2506,6 +2511,17 @@ if(P&&P.addEventListener){
   P.addEventListener("mouseover",function(e){spot(e,true)});P.addEventListener("focusin",function(e){spot(e,true)});
   P.addEventListener("mouseout",function(e){spot(e,false)});P.addEventListener("focusout",function(e){spot(e,false)})}
 if(pb){pb.hidden=false;pb.addEventListener("click",function(){pinMode(!pinOn,true)})}
+// COMMENT ON PAGE. The bar's button opens the panel on Open with the composer
+// set to the whole page: whatever a selection or a pin had put in it goes, and
+// the field takes focus. Without scripts it is a link to that form.
+var pg=document.querySelector(".pagecbtn");
+if(pg)pg.addEventListener("click",function(e){
+  if(e&&e.preventDefault)e.preventDefault();
+  pinMode(false);bar.hidden=true;last=null;
+  ["quote","anchor","kind"].forEach(function(n){drop(form.querySelector("input[name="+n+"]"))});
+  drop(form.querySelector(".cquote"));
+  var i=form.querySelector("input[name=body]");if(i)i.placeholder="Comment on this page";
+  tab("open");panel(true);if(i&&i.focus)i.focus()});
 // C, as in Figma and Vercel's comments: never while typing, never with a modifier.
 document.addEventListener("keydown",function(e){try{
   if(!e||(e.key!=="c"&&e.key!=="C")||e.ctrlKey||e.metaKey||e.altKey)return;
@@ -3618,7 +3634,7 @@ def _render_comments(
         )
     )
     out.append(
-        f'<form class="cnew" method="post" action="/c/{ident}">'
+        f'<form class="cnew" id="cwhole" method="post" action="/c/{ident}">'
         '<input name="body" placeholder="Comment on this page" '
         'aria-label="Comment on this page">'
         f'<button type="submit">Send</button>{_ATTACH}</form>'
@@ -3635,6 +3651,7 @@ def _comments_button(artifact_id: str, open_count: int) -> str:
     again."""
     count = f'<span class="cn">{open_count}</span>' if open_count else ""
     return (
+        '<a class="pagecbtn" href="#cwhole">Comment on page</a>'
         f'<a class="cbtn{" has" if open_count else ""}" href="#comments"'
         f' aria-controls="comments" aria-label="Comments">{_icon("comment")}{count}</a>'
         # Revealed by comments.js once it has a composer to fill; the C key does the same.
