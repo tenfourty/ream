@@ -59,7 +59,10 @@ dev = [
 # busiest one's tail, so the run ends when the work does, not when the unluckiest
 # worker's last chunk does. Inert without -n. See pytest_collection_modifyitems
 # in tests/conftest.py for where the slow tests go.
-addopts = "--dist=worksteal"
+# -rs: the summary names every skipped test and why. Browser tests skip where
+# there is no headless browser (CI is one such place), and a bare "13 skipped"
+# hid that for weeks (runcove-5t3oj.77).
+addopts = "--dist=worksteal -rs"
 # A test that hangs fails after 5 minutes with every thread's stack printed,
 # naming itself, instead of holding a CI builder until the job's own limit
 # (6 Oct 2026: a test job sat idle for 35 minutes and left no clue). The

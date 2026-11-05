@@ -29,7 +29,9 @@ from artifacts.app import create_app
 
 pytestmark = [
     pytest.mark.skipif(
-        not thumbs.available(), reason="no headless browser in this environment"
+        not thumbs.available(),
+        reason="no headless browser: set ARTIFACTS_BROWSER to a chrome binary, or put "
+        "chromium on PATH; these browser tests do NOT run without one",
     ),
     pytest.mark.slow(
         reason="a real browser against a live server: seconds, not milliseconds"
@@ -369,8 +371,12 @@ def test_hovering_marked_text_shows_its_comment_beside_it(browser, served, db):
         if shot:
             pg.screenshot(path=shot)
 
-        # Away from any mark, inside the frame: the card goes after its grace.
-        pg.mouse.move(box["x"] + 600, box["y"] + 900)
+        # Away from any mark, inside the frame AND inside the window (the
+        # window is 800 high: a pointer parked below it sends the page nothing,
+        # so no leave ever reaches the gallery): the card goes after its grace.
+        away = {"x": box["x"] + 900, "y": box["y"] + r["y"] + 40}
+        assert away["y"] < 800 and away["x"] < 1400, away
+        pg.mouse.move(away["x"], away["y"])
         card.wait_for(state="detached", timeout=3000)
 
         # On the wire. What the frame was sent: marks (no note) and nothing
