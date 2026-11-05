@@ -18,6 +18,6 @@ A superseded run still holds the runner. Cancel it before pushing again to the s
 
 Green alone does not say so: they skip without a browser. CI installs chromium (step "install
 chromium") and sets `ARTIFACTS_REQUIRE_BROWSER=1`, so a missing browser fails the run at start.
-The "browser tests" step runs with `-v`, so each test has its own line: grep the log for `chromium --version`,
+The "browser tests" step, in the `test-sqlite` job (the Postgres suite runs in `test`), runs with `-v`, so each test has its own line: grep the log for `chromium --version`,
 then count `test_panel_browser.*PASSED` (and `test_shim_marks`, `test_thumbs`,
 `test_thumbnail_wall`); none of them may appear in the `SKIPPED` summary.
