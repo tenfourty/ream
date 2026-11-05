@@ -103,3 +103,19 @@ unchanged.
   not found again; tabs keep both lists in view one click apart.
 
 **Evidence:** confirmed (Jeremy, 5 Nov 2026)
+
+## Inside a folder, the All tab names the folder and hides when it is alone (5 Nov 2026)
+
+**Chosen:** on a folder's page the first tab reads "All in <folder name>" (the name escaped), and
+when it is the only tab the tab row is not drawn at all. Waiting on you, Pinned and the other
+tabs still appear once they have something in them, as on the wall. Why: "All" inside a folder was
+already selected and reloaded the same view, so it read as a way out of the folder and did
+nothing; the label now says what it covers, and a button that can do nothing is not shown.
+
+**Not chosen:**
+- Make All leave the folder and show the whole wall: the Gallery link already does that, and two
+  ways out of one folder confuse.
+- Keep it as it was: a selected button labelled "All" that reloads the same view, which a reader
+  takes for a way out.
+
+**Evidence:** confirmed (Jeremy, 5 Nov 2026)

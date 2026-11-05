@@ -258,3 +258,18 @@ def test_every_menu_on_the_wall_is_one_exclusive_group(client, db):
         menus = re.findall(r'<details class="menu[^"]*"[^>]*>', html)
         assert len(menus) >= 2, url
         assert all('name="menu"' in m for m in menus), (url, menus)
+
+
+def test_inside_a_folder_the_all_tab_names_the_folder_and_hides_when_alone(client, db):
+    put(db, "bosun", "Pg-alpha", folder="digests", folder_title="Daily <b>digests</b>")
+    asker = put(db, "bosun", "Pg-asker", folder="digests")
+    fid = folder_id(db, "digests")
+    alone = client.get(f"/f/{fid}").text
+    assert 'class="tabs"' not in alone and "All in" not in alone, "no do-nothing button"
+    ask(db, "bosun", asker)
+    html = client.get(f"/f/{fid}").text
+    assert "All in Daily &lt;b&gt;digests&lt;/b&gt;" in html
+    assert "<b>digests</b>" not in html
+    assert "Waiting on you" in html
+    # The wall itself keeps a plain "All".
+    assert ">All</a>" in client.get("/").text

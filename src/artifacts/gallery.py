@@ -2900,8 +2900,13 @@ def _tabs(
     deleted: int = 0,
     archived: int = 0,
     base: str = "/",
+    folder_title: str = "",
 ) -> str:
     """All / Waiting on you / Pinned / Archived / Deleted.
+
+    INSIDE A FOLDER (`folder_title` set) the first tab reads "All in <folder>", and when it is
+    the only tab there is no tab row at all: "All" there is already on and reloads the same
+    view, a button that does nothing (Jeremy, 5 Nov 2026; docs/decisions.md).
 
     The reference's tabs are All / Yours / Shared with you, which do not map:
     every page here is his. These are the questions actually worth asking of
@@ -2918,8 +2923,9 @@ def _tabs(
     row plus something you scroll to, and the count keeps doing the job the
     fold's count did: "out of the way" never becomes "lost"."""
     out = []
+    all_label = f"All in {escape(folder_title)}" if folder_title else "All"
     for key, label, count in (
-        ("all", "All", 0),
+        ("all", all_label, 0),
         ("waiting", "Waiting on you", waiting),
         ("pinned", "Pinned", pinned),
         ("archived", "Archived", archived),
@@ -2931,6 +2937,8 @@ def _tabs(
         suffix = f'<span class="tn">{count}</span>' if count else ""
         href = base if key == "all" else f"{base}?filter={key}"
         out.append(f'<a class="{cls}" href="{href}">{label}{suffix}</a>')
+    if folder_title and len(out) == 1:
+        return ""
     return f'<nav class="tabs">{"".join(out)}</nav>'
 
 
@@ -3151,13 +3159,14 @@ def _controls_row(
     archived: int = 0,
     base: str = "/",
     select_html: str = "",
+    folder_title: str = "",
 ) -> str:
     """The row under the title: WHAT to show on the left, how to find it and how
     to see it on the right."""
     pages_text = f"{pages} page" if pages == 1 else f"{pages} pages"
     return (
         '<div class="controls">'
-        f"{_tabs(active, waiting, pinned, deleted, archived, base)}"
+        f"{_tabs(active, waiting, pinned, deleted, archived, base, folder_title)}"
         '<div class="cright">'
         f"{_agent_pick(agents or [], agent, view, query, base)}"
         f"{_search_box(query, view, base)}"
@@ -5455,6 +5464,7 @@ def gallery_router(db: Database) -> APIRouter:
                     0 if in_folder else archived_pages,
                     base,
                     _select_toggle(request, selecting, active),
+                    in_folder[1] if in_folder else "",
                 ),
                 # Inside a folder the way back is the labelled pill every other index
                 # page has: "All" there means all of THIS folder, and is no way out
