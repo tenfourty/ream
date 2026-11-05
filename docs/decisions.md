@@ -23,3 +23,20 @@ archiving or binning a page closes its open questions.
   a question in front of him 24 minutes after its page had left his wall.
 
 **Evidence:** confirmed (Jeremy, 2 Nov 2026)
+
+## The Older pages link is proven by CI until a real view passes 200 pages (5 Nov 2026)
+
+**Chosen:** the Older pages link on the wall (it shows the next 200 pages of a view past the
+200-page cap) counts as proven by CI's tests, which page the wall, a folder and the Archived tab,
+search and filters included. The maintainer checks it in the browser the first time a real view
+passes 200 pages. Why: no view in production holds more than 200 pages yet (the widest held 162 on
+5 Nov 2026), so there is nothing for him to tap, and the tests already cover what a tap would show.
+
+**Not chosen:**
+- Fill a throwaway folder with 205 blank pages so he can tap the link at once, then delete them:
+  real proof today, but it clutters the wall, the events and every office's reads to prove what the
+  tests already prove.
+- Leave it unproven until a real view passes 200 pages, then ask him: keeps the work open for weeks
+  with nothing left to do on it, and puts the check on him when the maintainer can make it.
+
+**Evidence:** confirmed (Jeremy, 5 Nov 2026)
