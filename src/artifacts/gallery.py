@@ -2560,8 +2560,23 @@ def starter_prompt() -> str:
     )
 
 
+def _alias_note(typed: str | None, resolved: str | None) -> str:
+    """Said plainly when a name he is about to approve is an old name of another agent."""
+    if typed and resolved and typed != resolved:
+        return (
+            f"{typed} is an old name of {resolved}: approving gives this machine a "
+            f"key for {resolved}."
+        )
+    return ""
+
+
 def _connect_page(
-    typed: str = "", pending=None, message: str = "", ok: str = "", name: str = ""
+    typed: str = "",
+    pending=None,
+    message: str = "",
+    ok: str = "",
+    name: str = "",
+    alias_note: str = "",
 ) -> str:
     """The page he approves a machine on. Step one asks for the code his agent
     is showing; step two shows that one request, lets him name the machine,
@@ -2597,6 +2612,11 @@ def _connect_page(
             "<p>Only approve if this is the code your own agent showed you. The machine "
             "gets its key directly; you will not see it.</p>"
             + (f'<p class="err">{escape(message)}</p>' if message else "")
+            + (
+                f'<p class="err alias-note">{escape(alias_note)}</p>'
+                if alias_note
+                else ""
+            )
             + '<form method="post" action="/connect/approve">'
             f'<input type="hidden" name="request_id" value="{escape(pending.id)}">'
             f'<input type="hidden" name="code" value="{escape(pending.code)}">'
@@ -6512,7 +6532,7 @@ def gallery_router(db: Database) -> APIRouter:
     @router.get("/connect", response_class=HTMLResponse)
     def connect_page(code: str = "") -> HTMLResponse:
         """Step one (no code) and step two (a code he typed). homelab-ij8.102."""
-        pending, message = None, ""
+        pending, message, alias_note = None, "", ""
         if code.strip():
             pending = connect.find(db, code)
             if pending is None:
@@ -6520,10 +6540,14 @@ def gallery_router(db: Database) -> APIRouter:
                     "No machine is waiting with that code. Check it against your "
                     "agent's screen; codes expire after 15 minutes."
                 )
+            else:
+                suggested = connect.clean_name(pending.suggested_name or "")
+                if suggested is not None:
+                    alias_note = _alias_note(suggested, rename.resolve(db, suggested))
         return HTMLResponse(
             _shell(
                 "Connect a machine",
-                _connect_page(code, pending, message),
+                _connect_page(code, pending, message, alias_note=alias_note),
                 scripts='<script src="/connect.js" defer></script>'
                 if pending is None
                 else "",
@@ -6545,16 +6569,19 @@ def gallery_router(db: Database) -> APIRouter:
             )
         else:
             agent = connect.clean_name(name)
+            typed_name, alias_note = agent, ""
             if agent is not None:
                 # A renamed agent's old name means the agent it became, so
                 # typing it can never quietly bring the old name back.
                 agent = rename.resolve(db, agent)
+                alias_note = _alias_note(typed_name, agent)
             if agent is None:
                 body = _connect_page(
                     code,
                     pending,
                     "Use 2 to 40 letters, digits or hyphens for the name.",
                     name=name,
+                    alias_note=alias_note,
                 )
             elif keys.is_reserved_agent_name(agent):
                 body = _connect_page(
@@ -6562,6 +6589,7 @@ def gallery_router(db: Database) -> APIRouter:
                     pending,
                     f"{agent} is {keys.RESERVED_REASON}. Pick another.",
                     name=name,
+                    alias_note=alias_note,
                 )
             elif connect.name_in_use(db, agent):
                 body = _connect_page(
@@ -6569,11 +6597,13 @@ def gallery_router(db: Database) -> APIRouter:
                     pending,
                     f"{agent} is already the name of a connected machine. Pick another.",
                     name=name,
+                    alias_note=alias_note,
                 )
             elif connect.approve(db, pending.id, agent):
                 body = _connect_page(
                     ok=f"Approved. {agent} will pick up its key in a few seconds; "
                     "your agent will say when it has."
+                    + (f" ({alias_note})" if alias_note else "")
                 )
             else:
                 body = _connect_page(

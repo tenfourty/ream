@@ -369,3 +369,153 @@ def test_connecting_a_machine_under_an_old_name_means_the_new_one(db):
     keys.revoke(db, key_id)
     assert "Approved. cove-maintainer" in approve(started["code"]).text
     assert set(_under(db, "cove-seat").values()) == {0}
+
+
+def _alias_rows(db, old: str) -> int:
+    with db.connect() as conn:
+        return conn.execute(
+            "select count(*) from agent_alias where old = %s", (old,)
+        ).fetchone()[0]
+
+
+def _agent_pages(db, agent: str) -> int:
+    with db.connect() as conn:
+        return conn.execute(
+            "select count(*) from artifact where agent = %s", (agent,)
+        ).fetchone()[0]
+
+
+def test_release_name_renames_without_leaving_an_alias(db, api):
+    token, _page, _decision = _populate(db, "warpgate-arc")
+
+    counts = rename.rename_agent(
+        db, "warpgate-arc", "warpgate-maintainer", dry_run=False, release_name=True
+    )
+    assert counts["artifact.agent"] == 1
+    assert counts["agent_alias"] == 0
+    assert _alias_rows(db, "warpgate-arc") == 0
+    assert rename.resolve(db, "warpgate-arc") == "warpgate-arc"
+    assert set(_under(db, "warpgate-arc").values()) == {0}
+    assert _agent_pages(db, "warpgate-maintainer") == 1
+    # the old key still acts as the new name
+    assert api.get("/api/v1/artifacts", headers=_auth(token)).status_code == 200
+
+
+def test_release_name_still_repoints_aliases_that_pointed_at_the_old_name(db):
+    _populate(db, "warpgate-arc")
+    rename.rename_agent(db, "warpgate-arc", "warpgate-mid", dry_run=False)
+    rename.rename_agent(
+        db, "warpgate-mid", "warpgate-maintainer", dry_run=False, release_name=True
+    )
+    assert rename.resolve(db, "warpgate-arc") == "warpgate-maintainer"
+    assert rename.resolve(db, "warpgate-mid") == "warpgate-mid"
+
+
+def test_release_name_dry_run_says_no_alias_and_changes_nothing(
+    db, monkeypatch, capsys
+):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    _populate(db, "warpgate-arc")
+    argv = ["rename-agent", "warpgate-arc", "warpgate-maintainer", "--release-name"]
+
+    admin.main([*argv, "--dry-run"])
+    out = capsys.readouterr().out
+    assert "DRY RUN" in out
+    assert "alias: none would be written" in out
+    assert _alias_rows(db, "warpgate-arc") == 0
+    assert _agent_pages(db, "warpgate-arc") == 1
+
+    admin.main(argv)
+    out = capsys.readouterr().out
+    assert "alias: none was written" in out
+    assert _alias_rows(db, "warpgate-arc") == 0
+    assert _agent_pages(db, "warpgate-maintainer") == 1
+
+
+def test_release_name_command_frees_an_existing_alias(db, monkeypatch, capsys):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    _populate(db, "warpgate-arc")
+    rename.rename_agent(db, "warpgate-arc", "warpgate-maintainer", dry_run=False)
+    assert _alias_rows(db, "warpgate-arc") == 1
+
+    admin.main(["release-name", "warpgate-arc", "--dry-run"])
+    out = capsys.readouterr().out
+    assert "DRY RUN" in out and "old name of warpgate-maintainer" in out
+    assert _alias_rows(db, "warpgate-arc") == 1
+
+    admin.main(["release-name", "warpgate-arc"])
+    out = capsys.readouterr().out
+    assert "released warpgate-arc" in out and "1 alias row deleted" in out
+    assert _alias_rows(db, "warpgate-arc") == 0
+    assert rename.resolve(db, "warpgate-arc") == "warpgate-arc"
+    # the agent it pointed at is untouched
+    assert _agent_pages(db, "warpgate-maintainer") == 1
+
+
+def test_release_name_refuses_a_name_that_is_not_an_alias(db, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    _populate(db, "warpgate-arc")
+    with pytest.raises(rename.Refused, match="is not an alias"):
+        rename.release_alias(db, "warpgate-arc", dry_run=False)
+    with pytest.raises(rename.Refused, match="is not an alias"):
+        rename.release_alias(db, "nobody-here", dry_run=True)
+    with pytest.raises(SystemExit) as refused:
+        admin.main(["release-name", "warpgate-arc"])
+    assert "refused: warpgate-arc is not an alias" in str(refused.value)
+
+
+def _start_connect(gallery, name: str, ip: str) -> dict:
+    return gallery.post(
+        "/api/v1/connect", json={"name": name}, headers={"x-real-ip": ip}
+    ).json()
+
+
+def _approve(gallery, code: str, name: str):
+    import re
+
+    page = gallery.get("/connect", params={"code": code}).text
+    request_id = re.search(r'name="request_id" value="([^"]+)"', page).group(1)
+    return gallery.post(
+        "/connect/approve",
+        data={"request_id": request_id, "code": code, "name": name},
+        headers={"sec-fetch-site": "same-origin"},
+    )
+
+
+def test_a_released_name_can_be_approved_for_a_new_machine(db):
+    gallery = TestClient(
+        create_gallery_app(db), base_url="https://artifacts.tenfourty.site"
+    )
+    keys.mint(db, "cove-seat")
+    rename.rename_agent(
+        db, "cove-seat", "cove-maintainer", dry_run=False, release_name=True
+    )
+    started = _start_connect(gallery, "x", "203.0.113.5")
+    done = _approve(gallery, started["code"], "cove-seat")
+    assert "Approved. cove-seat will pick up" in done.text
+    assert "old name" not in done.text
+
+
+def test_the_approve_page_says_when_a_name_is_an_old_name_of_another_agent(db):
+    gallery = TestClient(
+        create_gallery_app(db), base_url="https://artifacts.tenfourty.site"
+    )
+    keys.mint(db, "cove-seat")
+    rename.rename_agent(db, "cove-seat", "cove-maintainer", dry_run=False)
+
+    # the machine proposes the old name: the page warns before he approves
+    started = _start_connect(gallery, "cove-seat", "203.0.113.6")
+    page = gallery.get("/connect", params={"code": started["code"]}).text
+    assert (
+        "cove-seat is an old name of cove-maintainer: approving gives this "
+        "machine a key for cove-maintainer." in page
+    )
+
+    # a name that is not an alias carries no such note
+    other = _start_connect(gallery, "fresh-laptop", "203.0.113.7")
+    plain = gallery.get("/connect", params={"code": other["code"]}).text
+    assert "old name of" not in plain
+
+    # typing the old name into the form is refused (cove-maintainer is in use) and says why
+    refused = _approve(gallery, started["code"], "cove-seat")
+    assert "cove-seat is an old name of cove-maintainer" in refused.text

@@ -198,7 +198,13 @@ def cmd_rename_agent(args: argparse.Namespace) -> None:
 
     db = _open_db()
     try:
-        counts = rename.rename_agent(db, args.old, args.new, dry_run=args.dry_run)
+        counts = rename.rename_agent(
+            db,
+            args.old,
+            args.new,
+            dry_run=args.dry_run,
+            release_name=args.release_name,
+        )
     except rename.Refused as exc:
         raise SystemExit(f"refused: {exc}") from None
     if args.dry_run:
@@ -211,6 +217,29 @@ def cmd_rename_agent(args: argparse.Namespace) -> None:
         print(f"{column}\t{n}")
     total = sum(counts.values())
     print(f"total\t{total}{' (DRY RUN, nothing changed)' if args.dry_run else ''}")
+    if args.release_name:
+        verb = "would be" if args.dry_run else "was"
+        print(f"alias: none {verb} written; {args.old} is free to name a new machine")
+
+
+def cmd_release_name(args: argparse.Namespace) -> None:
+    """Delete an alias so the old name is free again."""
+    from artifacts import rename
+
+    try:
+        target = rename.release_alias(_open_db(), args.alias, dry_run=args.dry_run)
+    except rename.Refused as exc:
+        raise SystemExit(f"refused: {exc}") from None
+    if args.dry_run:
+        print(
+            f"DRY RUN -- nothing changed. {args.alias} (an old name of {target}) "
+            "would be released: 1 alias row deleted."
+        )
+    else:
+        print(
+            f"released {args.alias} (it meant {target}): 1 alias row deleted. "
+            "It is free to name a new machine."
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -270,13 +299,38 @@ def build_parser() -> argparse.ArgumentParser:
     rename_agent = sub.add_parser(
         "rename-agent",
         help="rename an agent, or merge it into an existing one (needs DATABASE_URL)",
+        description="Rename an agent, or merge it into an existing one. By default the old "
+        "name is kept as an alias, so a name somebody types still means the agent it became; "
+        "that also means a new machine connecting as the old name would get a key for the new "
+        "one. Pass --release-name to leave no alias and keep the old name free.",
     )
     rename_agent.add_argument("old")
     rename_agent.add_argument("new")
     rename_agent.add_argument(
+        "--release-name",
+        action="store_true",
+        help="leave no alias, so the old name is free for a new machine "
+        "(with --dry-run, says the alias would not be written)",
+    )
+    rename_agent.add_argument(
         "--dry-run", action="store_true", help="count what would change, change nothing"
     )
     rename_agent.set_defaults(func=cmd_rename_agent)
+
+    release_name = sub.add_parser(
+        "release-name",
+        help="free an old name: delete the alias that makes it mean another agent "
+        "(needs DATABASE_URL)",
+    )
+    release_name.add_argument(
+        "alias", help="the old name; refused if it is not an alias"
+    )
+    release_name.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="say what would be released, change nothing",
+    )
+    release_name.set_defaults(func=cmd_release_name)
 
     purge = sub.add_parser(
         "purge-deleted",

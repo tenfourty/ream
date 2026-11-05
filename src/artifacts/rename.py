@@ -64,8 +64,40 @@ def resolve(db: Database, name: str) -> str:
         return _resolve(conn, name)
 
 
-def rename_agent(db: Database, old: str, new: str, *, dry_run: bool) -> dict[str, int]:
+def release_alias(db: Database, name: str, *, dry_run: bool) -> str:
+    """Free `name`: delete the alias that makes it mean another agent, so it can be
+    given to a new machine (connect approval and `--to` resolve a typed name through
+    aliases). Returns the agent it used to point at. Raises `Refused` when `name` is
+    not an alias. Exactly one row goes; anything else rolls back."""
+    if not AGENT_NAME.fullmatch(name):
+        raise Refused(f"invalid agent name {name!r}: must match {AGENT_NAME.pattern!r}")
+    with db.connect() as conn, conn.transaction():
+        conn.advisory_lock(_RENAME_LOCK_KEY)
+        row = conn.execute(
+            "select new from agent_alias where old = %s", (name,)
+        ).fetchone()
+        if row is None:
+            raise Refused(
+                f"{name} is not an alias (an old name of another agent); nothing changed"
+            )
+        gone = conn.execute("delete from agent_alias where old = %s", (name,)).rowcount
+        if gone != 1:
+            raise Refused(
+                f"expected to release 1 alias row, got {gone}; nothing changed"
+            )
+        if dry_run:
+            raise Rollback()
+    return row[0]
+
+
+def rename_agent(
+    db: Database, old: str, new: str, *, dry_run: bool, release_name: bool = False
+) -> dict[str, int]:
     """Rename agent `old` to `new`, merging into `new` if it already exists.
+
+    With `release_name` no alias is left for `old` (and one `old` already held is
+    dropped), so `old` is free for a new machine; aliases that pointed at `old` are
+    still re-pointed at `new`.
 
     Returns the rows changed -- or, in a dry run, that would change -- per
     `table.column`, plus `agent_alias` for the alias rows written. Re-running a
@@ -121,13 +153,18 @@ def rename_agent(db: Database, old: str, new: str, *, dry_run: bool) -> dict[str
         if moved == 0 and already is None:
             raise Refused(f"no agent named {old}; nothing changed")
 
-        aliased = conn.execute(
-            "insert into agent_alias (old, new) values (%s, %s)"
-            " on conflict (old) do update"
-            " set new = excluded.new, renamed_at = %s"
-            " where agent_alias.new <> excluded.new",
-            (old, new, datetime.now(UTC)),
-        ).rowcount
+        if release_name:
+            aliased = conn.execute(
+                "delete from agent_alias where old = %s", (old,)
+            ).rowcount
+        else:
+            aliased = conn.execute(
+                "insert into agent_alias (old, new) values (%s, %s)"
+                " on conflict (old) do update"
+                " set new = excluded.new, renamed_at = %s"
+                " where agent_alias.new <> excluded.new",
+                (old, new, datetime.now(UTC)),
+            ).rowcount
         aliased += conn.execute(
             "update agent_alias set new = %s where new = %s", (new, old)
         ).rowcount
