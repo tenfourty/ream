@@ -13,7 +13,7 @@ the way this service exists to stop. It has to come from the page's own host.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import content, keys, store, templates
+from artifacts import content, keys, store, templates, textvars
 from artifacts.content import create_content_app
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
@@ -61,7 +61,7 @@ def test_it_is_the_same_bytes_the_templates_are_built_from(client):
     template's `shared:` sentinels, so a page that links the stylesheet and a
     page that inlines the block are looking at the same CSS."""
     on_disk = (templates.DIR / "_shared.css").read_text()
-    assert client.get("/_shared.css").text == on_disk
+    assert client.get("/_shared.css").text == textvars.render(on_disk)
 
 
 def test_a_second_fetch_revalidates_to_304(client):
@@ -80,18 +80,14 @@ def test_the_etag_follows_the_content(client, monkeypatch, tmp_path):
 
     (tmp_path / "_shared.css").write_text(":root{--accent:rebeccapurple}\n")
     monkeypatch.setattr(templates, "DIR", tmp_path)
-    templates.shared_css.cache_clear()
-    try:
-        after = client.get("/_shared.css")
-        assert after.headers["etag"] != before, "new bytes, new validator"
-        assert "rebeccapurple" in after.text
-        stale = client.get("/_shared.css", headers={"if-none-match": before})
-        assert stale.status_code == 200, (
-            "a browser holding the old validator is given the new stylesheet, "
-            "not an empty 304 that would leave the page unstyled"
-        )
-    finally:
-        templates.shared_css.cache_clear()
+    after = client.get("/_shared.css")
+    assert after.headers["etag"] != before, "new bytes, new validator"
+    assert "rebeccapurple" in after.text
+    stale = client.get("/_shared.css", headers={"if-none-match": before})
+    assert stale.status_code == 200, (
+        "a browser holding the old validator is given the new stylesheet, "
+        "not an empty 304 that would leave the page unstyled"
+    )
 
 
 def test_it_carries_the_content_origins_minimum_headers(client):

@@ -16,7 +16,7 @@ def _run(tmp_path, monkeypatch):
 def test_a_new_machine_sees_only_the_newest_then_nothing(tmp_path, monkeypatch):
     first = _run(tmp_path, monkeypatch)
     assert first.count("new in the artifacts tools:") == news.FIRST_RUN
-    assert news.NEWS[0][1] in first
+    assert news.entries()[0][1] in first
     assert _run(tmp_path, monkeypatch) == "", "said once, not on every call"
 
 
