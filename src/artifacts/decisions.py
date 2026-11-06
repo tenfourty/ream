@@ -1091,6 +1091,15 @@ ANSWER_SOURCES = ("terminal", "telegram", "in-person", "other")
 STORED_SOURCES = ("page", *ANSWER_SOURCES, "slack")
 
 
+def require_stored_source(source: str) -> None:
+    """Refuse an `answer_source` that is not one of `STORED_SOURCES`. The column had a
+    CHECK naming these until slice 5 of the core-and-plugins design; the check lives here
+    now, where a plug-in's value can join the set without a migration. Called at every
+    write of the column, before the SQL, so a bad value never reaches the table."""
+    if source not in STORED_SOURCES:
+        raise InvalidSource(source)
+
+
 class InvalidSource(Exception):
     """A relay named a source that is not one of ANSWER_SOURCES, or named 'page'.
 
@@ -1525,6 +1534,7 @@ def record_elsewhere(
     """
     if source not in ANSWER_SOURCES:
         raise InvalidSource(source)
+    require_stored_source(source)
     if not recorded_by:
         raise InvalidSource("a relayed answer must name the seat recording it")
     store._check_size(note, MAX_NOTE_BYTES, "note", agent=recorded_by, artifact_id=None)
@@ -1707,6 +1717,7 @@ def answer(
     """
     if source not in ("page", "slack"):
         raise InvalidSource(source)
+    require_stored_source(source)
     store._check_size(note, MAX_NOTE_BYTES, "note", agent=by, artifact_id=None)
 
     emissions: list[events.Emission] = []

@@ -441,6 +441,59 @@ def _widen_event_kinds_reopened(conn) -> None:
         )
 
 
+def _drop_house_checks(conn) -> None:
+    """Step 21: remove the two CHECKs that name house values, `decision.answer_source`
+    and `event.kind` (core-and-plugins design, section 5). The values are validated in
+    code now (`events.append`, `decisions.require_stored_source`), so a plug-in can add
+    one without a migration. Edits the stored table text as steps 6 to 18 do, but takes
+    the clause out instead of widening it, in one pass over both tables so `event` is
+    rewritten once. Self-proving: if either clause is still in the stored SQL afterwards
+    the step raises, the transaction rolls back and user_version stays. Idempotent: a
+    table without the clause is left as it is. The match tolerates any whitespace and
+    case, because step 1 spread these lists over lines and steps 6 to 18 put them on one."""
+    targets = {
+        "decision": re.compile(
+            r"\s*\bcheck\s*\(\s*answer_source\s+in\s*\([^()]*\)\s*\)", re.IGNORECASE
+        ),
+        "event": re.compile(
+            r"\s*\bcheck\s*\(\s*kind\s+in\s*\([^()]*\)\s*\)", re.IGNORECASE
+        ),
+    }
+    conn.execute("pragma writable_schema = on")
+    try:
+        for table, pattern in targets.items():
+            row = conn.execute(
+                "select sql from sqlite_master where type = 'table' and name = %s",
+                (table,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(f"schema step 21: table {table} is missing")
+            stripped = pattern.sub("", row[0])
+            if stripped != row[0]:
+                conn.execute(
+                    "update sqlite_master set sql = "  # noqa: S608 -- stored text
+                    + _sql_text(stripped)
+                    + " where type = 'table' and name = '"
+                    + table
+                    + "'"
+                )
+        (cookie,) = conn.execute("pragma schema_version").fetchone()
+        conn.execute(f"pragma schema_version = {cookie + 1}")
+    finally:
+        conn.execute("pragma writable_schema = off")
+    for table, column in (("decision", "answer_source"), ("event", "kind")):
+        (sql,) = conn.execute(
+            "select sql from sqlite_master where type = 'table' and name = %s",
+            (table,),
+        ).fetchone()
+        # Any `<column> in` left means a CHECK of a shape the pattern did not know.
+        if re.search(rf"\b{column}\s+in\b", sql, re.IGNORECASE):
+            raise RuntimeError(
+                f"schema step 21 could not remove {table}.{column}'s CHECK: the "
+                "stored table text is not the expected shape"
+            )
+
+
 def _sql_text(text: str) -> str:
     """`text` as an SQL string literal (fixed text only, never caller input)."""
     return "'" + text.replace("'", "''") + "'"
@@ -736,6 +789,8 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " where delivered_at is null and parked_at is null"
         ),
     ),
+    # 6 Nov 2026: the CHECKs naming house values go; code validates (see schema.sql).
+    21: (_drop_house_checks,),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

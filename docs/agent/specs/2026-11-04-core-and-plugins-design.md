@@ -505,6 +505,12 @@ drivers; CI only (not on baba).
    and the generic webhook sink are still to do.
 5. **Drop the CHECKs, source registry** (section 5), receipts' `receipt_set` step folded into
    the same `event` rewrite if receipts slice 1 has not shipped; otherwise a second rewrite.
+   **Part 1 built (`ci/slice5-checks-part1`).** Both CHECKs dropped (Postgres by a `pg_constraint`
+   lookup in `schema.sql`; SQLite step 21, `_drop_house_checks`, self-proving, one rewrite of
+   `event` since `receipt_set` shipped as step 16). Validation moved to code: `events.append`
+   against `events.KINDS`, `decisions.require_stored_source` against `STORED_SOURCES`. No table
+   rebuild fallback (an unknown stored shape fails start-up). Still to do: the source registry,
+   `decisions.stored_sources()` (part 2).
 6. **Renames with aliases** (section 6), `listening`/`inbox` neutral ids, gallery wording from the
    answer-source label (still declared in core for `slack` at this point).
 7. **Plug-in loader and API v1**, the six interfaces, failure isolation, versioning, the test

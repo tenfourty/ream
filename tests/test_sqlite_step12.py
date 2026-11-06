@@ -4,8 +4,6 @@ and is safe to run again."""
 
 from importlib import resources
 
-import pytest
-
 from artifacts import db as dbmod
 from artifacts.db import Database
 
@@ -56,12 +54,12 @@ def test_step_12_adds_the_column_and_widens_the_check(tmp_path):
     assert _version(database) == dbmod.SQLITE_SCHEMA_VERSION >= 12
     sql, columns = _shape(database)
     assert "reopened_at" in columns
-    assert "'decision_set_aside'" in sql and "'decision_reopened'" in sql
+    assert "kind" in sql  # step 21 later removed the CHECK itself
     with database.connect() as conn:
         assert conn.execute("pragma writable_schema").fetchone()[0] == 0
 
 
-def test_the_widened_check_accepts_the_new_kinds_and_refuses_others(tmp_path):
+def test_the_widened_check_accepts_the_new_kinds(tmp_path):
     database = _build_v11(tmp_path / "v11.db")
     database.migrate()
     with database.connect() as conn, conn.transaction():
@@ -76,11 +74,11 @@ def test_the_widened_check_accepts_the_new_kinds_and_refuses_others(tmp_path):
                 " values ('a', 'x', 'y', %s, datetime('now'))",
                 (kind,),
             )
-        with pytest.raises(Exception, match="(?i)check"):
-            conn.execute(
-                "insert into event (artifact_id, agent, actor, kind, created_at)"
-                " values ('a', 'x', 'y', 'bogus', datetime('now'))"
-            )
+        # Step 21 took the CHECK out: the kind is validated in code (events.append).
+        conn.execute(
+            "insert into event (artifact_id, agent, actor, kind, created_at)"
+            " values ('a', 'x', 'y', 'bogus', datetime('now'))"
+        )
 
 
 def test_step_12_run_again_changes_nothing(tmp_path):
@@ -88,7 +86,7 @@ def test_step_12_run_again_changes_nothing(tmp_path):
     database.migrate()
     before = _shape(database)
     with database.connect() as conn, conn.transaction():
-        dbmod._widen_event_kinds(conn)
+        dbmod._drop_house_checks(conn)
     assert _shape(database) == before
     database.migrate()
     assert _shape(database) == before

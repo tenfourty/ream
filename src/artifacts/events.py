@@ -153,6 +153,10 @@ def append(
     `event_id` only after `conn`'s transaction has actually committed: a
     nudge for a row that then rolls back would tell another agent about
     something that never happened."""
+    # The table had a CHECK on `kind` until slice 5 of the core-and-plugins design; the
+    # check is here now, so a plug-in's kind needs no migration.
+    if kind not in KINDS:
+        raise ValueError(f"unknown event kind {kind!r}: not one of events.KINDS")
     # The summary carries viewer-typed free text (a decision note, a comment)
     # and it is stored FLAT: whitespace collapsed, control characters gone,
     # length bounded. A consumer of this feed prints it into a terminal or an

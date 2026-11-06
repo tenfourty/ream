@@ -2611,3 +2611,18 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   `DELIVER_TIMEOUT_SECONDS` (30 s, under the 60 s lease) via a per-call daemon thread, a timeout
   being an ordinary failure with backoff. `artifacts-admin outbox` prints pending, parked and
   delivered counts by sink. Still later: the per-sink circuit breaker, the generic webhook sink.
+- **Drop the CHECKs, part 1 (6 Nov 2026, slice 5 of core-and-plugins).** The CHECKs on
+  `decision.answer_source` and `event.kind` are gone. Postgres: `schema.sql` no longer creates them
+  or re-adds them, and a `do $$` block drops any check on those two columns found in `pg_constraint`
+  by what it tests (so the inline-created and the re-added constraint both go), idempotent.
+  SQLite: step 21 (`_drop_house_checks`) strips both clauses from the stored table text in one
+  `writable_schema` pass (`event` is rewritten once; step 16's `receipt_set` and step 18's
+  `thread_reopened` steps already shipped, so there is no ordering issue), then raises and rolls
+  back, leaving `user_version`, if any `<column> in` is left in either table's SQL. No rebuild
+  fallback: an unknown shape fails start-up loudly instead. Code validates: `events.append` raises
+  `ValueError` for a kind not in `events.KINDS`; `decisions.require_stored_source` raises
+  `InvalidSource` for a value outside `STORED_SOURCES` (the relay and answer paths already refused
+  such values before the SQL, with the same 422 as before; the CHECK was only a backstop that
+  surfaced as a 500); `formanswer.relay` refuses it with `SubmitRefused` (422). Old step tests that
+  expected the CHECK text after a full migration were updated. Part 2: the
+  `decisions.stored_sources()` registry.

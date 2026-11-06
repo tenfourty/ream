@@ -184,8 +184,7 @@ create table if not exists event (
     artifact_id text not null references artifact(id) on delete cascade,
     agent       text not null,
     actor       text not null,
-    kind        text not null
-        check (kind in ('decision_answered', 'comment_added', 'thread_resolved')),
+    kind        text not null,
     summary     text not null default '',
     ref_id      text,
     created_at  timestamptz not null default now()
@@ -256,9 +255,8 @@ create table if not exists seat_grant (
 -- `said_at` is when HE said it, which is not when a seat got round to recording it.
 -- `answered_at` keeps meaning "when this row gained its answer" so the uncollected
 -- alert and the event journal need no special case.
-alter table decision add column if not exists answer_source text
-    check (answer_source in ('page', 'terminal', 'telegram', 'in-person', 'other'));
--- 'slack' is added further down (the partner bridge, inbound).
+alter table decision add column if not exists answer_source text;
+-- No CHECK on it: the stored values are validated in code (decisions.STORED_SOURCES).
 alter table decision add column if not exists recorded_by text;
 alter table decision add column if not exists said_at timestamptz;
 
@@ -367,12 +365,9 @@ create index if not exists artifact_live_idx on artifact (deleted_at)
 -- The CHECK has to be dropped and re-added rather than widened in place, which
 -- is why this is its own migration and not a line. The three original kinds
 -- were enumerated up front precisely so that adding one would be deliberate.
-alter table event drop constraint if exists event_kind_check;
-alter table event add constraint event_kind_check
-    check (kind in ('decision_answered', 'comment_added', 'thread_resolved',
-                    'decision_shelved', 'comment_withdrawn',
-                    'decision_set_aside', 'decision_reopened', 'receipt_set',
-                    'thread_reopened'));
+-- (Since slice 5 of the core-and-plugins design the CHECK is gone altogether: the kind is
+-- validated in code, `events.append` against `events.KINDS`. The block that drops it from a
+-- database that still has it is further down, by the partner bridge's answer source.)
 
 -- WHO, when three seats share one key (homelab-ij8.32, 21 Sep 2026).
 --
@@ -863,10 +858,28 @@ create index if not exists partner_outbox_due_idx
 -- (quarterdeck) vouched for who pressed. The CHECK is dropped and re-added, as
 -- `event_kind_check` is, because it cannot be widened in place. Agents cannot
 -- record 'slack' (`decisions.ANSWER_SOURCES` stays what a relay may claim).
-alter table decision drop constraint if exists decision_answer_source_check;
-alter table decision add constraint decision_answer_source_check
-    check (answer_source in ('page', 'terminal', 'telegram', 'in-person', 'other',
-                             'slack'));
+-- Since slice 5 of the core-and-plugins design neither this CHECK nor `event.kind`'s exists:
+-- both are validated in code (`decisions.STORED_SOURCES`, `events.KINDS`), so a plug-in can
+-- add a value without a migration. Drop whatever check constraint on those two columns a
+-- database still has, found in pg_constraint by what it tests rather than by name (the
+-- inline-created and the re-added constraint are both `<table>_<column>_check`, but a
+-- restored dump may differ). Idempotent: a database without them finds nothing.
+do $$
+declare c record;
+begin
+    for c in
+        select con.conrelid::regclass as tbl, con.conname
+        from pg_constraint con
+        where con.contype = 'c'
+          and con.connamespace = current_schema()::regnamespace
+          and ((con.conrelid = 'decision'::regclass
+                and pg_get_constraintdef(con.oid) ~ '^CHECK \(\(?answer_source\M')
+            or (con.conrelid = 'event'::regclass
+                and pg_get_constraintdef(con.oid) ~ '^CHECK \(\(?kind\M'))
+    loop
+        execute format('alter table %s drop constraint %I', c.tbl, c.conname);
+    end loop;
+end $$;
 
 -- A question whose home is the partner: the copy artifacts shows him. `source`
 -- is "qd:<id>"; `version` is the HOME's last applied version. `out_version` is

@@ -386,6 +386,8 @@ def relay(
         raise SubmitRefused("send {name: value} for at least one field")
     if len(fields_given) > MAX_FIELDS_SENT:
         raise SubmitRefused(f"more than {MAX_FIELDS_SENT} fields sent")
+    if source not in decisions.STORED_SOURCES:
+        raise SubmitRefused(f"unknown answer source {source!r}")
     with db.connect() as conn:
         row = conn.execute(
             "select d.artifact_id, d.form_name, d.session, a.agent"

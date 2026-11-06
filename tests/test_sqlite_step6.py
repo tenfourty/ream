@@ -46,7 +46,8 @@ def test_step_6_widens_a_v5_database(tmp_path):
         ).fetchone()
         conn.execute("pragma writable_schema")  # readable afterwards
         assert conn.execute("pragma writable_schema").fetchone()[0] == 0
-    assert "'in-person', 'other', 'slack')" in sql
+    # step 6 widened the CHECK and step 21 then took it out; neither leaves it behind
+    assert "answer_source" in sql and "'in-person'" not in sql
 
 
 def test_a_different_stored_shape_fails_loudly_and_stays_at_v5(tmp_path):
