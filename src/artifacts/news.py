@@ -93,7 +93,7 @@ NEWS: tuple[tuple[str, str], ...] = (
     ),
     (
         "2026-09-29c",
-        "On a page under review {{owner_name}}'s marks are now held until {{owner_their}} verdict unless {{owner_they}} switches to live; artifacts-decide ask-review --live asks for them as {{owner_they}} go{{owner_es}}. A held mark is invisible to you until then.",
+        "On a page under review {{owner_name}}'s marks are now held until {{owner_their}} verdict unless {{owner_they}} switch{{owner_es}} to live; artifacts-decide ask-review --live asks for them as {{owner_they}} go{{owner_es}}. A held mark is invisible to you until then.",
     ),
     (
         "2026-09-29b",

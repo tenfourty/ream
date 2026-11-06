@@ -299,7 +299,7 @@ reply under any of them; your reply goes to the page's owner as yours:
 Two offices on one key are told apart only by their session labels, so set
 ARTIFACTS_SESSION to "<office>/<ref>" or the owner may not hear you.
 
-AFTER YOU ASK, LISTEN. {{Owner_they}} often answers within minutes, and an answer nobody
+AFTER YOU ASK, LISTEN. {{Owner_they}} often answer{{owner_s}} within minutes, and an answer nobody
 collects is the failure this service exists to prevent. If your agent can run
 a background task, start `artifacts-decide wait` in the background straight
 after asking: it exits 0 printing {{owner_their}} answer the moment one lands (3 if
