@@ -18,6 +18,7 @@ There is no list of consumers to keep in step.
 """
 
 import re
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import ClassVar
 
@@ -275,3 +276,60 @@ LEADING_DOCTYPE = re.compile(
 # `content` -- content imports hosts imports store -- and a second copy of a
 # regex this carefully argued is how two parts of one service start disagreeing
 # about what a page is.
+
+
+@dataclass(frozen=True)
+class Pronoun:
+    """The forms of the owner's pronoun (`settings.owner_pronoun`): `he`/`she`/`they`.
+
+    Text that says "he answered" asks this instead of hard-coding one. `be` and `have` are
+    the verb forms that agree with the subject ("he is", "they are"); `verb("answer")` gives
+    "answers" for he/she and "answer" for they. Prefer wording with no pronoun at all
+    ("the owner's answer"); this is for the sentences that cannot avoid one."""
+
+    subject: str
+    object: str
+    possessive: str  # "his book"
+    possessive_pronoun: str  # "the book is his"
+    reflexive: str
+    plural: bool
+
+    @property
+    def be(self) -> str:
+        return "are" if self.plural else "is"
+
+    @property
+    def have(self) -> str:
+        return "have" if self.plural else "has"
+
+    def verb(self, base: str) -> str:
+        """The present tense of a regular verb agreeing with the subject."""
+        if self.plural:
+            return base
+        if base.endswith(("s", "sh", "ch", "x", "z", "o")):
+            return base + "es"
+        if base.endswith("y") and base[-2:-1] not in "aeiou":
+            return base[:-1] + "ies"
+        return base + "s"
+
+    def cap(self, form: str) -> str:
+        """`form` with its first letter capitalised (a sentence start)."""
+        return form[:1].upper() + form[1:]
+
+
+_PRONOUNS = {
+    "he": Pronoun("he", "him", "his", "his", "himself", False),
+    "she": Pronoun("she", "her", "her", "hers", "herself", False),
+    "they": Pronoun("they", "them", "their", "theirs", "themselves", True),
+}
+
+
+def pronoun(setting: str) -> Pronoun:
+    """The `Pronoun` for `settings.owner_pronoun` ('he', 'she' or 'they'); a `ValueError`
+    for anything else, so a typo in the manifest is loud, not a wrong word in a sentence."""
+    try:
+        return _PRONOUNS[setting]
+    except KeyError:
+        raise ValueError(
+            f"unknown pronoun {setting!r}: one of {', '.join(_PRONOUNS)}"
+        ) from None

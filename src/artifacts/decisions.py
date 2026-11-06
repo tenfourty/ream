@@ -49,6 +49,7 @@ from artifacts import (
     nudge,
     partner,
     receipts,
+    settings,
     store,
     text,
 )
@@ -1540,7 +1541,7 @@ def record_elsewhere(
             answered_at = datetime.now(UTC)
             written = conn.execute(
                 "update decision set answer = %s, answer_note = %s,"
-                " answered_at = %s, answered_by = 'jeremy',"
+                " answered_at = %s, answered_by = %s,"
                 " answer_source = %s, recorded_by = %s, said_at = %s"
                 " where id = %s and (kind <> 'review' or answer is null)"
                 # Live page at the write, as in `answer`: a relay is no more
@@ -1552,6 +1553,7 @@ def record_elsewhere(
                     letter,
                     note,
                     answered_at,
+                    settings.owner_id(),
                     source,
                     recorded_by,
                     said_at,
@@ -1587,7 +1589,7 @@ def record_elsewhere(
                     partner.answered_body(
                         letter=letter,
                         note=note,
-                        answered_by="jeremy",
+                        answered_by=settings.owner_id(),
                         answered_at=answered_at,
                         answer_source=source,
                         recorded_by=recorded_by,
@@ -1637,7 +1639,7 @@ def answer(
     """The gallery, acting for Jeremy, answers a decision. Takes no `agent`: this is
     not a call an agent ever makes, so there is no ownership to check against a
     caller-supplied identity -- only whether `decision_id` names an open (not closed)
-    decision at all. `by` is always `"jeremy"` today; the gallery hardcodes it rather
+    decision at all. `by` is always the owner id (`settings.owner_id`); the gallery hardcodes it rather
     than trusting any identity header (see `gallery.py`), and this function stores
     whatever it is given without questioning it further.
 

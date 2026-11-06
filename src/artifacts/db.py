@@ -706,6 +706,15 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
     ),
     # 5 Nov 2026: the event kind `thread_reopened` (see schema.sql).
     18: (_widen_event_kinds_reopened,),
+    # 5 Nov 2026: `service_meta`, the owner id a database was written for (see schema.sql).
+    19: (
+        (
+            "create table service_meta ("
+            " key text primary key,"
+            " value text not null,"
+            " updated_at timestamptz not null default (artifacts_now()))"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

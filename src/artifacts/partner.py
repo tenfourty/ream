@@ -43,7 +43,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from artifacts import db as dbmod
-from artifacts import ids
+from artifacts import ids, settings
 
 if TYPE_CHECKING:
     from artifacts.db import Connection, Database
@@ -289,7 +289,8 @@ def answered_body(
     """He answered on the page (`answer_source` 'page', verified by artifacts),
     or a seat recorded words he gave elsewhere (verified_by 'agent': artifacts
     saw only the seat's word, named in `recorded_by`)."""
-    name = {"jeremy": "Jeremy"}.get(answered_by, answered_by)
+    current = settings.current()
+    name = current.owner_name if answered_by == current.owner_id else answered_by
     verified = {"page": "artifacts", "slack": "quarterdeck"}.get(answer_source, "agent")
     body = {
         "answer": letter,

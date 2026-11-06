@@ -242,6 +242,35 @@ def cmd_release_name(args: argparse.Namespace) -> None:
         )
 
 
+def cmd_change_owner(args: argparse.Namespace) -> None:
+    """Move the database to another owner id: every column the owner's own acts were
+    stored under is rewritten in one transaction, and the new id is recorded."""
+    from artifacts import owner
+
+    db = _open_db()
+    try:
+        before = owner.stored(db)
+        counts = owner.change_owner(db, args.new, dry_run=args.dry_run)
+    except owner.Refused as exc:
+        raise SystemExit(f"refused: {exc}") from None
+    if args.dry_run:
+        print(
+            f"DRY RUN -- nothing changed. Changing the owner from {before} to {args.new}"
+            " would change:"
+        )
+    else:
+        print(f"changed the owner from {before} to {args.new}:")
+    for column, n in counts.items():
+        print(f"{column}\t{n}")
+    total = sum(counts.values())
+    print(f"total\t{total}{' (DRY RUN, nothing changed)' if args.dry_run else ''}")
+    if not args.dry_run:
+        print(
+            f"now set ARTIFACTS_OWNER_ID={args.new} on the service and restart it: it"
+            " refuses to start while the setting and the database disagree"
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="artifacts-admin")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -316,6 +345,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="count what would change, change nothing"
     )
     rename_agent.set_defaults(func=cmd_rename_agent)
+
+    change_owner = sub.add_parser(
+        "change-owner",
+        help="move the database to another owner id (needs DATABASE_URL)",
+        description="Change the owner id the database was written for: rewrite every "
+        "column the owner's own acts were stored under (comment author and resolver, "
+        "decision answerer, event actor, picture stager, folder owner) in one "
+        "transaction and record the new id. Then set ARTIFACTS_OWNER_ID to it on the "
+        "service. Refused if the id is an agent's name. An answer's stored JSON record "
+        "and the partner outbox keep the id they were written with.",
+    )
+    change_owner.add_argument("new", help="the new owner id")
+    change_owner.add_argument(
+        "--dry-run", action="store_true", help="count what would change, change nothing"
+    )
+    change_owner.set_defaults(func=cmd_change_owner)
 
     release_name = sub.add_parser(
         "release-name",

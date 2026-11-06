@@ -42,6 +42,7 @@ from artifacts import (
     image_store,
     images,
     nudge,
+    settings,
     store,
     text,
 )
@@ -1589,7 +1590,7 @@ def reopen(
     for `resolve`. The same two silences as `resolve` apply: an owner reopening its
     own thread (the keyed API only ever lets the owner), and a thread whose root is
     still held back."""
-    actor = by or agent or "jeremy"
+    actor = by or agent or settings.owner_id()
     event_seq = None
     with db.connect() as conn:
         if agent is None:

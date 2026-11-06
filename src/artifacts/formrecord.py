@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from artifacts import settings
+
 MAX_STALE = 100
 
 
@@ -73,7 +75,7 @@ def source_of(record: dict, name: str) -> dict:
         return found
     return {
         "source": "page",
-        "by": record.get("answered_by") or "jeremy",
+        "by": record.get("answered_by") or settings.owner_id(),
         "at": record.get("answered_at"),
         "version": record.get("version"),
     }

@@ -411,7 +411,8 @@ ships a golden test: with our settings, `agents.txt`, `skill.md`, `agent.json`, 
 template footers, `news` and the CLI `--help` render byte-identical to today's. Tests on both
 drivers; CI only (not on baba).
 
-1. **Owner settings** (first, as ruled). `settings.py` with the three owner fields,
+1. **Owner settings** (first, as ruled; built on `ci/core-slice1-owner`: unset means the neutral
+   `owner`/`the owner`/`they`, so a pod without the three variables refuses to start on our database). `settings.py` with the three owner fields,
    `service_meta`, the wrong-id guard, `change-owner`, `keys`/`folders`/SQL literals/25 call sites
    switched, `text.pronoun`. Manifest PR setting `OWNER_ID=jeremy`, name and `he` lands before
    the pin. The remaining `os.environ` reads are untouched.

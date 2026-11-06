@@ -1106,3 +1106,15 @@ alter table artifact add column if not exists refresh_every integer;
 alter table artifact add column if not exists checked_at timestamptz;
 alter table artifact add column if not exists check_status text check (check_status in ('ok', 'failed'));
 alter table artifact add column if not exists check_note text;
+
+-- SERVICE META (5 Nov 2026; docs/agent/specs/2026-11-04-core-and-plugins-design.md, 3.2, slice 1).
+-- Facts about the database itself, one row per key. `owner_id` is the principal id the owner's own
+-- acts are stored under (`by`, `author`, `answered_by`, `actor`, a folder's owner): recorded at the
+-- first start, compared at every later one, so a pod started with another id refuses instead of
+-- reading the owner's rows as a stranger's. `artifacts-admin change-owner` is the only writer after
+-- that. SQLite does the same as its schema step 19.
+create table if not exists service_meta (
+    key        text primary key,
+    value      text not null,
+    updated_at timestamptz not null default now()
+);

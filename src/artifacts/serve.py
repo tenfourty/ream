@@ -9,7 +9,16 @@ import os
 import signal
 import sys
 
-from artifacts import comments, events, maintenance, partner, partner_in, repack
+from artifacts import (
+    comments,
+    events,
+    maintenance,
+    owner,
+    partner,
+    partner_in,
+    repack,
+    settings,
+)
 from artifacts.app import create_app
 from artifacts.db import Database
 
@@ -115,8 +124,16 @@ def app_from_env():
         inbound = partner_in.config_from_env(partner_config)
     except (partner.PartnerConfigError, partner_in.PartnerInboundConfigError) as exc:
         raise SystemExit(str(exc)) from None
+    # Every problem with the owner settings at once, before any connection is made.
+    configured = settings.validate_for_serve()
     db = Database(dsn)
     db.migrate()
+    # The owner id is stored in rows: a pod started with another one refuses to start
+    # rather than read the owner's rows as a stranger's (owner.py).
+    try:
+        owner.check(db, configured.owner_id)
+    except owner.OwnerMismatch as exc:
+        raise SystemExit(str(exc)) from None
     comments.start_sweeper(db)
     # The nightly backup and purge (maintenance.py). ARTIFACTS_MAINTENANCE=off
     # turns it off, for tests that build the real app.

@@ -31,6 +31,7 @@ from artifacts import (
     ids,
     nudge,
     receipts,
+    settings,
     store,
 )
 from artifacts.db import jsonb
@@ -217,13 +218,14 @@ def submit(
     *,
     version: int,
     values,
-    by: str = "jeremy",
+    by: str | None = None,
 ) -> dict:
     """Record one submit of a form and return the merged record. `store.NotFound` for
     a form that does not exist or is closed (its agent said it is no longer needed);
     `SubmitRefused` for a batch the stored field list does not allow, including a
     `version` that is no longer the form's latest (409: he answered a question that
     has since changed, and nothing is carried silently)."""
+    by = by or settings.owner_id()
     with db.connect() as conn:
         row = conn.execute(
             "select d.artifact_id, d.form_name, d.session, d.answer_record,"
@@ -462,7 +464,7 @@ def relay(
             "submit_id": ids.new_id(),
             "version": latest,
             "kind": "relay",
-            "answered_by": "jeremy",
+            "answered_by": settings.owner_id(),
             "source": source,
             "recorded_by": recorded_by,
             "answered_at": _stamp(now),
@@ -482,7 +484,7 @@ def relay(
             "kind": "form",
             "form": form_name,
             "content_hash": content_hash[0] if content_hash else None,
-            "answered_by": "jeremy",
+            "answered_by": settings.owner_id(),
             "sent": [],
             **{k: v for k, v in (previous or {}).items() if k not in grown},
             **grown,
@@ -503,10 +505,18 @@ def relay(
         record["sent"] = applied
         conn.execute(
             "update decision set answer_record = %s, answered_at = %s,"
-            " answered_by = 'jeremy', answer_source = %s, recorded_by = %s,"
+            " answered_by = %s, answer_source = %s, recorded_by = %s,"
             " said_at = %s, acknowledged_at = null, acknowledged_by = null"
             " where id = %s and closed_at is null",
-            (jsonb(record), now, source, recorded_by, said_at, decision_id),
+            (
+                jsonb(record),
+                now,
+                settings.owner_id(),
+                source,
+                recorded_by,
+                said_at,
+                decision_id,
+            ),
         )
         receipts.void(conn, decision_id)
         answered = len(fields) - len(record["blank"])

@@ -12,14 +12,17 @@ the same transaction that writes it. Only plain SQL both databases read the same
 import re
 from datetime import UTC, datetime
 
-from artifacts import ids
+from artifacts import ids, settings
 
 # Validated like agent names, shorter: a slug is typed on a command line every publish.
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 
-# The owner of a folder HE makes (`keys.RESERVED_AGENT_NAMES`: no agent can be called this, so
-# no agent key reaches these folders). It holds any agent's pages, each keeping its publisher.
-HIS = "jeremy"
+
+def his() -> str:
+    """The owner of a folder the reader makes: the configured owner id
+    (`keys.reserved_agent_names`: no agent can be called this, so no agent key reaches these
+    folders). It holds any agent's pages, each keeping its publisher."""
+    return settings.current().owner_id
 
 
 class BadSlug(Exception):
@@ -228,13 +231,13 @@ def create_his(conn, title: str) -> tuple[str, str]:
     for n in range(1, 101):
         suffix = "" if n == 1 else f"-{n}"
         slug = base[: 40 - len(suffix)].rstrip("-") + suffix
-        if find(conn, HIS, slug) is not None:
+        if find(conn, his(), slug) is not None:
             continue
         folder_id = ids.new_id()
         done = conn.execute(
             "insert into folder (id, owner, slug, title, created_at)"
             " values (%s, %s, %s, %s, %s) on conflict (owner, slug) do nothing",
-            (folder_id, HIS, slug, title, datetime.now(UTC)),
+            (folder_id, his(), slug, title, datetime.now(UTC)),
         )
         if done.rowcount > 0:
             return folder_id, slug

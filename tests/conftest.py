@@ -62,6 +62,11 @@ if SQLITE:
     _dbmod.SQLITE_SYNCHRONOUS = "off"
 # No nightly backup-and-purge thread in a test that builds the real app.
 os.environ["ARTIFACTS_MAINTENANCE"] = "off"
+# Our deployment's owner, as its manifest sets them (core-and-plugins design 3.2): the suite
+# stores and reads "jeremy". A test of another owner uses `settings.override(...)`.
+os.environ["ARTIFACTS_OWNER_ID"] = "jeremy"
+os.environ["ARTIFACTS_OWNER_NAME"] = "Jeremy"
+os.environ["ARTIFACTS_OWNER_PRONOUN"] = "he"
 
 
 def _share_fastapi_type_adapters() -> None:

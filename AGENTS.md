@@ -45,6 +45,7 @@ new name; published pages never change owner by accident.
 | The service (FastAPI + Postgres) | `src/artifacts/` |
 | The agent CLIs (`artifacts-publish`, `artifacts-decide`, …) | `src/artifacts/client.py`, `decide.py` |
 | Admin commands (keys, scopes, renames) | `src/artifacts/admin.py` -> `artifacts-admin` |
+| The owner: settings, the stored id, its start-up guard | `src/artifacts/settings.py`, `src/artifacts/owner.py` |
 | The Postgres <-> SQLite copier and its verifier | `src/artifacts/migrate.py` |
 | Runbooks (cutover, rollback, backups, restore drill, CI logs) | `docs/agent/runbooks/` |
 | Tests | `tests/` |
@@ -92,6 +93,18 @@ deployment's manifest repo that moves production onto that image
 manifests live in the homelab repo and its maintainer merges the pin PRs.
 
 After changing a CLI, reinstall it where agents run it (`uv tool install <checkout> --force`).
+
+**The owner is a setting** (`docs/agent/specs/2026-11-04-core-and-plugins-design.md`, 3.2). The one
+person who reads the gallery is `ARTIFACTS_OWNER_ID` (default `owner`; lower-case letters, digits,
+hyphens), `ARTIFACTS_OWNER_NAME` (default `the owner`) and `ARTIFACTS_OWNER_PRONOUN` (`they`, `he` or
+`she`; default `they`), read at call time through `settings.current()`; a test changes them with
+`settings.override(...)`, and the suite runs as our deployment does (`jeremy`/`Jeremy`/`he`, set in
+`tests/conftest.py`). The id is **stored** (`by`, `author`, `answered_by`, `actor`, a folder's owner),
+so the first start records it in `service_meta` and every later start refuses a different one
+(`owner.check`). A deployment whose rows say another id sets the variable to that id; to move a
+database to a new one run `artifacts-admin change-owner <new-id> [--dry-run]`, then set the variable
+and restart. No agent may be named the owner id. Do not write the id as a literal in code: read
+`settings.owner_id()` (SQL takes it as a bound parameter).
 
 ## Safety rules
 

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from artifacts import settings
+
 if TYPE_CHECKING:  # annotations only: `artifacts-admin new-key` runs without psycopg
     from artifacts.db import Database
 
@@ -20,15 +22,19 @@ ROTATING_MAX_AGE = timedelta(days=14)
 AGENT_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
 # Names no agent may take: the gallery stores the reader's own comments, pictures
-# and answers under "jeremy", so an agent called that would read as his work.
-# The pattern forces lower case, so no case variants arise.
-RESERVED_AGENT_NAMES = frozenset({"jeremy"})
+# and answers under the owner id (`settings.owner_id`), so an agent called that would
+# read as the owner's work. The pattern forces lower case, so no case variants arise.
 RESERVED_REASON = "reserved: it is the reader's own name"
+
+
+def reserved_agent_names() -> frozenset[str]:
+    """The names no agent may take: the configured owner id, read when asked."""
+    return frozenset({settings.current().owner_id})
 
 
 def is_reserved_agent_name(name: str) -> bool:
     """Whether `name` is one no agent may be minted, connected or renamed to."""
-    return name in RESERVED_AGENT_NAMES
+    return name in reserved_agent_names()
 
 
 @dataclass(frozen=True)

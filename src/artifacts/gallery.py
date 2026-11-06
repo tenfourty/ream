@@ -10,7 +10,7 @@ hand-escaped field.
 No in-app identity check: Authelia gates this host at the ingress. `/api/v1` does not
 special-case a `Remote-User` header either -- it simply ignores one, since identity
 there comes only from the verified key. Nothing in this module reads it either, which is
-exactly why answering a decision hardcodes `by="jeremy"` (see `answer_decision` below)
+exactly why answering a decision hardcodes `by=settings.owner_id()` (see `answer_decision` below)
 rather than trusting any identity header: Authelia admits exactly one subject to this
 host, but nothing here proves the ingress strips an inbound copy of such a header before
 a request reaches this app, so the one subject it ever admits is named outright instead
@@ -50,6 +50,7 @@ from artifacts import (
     pagediff,
     partner_in,
     rename,
+    settings,
     stamp,
     store,
     thumbs,
@@ -5943,7 +5944,7 @@ def gallery_router(db: Database) -> APIRouter:
         if archived is not None:
             return RedirectResponse(f"/f/{folder_id}", status_code=303)
         preview = store.set_folder_archived(
-            db, owner, slug, True, confirm=False, actor=folders.HIS
+            db, owner, slug, True, confirm=False, actor=folders.his()
         )
         if preview is None:
             raise HTTPException(404, "no such folder")
@@ -5987,7 +5988,7 @@ def gallery_router(db: Database) -> APIRouter:
         if archived == "1" and confirm != "1":
             return RedirectResponse(f"/f/{folder_id}/archive", status_code=303)
         store.set_folder_archived(
-            db, owner, slug, archived == "1", confirm=True, actor=folders.HIS
+            db, owner, slug, archived == "1", confirm=True, actor=folders.his()
         )
         return RedirectResponse("/", status_code=303)
 
@@ -6785,7 +6786,7 @@ def gallery_router(db: Database) -> APIRouter:
             shown_version = int(version_field) if version_field else None
         except ValueError as exc:
             raise HTTPException(422, "round and version are numbers") from exc
-        # `by="jeremy"` is hardcoded, not read from any header -- see the module
+        # `by=settings.owner_id()` is hardcoded, not read from any header -- see the module
         # docstring for why: Authelia admits exactly one subject to this host, and
         # nothing here proves the ingress strips an inbound copy of an identity
         # header before this app ever sees the request.
@@ -6795,7 +6796,7 @@ def gallery_router(db: Database) -> APIRouter:
                 decision_id,
                 letter=letter,
                 note=note,
-                by="jeremy",
+                by=settings.owner_id(),
                 round=asked_round,
                 version=shown_version,
             )
@@ -6868,7 +6869,7 @@ def gallery_router(db: Database) -> APIRouter:
     # asked for rather than guessed at.
     #
     # Same shape as the answer form above and for the same reasons: a plain
-    # POST with the same-origin guard, `author="jeremy"` hardcoded rather than
+    # POST with the same-origin guard, `author=settings.owner_id()` hardcoded rather than
     # read from any header, and a 303 back to the page so a refresh does not
     # repost.
     @router.post("/c/{artifact_id}")
@@ -6901,7 +6902,7 @@ def gallery_router(db: Database) -> APIRouter:
                 db,
                 artifact_id=artifact_id,
                 author_kind="human",
-                author="jeremy",
+                author=settings.owner_id(),
                 body=body,
                 thread_root=thread_root or None,
                 quote=quote[:500],
@@ -6984,7 +6985,9 @@ def gallery_router(db: Database) -> APIRouter:
         if not await run_in_threadpool(store.exists, db, artifact_id):
             raise HTTPException(404, "no such artifact")
         try:
-            return await image_store.stage_upload(request, db, artifact_id, "jeremy")
+            return await image_store.stage_upload(
+                request, db, artifact_id, settings.owner_id()
+            )
         except images.ImageRefused as exc:
             raise HTTPException(
                 exc.status, {"field": exc.field, "detail": exc.detail}
@@ -6999,7 +7002,7 @@ def gallery_router(db: Database) -> APIRouter:
             # agent=None: the gallery owns nothing in the `agent` column's
             # sense, and Jeremy owns everything in the sense that matters. Same
             # call `add` already makes for writing.
-            row = comments.resolve(db, comment_id, by="jeremy", agent=None)
+            row = comments.resolve(db, comment_id, by=settings.owner_id(), agent=None)
         except store.NotFound as exc:
             raise HTTPException(404, "no such comment") from exc
         return RedirectResponse(f"/a/{row.artifact_id}#comments", status_code=303)
@@ -7011,7 +7014,7 @@ def gallery_router(db: Database) -> APIRouter:
     ):
         try:
             # agent=None, as for resolve: the gallery acts for Jeremy.
-            row = comments.reopen(db, comment_id, agent=None, by="jeremy")
+            row = comments.reopen(db, comment_id, agent=None, by=settings.owner_id())
         except store.NotFound as exc:
             raise HTTPException(404, "no such comment") from exc
         return RedirectResponse(f"/a/{row.artifact_id}#comments", status_code=303)

@@ -53,7 +53,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from artifacts import db as dbmod
-from artifacts import decisions, hosts, partner, store
+from artifacts import decisions, hosts, partner, settings, store
 from artifacts.db import Connection, Database
 
 _log = logging.getLogger("artifacts.partner.inbound")
@@ -517,7 +517,7 @@ def _apply_artifacts(db: Database, event: Event, now: datetime) -> str:
             event.question,
             letter=letter,
             note=note,
-            by="jeremy",
+            by=settings.owner_id(),
             source="slack",
             recorded_by="quarterdeck",
             in_transaction=hook,
@@ -895,9 +895,13 @@ def answer_here(db: Database, qid: str, *, letter: str, note: str = "") -> Copy:
         raise store.NotFound()
     source = partner.foreign_source(qid)
     store._check_size(
-        note, decisions.MAX_NOTE_BYTES, "note", agent="jeremy", artifact_id=None
+        note,
+        decisions.MAX_NOTE_BYTES,
+        "note",
+        agent=settings.owner_id(),
+        artifact_id=None,
     )
-    store._check_secrets(note, "note", agent="jeremy", artifact_id=None)
+    store._check_secrets(note, "note", agent=settings.owner_id(), artifact_id=None)
     now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
         row = conn.execute(
@@ -924,7 +928,7 @@ def answer_here(db: Database, qid: str, *, letter: str, note: str = "") -> Copy:
             partner.answered_body(
                 letter=letter,
                 note=note,
-                answered_by="jeremy",
+                answered_by=settings.owner_id(),
                 answered_at=now,
                 answer_source="page",
             ),

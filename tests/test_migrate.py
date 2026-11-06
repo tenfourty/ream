@@ -426,6 +426,7 @@ def _seed(database: Database) -> None:
             ["alpha", "publish", "i1", "1" * 64, 201, j({"id": "a1", "n": 1}), T1],
         ),
         ("agent_alias", "old, new, renamed_at", ["oldname", "alpha", T0]),
+        ("service_meta", "key, value, updated_at", ["owner_id", "jeremy", T0]),
         (
             "partner_outbox",
             (

@@ -2030,7 +2030,7 @@ def set_deleted(
         )
         if done.rowcount > 0 and before is not None:
             was, archived_at = before
-            actor = agent or "jeremy"
+            actor = agent or folders.his()
             if deleted and not was:
                 _set_aside_open_questions(conn, artifact_id, "binned", actor)
             elif not deleted and was and archived_at is None:
@@ -2186,7 +2186,7 @@ def set_archived(
             deleted_at = conn.execute(
                 "select deleted_at from artifact where id = %s", (artifact_id,)
             ).fetchone()[0]
-            actor = agent or "jeremy"
+            actor = agent or folders.his()
             if archived and not was:
                 _set_aside_open_questions(conn, artifact_id, "archived", actor)
             elif not archived and was and deleted_at is None:
@@ -2215,9 +2215,9 @@ def folders_for_page(db: Database, artifact_id: str):
         rows = conn.execute(
             "select id, title, owner from folder where archived_at is null"
             " and owner in (%s, %s) order by (owner = %s) desc, lower(title), slug",
-            (folders.HIS, page[0], folders.HIS),
+            (folders.his(), page[0], folders.his()),
         ).fetchall()
-    return page[0], page[1], [(r[0], r[1], r[2] == folders.HIS) for r in rows]
+    return page[0], page[1], [(r[0], r[1], r[2] == folders.his()) for r in rows]
 
 
 def file_page_for_reader(
@@ -2232,7 +2232,9 @@ def file_page_for_reader(
     one agent each); an archived one is `folders.FolderArchived`. False for no such page.
     Filing is a shelf fact: no version, and the archived-via-folder marker is cleared."""
     if new_title is not None:
-        _guard(new_title, MAX_TITLE_BYTES, "title", agent=folders.HIS, artifact_id=None)
+        _guard(
+            new_title, MAX_TITLE_BYTES, "title", agent=folders.his(), artifact_id=None
+        )
     with db.connect() as conn, conn.transaction():
         page = conn.execute(
             "select agent from artifact where id = %s and deleted_at is null",
@@ -2246,7 +2248,7 @@ def file_page_for_reader(
             target = None
         else:
             row = folders.get(conn, folder_id)
-            if row is None or row[1] not in (folders.HIS, page[0]):
+            if row is None or row[1] not in (folders.his(), page[0]):
                 raise NotFound()
             # Lock the folder row, then read archived_at again: a folder archive that
             # commits between the first read and the update must not be raced past.
@@ -2292,7 +2294,9 @@ def file_pages_for_reader(
     if not wanted:
         raise NotFound()
     if new_title is not None:
-        _guard(new_title, MAX_TITLE_BYTES, "title", agent=folders.HIS, artifact_id=None)
+        _guard(
+            new_title, MAX_TITLE_BYTES, "title", agent=folders.his(), artifact_id=None
+        )
     with db.connect() as conn, conn.transaction():
         agents = {
             r[0]: r[1]
@@ -2311,7 +2315,7 @@ def file_pages_for_reader(
         else:
             row = folders.get(conn, folder_id)
             if row is None or (
-                row[1] != folders.HIS and set(agents.values()) != {row[1]}
+                row[1] != folders.his() and set(agents.values()) != {row[1]}
             ):
                 raise NotFound()
             locked = conn.execute(
@@ -2347,14 +2351,14 @@ def folders_for_pages(db: Database, artifact_ids: list[str]):
         if len(found) != len(wanted):
             return None
         agents = sorted({r[1] for r in found})
-        owners = [folders.HIS, *(agents if len(agents) == 1 else [])]
+        owners = [folders.his(), *(agents if len(agents) == 1 else [])]
         rows = conn.execute(
             "select id, title, owner from folder where archived_at is null"  # noqa: S608 -- placeholders only
             f" and owner in {in_list(owners)}"
             " order by (owner = %s) desc, lower(title), slug",
-            (*owners, folders.HIS),
+            (*owners, folders.his()),
         ).fetchall()
-    return agents, [(r[0], r[1], r[2] == folders.HIS) for r in rows]
+    return agents, [(r[0], r[1], r[2] == folders.his()) for r in rows]
 
 
 def rename_folder(
@@ -2387,11 +2391,11 @@ def set_folder_archived(
     brings their questions back; a page that is binned is restored as a page restore does it
     (its questions stay set aside until the bin is emptied the other way).
 
-    `agent` is the folder's OWNER. For his own folder (`folders.HIS`) the pages are any
-    agent's, so the page filter drops the publisher clause; the gallery passes `actor="jeremy"`
+    `agent` is the folder's OWNER. For his own folder (`folders.his()`) the pages are any
+    agent's, so the page filter drops the publisher clause; the gallery passes `actor=<the owner id>`
     so the set-aside and the told agents name who archived it."""
     actor = actor or agent
-    unscoped = agent == folders.HIS
+    unscoped = agent == folders.his()
     who = "" if unscoped else " and agent = %s"
     who_params: tuple = () if unscoped else (agent,)
     with db.connect() as conn, conn.transaction():
@@ -2495,7 +2499,7 @@ def rename(db: Database, artifact_id: str, title: str, *, agent: str | None) -> 
     BEFORE the ownership clause does any work, so a refusal is logged against
     whoever actually sent the title rather than against the page's owner.
     """
-    actor = agent or "jeremy"
+    actor = agent or folders.his()
     _guard(title, MAX_TITLE_BYTES, "title", agent=actor, artifact_id=artifact_id)
     _check_secrets(title, "title", agent=actor, artifact_id=artifact_id)
     where, params = _scoped(artifact_id, agent)
@@ -2701,12 +2705,12 @@ def transfer(
             (to_agent, artifact_id, old),
         )
         # An agent's folder holds that agent's pages: the new owner sorts it itself. A folder
-        # of his (owner 'jeremy') may hold anyone's, so the page stays in it.
+        # of his (the owner id) may hold anyone's, so the page stays in it.
         conn.execute(
             "update artifact set folder_id = null, archived_via_folder = null"
             " where id = %s and folder_id in"
-            " (select id from folder where owner <> 'jeremy')",
-            (artifact_id,),
+            " (select id from folder where owner <> %s)",
+            (artifact_id, folders.his()),
         )
     return old
 
