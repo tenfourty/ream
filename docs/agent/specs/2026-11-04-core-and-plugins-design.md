@@ -496,7 +496,13 @@ drivers; CI only (not on baba).
    plug-in design and is deferred). Outbox columns are the spec's plus `claimed_until`, `parked_at`,
    `last_error`, `last_error_at`. Converted call sites: `formanswer.py` and the set-aside loop in
    `store.py`. Not yet: the other fan-out sites (part 2), the per-sink circuit breaker and
-   `artifacts-admin outbox` (4.4, 4.5), the generic webhook sink, and `change-owner` over `outbox.event_json`.
+   the per-sink circuit breaker (4.4), the generic webhook sink, and `change-owner` over `outbox.event_json`.
+   **Part 2 built (`ci/slice4-emit-part2`).** All remaining fan-out sites emit through `events.emit`
+   (decisions, store, comments); `partner_in.answer_here` stays on `partner.enqueue_foreign` (no
+   artifact or agent to put on an `Event`). `deliver` has a protocol bound: it must return within
+   `sinks.DELIVER_TIMEOUT_SECONDS` (30 s), enforced by running it in a daemon thread; a timeout is a
+   failure with backoff. `artifacts-admin outbox` (counts by sink) is in; the circuit breaker (4.4)
+   and the generic webhook sink are still to do.
 5. **Drop the CHECKs, source registry** (section 5), receipts' `receipt_set` step folded into
    the same `event` rewrite if receipts slice 1 has not shipped; otherwise a second rewrite.
 6. **Renames with aliases** (section 6), `listening`/`inbox` neutral ids, gallery wording from the

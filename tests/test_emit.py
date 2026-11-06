@@ -243,7 +243,7 @@ def test_the_nudge_sink_passes_the_fields_nudge_emit_takes(db, page, monkeypatch
     )
     out.fire()
     ((args, kwargs),) = calls
-    assert args == ("decision_answered",)
+    assert args == () and kwargs["kind"] == "decision_answered"
     assert kwargs["event_id"] == str(out.seq)
     assert kwargs["title"] == "Plan" and kwargs["note"] == "his words"
     assert kwargs["letter"] == "a" and kwargs["recommended"] == "b"
@@ -290,3 +290,204 @@ def test_migration_adds_the_outbox_and_leaves_partner_rows_delivering(db):
     # The row written before the migration is still the partner sender's to deliver.
     rows = partner._claim(db, datetime.now(UTC) + timedelta(seconds=1), 5)
     assert [r["event_id"] for r in rows] == [event_id]
+
+
+# --- part 2: the remaining call sites, and the part 1 review fixes ------------------
+
+
+def test_builtins_register_under_the_lock_so_a_concurrent_emit_sees_both(monkeypatch):
+    import threading
+    import time
+
+    real = sinks._builtin_sinks
+
+    def slow():
+        time.sleep(0.3)
+        return real()
+
+    monkeypatch.setattr(sinks, "_builtin_sinks", slow)
+    monkeypatch.setattr(sinks, "_sinks", {})
+    monkeypatch.setattr(sinks, "_builtins_loaded", False)
+    first = threading.Thread(target=sinks.registered)
+    first.start()
+    time.sleep(0.05)  # the first call is inside the slow registration
+    names = {s.name for s in sinks.matching("asked")}
+    first.join()
+    assert names == {"partner"}
+
+
+def test_a_lost_lease_neither_completes_nor_fails_the_row(db, page):
+    def steals_the_lease(event):
+        with db.connect() as conn:
+            conn.execute(
+                "update outbox set claimed_until = %s",
+                (datetime.now(UTC) + timedelta(hours=1),),
+            )
+
+    with sinks.isolated(Sink("one", ("decision_answered",), deliver=steals_the_lease)):
+        _emit(db, _event(artifact_id=page.id))
+        assert sinks.deliver_due(db) == (0, 0)
+    assert (
+        _outbox(db)[0][4] is None
+    )  # not marked delivered by a sender without the lease
+
+
+def test_a_lost_lease_does_not_fail_the_row_either(db, page):
+    def broken_after_losing_the_lease(event):
+        with db.connect() as conn:
+            conn.execute("update outbox set delivered_at = %s", (datetime.now(UTC),))
+        raise ValueError("x")
+
+    with sinks.isolated(
+        Sink("one", ("decision_answered",), deliver=broken_after_losing_the_lease)
+    ):
+        _emit(db, _event(artifact_id=page.id))
+        assert sinks.deliver_due(db) == (0, 0)
+    row = _outbox(db)[0]
+    assert row[2] == 0 and row[4] is not None  # attempts untouched
+
+
+def test_a_deliver_that_hangs_is_a_timeout_failure_not_a_stuck_sender(
+    db, page, monkeypatch
+):
+    import threading
+
+    monkeypatch.setattr(sinks, "DELIVER_TIMEOUT_SECONDS", 0.2)
+    release = threading.Event()
+    with sinks.isolated(
+        Sink("one", ("decision_answered",), deliver=lambda e: release.wait(10))
+    ):
+        _emit(db, _event(artifact_id=page.id))
+        assert sinks.deliver_due(db) == (0, 1)
+    release.set()
+    with db.connect() as conn:
+        error = conn.execute("select last_error from outbox").fetchone()[0]
+    assert error == "TimeoutError"
+
+
+def test_start_is_idempotent_and_stop_ends_the_sender(db, monkeypatch):
+    import threading
+
+    monkeypatch.setattr(sinks, "POLL_SECONDS", 0.05)
+    first = sinks.start(db)
+    try:
+        assert sinks.start(db) is first
+        senders = [t for t in threading.enumerate() if t.name == "outbox-sender"]
+        assert senders == [first]
+    finally:
+        sinks.stop()
+    assert not first.is_alive()
+    second = sinks.start(db)
+    try:
+        assert second is not first
+    finally:
+        sinks.stop()
+    assert not second.is_alive()
+
+
+def test_the_app_shutdown_stops_the_sender(monkeypatch):
+    import asyncio
+
+    from artifacts import serve
+
+    stopped = []
+    monkeypatch.setattr(sinks, "stop", lambda timeout=5.0: stopped.append(timeout))
+
+    async def app(scope, receive, send):
+        await send({"type": "lifespan.shutdown.complete"})
+
+    sent = []
+
+    async def send(message):
+        sent.append(message["type"])
+
+    asyncio.run(serve._arm_shutdown_signals(app)({"type": "lifespan"}, None, send))
+    assert stopped and sent == ["lifespan.shutdown.complete"]
+
+
+def _open_question(db, page, **kwargs):
+    from artifacts import decisions
+
+    return decisions.ask(
+        db,
+        agent="seat-a",
+        artifact_id=page.id,
+        question="ship it?",
+        options=[{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}],
+        **kwargs,
+    )
+
+
+def test_set_aside_and_reopen_emit_even_with_the_bridge_off(db, page):
+    seen = []
+    sink = Sink(
+        "spy", ("set_aside", "reopened", "asked"), deliver=lambda e: seen.append(e.kind)
+    )
+    with sinks.isolated(sink):
+        decision = _open_question(db, page)
+        assert store.set_archived(db, page.id, True, agent="seat-a")
+        assert store.set_archived(db, page.id, False, agent="seat-a")
+        assert sinks.deliver_due(db) == (3, 0)
+    assert seen == ["asked", "set_aside", "reopened"]
+    with db.connect() as conn:
+        rows = conn.execute("select event_json from outbox").fetchall()
+    refs = {Event_ref(r[0]) for r in rows}
+    assert refs == {decision.id}
+
+
+def Event_ref(raw):
+    return events.Event.from_json(raw).ref_id
+
+
+def test_an_answer_fires_the_nudge_with_the_note_and_recommendation(
+    db, page, monkeypatch
+):
+    from artifacts import decisions, nudge
+
+    calls = []
+    monkeypatch.setattr(nudge, "emit", lambda *a, **k: calls.append(k))
+    decision = _open_question(db, page, recommended="a")
+    decisions.answer(
+        db, decision.id, letter="b", note="not yet", by="jeremy", source="page"
+    )
+    (call,) = calls
+    assert call["kind"] == "decision_answered" and call["agent"] == "seat-a"
+    assert call["note"] == "not yet" and call["letter"] == "b"
+    assert call["recommended"] == "a" and call["title"] == "Plan"
+    with db.connect() as conn:
+        seq, note = conn.execute(
+            "select seq, note from event where kind = 'decision_answered'"
+        ).fetchone()
+    assert call["event_id"] == str(seq) and note == "not yet"
+
+
+def test_a_comment_nudge_carries_no_note_though_the_journal_has_his_words(
+    db, page, monkeypatch
+):
+    from artifacts import comments, nudge
+
+    calls = []
+    monkeypatch.setattr(nudge, "emit", lambda *a, **k: calls.append(k))
+    comments.add(
+        db, artifact_id=page.id, author_kind="human", author="jeremy", body="hello"
+    )
+    (call,) = calls
+    assert call["kind"] == "comment_added" and not call.get("note")
+    with db.connect() as conn:
+        note = conn.execute(
+            "select note from event where kind = 'comment_added'"
+        ).fetchone()[0]
+    assert note == "hello"
+
+
+def test_admin_outbox_reports_counts_by_sink(db, page, capsys, monkeypatch):
+    from artifacts import admin
+
+    with sinks.isolated(Sink("one", ("decision_answered",), deliver=lambda e: None)):
+        _emit(db, _event(artifact_id=page.id))
+        _emit(db, _event(artifact_id=page.id))
+        sinks.deliver_due(db)
+        _emit(db, _event(artifact_id=page.id))
+    monkeypatch.setattr(admin, "_open_db", lambda: db)
+    admin.cmd_outbox(None)
+    assert "one\tpending=1\tparked=0\tdelivered=2" in capsys.readouterr().out

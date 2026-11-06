@@ -59,7 +59,6 @@ from artifacts import (
     ggscan,
     ids,
     packing,
-    partner,
     scan,
     settings,
 )
@@ -1764,7 +1763,9 @@ def _set_aside_state(conn, artifact_id: str) -> tuple[bool, object] | None:
     return (row[0] is not None or row[1] is not None), row[0]
 
 
-def _set_aside_open_questions(conn, artifact_id: str, what: str, actor: str) -> int:
+def _set_aside_open_questions(
+    conn, artifact_id: str, what: str, actor: str, emissions: list
+) -> int:
     """Tell the world that the page's open questions are SET ASIDE, and close nothing.
 
     `what` is "archived" or "binned". Called from inside the caller's transaction,
@@ -1787,7 +1788,9 @@ def _set_aside_open_questions(conn, artifact_id: str, what: str, actor: str) -> 
     own timeout, every time, unable to tell "not answered yet" from "he is not being
     shown this". A seat can lose a shift to that. Found by walking the gallery.
 
-    Returns how many questions it set aside, so a caller can report a number.
+    Returns how many questions it set aside, so a caller can report a number. Each
+    `events.emit` here appends its Emission to `emissions`; the caller fires them
+    after its transaction commits.
     """
     now = datetime.now(UTC)
     rows = conn.execute(
@@ -1809,22 +1812,24 @@ def _set_aside_open_questions(conn, artifact_id: str, what: str, actor: str) -> 
 
         holds.release(conn, artifact_id, emit=True)
     for decision_id, question, asked_by_session, kind in rows:
-        if kind == "question" and partner.enabled():
-            events.emit(
-                conn,
-                events.Event(
-                    kind="set_aside",
-                    artifact_id=artifact_id,
-                    agent=owner,
-                    actor=actor,
-                    ref_id=decision_id,
-                    data={
-                        "body": {
-                            "reason": f"The page holding this question was {what}."
+        if kind == "question":
+            emissions.append(
+                events.emit(
+                    conn,
+                    events.Event(
+                        kind="set_aside",
+                        artifact_id=artifact_id,
+                        agent=owner,
+                        actor=actor,
+                        ref_id=decision_id,
+                        data={
+                            "body": {
+                                "reason": f"The page holding this question was {what}."
+                            },
+                            "at": now.isoformat(),
                         },
-                        "at": now.isoformat(),
-                    },
-                ),
+                    ),
+                )
             )
         events.append(
             conn,
@@ -1851,7 +1856,9 @@ def _set_aside_open_questions(conn, artifact_id: str, what: str, actor: str) -> 
     return len(rows)
 
 
-def _reopen_set_aside_questions(conn, artifact_id: str, what: str, actor: str) -> int:
+def _reopen_set_aside_questions(
+    conn, artifact_id: str, what: str, actor: str, emissions: list
+) -> int:
     """Bring back the questions that were set aside: stamp `reopened_at`, tell the
     partner hub and the asking agent. `what` is "unarchived" or "restored".
 
@@ -1874,13 +1881,24 @@ def _reopen_set_aside_questions(conn, artifact_id: str, what: str, actor: str) -
         "select agent from artifact where id = %s", (artifact_id,)
     ).fetchone()[0]
     for decision_id, question, asked_by_session, kind in rows:
-        if kind == "question" and partner.enabled():
-            partner.enqueue(
-                conn,
-                decision_id,
-                "reopened",
-                {"reason": f"The page holding this question was {what}."},
-                at=now,
+        if kind == "question":
+            emissions.append(
+                events.emit(
+                    conn,
+                    events.Event(
+                        kind="reopened",
+                        artifact_id=artifact_id,
+                        agent=owner,
+                        actor=actor,
+                        ref_id=decision_id,
+                        data={
+                            "body": {
+                                "reason": f"The page holding this question was {what}."
+                            },
+                            "at": now.isoformat(),
+                        },
+                    ),
+                )
             )
         events.append(
             conn,
@@ -2055,6 +2073,7 @@ def set_deleted(
     # deleting an already-deleted one (a no-op that should report False rather
     # than 404). The default clause excludes exactly the rows this call is for.
     where, params = _scoped(artifact_id, agent, live=False)
+    emissions: list = []
     with db.connect() as conn, conn.transaction():
         if deleted:
             _lock_open_decisions(conn, artifact_id)
@@ -2067,10 +2086,14 @@ def set_deleted(
             was, archived_at = before
             actor = agent or folders.his()
             if deleted and not was:
-                _set_aside_open_questions(conn, artifact_id, "binned", actor)
+                _set_aside_open_questions(conn, artifact_id, "binned", actor, emissions)
             elif not deleted and was and archived_at is None:
-                _reopen_set_aside_questions(conn, artifact_id, "restored", actor)
-        return done.rowcount > 0
+                _reopen_set_aside_questions(
+                    conn, artifact_id, "restored", actor, emissions
+                )
+        changed = done.rowcount > 0
+    _fire_all(emissions)
+    return changed
 
 
 def destroy(db: Database, artifact_id: str, *, agent: str | None) -> bool:
@@ -2162,25 +2185,38 @@ def purge_expired(db: Database, *, window: timedelta = DELETE_WINDOW) -> list[st
     """
     now = datetime.now(UTC)
     cutoff = now - window
+    emissions: list = []
     with db.connect() as conn, conn.transaction():
         # A question still open at the purge was set aside while its page sat in the
         # bin; the purge closes it for good, so the partner hub is told `withdrawn`
         # BEFORE the delete takes the decision rows (the outbox keeps no foreign key
         # to them, but `enqueue` bumps the decision's own counter).
-        if partner.enabled():
-            for (decision_id,) in conn.execute(
-                "select d.id from decision d join artifact a on a.id = d.artifact_id"
-                " where a.deleted_at is not null and a.deleted_at < %s"
-                " and d.kind = 'question' and d.answer is null and d.closed_at is null",
-                (cutoff,),
-            ).fetchall():
-                partner.enqueue(
+        for decision_id, page_id, page_agent in conn.execute(
+            "select d.id, d.artifact_id, a.agent from decision d"
+            " join artifact a on a.id = d.artifact_id"
+            " where a.deleted_at is not null and a.deleted_at < %s"
+            " and d.kind = 'question' and d.answer is null and d.closed_at is null"
+            " order by d.id",
+            (cutoff,),
+        ).fetchall():
+            emissions.append(
+                events.emit(
                     conn,
-                    decision_id,
-                    "withdrawn",
-                    {"reason": "The page holding this question was deleted for good."},
-                    at=now,
+                    events.Event(
+                        kind="withdrawn",
+                        artifact_id=page_id,
+                        agent=page_agent,
+                        actor=folders.his(),
+                        ref_id=decision_id,
+                        data={
+                            "body": {
+                                "reason": "The page holding this question was deleted for good."
+                            },
+                            "at": now.isoformat(),
+                        },
+                    ),
                 )
+            )
         # `receipt` has no foreign key (a subject may be a thread later), so the decisions'
         # receipts go in this transaction, before the cascade takes the decisions.
         conn.execute(
@@ -2194,6 +2230,7 @@ def purge_expired(db: Database, *, window: timedelta = DELETE_WINDOW) -> list[st
             " returning id",
             (cutoff,),
         ).fetchall()
+    _fire_all(emissions)
     return [row[0] for row in rows]
 
 
@@ -2207,6 +2244,7 @@ def set_archived(
     are all exactly where they were.
     """
     where, params = _scoped(artifact_id, agent)
+    emissions: list = []
     with db.connect() as conn, conn.transaction():
         if archived:
             _lock_open_decisions(conn, artifact_id)
@@ -2223,10 +2261,16 @@ def set_archived(
             ).fetchone()[0]
             actor = agent or folders.his()
             if archived and not was:
-                _set_aside_open_questions(conn, artifact_id, "archived", actor)
+                _set_aside_open_questions(
+                    conn, artifact_id, "archived", actor, emissions
+                )
             elif not archived and was and deleted_at is None:
-                _reopen_set_aside_questions(conn, artifact_id, "unarchived", actor)
-        return done.rowcount > 0
+                _reopen_set_aside_questions(
+                    conn, artifact_id, "unarchived", actor, emissions
+                )
+        changed = done.rowcount > 0
+    _fire_all(emissions)
+    return changed
 
 
 def folder_by_id(db: Database, folder_id: str):
@@ -2415,6 +2459,30 @@ def set_folder_archived(
     confirm: bool,
     actor: str | None = None,
 ) -> dict | None:
+    emissions: list = []
+    result = _set_folder_archived(
+        db, agent, slug, archived, confirm=confirm, actor=actor, emissions=emissions
+    )
+    _fire_all(emissions)
+    return result
+
+
+def _fire_all(emissions: list) -> None:
+    """After the transaction has committed: run each Emission's after-commit work."""
+    for emission in emissions:
+        emission.fire()
+
+
+def _set_folder_archived(
+    db: Database,
+    agent: str,
+    slug: str,
+    archived: bool,
+    *,
+    confirm: bool,
+    actor: str | None,
+    emissions: list,
+) -> dict | None:
     """Archive or unarchive one of the agent's own folders (an old slug resolves), in one
     transaction (docs/agent/specs/2026-11-02-folders-design.md 3.4). None for no such folder.
 
@@ -2483,7 +2551,9 @@ def set_folder_archived(
                 ).rowcount
                 if changed:
                     done_pages += 1
-                    aside += _set_aside_open_questions(conn, pid, "archived", actor)
+                    aside += _set_aside_open_questions(
+                        conn, pid, "archived", actor, emissions
+                    )
             return {
                 "slug": canonical,
                 "archived": True,
@@ -2510,7 +2580,7 @@ def set_folder_archived(
                 restored_pages += 1
                 if deleted_at is None:
                     reopened += _reopen_set_aside_questions(
-                        conn, pid, "unarchived", actor
+                        conn, pid, "unarchived", actor, emissions
                     )
         return {
             "slug": canonical,

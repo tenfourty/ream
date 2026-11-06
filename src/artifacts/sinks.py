@@ -42,6 +42,14 @@ _log = logging.getLogger(__name__)
 
 DELIVERIES = ("outbox", "after_commit")
 LEASE_SECONDS = 60
+# One `deliver` call gets this long (less than the lease, so a row is never
+# delivered by a second sender while the first is still inside its call). The
+# sink protocol: `deliver` must return within it. A call that does not is
+# abandoned as a failure ("Timeout"): retried with backoff, parked after
+# MAX_ATTEMPTS. It runs in its own daemon thread, which cannot be killed, so a
+# sink that really hangs leaks one thread per attempt; a late success of an
+# abandoned call is a duplicate, which at-least-once delivery already allows.
+DELIVER_TIMEOUT_SECONDS = 30.0
 POLL_SECONDS = 2.0
 BATCH = 20
 BACKOFF_BASE_SECONDS = 5
@@ -69,7 +77,7 @@ class Sink:
             raise ValueError("an after_commit sink needs deliver")
 
 
-_lock = threading.Lock()
+_lock = threading.RLock()
 _sinks: dict[str, Sink] = {}
 _builtins_loaded = False
 _late_failures = 0
@@ -83,13 +91,18 @@ def register(sink: Sink) -> None:
 
 
 def _ensure_builtins() -> None:
+    """Register the two in-core sinks. All under the lock, and the flag is set
+    last: a concurrent `emit` either waits here or sees the full registry, never
+    an empty one."""
     global _builtins_loaded
     with _lock:
         if _builtins_loaded:
             return
+        for sink in _builtin_sinks():
+            if sink.name in _sinks:
+                raise ValueError(f"sink {sink.name!r} is already registered")
+            _sinks[sink.name] = sink
         _builtins_loaded = True
-    for sink in _builtin_sinks():
-        register(sink)
 
 
 def registered() -> list[Sink]:
@@ -202,7 +215,34 @@ def _claim(db: Database, now: datetime, names: list[str]) -> dict | None:
         conn.execute(
             "update outbox set claimed_until = %s where id = %s", (lease, row[0])
         )
-    return {"id": row[0], "sink": row[1], "event_json": row[2], "attempts": row[3]}
+    return {
+        "id": row[0],
+        "sink": row[1],
+        "event_json": row[2],
+        "attempts": row[3],
+        "lease": lease,
+    }
+
+
+def _call_bounded(deliver: Callable[[Event], None], event: Event) -> None:
+    """`deliver(event)` within DELIVER_TIMEOUT_SECONDS, else raise TimeoutError.
+    What `deliver` raises is raised here."""
+    outcome: list[BaseException | None] = []
+
+    def run() -> None:
+        try:
+            deliver(event)
+            outcome.append(None)
+        except BaseException as exc:  # noqa: BLE001 -- handed to the caller
+            outcome.append(exc)
+
+    worker = threading.Thread(target=run, name="outbox-deliver", daemon=True)
+    worker.start()
+    worker.join(DELIVER_TIMEOUT_SECONDS)
+    if not outcome:
+        raise TimeoutError("deliver exceeded its time")
+    if outcome[0] is not None:
+        raise outcome[0]
 
 
 def deliver_due(
@@ -221,33 +261,43 @@ def deliver_due(
         try:
             deliver = sinks[row["sink"]].deliver
             assert deliver is not None  # noqa: S101 -- _deliverable filters
-            deliver(Event.from_json(row["event_json"]))
+            _call_bounded(deliver, Event.from_json(row["event_json"]))
         except Exception as exc:  # noqa: BLE001 -- a sink must not stop the loop
             error = type(exc).__name__
         finished = clock()
+        # Only a row this sender still leases: if the lease ran out and another
+        # sender took the row (or finished it), these updates touch nothing.
+        mine = " where id = %s and delivered_at is null and claimed_until = %s"
         with db.connect() as conn:
             if error is None:
-                conn.execute(
-                    "update outbox set delivered_at = %s, claimed_until = null,"
-                    " attempts = attempts + 1 where id = %s",
-                    (finished, row["id"]),
+                done = conn.execute(
+                    "update outbox set delivered_at = %s, claimed_until = null,"  # noqa: S608 -- fixed clause
+                    " attempts = attempts + 1" + mine,
+                    (finished, row["id"], row["lease"]),
                 )
-                delivered += 1
+                if done.rowcount:
+                    delivered += 1
                 continue
             attempts = row["attempts"] + 1
             parked = attempts >= MAX_ATTEMPTS
-            conn.execute(
-                "update outbox set attempts = %s, next_at = %s, claimed_until = null,"
-                " last_error = %s, last_error_at = %s, parked_at = %s where id = %s",
-                (
-                    attempts,
-                    finished + _backoff(attempts),
-                    error,
-                    finished,
-                    finished if parked else None,
-                    row["id"],
-                ),
+            lost = (
+                conn.execute(
+                    "update outbox set attempts = %s, next_at = %s, claimed_until = null,"  # noqa: S608 -- fixed clause
+                    " last_error = %s, last_error_at = %s, parked_at = %s" + mine,
+                    (
+                        attempts,
+                        finished + _backoff(attempts),
+                        error,
+                        finished,
+                        finished if parked else None,
+                        row["id"],
+                        row["lease"],
+                    ),
+                ).rowcount
+                == 0
             )
+            if lost:
+                continue
             failed += 1
             _log.warning(
                 "sink %s %s (attempt %d): %s",
@@ -279,41 +329,72 @@ def status(db: Database) -> dict:
             "select sink, count(*) from outbox where parked_at is not null"
             " and delivered_at is null group by sink"
         ).fetchall()
+    with db.connect() as conn:
+        delivered = conn.execute(
+            "select sink, count(*) from outbox where delivered_at is not null"
+            " group by sink"
+        ).fetchall()
     return {
         "pending": {r[0]: r[1] for r in pending},
         "parked": {r[0]: r[1] for r in parked},
+        "delivered": {r[0]: r[1] for r in delivered},
         "late_failures": late_failures(),
     }
 
 
-_stop = threading.Event()
+_thread: threading.Thread | None = None
+_stop: threading.Event | None = None
 
 
 def start(db: Database) -> threading.Thread:
     """The core sender: one daemon thread, always on (a sink may be registered
-    with the partner bridge off). It never dies of an exception."""
-    _stop.clear()
+    with the partner bridge off). It never dies of an exception. Idempotent: while
+    a sender is running, a second call returns it and starts nothing. Each sender
+    has its own stop flag, so a restart can never revive one that was told to stop."""
+    global _thread, _stop
+    with _lock:
+        if (
+            _thread is not None
+            and _thread.is_alive()
+            and _stop is not None
+            and not _stop.is_set()
+        ):
+            return _thread
+        stop_flag = threading.Event()
 
-    def loop() -> None:
-        last_prune = datetime.min.replace(tzinfo=UTC)
-        while not _stop.is_set():
-            try:
-                deliver_due(db)
-                now = datetime.now(UTC)
-                if now - last_prune > _PRUNE_EVERY:
-                    prune(db, now)
-                    last_prune = now
-            except Exception:  # noqa: BLE001 -- the loop must outlive one bad pass
-                _log.error("outbox delivery pass failed", exc_info=True)
-            _stop.wait(POLL_SECONDS)
+        def loop() -> None:
+            last_prune = datetime.min.replace(tzinfo=UTC)
+            while not stop_flag.is_set():
+                try:
+                    deliver_due(db)
+                    now = datetime.now(UTC)
+                    if now - last_prune > _PRUNE_EVERY:
+                        prune(db, now)
+                        last_prune = now
+                except Exception:  # noqa: BLE001 -- the loop must outlive one bad pass
+                    _log.error("outbox delivery pass failed", exc_info=True)
+                stop_flag.wait(POLL_SECONDS)
 
-    thread = threading.Thread(target=loop, name="outbox-sender", daemon=True)
-    thread.start()
-    return thread
+        thread = threading.Thread(target=loop, name="outbox-sender", daemon=True)
+        _stop, _thread = stop_flag, thread
+        thread.start()
+        return thread
 
 
-def stop() -> None:
-    _stop.set()
+def stop(timeout: float = 5.0) -> None:
+    """Ask the sender to stop and wait briefly for it (a deliver in flight is
+    bounded by DELIVER_TIMEOUT_SECONDS, so it may outlast `timeout`)."""
+    global _thread, _stop
+    with _lock:
+        thread, flag = _thread, _stop
+        if flag is not None:
+            flag.set()
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(timeout)
+    with _lock:
+        if _thread is thread and (thread is None or not thread.is_alive()):
+            _thread = None
+            _stop = None
 
 
 # --- the two sinks core already had -----------------------------------------------
@@ -325,13 +406,16 @@ def _builtin_sinks() -> list[Sink]:
     def deliver_nudge(event: Event) -> None:
         data = event.data
         nudge.emit(
-            event.kind,
+            kind=event.kind,
             artifact_id=event.artifact_id,
             title=data.get("title", ""),
             agent=event.agent,
             summary=event.summary,
             event_id=event.id or "",
-            note=event.note,
+            # The journal row and the nudge usually carry the same note; a producer
+            # whose journal row has words the nudge never did (comment_added) says
+            # so with `nudge_note`.
+            note=data.get("nudge_note", event.note),
             letter=data.get("letter"),
             recommended=data.get("recommended"),
         )

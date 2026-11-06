@@ -123,6 +123,23 @@ def cmd_list_keys(_args: argparse.Namespace) -> None:
         print(f"{row.id}\t{row.agent}\t{row.created_at}\t{row.revoked_at or '-'}")
 
 
+def cmd_outbox(_args: argparse.Namespace) -> None:
+    """The core outbox, read-only: counts by sink, never an event."""
+    from artifacts import sinks
+
+    report = sinks.status(_open_db())
+    names = sorted({*report["pending"], *report["parked"], *report["delivered"]})
+    if not names:
+        print("outbox: empty")
+        return
+    for name in names:
+        print(
+            f"{name}\tpending={report['pending'].get(name, 0)}"
+            f"\tparked={report['parked'].get(name, 0)}"
+            f"\tdelivered={report['delivered'].get(name, 0)}"
+        )
+
+
 def cmd_partner_outbox(args: argparse.Namespace) -> None:
     from artifacts import partner
 
@@ -307,6 +324,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--retry-parked", action="store_true", help="release every parked event"
     )
     partner_outbox.set_defaults(func=cmd_partner_outbox)
+
+    outbox = sub.add_parser(
+        "outbox",
+        help="core outbox: pending, parked and delivered counts by sink (read-only; needs DATABASE_URL)",
+    )
+    outbox.set_defaults(func=cmd_outbox)
 
     grant_scope = sub.add_parser(
         "grant-scope", help="give a seat a named privilege (needs DATABASE_URL)"

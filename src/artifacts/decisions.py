@@ -46,7 +46,6 @@ from artifacts import (
     holds,
     ids,
     keys,
-    nudge,
     partner,
     receipts,
     settings,
@@ -710,6 +709,7 @@ def ask(
                 store._check_secrets(value, name, agent=agent, artifact_id=artifact_id)
 
         decision_id = ids.new_id()
+        emissions: list[events.Emission] = []
         # The artifact row lock a section update holds while it checks that
         # it drops no open question's slot (store.patch_section): taken here
         # so a question created mid-update is seen by that check or created
@@ -781,31 +781,39 @@ def ask(
             )
             # The partner is told in the same transaction (partner.py): a rolled
             # back ask leaves no event. Nothing at all when the bridge is off.
-            if partner.enabled():
-                partner.enqueue(
+            asked_body = partner.asked_body(
+                asking_office=agent,
+                title=question,
+                options=validated_options,
+                recommended=recommended,
+                context=fields.context,
+                link=partner.link_for(artifact_id, decision_id),
+                topic=(
+                    {"id": fields.topic_id, "title": title}
+                    if fields.topic_id is not None
+                    else None
+                ),
+                depends_on=fields.depends_on,
+                replaces=fields.replaces,
+                urgency=fields.urgency,
+                blocked_on=fields.blocked_on,
+                needed_by=fields.needed_by,
+                for_offices=fields.for_offices,
+            )
+            emissions.append(
+                events.emit(
                     conn,
-                    decision_id,
-                    "asked",
-                    partner.asked_body(
-                        asking_office=agent,
-                        title=question,
-                        options=validated_options,
-                        recommended=recommended,
-                        context=fields.context,
-                        link=partner.link_for(artifact_id, decision_id),
-                        topic=(
-                            {"id": fields.topic_id, "title": title}
-                            if fields.topic_id is not None
-                            else None
-                        ),
-                        depends_on=fields.depends_on,
-                        replaces=fields.replaces,
-                        urgency=fields.urgency,
-                        blocked_on=fields.blocked_on,
-                        needed_by=fields.needed_by,
-                        for_offices=fields.for_offices,
+                    events.Event(
+                        kind="asked",
+                        artifact_id=artifact_id,
+                        agent=agent,
+                        actor=agent,
+                        ref_id=decision_id,
+                        session=session,
+                        data={"body": asked_body},
                     ),
                 )
+            )
             # Asked on a page that is already archived or binned: set aside from
             # birth. The hub is told straight after `asked` (and takes the Slack
             # buttons away), and the agent gets the same `decision_set_aside` event
@@ -818,13 +826,23 @@ def ask(
             ).fetchone()
             if away and (away[0] or away[1]):
                 what = "binned" if away[1] else "archived"
-                if partner.enabled():
-                    partner.enqueue(
+                emissions.append(
+                    events.emit(
                         conn,
-                        decision_id,
-                        "set_aside",
-                        {"reason": f"The page holding this question was {what}."},
+                        events.Event(
+                            kind="set_aside",
+                            artifact_id=artifact_id,
+                            agent=agent,
+                            actor=agent,
+                            ref_id=decision_id,
+                            data={
+                                "body": {
+                                    "reason": f"The page holding this question was {what}."
+                                }
+                            },
+                        ),
                     )
+                )
                 events.append(
                     conn,
                     artifact_id=artifact_id,
@@ -844,7 +862,11 @@ def ask(
                     session=session,
                 )
             if old is not None:
-                _close_row(conn, agent, old, replaced_by=decision_id)
+                closed = _close_row(conn, agent, old, replaced_by=decision_id)
+                if closed is not None:
+                    emissions.append(closed)
+        for emission in emissions:
+            emission.fire()
         created = conn.execute(
             f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
             (decision_id,),
@@ -1507,6 +1529,7 @@ def record_elsewhere(
         raise InvalidSource("a relayed answer must name the seat recording it")
     store._check_size(note, MAX_NOTE_BYTES, "note", agent=recorded_by, artifact_id=None)
 
+    emissions: list[events.Emission] = []
     with db.connect() as conn:
         row = conn.execute(
             f"select {_COLUMNS}, artifact.title, artifact.agent from decision"  # noqa: S608 -- fixed constant, not caller input
@@ -1582,21 +1605,31 @@ def record_elsewhere(
                 # His verdict carries every mark in its message, so releasing
                 # the held ones writes no events of their own.
                 holds.release(conn, artifact_id, emit=False)
-            elif partner.enabled():
-                partner.enqueue(
-                    conn,
-                    decision_id,
-                    "answered",
-                    partner.answered_body(
-                        letter=letter,
-                        note=note,
-                        answered_by=settings.owner_id(),
-                        answered_at=answered_at,
-                        answer_source=source,
-                        recorded_by=recorded_by,
-                        said_at=said_at,
-                    ),
-                    at=answered_at,
+            else:
+                emissions.append(
+                    events.emit(
+                        conn,
+                        events.Event(
+                            kind="answered",
+                            artifact_id=artifact_id,
+                            agent=owning_agent,
+                            actor=recorded_by,
+                            ref_id=decision_id,
+                            session=asking_session,
+                            data={
+                                "body": partner.answered_body(
+                                    letter=letter,
+                                    note=note,
+                                    answered_by=settings.owner_id(),
+                                    answered_at=answered_at,
+                                    answer_source=source,
+                                    recorded_by=recorded_by,
+                                    said_at=said_at,
+                                ),
+                                "at": answered_at.isoformat(),
+                            },
+                        ),
+                    )
                 )
             # Journalled like a tapped answer, because to the OWNING agent the
             # fact is the same one it has been waiting for: Jeremy decided. The
@@ -1621,6 +1654,8 @@ def record_elsewhere(
                 f"select {_COLUMNS} from decision where id = %s",  # noqa: S608 -- fixed constant
                 (decision_id,),
             ).fetchone()
+    for emission in emissions:
+        emission.fire()
     return _row_to_decision(refreshed)
 
 
@@ -1674,8 +1709,9 @@ def answer(
         raise InvalidSource(source)
     store._check_size(note, MAX_NOTE_BYTES, "note", agent=by, artifact_id=None)
 
+    emissions: list[events.Emission] = []
     with db.connect() as conn:
-        # Joins `artifact` for the nudge below (title, owning agent) as well as the
+        # Joins `artifact` for the nudge (title, owning agent) as well as the
         # existence-and-not-closed check itself -- one query doing both jobs, exactly
         # as comments.resolve()'s join does ownership and lookup together.
         row = conn.execute(
@@ -1787,40 +1823,33 @@ def answer(
                 # His verdict carries every mark in its message, so releasing
                 # the held ones writes no events of their own.
                 holds.release(conn, artifact_id, emit=False)
-            elif partner.enabled():
+            else:
                 # A changed answer is a new version: the partner keeps the latest.
-                partner.enqueue(
-                    conn,
-                    decision_id,
-                    "answered",
-                    partner.answered_body(
-                        letter=letter,
-                        note=note,
-                        answered_by=by,
-                        answered_at=answered_at,
-                        answer_source=source,
-                    ),
-                    at=answered_at,
+                emissions.append(
+                    events.emit(
+                        conn,
+                        events.Event(
+                            kind="answered",
+                            artifact_id=artifact_id,
+                            agent=owning_agent,
+                            actor=by,
+                            ref_id=decision_id,
+                            session=asking_session,
+                            data={
+                                "body": partner.answered_body(
+                                    letter=letter,
+                                    note=note,
+                                    answered_by=by,
+                                    answered_at=answered_at,
+                                    answer_source=source,
+                                ),
+                                "at": answered_at.isoformat(),
+                            },
+                        ),
+                    )
                 )
             if in_transaction is not None:
                 in_transaction(conn)
-            event_seq = events.append(
-                conn,
-                artifact_id=artifact_id,
-                agent=owning_agent,
-                actor=by,
-                kind="decision_answered",
-                summary=summary,
-                ref_id=decision_id,
-                # HIS WORDS, on the event. Without this the feed says only
-                # "a: Yes" and the qualification he typed never leaves the
-                # database.
-                note=note,
-                # The session that ASKED, not the one that answered: Jeremy has
-                # no session, and the whole point is that the seat which raised
-                # the question can pick its own answer out of a shared feed.
-                session=asking_session,
-            )
             # Read back INSIDE the transaction, while it still holds the row:
             # after the commit a republish that was waiting on the lock can
             # open the next round and clear the answer, and this call would
@@ -1829,35 +1858,46 @@ def answer(
                 f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
                 (decision_id,),
             ).fetchone()
+            # Read back as a row rather than indexed by position, because the fields
+            # below are exactly the ones a positional read gets wrong: the comment
+            # above about row[12] silently becoming `acknowledged_by` is the same
+            # mistake one column earlier, and this one would mis-send what Jeremy
+            # wrote.
+            answered = _row_to_decision(updated)
+            # The journal row and the nudge, as one event. The nudge fires after the
+            # commit (below): it must never be mistaken for an answer that failed
+            # (nudge.py's docstring), and the journal row must be durable before any
+            # other agent is told to go read it. HIS WORDS TRAVEL WITH IT: `note` on
+            # the journal (the feed would say only "a: Yes" otherwise) and in the
+            # mailbox (homelab-873), with the recommendation, because a letter that
+            # departs from it reads as agreement until somebody checks.
+            emissions.append(
+                events.emit(
+                    conn,
+                    events.Event(
+                        kind="decision_answered",
+                        artifact_id=artifact_id,
+                        agent=owning_agent,
+                        actor=by,
+                        ref_id=decision_id,
+                        summary=summary,
+                        note=note,
+                        # The session that ASKED, not the one that answered: Jeremy
+                        # has no session, and the whole point is that the seat which
+                        # raised the question can pick its own answer out of a shared
+                        # feed.
+                        session=asking_session,
+                        data={
+                            "title": title,
+                            "letter": answered.answer,
+                            "recommended": answered.recommended,
+                        },
+                    ),
+                )
+            )
 
-    # Read back as a row rather than indexed by position, because the fields
-    # below are exactly the ones a positional read gets wrong: the comment above
-    # about row[12] silently becoming `acknowledged_by` is the same mistake one
-    # column earlier, and this one would mis-send what Jeremy wrote.
-    answered = _row_to_decision(updated)
-
-    # Fire-and-forget, after the transaction above has actually committed: a nudge
-    # that fails must never be mistaken for an answer that failed (see nudge.py's
-    # own docstring), and `event_seq` must name a row that is durable before any
-    # other agent is told to go read it.
-    nudge.emit(
-        kind="decision_answered",
-        artifact_id=artifact_id,
-        title=title,
-        agent=owning_agent,
-        summary=summary,
-        event_id=str(event_seq),
-        # HIS WORDS REACH THE MAILBOX TOO, not only the journal (homelab-873).
-        # The journal has carried the note since the day it was needed, and the
-        # nudge -- the thing that actually wakes a seat -- carried "a: <label>"
-        # and nothing else, so a session woken by it and acting immediately
-        # acted on the letter alone. The recommendation travels for the same
-        # reason: a letter that departs from it reads as agreement until
-        # somebody checks.
-        note=answered.answer_note,
-        letter=answered.answer,
-        recommended=answered.recommended,
-    )
+    for emission in emissions:
+        emission.fire()
     return answered
 
 
@@ -1904,9 +1944,13 @@ def get_owned_with_round(
     )
 
 
-def _close_row(conn, agent: str, row, *, replaced_by: str | None = None) -> None:
+def _close_row(
+    conn, agent: str, row, *, replaced_by: str | None = None
+) -> events.Emission | None:
     """Close the decision `row` (raw, from `_COLUMNS`) inside the caller's
-    transaction. `replaced_by` records which question took its place."""
+    transaction. `replaced_by` records which question took its place. Returns the
+    Emission of the `replaced`/`withdrawn` bridge event, if one was made; the caller
+    fires it after its transaction commits."""
     # Closing implies acknowledgement -- an agent that finished the work
     # necessarily heard the answer -- but only when nothing has acknowledged
     # it yet, so an earlier, truer "seen at" is never overwritten by a later
@@ -1924,35 +1968,38 @@ def _close_row(conn, agent: str, row, *, replaced_by: str | None = None) -> None
         (now, now, agent, replaced_by, row[0]),
     ).fetchone()
     if closed is None:
-        return
-    if row[_KIND_IDX] == "question" and closed[0] is None and partner.enabled():
+        return None
+    emission = None
+    if row[_KIND_IDX] == "question" and closed[0] is None:
         # Closed with no answer: withdrawn, or replaced by the question that
         # took its place. An answered question that is then closed is the
         # agent finishing its work, which the partner has no use for.
         if replaced_by is not None:
-            partner.enqueue(
-                conn,
-                row[0],
-                "replaced",
-                {
-                    "replaced_by": replaced_by,
-                    "replaced_by_source": partner.source_of(replaced_by),
-                },
-                at=now,
-            )
+            kind = "replaced"
+            body = {
+                "replaced_by": replaced_by,
+                "replaced_by_source": partner.source_of(replaced_by),
+            }
         else:
-            partner.enqueue(
-                conn,
-                row[0],
-                "withdrawn",
-                {"reason": "The asking agent closed the question without an answer."},
-                at=now,
-            )
+            kind = "withdrawn"
+            body = {"reason": "The asking agent closed the question without an answer."}
+        emission = events.emit(
+            conn,
+            events.Event(
+                kind=kind,
+                artifact_id=row[1],
+                agent=agent,
+                actor=agent,
+                ref_id=row[0],
+                data={"body": body, "at": now.isoformat()},
+            ),
+        )
     if row[_KIND_IDX] == "review" and holds.page_mode(conn, row[1]) != "held":
         # The review is over, so his held marks would never be
         # seen -- unless another open review on the page still
         # holds them.
         holds.release(conn, row[1], emit=True)
+    return emission
 
 
 def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
@@ -1973,7 +2020,9 @@ def close(db: Database, agent: str, decision_id: str) -> DecisionRow:
         ).fetchone()
         if row[11] is None:  # closed_at
             with conn.transaction():
-                _close_row(conn, agent, row)
+                emission = _close_row(conn, agent, row)
+            if emission is not None:
+                emission.fire()
             row = conn.execute(
                 f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
                 (decision_id,),

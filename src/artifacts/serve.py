@@ -73,6 +73,15 @@ def _arm_shutdown_signals(app):
     async def armed(scope, receive, send):
         if scope["type"] == "lifespan":
             install()
+
+            async def watching(message):
+                # The app has finished shutting down: stop the core outbox sender.
+                if message["type"].startswith("lifespan.shutdown"):
+                    sinks.stop(timeout=2.0)
+                await send(message)
+
+            await app(scope, receive, watching)
+            return
         await app(scope, receive, send)
 
     return armed

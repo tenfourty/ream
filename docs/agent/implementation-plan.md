@@ -2593,3 +2593,21 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   keep delivering; a core sender thread drains `outbox`. Two call sites converted
   (`formanswer.py`, the set-aside loop in `store.py`); the other ~11 are part 2. Spec
   `specs/2026-11-04-core-and-plugins-design.md`, slice 4.
+- **One emit point, part 2 (6 Nov 2026, slice 4).** Every fan-out site now calls `events.emit` and
+  `.fire()`s the Emission after commit: `decisions.py` (ask incl. born-set-aside, record_elsewhere,
+  answer, and `_close_row` for replaced/withdrawn), `store.py` (set-aside and reopen loops, which
+  hand their Emissions to the callers to fire after the commit; `purge_expired`), `comments.py`
+  (comment_added to owner and repliers, thread_resolved, thread_reopened). Journal rows, nudge
+  payloads and partner rows are as before; the `partner.enabled()` gates at call sites are gone
+  (`partner.enqueue` returns early when off). Left: `partner_in.answer_here` calls
+  `partner.enqueue_foreign`, which has no artifact or agent (a foreign copy), its own version
+  space and is never gated, so it does not fit an `Event`; it stays a direct partner-module call.
+  `receipts` calls `decisions._close_row` under `DONE_CLOSES = False` and drops the returned
+  Emission (bridge kinds have no after-commit sink). Behaviour change: a raising nudge no longer
+  propagates out of `comments.add` (the nudge is an after-commit sink, so it is logged and
+  counted). Review fixes: built-in sinks register under the lock and the flag is set last; the
+  sender's completion and failure updates touch only a row it still leases; `sinks.start` is
+  idempotent and `sinks.stop` runs at lifespan shutdown; `deliver` is bounded by
+  `DELIVER_TIMEOUT_SECONDS` (30 s, under the 60 s lease) via a per-call daemon thread, a timeout
+  being an ordinary failure with backoff. `artifacts-admin outbox` prints pending, parked and
+  delivered counts by sink. Still later: the per-sink circuit breaker, the generic webhook sink.

@@ -31,7 +31,6 @@ from collections import OrderedDict
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from functools import partial
 
 from artifacts import (
     anchors,
@@ -41,7 +40,6 @@ from artifacts import (
     ids,
     image_store,
     images,
-    nudge,
     settings,
     store,
     text,
@@ -843,8 +841,8 @@ def add(
             # Not when the owner comments on its own page: an event means
             # "something happened on your page that you did not do", and a
             # seat woken by its own reply is a watcher crying wolf.
-            event_seq = None
-            replier_events: list[tuple[str, int]] = []
+            owner_emission = None
+            replier_emissions: list[events.Emission] = []
             if not held and (
                 author_kind == "human"
                 or is_foreign(author, session, owning_agent, page_session)
@@ -854,20 +852,24 @@ def add(
                         "a comment that raises an owner event cannot join a"
                         " caller's transaction: its nudge would precede the commit"
                     )
-                event_seq = events.append(
+                owner_emission = events.emit(
                     conn,
-                    artifact_id=artifact_id,
-                    agent=owning_agent,
-                    actor=author,
-                    kind="comment_added",
-                    summary=said,
-                    # The comment itself, so the agent can read the thread, the
-                    # quote and where on the page it was anchored.
-                    ref_id=comment_id,
-                    # His words in full. The summary is one line in a list; the
-                    # comment is the thing he actually said.
-                    note=said,
-                    session=page_session,
+                    events.Event(
+                        kind="comment_added",
+                        artifact_id=artifact_id,
+                        agent=owning_agent,
+                        actor=author,
+                        summary=said,
+                        # The comment itself, so the agent can read the thread, the
+                        # quote and where on the page it was anchored.
+                        ref_id=comment_id,
+                        # His words in full. The summary is one line in a list; the
+                        # comment is the thing he actually said.
+                        note=said,
+                        session=page_session,
+                        # The journal carries his words; the nudge never did.
+                        data={"title": title, "nudge_note": ""},
+                    ),
                 )
             # Under his note, every AGENT already in the thread hears his
             # answer too, not only the page's owner: an office that replied on
@@ -887,19 +889,19 @@ def add(
                     (artifact_id, thread_root, thread_root, owning_agent),
                 ).fetchall()
                 for replier, replier_session in repliers:
-                    replier_events.append(
-                        (
-                            replier,
-                            events.append(
-                                conn,
+                    replier_emissions.append(
+                        events.emit(
+                            conn,
+                            events.Event(
+                                kind="comment_added",
                                 artifact_id=artifact_id,
                                 agent=replier,
                                 actor=author,
-                                kind="comment_added",
                                 summary=said,
                                 ref_id=comment_id,
                                 note=said,
                                 session=replier_session,
+                                data={"title": title, "nudge_note": ""},
                             ),
                         )
                     )
@@ -912,34 +914,11 @@ def add(
     # something that never happened. `emit` never raises and never blocks --
     # commenting is what Jeremy came to do, and telling a seat about it is a
     # courtesy on top of a journal that already has the comment durably.
-    if event_seq is not None:
-        send = partial(
-            nudge.emit,
-            kind="comment_added",
-            artifact_id=artifact_id,
-            title=title,
-            agent=owning_agent,
-            summary=said,
-            event_id=str(event_seq),
-        )
+    for emission in ([owner_emission] if owner_emission else []) + replier_emissions:
         if callers_txn:
-            after_commit.append(send)
+            after_commit.append(emission.fire)
         else:
-            send()
-    for replier, seq in replier_events:
-        send = partial(
-            nudge.emit,
-            kind="comment_added",
-            artifact_id=artifact_id,
-            title=title,
-            agent=replier,
-            summary=said,
-            event_id=str(seq),
-        )
-        if callers_txn:
-            after_commit.append(send)
-        else:
-            send()
+            emission.fire()
     return _row_to_comment(created)
 
 
@@ -1531,31 +1510,27 @@ def resolve(
                 # to know it had started -- and it must not be woken by its
                 # own tidying up, so an owner settling its own thread is
                 # silent, exactly as its own comment is.
-                event_seq = None
+                emission = None
                 if by != owning_agent and not root_held:
-                    event_seq = events.append(
+                    emission = events.emit(
                         conn,
-                        artifact_id=row[1],
-                        agent=owning_agent,
-                        actor=by,
-                        kind="thread_resolved",
-                        summary=_settled_summary(root_quote, root_body),
-                        ref_id=root_id,
-                        session=page_session,
+                        events.Event(
+                            kind="thread_resolved",
+                            artifact_id=row[1],
+                            agent=owning_agent,
+                            actor=by,
+                            summary=_settled_summary(root_quote, root_body),
+                            ref_id=root_id,
+                            session=page_session,
+                            data={"title": title},
+                        ),
                     )
             row = conn.execute(
                 f"select {_COLUMNS} from comment where comment.id = %s",  # noqa: S608 -- fixed constant, not caller input
                 (comment_id,),
             ).fetchone()
-            if event_seq is not None:
-                nudge.emit(
-                    kind="thread_resolved",
-                    artifact_id=row[1],
-                    title=title,
-                    agent=owning_agent,
-                    summary=_settled_summary(root_quote, root_body),
-                    event_id=str(event_seq),
-                )
+            if emission is not None:
+                emission.fire()
 
     return _row_to_comment(row)
 
@@ -1591,7 +1566,7 @@ def reopen(
     own thread (the keyed API only ever lets the owner), and a thread whose root is
     still held back."""
     actor = by or agent or settings.owner_id()
-    event_seq = None
+    emission = None
     with db.connect() as conn:
         if agent is None:
             row = conn.execute(
@@ -1627,29 +1602,25 @@ def reopen(
                 (root_id, root_id),
             )
             if was is not None and actor != owning_agent and not root_held:
-                event_seq = events.append(
+                emission = events.emit(
                     conn,
-                    artifact_id=row[1],
-                    agent=owning_agent,
-                    actor=actor,
-                    kind="thread_reopened",
-                    summary=summary,
-                    ref_id=root_id,
-                    session=page_session,
+                    events.Event(
+                        kind="thread_reopened",
+                        artifact_id=row[1],
+                        agent=owning_agent,
+                        actor=actor,
+                        summary=summary,
+                        ref_id=root_id,
+                        session=page_session,
+                        data={"title": title},
+                    ),
                 )
         row = conn.execute(
             f"select {_COLUMNS} from comment where comment.id = %s",  # noqa: S608 -- fixed constant, not caller input
             (comment_id,),
         ).fetchone()
-        if event_seq is not None:
-            nudge.emit(
-                kind="thread_reopened",
-                artifact_id=row[1],
-                title=title,
-                agent=owning_agent,
-                summary=summary,
-                event_id=str(event_seq),
-            )
+        if emission is not None:
+            emission.fire()
     return _row_to_comment(row)
 
 

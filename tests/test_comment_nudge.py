@@ -22,7 +22,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, events, nudge, store
+from artifacts import comments, events, nudge, sinks, store
 from artifacts.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
@@ -239,10 +239,13 @@ def test_a_failing_nudge_never_costs_the_comment(db, page, monkeypatch):
         raise RuntimeError("inbox down")
 
     monkeypatch.setattr(nudge, "emit", boom)
-    with pytest.raises(RuntimeError):
-        comments.add(
-            db, artifact_id=page.id, author_kind="human", author="jeremy", body="Hi."
-        )
+    before = sinks.late_failures()
+    # The nudge is an after-commit sink (events.emit): a failure is a log line and a
+    # count, never an exception into the comment that already committed.
+    comments.add(
+        db, artifact_id=page.id, author_kind="human", author="jeremy", body="Hi."
+    )
+    assert sinks.late_failures() == before + 1
     assert [c.body for c in comments.list_for_artifact(db, page.id)] == ["Hi."], (
         "the comment survives a broken nudge -- it is stored and journalled "
         "before the push is even attempted"
