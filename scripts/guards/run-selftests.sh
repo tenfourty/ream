@@ -37,10 +37,12 @@ run "push-count-guard --selftest"       scripts/guards/push-count-guard.sh --sel
 run "commit-msg-guard --selftest"       scripts/guards/commit-msg-guard.sh --selftest
 run "secret-on-cmdline-guard --selftest" scripts/guards/secret-on-cmdline-guard.sh --selftest
 run "ggshield-gate --selftest"          scripts/guards/ggshield-gate.sh --selftest
+run "no-environ-guard --selftest"       scripts/guards/no-environ-guard.sh --selftest
 
 echo
 echo "== whole-tree scans (the pre-commit hook only ever sees a staged diff) =="
 run "secret-on-cmdline-guard --tree"    scripts/guards/secret-on-cmdline-guard.sh --tree
+run "no-environ-guard --tree"           scripts/guards/no-environ-guard.sh --tree
 
 echo
 echo "== lefthook dispatch =="
