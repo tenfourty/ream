@@ -25,7 +25,7 @@ from artifacts import (
     settings,
     store,
 )
-from artifacts.db import jsonb
+from artifacts.db import Database, jsonb
 from artifacts.serve import app_from_env
 from artifacts.text import pronoun
 
@@ -35,12 +35,19 @@ OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
 
 @pytest.fixture(autouse=True)
 def _forget_meta_after(request):
-    """The service_meta row a test records is not left for a test that has no `db`."""
+    """The service_meta row a test records is not left for a test that has no `db`.
+
+    The `dsn` is fetched before the test runs: this autouse fixture is torn down after `db`, so
+    `db` can no longer be asked for at teardown, and a connection of its own is opened instead."""
+    dsn = request.getfixturevalue("dsn") if "db" in request.fixturenames else None
     yield
-    if "db" in request.fixturenames:
-        db = request.getfixturevalue("db")
-        with db.connect() as conn:
-            conn.execute("delete from service_meta")
+    if dsn is not None:
+        database = Database(dsn)
+        try:
+            with database.connect() as conn:
+                conn.execute("delete from service_meta")
+        finally:
+            database.close()
 
 
 # --- the settings object -----------------------------------------------------------------
