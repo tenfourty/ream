@@ -61,6 +61,43 @@ def test_postgres_has_no_check_on_either_column(db):
     assert any("question" in d for d in defs)  # decision.kind's CHECK stays
 
 
+def _check_defs(conn) -> list[tuple[str, str]]:
+    return [
+        (r[0], r[1])
+        for r in conn.execute(
+            "select conname, pg_get_constraintdef(oid) from pg_constraint"
+            " where contype = 'c' and conrelid in"
+            " ('decision'::regclass, 'event'::regclass)"
+        ).fetchall()
+    ]
+
+
+@pytest.mark.postgres_only
+@pytest.mark.usefixtures("fresh_schema")
+def test_postgres_upgrade_drops_the_old_checks_and_keeps_the_rest(db):
+    """A database from before the slice still has both CHECKs (inline and re-added
+    names); the next start's migrate drops exactly those two."""
+    with db.connect() as conn:
+        before = {name for name, _ in _check_defs(conn)}
+        conn.execute(
+            "alter table event add constraint event_kind_check"
+            " check (kind in ('decision_answered', 'comment_added'))"
+            " not valid"
+        )
+        conn.execute(
+            "alter table decision add constraint decision_answer_source_check"
+            " check (answer_source in ('page', 'terminal', 'slack'))"
+            " not valid"
+        )
+        added = {name for name, _ in _check_defs(conn)}
+    assert {"event_kind_check", "decision_answer_source_check"} <= added
+    db.migrate()
+    with db.connect() as conn:
+        after = _check_defs(conn)
+    assert {name for name, _ in after} == before  # both dropped, every other CHECK kept
+    assert any("question" in d for _, d in after)  # decision.kind's CHECK stays
+
+
 # ---- SQLite: a v20 file, then the step -------------------------------------------------
 
 
