@@ -186,7 +186,8 @@ jobs:
   # No `needs:` -- the image builds while the tests run. An image whose tests fail
   # is only ever pushed to the internal registry; `deploy` below waits for both.
   image:
-    runs-on: docker
+    # A deploy builder of its own (homelab's labels, 6 Nov 2026): one slot, main only.
+    runs-on: deploy-docker
     # A hung job fails here instead of holding a builder for the runner's default of hours
     # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
     timeout-minutes: 30
@@ -229,8 +230,8 @@ jobs:
       #
       # This used to also assert `docker run --dns 10.96.0.10` -- kube-dns's ClusterIP,
       # read from the cluster on 19 Sep 2026. That was correct while the runner lived
-      # IN the cluster and is wrong now: since 00:03 on 21 Sep the `docker` label is
-      # served by cibuild01, outside the cluster, which cannot reach a ClusterIP and
+      # IN the cluster and is wrong now: since 00:03 on 21 Sep the image job's builder
+      # (then the `docker` label, cibuild01; `deploy-docker` since 6 Nov) is outside the cluster, which cannot reach a ClusterIP and
       # should not be able to. The right answer was not to ask for that address to be
       # opened up -- it was to notice the check was asserting a MECHANISM (one specific
       # resolver) rather than the PROPERTY it exists for, on a container configuration
@@ -311,7 +312,8 @@ jobs:
   pin:
     # Both: a failed or skipped test blocks the pin even though image is green.
     needs: [test, test-sqlite, image]
-    runs-on: docker
+    # No docker needed: git, curl and python3 against the forge (homelab's labels, 6 Nov 2026).
+    runs-on: deploy
     timeout-minutes: 10
     if: "github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')"
     steps:
