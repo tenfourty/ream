@@ -67,6 +67,15 @@ PG_TEST_DSN=postgresql://… uv run pytest -q -n auto --maxprocesses 8   # or an
 ARTIFACTS_TEST_DB=sqlite uv run pytest -q -n auto --maxprocesses 8      # the same suite on SQLite
 ```
 
+Settings: every server variable is a field of `artifacts.settings.Settings`, read at call time with
+`settings.current()` (tests: `settings.override(...)`, no caching, no `__repr__` that prints a value).
+`scripts/guards/no-environ-guard.sh` refuses `os.environ` in `src/artifacts` outside `settings.py`,
+`serve.py`, `admin.py` and the command-line tools. Nothing of a house is a default: a fresh install
+(nothing set) serves `http://localhost:8000`, and a server bound to a non-loopback address
+(`ARTIFACTS_BIND_HOST`, set to `0.0.0.0` by the image) without `ARTIFACTS_GALLERY_ORIGIN` refuses to
+start. A deployment sets `ARTIFACTS_GALLERY_ORIGIN`, `ARTIFACTS_CONTENT_DOMAIN`, the owner trio and,
+behind a proxy, `ARTIFACTS_TRUSTED_IP_HEADER`.
+
 The service runs on Postgres or SQLite, chosen by `DATABASE_URL` (`postgresql://…` or
 `sqlite:////data/artifacts.db`). Only `src/artifacts/db.py` talks to a driver; SQL elsewhere must
 read the same on both (`docs/agent/specs/2026-10-09-sqlite-design.md`). CI runs the suite on both.

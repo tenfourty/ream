@@ -136,9 +136,14 @@ that leaves `gallery_origin` unset **refuses to start** rather than serving link
 The CLI has no default endpoint: with `ARTIFACTS_API` unset it says how to set it (and
 `artifacts-connect` stores it in a config file); our machines get the old default from the
 plug-in's client hook (4.2, item 6), so nothing changes for us. Open point to check in slice 2: how
-`hosts.py` serves content on a separate origin when both are `localhost`; if it cannot, the
-fresh-install mode serves content under a path on the gallery origin with a banner, never
-silently.
+`hosts.py` serves content on a separate origin when both are `localhost`. **Checked (slice 2):
+it does.** `hosts.normalise` drops the port, so `<id>.localhost:8000` routes to the content app,
+and browsers resolve `*.localhost` to loopback without DNS. What was missing was the URL
+builders, which hard-coded `https://` and no port: `store.content_base` now gives
+`http://<id>.localhost:8000` when the gallery is http and the content domain is loopback, and
+the content domain may carry a port (unset on a localhost gallery it is `localhost:<port>`).
+The path-under-gallery fallback is not built; a browser that does not resolve `*.localhost`
+(Safari is the one to test) would need it.
 
 ### 3.4 Text variables
 
@@ -420,10 +425,31 @@ drivers; CI only (not on baba).
    the owner id, so a row without one prints `?`, as a form's does. The served texts that still
    say "Jeremy"/"he" (template footers, `news`, CLI `--help`) are pinned by digest in
    `tests/test_owner.py` until slice 3 re-takes them.
-2. **All other settings.** The rest of the env reads move into `Settings`; the lint; origins and
-   mail sender lose their defaults (manifest PR sets ours first); fresh-install mode and the
-   start-up refusal; CLI default endpoint becomes a setting we set on our machines. Docs:
-   `AGENTS.md`, runbooks.
+2. **All other settings** (built on `ci/core-slice2-settings`, 6 Nov 2026). `Settings` now holds
+   every server variable (gallery origin, content domain, API host, display zone, trusted IP
+   header, mail, nudge, ggshield, the partner groups, backup dir, tools dir, tracker command,
+   browser path, and the CLI endpoint); `os.environ` is read only in `settings.py`, in
+   `serve.py` (DATABASE_URL, ARTIFACTS_MAINTENANCE, ARTIFACTS_PACK_VERSIONS), in `admin.py`
+   and in the command-line tools' own modules (`client`, `decide`, `republish`, `news`), held
+   by `scripts/guards/no-environ-guard.sh` (selftest, `--tree`, lefthook, CI).
+   `validate_for_serve()` collects every problem (owner, origin shape, content domain, header
+   name, mail group, both partner groups) and runs before the key files are opened. Origins
+   and the mail sender lose their defaults: mail is on only when key, API, domain and sender
+   are all set; `gallery_origin` unset means `http://localhost:8000` and refuses to start when
+   `ARTIFACTS_BIND_HOST` (the image sets `0.0.0.0`) is not loopback; the start-up log names the
+   defaulted owner and origin settings. **Manifest values set first** (our pod already sets
+   the rest): `ARTIFACTS_TRUSTED_IP_HEADER=X-Real-IP`, and the image sets
+   `ARTIFACTS_BIND_HOST` itself. **Kept for our machines**: the CLI's default endpoint stays
+   `https://artifacts.tenfourty.site/api/v1`, now as `settings.HOUSE_DEFAULT_API` behind
+   `ARTIFACTS_API`; many agents run the tools with no variable set, and the plug-in client
+   hook that replaces it does not exist before slice 7, which also removes the constant.
+   **Not done here**: `session_env`/`QD_OFFICE`/`ARTIFACTS_SEAT` stay in `client.py` (slice 7);
+   `proxy_notes` and the hard-coded gallery links in `markdown.py`, `traps.py` and
+   `beadpage.py` wait for the text templates (slice 3); the Mailgun key, nudge token and
+   ggshield token are still read as values (their Secrets are mounted as variables), the move
+   to key files needs a manifest change; `display_tz` unset keeps meaning the host's zone,
+   not UTC. The fresh-install content origin works (3.3). Docs: `AGENTS.md`;
+   the runbooks need no change (a settings runbook is left to do).
 3. **Text templates.** `{{var}}` mechanism, then `onboarding`, `news`, templates, API error text,
    CLI help, share mail move to variables. Golden test. No plug-in yet: the house sections are
    settings (`proxy_notes`, `footer`) for now.
@@ -469,7 +495,7 @@ only needs sinks to exist; it does not wait for the plug-in repo.
 - **SQLite CHECK removal** edits `sqlite_master` text; the guard proves its work (same pattern as
   step 6), and a table-rebuild fallback exists.
 - **Outbox migration** while rows are pending: slice 4 reads the old table until empty.
-- **Fresh-install content origin** (3.3) may not work on a single host; checked early in slice 2.
+- **Fresh-install content origin** (3.3): checked in slice 2, works on `*.localhost`; Safari untested.
 - **One plug-in repo for all house code** couples our own release cadence: acceptable at one
   deployment; split later if it hurts.
 
