@@ -119,7 +119,8 @@ def _ask(args, key: str) -> dict:
     if args.needed_by is not None:
         body["needed_by"] = args.needed_by
     if args.for_office:
-        body["for"] = args.for_office
+        # Both names: a server from before the rename reads only `for`.
+        body["audience"] = body["for"] = args.for_office
     return _request(
         "POST", f"{_api_base()}/artifacts/{args.artifact}/decisions", key, body
     )
@@ -151,8 +152,9 @@ def _carries(row: dict) -> list[str]:
         links.append(f"replaces {row['replaces']}")
     if row.get("replaced_by"):
         links.append(f"REPLACED by {row['replaced_by']}")
-    if row.get("for"):
-        links.append("also needed by " + ", ".join(row["for"]))
+    audience = row.get("audience", row.get("for"))
+    if audience:
+        links.append("also needed by " + ", ".join(audience))
     if links:
         lines.append("  " + " · ".join(links))
     if row.get("context"):
@@ -856,9 +858,9 @@ _RESURFACE_EVERY = 3600.0
 
 
 def _office(args) -> str | None:
-    """Whose answers this waiter hears: `--office`, else the part of the
-    session label before the first "/" ("cove-maintainer/ab12" is the
-    cove-maintainer office). None means every office, as before 6 Oct 2026."""
+    """Whose answers this waiter hears: `--team` (or its old name `--office`), else
+    the part of the session label before the first "/" ("cove-maintainer/ab12" is
+    the cove-maintainer team). None means every team, as before 6 Oct 2026."""
     if args.all_offices:
         return None
     if args.office is not None:
@@ -866,9 +868,9 @@ def _office(args) -> str | None:
     session = declared_session(args.session)
     if session is None:
         print(
-            "no office: hearing every office's answers under this key. Set "
-            "ARTIFACTS_SESSION=<office>/<ref> or pass --office NAME to hear only "
-            "your own (--all-offices says this on purpose).",
+            "no team: hearing every team's answers under this key. Set "
+            "ARTIFACTS_SESSION=<team>/<ref> or pass --team NAME to hear only "
+            "your own (--all-teams says this on purpose).",
             file=sys.stderr,
         )
         return None
@@ -980,7 +982,16 @@ def _listening(args, key: str, base: str) -> int:
         w for w in found.get("waiting", []) if _hears(w.get("session") or "", office)
     ]
     if args.json:
-        print(json.dumps({**found, "office": office, "office_waiting": bool(mine)}))
+        print(
+            json.dumps(
+                {
+                    **found,
+                    "team": office,
+                    "office": office,
+                    "office_waiting": bool(mine),
+                }
+            )
+        )
     else:
         whose = f"of {office} " if office else ""
         if mine:
@@ -1174,7 +1185,8 @@ def _wait(args, key: str, base: str) -> int:
             print(
                 json.dumps(
                     {
-                        "office": office,
+                        "team": office,
+                        "office": office,  # the old name, for one release
                         "page": page,
                         "answers": answers,
                         "threads": threads,
@@ -1734,7 +1746,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="LABEL",
         help=(
             "which session this is; defaults to $ARTIFACTS_SESSION, else "
-            "<office>/<session id> from Claude Code's QD_OFFICE or "
+            "<team>/<session id> from Claude Code's QD_OFFICE or "
             "ARTIFACTS_SEAT. Only a label you set chooses whose answers wait hears."
         ),
     )
@@ -1813,12 +1825,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="when you need the answer, with a timezone: 2026-10-22T15:00:00Z",
     )
     ask.add_argument(
+        "--audience",
         "--for",
         dest="for_office",
         action="append",
         default=[],
-        metavar="OFFICE",
-        help="repeatable (max 5); another office that also needs the answer",
+        metavar="TEAM",
+        help="repeatable (max 5); another team that also needs the answer",
     )
 
     ask_review = subs.add_parser(
@@ -2006,15 +2019,24 @@ def build_parser() -> argparse.ArgumentParser:
         " (default 55m, or ARTIFACTS_WAIT_TIMEOUT; 0 or forever: no limit)",
     )
     waiting.add_argument(
-        "--office",
+        "--team",
+        dest="office",
         metavar="NAME",
-        help="hear only this office's answers (default: ARTIFACTS_SESSION before"
-        " the first /; '' for every office)",
+        help="hear only this team's answers (default: ARTIFACTS_SESSION before"
+        " the first /; '' for every team)",
     )
     waiting.add_argument(
-        "--all-offices",
+        "--all-teams",
+        dest="all_offices",
         action="store_true",
-        help="hear every office's answers under this key, as before",
+        help="hear every team's answers under this key, as before",
+    )
+    # The old names, kept for one release (core-and-plugins design, section 6).
+    waiting.add_argument(
+        "--office", dest="office", metavar="NAME", help=argparse.SUPPRESS
+    )
+    waiting.add_argument(
+        "--all-offices", dest="all_offices", action="store_true", help=argparse.SUPPRESS
     )
     waiting.add_argument(
         "--answers-only",
@@ -2066,10 +2088,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="also say where {{owner_their}} answer goes",
     )
     listen.add_argument(
-        "--office",
+        "--team",
+        dest="office",
         metavar="NAME",
-        help="the office to check (default: ARTIFACTS_SESSION before the first /;"
+        help="the team to check (default: ARTIFACTS_SESSION before the first /;"
         " '' for any session of this key)",
+    )
+    listen.add_argument(
+        "--office", dest="office", metavar="NAME", help=argparse.SUPPRESS
     )
     listen.add_argument(
         "--json", action="store_true", help="the service's answer, as JSON"

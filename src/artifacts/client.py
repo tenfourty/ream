@@ -1827,7 +1827,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="LABEL",
         help=(
             "which session this is, when several share one key; defaults to "
-            f"${_SESSION_ENV}, else <office>/<session id> from Claude Code's "
+            f"${_SESSION_ENV}, else <team>/<session id> from Claude Code's "
             "QD_OFFICE or ARTIFACTS_SEAT. A label, never a secret."
         ),
     )

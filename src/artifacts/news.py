@@ -20,6 +20,10 @@ from artifacts import textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-06",
+        "Neutral names, old ones still work for now: a question's `for` is now `audience` (send either, `audience` wins; every read carries both); artifacts-decide wait/listening take --team and --all-teams (--office and --all-offices keep working, hidden from --help), and a session label is <team>/<ref>; listening states are sent_to_partner and partner_delayed, with the old sent_to_slack and slack_delayed beside them as legacy_state. Reinstall the tools to get the new flags.",
+    ),
+    (
         "2026-11-05",
         'When {{owner_they}} reopen{{owner_s}} a comment thread {{owner_they}} had settled, you now get a thread_reopened event (actor, ref_id = the thread id, summary "reopened: ..."), and artifacts-decide wait wakes and prints the thread under a REOPENED by line. Reopening your own thread (artifacts-decide reopen, POST /api/v1/comments/ID/reopen) stays silent.',
     ),

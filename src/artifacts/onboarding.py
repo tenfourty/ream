@@ -142,8 +142,9 @@ a flag, and the same name in the JSON body (`POST /api/v1/artifacts/<id>/decisio
         blocking needs --blocked-on TEXT (what has stopped, 1-200 characters)
         by needs --needed-by, an ISO-8601 date-time WITH a timezone (2026-10-22T15:00:00Z)
         --needed-by is also allowed with the other two
-    --for OFFICE            another office that needs the answer too; repeatable, max 5,
-                            never your own name. JSON: "for": a list of office names
+    --audience TEAM         another team that needs the answer too; repeatable, max 5,
+                            never your own name. JSON: "audience": a list of team names
+                            (--for and "for" are the old names; both still work)
 
 An id that is unknown and an id that is someone else's are refused the same
 way, so name only your own questions (not reviews). depends_on is stored and
@@ -297,7 +298,7 @@ reply under any of them; your reply goes to the page's owner as yours:
     artifacts-decide comments --page <page-id>
     artifacts-decide reply <thread-id> "text" --page <page-id>
 Two offices on one key are told apart only by their session labels, so set
-ARTIFACTS_SESSION to "<office>/<ref>" or the owner may not hear you.
+ARTIFACTS_SESSION to "<team>/<ref>" or the owner may not hear you.
 
 AFTER YOU ASK, LISTEN. {{Owner_they}} often answer{{owner_s}} within minutes, and an answer nobody
 collects is the failure this service exists to prevent. If your agent can run
@@ -310,11 +311,11 @@ deploy's 1-2 minute gap is waited out, with a 20 s back-off, and loses nothing).
 every turn.
 
 It hears only YOUR OFFICE's answers: the part of ARTIFACTS_SESSION before the
-first "/" (cove-maintainer/ab12 is the cove-maintainer office), or --office
-NAME. Another office's answer under the same key never wakes you; a question
+first "/" (cove-maintainer/ab12 is the cove-maintainer team), or --team
+NAME. Another team's answer under the same key never wakes you; a question
 asked with no label belongs to the office named like the key. Your own answer
 left unacknowledged is shown again at most hourly (list shows it until you
-ack). --all-offices hears everything; --json prints each wake as one line.
+ack). --all-teams hears everything (--office and --all-offices still work); --json prints each wake as one line.
 
 Before arming a wait in a fresh session, run `artifacts-decide listening`: exit
 0 means a session of your office already holds one (do not start a second), 3
@@ -360,7 +361,7 @@ your key relayed: the answer is {{owner_theirs}}). Use a client timeout of wait 
 Your session label must reach every call. In Claude Code each Bash call is a
 fresh shell, so an `export` does not carry over: set ARTIFACTS_SESSION in
 ~/.claude/settings.json under "env", or pass --session on each command. With
-neither, the tools label what you send "<office>/<first 8 of the Claude Code
+neither, the tools label what you send "<team>/<first 8 of the Claude Code
 session id>" (office from QD_OFFICE, else ARTIFACTS_SEAT); a label you set
 always wins, and only a label you set chooses whose answers `wait` hears.
 
@@ -657,7 +658,7 @@ short and it is the source of truth. This skill is the reminder.
 This labels everything you publish with which session did it. It is
 attribution, never permission. In Claude Code each Bash call is a new shell:
 put it in ~/.claude/settings.json under "env", or pass --session every time.
-Without one, Claude Code sessions are labelled "<office>/<session id>" from
+Without one, Claude Code sessions are labelled "<team>/<session id>" from
 QD_OFFICE or ARTIFACTS_SEAT; yours always wins, and only yours filters `wait`.
 
 ## The loop
@@ -683,7 +684,7 @@ QD_OFFICE or ARTIFACTS_SEAT; yours always wins, and only yours filters `wait`.
 
 A question can also carry --context, --topic ID[:TITLE], --depends-on ID,
 --replaces ID, --urgency blocking|by|when-you-can (with --blocked-on or
---needed-by) and --for OFFICE; see /api/v1/agents.txt. A --depends-on question
+--needed-by) and --audience TEAM; see /api/v1/agents.txt. A --depends-on question
 is held back from {{owner_name}} until the earlier one is answered; held_by shows what
 it still waits on.
 
@@ -712,7 +713,7 @@ close it: that is the only thing that closes one.
 
 After you ask, start `artifacts-decide wait` in the background so you are woken
 when {{owner_they}} answer{{owner_s}} or comment{{owner_s}} on your office's work (the ARTIFACTS_SESSION prefix
-before "/", or --office; --all-offices for everything; --timeout 0 for no limit; the default 55m ends with exit 3, a time limit, so re-arm it; exit 9 means the page was archived or binned and its questions are set aside; ARTIFACTS_WAIT_TIMEOUT changes it); without background tasks, run `artifacts-decide
+before "/", or --team; --all-teams for everything; --timeout 0 for no limit; the default 55m ends with exit 3, a time limit, so re-arm it; exit 9 means the page was archived or binned and its questions are set aside; ARTIFACTS_WAIT_TIMEOUT changes it); without background tasks, run `artifacts-decide
 list` and `artifacts-decide comments` at the start of every turn. An unread
 answer is a broken promise, and so is an unanswered comment:
 

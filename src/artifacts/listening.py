@@ -24,17 +24,23 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from artifacts import events, partner
+from artifacts import decisions, events, partner
 from artifacts.db import Database, in_list
 from artifacts.pickup import PICKUP_FRESH
 
 WAITING_NOW = "waiting_now"
-SENT_TO_SLACK = "sent_to_slack"
-SLACK_DELAYED = "slack_delayed"
+SENT_TO_PARTNER = "sent_to_partner"
+PARTNER_DELAYED = "partner_delayed"
 NOT_SENT = "not_sent"
-STATES = (WAITING_NOW, SENT_TO_SLACK, SLACK_DELAYED, NOT_SENT)
+# The old state ids, emitted beside the new as `legacy_state` for one release
+# (core-and-plugins design, section 6).
+LEGACY_STATES = {SENT_TO_PARTNER: "sent_to_slack", PARTNER_DELAYED: "slack_delayed"}
+# The answer source whose label names the partner in the wording. Still core's
+# 'slack' until the Slack plug-in moves out.
+PARTNER_SOURCE = "slack"
+STATES = (WAITING_NOW, SENT_TO_PARTNER, PARTNER_DELAYED, NOT_SENT)
 # Wording keys for the two states that can carry an agent's own pickup line.
-SENT_TO_SLACK_PICKUP = "sent_to_slack_pickup"
+SENT_TO_PARTNER_PICKUP = "sent_to_partner_pickup"
 NOT_SENT_PICKUP = "not_sent_pickup"
 
 # How far back `recent` looks, and how many it lists.
@@ -49,27 +55,27 @@ WORDING = {
         "A session is waiting for your answer now{session}. "
         "It acts as soon as you answer."
     ),
-    SENT_TO_SLACK: (
-        "No session is waiting. Your answer is delivered to {agent} in Slack, "
+    SENT_TO_PARTNER: (
+        "No session is waiting. Your answer is delivered to {agent} in {partner}, "
         "and acted on at its next check.{seen}"
     ),
     # The agent declared its own pickup line (`set_pickup`): its words replace
     # "acted on at its next check". Never a promise of this service.
-    SENT_TO_SLACK_PICKUP: (
-        "No session is waiting. Your answer is delivered to {agent} in Slack. "
+    SENT_TO_PARTNER_PICKUP: (
+        "No session is waiting. Your answer is delivered to {agent} in {partner}. "
         "{says}{seen}"
     ),
-    SLACK_DELAYED: (
+    PARTNER_DELAYED: (
         "No session is waiting, and the copy of this question for {agent} in "
-        "Slack has not been delivered yet. Your answer is saved; the agent "
+        "{partner} has not been delivered yet. Your answer is saved; the agent "
         "reads it when it next looks.{seen}"
     ),
     NOT_SENT: (
-        "No session is waiting and this question is not in Slack. Your answer "
+        "No session is waiting and this question is not in {partner}. Your answer "
         "is saved; the agent reads it when it next looks.{seen}"
     ),
     NOT_SENT_PICKUP: (
-        "No session is waiting and this question is not in Slack. Your answer "
+        "No session is waiting and this question is not in {partner}. Your answer "
         "is saved. {says}{seen}"
     ),
 }
@@ -277,9 +283,9 @@ def for_decisions(
         if holding:
             state = WAITING_NOW
         elif sent:
-            state = SENT_TO_SLACK
+            state = SENT_TO_PARTNER
         elif announced:
-            state = SLACK_DELAYED
+            state = PARTNER_DELAYED
         else:
             state = NOT_SENT
         out[decision_id] = Route(
@@ -308,18 +314,30 @@ def line(route: Route, now: datetime | None = None) -> str:
     session = f" ({route.waiting_session})" if route.waiting_session else ""
     key = route.state
     says = ""
-    if route.pickup and key in (SENT_TO_SLACK, NOT_SENT):
-        key = SENT_TO_SLACK_PICKUP if key == SENT_TO_SLACK else NOT_SENT_PICKUP
+    if route.pickup and key in (SENT_TO_PARTNER, NOT_SENT):
+        key = SENT_TO_PARTNER_PICKUP if key == SENT_TO_PARTNER else NOT_SENT_PICKUP
         stop = "" if route.pickup[-1] in ".!?" else "."
         says = SAYS.format(agent=route.agent, pickup=route.pickup, stop=stop)
-    return WORDING[key].format(agent=route.agent, session=session, seen=seen, says=says)
+    return WORDING[key].format(
+        agent=route.agent,
+        session=session,
+        seen=seen,
+        says=says,
+        partner=decisions.source_label(PARTNER_SOURCE),
+    )
 
 
 def route_view(route: Route, now: datetime | None = None) -> dict:
     """A route as the API and the CLI carry it."""
+    legacy = (
+        {"legacy_state": LEGACY_STATES[route.state]}
+        if route.state in LEGACY_STATES
+        else {}
+    )
     return {
         "id": route.id,
         "state": route.state,
+        **legacy,
         "waiting_session": route.waiting_session,
         "route": {
             "kind": "partner" if route.announced else "none",

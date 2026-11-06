@@ -518,6 +518,23 @@ drivers; CI only (not on baba).
    <value>, not on the page" with a "via <value>" badge, claiming no relayer.
 6. **Renames with aliases** (section 6), `listening`/`inbox` neutral ids, gallery wording from the
    answer-source label (still declared in core for `slack` at this point).
+   **Built (`ci/slice6-renames`).** `audience` joins `for` on `POST /decisions` (either; `audience`
+   wins; an error names the field the caller sent; "lists other teams"), and every decision read
+   carries both (`decisions.public`, the partner-home view). `artifacts-decide wait`/`listening`
+   take `--team` and `--all-teams`; `--office`/`--all-offices` stay, hidden from `--help`
+   (`argparse.SUPPRESS`, same destinations); `ask` takes `--audience` beside `--for` and sends both
+   keys; `--json` carries `team` beside `office`. Session labels read `<team>/<ref>` (same format).
+   Inbox kind is `partner_question`, with `Item.legacy_kind = slack_question`, `Item.view()` emitting
+   both and `inbox.kind_matches` accepting either (no API route serves the kind today; the inbox
+   is gallery-only). Listening states are `sent_to_partner`/`partner_delayed` with `legacy_state`
+   on the two renamed ones. `register_source(name, label=...)` and `decisions.source_label()`;
+   `sinks.Sink(label=...)` and `sinks.label_of()` (`partner` is "quarterdeck"). "Open in Slack",
+   "Asked in/Settled in/from Slack", "via Slack" and "waiting for quarterdeck" and the listening
+   sentences take those labels, so our text is byte-identical. `news` announces the renames (the
+   clock for "one release" starts there). Pins re-taken on purpose in `tests/test_owner.py`:
+   agents.txt, skill.md and the `artifacts-decide` help (the `artifacts-publish` help moved by one
+   word, `<team>/<session id>`). Left alone: the partner wire body (`for`, a protocol with
+   quarterdeck, moves with its plug-in), the `QD_OFFICE` variable, stored columns.
 7. **Plug-in loader and API v1**, the six interfaces, failure isolation, versioning, the test
    plug-in, core-bare CI job. Still nothing moved.
 8. **The plug-in repo and its pipeline** (homelab office creates the repo; lander change). It

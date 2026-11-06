@@ -2,7 +2,8 @@
 
 Four kinds of item today, all built by `items`, which returns typed `Item`s:
 
-- `slack_question`: an open question whose home is the partner (asked in Slack,
+- `partner_question` (until slice 6: `slack_question`): an open question whose home
+  is the partner (asked in Slack,
   `partner_in.Copy`), one he has not yet answered here. One he HAS answered
   here waits for the home and is not waiting on him: the page shows it apart.
 
@@ -74,7 +75,7 @@ def key(row: decisions.DecisionRow, now: datetime) -> tuple:
 
 @dataclass(frozen=True)
 class Item:
-    kind: str  # 'question' | 'review' | 'reply' | 'slack_question'
+    kind: str  # 'question' | 'review' | 'reply' | 'partner_question'
     id: str  # the decision's id, or the reply comment's
     artifact_id: str
     page_title: str
@@ -84,8 +85,30 @@ class Item:
     created_at: datetime
     decision: decisions.DecisionRow | None = None
     body: str = ""
-    # The copy, for a `slack_question`.
+    # The copy, for a `partner_question`.
     copy: partner_in.Copy | None = None
+
+    @property
+    def legacy_kind(self) -> str | None:
+        """The old name of this kind, emitted beside `kind` for one release
+        (core-and-plugins design, section 6); None for a kind that kept its name."""
+        return LEGACY_KINDS.get(self.kind)
+
+    def view(self) -> dict:
+        """The kind as a reader gets it: the new id, and the old one beside it."""
+        out = {"kind": self.kind}
+        if self.legacy_kind:
+            out["legacy_kind"] = self.legacy_kind
+        return out
+
+
+# Kind ids that were renamed: new -> old. A kind filter accepts either.
+LEGACY_KINDS = {"partner_question": "slack_question"}
+
+
+def kind_matches(item: "Item", wanted: str) -> bool:
+    """Whether `item` is of kind `wanted`, by its current id or its old one."""
+    return wanted in (item.kind, item.legacy_kind)
 
 
 def item_key(item: Item, now: datetime) -> tuple:
@@ -95,7 +118,7 @@ def item_key(item: Item, now: datetime) -> tuple:
     if item.kind == "question" and item.decision is not None:
         k = key(item.decision, now)
         return (*k[:2], 0, *k[2:])
-    if item.kind == "slack_question" and item.copy is not None:
+    if item.kind == "partner_question" and item.copy is not None:
         k = key(item.copy, now)
         return (*k[:2], 0, *k[2:])
     return (
@@ -150,7 +173,7 @@ def _slack_items(db: Database, limit: int) -> tuple[list[Item], bool]:
     found = partner_in.open_copies(db, limit)
     return [
         Item(
-            kind="slack_question",
+            kind="partner_question",
             id=c.source,
             artifact_id="",
             page_title=c.title,

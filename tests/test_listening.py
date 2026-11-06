@@ -251,7 +251,7 @@ def test_sent_to_slack_when_the_bridge_delivered_the_question(db, bridge):
     _, asked = _ask(db)
     _deliver(db, asked.id)
     route = listening.for_decision(db, "cove", asked.id)
-    assert route.state == listening.SENT_TO_SLACK
+    assert route.state == listening.SENT_TO_PARTNER
     assert route.announced and route.delivered
     text = listening.line(route)
     assert "delivered to cove in Slack" in text
@@ -261,7 +261,7 @@ def test_sent_to_slack_when_the_bridge_delivered_the_question(db, bridge):
 def test_slack_delayed_while_the_copy_is_undelivered(db, bridge):
     _, asked = _ask(db)
     route = listening.for_decision(db, "cove", asked.id)
-    assert route.state == listening.SLACK_DELAYED
+    assert route.state == listening.PARTNER_DELAYED
     assert route.announced and not route.delivered
     assert "has not been delivered yet" in listening.line(route)
 
@@ -273,7 +273,7 @@ def test_a_parked_copy_reads_as_delayed_not_delivered(db, bridge):
             "update partner_outbox set parked_at = %s where decision_id = %s",
             (datetime.now(UTC), asked.id),
         )
-    assert _state(db, "cove", asked.id) == listening.SLACK_DELAYED
+    assert _state(db, "cove", asked.id) == listening.PARTNER_DELAYED
 
 
 def test_not_sent_when_the_bridge_is_off(db):
@@ -334,7 +334,7 @@ def test_last_seen_is_stated_as_an_age_or_as_never_seen():
 
 
 def test_every_state_has_wording_in_the_one_place():
-    extra = {listening.SENT_TO_SLACK_PICKUP, listening.NOT_SENT_PICKUP}
+    extra = {listening.SENT_TO_PARTNER_PICKUP, listening.NOT_SENT_PICKUP}
     assert set(listening.WORDING) == set(listening.STATES) | extra
 
 
@@ -353,7 +353,7 @@ def test_the_api_reports_the_decision_with_the_same_line_the_page_uses(
     assert body["agent"] == "cove" and body["bridge"] == {"enabled": True}
     assert body["ttl_grace_seconds"] == events.HOLD_GRACE_SECONDS
     decision = body["decision"]
-    assert decision["state"] == "sent_to_slack"
+    assert decision["state"] == "sent_to_partner"
     assert decision["route"] == {
         "kind": "partner",
         "agent": "cove",

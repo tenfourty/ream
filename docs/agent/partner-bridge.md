@@ -261,7 +261,7 @@ and a pending local answer.
   delivered again after the `asked` has applied, and then applies. `message_added` for an
   unknown copy is still 2xx-ignored.
 
-His inbox takes the open copies as a second source (`inbox.py`, kind `slack_question`):
+His inbox takes the open copies as a second source (`inbox.py`, kind `partner_question`, formerly `slack_question`):
 the same order key as a page question, labelled "from Slack", with the context, the link
 to Slack and a button per option. They count in the inbox total. The form posts to
 `POST /pq/<id>/answer` behind the same same-origin guard as the page's answer form.

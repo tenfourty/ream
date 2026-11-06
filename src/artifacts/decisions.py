@@ -204,9 +204,10 @@ class DecisionRow:
 
 def public(row: DecisionRow) -> dict:
     """The JSON an agent reads for a decision: the row's fields, with
-    `for_offices` under its contract name `for`."""
+    `for_offices` under its contract name `audience`, and under the old name `for`
+    too, for one release (core-and-plugins design, section 6)."""
     out = dict(row.__dict__)
-    out["for"] = out.pop("for_offices")
+    out["audience"] = out["for"] = out.pop("for_offices")
     return out
 
 
@@ -405,6 +406,7 @@ def _validate_fields(
     blocked_on: object,
     needed_by: object,
     for_offices: object,
+    audience_field: str = "for",
 ) -> _Fields:
     """Shape checks only, in memory. Ownership of depends_on/replaces and the
     topic title lookup need the database and happen in `ask`."""
@@ -464,14 +466,18 @@ def _validate_fields(
             "needed_by", "urgency 'by' needs needed_by: when you need the answer"
         )
     needed = _parse_needed_by(needed_by) if needed_by is not None else None
-    offices = _ids_list(for_offices, "for", MAX_FOR, "office names")
+    # The field is `audience` (`for` is the old name, accepted for one release); an
+    # error names whichever the caller sent.
+    name = audience_field
+    offices = _ids_list(for_offices, name, MAX_FOR, "team names")
     for office in offices:
         if not keys.AGENT_NAME.fullmatch(office):
             raise InvalidField(
-                "for", "for must list office names: lowercase letters, digits, hyphens"
+                name,
+                f"{name} must list team names: lowercase letters, digits, hyphens",
             )
         if office == agent:
-            raise InvalidField("for", "for lists OTHER offices, not the one asking")
+            raise InvalidField(name, f"{name} lists other teams, not the one asking")
     return _Fields(
         context,
         topic_id,
@@ -650,6 +656,7 @@ def ask(
     blocked_on: str | None = None,
     needed_by: str | None = None,
     for_offices: list | None = None,
+    audience_field: str = "for",
 ) -> DecisionRow:
     """Pose a lettered question on `artifact_id`. Refuses (`store.NotFound`) an
     artifact `agent` does not own, exactly as `store.patch` does -- someone else's
@@ -676,6 +683,7 @@ def ask(
         blocked_on=blocked_on,
         needed_by=needed_by,
         for_offices=[] if for_offices is None else for_offices,
+        audience_field=audience_field,
     )
     # Every free-text field is size-checked (also catching a lone surrogate)
     # before any database work; the scan comes last, below.
@@ -1096,12 +1104,16 @@ CORE_SOURCES = ("page", *ANSWER_SOURCES)
 # a relay is an agent's word and 'slack' means quarterdeck verified who pressed.
 # Only `answer(..., source='slack')`, called from partner_in, writes it.
 _REGISTERED: list[str] = ["slack"]
+# A source's human label, for wording ("Open in Slack"). One without a label shows
+# its raw value. 'slack' is labelled here until the Slack plug-in moves out.
+_LABELS: dict[str, str] = {"slack": "Slack"}
 
 _SOURCE_NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 
 
-def register_source(name: str) -> None:
-    """Let a plug-in store `name` as an `answer_source`. Idempotent; a core source or a
+def register_source(name: str, label: str | None = None) -> None:
+    """Let a plug-in store `name` as an `answer_source`, shown to people as `label`
+    (a source without one shows its raw value). Idempotent; a core source or a
     name that is not lower-case letters, digits and hyphens (at most 32) is refused, so
     a plug-in can neither shadow 'page' nor store something the gallery would have to
     take apart to show."""
@@ -1109,8 +1121,18 @@ def register_source(name: str) -> None:
         raise ValueError(f"answer source {name!r}: lower-case letters, digits, hyphens")
     if name in CORE_SOURCES:
         raise ValueError(f"answer source {name!r} is core's")
+    if label is not None:
+        if not isinstance(label, str) or not label.strip() or len(label) > 40:
+            raise ValueError(f"answer source {name!r}: a label is 1-40 characters")
+        _LABELS[name] = label.strip()
     if name not in _REGISTERED:
         _REGISTERED.append(name)
+
+
+def source_label(source: str | None) -> str:
+    """The words for a source in a sentence: its registered label, else its raw
+    value (an unregistered or unlabelled source is never an error)."""
+    return _LABELS.get(source or "", source or "")
 
 
 def stored_sources() -> tuple[str, ...]:

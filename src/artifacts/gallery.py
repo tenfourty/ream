@@ -51,6 +51,7 @@ from artifacts import (
     partner_in,
     rename,
     settings,
+    sinks,
     stamp,
     store,
     textvars,
@@ -3927,8 +3928,9 @@ def _provenance(row) -> str:
         return ""
     if row.answer_source == "slack":
         return (
-            '<p class="relayed-note">You answered this in Slack, verified by '
-            "quarterdeck. If that is not what you meant, answer it again here.</p>"
+            f'<p class="relayed-note">You answered this in {_partner()}, verified by '
+            f"{_sink_name()}. If that is not what you meant, answer it again "
+            "here.</p>"
         )
     where = escape(row.answer_source)
     if not decisions.is_known_source(row.answer_source):
@@ -4061,17 +4063,31 @@ def _slack_button(option: dict, copy, chosen: str | None = None) -> str:
     )
 
 
+def _partner() -> str:
+    """The partner's name in a sentence: the label its answer source registered
+    (`slack` is core's until the Slack plug-in moves out), escaped."""
+    return escape(decisions.source_label(listening.PARTNER_SOURCE))
+
+
+def _sink_name() -> str:
+    """The partner sink's label ("quarterdeck"), escaped."""
+    return escape(sinks.label_of("partner"))
+
+
 def _slack_link(copy) -> str:
-    """The link to Slack. Only an http(s) link was ever stored (partner_in)."""
+    """The link to the partner. Only an http(s) link was ever stored (partner_in)."""
     if not copy.link:
-        return "Asked in Slack"
-    return f'<a href="{escape(copy.link)}" rel="noopener noreferrer">Open in Slack</a>'
+        return f"Asked in {_partner()}"
+    return (
+        f'<a href="{escape(copy.link)}" rel="noopener noreferrer">'
+        f"Open in {_partner()}</a>"
+    )
 
 
 def _slack_head(copy, label: str = "Question") -> str:
     return (
         f'<p class="ihead"><span>{label}</span>'
-        '<span class="from-slack">from Slack</span>'
+        f'<span class="from-slack">from {_partner()}</span>'
         f"<span>from {escape(copy.asking_office)}</span></p>"
     )
 
@@ -4103,7 +4119,7 @@ def _render_slack_status(pending: list, settled: list) -> str:
             f'<li class="ask" id="i-{escape(c.id)}">{_slack_head(c, "Answered here")}'
             f'<p class="q">{escape(c.title)}</p>'
             f'<p class="pickup">You answered ({escape(c.pending_answer or "")}) '
-            f"{escape(mine)} here. Answered here, waiting for quarterdeck.</p>"
+            f"{escape(mine)} here. Answered here, waiting for {_sink_name()}.</p>"
             f'<p class="ilink">{_slack_link(c)}</p></li>'
         )
     for c in settled:
@@ -4111,7 +4127,7 @@ def _render_slack_status(pending: list, settled: list) -> str:
         out.append(
             f'<li class="ask" id="i-{escape(c.id)}">{_slack_head(c, "Settled")}'
             f'<p class="q">{escape(c.title)}</p>'
-            f'<p class="pickup">Settled in Slack: ({escape(c.answer or "")}) '
+            f'<p class="pickup">Settled in {_partner()}: ({escape(c.answer or "")}) '
             f"{escape(mine)}.</p>"
             f'<p class="ilink">{_slack_link(c)}</p></li>'
         )
@@ -4130,7 +4146,7 @@ def _render_inbox(
         page = f"/a/{escape(item.artifact_id)}"
         title = escape(item.page_title)
         d = item.decision
-        if item.kind == "slack_question" and item.copy is not None:
+        if inbox.kind_matches(item, "partner_question") and item.copy is not None:
             out.append(_render_slack_question(item.copy, now))
         elif item.kind == "question" and d is not None:
             meta = " &middot; ".join(_question_meta(d, now))
@@ -4585,8 +4601,9 @@ def _render_decisions(
             relayed = ""
             if row.answer_source == "slack":
                 relayed = (
-                    '<span class="relayed" title="Answered in Slack, verified by '
-                    'quarterdeck; not tapped on this page">via Slack</span>'
+                    f'<span class="relayed" title="Answered in {_partner()}, '
+                    f'verified by {_sink_name()}; not tapped on this page">'
+                    f"via {_partner()}</span>"
                 )
             elif row.answer_source and not decisions.is_known_source(row.answer_source):
                 where = escape(row.answer_source)

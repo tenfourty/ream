@@ -367,7 +367,16 @@ class DecisionBody(BaseModel):
     urgency: Any = "when_you_can"
     blocked_on: Any = None
     needed_by: Any = None
+    # `audience` is the field; `for` is its old name, accepted for one release.
+    # Both sent: `audience` wins (see `audience_sent`).
+    audience: Any = None
     for_offices: Any = Field(default=None, alias="for")
+
+    def audience_sent(self) -> tuple[Any, str]:
+        """The value and the field name to report errors under."""
+        if self.audience is not None:
+            return self.audience, "audience"
+        return self.for_offices, "for"
 
 
 class ReviewBody(BaseModel):
@@ -441,6 +450,7 @@ def _slack_view(c: partner_in.Copy, now: datetime) -> dict:
         "urgency": c.urgency,
         "blocked_on": c.blocked_on,
         "needed_by": c.needed_by,
+        "audience": c.for_offices,
         "for": c.for_offices,
         "agent": c.asking_office,
         "artifact_id": None,
@@ -2221,7 +2231,8 @@ def agent_router(
                 urgency=payload.urgency,
                 blocked_on=payload.blocked_on,
                 needed_by=payload.needed_by,
-                for_offices=payload.for_offices,
+                for_offices=payload.audience_sent()[0],
+                audience_field=payload.audience_sent()[1],
             )
             out = decisions.public(row)
             if row.set_aside:

@@ -67,6 +67,8 @@ class Sink:
     deliver: Callable[[Event], None] | None = None
     delivery: str = "outbox"
     stage: Callable[[Connection, Event], None] | None = None
+    # Human words for wording ("waiting for quarterdeck"); None shows `name`.
+    label: str | None = None
 
     def __post_init__(self) -> None:
         if self.delivery not in DELIVERIES:
@@ -103,6 +105,14 @@ def _ensure_builtins() -> None:
                 raise ValueError(f"sink {sink.name!r} is already registered")
             _sinks[sink.name] = sink
         _builtins_loaded = True
+
+
+def label_of(name: str) -> str:
+    """A sink's label for a sentence, else its name; an unknown sink shows its name."""
+    for sink in registered():
+        if sink.name == name:
+            return sink.label or sink.name
+    return name
 
 
 def registered() -> list[Sink]:
@@ -439,5 +449,5 @@ def _builtin_sinks() -> list[Sink]:
             deliver=deliver_nudge,
             delivery="after_commit",
         ),
-        Sink("partner", events.BRIDGE_KINDS, stage=stage_partner),
+        Sink("partner", events.BRIDGE_KINDS, stage=stage_partner, label="quarterdeck"),
     ]

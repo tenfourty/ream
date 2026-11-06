@@ -8,11 +8,11 @@ An open question on a page carries one line saying where Jeremy's answer goes:
 | `state` | Meaning |
 |---|---|
 | `waiting_now` | A session of the asking office holds a `GET /events?wait=N` that has not lapsed. |
-| `sent_to_slack` | Nobody holds a wait; the question was announced to the partner and that copy was delivered. |
-| `slack_delayed` | Announced, but the copy is undelivered or parked (`artifacts-admin partner-outbox`). |
+| `sent_to_partner` (old id `sent_to_slack`, emitted as `legacy_state`) | Nobody holds a wait; the question was announced to the partner and that copy was delivered. |
+| `partner_delayed` (old id `slack_delayed`, also `legacy_state`) | Announced, but the copy is undelivered or parked (`artifacts-admin partner-outbox`). |
 | `not_sent` | Bridge off, or the question predates it. The answer is saved; the agent reads it when it next looks. |
 
-Read the same from an agent: `artifacts-decide listening [--decision ID] [--office NAME] [--json]`
+Read the same from an agent: `artifacts-decide listening [--decision ID] [--team NAME] [--json]`
 (exit 0 a session of my office waits, 3 none), or `GET /api/v1/listening[?decision=ID]`. Both
 see this key's agent only; a decision that is not the caller's is a 404 identical to a missing one.
 
@@ -22,7 +22,7 @@ An agent may declare when it acts on answers: `artifacts-decide pickup "within t
 (`--clear` removes it; `PUT|DELETE /api/v1/listening/pickup`). One line of plain text, at most
 120 characters; a line break is refused and control characters are removed. It is per agent
 (key), declared and never verified, and replaces "acted on at its next check" as
-"`<agent>` says: ..." in the `sent_to_slack` and `not_sent` states only. It also rides in the
+"`<agent>` says: ..." in the `sent_to_partner` and `not_sent` states only. It also rides in the
 `/listening` body. Jeremy has no control for it.
 
 ## How "waiting" is measured

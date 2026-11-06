@@ -169,7 +169,7 @@ def test_no_label_and_no_office_hears_everything_and_says_so(
     assert _run(["wait", "--timeout", "5s"], path, monkeypatch, None) == 0
     captured = capsys.readouterr()
     assert "homelab note" in captured.out
-    assert "ARTIFACTS_SESSION" in captured.err and "--office" in captured.err
+    assert "ARTIFACTS_SESSION" in captured.err and "--team" in captured.err
 
 
 def test_timeout_zero_keeps_holding_and_resumes_from_its_cursor(
