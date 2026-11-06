@@ -45,7 +45,6 @@ the loser sees 409, not a raw database error.
 
 import hashlib
 import logging
-import os
 import re
 import secrets
 import threading
@@ -53,7 +52,17 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from artifacts import events, folders, forms, ggscan, ids, packing, partner, scan
+from artifacts import (
+    events,
+    folders,
+    forms,
+    ggscan,
+    ids,
+    packing,
+    partner,
+    scan,
+    settings,
+)
 from artifacts import rename as agent_rename
 from artifacts.db import DUPLICATE_KEY, Database, in_list, jsonb
 from artifacts.text import LEADING_DOCTYPE
@@ -318,20 +327,36 @@ def _check_fields(row, archived_at, now: datetime) -> dict:
 
 
 def content_domain() -> str:
-    return os.environ.get("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    """The domain pages are served under (`<id>.<domain>`), as configured: it may carry a
+    port. Read at call time (settings.current())."""
+    return settings.current().content_domain
+
+
+def content_host() -> str:
+    """`content_domain()` without any port: what a normalised Host header compares to."""
+    return content_domain().partition(":")[0]
+
+
+def content_scheme() -> str:
+    """https, except on a local try-out: a gallery on http whose content domain is
+    `localhost` too (a browser reaches `<id>.localhost` without DNS or a certificate)."""
+    local = settings.is_loopback(content_host())
+    return "http" if local and gallery_origin().startswith("http://") else "https"
+
+
+def content_base(artifact_id: str) -> str:
+    """`scheme://<id>.<content domain>`, no trailing slash: a page's own origin."""
+    return f"{content_scheme()}://{artifact_id}.{content_domain()}"
 
 
 def gallery_origin() -> str:
-    """Read at call time, exactly like content_domain(). A module-level
-    os.environ.get() is fixed at import, so no test can override it and the
-    deployment has to set it before the first import of this module."""
-    return os.environ.get(
-        "ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site"
-    )
+    """Read at call time (settings.current()), so no test needs the deployment to have set
+    it before the first import of this module."""
+    return settings.current().gallery_origin
 
 
 def url_for(artifact_id: str) -> str:
-    return f"https://{artifact_id}.{content_domain()}/"
+    return f"{content_base(artifact_id)}/"
 
 
 def page_url_for(artifact_id: str) -> str:
@@ -347,7 +372,7 @@ def content_url(artifact_id: str, frame_pass: str) -> str:
     once, for minutes (homelab-ij8.101). Never handed to an agent, and
     `Published.url` stays pass-free. Until 22 Sep 2026 this carried the page's
     permanent `read_token`, which made any leaked frame URL a read for ever."""
-    return f"https://{artifact_id}.{content_domain()}/p/{frame_pass}/"
+    return f"{content_base(artifact_id)}/p/{frame_pass}/"
 
 
 def read_token(db: Database, artifact_id: str) -> str | None:
@@ -2547,7 +2572,7 @@ def mark_read(db: Database, artifact_id: str) -> None:
 def share_url(artifact_id: str, token: str) -> str:
     """The address a shared page is read at: its own origin, top level, no
     login (homelab-ij8.101)."""
-    return f"https://{artifact_id}.{content_domain()}/s/{token}/"
+    return f"{content_base(artifact_id)}/s/{token}/"
 
 
 def share_token(db: Database, artifact_id: str) -> str | None:
@@ -2630,7 +2655,7 @@ def shared_page_body(db: Database, artifact_id: str) -> tuple[str, datetime] | N
 
 def email_share_url(artifact_id: str, token: str) -> str:
     """One person's own link to a page (homelab-ij8.16)."""
-    return f"https://{artifact_id}.{content_domain()}/e/{token}/"
+    return f"{content_base(artifact_id)}/e/{token}/"
 
 
 class NoSuchAgent(Exception):

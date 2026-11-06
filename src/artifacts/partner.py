@@ -33,7 +33,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import os
 import threading
 import urllib.error
 import urllib.request
@@ -111,11 +110,19 @@ def enabled() -> bool:
     """Whether events are written. Read at call time, like `mail.enabled`. True
     only when every variable is set; a half-configured process never gets as far
     as running (`config_from_env` stops it at start-up)."""
-    return all(os.environ.get(name, "").strip() for name in _ENV_ALL)
+    c = settings.current()
+    return all(
+        (
+            c.partner_name,
+            c.partner_events_url,
+            c.partner_signing_key_file,
+            c.partner_key_id,
+        )
+    )
 
 
 def allow_http() -> bool:
-    return os.environ.get(ENV_ALLOW_HTTP, "").strip() == "1"
+    return settings.current().partner_allow_http == "1"
 
 
 def config_from_env() -> Config | None:
@@ -123,7 +130,14 @@ def config_from_env() -> Config | None:
     `PartnerConfigError` when some but not all are set, when the URL is not
     http(s), or when the key file is missing or is not an Ed25519 private key in
     PEM PKCS8. Nothing from the key file reaches a message."""
-    present = [n for n in _ENV_ALL if os.environ.get(n, "").strip()]
+    cfg = settings.current()
+    given = {
+        ENV_NAME: cfg.partner_name,
+        ENV_URL: cfg.partner_events_url,
+        ENV_KEY_FILE: cfg.partner_signing_key_file,
+        ENV_KEY_ID: cfg.partner_key_id,
+    }
+    present = [n for n in _ENV_ALL if given[n]]
     if not present:
         return None
     missing = [n for n in _ENV_ALL if n not in present]
@@ -134,14 +148,14 @@ def config_from_env() -> Config | None:
             + " or none; missing "
             + ", ".join(missing)
         )
-    url = os.environ[ENV_URL].strip()
+    url = cfg.partner_events_url
     plain_ok = url.startswith("http://") and allow_http()
     if not url.startswith("https://") and not plain_ok:
         raise PartnerConfigError(
             f"{ENV_URL} must start with https:// (plain http:// only with "
             f"{ENV_ALLOW_HTTP}=1)"
         )
-    path = os.environ[ENV_KEY_FILE].strip()
+    path = cfg.partner_signing_key_file
     try:
         with open(path, "rb") as handle:
             pem = handle.read()
@@ -150,9 +164,9 @@ def config_from_env() -> Config | None:
             f"{ENV_KEY_FILE} cannot be read ({type(exc).__name__})"
         ) from None
     return Config(
-        name=os.environ[ENV_NAME].strip(),
+        name=cfg.partner_name,
         url=url,
-        key_id=os.environ[ENV_KEY_ID].strip(),
+        key_id=cfg.partner_key_id,
         private_key=load_private_key(pem),
     )
 

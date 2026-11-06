@@ -111,9 +111,12 @@ def config_from_env(outbound: partner.Config | None) -> Inbound | None:
     back go to the same place), when the host would also be the gallery, the
     API host or a page origin, or when the key file is unreadable or holds no
     usable Ed25519 public key. Nothing from the file reaches a message."""
-    import os
-
-    present = [n for n in _ENV_ALL if os.environ.get(n, "").strip()]
+    cfg = settings.current()
+    given = {
+        ENV_KEYS_FILE: cfg.partner_inbound_keys_file,
+        ENV_HOST: cfg.partner_inbound_host,
+    }
+    present = [n for n in _ENV_ALL if given[n]]
     if not present:
         return None
     missing = [n for n in _ENV_ALL if n not in present]
@@ -129,20 +132,20 @@ def config_from_env(outbound: partner.Config | None) -> Inbound | None:
             "the inbound partner bridge needs the outbound one: set "
             + ", ".join(partner._ENV_ALL)
         )
-    host = hosts.normalise(os.environ[ENV_HOST].strip())
+    host = hosts.normalise(cfg.partner_inbound_host)
     if host is None:
         raise PartnerInboundConfigError(f"{ENV_HOST} is not a host name")
     if (
         hosts.is_gallery(host)
         or hosts.is_api(host)
         or hosts.artifact_id(host) is not None
-        or host.endswith("." + store.content_domain())
+        or host.endswith("." + store.content_host())
     ):
         raise PartnerInboundConfigError(
             f"{ENV_HOST} must be a name of its own, not the gallery, the API "
             "host or a page origin"
         )
-    path = os.environ[ENV_KEYS_FILE].strip()
+    path = cfg.partner_inbound_keys_file
     try:
         with open(path, "rb") as handle:
             raw = handle.read()

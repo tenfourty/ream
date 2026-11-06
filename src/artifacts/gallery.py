@@ -58,7 +58,12 @@ from artifacts import (
 from artifacts import text as text_module
 from artifacts.content import _script_json
 from artifacts.db import Database, in_list
-from artifacts.store import content_domain, content_url, gallery_origin
+from artifacts.store import (
+    content_domain,
+    content_scheme,
+    content_url,
+    gallery_origin,
+)
 
 # Mirrors api.py's own wording for the identical fault: the scanner broke, the
 # content did not -- 503, not 422, so Jeremy is not left resubmitting a note that was
@@ -88,7 +93,7 @@ def gallery_headers() -> dict[str, str]:
             "default-src 'none'; style-src 'self' 'unsafe-inline'; "
             # Pictures on a comment are shown from the page's own content origin
             # (one host per page), never from here: this origin holds his session.
-            f"img-src 'self' https://*.{content_domain()}; "
+            f"img-src 'self' {content_scheme()}://*.{content_domain()}; "
             # script-src is 'self' ONLY -- no 'unsafe-inline', no CDN. gallery.js is
             # the one file this loads, served by this same router; the viewer script
             # moves and sizes the decisions block, it never becomes the thing that
@@ -98,7 +103,7 @@ def gallery_headers() -> dict[str, str]:
             # frame-src is the content domain only. `https:` would let any bug
             # that reaches this attribute frame anything on the internet,
             # inside the one page that IS logged in.
-            f"frame-src https://*.{content_domain()}; frame-ancestors 'none'; "
+            f"frame-src {content_scheme()}://*.{content_domain()}; frame-ancestors 'none'; "
             # connect-src 'self' and nothing else: gallery.js asks THIS origin
             # whether the page in front of him has been republished
             # (homelab-ij8.74). It is the narrowest thing that lets the wall

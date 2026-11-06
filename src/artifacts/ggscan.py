@@ -30,12 +30,12 @@ import hashlib
 import http.client
 import json
 import logging
-import os
 import re
 import threading
 import time
 import urllib.parse
 
+from artifacts import settings
 from artifacts.scan import Finding
 
 URL_ENV = "ARTIFACTS_GGSHIELD_URL"
@@ -90,7 +90,7 @@ def _remember_clean(digest: str, now: float) -> None:
 
 
 def configured() -> bool:
-    return bool(os.environ.get(URL_ENV) and os.environ.get(TOKEN_ENV))
+    return bool(settings.current().ggshield_url and settings.current().ggshield_token)
 
 
 def _shape(kind: str) -> str:
@@ -139,7 +139,8 @@ def _post(url: str, token: str, body: str) -> object:
 
 
 def scan(body: str) -> list[Finding] | None:
-    url, token = os.environ.get(URL_ENV), os.environ.get(TOKEN_ENV)
+    cfg = settings.current()
+    url, token = cfg.ggshield_url, cfg.ggshield_token
     if not url or not token:
         if not _said_unconfigured:
             _said_unconfigured.append(True)

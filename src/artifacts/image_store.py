@@ -331,7 +331,7 @@ def token_valid(
 
 def origin_url(artifact_id: str, image_id: str, token: str) -> str:
     """Where a reader's browser fetches the picture: the page's own content origin."""
-    return f"https://{artifact_id}.{store.content_domain()}/ci/{image_id}?t={token}"
+    return f"{store.content_base(artifact_id)}/ci/{image_id}?t={token}"
 
 
 # What every picture response carries, on either origin: the type from the bytes, never

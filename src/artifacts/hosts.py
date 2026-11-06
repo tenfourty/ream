@@ -6,11 +6,11 @@ to. `first_host_header` is the shared read of the raw ASGI scope that feeds `nor
 in both places.
 """
 
-import os
 import re
 from urllib.parse import urlsplit
 
-from artifacts.store import content_domain, gallery_origin
+from artifacts import settings
+from artifacts.store import content_host, gallery_origin
 
 _ARTIFACT_ID = re.compile(r"[a-z2-7]{26}")  # ids.py's alphabet and length, exactly
 
@@ -36,11 +36,11 @@ def normalise(raw: str | None) -> str | None:
 
 def artifact_id(host: str | None) -> str | None:
     """The artifact id when `host` (already normalised) FULLY matches
-    [a-z2-7]{26}\\.<content_domain()>, else None. content_domain() is read at call time."""
+    [a-z2-7]{26}\\.<content host>, else None. content_domain() is read at call time."""
     if host is None:
         return None
     match = re.fullmatch(
-        rf"({_ARTIFACT_ID.pattern})\.{re.escape(content_domain())}", host
+        rf"({_ARTIFACT_ID.pattern})\.{re.escape(content_host())}", host
     )
     return match.group(1) if match else None
 
@@ -53,7 +53,7 @@ def is_gallery(host: str | None) -> bool:
 
 
 def is_api(host: str | None) -> bool:
-    """True only when `host` (already normalised) equals $ARTIFACTS_API_HOST.
+    """True only when `host` (already normalised) equals the api_host setting.
 
     THE NAME AN AGENT OUTSIDE THE HOUSE ARRIVES AT, and the reason it is a
     separate name rather than a path on the gallery's. Jeremy, 22 Sep 2026, made
@@ -75,7 +75,7 @@ def is_api(host: str | None) -> bool:
     """
     if host is None:
         return False
-    configured = normalise(os.environ.get("ARTIFACTS_API_HOST"))
+    configured = normalise(settings.current().api_host)
     return configured is not None and host == configured
 
 

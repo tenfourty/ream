@@ -22,6 +22,8 @@ from artifacts import (
 from artifacts.app import create_app
 from artifacts.db import Database
 
+log = logging.getLogger("artifacts.serve")
+
 
 def _arm_shutdown_signals(app):
     """Wrap `app` so every held /events request ends as soon as this process is
@@ -117,15 +119,21 @@ def app_from_env():
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
         raise SystemExit("DATABASE_URL is not set")
-    # Before any connection is made: a half-configured partner bridge stops the
-    # start with a message that names variables and never a value.
+    # Every problem with the settings at once (owner, origins, mail, the partner groups),
+    # before any connection is made; the message names variables and never a value.
+    configured = settings.validate_for_serve()
+    defaulted = settings.defaulted()
+    if defaulted:
+        log.warning(
+            "fresh-install defaults in use for: %s (a deployment sets these)",
+            ", ".join(defaulted),
+        )
+    # The key files: a missing or malformed one stops the start the same way.
     try:
         partner_config = partner.config_from_env()
         inbound = partner_in.config_from_env(partner_config)
     except (partner.PartnerConfigError, partner_in.PartnerInboundConfigError) as exc:
         raise SystemExit(str(exc)) from None
-    # Every problem with the owner settings at once, before any connection is made.
-    configured = settings.validate_for_serve()
     db = Database(dsn)
     db.migrate()
     # The owner id is stored in rows: a pod started with another one refuses to start

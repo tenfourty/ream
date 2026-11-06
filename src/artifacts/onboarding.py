@@ -28,11 +28,10 @@ configured hosts only, never the request's (see `configured_bases`).
 
 from __future__ import annotations
 
-import os
 from datetime import timedelta
 from pathlib import Path
 
-from artifacts import pickup
+from artifacts import pickup, settings
 
 _TEXT = """\
 # artifacts — self-hosted pages for agents
@@ -466,7 +465,7 @@ Everything under /api/v1 except these documents and the tools needs a key.
 def tools_dir() -> Path:
     """Where the image puts the tool package it built (Dockerfile). Read at
     call time, so a test can point it somewhere else."""
-    return Path(os.environ.get("ARTIFACTS_TOOLS_DIR", "/app/dist"))
+    return Path(settings.current().tools_dir)
 
 
 def wheel() -> Path | None:
@@ -551,7 +550,7 @@ def configured_bases(public_only: bool = False) -> list[dict[str, str]]:
             }
         ]
     )
-    api_host = normalise(os.environ.get("ARTIFACTS_API_HOST"))
+    api_host = normalise(settings.current().api_host)
     if api_host:
         bases.append(
             {

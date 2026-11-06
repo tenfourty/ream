@@ -26,6 +26,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from artifacts import settings
+
 if TYPE_CHECKING:
     from artifacts.db import Database
 
@@ -42,7 +44,7 @@ def backup_folder(db: Database) -> Path | None:
     database file. None on Postgres."""
     if not db.sqlite:
         return None
-    configured = os.environ.get("ARTIFACTS_BACKUP_DIR")
+    configured = settings.current().backup_dir
     if configured:
         return Path(configured)
     return Path(db.dsn.removeprefix("sqlite:///")).parent / "backups"

@@ -29,9 +29,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-from artifacts import csp, news, traps
+from artifacts import csp, news, settings, traps
 
-_DEFAULT_API = "https://artifacts.tenfourty.site/api/v1"
 _DEFAULT_KEY_FILE = "~/.config/artifacts/key"
 
 # Exactly what `keys.mint`/`artifacts-admin new-key` produce: "art_" plus a
@@ -227,7 +226,7 @@ def _check_url_scheme(url: str) -> None:
 
 
 def _api_base() -> str:
-    return os.environ.get("ARTIFACTS_API", _DEFAULT_API)
+    return settings.current().api_url
 
 
 def _key_file_path(explicit: str | None) -> Path:

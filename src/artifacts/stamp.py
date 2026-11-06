@@ -29,9 +29,10 @@ this exists to prevent.
 from __future__ import annotations
 
 import html
-import os
 from datetime import datetime, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from artifacts import settings
 
 #: What an agent writes in its page. Deliberately verbose and namespaced: a page
 #: is arbitrary HTML from an arbitrary author, and a short marker like `{{date}}`
@@ -48,7 +49,7 @@ def display_timezone() -> tzinfo | None:
     """The zone pages are rendered in, read at call time.
 
     Read at call time rather than at import, for the same reason
-    `content_domain()` is: a module-level `os.environ.get` freezes at the first
+    `content_domain()` is: a module-level read of the environment freezes at the first
     import, so no test can override it and the deployment has to set it before
     anything imports this module.
 
@@ -58,7 +59,7 @@ def display_timezone() -> tzinfo | None:
     worth failing a page render for -- it falls back to the host, because a page
     that will not load teaches nobody anything about a misconfigured variable.
     """
-    name = os.environ.get("ARTIFACTS_DISPLAY_TZ")
+    name = settings.current().display_tz
     if not name:
         return None
     try:

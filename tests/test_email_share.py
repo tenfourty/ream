@@ -18,6 +18,9 @@ PAGE = "<!doctype html><html><head><title>t</title></head><body><p>{}</p></body>
 def outbox(monkeypatch):
     sent = []
     monkeypatch.setenv("ARTIFACTS_MAILGUN_KEY", "test-key-not-real")
+    monkeypatch.setenv("ARTIFACTS_MAILGUN_API", "https://api.eu.mailgun.net")
+    monkeypatch.setenv("ARTIFACTS_MAILGUN_DOMAIN", "mg.tenfourty.site")
+    monkeypatch.setenv("ARTIFACTS_MAIL_FROM", "Artifacts <artifacts@mg.tenfourty.site>")
     monkeypatch.setattr(
         mail, "send", lambda to, subject, text: sent.append((to, subject, text))
     )
@@ -172,9 +175,11 @@ def test_mailgun_is_called_as_documented_and_the_key_is_never_logged(
     monkeypatch.setenv("ARTIFACTS_MAILGUN_KEY", "k-123")
     monkeypatch.setenv("ARTIFACTS_MAILGUN_API", "https://api.eu.mailgun.net")
     monkeypatch.setenv("ARTIFACTS_MAILGUN_DOMAIN", "mg.tenfourty.site")
+    monkeypatch.setenv("ARTIFACTS_MAIL_FROM", "Artifacts <artifacts@mg.tenfourty.site>")
     monkeypatch.setattr(mail.urllib.request, "urlopen", fake_urlopen)
     mail.send("a@example.com", "Hi", "Body")
     assert captured["url"] == "https://api.eu.mailgun.net/v3/mg.tenfourty.site/messages"
     assert captured["auth"].startswith("Basic ")
     assert "to=a%40example.com" in captured["data"]
+    assert "from=Artifacts+%3Cartifacts%40mg.tenfourty.site%3E" in captured["data"]
     assert "k-123" not in caplog.text

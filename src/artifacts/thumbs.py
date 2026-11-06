@@ -52,7 +52,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from artifacts import stamp, store
+from artifacts import settings, stamp, store
 
 log = logging.getLogger("artifacts.thumbs")
 
@@ -255,7 +255,7 @@ def _data_limited(argv: list[str], limit: int) -> list[str]:
 
 def browser_path() -> str | None:
     """Where the headless browser is, or None if this deployment has none."""
-    explicit = os.environ.get(BROWSER_ENV)
+    explicit = settings.current().browser
     if explicit:
         return explicit if Path(explicit).is_file() else None
     return shutil.which("chrome-headless-shell") or shutil.which("chromium")

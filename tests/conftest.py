@@ -67,6 +67,12 @@ os.environ["ARTIFACTS_MAINTENANCE"] = "off"
 os.environ["ARTIFACTS_OWNER_ID"] = "jeremy"
 os.environ["ARTIFACTS_OWNER_NAME"] = "Jeremy"
 os.environ["ARTIFACTS_OWNER_PRONOUN"] = "he"
+# ...and its origins and proxy header, as the manifest sets them (design 3.3, slice 2): the
+# service has no house default for any of them. A test of another deployment, or of a fresh
+# install, uses `settings.override(...)` or monkeypatch.
+os.environ["ARTIFACTS_GALLERY_ORIGIN"] = "https://artifacts.tenfourty.site"
+os.environ["ARTIFACTS_CONTENT_DOMAIN"] = "tenfourty.com"
+os.environ["ARTIFACTS_TRUSTED_IP_HEADER"] = "X-Real-IP"
 
 
 def _share_fastapi_type_adapters() -> None:

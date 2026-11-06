@@ -36,7 +36,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 
-from artifacts import templates
+from artifacts import settings, templates
 
 BD_ENV = "ARTIFACTS_BD"
 RECENT_DAYS = 7
@@ -57,7 +57,7 @@ class Unsourced(Exception):
 
 
 def _bd(parent: str, directory: str | None) -> list[dict]:
-    argv = [os.environ.get(BD_ENV, "bd")]
+    argv = [settings.current().bd_command]
     if directory:
         argv += ["-C", os.path.expanduser(directory)]
     argv += ["list", "--json", "--all", "--limit", "0", "--brief", "--parent", parent]

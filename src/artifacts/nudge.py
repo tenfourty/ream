@@ -40,11 +40,11 @@ header on the one POST this module ever makes.
 
 import json
 import logging
-import os
 import threading
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
+from artifacts import settings
 from artifacts import text as text_module
 from artifacts.events import MAX_NOTE_IN_EVENT
 
@@ -181,7 +181,8 @@ def emit(
     data has to be at the boundary before the other side can choose to keep it.
     """
     try:
-        url = os.environ.get("ARTIFACTS_NUDGE_URL", "")
+        cfg = settings.current()
+        url = cfg.nudge_url
         if not url:
             return
         # Jeremy, 19 Sep: "the agent that published the artifact needs to get the
@@ -196,15 +197,15 @@ def emit(
         # is not on this machine. This push stays only because it reaches a
         # seat that is NOT sitting on such a request: it is an optimisation for
         # one mailbox, never the mechanism.
-        for_agent = os.environ.get("ARTIFACTS_NUDGE_AGENT", "")
+        for_agent = cfg.nudge_agent
         if not for_agent or agent != for_agent:
             return
-        token = os.environ.get("ARTIFACTS_NUDGE_TOKEN", "")
+        token = cfg.nudge_token
         if not token:
             _warn_missing_token_once()
             return
         try:
-            timeout = float(os.environ.get("ARTIFACTS_NUDGE_TIMEOUT", "2.0"))
+            timeout = float(cfg.nudge_timeout)
         except ValueError:
             timeout = 2.0
 

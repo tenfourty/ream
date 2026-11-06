@@ -87,6 +87,12 @@ ENV PATH=/app/.venv/bin:$PATH \
 USER 10001:10001
 EXPOSE 8000
 
+# The CMD below binds every interface. Tell the service so: a container that leaves
+# ARTIFACTS_GALLERY_ORIGIN unset then refuses to start instead of serving links to
+# localhost (settings.validate_for_serve). Set ARTIFACTS_BIND_HOST=127.0.0.1 for a local
+# try-out that publishes the port on loopback only.
+ENV ARTIFACTS_BIND_HOST=0.0.0.0
+
 # uvicorn reads FORWARDED_ALLOW_IPS from the environment itself when it is not
 # passed on the command line (uvicorn 0.53.0, config.py: `self.forwarded_allow_ips
 # = os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1,::1")`) -- the deployment's

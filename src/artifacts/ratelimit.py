@@ -53,6 +53,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from artifacts import settings
+
 # Ten wrong keys inside a minute from one address earns five minutes of
 # refusal. Generous for a person fixing a typo, short enough that a mistake is
 # not a long outage, and far below anything useful for guessing.
@@ -125,9 +127,11 @@ class FailedAuthLimiter:
 
 
 def client_address(headers, peer: str | None) -> str:
-    """The address to count against. See the module docstring for why
+    """The address to count against: the header the `trusted_ip_header` setting names (ours
+    is `X-Real-IP`; unset means none, the socket address). See the module docstring for why
     `X-Real-IP` is trusted and `X-Forwarded-For` is not: nginx overwrites the
     first and merely appends to the second, so only the first cannot be written
     by the caller."""
-    real = (headers.get("x-real-ip") or "").strip()
+    name = settings.current().trusted_ip_header.lower()
+    real = (headers.get(name) or "").strip() if name else ""
     return real or (peer or "unknown")

@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import base64
 import logging
-import os
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from artifacts import settings
 
 _log = logging.getLogger("artifacts.mail")
 _TIMEOUT = 15
@@ -25,18 +26,20 @@ class MailFailed(Exception):
 
 
 def enabled() -> bool:
-    return bool(os.environ.get("ARTIFACTS_MAILGUN_KEY", "").strip())
+    """Mail is on when the key, the API, the domain and the sender are all set
+    (`Settings.problems` makes a half-set group a start-up refusal)."""
+    s = settings.current()
+    return bool(s.mailgun_key and s.mailgun_api and s.mailgun_domain and s.mail_from)
 
 
 def send(to: str, subject: str, text: str) -> None:
-    key = os.environ.get("ARTIFACTS_MAILGUN_KEY", "").strip()
-    if not key:
+    s = settings.current()
+    key = s.mailgun_key
+    if not enabled():
         raise MailFailed("mail is not configured")
-    api = os.environ.get("ARTIFACTS_MAILGUN_API", "https://api.eu.mailgun.net").rstrip(
-        "/"
-    )
-    domain = os.environ.get("ARTIFACTS_MAILGUN_DOMAIN", "mg.tenfourty.site")
-    sender = os.environ.get("ARTIFACTS_MAIL_FROM", f"Artifacts <artifacts@{domain}>")
+    api = s.mailgun_api.rstrip("/")
+    domain = s.mailgun_domain
+    sender = s.mail_from
     if not api.startswith("https://"):
         raise MailFailed("mail API must be https")
     data = urllib.parse.urlencode(
