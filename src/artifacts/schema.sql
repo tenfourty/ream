@@ -256,7 +256,7 @@ create table if not exists seat_grant (
 -- `answered_at` keeps meaning "when this row gained its answer" so the uncollected
 -- alert and the event journal need no special case.
 alter table decision add column if not exists answer_source text;
--- No CHECK on it: the stored values are validated in code (decisions.STORED_SOURCES).
+-- No CHECK on it: the stored values are validated in code (decisions.stored_sources()).
 alter table decision add column if not exists recorded_by text;
 alter table decision add column if not exists said_at timestamptz;
 
@@ -859,7 +859,7 @@ create index if not exists partner_outbox_due_idx
 -- `event_kind_check` is, because it cannot be widened in place. Agents cannot
 -- record 'slack' (`decisions.ANSWER_SOURCES` stays what a relay may claim).
 -- Since slice 5 of the core-and-plugins design neither this CHECK nor `event.kind`'s exists:
--- both are validated in code (`decisions.STORED_SOURCES`, `events.KINDS`), so a plug-in can
+-- both are validated in code (`decisions.stored_sources()`, `events.KINDS`), so a plug-in can
 -- add a value without a migration. Drop whatever check constraint on those two columns a
 -- database still has, found in pg_constraint by what it tests rather than by name (the
 -- inline-created and the re-added constraint are both `<table>_<column>_check`, but a

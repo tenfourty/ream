@@ -274,3 +274,46 @@ def test_a_relayed_answer_cannot_smuggle_markup_onto_the_gallery(client, db, ask
         "the note should be shown, escaped"
     )
     assert "<img" not in page, "and never as an element"
+
+
+def _store_raw_source(db, decision_id: str, source: str) -> None:
+    """A row a plug-in wrote, read by a process where that plug-in is absent."""
+    with db.connect() as conn, conn.transaction():
+        conn.execute(
+            "update decision set answer = 'b', answered_at = %s, answered_by = %s,"
+            " answer_source = %s, recorded_by = 'bridge' where id = %s",
+            ("2026-11-06T12:00:00+00:00", "jeremy", source, decision_id),
+        )
+
+
+def test_an_unregistered_source_reads_through_the_api(client, db, asked):
+    """Core-and-plugins design, section 5: a stored value is data. A row whose source
+    no plug-in here registered still reads, by its raw value, never an error."""
+    _store_raw_source(db, asked.id, "teams")
+    assert not decisions.is_known_source("teams")
+    token, _ = keys.mint(db, agent="seat")
+    got = client.get(
+        f"/api/v1/artifacts/{asked.artifact_id}/decisions", headers=auth(token)
+    )
+    assert got.status_code == 200
+    (row,) = [d for d in got.json() if d["id"] == asked.id]
+    assert row["answer_source"] == "teams"
+    assert row["answer"] == "b"
+
+
+def test_the_gallery_shows_an_unregistered_source_by_its_value(client, db, asked):
+    _store_raw_source(db, asked.id, "teams")
+    page = client.get(f"/a/{asked.artifact_id}").text
+    assert "via teams" in page
+    assert "Answered via teams, not on the page." in page
+    # claims nothing about who relayed it: core does not know how it got there
+    assert "bridge wrote it down" not in page
+
+
+def test_a_registered_source_is_shown_as_a_relay(client, db, asked, monkeypatch):
+    monkeypatch.setattr(decisions, "_REGISTERED", list(decisions._REGISTERED))
+    decisions.register_source("teams")
+    _store_raw_source(db, asked.id, "teams")
+    page = client.get(f"/a/{asked.artifact_id}").text
+    assert "via teams" in page
+    assert "bridge wrote it down" in page

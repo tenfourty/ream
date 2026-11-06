@@ -1085,18 +1085,52 @@ def list_for_agent(
 # reader can switch on it, and so a seat cannot invent a source that sounds more
 # authoritative than it is.
 ANSWER_SOURCES = ("terminal", "telegram", "in-person", "other")
-# 'slack' is stored (the partner bridge, inbound) but is NOT in the set above: a
-# relay is an agent's word, and 'slack' means quarterdeck verified who pressed.
+# The sources core itself writes: a tap, and the four a seat may relay from.
+CORE_SOURCES = ("page", *ANSWER_SOURCES)
+
+# Sources a plug-in writes, registered at import time (core-and-plugins design,
+# section 5). A stored value is data, not code: a row whose source is not
+# registered (its plug-in is absent) still reads, shown by its raw value.
+# 'slack' is declared here, in core, until the Slack plug-in moves out (slice 6):
+# it is stored by the partner bridge, inbound, but is NOT in ANSWER_SOURCES, because
+# a relay is an agent's word and 'slack' means quarterdeck verified who pressed.
 # Only `answer(..., source='slack')`, called from partner_in, writes it.
-STORED_SOURCES = ("page", *ANSWER_SOURCES, "slack")
+_REGISTERED: list[str] = ["slack"]
+
+_SOURCE_NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+
+
+def register_source(name: str) -> None:
+    """Let a plug-in store `name` as an `answer_source`. Idempotent; a core source or a
+    name that is not lower-case letters, digits and hyphens (at most 32) is refused, so
+    a plug-in can neither shadow 'page' nor store something the gallery would have to
+    take apart to show."""
+    if not isinstance(name, str) or not _SOURCE_NAME.match(name):
+        raise ValueError(f"answer source {name!r}: lower-case letters, digits, hyphens")
+    if name in CORE_SOURCES:
+        raise ValueError(f"answer source {name!r} is core's")
+    if name not in _REGISTERED:
+        _REGISTERED.append(name)
+
+
+def stored_sources() -> tuple[str, ...]:
+    """Every value this process may write to `answer_source`: core's, then the
+    registered ones, in registration order. Read at call time, never cached."""
+    return (*CORE_SOURCES, *_REGISTERED)
+
+
+def is_known_source(source: str | None) -> bool:
+    """Whether a stored value names a source this process knows. A reader uses it to
+    choose wording: an unknown one is shown as "answered via <value>", never an error."""
+    return source in stored_sources()
 
 
 def require_stored_source(source: str) -> None:
-    """Refuse an `answer_source` that is not one of `STORED_SOURCES`. The column had a
+    """Refuse an `answer_source` that is not one of `stored_sources()`. The column had a
     CHECK naming these until slice 5 of the core-and-plugins design; the check lives here
     now, where a plug-in's value can join the set without a migration. Called at every
     write of the column, before the SQL, so a bad value never reaches the table."""
-    if source not in STORED_SOURCES:
+    if source not in stored_sources():
         raise InvalidSource(source)
 
 

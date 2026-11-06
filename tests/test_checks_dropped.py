@@ -30,7 +30,7 @@ def test_an_unknown_event_kind_is_refused_in_code(db):
     assert events.list_for_agent(db, "ops-seat", include_receipts=True) == []
 
 
-@pytest.mark.parametrize("source", decisions.STORED_SOURCES)
+@pytest.mark.parametrize("source", decisions.stored_sources())
 def test_every_stored_source_passes(source):
     decisions.require_stored_source(source)
 
@@ -206,3 +206,31 @@ def test_a_shape_it_does_not_know_fails_loudly_and_stays_at_v20(tmp_path):
         assert conn.execute("pragma user_version").fetchone()[0] == 20
         assert conn.execute("pragma writable_schema").fetchone()[0] == 0
     assert _tables(reopened)["event"] == odd
+
+
+# Slice 5, part 2: the source registry.
+
+
+def test_core_and_slack_are_stored_sources():
+    assert decisions.stored_sources()[: len(decisions.CORE_SOURCES)] == (
+        decisions.CORE_SOURCES
+    )
+    assert "slack" in decisions.stored_sources()
+
+
+def test_a_registered_source_can_be_written_and_is_idempotent(monkeypatch):
+    monkeypatch.setattr(decisions, "_REGISTERED", list(decisions._REGISTERED))
+    with pytest.raises(decisions.InvalidSource):
+        decisions.require_stored_source("teams")
+    decisions.register_source("teams")
+    decisions.register_source("teams")
+    decisions.require_stored_source("teams")
+    assert decisions.stored_sources().count("teams") == 1
+
+
+@pytest.mark.parametrize("name", ["page", "terminal", "Teams", "a b", "", "x" * 33, 7])
+def test_a_core_or_malformed_source_cannot_be_registered(name, monkeypatch):
+    monkeypatch.setattr(decisions, "_REGISTERED", list(decisions._REGISTERED))
+    with pytest.raises(ValueError):
+        decisions.register_source(name)
+    assert decisions.stored_sources() == (*decisions.CORE_SOURCES, "slack")

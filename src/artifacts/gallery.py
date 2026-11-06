@@ -3930,8 +3930,15 @@ def _provenance(row) -> str:
             '<p class="relayed-note">You answered this in Slack, verified by '
             "quarterdeck. If that is not what you meant, answer it again here.</p>"
         )
-    who = escape(row.recorded_by or "an agent")
     where = escape(row.answer_source)
+    if not decisions.is_known_source(row.answer_source):
+        # A plug-in's source whose plug-in is not here: show the stored value and
+        # claim nothing about how it got there (core-and-plugins design, section 5).
+        return (
+            f'<p class="relayed-note">Answered via {where}, not on the page. If '
+            "that is not what you meant, answer it again here.</p>"
+        )
+    who = escape(row.recorded_by or "an agent")
     said = f" You said it {escape(_when(row.said_at))}." if row.said_at else ""
     return (
         f'<p class="relayed-note">You answered this on {where}, not on the page.'
@@ -4580,6 +4587,12 @@ def _render_decisions(
                 relayed = (
                     '<span class="relayed" title="Answered in Slack, verified by '
                     'quarterdeck; not tapped on this page">via Slack</span>'
+                )
+            elif row.answer_source and not decisions.is_known_source(row.answer_source):
+                where = escape(row.answer_source)
+                relayed = (
+                    f'<span class="relayed" title="Answered via {where}; not '
+                    f'tapped on this page">via {where}</span>'
                 )
             elif row.answer_source and row.answer_source != "page":
                 where = escape(row.answer_source)

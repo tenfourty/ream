@@ -509,8 +509,13 @@ drivers; CI only (not on baba).
    lookup in `schema.sql`; SQLite step 21, `_drop_house_checks`, self-proving, one rewrite of
    `event` since `receipt_set` shipped as step 16). Validation moved to code: `events.append`
    against `events.KINDS`, `decisions.require_stored_source` against `STORED_SOURCES`. No table
-   rebuild fallback (an unknown stored shape fails start-up). Still to do: the source registry,
-   `decisions.stored_sources()` (part 2).
+   rebuild fallback (an unknown stored shape fails start-up). **Part 2 built
+   (`ci/slice5-sources-part2`).** `decisions.register_source(name)` (idempotent; refuses a core
+   name or one outside `[a-z][a-z0-9-]{0,31}`), `decisions.stored_sources()` (core's
+   `CORE_SOURCES`, then the registered ones; `slack` is still registered in core until slice 6)
+   and `decisions.is_known_source()` replace `STORED_SOURCES`. A row whose source is not
+   registered reads through the API unchanged, and the gallery shows it as "Answered via
+   <value>, not on the page" with a "via <value>" badge, claiming no relayer.
 6. **Renames with aliases** (section 6), `listening`/`inbox` neutral ids, gallery wording from the
    answer-source label (still declared in core for `slack` at this point).
 7. **Plug-in loader and API v1**, the six interfaces, failure isolation, versioning, the test
