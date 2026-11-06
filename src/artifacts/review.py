@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-from artifacts import comments, decisions, store, text
+from artifacts import comments, decisions, store, text, textvars
 from artifacts.db import Database
 
 # Bidi controls, zero-width characters and the BOM: a note that renders one
@@ -134,23 +134,30 @@ def render(db: Database, review_id: str, *, agent: str) -> tuple[str, dict]:
         if n:
             what = f"You MUST revise the page to address ALL {n} items below, then"
         elif note:
-            what = "You MUST revise the page as his note asks, then"
+            what = textvars.render(
+                "You MUST revise the page as {{owner_their}} note asks, then"
+            )
         else:
             # No marks and no note: nothing here says what to change, and
             # guessing is how a page gets republished unchanged in spirit.
             what = (
-                "He did not say what to change: ask him"
-                f" (artifacts-decide ask {page.id} ...), then revise the page and"
+                textvars.render(
+                    "{{Owner_they}} did not say what to change: ask {{owner_them}}"
+                )
+                + f" (artifacts-decide ask {page.id} ...), then revise the page and"
             )
         lines.append(what + republish)
     else:
         lines.append(_HEAD[verdict])
     if note:
-        lines.append("His note:")
+        lines.append(textvars.render("{{Owner_their}} note:"))
         lines.extend(f"   > {line}" for line in note.splitlines())
     lines.append("")
     lines.append(
-        "He left no marks." if n == 0 else f"He left {n} mark{'' if n == 1 else 's'}:"
+        textvars.render("{{Owner_they}} left no marks.")
+        if n == 0
+        else textvars.render("{{Owner_they}} left ")
+        + f"{n} mark{'' if n == 1 else 's'}:"
     )
 
     items = []

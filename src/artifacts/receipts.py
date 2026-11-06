@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime, timedelta
 
-from artifacts import events, ids, store, text
+from artifacts import events, ids, store, text, textvars
 from artifacts.db import in_list
 
 # Design 9.5: "answered" shown while the question stays open; closing is a separate act.
@@ -273,7 +273,10 @@ def declare(
     artifact_id = owned[0]
     if state == "done" and owned[1] is None:
         raise NotAnswered(
-            "he has not answered this yet, so there is nothing to be done"
+            textvars.render(
+                "{{owner_they}} {{owner_has}} not answered this yet, so there is "
+                "nothing to be done"
+            )
         )
 
     if state == "seen":

@@ -835,7 +835,8 @@ def ask(
                     ref_id=decision_id,
                     note=(
                         f"The page holding this question is {what}, so the question "
-                        "is SET ASIDE from the start -- Jeremy is not shown it and it "
+                        f"is SET ASIDE from the start -- {settings.current().owner_name} "
+                        "is not shown it and it "
                         "cannot be answered. It is NOT closed: if the page is "
                         "unarchived or restored it comes back open with the same id, "
                         "and you will get a decision_reopened event."

@@ -62,6 +62,7 @@ from artifacts import (
     store,
     templates,
     text,
+    textvars,
     thumbs,
     traps,
 )
@@ -1032,9 +1033,12 @@ def agent_router(
                     "decision": exc.decision_id,
                     "detail": (
                         f"this would remove the slot of open question "
-                        f"{exc.decision_id} ({exc.question!r}), which he has "
-                        "not answered. Keep its data-artifact-decision slot, "
-                        "or close the question first. Nothing was changed."
+                        f"{exc.decision_id} ({exc.question!r}), "
+                        + textvars.render(
+                            "which {{owner_they}} {{owner_has}} not answered. "
+                            "Keep its data-artifact-decision slot, "
+                            "or close the question first. Nothing was changed."
+                        )
                     ),
                 },
             )
@@ -1717,8 +1721,10 @@ def agent_router(
                 {
                     "field": "anchor",
                     "detail": (
-                        "a thread under his answer is started with "
-                        "POST /api/v1/decisions/{decision_id}/replies"
+                        textvars.render(
+                            "a thread under {{owner_their}} answer is started with "
+                        )
+                        + "POST /api/v1/decisions/{decision_id}/replies"
                     ),
                 },
             )
@@ -1927,9 +1933,9 @@ def agent_router(
                 422,
                 {
                     "field": exc.field,
-                    "detail": (
+                    "detail": textvars.render(
                         "on a page you do not own only kind comment is allowed: "
-                        "remove and looks_good are Jeremy's. Say it in the body "
+                        "remove and looks_good are {{owner_name}}'s. Say it in the body "
                         "of a plain comment instead."
                     ),
                 },
@@ -2684,7 +2690,9 @@ def agent_router(
                 raise HTTPException(404, "no such open decision")
             raise HTTPException(422, "`fields` is for a form; send a letter")
         if payload.letter is None:
-            raise HTTPException(422, "send the letter he chose")
+            raise HTTPException(
+                422, textvars.render("send the letter {{owner_they}} chose")
+            )
         try:
             row = decisions.record_elsewhere(
                 db,
@@ -2701,7 +2709,10 @@ def agent_router(
                 422,
                 "source must be one of "
                 f"{', '.join(decisions.ANSWER_SOURCES)} — 'page' is refused, "
-                "because it means Jeremy answered on the page himself",
+                + textvars.render(
+                    "because it means {{owner_name}} answered on the page "
+                    "{{owner_themselves}}"
+                ),
             ) from None
         except decisions.InvalidAnswer:
             raise HTTPException(422, "that letter is not one of the options") from None
@@ -2745,7 +2756,10 @@ def agent_router(
                 422,
                 "source must be one of "
                 f"{', '.join(decisions.ANSWER_SOURCES)} — 'page' is refused, "
-                "because it means Jeremy answered on the page himself",
+                + textvars.render(
+                    "because it means {{owner_name}} answered on the page "
+                    "{{owner_themselves}}"
+                ),
             )
         if payload.letter is not None or not payload.fields:
             raise HTTPException(
@@ -2890,7 +2904,9 @@ def agent_router(
                         422,
                         {
                             "field": "decision",
-                            "detail": "he has not answered yet",
+                            "detail": textvars.render(
+                                "{{owner_they}} {{owner_has}} not answered yet"
+                            ),
                         },
                     )
                 root = c.execute(
@@ -3312,7 +3328,10 @@ def agent_router(
                     "changed under it"
                     if unknown in ("outcomes/", "result", "results", "caused")
                     else (
-                        "replies -- POST a reply under his note on an answered decision"
+                        textvars.render(
+                            "replies -- POST a reply under {{owner_their}} note on an "
+                            "answered decision"
+                        )
                         if unknown in ("reply", "note")
                         else None
                     )

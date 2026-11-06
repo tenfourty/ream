@@ -116,8 +116,9 @@ def refusal_reason(db: Database, token: str) -> str:
     if revoked_at is not None and reason == "replaced":
         return (
             "this key was replaced by a newer one. If this machine did not replace "
-            "it, someone else has held its key: tell Jeremy, and connect again with "
-            "artifacts-connect"
+            "it, someone else has held its key: tell "
+            + settings.current().owner_name
+            + ", and connect again with artifacts-connect"
         )
     if (
         revoked_at is None

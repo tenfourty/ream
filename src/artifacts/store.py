@@ -1830,7 +1830,8 @@ def _set_aside_open_questions(conn, artifact_id: str, what: str, actor: str) -> 
             # question is parked, not dropped.
             note=(
                 f"The page holding this question was {what}, so the question is SET "
-                "ASIDE -- Jeremy is not shown it while the page is away, and it cannot "
+                f"ASIDE -- {settings.current().owner_name} is not shown it while the "
+                "page is away, and it cannot "
                 "be answered. It is NOT closed: if the page is unarchived or restored "
                 "it comes back open and unanswered with the same id, and you will get "
                 "a decision_reopened event. Stop waiting on it for now; re-arm your "

@@ -18,6 +18,7 @@ Capitals follow the name: `{{Owner_they}}` is "He" or "They", `{{OWNER_THEY}}` i
 Variables:
     owner_id        the owner's id, as stored ("jeremy")
     owner_name      the owner's display name ("Jeremy", "the owner")
+    owner_themselves  the reflexive ("himself")
     owner_they / owner_them / owner_their / owner_theirs      the pronoun forms
     owner_are / owner_has   the verbs that agree with it ("is"/"are")
     owner_s / owner_es      the verb ending ("answers" / "answer"): `answer{{owner_s}}`
@@ -103,6 +104,7 @@ def variables(client: bool = False) -> dict[str, str]:
         "owner_name": s.owner_name,
         "owner_they": p.subject,
         "owner_them": p.object,
+        "owner_themselves": p.reflexive,
         "owner_their": p.possessive,
         "owner_theirs": p.possessive_pronoun,
         "owner_are": p.be,
