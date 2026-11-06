@@ -37,7 +37,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
-from artifacts import images, news, pickup
+from artifacts import images, news, pickup, textvars
 from artifacts.client import (
     Conflict,
     HTTPFailure,
@@ -57,6 +57,8 @@ from artifacts.client import (
 from artifacts.client import (
     _Parser as _StaleAwareParser,
 )
+
+_w = textvars.words
 
 
 def _options(pairs: list[str]) -> list[dict]:
@@ -166,7 +168,8 @@ def _set_aside_line(row: dict) -> str:
     by = f" by {row['set_aside_by']}" if row.get("set_aside_by") else ""
     return (
         f"  SET ASIDE since {since}, page {row.get('set_aside_why') or 'archived'}"
-        f"{by} -- not waiting on him; it is open again if the page comes back"
+        f"{by} -- "
+        + _w("not waiting on {{owner_them}}; it is open again if the page comes back")
     )
 
 
@@ -197,7 +200,11 @@ def _fmt_form(row: dict) -> list[str]:
         source,
         row.get("recorded_by"),
     )
-    how = "he submitted it" if source in (None, "page") else f"relayed from {source}"
+    how = (
+        _w("{{owner_they}} submitted it")
+        if source in (None, "page")
+        else f"relayed from {source}"
+    )
     head = f"  FORM {rec.get('form', row.get('form_name', '?'))} "
     head += f"(version {rec.get('version', '?')}, {how}, by {by}, "
     head += f"{rec.get('answered_at', '?')})"
@@ -298,7 +305,11 @@ def _fmt(row: dict) -> str:
         # Said plainly, because it is the difference between him and us. A tap
         # is 'page'; anything else was relayed by a seat, and the reader has to
         # be able to tell without knowing the vocabulary.
-        how = "he tapped it" if source == "page" else f"relayed from {source}"
+        how = (
+            _w("{{owner_they}} tapped it")
+            if source == "page"
+            else f"relayed from {source}"
+        )
         # The server stamps every answer with the owner's id; a row without one prints
         # "?" like a form's does, rather than a name this client invented.
         by = _speaker(row.get("answered_by"), source, row.get("recorded_by"))
@@ -324,7 +335,9 @@ def _fmt(row: dict) -> str:
             elif state == "stuck":
                 seen = (row.get("last_read_at") or "")[:16]
                 lines.append(
-                    f"  the asker HAS read its feed since he answered ({seen}) and has "
+                    "  the asker HAS read its feed since "
+                    + _w("{{owner_they}} answered")
+                    + f" ({seen}) and has "
                     "still not taken it -- something is alive and not acting"
                 )
     else:
@@ -397,7 +410,9 @@ def _get_decisions(url: str, key: str) -> list[dict]:
 
 def _aside_section(row: dict) -> str | None:
     """The heading `list` puts before the first set-aside row."""
-    return "SET ASIDE (not waiting on him; open again if the page comes back)"
+    return _w(
+        "SET ASIDE (not waiting on {{owner_them}}; open again if the page comes back)"
+    )
 
 
 def _print_rows(rows: list[dict], *, empty: str, section=None) -> int:
@@ -710,7 +725,10 @@ def _fmt_thread(thread: dict, *, on_page: bool = False) -> str:
             f"  REOPENED by {thread['reopened_by']}: it was settled, and is open again"
         )
     if thread.get("decision_id"):
-        lines.append(f"  under his answer on decision {thread['decision_id']}")
+        lines.append(
+            _w("  under {{owner_their}} answer on decision ")
+            + str(thread["decision_id"])
+        )
     if thread.get("element"):
         lines.append(f"  element: {_element_line(thread['element'])}")
     if thread["quote"]:
@@ -969,7 +987,7 @@ def _listening(args, key: str, base: str) -> int:
             names = ", ".join(w.get("session") or "(unlabelled)" for w in mine)
             print(f"waiting now: {names}")
         else:
-            print(f"no session {whose}is waiting for his answer")
+            print(f"no session {whose}is waiting for " + _w("{{owner_their}} answer"))
         seen = [
             r["last_read_at"]
             for r in mine + found.get("recent", [])
@@ -1246,7 +1264,8 @@ def _wait(args, key: str, base: str) -> int:
     whose = f" for {office}" if office else ""
     limit = "with no limit" if endless else f"up to {int(timeout // 60)}m"
     print(
-        f"waiting for Jeremy's answer{whose}{f' on {page}' if page else ''} "
+        _w("waiting for {{owner_name}}'s answer")
+        + f"{whose}{f' on {page}' if page else ''} "
         f"({limit})...",
         file=sys.stderr,
         flush=True,
@@ -1610,7 +1629,8 @@ def _wait_review(args, key: str, base: str) -> int:
         return done
     wait_for = f"{int(timeout)}s" if timeout < 60 else f"{int(timeout // 60)}m"
     print(
-        f"waiting for Jeremy's verdict on {review_id} (up to {wait_for})...",
+        _w("waiting for {{owner_name}}'s verdict")
+        + f" on {review_id} (up to {wait_for})...",
         file=sys.stderr,
         flush=True,
     )
@@ -1691,13 +1711,13 @@ def _wait_review(args, key: str, base: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = _StaleAwareParser(
         prog="artifacts-decide",
-        description="ask Jeremy a lettered question on a page, and read the answer",
+        description="ask {{owner_name}} a lettered question on a page, and read the answer",
         epilog=(
             "A form published in a page (data-artifact-form) is answered in the gallery: "
             "`list`, `answers` and `wait` print its submitted record, one `name: value` "
             "line per field with blank and stale fields named. Read it by "
             "answer_record, never by `answer`, which stays empty for a form. A republish "
-            "that changes a field's wording or options moves his old answer to the "
+            "that changes a field's wording or options moves {{owner_their}} old answer to the "
             "record's `stale` list; relay a form answer given elsewhere with "
             "`record ID --field NAME=VALUE ... --note`."
         ),
@@ -1747,17 +1767,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="LETTER=LABEL",
-        help="repeatable; give them in the order he should read them",
+        help="repeatable; give them in the order {{owner_they}} should read them",
     )
     ask.add_argument(
         "--recommend",
         metavar="LETTER",
-        help="defaults to the first option -- his house style is (a) first",
+        help="defaults to the first option -- {{owner_their}} house style is (a) first",
     )
     ask.add_argument(
         "--context",
         metavar="TEXT",
-        help="what he needs to know to answer, plain text, at most 1000 characters",
+        help="what {{owner_they}} need{{owner_s}} to know to answer, plain text, at most 1000 characters",
     )
     ask.add_argument(
         "--topic",
@@ -1803,19 +1823,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     ask_review = subs.add_parser(
         "ask-review",
-        help="ask Jeremy to review one of your pages (a verdict, not a question)",
+        help="ask {{owner_name}} to review one of your pages (a verdict, not a question)",
     )
     ask_review.add_argument("page", metavar="PAGE-ID")
     mode = ask_review.add_mutually_exclusive_group()
     mode.add_argument(
         "--live",
         action="store_true",
-        help="ask for his marks as he makes them",
+        help="ask for {{owner_their}} marks as {{owner_they}} make{{owner_s}} them",
     )
     mode.add_argument(
         "--hold",
         action="store_true",
-        help="his marks stay hidden from you until his verdict",
+        help="{{owner_their}} marks stay hidden from you until {{owner_their}} verdict",
     )
 
     answers = subs.add_parser(
@@ -1825,7 +1845,7 @@ def build_parser() -> argparse.ArgumentParser:
     answers.add_argument(
         "--open-only",
         action="store_true",
-        help="just the ones still waiting on him",
+        help="just the ones still waiting on {{owner_them}}",
     )
 
     listing = subs.add_parser(
@@ -1845,7 +1865,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="also answers you have already acknowledged",
     )
     listing.add_argument(
-        "--open-only", action="store_true", help="only questions still waiting on him"
+        "--open-only",
+        action="store_true",
+        help="only questions still waiting on {{owner_them}}",
     )
     listing.add_argument(
         "--json",
@@ -1860,18 +1882,18 @@ def build_parser() -> argparse.ArgumentParser:
     listing.add_argument(
         "--stranded",
         action="store_true",
-        help="only answers nobody has collected yet -- who owes Jeremy a reply",
+        help="only answers nobody has collected yet -- who owes {{owner_name}} a reply",
     )
 
     record = subs.add_parser(
         "record",
-        help="write down an answer he gave somewhere that is not the page",
+        help="write down an answer {{owner_they}} gave somewhere that is not the page",
         description=(
-            "Write down an answer he gave somewhere that is not the page. A question "
-            "takes --letter. A FORM takes one --field NAME=VALUE per field he answered "
+            "Write down an answer {{owner_they}} gave somewhere that is not the page. A question "
+            "takes --letter. A FORM takes one --field NAME=VALUE per field {{owner_they}} answered "
             "(repeat a name for a checkbox group, or give a,b; a lone checkbox is "
-            "true or false): each field is stored with its source, never counts as his "
-            "own submit, and never overwrites a value he submitted after --said-at. "
+            "true or false): each field is stored with its source, never counts as {{owner_their}} "
+            "own submit, and never overwrites a value {{owner_they}} submitted after --said-at. "
             "A field answered on an older wording of the form is stale: relay it again "
             "for the current wording."
         ),
@@ -1883,25 +1905,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="NAME=VALUE",
-        help="a form field he answered (repeatable)",
+        help="a form field {{owner_they}} answered (repeatable)",
     )
     record.add_argument(
         "--note",
         required=True,
-        help="his words, verbatim -- required, because the note usually decides it",
+        help="{{owner_their}} words, verbatim -- required, because the note usually decides it",
     )
     record.add_argument(
         "--source",
         required=True,
         choices=("terminal", "telegram", "in-person", "other"),
-        help="where he said it; 'page' is refused -- that means he tapped it",
+        help="where {{owner_they}} said it; 'page' is refused -- that means {{owner_they}} tapped it",
     )
     record.add_argument("--said-at", metavar="ISO8601", help="when HE said it")
 
     outcome = subs.add_parser(
         "outcome",
         help="append what this decision caused, or what changed under it "
-        "(one-way; to answer his note use reply-note)",
+        "(one-way; to answer {{owner_their}} note use reply-note)",
     )
     outcome.add_argument("decision", metavar="DECISION-ID")
     outcome.add_argument(
@@ -1910,18 +1932,18 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "what happened -- a PR, a closed bead, a correction to your own "
             "framing. Allowed while the question is still open, and that is "
-            "the case that matters most: if the framing moved after he read "
-            "it, he can answer the old question by accident."
+            "the case that matters most: if the framing moved after {{owner_they}} read "
+            "it, {{owner_they}} can answer the old question by accident."
         ),
     )
 
     reply_note = subs.add_parser(
         "reply-note",
-        help="reply under the note he left when answering a decision",
+        help="reply under the note {{owner_they}} left when answering a decision",
         description=(
-            "Reply under the note Jeremy left with his answer, on any page you "
-            "can read. He sees it under his note and can answer; the page's "
-            "owner is told when you are another office, and you hear his answer "
+            "Reply under the note {{owner_name}} left with {{owner_their}} answer, on any page you "
+            "can read. {{Owner_they}} see{{owner_s}} it under {{owner_their}} note and can answer; the page's "
+            "owner is told when you are another office, and you hear {{owner_their}} answer "
             "through artifacts-decide wait --page. It never changes the "
             "decision: no answer, acknowledgement or closing. Use outcome to "
             "record what the decision caused; this is for talking back. "
@@ -1940,11 +1962,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     receipt = subs.add_parser(
         "receipt",
-        help="say what you did with his answer: seen, working, done, blocked, wont-do",
+        help="say what you did with {{owner_their}} answer: seen, working, done, blocked, wont-do",
         description=(
-            "Your own statement about his answer, shown to him and never verified. "
+            "Your own statement about {{owner_their}} answer, shown to {{owner_them}} and never verified. "
             "blocked and wont-do need --note; --link only with done; --for only with "
-            "working (30m, 4h; at most 12h, default 4h). done needs his answer first "
+            "working (30m, 4h; at most 12h, default 4h). done needs {{owner_their}} answer first "
             "and does not close the decision. `seen` is what `ack` does."
         ),
     )
@@ -1964,10 +1986,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     waiting = subs.add_parser(
         "wait",
-        help="block until he answers, print the answer, exit 0 (3 if nothing by --timeout;"
+        help="block until {{owner_they}} answer{{owner_s}}, print the answer, exit 0 (3 if nothing by --timeout;"
         " 9 if --page's questions are all set aside because the page was archived or binned)",
         description=(
-            "Block until he answers, print the answer. Exit codes: 0 an answer was"
+            "Block until {{owner_they}} answer{{owner_s}}, print the answer. Exit codes: 0 an answer was"
             " printed; 3 nothing by --timeout (a time limit, not a failure: re-arm it);"
             " 9 the question was set aside because its page was archived or binned"
             " (unarchiving or restoring reopens it: re-arm when you see"
@@ -1995,7 +2017,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="hear every office's answers under this key, as before",
     )
     waiting.add_argument(
-        "--answers-only", action="store_true", help="do not wake for his comments"
+        "--answers-only",
+        action="store_true",
+        help="do not wake for {{owner_their}} comments",
     )
     waiting.add_argument(
         "--review", metavar="REVIEW-ID", help="wait for the verdict on this review"
@@ -2021,23 +2045,25 @@ def build_parser() -> argparse.ArgumentParser:
 
     listen = subs.add_parser(
         "listening",
-        help="is a session of your office waiting for his answer? exit 0 yes, 3 no",
+        help="is a session of your office waiting for {{owner_their}} answer? exit 0 yes, 3 no",
         description=(
             "Asks the service whether a session of your office holds a wait for "
-            "his answers right now (a held `artifacts-decide wait`, or any client "
+            "{{owner_their}} answers right now (a held `artifacts-decide wait`, or any client "
             "holding GET /events?wait=...). Exit 0: one does. Exit 3: none does "
             "-- not a failure. Run it before arming a wait, so a restarted "
             "session does not start a second one: "
             "`artifacts-decide listening || artifacts-decide wait`. With "
-            "--decision ID it also prints where his answer to that question "
-            "goes, in the words his page uses. It sees only waits held through "
+            "--decision ID it also prints where {{owner_their}} answer to that question "
+            "goes, in the words {{owner_their}} page uses. It sees only waits held through "
             "the service: an office that polls `list` leaves no trace, and which "
             "Slack office a question maps to is not known here. Your own agent's "
             "sessions only."
         ),
     )
     listen.add_argument(
-        "--decision", metavar="DECISION-ID", help="also say where his answer goes"
+        "--decision",
+        metavar="DECISION-ID",
+        help="also say where {{owner_their}} answer goes",
     )
     listen.add_argument(
         "--office",
@@ -2051,12 +2077,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     pick = subs.add_parser(
         "pickup",
-        help="say when your office acts on his answer; shown on his page as"
+        help="say when your office acts on {{owner_their}} answer; shown on {{owner_their}} page as"
         ' "<agent> says: ..."',
         description=(
             "Declares one short line (at most 120 characters, one line, plain "
-            "text) for when your office acts on his answer, e.g. `artifacts-"
-            'decide pickup "within the hour"`. His page then reads "<agent> '
+            "text) for when your office acts on {{owner_their}} answer, e.g. `artifacts-"
+            'decide pickup "within the hour"`. {{Owner_their}} page then reads "<agent> '
             'says: within the hour" under your open questions, in place of "acted '
             'on at its next check", whenever no session of yours is waiting and '
             "the Slack copy is not late. It is your word: the service does not check "
@@ -2084,12 +2110,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     release.add_argument("review", metavar="REVIEW-ID")
     release.add_argument(
-        "--reason", required=True, help="why -- he reads it on the review card"
+        "--reason",
+        required=True,
+        help="why -- {{owner_they}} read{{owner_s}} it on the review card",
     )
 
     threads = subs.add_parser(
         "comments",
-        help="comment threads on your pages; NEEDS YOUR REPLY marks his last word."
+        help="comment threads on your pages; NEEDS YOUR REPLY marks {{owner_their}} last word."
         " A pinned comment says what it is pinned to (an `element:` line for a"
         " chart, image or table: tag, id, heading, a cell's row and column, an"
         " image's alt text; a quote otherwise), the version it was pinned on, and"
@@ -2138,12 +2166,12 @@ def build_parser() -> argparse.ArgumentParser:
         " element, with up to 4 pictures",
         description=(
             "Comment on a page another office published (or your own), the way "
-            "Jeremy does. The page's owner is told and answers in the thread. "
-            "Two fixed rules: your comment is never his answer to a decision and "
+            "{{owner_name}} does. The page's owner is told and answers in the thread. "
+            "Two fixed rules: your comment is never {{owner_their}} answer to a decision and "
             "never acknowledges or closes one, and it is shown as yours, with "
-            "your agent and session label, never as if it were him. Only a plain "
+            "your agent and session label, never as if it were {{owner_them}}. Only a plain "
             "comment is allowed on another office's page: 'remove' and 'looks "
-            "good' stay his, so say your view in the text. Afterwards this prints "
+            "good' stay {{owner_theirs}}, so say your view in the text. Afterwards this prints "
             "the page link and whose page it is, so you know whom to tell."
         ),
     )
@@ -2190,7 +2218,7 @@ def build_parser() -> argparse.ArgumentParser:
     reopen = subs.add_parser(
         "reopen",
         help="put a settled comment thread back among the open ones (silent for"
-        " your own page: only his reopen wakes you, as a thread_reopened event)",
+        " your own page: only {{owner_their}} reopen wakes you, as a thread_reopened event)",
     )
     reopen.add_argument("thread", metavar="THREAD-ID")
 
@@ -2336,11 +2364,11 @@ def main(argv: list[str] | None = None) -> int:
                     "" if args.all else " on this seat's pages"
                 )
             elif args.open_only:
-                empty = "nothing waiting on Jeremy" + (
+                empty = _w("nothing waiting on {{owner_name}}") + (
                     "" if args.all else " from this seat"
                 )
             else:
-                empty = "no new answers, and nothing waiting on Jeremy" + (
+                empty = _w("no new answers, and nothing waiting on {{owner_name}}") + (
                     "" if args.all else " from this seat"
                 )
             if args.json:
@@ -2379,7 +2407,9 @@ def main(argv: list[str] | None = None) -> int:
             skipped = (row.get("relayed") or {}).get("skipped")
             if skipped:
                 print(
-                    "  NOT STORED (he submitted a later answer on the page): "
+                    _w(
+                        "  NOT STORED ({{owner_they}} submitted a later answer on the page): "
+                    )
                     + ", ".join(skipped)
                 )
             return 0
@@ -2407,15 +2437,21 @@ def main(argv: list[str] | None = None) -> int:
             page = _request("GET", f"{base}/artifacts/{page_id}", key, None)
             owner = page.get("agent") or "unknown"
             label = page.get("last_session")
-            print(f"replied {written['id']} under his answer on {args.decision}")
+            print(
+                f"replied {written['id']} "
+                + _w("under {{owner_their}} answer on ")
+                + str(args.decision)
+            )
             print(f"  link: {page.get('page_url') or page_id}#note-{args.decision}")
             print(
                 f"  page owner: {owner}"
                 + (f" (last session {label})" if label else " (no session label)")
             )
             print(
-                "  he sees it under his note; if you are another office, the owner "
-                "is told through the service"
+                _w(
+                    "  {{owner_they}} see{{owner_s}} it under {{owner_their}} note; if you are another office, the owner "
+                )
+                + "is told through the service"
             )
             return 0
         if args.cmd == "wait":
@@ -2561,7 +2597,10 @@ def main(argv: list[str] | None = None) -> int:
                 },
                 idempotency_key=args.idempotency_key or str(uuid.uuid4()),
             )
-            print(f"replied on {args.thread}; he sees it in the page's comments")
+            print(
+                f"replied on {args.thread}; "
+                + _w("{{owner_they}} see{{owner_s}} it in the page's comments")
+            )
             return 0
         if args.cmd == "receipt":
             body: dict = {"state": args.state, "note": args.note}

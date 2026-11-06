@@ -36,3 +36,46 @@ def test_every_served_text_renders_under_any_owner(owner):
             assert "{{" not in templates.body(name)
         templates.shared_css()
         templates.index()
+
+
+def _all_help(parser):
+    import argparse
+
+    out = [parser.format_help()]
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for sub in action.choices.values():
+                out.append(_all_help(sub))
+    return "\n".join(out)
+
+
+def test_cli_help_and_messages_follow_the_owner(monkeypatch, capsys):
+    from artifacts import client, connect_cli, decide
+
+    monkeypatch.setenv("COLUMNS", "80")
+    for parser in (client.build_parser(), decide.build_parser()):
+        ours = _all_help(parser)
+        assert "{{" not in ours
+        assert "Jeremy" in ours
+    with settings.override(owner_name="Ann", owner_pronoun="she"):
+        for parser in (client.build_parser(), decide.build_parser()):
+            text = _all_help(parser)
+            assert "{{" not in text
+            assert "Jeremy" not in text
+            assert " he " not in text
+        assert "ask Ann a lettered question" in decide.build_parser().format_help()
+        assert "{{" not in _all_help(client.build_parser())
+        assert decide._w("waiting on {{owner_them}}") == "waiting on her"
+        assert "Ask Ann to approve" in textvars.words(
+            "Ask {{owner_name}} to approve this machine."
+        )
+    with settings.override(owner_name="Sam", owner_pronoun="they"):
+        text = _all_help(decide.build_parser())
+        assert "Jeremy" not in text and " they answers " not in text
+        assert "block until they answer," in " ".join(text.split())
+    # connect_cli's --help
+    with settings.override(owner_name="Ann", owner_pronoun="she"):
+        with pytest.raises(SystemExit):
+            connect_cli.main(["--help"])
+        shown = " ".join(capsys.readouterr().out.split())
+        assert "Ann's artifacts space; she approves a code" in shown

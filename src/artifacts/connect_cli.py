@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from artifacts import client
+from artifacts import client, textvars
 
 _WAIT_LIMIT_SECONDS = 16 * 60
 
@@ -51,7 +51,8 @@ def _save_key(path: Path, key: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="artifacts-connect",
-        description="connect this machine to Jeremy's artifacts space; he approves a code",
+        description="connect this machine to {{owner_name}}'s artifacts space; {{owner_they}} approve{{owner_s}} a code",
+        formatter_class=client._HelpFormatter,
     )
     parser.add_argument(
         "--name", help="what to call this machine (default: its hostname)"
@@ -81,10 +82,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(
-        "Ask Jeremy to approve this machine.\n\n"
-        f"    Code:  {started['code']}\n"
-        f"    Where: {started['approve_at']}\n\n"
-        f"Waiting for him (the code expires in {started['expires_in'] // 60} minutes)...",
+        textvars.words("Ask {{owner_name}} to approve this machine.\n\n")
+        + f"    Code:  {started['code']}\n"
+        + f"    Where: {started['approve_at']}\n\n"
+        + textvars.words("Waiting for {{owner_them}} ")
+        + f"(the code expires in {started['expires_in'] // 60} minutes)...",
         flush=True,
     )
     interval = max(2, int(started.get("interval", 5)))
@@ -111,12 +113,19 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         if status == "denied":
-            print("Jeremy denied this request. Nothing was saved.", file=sys.stderr)
+            print(
+                textvars.words(
+                    "{{owner_name}} denied this request. Nothing was saved."
+                ),
+                file=sys.stderr,
+            )
             return 1
         if status == "delivered":
             print(
                 "this request's key was already collected by an earlier poll; it is "
-                "not shown twice. Ask Jeremy to revoke it and connect again.",
+                + textvars.words(
+                    "not shown twice. Ask {{owner_name}} to revoke it and connect again."
+                ),
                 file=sys.stderr,
             )
             return 1

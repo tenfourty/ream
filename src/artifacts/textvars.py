@@ -139,6 +139,12 @@ def render(text: str, *, client: bool = False, **extra: object) -> str:
     return _NAME.sub(lambda m: _lookup(m.group(1), table), text)
 
 
+def words(text: str) -> str:
+    """A command-line tool's own fixed words, filled for the machine it runs on. Pass it only
+    literals from the source, never text that came from a user or a server."""
+    return render(text, client=True)
+
+
 def names_in(text: str) -> set[str]:
     """The names a text uses, as written (for the test that finds a typo)."""
     return {m.group(1) for m in _NAME.finditer(text)}

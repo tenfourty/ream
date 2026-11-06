@@ -455,7 +455,7 @@ drivers; CI only (not on baba).
 3. **Text templates.** `{{var}}` mechanism, then `onboarding`, `news`, templates, API error text,
    CLI help, share mail move to variables. Golden test. No plug-in yet: the house sections are
    settings (`proxy_notes`, `footer`) for now.
-   **Partly built (`ci/core-slice3-text`, 6 Nov 2026).** `src/artifacts/textvars.py` is the
+   **Built (`ci/core-slice3-text`, 6 Nov 2026).** `src/artifacts/textvars.py` is the
    mechanism (`{{name}}`, capitals follow the name, unknown name raises; `tests/test_textvars.py`
    renders every served text under three owners). Moved: `agents.txt`, `skill.md`, `news`
    (rendered by `news.entries()`), `templates.USE_WHEN`, the eight templates and the shared CSS
@@ -466,11 +466,21 @@ drivers; CI only (not on baba).
    `render(client=True)`: owner unset there means `settings.HOUSE_DEFAULT_OWNER` and the gallery
    origin falls back to the API's origin (both go in slice 7). The skill-directory copies of the
    templates are rendered with house values by `scripts/sync-templates.py`.
-   **Left**: API error strings (`api.py` 1035, 1720, 1932, 2687, 2704, 2748, 2893, 3315;
-   `decisions.py` 838; `store.py` 1833; `review.py`; `receipts.py` 276; `keys.py` 118), CLI
-   help in `client.py`/`decide.py`/`connect_cli.py`, share-mail wording, route docstrings in
-   OpenAPI. Manifest values to set first: `ARTIFACTS_FOOTER`, `ARTIFACTS_HOST_LABEL=BABA`,
-   `ARTIFACTS_PROXY_NOTES_FILE` (a ConfigMap file).
+   **Built, complete (6 Nov 2026).** The API error strings that name the owner (`api.py`,
+   `decisions.py`, `store.py`, `review.py`, `receipts.py`, `keys.py`), the command-line tools'
+   `--help` and messages (`client.py`, `decide.py`, `connect_cli.py`) and the share-mail wording
+   (the mail's subject and body in `gallery.py`, the door page in `content.py`) all use
+   variables. `--help` is filled by `client._HelpFormatter` BEFORE argparse wraps, so the wrap does
+   not depend on the name's length; runtime messages go through `textvars.words()`, which takes
+   literals only, never a user's text. `tests/test_owner.py` digests (both `--help`s included)
+   are unchanged: with our settings every word is byte-identical. The "BABA" stamp was already the
+   `host_label` setting (only a comment in `thumbs.py` named it).
+   **Manifest values to set before the pin** (all optional for a house that wants the neutral
+   wording; ours sets them to keep today's text): `ARTIFACTS_FOOTER`, `ARTIFACTS_HOST_LABEL=BABA`,
+   `ARTIFACTS_PROXY_NOTES_FILE` (a ConfigMap file: the proxy note, a `%%` line, the held-request
+   clause). **Carried forward, not slice 3**: the nudge alert names (`nudge.py`), the gallery's
+   profile chip and thread-author label (`gallery.py`) and route docstrings in OpenAPI still say
+   "Jeremy"; they are gallery wording, taken with slice 6.
 4. **One emit point.** `events.emit`; core outbox generalised from `partner.enqueue`; the
    existing nudge and partner code become two in-core sinks behind it; fan-out call sites
    (13) collapse to `emit`. Outbox rows from before the slice keep delivering (the migration

@@ -23,6 +23,7 @@ from artifacts import (
     stamp,
     store,
     templates,
+    textvars,
 )
 from artifacts.db import Database
 from artifacts.store import (
@@ -1171,7 +1172,9 @@ def create_content_app(db: Database) -> FastAPI:
             )
         else:
             inner = (
-                f"<h1>{_html.escape(title)}</h1><p>Jeremy shared this page with {where}. "
+                f"<h1>{_html.escape(title)}</h1><p>"
+                + textvars.render("{{Owner_name}} shared this page with ")
+                + f"{where}. "
                 "To open it on this device, confirm it's you: we'll email a code to that "
                 f"address.</p>{err}"
                 f'<form method="post" action="/e/{_html.escape(token)}/code">'

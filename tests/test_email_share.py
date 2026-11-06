@@ -60,6 +60,24 @@ def test_without_mail_configured_the_page_says_so(db, gallery, page, monkeypatch
     )
 
 
+def test_the_share_mail_and_the_door_page_follow_the_configured_owner(
+    db, gallery, page, outbox, monkeypatch
+):
+    from artifacts import settings
+
+    with settings.override(owner_name="Ann", owner_pronoun="she"):
+        url = _share(gallery, page, outbox)
+        _to, subject, body = outbox[-1]
+        assert subject == "Ann shared \u201cPlan\u201d with you"
+        assert body.startswith("Ann has shared a page with you: Plan")
+        reader, path = _reader(db, url)
+        assert "Ann shared this page with" in reader.get(path).text
+    monkeypatch.delenv("ARTIFACTS_OWNER_NAME")
+    monkeypatch.delenv("ARTIFACTS_OWNER_PRONOUN")
+    _share(gallery, page, outbox, email="other@example.com")
+    assert outbox[-1][1] == "The owner shared \u201cPlan\u201d with you"
+
+
 def test_the_whole_journey_link_code_open(db, gallery, page, outbox):
     url = _share(gallery, page, outbox)
     assert "Jeremy shared" in outbox[-1][1] and "Plan" in outbox[-1][1]

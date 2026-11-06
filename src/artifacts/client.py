@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-from artifacts import csp, news, settings, traps
+from artifacts import csp, news, settings, textvars, traps
 
 _DEFAULT_KEY_FILE = "~/.config/artifacts/key"
 
@@ -123,8 +123,9 @@ def warn_if_unlabelled(what: str) -> None:
     no caller that parses stdout is affected; never refuses."""
     if _session is None:
         print(
-            f"note: this {what} carries no session label, so his record will not say "
-            f"which session did it. Set {_SESSION_ENV} (in Claude Code, in "
+            f"note: this {what} carries no session label, so "
+            + textvars.words("{{owner_their}} record will not say ")
+            + f"which session did it. Set {_SESSION_ENV} (in Claude Code, in "
             '~/.claude/settings.json under "env") or pass --session.',
             file=sys.stderr,
         )
@@ -494,7 +495,9 @@ def _detail(raw: bytes, headers=None) -> str:
         return (
             "Cloudflare's bot protection challenged this request before it reached "
             "the service -- nothing was looked up. An agent cannot pass a browser "
-            "challenge: ask Jeremy to exempt agent calls to /api/v1/"
+            + textvars.words(
+                "challenge: ask {{owner_name}} to exempt agent calls to /api/v1/"
+            )
         )
     try:
         parsed = json.loads(raw)
@@ -1638,8 +1641,24 @@ _STALE_HINT = (
 _GLOBAL_FLAGS = ("--session", "--key-file", "--version")
 
 
+class _HelpFormatter(argparse.HelpFormatter):
+    """`--help` with the owner's words filled in (`{{owner_name}}`, `{{owner_they}}`): the help
+    text is written once and the house is in the settings. Filled BEFORE argparse wraps the
+    lines, so the wrap is the same for a short name and a long one."""
+
+    def _fill_text(self, text, width, indent):
+        return super()._fill_text(textvars.words(text), width, indent)
+
+    def _split_lines(self, text, width):
+        return super()._split_lines(textvars.words(text), width)
+
+
 class _Parser(argparse.ArgumentParser):
     """argparse, except that a refused flag says how old this build is."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("formatter_class", _HelpFormatter)
+        super().__init__(*args, **kwargs)
 
     def error(self, message: str) -> None:  # type: ignore[override]
         # Only for the one message that is ambiguous with a missing feature.
@@ -1762,7 +1781,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--folders",
         action="store_true",
-        help="list your folders: slug, pages, questions waiting on him, archived",
+        help="list your folders: slug, pages, questions waiting on {{owner_them}}, archived",
     )
     parser.add_argument(
         "--all",
@@ -1883,12 +1902,12 @@ def build_parser() -> argparse.ArgumentParser:
     shelf.add_argument(
         "--close-to-agents",
         metavar="ID",
-        help="only Jeremy and you can read this page (other agents can by default)",
+        help="only {{owner_name}} and you can read this page (other agents can by default)",
     )
     shelf.add_argument(
         "--open-to-agents",
         metavar="ID",
-        help="let every agent in his space read it again",
+        help="let every agent in {{owner_their}} space read it again",
     )
     shelf.add_argument(
         "--versions",
@@ -1941,7 +1960,7 @@ def build_parser() -> argparse.ArgumentParser:
     part.add_argument(
         "--notify",
         action="store_true",
-        help="ask for Jeremy's eye: his wall marks the tile (off by default)",
+        help="ask for {{owner_name}}'s eye: {{owner_their}} wall marks the tile (off by default)",
     )
     part.add_argument(
         "--note",

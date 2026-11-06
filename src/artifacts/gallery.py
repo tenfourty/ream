@@ -53,6 +53,7 @@ from artifacts import (
     settings,
     stamp,
     store,
+    textvars,
     thumbs,
 )
 from artifacts import text as text_module
@@ -6391,9 +6392,11 @@ def gallery_router(db: Database) -> APIRouter:
         try:
             mail.send(
                 address,
-                f"Jeremy shared \u201c{row[0]}\u201d with you",
-                f"Jeremy has shared a page with you: {row[0]}\n\n"
-                f"Open it here: {link}\n\n"
+                textvars.render("{{Owner_name}} shared \u201c")
+                + f"{row[0]}\u201d with you",
+                textvars.render("{{Owner_name}} has shared a page with you: ")
+                + f"{row[0]}\n\n"
+                + f"Open it here: {link}\n\n"
                 "The first time you open it on a device, you'll be asked for a code "
                 "we email to this address. The link is yours: forwarding this email "
                 "won't let anyone else open it.",
