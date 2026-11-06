@@ -715,6 +715,27 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " updated_at timestamptz not null default (artifacts_now()))"
         ),
     ),
+    # 6 Nov 2026: the core outbox, one row per sink per event (see schema.sql).
+    20: (
+        (
+            "create table outbox ("
+            " id text primary key,"
+            " sink text not null,"
+            " event_json jsonb not null check (json_valid(event_json)),"
+            " created_at timestamptz not null,"
+            " attempts integer not null default 0,"
+            " next_at timestamptz not null,"
+            " claimed_until timestamptz,"
+            " delivered_at timestamptz,"
+            " parked_at timestamptz,"
+            " last_error text,"
+            " last_error_at timestamptz)"
+        ),
+        (
+            "create index outbox_due_idx on outbox (next_at)"
+            " where delivered_at is null and parked_at is null"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

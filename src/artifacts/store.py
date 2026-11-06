@@ -1810,12 +1810,21 @@ def _set_aside_open_questions(conn, artifact_id: str, what: str, actor: str) -> 
         holds.release(conn, artifact_id, emit=True)
     for decision_id, question, asked_by_session, kind in rows:
         if kind == "question" and partner.enabled():
-            partner.enqueue(
+            events.emit(
                 conn,
-                decision_id,
-                "set_aside",
-                {"reason": f"The page holding this question was {what}."},
-                at=now,
+                events.Event(
+                    kind="set_aside",
+                    artifact_id=artifact_id,
+                    agent=owner,
+                    actor=actor,
+                    ref_id=decision_id,
+                    data={
+                        "body": {
+                            "reason": f"The page holding this question was {what}."
+                        },
+                        "at": now.isoformat(),
+                    },
+                ),
             )
         events.append(
             conn,

@@ -1118,3 +1118,27 @@ create table if not exists service_meta (
     value      text not null,
     updated_at timestamptz not null default now()
 );
+
+-- THE CORE OUTBOX (6 Nov 2026; docs/agent/specs/2026-11-04-core-and-plugins-design.md, 4.1, slice 4).
+-- One row per sink per event, written in the action's own transaction by `events.emit` and drained
+-- by the core sender thread (`sinks.py`): at-least-once, backoff, parked after MAX_ATTEMPTS and
+-- never dropped. `event_json` is the whole `events.Event`; its `id` is the sink's idempotency key.
+-- A row whose sink is not registered is never claimed. `partner_outbox` is NOT migrated into this
+-- table: its per-question versions and ordering are the partner bridge's own, its sender still
+-- drains it, and rows written before this table existed keep delivering untouched.
+-- SQLite does the same as its schema step 20.
+create table if not exists outbox (
+    id            text primary key,
+    sink          text not null,
+    event_json    jsonb not null,
+    created_at    timestamptz not null,
+    attempts      integer not null default 0,
+    next_at       timestamptz not null,
+    claimed_until timestamptz,
+    delivered_at  timestamptz,
+    parked_at     timestamptz,
+    last_error    text,
+    last_error_at timestamptz
+);
+create index if not exists outbox_due_idx
+    on outbox (next_at) where delivered_at is null and parked_at is null;

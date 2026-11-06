@@ -2584,3 +2584,12 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   gallery CSP now names (`img-src 'self' https://*.<content domain>`). Under the control: "Images
   are not checked for secrets." Without scripts the form is the plain one. Spec as above, "As
   built, slice 3 (gallery)".
+- **One emit point, part 1 (6 Nov 2026, slice 4 of core-and-plugins).** `events.emit(conn, Event)`
+  is the single call that records "this happened": the journal row (journal kinds), then per
+  registered sink either a row in the new core `outbox` table or the sink's own staging, in the
+  action's transaction, and an `Emission.fire()` for after-commit sinks (never raises). The nudge
+  and the partner bridge are the two in-core sinks (`sinks.py`); `events.BRIDGE_KINDS` is the
+  partner's kind list. `partner_outbox` is left in place and its sender unchanged, so old rows
+  keep delivering; a core sender thread drains `outbox`. Two call sites converted
+  (`formanswer.py`, the set-aside loop in `store.py`); the other ~11 are part 2. Spec
+  `specs/2026-11-04-core-and-plugins-design.md`, slice 4.

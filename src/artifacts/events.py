@@ -18,12 +18,13 @@ calling agent alone (never another agent's events) and ordered strictly by
 with `since=<last seq it saw>` can never skip or repeat a row.
 """
 
+import json
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
-from artifacts import text
+from artifacts import ids, text
 from artifacts.db import TRANSIENT, Database
 
 # The three kinds the design names (schema.sql's own CHECK constraint is the
@@ -56,6 +57,23 @@ KINDS = (
     # He reopened a resolved comment thread (5 Nov 2026; `comments.reopen`). ref_id is the
     # thread's root. Like `thread_resolved` it is never written for the owner's own act.
     "thread_reopened",
+)
+
+# The other namespace (core-and-plugins design, 4.1): what the partner bridge carries.
+# Not in the journal and never seen by an agent polling /events. Sink `kinds` may name
+# either list.
+BRIDGE_KINDS = (
+    "asked",
+    "answered",
+    "withdrawn",
+    "replaced",
+    "message_added",
+    "edited",
+    # The page holding the question was archived or binned (2 Nov 2026): the hub takes
+    # the Slack copy's buttons away; `reopened` puts them back. Body {"reason": str},
+    # like `withdrawn`.
+    "set_aside",
+    "reopened",
 )
 
 # A note is his own words and must survive the trip whole. 1000 is the same
@@ -166,6 +184,102 @@ def append(
         ),
     ).fetchone()
     return row[0]
+
+
+@dataclass(frozen=True)
+class Event:
+    """Something happened. `kind` is a journal kind (`KINDS`) or a bridge kind
+    (`BRIDGE_KINDS`); `agent` is who it is for, `actor` who caused it. `data` is a
+    small JSON-able dict the producer adds for sinks (a sink reads only what it
+    knows; readers accept fields they do not know). `id` is set by `emit`: the
+    journal row's seq for a journal kind, a fresh id otherwise, and the
+    idempotency key a sink passes on."""
+
+    kind: str
+    artifact_id: str
+    agent: str
+    actor: str
+    ref_id: str | None = None
+    summary: str = ""
+    note: str = ""
+    session: str | None = None
+    data: dict = field(default_factory=dict)
+    id: str | None = None
+
+    def as_json(self) -> dict:
+        return {
+            "kind": self.kind,
+            "artifact_id": self.artifact_id,
+            "agent": self.agent,
+            "actor": self.actor,
+            "ref_id": self.ref_id,
+            "summary": self.summary,
+            "note": self.note,
+            "session": self.session,
+            "data": self.data,
+            "id": self.id,
+        }
+
+    @classmethod
+    def from_json(cls, raw) -> "Event":
+        if isinstance(raw, (str, bytes)):
+            raw = json.loads(raw)
+        known = {k: v for k, v in raw.items() if k in cls.__dataclass_fields__}
+        return cls(**known)
+
+
+@dataclass(frozen=True)
+class Emission:
+    """What `emit` hands back: the event as stamped, the journal `seq` (None for
+    a bridge kind), and the after-commit work still to do. Call `fire()` once
+    the caller's transaction has committed; it never raises."""
+
+    event: Event
+    seq: int | None
+    late: tuple = ()
+
+    def fire(self) -> None:
+        from artifacts import sinks
+
+        sinks.deliver_late(list(self.late), self.event)
+
+
+def emit(conn, event: Event) -> Emission:
+    """The one place an action says "this happened", in the action's own
+    transaction on `conn`: the journal row for a journal kind, then for each
+    registered sink that wants the kind either an outbox row (or the sink's own
+    staging) in the same transaction, or a place on the after-commit list that
+    `Emission.fire()` runs. If any step here raises, the caller's transaction
+    rolls back with it."""
+    from artifacts import sinks
+
+    seq = None
+    if event.kind in KINDS:
+        seq = append(
+            conn,
+            artifact_id=event.artifact_id,
+            agent=event.agent,
+            actor=event.actor,
+            kind=event.kind,
+            summary=event.summary,
+            ref_id=event.ref_id,
+            note=event.note,
+            session=event.session,
+        )
+        event = replace(event, id=str(seq))
+    elif event.kind in BRIDGE_KINDS:
+        event = replace(event, id=event.id or ids.new_id())
+    else:
+        raise ValueError(f"unknown event kind {event.kind!r}")
+    late = []
+    for sink in sinks.matching(event.kind):
+        if sink.delivery == "after_commit":
+            late.append(sink)
+        elif sink.stage is not None:
+            sink.stage(conn, event)
+        else:
+            sinks.write_outbox(conn, sink.name, event)
+    return Emission(event, seq, tuple(late))
 
 
 def list_for_agent(

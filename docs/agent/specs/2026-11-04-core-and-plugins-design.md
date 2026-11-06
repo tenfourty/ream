@@ -486,6 +486,17 @@ drivers; CI only (not on baba).
    (13) collapse to `emit`. Outbox rows from before the slice keep delivering (the migration
    renames the table or reads both). No plug-in loader yet. Order first, because slices 5 to 8
    depend on it.
+   **Part 1 built (`ci/slice4-emit-part1`, 6 Nov 2026).** `events.Event`, `events.emit` (returns an
+   `Emission`; the caller runs `.fire()` after commit for the after-commit sinks), `events.BRIDGE_KINDS`,
+   `sinks.py` (registry, `outbox` table with a sender thread always started by `serve`). Migration
+   approach: a NEW `outbox` table (schema.sql, SQLite step 20) and `partner_outbox` untouched; the
+   partner sink is a sink with a `stage` hook that calls `partner.enqueue` in the transaction, because
+   its per-question version counter and ordering live in that table and its own sender still drains it
+   (so old rows keep delivering by construction; merging the two tables is not needed for the
+   plug-in design and is deferred). Outbox columns are the spec's plus `claimed_until`, `parked_at`,
+   `last_error`, `last_error_at`. Converted call sites: `formanswer.py` and the set-aside loop in
+   `store.py`. Not yet: the other fan-out sites (part 2), the per-sink circuit breaker and
+   `artifacts-admin outbox` (4.4, 4.5), the generic webhook sink, and `change-owner` over `outbox.event_json`.
 5. **Drop the CHECKs, source registry** (section 5), receipts' `receipt_set` step folded into
    the same `event` rewrite if receipts slice 1 has not shipped; otherwise a second rewrite.
 6. **Renames with aliases** (section 6), `listening`/`inbox` neutral ids, gallery wording from the

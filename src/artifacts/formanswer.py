@@ -29,7 +29,6 @@ from artifacts import (
     formrecord,
     forms,
     ids,
-    nudge,
     receipts,
     settings,
     store,
@@ -330,24 +329,20 @@ def submit(
         receipts.void(conn, decision_id)
         answered = len(fields) - len(total_blank)
         summary = f"form {form_name}: {answered} of {len(fields)} answered"
-        seq = events.append(
+        emission = events.emit(
             conn,
-            artifact_id=artifact_id,
-            agent=owner,
-            actor=by,
-            kind="decision_answered",
-            summary=summary,
-            ref_id=decision_id,
-            session=asking_session,
+            events.Event(
+                kind="decision_answered",
+                artifact_id=artifact_id,
+                agent=owner,
+                actor=by,
+                summary=summary,
+                ref_id=decision_id,
+                session=asking_session,
+                data={"title": title},
+            ),
         )
-    nudge.emit(
-        kind="decision_answered",
-        artifact_id=artifact_id,
-        title=title,
-        agent=owner,
-        summary=summary,
-        event_id=str(seq),
-    )
+    emission.fire()
     return record
 
 

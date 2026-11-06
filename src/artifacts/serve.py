@@ -18,6 +18,7 @@ from artifacts import (
     partner_in,
     repack,
     settings,
+    sinks,
 )
 from artifacts.app import create_app
 from artifacts.db import Database
@@ -165,4 +166,6 @@ def app_from_env():
         repack.start(db)
     # The partner bridge's sender: only when fully configured (partner.py).
     partner.start(db, partner_config)
+    # The core outbox's sender, for every sink that delivers through it (sinks.py).
+    sinks.start(db)
     return _arm_shutdown_signals(create_app(db, inbound))

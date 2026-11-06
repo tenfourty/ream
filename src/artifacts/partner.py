@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING
 
 from artifacts import db as dbmod
 from artifacts import ids, settings
+from artifacts.events import BRIDGE_KINDS
 
 if TYPE_CHECKING:
     from artifacts.db import Connection, Database
@@ -64,19 +65,7 @@ _ENV_ALL = (ENV_NAME, ENV_URL, ENV_KEY_FILE, ENV_KEY_ID)
 # Optional, outside the all-or-none set: plain http only when asked for by name.
 ENV_ALLOW_HTTP = "ARTIFACTS_PARTNER_ALLOW_HTTP"
 
-KINDS = (
-    "asked",
-    "answered",
-    "withdrawn",
-    "replaced",
-    "message_added",
-    "edited",
-    # The page holding the question was archived or binned (2 Nov 2026): the hub takes
-    # the Slack copy's buttons away; `reopened` puts them back. Body {"reason": str},
-    # like `withdrawn`.
-    "set_aside",
-    "reopened",
-)
+KINDS = BRIDGE_KINDS  # one list, defined with the journal's (events.py)
 
 REQUEST_TIMEOUT_SECONDS = 10
 # How long a claimed row is the claimer's. Longer than a request can take, short
