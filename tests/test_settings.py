@@ -108,6 +108,39 @@ def test_the_real_entrypoint_logs_what_a_fresh_install_defaulted(
     assert "ARTIFACTS_OWNER_ID" in caplog.text
 
 
+def _serve_warnings(caplog):
+    with caplog.at_level(logging.WARNING, logger="artifacts.serve"):
+        app_from_env()
+    return [
+        r.getMessage() for r in caplog.records if "TRUSTED_IP_HEADER" in r.getMessage()
+    ]
+
+
+def test_start_up_warns_when_exposed_without_a_trusted_ip_header(
+    fresh, dsn, monkeypatch, caplog
+):
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("ARTIFACTS_BIND_HOST", "0.0.0.0")  # noqa: S104
+    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://gallery.example")
+    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "pages.example")
+    assert len(_serve_warnings(caplog)) == 1
+
+
+def test_start_up_is_silent_about_the_ip_header_when_set_or_on_loopback(
+    fresh, dsn, monkeypatch, caplog
+):
+    monkeypatch.setenv("DATABASE_URL", dsn)
+    monkeypatch.setenv("ARTIFACTS_BIND_HOST", "0.0.0.0")  # noqa: S104
+    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://gallery.example")
+    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "pages.example")
+    monkeypatch.setenv("ARTIFACTS_TRUSTED_IP_HEADER", "X-Real-IP")
+    assert _serve_warnings(caplog) == []
+    monkeypatch.delenv("ARTIFACTS_TRUSTED_IP_HEADER")
+    monkeypatch.setenv("ARTIFACTS_BIND_HOST", "127.0.0.1")
+    caplog.clear()
+    assert _serve_warnings(caplog) == []
+
+
 def test_our_deployment_defaults_nothing_it_reports():
     # Production sets the owner and both origins: no fresh-install line.
     assert settings.defaulted() == []

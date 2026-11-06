@@ -131,7 +131,9 @@ gallery host.
 A **fresh install with nothing set**: starts on one port, gallery at `http://localhost:8000`,
 owner `owner`/"the owner"/"they", no mail (share-by-email is hidden, not broken), no second
 scanner, no sinks, no tracker pages, `agents.txt` and `skill.md` rendered with those words, and
-one start-up line that says which settings are defaulted. Production (anything not loopback)
+one start-up line that says which settings are defaulted, and a second warning when the server
+binds to a non-loopback address with `trusted_ip_header` unset (rate limiting then keys on the
+proxy's address; a warning, not a refusal, because a deployment with no proxy is legitimate). Production (anything not loopback)
 that leaves `gallery_origin` unset **refuses to start** rather than serving links to localhost.
 The CLI has no default endpoint: with `ARTIFACTS_API` unset it says how to set it (and
 `artifacts-connect` stores it in a config file); our machines get the old default from the

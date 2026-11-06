@@ -128,6 +128,16 @@ def app_from_env():
             "fresh-install defaults in use for: %s (a deployment sets these)",
             ", ".join(defaulted),
         )
+    if (
+        not settings.is_loopback(configured.bind_host)
+        and not configured.trusted_ip_header
+    ):
+        log.warning(
+            "ARTIFACTS_TRUSTED_IP_HEADER is not set and the server binds to a non-loopback"
+            " address: rate limiting will key on the proxy's address, not the visitor's."
+            " Behind a proxy, set it to the header your proxy writes (for example X-Real-IP);"
+            " with no proxy, ignore this"
+        )
     # The key files: a missing or malformed one stops the start the same way.
     try:
         partner_config = partner.config_from_env()
