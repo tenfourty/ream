@@ -450,6 +450,26 @@ def _seed(database: Database) -> None:
             ],
         ),
         (
+            "outbox",
+            (
+                "id, sink, event_json, created_at, attempts, next_at, claimed_until,"
+                " delivered_at, parked_at, last_error, last_error_at"
+            ),
+            [
+                "ob1",
+                "webhook",
+                j({"kind": "answered", "id": "e1", "data": {"t": "Zürich?"}}),
+                T0,
+                1,
+                T1,
+                None,
+                None,
+                None,
+                "OSError",
+                T0,
+            ],
+        ),
+        (
             "partner_question",
             (
                 "source, version, asking_office, title, options, context, state,"
