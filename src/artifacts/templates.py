@@ -28,6 +28,8 @@ import functools
 import hashlib
 from pathlib import Path
 
+from artifacts import textvars
+
 DIR = Path(__file__).resolve().parent / "templates"
 
 # What each one is for, in the words an agent needs to pick between them. Keyed
@@ -36,7 +38,7 @@ DIR = Path(__file__).resolve().parent / "templates"
 # one -- see `index`.
 USE_WHEN = {
     "project-status": "Where an arc stands. Update it in place as work moves.",
-    "decision-request": "The page exists to ask Jeremy something and get an answer back.",
+    "decision-request": "The page exists to ask {{owner_name}} something and get an answer back.",
     "incident": "Something broke and is now fixed: impact, timeline, what was ruled out, the lesson.",
     "implementation-plan": "The order of a piece of work, with each step named by its outcome.",
     "comparison": "Two or three approaches argued side by side, before a decision is asked.",
@@ -67,20 +69,24 @@ def names() -> list[str]:
 
 
 @functools.cache
-def body(name: str) -> str:
-    """One template's bytes, exactly as the skill directories carry them.
-
-    The name is matched against the directory listing rather than joined onto a
-    path, so nothing a caller sends can walk out of it. A traversal attempt is
-    simply a name that is not in the list, which is the same 404 as a typo --
-    there is no separate rejection path to get wrong.
+def raw(name: str) -> str:
+    """One template's file, as it is in the package: its `{{variables}}` still in it. The name
+    is matched against the directory listing rather than joined onto a path, so nothing a
+    caller sends can walk out of it. A traversal attempt is simply a name that is not in the
+    list, which is the same 404 as a typo -- there is no separate rejection path to get wrong.
     """
     if name not in names():
         raise UnknownTemplate(name)
     return (DIR / f"{name}.html").read_text(encoding="utf-8")
 
 
-@functools.cache
+def body(name: str) -> str:
+    """One template as it is served: the file with the deployment's words filled in (owner,
+    gallery link, footer; `textvars`). Rendered per call, because the settings are read at call
+    time; the cost is one regex pass over 20 KB."""
+    return textvars.render(raw(name))
+
+
 def shared_css() -> tuple[str, str]:
     """The shared stylesheet, and an ETag for it: (css, etag).
 
@@ -95,11 +101,11 @@ def shared_css() -> tuple[str, str]:
     the stylesheet and a page that inlines the block are looking at one source
     -- which is the only version of this worth having.
 
-    Cached for the process: the file ships inside the image and cannot change
-    under a running pod. The ETag is content-derived, so a pod serving new CSS
+    Rendered per call (the owner's name is in its comments); the file ships inside the image
+    and cannot change under a running pod. The ETag is content-derived, so a pod serving new CSS
     answers a stale revalidation with 200 and the rest with 304.
     """
-    css = (DIR / "_shared.css").read_text(encoding="utf-8")
+    css = textvars.render((DIR / "_shared.css").read_text(encoding="utf-8"))
     digest = hashlib.sha256(css.encode("utf-8")).hexdigest()[:16]
     return css, f'"{digest}"'
 
@@ -113,7 +119,7 @@ def index() -> list[dict]:
             {
                 "name": name,
                 "title": TITLES.get(name, name.replace("-", " ").capitalize()),
-                "use_when": USE_WHEN.get(name, ""),
+                "use_when": textvars.render(USE_WHEN.get(name, "")),
                 "bytes": len(text.encode("utf-8")),
             }
         )

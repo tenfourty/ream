@@ -12,22 +12,22 @@
   Everything below is a worked example about a made-up backup project. Replace
   it. Each region has a REPLACE comment saying what belongs there.
 
-  THE ORDER MATTERS AND IS NOT A STYLE CHOICE. Jeremy reads the question, then
-  the options, then the cost of each. He answers by letter with a note beside
-  it, and the note is usually the real decision — one "(a)" of his read "start
+  THE ORDER MATTERS AND IS NOT A STYLE CHOICE. {{Owner_name}} reads the question, then
+  the options, then the cost of each. {{Owner_they}} answer{{owner_s}} by letter with a note beside
+  it, and the note is usually the real decision — one "(a)" of {{owner_their}} read "start
   with (b) but then (a) if we can". So: recommendation first as (a), every
-  option priced, and nothing he has to scroll past to reach the buttons.
+  option priced, and nothing {{owner_they}} {{owner_has}} to scroll past to reach the buttons.
 -->
 <html lang="en-GB">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!-- REPLACE: the question, shortened to fit a browser tab. Not "Decision" —
-     he may have several of these open at once. -->
+     {{owner_they}} may have several of these open at once. -->
 <title>Where should the backup key live?</title>
 <style>
 /* ==== shared: begin — do not edit here; edit _shared.css and re-sync ==== */
-  /* Tokens. Change values, never names — every homelab page shares these, so a
+  /* Tokens. Change values, never names — every page shares these, so a
      page that renames one stops looking like the others. Declared on :root and
      redefined for dark; never hard-code a colour in a rule below. */
   :root{
@@ -65,7 +65,7 @@
   /* Masthead. The Gallery pill MUST keep target="_blank" rel="noopener": this
      page is framed by the gallery, the gallery refuses to be framed, and the
      frame's sandbox forbids top-level navigation — so a same-tab link is a dead
-     link. Found by Jeremy on a real page, 19 Sep 2026. */
+     link. Found by {{owner_name}} on a real page, 19 Sep 2026. */
   .masthead{max-width:52rem;margin:0 auto;padding:1.1rem 1rem 0}
   .topline{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:2.6rem}
   .topline a{color:var(--accent-ink);text-decoration:none;display:inline-flex;align-items:center;
@@ -131,7 +131,7 @@
     color:var(--muted);font-size:.85rem}
 
   /* Stat tiles. A tile with no real source is DELETED, never rendered as zero —
-     a made-up number on a page Jeremy trusts is worse than a missing one. Every
+     a made-up number on a page {{owner_name}} trusts is worse than a missing one. Every
      tile says what it counted and over what window, in the tile. */
   .tiles{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));
     margin:.6rem 0}
@@ -170,7 +170,7 @@
     padding:.9rem 1.05rem;margin:.6rem 0;box-shadow:var(--shadow);
     display:grid;grid-template-columns:2rem 1fr;gap:.2rem .7rem}
   .opt.pick{border-left:3px solid var(--ok)}
-  /* A LABEL, NOT A BUTTON. Jeremy tapped these on his phone on 20 Sep 2026 and
+  /* A LABEL, NOT A BUTTON. {{Owner_name}} tapped these on {{owner_their}} phone on 20 Sep 2026 and
      nothing happened: "I tried to click on the options on the HTML of the page
      but that didn't work". A page cannot carry a working control — the real one
      is drawn by the gallery on its own origin, because a button rendered inside
@@ -190,9 +190,9 @@
 <body>
 <header class="masthead">
   <p class="topline">
-    <a href="https://artifacts.tenfourty.site/" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg> Gallery</a>
+    <a href="{{gallery_origin}}/" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg> Gallery</a>
   </p>
-  <p class="eyebrow">DECISION &middot; <!--artifacts:updated--> &middot; BABA</p>
+  <p class="eyebrow">DECISION &middot; <!--artifacts:updated-->{{host_suffix}}</p>
   <!-- REPLACE: the question itself, as the headline. A reader who reads only
        the big type should know exactly what is being asked. Not a topic
        ("Backup encryption") — a question. -->
@@ -207,8 +207,8 @@
 
 <main>
   <!-- REPLACE. What you already know, in as few lines as will do. Everything
-       here has to earn its place: this section is what he reads BEFORE the
-       options, so anything that does not change how he chooses is noise that
+       here has to earn its place: this section is what {{owner_they}} read{{owner_s}} BEFORE the
+       options, so anything that does not change how {{owner_they}} choose{{owner_s}} is noise that
        delays the choosing. If you researched something and it turned out not
        to matter, leave it out — or say in one line that you checked it and it
        did not matter, which is worth more than the detail. -->
@@ -228,10 +228,10 @@
 
   <h2>The options</h2>
   <!-- REPLACE. One .opt per option, RECOMMENDATION FIRST as (a) — that is how
-       he answers, and an ordering that buries your recommendation costs him the
+       {{owner_they}} answer{{owner_s}}, and an ordering that buries your recommendation costs {{owner_them}} the
        work of finding it. Every option gets both lines: what it BUYS and what
        it COSTS. An option with no cost listed reads as though you have not
-       thought about it, and he will ask.
+       thought about it, and {{owner_they}} will ask.
 
        Two or three options. Four is a survey, and a survey is you declining to
        have an opinion. -->
@@ -257,8 +257,8 @@
   </div>
 
   <!-- REPLACE, or delete if genuinely nothing happens. Naming the default is
-       what turns a question into a decision: it tells him what he is choosing
-       by NOT answering, which is the option he is most likely to take by
+       what turns a question into a decision: it tells {{owner_them}} what {{owner_they}} {{owner_are}} choosing
+       by NOT answering, which is the option {{owner_they}} {{owner_are}} most likely to take by
        accident. -->
   <h2>Answer here</h2>
   <p class="muted">The options above are the explanation; the buttons are here.
@@ -275,7 +275,7 @@
        nothing told it this existed — a day's work for an affordance that ships.
 
        Never add your own note field beside the control: the real one already
-       takes free text, he uses it constantly, and a second box means his note
+       takes free text, {{owner_they}} uses it constantly, and a second box means {{owner_their}} note
        lands somewhere you will not read.
 
        Uncomment this and put the real id in after you POST the question.
@@ -294,7 +294,7 @@
       cost of this question goes up after Thursday and not before.</p>
   </div>
 
-  <!-- REPLACE. What happens the moment he answers. This is the line that makes
+  <!-- REPLACE. What happens the moment {{owner_they}} answer{{owner_s}}. This is the line that makes
        answering feel worth doing, and it is also your commitment. -->
   <div class="card live">
     <b>What I do when you answer</b>
@@ -303,7 +303,7 @@
       is the real test, not the encryption.</p>
   </div>
 
-  <footer>Published from BABA through the homelab artifacts service.</footer>
+  <footer>{{footer}}</footer>
 </main>
 </body>
 </html>

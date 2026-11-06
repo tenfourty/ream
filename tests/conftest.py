@@ -73,6 +73,14 @@ os.environ["ARTIFACTS_OWNER_PRONOUN"] = "he"
 os.environ["ARTIFACTS_GALLERY_ORIGIN"] = "https://artifacts.tenfourty.site"
 os.environ["ARTIFACTS_CONTENT_DOMAIN"] = "tenfourty.com"
 os.environ["ARTIFACTS_TRUSTED_IP_HEADER"] = "X-Real-IP"
+# ...and its served-text settings (design 3.4, slice 3).
+os.environ["ARTIFACTS_FOOTER"] = (
+    "Published from BABA through the homelab artifacts service."
+)
+os.environ["ARTIFACTS_HOST_LABEL"] = "BABA"
+os.environ["ARTIFACTS_PROXY_NOTES_FILE"] = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "fixtures", "house_proxy_notes.txt"
+)
 
 
 def _share_fastapi_type_adapters() -> None:

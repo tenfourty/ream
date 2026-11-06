@@ -1,4 +1,4 @@
-  /* Tokens. Change values, never names — every homelab page shares these, so a
+  /* Tokens. Change values, never names — every page shares these, so a
      page that renames one stops looking like the others. Declared on :root and
      redefined for dark; never hard-code a colour in a rule below. */
   :root{
@@ -36,7 +36,7 @@
   /* Masthead. The Gallery pill MUST keep target="_blank" rel="noopener": this
      page is framed by the gallery, the gallery refuses to be framed, and the
      frame's sandbox forbids top-level navigation — so a same-tab link is a dead
-     link. Found by Jeremy on a real page, 19 Sep 2026. */
+     link. Found by {{owner_name}} on a real page, 19 Sep 2026. */
   .masthead{max-width:52rem;margin:0 auto;padding:1.1rem 1rem 0}
   .topline{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:2.6rem}
   .topline a{color:var(--accent-ink);text-decoration:none;display:inline-flex;align-items:center;
@@ -102,7 +102,7 @@
     color:var(--muted);font-size:.85rem}
 
   /* Stat tiles. A tile with no real source is DELETED, never rendered as zero —
-     a made-up number on a page Jeremy trusts is worse than a missing one. Every
+     a made-up number on a page {{owner_name}} trusts is worse than a missing one. Every
      tile says what it counted and over what window, in the tile. */
   .tiles{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));
     margin:.6rem 0}

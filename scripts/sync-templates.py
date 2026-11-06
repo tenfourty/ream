@@ -31,6 +31,28 @@ BEGIN = "/* ==== shared: begin — do not edit here; edit _shared.css and re-syn
 END = "/* ==== shared: end ==== */"
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "src"))
+
+from artifacts import settings, textvars
+
+# The canonical templates carry `{{variables}}` (textvars); the skill directories are THIS
+# house's and carry the words filled in, because an agent copies a skill file as it stands.
+HOUSE = {
+    "owner_id": "jeremy",
+    "owner_name": "Jeremy",
+    "owner_pronoun": "he",
+    "gallery_origin": "https://artifacts.tenfourty.site",
+    "footer": "Published from BABA through the homelab artifacts service.",
+    "host_label": "BABA",
+}
+
+
+def house_copy(text: str) -> str:
+    """The canonical text with this house's words in it, whatever the environment says."""
+    with settings.override(**HOUSE):
+        return textvars.render(text)
+
+
 CANON = REPO / "src" / "artifacts" / "templates"
 
 # Every place a copy of the templates has to appear. The homelab tree is listed
@@ -39,7 +61,13 @@ CANON = REPO / "src" / "artifacts" / "templates"
 # alone still syncs.
 SKILL_DIRS = [
     REPO / ".claude" / "skills" / "lab-artifacts" / "templates",
-    Path.home() / "repos" / "homelab" / ".claude" / "skills" / "lab-artifacts" / "templates",
+    Path.home()
+    / "repos"
+    / "homelab"
+    / ".claude"
+    / "skills"
+    / "lab-artifacts"
+    / "templates",
 ]
 
 
@@ -73,7 +101,9 @@ def splice(text: str, shared: str, where: Path) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--check", action="store_true", help="write nothing; exit 1 if stale")
+    ap.add_argument(
+        "--check", action="store_true", help="write nothing; exit 1 if stale"
+    )
     args = ap.parse_args()
 
     shared = (CANON / "_shared.css").read_text(encoding="utf-8")
@@ -85,7 +115,9 @@ def main() -> int:
         wanted = splice(current, shared, path)
         if current != wanted:
             if args.check:
-                stale.append(f"{path.relative_to(REPO)}: shared block differs from _shared.css")
+                stale.append(
+                    f"{path.relative_to(REPO)}: shared block differs from _shared.css"
+                )
             else:
                 path.write_text(wanted, encoding="utf-8")
                 written += 1
@@ -95,19 +127,21 @@ def main() -> int:
                 continue  # that tree is not on this machine
             copy = skill_dir / path.name
             existing = copy.read_text(encoding="utf-8") if copy.exists() else None
-            if existing == wanted:
+            if existing == house_copy(wanted):
                 continue
             if args.check:
                 stale.append(f"{copy}: copy differs from canonical")
             else:
                 skill_dir.mkdir(parents=True, exist_ok=True)
-                copy.write_text(wanted, encoding="utf-8")
+                copy.write_text(house_copy(wanted), encoding="utf-8")
                 written += 1
 
     if args.check:
         for line in stale:
             print(line, file=sys.stderr)
-        print(f"checked {len(templates())} templates, {len(stale)} stale", file=sys.stderr)
+        print(
+            f"checked {len(templates())} templates, {len(stale)} stale", file=sys.stderr
+        )
         return 1 if stale else 0
 
     print(f"synced {len(templates())} templates, wrote {written} files")

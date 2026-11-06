@@ -188,7 +188,18 @@ def test_the_skill_directory_carries_the_same_bytes(path: Path):
     """An agent reading the skill gets what the API would serve it, exactly."""
     copy = SKILL_COPIES / path.name
     assert copy.is_file(), f"{copy} is missing — run scripts/sync-templates.py"
-    assert copy.read_bytes() == path.read_bytes(), (
+    from artifacts import settings, textvars
+
+    with settings.override(
+        owner_id="jeremy",
+        owner_name="Jeremy",
+        owner_pronoun="he",
+        gallery_origin="https://artifacts.tenfourty.site",
+        footer="Published from BABA through the homelab artifacts service.",
+        host_label="BABA",
+    ):
+        wanted = textvars.render(path.read_text(encoding="utf-8"))
+    assert copy.read_text(encoding="utf-8") == wanted, (
         f"{copy.name} has drifted from the canonical template — "
         "run scripts/sync-templates.py"
     )

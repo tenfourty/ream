@@ -5,10 +5,10 @@
   Publish this when a piece of work is big enough that its ORDER needs
   explaining — what comes first, what is waiting on what, what is already done.
 
-  The one rule that makes this page readable to Jeremy rather than to you:
+  The one rule that makes this page readable to {{owner_name}} rather than to you:
   EVERY PHASE IS NAMED BY ITS OUTCOME, never by its coordinate. "Backups run
-  themselves", not "Phase 2". He does not read plans, and a page full of phase
-  numbers is a page he will not read either. If a phase cannot be named by what
+  themselves", not "Phase 2". {{Owner_they}} do{{owner_es}} not read plans, and a page full of phase
+  numbers is a page {{owner_they}} will not read either. If a phase cannot be named by what
   becomes true when it is done, it is not a phase — it is a list of tasks, and
   it belongs inside one.
 
@@ -25,7 +25,7 @@
 <title>Backups that look after themselves</title>
 <style>
 /* ==== shared: begin — do not edit here; edit _shared.css and re-sync ==== */
-  /* Tokens. Change values, never names — every homelab page shares these, so a
+  /* Tokens. Change values, never names — every page shares these, so a
      page that renames one stops looking like the others. Declared on :root and
      redefined for dark; never hard-code a colour in a rule below. */
   :root{
@@ -63,7 +63,7 @@
   /* Masthead. The Gallery pill MUST keep target="_blank" rel="noopener": this
      page is framed by the gallery, the gallery refuses to be framed, and the
      frame's sandbox forbids top-level navigation — so a same-tab link is a dead
-     link. Found by Jeremy on a real page, 19 Sep 2026. */
+     link. Found by {{owner_name}} on a real page, 19 Sep 2026. */
   .masthead{max-width:52rem;margin:0 auto;padding:1.1rem 1rem 0}
   .topline{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:2.6rem}
   .topline a{color:var(--accent-ink);text-decoration:none;display:inline-flex;align-items:center;
@@ -129,7 +129,7 @@
     color:var(--muted);font-size:.85rem}
 
   /* Stat tiles. A tile with no real source is DELETED, never rendered as zero —
-     a made-up number on a page Jeremy trusts is worse than a missing one. Every
+     a made-up number on a page {{owner_name}} trusts is worse than a missing one. Every
      tile says what it counted and over what window, in the tile. */
   .tiles{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));
     margin:.6rem 0}
@@ -181,9 +181,9 @@
 <body>
 <header class="masthead">
   <p class="topline">
-    <a href="https://artifacts.tenfourty.site/" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg> Gallery</a>
+    <a href="{{gallery_origin}}/" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg> Gallery</a>
   </p>
-  <p class="eyebrow">PLAN &middot; <!--artifacts:updated--> &middot; BABA</p>
+  <p class="eyebrow">PLAN &middot; <!--artifacts:updated-->{{host_suffix}}</p>
   <!-- REPLACE: what will be true when all of this is done. -->
   <h1>Backups that look after themselves</h1>
   <!-- REPLACE: one sentence. Where this is going and roughly when. -->
@@ -271,8 +271,8 @@
       the rest.</li>
   </ul>
 
-  <!-- REPLACE, or DELETE the whole section when nothing genuinely needs him.
-       An empty decisions slot pulls hard, and a manufactured question costs him
+  <!-- REPLACE, or DELETE the whole section when nothing genuinely needs {{owner_them}}.
+       An empty decisions slot pulls hard, and a manufactured question costs {{owner_them}}
        more than an absent section. Uncomment the slot and put the real id in
        after you POST the question. -->
   <h2>Decisions for you</h2>
@@ -282,7 +282,7 @@
       holding a step here.</p>
   </div>
 
-  <footer>Published from BABA through the homelab artifacts service.</footer>
+  <footer>{{footer}}</footer>
 </main>
 </body>
 </html>

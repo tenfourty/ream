@@ -26,19 +26,27 @@ this is the only moment it learns).
 
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
+from artifacts import textvars
 from artifacts.csp import CspWarning, line_of, newline_offsets, outside_comments
+
 
 # The gallery's own host. A link to it from inside a published page is the one
 # link that needs `target="_blank"`: the page is served on its own origin in a
 # sandboxed frame, the gallery refuses to be framed, and the sandbox forbids
-# top-level navigation -- so a same-tab link goes nowhere at all. Jeremy found
+# top-level navigation -- so a same-tab link goes nowhere at all. The owner found
 # this on a real page on 19 Sep, which is why every template carries the
 # attribute and why this checks for it.
-_GALLERY_LINK = re.compile(
-    r"<a\b[^>]*\bhref\s*=\s*[\"']?https?://artifacts\.tenfourty\.site[^>]*>",
-    re.IGNORECASE,
-)
+def _gallery_link(client: bool) -> re.Pattern[str]:
+    """A link to the configured gallery's host, built at call time (the host is a setting)."""
+    host = urlsplit(textvars.gallery_origin(client)).hostname or ""
+    return re.compile(
+        r"<a\b[^>]*\bhref\s*=\s*[\"']?https?://" + re.escape(host) + r"[^>]*>",
+        re.IGNORECASE,
+    )
+
+
 _HAS_BLANK_TARGET = re.compile(r"\btarget\s*=\s*[\"']?_blank\b", re.IGNORECASE)
 
 # `<code>ID</code>`, and nothing looser. The old skeleton's footer read "Page
@@ -112,7 +120,7 @@ def _templates() -> tuple[frozenset[str], frozenset[str]]:
     return _TEMPLATES[0]
 
 
-def check(body: str) -> list[CspWarning]:
+def check(body: str, client: bool = False) -> list[CspWarning]:
     """Every trap in `body`, oldest concern first, as the same warning shape the
     CSP advisory returns -- one list reaches the author, and it should not
     matter to them which module noticed.
@@ -190,7 +198,7 @@ def check(body: str) -> list[CspWarning]:
             )
         )
 
-    for match in _GALLERY_LINK.finditer(visible):
+    for match in _gallery_link(client).finditer(visible):
         if _HAS_BLANK_TARGET.search(match.group(0)):
             continue
         found.append(

@@ -455,6 +455,22 @@ drivers; CI only (not on baba).
 3. **Text templates.** `{{var}}` mechanism, then `onboarding`, `news`, templates, API error text,
    CLI help, share mail move to variables. Golden test. No plug-in yet: the house sections are
    settings (`proxy_notes`, `footer`) for now.
+   **Partly built (`ci/core-slice3-text`, 6 Nov 2026).** `src/artifacts/textvars.py` is the
+   mechanism (`{{name}}`, capitals follow the name, unknown name raises; `tests/test_textvars.py`
+   renders every served text under three owners). Moved: `agents.txt`, `skill.md`, `news`
+   (rendered by `news.entries()`), `templates.USE_WHEN`, the eight templates and the shared CSS
+   (footer, gallery link, eyebrow host, owner words), `markdown.py`/`beadpage.py` gallery links,
+   `traps.py` gallery host. New settings: `ARTIFACTS_PRODUCT`, `ARTIFACTS_FOOTER`,
+   `ARTIFACTS_HOST_LABEL`, `ARTIFACTS_PROXY_NOTES_FILE` (two paragraphs split by a `%%` line: the
+   proxy note, then the clause about held requests). The command-line tools' own words use
+   `render(client=True)`: owner unset there means `settings.HOUSE_DEFAULT_OWNER` and the gallery
+   origin falls back to the API's origin (both go in slice 7). The skill-directory copies of the
+   templates are rendered with house values by `scripts/sync-templates.py`.
+   **Left**: API error strings (`api.py` 1035, 1720, 1932, 2687, 2704, 2748, 2893, 3315;
+   `decisions.py` 838; `store.py` 1833; `review.py`; `receipts.py` 276; `keys.py` 118), CLI
+   help in `client.py`/`decide.py`/`connect_cli.py`, share-mail wording, route docstrings in
+   OpenAPI. Manifest values to set first: `ARTIFACTS_FOOTER`, `ARTIFACTS_HOST_LABEL=BABA`,
+   `ARTIFACTS_PROXY_NOTES_FILE` (a ConfigMap file).
 4. **One emit point.** `events.emit`; core outbox generalised from `partner.enqueue`; the
    existing nudge and partner code become two in-core sinks behind it; fan-out call sites
    (13) collapse to `emit`. Outbox rows from before the slice keep delivering (the migration

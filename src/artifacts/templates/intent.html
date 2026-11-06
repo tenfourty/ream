@@ -3,8 +3,8 @@
   TEMPLATE · intent
   ─────────────────
   The first page of a piece of work, published while the design is still soft.
-  Its job is to make intent CRYSTALLISE IN THE OPEN: Jeremy watches an idea
-  sharpen instead of being handed a finished plan he had no hand in.
+  Its job is to make intent CRYSTALLISE IN THE OPEN: {{Owner_name}} watches an idea
+  sharpen instead of being handed a finished plan {{owner_they}} had no hand in.
 
   This is the one page here that is mostly questions, so the decision slots are
   the main event rather than a footer. Several can be open at once; the gallery
@@ -33,7 +33,7 @@
 <title>Backups that look after themselves</title>
 <style>
 /* ==== shared: begin — do not edit here; edit _shared.css and re-sync ==== */
-  /* Tokens. Change values, never names — every homelab page shares these, so a
+  /* Tokens. Change values, never names — every page shares these, so a
      page that renames one stops looking like the others. Declared on :root and
      redefined for dark; never hard-code a colour in a rule below. */
   :root{
@@ -71,7 +71,7 @@
   /* Masthead. The Gallery pill MUST keep target="_blank" rel="noopener": this
      page is framed by the gallery, the gallery refuses to be framed, and the
      frame's sandbox forbids top-level navigation — so a same-tab link is a dead
-     link. Found by Jeremy on a real page, 19 Sep 2026. */
+     link. Found by {{owner_name}} on a real page, 19 Sep 2026. */
   .masthead{max-width:52rem;margin:0 auto;padding:1.1rem 1rem 0}
   .topline{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:2.6rem}
   .topline a{color:var(--accent-ink);text-decoration:none;display:inline-flex;align-items:center;
@@ -137,7 +137,7 @@
     color:var(--muted);font-size:.85rem}
 
   /* Stat tiles. A tile with no real source is DELETED, never rendered as zero —
-     a made-up number on a page Jeremy trusts is worse than a missing one. Every
+     a made-up number on a page {{owner_name}} trusts is worse than a missing one. Every
      tile says what it counted and over what window, in the tile. */
   .tiles{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));
     margin:.6rem 0}
@@ -200,9 +200,9 @@
 <body>
 <header class="masthead">
   <p class="topline">
-    <a href="https://artifacts.tenfourty.site/" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg> Gallery</a>
+    <a href="{{gallery_origin}}/" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg> Gallery</a>
   </p>
-  <p class="eyebrow">INTENT &middot; <!--artifacts:updated--> &middot; BABA</p>
+  <p class="eyebrow">INTENT &middot; <!--artifacts:updated-->{{host_suffix}}</p>
   <!-- REPLACE -->
   <h1>Backups that look after themselves</h1>
   <!-- REPLACE: say plainly that this is being worked out, not decided. The
@@ -215,11 +215,11 @@
 
 <main>
   <h2>What you asked for</h2>
-  <!-- REPLACE. THE BLOCKQUOTE IS VERBATIM AND STAYS VERBATIM. Never tidy his
+  <!-- REPLACE. THE BLOCKQUOTE IS VERBATIM AND STAYS VERBATIM. Never tidy {{owner_theirs}}
        wording, never "clarify" it, never fold an answer into it. Each answered
        question adds ONE bullet below, and the bullets are the only thing that
        grows. That is what makes this page trustworthy: the distance between
-       what he asked and what you are building stays visible, so scope creep has
+       what {{owner_they}} asked and what you are building stays visible, so scope creep has
        to be argued for rather than absorbed. -->
   <div class="intent">
     <blockquote class="orig">"I want to stop having to check whether the backups
@@ -324,7 +324,7 @@
 
   <h2>Settled</h2>
   <!-- REPLACE. Answered questions keep their id and their original wording, and
-       carry HIS WORDS verbatim beside the letter. Do not paraphrase the note:
+       carry {{OWNER_THEIR}} WORDS verbatim beside the letter. Do not paraphrase the note:
        it routinely qualifies the letter past recognition, and a summary of a
        note is a paraphrase of a decision. -->
   <div class="q settled">
@@ -348,7 +348,7 @@
       The alerting route waits on Q3, and the restore schedule on Q4 and Q5.</p>
   </div>
 
-  <footer>Published from BABA through the homelab artifacts service.</footer>
+  <footer>{{footer}}</footer>
 </main>
 </body>
 </html>

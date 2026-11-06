@@ -456,10 +456,13 @@ def test_served_text_is_byte_identical_with_our_settings(monkeypatch, name):
 
 
 @pytest.mark.parametrize("name", sorted(GOLDEN))
-def test_served_text_does_not_yet_depend_on_the_owner_settings(monkeypatch, name):
+def test_served_text_follows_the_owner_settings(monkeypatch, name):
+    if name == "agent.json":
+        pytest.skip("agent.json names no owner")
     with settings.override(owner_id="ann", owner_name="Ann", owner_pronoun="she"):
         text = _served(monkeypatch)[name]
-    assert hashlib.sha256(text.encode()).hexdigest() == GOLDEN[name]
+    assert "Jeremy" not in text and "Ann" in text
+    assert hashlib.sha256(text.encode()).hexdigest() != GOLDEN[name]
 
 
 # --- the rest of the served text, pinned (design section 8) -------------------------------
@@ -498,7 +501,7 @@ def test_every_template_ends_with_the_same_footer():
 
 
 def test_the_news_tail_is_unchanged():
-    tail = news.NEWS[-NEWS_TAIL:]
+    tail = news.entries()[-NEWS_TAIL:]
     text = "\n".join(f"{day}|{line}" for day, line in tail)
     assert hashlib.sha256(text.encode()).hexdigest() == NEWS_TAIL_DIGEST
 

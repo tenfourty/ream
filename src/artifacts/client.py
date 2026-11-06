@@ -1378,7 +1378,8 @@ def check_page(body: str) -> tuple[list, list[str], bool]:
     not their business (homelab-ij8.36).
     """
     findings = sorted(
-        csp.check(body) + traps.check(body), key=lambda w: (w.line, w.shape)
+        csp.check(body) + traps.check(body, client=True),
+        key=lambda w: (w.line, w.shape),
     )
     return findings, _syntax_findings(body), shutil.which("node") is not None
 

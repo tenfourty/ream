@@ -35,14 +35,14 @@ from markdown_it.token import Token
 from mdit_py_plugins.anchors import anchors_plugin
 from mdit_py_plugins.tasklists import tasklists_plugin
 
-from artifacts import templates
+from artifacts import templates, textvars
 
 FORMATS = ("html", "markdown")
 
 # The link back to the wall, as every template carries it.
 _TOPLINE = """\
   <p class="topline">
-    <a href="https://artifacts.tenfourty.site/" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg> Gallery</a>
+    <a href="{{gallery_origin}}/" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg> Gallery</a>
   </p>
 """
 
@@ -155,7 +155,7 @@ def render_page(text: str, title: str | None = None) -> tuple[str, str | None]:
         f"<style>\n{templates.shared_css()[0]}\n{_EXTRA_CSS}</style>\n"
         "</head>\n<body>\n"
         '<header class="masthead">\n'
-        f"{_TOPLINE}"
+        f"{textvars.render(_TOPLINE)}"
         '  <p class="eyebrow">PAGE &middot; <!--artifacts:updated--></p>\n'
         f"  {heading_html.strip()}\n"
         "  <hr>\n</header>\n"

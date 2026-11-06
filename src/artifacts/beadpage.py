@@ -36,7 +36,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 
-from artifacts import settings, templates
+from artifacts import settings, templates, textvars
 
 BD_ENV = "ARTIFACTS_BD"
 RECENT_DAYS = 7
@@ -121,6 +121,7 @@ def render(rows: list[dict], title: str, now: datetime | None = None) -> str:
     still_open = len(rows) - len(closed)
 
     css, _etag = templates.shared_css()
+    gallery_origin = textvars.gallery_origin(client=True)
     name = html.escape(title)
     tiles = [
         ("Done", len(closed), f"of {len(rows)}, all time"),
@@ -159,7 +160,7 @@ def render(rows: list[dict], title: str, now: datetime | None = None) -> str:
 </head>
 <body>
 <header class="masthead">
-  <p class="topline"><a href="https://artifacts.tenfourty.site/" target="_blank" rel="noopener">Gallery</a></p>
+  <p class="topline"><a href="{gallery_origin}/" target="_blank" rel="noopener">Gallery</a></p>
   <p class="eyebrow">STATUS &middot; <!--artifacts:updated--></p>
   <h1>{name}</h1>
   <p class="standfirst">Where this work stands, drawn from the tracker every time a piece of it moves.</p>

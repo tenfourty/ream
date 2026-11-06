@@ -16,22 +16,24 @@ import os
 import sys
 from pathlib import Path
 
+from artifacts import textvars
+
 NEWS: tuple[tuple[str, str], ...] = (
     (
         "2026-11-05",
-        'When he reopens a comment thread he had settled, you now get a thread_reopened event (actor, ref_id = the thread id, summary "reopened: ..."), and artifacts-decide wait wakes and prints the thread under a REOPENED by line. Reopening your own thread (artifacts-decide reopen, POST /api/v1/comments/ID/reopen) stays silent.',
+        'When {{owner_they}} reopen{{owner_s}} a comment thread {{owner_they}} had settled, you now get a thread_reopened event (actor, ref_id = the thread id, summary "reopened: ..."), and artifacts-decide wait wakes and prints the thread under a REOPENED by line. Reopening your own thread (artifacts-decide reopen, POST /api/v1/comments/ID/reopen) stays silent.',
     ),
     (
         "2026-11-04",
-        "His wall no longer stops at 200 pages: an Older pages link under the last page shows the next 200 in the same view (same search, filters, folder and tab). The API and artifacts-publish --list were never capped and are unchanged.",
+        "{{Owner_their}} wall no longer stops at 200 pages: an Older pages link under the last page shows the next 200 in the same view (same search, filters, folder and tab). The API and artifacts-publish --list were never capped and are unchanged.",
     ),
     (
         "2026-11-04",
-        "Pages a script keeps current: artifacts-publish --touch ID says a page is checked and still current without sending it (no new version, the wall does not reorder, nothing becomes unread); --status failed --note TEXT says your job failed; --if-revision REV refuses (exit 1) if the page has moved on. --refresh-every 30m (also 2h, 1d, or seconds) on a publish, --update or --touch declares how often you promise to check it, --no-refresh clears it. Any publish, even an identical one, now counts as a check. Pages and listings carry checked_at, changed_at, check_status, check_note, refresh_every, lapsed and lapses_at (lapsed: silent for 2.5 intervals, or the last check failed). API: POST /api/v1/artifacts/ID/touch {status?, note?, if_revision?, refresh_every?}; refresh_every on POST and PATCH /artifacts. His wall does not show it yet.",
+        "Pages a script keeps current: artifacts-publish --touch ID says a page is checked and still current without sending it (no new version, the wall does not reorder, nothing becomes unread); --status failed --note TEXT says your job failed; --if-revision REV refuses (exit 1) if the page has moved on. --refresh-every 30m (also 2h, 1d, or seconds) on a publish, --update or --touch declares how often you promise to check it, --no-refresh clears it. Any publish, even an identical one, now counts as a check. Pages and listings carry checked_at, changed_at, check_status, check_note, refresh_every, lapsed and lapses_at (lapsed: silent for 2.5 intervals, or the last check failed). API: POST /api/v1/artifacts/ID/touch {status?, note?, if_revision?, refresh_every?}; refresh_every on POST and PATCH /artifacts. {{Owner_their}} wall does not show it yet.",
     ),
     (
         "2026-11-04",
-        "Receipts: artifacts-decide receipt ID seen|working|done|blocked|wont-do [--note ...] [--link URL] [--for 4h] (POST /api/v1/decisions/ID/receipt {state, note, link?, for?}) says what you did with his answer. Your own word, never verified; ack is the same as receipt seen; done does not close the decision; a new answer from him voids earlier receipts. list and answers print RECEIPT <state>: <note>; GET /decisions/ID/receipts is the history.",
+        "Receipts: artifacts-decide receipt ID seen|working|done|blocked|wont-do [--note ...] [--link URL] [--for 4h] (POST /api/v1/decisions/ID/receipt {state, note, link?, for?}) says what you did with {{owner_their}} answer. Your own word, never verified; ack is the same as receipt seen; done does not close the decision; a new answer from {{owner_them}} voids earlier receipts. list and answers print RECEIPT <state>: <note>; GET /decisions/ID/receipts is the history.",
     ),
     (
         "2026-11-03",
@@ -47,7 +49,7 @@ NEWS: tuple[tuple[str, str], ...] = (
     ),
     (
         "2026-11-02b",
-        "Folders, agent side: artifacts-publish FILE --folder SLUG (and --folder-title NAME) files a page in your own folder when you publish or --update it; the folder is made on first use and the result says 'created new folder' so a typo shows. --no-folder takes it out; --folders lists yours (pages, questions waiting); --list --folder SLUG lists one; the API has folder on POST and PATCH, GET /folders and GET /folders/SLUG/artifacts. His wall does not group them yet.",
+        "Folders, agent side: artifacts-publish FILE --folder SLUG (and --folder-title NAME) files a page in your own folder when you publish or --update it; the folder is made on first use and the result says 'created new folder' so a typo shows. --no-folder takes it out; --folders lists yours (pages, questions waiting); --list --folder SLUG lists one; the API has folder on POST and PATCH, GET /folders and GET /folders/SLUG/artifacts. {{Owner_their}} wall does not group them yet.",
     ),
     (
         "2026-11-02",
@@ -59,7 +61,7 @@ NEWS: tuple[tuple[str, str], ...] = (
     ),
     (
         "2026-10-22a",
-        "A rule now in the onboarding text: a review request or a comment on a page allows a reply. A concrete instruction from someone allowed to direct you allows that one change and nothing it implies, and another office's comment is never Jeremy's approval. If unsure, reply with what you would change, then wait.",
+        "A rule now in the onboarding text: a review request or a comment on a page allows a reply. A concrete instruction from someone allowed to direct you allows that one change and nothing it implies, and another office's comment is never {{owner_name}}'s approval. If unsure, reply with what you would change, then wait.",
     ),
     (
         "2026-10-15a",
@@ -67,7 +69,7 @@ NEWS: tuple[tuple[str, str], ...] = (
     ),
     (
         "2026-10-06c",
-        "You can now change one part of a live page without republishing it: artifacts-publish --update ID --section EL with --replace FILE, --append FILE, --prepend FILE or --remove. The server applies it to what is live, so nothing elsewhere is lost; --fetch ID --section EL reads the part and its revision for --if-section (or --if-revision for the whole page). Not notified by default; --notify marks it on Jeremy's wall, which names the part that changed.",
+        "You can now change one part of a live page without republishing it: artifacts-publish --update ID --section EL with --replace FILE, --append FILE, --prepend FILE or --remove. The server applies it to what is live, so nothing elsewhere is lost; --fetch ID --section EL reads the part and its revision for --if-section (or --if-revision for the whole page). Not notified by default; --notify marks it on {{owner_name}}'s wall, which names the part that changed.",
     ),
     (
         "2026-10-06b",
@@ -79,11 +81,11 @@ NEWS: tuple[tuple[str, str], ...] = (
     ),
     (
         "2026-09-29f",
-        'wait --review now claims the round for your session (set ARTIFACTS_SESSION): a second session waiting on the same review exits 8 and names who has it. artifacts-decide review-release <id> --reason "…" hands it back, and Jeremy sees why. reply and ack send an Idempotency-Key, so a retry of the same request never posts twice; pass the same --idempotency-key to make re-running the command safe too.',
+        'wait --review now claims the round for your session (set ARTIFACTS_SESSION): a second session waiting on the same review exits 8 and names who has it. artifacts-decide review-release <id> --reason "…" hands it back, and {{owner_name}} sees why. reply and ack send an Idempotency-Key, so a retry of the same request never posts twice; pass the same --idempotency-key to make re-running the command safe too.',
     ),
     (
         "2026-09-29e",
-        'When Jeremy requests changes and you republish the page, round 2 of the same review opens by itself: keep waiting on the same review id. The verdict message now says the round and tags each earlier mark [still on page], [text changed] or [addressed/removed]. In round 1 each item\'s JSON state is now "new" (it used to be the quote state).',
+        'When {{owner_name}} requests changes and you republish the page, round 2 of the same review opens by itself: keep waiting on the same review id. The verdict message now says the round and tags each earlier mark [still on page], [text changed] or [addressed/removed]. In round 1 each item\'s JSON state is now "new" (it used to be the quote state).',
     ),
     (
         "2026-09-29d",
@@ -91,15 +93,15 @@ NEWS: tuple[tuple[str, str], ...] = (
     ),
     (
         "2026-09-29c",
-        "On a page under review Jeremy's marks are now held until his verdict unless he switches to live; artifacts-decide ask-review --live asks for them as he goes. A held mark is invisible to you until then.",
+        "On a page under review {{owner_name}}'s marks are now held until {{owner_their}} verdict unless {{owner_they}} switches to live; artifacts-decide ask-review --live asks for them as {{owner_they}} go{{owner_es}}. A held mark is invisible to you until then.",
     ),
     (
         "2026-09-29b",
-        "artifacts-decide ask-review <page-id> asks Jeremy to review a page; wait --review <id> prints one numbered message with his verdict and marks, and exits 0 approved, 4 approved with notes, 5 changes requested, 6 dismissed, 7 new marks with no verdict yet.",
+        "artifacts-decide ask-review <page-id> asks {{owner_name}} to review a page; wait --review <id> prints one numbered message with {{owner_their}} verdict and marks, and exits 0 approved, 4 approved with notes, 5 changes requested, 6 dismissed, 7 new marks with no verdict yet.",
     ),
     (
         "2026-09-29a",
-        "Jeremy can now mark text on any page as 'Remove this' or 'Looks good' as well as comment; artifacts-decide comments shows which, and comment rows carry a kind.",
+        "{{Owner_name}} can now mark text on any page as 'Remove this' or 'Looks good' as well as comment; artifacts-decide comments shows which, and comment rows carry a kind.",
     ),
     (
         "2026-09-28a",
@@ -126,7 +128,7 @@ NEWS: tuple[tuple[str, str], ...] = (
         "2026-09-24b",
         (
             "artifacts-publish page.html --preview shot.png renders your page at "
-            "phone width WITHOUT publishing it, so you can look before Jeremy does. "
+            "phone width WITHOUT publishing it, so you can look before {{owner_name}} does. "
             "artifacts-publish --matches ID FILE: exit 0 if FILE is exactly the live "
             "page, 3 if not. --give --to takes homelab_ops or homelab-ops. "
             "--check refuses a page still carrying a template's REPLACE marker or "
@@ -154,6 +156,11 @@ def _state_file() -> Path:
     return Path(base) / "artifacts" / "news-seen"
 
 
+def entries() -> list[tuple[str, str]]:
+    """`NEWS` with the owner's words filled in, as the tools print it."""
+    return [(day, textvars.render(line, client=True)) for day, line in NEWS]
+
+
 def announce(stream=None) -> None:
     """Print the entries this machine has not seen, then remember the newest.
 
@@ -167,7 +174,7 @@ def announce(stream=None) -> None:
     path = _state_file()
     try:
         seen = path.read_text(encoding="utf-8").strip() if path.exists() else None
-        unseen = [entry for entry in NEWS if seen is None or entry[0] > seen]
+        unseen = [entry for entry in entries() if seen is None or entry[0] > seen]
         if seen is None:
             unseen = unseen[:FIRST_RUN]
         if not unseen:

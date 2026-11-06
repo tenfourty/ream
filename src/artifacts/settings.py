@@ -52,6 +52,16 @@ DEFAULT_BIND_HOST = "127.0.0.1"
 # hook in slice 7, and the tools then have no default endpoint.
 HOUSE_DEFAULT_API = "https://artifacts.tenfourty.site/api/v1"
 
+# The owner the command-line tools name in their own `--help` and news when the machine has
+# no `ARTIFACTS_OWNER_*` variables, which is nearly every agent's machine. OUR house's, kept
+# here for the same reason as HOUSE_DEFAULT_API and removed with it in slice 7 (when the
+# plug-in's client hook supplies them).
+HOUSE_DEFAULT_OWNER = {
+    "owner_id": "jeremy",
+    "owner_name": "Jeremy",
+    "owner_pronoun": "he",
+}
+
 # The all-or-none groups: a half-set group is a start-up problem naming the variables.
 PARTNER_OUT = (
     "ARTIFACTS_PARTNER_NAME",
@@ -104,6 +114,13 @@ class Settings:
     browser: str = ""
     # The command-line tools' endpoint (`ARTIFACTS_API`); see HOUSE_DEFAULT_API.
     api_url: str = HOUSE_DEFAULT_API
+    # Served text (3.4): what the service calls itself, the line under every shipped template,
+    # the word after the kind on a template's eyebrow ("DESIGN . BABA"), and the file holding
+    # the notes about a proxy in front (see textvars.proxy_notes).
+    product: str = "artifacts"
+    footer: str = ""
+    host_label: str = ""
+    proxy_notes_file: str = ""
 
     def __repr__(self) -> str:
         return "Settings(...)"
@@ -222,6 +239,10 @@ _ENV = {
     "bd_command": "ARTIFACTS_BD",
     "browser": "ARTIFACTS_BROWSER",
     "api_url": "ARTIFACTS_API",
+    "product": "ARTIFACTS_PRODUCT",
+    "footer": "ARTIFACTS_FOOTER",
+    "host_label": "ARTIFACTS_HOST_LABEL",
+    "proxy_notes_file": "ARTIFACTS_PROXY_NOTES_FILE",
 }
 if set(_ENV) != {f.name for f in fields(Settings)}:
     raise RuntimeError("settings._ENV and Settings disagree")
@@ -283,6 +304,12 @@ def defaulted() -> list[str]:
         for name in _REPORTED
         if name not in _overrides and not os.environ.get(_ENV[name], "").strip()
     ]
+
+
+def is_set(name: str) -> bool:
+    """True when the setting `name` has been given a value (environment or `override`), as
+    against taking its default."""
+    return name in _overrides or bool(os.environ.get(_ENV[name], "").strip())
 
 
 def is_loopback(host: str) -> bool:

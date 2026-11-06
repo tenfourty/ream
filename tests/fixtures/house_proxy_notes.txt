@@ -1,0 +1,6 @@
+Send a User-Agent of your
+own: the service sits behind Cloudflare, which refuses Python urllib's default
+agent with a 403 page that says "error code: 1010". That is Cloudflare, not
+the service, and not your key.
+%%
+pass through Cloudflare, which cuts anything held past about 100,
