@@ -7,23 +7,29 @@ as our deployment does (`jeremy`, `Jeremy`, `he`: tests/conftest.py); a test of 
 uses `settings.override`.
 """
 
+import argparse
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 
 import pytest
 
 from artifacts import (
     admin,
+    client,
     comments,
+    decide,
     decisions,
     folders,
     keys,
+    news,
     onboarding,
     owner,
     rename,
     settings,
     store,
+    templates,
 )
 from artifacts.db import Database, jsonb
 from artifacts.serve import app_from_env
@@ -454,3 +460,52 @@ def test_served_text_does_not_yet_depend_on_the_owner_settings(monkeypatch, name
     with settings.override(owner_id="ann", owner_name="Ann", owner_pronoun="she"):
         text = _served(monkeypatch)[name]
     assert hashlib.sha256(text.encode()).hexdigest() == GOLDEN[name]
+
+
+# --- the rest of the served text, pinned (design section 8) -------------------------------
+#
+# Today these words say "Jeremy" and "he" in the text itself; slice 3 moves them to variables
+# and re-takes the digests on purpose. Until then a change to any of them is a change to what
+# an agent is told, so it shows up here. They hold the display words; the stored id is held by
+# the tests above.
+
+FOOTER = "<footer>Published from BABA through the homelab artifacts service.</footer>"
+NEWS_TAIL = 26  # every entry so far; newer ones are added in front, so these never move
+NEWS_TAIL_DIGEST = "08b7ad27fd383101cc42c10f0994c8368d6fa5b33dc1617635d6068b5902f467"
+HELP_DIGEST = {
+    "artifacts-publish": "e0c759e042ac52370750879b4c1ade735627541e27c310787b8699ee0628e479",
+    "artifacts-decide": "d15998375e6f52b9f6db1eea780559f3a1724c4075fcb980f97a1da42d73d9c4",
+}
+
+
+def _help(parser: argparse.ArgumentParser) -> str:
+    """Every `--help` the parser can print: its own, then each subcommand's, in order."""
+    out = [parser.format_help()]
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for sub in action.choices.values():
+                out.append(_help(sub))
+    return "\n".join(out)
+
+
+def test_every_template_ends_with_the_same_footer():
+    names = templates.names()
+    assert len(names) == 8
+    for name in names:
+        assert re.findall(r"<footer>.*?</footer>", templates.body(name)) == [FOOTER], (
+            name
+        )
+
+
+def test_the_news_tail_is_unchanged():
+    tail = news.NEWS[-NEWS_TAIL:]
+    text = "\n".join(f"{day}|{line}" for day, line in tail)
+    assert hashlib.sha256(text.encode()).hexdigest() == NEWS_TAIL_DIGEST
+
+
+@pytest.mark.parametrize("name", sorted(HELP_DIGEST))
+def test_cli_help_is_unchanged(monkeypatch, name):
+    monkeypatch.setenv("COLUMNS", "80")
+    parser = (client if name == "artifacts-publish" else decide).build_parser()
+    text = _help(parser)
+    assert hashlib.sha256(text.encode()).hexdigest() == HELP_DIGEST[name]

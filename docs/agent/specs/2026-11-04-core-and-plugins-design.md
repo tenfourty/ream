@@ -415,7 +415,11 @@ drivers; CI only (not on baba).
    `owner`/`the owner`/`they`, so a pod without the three variables refuses to start on our database). `settings.py` with the three owner fields,
    `service_meta`, the wrong-id guard, `change-owner`, `keys`/`folders`/SQL literals/25 call sites
    switched, `text.pronoun`. Manifest PR setting `OWNER_ID=jeremy`, name and `he` lands before
-   the pin. The remaining `os.environ` reads are untouched.
+   the pin. The remaining `os.environ` reads are untouched. The client's `jeremy` fallback for an
+   answer row with no `answered_by` (`decide._fmt`) is dropped: the server stamps every answer with
+   the owner id, so a row without one prints `?`, as a form's does. The served texts that still
+   say "Jeremy"/"he" (template footers, `news`, CLI `--help`) are pinned by digest in
+   `tests/test_owner.py` until slice 3 re-takes them.
 2. **All other settings.** The rest of the env reads move into `Settings`; the lint; origins and
    mail sender lose their defaults (manifest PR sets ours first); fresh-install mode and the
    start-up refusal; CLI default endpoint becomes a setting we set on our machines. Docs:
