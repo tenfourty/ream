@@ -177,7 +177,7 @@ def _answered(row: dict) -> bool:
 
 
 def _speaker(person: str | None, source: str | None, relayer: str | None) -> str:
-    """Whose answer it is, and, when a seat relayed it, which seat: `jeremy (relayed by
+    """Whose answer it is, and, when a seat relayed it, which seat: `<owner-id> (relayed by
     ops-seat)`. The person is the speaker in a form and in a single answer alike; the
     relaying seat is only ever the relayer."""
     who = person or "?"
@@ -299,9 +299,9 @@ def _fmt(row: dict) -> str:
         # is 'page'; anything else was relayed by a seat, and the reader has to
         # be able to tell without knowing the vocabulary.
         how = "he tapped it" if source == "page" else f"relayed from {source}"
-        by = _speaker(
-            row.get("answered_by") or "jeremy", source, row.get("recorded_by")
-        )
+        # The server stamps every answer with the owner's id; a row without one prints
+        # "?" like a form's does, rather than a name this client invented.
+        by = _speaker(row.get("answered_by"), source, row.get("recorded_by"))
         lines.append(
             f"  ANSWER ({how}{f', by {by}' if source != 'page' else ''}): "
             f"({chosen}) {letters.get(chosen, '')}"

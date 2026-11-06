@@ -735,6 +735,12 @@ def _relay_row(**over):
     return row
 
 
+def test_an_answer_row_without_an_answered_by_names_nobody_in_particular():
+    out = decide._fmt(_relay_row(answered_by=None))
+    assert "by ? (relayed by ops-seat)" in out
+    assert "jeremy" not in out
+
+
 def test_a_relayed_single_answer_names_the_person_and_the_relaying_seat():
     out = decide._fmt(_relay_row())
     assert "ANSWER (relayed from telegram, by jeremy (relayed by ops-seat))" in out
