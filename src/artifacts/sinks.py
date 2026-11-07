@@ -328,6 +328,12 @@ def prune(db: Database, now: datetime | None = None) -> int:
         ).rowcount
 
 
+def _plugin_failures() -> dict[str, int]:
+    from artifacts import plugin_api
+
+    return plugin_api.failure_counts()
+
+
 def status(db: Database) -> dict:
     """Pending and parked rows by sink. Counts only, never an event."""
     with db.connect() as conn:
@@ -349,6 +355,7 @@ def status(db: Database) -> dict:
         "parked": {r[0]: r[1] for r in parked},
         "delivered": {r[0]: r[1] for r in delivered},
         "late_failures": late_failures(),
+        "plugin_failures": _plugin_failures(),
     }
 
 

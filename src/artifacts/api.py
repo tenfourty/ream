@@ -2719,7 +2719,7 @@ def agent_router(
             raise HTTPException(
                 422,
                 "source must be one of "
-                f"{', '.join(decisions.ANSWER_SOURCES)} — 'page' is refused, "
+                f"{', '.join(decisions.relay_sources())} — 'page' is refused, "
                 + textvars.render(
                     "because it means {{owner_name}} answered on the page "
                     "{{owner_themselves}}"
@@ -2762,11 +2762,11 @@ def agent_router(
     def _record_form(found, payload: RecordBody, said_at, agent: str):
         """The per-field relay of a form (formanswer.relay): every field stored with its
         source, none of it his own submit, none over a later submit of his."""
-        if payload.source not in decisions.ANSWER_SOURCES:
+        if payload.source not in decisions.relay_sources():
             raise HTTPException(
                 422,
                 "source must be one of "
-                f"{', '.join(decisions.ANSWER_SOURCES)} — 'page' is refused, "
+                f"{', '.join(decisions.relay_sources())} — 'page' is refused, "
                 + textvars.render(
                     "because it means {{owner_name}} answered on the page "
                     "{{owner_themselves}}"

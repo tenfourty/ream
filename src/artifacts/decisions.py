@@ -1108,15 +1108,30 @@ _REGISTERED: list[str] = ["slack"]
 # its raw value. 'slack' is labelled here until the Slack plug-in moves out.
 _LABELS: dict[str, str] = {"slack": "Slack"}
 
+# What a plug-in's source adds beyond a label (plugin_api.answer_source): whether an
+# agent may relay it, and the words for "verified by" and for the route.
+_RELAY: list[str] = []
+_VERIFIED_LABELS: dict[str, str] = {}
+_ROUTE_LABELS: dict[str, str] = {}
+
 _SOURCE_NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 
 
-def register_source(name: str, label: str | None = None) -> None:
+def register_source(
+    name: str,
+    label: str | None = None,
+    *,
+    relay: bool = False,
+    verified_label: str | None = None,
+    route_label: str | None = None,
+) -> None:
     """Let a plug-in store `name` as an `answer_source`, shown to people as `label`
     (a source without one shows its raw value). Idempotent; a core source or a
     name that is not lower-case letters, digits and hyphens (at most 32) is refused, so
     a plug-in can neither shadow 'page' nor store something the gallery would have to
-    take apart to show."""
+    take apart to show. `relay=True` lets an agent record it (`relay_sources()`);
+    `verified_label` and `route_label` are read back with `verified_label_of` and
+    `route_label_of`."""
     if not isinstance(name, str) or not _SOURCE_NAME.match(name):
         raise ValueError(f"answer source {name!r}: lower-case letters, digits, hyphens")
     if name in CORE_SOURCES:
@@ -1125,8 +1140,38 @@ def register_source(name: str, label: str | None = None) -> None:
         if not isinstance(label, str) or not label.strip() or len(label) > 40:
             raise ValueError(f"answer source {name!r}: a label is 1-40 characters")
         _LABELS[name] = label.strip()
+    for what, wording in (
+        ("verified_label", verified_label),
+        ("route_label", route_label),
+    ):
+        if wording is not None and (
+            not isinstance(wording, str) or not wording.strip() or len(wording) > 40
+        ):
+            raise ValueError(f"answer source {name!r}: {what} is 1-40 characters")
+    if verified_label is not None:
+        _VERIFIED_LABELS[name] = verified_label.strip()
+    if route_label is not None:
+        _ROUTE_LABELS[name] = route_label.strip()
+    if relay and name not in _RELAY:
+        _RELAY.append(name)
     if name not in _REGISTERED:
         _REGISTERED.append(name)
+
+
+def relay_sources() -> tuple[str, ...]:
+    """What an agent may record as an answer's source: core's four, then any a plug-in
+    registered with `relay=True`. Read at call time."""
+    return (*ANSWER_SOURCES, *_RELAY)
+
+
+def verified_label_of(source: str | None) -> str:
+    """ "verified by ..." wording for a source: its `verified_label`, else its label."""
+    return _VERIFIED_LABELS.get(source or "") or source_label(source)
+
+
+def route_label_of(source: str | None) -> str:
+    """The route wording for a source: its `route_label`, else its label."""
+    return _ROUTE_LABELS.get(source or "") or source_label(source)
 
 
 def source_label(source: str | None) -> str:
@@ -1588,7 +1633,7 @@ def record_elsewhere(
     REVIEW is refused too: the first verdict counts, relayed or tapped.
     `round`, when given, must be the review's current round (see `answer`).
     """
-    if source not in ANSWER_SOURCES:
+    if source not in relay_sources():
         raise InvalidSource(source)
     require_stored_source(source)
     if not recorded_by:

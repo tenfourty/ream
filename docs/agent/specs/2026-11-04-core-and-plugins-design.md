@@ -537,6 +537,20 @@ drivers; CI only (not on baba).
    quarterdeck, moves with its plug-in), the `QD_OFFICE` variable, stored columns.
 7. **Plug-in loader and API v1**, the six interfaces, failure isolation, versioning, the test
    plug-in, core-bare CI job. Still nothing moved.
+   **7a built (`ci/slice7a-loader`).** `plugin_api.py`: `API_VERSION = (1, 0)`, `PluginAPI`
+   (`version`, `sink(name, kinds, deliver, delivery, *, label)`, `answer_source(name, label, *,
+   relay, verified_label, route_label)`), and `load()`, called by `serve` after the migration and
+   owner check: entry-point group `artifacts.plugins`, name order, `ARTIFACTS_PLUGINS` (a
+   `Settings` field: unset all, `none`, or a list whose unknown name stops start-up). A `register`
+   that raises, a `REQUIRES_API` major mismatch or an unknown listed name stops start-up as
+   `PluginError` naming the plug-in. A plug-in's `deliver` is wrapped: a raise is logged with
+   plug-in and interface and counted (`plugin_api.failure_counts()`, also `plugin_failures` in
+   `sinks.status()`), then raised on so the outbox backs off and after-commit stays best effort.
+   `decisions.register_source` takes `relay`, `verified_label`, `route_label`
+   (`relay_sources()`, `verified_label_of`, `route_label_of`; the relay check and the 422 text read
+   `relay_sources()`, equal to `ANSWER_SOURCES` with no plug-in). Not in 7a: `validate` on a sink,
+   the per-sink circuit breaker, the other registrations (7b), the CLI side of loading. Nothing
+   moved; core still registers `slack` and the `nudge`/`partner` sinks itself.
 8. **The plug-in repo and its pipeline** (homelab office creates the repo; lander change). It
    builds an image identical to today's from an empty plug-in set, opens a pin PR, and one real
    pin PR is merged as proof before anything moves. Core starts publishing the `-core` image and

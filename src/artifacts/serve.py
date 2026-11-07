@@ -16,6 +16,7 @@ from artifacts import (
     owner,
     partner,
     partner_in,
+    plugin_api,
     repack,
     settings,
     sinks,
@@ -161,6 +162,11 @@ def app_from_env():
     try:
         owner.check(db, configured.owner_id)
     except owner.OwnerMismatch as exc:
+        raise SystemExit(str(exc)) from None
+    # Plug-ins register before anything serves; one that cannot stops the start.
+    try:
+        plugin_api.load()
+    except plugin_api.PluginError as exc:
         raise SystemExit(str(exc)) from None
     comments.start_sweeper(db)
     # The nightly backup and purge (maintenance.py). ARTIFACTS_MAINTENANCE=off

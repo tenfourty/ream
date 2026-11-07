@@ -75,6 +75,8 @@ Settings: every server variable is a field of `artifacts.settings.Settings`, rea
 (`ARTIFACTS_BIND_HOST`, set to `0.0.0.0` by the image) without `ARTIFACTS_GALLERY_ORIGIN` refuses to
 start. A deployment sets `ARTIFACTS_GALLERY_ORIGIN`, `ARTIFACTS_CONTENT_DOMAIN`, the owner trio and,
 behind a proxy, `ARTIFACTS_TRUSTED_IP_HEADER`.
+`ARTIFACTS_PLUGINS` picks which installed `artifacts.plugins` entry points load at server start (unset: all;
+`none`: none; `a,b`: only those, and an unknown name stops start-up); see `src/artifacts/plugin_api.py`.
 
 The service runs on Postgres or SQLite, chosen by `DATABASE_URL` (`postgresql://…` or
 `sqlite:////data/artifacts.db`). Only `src/artifacts/db.py` talks to a driver; SQL elsewhere must

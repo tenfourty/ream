@@ -121,6 +121,9 @@ class Settings:
     footer: str = ""
     host_label: str = ""
     proxy_notes_file: str = ""
+    # Which installed plug-ins to load (`artifacts.plugins` entry points): unset = all,
+    # `none` = none, `a,b` = only those (plugin_api.py).
+    plugins: str = ""
 
     def __repr__(self) -> str:
         return "Settings(...)"
@@ -243,6 +246,7 @@ _ENV = {
     "footer": "ARTIFACTS_FOOTER",
     "host_label": "ARTIFACTS_HOST_LABEL",
     "proxy_notes_file": "ARTIFACTS_PROXY_NOTES_FILE",
+    "plugins": "ARTIFACTS_PLUGINS",
 }
 if set(_ENV) != {f.name for f in fields(Settings)}:
     raise RuntimeError("settings._ENV and Settings disagree")
