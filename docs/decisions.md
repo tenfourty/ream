@@ -138,3 +138,29 @@ to be filled in.
   strange.
 
 **Evidence:** confirmed (Jeremy, 5 Nov 2026)
+
+## The open project is named Ream; what it makes is still "a page" (7 Nov 2026)
+
+**Chosen:** the open project takes the name **Ream**. What an agent makes and shares stays "a page"
+(or "a webpage"): "create a page on Ream", "share a page from Ream", "my pages on Ream". A ream is a
+pack of paper, so the name pictures a place that holds many pages without renaming the page itself,
+and it is four letters, easy to type and to say (`ream publish`). The skill can still trigger on
+"share this page". GitGuardian's internal instance keeps its own Roman name, Carmenta. Nothing is
+renamed yet: a rename plan (repository, command-line tools, docs, the homelab address, with every old
+name kept working) comes to Jeremy for approval before any change.
+
+**Not chosen:**
+- Keep "artifacts": the word is crowded (Claude's own Artifacts, and several self-hosted HTML
+  publishers for agents use it), and it is not the word people use for what they share.
+- A shortlist of Ream beside other page names (Leaf, Verso, Colophon, Pagewall, Pagina), shown as
+  wordmarks before choosing: Jeremy already had the name he wanted, so a comparison only delays it.
+- Another round of names: the earlier rounds' clash-checked picks (pinwall, tack, Sheetwall,
+  wallsheet) were rejected as not good names, and Ream answers the rule they missed, that the thing
+  made is "a page".
+- A name that is itself the noun for one page (placard, broadside, pamphlet): Jeremy wants "page" to
+  stay the word, so the app's name should belong to pages, not replace the word.
+
+A known cost: in American English "to ream" is also slang for a harsh telling-off, with a cruder
+sense too; weighed and accepted.
+
+**Evidence:** confirmed (Jeremy, 7 Nov 2026)
