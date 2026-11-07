@@ -216,3 +216,31 @@ them is where the risk is.
   its own docs no longer use.
 
 **Evidence:** confirmed (Jeremy, 7 Nov 2026)
+
+## Ream inside the code too, the cluster names included, with old names kept working for good (7 Nov 2026)
+
+**Chosen:** the rename to Ream goes all the way into the code, not only what people and agents see.
+This replaces the "what never changes" list in the entry above, except for page addresses and the
+office id, which still never change.
+- **The code:** the package and every import, the settings names (`REAM_…`), logs, tests, scripts
+  and CI all say ream. Someone reading the code meets "artifacts" only where it is kept on purpose
+  for old callers.
+- **The deployment's cluster names** (namespace, service, volume, secret files) are renamed as
+  well. Homelab runs that as its own migration, with a maintenance window, because the data and its
+  backups have to move.
+- **Old names keep working for good:** the `ARTIFACTS_…` settings and the `artifacts` import stay
+  as aliases, so nothing outside the repository breaks on the day or later.
+- **Order:** the code refactor comes first. It lands as one mechanical change once the two held
+  clean-up changes are in, before any wording or address change.
+- **The plan is approved** with this added, so the work starts when those clean-up changes land.
+
+**Not chosen:**
+- Leave the cluster names alone: that avoids moving data, but they would keep the old name for
+  good.
+- Keep the old names for one release with a warning, then drop them: that breaks callers outside
+  the repository that nobody has listed.
+- A clean break with no aliases: everything outside the repository breaks on the day.
+- Do the user-facing steps first: the wording and address changes would then be written against
+  code that is about to be renamed under them.
+
+**Evidence:** confirmed (Jeremy, 7 Nov 2026, lettered answer to the in-code rename playback)
