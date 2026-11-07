@@ -312,8 +312,9 @@ jobs:
   pin:
     # Both: a failed or skipped test blocks the pin even though image is green.
     needs: [test, test-sqlite, image]
-    # No docker needed: git, curl and python3 against the forge (homelab's labels, 6 Nov 2026).
-    runs-on: deploy
+    # The shared deploy builder: plain `deploy` is runcove/runcove's alone and never takes an
+    # artifacts job (homelab, 7 Nov 2026). Needs only git, curl and python3 against the forge.
+    runs-on: deploy-docker
     timeout-minutes: 10
     if: "github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')"
     steps:
