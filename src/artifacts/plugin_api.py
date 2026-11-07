@@ -155,7 +155,7 @@ def load() -> list[str]:
             raise
         except Exception as exc:
             raise PluginError(
-                f"plug-in {name!r} failed to register: {type(exc).__name__}: {exc}"
+                f"plug-in {name!r} failed to register: {type(exc).__name__}"
             ) from exc
         done.append(name)
         _log.info("plug-in %s registered", name)
