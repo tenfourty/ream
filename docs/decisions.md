@@ -164,3 +164,31 @@ A known cost: in American English "to ream" is also slang for a harsh telling-of
 sense too; weighed and accepted.
 
 **Evidence:** confirmed (Jeremy, 7 Nov 2026)
+
+## One shared skill for showing anything to a person, in place of a host's built-in panel (7 Nov 2026)
+
+**Chosen:** the skill that ships with Ream is the one an agent reaches for whenever it shows or shares
+something with a person beyond a short chat answer: a report, a plan, a chart, a diagram, a
+comparison. It does not wait for the words "page" or "publish". Where it is installed on Claude.ai or
+ChatGPT and a key is set up, it is used instead of their built-in artifacts or canvas; with no key,
+the agent falls back to the built-in panel and says why. A page carries a question only when the
+agent is blocked on the person or needs their choice, never just to have one; otherwise it is
+something to read. The skill is written for any agent and any host; the homelab's own skill keeps
+only its house look and keys on top. It is written once, under the new name, as part of the rename.
+Why: a skill that fires only on "publish a page" is missed whenever the agent thinks of what it is
+doing as a report or a chart, and the person then gets it in a chat panel they cannot comment on or
+answer from.
+
+**Not chosen:**
+- Fire on every reply, short ones included: a one-line answer belongs in the chat; a page for it is
+  noise.
+- Always replace the built-in panel and ask the person for a key when none is set up: blocks a
+  person who has not installed Ream yet from seeing anything at all.
+- Change only the homelab's skill for now: other agents and hosts are the point of the open
+  project, and two skills drift.
+- Write it now under the current name and rename it later: the rename is already planned, so it
+  would be written twice.
+- Leave questions entirely to each agent: agents then add a question to every page, and the person
+  is asked for decisions nobody needs.
+
+**Evidence:** confirmed (Jeremy, 7 Nov 2026)
