@@ -192,3 +192,27 @@ answer from.
   is asked for decisions nobody needs.
 
 **Evidence:** confirmed (Jeremy, 7 Nov 2026)
+
+## Ream lives at its own address, is typed as one command, and its API says pages (7 Nov 2026)
+
+**Chosen:** three choices in the rename to Ream, each kept beside a working old name.
+- **The address:** Ream moves to `ream.tenfourty.site`, and the old address forwards to it for good.
+  People sign in once more, because a sign-in belongs to an address.
+- **What agents type:** one `ream` command with verbs (`ream publish`, `ream ask`, `ream wait`).
+  It reads the way a person says it. The `artifacts-*` commands keep working.
+- **The API's word:** `/api/v1/pages` becomes the main route, and `/api/v1/artifacts` keeps working
+  for good, because what an agent makes is a page.
+
+What never changes: the code's import name, the cluster's namespace, service and volume names, the
+database, the page addresses on the content domain, and the office id. Nobody sees them, and renaming
+them is where the risk is.
+
+**Not chosen:**
+- Keep `artifacts.tenfourty.site` and change only the name on the page: the address is the name
+  people see most, and it would keep saying the old one.
+- Separate commands as today (`ream-publish`, `ream-decide`): longer to type, and two words for one
+  tool.
+- Leave `/artifacts` and say "pages" only in the docs: the API would keep a word for the thing that
+  its own docs no longer use.
+
+**Evidence:** confirmed (Jeremy, 7 Nov 2026)
