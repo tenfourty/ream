@@ -15,7 +15,9 @@ def _run(tmp_path, monkeypatch):
 
 def test_a_new_machine_sees_only_the_newest_then_nothing(tmp_path, monkeypatch):
     first = _run(tmp_path, monkeypatch)
-    assert first.count("new in the artifacts tools:") == news.FIRST_RUN
+    # 8 Nov 2026 (rename, step 2): the line the tools print said "new in the artifacts tools:";
+    # it now says "new in Ream:". Only that prefix changed.
+    assert first.count("new in Ream:") == news.FIRST_RUN
     assert news.entries()[0][1] in first
     assert _run(tmp_path, monkeypatch) == "", "said once, not on every call"
 

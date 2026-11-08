@@ -20,6 +20,10 @@ from ream import envnames, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-08b",
+        'Ream (formerly artifacts) now says "pages" in its API: `/api/v1/pages` is the main route, and `/api/v1/artifacts` keeps working for good, answering exactly the same (same handlers, not a redirect, so a POST to the old route still works). `GET /api/v1/folders/SLUG/pages` is the new name of `/folders/SLUG/artifacts`. The tools and the onboarding document now use `/pages` and teach `ream <verb>` first; the artifacts-* commands still work. Reinstall the tools to get the new routes, and nothing else changes for a script that uses the old ones.',
+    ),
+    (
         "2026-11-08",
         "The tools are now called Ream. One command, `ream`, runs them by verb: `ream publish`, `ream ask`, `ream wait`, `ream list`, `ream admin`, `ream connect` and the rest (`ream --help` lists them), and usage and errors name the command as you ran it. Settings are REAM_<NAME> and headers are X-Ream-*; the install package is now `ream` (the onboarding document gives the exact line). Every old name keeps working for good: the artifacts-* commands, ARTIFACTS_<NAME> settings (set both with different values and the tool refuses to start), X-Artifacts-* headers, and `import artifacts`. Nothing you published or stored is renamed. Reinstall the tools to get `ream`.",
     ),
@@ -188,7 +192,7 @@ def announce(stream=None) -> None:
         if not unseen:
             return
         for _tag, line in unseen:
-            print(f"new in the artifacts tools: {line}", file=stream)
+            print(f"new in Ream: {line}", file=stream)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(NEWS[0][0] + "\n", encoding="utf-8")
     except OSError:

@@ -430,10 +430,15 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # Digests of what an agent is served for our deployment, taken from the code as it was before
 # this slice (6 Nov 2026 tree). Re-taken on purpose on 8 Nov 2026 for the rename: the only change is REAM_/X-Ream- for ARTIFACTS_/X-Artifacts- in the served text and --help. Slice 1 changes ids, not words: the day text moves to
 # variables (slice 3) these are re-taken on purpose, with the owner settings below.
+# Re-taken again on purpose on 8 Nov 2026 for rename step 2 (the name Ream, `ream <verb>` taught first,
+# `/api/v1/pages` for `/api/v1/artifacts`). agents.txt, skill.md, agent.json and both --help digests
+# changed ONLY in that wording: Ream (formerly artifacts) where the product is named, `ream publish` /
+# `ream ask` for the old command names in examples, /pages for /artifacts in routes, and one short
+# paragraph saying the old commands and route keep working. The news tail did not move.
 GOLDEN = {
-    "agents.txt": "d005ae63f66b24b99d60087c274da9fa92ade4116ac5e221de3ae4fdbb2290cb",
-    "skill.md": "b21ec6f20d7731aeea2893155b1d187f73bd640b590bbc06de0487e14c85e476",
-    "agent.json": "23d68436a2dd35464d6f30384dfe41ca2734b20d26d6d094ceda898b6fdfa487",
+    "agents.txt": "43a6431a21b1894c7d3dfc953ca20dab523e852468597c3d9c6839e4a2b0c81e",
+    "skill.md": "ccc3da3b6690f0fb61412823892208371fb273fcb3c094a0fb2fde92cbedea16",
+    "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"
 
@@ -476,8 +481,8 @@ FOOTER = "<footer>Published from BABA through the homelab artifacts service.</fo
 NEWS_TAIL = 26  # every entry so far; newer ones are added in front, so these never move
 NEWS_TAIL_DIGEST = "08b7ad27fd383101cc42c10f0994c8368d6fa5b33dc1617635d6068b5902f467"
 HELP_DIGEST = {
-    "artifacts-publish": "71d90c6a43a6a9a903eaf2f89f3ff2e59e0a07ce852936f83e408449007ee252",
-    "artifacts-decide": "c019bc341587af95cb8f4e0cb3948bf64e3b9cd72b243fb03a7926d05f6d9371",
+    "artifacts-publish": "ba422008ab456de297687fab35da6e52bee9dd5ee710872327a6e637c21adb7e",
+    "artifacts-decide": "0201cb0dd41d3a70a3d29046ba4ccafe06fb676e415f17cdc14bd5050718b75c",
 }
 
 

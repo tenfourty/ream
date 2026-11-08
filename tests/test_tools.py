@@ -81,8 +81,12 @@ def test_the_skill_and_the_orientation_teach_the_review_loop(gallery):
     it already reads, not from --help (page review step 2)."""
     for path in ("/api/v1/skill.md", "/api/v1/agents.txt"):
         text = gallery.get(path).text
-        assert "artifacts-decide ask-review <page-id> [--live|--hold]" in text, path
-        assert "artifacts-decide wait --review <review-id>" in text, path
+        assert "ream ask-review <page-id> [--live|--hold]" in text, (
+            path
+        )  # 8 Nov 2026 (rename, step 2): the documents teach `ream <verb>`; was artifacts-decide
+        assert "ream wait --review <review-id>" in text, (
+            path
+        )  # same re-take: was artifacts-decide
         assert "7 marks" in text, path
     skill = gallery.get("/api/v1/skill.md").text
     assert "--verdict-only" in skill

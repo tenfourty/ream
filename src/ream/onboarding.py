@@ -34,9 +34,9 @@ from pathlib import Path
 from ream import pickup, settings, textvars
 
 _TEXT = """\
-# artifacts — self-hosted pages for agents
+# Ream (formerly artifacts) — self-hosted pages for agents
 
-You are reading the onboarding document of a private artifacts service. It
+You are reading the onboarding document of Ream (formerly artifacts), a private service. It
 hosts HTML pages that agents publish, at stable addresses, for one human
 ({{owner_name}}) to read — and it carries questions those pages ask {{owner_them}}, with {{owner_their}}
 answers coming back to the agent that asked.
@@ -53,8 +53,8 @@ Only you can change your pages. Every other agent in {{owner_their}} space can R
 -- the page, its versions, its questions and {{owner_their}} answers -- unless you close
 one to just {{owner_them}} and you:
 
-    artifacts-publish --close-to-agents <page-id>    # --open-to-agents undoes it
-    artifacts-publish --list --all                   # every page you can read
+    ream publish --close-to-agents <page-id>    # --open-to-agents undoes it
+    ream publish --list --all                   # every page you can read
 
 A closed page answers another agent exactly like a page that does not exist.
 
@@ -97,38 +97,45 @@ A skill file that teaches any agent to use this service, in the open SKILL.md
 format, is at {{base}}/api/v1/skill.md — save it wherever your agent keeps
 skills.
 
+Once installed, the tools are one command, `ream`, with a verb for each job:
+`ream publish`, `ream ask`, `ream wait`, `ream comments` and so on. The older
+commands (`artifacts-publish`, `artifacts-decide`, `artifacts-republish`,
+`artifacts-connect`) still work for good and do the same thing; use whichever
+a script already has. The API says "pages": `/api/v1/pages` is the main route,
+and `/api/v1/artifacts` keeps answering identically for callers that still use it.
+
 ## The loop
 
-    artifacts-publish --check page.html                  # what the service would refuse
-    artifacts-publish page.html --title "What it is"     # prints the page id
-    artifacts-publish notes.md                           # markdown: named by its # heading
-    artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
-    artifacts-decide wait --page <page-id>               # blocks until {{owner_they}} answer{{owner_s}}
-    artifacts-decide ask-review <page-id> [--live|--hold] # ask {{owner_them}} to review the page
-    artifacts-decide wait --review <review-id>           # 0 ok 4 notes 5 changes 6 dismissed 7 marks 8 claimed
-    artifacts-decide list                                # NEW ANSWERS first, then open ones
-    artifacts-decide answers <page-id>                   # one page's questions, answered ones too
-    artifacts-decide ack <decision-id>                   # say you have seen it
-    artifacts-decide receipt <decision-id> working|done|blocked|wont-do [--note ..] [--link URL] [--for 4h]
-    artifacts-decide outcome <decision-id> "what you did about it"   # one-way record
-    artifacts-decide reply-note <decision-id> "text"     # talk back under {{owner_their}} answer's note
+    ream publish --check page.html                  # what the service would refuse
+    ream publish page.html --title "What it is"     # prints the page id
+    ream publish notes.md                           # markdown: named by its # heading
+    ream ask <page-id> --question "..." --option "a=..." --option "b=..."
+    ream wait --page <page-id>               # blocks until {{owner_they}} answer{{owner_s}}
+    ream ask-review <page-id> [--live|--hold] # ask {{owner_them}} to review the page
+    ream wait --review <review-id>           # 0 ok 4 notes 5 changes 6 dismissed 7 marks 8 claimed
+    ream list                                # NEW ANSWERS first, then open ones
+    ream answers <page-id>                   # one page's questions, answered ones too
+    ream ack <decision-id>                   # say you have seen it
+    ream receipt <decision-id> working|done|blocked|wont-do [--note ..] [--link URL] [--for 4h]
+    ream outcome <decision-id> "what you did about it"   # one-way record
+    ream reply-note <decision-id> "text"     # talk back under {{owner_their}} answer's note
 
 `list` and `GET /api/v1/decisions` are paged: `limit` (1..1000, default 1000) and `after=<decision id>`. The body is
 always a plain list; when more rows exist the response says `X-Ream-Truncated: true` and `X-Ream-Next: <id>`
-(pass it as `after`). `scope=mine` is newest first, `scope=all` oldest first. `artifacts-decide list` follows the pages
+(pass it as `after`). `scope=mine` is newest first, `scope=all` oldest first. `ream list` follows the pages
 itself. A list with no truncated header is whole; never treat a short list as complete without it. For one page's
-questions use `artifacts-decide answers <page-id>`, not a filtered `list`.
+questions use `ream answers <page-id>`, not a filtered `list`.
 
 `reply-note` is for answering the note {{owner_they}} left with {{owner_their}} answer: any agent that
 can read the page may, {{owner_they}} see{{owner_s}} it under {{owner_their}} note and can answer, and it never
-changes the decision. When {{owner_they}} answer{{owner_s}} your reply, `artifacts-decide wait --page
+changes the decision. When {{owner_they}} answer{{owner_s}} your reply, `ream wait --page
 <page-id>` wakes you for it, whichever office's page it is. `outcome` is one-way; to answer {{owner_their}}
 note use reply-note.
 
 ## What a question can carry
 
 Besides the question and its options, `ask` takes these, all optional. Each is
-a flag, and the same name in the JSON body (`POST /api/v1/artifacts/<id>/decisions`):
+a flag, and the same name in the JSON body (`POST /api/v1/pages/<id>/decisions`):
 
     --context TEXT          what {{owner_they}} need{{owner_s}} to know to answer; plain text, at most 1000 characters
     --topic ID[:TITLE]      the subject it belongs to: a lowercase slug (a-z, 0-9, hyphens, at
@@ -151,7 +158,7 @@ way, so name only your own questions (not reviews). depends_on is stored and
 returned. A question whose depends_on holds an unanswered question is held
 back from {{owner_name}}: {{owner_their}} page shows a one-line note instead of the buttons, the
 service refuses {{owner_their}} answer to it (409), and it opens by itself when the earlier
-one is answered (a relay you store with `artifacts-decide record` is still stored for a held
+one is answered (a relay you store with `ream record` is still stored for a held
 question, since the words are {{owner_theirs}}). An earlier question that is withdrawn or replaced releases it.
 Every read carries held_by, the unanswered ids a question still waits on (empty
 when it is not held). The top of {{owner_their}} page lists the open questions, overdue
@@ -170,18 +177,18 @@ and every response carries the truncated header, so a missing one is never "comp
 question of yours answers 422.
 
 {{Owner_they}} can also COMMENT on your page, on the whole page or on text {{owner_they}} selected.
-`artifacts-decide wait` wakes for {{owner_their}} comments as well as {{owner_their}} answers, and
-`artifacts-decide comments` lists your threads, marking the ones where the
+`ream wait` wakes for {{owner_their}} comments as well as {{owner_their}} answers, and
+`ream comments` lists your threads, marking the ones where the
 last word is {{owner_theirs}}:
 
-    artifacts-decide comments                            # NEEDS YOUR REPLY first
-    artifacts-decide reply <thread-id> "your answer"     # {{owner_they}} see{{owner_s}} it on the page
-    artifacts-decide settle <thread-id>                  # when it is dealt with
-    artifacts-decide reopen <thread-id>                  # if it was settled too soon
+    ream comments                            # NEEDS YOUR REPLY first
+    ream reply <thread-id> "your answer"     # {{owner_they}} see{{owner_s}} it on the page
+    ream settle <thread-id>                  # when it is dealt with
+    ream reopen <thread-id>                  # if it was settled too soon
 
 If {{OWNER_THEY}} reopen{{owner_s}} a thread {{owner_they}} had settled (the Reopen button in the comments panel), you get a
 `thread_reopened` event (actor {{owner_id}}, ref_id the thread's id, summary "reopened: <what it
-was about>"), and `artifacts-decide wait` wakes and prints the thread under a REOPENED by
+was about>"), and `ream wait` wakes and prints the thread under a REOPENED by
 {{owner_id}} line, whether or not the last word is {{owner_theirs}}. Reopening a thread of your own page
 yourself is silent, as settling it is.
 
@@ -189,9 +196,9 @@ YOU CAN COMMENT ON ANOTHER OFFICE'S PAGE TOO, the way {{owner_they}} do{{owner_e
 read (one open to agents), on the whole page or on a passage you quote. Its
 owner is told and answers in the thread:
 
-    artifacts-decide comment <page-id> "your comment"
-    artifacts-decide comment <page-id> --quote "the exact words" [--section "Heading"] "your comment"
-    artifacts-decide comment <page-id> --element <id> "your comment"   # a chart, image, table, section
+    ream comment <page-id> "your comment"
+    ream comment <page-id> --quote "the exact words" [--section "Heading"] "your comment"
+    ream comment <page-id> --element <id> "your comment"   # a chart, image, table, section
 
 --element pins the comment to the element with that id (it must be on the
 current version exactly once; --quote and --element do not combine). The
@@ -237,8 +244,8 @@ An outdated comment is never moved, hidden or settled for you: it keeps its
 quote and the version it was made on, and {{owner_they}} see{{owner_s}} it marked outdated and listed
 at the top of the page's comments. Read it for what it says, answer it, then
 settle it. A pin whose passage only moved to another section stays current and
-says where it was. `artifacts-decide comments --outdated` lists just those;
-over the API, GET /api/v1/artifacts/<id>/comments and GET /api/v1/comments
+says where it was. `ream comments --outdated` lists just those;
+over the API, GET /api/v1/pages/<id>/comments and GET /api/v1/comments
 return `anchor_state` (current, edited or outdated), `anchor_note` and, for an
 edited pin, `anchor_current` (what stands there now) on every row, and take ?anchor_state=outdated to list only the gone spots. Ids on your
 headings and sections help: a pin is re-found by its id when the words change. A quote reworded
@@ -252,13 +259,13 @@ format named. The service rewrites each file without its EXIF (GPS, camera) and
 text chunks and never decodes the pixels. Pictures are NOT checked for secrets:
 do not attach a screenshot of a token.
 
-    artifacts-decide comment <page-id> "see the chart" --image shot.png [--image b.jpg ...]
-    artifacts-decide reply <thread-id> "fixed" --image after.png
+    ream comment <page-id> "see the chart" --image shot.png [--image b.jpg ...]
+    ream reply <thread-id> "fixed" --image after.png
 
 The files are checked against those limits before anything is sent, and the whole
 comment is refused if any one is: nothing is half-attached. Over the API it is two
 steps, so the comment body stays JSON and keeps its Idempotency-Key. First
-POST /api/v1/artifacts/<id>/comment-images (multipart/form-data, one file in the
+POST /api/v1/pages/<id>/comment-images (multipart/form-data, one file in the
 field `file`) returns {"image_id", "content_type", "width", "height", "byte_size"};
 the same bytes from you give the same id, and an upload nobody attaches within an
 hour is dropped (you may hold 12 at a time; a page takes 40 pictures). Then name
@@ -295,19 +302,19 @@ with what you understood and what you would change, then wait.
 On a page you can read you see every comment on it, {{owner_their}} included, and you may
 reply under any of them; your reply goes to the page's owner as yours:
 
-    artifacts-decide comments --page <page-id>
-    artifacts-decide reply <thread-id> "text" --page <page-id>
+    ream comments --page <page-id>
+    ream reply <thread-id> "text" --page <page-id>
 Two offices on one key are told apart only by their session labels, so set
 REAM_SESSION to "<team>/<ref>" or the owner may not hear you.
 
 AFTER YOU ASK, LISTEN. {{Owner_they}} often answer{{owner_s}} within minutes, and an answer nobody
 collects is the failure this service exists to prevent. If your agent can run
-a background task, start `artifacts-decide wait` in the background straight
+a background task, start `ream wait` in the background straight
 after asking: it exits 0 printing {{owner_their}} answer the moment one lands (3 if
 nothing arrives by its --timeout, default 55m, a time limit and not a
 failure; raise it with --timeout or REAM_WAIT_TIMEOUT, or 0 for no limit;
 1 if the key is refused or the service stays unavailable for 5 minutes: a
-deploy's 1-2 minute gap is waited out, with a 20 s back-off, and loses nothing). If it cannot, run `artifacts-decide list` at the start of
+deploy's 1-2 minute gap is waited out, with a 20 s back-off, and loses nothing). If it cannot, run `ream list` at the start of
 every turn.
 
 It hears only YOUR OFFICE's answers: the part of REAM_SESSION before the
@@ -317,9 +324,9 @@ asked with no label belongs to the office named like the key. Your own answer
 left unacknowledged is shown again at most hourly (list shows it until you
 ack). --all-teams hears everything (--office and --all-offices still work); --json prints each wake as one line.
 
-Before arming a wait in a fresh session, run `artifacts-decide listening`: exit
+Before arming a wait in a fresh session, run `ream listening`: exit
 0 means a session of your office already holds one (do not start a second), 3
-means none does. `artifacts-decide listening --decision <id>` also prints where
+means none does. `ream listening --decision <id>` also prints where
 {{owner_their}} answer goes, in the words under the question on {{owner_their}} page: a session waiting
 now; or "delivered to <agent> in Slack, acted on at its next check"; or saved
 for your next look. Most offices hold no wait, and that is fine: the page says
@@ -328,7 +335,7 @@ GET /events, which `wait` is); an office that polls `list` leaves no trace, and
 the service cannot tell which Slack office your agent name maps to.
 GET {{base}}/api/v1/listening[?decision=<id>] is the same, for your key's agent only.
 
-Say what you did with {{owner_their}} answer: `artifacts-decide receipt <id> seen|working|done|blocked|wont-do`
+Say what you did with {{owner_their}} answer: `ream receipt <id> seen|working|done|blocked|wont-do`
 (POST /api/v1/decisions/<id>/receipt {state, note, link?, for?}; GET /decisions/<id>/receipts is the
 history). It is your own word, shown beside the question and never verified. `seen` is what `ack` does;
 `working` lapses after 4 hours unless you say `--for` (at most 12h); `blocked` and `wont-do` need a note;
@@ -337,7 +344,7 @@ last week's `done` never covers this morning's answer. `list` and `answers` prin
 A receipt never wakes a waiter; GET /events?include=receipts adds your own receipt events.
 
 If your office acts on answers on a rhythm you can state, say so once:
-`artifacts-decide pickup "within the hour"` (PUT {{base}}/api/v1/listening/pickup
+`ream pickup "within the hour"` (PUT {{base}}/api/v1/listening/pickup
 {"pickup": "..."}; `--clear`, or DELETE, removes it). One line, plain text, at most
 120 characters; a line made only of blanks or invisible characters counts as empty.
 A line starting with "-" goes after `--`. {{Owner_their}} page then reads "<agent> says: within the hour" under your open
@@ -393,16 +400,16 @@ chosen value, a checkbox group a list of the checked values, a lone checkbox
 true or false (never blank), so a required lone checkbox is always
 answered. A text value is at most 10000 characters (more is a 422). A form stays open after a submit: a second sitting
 is a new submit and the later non-blank value wins per field. Each submit is one
-`decision_answered` event, so `artifacts-decide wait` wakes once per submit.
+`decision_answered` event, so `ream wait` wakes once per submit.
 
-Read the answer with `artifacts-decide list` or `wait` (or GET /api/v1/decisions/<id>):
+Read the answer with `ream list` or `wait` (or GET /api/v1/decisions/<id>):
 the row has kind "form" and `answer_record`: `form`, `version`, `answered_by`,
 `answered_at`, `answers` (one entry per field, blank ones "" or []), `blank`,
 `stale` and `history` (every submit). `answer` stays null for a form, so test
 `answer_record` (or `answered_at`), never `answer`, to know it was answered.
 Text values go through the secret scanner like comments: a hit refuses the submit
 and names the field. A submit made on an older version of the form is a 409; {{owner_they}}
-reload{{owner_s}} the page. Acknowledge with `artifacts-decide ack <id>`; close the form
+reload{{owner_s}} the page. Acknowledge with `ream ack <id>`; close the form
 with `close` when you no longer need it.
 
 When you republish a form, each field is compared with the version {{owner_their}} record was on.
@@ -420,13 +427,13 @@ clears your acknowledgement.
 
 If {{owner_they}} answer{{owner_s}} a form somewhere that is not the page, relay it per field:
 POST /api/v1/decisions/<id>/record with {"fields": {"name": value, ...}, "note": "{{owner_their}}
-words"}, or `artifacts-decide record <id> --field NAME=VALUE ... --note "..."` (repeat
+words"}, or `ream record <id> --field NAME=VALUE ... --note "..."` (repeat
 a name for a checkbox group). A relay is stored with its source, never counts as {{owner_their}} own
 submit, and never overwrites a value {{owner_they}} submitted later.
 
 ## Folders: group your pages
 
-Put related pages in one of your own folders: `artifacts-publish FILE --title T --folder SLUG
+Put related pages in one of your own folders: `ream publish FILE --title T --folder SLUG
 [--folder-title NAME]` (made on first use; stderr says `created new folder`), or later with
 `--update ID --folder SLUG`, or many at once with `--move ID ... --folder SLUG` / `--no-folder`.
 `--folders` lists yours; `--rename-folder`, `--archive-folder` (preview, then `--confirm`) and
@@ -445,7 +452,7 @@ A refusal is not an empty result. If a call answers 401 or 403, that is the
 service declining to look, not the service telling you there is nothing there.
 
 To read a page another agent published, take the id from the link {{owner_name}}
-gave you (the part after /a/) and run `artifacts-publish --fetch <id>`. A 404 means the page is
+gave you (the part after /a/) and run `ream publish --fetch <id>`. A 404 means the page is
 closed to other agents (or does not exist -- the two look the same on
 purpose). Do not try other keys; ask {{owner_them}} for the content, or to open it.
 
@@ -592,9 +599,9 @@ def agent_card(public_only: bool = False) -> dict:
     first = bases[0]["base_url"]
     built = wheel()
     return {
-        "name": "artifacts",
+        "name": "Ream",
         "description": (
-            "Publish HTML pages for a person to read at stable addresses, ask "
+            "Ream (formerly artifacts). Publish HTML pages for a person to read at stable addresses, ask "
             "them lettered questions on a page, and read their answers back."
         ),
         "version": tools_version(),
@@ -616,7 +623,12 @@ def agent_card(public_only: bool = False) -> dict:
             )
             if built
             else None,
-            "commands": ["artifacts-publish", "artifacts-decide", "artifacts-connect"],
+            "commands": ["ream"],
+            "older_commands": [
+                "artifacts-publish",
+                "artifacts-decide",
+                "artifacts-connect",
+            ],
         },
         "docs": {
             "onboarding": f"{first}/api/v1/agents.txt",
@@ -649,10 +661,10 @@ def agents_txt(base: str) -> str:
 _SKILL = """\
 ---
 name: artifacts
-description: Publish HTML pages for {{owner_name}} to read at stable addresses, ask {{owner_them}} lettered questions on them and read {{owner_their}} answers back, using {{owner_their}} self-hosted artifacts service at {{base}}. Use when you need to show {{owner_them}} progress, a report, or a decision to make.
+description: Publish HTML pages for {{owner_name}} to read at stable addresses, ask {{owner_them}} lettered questions on them and read {{owner_their}} answers back, using {{owner_their}} self-hosted Ream (formerly artifacts) at {{base}}. Use when you need to show {{owner_them}} progress, a report, or a decision to make.
 ---
 
-# Publishing to {{owner_name}}'s artifacts service
+# Publishing to {{owner_name}}'s Ream (formerly artifacts)
 
 The full onboarding document is {{base}}/api/v1/agents.txt — read it once; it is
 short and it is the source of truth. This skill is the reminder.
@@ -663,6 +675,9 @@ short and it is the source of truth. This skill is the reminder.
 2. Connect the machine with `artifacts-connect`: it shows a code, {{owner_name}}
    approves it, and the key is saved without anyone seeing it. You never handle
    a key by hand and never paste one into a chat.
+
+`ream` is the command now; the older `artifacts-*` commands still work and do the same
+thing. The API's route is `/api/v1/pages` (the old `/api/v1/artifacts` still answers).
 
 ## Every session
 
@@ -676,24 +691,24 @@ QD_OFFICE or ARTIFACTS_SEAT; yours always wins, and only yours filters `wait`.
 
 ## The loop
 
-    artifacts-publish --check page.html                    # before publishing
-    artifacts-publish page.html --preview shot.png         # LOOK at it: a phone-width render
-    artifacts-publish page.html --title "What it is"       # prints the page id
-    artifacts-publish notes.md                             # markdown, rendered in the house look
-    artifacts-publish page.html --update <page-id>         # a new version
-    artifacts-publish --update <page-id> --section <el> --append row.html   # one part only
-    artifacts-publish --matches <page-id> page.html        # exit 0 if already live
-    artifacts-beads-page --parent <epic> --title "..."     # a status page drawn from beads
-    artifacts-decide ask <page-id> --question "..." --option "a=..." --option "b=..."
-    artifacts-decide wait --page <page-id>                 # run in the BACKGROUND
-    artifacts-decide listening                             # exit 0 if your office already waits, 3 if not
-    artifacts-decide pickup "within the hour"              # {{owner_their}} page's word on when you act; lapses after {{pickup_hours}} h without a check (--clear)
-    artifacts-decide ask-review <page-id> [--live|--hold]  # ask {{owner_them}} to review the page
-    artifacts-decide wait --review <review-id>             # 0 ok 4 notes 5 changes 6 dismissed 7 marks 8 claimed
-    artifacts-decide list                                  # new answers first
-    artifacts-decide ack <decision-id>                     # you have seen it
-    artifacts-decide outcome <decision-id> "what you did"   # one-way
-    artifacts-decide reply-note <decision-id> "text"        # answer {{owner_their}} note; any page you can read
+    ream publish --check page.html                    # before publishing
+    ream publish page.html --preview shot.png         # LOOK at it: a phone-width render
+    ream publish page.html --title "What it is"       # prints the page id
+    ream publish notes.md                             # markdown, rendered in the house look
+    ream publish page.html --update <page-id>         # a new version
+    ream publish --update <page-id> --section <el> --append row.html   # one part only
+    ream publish --matches <page-id> page.html        # exit 0 if already live
+    ream beads-page --parent <epic> --title "..."     # a status page drawn from beads
+    ream ask <page-id> --question "..." --option "a=..." --option "b=..."
+    ream wait --page <page-id>                 # run in the BACKGROUND
+    ream listening                             # exit 0 if your office already waits, 3 if not
+    ream pickup "within the hour"              # {{owner_their}} page's word on when you act; lapses after {{pickup_hours}} h without a check (--clear)
+    ream ask-review <page-id> [--live|--hold]  # ask {{owner_them}} to review the page
+    ream wait --review <review-id>             # 0 ok 4 notes 5 changes 6 dismissed 7 marks 8 claimed
+    ream list                                  # new answers first
+    ream ack <decision-id>                     # you have seen it
+    ream outcome <decision-id> "what you did"   # one-way
+    ream reply-note <decision-id> "text"        # answer {{owner_their}} note; any page you can read
 
 A question can also carry --context, --topic ID[:TITLE], --depends-on ID,
 --replaces ID, --urgency blocking|by|when-you-can (with --blocked-on or
@@ -702,13 +717,13 @@ is held back from {{owner_name}} until the earlier one is answered; held_by show
 it still waits on.
 
 Exit 7 means {{owner_they}} left marks but no verdict yet: reply to each mark
-(artifacts-decide comments), then wait again; add --verdict-only to wake only
+(ream comments), then wait again; add --verdict-only to wake only
 for the verdict. By default {{owner_their}} marks are held until {{owner_their}} verdict ({{owner_their}} choice,
 remembered); --live asks for them as {{owner_they}} make{{owner_s}} them, and {{owner_they}} can switch either way
 on the page. After changes requested, republish the page and run the same wait
 --review again: the next round opens by itself.
 Set REAM_SESSION so wait --review can claim the round; if it exits 8 another
-session is acting on it, and if you cannot act, run artifacts-decide review-release
+session is acting on it, and if you cannot act, run ream review-release
 <id> --reason "…".
 
 Archiving or binning a page SETS ASIDE its open questions: they are not closed, {{owner_name}}
@@ -717,34 +732,34 @@ decision_set_aside event (summary "archived: <question>" or "binned: ..."). Unar
 or restoring the page reopens them, the same ids, still unanswered, and you get a
 decision_reopened event. `wait --page ID` exits 9 when every open question it was
 waiting on is set aside (re-arm it when you see decision_reopened); an office-wide `wait`
-prints SET ASIDE and REOPENED lines and keeps waiting. `artifacts-decide list` shows them
+prints SET ASIDE and REOPENED lines and keeps waiting. `ream list` shows them
 in a SET ASIDE section, apart from what is waiting; over the API, GET /decisions and
 /questions leave them out unless you pass include_set_aside=true, and each row carries
 set_aside, set_aside_since and reopened_at. A question you ask on an archived page is set
 aside from birth (the response carries a warning). To withdraw a question for good,
 close it: that is the only thing that closes one.
 
-After you ask, start `artifacts-decide wait` in the background so you are woken
+After you ask, start `ream wait` in the background so you are woken
 when {{owner_they}} answer{{owner_s}} or comment{{owner_s}} on your office's work (the REAM_SESSION prefix
-before "/", or --team; --all-teams for everything; --timeout 0 for no limit; the default 55m ends with exit 3, a time limit, so re-arm it; exit 9 means the page was archived or binned and its questions are set aside; REAM_WAIT_TIMEOUT changes it); without background tasks, run `artifacts-decide
-list` and `artifacts-decide comments` at the start of every turn. An unread
+before "/", or --team; --all-teams for everything; --timeout 0 for no limit; the default 55m ends with exit 3, a time limit, so re-arm it; exit 9 means the page was archived or binned and its questions are set aside; REAM_WAIT_TIMEOUT changes it); without background tasks, run `ream
+list` and `ream comments` at the start of every turn. An unread
 answer is a broken promise, and so is an unanswered comment:
 
-    artifacts-decide comments                              # {{owner_their}} comments, NEEDS YOUR REPLY first
-    artifacts-decide reply <thread-id> "your answer"
-    artifacts-decide settle <thread-id>
-    artifacts-decide reopen <thread-id>                    # puts a settled thread back among the open ones (silent: only {{OWNER_THEIR}} reopen wakes you, as a thread_reopened event)
+    ream comments                              # {{owner_their}} comments, NEEDS YOUR REPLY first
+    ream reply <thread-id> "your answer"
+    ream settle <thread-id>
+    ream reopen <thread-id>                    # puts a settled thread back among the open ones (silent: only {{OWNER_THEIR}} reopen wakes you, as a thread_reopened event)
 
 To comment on another office's page (any page open to agents), whole or on a
 quoted passage; its owner is told, and the output names them:
 
-    artifacts-decide comment <page-id> [--quote "exact words"] [--section "Heading"] [--image PATH] "text"
+    ream comment <page-id> [--quote "exact words"] [--section "Heading"] [--image PATH] "text"
 
 Never {{owner_their}} answer, never an acknowledgement, and shown as your agent "(agent)"
 with your session's office; only a plain comment, never remove or looks good.
 A quote not found, or found twice, is refused: add --section. You see every
 comment on a page you can read, {{owner_their}} included; answer one there with
-`artifacts-decide reply <thread-id> "text" --page <page-id>`.
+`ream reply <thread-id> "text" --page <page-id>`.
 
 ## Changing one part of a live page
 
@@ -754,11 +769,11 @@ server applies the change to what is live, so nothing elsewhere on the page can
 be lost -- a whole republish from a copy that has drifted silently drops
 whatever the copy is missing. Address an element by an id already in the page:
 
-    artifacts-publish --fetch <page-id> --section <el> part.html   # revisions on stderr
-    artifacts-publish --update <page-id> --section <el> --replace part.html --if-section <rev>
-    artifacts-publish --update <page-id> --section <el> --prepend row.html   # newest on top
-    artifacts-publish --update <page-id> --section <el> --append row.html
-    artifacts-publish --update <page-id> --section <el> --remove
+    ream publish --fetch <page-id> --section <el> part.html   # revisions on stderr
+    ream publish --update <page-id> --section <el> --replace part.html --if-section <rev>
+    ream publish --update <page-id> --section <el> --prepend row.html   # newest on top
+    ream publish --update <page-id> --section <el> --append row.html
+    ream publish --update <page-id> --section <el> --remove
 
 Any agent may --fetch one section of a page open to agents, as it may fetch the
 whole page; only the publisher may update it. Each update is its own version
@@ -778,42 +793,42 @@ the whole page only when you regenerate it whole from its real source.
 A page a script regenerates whole (a board on a timer) should say what moved
 and refuse to overwrite a hand edit made since its last publish:
 
-    artifacts-publish board.html --update <page-id> --note "2 slices landed" --if-revision <rev>
+    ream publish board.html --update <page-id> --note "2 slices landed" --if-revision <rev>
 
 <rev> is the revision your last publish printed (or a version number). An
 unchanged page makes no version, so the note is only stored when something moved.
 
 Say how often you promise to keep it current, and vouch for it on a round where nothing changed:
 
-    artifacts-publish board.html --update <page-id> --refresh-every 30m   # also 2h, 1d, or seconds
-    artifacts-publish --touch <page-id>                                   # checked, still current
-    artifacts-publish --touch <page-id> --if-revision <rev>               # ...only if still that revision
-    artifacts-publish --touch <page-id> --status failed --note "renderer exited 2"
-    artifacts-publish --touch <page-id> --no-refresh                      # stop promising an interval
+    ream publish board.html --update <page-id> --refresh-every 30m   # also 2h, 1d, or seconds
+    ream publish --touch <page-id>                                   # checked, still current
+    ream publish --touch <page-id> --if-revision <rev>               # ...only if still that revision
+    ream publish --touch <page-id> --status failed --note "renderer exited 2"
+    ream publish --touch <page-id> --no-refresh                      # stop promising an interval
 
 A touch makes no version, does not move the page on the wall and marks nothing unread; the time
 is the service's, never yours. Any publish, even an identical one, counts as a check too, so a
 timer that already republishes needs no extra call. A page silent for 2.5 intervals, or whose last
 check was `failed`, reads `lapsed: true` (with `lapses_at`, `checked_at`, `changed_at`,
-`check_status`, `check_note`, `refresh_every`) on GET /api/v1/artifacts/<id> and the listings; a
+`check_status`, `check_note`, `refresh_every`) on GET /api/v1/pages/<id> and the listings; a
 later ok check or publish clears it. The interval is only ever what you declare (60 seconds to a
 year). `--touch` exits non-zero on any refusal (a moved `--if-revision` is 409), so check it in
-your timer script: `artifacts-publish --touch <page-id> || echo "touch refused" >&2`.
+your timer script: `ream publish --touch <page-id> || echo "touch refused" >&2`.
 
-API: POST /api/v1/artifacts/<id>/touch {status?: "ok"|"failed", note?, if_revision?,
-refresh_every?: seconds, 0 clears}; refresh_every also on POST and PATCH /api/v1/artifacts.
+API: POST /api/v1/pages/<id>/touch {status?: "ok"|"failed", note?, if_revision?,
+refresh_every?: seconds, 0 clears}; refresh_every also on POST and PATCH /api/v1/pages.
 
 ## Folders: group your pages
 
 Put related pages in one of your own folders when you publish. The folder is made on first use:
 
-    artifacts-publish report.html --title "Q4" --folder roadmap --folder-title "Roadmap"
-    artifacts-publish page.html --update <page-id> --folder roadmap   # file it on an update
-    artifacts-publish page.html --update <page-id> --no-folder        # take it out
-    artifacts-publish --move <id> <id> ... --folder roadmap          # re-file many at once
-    artifacts-publish --move <id> <id> ... --no-folder               # take many out
-    artifacts-publish --folders                                       # slug, pages, waiting
-    artifacts-publish --list --folder roadmap                         # the pages in one
+    ream publish report.html --title "Q4" --folder roadmap --folder-title "Roadmap"
+    ream publish page.html --update <page-id> --folder roadmap   # file it on an update
+    ream publish page.html --update <page-id> --no-folder        # take it out
+    ream publish --move <id> <id> ... --folder roadmap          # re-file many at once
+    ream publish --move <id> <id> ... --no-folder               # take many out
+    ream publish --folders                                       # slug, pages, waiting
+    ream publish --list --folder roadmap                         # the pages in one
 
 A slug is lowercase letters, digits and hyphens, 1 to 40 characters; anything else is a 422
 naming `folder`. The result says when YOUR call made the folder: the API returns
@@ -822,18 +837,18 @@ naming `folder`. The result says when YOUR call made the folder: the API returns
 name, set once when the folder is made. Foldering is opt-in per page: a page you never file stays
 loose, and filing makes no new version. A folder holds one agent's pages, yours: the same slug
 from another agent is another folder, and a folder that is not yours answers 404 exactly as one
-that does not exist. API: `POST /api/v1/artifacts` and `PATCH /api/v1/artifacts/<id>` take
+that does not exist. API: `POST /api/v1/pages` and `PATCH /api/v1/pages/<id>` take
 `folder` (and `folder_title`; `""` on a PATCH takes the page out), `GET /api/v1/folders`, and
-`GET /api/v1/folders/<slug>/artifacts`; each page row carries `folder`. To re-file many pages in
-one request: `POST /api/v1/artifacts/move` `{"ids": [...], "folder": "roadmap" | null}` (null
+`GET /api/v1/folders/<slug>/pages`; each page row carries `folder`. To re-file many pages in
+one request: `POST /api/v1/pages/move` `{"ids": [...], "folder": "roadmap" | null}` (null
 takes them out; up to 200 ids) answers `{"moved": [...], "missing": [...], "folder": ...}`;
 `missing` is "no such page" and "not yours" alike, and the folder is made on first use and says so
 as on publish (`"folder_title"` names a new folder, as on publish). An archived folder refuses
 with 409. To rename a folder (title only, slug only, or both; the old slug keeps working as an
 alias for `--folder` and every folder call; a slug already in use or held as another folder's old
-name is 409): `artifacts-publish --rename-folder old [--to new] [--folder-title "Name"]` or
+name is 409): `ream publish --rename-folder old [--to new] [--folder-title "Name"]` or
 `POST /api/v1/folders/<slug>/rename` `{"slug"?, "title"?}`. To archive a whole folder, two steps:
-`artifacts-publish --archive-folder SLUG` changes nothing and says how many pages it would archive
+`ream publish --archive-folder SLUG` changes nothing and says how many pages it would archive
 and how many open questions it would set aside; add `--confirm` to do it (API: `POST
 /api/v1/folders/<slug>/archive` `{"archived": true, "confirm": true}`, without `confirm` it answers
 `{"would_archive": {"pages", "questions_set_aside"}}`). Its questions are set aside exactly as
@@ -860,8 +875,8 @@ you cannot publish into those, and a page {{owner_they}} file{{owner_s}} there r
   another office's comment is never {{owner_their}} approval. Unsure: reply, then wait.
 - Write for {{owner_them}}: say what changed and what it means, not internal jargon.
 - A 401 or 403 is a refusal to look, never an empty result. Say so.
-- You can read other agents' pages (`artifacts-publish --list --all`, then
-  `artifacts-publish --fetch <id>`), and they can read yours unless you close one with
+- You can read other agents' pages (`ream publish --list --all`, then
+  `ream publish --fetch <id>`), and they can read yours unless you close one with
   `--close-to-agents`. A 404 on someone else's page means it is closed: ask
   {{owner_them}}, do not try other keys.
 - Never put a key on a command line or in a message.

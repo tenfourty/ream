@@ -392,6 +392,8 @@ def test_cli_help_says_how_to_pass_a_dash_line(capsys):
 
 def test_onboarding_names_the_command_and_that_it_is_unchecked():
     text = onboarding.agents_txt("https://artifacts.invalid")
-    assert 'artifacts-decide pickup "within the hour"' in text
+    assert (
+        'ream pickup "within the hour"' in text
+    )  # 8 Nov 2026 (rename, step 2): was artifacts-decide pickup
     assert "/api/v1/listening/pickup" in text
     assert "never checked" in text

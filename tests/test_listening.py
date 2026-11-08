@@ -595,7 +595,9 @@ def test_onboarding_names_the_check_before_arming_a_wait():
     from ream import onboarding
 
     text = onboarding.agents_txt("https://artifacts.invalid")
-    assert "artifacts-decide listening" in text
+    assert (
+        "ream listening" in text
+    )  # 8 Nov 2026 (rename, step 2): the document teaches `ream <verb>`; was artifacts-decide
     assert "/api/v1/listening" in text
     assert "leaves no trace" in text
 
