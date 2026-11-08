@@ -28,7 +28,8 @@ MAX_FINDINGS = 20
 MAX_SHAPE_LENGTH = 64
 # One plug-in scanner call is abandoned after this long and counts as a scanner error
 # (`on_error` applies). It runs in a daemon thread that cannot be killed, so a scanner
-# that really hangs leaks one thread per call, as a hung sink does.
+# that really hangs leaks one thread per call (bounded only by how often the caller
+# calls; never reclaimed), as a hung sink does.
 SCAN_TIMEOUT_SECONDS = 10.0
 
 
@@ -85,8 +86,13 @@ def _call_bounded(scan: Callable, text: str, name: str) -> object:
     def work() -> None:
         try:
             outcome.append((True, scan(text)))
-        except BaseException as exc:  # noqa: BLE001 -- handed to the caller
+        except Exception as exc:  # noqa: BLE001 -- handed to the caller
             outcome.append((False, exc))
+        except BaseException as exc:  # noqa: BLE001 -- sys.exit() etc. in a plug-in
+            # Must not escape the caller's `except Exception`: it is a scanner error.
+            outcome.append(
+                (False, RuntimeError(f"scanner raised {type(exc).__name__}"))
+            )
 
     worker = threading.Thread(target=work, name="plugin-scanner", daemon=True)
     worker.start()

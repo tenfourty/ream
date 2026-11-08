@@ -582,7 +582,13 @@ drivers; CI only (not on baba).
    configured (a configured relay that is down stays unscanned); a finding's shape must be a non-empty
    `str` of at most 64 characters, else the answer is a scanner error; each scanner call is
    bounded (`SCAN_TIMEOUT_SECONDS`; a timeout is a scanner error); a backend whose `enabled()`
-   is false or raises refuses to send (`MailFailed`). **Scope:** plug-in scanners run in
+   is false or raises refuses to send (`MailFailed`). A held comment is hidden with no event, and
+   replies to it fail as for a withdrawn comment until it reappears; a hold is lifted by a clean scan,
+   or when no plug-in scanner is registered and no relay is configured (shown, unscanned, as on
+   main); a hide never touches a comment already stamped scanned, and a lift stamps in the same
+   transaction. A scanner raising `SystemExit` or any `BaseException` is a scanner error. A hung
+   scanner costs one daemon thread per call (the timeout's caller bounds the rate; threads are not
+   reclaimed). **Scope:** plug-in scanners run in
    ggscan's slot (bodies, previews, `gitguardian=True` fields, agent comments' second scan),
    not on titles, decision fields or human comments; widening that waits for 9c, when ggscan
    moves into a plug-in.

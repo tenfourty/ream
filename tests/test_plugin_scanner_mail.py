@@ -161,6 +161,24 @@ def test_a_slow_scanner_under_skip_lets_the_page_publish(db, world, monkeypatch)
     assert plugin_api.failure_counts() == {"toy:scanner": 1}
 
 
+def test_a_scanner_that_exits_is_a_scanner_error(world):
+    def bye(text):
+        raise SystemExit(1)
+
+    world.scanner("toy", bye, on_error="block")
+    with pytest.raises(scanners.ScannerBlocked):
+        scanners.run("x")
+    assert plugin_api.failure_counts() == {"toy:scanner": 1}
+
+
+def test_a_scanner_that_exits_under_skip_is_no_answer(world):
+    def bye(text):
+        raise SystemExit(1)
+
+    world.scanner("toy", bye, on_error="skip")
+    assert scanners.run_detailed("x") == ([], False)
+
+
 def test_a_scanners_exception_text_never_reaches_logs_or_the_error(world, caplog):
     def boom(text):
         raise RuntimeError("SECRET-IN-EXCEPTION")

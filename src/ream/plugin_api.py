@@ -146,7 +146,11 @@ class PluginAPI:
         the core takes its second opinion (after a clean pattern scan: bodies, section
         notes, agent comments' second scan). `on_error="skip"`: a raise is logged and
         counted and the text is judged on the other scanners; `"block"`: it fails the
-        action (`scanners.ScannerBlocked`)."""
+        action (`scanners.ScannerBlocked`). Under `block` an agent comment not yet
+        cleared is hidden (no event), so replies to it fail as for a withdrawn comment
+        until a clean scan shows it again. Each call is bounded by
+        `scanners.SCAN_TIMEOUT_SECONDS`; a scanner that hangs costs one daemon thread
+        per call, never reclaimed."""
         scanners.register(self._plugin, name, scan, on_error)
 
     def mail_backend(self, name: str, send: Callable, enabled: Callable) -> None:

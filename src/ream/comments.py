@@ -1635,18 +1635,27 @@ def _hide_pending_scan(db: Database, comment_id: str) -> None:
     with db.connect() as conn, conn.transaction():
         conn.execute(
             "update comment set withdrawn_at = %s, withdrawn_kind = %s"
-            " where id = %s and withdrawn_at is null",
+            " where id = %s and withdrawn_at is null and gg_scanned_at is null",
             (datetime.now(UTC), _SCAN_HOLD, comment_id),
         )
 
 
-def _lift_scan_hold(db: Database, comment_id: str) -> None:
+def _lift_scan_hold(db: Database, comment_id: str, *, stamp: bool = False) -> None:
+    """Show a held comment again. With `stamp` the clean scan is recorded in the same
+    transaction, so a late failing scan cannot hide it between the lift and the stamp
+    (`_hide_pending_scan` refuses a stamped comment)."""
     with db.connect() as conn, conn.transaction():
         conn.execute(
             "update comment set withdrawn_at = null, withdrawn_kind = null"
             " where id = %s and withdrawn_kind = %s",
             (comment_id, _SCAN_HOLD),
         )
+        if stamp:
+            conn.execute(
+                "update comment set gg_scanned_at = %s where id = %s"
+                " and gg_scanned_at is null",
+                (datetime.now(UTC), comment_id),
+            )
 
 
 def withdraw(db: Database, comment_id: str, *, kind: str) -> bool:
@@ -1755,6 +1764,10 @@ def second_scan(db: Database, comment_id: str) -> str:
             # answer is the second opinion. A configured relay that is down stays
             # unscanned so the sweeper asks it again.
             found = []
+        if found is None and not ggscan.configured() and not scanners.registered():
+            # Nothing can ever clear a hold now (the blocking plug-in is gone and there
+            # is no relay): show the comment, unscanned, as without the hold.
+            _lift_scan_hold(db, comment_id)
         if found is None:
             if ggscan.configured():
                 _log.warning(
@@ -1767,13 +1780,13 @@ def second_scan(db: Database, comment_id: str) -> str:
             return "unavailable"
         if found:
             withdraw(db, comment_id, kind=found[0].shape)
+            with db.connect() as conn:
+                conn.execute(
+                    "update comment set gg_scanned_at = %s where id = %s",
+                    (datetime.now(UTC), comment_id),
+                )
         else:
-            _lift_scan_hold(db, comment_id)
-        with db.connect() as conn:
-            conn.execute(
-                "update comment set gg_scanned_at = %s where id = %s",
-                (datetime.now(UTC), comment_id),
-            )
+            _lift_scan_hold(db, comment_id, stamp=True)
         return "withdrawn" if found else "scanned"
     except Exception:  # noqa: BLE001 -- a background task's exception is lost
         _log.error("comment second scan failed: comment=%s", comment_id, exc_info=True)

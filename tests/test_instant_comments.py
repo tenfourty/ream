@@ -520,3 +520,44 @@ def test_a_relay_finding_means_the_plugin_scanners_are_not_asked(
     assert comments.second_scan(db, row.id) == "withdrawn"
     assert asked == []
     assert _body_state(db, row.id) == ("", True, "ggshield_x")
+
+
+def _event_count(db):
+    with db.connect() as conn:
+        return conn.execute("select count(*) from event").fetchone()[0]
+
+
+def test_a_hold_emits_no_event(db, page, gg, monkeypatch):
+    _toy(monkeypatch, _boom, "block")
+    row = _agent_comment(db, page, "fine")
+    before = _event_count(db)
+    assert comments.second_scan(db, row.id) == "unavailable"
+    assert _body_state(db, row.id) == ("fine", True, "scan_blocked")
+    assert _event_count(db) == before
+
+
+def test_a_late_failing_scan_does_not_hide_a_comment_already_scanned(
+    db, page, gg, monkeypatch
+):
+    _toy(monkeypatch, lambda text: [])
+    row = _agent_comment(db, page, "fine")
+    assert comments.second_scan(db, row.id) == "scanned"
+    assert _stamped(db, row.id)
+    _toy(monkeypatch, _boom, "block")
+    assert comments.second_scan(db, row.id) == "unavailable"
+    assert _body_state(db, row.id) == ("fine", False, None)
+
+
+def test_a_hold_nothing_can_clear_is_lifted(db, page, gg, monkeypatch):
+    from ream import scanners
+
+    _toy(monkeypatch, _boom, "block")
+    row = _agent_comment(db, page, "fine")
+    comments.second_scan(db, row.id)
+    assert _body_state(db, row.id) == ("fine", True, "scan_blocked")
+    scanners._SCANNERS[:] = []  # the blocking plug-in is gone
+    gg.result = None
+    monkeypatch.setattr(ggscan, "configured", lambda: False)
+    assert comments.second_scan(db, row.id) == "unavailable"
+    assert _body_state(db, row.id) == ("fine", False, None)
+    assert not _stamped(db, row.id)
