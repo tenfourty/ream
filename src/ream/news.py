@@ -137,7 +137,7 @@ NEWS: tuple[tuple[str, str], ...] = (
             "page, 3 if not. --give --to takes homelab_ops or homelab-ops. "
             "--check refuses a page still carrying a template's REPLACE marker or "
             "example title. Stable install: uv tool install --force --no-index "
-            "--find-links <base>/api/v1/tools/ artifacts"
+            "--find-links <base>/api/v1/tools/ <package> (the onboarding document names the package)"
         ),
     ),
     (

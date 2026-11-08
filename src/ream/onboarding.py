@@ -480,6 +480,15 @@ def wheel() -> Path | None:
     return found[-1] if found else None
 
 
+def package_name() -> str:
+    """The name `uv tool install` is given: that of the wheel actually served
+    (`ream` now, `artifacts` for an image built before the rename)."""
+    built = wheel()
+    if built is not None and built.name.startswith("artifacts-"):
+        return "artifacts"
+    return "ream"
+
+
 def _tools_text(base: str) -> str:
     built = wheel()
     if built is None:
@@ -499,7 +508,7 @@ def _tools_text(base: str) -> str:
         "or install them once and call them by name. This line never changes, so\n"
         "it is the one to keep in a script; uv picks the newest package itself:\n"
         "\n"
-        f"    uv tool install --force --no-index --find-links {base}/api/v1/tools/ artifacts\n"
+        f"    uv tool install --force --no-index --find-links {base}/api/v1/tools/ {package_name()}\n"
         f"    pipx install --force {url}      # without uv\n"
         "\n"
         "Careful: `uvx` with `--find-links` can quietly reuse an older tool that is\n"
@@ -603,7 +612,7 @@ def agent_card(public_only: bool = False) -> dict:
         "cli": {
             "install": (
                 "uv tool install --force --no-index --find-links "
-                f"{first}/api/v1/tools/ artifacts"
+                f"{first}/api/v1/tools/ {package_name()}"
             )
             if built
             else None,

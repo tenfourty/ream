@@ -129,6 +129,29 @@ def test_the_document_carries_a_stable_line_and_a_machine_readable_one(
     assert wheel_lines == [f"wheel: {base}{WHEEL}"]
 
 
+@pytest.mark.parametrize(
+    ("wheel_name", "package"),
+    [
+        ("ream-0.1.0-py3-none-any.whl", "ream"),
+        ("artifacts-0.1.0-py3-none-any.whl", "artifacts"),
+    ],
+)
+def test_the_install_line_names_the_package_of_the_wheel_served(
+    gallery, tmp_path, monkeypatch, wheel_name, package
+):
+    with zipfile.ZipFile(tmp_path / wheel_name, "w") as z:
+        z.writestr("x/__init__.py", "")
+    monkeypatch.setenv("REAM_TOOLS_DIR", str(tmp_path))
+    from ream import onboarding
+
+    base = "https://artifacts.tenfourty.site/api/v1/tools/"
+    text = gallery.get("/api/v1/agents.txt").text
+    assert f"--find-links {base} {package}\n" in text
+    assert onboarding.agent_card()["cli"]["install"].endswith(
+        f"/api/v1/tools/ {package}"
+    )
+
+
 def test_both_exit_code_lists_name_eight_claimed():
     from ream import onboarding
 
