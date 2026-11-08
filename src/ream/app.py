@@ -41,7 +41,7 @@ def create_gallery_app(
     # docs_url/redoc_url stay off: the machine-readable contract is the point,
     # and an interactive UI would be a second surface with no reader.
     app = FastAPI(
-        title="artifacts gallery",
+        title="Ream",
         docs_url=None,
         redoc_url=None,
         openapi_url=None,

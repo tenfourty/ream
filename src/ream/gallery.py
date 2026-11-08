@@ -1019,6 +1019,7 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
 /* A pinned tile leads the wall; the accent edge says why, without shouting. */
 .tiles > li.pinned > a{border-color:var(--accent)}
 .empty{color:var(--muted);padding:2rem 0}
+.foot{color:var(--muted);font-size:.8125rem;padding:2rem 0 1rem}
 
 /* --- the rename dialog -------------------------------------------------------
    :target, not <dialog>. A real dialog needs showModal() and this gallery works
@@ -2560,7 +2561,7 @@ def starter_prompt() -> str:
     read and what to tell him -- so it is safe in any chat and any transcript
     (homelab-ij8.102)."""
     return (
-        "Connect this machine to my artifacts space, so you can publish pages "
+        "Connect this machine to my Ream (formerly artifacts), so you can publish pages "
         "for me and ask me questions on them. Read "
         f"{gallery_origin().rstrip('/')}/api/v1/agents.txt and follow it. When it "
         "gives you a code, tell me the code and wait while I approve it. Never "
@@ -3769,10 +3770,14 @@ def _shell(
             f'<div class="wrap"><header class="bar">{back}{heading}'
             f"{meta_block}{_PROFILE}</header>"
         )
+    # The product's name, where a reader first meets it: the wall is "Ream",
+    # every other page "<what it is> · Ream", and the foot says what it was.
+    tab = "Ream" if title == "Ream" else f"{title} · Ream"
+    foot = "" if bleed else '<footer class="foot">Ream (formerly artifacts)</footer>'
     return (
         '<!doctype html><html lang="en-GB"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>{escape(title)}</title><style>{_CSS}</style></head><body>"
+        f"<title>{escape(tab)}</title><style>{_CSS}</style></head><body>"
         f"{top}"
         # The controls are their OWN row beneath the title, as the reference
         # has it: a 48px title row, 16px, then a 32px row of controls. They
@@ -3785,7 +3790,7 @@ def _shell(
         # user arrives at the top of the chrome every time and walks the header
         # again on every page. The controls row stays OUTSIDE it -- tabs and
         # search are navigation, not the content they filter.
-        f"<main>{body}</main></div>{scripts}</body></html>"
+        f"<main>{body}</main>{foot}</div>{scripts}</body></html>"
     )
 
 
@@ -5485,7 +5490,7 @@ def gallery_router(db: Database) -> APIRouter:
             visible += 0 if later else folder_pages - len(folder_items)
         response = HTMLResponse(
             _shell(
-                in_folder[1] if in_folder else "Artifacts",
+                in_folder[1] if in_folder else "Ream",
                 body,
                 meta_html=_wall_meta(waiting_total, inbox.label(*inbox.count(db))),
                 controls=_controls_row(
@@ -5596,7 +5601,7 @@ def gallery_router(db: Database) -> APIRouter:
         """
         _same_origin_write(request)
         if not store.set_archived(db, artifact_id, archived == "1", agent=None):
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         # Archiving is "put this away", so it lands back on the wall, not on
         # the page just put away (Jeremy, 28 Sep 2026: staying on the page read
         # as if nothing had happened). Un-archiving opens the page again.
@@ -5611,7 +5616,7 @@ def gallery_router(db: Database) -> APIRouter:
         change made with his session."""
         _same_origin_write(request)
         if not store.set_agents_can_read(db, artifact_id, can_read == "1", agent=None):
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return RedirectResponse(f"/a/{artifact_id}", status_code=303)
 
     @router.post("/a/{artifact_id}/pin")
@@ -5628,7 +5633,7 @@ def gallery_router(db: Database) -> APIRouter:
         """
         _same_origin_write(request)
         if not store.set_pinned(db, artifact_id, pinned == "1", agent=None):
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return RedirectResponse("/", status_code=303)
 
     @router.post("/a/{artifact_id}/duplicate")
@@ -5644,7 +5649,7 @@ def gallery_router(db: Database) -> APIRouter:
         try:
             copy, body = store.duplicate(db, artifact_id, agent=None)
         except store.NotFound as exc:
-            raise HTTPException(404, "no such artifact") from exc
+            raise HTTPException(404, "no such page") from exc
         thumbs.render_in_background(db, copy.id, copy.version, body)
         return RedirectResponse(f"/a/{copy.id}", status_code=303)
 
@@ -5658,7 +5663,7 @@ def gallery_router(db: Database) -> APIRouter:
         """
         _same_origin_write(request)
         if not store.set_deleted(db, artifact_id, True, agent=None):
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return RedirectResponse("/?filter=deleted", status_code=303)
 
     @router.post("/a/{artifact_id}/restore")
@@ -5666,7 +5671,7 @@ def gallery_router(db: Database) -> APIRouter:
         """Put a deleted page back, with its address and its history intact."""
         _same_origin_write(request)
         if not store.set_deleted(db, artifact_id, False, agent=None):
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return RedirectResponse(f"/a/{artifact_id}", status_code=303)
 
     @router.post("/a/{artifact_id}/destroy")
@@ -5683,7 +5688,7 @@ def gallery_router(db: Database) -> APIRouter:
         if confirm.strip().lower() != "destroy":
             raise HTTPException(400, "type destroy to confirm")
         if not store.destroy(db, artifact_id, agent=None):
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return RedirectResponse("/?filter=deleted", status_code=303)
 
     @router.post("/a/{artifact_id}/rename")
@@ -5709,7 +5714,7 @@ def gallery_router(db: Database) -> APIRouter:
                 422, "that name looks like it contains a secret"
             ) from None
         if not found:
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return RedirectResponse(f"/a/{artifact_id}", status_code=303)
 
     # ---- Folder controls (docs/agent/specs/2026-11-02-folders-design.md 3.3). His, so unscoped,
@@ -5727,7 +5732,7 @@ def gallery_router(db: Database) -> APIRouter:
         folders, or a new folder he names here. No script: every choice is a button."""
         found = store.folders_for_page(db, artifact_id)
         if found is None:
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         agent, current, choices = found
         with db.connect() as conn:
             row = conn.execute(
@@ -5795,7 +5800,7 @@ def gallery_router(db: Database) -> APIRouter:
                 409, "that folder is archived: unarchive it first"
             ) from None
         if not done:
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return RedirectResponse("/", status_code=303)
 
     # ---- Multi-select (docs/agent/specs/2026-11-02-folders-design.md 3.3, 8.3b). The wall's
@@ -6066,7 +6071,7 @@ def gallery_router(db: Database) -> APIRouter:
         """
         row = conn_current(artifact_id)
         if row is None:
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         if wait <= 0 or int(row[0]) != since or not _watchers.acquire(blocking=False):
             return {"n": int(row[0])}
         try:
@@ -6136,7 +6141,7 @@ def gallery_router(db: Database) -> APIRouter:
                 (artifact_id,),
             ).fetchone()
         if row is None:
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         # He has opened it: the wall stops calling it unread, and its agent can
         # see that he has (homelab-ij8.103).
         # What he had seen before this visit: a reply under his note is "new"
@@ -6365,7 +6370,7 @@ def gallery_router(db: Database) -> APIRouter:
                 (artifact_id,),
             ).fetchone()
         if row is None:
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return HTMLResponse(
             _shell(
                 "Share a page",
@@ -6391,7 +6396,7 @@ def gallery_router(db: Database) -> APIRouter:
         """His deliberate act, and only his: there is no agent route for it."""
         _same_origin_write(request)
         if store.start_sharing(db, artifact_id) is None:
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return _share_response(
             artifact_id,
             note="Link created. Copy it and send it to whoever should read the page.",
@@ -6414,7 +6419,7 @@ def gallery_router(db: Database) -> APIRouter:
                 (artifact_id,),
             ).fetchone()
         if row is None:
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         if not mail.enabled():
             return _share_response(artifact_id, note="Email isn't set up yet.")
         share, token = email_share.create(db, artifact_id, address)
@@ -6476,7 +6481,7 @@ def gallery_router(db: Database) -> APIRouter:
                 (artifact_id,),
             ).fetchone()
         if row is None:
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         title, owner = row
         names = sorted(
             {m.agent for m in keys.machines(db) if m.revoked_at is None} - {owner}
@@ -6524,7 +6529,7 @@ def gallery_router(db: Database) -> APIRouter:
         except store.NoSuchAgent:
             return _move_page(artifact_id, note=f"{to} is not a connected agent.")
         if old is None:
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return _move_page(
             artifact_id, note=f"Moved from {old} to {store.owner(db, artifact_id)}."
         )
@@ -6694,7 +6699,7 @@ def gallery_router(db: Database) -> APIRouter:
                 (artifact_id,),
             ).fetchone()
         if row is None:
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return Response(
             json.dumps(
                 {
@@ -6971,7 +6976,7 @@ def gallery_router(db: Database) -> APIRouter:
         except comments.NoSuchDecision:
             raise HTTPException(404, "no such decision") from None
         except store.NotFound as exc:
-            raise HTTPException(404, "no such artifact") from exc
+            raise HTTPException(404, "no such page") from exc
         note_decision = (
             row.anchor.get("decision_id")
             if isinstance(row.anchor, dict) and row.anchor.get("kind") == "decision"
@@ -7021,7 +7026,7 @@ def gallery_router(db: Database) -> APIRouter:
         (`api.upload_comment_image`). Returns `{image_id, ...}`; the comment form names
         the id in a repeated `image` field. Pictures are not checked for secrets."""
         if not await run_in_threadpool(store.exists, db, artifact_id):
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         try:
             return await image_store.stage_upload(
                 request, db, artifact_id, settings.owner_id()
