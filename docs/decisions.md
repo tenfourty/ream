@@ -312,15 +312,21 @@ tools refuse forwards on purpose: a forward on the API would stop every agent st
 old address.
 
 The maintainer's own calls within this: browser paths forward with a 308, built only from the
-configured origin; `/healthz` is served like the API; a signed-out visitor to the old address is
-forwarded without a login there; the defaults and docs name the new address only once it is proven
-live.
+configured origin; `/healthz` is served like the API; the defaults and docs name the new address only
+once it is proven live.
+
+The owner's own call, 8 Nov 2026: the old address keeps its sign-in at the ingress. A signed-out person
+logs in once and is then forwarded; agents are unaffected, because the API already passes the sign-in.
+The gallery has no login of its own, so this way a bug in the forwarding cannot expose it on a host the
+internet can reach.
 
 **Not chosen:**
 - Forward everything, the API included, and update every agent's tools first: any agent not updated
   stops working until it is.
 - Serve both addresses fully for good, with no forwarding: old links keep showing the old name in the
   browser, and the gallery assumes one origin throughout.
+- Remove the old address's sign-in so a signed-out person is forwarded at once: it saves one login, and
+  leaves the app's forwarding as the only guard on that address.
 
 **Evidence:** the behaviour of the old address: confirmed (Jeremy, 8 Nov 2026). The maintainer's own
 calls: unconfirmed.
