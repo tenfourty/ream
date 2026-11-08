@@ -428,11 +428,11 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # --- served text is unchanged ------------------------------------------------------------
 
 # Digests of what an agent is served for our deployment, taken from the code as it was before
-# this slice (6 Nov 2026 tree). Slice 1 changes ids, not words: the day text moves to
+# this slice (6 Nov 2026 tree). Re-taken on purpose on 8 Nov 2026 for the rename: the only change is REAM_/X-Ream- for ARTIFACTS_/X-Artifacts- in the served text and --help. Slice 1 changes ids, not words: the day text moves to
 # variables (slice 3) these are re-taken on purpose, with the owner settings below.
 GOLDEN = {
-    "agents.txt": "f3ac33043031211c1c805688401850eaf68718fa5eaee16888af640c2851b7f1",
-    "skill.md": "efd1ae0e802b4f5db449289f2851d5204d1c5d3087c014398803a8a8b4e8e509",
+    "agents.txt": "d005ae63f66b24b99d60087c274da9fa92ade4116ac5e221de3ae4fdbb2290cb",
+    "skill.md": "b21ec6f20d7731aeea2893155b1d187f73bd640b590bbc06de0487e14c85e476",
     "agent.json": "23d68436a2dd35464d6f30384dfe41ca2734b20d26d6d094ceda898b6fdfa487",
 }
 BASE = "https://artifacts.tenfourty.site"
@@ -476,8 +476,8 @@ FOOTER = "<footer>Published from BABA through the homelab artifacts service.</fo
 NEWS_TAIL = 26  # every entry so far; newer ones are added in front, so these never move
 NEWS_TAIL_DIGEST = "08b7ad27fd383101cc42c10f0994c8368d6fa5b33dc1617635d6068b5902f467"
 HELP_DIGEST = {
-    "artifacts-publish": "93a594e251e76e033b7f3e8c269a31fc45ee7141692b97961a148dddf3605e69",
-    "artifacts-decide": "849fc36f2065438ac352f4e98bfcd66bb13b11cf1ab671aa5c5d7510ec59952d",
+    "artifacts-publish": "71d90c6a43a6a9a903eaf2f89f3ff2e59e0a07ce852936f83e408449007ee252",
+    "artifacts-decide": "c019bc341587af95cb8f4e0cb3948bf64e3b9cd72b243fb03a7926d05f6d9371",
 }
 
 
