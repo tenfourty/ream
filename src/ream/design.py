@@ -34,6 +34,10 @@ VALUES: tuple[Value, ...] = (
     Value("ink", "#0b0b0b", "#e9eae4", "body text"),
     Value("muted", "#898781", "#989a90", "secondary text"),
     Value("card", "#fff", "#1c1f23", "a card, panel or dialog"),
+    # A box set INTO the page rather than lifted off it: the connect page's prompt to
+    # copy. A step from --paper in each theme (darker in light, lighter in dark), so it
+    # is never the light grey on a dark page it was while it named no value.
+    Value("well", "#f5f5f4", "#1c1f23", "a box set into the page"),
     Value("line", "rgba(11,11,11,.1)", "#2b2e34", "hairlines and borders"),
     Value("line-hover", "rgba(11,11,11,.28)", "#5a606a", "a border under the pointer"),
     Value("accent", "#0f6f63", "#5ec9b8", "the homelab teal: links, focus, fills"),

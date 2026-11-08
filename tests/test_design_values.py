@@ -16,12 +16,9 @@ _DECL = re.compile(r"(?:(?<=[{;])|^)\s*([a-z-]+)\s*:([^;{}]*)(?=[;}])")
 _COLOUR = re.compile(r"#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\(")
 _FACE = re.compile(r"serif|monospace|system-ui|Roboto|Georgia|Menlo|Consolas")
 
-# Known before the values were named, and kept so the look did not change: the connect
-# pages' fallbacks after names that are always defined (so never used), and the one after
-# --soft, which is not defined, so its fallback is what renders.
-_RAW_COLOUR_EXCEPTIONS = ["#ddd", "#ccc", "#f5f5f4"]
-# Used but never defined: existing bugs, recorded rather than fixed (the look stays as is).
-_UNDEFINED_KNOWN = {"bg", "soft"}
+# None left: the connect page's fallbacks are gone, and the box that rendered one (after
+# an undefined --soft) names --well.
+_RAW_COLOUR_EXCEPTIONS: list[str] = []
 
 
 def _sheets() -> list[str]:
@@ -62,7 +59,37 @@ def test_every_name_used_is_defined():
     used = set()
     for css in _sheets():
         used |= set(re.findall(r"var\(--([a-z0-9-]+)", css))
-    assert used - set(design.BY_NAME) == _UNDEFINED_KNOWN
+    assert used - set(design.BY_NAME) == set()
+
+
+def test_no_var_carries_a_fallback():
+    """A fallback after a name that is always defined never renders, and one after a
+    name that is not hides the missing name (--soft drew a light box in dark mode)."""
+    for css in _sheets():
+        assert re.findall(r"var\(--[a-z0-9-]+,", css) == []
+
+
+def test_no_comment_text_is_left_outside_a_comment():
+    """Prose after a stray `*/` is read as a selector: the browser drops it and the rule
+    behind it, which is how the narrow-screen `.sheet .ask` rule never applied."""
+    for css in _sheets():
+        bare = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+        assert "*/" not in bare
+        assert "`" not in bare
+
+
+def test_the_narrow_screen_rule_for_a_lifted_question_stands_alone():
+    bare = re.sub(r"/\*.*?\*/", "", gallery._RULES, flags=re.DOTALL)
+    before, after = bare.split("@media (max-width:55.99rem){", 1)
+    assert before.rstrip().endswith("}"), "something not a rule sits before it"
+    assert after.lstrip().startswith(".sheet .ask{position:static;")
+
+
+def test_since_and_the_connect_box_have_a_defined_ground():
+    assert re.search(r"\.since\{[^}]*background:var\(--paper\)", gallery._RULES)
+    assert "background:var(--well)" in gallery._CONNECT_CSS
+    assert design.light("well") == "#f5f5f4"  # the light look did not move
+    assert design.dark("well") != design.light("well")
 
 
 def test_the_icon_carries_the_mark_colours_as_values():

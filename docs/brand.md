@@ -74,6 +74,7 @@ another refuses a raw colour or font stack in the gallery's rules.
 | `--ink` | `#0b0b0b` | `#e9eae4` | body text |
 | `--muted` | `#898781` | `#989a90` | secondary text |
 | `--card` | `#fff` | `#1c1f23` | a card, panel or dialog |
+| `--well` | `#f5f5f4` | `#1c1f23` | a box set into the page |
 | `--line` | `rgba(11,11,11,.1)` | `#2b2e34` | hairlines and borders |
 | `--line-hover` | `rgba(11,11,11,.28)` | `#5a606a` | a border under the pointer |
 | `--accent` | `#0f6f63` | `#5ec9b8` | the homelab teal: links, focus, fills |

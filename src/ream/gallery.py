@@ -564,8 +564,10 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
   border-radius:.45rem;background:var(--chip);color:var(--ink);
   font:var(--text-sm)/1.4 var(--sans-short)}
 
+/* What has happened to a question since it was asked: set apart from the card it
+   sits on (--card) by the page's own ground, as the inputs on a card are. */
 .since{margin:var(--space-5) 0 var(--space-75);padding:var(--space-45) var(--space-7);border-left:2px solid var(--line);
-  background:var(--bg);border-radius:.3rem}
+  background:var(--paper);border-radius:.3rem}
 .since b{display:block;font:600 .7rem/1.5 var(--mono);letter-spacing:.1em;
   text-transform:uppercase;color:var(--muted)}
 .since ul{margin:.25rem 0 0;padding-left:1.1rem}
@@ -606,7 +608,8 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    should have been. The script now asks `matchMedia("(min-width:56rem)")`, and
    this query is its exact complement (55.99, not 56, so the boundary width
    belongs to exactly one of them). Change one and you must change the other;
-   better, change neither without checking both. */
+   better, change neither without checking both.
+
    `width` carries !important and the others do not, deliberately. gallery.js
    writes top, left and width as INLINE styles, and an inline style beats a
    stylesheet rule whatever its specificity -- so a plain `width:auto` here
@@ -1785,12 +1788,12 @@ def _rename_dialog(artifact_id: str, title: str) -> str:
 # the gallery CSP allows style 'unsafe-inline' and nothing else uses it.
 _CONNECT_CSS = (
     "<style>.cx{max-width:40rem;margin:1.5rem auto;display:grid;gap:1.25rem}"
-    ".cx section{border:1px solid var(--line,#ddd);border-radius:12px;padding:1.1rem 1.25rem}"
+    ".cx section{border:1px solid var(--line);border-radius:12px;padding:1.1rem 1.25rem}"
     ".cx h2{margin:0 0 .5rem;font-size:1.05rem}.cx p{margin:.4rem 0;line-height:1.5}"
-    ".cx input{font:inherit;padding:.5rem .6rem;border:1px solid var(--line,#ccc);"
+    ".cx input{font:inherit;padding:.5rem .6rem;border:1px solid var(--line);"
     "border-radius:8px;width:100%;box-sizing:border-box;margin:.35rem 0 .75rem}"
     ".cx .code{font:600 1.4rem/1.2 var(--mono-short);letter-spacing:.12em;text-transform:uppercase}"
-    ".cx pre{white-space:pre-wrap;background:var(--soft,#f5f5f4);padding:.75rem;border-radius:8px;"
+    ".cx pre{white-space:pre-wrap;background:var(--well);padding:.75rem;border-radius:8px;"
     "font-size:.9rem;user-select:all}.cx .err{color:var(--connect-err)}.cx .ok{color:var(--connect-ok)}"
     ".cx dl{display:grid;grid-template-columns:auto 1fr;gap:.25rem .75rem;margin:.5rem 0}"
     ".cx dt{opacity:.7}.cx .row{display:flex;gap:.5rem;flex-wrap:wrap}"
