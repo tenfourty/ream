@@ -448,15 +448,33 @@ def test_a_failing_block_scanner_leaves_the_comment_intact_and_unscanned(
     _toy(monkeypatch, _boom, "block")
     row = _agent_comment(db, page, "fine")
     assert comments.second_scan(db, row.id) == "unavailable"
-    assert _body_state(db, row.id) == ("fine", False, None)
+    # hidden reversibly: not listed, nothing blanked, still unscanned
+    assert _body_state(db, row.id) == ("fine", True, "scan_blocked")
+    assert comments.list_for_artifact(db, page.id) == []
     assert not _stamped(db, row.id)
     assert "leaky detail" not in caplog.text
-    # the sweeper retries once the scanner works again
+    # the sweeper retries once the scanner works again, and the comment returns
     _age(db, row.id)
     scanners._SCANNERS[:] = []
     scanners.register("toy", "toy", lambda text: [])
     assert comments.sweep_unscanned(db) == 1
     assert _stamped(db, row.id)
+    assert _body_state(db, row.id) == ("fine", False, None)
+    assert [c.id for c in comments.list_for_artifact(db, page.id)] == [row.id]
+
+
+def test_a_hidden_pending_comment_is_still_withdrawn_by_a_finding(
+    db, page, gg, monkeypatch
+):
+    from ream import scanners
+
+    _toy(monkeypatch, _boom, "block")
+    row = _agent_comment(db, page, "fine")
+    comments.second_scan(db, row.id)
+    scanners._SCANNERS[:] = []
+    gg.result = [Finding(shape="ggshield_x", line=1)]
+    assert comments.second_scan(db, row.id) == "withdrawn"
+    assert _body_state(db, row.id) == ("", True, "ggshield_x")
 
 
 def test_a_clean_plugin_answer_counts_as_scanned_when_the_relay_is_unset(
@@ -468,6 +486,17 @@ def test_a_clean_plugin_answer_counts_as_scanned_when_the_relay_is_unset(
     row = _agent_comment(db, page, "fine")
     assert comments.second_scan(db, row.id) == "scanned"
     assert _stamped(db, row.id)
+
+
+def test_a_clean_plugin_answer_is_not_enough_when_a_configured_relay_is_down(
+    db, page, gg, monkeypatch
+):
+    _toy(monkeypatch, lambda text: [])
+    gg.result = None  # configured (the fixture) but unavailable
+    row = _agent_comment(db, page, "fine")
+    assert comments.second_scan(db, row.id) == "unavailable"
+    assert not _stamped(db, row.id)
+    assert [c.id for c in comments.list_for_artifact(db, page.id)] == [row.id]
 
 
 def test_a_skipped_plugin_scanner_is_no_answer_when_the_relay_is_unset(

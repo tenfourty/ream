@@ -576,8 +576,10 @@ drivers; CI only (not on baba).
    or the built-in Mailgun code when none is registered (it moves out in 9b); a raise becomes
    `MailFailed` (so callers are unchanged) and counts as `<plug-in>:mail`.
    Review fixes: a `block` scanner fault on a comment's second scan leaves the comment intact and
-   unscanned (the sweeper retries; only a publish fails closed); a clean answer from a plug-in
-   scanner counts as scanned when no relay is configured; a finding's shape must be a non-empty
+   unscanned and hidden reversibly (`withdrawn_kind = 'scan_blocked'`, nothing blanked; the sweeper
+   retries and a clean scan lifts it, a finding withdraws it for good; only a publish fails
+   closed); a clean answer from a plug-in scanner counts as scanned only when no relay is
+   configured (a configured relay that is down stays unscanned); a finding's shape must be a non-empty
    `str` of at most 64 characters, else the answer is a scanner error; each scanner call is
    bounded (`SCAN_TIMEOUT_SECONDS`; a timeout is a scanner error); a backend whose `enabled()`
    is false or raises refuses to send (`MailFailed`). **Scope:** plug-in scanners run in

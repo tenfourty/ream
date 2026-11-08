@@ -1625,6 +1625,30 @@ def reopen(
     return _row_to_comment(row)
 
 
+# `withdrawn_kind` of a comment hidden while a `block` plug-in scanner is failing: the
+# same hidden state every reader already excludes, but nothing is blanked and a later
+# clean scan lifts it (a finding still withdraws it for good).
+_SCAN_HOLD = "scan_blocked"
+
+
+def _hide_pending_scan(db: Database, comment_id: str) -> None:
+    with db.connect() as conn, conn.transaction():
+        conn.execute(
+            "update comment set withdrawn_at = %s, withdrawn_kind = %s"
+            " where id = %s and withdrawn_at is null",
+            (datetime.now(UTC), _SCAN_HOLD, comment_id),
+        )
+
+
+def _lift_scan_hold(db: Database, comment_id: str) -> None:
+    with db.connect() as conn, conn.transaction():
+        conn.execute(
+            "update comment set withdrawn_at = null, withdrawn_kind = null"
+            " where id = %s and withdrawn_kind = %s",
+            (comment_id, _SCAN_HOLD),
+        )
+
+
 def withdraw(db: Database, comment_id: str, *, kind: str) -> bool:
     """Take a comment GitGuardian flagged out of every read, and blank its text so
     the secret does not sit in the database. `kind` names the shape (e.g.
@@ -1634,8 +1658,9 @@ def withdraw(db: Database, comment_id: str, *, kind: str) -> bool:
         row = conn.execute(
             "update comment set withdrawn_at = %s, withdrawn_kind = %s,"
             " body = '', quote = ''"
-            " where id = %s and withdrawn_at is null returning artifact_id",
-            (datetime.now(UTC), kind, comment_id),
+            " where id = %s and (withdrawn_at is null or withdrawn_kind = %s)"
+            " returning artifact_id",
+            (datetime.now(UTC), kind, comment_id, _SCAN_HOLD),
         ).fetchone()
         if row is None:
             return False
@@ -1690,8 +1715,9 @@ def second_scan(db: Database, comment_id: str) -> str:
         with db.connect() as conn:
             row = conn.execute(
                 "select body, artifact_id, author, quote from comment"
-                " where id = %s and withdrawn_at is null and author_kind = 'agent'",
-                (comment_id,),
+                " where id = %s and (withdrawn_at is null or withdrawn_kind = %s)"
+                " and author_kind = 'agent'",
+                (comment_id, _SCAN_HOLD),
             ).fetchone()
         if row is None:
             return "gone"
@@ -1708,7 +1734,8 @@ def second_scan(db: Database, comment_id: str) -> str:
         if not found:
             # Scanners a plug-in registered. A `block` scanner that fails leaves the
             # comment unscanned for the sweeper to retry (an outage must not wipe
-            # comments); a publish under `block` still fails closed.
+            # comments); a publish under `block` still fails closed. Until it is
+            # cleared the comment is hidden (reversibly), not shown unscanned.
             try:
                 extra, plugin_answered = scanners.run_detailed(scanned_text)
             except scanners.ScannerBlocked as exc:
@@ -1719,11 +1746,15 @@ def second_scan(db: Database, comment_id: str) -> str:
                     exc.name,
                     comment_id,
                 )
+                _hide_pending_scan(db, comment_id)
                 return "unavailable"
             if extra:
                 found = extra
-        if found is None and plugin_answered:
-            found = []  # no relay answer, but a plug-in scanner gave a real clean one
+        if found is None and plugin_answered and not ggscan.configured():
+            # No relay to ask at all (never configured): a plug-in scanner's real clean
+            # answer is the second opinion. A configured relay that is down stays
+            # unscanned so the sweeper asks it again.
+            found = []
         if found is None:
             if ggscan.configured():
                 _log.warning(
@@ -1736,6 +1767,8 @@ def second_scan(db: Database, comment_id: str) -> str:
             return "unavailable"
         if found:
             withdraw(db, comment_id, kind=found[0].shape)
+        else:
+            _lift_scan_hold(db, comment_id)
         with db.connect() as conn:
             conn.execute(
                 "update comment set gg_scanned_at = %s where id = %s",
@@ -1757,11 +1790,11 @@ def sweep_unscanned(db: Database, *, limit: int = 200) -> int:
             r[0]
             for r in conn.execute(
                 "select id from comment where author_kind = 'agent'"
-                " and withdrawn_at is null and gg_scanned_at is null"
-                " and created_at < %s"
+                " and (withdrawn_at is null or withdrawn_kind = %s)"
+                " and gg_scanned_at is null and created_at < %s"
                 " order by gg_attempted_at asc nulls first, created_at asc, id asc"
                 " limit %s",
-                (datetime.now(UTC) - timedelta(seconds=30), limit),
+                (_SCAN_HOLD, datetime.now(UTC) - timedelta(seconds=30), limit),
             ).fetchall()
         ]
     checked = 0
