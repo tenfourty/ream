@@ -16,7 +16,7 @@ import os
 import sys
 from pathlib import Path
 
-from ream import envnames, textvars
+from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
@@ -169,8 +169,12 @@ def _state_file() -> Path:
 
 
 def entries() -> list[tuple[str, str]]:
-    """`NEWS` with the owner's words filled in, as the tools print it."""
-    return [(day, textvars.render(line, client=True)) for day, line in NEWS]
+    """`NEWS` (and any plug-in's lines, merged newest first) with the owner's words filled
+    in, as the tools print it."""
+    merged = list(NEWS)
+    if plugin_cli.news():
+        merged = sorted([*NEWS, *plugin_cli.news()], key=lambda e: e[0], reverse=True)
+    return [(day, textvars.render(line, client=True)) for day, line in merged]
 
 
 def announce(stream=None) -> None:
@@ -180,13 +184,14 @@ def announce(stream=None) -> None:
     a note about new features must not be the thing that breaks a pipeline.
     `ARTIFACTS_NEWS=0` silences it.
     """
-    if envnames.get("NEWS") == "0" or not NEWS:
+    if envnames.get("NEWS") == "0" or not (NEWS or plugin_cli.news()):
         return
     stream = stream or sys.stderr
     path = _state_file()
     try:
         seen = path.read_text(encoding="utf-8").strip() if path.exists() else None
-        unseen = [entry for entry in entries() if seen is None or entry[0] > seen]
+        every = entries()
+        unseen = [entry for entry in every if seen is None or entry[0] > seen]
         if seen is None:
             unseen = unseen[:FIRST_RUN]
         if not unseen:
@@ -194,6 +199,6 @@ def announce(stream=None) -> None:
         for _tag, line in unseen:
             print(f"new in Ream: {line}", file=stream)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(NEWS[0][0] + "\n", encoding="utf-8")
+        path.write_text(every[0][0] + "\n", encoding="utf-8")
     except OSError:
         return

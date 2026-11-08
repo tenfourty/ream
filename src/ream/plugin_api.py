@@ -3,7 +3,8 @@
 A plug-in is a Python package with an entry point in the group `ream.plugins` (or the old
 `artifacts.plugins`, kept for good)
 naming a function `register(api: PluginAPI) -> None`. The server calls each once at
-start-up, in name order. Registrations: `sink`, `answer_source`, `on_answer`, `scanner`, `mail_backend`.
+start-up, in name order. Registrations: `sink`, `answer_source`, `on_answer`, `scanner`, `mail_backend`,
+`cli`, `client_defaults` (the last two matter to the command-line tools: `plugin_cli.py`).
 
 A plug-in that raises while registering, names a major API version this core does not
 speak, or is named in `REAM_PLUGINS` but not installed, stops start-up
@@ -21,19 +22,29 @@ running, so the wrapper sees no failure; the outbox row's `last_error` says
 
 from __future__ import annotations
 
-import inspect
 import logging
 import re
 import threading
 from collections.abc import Callable
 from importlib import metadata
 
-from ream import decisions, hosts, mail, scanners, settings, sinks, store, textvars
+from ream import (
+    decisions,
+    hosts,
+    mail,
+    plugin_cli,
+    scanners,
+    settings,
+    sinks,
+    store,
+    textvars,
+)
 
-API_VERSION = (1, 0)
-GROUP = "ream.plugins"
-# The old group name, read for good beside the new one.
-OLD_GROUP = "artifacts.plugins"
+# Shared with the command-line side, which cannot import this module (plugin_cli.py).
+API_VERSION = plugin_cli.API_VERSION
+GROUP = plugin_cli.GROUP
+OLD_GROUP = plugin_cli.OLD_GROUP
+PluginError = plugin_cli.PluginError
 
 _log = logging.getLogger(__name__)
 _lock = threading.Lock()
@@ -41,10 +52,6 @@ _failures: dict[tuple[str, str], int] = {}
 _loaded: list[str] = []
 # Inbound routes plug-ins mounted, by normalised host: (plug-in, guarded ASGI app).
 _ROUTERS: dict[str, tuple[str, Callable]] = {}
-
-
-class PluginError(Exception):
-    """A plug-in could not be loaded. The message names it, never a value."""
 
 
 def failure_counts() -> dict[str, int]:
@@ -234,6 +241,28 @@ class PluginAPI:
         app.include_router(router)
         _ROUTERS[name] = (self._plugin, _guard_app(self._plugin, app))
 
+    def cli(self, name: str, main: Callable, help: str) -> None:
+        """Register `ream <name>` (4.2, 6). `main()` is called as a console script is: it
+        reads `sys.argv` (argv[0] is `ream <name>`) and returns the exit status. `help` is
+        one printable line for `ream --help`. A verb the core owns, or one already taken, is
+        refused (start-up stops). Used by the command-line process; the server only checks
+        the registration."""
+        plugin_cli.register_cli(self._plugin, name, main, help)
+
+    def client_defaults(
+        self,
+        api_url: str | None = None,
+        session_envs: list[str] | tuple[str, ...] = (),
+        news: list[tuple[str, str]] | tuple[tuple[str, str], ...] = (),
+    ) -> None:
+        """The command-line tools' defaults (4.2, 6): `api_url` is the endpoint when
+        `REAM_API` is unset (one plug-in at most); `session_envs` are environment variables
+        holding the office part of the default session label, asked before the core's own
+        `QD_OFFICE` and seat; `news` is `(YYYY-MM-DD[a-z], text)` lines printed once per
+        machine with the core's. Used by the command-line process; the server only checks
+        the registration."""
+        plugin_cli.register_client_defaults(self._plugin, api_url, session_envs, news)
+
 
 _HOST_NAME = re.compile(
     r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+"
@@ -329,49 +358,14 @@ def _entry_points() -> list:
     return list(found.values())
 
 
-def _requires_major(register: Callable) -> int | None:
-    module = inspect.getmodule(register)
-    declared = getattr(module, "REQUIRES_API", None)
-    if declared is None:
-        return None
-    return int(str(declared).split(".")[0])
+_requires_major = plugin_cli.requires_major
 
 
 def load() -> list[str]:
     """Register every plug-in `REAM_PLUGINS` selects, once, in name order.
     Raises PluginError (naming the plug-in) and loads nothing further on a failure."""
-    wanted = settings.current().plugins.strip()
-    found = {ep.name: ep for ep in _entry_points()}
-    if wanted.lower() == "none":
-        names: list[str] = []
-    elif wanted:
-        names = [n.strip() for n in wanted.split(",") if n.strip()]
-        for name in names:
-            if name not in found:
-                raise PluginError(
-                    f"REAM_PLUGINS names plug-in {name!r}, which is not installed"
-                )
-        names = sorted(set(names))
-    else:
-        names = sorted(found)
-    done: list[str] = []
-    for name in names:
-        try:
-            register = found[name].load()
-            major = _requires_major(register)
-            if major is not None and major != API_VERSION[0]:
-                raise PluginError(
-                    f"plug-in {name!r} requires plug-in API {major}, this core speaks"
-                    f" {API_VERSION[0]}"
-                )
-            register(PluginAPI(name))
-        except PluginError:
-            raise
-        except Exception as exc:
-            raise PluginError(
-                f"plug-in {name!r} failed to register: {type(exc).__name__}"
-            ) from exc
-        done.append(name)
-        _log.info("plug-in %s registered", name)
+    done = plugin_cli.register_all(
+        _entry_points(), settings.current().plugins, PluginAPI, _log
+    )
     _loaded[:] = done
     return done

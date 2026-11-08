@@ -37,7 +37,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
-from ream import envnames, images, news, pickup, textvars
+from ream import envnames, images, news, pickup, plugin_cli, textvars
 from ream.cli import prog_name
 from ream.client import (
     Conflict,
@@ -2677,7 +2677,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run() -> None:
-    news.announce()  # the console script only; see news.py
+    plugin_cli.load_or_exit()  # the console script only, like the news
+    news.announce()  # see news.py
     raise SystemExit(main())
 
 

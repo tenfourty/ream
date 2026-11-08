@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from ream import client, textvars
+from ream import client, plugin_cli, textvars
 from ream.cli import prog_name
 
 _WAIT_LIMIT_SECONDS = 16 * 60
@@ -139,4 +139,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run() -> None:
+    plugin_cli.load_or_exit()
     sys.exit(main())

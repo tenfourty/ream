@@ -611,9 +611,33 @@ drivers; CI only (not on baba).
    plug-in's, and `create_app` checks plug-in hosts last so one can never shadow a core host.
    The route has no gallery or key authentication (it checks its own caller, as `partner_in`
    does). A fault in it answers a bare 500, is counted as `<plug-in>:router` and logged by type
-   only. Any registration error stops start-up naming the plug-in. Left for 7b now: cli/client
-   hooks, CLI loading of plug-ins, cross-process failure counts and
-   breaker state, the core-bare CI job.
+   only. Any registration error stops start-up naming the plug-in.
+   **7b part 4 built (`ci/slice7b-part4`).** `api.cli(name, main, help)` and
+   `api.client_defaults(api_url=None, session_envs=(), news=())`, with the CLI side of loading
+   (`plugin_cli.py`, standard library only, so a client machine without the server stack can run
+   it). Every command-line entry (`ream`, `artifacts-publish`, `-decide`, `-connect`) runs the
+   same selection as the server (`REAM_PLUGINS`/`ARTIFACTS_PLUGINS`: unset all, `none`, a list
+   whose unknown name stops) and hands each plug-in a `CliPluginAPI`: `cli` and
+   `client_defaults` work, the server registrations are accepted and ignored, so one `register`
+   serves both processes. A registration fault stops the tool (exit 2) naming the plug-in and the
+   exception's type, never its text. `cli`: a name matching `[a-z][a-z0-9-]{0,31}`, not a verb
+   the core owns (`publish`, the decide verbs, `admin`, `republish`, `connect`, `beads-page`,
+   `bead-metrics`, `help`), not taken by another plug-in; `ream <name>` calls `main()` as a
+   console script is called (argv[0] `ream <name>`), a raise prints the type only (exit 1), and
+   `ream --help` gains a "From plug-ins" section only when one is installed (with none the text is
+   unchanged, the HELP_DIGEST tests as they were). `client_defaults`: `api_url` (plain http(s),
+   no userinfo/query; one plug-in at most) is the endpoint when `REAM_API` is unset, ahead of
+   the house constant; `session_envs` (upper-case names, none containing KEY, TOKEN, SECRET,
+   PASSWORD or CREDENTIAL, at most 8) are asked for the office part of the default session label
+   before `QD_OFFICE` and the seat; `news` is `(YYYY-MM-DD[a-z], text)`, at most 20, merged
+   newest first into the tools' once-per-machine news. A refused call changes nothing.
+   **Choices:** the house fallbacks (`HOUSE_DEFAULT_API`, `QD_OFFICE`, the seat, the house owner
+   words) stay in the core as the lowest default, because with no plug-in the tools must behave
+   as today and the house plug-in does not exist before step 9; they go when it does. The
+   `session_env` setting (the variable holding the session id) is not made configurable here:
+   `CLAUDE_CODE_SESSION_ID` stays. The tracker-page verbs (`beads-page`, `bead-metrics`) stay
+   core verbs until 9a. Left for 7b: cross-process failure
+   counts and breaker state, the core-bare CI job.
 8. **The plug-in repo and its pipeline** (homelab office creates the repo; lander change). It
    builds an image identical to today's from an empty plug-in set, opens a pin PR, and one real
    pin PR is merged as proof before anything moves. Core starts publishing the `-core` image and

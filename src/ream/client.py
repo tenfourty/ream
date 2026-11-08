@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-from ream import csp, envnames, news, settings, textvars, traps
+from ream import csp, envnames, news, plugin_cli, settings, textvars, traps
 from ream.cli import prog_name
 
 _DEFAULT_KEY_FILE = "~/.config/artifacts/key"
@@ -86,7 +86,15 @@ def default_session() -> str | None:
     said their pages had gone out unlabelled. None when there is no session id
     or no office, so the caller still warns."""
     ref = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()[:8]
-    office = os.environ.get("QD_OFFICE", "").strip()
+    # A plug-in's `client_defaults(session_envs=[...])` names are asked first, then the
+    # house's own (kept in the core until the house plug-in exists, design step 9).
+    office = ""
+    for name in plugin_cli.session_envs():
+        office = os.environ.get(name, "").strip()
+        if office:
+            break
+    if not office:
+        office = os.environ.get("QD_OFFICE", "").strip()
     if not office:
         office = (envnames.get("SEAT") or "").replace("_", "-")
     if not ref or not office or "/" in office:
@@ -230,6 +238,12 @@ def _check_url_scheme(url: str) -> None:
 
 
 def _api_base() -> str:
+    # REAM_API wins; else a plug-in's `client_defaults(api_url=...)`; else the house's
+    # address, kept in the core until the house plug-in exists (design step 9).
+    if not settings.is_set("api_url"):
+        supplied = plugin_cli.default_api_url()
+        if supplied:
+            return supplied
     return settings.current().api_url
 
 
@@ -2464,6 +2478,7 @@ def main(argv: list[str] | None = None) -> int:
 def run() -> None:
     # In run(), not main(): the console script only, so tests never touch
     # this machine's state file.
+    plugin_cli.load_or_exit()
     news.announce()
     sys.exit(main())
 

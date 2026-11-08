@@ -13,6 +13,8 @@ stay for good. Standard library only at import: a tool is loaded when its verb i
 import importlib
 import sys
 
+from ream import plugin_cli
+
 # verb -> (module, function). A function is called with no arguments, as a console script is,
 # and reads sys.argv; its return value is the exit status.
 _OTHER = {
@@ -68,7 +70,17 @@ The old `artifacts-*` commands keep working.
 def _help() -> str:
     rest = [v for v in DECIDE_VERBS if v not in ("ask", "wait")]
     lines = ", ".join(rest)
-    return _HELP.format(decide_rest=f"also (artifacts-decide): {lines}")
+    text = _HELP.format(decide_rest=f"also (artifacts-decide): {lines}")
+    # Plug-in verbs, when any is installed; with none the text is exactly the above.
+    extra = plugin_cli.commands()
+    if extra:
+        text = text.replace(
+            "\nThe old `artifacts-*`",
+            "\nFrom plug-ins:\n"
+            + "".join(f"  {c.name:<14} {c.help}\n" for c in extra)
+            + "\nThe old `artifacts-*`",
+        )
+    return text
 
 
 # The global flags of `artifacts-decide` that take a value; they may come before the verb.
@@ -86,7 +98,7 @@ def prog_name(default: str) -> str:
 def _find_verb(args: list[str]) -> int | None:
     """The verb is the first positional word. Only decide's own global flags may come
     before it; anything else in front (`ream --title list publish ...`) is no verb."""
-    known = set(_OTHER) | set(DECIDE_VERBS)
+    known = set(_OTHER) | set(DECIDE_VERBS) | {c.name for c in plugin_cli.commands()}
     index = 0
     while index < len(args):
         token = args[index]
@@ -102,7 +114,22 @@ def _find_verb(args: list[str]) -> int | None:
     return None
 
 
+def _run_plugin_verb(command) -> int:
+    """Run a plug-in's verb as a console script. A fault prints the exception's type and
+    nothing else: its text may carry a value."""
+    try:
+        result = command.main()
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- a plug-in's fault, reported by type only
+        sys.stderr.write(f"ream {command.name}: error: {type(exc).__name__}\n")
+        return 1
+    return result if isinstance(result, int) else 0
+
+
 def main(argv: list[str] | None = None) -> None:
+    # The plug-ins selected by REAM_PLUGINS register their verbs and client defaults first.
+    plugin_cli.load_or_exit()
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args == ["-h"] or args == ["--help"] or args == ["help"]:
         stream = sys.stdout if args else sys.stderr
@@ -113,6 +140,10 @@ def main(argv: list[str] | None = None) -> None:
         sys.stderr.write(f"ream: no such verb in: {' '.join(args)}\n\n{_help()}")
         raise SystemExit(2)
     verb = args[index]
+    plugin_verb = plugin_cli.command(verb)
+    if plugin_verb is not None:
+        sys.argv = [f"ream {verb}"] + args[:index] + args[index + 1 :]
+        raise SystemExit(_run_plugin_verb(plugin_verb))
     before, after = args[:index], args[index + 1 :]
     if verb in DECIDE_VERBS:
         module_name, function_name = "ream.decide", "run"
