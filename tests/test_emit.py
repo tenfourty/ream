@@ -261,6 +261,9 @@ def test_migration_adds_the_outbox_and_leaves_partner_rows_delivering(db):
         )
         conn.execute("drop table outbox")
         if db.sqlite:
+            # The tables of the steps after it go too, or their steps would find them.
+            conn.execute("drop table sink_breaker")
+            conn.execute("drop table plugin_failure")
             conn.execute("pragma user_version = 19")  # the version before this table
     db.migrate()
     db.migrate()  # idempotent

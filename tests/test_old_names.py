@@ -23,6 +23,9 @@ from artifacts import keys as old_keys
 # --- the import name -----------------------------------------------------------------------
 
 
+pytestmark = pytest.mark.plugin_loader
+
+
 def test_the_old_package_is_the_new_one():
     assert artifacts is ream
     assert "ream" in sys.modules and sys.modules["artifacts"] is sys.modules["ream"]

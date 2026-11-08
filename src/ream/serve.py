@@ -183,5 +183,7 @@ def app_from_env():
     # The partner bridge's sender: only when fully configured (partner.py).
     partner.start(db, partner_config)
     # The core outbox's sender, for every sink that delivers through it (sinks.py).
+    # Breaker state and plug-in failure counts in the database: one view over all workers.
+    sinks.bind(db)
     sinks.start(db)
     return _arm_shutdown_signals(create_app(db, inbound))

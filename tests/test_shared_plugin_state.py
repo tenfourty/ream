@@ -103,10 +103,8 @@ def test_an_unreachable_database_falls_back_to_memory(two):
     assert plugin_api.failure_counts() == {"toy:sink": 1}
 
 
-def test_start_binds_and_stop_unbinds(db):
-    try:
-        sinks.start(db)
-        assert sinks.shared() is db
-    finally:
-        sinks.stop()
+def test_stop_unbinds(db):
+    sinks.bind(db)
+    assert sinks.shared() is db
+    sinks.stop()
     assert sinks.shared() is None

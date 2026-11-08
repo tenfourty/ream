@@ -905,6 +905,27 @@ def fresh_schema(_schema: _Schema):
 
 
 @pytest.fixture(autouse=True)
+def _plugin_loader_env(request, monkeypatch):
+    """A test marked `plugin_loader` fakes entry points and expects the loader to read
+    them, so it runs with REAM_PLUGINS unset even in the core-bare CI job, where the
+    variable is `none` for the rest of the suite."""
+    if request.node.get_closest_marker("plugin_loader"):
+        monkeypatch.delenv("REAM_PLUGINS", raising=False)
+        monkeypatch.delenv("ARTIFACTS_PLUGINS", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _unbound_shared_state():
+    """`serve.app_from_env` binds the shared breaker state and failure counts to its
+    database; no test may inherit that (or leave its own) binding."""
+    from ream import sinks
+
+    sinks.bind(None)
+    yield
+    sinks.bind(None)
+
+
+@pytest.fixture(autouse=True)
 def _postgres_only(request):
     """A test marked `postgres_only` is skipped on SQLite."""
     if SQLITE and request.node.get_closest_marker("postgres_only"):

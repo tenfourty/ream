@@ -653,7 +653,7 @@ drivers; CI only (not on baba).
    failure counts now live in the database: tables `sink_breaker` (sink, failures, open_until,
    failed_keys, opened_at) and `plugin_failure` (plugin, interface, failures), SQLite step 22,
    `schema.sql` for Postgres; no stored name changed. `sinks.bind(db)` points the state at a
-   database (`sinks.start(db)` binds, `stop()` unbinds; `sinks.shared()` reads it); the
+   database (`serve.py` binds, `sinks.stop()` unbinds; `sinks.shared()` reads it); the
    breaker rules are the same code for both copies (`_fail_state`), run read-modify-write in
    one transaction (`for update` on Postgres, `begin immediate` on SQLite), so the cooldown
    trial is taken by exactly one process. **Choices:** (a) with no database bound (the command

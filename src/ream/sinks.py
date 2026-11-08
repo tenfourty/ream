@@ -98,7 +98,7 @@ _late_failures = 0
 _breakers: dict[str, list] = {}
 # The database that holds the shared copy of the breaker state and the plug-in
 # failure counts (tables `sink_breaker`, `plugin_failure`), so every worker process of
-# a deployment sees one breaker per sink. `start(db)` binds it, `stop()` unbinds it.
+# a deployment sees one breaker per sink. `serve.py` binds it, `stop()` unbinds it.
 _shared: Database | None = None
 
 
@@ -599,7 +599,6 @@ def start(db: Database) -> threading.Thread:
     a sender is running, a second call returns it and starts nothing. Each sender
     has its own stop flag, so a restart can never revive one that was told to stop."""
     global _thread, _stop
-    bind(db)
     with _lock:
         if (
             _thread is not None

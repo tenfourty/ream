@@ -10,6 +10,8 @@ import pytest
 
 from ream import decisions, events, plugin_api, settings, sinks, store
 
+pytestmark = pytest.mark.plugin_loader
+
 
 class EP:
     """An entry point: a name and the `register` it loads."""

@@ -86,6 +86,7 @@ timeout_method = "signal"
 markers = [
     "slow(reason): genuinely needs more than a second; says why",
     "postgres_only: reads Postgres's catalogue or runs Postgres's own SQL; skipped when REAM_TEST_DB=sqlite",
+    "plugin_loader: drives the plug-in loader with entry points it fakes; REAM_PLUGINS is unset for it (the core-bare CI job sets it to none for everything else)",
     "background_thumbnails: publishes in this test start the real background thumbnail render (off by default in tests; see tests/conftest.py)",
 ]
 

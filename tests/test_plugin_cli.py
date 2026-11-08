@@ -9,6 +9,9 @@ import pytest
 
 from ream import cli, client, news, plugin_api, plugin_cli
 
+pytestmark = pytest.mark.plugin_loader
+
+
 TODAY = datetime.now(UTC).date().isoformat()
 
 

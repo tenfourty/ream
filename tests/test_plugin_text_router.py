@@ -15,6 +15,9 @@ from fastapi.testclient import TestClient
 from ream import hosts, onboarding, plugin_api, settings, sinks, store, textvars
 from ream.app import create_app
 
+pytestmark = pytest.mark.plugin_loader
+
+
 _counter = itertools.count()
 LEAK_MARK = "sekrit-payload-77"
 
