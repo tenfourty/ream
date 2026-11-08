@@ -307,6 +307,10 @@ def open_breakers(now: datetime | None = None) -> dict[str, str]:
 
 
 def register(sink: Sink) -> None:
+    """Add a sink. A name already in use, a built-in's included, is a ValueError here, at
+    start-up, never later in an event-emitting call. (`_ensure_builtins` writes the
+    registry itself, not through here, so there is no recursion.)"""
+    _ensure_builtins()
     with _lock:
         if sink.name in _sinks:
             raise ValueError(f"sink {sink.name!r} is already registered")
@@ -515,7 +519,11 @@ def deliver_due(
             assert deliver is not None  # noqa: S101 -- _deliverable filters
             _call_bounded(deliver, Event.from_json(row["event_json"]), row["sink"])
         except Exception as exc:  # noqa: BLE001 -- a sink must not stop the loop
+            # The type name; an exception class that sets `stored_message = True`
+            # promises a fixed, value-free message (WebhookError), kept as well.
             error = type(exc).__name__
+            if getattr(type(exc), "stored_message", False):
+                error = f"{error}: {str(exc)[:200]}"
         finished = clock()
         breaker_record(row["sink"], error is None, finished, started=now, key=row["id"])
         # Only a row this sender still leases: if the lease ran out and another

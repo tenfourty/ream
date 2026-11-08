@@ -179,6 +179,23 @@ def test_a_row_is_parked_not_dropped_after_too_many_failures(db, page, monkeypat
     assert error == "ValueError"  # the type, never the message
 
 
+def test_an_exception_that_opts_in_stores_its_fixed_message(db, page, monkeypatch):
+    class Fixed(Exception):
+        stored_message = True
+
+    clock = Clock()
+
+    def broken(event):
+        raise Fixed("HTTP 503")
+
+    with sinks.isolated(Sink("one", ("decision_answered",), deliver=broken)):
+        _emit(db, _event(artifact_id=page.id))
+        sinks.deliver_due(db, clock)
+    with db.connect() as conn:
+        (error,) = conn.execute("select last_error from outbox").fetchone()
+    assert error == "Fixed: HTTP 503"
+
+
 def test_rows_of_an_unregistered_sink_wait_untouched(db, page):
     with sinks.isolated(Sink("one", ("decision_answered",), deliver=lambda e: None)):
         _emit(db, _event(artifact_id=page.id))

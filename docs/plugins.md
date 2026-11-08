@@ -154,11 +154,11 @@ and circuit breaker above. A bad file stops start-up naming the sink and the fie
 
 ```toml
 [[sink]]
-name = "chase"                  # lower-case letters, digits, hyphens; not a name already in use
+name = "chase"                  # lower-case letters, digits, hyphens; not a built-in sink or a plug-in's (start-up refuses it)
 kinds = ["set_aside"]      # the same kinds as api.sink
 url = "https://hooks.example/in"
 signing_key_file = "chase.pem"  # Ed25519, PEM PKCS8, unencrypted; relative to this file
-key_id = "k1"                   # the receiver picks its public key from this
+key_id = "k1"                   # 1 to 64 of letters, digits . _ : - ; the receiver picks its public key from this
 label = "Chase"                 # optional, as for api.sink
 allow_http = false              # optional: allow plain http://
 allow_private = false           # optional: allow private, loopback and link-local addresses
@@ -178,8 +178,23 @@ it. An IPv6 address is allowed only inside global unicast (`2000::/3`) and outsi
 embedding ranges (NAT64 `64:ff9b::/96`, 6to4, Teredo and the like), so anything unlisted is
 refused. Limit: a network-specific NAT64 prefix inside `2000::/3` cannot be recognised by this
 filter, so a deployment that runs one must block it at the network; redirects are never followed and a 3xx is a failure; no proxy from the environment; 10 seconds
-per socket operation; the response body is never read; a body over 64 KiB is a failure, never a
-truncated send. Errors stored with a failed row say a status or a class of failure, never the URL.
+per socket operation, and 25 seconds for the whole attempt (connects use what is left, and the socket
+is cut at the deadline, so a server that drips bytes cannot hold it open); name resolution is the
+one step with no timeout, so a stalled resolver can still run to the sender's 30-second cap, which
+abandons the call (its thread ends when the resolver returns); the response body is never read; a body over 64 KiB is a failure, never a
+truncated send. Errors stored with a failed row (and logged) are a fixed phrase: `WebhookError: HTTP 503`,
+`timed out`, `TLS failed`, `refused address (not a public one)` and the like, never the URL, host
+or key; any other exception is stored as its type name only.
+
+Things to know when running several:
+
+- Give each sink its own key. The signature covers the body, not where it is sent, so a receiver
+  that trusts one key for two destinations can be sent the other's events.
+- Pending rows belong to the sink's name. Remove or rename a sink and its waiting rows stay; add
+  that name back, even with another url or key, and they are sent there. Clear them first if that
+  is not wanted.
+- One sender thread delivers for every sink, one row at a time. A webhook that stalls (up to 30
+  seconds an attempt) delays the others until its breaker opens.
 
 ### Answer source and answer hook
 

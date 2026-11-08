@@ -39,12 +39,12 @@ inside the deployment's network, so:
   private address, or changes its answer between a check and a connect, cannot get past it;
 * redirects are never followed and any 3xx is a failure (a signed body goes only where it was
   addressed); no proxy from the environment;
-* 10 s per socket operation (the sender gives a whole delivery 30 s: sinks.py); the response
-  body is never read;
+* 10 s per socket operation and 25 s for the whole attempt (the sender gives a delivery 30 s:
+  sinks.py); name resolution has no timeout; the response body is never read;
 * the request body is at most 64 KiB; a larger event is a failure (it is parked after the usual
   attempts, never dropped), not a truncated send.
 
-Errors are short and safe to store: a status or a class of failure. They never carry the URL,
+Errors are short and safe to store: a fixed phrase ("HTTP 503", "timed out", ...). They never carry the URL,
 the response, or anything from a key file.
 """
 
@@ -57,6 +57,8 @@ import json
 import re
 import socket
 import ssl
+import threading
+import time
 import tomllib
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -71,8 +73,14 @@ KEY_ID_HEADER = "X-Ream-Key-Id"
 EVENT_ID_HEADER = "X-Ream-Event-Id"
 
 REQUEST_TIMEOUT_SECONDS = 10.0
+# The whole attempt, connect to the end of the response head, under the sender's cap of 30 s
+# (sinks.DELIVER_TIMEOUT_SECONDS). Name resolution is the one step it cannot cut short.
+DEADLINE_SECONDS = 25.0
 MAX_BODY_BYTES = 64 * 1024
 
+_KEY_ID = re.compile(
+    r"[A-Za-z0-9._:-]{1,64}"
+)  # it rides in a header: no CR, LF, non-ASCII
 _NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _REQUIRED = ("name", "kinds", "url", "signing_key_file", "key_id")
 _OPTIONAL = ("label", "allow_http", "allow_private")
@@ -85,7 +93,12 @@ class WebhookConfigError(Exception):
 
 
 class WebhookError(Exception):
-    """One delivery attempt failed. Short and safe to store."""
+    """One delivery attempt failed. Short and safe to store: every message is a fixed
+    string ("HTTP 503", "timed out", "TLS failed", ...), never built from the URL, a host,
+    a key or a library's text. `stored_message` lets the sender keep it in `last_error`
+    and the logs (sinks.deliver_due) where other exceptions keep only their type name."""
+
+    stored_message = True
 
 
 @dataclass(frozen=True)
@@ -161,6 +174,10 @@ def _entry(raw: object, index: int, base: Path) -> Webhook:
     for f in ("url", "signing_key_file", "key_id"):
         if not isinstance(raw[f], str) or not raw[f].strip():
             raise WebhookConfigError(f"{where}: {f} must be a non-empty string")
+    if not _KEY_ID.fullmatch(raw["key_id"]):
+        raise WebhookConfigError(
+            f"{where}: key_id must be 1 to 64 of letters, digits and . _ : -"
+        )
     allow_http = bool(raw.get("allow_http", False))
     parts = urlsplit(raw["url"])
     try:
@@ -182,7 +199,7 @@ def _entry(raw: object, index: int, base: Path) -> Webhook:
         name=name,
         kinds=tuple(kinds),
         url=raw["url"],
-        key_id=raw["key_id"].strip(),
+        key_id=raw["key_id"],
         private_key=_load_key(key_path, where),
         label=label,
         allow_http=allow_http,
@@ -311,9 +328,16 @@ def build_request(
     }
 
 
-def _pinned_connect(allow_private: bool):
+def _pinned_connect(
+    allow_private: bool,
+    deadline: float | None = None,
+    opened: list | None = None,
+):
     """A `create_connection` that resolves once, refuses what the policy refuses, and
-    connects to the address it checked."""
+    connects to the address it checked. Each attempt gets the per-operation timeout or
+    what is left of `deadline` (a `time.monotonic()` value), whichever is less. The
+    resolver (getaddrinfo) has no timeout and is not bounded here. A socket made is
+    appended to `opened`, so the deadline timer can cut it."""
 
     def create(address, timeout=None, source_address=None):
         host, port = address
@@ -327,9 +351,17 @@ def _pinned_connect(allow_private: bool):
             if not address_allowed(sockaddr[0], allow_private):
                 refused = True
                 continue
+            budget = timeout
+            if deadline is not None:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise WebhookError("timed out")
+                budget = left if timeout is None else min(timeout, left)
             sock = socket.socket(family, kind, proto)
             try:
-                sock.settimeout(timeout)
+                sock.settimeout(budget)
+                if opened is not None:
+                    opened.append(sock)
                 sock.connect(sockaddr)
                 return sock
             except OSError as exc:
@@ -346,18 +378,40 @@ def _pinned_connect(allow_private: bool):
 
 def http_post(hook: Webhook, body: bytes, headers: dict[str, str]) -> int:
     """POST and return the status. No redirect is followed, no proxy is used, the response
-    body is not read. Raises WebhookError for a transport failure."""
+    body is not read. Raises WebhookError for a transport failure. The whole attempt has
+    DEADLINE_SECONDS: connects get what is left, and a timer cuts the socket at the
+    deadline, so a server that drips bytes cannot hold the read open (a per-recv timeout
+    alone resets on every byte). Name resolution is not covered."""
     parts = urlsplit(hook.url)
-    cls = (
-        http.client.HTTPSConnection
-        if parts.scheme == "https"
-        else http.client.HTTPConnection
-    )
-    conn = cls(parts.hostname, parts.port, timeout=REQUEST_TIMEOUT_SECONDS)
-    conn._create_connection = _pinned_connect(hook.allow_private)  # type: ignore[attr-defined]
+    https = parts.scheme == "https"
+    cls = http.client.HTTPSConnection if https else http.client.HTTPConnection
+    deadline = time.monotonic() + DEADLINE_SECONDS
+    opened: list = []
+    expired = threading.Event()
+
+    def cut() -> None:
+        expired.set()
+        for sock in tuple(opened):
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    # An explicit port: http.client splits "host" at the last colon when it is not given,
+    # which breaks a bracket-stripped IPv6 literal.
+    port = parts.port or (443 if https else 80)
+    conn = cls(parts.hostname, port, timeout=REQUEST_TIMEOUT_SECONDS)
+    conn._create_connection = _pinned_connect(hook.allow_private, deadline, opened)  # type: ignore[attr-defined]
     target = parts.path or "/"
     if parts.query:
         target += "?" + parts.query
+    timer = threading.Timer(DEADLINE_SECONDS, cut)
+    timer.daemon = True
+    timer.start()
     try:
         conn.request("POST", target, body, headers)
         return conn.getresponse().status
@@ -368,10 +422,15 @@ def http_post(hook: Webhook, body: bytes, headers: dict[str, str]) -> int:
     except ssl.SSLError:
         raise WebhookError("TLS failed") from None
     except http.client.HTTPException:
-        raise WebhookError("bad response") from None
+        raise WebhookError(
+            "timed out" if expired.is_set() else "bad response"
+        ) from None
     except OSError:
-        raise WebhookError("connection failed") from None
+        raise WebhookError(
+            "timed out" if expired.is_set() else "connection failed"
+        ) from None
     finally:
+        timer.cancel()
         conn.close()
 
 

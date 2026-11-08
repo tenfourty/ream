@@ -192,6 +192,38 @@ def test_a_name_that_is_already_a_sink_stops_the_start(tmp_path, key):
         webhook.register_all()
 
 
+@pytest.mark.parametrize("name", ["nudge", "partner"])
+def test_a_built_in_name_is_refused_at_registration(name):
+    with pytest.raises(ValueError, match="already registered"):
+        sinks.register(sinks.Sink(name, ("asked",), deliver=lambda e: None))
+    # the registry is still sound: nothing raises later, in an emitting call
+    assert [s.name for s in sinks.registered()].count(name) == 1
+
+
+@pytest.mark.parametrize("name", ["nudge", "partner"])
+def test_a_webhook_named_like_a_built_in_stops_the_start(tmp_path, key, name):
+    path = _sinks_file(tmp_path, _entry(name=name))
+    with (
+        settings.override(sinks_file=path),
+        pytest.raises(webhook.WebhookConfigError, match="already"),
+    ):
+        webhook.register_all()
+    assert [s.name for s in sinks.registered()].count(name) == 1
+
+
+@pytest.mark.parametrize(
+    "bad", ['"k1\\nX: y"', '"k\\u00e9"', '""', '"' + "a" * 65 + '"', '"a b"']
+)
+def test_a_key_id_that_cannot_ride_in_a_header_is_refused(tmp_path, key, bad):
+    path = _sinks_file(tmp_path, _entry(key_id=bad))
+    with pytest.raises(webhook.WebhookConfigError, match="key_id"):
+        webhook.load_file(path)
+
+
+def test_a_webhook_error_stores_its_message(tmp_path, key):
+    assert webhook.WebhookError.stored_message is True
+
+
 # --- the request ---------------------------------------------------------------------
 
 
@@ -412,3 +444,103 @@ def test_the_checked_address_is_the_one_connected_to(monkeypatch):
     with pytest.raises(webhook.WebhookError, match="refused address"):
         create(("rebind.example", 443), 1.0)
     assert calls == ["rebind.example"]
+
+
+def test_an_ipv6_literal_url_gets_an_explicit_port(tmp_path, key, monkeypatch):
+    seen = {}
+
+    class Fake:
+        def __init__(self, host, port=None, timeout=None):
+            seen["args"] = (host, port)
+
+        def request(self, *a):
+            raise OSError
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(webhook.http.client, "HTTPSConnection", Fake)
+    monkeypatch.setattr(webhook.http.client, "HTTPConnection", Fake)
+    for url, want in (
+        ("https://[2001:db8::1]/in", ("2001:db8::1", 443)),
+        ("http://[2001:db8::1]/in", ("2001:db8::1", 80)),
+        ("https://[2001:db8::1]:8443/in", ("2001:db8::1", 8443)),
+    ):
+        hook = webhook.load_file(
+            _sinks_file(tmp_path, _entry(url=f'"{url}"', allow_http="true"))
+        )[0]
+        with pytest.raises(webhook.WebhookError):
+            webhook.http_post(hook, b"{}", {})
+        assert seen["args"] == want
+
+
+def test_a_connect_gets_what_is_left_of_the_deadline(monkeypatch):
+    import socket
+
+    timeouts = []
+
+    class Sock:
+        def __init__(self, *a):
+            pass
+
+        def settimeout(self, t):
+            timeouts.append(t)
+
+        def connect(self, addr):
+            raise TimeoutError
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda h, p, **kw: (
+            [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", p))] * 3
+        ),
+    )
+    monkeypatch.setattr(socket, "socket", Sock)
+    now = webhook.time.monotonic()
+    create = webhook._pinned_connect(False, now + 4.0)
+    with pytest.raises(webhook.WebhookError, match="timed out"):
+        create(("h.example", 443), 10.0)
+    assert timeouts and all(t <= 4.0 for t in timeouts)
+    # past the deadline no further attempt is made
+    timeouts.clear()
+    with pytest.raises(webhook.WebhookError, match="timed out"):
+        webhook._pinned_connect(False, now - 1)(("h.example", 443), 10.0)
+    assert timeouts == []
+
+
+def test_a_server_that_drips_bytes_is_cut_at_the_deadline(tmp_path, key, monkeypatch):
+    import socket
+    import time
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    stop = threading.Event()
+
+    def drip():
+        conn, _ = srv.accept()
+        conn.recv(65536)
+        while not stop.is_set():
+            try:
+                conn.send(b"H")  # never finishes the status line
+            except OSError:
+                return
+            time.sleep(0.05)
+
+    threading.Thread(target=drip, daemon=True).start()
+    monkeypatch.setattr(webhook, "DEADLINE_SECONDS", 0.5)
+    try:
+        hook = _local_hook(
+            tmp_path, srv.getsockname()[1], allow_http="true", allow_private="true"
+        )
+        started = time.monotonic()
+        with pytest.raises(webhook.WebhookError, match="timed out"):
+            webhook.deliver(hook, _event())
+        assert time.monotonic() - started < 3
+    finally:
+        stop.set()
+        srv.close()
