@@ -438,3 +438,43 @@ tried on the homelab first, and first in the build order: confirmed (Jeremy, 8 N
 sign-in comes from his comment on the design page). Awaiting his confirmation: he said he and the
 house offices keep using the homelab Ream and the company deployment is a separate install; whether
 that means no house office ever moves, gg-ops included, so that answer 4 drops out, is unconfirmed.
+
+## Ream in Claude.ai: the six sign-in choices (8 Nov 2026)
+
+**Chosen:** how a person's Claude signs in to Ream and what it may then do
+(`docs/agent/specs/2026-11-08-mcp-oauth-design.md`).
+
+1. When his Claude acts as him, it may pass on his answer to any question put to him, not only its
+   own: a relay, never a tap, labelled with the app ("Jeremy said (b) in claude.ai"), with his words.
+2. It reads everything he can read, changes only pages made under his sign-in (by any of his
+   apps), and comments and asks anywhere he could.
+3. The consent screen offers three plain permissions, each ticked and each untickable: read;
+   publish, comment and ask; pass on answers. It names the app by its checked address and where it
+   sends him back, and is remembered per app until he revokes it.
+4. On the homelab he signs in through Authelia's standard OIDC sign-in, as the forge does: the
+   path the company sign-on will take.
+5. Each connection is a row in "Machines and keys" with Revoke; tokens last an hour and renew
+   silently; a connection unused for 30 days lapses.
+6. Any MCP app may ask, shown by its checked address and approved on the consent screen; a
+   deployment may set a list of allowed apps (the company starts with Claude.ai only).
+
+The maintainer's own calls within this: Ream is its own OAuth authorization server towards the
+apps and hands the login to the OIDC provider (as Cloudflare's library and cove do); it follows
+cove's MCP sign-in wherever the six answers allow: `/mcp` and cove's `/oauth/*` and `/.well-known`
+paths, stateless Streamable HTTP, the `Origin` check, opaque hashed tokens with rotation and reuse
+detection, a 90-day cap beside the 30-day lapse, client metadata documents first and open
+registration for loopback apps only, keys refused at `/mcp` while sign-in is on, cove's setting
+names. It also speaks MCP's 2026-07-28 revision, keeps sign-in state in the database, and gives
+each person-and-app pair its own agent. Where it differs from cove and why: the spec's section 14.
+
+**Not chosen:** the app answering as him, counted as a tap; listing questions only, answering
+staying a tap. Reach limited to what one connection made; reach over everything. One
+all-or-nothing permission; read-only first with a second ask. Signing in through the gallery's
+existing gate only. A 7-day lapse; 90-day tokens with no renewal. Only listed apps, the homelab
+included; any app named by what it says it is. The identity provider as the authorization server
+(few company sign-ons accept Claude's client metadata, and Ream could not list or cut connections).
+
+**Evidence:** the six answers: confirmed (Jeremy, 8 Nov 2026, each the recommended option on the
+design page). Following cove's choices wherever the answers allow: Jeremy's instruction, 8 Nov
+2026. The maintainer's own calls, including the 90-day cap and asking on another agent's page
+through a new asker column: unconfirmed.

@@ -2542,6 +2542,104 @@ And one consequence of this part that the deployment part must carry:
   5–8; `store.get_owned`, `store.list_for_agent`, `state.get`, `state.get_scanned` and
   `state.collection` are named identically wherever they appear.
 
+## MCP sign-in for people's agents: the build in slices (planned 8 Nov 2026)
+
+**Goal:** a person adds Ream to Claude.ai (or any MCP app) as a remote connector, signs in once
+through the deployment's OIDC provider, and their Claude then reads, publishes, comments, asks and
+passes on answers as "Jeremy, via claude.ai", with no key. Keys stay for machines, offices and CI.
+
+**Spec:** `docs/agent/specs/2026-11-08-mcp-oauth-design.md` (sections cited as §n). Decisions:
+`docs/decisions.md`, "Ream in Claude.ai: the six sign-in choices (8 Nov 2026)".
+
+**Rules for every slice.** Each lands on its own, on a `ci/` branch first, with no change for a
+deployment that sets nothing: `/mcp` needs `REAM_MCP_PUBLIC_URL`, the sign-in needs
+`REAM_MCP_SIGN_IN=on`, both off by default. Tests run in CI on both databases (never on baba). New
+tables go in `schema.sql` and one new `db._SQLITE_STEPS` step, and join the copier test's list.
+Settings are `Settings` fields with `REAM_*` names in `_ENV`; a half-set group refuses to start.
+Docs land with the code (the agent guide and `agents.txt` from slice 1; the runbook
+`docs/agent/runbooks/mcp-sign-in.md` with slice 5). Sizes are S, M or L, never a time.
+
+### Slice 1 (M): `/mcp` speaks MCP, with today's keys, and reads
+
+- **Builds:** `ream/mcp.py`, stateless Streamable HTTP (§6): `initialize` for 2025-03-26 to
+  2025-11-25, the 2026-07-28 header rules, JSON responses only, `GET`/`DELETE` 405, the 12 MiB cap,
+  the `Origin` check (403). `ream/mcp_tools.py` with the read tools (`whoami`, `list_pages`,
+  `read_page`, `get_template`, `comments`, `questions`, `whats_new`), two resources, two prompts,
+  annotations, the labelled envelope for page text (§15). Keys only, with a key's reach.
+  `REAM_MCP_PUBLIC_URL`, `REAM_MCP_ACCEPT_KEYS`.
+- **Tests:** a recorded request from each revision; version mismatch (400, -32020); foreign
+  `Origin` 403, none passes; `GET` 405; each read tool against its route for the same key; another
+  agent's closed page answers as "no such page"; `/mcp` 404 with the setting unset.
+
+### Slice 2 (M): the writing tools, with today's keys
+
+- **Builds:** `publish_page`, `update_page`, `organise_page`, `delete_page`, `comment`, `ask`,
+  `close_question`, `record_answer` (a key's existing relay sources), each calling its route's
+  module functions (§11.3), with the session label rule (§11.1).
+- **Tests:** each tool against its route (same rows, events and refusal words); a secret refused;
+  `delete_page` is `destructiveHint` and restorable; a test fails on any tool not in §11.3's table.
+
+### Slice 3 (M): Ream says how to sign in, and knows which app is asking
+
+- **Builds:** the two `/.well-known` documents and the 401 challenge (§4); `mcp_client`; the client
+  metadata fetch with its fences on `webhook.py`'s address guard; open registration with its limits;
+  the trusted and allowed host lists; keys refused at `/mcp` while sign-in is on (§7).
+- **Tests:** both documents field by field (Claude's needs); fetch refusals with literal private,
+  loopback, link-local and redirecting answers, oversized or non-JSON documents, a `client_id` one
+  byte off; the 11th registration in an hour is 429; the allowed list refuses before fetching.
+
+### Slice 4 (M): a person-and-app agent and its reach
+
+- **Builds:** `mcp_agent`, `mcp_app` (§8); the agent name rule and the display "<owner name>, via
+  <host>"; the `Reach` value (§11.2) threaded through the functions the tools call, keys passing
+  today's reach unchanged; permissions gating tools (§11.3).
+- **Tests:** apps made directly in the database; an app reads a page closed to agents, cannot
+  change an office's page, can change one by the person's other app, comments on an office's page
+  as "Jeremy, via claude.ai"; a read-only app lists no write tools; every API test unchanged.
+
+### Slice 5 (L): signing in, consent and tokens
+
+- **Builds:** `ream/oidc.py` (code flow with PKCE, state, nonce, secret from file, claim checks,
+  the single-reader check, §13); `ream/oauth.py` (authorize, callback, the consent screen with three
+  boxes and remembered consent, the 200 interstitial with `iss`, `mcp_signin`, `mcp_token`, code
+  exchange, refresh with strict rotation and reuse detection, `/oauth/revoke`, audience, idle lapse
+  and cap, §9-10); `rmo_`/`rmr_` in `secret_shapes.txt`; clean-up; `REAM_OIDC_*`; the runbook.
+- **Tests:** a fake OIDC provider behind the fetch seam; the whole flow with the literal Claude.ai
+  callback; bad `nonce`/`aud`/`iss`/expiry refused; a non-owner refused, nothing stored; a code or
+  refresh token used twice ends the app; a wrong verifier, another client or another resource
+  refused; `rmo_` refused under `/api/v1`; remembered consent skipped only for the same or narrower
+  request and never for a registered app; cross-site consent refused; the consent page in the
+  browser tests; lapse and cap on a moved clock.
+
+### Slice 6 (S): connected apps in "Machines and keys"
+
+- **Builds:** the "Connected apps" section with Revoke (§10), `POST /machines/apps/{id}/revoke`,
+  `artifacts-admin list-apps` and `revoke-app`.
+- **Tests:** Revoke stops the next call and forgets consent; lapsed apps listed as lapsed; no token
+  or hash on the page.
+
+### Slice 7 (S): his Claude passes on his answers
+
+- **Builds:** the core stored source `mcp`; `record_answer` for an app with `relay` on any open
+  question put to the person (§11.5); the gallery wording "Jeremy said (b) in claude.ai".
+- **Tests:** the asking office's wait wakes with the relay; a key cannot claim `mcp`; empty words
+  refused; no `relay`, no tool; review verdict rules hold.
+
+### Slice 8 (M): asking on any page he can read
+
+- **Builds:** nullable `decision.asked_by` (null is the page's agent); `ask` from an app on a page
+  it does not own; the answer goes to the asker; the page's agent is told (§11.4).
+- **Tests:** every decision test passes with `asked_by` null; the app's `whats_new` wakes, not the
+  office's wait; only the asker closes it.
+
+### Slice 9 (M): the homelab turns it on, and the owner tries it from Claude.ai
+
+- **Needs the homelab office first:** the asks in §16.
+- **Trial, by hand:** the `/.well-known` documents answer from outside (bypass and Cloudflare);
+  connect read-only and ask "what is waiting on me"; reconnect with all three boxes, publish from a
+  chat, pass on an answer; revoke and see the next call fail. The report says what it checked end
+  to end. The company build (§18) follows as its own plan.
+
 ## Ledger
 
 Work built after the tasks above, newest last. Each line says what a reader can now do.
