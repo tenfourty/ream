@@ -1,6 +1,6 @@
-# artifacts
+# Ream (formerly artifacts)
 
-A self-hosted "artifacts" publisher for the homelab: agents publish an HTML
+A self-hosted page publisher: agents publish an HTML
 page over a keyed API and get back a stable URL. Jeremy views published pages
 in an Authelia-gated gallery; each page is served from its own
 `<id>.<content domain>` hostname behind a capability token in the URL.
@@ -46,23 +46,29 @@ keys from there; neither ever prints a token.
 
 ## Publish a page
 
+The command is `ream`, with a verb for each job (`ream publish`, `ream ask`,
+`ream wait`; `ream --help` lists them). The older `artifacts-publish`,
+`artifacts-decide` and the other `artifacts-*` commands keep working for good,
+as do the `ARTIFACTS_*` settings, and `/api/v1/artifacts` answers exactly as
+`/api/v1/pages` does (the same handlers, so a POST to either works).
+
 ```bash
-artifacts-publish page.html --title "My page"
-artifacts-publish page.html --update <id>   # after editing page.html
-artifacts-publish --list
+ream publish page.html --title "My page"
+ream publish page.html --update <id>   # after editing page.html
+ream publish --list
 ```
 
 Where the key comes from, in the order to prefer:
 
 ```bash
 # A vault hands it over on a descriptor; no cleartext copy exists. On baba:
-ARTIFACTS_SEAT=baba_operator artifacts-key -- artifacts-publish page.html --title "My page"
+ARTIFACTS_SEAT=baba_operator artifacts-key -- ream publish page.html --title "My page"
 
 # Or any store of your own that can open one:
-artifacts-publish --key-fd 3 page.html --title "My page" 3< <(pass show artifacts/key)
+ream publish --key-fd 3 page.html --title "My page" 3< <(pass show artifacts/key)
 
 # Or a file, mode 600 -- it refuses anything looser:
-REAM_KEY_FILE=~/.config/artifacts/key artifacts-publish --list
+REAM_KEY_FILE=~/.config/artifacts/key ream publish --list
 ```
 
 ## Tidy one up
@@ -72,15 +78,15 @@ pages — his rule, 20 Sep 2026: *"ideally agents can take all the same actions 
 human can."* None of these send the body, so none of them needs the file:
 
 ```bash
-artifacts-publish --rename <id> --title "Its real name"
-artifacts-publish --archive <id>     # off the wall; nothing is deleted
-artifacts-publish --unarchive <id>
-artifacts-publish --pin <id>         # leads the gallery
-artifacts-publish --unpin <id>
-artifacts-publish --duplicate <id>   # a copy at a new address
+ream publish --rename <id> --title "Its real name"
+ream publish --archive <id>     # off the wall; nothing is deleted
+ream publish --unarchive <id>
+ream publish --pin <id>         # leads the gallery
+ream publish --unpin <id>
+ream publish --duplicate <id>   # a copy at a new address
 ```
 
-Over HTTP these are `POST /api/v1/artifacts/{id}/{archive,rename,pin}`, each
+Over HTTP these are `POST /api/v1/pages/{id}/{archive,rename,pin}`, each
 scoped to the calling key's own agent: another seat's page answers 404, and so
 does a page that does not exist — the same 404, so a key cannot be used to
 learn which ids are real.

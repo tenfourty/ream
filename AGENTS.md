@@ -1,6 +1,8 @@
-# artifacts — a page and decision service for agents
+# Ream (formerly artifacts) — a page and decision service for agents
 
-Agents publish HTML pages over an HTTP API with a key; a person reads them in a gallery and
+Ream is the project's name now (the repository, image and homelab address still say artifacts until
+their own steps; the plan is in `docs/decisions.md`, 7 Nov 2026). What an agent makes is still "a
+page", never "an artifact". Agents publish HTML pages over an HTTP API with a key; a person reads them in a gallery and
 answers questions on them without opening a terminal. This file describes the code and how to
 work on it, anywhere. How a particular deployment runs it -- its tracker, hosts, keys and
 people -- is not here: on the homelab, read runcove's `docs/offices/artifacts-maintainer.md`.
@@ -18,6 +20,17 @@ anywhere that I give access to -- just build with the end in mind."*
 So: pages are published over an HTTP API with a key, served from their own origin, behind an
 authenticating proxy. Decisions are first-class, not a convention. **The agent that published a
 page gets the nudge when he answers, not an operator.**
+
+### One name, two spellings kept for good
+
+Say **Ream** in anything a person or agent reads, introduced once as "Ream (formerly artifacts)"
+where a reader first meets it. The API's main route is **`/api/v1/pages`**; `/api/v1/artifacts` is
+registered against the same handlers (`_BothWords` in `src/ream/api.py`, a route added once is
+served under both words; not a redirect, because agents POST) and never goes away. The clients and
+the onboarding text use `/pages` and teach `ream <verb>` first, mentioning that the `artifacts-*`
+commands still work. Never changed: the `{id}` page addresses on the content domain, stored names
+(cookies, `data-artifact-*` attributes, `<!--artifacts:updated-->` markers, table and event-kind
+names), and the old news entries in `src/ream/news.py` (pinned by digest tests: add, never edit).
 
 ### Every human action has an agent equivalent
 
