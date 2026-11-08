@@ -35,6 +35,7 @@ from ream import (
     comments,
     connect,
     decisions,
+    design,
     email_share,
     events,
     folders,
@@ -137,64 +138,14 @@ def gallery_headers() -> dict[str, str]:
 # 2026, on the first framed board: "page is ugly ... I don't see why questions are
 # in the header and not on the page". Inline because the gallery CSP allows
 # style-src 'self' 'unsafe-inline'; serving it as a file from 'self' is the next
-# step (it is the same stylesheet an agent's page will be able to link).
-_CSS = """
-/* The neutral scale is claude.ai's own, read off the saved page with
-   getComputedStyle rather than sampled from a screenshot: page rgb(252,252,251),
-   ink rgb(11,11,11), muted rgb(137,135,129), hairline rgba(11,11,11,.1). The
-   ACCENT stays the homelab teal -- every template on this service shares it, and
-   swapping it here would leave the gallery and the pages it frames looking like
-   two different products. */
-:root{
-  --paper:#fcfcfb; --ink:#0b0b0b; --muted:#898781; --card:#fff;
-  --line:rgba(11,11,11,.1);
-  --accent:#0f6f63; --accent-soft:rgba(15,111,99,.10); --accent-ink:#0b4f46;
-  --ok:#2f7a45; --now:#b06a12;
-  /* The waiting badge is SOLID, so its background and its text are their own
-     tokens rather than --now plus white. Computed, not chosen: white on
-     --now (#b06a12) is 4.27:1, which fails for 11px bold; #9c5e10 takes it to
-     5.22:1. In dark mode --now is a LIGHT amber and white on it is 2.18:1 --
-     a clear fail -- so the dark scheme flips the text instead of the fill. */
-  --now-solid:#9c5e10; --on-now:#fff;
-  --line-hover:rgba(11,11,11,.28);
-  /* The only red in the interface: destructive actions and marks -- the
-     archive/destroy controls below, and the "Remove this" mark label
-     (page review step 1, homelab-ij8.108) reuse it rather than mint a
-     second, uncalibrated red. */
-  --danger:#a8271b; --danger-soft:rgba(168,39,27,.08);
-  /* Text on a SOLID accent fill. Its own token for the same reason --on-now
-     is: --accent is a light teal in dark mode, where white on it measures
-     2.0:1. Third time this shape has come up, so it is now a habit -- any
-     token used as a FILL needs a paired ink that flips with the scheme. */
-  --on-accent:#fff;
-  /* A control sitting ON a card: the dots chip, the pin's hover. It must be a
-     step AWAY from the card in whichever direction reads as lifted. In light
-     mode that is very slightly darker (the paper colour); in dark mode darker
-     is a hole, so the dark block lifts it instead. Using --paper for both made
-     the dots chip disappear into the dark card. */
-  --chip:#fcfcfb; --chip-hover:#fff;
-  --shadow:0 1px 2px rgba(20,20,15,.05), 0 8px 24px -16px rgba(20,20,15,.25);
-  --display:ui-serif,"Iowan Old Style",Georgia,"Times New Roman",serif;
-  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
-}
-@media (prefers-color-scheme:dark){
-  :root{
-    --paper:#141619; --ink:#e9eae4; --muted:#989a90; --card:#1c1f23; --line:#2b2e34;
-    --accent:#5ec9b8; --accent-soft:rgba(94,201,184,.12); --accent-ink:#9fe3d7;
-    --ok:#6cc48a; --now:#e0a458;
-    /* Light amber, so the text on it goes dark: #2a1d0a on #e0a458 is 7.52:1. */
-    --now-solid:#e0a458; --on-now:#2a1d0a;
-    --line-hover:#5a606a;
-    --danger:#f08b7f; --danger-soft:rgba(240,139,127,.12);
-    --on-accent:#0b2723;  /* 7.92:1 on #5ec9b8 */
-    --chip:#2b3038; --chip-hover:#343a44;
-    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.8);
-  }
-}
+# step (it is the same stylesheet an agent's page will be able to link). Every colour,
+# font stack, recurring size and recurring spacing is a name from design.py, whose
+# `:root` block the stylesheet starts from: a rule says var(--name), never the value.
+_RULES = """
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--paper);color:var(--ink);
-     font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+     font:16px/1.55 var(--sans)}
 a{color:var(--accent-ink)}
 /* 62rem, not 60. The CONTENT box wants to be 960px -- the reference's column
    exactly, 3 x 304 + 2 x 24 -- and `box-sizing:border-box` means max-width
@@ -205,13 +156,13 @@ a{color:var(--accent-ink)}
    48px above the title is measured off it too -- the old 1rem put the heading
    hard against the top of the window and made the whole page feel cramped
    before a single card had been read. */
-.wrap{max-width:62rem;margin:0 auto;padding:3rem 1rem 3.5rem}
+.wrap{max-width:62rem;margin:0 auto;padding:3rem var(--space-10) 3.5rem}
 main{display:block}
 @media (max-width:40rem){.wrap{padding-top:1.5rem}}
 /* No rule under the title. Measured: the reference's header is a 48px row with
    no border beneath it -- the wall's own top edge is the separation, and a rule
    as well is one line too many on a page that is mostly cards. */
-.bar{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;
+.bar{display:flex;align-items:center;gap:var(--space-7);flex-wrap:wrap;
      min-height:48px;padding:0;margin:0}
 /* An ARTIFACT page's bar: across the window, white, pinned to the top, and no
    rule under it -- the white against the page colour is the separation, which
@@ -220,21 +171,21 @@ main{display:block}
    the pages this service frames are written for about 52rem and a full-width
    frame would stretch every one of them. */
 .bar.bleed{position:sticky;top:0;z-index:40;background:var(--card);
-  padding:0 .75rem;margin:0 0 1.25rem;min-height:48px;flex-wrap:nowrap;
+  padding:0 var(--space-75);margin:0 0 1.25rem;min-height:48px;flex-wrap:nowrap;
   box-shadow:0 1px 0 var(--line)}
 .bar .acts{display:flex;align-items:center;gap:.25rem;margin-left:auto}
 .bar .acts + .profile{margin-left:0}
-.sharebtn,.fsbtn{display:inline-flex;align-items:center;gap:.3rem;height:1.75rem;
-  padding:0 .5rem;border:0;border-radius:.45rem;background:transparent;
-  color:var(--muted);text-decoration:none;font:inherit;font-size:.8125rem;
+.sharebtn,.fsbtn{display:inline-flex;align-items:center;gap:var(--space-3);height:1.75rem;
+  padding:0 var(--space-5);border:0;border-radius:.45rem;background:transparent;
+  color:var(--muted);text-decoration:none;font:inherit;font-size:var(--text-sm);
   cursor:pointer}
 .sharebtn:hover,.fsbtn:hover{background:var(--chip-hover);color:var(--ink)}
 .fsbtn[hidden]{display:none}
-.pagecbtn{display:inline-flex;align-items:center;height:1.75rem;padding:0 .5rem;
+.pagecbtn{display:inline-flex;align-items:center;height:1.75rem;padding:0 var(--space-5);
   border:1px solid var(--line);border-radius:.45rem;background:var(--card);color:var(--ink);
-  font:inherit;font-size:.8125rem;text-decoration:none;white-space:nowrap}
+  font:inherit;font-size:var(--text-sm);text-decoration:none;white-space:nowrap}
 .pagecbtn:hover{border-color:var(--accent)}
-@media (max-width:34rem){.pagecbtn{padding:0 .4rem}}
+@media (max-width:34rem){.pagecbtn{padding:0 var(--space-4)}}
 .acts .mi{width:1rem;height:1rem;opacity:1}
 @media (max-width:34rem){.sharebtn span{display:none}}
 /* The PAGE view only (the wall and the lists keep .wrap as it was): the agent's
@@ -247,17 +198,16 @@ main{display:block}
 .col.top{padding-top:1.25rem}
 .full .sheet{border:0;border-radius:0;box-shadow:none}
 .sheet:fullscreen iframe{height:100vh !important}
-.bar.bleed h1{font:500 .875rem/1.25rem ui-sans-serif,system-ui,-apple-system,
-  sans-serif}
+.bar.bleed h1{font:500 var(--text-md)/1.25rem var(--sans-system)}
 /* 14px, not the reference's 13: every other control in this interface is 14,
    and a single 13 would be the only one. */
-.bar.bleed .menu > summary{font-size:.875rem}
+.bar.bleed .menu > summary{font-size:var(--text-md)}
 /* On an artifact page this is a plain 28x28 icon button, as in the reference:
    a bordered pill beside a 14px title was the heaviest thing in a bar whose
    whole job is to stay out of the way. It keeps the label on the gallery
    index, where there is room and no title menu competing with it. */
 .bar a.home{color:var(--ink);text-decoration:none;display:inline-flex;
-  align-items:center;gap:.4rem;border:1px solid var(--line);background:var(--card);
+  align-items:center;gap:var(--space-4);border:1px solid var(--line);background:var(--card);
   border-radius:999px;padding:.22rem .66rem;font-size:.8rem;white-space:nowrap}
 .bar a.home:hover{border-color:var(--accent)}
 .bar.bleed a.home{width:28px;height:28px;padding:0;justify-content:center;
@@ -276,17 +226,17 @@ main{display:block}
    masthead over a filing cabinet. */
 .bar h1{font:500 1.5rem/2rem var(--display);margin:0;letter-spacing:-.01em;
   flex:1 1 12rem}
-.bar .meta{display:flex;align-items:center;gap:.6rem;margin-left:auto;
-  font:.8125rem/1.25rem ui-sans-serif,system-ui,-apple-system,sans-serif;
+.bar .meta{display:flex;align-items:center;gap:var(--space-6);margin-left:auto;
+  font:var(--text-sm)/1.25rem var(--sans-system);
   color:var(--muted);white-space:nowrap}
 /* What is waiting on him leads the header, and it is a link: one tap and he is
    at the first page asking. The only coloured thing in the bar, because on a
    wall whose whole purpose is decisions it is the only thing there that is
    about him rather than about the service. */
-.bar .waiting{display:inline-flex;align-items:center;gap:.35rem;
+.bar .waiting{display:inline-flex;align-items:center;gap:var(--space-35);
   text-decoration:none;font-weight:600;color:var(--on-now);
   background:var(--now-solid);border-radius:999px;
-  padding:.2rem .6rem .2rem .62rem}
+  padding:var(--space-2) var(--space-6) var(--space-2) .62rem}
 .bar .waiting::after{content:"→";font-weight:400}
 .bar .waiting:hover{filter:brightness(.94)}
 /* Landing on the tile should not put it under the top edge of the window. */
@@ -296,9 +246,9 @@ main{display:block}
 .asks h2{font:600 .74rem/1.4 var(--mono);letter-spacing:.14em;text-transform:uppercase;
   color:var(--accent);margin:0 0 .55rem}
 .ask{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--now);
-  border-radius:.7rem;padding:.95rem 1.1rem;margin:0 0 .6rem;box-shadow:var(--shadow)}
-.ask .q{margin:0 0 .75rem;font-size:1.04rem;font-weight:600}
-.ask form{margin:0;display:flex;flex-wrap:wrap;gap:.45rem;align-items:center}
+  border-radius:.7rem;padding:.95rem 1.1rem;margin:0 0 var(--space-6);box-shadow:var(--shadow)}
+.ask .q{margin:0 0 var(--space-75);font-size:1.04rem;font-weight:600}
+.ask form{margin:0;display:flex;flex-wrap:wrap;gap:var(--space-45);align-items:center}
 .ask button{font:inherit;font-size:.92rem;cursor:pointer;border-radius:.45rem;
   padding:.44rem .8rem;border:1px solid var(--line);background:transparent;color:var(--ink);
   text-align:left}
@@ -311,29 +261,27 @@ main{display:block}
    first version filled the RECOMMENDED button instead, and he read the filled
    button as his selection -- "better but I can't change selection", 19 Sep. */
 .ask button.chosen,.ask button.rec.chosen{background:var(--accent);
-  border-color:var(--accent);color:#fff;font-weight:600}
-@media (prefers-color-scheme:dark){
-  .ask button.chosen,.ask button.rec.chosen{color:#10201d}}
+  border-color:var(--accent);color:var(--on-chosen);font-weight:600}
 .rtag{font:600 .7rem var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--accent)}
-.rhint{font-size:.85rem;color:var(--muted);margin:.2rem 0}
-.htag{font:600 .7rem var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-left:.5rem}
-.rmode{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;font-size:.85rem;color:var(--muted);margin:.2rem 0}
+.rhint{font-size:.85rem;color:var(--muted);margin:var(--space-2) 0}
+.htag{font:600 .7rem var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-left:var(--space-5)}
+.rmode{display:flex;flex-wrap:wrap;align-items:center;gap:var(--space-5);font-size:.85rem;color:var(--muted);margin:var(--space-2) 0}
 .rmode form{display:inline;margin:0}
 .rmode .rheld{font:600 .7rem var(--mono);letter-spacing:.06em;color:var(--ink)}
-.verdict{margin:.3rem 0}
-.rround{display:flex;flex-wrap:wrap;align-items:baseline;gap:.5rem;font-size:.85rem;color:var(--muted);margin:.2rem 0}
+.verdict{margin:var(--space-3) 0}
+.rround{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--space-5);font-size:.85rem;color:var(--muted);margin:var(--space-2) 0}
 .rround a{color:var(--accent)}
-.carried{font-size:.85rem;margin:.3rem 0}
-.carried ul{margin:.2rem 0;padding-left:1.1rem}
-.carried .cstate{font:600 .68rem var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-right:.4rem}
+.carried{font-size:.85rem;margin:var(--space-3) 0}
+.carried ul{margin:var(--space-2) 0;padding-left:1.1rem}
+.carried .cstate{font:600 .68rem var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-right:var(--space-4)}
 .carried .cstate.still{color:var(--accent)}
 .ask .tag{font:.68rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
-  opacity:.8;margin-left:.45rem;white-space:nowrap}
+  opacity:.8;margin-left:var(--space-45);white-space:nowrap}
 .ask input[name=note]{font:inherit;font-size:.9rem;flex:1 1 11rem;min-width:8rem;
-  padding:.42rem .6rem;border:1px solid var(--line);border-radius:.45rem;
+  padding:.42rem var(--space-6);border:1px solid var(--line);border-radius:.45rem;
   background:var(--paper);color:var(--ink)}
-.ask .answered{margin:0 0 .7rem;font-size:.9rem;color:var(--ok);
-  display:flex;gap:.4rem;align-items:baseline;flex-wrap:wrap}
+.ask .answered{margin:0 0 var(--space-7);font-size:.9rem;color:var(--ok);
+  display:flex;gap:var(--space-4);align-items:baseline;flex-wrap:wrap}
 .ask .answered b{font-weight:600}
 .ask .answered .when{font:.72rem/1.4 var(--mono);color:var(--muted)}
 /* A relayed answer is marked wherever it appears. Muted rather than loud: it is
@@ -341,35 +289,35 @@ main{display:block}
    to be readable as "he tapped this himself". */
 .relayed{font:.68rem/1.4 var(--mono);letter-spacing:.06em;text-transform:uppercase;
   color:var(--now);border:1px solid currentColor;border-radius:.3rem;
-  padding:.1rem .34rem;margin-left:.45rem;white-space:nowrap}
+  padding:.1rem .34rem;margin-left:var(--space-45);white-space:nowrap}
 .relayed-note{font-size:.88rem;color:var(--muted);border-left:2px solid var(--now);
-  padding-left:.7rem;margin:.2rem 0 .6rem}
+  padding-left:var(--space-7);margin:var(--space-2) 0 var(--space-6)}
 .ask.held{border-left-color:var(--line);box-shadow:none;background:transparent}
-.ask.held .q{font-weight:500;color:var(--muted);margin:0 0 .3rem}
+.ask.held .q{font-weight:500;color:var(--muted);margin:0 0 var(--space-3)}
 .ask .qroute{margin:0 0 .65rem;font-size:.82rem;color:var(--muted)}
 .ask .qroute.waiting_now{color:var(--ok)}
-.ask .qctx{margin:0 0 .6rem;font-size:.9rem;color:var(--muted);white-space:pre-line}
+.ask .qctx{margin:0 0 var(--space-6);font-size:.9rem;color:var(--muted);white-space:pre-line}
 .ask .qmeta{margin:0 0 .65rem;font:.74rem/1.5 var(--mono);color:var(--muted);
-  display:flex;flex-wrap:wrap;gap:.2rem .7rem}
+  display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-7)}
 .ask .qmeta .urg-blocking,.openlist .urg-blocking,.ask .qmeta .over,.openlist .over{
   color:var(--now-solid)}
-.openlist{margin:0 0 1rem;padding:.7rem 1.1rem;border:1px solid var(--line);
+.openlist{margin:0 0 var(--space-10);padding:var(--space-7) 1.1rem;border:1px solid var(--line);
   border-radius:.7rem;background:var(--card)}
 .openlist h2{font:600 .74rem/1.4 var(--mono);letter-spacing:.14em;text-transform:uppercase;
-  color:var(--accent);margin:0 0 .4rem}
+  color:var(--accent);margin:0 0 var(--space-4)}
 .openlist ul{list-style:none;margin:0;padding:0}
 .openlist li{margin:.15rem 0;font-size:.9rem}
-.openlist .lmeta{font:.74rem/1.4 var(--mono);color:var(--muted);margin-left:.5rem}
+.openlist .lmeta{font:.74rem/1.4 var(--mono);color:var(--muted);margin-left:var(--space-5)}
 .bar .inboxlink{font-size:.84rem;color:var(--muted);text-decoration:none;
-  border:1px solid var(--line);border-radius:999px;padding:.18rem .6rem}
+  border:1px solid var(--line);border-radius:999px;padding:.18rem var(--space-6)}
 .bar .inboxlink.some{color:var(--on-now);background:var(--now-solid);
   border-color:var(--now-solid);font-weight:600}
 .inbox{list-style:none;margin:0;padding:0}
 .inbox>li{margin:0 0 .9rem}
-.inbox .ihead{margin:0 0 .35rem;font:.74rem/1.5 var(--mono);color:var(--muted);
-  display:flex;flex-wrap:wrap;gap:.2rem .7rem}
+.inbox .ihead{margin:0 0 var(--space-35);font:.74rem/1.5 var(--mono);color:var(--muted);
+  display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-7)}
 .inbox .ihead a{color:inherit}
-.inbox .ibody{margin:0 0 .6rem;font-size:.92rem;white-space:pre-line}
+.inbox .ibody{margin:0 0 var(--space-6);font-size:.92rem;white-space:pre-line}
 .inbox .ilink{font-size:.84rem}
 .ask.done{border-left-color:var(--ok)}
 .ask.done .q{font-weight:500}
@@ -382,17 +330,17 @@ main{display:block}
    Jeremy had already answered took his entire first screen on 20 Sep 2026; the
    page they were attached to began underneath them. */
 .settled-list{margin-top:1.8rem}
-.settled-list > summary{cursor:pointer;list-style:none;padding:.45rem 0;
+.settled-list > summary{cursor:pointer;list-style:none;padding:var(--space-45) 0;
   color:var(--muted)}
 .settled-list > summary::-webkit-details-marker{display:none}
-.settled-list > summary::before{content:"";margin-right:.5rem;display:inline-block;
+.settled-list > summary::before{content:"";margin-right:var(--space-5);display:inline-block;
   width:0;height:0;border:.3rem solid transparent;border-left-color:currentColor;
   vertical-align:.05em;transition:transform .12s}
 .settled-list[open] > summary::before{transform:rotate(90deg)}
 .settled{border:1px solid var(--line);border-radius:.55rem;background:var(--card);
-  margin:0 0 .35rem}
-.settled summary{cursor:pointer;list-style:none;padding:.5rem .8rem;display:flex;
-  gap:.6rem;align-items:baseline;flex-wrap:wrap;font-size:.92rem}
+  margin:0 0 var(--space-35)}
+.settled summary{cursor:pointer;list-style:none;padding:var(--space-5) .8rem;display:flex;
+  gap:var(--space-6);align-items:baseline;flex-wrap:wrap;font-size:.92rem}
 .settled summary::-webkit-details-marker{display:none}
 .settled summary::before{content:"";display:inline-block;width:0;height:0;
   border:.28rem solid transparent;border-left-color:var(--muted);
@@ -403,7 +351,7 @@ main{display:block}
 .settled .sa{color:var(--ok);font-weight:600}
 .settled .settled-body{padding:0 .55rem .55rem}
 .settled .settled-body .ask{margin:0;border-left-color:var(--ok);box-shadow:none}
-.settled .note{margin:.2rem .35rem .5rem;font-size:.9rem;white-space:pre-wrap}
+.settled .note{margin:var(--space-2) var(--space-35) var(--space-5);font-size:.9rem;white-space:pre-wrap}
 /* Whether the agent has actually collected the answer. Shown in the summary line
    ONLY when it has not -- an answer that landed needs no announcement, and the one
    that did not is the whole reason this is on the page. */
@@ -412,7 +360,7 @@ main{display:block}
   overflow:hidden;text-overflow:ellipsis}
 .part.flagged{font-weight:700}
 .rmeta .part{display:inline}
-.settled .pickup{margin:.2rem .35rem .5rem;font-size:.82rem;color:var(--muted)}
+.settled .pickup{margin:var(--space-2) var(--space-35) var(--space-5);font-size:.82rem;color:var(--muted)}
 
 
 /* the page itself */
@@ -462,12 +410,12 @@ main{display:block}
 /* The bar control, sized and shaped like the other bar buttons rather than
    like a new kind of thing. `.has` is the only state: there is something to
    read. A count with no unread is a number for its own sake. */
-.cbtn{display:inline-flex;align-items:center;gap:.3rem;height:1.75rem;
-  padding:0 .5rem;border-radius:.45rem;color:var(--muted);text-decoration:none}
+.cbtn{display:inline-flex;align-items:center;gap:var(--space-3);height:1.75rem;
+  padding:0 var(--space-5);border-radius:.45rem;color:var(--muted);text-decoration:none}
 .cbtn:hover{background:var(--chip-hover);color:var(--ink)}
 .cbtn.has{color:var(--ink)}
-.cn{font:600 .6875rem/1 var(--mono);color:var(--on-accent);
-  background:var(--accent);border-radius:.6rem;padding:.1rem .3rem}
+.cn{font:600 var(--text-2xs)/1 var(--mono);color:var(--on-accent);
+  background:var(--accent);border-radius:.6rem;padding:.1rem var(--space-3)}
 
 /* A PANEL, opened from the bar -- the reference keeps the conversation beside
    the page rather than under it, and so does this: DOCKED on the right, below
@@ -487,12 +435,12 @@ body:not(.cjs) .cpanel:target,body.cpanel-open .cpanel{display:block}
 body.cpanel-open .wrap.full{margin-right:min(24rem,100%)}
 body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
 .chead{display:flex;align-items:center;justify-content:space-between;
-  gap:.5rem;margin:0 0 .9rem}
+  gap:var(--space-5);margin:0 0 .9rem}
 .cpanel h2{font:600 .74rem/1.4 var(--mono);letter-spacing:.14em;
   text-transform:uppercase;color:var(--muted);margin:0}
 .cclose{display:inline-flex;align-items:center;justify-content:center;
   width:1.75rem;height:1.75rem;border:0;border-radius:.45rem;background:transparent;
-  color:var(--muted);font:400 1.2rem/1 ui-sans-serif,system-ui,sans-serif;
+  color:var(--muted);font:400 1.2rem/1 var(--sans-short);
   text-decoration:none;cursor:pointer}
 .cclose:hover{background:var(--chip-hover);color:var(--ink)}
 .cbtn[aria-expanded="true"]{background:var(--chip);color:var(--ink)}
@@ -509,101 +457,101 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
 @keyframes cup{from{transform:translateY(100%)}}
 @media (prefers-reduced-motion:reduce){.cpanel{animation:none}}
 /* END THE PANEL ON A PHONE */
-.cempty{font-size:.875rem;line-height:1.55;color:var(--muted);margin:0 0 .9rem}
+.cempty{font-size:var(--text-md);line-height:1.55;color:var(--muted);margin:0 0 .9rem}
 /* This page / All pages. The wall's own .tab, so the two switches in this
    product read as one idea; only the spacing is local to the panel. */
 .cscope{margin:0 0 .9rem}
 /* Which page a conversation belongs to, in the all-pages view. Quieter than
    the thread itself: it is a label on the group, not the thing being read. */
 .cpage{font:600 .7rem/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;
-  color:var(--muted);margin:1.1rem 0 .5rem;display:flex;align-items:center;gap:.5rem}
+  color:var(--muted);margin:1.1rem 0 var(--space-5);display:flex;align-items:center;gap:var(--space-5)}
 .cpage:first-of-type{margin-top:0}
 .cpage a{color:var(--muted);text-decoration:none}
 .cpage a:hover{color:var(--ink)}
-.carch{font:500 .62rem/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.06em;
+.carch{font:500 .62rem/1 var(--sans-short);letter-spacing:.06em;
   color:var(--muted);background:var(--paper);border-radius:999px;
-  padding:.16rem .4rem;box-shadow:inset 0 0 0 1px var(--line)}
-.threads{list-style:none;margin:0 0 1rem;padding:0}
+  padding:.16rem var(--space-4);box-shadow:inset 0 0 0 1px var(--line)}
+.threads{list-style:none;margin:0 0 var(--space-10);padding:0}
 .thread{background:var(--card);border:1px solid var(--line);
-  border-radius:.6rem;padding:.7rem .85rem;margin:0 0 .7rem}
+  border-radius:.6rem;padding:var(--space-7) .85rem;margin:0 0 var(--space-7)}
 .thread.settled{background:transparent}
 .bubbles{list-style:none;margin:0;padding:0}
 /* What a thread is ABOUT, above what was said about it -- the passage is the
    subject of the conversation, so it reads first, set apart and quieter. */
-.cquote{margin:0 0 .5rem;padding:.35rem 0 .35rem .7rem;
-  border-left:3px solid var(--chip);font-size:.8125rem;line-height:1.5;
+.cquote{margin:0 0 var(--space-5);padding:var(--space-35) 0 var(--space-35) var(--space-7);
+  border-left:3px solid var(--chip);font-size:var(--text-sm);line-height:1.5;
   color:var(--muted);font-style:italic;overflow-wrap:anywhere}
 /* Said plainly rather than in a warning colour: the comment is not wrong and
    nothing is broken -- the page moved on, and he is being told which version
    the words were on. */
-.cmoved{display:block;margin-top:.3rem;font-style:normal;font-size:.75rem;
+.cmoved{display:block;margin-top:var(--space-3);font-style:normal;font-size:var(--text-xs);
   color:var(--muted)}
-.cwhere{margin-right:.4rem}
-.coutdated-list{margin:0 0 .75rem;padding:.5rem .7rem;border:1px solid var(--line);
-  border-radius:.4rem;font-size:.8125rem}
-.coutdated-list h3{margin:0 0 .3rem;font-size:.8125rem}
-.coutdated-list ul{margin:0;padding-left:1rem}
-.coutdated-list span{color:var(--muted);font-size:.75rem}
-.cmt{padding:.35rem 0;border-left:2px solid var(--line);padding-left:.7rem;
-  margin:0 0 .35rem}
+.cwhere{margin-right:var(--space-4)}
+.coutdated-list{margin:0 0 var(--space-75);padding:var(--space-5) var(--space-7);border:1px solid var(--line);
+  border-radius:.4rem;font-size:var(--text-sm)}
+.coutdated-list h3{margin:0 0 var(--space-3);font-size:var(--text-sm)}
+.coutdated-list ul{margin:0;padding-left:var(--space-10)}
+.coutdated-list span{color:var(--muted);font-size:var(--text-xs)}
+.cmt{padding:var(--space-35) 0;border-left:2px solid var(--line);padding-left:var(--space-7);
+  margin:0 0 var(--space-35)}
 .cmt.human{border-left-color:var(--accent)}
 /* An agent's words are plainly not his: a dashed rule, a tinted ground, and the
    writer named with "(agent)". The office after "via session" is only what the
    session called itself; one key can be shared by several offices. */
 .cmt.agent{border-left-style:dashed;border-left-color:var(--muted);
-  background:var(--chip);padding-right:.5rem;border-radius:0 .35rem .35rem 0}
-.cvia{margin-left:.5rem;font-size:.75rem;color:var(--muted)}
-.cwho{font:600 .8125rem/1.4 ui-sans-serif,system-ui,sans-serif;color:var(--ink)}
-.cwhen{margin-left:.5rem;font-size:.75rem;color:var(--muted)}
-.cmt p{margin:.15rem 0 0;font-size:.875rem;line-height:1.55;color:var(--ink);
+  background:var(--chip);padding-right:var(--space-5);border-radius:0 .35rem .35rem 0}
+.cvia{margin-left:var(--space-5);font-size:var(--text-xs);color:var(--muted)}
+.cwho{font:600 var(--text-sm)/1.4 var(--sans-short);color:var(--ink)}
+.cwhen{margin-left:var(--space-5);font-size:var(--text-xs);color:var(--muted)}
+.cmt p{margin:.15rem 0 0;font-size:var(--text-md);line-height:1.55;color:var(--ink);
   white-space:pre-wrap;overflow-wrap:anywhere}
-.cnew,.creply,.nreply{display:flex;gap:.4rem;margin:.5rem 0 0}
-.cnew input,.creply input,.nreply input{flex:1 1 auto;min-width:0;padding:.4rem .6rem;
+.cnew,.creply,.nreply{display:flex;gap:var(--space-4);margin:var(--space-5) 0 0}
+.cnew input,.creply input,.nreply input{flex:1 1 auto;min-width:0;padding:var(--space-4) var(--space-6);
   border:1px solid var(--line);border-radius:.45rem;background:var(--paper);
-  color:var(--ink);font:.875rem/1.4 ui-sans-serif,system-ui,sans-serif}
-.cnew button,.creply button,.nreply button,.cresolve button{padding:.4rem .7rem;cursor:pointer;
+  color:var(--ink);font:var(--text-md)/1.4 var(--sans-short)}
+.cnew button,.creply button,.nreply button,.cresolve button{padding:var(--space-4) var(--space-7);cursor:pointer;
   border:1px solid var(--line);border-radius:.45rem;background:var(--chip);
-  color:var(--ink);font:.8125rem/1.4 ui-sans-serif,system-ui,sans-serif}
+  color:var(--ink);font:var(--text-sm)/1.4 var(--sans-short)}
 .cnew button{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
-.cresolve{margin:.5rem 0 0}
+.cresolve{margin:var(--space-5) 0 0}
 .cnew,.creply{flex-wrap:wrap}
-.cattach{display:none;flex:1 1 100%;flex-wrap:wrap;align-items:center;gap:.4rem}
+.cattach{display:none;flex:1 1 100%;flex-wrap:wrap;align-items:center;gap:var(--space-4)}
 .cpics-on .cattach{display:flex}
 .cattach .cattachbtn{background:var(--chip);color:var(--ink);border-color:var(--line)}
-.cnote{font-size:.75rem;color:var(--muted)}
-.cpics{display:flex;flex:1 1 100%;flex-wrap:wrap;gap:.4rem}
+.cnote{font-size:var(--text-xs);color:var(--muted)}
+.cpics{display:flex;flex:1 1 100%;flex-wrap:wrap;gap:var(--space-4)}
 .cpics:empty{display:none}
 .cpic{position:relative;display:inline-block}
 .cpic canvas,.cpic .cpicname{display:block;width:3.5rem;height:3.5rem;border:1px solid var(--line);
   border-radius:.35rem;background:var(--chip);font-size:.65rem;overflow:hidden;overflow-wrap:anywhere}
-.cpic .cpicx{position:absolute;top:-.4rem;right:-.4rem;padding:0 .35rem;line-height:1.2;border-radius:1rem}
-.cpics-say{flex:1 1 100%;margin:0;font-size:.75rem;color:var(--now)}
+.cpic .cpicx{position:absolute;top:-.4rem;right:-.4rem;padding:0 var(--space-35);line-height:1.2;border-radius:1rem}
+.cpics-say{flex:1 1 100%;margin:0;font-size:var(--text-xs);color:var(--now)}
 .cpics-say:empty{display:none}
-.cpicsrow{display:flex;flex-wrap:wrap;gap:.4rem;margin:.35rem 0 0}
+.cpicsrow{display:flex;flex-wrap:wrap;gap:var(--space-4);margin:var(--space-35) 0 0}
 .cpicsrow .cimg{display:inline-block;line-height:0}
 .cthumb{max-width:6rem;max-height:6rem;object-fit:cover;border:1px solid var(--line);
   border-radius:.35rem;cursor:zoom-in}
 .cthumb.big{max-width:100%;max-height:none;object-fit:contain;cursor:zoom-out}
 .cpicsrow .cimg.big{flex:1 1 100%}
-.nthread{margin:.2rem .35rem .6rem}
-.nthread .nhead{font-size:.8125rem;color:var(--muted);margin:0 0 .3rem}
-.nthread .ntag{margin-left:.5rem;color:var(--now);font-weight:600}
+.nthread{margin:var(--space-2) var(--space-35) var(--space-6)}
+.nthread .nhead{font-size:var(--text-sm);color:var(--muted);margin:0 0 var(--space-3)}
+.nthread .ntag{margin-left:var(--space-5);color:var(--now);font-weight:600}
 /* OPEN / RESOLVED. Both lists are in the markup. With scripts (body.cjs) the
    tabs show and `data-ctab` on the panel picks the list; without them the tabs
    are hidden and both lists show, each under its small label. A resolved
    thread is one tap away and never hidden: the count is on its tab. */
 .ctabs{display:none;gap:.15rem;margin:0 0 .9rem}
 body.cjs .ctabs{display:flex}
-.ctab{display:inline-flex;align-items:center;gap:.4rem;height:32px;padding:0 .75rem;
+.ctab{display:inline-flex;align-items:center;gap:var(--space-4);height:32px;padding:0 var(--space-75);
   border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer;
-  font:500 .875rem/1.25rem ui-sans-serif,system-ui,-apple-system,sans-serif}
+  font:500 var(--text-md)/1.25rem var(--sans-system)}
 .ctab:hover{color:var(--ink);background:var(--card)}
 .ctab[aria-selected="true"]{color:var(--ink);background:var(--card);
   box-shadow:inset 0 0 0 1px var(--line)}
-.ctab .tn{font-size:.75rem;color:var(--muted);background:var(--paper);
+.ctab .tn{font-size:var(--text-xs);color:var(--muted);background:var(--paper);
   border-radius:999px;padding:.05rem .36rem;box-shadow:inset 0 0 0 1px var(--line)}
 .cpane-h{font:600 .7rem/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;
-  color:var(--muted);margin:.8rem 0 .5rem}
+  color:var(--muted);margin:.8rem 0 var(--space-5)}
 body.cjs .cpane-h{display:none}
 body.cjs .cpanel[data-ctab="open"] .cpane-resolved,
 body.cjs .cpanel[data-ctab="resolved"] .cpane-open{display:none}
@@ -611,18 +559,18 @@ body.cjs .cpanel[data-ctab="open"] .cgroup:not(:has(.cpane-open)),
 body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){display:none}
 .cgroup + .cgroup{margin-top:1.1rem}
 .cgroup > .cpage{margin-top:0}
-.creopen{margin:.5rem 0 0}
-.creopen button{padding:.4rem .7rem;cursor:pointer;border:1px solid var(--line);
+.creopen{margin:var(--space-5) 0 0}
+.creopen button{padding:var(--space-4) var(--space-7);cursor:pointer;border:1px solid var(--line);
   border-radius:.45rem;background:var(--chip);color:var(--ink);
-  font:.8125rem/1.4 ui-sans-serif,system-ui,sans-serif}
+  font:var(--text-sm)/1.4 var(--sans-short)}
 
-.since{margin:.5rem 0 .75rem;padding:.45rem .7rem;border-left:2px solid var(--line);
+.since{margin:var(--space-5) 0 var(--space-75);padding:var(--space-45) var(--space-7);border-left:2px solid var(--line);
   background:var(--bg);border-radius:.3rem}
 .since b{display:block;font:600 .7rem/1.5 var(--mono);letter-spacing:.1em;
   text-transform:uppercase;color:var(--muted)}
 .since ul{margin:.25rem 0 0;padding-left:1.1rem}
-.since li{font-size:.875rem;line-height:1.5;color:var(--ink)}
-.since li + li{margin-top:.3rem}
+.since li{font-size:var(--text-md);line-height:1.5;color:var(--ink)}
+.since li + li{margin-top:var(--space-3)}
 
 .sheet .ask{position:absolute;margin:0;z-index:1;
   transform:translateZ(0);isolation:isolate}
@@ -687,10 +635,10 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    instead of shouting with a background. Something is being hidden from the
    wall and that must be visible at a glance -- but it is a state, not an
    alarm. */
-.pick > summary{display:inline-flex;align-items:center;gap:.35rem;
-  height:1.75rem;padding:0 .5rem;border:1px solid var(--line);
+.pick > summary{display:inline-flex;align-items:center;gap:var(--space-35);
+  height:1.75rem;padding:0 var(--space-5);border:1px solid var(--line);
   border-radius:.45rem;cursor:pointer;list-style:none;
-  font:.8125rem/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
+  font:var(--text-sm)/1 var(--sans-system);
   color:var(--muted);max-width:10rem;overflow:hidden;white-space:nowrap}
 .pick > summary::-webkit-details-marker{display:none}
 .pick > summary:hover{color:var(--ink);border-color:var(--muted)}
@@ -703,9 +651,8 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    heading that had been shrunk. The serif belongs to the gallery's own <h1>
    and to the pages this service frames, not to a toolbar. */
 .menu > summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;
-  gap:.35rem;border-radius:6px;padding:.22rem .5rem;
-  font:400 .875rem/1.25rem ui-sans-serif,system-ui,-apple-system,"Segoe UI",
-  Roboto,sans-serif;color:var(--ink);white-space:nowrap;
+  gap:var(--space-35);border-radius:6px;padding:.22rem var(--space-5);
+  font:400 var(--text-md)/1.25rem var(--sans);color:var(--ink);white-space:nowrap;
   max-width:min(60vw,26rem);overflow:hidden;text-overflow:ellipsis}
 .menu > summary::-webkit-details-marker{display:none}
 .menu > summary:hover{background:var(--accent-soft)}
@@ -715,10 +662,10 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
 .menu[open] > summary{background:var(--accent-soft)}
 .mpanel{position:absolute;z-index:20;top:calc(100% + .35rem);left:0;min-width:16rem;
   background:var(--card);border:1px solid var(--line);border-radius:.6rem;
-  box-shadow:0 2px 6px rgba(20,20,15,.06),0 14px 34px -18px rgba(20,20,15,.45);
-  padding:.35rem;text-align:left}
+  box-shadow:var(--shadow-menu);
+  padding:var(--space-35);text-align:left}
 .mpanel.right{left:auto;right:0}
-.mhead{padding:.5rem .6rem .55rem;border-bottom:1px solid var(--line);margin-bottom:.3rem}
+.mhead{padding:var(--space-5) var(--space-6) .55rem;border-bottom:1px solid var(--line);margin-bottom:var(--space-3)}
 .mhead b{display:block;font-weight:600;font-size:.88rem}
 .mhead span{font-size:.8rem;color:var(--muted)}
 /* One row shape for links and submit buttons alike, so a form in the menu is
@@ -727,10 +674,10 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
 /* Every row in every menu is this: icon, label, one line, one height.
    Rename and Copy link used to be inline forms with a text field, which made a
    four-item menu three different shapes -- they open a dialog now instead. */
-.mrow{display:flex;align-items:center;gap:.6rem;width:100%;min-height:32px;
+.mrow{display:flex;align-items:center;gap:var(--space-6);width:100%;min-height:32px;
   font:inherit;font-size:.92rem;text-align:left;text-decoration:none;
   color:var(--ink);background:transparent;border:0;border-radius:.4rem;
-  padding:.44rem .6rem;cursor:pointer}
+  padding:.44rem var(--space-6);cursor:pointer}
 .mrow:hover{background:var(--accent-soft);color:var(--accent-ink)}
 .mi{width:1em;height:1em;flex:0 0 auto;fill:currentColor;opacity:.75}
 .mpanel form{margin:0}
@@ -738,12 +685,12 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
 /* The per-tile dots. Sits over the tile rather than inside its link, because an
    interactive control nested in an <a> is invalid and behaves unpredictably. */
 .tile-wrap{position:relative}
-.selbtn{position:absolute;z-index:60;font:500 .8rem/1 ui-sans-serif,system-ui,sans-serif;
-  padding:.45rem .7rem;border-radius:8px;border:1px solid var(--accent);
-  background:var(--card);color:var(--ink);box-shadow:0 2px 8px rgba(0,0,0,.18);cursor:pointer}
+.selbtn{position:absolute;z-index:60;font:500 .8rem/1 var(--sans-short);
+  padding:var(--space-45) var(--space-7);border-radius:8px;border:1px solid var(--accent);
+  background:var(--card);color:var(--ink);box-shadow:var(--shadow-float);cursor:pointer}
 /* The three-action bar that replaced the single .selbtn (page review step 1,
    homelab-ij8.108): same look, laid out as a row with gaps. */
-.selbar{position:absolute;z-index:60;display:flex;gap:.4rem}
+.selbar{position:absolute;z-index:60;display:flex;gap:var(--space-4)}
 /* The author-origin `display:flex` above always beats the user-agent
    stylesheet's `[hidden]{display:none}` -- origin, not specificity, decides
    that fight, and author rules win it regardless of selector weight. Without
@@ -754,51 +701,51 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    caught in review instead (page review step 1, homelab-ij8.108). */
 .selbar[hidden]{display:none}
 .cchordhint{position:fixed;left:50%;bottom:1.5rem;transform:translateX(-50%);z-index:70;
-  padding:.5rem .8rem;border-radius:.5rem;background:var(--ink);color:var(--paper);font-size:.8125rem}
+  padding:var(--space-5) .8rem;border-radius:.5rem;background:var(--ink);color:var(--paper);font-size:var(--text-sm)}
 .cchordhint[hidden]{display:none}
 /* The outline over the frame while picking a spot, and the numbered badges at
    pinned elements' corners: drawn here, over the page, never in it. The
    outline lets the pointer through, so the frame keeps hearing it. */
 .pinout{position:absolute;z-index:60;box-sizing:border-box;pointer-events:none;
-  border:2px solid var(--accent);background:rgba(217,164,0,.12);border-radius:.25rem}
+  border:2px solid var(--accent);background:var(--pin-fill);border-radius:.25rem}
 .pinout[hidden]{display:none}
-.pinbadge{position:absolute;z-index:59;min-width:1.25rem;height:1.25rem;padding:0 .3rem;
+.pinbadge{position:absolute;z-index:59;min-width:1.25rem;height:1.25rem;padding:0 var(--space-3);
   border:0;border-radius:.65rem;background:var(--accent);color:var(--on-accent);
-  font:600 .6875rem/1.25rem var(--mono);text-align:center;cursor:pointer;
-  box-shadow:0 1px 4px rgba(0,0,0,.3)}
-.cpinno{display:inline-block;margin-right:.4rem;min-width:1.1rem;padding:0 .3rem;
+  font:600 var(--text-2xs)/1.25rem var(--mono);text-align:center;cursor:pointer;
+  box-shadow:var(--shadow-pin)}
+.cpinno{display:inline-block;margin-right:var(--space-4);min-width:1.1rem;padding:0 var(--space-3);
   border-radius:.6rem;background:var(--accent);color:var(--on-accent);
-  font:600 .6875rem/1.1rem var(--mono);text-align:center}
-.cspot{margin-right:.4rem;font-style:normal;font-weight:600}
+  font:600 var(--text-2xs)/1.1rem var(--mono);text-align:center}
+.cspot{margin-right:var(--space-4);font-style:normal;font-weight:600}
 /* A HOVER CARD: the comment on marked text, beside it, drawn by the gallery
    (comments.js) from the panel's own thread. Tokens only, so it follows the
    theme; fixed, because a scroll closes it. */
 .hovercard{position:fixed;z-index:70;max-width:22rem;min-width:14rem;
   background:var(--card);color:var(--ink);border:1px solid var(--line);
-  border-radius:.6rem;box-shadow:var(--shadow);padding:.6rem .75rem .65rem;
-  font-size:.875rem}
-.hovercard .ckind{display:block;margin:0 0 .3rem;color:var(--muted)}
+  border-radius:.6rem;box-shadow:var(--shadow);padding:var(--space-6) var(--space-75) .65rem;
+  font-size:var(--text-md)}
+.hovercard .ckind{display:block;margin:0 0 var(--space-3);color:var(--muted)}
 .hovercard .ckind-remove{color:var(--danger)}
 .hovercard .ckind-looks_good{color:var(--ok)}
 .hovercard .bubbles{max-height:14rem;overflow-y:auto}
 .hovercard .creply[hidden]{display:none}
-.hcact{display:flex;gap:.4rem;justify-content:flex-end;margin:.5rem 0 0}
-.hcact button{padding:.3rem .65rem;cursor:pointer;border:1px solid var(--line);
-  border-radius:.45rem;background:var(--card);color:var(--ink);font:500 .8rem/1 ui-sans-serif,system-ui,sans-serif}
+.hcact{display:flex;gap:var(--space-4);justify-content:flex-end;margin:var(--space-5) 0 0}
+.hcact button{padding:var(--space-3) .65rem;cursor:pointer;border:1px solid var(--line);
+  border-radius:.45rem;background:var(--card);color:var(--ink);font:500 .8rem/1 var(--sans-short)}
 .hcact button:hover{background:var(--chip-hover)}
-.selbar button{font:500 .8rem/1 ui-sans-serif,system-ui,sans-serif;
-  padding:.45rem .7rem;border-radius:8px;border:1px solid var(--accent);
-  background:var(--card);color:var(--ink);box-shadow:0 2px 8px rgba(0,0,0,.18);cursor:pointer}
-.cquote{margin:0 0 .4rem;padding:.3rem .6rem;border-left:3px solid var(--accent);opacity:.85;
+.selbar button{font:500 .8rem/1 var(--sans-short);
+  padding:var(--space-45) var(--space-7);border-radius:8px;border:1px solid var(--accent);
+  background:var(--card);color:var(--ink);box-shadow:var(--shadow-float);cursor:pointer}
+.cquote{margin:0 0 var(--space-4);padding:var(--space-3) var(--space-6);border-left:3px solid var(--accent);opacity:.85;
   font-size:.85rem;white-space:pre-wrap}
-.ckind{font:600 .75rem var(--mono);text-transform:uppercase}
+.ckind{font:600 var(--text-xs) var(--mono);text-transform:uppercase}
 /* --danger already IS the interface's one red (see its own comment, :root
    above) -- a "Remove this" mark is exactly that meaning, so it reuses the
    token rather than invent a second, uncalibrated red with no dark-mode
    counterpart. --ok already covers "fine as it is" the same way. */
 .ckind-remove{color:var(--danger)}
 .ckind-looks_good{color:var(--ok)}
-.cunplaced{margin:0 0 .6rem;font-size:.8rem;opacity:.8}
+.cunplaced{margin:0 0 var(--space-6);font-size:.8rem;opacity:.8}
 .bar .profile{margin-left:auto}.bar .profile .mpanel{right:0;left:auto}
 /* THE PAGE BAR ON A PHONE. The title menu is the one thing in the bar that may give
    way: it shrinks to an ellipsis rather than push the bar past the screen. When the
@@ -807,7 +754,7 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    (2 Nov 2026). Full screen is dropped there too: the phone is already all page. */
 .bar.bleed > .menu:not(.profile){flex:1 1 auto;min-width:0}
 .bar.bleed > .menu:not(.profile) > summary{max-width:100%}
-@media (max-width:34rem){.bar.bleed{gap:.4rem}.bar.bleed .fsbtn{display:none}}
+@media (max-width:34rem){.bar.bleed{gap:var(--space-4)}.bar.bleed .fsbtn{display:none}}
 [data-unread] .t::before,[data-unread] .rt::before{content:"";display:inline-block;
   width:.55em;height:.55em;border-radius:50%;background:var(--accent);
   margin-right:.4em;vertical-align:.1em}
@@ -824,10 +771,10 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    part of the card. */
 .tile-wrap .menu > summary{display:flex;align-items:center;justify-content:center;
   width:32px;height:32px;background:var(--chip);border:0;border-radius:8px;
-  line-height:0;box-shadow:0 1px 3px rgba(20,20,15,.10);transition:background .12s}
+  line-height:0;box-shadow:var(--shadow-chip);transition:background .12s}
 .tile-wrap .menu > summary:hover,.tile-wrap .menu[open] > summary,
 .tile-wrap .menu > summary:focus-visible{background:var(--chip-hover);
-  box-shadow:0 2px 6px rgba(20,20,15,.16)}
+  box-shadow:var(--shadow-chip-hover)}
 /* Three dots drawn in CSS rather than as a character: the unicode vertical
    ellipsis renders as a different width in every font on the box, and at this
    size the difference is the whole control. */
@@ -848,13 +795,13 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
 .tmenu .mpanel{min-width:0;width:15rem;max-width:calc(100vw - 2rem)}
 /* No special cases left in here: the two rows that needed a text field are
    dialogs now, so a menu panel is a plain stack of identical rows. */
-.mlink{display:flex;align-items:center;gap:.5rem;margin:0}
+.mlink{display:flex;align-items:center;gap:var(--space-5);margin:0}
 .mlink input{font:inherit;font-size:.82rem;font-family:var(--mono);flex:1 1 auto;
   min-width:5rem;border:1px solid var(--line);border-radius:.4rem;
-  padding:.24rem .4rem;background:var(--paper);color:var(--muted)}
+  padding:.24rem var(--space-4);background:var(--paper);color:var(--muted)}
 .mcopy{font:inherit;font-size:.82rem;cursor:pointer;border-radius:.4rem;
   border:1px solid var(--line);background:var(--card);color:var(--ink);
-  padding:.24rem .5rem;flex:0 0 auto}
+  padding:.24rem var(--space-5);flex:0 0 auto}
 .mcopy:hover{border-color:var(--accent);color:var(--accent-ink)}
 
 /* index. Geometry measured off claude.ai's own gallery: a 304x234 card, of
@@ -873,13 +820,13 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    this fixes. A folder that holds a question gets a left rule as well as its badge,
    so the cue is never colour alone. Prior art: 2026-11-02-folder-row-prior-art.md. */
 .wsec{font:600 .7rem var(--mono);text-transform:uppercase;letter-spacing:.08em;
-  color:var(--muted);margin:0 0 .6rem}
+  color:var(--muted);margin:0 0 var(--space-6)}
 .folders + .wsec{margin-top:1.6rem}
-.folders{list-style:none;margin:0;padding:0;display:grid;gap:.6rem;
+.folders{list-style:none;margin:0;padding:0;display:grid;gap:var(--space-6);
   grid-template-columns:repeat(auto-fill,minmax(min(16rem,100%),1fr))}
 .folders li{margin:0}
 .folders > li > a{display:flex;align-items:center;gap:.65rem;min-height:3.4rem;
-  padding:.55rem 2.6rem .55rem .7rem;background:var(--card);border:1px solid var(--line);
+  padding:.55rem 2.6rem .55rem var(--space-7);background:var(--card);border:1px solid var(--line);
   border-radius:10px;text-decoration:none;color:var(--ink);transition:border-color .12s}
 .folders > li > a:hover{border-color:var(--line-hover)}
 .folders > li.asking > a{box-shadow:inset 3px 0 0 var(--accent)}
@@ -889,12 +836,11 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
 .folders .body{display:flex;flex-direction:column;min-width:0;flex:1 1 auto}
 .folders .t{font-weight:600;font-size:.9rem;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis}
-.folders .m{font-size:.75rem;color:var(--muted);white-space:nowrap;overflow:hidden;
+.folders .m{font-size:var(--text-xs);color:var(--muted);white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis}
-.folders .m .dot{margin:0 .3rem;opacity:.7}
-.folders .wait{flex:0 0 auto;font:600 .6875rem/1rem ui-sans-serif,system-ui,-apple-system,
-  sans-serif;color:var(--on-now);background:var(--now-solid);border-radius:.3rem;
-  padding:.2rem .45rem;white-space:nowrap}
+.folders .m .dot{margin:0 var(--space-3);opacity:.7}
+.folders .wait{flex:0 0 auto;font:600 var(--text-2xs)/1rem var(--sans-system);color:var(--on-now);background:var(--now-solid);border-radius:.3rem;
+  padding:var(--space-2) var(--space-45);white-space:nowrap}
 .folders .tile-wrap .menu{top:50%;right:.5rem;transform:translateY(-50%)}
 .folders .tile-wrap .menu[open]{transform:none;top:.6rem}
 /* The card clips its own corners so the preview can bleed to three edges
@@ -943,10 +889,10 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
   -webkit-box-orient:vertical;overflow:hidden;font-size:.82rem;line-height:1.5;
   color:var(--muted);margin:0}
 .tiles .shot.none .mi{width:1.1rem;height:1.1rem;opacity:.25;display:block;
-  margin:0 0 .4rem}
+  margin:0 0 var(--space-4)}
 /* Everything below the picture, in one padded column. 14px padding and an 8px
    gap are the reference's, measured. */
-.tiles .body{display:flex;flex-direction:column;gap:.5rem;padding:14px;
+.tiles .body{display:flex;flex-direction:column;gap:var(--space-5);padding:14px;
   flex:1 1 auto}
 /* The title is SANS at 14/20 and weight 500, not the serif display face. On a
    304px card the serif at 17px wrapped to three lines and fought the page's own
@@ -960,8 +906,7 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    only by putting this wall beside the reference at the same width: mine was
    visibly looser and that was most of the reason. What made rows ragged was
    the waiting badge sitting in the body, and that now rides the picture. */
-.tiles .t{font:500 .875rem/1.25rem ui-sans-serif,system-ui,
-  -apple-system,"Segoe UI",Roboto,sans-serif;
+.tiles .t{font:500 var(--text-md)/1.25rem var(--sans);
   overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;
   -webkit-box-orient:vertical}
 /* Anything waiting on Jeremy is the one thing on a tile that should interrupt
@@ -975,16 +920,16 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    arbitrary content is legible on some pages and invisible on others, which is
    the one thing this badge may never be. */
 .tiles .wait{position:absolute;left:.6rem;bottom:.6rem;z-index:1;
-  font:600 .6875rem/1rem ui-sans-serif,system-ui,-apple-system,sans-serif;
+  font:600 var(--text-2xs)/1rem var(--sans-system);
   letter-spacing:.01em;color:var(--on-now);background:var(--now-solid);
-  border-radius:.3rem;padding:.24rem .45rem;
-  box-shadow:0 1px 4px rgba(20,20,15,.28)}
+  border-radius:.3rem;padding:.24rem var(--space-45);
+  box-shadow:var(--shadow-badge)}
 /* And the card says so at its edge, so a wall scanned at arm's length still
    sorts itself. One hairline, not a thick rule: it should register, not shout
    over the pinned tile next to it. */
 .tiles > li.asking > a{border-color:var(--now)}
-.tiles .m{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;
-  font:.75rem/1rem ui-sans-serif,system-ui,-apple-system,sans-serif;
+.tiles .m{display:flex;align-items:center;gap:var(--space-4);flex-wrap:wrap;
+  font:var(--text-xs)/1rem var(--sans-system);
   color:var(--muted);margin:auto 0 0}
 .tiles time{font:inherit;color:var(--muted);white-space:nowrap}
 .tiles .dot{color:var(--muted);opacity:.6}
@@ -1026,7 +971,7 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
 /* A pinned tile leads the wall; the accent edge says why, without shouting. */
 .tiles > li.pinned > a{border-color:var(--accent)}
 .empty{color:var(--muted);padding:2rem 0}
-.foot{color:var(--muted);font-size:.8125rem;padding:2rem 0 1rem}
+.foot{color:var(--muted);font-size:var(--text-sm);padding:2rem 0 var(--space-10)}
 
 /* --- the rename dialog -------------------------------------------------------
    :target, not <dialog>. A real dialog needs showModal() and this gallery works
@@ -1037,22 +982,21 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    back to the page, so clicking away closes it exactly as it should. */
 .dlg{display:none}
 .dlg:target{display:block;position:fixed;inset:0;z-index:100}
-.dlg-back{position:absolute;inset:0;background:rgba(11,11,11,.45);
+.dlg-back{position:absolute;inset:0;background:var(--backdrop);
   backdrop-filter:blur(2px)}
 .dlg-card{position:relative;margin:12vh auto 0;max-width:26rem;
   width:calc(100% - 2rem);background:var(--card);border:1px solid var(--line);
-  border-radius:12px;box-shadow:0 12px 40px -12px rgba(11,11,11,.4);
-  padding:1.15rem 1.25rem 1rem}
-.dlg-card h2{margin:0 0 .8rem;font:500 1rem/1.4 ui-sans-serif,system-ui,
-  -apple-system,sans-serif;color:var(--ink);letter-spacing:0;text-transform:none}
-.dlg-card input{font:inherit;font-size:.95rem;width:100%;padding:.5rem .6rem;
+  border-radius:12px;box-shadow:var(--shadow-dialog);
+  padding:1.15rem 1.25rem var(--space-10)}
+.dlg-card h2{margin:0 0 .8rem;font:500 1rem/1.4 var(--sans-system);color:var(--ink);letter-spacing:0;text-transform:none}
+.dlg-card input{font:inherit;font-size:.95rem;width:100%;padding:var(--space-5) var(--space-6);
   border:1px solid var(--line);border-radius:.5rem;background:var(--paper);
   color:var(--ink)}
 .dlg-card input:focus{outline:2px solid var(--accent);outline-offset:1px}
-.dlg-actions{display:flex;justify-content:flex-end;gap:.5rem;margin:1rem 0 0}
-.btn{font:inherit;font-size:.875rem;cursor:pointer;text-decoration:none;
+.dlg-actions{display:flex;justify-content:flex-end;gap:var(--space-5);margin:var(--space-10) 0 0}
+.btn{font:inherit;font-size:var(--text-md);cursor:pointer;text-decoration:none;
   display:inline-flex;align-items:center;border:1px solid var(--line);
-  border-radius:.5rem;padding:.4rem .8rem;background:var(--card);color:var(--ink)}
+  border-radius:.5rem;padding:var(--space-4) .8rem;background:var(--card);color:var(--ink)}
 .btn:hover{border-color:var(--line-hover)}
 .btn.primary{background:var(--accent);border-color:var(--accent);
   color:var(--on-accent)}
@@ -1065,27 +1009,27 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    reference's rhythm measured: title row top 48 height 48, controls top 112
    height 32. They used to share the title's line, which is what made the
    header read as a toolbar someone had run out of room on. */
-.controls{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;
-  min-height:32px;margin:1rem 0 2rem}
-.cright{display:flex;align-items:center;gap:.6rem;margin-left:auto}
+.controls{display:flex;align-items:center;gap:var(--space-10);flex-wrap:wrap;
+  min-height:32px;margin:var(--space-10) 0 2rem}
+.cright{display:flex;align-items:center;gap:var(--space-6);margin-left:auto}
 .tabs{display:flex;align-items:center;gap:.15rem;flex-wrap:wrap}
-.tab{display:inline-flex;align-items:center;gap:.4rem;height:32px;
-  padding:0 .75rem;border-radius:8px;text-decoration:none;color:var(--muted);
-  font:500 .875rem/1.25rem ui-sans-serif,system-ui,-apple-system,sans-serif}
+.tab{display:inline-flex;align-items:center;gap:var(--space-4);height:32px;
+  padding:0 var(--space-75);border-radius:8px;text-decoration:none;color:var(--muted);
+  font:500 var(--text-md)/1.25rem var(--sans-system)}
 .tab:hover{color:var(--ink);background:var(--card)}
 .tab.on{color:var(--ink);background:var(--card);
   box-shadow:inset 0 0 0 1px var(--line)}
-.tab .tn{font-size:.75rem;color:var(--muted);background:var(--paper);
+.tab .tn{font-size:var(--text-xs);color:var(--muted);background:var(--paper);
   border-radius:999px;padding:.05rem .36rem;box-shadow:inset 0 0 0 1px var(--line)}
 .tab.on .tn{background:var(--paper)}
 
 /* Search. A GET form, so a search is a URL he can keep. */
-.find{display:flex;align-items:center;gap:.4rem;height:28px;margin:0;
-  padding:0 .5rem;border:1px solid var(--line);border-radius:7px;
+.find{display:flex;align-items:center;gap:var(--space-4);height:28px;margin:0;
+  padding:0 var(--space-5);border:1px solid var(--line);border-radius:7px;
   background:var(--card)}
 .find:focus-within{border-color:var(--accent)}
 .find .mi{width:.85rem;height:.85rem;opacity:.55;flex:0 0 auto}
-.find input[type=search]{font:inherit;font-size:.8125rem;border:0;outline:0;
+.find input[type=search]{font:inherit;font-size:var(--text-sm);border:0;outline:0;
   background:transparent;color:var(--ink);width:9rem;min-width:0;padding:0}
 .find input[type=search]::-webkit-search-cancel-button{display:none}
 .clearq{text-decoration:none;color:var(--muted);font-size:1rem;line-height:1;
@@ -1121,14 +1065,14 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    page bar and the comments drawer, and it only ever appears because something
    actually changed. */
 .newer{position:fixed;left:50%;transform:translateX(-50%);bottom:1.1rem;z-index:40;
-  display:flex;align-items:center;gap:.6rem;max-width:min(92vw,34rem);
-  padding:.55rem .6rem .55rem .9rem;border:1px solid var(--line);
+  display:flex;align-items:center;gap:var(--space-6);max-width:min(92vw,34rem);
+  padding:.55rem var(--space-6) .55rem .9rem;border:1px solid var(--line);
   border-radius:.7rem;background:var(--card);color:var(--ink);
-  box-shadow:0 6px 24px rgba(0,0,0,.14);
-  font:.8125rem/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif}
-.newer button{padding:.35rem .65rem;cursor:pointer;border-radius:.45rem;
+  box-shadow:var(--shadow-toast);
+  font:var(--text-sm)/1.4 var(--sans-system)}
+.newer button{padding:var(--space-35) .65rem;cursor:pointer;border-radius:.45rem;
   border:1px solid var(--accent);background:var(--accent);color:var(--on-accent);
-  font:500 .8125rem/1.25 ui-sans-serif,system-ui,-apple-system,sans-serif}
+  font:500 var(--text-sm)/1.25 var(--sans-system)}
 .newer button.ghost{background:var(--chip);color:var(--ink);border-color:var(--line)}
 
 /* --- the list view ---------------------------------------------------------
@@ -1136,16 +1080,15 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    with 6px 12px padding, and a 40px row whose title is 14/20 at weight 400 --
    LIGHTER than the card title, because in a list the title is the only thing
    and does not need to win against anything. */
-.daygroup{font:500 .75rem/1.0625rem ui-sans-serif,system-ui,-apple-system,
-  sans-serif;color:var(--muted);margin:1.3rem 0 .15rem;padding:.375rem .75rem}
+.daygroup{font:500 var(--text-xs)/1.0625rem var(--sans-system);color:var(--muted);margin:1.3rem 0 .15rem;padding:.375rem var(--space-75)}
 .daygroup:first-child{margin-top:0}
 .rows{list-style:none;margin:0;padding:0}
 .row-wrap{position:relative;margin:0}
 /* 52px, measured off the reference's own row -- the 40 this used came from an
    inner element of theirs, not the row. Room on the right for the pin and the
    dots, which sit over it as siblings of the link. */
-.row{display:flex;align-items:center;gap:.75rem;min-height:52px;
-  padding:.25rem 4.6rem .25rem .5rem;border-radius:.6rem;
+.row{display:flex;align-items:center;gap:var(--space-75);min-height:52px;
+  padding:.25rem 4.6rem .25rem var(--space-5);border-radius:.6rem;
   text-decoration:none;color:var(--ink)}
 .row:hover{background:var(--card)}
 /* The type-icon slot. Types do not exist yet, so it carries the page's own
@@ -1156,17 +1099,16 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
 .rshot.none{display:flex;align-items:center;justify-content:center}
 .rshot.none .mi{width:1rem;height:1rem;opacity:.3}
 .rt{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;font:400 .875rem/1.25rem ui-sans-serif,system-ui,
-  -apple-system,sans-serif}
+  white-space:nowrap;font:400 var(--text-md)/1.25rem var(--sans-system)}
 .rmeta{flex:0 1 auto;display:flex;align-items:center;gap:.55rem;
-  font:.75rem/1rem ui-sans-serif,system-ui,-apple-system,sans-serif;
+  font:var(--text-xs)/1rem var(--sans-system);
   color:var(--muted);white-space:nowrap}
 /* In a row the badge is inline rather than laid over a picture, so it goes
    back to being tinted -- there is no arbitrary page render underneath it to
    be illegible against. */
 .rows .wait{position:static;box-shadow:none;background:transparent;
   color:var(--now);border:1px solid currentColor;padding:.1rem .36rem}
-.rows .setaside{color:var(--muted);font-size:.7rem;margin-left:.4rem}
+.rows .setaside{color:var(--muted);font-size:.7rem;margin-left:var(--space-4)}
 .row-wrap .menu{position:absolute;top:50%;right:.35rem;transform:translateY(-50%);
   z-index:5}
 .row-wrap .menu > summary{display:flex;align-items:center;justify-content:center;
@@ -1185,11 +1127,11 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
   border-radius:8px}
 .row-wrap > .sel-pick{top:50%;left:0;width:44px;height:44px;transform:translateY(-50%)}
 .row-wrap.sel .row{padding-left:2.9rem}
-.selbar{position:sticky;bottom:0;z-index:50;display:flex;flex-wrap:wrap;gap:.5rem;
-  align-items:center;padding:.6rem .75rem;margin-top:1rem;background:var(--card);
-  border:1px solid var(--line);border-radius:12px;box-shadow:0 -2px 10px rgba(20,20,15,.12)}
+.selbar{position:sticky;bottom:0;z-index:50;display:flex;flex-wrap:wrap;gap:var(--space-5);
+  align-items:center;padding:var(--space-6) var(--space-75);margin-top:var(--space-10);background:var(--card);
+  border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-dock)}
 .selbar .btn{min-height:40px}
-.selnote{margin:.5rem 0;color:var(--muted);font-size:.875rem}
+.selnote{margin:var(--space-5) 0;color:var(--muted);font-size:var(--text-md)}
 /* WHAT GOES FIRST WHEN THERE IS NO ROOM. A list is scanned for titles, so the
    title wins and the metadata yields -- in order: the agent, then the waiting
    badge (the amber edge on the row still says a question is there), then the
@@ -1212,7 +1154,7 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    malformed -- "\00b7" with no terminating space, so CSS swallowed the next
    characters and every tile rendered a literal glyph-and-"b7". Invisible to
    the whole suite; obvious the moment the wall was rendered and looked at. */
-.sess{font:.6875rem/1 var(--mono);color:var(--muted);letter-spacing:.02em}
+.sess{font:var(--text-2xs)/1 var(--mono);color:var(--muted);letter-spacing:.02em}
 /* First to go when the row narrows: the seat name answers "whose" and this
    only answers "which of theirs", which is the finer question and the one a
    phone has no room for. */
@@ -1235,15 +1177,15 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    Its own view, not a fold under the wall: the wall answers "what is there",
    this answers "what am I about to lose", and a deleted page sitting anywhere
    near the live ones is how "deleted" stops meaning anything. */
-.binnote{color:var(--muted);font-size:.8125rem;margin:0 0 1rem;max-width:40rem}
+.binnote{color:var(--muted);font-size:var(--text-sm);margin:0 0 var(--space-10);max-width:40rem}
 .rows.bin .rshot.none .mi{opacity:.4}
 .left{font-variant-numeric:tabular-nums}
 /* The one about to go says so. Counted DOWN, not up: "deleted 4 days ago" is a
    fact about the past, and this list is read for a decision about the future. */
 .left.soon{color:var(--now-solid);font-weight:600}
-.restore{display:inline-flex;align-items:center;gap:.3rem;font:inherit;
-  font-size:.75rem;cursor:pointer;border:1px solid var(--line);border-radius:.4rem;
-  background:var(--card);color:var(--ink);padding:.2rem .45rem}
+.restore{display:inline-flex;align-items:center;gap:var(--space-3);font:inherit;
+  font-size:var(--text-xs);cursor:pointer;border:1px solid var(--line);border-radius:.4rem;
+  background:var(--card);color:var(--ink);padding:var(--space-2) var(--space-45)}
 .restore:hover{border-color:var(--accent);color:var(--accent-ink)}
 .restore .mi{width:.8rem;height:.8rem}
 .rows.bin form{margin:0}
@@ -1253,19 +1195,20 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    through those, but because this is the one operation in the service that can
    lose something he said, and the words have to be in front of him at the
    moment he commits to it. */
-.mdanger{border-top:1px solid var(--line);margin-top:.3rem;padding-top:.3rem}
+.mdanger{border-top:1px solid var(--line);margin-top:var(--space-3);padding-top:var(--space-3)}
 .mrow.danger{color:var(--danger)}
 .mrow.danger:hover{background:var(--danger-soft);color:var(--danger)}
-.destroyform{padding:.6rem;display:flex;flex-direction:column;gap:.5rem}
-.destroyform p{margin:0;font-size:.8125rem;color:var(--muted);line-height:1.45}
-.destroyform input{font:inherit;font-size:.8125rem;padding:.3rem .45rem;
+.destroyform{padding:var(--space-6);display:flex;flex-direction:column;gap:var(--space-5)}
+.destroyform p{margin:0;font-size:var(--text-sm);color:var(--muted);line-height:1.45}
+.destroyform input{font:inherit;font-size:var(--text-sm);padding:var(--space-3) var(--space-45);
   border:1px solid var(--line);border-radius:.4rem;background:var(--paper);
   color:var(--ink);width:100%}
-.destroyform .danger{font:inherit;font-size:.8125rem;font-weight:600;
+.destroyform .danger{font:inherit;font-size:var(--text-sm);font-weight:600;
   cursor:pointer;border:1px solid var(--danger);border-radius:.4rem;
-  background:transparent;color:var(--danger);padding:.3rem .5rem}
-.destroyform .danger:hover{background:var(--danger);color:#fff}
+  background:transparent;color:var(--danger);padding:var(--space-3) var(--space-5)}
+.destroyform .danger:hover{background:var(--danger);color:var(--on-danger)}
 """
+_CSS = design.ROOT_CSS + _RULES
 
 # Served from 'self' at /gallery.js (script-src 'self' above; no inline script, no
 # CDN, no framework, no dependency). One file, single-digit KB, so the CSP change
@@ -1846,14 +1789,14 @@ _CONNECT_CSS = (
     ".cx h2{margin:0 0 .5rem;font-size:1.05rem}.cx p{margin:.4rem 0;line-height:1.5}"
     ".cx input{font:inherit;padding:.5rem .6rem;border:1px solid var(--line,#ccc);"
     "border-radius:8px;width:100%;box-sizing:border-box;margin:.35rem 0 .75rem}"
-    ".cx .code{font:600 1.4rem/1.2 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase}"
+    ".cx .code{font:600 1.4rem/1.2 var(--mono-short);letter-spacing:.12em;text-transform:uppercase}"
     ".cx pre{white-space:pre-wrap;background:var(--soft,#f5f5f4);padding:.75rem;border-radius:8px;"
-    "font-size:.9rem;user-select:all}.cx .err{color:#b42318}.cx .ok{color:#067647}"
+    "font-size:.9rem;user-select:all}.cx .err{color:var(--connect-err)}.cx .ok{color:var(--connect-ok)}"
     ".cx dl{display:grid;grid-template-columns:auto 1fr;gap:.25rem .75rem;margin:.5rem 0}"
     ".cx dt{opacity:.7}.cx .row{display:flex;gap:.5rem;flex-wrap:wrap}"
     ".cx .boxes{display:flex;gap:.35rem;align-items:center;margin:.35rem 0 .9rem}"
     ".cx .boxes input{width:2.4rem;height:2.9rem;margin:0;padding:0;text-align:center;"
-    "font:600 1.35rem ui-monospace,monospace;text-transform:uppercase}"
+    "font:600 1.35rem var(--mono-short);text-transform:uppercase}"
     ".cx .boxes .dash{padding:0 .2rem;opacity:.5}</style>"
 )
 
@@ -3784,7 +3727,7 @@ def _shell(
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{escape(tab)}</title>"
         '<link rel="icon" type="image/svg+xml" sizes="any" href="/favicon.svg">'
-        f"<style>{_CSS}{logo.CSS}</style></head><body>"
+        f"<style>{_CSS}{logo.PAGE_CSS}</style></head><body>"
         f"{top}"
         # The controls are their OWN row beneath the title, as the reference
         # has it: a 48px title row, 16px, then a 32px row of controls. They

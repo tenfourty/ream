@@ -3,21 +3,27 @@
 The drawings live in `brand/`, one file per size and theme, and those files are the only
 geometry: everything here is cut from the light files, so the bar and the icon cannot drift
 from them. The small drawing is the one made to read at tab size; the large one needs about
-32 px. One palette for both uses, written once in `CSS`, so a light or dark reader gets the
-mark as it was drawn for that theme.
+32 px. One palette for both uses, the named mark colours in `design.py`, so a light or dark
+reader gets the mark as it was drawn for that theme.
 """
 
 import re
 from pathlib import Path
 
-_BRAND = Path(__file__).resolve().parent / "brand"
-_INK = 'fill="#191a17"'
-_LIFT = 'stroke="#0f6f63"'
+from ream import design
 
-# Class names a stylesheet can hold beside the gallery's own without colliding.
+_BRAND = Path(__file__).resolve().parent / "brand"
+_INK = f'fill="{design.light("mark-ink")}"'
+_LIFT = f'stroke="{design.light("mark-lift")}"'
+
+# Class names a stylesheet can hold beside the gallery's own without colliding. The colours
+# are the named `--mark-ink` and `--mark-lift` (design.py): the gallery's stylesheet defines
+# them, so its pages take `PAGE_CSS`; the icon stands alone, so `CSS` writes their values in.
+PAGE_CSS = ".mark-i{fill:var(--mark-ink)}.mark-l{stroke:var(--mark-lift)}"
 CSS = (
-    ".mark-i{fill:#191a17}.mark-l{stroke:#0f6f63}"
-    "@media (prefers-color-scheme:dark){.mark-i{fill:#e9eae4}.mark-l{stroke:#5ec9b8}}"
+    f".mark-i{{fill:{design.light('mark-ink')}}}.mark-l{{stroke:{design.light('mark-lift')}}}"
+    "@media (prefers-color-scheme:dark){"
+    f".mark-i{{fill:{design.dark('mark-ink')}}}.mark-l{{stroke:{design.dark('mark-lift')}}}}}"
 )
 
 

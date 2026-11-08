@@ -358,3 +358,26 @@ stack, the sheet curling up harder, four sheets with wider variation); further r
 
 **Evidence:** the mark, where it goes now, the docs and repository later, and no further rounds:
 confirmed (decision d_01M6XGT9CRKX07VKMBHN166K28, 8 Nov 2026). The maintainer's own calls: unconfirmed.
+
+## A standard look first: a logo guide and the gallery's design values in one place (8 Nov 2026)
+
+**Chosen:** Ream ships one standard look that everything shares. Letting each install have a
+look of its own comes later, as its own piece of work. For now the minimum: a short guide to
+the logo (`docs/brand.md`), and the gallery's colours, type and spacing as one set of named
+values in one place (`src/ream/design.py`), with the gallery looking exactly as it did.
+
+The maintainer's own calls within this: the values are a table in `design.py` that produces
+the stylesheet's `:root` block, and every rule names a value rather than writing it. Only
+values that recur exactly are named; off-scale sizes and one-off spacings stay literals,
+because folding them onto a scale would change the look. The three sans-serif stacks stay
+three names rather than one. The logo's two colours are named values too, and the tab icon,
+which stands alone, has them written in from the same table. The rendered gallery was
+checked unchanged: every element's computed style, light and dark, on the wall, the list,
+a page with its comments open and the connect page, and the screenshots pixel for pixel.
+
+**Not chosen:** a full design system or theming now; merging near-equal values into a tidy
+scale, which would have changed the look.
+
+**Evidence:** a standard look first, with the logo guide and the named values as the minimum,
+look unchanged, and per-install looks later as their own work: confirmed (the owner, 8 Nov
+2026). The maintainer's own calls: unconfirmed.

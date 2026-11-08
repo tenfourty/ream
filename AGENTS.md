@@ -64,6 +64,7 @@ new name; published pages never change owner by accident.
 | The Postgres <-> SQLite copier and its verifier | `src/ream/migrate.py` |
 | The logo: its drawings, and the gallery's bar mark and tab icon cut from them | `src/ream/brand/`, `src/ream/logo.py` |
 | Writing a plug-in (the `ream.plugins` interfaces, `REAM_PLUGINS`, failure rules) | `docs/plugins.md` |
+| The logo guide and the gallery's named design values (colours, type, spacing) | `docs/brand.md`, `src/ream/design.py` |
 | Runbooks (cutover, rollback, backups, restore drill, CI logs) | `docs/agent/runbooks/` |
 | Tests | `tests/` |
 | Container | `Dockerfile` |
