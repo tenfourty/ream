@@ -191,7 +191,12 @@ def test_a_sink_with_nothing_due_keeps_its_trial_while_another_delivers(db):
         with db.connect() as conn, conn.transaction():
             events.emit(
                 conn,
-                events.Event(kind="comment_added", artifact_id=page.id, agent="seat-a"),
+                events.Event(
+                    kind="comment_added",
+                    artifact_id=page.id,
+                    agent="seat-a",
+                    actor="owner",
+                ),
             )
         later = now + timedelta(seconds=sinks.BREAKER_COOLDOWN_SECONDS + 1)
         assert sinks.deliver_due(db, lambda: later) == (1, 0)
