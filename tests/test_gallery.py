@@ -502,7 +502,12 @@ def test_gallery_js_is_served_from_self_with_no_dependency(db):
     # 274 bytes tell a frame that holds the whole page that it has nothing to
     # scroll, and give it its scrollbar back when it does not. The argument
     # lives above `_GALLERY_JS`.
-    assert len(text.encode()) < 8448
+    #
+    # 8704 on 9 Nov 2026 (8448): a window narrowed after the page loaded left the
+    # question at the foot of the sheet under a blank frame (runcove-5t3oj.93).
+    # 38 bytes put every lifted block back and let the page's slot collapse. The
+    # argument lives above `_GALLERY_JS`.
+    assert len(text.encode()) < 8704
     assert "http://" not in text and "https://" not in text  # no CDN, nothing fetched
     assert "eval(" not in text
     assert "new Function(" not in text

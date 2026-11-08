@@ -1307,6 +1307,10 @@ _CSS = design.ROOT_CSS + _RULES
 #    the parent it came from and NO size is reported for it. A control in the
 #    wrong place is readable and answerable; an invisible one over a reserved
 #    hole is the failure this whole arc exists to prevent.
+#  - A window narrowed after the page loaded (a phone turned to portrait) puts every
+#    lifted block back where it came from and sends an empty size list, so the
+#    page's slot stops holding room open. Without that the block stayed at the foot
+#    of the sheet, under a frame with a blank hole where it had been.
 #  - A frame whose pass is spent says so (`content.expired_page`), and this asks
 #    the gallery's own origin for a fresh one and re-points the frame
 #    (homelab-ij8.101). A pass is good once, and browsers re-request a frame's
@@ -1370,13 +1374,9 @@ window.addEventListener("message",function(event){
       // number of our own. See the Python comment above this file's source.
       // `fits` too: a slot coordinate points nowhere while the frame is clipped.
       var lifting=fits&&liftsHere();
-      // Not lifting NOW but lifted before (a window narrowed or a phone turned to
-      // portrait): put every lifted block back where it came from, or it stays at
-      // the foot of the sheet, below a frame whose slot still holds its room open.
-      // The empty `sizes` sent below then collapses that slot.
-      if(!lifting)homes.forEach(function(hm,el){
-        if(el.parentNode===sheet&&hm&&hm!==sheet)hm.appendChild(el);
-        el.style.top=el.style.left=el.style.width="";
+      if(!lifting)homes.forEach(function(h,e){
+        if(e.parentNode===sheet&&h!==sheet)h.appendChild(e);
+        e.style.top=e.style.left=e.style.width="";
       });
       if(lifting)data.slots.forEach(function(slot){
         if(!slot||typeof slot.id!=="string"||seen.has(slot.id))return;
