@@ -470,6 +470,12 @@ def _seed(database: Database) -> None:
             ],
         ),
         (
+            "sink_breaker",
+            "sink, failures, open_until, failed_keys, opened_at",
+            ["quarterdeck", 5, T1, "ob1\nob2", T0],
+        ),
+        ("plugin_failure", "plugin, interface, failures", ["house", "sink", 3]),
+        (
             "partner_question",
             (
                 "source, version, asking_office, title, options, context, state,"

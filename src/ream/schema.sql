@@ -1155,3 +1155,21 @@ create table if not exists outbox (
 );
 create index if not exists outbox_due_idx
     on outbox (next_at) where delivered_at is null and parked_at is null;
+
+-- SHARED PLUG-IN STATE (8 Nov 2026; core-and-plugins design 4.5, slice 7b part 5). The per-sink
+-- circuit breaker and the plug-in failure counts, kept here so every worker process of a
+-- deployment sees one breaker per sink and one count per plug-in interface. `failed_keys` is the
+-- (at most two) distinct outbox row ids that failed, newline-separated.
+create table if not exists sink_breaker (
+    sink        text primary key,
+    failures    integer not null default 0,
+    open_until  timestamptz,
+    failed_keys text not null default '',
+    opened_at   timestamptz
+);
+create table if not exists plugin_failure (
+    plugin    text not null,
+    interface text not null,
+    failures  integer not null default 0,
+    primary key (plugin, interface)
+);

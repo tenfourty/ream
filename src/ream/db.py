@@ -791,6 +791,24 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
     ),
     # 6 Nov 2026: the CHECKs naming house values go; code validates (see schema.sql).
     21: (_drop_house_checks,),
+    # 8 Nov 2026: the shared circuit-breaker state and plug-in failure counts (schema.sql).
+    22: (
+        (
+            "create table sink_breaker ("
+            " sink text primary key,"
+            " failures integer not null default 0,"
+            " open_until timestamptz,"
+            " failed_keys text not null default '',"
+            " opened_at timestamptz)"
+        ),
+        (
+            "create table plugin_failure ("
+            " plugin text not null,"
+            " interface text not null,"
+            " failures integer not null default 0,"
+            " primary key (plugin, interface))"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

@@ -571,7 +571,7 @@ drivers; CI only (not on baba).
    (`answer_source` first, else start-up stops); a raise aborts the answer as
    `decisions.AnswerHookFailed` naming the plug-in, and is counted as `<plug-in>:on_answer`.
    `decisions.answer` accepts any registered source, not only `page`/`slack`. Circuit breaker in
-   `sinks.py`, per sink, per process: 5 failures running (a raise or a timeout), from at least two different rows, open it for 60 s;
+   `sinks.py`, per sink (shared across processes since part 5): 5 failures running (a raise or a timeout), from at least two different rows, open it for 60 s;
    outbox rows of an open sink wait uncounted, after-commit deliveries are skipped; after the
    cooldown one trial goes through (success closes, failure re-opens). `sinks.status()` shows
    `open_breakers`. Left for 7b: cli/client, text and router hooks, CLI loading of
@@ -648,8 +648,27 @@ drivers; CI only (not on baba).
    as today and the house plug-in does not exist before step 9; they go when it does. The
    `session_env` setting (the variable holding the session id) is not made configurable here:
    `CLAUDE_CODE_SESSION_ID` stays. The tracker-page verbs (`beads-page`, `bead-metrics`) stay
-   core verbs until 9a. Left for 7b: cross-process failure
-   counts and breaker state, the core-bare CI job.
+   core verbs until 9a.
+   **7b part 5 built (`ci/slice7b-part5`); slice 7b is complete.** Breaker state and plug-in
+   failure counts now live in the database: tables `sink_breaker` (sink, failures, open_until,
+   failed_keys, opened_at) and `plugin_failure` (plugin, interface, failures), SQLite step 22,
+   `schema.sql` for Postgres; no stored name changed. `sinks.bind(db)` points the state at a
+   database (`sinks.start(db)` binds, `stop()` unbinds; `sinks.shared()` reads it); the
+   breaker rules are the same code for both copies (`_fail_state`), run read-modify-write in
+   one transaction (`for update` on Postgres, `begin immediate` on SQLite), so the cooldown
+   trial is taken by exactly one process. **Choices:** (a) with no database bound (the command
+   line tools, unit tests) or one that cannot be reached, the old in-memory copy answers, so
+   a breaker can never stop a delivery by failing itself; (b) failure counts are
+   written on a short-lived thread, because the caller may be inside its own transaction (the
+   answer hook is) and on SQLite a second writer would wait for that commit; the in-memory
+   count is always kept and `failure_counts()` reads the database total after waiting for
+   the stores in flight; (c) `late_failures` (after-commit raises) stays per process: it is a
+   process counter by its own wording and has no breaker meaning. CI job `core-bare`
+   (`.forgejo/workflows/ci.yml`): asserts no `ream.plugins`/`artifacts.plugins` entry point is
+   installed, sets `REAM_PLUGINS=none`, and runs the whole suite on Postgres and on SQLite
+   (the browser tests stay in `test-sqlite`). `pin` does not list it in `needs` yet: the pin
+   lander names its required checks in the homelab repo, so making it required (7.3) is that
+   change, not this one. `core-with-house` waits for step 8.
 8. **The plug-in repo and its pipeline** (homelab office creates the repo; lander change). It
    builds an image identical to today's from an empty plug-in set, opens a pin PR, and one real
    pin PR is merged as proof before anything moves. Core starts publishing the `-core` image and

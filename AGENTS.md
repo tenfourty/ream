@@ -109,6 +109,10 @@ skip (`-rs` names them). CI installs Debian's chromium and runs those four files
 step of the `test-sqlite` job, which runs beside the Postgres suite's `test` job, with `REAM_REQUIRE_BROWSER=1` (the parallel runs hide the browser: `REAM_BROWSER=/nonexistent/browser`), which
 makes a missing browser fail the run at start instead of skipping -- so a green CI run means they ran.
 
+CI's `core-bare` job runs the whole suite on both databases with `REAM_PLUGINS=none` and no
+plug-in installed (core stands alone); a plug-in's breaker state and failure counts are shared
+through the `sink_breaker` and `plugin_failure` tables (`sinks.bind`).
+
 **On baba, never run the test suite** (Jeremy, 13 Oct 2026: no test-suite runs there). Push the
 change to a `ci/<name>` branch instead: CI runs the full suite on it and never builds an image or
 deploys from it. Land on `main` once that run is green, then delete the branch.

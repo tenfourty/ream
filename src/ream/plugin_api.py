@@ -55,7 +55,21 @@ _ROUTERS: dict[str, tuple[str, Callable]] = {}
 
 
 def failure_counts() -> dict[str, int]:
-    """Failures caught since the process started, keyed `<plug-in>:<interface>`."""
+    """Failures caught, keyed `<plug-in>:<interface>`. With the sink sender's database
+    bound (`sinks.bind`) this is the total over every process using it; otherwise, or
+    if it cannot be read, the count since this process started."""
+    db = sinks.shared()
+    if db is not None:
+        _flush()
+        try:
+            with db.connect() as conn:
+                rows = conn.execute(
+                    "select plugin, interface, failures from plugin_failure"
+                    " order by plugin, interface"
+                ).fetchall()
+            return {f"{p}:{i}": n for p, i, n in rows}
+        except Exception:  # noqa: BLE001 -- a counter must not break a status call
+            _log.warning("plug-in failure counts: shared copy unreachable")
     with _lock:
         return {f"{p}:{i}": n for (p, i), n in sorted(_failures.items())}
 
@@ -70,9 +84,47 @@ def count_failure(plugin: str, interface: str) -> None:
     _count(plugin, interface)
 
 
+_pending: set[threading.Thread] = set()
+
+
 def _count(plugin: str, interface: str) -> None:
     with _lock:
         _failures[(plugin, interface)] = _failures.get((plugin, interface), 0) + 1
+    db = sinks.shared()
+    if db is None:
+        return
+    # On its own thread: the caller may be inside a transaction of its own (the answer
+    # hook is), and on SQLite a second writer would wait for that commit.
+    thread = threading.Thread(
+        target=_store_count, args=(db, plugin, interface), daemon=True
+    )
+    with _lock:
+        _pending.add(thread)
+    thread.start()
+
+
+def _store_count(db, plugin: str, interface: str) -> None:
+    try:
+        with db.connect() as conn, conn.transaction():
+            conn.execute(
+                "insert into plugin_failure (plugin, interface, failures)"
+                " values (%s, %s, 1) on conflict (plugin, interface)"
+                " do update set failures = plugin_failure.failures + 1",
+                (plugin, interface),
+            )
+    except Exception:  # noqa: BLE001 -- the in-memory count stands
+        _log.warning("plug-in failure count not stored", exc_info=True)
+    finally:
+        with _lock:
+            _pending.discard(threading.current_thread())
+
+
+def _flush(timeout: float = 5.0) -> None:
+    """Wait for the counts still being stored (a status call wants them in)."""
+    with _lock:
+        threads = list(_pending)
+    for t in threads:
+        t.join(timeout)
 
 
 class PluginAPI:

@@ -60,7 +60,8 @@ MAX_ATTEMPTS = 20
 # deliveries running is skipped for BREAKER_COOLDOWN_SECONDS. Outbox rows of a skipped
 # sink wait untouched (no attempt counted, nothing parked); an after-commit delivery is
 # skipped. When the cooldown ends ONE delivery is let through as a trial: a success
-# closes the breaker, a failure opens it for another cooldown. Per process.
+# closes the breaker, a failure opens it for another cooldown. The state is shared by
+# every process on the database (`bind`); without one it is per process.
 BREAKER_THRESHOLD = 5
 BREAKER_COOLDOWN_SECONDS = 60
 KEEP_DELIVERED = timedelta(days=30)
@@ -91,13 +92,105 @@ _sinks: dict[str, Sink] = {}
 _builtins_loaded = False
 _late_failures = 0
 # sink name -> [consecutive failures, open until (None: closed), the distinct rows that
-# failed (capped at 2), when it last opened (None: never)]
+# failed (capped at 2), when it last opened (None: never)]. This is the state of a
+# process with no database bound (tools, unit tests) and the fallback when the shared
+# copy cannot be reached.
 _breakers: dict[str, list] = {}
+# The database that holds the shared copy of the breaker state and the plug-in
+# failure counts (tables `sink_breaker`, `plugin_failure`), so every worker process of
+# a deployment sees one breaker per sink. `start(db)` binds it, `stop()` unbinds it.
+_shared: Database | None = None
+
+
+def bind(db: Database | None) -> None:
+    """Keep breaker state and plug-in failure counts in `db` (None: in memory again)."""
+    global _shared
+    _shared = db
+
+
+def shared() -> Database | None:
+    """The database the shared state lives in, or None when it is per process."""
+    return _shared
+
+
+def _fail_state(
+    state: list | None, ok: bool, now: datetime, started, key: str | None
+) -> tuple[list | None, bool]:
+    """One step of the breaker's rules on `state` (see `breaker_record`). Returns the
+    new state (None: closed, nothing to keep) and whether the breaker just opened."""
+    if ok:
+        if (
+            state is not None
+            and state[3] is not None
+            and started is not None
+            and started < state[3]
+        ):
+            return state, False
+        return None, False
+    state = [0, None, set(), None] if state is None else state
+    state[0] += 1
+    if len(state[2]) < 2:
+        state[2].add(key if key is not None else f"anon-{state[0]}")
+    first = False
+    if state[0] >= BREAKER_THRESHOLD and len(state[2]) >= 2:
+        first = state[3] is None or state[1] is None
+        state[1] = now + timedelta(seconds=BREAKER_COOLDOWN_SECONDS)
+        state[3] = now
+    return state, first
+
+
+def _read_state(conn: Connection, name: str) -> list | None:
+    row = conn.execute(
+        "select failures, open_until, failed_keys, opened_at from sink_breaker"  # noqa: S608
+        " where sink = %s" + conn.for_update(),
+        (name,),
+    ).fetchone()
+    if row is None:
+        return None
+    return [row[0], row[1], {k for k in row[2].split("\n") if k}, row[3]]
+
+
+def _write_state(conn: Connection, name: str, state: list | None) -> None:
+    if state is None:
+        conn.execute("delete from sink_breaker where sink = %s", (name,))
+        return
+    conn.execute(
+        "insert into sink_breaker (sink, failures, open_until, failed_keys, opened_at)"
+        " values (%s, %s, %s, %s, %s)"
+        " on conflict (sink) do update set failures = excluded.failures,"
+        " open_until = excluded.open_until, failed_keys = excluded.failed_keys,"
+        " opened_at = excluded.opened_at",
+        (name, state[0], state[1], "\n".join(sorted(state[2])), state[3]),
+    )
+
+
+def _shared_or_none(work):
+    """Run `work(conn)` in a transaction on the shared database; None if none is bound
+    or it cannot be reached (the caller then uses the in-memory copy)."""
+    db = _shared
+    if db is None:
+        return None
+    try:
+        with db.connect() as conn, conn.transaction():
+            return (work(conn),)
+    except Exception:  # noqa: BLE001 -- a breaker must never stop a delivery
+        _log.warning("sink breaker state: shared copy unreachable", exc_info=True)
+        return None
 
 
 def breaker_peek(name: str, now: datetime) -> bool:
     """Whether a delivery to `name` could be tried now: closed, or the cooldown has
     passed. Read-only: it spends no trial, so it is safe to ask about every sink."""
+
+    def work(conn):
+        row = conn.execute(
+            "select open_until from sink_breaker where sink = %s", (name,)
+        ).fetchone()
+        return row is None or row[0] is None or now >= row[0]
+
+    got = _shared_or_none(work)
+    if got is not None:
+        return got[0]
     with _lock:
         state = _breakers.get(name)
         return state is None or state[1] is None or now >= state[1]
@@ -105,9 +198,23 @@ def breaker_peek(name: str, now: datetime) -> bool:
 
 def breaker_reserve(name: str, now: datetime) -> bool:
     """Take the right to deliver to `name` now. Closed: yes. Open: no. Once the cooldown
-    has passed the first caller gets it and the breaker re-arms at once for another
-    cooldown, so only one trial runs; `breaker_record` settles it. Call this only for
-    a delivery that is about to run."""
+    has passed the first caller (in any process) gets it and the breaker re-arms at once
+    for another cooldown, so only one trial runs; `breaker_record` settles it. Call this
+    only for a delivery that is about to run."""
+
+    def work(conn):
+        state = _read_state(conn, name)
+        if state is None or state[1] is None:
+            return True
+        if now < state[1]:
+            return False
+        state[1] = now + timedelta(seconds=BREAKER_COOLDOWN_SECONDS)
+        _write_state(conn, name, state)
+        return True
+
+    got = _shared_or_none(work)
+    if got is not None:
+        return got[0]
     with _lock:
         state = _breakers.get(name)
         if state is None or state[1] is None:
@@ -136,39 +243,47 @@ def breaker_record(
     when the failures come from at least two different rows (`key`; None counts as a
     row of its own), so one poison event retried again and again cannot open the
     breaker of a healthy sink. A success of a call that `started` before the breaker
-    last opened is ignored: it says nothing about the sink now."""
-    with _lock:
-        if ok:
-            state = _breakers.get(name)
-            if (
-                state is not None
-                and state[3] is not None
-                and started is not None
-                and started < state[3]
-            ):
-                return
-            _breakers.pop(name, None)
-            return
-        state = _breakers.setdefault(name, [0, None, set(), None])
-        state[0] += 1
-        if len(state[2]) < 2:
-            state[2].add(key if key is not None else f"anon-{state[0]}")
-        if state[0] >= BREAKER_THRESHOLD and len(state[2]) >= 2:
-            first = state[3] is None or state[1] is None
-            state[1] = now + timedelta(seconds=BREAKER_COOLDOWN_SECONDS)
-            state[3] = now
-            if first:
-                _log.warning(
-                    "sink %s: circuit open for %ds after %d failures running",
-                    name,
-                    BREAKER_COOLDOWN_SECONDS,
-                    state[0],
-                )
+    last opened is ignored: it says nothing about the sink now. With a database bound
+    the count and the state are shared by every process using it."""
+
+    def work(conn):
+        state, first = _fail_state(_read_state(conn, name), ok, now, started, key)
+        _write_state(conn, name, state)
+        return state, first
+
+    got = _shared_or_none(work)
+    if got is not None:
+        state, first = got[0]
+    else:
+        with _lock:
+            state, first = _fail_state(_breakers.get(name), ok, now, started, key)
+            if state is None:
+                _breakers.pop(name, None)
+            else:
+                _breakers[name] = state
+    if first and state is not None:
+        _log.warning(
+            "sink %s: circuit open for %ds after %d failures running",
+            name,
+            BREAKER_COOLDOWN_SECONDS,
+            state[0],
+        )
 
 
 def open_breakers(now: datetime | None = None) -> dict[str, str]:
     """Sinks whose breaker is open now, with when it next lets a trial through."""
     when = now or datetime.now(UTC)
+
+    def work(conn):
+        rows = conn.execute(
+            "select sink, open_until from sink_breaker where open_until is not null"
+            " order by sink"
+        ).fetchall()
+        return {r[0]: r[1].isoformat() for r in rows if r[1] > when}
+
+    got = _shared_or_none(work)
+    if got is not None:
+        return got[0]
     with _lock:
         return {
             n: st[1].isoformat()
@@ -484,6 +599,7 @@ def start(db: Database) -> threading.Thread:
     a sender is running, a second call returns it and starts nothing. Each sender
     has its own stop flag, so a restart can never revive one that was told to stop."""
     global _thread, _stop
+    bind(db)
     with _lock:
         if (
             _thread is not None
@@ -517,6 +633,7 @@ def stop(timeout: float = 5.0) -> None:
     """Ask the sender to stop and wait briefly for it (a deliver in flight is
     bounded by DELIVER_TIMEOUT_SECONDS, so it may outlast `timeout`)."""
     global _thread, _stop
+    bind(None)
     with _lock:
         thread, flag = _thread, _stop
         if flag is not None:
