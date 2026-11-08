@@ -62,6 +62,7 @@ new name; published pages never change owner by accident.
 | Admin commands (keys, scopes, renames) | `src/ream/admin.py` -> `artifacts-admin` |
 | The owner: settings, the stored id, its start-up guard | `src/ream/settings.py`, `src/ream/owner.py` |
 | The Postgres <-> SQLite copier and its verifier | `src/ream/migrate.py` |
+| Writing a plug-in (the `ream.plugins` interfaces, `REAM_PLUGINS`, failure rules) | `docs/plugins.md` |
 | Runbooks (cutover, rollback, backups, restore drill, CI logs) | `docs/agent/runbooks/` |
 | Tests | `tests/` |
 | Container | `Dockerfile` |

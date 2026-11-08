@@ -690,6 +690,14 @@ drivers; CI only (not on baba).
 10. **Docs and decisions.** `docs/decisions.md` entry for the core-and-plug-ins split, the design
     doc's extension section, a plug-in author guide, the office doc's deployment paragraph.
     (Docs also land with each slice above; this is the consolidation.)
+    **Part 1 built (`ci/plugin-docs`, 8 Nov 2026).** Covered: the plug-in author guide
+    (`docs/plugins.md`, every interface of steps 1 to 7 with an example and the failure rules) and
+    the `docs/decisions.md` entry for the split. Not yet: the design doc's extension section
+    (section 4 above still reads as written before building; where it differs, the ledger above
+    and the guide are right: the mail backend's `send(to, subject, text)`, no `validate` on a
+    sink, no generic webhook sink or `ARTIFACTS_SINKS_FILE`, failure counts in `failure_counts()`
+    and `sinks.status()` rather than `/metrics`), the office doc's deployment paragraph, and the
+    parts that describe steps 8 and 9, which are not built.
 
 The chasing work (nudge once, `answer_dropped` after a day) follows slice 4 at the earliest, and
 only needs sinks to exist; it does not wait for the plug-in repo.

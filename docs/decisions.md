@@ -244,3 +244,60 @@ office id, which still never change.
   code that is about to be renamed under them.
 
 **Evidence:** confirmed (Jeremy, 7 Nov 2026, lettered answer to the in-code rename playback)
+
+## The core runs for anyone, and our house specifics become plug-ins in a separate repo (4 Nov 2026)
+
+**Chosen:** Ream's core is cleaned of everything particular to one household and works with no
+plug-in installed. A fresh install with nothing set starts, serves a gallery, takes pages and
+decisions, and says nothing about anyone's house. What is ours (the quarterdeck bridge and its
+inbound route, the doorbell, GitGuardian scanning, Mailgun, the tracker pages, our default
+endpoint and wording) becomes plug-ins, kept in a separate repo and installed into the deployed
+image at build time; the artifacts repo holds only the core. The cleanup comes first, before any
+new feature, and goes in slices that each leave our deployment behaving exactly as today (same
+rows, same API, same text, same events, checked by golden tests of the served text).
+- **Extension points:** one entry-point group (`ream.plugins`, old `artifacts.plugins` kept),
+  one function `register(api)`, and one emit point (`events.emit`) that journals, writes the
+  outbox in the action's transaction, and fans out after commit. The interfaces are event sink,
+  answer source, answer hook, scanner, mail backend, CLI command and client defaults, plus text
+  variables, text sections and a router on a dedicated host. The extension points exist only where
+  a house module has to plug in today.
+- **Stays single-reader:** the owner becomes a setting (id, name, pronoun), stored in
+  `service_meta` so a wrong id refuses to start instead of reading old answers as a stranger's.
+  Many readers is a later design.
+- **A failing plug-in is never silent:** one that cannot load or declares another API major
+  stops the server's start-up; one that fails at run time is counted and logged and, for a sink,
+  paused by a per-sink circuit breaker. The API is versioned from day one.
+- **Stored values stay data, not code:** the two schema CHECKs that named house values (answer
+  source, event kind) are dropped and validated in code, so a plug-in can add a source without a
+  migration; old rows keep their values.
+- **Built so far (8 Nov 2026):** steps 1 to 7 of the design, including slice 7b. **Not built:**
+  step 8 (the plug-in repo, its image pipeline and the pin-lander change) and step 9 (moving each
+  house module out of the core, one at a time). The author guide is `docs/plugins.md`.
+
+**Not chosen:**
+- Leave the house code in the core behind settings only: the core would still import
+  Mailgun, GitGuardian, quarterdeck and the doorbell by name, and every new feature would add to
+  the debt.
+- Build new features first and clean up later: the coupling compounds with each one.
+- Keep our plug-ins in the artifacts repo: the repo would no longer hold only the core.
+- Build the deployed image from the artifacts repo by cloning the plug-in repo (the design's
+  option B), or from a third assembling repo (option C): B ties every plug-in change to a commit
+  in the core repo and blurs who owns what runs; C is worth it only if a second deployment
+  appears. The design recommends the plug-in repo building the image (option A); that choice, with
+  where the repo lives and how a core change reaches production, is among the design's open
+  decisions for Jeremy (section 10), not settled here.
+- A framework with more extension points than the house needs, or plug-in-added tables, gallery
+  pages or JavaScript, a marketplace, or a stable third-party guarantee: out of scope for v1.
+- Fail silently when a plug-in breaks: a scanner or answer source quietly absent is worse than a
+  server that does not start.
+
+**Evidence:** the rulings of 4 Nov 2026 recorded as Jeremy's in section 2 of
+`docs/agent/specs/2026-11-04-core-and-plugins-design.md` (house behaviour out of the core and
+cleaned up before more features; the core works with no plug-ins; our plug-ins in a separate repo
+installed at build time; single-reader; the cleanup first), and the design's section 10.6 (new
+features wait for the cleanup; decision d_01M6K1QHEVKDT977KK25W648FC). The shape of the extension
+points and the choices inside each slice are the maintainer's, as built and recorded in that
+design's section 8 ledger. Section 10 questions 1 to 5 (repo name, which repo builds the image, how
+a core change reaches production, first-install defaults, aliases for renamed words) are listed
+there for Jeremy; where this entry names a default it is the design's recommendation, not his
+answer.
