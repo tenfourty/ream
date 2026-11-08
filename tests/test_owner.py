@@ -435,9 +435,12 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # changed ONLY in that wording: Ream (formerly artifacts) where the product is named, `ream publish` /
 # `ream ask` for the old command names in examples, /pages for /artifacts in routes, and one short
 # paragraph saying the old commands and route keep working. The news tail did not move.
+# skill.md re-taken once more on 8 Nov 2026 (rename step 3): the shared Ream skill (name: ream, a
+# description that fires on any report/plan/chart/diagram/comparison, a "When to use this" section,
+# `ream connect`); agents.txt and agent.json did not move.
 GOLDEN = {
     "agents.txt": "43a6431a21b1894c7d3dfc953ca20dab523e852468597c3d9c6839e4a2b0c81e",
-    "skill.md": "ccc3da3b6690f0fb61412823892208371fb273fcb3c094a0fb2fde92cbedea16",
+    "skill.md": "a7c6b36252235b8df33fee37197bd1c14f70b654f59e48fe046a3a07e20695de",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"

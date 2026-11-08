@@ -71,7 +71,7 @@ def test_without_a_package_the_document_says_so_rather_than_a_dead_line(
 def test_the_skill_is_open_and_in_the_skill_format(gallery):
     response = gallery.get("/api/v1/skill.md")
     assert response.status_code == 200
-    assert response.text.startswith("---\nname: artifacts\ndescription: ")
+    assert response.text.startswith("---\nname: ream\ndescription: ")
     assert "https://artifacts.tenfourty.site/api/v1/agents.txt" in response.text
     assert "art_" not in response.text
 

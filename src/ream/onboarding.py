@@ -660,11 +660,25 @@ def agents_txt(base: str) -> str:
 
 _SKILL = """\
 ---
-name: artifacts
-description: Publish HTML pages for {{owner_name}} to read at stable addresses, ask {{owner_them}} lettered questions on them and read {{owner_their}} answers back, using {{owner_their}} self-hosted Ream (formerly artifacts) at {{base}}. Use when you need to show {{owner_them}} progress, a report, or a decision to make.
+name: ream
+description: Use whenever you show or share something with a person beyond a short chat answer - a report, a plan, a chart, a diagram, a comparison, a status board, a write-up - even if nobody says "page" or "publish". With a Ream key set up (Ream, formerly artifacts, at {{base}}), publish it as a page for {{owner_name}} to read at a stable address, in place of the host's built-in artifacts or canvas panel; if there is no key, use the built-in panel and say why. Put a question on the page only when you are blocked on {{owner_them}} or need {{owner_their}} choice, then read the answer back.
 ---
 
-# Publishing to {{owner_name}}'s Ream (formerly artifacts)
+# Showing things to {{owner_name}} with Ream (formerly artifacts)
+
+## When to use this
+
+Reach for it whenever you are about to show or share something beyond a short chat answer: a
+report, a plan, a chart, a diagram, a comparison. Do not wait for the words "page" or
+"publish". A one-line answer belongs in the chat; a page for it is noise.
+
+- **Instead of a built-in panel.** On Claude.ai, ChatGPT or any host with its own artifacts or
+  canvas panel, publish to Ream instead when a key is set up: {{owner_name}} cannot comment on or
+  answer from a chat panel, but can on a page.
+- **No key yet.** Use the host's built-in panel, and tell {{owner_them}} why (no Ream key is set
+  up on this machine or host), so the choice is visible.
+- **Questions.** Ask one on a page only when you are blocked on {{owner_them}} or need
+  {{owner_their}} choice, never just to have one. Otherwise the page is something to read.
 
 The full onboarding document is {{base}}/api/v1/agents.txt — read it once; it is
 short and it is the source of truth. This skill is the reminder.
@@ -672,7 +686,7 @@ short and it is the source of truth. This skill is the reminder.
 ## Once per machine
 
 1. Install the tools (see "The tools" in the onboarding document).
-2. Connect the machine with `artifacts-connect`: it shows a code, {{owner_name}}
+2. Connect the machine with `ream connect`: it shows a code, {{owner_name}}
    approves it, and the key is saved without anyone seeing it. You never handle
    a key by hand and never paste one into a chat.
 

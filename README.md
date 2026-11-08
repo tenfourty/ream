@@ -44,6 +44,16 @@ kubectl -n artifacts exec deploy/artifacts -- artifacts-admin register-key \
 `artifacts-admin revoke-key <key_id>` and `artifacts-admin list-keys` manage
 keys from there; neither ever prints a token.
 
+## The skill
+
+One skill, `GET /api/v1/skill.md` (open, no key), in the open SKILL.md format: save it wherever
+your agent keeps skills. It is named `ream` and fires whenever the agent shows or shares something
+beyond a short chat answer (a report, a plan, a chart, a diagram, a comparison), not only on the
+words "page" or "publish". With a key set up it publishes to Ream instead of a host's built-in
+artifacts or canvas panel; with none it falls back to that panel and says why. A page carries a
+question only when the agent is blocked on the person or needs their choice. It names no house, so
+it works for any agent on any host; a deployment's own skill adds only its look and keys.
+
 ## Publish a page
 
 The command is `ream`, with a verb for each job (`ream publish`, `ream ask`,
