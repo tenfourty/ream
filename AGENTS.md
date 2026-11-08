@@ -99,6 +99,8 @@ after a move: on it `/api/v1/*` (both words) and `/healthz` are served as on the
 differ from the gallery host and `REAM_API_HOST`. Runbook: `docs/agent/runbooks/former-host.md`.
 `REAM_PLUGINS` picks which installed `ream.plugins` (or old `artifacts.plugins`) entry points load at server start (unset: all;
 `none`: none; `a,b`: only those, and an unknown name stops start-up); see `src/ream/plugin_api.py`.
+`REAM_SINKS_FILE` (also `ARTIFACTS_SINKS_FILE`; unset: none) names a TOML file of `[[sink]]` signed-webhook sinks that
+need no plug-in: format, signing and the addresses it refuses are in `docs/plugins.md` and `src/ream/webhook.py`.
 
 The service runs on Postgres or SQLite, chosen by `DATABASE_URL` (`postgresql://…` or
 `sqlite:////data/artifacts.db`). Only `src/ream/db.py` talks to a driver; SQL elsewhere must

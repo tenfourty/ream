@@ -194,14 +194,16 @@ see them. The chasing work adds, as bridge kinds, `answer_unpicked`, `receipt_la
 single nudges, delivered to the agent's own sink) and **`answer_dropped`** (after a day, to the
 deployment's target); they are listed in `events.BRIDGE_KINDS` and sink `kinds` may name any. A
 sink routes by kind and, optionally, target: the core's generic webhook sink reads
-`ARTIFACTS_SINKS_FILE` (a TOML file of `[[sink]] name, kinds, url, signing_key_file, key_id`), so
+`REAM_SINKS_FILE` (also `ARTIFACTS_SINKS_FILE`; a TOML file of `[[sink]] name, kinds, url,
+signing_key_file, key_id`, and optionally `label`, `allow_http`, `allow_private`; built, `src/ream/webhook.py`), so
 "`answer_dropped` goes to this URL" is configuration, not code. Chase bookkeeping (a
 once-only marker per subject and stage) is the chasing design's table, not this one's.
 
 ### 4.2 The six interfaces
 
 1. **Event sink.** `api.sink(name, kinds, deliver, delivery="outbox"|"after_commit",
-   validate=None)`. `deliver(event)` returns normally on success, raises to retry (outbox) or is
+   validate=None)` (built as `api.sink(name, kinds, deliver, delivery="outbox", *, label=None)`: no
+   `validate`, and a kind outside `events.KINDS`/`events.BRIDGE_KINDS` is refused). `deliver(event)` returns normally on success, raises to retry (outbox) or is
    logged (after commit). Replaces `nudge.py`, the quarterdeck envelope in `partner.py`, and
    Telegram or any future target.
 2. **Answer source.** `api.answer_source(name, label, *, relay=False, verified_label=None,
@@ -224,7 +226,8 @@ once-only marker per subject and stage) is the chasing design's table, not this 
    (`store.py:449`, `comments.py:1639`). `on_error` preserves today's `ggscan` behaviour exactly
    (to be read from `ggscan.py` in the slice, not assumed here). Core ships the pattern scan
    only.
-5. **Mail backend.** `api.mail_backend(name, send, enabled)`; core has `mail.send(message)` and
+5. **Mail backend.** `api.mail_backend(name, send, enabled)` with `send(to, subject, text)` (as
+   built; not a message object); core has `mail.send(to, subject, text)` and
    `mail.enabled()` that ask the one registered backend (or none: off). Mailgun moves out; the
    sender and region/domain are settings the backend reads.
 6. **CLI command and client hooks.** `api.cli(name, main, help)` registers `artifacts <name>`
@@ -246,7 +249,9 @@ once-only marker per subject and stage) is the chasing design's table, not this 
    `REAM_PLUGINS` unset a plug-in that fails to load or register is skipped with a warning on
    stderr; naming plug-ins makes a failure exit 2; the server's start-up still stops.
 
-Plus **text**: `api.text_vars({...})` (extra template variables) and `api.text_section(slot,
+Plus **text** (as built, a variable or section value that is a function is cached for 60 s,
+`textvars._TEXT_TTL`, so a slow or failing one is not called on every request):
+`api.text_vars({...})` (extra template variables) and `api.text_section(slot,
 fn)` for named slots in `agents.txt`/`skill.md` (`proxy`, `tools`, `integrations`), so the
 tracker-page paragraph of `skill.md` ships with the plug-in. And **routes**:
 `api.router(router, host)` mounts an inbound route on a dedicated host (the partner's inbound
@@ -254,8 +259,9 @@ webhook, today `ARTIFACTS_PARTNER_INBOUND_HOST`); core never mounts it on the ga
 
 ### 4.3 What the core ships with no plug-in
 
-Journal, outbox and sender thread, the generic **signed webhook sink** (an Ed25519-signed JSON
-POST of the generic envelope to configured URLs; stays core as ruled, the part of `partner.py`
+Journal, outbox and sender thread, the generic **signed webhook sink** (built: an Ed25519-signed JSON
+POST of the generic envelope `{key_id, sent_at, event}` to configured URLs, https and public
+addresses only unless a sink opts out, no redirects, 64 KiB cap; see `docs/plugins.md`; stays core as ruled, the part of `partner.py`
 that is not quarterdeck's contract), the pattern scanner, built-in answer sources
 (`page`, `terminal`, `telegram`, `in-person`, `other`), no mail, no tracker pages. Everything a
 plug-in does can be turned off by not installing it.
@@ -277,8 +283,9 @@ re-installing drains them.
 ### 4.5 Failure isolation
 
 A plug-in cannot take down a request or the sender thread: every call into one is wrapped; an
-exception becomes a log line with the plug-in and interface and a counter on `/metrics` (or the
-admin health command if there is no metrics route yet), and the per-sink circuit breaker pauses a
+exception becomes a log line with the plug-in and interface and a counter (there is no `/metrics` route: the counts
+are `plugin_api.failure_counts()` and `sinks.status()`, shared across workers through the
+`plugin_failure` table), and the per-sink circuit breaker pauses a
 sink that fails N times running (outbox rows wait). Exceptions: the answer hook and scanner
 `on_error="block"` fail the action by design (4.4). A plug-in that raises while registering, or
 declares an unsupported API version, **stops start-up** with its name: a missing scanner or
@@ -510,13 +517,13 @@ drivers; CI only (not on baba).
    plug-in design and is deferred). Outbox columns are the spec's plus `claimed_until`, `parked_at`,
    `last_error`, `last_error_at`. Converted call sites: `formanswer.py` and the set-aside loop in
    `store.py`. Not yet: the other fan-out sites (part 2), the per-sink circuit breaker and
-   the per-sink circuit breaker (4.4), the generic webhook sink, and `change-owner` over `outbox.event_json`.
+   the per-sink circuit breaker (4.4), and `change-owner` over `outbox.event_json`.
    **Part 2 built (`ci/slice4-emit-part2`).** All remaining fan-out sites emit through `events.emit`
    (decisions, store, comments); `partner_in.answer_here` stays on `partner.enqueue_foreign` (no
    artifact or agent to put on an `Event`). `deliver` has a protocol bound: it must return within
    `sinks.DELIVER_TIMEOUT_SECONDS` (30 s), enforced by running it in a daemon thread; a timeout is a
    failure with backoff. `artifacts-admin outbox` (counts by sink) is in; the circuit breaker (4.4)
-   and the generic webhook sink are still to do.
+   is in; the generic webhook sink is built (step 10, `ci/webhook-sink`).
 5. **Drop the CHECKs, source registry** (section 5), receipts' `receipt_set` step folded into
    the same `event` rewrite if receipts slice 1 has not shipped; otherwise a second rewrite.
    **Part 1 built (`ci/slice5-checks-part1`).** Both CHECKs dropped (Postgres by a `pg_constraint`
@@ -695,7 +702,7 @@ drivers; CI only (not on baba).
     the `docs/decisions.md` entry for the split. Not yet: the design doc's extension section
     (section 4 above still reads as written before building; where it differs, the ledger above
     and the guide are right: the mail backend's `send(to, subject, text)`, no `validate` on a
-    sink, no generic webhook sink or `ARTIFACTS_SINKS_FILE`, failure counts in `failure_counts()`
+    sink, failure counts in `failure_counts()`
     and `sinks.status()` rather than `/metrics`), the office doc's deployment paragraph, and the
     parts that describe steps 8 and 9, which are not built.
     **Part 2 built (`ci/plugin-guards`, 8 Nov 2026).** Two gaps closed: `api.sink` refuses a kind
@@ -705,6 +712,12 @@ drivers; CI only (not on baba).
     fault is ours and retrying later may succeed, as with a failed scanner) as JSON naming the
     plug-in, by an app-level handler on the gallery and API apps, and as a readable "Answer not
     saved" page (503) on the gallery answer form.
+    **Part 3 built (`ci/webhook-sink`, 8 Nov 2026).** The generic signed webhook sink
+    (`src/ream/webhook.py`) and `REAM_SINKS_FILE` (`ARTIFACTS_SINKS_FILE` read too): outbox sinks from
+    a TOML file, Ed25519-signed envelope, https and public addresses only unless a sink opts out
+    (`allow_http`, `allow_private`), no redirects, 64 KiB cap. Section 4 above now reads as built for
+    the mail `send(to, subject, text)` signature, no `validate` on a sink, no `/metrics`, and the
+    60 s text cache.
 
 The chasing work (nudge once, `answer_dropped` after a day) follows slice 4 at the earliest, and
 only needs sinks to exist; it does not wait for the plug-in repo.

@@ -129,6 +129,8 @@ class Settings:
     # Which installed plug-ins to load (`ream.plugins` or `artifacts.plugins` entry points): unset = all,
     # `none` = none, `a,b` = only those (plugin_api.py).
     plugins: str = ""
+    # The generic signed webhook sinks: a TOML file of `[[sink]]` tables (webhook.py).
+    sinks_file: str = ""
 
     def __repr__(self) -> str:
         return "Settings(...)"
@@ -263,6 +265,7 @@ _ENV = {
     "host_label": "REAM_HOST_LABEL",
     "proxy_notes_file": "REAM_PROXY_NOTES_FILE",
     "plugins": "REAM_PLUGINS",
+    "sinks_file": "REAM_SINKS_FILE",
 }
 if set(_ENV) != {f.name for f in fields(Settings)}:
     raise RuntimeError("settings._ENV and Settings disagree")

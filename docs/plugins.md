@@ -145,6 +145,39 @@ the plug-in failure counts are shared by every process on the database (tables `
 tools, unit tests) or one that cannot be reached, a per-process copy answers, so a breaker can
 never stop a delivery by failing itself. `sinks.status()` reports `open_breakers`.
 
+### Webhook sinks without a plug-in
+
+A deployment that only needs "this kind of event goes to that URL" writes no code: it points
+`REAM_SINKS_FILE` (also read as `ARTIFACTS_SINKS_FILE`; both set and different refuses to start)
+at a TOML file, and each `[[sink]]` becomes an outbox sink of the core, with the retry, parking
+and circuit breaker above. A bad file stops start-up naming the sink and the field.
+
+```toml
+[[sink]]
+name = "chase"                  # lower-case letters, digits, hyphens; not a name already in use
+kinds = ["answer_dropped"]      # the same kinds as api.sink
+url = "https://hooks.example/in"
+signing_key_file = "chase.pem"  # Ed25519, PEM PKCS8, unencrypted; relative to this file
+key_id = "k1"                   # the receiver picks its public key from this
+label = "Chase"                 # optional, as for api.sink
+allow_http = false              # optional: allow plain http://
+allow_private = false           # optional: allow private, loopback and link-local addresses
+```
+
+The request is a POST of `{"key_id", "sent_at", "event": <Event.as_json()>}` as compact JSON, with
+`X-Ream-Signature` (base64 Ed25519 over the exact body bytes), `X-Ream-Key-Id` and
+`X-Ream-Event-Id` (the idempotency key). Every attempt is re-signed with a fresh `sent_at`; a
+receiver should refuse a body older than a few minutes and answer a repeated event id with success.
+A 2xx is delivery; anything else is a failure and retried.
+
+What it will and will not talk to (`src/ream/webhook.py`): https only unless `allow_http`; no
+credentials in the URL; the socket is opened only to a public address (private, loopback,
+link-local such as cloud metadata, CGNAT, multicast and unspecified ranges are refused unless
+`allow_private`), checked on the address actually connected to, so DNS rebinding cannot get past
+it; redirects are never followed and a 3xx is a failure; no proxy from the environment; 10 seconds
+per socket operation; the response body is never read; a body over 64 KiB is a failure, never a
+truncated send. Errors stored with a failed row say a status or a class of failure, never the URL.
+
 ### Answer source and answer hook
 
 ```python

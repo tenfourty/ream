@@ -21,6 +21,7 @@ from ream import (
     repack,
     settings,
     sinks,
+    webhook,
 )
 from ream.app import create_app
 from ream.db import Database
@@ -168,6 +169,12 @@ def app_from_env():
     try:
         plugin_api.load()
     except plugin_api.PluginError as exc:
+        raise SystemExit(str(exc)) from None
+    # The webhook sinks of REAM_SINKS_FILE, after the plug-ins so a name clash with one of
+    # theirs is caught here too; a bad file stops the start (webhook.py).
+    try:
+        webhook.register_all()
+    except webhook.WebhookConfigError as exc:
         raise SystemExit(str(exc)) from None
     comments.start_sweeper(db)
     # The nightly backup and purge (maintenance.py). REAM_MAINTENANCE=off
