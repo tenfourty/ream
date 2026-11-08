@@ -21,7 +21,7 @@ import pytest
 from ream import csp, stamp
 
 REPO = Path(__file__).resolve().parent.parent
-CANON = REPO / "src" / "artifacts" / "templates"
+CANON = REPO / "src" / "ream" / "templates"
 SHARED = CANON / "_shared.css"
 SKILL_COPIES = REPO / ".claude" / "skills" / "lab-artifacts" / "templates"
 
