@@ -252,6 +252,15 @@ def test_deliver_raises_on_a_non_2xx_and_not_on_a_2xx(tmp_path, key):
         "fc00::1",
         "::ffff:10.0.0.1",
         "100.64.0.1",
+        "64:ff9b::a9fe:a9fe",
+        "64:ff9b::8.8.8.8",
+        "64:ff9b:1::1",
+        "::127.0.0.1",
+        "::8.8.8.8",
+        "2002:7f00:1::1",
+        "2002:a9fe:a9fe::1",
+        "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+        "fec0::1",
     ],
 )
 def test_private_and_special_addresses_are_refused_by_default(ip):
@@ -261,6 +270,7 @@ def test_private_and_special_addresses_are_refused_by_default(ip):
 
 def test_public_addresses_are_allowed():
     assert webhook.address_allowed("93.184.216.34", allow_private=False)
+    assert webhook.address_allowed("::ffff:93.184.216.34", allow_private=False)
     assert webhook.address_allowed("2606:2800:220:1:248:1893:25c8:1946", False)
 
 
@@ -381,3 +391,21 @@ def test_a_refused_connection_names_no_url(tmp_path, key):
     with pytest.raises(webhook.WebhookError) as err:
         webhook.deliver(hook, _event())
     assert "127.0.0.1" not in str(err.value)
+
+
+def test_the_checked_address_is_the_one_connected_to(monkeypatch):
+    """One lookup; a refused answer is never retried by name, so a second lookup that
+    would answer differently (rebinding) is never made."""
+    import socket
+
+    calls = []
+
+    def fake(host, port, **kw):
+        calls.append(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake)
+    create = webhook._pinned_connect(False)
+    with pytest.raises(webhook.WebhookError, match="refused address"):
+        create(("rebind.example", 443), 1.0)
+    assert calls == ["rebind.example"]

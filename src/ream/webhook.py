@@ -30,7 +30,9 @@ cannot change where it goes. Still, a webhook is a request an operator-chosen na
 inside the deployment's network, so:
 
 * https only (`allow_http` per sink to permit http), and no credentials in the URL;
-* the connection goes only to a global address: private (10/8, 172.16/12, 192.168/16, ULA),
+* the connection goes only to a global address (IPv6 forms that embed an IPv4 address, NAT64,
+  6to4, Teredo, IPv4-compatible and site-local, are refused whole; an IPv4-mapped one is judged
+  as the IPv4 address): private (10/8, 172.16/12, 192.168/16, ULA),
   loopback, link-local (cloud metadata is 169.254.169.254), CGNAT, multicast and unspecified
   addresses are refused unless the sink says `allow_private`. The check is on the address the
   socket is actually opened to (resolved once, then connected), so a name that resolves to a
@@ -248,6 +250,22 @@ def register_all() -> list[str]:
 # --- the request ------------------------------------------------------------------
 
 
+# IPv6 ranges that carry an IPv4 address (or are deprecated/unroutable): refused whole,
+# without unwrapping, because a translator or tunnel on the path could turn them into a
+# connection to the embedded (possibly internal) IPv4 address.
+_EMBEDDING_V6 = tuple(
+    ipaddress.ip_network(n)
+    for n in (
+        "::/96",  # IPv4-compatible (deprecated)
+        "64:ff9b::/96",  # NAT64
+        "64:ff9b:1::/48",  # local-use NAT64
+        "2002::/16",  # 6to4
+        "2001::/32",  # Teredo
+        "fec0::/10",  # site-local (deprecated)
+    )
+)
+
+
 def address_allowed(ip: str, allow_private: bool) -> bool:
     """Whether a connection may be opened to `ip`."""
     if allow_private:
@@ -256,8 +274,11 @@ def address_allowed(ip: str, allow_private: bool) -> bool:
         addr = ipaddress.ip_address(ip.split("%")[0])
     except ValueError:
         return False
-    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
-        addr = addr.ipv4_mapped
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped is not None:
+            addr = addr.ipv4_mapped
+        elif any(addr in net for net in _EMBEDDING_V6):
+            return False
     return addr.is_global and not addr.is_multicast
 
 
