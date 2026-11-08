@@ -34,6 +34,7 @@ value that is actually about to be stored.
 """
 
 import dataclasses
+import logging
 import re
 import types
 from collections.abc import Callable
@@ -53,6 +54,8 @@ from ream import (
     text,
 )
 from ream.db import Connection, Database, in_list, jsonb
+
+_log = logging.getLogger(__name__)
 
 # A decision's question is a single line Jeremy reads on a card, not a page body -- 500
 # bytes is generous for a real question and small enough that a wall of prose is refused
@@ -1158,6 +1161,59 @@ def register_source(
         _REGISTERED.append(name)
 
 
+@dataclass(frozen=True)
+class Answer:
+    """What `on_answer` hooks are handed beside the decision row: the answer as written."""
+
+    letter: str
+    note: str
+    by: str
+    source: str
+    recorded_by: str | None
+
+
+class AnswerHookFailed(Exception):
+    """An `on_answer` hook raised, so the answer was rolled back. Names the plug-in and
+    hook, never a value."""
+
+    def __init__(self, plugin: str, hook: str) -> None:
+        super().__init__(f"plug-in {plugin!r} on_answer hook {hook!r} failed")
+        self.plugin = plugin
+        self.hook = hook
+
+
+# (plug-in, hook name, fn, the sources the plug-in registered): plugin_api.on_answer.
+_ANSWER_HOOKS: list[tuple[str, str, Callable, set[str]]] = []
+
+
+def register_answer_hook(
+    plugin: str, name: str, fn: Callable, sources: set[str]
+) -> None:
+    """Run `fn(conn, decision, answer)` inside the transaction of every answer whose
+    stored source is one of `sources` (the plug-in's own), after the row is written and
+    before the commit. A raise aborts the answer as `AnswerHookFailed`."""
+    _ANSWER_HOOKS.append((plugin, name, fn, sources))
+
+
+def _run_answer_hooks(conn, decision: DecisionRow, answer: Answer) -> None:
+    for plugin, name, fn, sources in _ANSWER_HOOKS:
+        if answer.source not in sources:
+            continue
+        try:
+            fn(conn, decision, answer)
+        except Exception as exc:
+            _log.warning(
+                "plug-in %s: on_answer hook %s failed: %s",
+                plugin,
+                name,
+                type(exc).__name__,
+            )
+            from ream import plugin_api
+
+            plugin_api.count_failure(plugin, "on_answer")
+            raise AnswerHookFailed(plugin, name) from exc
+
+
 def relay_sources() -> tuple[str, ...]:
     """What an agent may record as an answer's source: core's four, then any a plug-in
     registered with `relay=True`. Read at call time."""
@@ -1816,7 +1872,9 @@ def answer(
     called with the connection inside the answer's own transaction, so the
     caller's own records commit or roll back with it.
     """
-    if source not in ("page", "slack"):
+    # His tap, or an inbound answer a plug-in vouches for ('slack', or a source a
+    # plug-in registered); never one of the four an agent may relay.
+    if source != "page" and source not in _REGISTERED:
         raise InvalidSource(source)
     require_stored_source(source)
     store._check_size(note, MAX_NOTE_BYTES, "note", agent=by, artifact_id=None)
@@ -1976,6 +2034,17 @@ def answer(
             # mistake one column earlier, and this one would mis-send what Jeremy
             # wrote.
             answered = _row_to_decision(updated)
+            _run_answer_hooks(
+                conn,
+                answered,
+                Answer(
+                    letter=letter,
+                    note=note,
+                    by=by,
+                    source=source,
+                    recorded_by=recorded_by,
+                ),
+            )
             # The journal row and the nudge, as one event. The nudge fires after the
             # commit (below): it must never be mistaken for an answer that failed
             # (nudge.py's docstring), and the journal row must be durable before any

@@ -52,6 +52,11 @@ def loaded() -> list[str]:
     return list(_loaded)
 
 
+def count_failure(plugin: str, interface: str) -> None:
+    """Count one caught failure of `plugin`'s `interface` (see `failure_counts`)."""
+    _count(plugin, interface)
+
+
 def _count(plugin: str, interface: str) -> None:
     with _lock:
         _failures[(plugin, interface)] = _failures.get((plugin, interface), 0) + 1
@@ -64,6 +69,9 @@ class PluginAPI:
 
     def __init__(self, plugin: str) -> None:
         self._plugin = plugin
+        # The answer sources this plug-in registered: `on_answer` needs one, and
+        # runs only for answers stored with one of them.
+        self._sources: set[str] = set()
 
     def sink(
         self,
@@ -104,6 +112,7 @@ class PluginAPI:
         route_label: str | None = None,
     ) -> None:
         """Declare a stored `answer_source` value and its wording (4.2, 2)."""
+        self._sources.add(name)
         decisions.register_source(
             name,
             label,
@@ -111,6 +120,21 @@ class PluginAPI:
             verified_label=verified_label,
             route_label=route_label,
         )
+
+    def on_answer(self, name: str, fn: Callable) -> None:
+        """Register an answer hook (4.2, 3). `fn(conn, decision, answer)` runs inside the
+        answer's transaction, after the row is written and before the commit, for answers
+        stored with a source THIS plug-in registered (`answer_source`, called first: a
+        plug-in with none is refused, so the hook stays with the plug-in that vouches
+        for its own inbound answers). `answer` is a `decisions.Answer`. A raise aborts
+        the whole answer (`decisions.AnswerHookFailed`, naming the plug-in)."""
+        if not self._sources:
+            raise ValueError(
+                f"plug-in {self._plugin!r}: on_answer needs an answer_source"
+                " registered first"
+            )
+        # The live set, so a source registered after the hook counts too.
+        decisions.register_answer_hook(self._plugin, name, fn, self._sources)
 
 
 def _entry_points() -> list:

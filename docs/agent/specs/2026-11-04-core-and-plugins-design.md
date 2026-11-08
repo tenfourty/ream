@@ -551,6 +551,17 @@ drivers; CI only (not on baba).
    `relay_sources()`, equal to `ANSWER_SOURCES` with no plug-in). Not in 7a: `validate` on a sink,
    the per-sink circuit breaker, the other registrations (7b), the CLI side of loading. Nothing
    moved; core still registers `slack` and the `nudge`/`partner` sinks itself.
+   **7b part 1 built (`ci/slice7b-part1`).** `api.on_answer(name, fn)`: `fn(conn, decision, answer)`
+   (`answer` a `decisions.Answer`) runs inside `decisions.answer`'s transaction after the row is
+   written and before the commit, only for answers stored with a source the same plug-in registered
+   (`answer_source` first, else start-up stops); a raise aborts the answer as
+   `decisions.AnswerHookFailed` naming the plug-in, and is counted as `<plug-in>:on_answer`.
+   `decisions.answer` accepts any registered source, not only `page`/`slack`. Circuit breaker in
+   `sinks.py`, per sink, per process: 5 failures running (a raise or a timeout) open it for 60 s;
+   outbox rows of an open sink wait uncounted, after-commit deliveries are skipped; after the
+   cooldown one trial goes through (success closes, failure re-opens). `sinks.status()` shows
+   `open_breakers`. Left for 7b: scanner, mail, cli/client, text and router hooks, CLI loading of
+   plug-ins, cross-process failure counts and breaker state, the core-bare CI job.
 8. **The plug-in repo and its pipeline** (homelab office creates the repo; lander change). It
    builds an image identical to today's from an empty plug-in set, opens a pin PR, and one real
    pin PR is merged as proof before anything moves. Core starts publishing the `-core` image and

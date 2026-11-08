@@ -45,7 +45,7 @@ LEASE_SECONDS = 60
 # One `deliver` call gets this long (less than the lease, so a row is never
 # delivered by a second sender while the first is still inside its call). The
 # sink protocol: `deliver` must return within it. A call that does not is
-# abandoned as a failure ("Timeout"): retried with backoff, parked after
+# abandoned as a failure ("TimeoutError"): retried with backoff, parked after
 # MAX_ATTEMPTS. It runs in its own daemon thread, which cannot be killed, so a
 # sink that really hangs leaks one thread per attempt; a late success of an
 # abandoned call is a duplicate, which at-least-once delivery already allows.
@@ -56,6 +56,13 @@ BACKOFF_BASE_SECONDS = 5
 BACKOFF_CAP_SECONDS = 15 * 60
 # Parked, not dropped, after this many failed attempts: it waits for a release.
 MAX_ATTEMPTS = 20
+# The circuit breaker (4.5): a sink that fails (a raise or a timeout) this many
+# deliveries running is skipped for BREAKER_COOLDOWN_SECONDS. Outbox rows of a skipped
+# sink wait untouched (no attempt counted, nothing parked); an after-commit delivery is
+# skipped. When the cooldown ends ONE delivery is let through as a trial: a success
+# closes the breaker, a failure opens it for another cooldown. Per process.
+BREAKER_THRESHOLD = 5
+BREAKER_COOLDOWN_SECONDS = 60
 KEEP_DELIVERED = timedelta(days=30)
 _PRUNE_EVERY = timedelta(hours=1)
 
@@ -83,6 +90,53 @@ _lock = threading.RLock()
 _sinks: dict[str, Sink] = {}
 _builtins_loaded = False
 _late_failures = 0
+# sink name -> [consecutive failures, open until (None: closed)]
+_breakers: dict[str, list] = {}
+
+
+def breaker_allows(name: str, now: datetime) -> bool:
+    """Whether a delivery to `name` may be tried now. Open: no. Once the cooldown has
+    passed the first caller is let through (the breaker re-opens at once for another
+    cooldown, so only one trial runs) and `breaker_record` settles it."""
+    with _lock:
+        state = _breakers.get(name)
+        if state is None or state[1] is None:
+            return True
+        if now < state[1]:
+            return False
+        state[1] = now + timedelta(seconds=BREAKER_COOLDOWN_SECONDS)
+        return True
+
+
+def breaker_record(name: str, ok: bool, now: datetime) -> None:
+    """The outcome of a delivery: success closes the breaker and clears the count;
+    the THRESHOLD-th failure running (and each failed trial after) opens it."""
+    with _lock:
+        if ok:
+            _breakers.pop(name, None)
+            return
+        state = _breakers.setdefault(name, [0, None])
+        state[0] += 1
+        if state[0] >= BREAKER_THRESHOLD:
+            state[1] = now + timedelta(seconds=BREAKER_COOLDOWN_SECONDS)
+            if state[0] == BREAKER_THRESHOLD:
+                _log.warning(
+                    "sink %s: circuit open for %ds after %d failures running",
+                    name,
+                    BREAKER_COOLDOWN_SECONDS,
+                    state[0],
+                )
+
+
+def open_breakers(now: datetime | None = None) -> dict[str, str]:
+    """Sinks whose breaker is open now, with when it next lets a trial through."""
+    when = now or datetime.now(UTC)
+    with _lock:
+        return {
+            n: st[1].isoformat()
+            for n, st in sorted(_breakers.items())
+            if st[1] is not None and st[1] > when
+        }
 
 
 def register(sink: Sink) -> None:
@@ -134,12 +188,14 @@ def isolated(*sinks: Sink) -> Iterator[None]:
         saved, saved_loaded = _sinks, _builtins_loaded
         _sinks, _builtins_loaded = {}, True
     try:
+        _breakers.clear()
         for sink in sinks:
             register(sink)
         yield
     finally:
         with _lock:
             _sinks, _builtins_loaded = saved, saved_loaded
+            _breakers.clear()
 
 
 def late_failures() -> int:
@@ -152,11 +208,13 @@ def deliver_late(sinks: list[Sink], event: Event) -> None:
     exception's type only) and a count."""
     global _late_failures
     for sink in sinks:
+        if sink.deliver is None or not breaker_allows(sink.name, datetime.now(UTC)):
+            continue
         try:
-            if sink.deliver is None:
-                continue
             sink.deliver(event)
+            breaker_record(sink.name, True, datetime.now(UTC))
         except Exception as exc:  # noqa: BLE001 -- the action already committed
+            breaker_record(sink.name, False, datetime.now(UTC))
             with _lock:
                 _late_failures += 1
             _log.warning(
@@ -234,7 +292,9 @@ def _claim(db: Database, now: datetime, names: list[str]) -> dict | None:
     }
 
 
-def _call_bounded(deliver: Callable[[Event], None], event: Event) -> None:
+def _call_bounded(
+    deliver: Callable[[Event], None], event: Event, name: str = "sink"
+) -> None:
     """`deliver(event)` within DELIVER_TIMEOUT_SECONDS, else raise TimeoutError.
     What `deliver` raises is raised here."""
     outcome: list[BaseException | None] = []
@@ -250,7 +310,7 @@ def _call_bounded(deliver: Callable[[Event], None], event: Event) -> None:
     worker.start()
     worker.join(DELIVER_TIMEOUT_SECONDS)
     if not outcome:
-        raise TimeoutError("deliver exceeded its time")
+        raise TimeoutError(f"sink {name}: deliver exceeded {DELIVER_TIMEOUT_SECONDS}s")
     if outcome[0] is not None:
         raise outcome[0]
 
@@ -264,17 +324,20 @@ def deliver_due(
     sinks = _deliverable()
     delivered = failed = 0
     for _ in range(BATCH):
-        row = _claim(db, clock(), list(sinks))
+        # A sink with an open breaker is left out: its rows wait, uncounted.
+        now = clock()
+        row = _claim(db, now, [n for n in sinks if breaker_allows(n, now)])
         if row is None:
             break
         error = None
         try:
             deliver = sinks[row["sink"]].deliver
             assert deliver is not None  # noqa: S101 -- _deliverable filters
-            _call_bounded(deliver, Event.from_json(row["event_json"]))
+            _call_bounded(deliver, Event.from_json(row["event_json"]), row["sink"])
         except Exception as exc:  # noqa: BLE001 -- a sink must not stop the loop
             error = type(exc).__name__
         finished = clock()
+        breaker_record(row["sink"], error is None, finished)
         # Only a row this sender still leases: if the lease ran out and another
         # sender took the row (or finished it), these updates touch nothing.
         mine = " where id = %s and delivered_at is null and claimed_until = %s"
@@ -356,6 +419,7 @@ def status(db: Database) -> dict:
         "delivered": {r[0]: r[1] for r in delivered},
         "late_failures": late_failures(),
         "plugin_failures": _plugin_failures(),
+        "open_breakers": open_breakers(),
     }
 
 

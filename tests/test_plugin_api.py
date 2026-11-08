@@ -8,7 +8,7 @@ import types
 
 import pytest
 
-from ream import decisions, events, plugin_api, settings, sinks
+from ream import decisions, events, plugin_api, settings, sinks, store
 
 
 class EP:
@@ -43,6 +43,7 @@ def world(monkeypatch):
     monkeypatch.setattr(decisions, "_RELAY", list(decisions._RELAY))
     monkeypatch.setattr(decisions, "_VERIFIED_LABELS", dict(decisions._VERIFIED_LABELS))
     monkeypatch.setattr(decisions, "_ROUTE_LABELS", dict(decisions._ROUTE_LABELS))
+    monkeypatch.setattr(decisions, "_ANSWER_HOOKS", [])
     monkeypatch.setattr(plugin_api, "_failures", {})
     monkeypatch.setattr(plugin_api, "_loaded", [])
 
@@ -197,3 +198,103 @@ def test_with_no_plugins_core_keeps_its_own_sinks_and_slack(world):
     world()
     assert plugin_api.load() == []
     assert decisions.is_known_source("slack")
+
+
+# --- on_answer (slice 7b part 1) ---------------------------------------------------
+
+_PAGE = "<!doctype html><html><head><title>t</title></head><body>hi</body></html>"
+
+
+def _ask(db):
+    page = store.publish(db, "seat-a", "Plan", _PAGE)
+    return decisions.ask(
+        db,
+        agent="seat-a",
+        artifact_id=page.id,
+        question="go?",
+        options=[{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}],
+    )
+
+
+def test_on_answer_runs_inside_the_transaction_for_the_plugins_own_source(db, world):
+    seen = []
+
+    def hook(conn, decision, answer):
+        # Inside the transaction: the row is already written, visible on this conn.
+        row = conn.execute(
+            "select answer from decision where id = %s", (decision.id,)
+        ).fetchone()
+        seen.append((row[0], decision.answer, answer))
+
+    def register(api):
+        api.answer_source("toy-chat", "Toy chat")
+        api.on_answer("mark", hook)
+
+    world(EP("toy", _with_module(register, "1")))
+    plugin_api.load()
+    decisions.answer(
+        db,
+        _ask(db).id,
+        letter="a",
+        note="n",
+        by="owner",
+        source="toy-chat",
+        recorded_by="toy",
+    )
+    assert len(seen) == 1
+    stored, on_row, answer = seen[0]
+    assert stored == on_row == "a"
+    assert (answer.letter, answer.note, answer.source, answer.recorded_by) == (
+        "a",
+        "n",
+        "toy-chat",
+        "toy",
+    )
+
+
+def test_on_answer_does_not_run_for_a_source_the_plugin_did_not_register(db, world):
+    seen = []
+
+    def register(api):
+        api.answer_source("toy-chat", "Toy chat")
+        api.on_answer("mark", lambda conn, d, a: seen.append(a.source))
+
+    world(EP("toy", _with_module(register, "1")))
+    plugin_api.load()
+    decisions.answer(db, _ask(db).id, letter="a", by="owner")  # a tap
+    assert seen == []
+
+
+def test_a_raising_hook_rolls_the_answer_back_naming_the_plugin(db, world, caplog):
+    def boom(conn, decision, answer):
+        raise RuntimeError("secret detail")
+
+    def register(api):
+        api.answer_source("toy-chat", "Toy chat")
+        api.on_answer("mark", boom)
+
+    world(EP("toy", _with_module(register, "1")))
+    plugin_api.load()
+    q = _ask(db)
+    with caplog.at_level("WARNING"), pytest.raises(decisions.AnswerHookFailed) as err:
+        decisions.answer(db, q.id, letter="a", by="owner", source="toy-chat")
+    assert "toy" in str(err.value) and "secret" not in str(err.value)
+    assert "secret" not in caplog.text
+    with db.connect() as conn:
+        (answer,) = conn.execute(
+            "select answer from decision where id = %s", (q.id,)
+        ).fetchone()
+        (n,) = conn.execute(
+            "select count(*) from event where kind = 'decision_answered'"
+        ).fetchone()
+    assert answer is None and n == 0  # not half-applied
+    assert plugin_api.failure_counts() == {"toy:on_answer": 1}
+
+
+def test_on_answer_needs_an_answer_source_first_and_stops_start_up(world):
+    def register(api):
+        api.on_answer("mark", lambda *a: None)
+
+    world(EP("toy", _with_module(register, "1")))
+    with pytest.raises(plugin_api.PluginError, match="toy"):
+        plugin_api.load()
