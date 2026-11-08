@@ -60,7 +60,7 @@ new name; published pages never change owner by accident.
 | Setting names, new and old (`REAM_X`, `ARTIFACTS_X`) | `src/ream/envnames.py` |
 | The old import name `artifacts` (a shim; `artifacts.X` is the `ream.X` module) | `src/artifacts/__init__.py` |
 | Admin commands (keys, scopes, renames) | `src/ream/admin.py` -> `artifacts-admin` |
-| MCP at `/mcp` (transport, tool registry, the content fence) | `src/ream/mcp.py`; trying it: `docs/mcp.md` |
+| MCP at `/mcp` (transport, registries, the content fence; the tools, resources and prompts) | `src/ream/mcp.py`, `src/ream/mcp_tools.py`; trying it: `docs/mcp.md` |
 | The owner: settings, the stored id, its start-up guard | `src/ream/settings.py`, `src/ream/owner.py` |
 | The Postgres <-> SQLite copier and its verifier | `src/ream/migrate.py` |
 | The logo: its drawings, and the gallery's bar mark and tab icon cut from them | `src/ream/brand/`, `src/ream/logo.py` |

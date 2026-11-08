@@ -65,6 +65,8 @@ PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
+# A resource that is not there, until 2025-11-25 (2026-07-28 answers INVALID_PARAMS).
+RESOURCE_NOT_FOUND = -32002
 # Not a standard code: the credential was refused (401) or the address is resting (429).
 AUTH_REFUSED = -32001
 FORBIDDEN_ORIGIN = -32003
@@ -223,6 +225,98 @@ def untrusted(body: str, written_by: str, what: str = "page content") -> str:
         f"{body}\n"
         f"<<<{fence} END {what}>>>"
     )
+
+
+# --- Resources and prompts (section 11.3) ---------------------------------------------
+
+
+@dataclass(frozen=True)
+class Resource:
+    """A text resource at a fixed address. `read` gives its text, or None when it is not
+    there for this caller (answered as a missing resource)."""
+
+    uri: str
+    name: str
+    title: str
+    description: str
+    mime_type: str
+    read: Callable[[Call], str | None]
+
+    def listing(self) -> dict[str, Any]:
+        return {
+            "uri": self.uri,
+            "name": self.name,
+            "title": self.title,
+            "description": self.description,
+            "mimeType": self.mime_type,
+        }
+
+
+@dataclass(frozen=True)
+class ResourceTemplate:
+    """Resources under `prefix` (`uri_template` is `prefix{name}`). `read` gives one by
+    the rest of its address, or None; `members` lists the ones there are, for
+    `resources/list`."""
+
+    prefix: str
+    uri_template: str
+    name: str
+    title: str
+    description: str
+    mime_type: str
+    read: Callable[[Call, str], str | None]
+    members: Callable[[Call], list[Resource]]
+
+    def listing(self) -> dict[str, Any]:
+        return {
+            "uriTemplate": self.uri_template,
+            "name": self.name,
+            "title": self.title,
+            "description": self.description,
+            "mimeType": self.mime_type,
+        }
+
+
+@dataclass(frozen=True)
+class Prompt:
+    """A prompt a person picks in their client. `render` turns its arguments (all
+    strings) into the user message's text."""
+
+    name: str
+    title: str
+    description: str
+    arguments: tuple[dict[str, Any], ...]
+    render: Callable[[Call, dict[str, str]], str]
+
+    def listing(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "name": self.name,
+            "title": self.title,
+            "description": self.description,
+        }
+        if self.arguments:
+            out["arguments"] = list(self.arguments)
+        return out
+
+
+# In registration order, as `resources/list`, `resources/templates/list` and
+# `prompts/list` answer. Every resource and prompt needs `ream:read`.
+RESOURCES: dict[str, Resource] = {}
+RESOURCE_TEMPLATES: dict[str, ResourceTemplate] = {}
+PROMPTS: dict[str, Prompt] = {}
+
+
+def _find_resource(call: Call, uri: str) -> tuple[str, str] | None:
+    """(mime type, text) of the resource at `uri`, or None."""
+    fixed = RESOURCES.get(uri)
+    if fixed is not None:
+        found = fixed.read(call)
+        return None if found is None else (fixed.mime_type, found)
+    for template in RESOURCE_TEMPLATES.values():
+        if uri.startswith(template.prefix):
+            found = template.read(call, uri[len(template.prefix) :])
+            return None if found is None else (template.mime_type, found)
+    return None
 
 
 # --- whoami ---------------------------------------------------------------------------
@@ -461,7 +555,9 @@ _LEGACY_METHODS = {
     "tools/call",
     "resources/list",
     "resources/templates/list",
+    "resources/read",
     "prompts/list",
+    "prompts/get",
 }
 _MODERN_METHODS = {
     "server/discover",
@@ -469,9 +565,63 @@ _MODERN_METHODS = {
     "tools/call",
     "resources/list",
     "resources/templates/list",
+    "resources/read",
     "prompts/list",
+    "prompts/get",
 }
 _LISTS = {"tools/list", "resources/list", "resources/templates/list", "prompts/list"}
+# 2026: the results that say how long a client may keep them (`prompts/get` does not).
+_CACHED = _LISTS | {"server/discover", "resources/read"}
+
+
+def _read_resource(call: Call, params: dict, id: Any) -> dict:
+    uri = params.get("uri")
+    if not isinstance(uri, str) or not uri:
+        raise _Refusal(200, INVALID_PARAMS, "uri must be a string", id=id)
+    found = _find_resource(call, uri) if READ in call.permissions else None
+    if found is None:
+        # -32002 until 2025-11-25; 2026-07-28 made it Invalid Params.
+        raise _Refusal(
+            200,
+            INVALID_PARAMS if call.version == MODERN else RESOURCE_NOT_FOUND,
+            "Resource not found",
+            id=id,
+            data={"uri": uri},
+        )
+    mime_type, body = found
+    return {"contents": [{"uri": uri, "mimeType": mime_type, "text": body}]}
+
+
+def _get_prompt(call: Call, params: dict, id: Any) -> dict:
+    name = params.get("name")
+    found = PROMPTS.get(name) if isinstance(name, str) else None
+    if found is None or READ not in call.permissions:
+        raise _Refusal(200, INVALID_PARAMS, f"Unknown prompt: {name}", id=id)
+    arguments = params.get("arguments") or {}
+    if not isinstance(arguments, dict) or not all(
+        isinstance(v, str) for v in arguments.values()
+    ):
+        raise _Refusal(
+            200, INVALID_PARAMS, "arguments must map names to strings", id=id
+        )
+    missing = [
+        a["name"]
+        for a in found.arguments
+        if a.get("required") and not arguments.get(a["name"])
+    ]
+    if missing:
+        raise _Refusal(
+            200, INVALID_PARAMS, f"Missing required argument: {missing[0]}", id=id
+        )
+    return {
+        "description": found.description,
+        "messages": [
+            {
+                "role": "user",
+                "content": {"type": "text", "text": found.render(call, arguments)},
+            }
+        ],
+    }
 
 
 def _dispatch(call: Call, message: dict) -> tuple[int, dict]:
@@ -519,13 +669,31 @@ def _dispatch(call: Call, message: dict) -> tuple[int, dict]:
         result = _call_tool(call, params, id)
     elif method == "resources/list":
         result = {"resources": []}
+        if READ in call.permissions:
+            result["resources"] = [r.listing() for r in RESOURCES.values()] + [
+                member.listing()
+                for t in RESOURCE_TEMPLATES.values()
+                for member in t.members(call)
+            ]
     elif method == "resources/templates/list":
-        result = {"resourceTemplates": []}
-    else:  # prompts/list
-        result = {"prompts": []}
+        result = {
+            "resourceTemplates": [t.listing() for t in RESOURCE_TEMPLATES.values()]
+            if READ in call.permissions
+            else []
+        }
+    elif method == "resources/read":
+        result = _read_resource(call, params, id)
+    elif method == "prompts/list":
+        result = {
+            "prompts": [p.listing() for p in PROMPTS.values()]
+            if READ in call.permissions
+            else []
+        }
+    else:  # prompts/get
+        result = _get_prompt(call, params, id)
     if modern:
         result["resultType"] = "complete"
-        if method in _LISTS or method == "server/discover":
+        if method in _CACHED:
             result["ttlMs"] = TTL_MS
             result["cacheScope"] = "private"
     return 200, {"jsonrpc": "2.0", "id": id, "result": result}
@@ -654,3 +822,8 @@ def mcp_router(db: Database, limiter: ratelimit.FailedAuthLimiter) -> APIRouter:
         return _json(status, body)
 
     return router
+
+
+# The tools, resources and prompts register themselves on import; imported last, so this
+# module is whole by then.
+from ream import mcp_tools  # noqa: F401

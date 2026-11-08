@@ -730,6 +730,33 @@ def open_questions(
     return [view for _, view in ranked]
 
 
+def page_warnings(db: Database, artifact_id: str, body: str) -> list[dict]:
+    """CSP advisories, plus every decision slot that names no decision here.
+
+    One list because they are one kind of fact: something wrong with the
+    page you just published that you cannot see, since the rendered page
+    only answers a framed request holding a capability token no agent is
+    given (homelab-ij8.35). Publish time is the one moment the author is
+    definitely looking (homelab-ij8.50).
+    """
+    out = csp.as_json(body) + traps.as_json(body) + forms.warnings(body)
+    for slot, line in decisions.unresolved_slots(db, artifact_id, body):
+        out.append(
+            {
+                "shape": "unresolved_decision_slot",
+                "line": line,
+                "hint": (
+                    f"slot {slot!r} names no decision on this page. Readers "
+                    "see a note saying the question does not exist, where "
+                    "the control should be. Ask the decision first "
+                    "(POST /artifacts/<id>/decisions), then publish the "
+                    "slot with the id it returns."
+                ),
+            }
+        )
+    return out
+
+
 def agent_router(
     db: Database, limiter: ratelimit.FailedAuthLimiter | None = None
 ) -> APIRouter:
@@ -747,30 +774,7 @@ def agent_router(
     session = declared_session
 
     def _warnings_for(artifact_id: str, body: str) -> list[dict]:
-        """CSP advisories, plus every decision slot that names no decision here.
-
-        One list because they are one kind of fact: something wrong with the
-        page you just published that you cannot see, since the rendered page
-        only answers a framed request holding a capability token no agent is
-        given (homelab-ij8.35). Publish time is the one moment the author is
-        definitely looking (homelab-ij8.50).
-        """
-        out = csp.as_json(body) + traps.as_json(body) + forms.warnings(body)
-        for slot, line in decisions.unresolved_slots(db, artifact_id, body):
-            out.append(
-                {
-                    "shape": "unresolved_decision_slot",
-                    "line": line,
-                    "hint": (
-                        f"slot {slot!r} names no decision on this page. Readers "
-                        "see a note saying the question does not exist, where "
-                        "the control should be. Ask the decision first "
-                        "(POST /artifacts/<id>/decisions), then publish the "
-                        "slot with the id it returns."
-                    ),
-                }
-            )
-        return out
+        return page_warnings(db, artifact_id, body)
 
     @router.get("/agents.txt", response_class=PlainTextResponse)
     def onboarding_doc(request: Request):
