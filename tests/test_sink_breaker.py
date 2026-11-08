@@ -226,3 +226,73 @@ def test_a_success_from_a_call_begun_before_the_breaker_opened_is_ignored(clean)
     assert sinks.breaker_reserve("s", trial)
     sinks.breaker_record("s", True, trial, started=trial)
     assert sinks.open_breakers(trial) == {}
+
+
+def _outbox_row(db):
+    with db.connect() as conn:
+        return conn.execute(
+            "select claimed_until, attempts, delivered_at, parked_at from outbox"
+        ).fetchone()
+
+
+def test_a_refused_reserve_gives_the_row_back_and_a_later_pass_delivers_it(
+    db, monkeypatch
+):
+    page = store.publish(db, "seat-a", "Plan", PAGE)
+    now = datetime.now(UTC) + timedelta(minutes=1)
+    later = now + timedelta(seconds=sinks.BREAKER_COOLDOWN_SECONDS + 1)
+    calls = []
+    with sinks.isolated(
+        Sink("s", ("decision_answered",), deliver=lambda e: calls.append(1))
+    ):
+        with db.connect() as conn, conn.transaction():
+            events.emit(conn, _event(page.id))
+        _fail("s", sinks.BREAKER_THRESHOLD, now)
+        assert sinks.breaker_peek("s", later)  # past the cooldown: a trial is on offer
+        real = sinks.breaker_reserve
+        refused = []
+
+        def taken(name, at):
+            refused.append(name)
+            return False  # another sender took the trial between peek and claim
+
+        monkeypatch.setattr(sinks, "breaker_reserve", taken)
+        assert sinks.deliver_due(db, lambda: later) == (0, 0)
+        assert refused  # the branch ran
+        claimed_until, attempts, delivered_at, parked_at = _outbox_row(db)
+        assert claimed_until is None  # the lease was released
+        assert attempts == 0
+        assert delivered_at is None and parked_at is None
+        assert calls == []  # not delivered
+        # The row is still due: with the real reserve the next pass delivers it.
+        monkeypatch.setattr(sinks, "breaker_reserve", real)
+        assert sinks.deliver_due(db, lambda: later) == (1, 0)
+        assert calls == [1]
+        claimed_until, attempts, delivered_at, _ = _outbox_row(db)
+        assert delivered_at is not None and attempts == 1 and claimed_until is None
+
+
+def test_a_success_without_a_start_time_still_closes_an_open_breaker(clean):
+    _fail("s", sinks.BREAKER_THRESHOLD, T0)
+    assert "s" in sinks.open_breakers(T0 + timedelta(seconds=1))
+    sinks.breaker_record("s", True, T0 + timedelta(seconds=2), started=None)
+    assert sinks.open_breakers(T0 + timedelta(seconds=3)) == {}
+    assert sinks.breaker_peek("s", T0 + timedelta(seconds=3))
+
+
+def test_deliver_due_closes_the_breaker_on_a_successful_trial(db):
+    page = store.publish(db, "seat-a", "Plan", PAGE)
+    now = datetime.now(UTC) + timedelta(minutes=1)
+    later = now + timedelta(seconds=sinks.BREAKER_COOLDOWN_SECONDS + 1)
+    calls = []
+    with sinks.isolated(
+        Sink("s", ("decision_answered",), deliver=lambda e: calls.append(1))
+    ):
+        with db.connect() as conn, conn.transaction():
+            events.emit(conn, _event(page.id))
+        _fail("s", sinks.BREAKER_THRESHOLD, now)
+        assert "s" in sinks.open_breakers(now + timedelta(seconds=1))
+        assert sinks.deliver_due(db, lambda: later) == (1, 0)
+        assert calls == [1]
+        assert sinks.open_breakers(later) == {}
+        assert "s" not in sinks.status(db)["open_breakers"]
