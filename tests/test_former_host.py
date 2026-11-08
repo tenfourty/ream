@@ -183,3 +183,49 @@ def test_start_up_refuses_the_api_host_as_former_host(monkeypatch):
 
 def test_a_good_former_host_starts(former):
     assert settings.validate_for_serve().former_host == FORMER
+
+
+BAD_VALUE = "sk-live-0123456789abcdef-not-a-real-value"
+
+
+@pytest.mark.parametrize("which", ["gallery", "api", "former"])
+def test_a_refused_body_is_a_422_that_repeats_nothing_on_every_host(
+    db, monkeypatch, which
+):
+    monkeypatch.setenv("REAM_API_HOST", "api.tenfourty.site")
+    monkeypatch.setenv("REAM_FORMER_HOST", FORMER)
+    host = {"gallery": GALLERY_HOST, "api": "api.tenfourty.site", "former": FORMER}[
+        which
+    ]
+    client = TestClient(create_app(db), follow_redirects=False)
+    token, _ = keys.mint(db, agent="validation-seat")
+    headers = {"host": host, "Authorization": f"Bearer {token}"}
+    bodies = [
+        {"title": BAD_VALUE},  # `body` missing
+        {"title": BAD_VALUE, "body": PAGE, "format": BAD_VALUE},  # bad value
+        {"title": BAD_VALUE, "body": {"nested": BAD_VALUE}},  # wrong type
+    ]
+    for payload in bodies:
+        response = client.post("/api/v1/pages", json=payload, headers=headers)
+        assert response.status_code == 422, which
+        assert BAD_VALUE not in response.text, which
+        assert "input" not in response.text, which
+        assert "input" not in str(response.json()), which
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "//evil.example/x",
+        "/\\evil.example/x",
+        "/%2f%2fevil.example/x",
+        "/a%0d%0aSet-Cookie:%20x=1",
+        "/x?q=a%0d%0ab&r=<>\"'`{}|^&s=%00%ff;",
+    ],
+)
+def test_odd_paths_still_forward_to_the_gallery_origin_only(client, former, path):
+    response = client.get(path, headers={"host": former})
+    assert response.status_code == 308
+    location = response.headers["location"]
+    assert location.startswith(f"https://{GALLERY_HOST}/")
+    assert "\r" not in location and "\n" not in location
