@@ -60,6 +60,7 @@ from ream import (
     ids,
     packing,
     scan,
+    scanners,
     settings,
 )
 from ream import rename as agent_rename
@@ -481,6 +482,22 @@ def _check_secrets(
                 )
         else:
             findings = second
+        if not findings:
+            # Scanners a plug-in registered (scanners.py): the same slot, the same
+            # conditions. Nothing registered: no call, no change.
+            try:
+                findings = scanners.run(value)
+            except scanners.ScannerBlocked as exc:
+                _refusals.error(
+                    "publish refused: agent=%s artifact=%s field=%s"
+                    " reason=scanner_blocked plugin=%s scanner=%s",
+                    agent,
+                    artifact_id or "-",
+                    field,
+                    exc.plugin,
+                    exc.name,
+                )
+                raise ScanFailed(field) from exc
     if findings:
         shapes = sorted({finding.shape for finding in findings})
         _refusals.warning(

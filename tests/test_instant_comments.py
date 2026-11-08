@@ -410,3 +410,28 @@ def test_a_comment_the_relay_always_refuses_does_not_block_a_newer_one(
     comments.sweep_unscanned(db)
     comments.sweep_unscanned(db)
     assert _stamped(db, new.id) and not _stamped(db, old.id)
+
+
+def test_a_plugin_scanner_finding_withdraws_the_comment(db, page, gg, monkeypatch):
+    from ream import scanners
+
+    monkeypatch.setattr(scanners, "_SCANNERS", [])
+    scanners.register("toy", "toy", lambda text: [Finding(shape="toy_x", line=1)])
+    row = _agent_comment(db, page, "fine")
+    assert comments.second_scan(db, row.id) == "withdrawn"
+    assert comments.list_for_artifact(db, page.id) == []
+
+
+def test_a_blocking_plugin_scanner_that_fails_withdraws_the_comment(
+    db, page, gg, monkeypatch
+):
+    from ream import scanners
+
+    monkeypatch.setattr(scanners, "_SCANNERS", [])
+
+    def boom(text):
+        raise RuntimeError
+
+    scanners.register("toy", "toy", boom, "block")
+    row = _agent_comment(db, page, "fine")
+    assert comments.second_scan(db, row.id) == "withdrawn"

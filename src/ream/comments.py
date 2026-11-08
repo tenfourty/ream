@@ -40,6 +40,7 @@ from ream import (
     ids,
     image_store,
     images,
+    scanners,
     settings,
     store,
     text,
@@ -52,6 +53,7 @@ from ream.anchors import (
     _tight,
 )
 from ream.db import Connection, Database, in_list, jsonb
+from ream.scan import Finding
 
 # A comment is a remark about a page, not a page in itself -- 8 KB is generous for
 # prose and small enough that a thread of hundreds never becomes its own storage
@@ -1701,7 +1703,17 @@ def second_scan(db: Database, comment_id: str) -> str:
                 (datetime.now(UTC), comment_id),
             )
         # The quote was only ever built-in scanned; the relay sees it too.
-        found = ggscan.scan(body + "\n" + quote)
+        text = body + "\n" + quote
+        found = ggscan.scan(text)
+        if not found:
+            # Scanners a plug-in registered; a `block` scanner that fails withdraws the
+            # comment, as a finding would. Nothing registered: no change.
+            try:
+                extra = scanners.run(text)
+            except scanners.ScannerBlocked:
+                extra = [Finding(shape="scanner_failed", line=1)]
+            if extra:
+                found = extra
         if found is None:
             if ggscan.configured():
                 _log.warning(

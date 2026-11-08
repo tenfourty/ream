@@ -14,6 +14,7 @@ import logging
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 
 from ream import settings
 
@@ -22,20 +23,65 @@ _TIMEOUT = 15
 
 
 class MailFailed(Exception):
-    """Mailgun did not accept the message. Carries a status, never the key."""
+    """The mail was not accepted. Carries a status, never a key."""
+
+
+# The mail backend a plug-in registered (core-and-plugins design, 4.2 item 5): one at
+# most. With none, the built-in Mailgun code below is the backend (it moves out in 9b).
+_backend: tuple[str, Callable, Callable] | None = None
+
+
+def register_backend(plugin: str, send: Callable, enabled: Callable) -> None:
+    """`send(to, subject, text)` and `enabled()`. A second backend is an error."""
+    global _backend
+    if _backend is not None:
+        raise ValueError(f"a mail backend is already registered by {_backend[0]!r}")
+    _backend = (plugin, send, enabled)
+
+
+def _fail(plugin: str, exc: Exception) -> None:
+    from ream import plugin_api  # late: plugin_api imports the modules that call this
+
+    plugin_api.count_failure(plugin, "mail")
+    _log.warning("plug-in %s: mail backend failed: %s", plugin, type(exc).__name__)
 
 
 def enabled() -> bool:
+    """Whether mail can be sent: the registered backend's answer, else Mailgun's.
+    A backend whose `enabled` raises counts as off."""
+    if _backend is None:
+        return _mailgun_enabled()
+    try:
+        return bool(_backend[2]())
+    except Exception as exc:  # noqa: BLE001 -- a plug-in may raise anything
+        _fail(_backend[0], exc)
+        return False
+
+
+def send(to: str, subject: str, text: str) -> None:
+    """Send one message through the registered backend, else Mailgun. A backend that
+    raises is a `MailFailed` (the callers already handle it); nothing of its message
+    is kept."""
+    if _backend is None:
+        return _mailgun_send(to, subject, text)
+    try:
+        _backend[1](to, subject, text)
+    except Exception as exc:  # noqa: BLE001 -- a plug-in may raise anything
+        _fail(_backend[0], exc)
+        raise MailFailed("the mail backend failed") from None
+
+
+def _mailgun_enabled() -> bool:
     """Mail is on when the key, the API, the domain and the sender are all set
     (`Settings.problems` makes a half-set group a start-up refusal)."""
     s = settings.current()
     return bool(s.mailgun_key and s.mailgun_api and s.mailgun_domain and s.mail_from)
 
 
-def send(to: str, subject: str, text: str) -> None:
+def _mailgun_send(to: str, subject: str, text: str) -> None:
     s = settings.current()
     key = s.mailgun_key
-    if not enabled():
+    if not _mailgun_enabled():
         raise MailFailed("mail is not configured")
     api = s.mailgun_api.rstrip("/")
     domain = s.mailgun_domain

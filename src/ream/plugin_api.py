@@ -3,7 +3,7 @@
 A plug-in is a Python package with an entry point in the group `ream.plugins` (or the old
 `artifacts.plugins`, kept for good)
 naming a function `register(api: PluginAPI) -> None`. The server calls each once at
-start-up, in name order. Slice 7a offers two registrations: `sink` and `answer_source`.
+start-up, in name order. Registrations: `sink`, `answer_source`, `on_answer`, `scanner`, `mail_backend`.
 
 A plug-in that raises while registering, names a major API version this core does not
 speak, or is named in `REAM_PLUGINS` but not installed, stops start-up
@@ -27,7 +27,7 @@ import threading
 from collections.abc import Callable
 from importlib import metadata
 
-from ream import decisions, settings, sinks
+from ream import decisions, mail, scanners, settings, sinks
 
 API_VERSION = (1, 0)
 GROUP = "ream.plugins"
@@ -140,6 +140,20 @@ class PluginAPI:
             )
         # The live set, so a source registered after the hook counts too.
         decisions.register_answer_hook(self._plugin, name, fn, self._sources)
+
+    def scanner(self, name: str, scan: Callable, on_error: str = "skip") -> None:
+        """Register a scanner (4.2, 4). `scan(text) -> list[scan.Finding]` is run where
+        the core takes its second opinion (after a clean pattern scan: bodies, section
+        notes, agent comments' second scan). `on_error="skip"`: a raise is logged and
+        counted and the text is judged on the other scanners; `"block"`: it fails the
+        action (`scanners.ScannerBlocked`)."""
+        scanners.register(self._plugin, name, scan, on_error)
+
+    def mail_backend(self, name: str, send: Callable, enabled: Callable) -> None:
+        """Register the mail backend (4.2, 5). `send(to, subject, text)` raises to fail;
+        `enabled()` says whether mail is on. One backend at most; it replaces the
+        built-in Mailgun code. `name` is only for the log."""
+        mail.register_backend(self._plugin, send, enabled)
 
 
 def _entry_points() -> list:
