@@ -18,8 +18,8 @@ def clean():
 
 
 def _fail(name, n, at=T0):
-    for _ in range(n):
-        sinks.breaker_record(name, False, at)
+    for i in range(n):
+        sinks.breaker_record(name, False, at, key=f"row{i}")
 
 
 def _event(artifact_id="a1"):
@@ -101,7 +101,12 @@ def test_a_sink_with_an_open_breaker_keeps_its_rows_uncounted(db):
         (parked,) = conn.execute(
             "select count(*) from outbox where parked_at is not null"
         ).fetchone()
+        untried = conn.execute(
+            "select attempts from outbox where attempts = 0"
+        ).fetchall()
     assert parked == 0
+    # The five rows that failed were counted; the other five were never touched.
+    assert len(untried) == 10 - sinks.BREAKER_THRESHOLD
 
 
 def test_a_hung_sink_is_a_timeout_failure_and_trips_the_breaker(db, monkeypatch):
@@ -127,3 +132,92 @@ def test_a_hung_sink_is_a_timeout_failure_and_trips_the_breaker(db, monkeypatch)
             "select distinct last_error from outbox where last_error is not null"
         ).fetchall()
     assert [e[0] for e in errors] == ["TimeoutError"]
+
+
+def test_a_peek_spends_no_trial(clean):
+    _fail("s", sinks.BREAKER_THRESHOLD)
+    later = T0 + timedelta(seconds=sinks.BREAKER_COOLDOWN_SECONDS + 1)
+    assert sinks.breaker_peek("s", later)
+    assert sinks.breaker_peek("s", later)
+    assert sinks.breaker_reserve("s", later)  # the trial is still there
+    assert not sinks.breaker_reserve("s", later)
+
+
+def test_only_one_of_many_concurrent_callers_gets_the_trial(clean):
+    import threading
+
+    _fail("s", sinks.BREAKER_THRESHOLD)
+    later = T0 + timedelta(seconds=sinks.BREAKER_COOLDOWN_SECONDS + 1)
+    got = []
+    start = threading.Barrier(8)
+
+    def go():
+        start.wait()
+        got.append(sinks.breaker_reserve("s", later))
+
+    threads = [threading.Thread(target=go) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert got.count(True) == 1 and len(got) == 8
+
+
+def test_a_sink_with_nothing_due_keeps_its_trial_while_another_delivers(db):
+    page = store.publish(db, "seat-a", "Plan", PAGE)
+    now = datetime.now(UTC) + timedelta(minutes=1)
+    x_calls, y_calls = [], []
+
+    def x_bad(event):
+        x_calls.append(1)
+        raise OSError("down")
+
+    sx = Sink("x", ("decision_answered",), deliver=x_bad)
+    sy = Sink("y", ("comment_added",), deliver=lambda e: y_calls.append(1))
+    with sinks.isolated(sx, sy):
+        for _ in range(sinks.BREAKER_THRESHOLD):
+            with db.connect() as conn, conn.transaction():
+                events.emit(conn, _event(page.id))
+        sinks.deliver_due(db, lambda: now)
+        assert "x" in sinks.status(db)["open_breakers"]
+        opened_until = sinks.open_breakers(now)["x"]
+        # Past the cooldown, but X's rows are still in backoff (cap 40 s < 60 s, so
+        # push their next_at out): nothing of X is due, Y has a row.
+        with db.connect() as conn:
+            conn.execute(
+                "update outbox set next_at = %s where sink = 'x'",
+                (now + timedelta(hours=1),),
+            )
+        with db.connect() as conn, conn.transaction():
+            events.emit(
+                conn,
+                events.Event(kind="comment_added", artifact_id=page.id, agent="seat-a"),
+            )
+        later = now + timedelta(seconds=sinks.BREAKER_COOLDOWN_SECONDS + 1)
+        assert sinks.deliver_due(db, lambda: later) == (1, 0)
+        assert len(y_calls) == 1
+        # X did not re-arm: its trial is still available to the next due row.
+        assert sinks.breaker_peek("x", later)
+        assert sinks.open_breakers(now)["x"] == opened_until
+
+
+def test_one_poison_row_does_not_open_the_breaker(clean):
+    for _ in range(sinks.BREAKER_THRESHOLD + 3):
+        sinks.breaker_record("s", False, T0, key="poison")
+    assert sinks.breaker_peek("s", T0)
+    assert sinks.open_breakers(T0) == {}
+    # A second, different row failing in the same run does count.
+    sinks.breaker_record("s", False, T0, key="other")
+    assert not sinks.breaker_peek("s", T0 + timedelta(seconds=1))
+
+
+def test_a_success_from_a_call_begun_before_the_breaker_opened_is_ignored(clean):
+    started = T0
+    _fail("s", sinks.BREAKER_THRESHOLD, T0 + timedelta(seconds=5))
+    sinks.breaker_record("s", True, T0 + timedelta(seconds=6), started=started)
+    assert not sinks.breaker_peek("s", T0 + timedelta(seconds=7))
+    # A trial begun after it opened does close it.
+    trial = T0 + timedelta(seconds=sinks.BREAKER_COOLDOWN_SECONDS + 10)
+    assert sinks.breaker_reserve("s", trial)
+    sinks.breaker_record("s", True, trial, started=trial)
+    assert sinks.open_breakers(trial) == {}

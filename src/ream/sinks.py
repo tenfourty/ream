@@ -90,14 +90,24 @@ _lock = threading.RLock()
 _sinks: dict[str, Sink] = {}
 _builtins_loaded = False
 _late_failures = 0
-# sink name -> [consecutive failures, open until (None: closed)]
+# sink name -> [consecutive failures, open until (None: closed), the distinct rows that
+# failed (capped at 2), when it last opened (None: never)]
 _breakers: dict[str, list] = {}
 
 
-def breaker_allows(name: str, now: datetime) -> bool:
-    """Whether a delivery to `name` may be tried now. Open: no. Once the cooldown has
-    passed the first caller is let through (the breaker re-opens at once for another
-    cooldown, so only one trial runs) and `breaker_record` settles it."""
+def breaker_peek(name: str, now: datetime) -> bool:
+    """Whether a delivery to `name` could be tried now: closed, or the cooldown has
+    passed. Read-only: it spends no trial, so it is safe to ask about every sink."""
+    with _lock:
+        state = _breakers.get(name)
+        return state is None or state[1] is None or now >= state[1]
+
+
+def breaker_reserve(name: str, now: datetime) -> bool:
+    """Take the right to deliver to `name` now. Closed: yes. Open: no. Once the cooldown
+    has passed the first caller gets it and the breaker re-arms at once for another
+    cooldown, so only one trial runs; `breaker_record` settles it. Call this only for
+    a delivery that is about to run."""
     with _lock:
         state = _breakers.get(name)
         if state is None or state[1] is None:
@@ -108,18 +118,46 @@ def breaker_allows(name: str, now: datetime) -> bool:
         return True
 
 
-def breaker_record(name: str, ok: bool, now: datetime) -> None:
+def breaker_allows(name: str, now: datetime) -> bool:
+    """Peek and reserve in one (for a caller that delivers at once)."""
+    return breaker_reserve(name, now)
+
+
+def breaker_record(
+    name: str,
+    ok: bool,
+    now: datetime,
+    *,
+    started: datetime | None = None,
+    key: str | None = None,
+) -> None:
     """The outcome of a delivery: success closes the breaker and clears the count;
-    the THRESHOLD-th failure running (and each failed trial after) opens it."""
+    the THRESHOLD-th failure running (and each failed trial after) opens it, but only
+    when the failures come from at least two different rows (`key`; None counts as a
+    row of its own), so one poison event retried again and again cannot open the
+    breaker of a healthy sink. A success of a call that `started` before the breaker
+    last opened is ignored: it says nothing about the sink now."""
     with _lock:
         if ok:
+            state = _breakers.get(name)
+            if (
+                state is not None
+                and state[3] is not None
+                and started is not None
+                and started < state[3]
+            ):
+                return
             _breakers.pop(name, None)
             return
-        state = _breakers.setdefault(name, [0, None])
+        state = _breakers.setdefault(name, [0, None, set(), None])
         state[0] += 1
-        if state[0] >= BREAKER_THRESHOLD:
+        if len(state[2]) < 2:
+            state[2].add(key if key is not None else f"anon-{state[0]}")
+        if state[0] >= BREAKER_THRESHOLD and len(state[2]) >= 2:
+            first = state[3] is None or state[1] is None
             state[1] = now + timedelta(seconds=BREAKER_COOLDOWN_SECONDS)
-            if state[0] == BREAKER_THRESHOLD:
+            state[3] = now
+            if first:
                 _log.warning(
                     "sink %s: circuit open for %ds after %d failures running",
                     name,
@@ -187,8 +225,9 @@ def isolated(*sinks: Sink) -> Iterator[None]:
     with _lock:
         saved, saved_loaded = _sinks, _builtins_loaded
         _sinks, _builtins_loaded = {}, True
-    try:
+    with _lock:
         _breakers.clear()
+    try:
         for sink in sinks:
             register(sink)
         yield
@@ -208,11 +247,12 @@ def deliver_late(sinks: list[Sink], event: Event) -> None:
     exception's type only) and a count."""
     global _late_failures
     for sink in sinks:
-        if sink.deliver is None or not breaker_allows(sink.name, datetime.now(UTC)):
+        started = datetime.now(UTC)
+        if sink.deliver is None or not breaker_reserve(sink.name, started):
             continue
         try:
             sink.deliver(event)
-            breaker_record(sink.name, True, datetime.now(UTC))
+            breaker_record(sink.name, True, datetime.now(UTC), started=started)
         except Exception as exc:  # noqa: BLE001 -- the action already committed
             breaker_record(sink.name, False, datetime.now(UTC))
             with _lock:
@@ -324,11 +364,22 @@ def deliver_due(
     sinks = _deliverable()
     delivered = failed = 0
     for _ in range(BATCH):
-        # A sink with an open breaker is left out: its rows wait, uncounted.
+        # A sink with an open breaker is left out: its rows wait, uncounted. The list
+        # is a read-only peek; the trial is reserved only for the sink whose row is
+        # claimed, so a sink with nothing due keeps its trial.
         now = clock()
-        row = _claim(db, now, [n for n in sinks if breaker_allows(n, now)])
+        row = _claim(db, now, [n for n in sinks if breaker_peek(n, now)])
         if row is None:
             break
+        if not breaker_reserve(row["sink"], now):
+            # Another sender took the trial between peek and claim: give the row back.
+            with db.connect() as conn:
+                conn.execute(
+                    "update outbox set claimed_until = null where id = %s"
+                    " and delivered_at is null and claimed_until = %s",
+                    (row["id"], row["lease"]),
+                )
+            continue
         error = None
         try:
             deliver = sinks[row["sink"]].deliver
@@ -337,7 +388,7 @@ def deliver_due(
         except Exception as exc:  # noqa: BLE001 -- a sink must not stop the loop
             error = type(exc).__name__
         finished = clock()
-        breaker_record(row["sink"], error is None, finished)
+        breaker_record(row["sink"], error is None, finished, started=now, key=row["id"])
         # Only a row this sender still leases: if the lease ran out and another
         # sender took the row (or finished it), these updates touch nothing.
         mine = " where id = %s and delivered_at is null and claimed_until = %s"
