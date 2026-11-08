@@ -73,7 +73,7 @@ Settings: every server variable is a field of `ream.settings.Settings`, read at 
 `settings.current()` (tests: `settings.override(...)`, no caching, no `__repr__` that prints a value).
 `scripts/guards/no-environ-guard.sh` refuses `os.environ` in `src/ream` outside `settings.py`,
 `envnames.py` (the one place a setting is read under both its names), `serve.py`, `admin.py` and the
-command-line tools. The shim package `src/artifacts/` reads no environment and is not scanned. Nothing of a house is a default: a fresh install
+command-line tools. The shim package `src/artifacts/` reads no environment and may hold only `__init__.py` and `py.typed`; the same guard scans it and refuses any other file there. Nothing of a house is a default: a fresh install
 (nothing set) serves `http://localhost:8000`, and a server bound to a non-loopback address
 (`REAM_BIND_HOST`, set to `0.0.0.0` by the image) without `REAM_GALLERY_ORIGIN` refuses to
 start. A deployment sets `REAM_GALLERY_ORIGIN`, `REAM_CONTENT_DOMAIN`, the owner trio and,

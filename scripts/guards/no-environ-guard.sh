@@ -15,6 +15,9 @@
 #   client.py decide.py republish.py news.py
 #                 the command-line tools' OWN variables (key file, session label, XDG dirs,
 #                 wait timeout): they run on other machines with no server settings
+# The shim package src/artifacts/ is held to the same rule and to more: it may contain only
+# __init__.py and py.typed (a module added there would be a second copy of the code, not an
+# alias), and its __init__.py reads no environment at all.
 # A single line may opt out with a trailing `# env-ok: <reason>`.
 #
 # Three invocations:
@@ -34,6 +37,24 @@ scan_paths() {
   local f hits=0 out base line
   for f in "$@"; do
     case "$f" in
+      */src/artifacts/* | src/artifacts/*)
+        base="$(basename "$f")"
+        case "$base" in
+          __init__.py | py.typed) ;;
+          *)
+            printf '%s: src/artifacts may hold only __init__.py and py.typed — %s\n' "$SELF" "$f"
+            hits=$((hits + 1))
+            continue
+            ;;
+        esac
+        out="$(grep -nE -- "$PATTERN" "$f" 2>/dev/null | grep -v '# env-ok:')" || continue
+        while IFS= read -r line; do
+          [ -n "$line" ] || continue
+          printf '%s: environment read in the shim — %s:%s\n' "$SELF" "$f" "$line"
+          hits=$((hits + 1))
+        done <<<"$out"
+        continue
+        ;;
       */src/ream/*.py | src/ream/*.py) ;;
       *) continue ;;
     esac
@@ -69,7 +90,7 @@ case "${1:-}" in
     }
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
-    mkdir -p "$tmp/src/ream" "$tmp/tests"
+    mkdir -p "$tmp/src/ream" "$tmp/src/artifacts" "$tmp/tests"
 
     printf 'import os\nx = os.environ.get("A")\n' >"$tmp/src/ream/bad.py"
     check "catches os.environ.get in a service module" \
@@ -103,6 +124,17 @@ case "${1:-}" in
     check "does not flag other os calls" \
       "$(scan_paths "$tmp/src/ream/fine.py" >/dev/null 2>&1; echo $?)" 0
 
+    printf 'import ream\n' >"$tmp/src/artifacts/__init__.py"
+    : >"$tmp/src/artifacts/py.typed"
+    check "allows the shim's __init__.py and py.typed" \
+      "$(scan_paths "$tmp/src/artifacts/__init__.py" "$tmp/src/artifacts/py.typed" >/dev/null 2>&1; echo $?)" 0
+    printf 'x = 1\n' >"$tmp/src/artifacts/settings.py"
+    check "refuses another module in src/artifacts" \
+      "$(scan_paths "$tmp/src/artifacts/settings.py" >/dev/null 2>&1; echo $?)" 1
+    printf 'import os\nx = os.getenv("A")\n' >"$tmp/src/artifacts/__init__.py"
+    check "refuses an environment read in the shim" \
+      "$(scan_paths "$tmp/src/artifacts/__init__.py" >/dev/null 2>&1; echo $?)" 1
+
     echo "----"
     if [ "$fail" -eq 0 ]; then
       echo "$SELF selftest: ALL PASS"
@@ -115,7 +147,7 @@ case "${1:-}" in
 
   --tree)
     repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-    mapfile -t files < <(git -C "$repo" ls-files -- 'src/ream/*.py' 2>/dev/null)
+    mapfile -t files < <(git -C "$repo" ls-files -- 'src/ream/*.py' 'src/artifacts/*' 2>/dev/null)
     abs=()
     for f in "${files[@]}"; do abs+=("$repo/$f"); done
     if [ "${#abs[@]}" -eq 0 ]; then
