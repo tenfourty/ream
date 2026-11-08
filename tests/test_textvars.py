@@ -78,4 +78,5 @@ def test_cli_help_and_messages_follow_the_owner(monkeypatch, capsys):
         with pytest.raises(SystemExit):
             connect_cli.main(["--help"])
         shown = " ".join(capsys.readouterr().out.split())
-        assert "Ann's artifacts space; she approves a code" in shown
+        # Step 2 of the Ream rename: the help says "Ream (formerly artifacts)".
+        assert "Ann's Ream (formerly artifacts); she approves a code" in shown

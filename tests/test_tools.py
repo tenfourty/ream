@@ -101,10 +101,11 @@ def test_the_skill_says_a_republish_opens_the_next_round(gallery):
 
 def test_the_skill_teaches_claiming_and_handing_back_a_review(gallery):
     text = " ".join(gallery.get("/api/v1/skill.md").text.split())
+    # Step 2 of the Ream rename: the skill names the command `ream`, not `artifacts-decide`.
     assert (
         "Set REAM_SESSION so wait --review can claim the round; if it exits 8 "
         "another session is acting on it, and if you cannot act, run "
-        'artifacts-decide review-release <id> --reason "…".'
+        'ream review-release <id> --reason "…".'
     ) in text
 
 
