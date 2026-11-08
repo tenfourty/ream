@@ -71,11 +71,26 @@ def _help() -> str:
     return _HELP.format(decide_rest=f"also (artifacts-decide): {lines}")
 
 
+# The global flags of `artifacts-decide` that take a value; they may come before the verb.
+_VALUE_FLAGS = ("--key-file", "--key-fd", "--session")
+
+
 def _find_verb(args: list[str]) -> int | None:
+    """The verb is the first positional word. Only decide's own global flags may come
+    before it; anything else in front (`ream --title list publish ...`) is no verb."""
     known = set(_OTHER) | set(DECIDE_VERBS)
-    for index, token in enumerate(args):
-        if token in known:
-            return index
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token in _VALUE_FLAGS:
+            index += 2
+            continue
+        if token.startswith("-"):
+            if token.split("=", 1)[0] in _VALUE_FLAGS:
+                index += 1
+                continue
+            return None
+        return index if token in known else None
     return None
 
 
