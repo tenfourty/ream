@@ -112,8 +112,8 @@ def post(event):                       # event: ream.events.Event
   `receipt_set`, `thread_reopened`, and `decision_shelved`, kept for history) or **bridge kind**
   (`ream.events.BRIDGE_KINDS`: `asked`, `answered`, `withdrawn`, `replaced`, `message_added`,
   `edited`, `set_aside`, `reopened`). Bridge kinds never reach the journal or `/events`. A kind
-  that is in neither list is not rejected at registration; the sink simply never matches, so
-  check your spelling.
+  that is in neither list is refused at registration: start-up stops with a `PluginError`
+  naming your plug-in and the kind (plug-ins cannot declare kinds of their own).
 - `Event` is frozen: `kind`, `artifact_id`, `agent` (who it is for), `actor`, `ref_id`,
   `summary`, `note`, `session`, `data` (a small dict the producer may add), `id`. `event.id` is
   the idempotency key: pass it on so a retry does not act twice.
@@ -175,7 +175,9 @@ a value that may be stored as a decision's `answer_source`, and how the gallery 
 stored source is one **this plug-in** registered (so `answer_source` must be called first, or
 registration fails). `answer` has `letter`, `note`, `by`, `source`, `recorded_by`. A raise aborts
 the whole answer as `decisions.AnswerHookFailed` (naming plug-in and hook, no value) and is
-counted as `<plug-in>:on_answer`; the caller's request fails. It is for answers a person gave
+counted as `<plug-in>:on_answer`; the caller's request fails with a 503 whose JSON `detail`
+names the plug-in (no error text, no value). On the gallery's answer form a person sees a
+plain "Answer not saved" page, also 503, with the same wording. It is for answers a person gave
 through the plug-in's own inbound path, never for an agent's relay (`record_elsewhere` does not
 run it). One hook per name per plug-in. Use it only when the answer must not half-apply;
 everything else is a sink.

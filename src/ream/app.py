@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 
-from ream import forms, hosts, onboarding, partner_in, plugin_api, ratelimit
+from ream import decisions, forms, hosts, onboarding, partner_in, plugin_api, ratelimit
 from ream.api import agent_card_response, agent_router
 from ream.content import create_content_app
 from ream.db import Database
@@ -20,6 +20,20 @@ def _refuse_bad_forms(app: FastAPI) -> None:
     @app.exception_handler(forms.FormRefused)
     async def _on_form_refused(_request: Request, exc: forms.FormRefused):
         return JSONResponse(status_code=422, content={"detail": exc.as_detail()})
+
+
+def _refuse_failed_answer_hooks(app: FastAPI) -> None:
+    """An `on_answer` hook raised, so the answer was rolled back (core-and-plugins design,
+    4.3): 503 naming the plug-in, whichever route met it. No exception text, no value."""
+
+    @app.exception_handler(decisions.AnswerHookFailed)
+    async def _on_answer_hook_failed(
+        _request: Request, exc: decisions.AnswerHookFailed
+    ):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": decisions.answer_hook_failed_detail(exc.plugin)},
+        )
 
 
 def _scrub_validation_errors(app: FastAPI) -> None:
@@ -67,6 +81,7 @@ def create_gallery_app(
 
     _refuse_bad_forms(app)
     _scrub_validation_errors(app)
+    _refuse_failed_answer_hooks(app)
 
     @app.middleware("http")
     async def _log_gallery_requests(request: Request, call_next):
@@ -151,6 +166,7 @@ def create_api_app(
     app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
     _refuse_bad_forms(app)
     _scrub_validation_errors(app)
+    _refuse_failed_answer_hooks(app)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

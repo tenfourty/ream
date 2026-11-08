@@ -30,6 +30,7 @@ from importlib import metadata
 
 from ream import (
     decisions,
+    events,
     hosts,
     mail,
     plugin_cli,
@@ -243,8 +244,18 @@ class PluginAPI:
         label: str | None = None,
     ) -> None:
         """Register an event sink (4.2, 1). `deliver(event)` returns on success and
-        raises to retry (outbox) or be logged (after commit)."""
+        raises to retry (outbox) or be logged (after commit). A kind that is not one of
+        `events.KINDS` or `events.BRIDGE_KINDS` is refused (`PluginError`, naming the
+        plug-in and the kind): the sink would otherwise never match. Plug-ins cannot
+        declare kinds of their own, so these two lists are the whole set."""
         plugin = self._plugin
+        known = (*events.KINDS, *events.BRIDGE_KINDS)
+        for kind in kinds:
+            if kind not in known:
+                raise PluginError(
+                    f"plug-in {plugin!r}: sink {name!r} names unknown event kind"
+                    f" {str(kind)[:60]!r}"
+                )
 
         def guarded(event):
             try:

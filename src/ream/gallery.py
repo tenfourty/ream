@@ -6865,6 +6865,18 @@ def gallery_router(db: Database) -> APIRouter:
             return _already_decided_page(exc)
         except store.NotFound as exc:
             raise HTTPException(404, "no such open decision") from exc
+        except decisions.AnswerHookFailed as exc:
+            # A plug-in's hook failed and the answer was rolled back: say so to a
+            # person, on a page, naming the plug-in and nothing of the failure.
+            return HTMLResponse(
+                _shell(
+                    "Answer not saved",
+                    f"<p>{escape(decisions.answer_hook_failed_detail(exc.plugin))} "
+                    'Go back and try again, or <a href="/">return to the wall</a>.</p>',
+                ),
+                status_code=503,
+                headers=gallery_headers(),
+            )
         if next_field == "inbox":
             return RedirectResponse("/inbox", status_code=303)
         return RedirectResponse(f"/a/{row.artifact_id}", status_code=303)

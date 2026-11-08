@@ -698,6 +698,13 @@ drivers; CI only (not on baba).
     sink, no generic webhook sink or `ARTIFACTS_SINKS_FILE`, failure counts in `failure_counts()`
     and `sinks.status()` rather than `/metrics`), the office doc's deployment paragraph, and the
     parts that describe steps 8 and 9, which are not built.
+    **Part 2 built (`ci/plugin-guards`, 8 Nov 2026).** Two gaps closed: `api.sink` refuses a kind
+    that is in neither `events.KINDS` nor `events.BRIDGE_KINDS` (plug-ins cannot declare kinds)
+    with a `PluginError` naming the plug-in, sink and kind, so start-up stops; and
+    `decisions.AnswerHookFailed` is answered **503** (the spec said "a 5xx"; 503 because the
+    fault is ours and retrying later may succeed, as with a failed scanner) as JSON naming the
+    plug-in, by an app-level handler on the gallery and API apps, and as a readable "Answer not
+    saved" page (503) on the gallery answer form.
 
 The chasing work (nudge once, `answer_dropped` after a day) follows slice 4 at the earliest, and
 only needs sinks to exist; it does not wait for the plug-in repo.

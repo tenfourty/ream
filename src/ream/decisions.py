@@ -1187,6 +1187,15 @@ class AnswerHookFailed(Exception):
         self.hook = hook
 
 
+def answer_hook_failed_detail(plugin: str) -> str:
+    """What a caller is told when `AnswerHookFailed` reaches it: the plug-in's name and
+    that nothing was saved, never the hook's error."""
+    return (
+        f"the {plugin} plug-in failed while recording this answer, so it was not saved."
+        " This is a fault on our side; try again later or tell the operator."
+    )
+
+
 # (plug-in, hook name, fn, the sources the plug-in registered): plugin_api.on_answer.
 _ANSWER_HOOKS: list[tuple[str, str, Callable, set[str]]] = []
 

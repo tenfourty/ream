@@ -370,3 +370,68 @@ def test_on_answer_needs_an_answer_source_first_and_stops_start_up(world):
     world(EP("toy", _with_module(register, "1")))
     with pytest.raises(plugin_api.PluginError, match="toy"):
         plugin_api.load()
+
+
+def test_a_sink_naming_an_unknown_kind_stops_start_up_naming_plugin_and_kind(world):
+    def register(api):
+        api.sink("typo", ("decision_anwered",), lambda e: None)
+
+    world(EP("toy", _with_module(register, "1")))
+    with pytest.raises(plugin_api.PluginError) as err:
+        plugin_api.load()
+    assert "toy" in str(err.value) and "decision_anwered" in str(err.value)
+    assert sinks.matching("decision_answered") == []
+
+
+def test_a_sink_may_name_journal_and_bridge_kinds(world):
+    def register(api):
+        api.sink("both", ("decision_answered", "asked"), lambda e: None)
+
+    world(EP("toy", _with_module(register, "1")))
+    assert plugin_api.load() == ["toy"]
+    assert [s.name for s in sinks.matching("asked")] == ["both"]
+
+
+def test_a_failed_answer_hook_is_a_503_json_naming_the_plugin(db, world):
+    from fastapi.testclient import TestClient
+
+    from ream.app import create_api_app, create_gallery_app
+
+    for make in (create_api_app, create_gallery_app):
+        app = make(db)
+
+        @app.get("/_hook_fail")
+        def _fail():
+            raise decisions.AnswerHookFailed("toy", "mark")
+
+        response = TestClient(app, raise_server_exceptions=False).get("/_hook_fail")
+        assert response.status_code == 503
+        detail = response.json()["detail"]
+        assert "toy" in detail and "mark" not in detail
+
+
+def test_the_gallery_answer_form_shows_a_readable_page_when_a_hook_fails(
+    db, world, monkeypatch
+):
+    from fastapi.testclient import TestClient
+
+    from ream.app import create_gallery_app
+
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    q = _ask(db)
+
+    def boom(*args, **kwargs):
+        raise decisions.AnswerHookFailed("toy", "zzhook")
+
+    monkeypatch.setattr(decisions, "answer", boom)
+    response = TestClient(create_gallery_app(db), base_url="https://testserver").post(
+        f"/d/{q.id}/answer",
+        data={"letter": "a"},
+        headers={"Remote-User": "jeremy", "sec-fetch-site": "same-origin"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 503
+    assert response.headers["content-type"].startswith("text/html")
+    assert "toy" in response.text and "not saved" in response.text
+    assert "Traceback" not in response.text and "zzhook" not in response.text
