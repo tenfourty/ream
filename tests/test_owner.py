@@ -438,9 +438,11 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # skill.md re-taken once more on 8 Nov 2026 (rename step 3): the shared Ream skill (name: ream, a
 # description that fires on any report/plan/chart/diagram/comparison, a "When to use this" section,
 # `ream connect`); agents.txt and agent.json did not move.
+# agents.txt and skill.md re-taken on 9 Nov 2026 for MCP slice 1: each gains only a short static
+# paragraph saying /mcp takes the same key (agent.json is unchanged while REAM_MCP_PUBLIC_URL is unset).
 GOLDEN = {
-    "agents.txt": "43a6431a21b1894c7d3dfc953ca20dab523e852468597c3d9c6839e4a2b0c81e",
-    "skill.md": "a7c6b36252235b8df33fee37197bd1c14f70b654f59e48fe046a3a07e20695de",
+    "agents.txt": "e8b1eb4fd080c977ac90e2a4a06ab7b3ff704cc12bfc9820ae1bf3473cd45e7e",
+    "skill.md": "d9807773f40a56c5a7f077b9ddd37ad9094a0b893f024baf9db1184a8ed3b5da",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"

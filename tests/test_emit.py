@@ -281,6 +281,7 @@ def test_migration_adds_the_outbox_and_leaves_partner_rows_delivering(db):
             # The tables of the steps after it go too, or their steps would find them.
             conn.execute("drop table sink_breaker")
             conn.execute("drop table plugin_failure")
+            conn.execute("drop table mcp_events_seen")
             conn.execute("pragma user_version = 19")  # the version before this table
     db.migrate()
     db.migrate()  # idempotent
