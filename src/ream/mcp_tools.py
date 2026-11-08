@@ -10,10 +10,15 @@ as a tool error.
 
 Which fields are which (section 15):
 
-- Ream's own, bare: ids, versions, revisions, counts, times, flags, enum words (kind,
-  visibility, urgency, check_status, author_kind, ...), URLs and paths Ream made, agent
-  names (format-checked by `keys.AGENT_NAME`), folder slugs (`folders.SLUG`), option
-  letters, image metadata. Bare only while each is one plain token (`mcp.PLAIN`).
+- Ream's own, bare, each only while it passes its field's exact format (`_REAM`): ids
+  (26 lowercase base32), revisions and key ids (hex of their length), times (ISO), the
+  fixed words of kind, visibility, urgency, check_status, author_kind, quote_state,
+  anchor_state, home, answer_source and an image's content_type, agent names
+  (`keys.AGENT_NAME`, never a Slack question's asking office), folder slugs
+  (`folders.SLUG`). Numbers, booleans and null are always bare.
+- Fenced although Ream shaped them, because an agent or the partner chooses part of
+  them: urls, page_url, link, path, source, option letters, recommended, answer,
+  review_mode, a warning's shape.
 - The owner's, bare: his comments (and their session, none), an event's `note` when he is
   the actor (his verbatim words).
 - Agent-written, fenced, everything else: page titles and bodies, folder titles, version
@@ -29,6 +34,8 @@ Which fields are which (section 15):
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -37,8 +44,10 @@ from fastapi.encoders import jsonable_encoder
 from ream import (
     api,
     comments,
+    decisions,
     events,
     folders,
+    keys,
     onboarding,
     sections,
     settings,
@@ -58,6 +67,8 @@ from ream.mcp import (
     ResourceTemplate,
     ToolError,
     ToolOutput,
+    matches,
+    one_of,
     tool,
 )
 
@@ -126,86 +137,89 @@ LIMIT = {
 }
 
 
-# Ream's own fields, shared by every tool that lists them (see the module docstring).
-_IDS = frozenset(
-    {
-        "id",
-        "artifact_id",
-        "ref_id",
-        "thread_root",
-        "decision_id",
-        "key_id",
-        "revision",
-        "section_revision",
-        "page_revision",
-        "sha256",
-        "url",
-        "page_url",
-        "path",
-        "link",
-        "source",
-        # A question's links to others, by id.
-        "depends_on",
-        "held_by",
-        "replaces",
-        "replaced_by",
-    }
-)
-_TIMES = frozenset(
-    {
-        "created_at",
-        "updated_at",
-        "archived_at",
-        "pinned_at",
-        "deleted_at",
-        "seen_at",
-        "checked_at",
-        "changed_at",
-        "lapses_at",
-        "resolved_at",
-        "answered_at",
-        "closed_at",
-        "acknowledged_at",
-        "said_at",
-        "set_aside_since",
-        "reopened_at",
-        "needed_by",
-    }
-)
-_NAMES = frozenset(
-    {
-        "agent",
-        "author",
-        "actor",
-        "created_by",
-        "resolved_by",
-        "answered_by",
-        "acknowledged_by",
-        "recorded_by",
-        "folder",
-        "slug",
-        "letter",
-    }
-)
-_WORDS = frozenset(
-    {
-        "kind",
-        "visibility",
-        "check_status",
-        "author_kind",
-        "quote_state",
-        "anchor_state",
-        "urgency",
-        "home",
-        "recommended",
-        "answer",
-        "answer_source",
-        "review_mode",
-        "content_type",
-        "shape",
-    }
-)
-_REAM = _IDS | _TIMES | _NAMES | _WORDS
+# Ream's own fields, shared by every tool that lists them (see the module docstring), each
+# with its exact format: a value that fails it is fenced like free text.
+_ID = matches(r"[a-z2-7]{26}")
+_HEX16 = matches(r"[0-9a-f]{16}")
+_TIME = matches(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(\.\d{1,6})?(Z|[+-]\d\d(:?\d\d)?)?")
+_SLUG = matches(folders.SLUG.pattern.strip("^$"))
+_AGENT_NAME = keys.AGENT_NAME.pattern.strip("^$")
+
+
+def _agent_name(value: str, obj: dict) -> bool:
+    """An agent's name, as `keys.AGENT_NAME` makes them. A question from the partner names
+    its asking office in free text, so there it is fenced whatever it looks like."""
+    return obj.get("home") != "partner" and re.fullmatch(_AGENT_NAME, value) is not None
+
+
+_KINDS = one_of(*comments.KINDS, *decisions.KINDS, *events.KINDS, *events.BRIDGE_KINDS)
+
+_REAM: dict[str, Callable[[str, dict], bool]] = {
+    **dict.fromkeys(
+        (
+            "id",
+            "artifact_id",
+            "ref_id",
+            "thread_root",
+            "depends_on",
+            "held_by",
+            "replaces",
+            "replaced_by",
+        ),
+        _ID,
+    ),
+    **dict.fromkeys(
+        ("revision", "section_revision", "page_revision", "key_id"), _HEX16
+    ),
+    "sha256": matches(r"[0-9a-f]{64}"),
+    **dict.fromkeys(
+        (
+            "created_at",
+            "updated_at",
+            "archived_at",
+            "pinned_at",
+            "deleted_at",
+            "seen_at",
+            "checked_at",
+            "changed_at",
+            "lapses_at",
+            "resolved_at",
+            "answered_at",
+            "closed_at",
+            "acknowledged_at",
+            "said_at",
+            "set_aside_since",
+            "reopened_at",
+            "needed_by",
+        ),
+        _TIME,
+    ),
+    **dict.fromkeys(
+        (
+            "agent",
+            "author",
+            "actor",
+            "created_by",
+            "resolved_by",
+            "answered_by",
+            "acknowledged_by",
+            "recorded_by",
+        ),
+        _agent_name,
+    ),
+    "folder": _SLUG,
+    "slug": _SLUG,
+    "kind": _KINDS,
+    "visibility": one_of("private", "link", "public"),
+    "check_status": one_of("ok", "failed"),
+    "author_kind": one_of("agent", "human"),
+    "quote_state": one_of("current", "changed"),
+    "anchor_state": one_of("current", "edited", "outdated"),
+    "urgency": one_of(*decisions.URGENCIES),
+    "home": one_of("partner"),
+    "answer_source": one_of(*decisions.CORE_SOURCES, "slack"),
+    "content_type": one_of("image/png", "image/jpeg", "image/webp"),
+}
 
 
 def _by(field: str):
@@ -379,6 +393,16 @@ def _get_template(call: Call, arguments: dict[str, Any]) -> dict:
 # --- comments -------------------------------------------------------------------------
 
 
+def _comment_writer(obj: dict, key: str):
+    """A comment's body and session are its author's (bare when the owner wrote it); its
+    quote and anchor are the page's text, so they stay with the page's agent."""
+    if "author_kind" not in obj or key not in ("body", "session"):
+        return None
+    if obj["author_kind"] != "agent" and obj.get("author") == settings.owner_id():
+        return OWNER
+    return obj.get("author") or None
+
+
 @tool(
     "comments",
     title="Read a page's comments",
@@ -391,7 +415,7 @@ def _get_template(call: Call, arguments: dict[str, Any]) -> dict:
     destructive=False,
     idempotent=True,
     fences=Fences(
-        ream=_REAM | {"content_type", "width", "height", "byte_size"},
+        ream=_REAM,
         writer=lambda obj, key: _comment_writer(obj, key),
         what={"body": "a comment", "quote": "quoted page text"},
     ),
@@ -399,16 +423,6 @@ def _get_template(call: Call, arguments: dict[str, Any]) -> dict:
         {"page_id": PAGE_ID, "include_resolved": {"type": "boolean"}}, ("page_id",)
     ),
 )
-def _comment_writer(obj: dict, key: str):
-    """A comment's body and session are its author's (bare when the owner wrote it); its
-    quote and anchor are the page's text, so they stay with the page's agent."""
-    if "author_kind" not in obj or key not in ("body", "session"):
-        return None
-    if obj["author_kind"] != "agent" and obj.get("author") == settings.owner_id():
-        return OWNER
-    return obj.get("author") or None
-
-
 def _comments(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     page_id = _str(arguments, "page_id", required=True)
     include_resolved = _bool(arguments, "include_resolved")
@@ -486,6 +500,17 @@ def _save_seen(call: Call, seq: int) -> None:
         )
 
 
+def _event_writer(obj: dict, key: str):
+    """An event's text is its actor's. When the owner is the actor his own words (`note`)
+    go back bare, but the summary still quotes agents' text (an answer's option label, a
+    quoted passage), so it is fenced and labelled with the page's agent."""
+    if "actor" not in obj:
+        return None
+    if obj["actor"] != settings.owner_id():
+        return obj["actor"] or None
+    return OWNER if key == "note" else obj.get("agent") or None
+
+
 @tool(
     "whats_new",
     title="What is new",
@@ -499,7 +524,7 @@ def _save_seen(call: Call, seq: int) -> None:
     destructive=False,
     idempotent=False,
     fences=Fences(
-        ream=_REAM | {"seq"},
+        ream=_REAM,
         writer=lambda obj, key: _event_writer(obj, key),
         what={"summary": "an event's summary", "note": "an event's note"},
     ),
@@ -514,17 +539,6 @@ def _save_seen(call: Call, seq: int) -> None:
         }
     ),
 )
-def _event_writer(obj: dict, key: str):
-    """An event's text is its actor's. When the owner is the actor his own words (`note`)
-    go back bare, but the summary still quotes agents' text (an answer's option label, a
-    quoted passage), so it is fenced and labelled with the page's agent."""
-    if "actor" not in obj:
-        return None
-    if obj["actor"] != settings.owner_id():
-        return obj["actor"] or None
-    return OWNER if key == "note" else obj.get("agent") or None
-
-
 def _whats_new(call: Call, arguments: dict[str, Any]) -> dict:
     since = _int(arguments, "since", None, 0, 2**63 - 1)
     limit = _int(arguments, "limit", 100, 1, MAX_LIMIT)

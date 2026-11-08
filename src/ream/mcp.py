@@ -136,31 +136,46 @@ class Fences:
     """How a tool's result is fenced (section 15). Deny by default: EVERY string in the
     result, at any depth, goes back inside an `untrusted` fence, except
 
-    - a value under a key in `ream`: Ream's own fields (ids, numbers, times, fixed words,
-      format-checked names), which the model must be able to pass back as they are. Even
-      there a string that is not one plain token (`PLAIN`: no space, no line break) is
-      fenced, so a free-text value that lands under a Ream key cannot go out bare; and
+    - a value under a key in `ream` that its key's own check passes: Ream's own fields
+      (ids, times, fixed words, format-checked names), which the model must be able to pass
+      back as they are. Each check is the field's exact format (an id is 26 lowercase
+      base32 characters, a kind is one of its fixed words), never "looks like one token": a
+      check loose enough to pass `Ignore_all_previous_instructions` is no check. A value
+      that fails it is fenced like free text. The check is given the value and the object
+      it sits in; and
     - text `writer` says the owner wrote (`OWNER`).
+
+    Numbers, booleans and null carry no words and go back bare everywhere.
 
     `writer(obj, key)` names the agent that wrote `obj[key]`, `OWNER`, or None for the
     writer of the enclosing object (at the top, `ToolOutput.written_by`, else the calling
     agent). A new field is fenced until someone classifies it, never the other way round.
     `what` says what a fenced key is, for its label (default: "the <key> field")."""
 
-    ream: frozenset[str]
+    ream: Mapping[str, Callable[[str, dict], bool]]
     writer: Callable[[dict, str], Any] = lambda _obj, _key: None
     what: Mapping[str, str] = field(default_factory=dict)
 
 
-# Ream's own fields hold one token each: ids, times, numbers as text, enum words, slugs,
-# URLs and paths. Anything else under such a key is fenced as if it were free text.
-PLAIN = re.compile(r"[A-Za-z0-9_.:/?=&%#~+@-]{0,512}", re.ASCII)
-# A time as a database writes it may have a space where ISO has a T.
-_TIME = re.compile(r"\d{4}-\d\d-\d\d[ T][0-9:.+-]{1,40}Z?", re.ASCII)
+def matches(pattern: str) -> Callable[[str, dict], bool]:
+    """A `Fences` check: the whole value matches `pattern` (ASCII only)."""
+    compiled = re.compile(pattern, re.ASCII)
+    return lambda value, _obj: compiled.fullmatch(value) is not None
+
+
+def one_of(*words: str) -> Callable[[str, dict], bool]:
+    """A `Fences` check: the value is one of a field's fixed words."""
+    fixed = frozenset(words)
+    return lambda value, _obj: value in fixed
 
 
 def fence_result(
-    value: Any, fences: Fences, written_by: str, key: str = "", ream: bool = False
+    value: Any,
+    fences: Fences,
+    written_by: str,
+    key: str = "",
+    check: Callable[[str, dict], bool] | None = None,
+    holder: dict | None = None,
 ) -> Any:
     """`value` with every agent-written string fenced, as `Fences` says."""
     if isinstance(value, dict):
@@ -175,13 +190,14 @@ def fence_result(
                 fences,
                 written_by if who is None else str(who),
                 k,
-                ream=k in fences.ream,
+                fences.ream.get(k),
+                value,
             )
         return out
     if isinstance(value, list | tuple):
-        return [fence_result(v, fences, written_by, key, ream) for v in value]
+        return [fence_result(v, fences, written_by, key, check, holder) for v in value]
     if isinstance(value, str) and value:
-        if ream and (PLAIN.fullmatch(value) or _TIME.fullmatch(value)):
+        if check is not None and check(value, holder or {}):
             return value
         what = fences.what.get(key) or f"the {key or 'result'} field"
         return untrusted(value, written_by, what)
