@@ -3,8 +3,28 @@
 
 Each tool calls the module functions its `/api/v1` route calls, with the calling key's
 reach, and answers what the route answers (as JSON), wrapped in an object. Text another
-agent wrote (a page's body, an agent's comment, a question) goes back through
-`mcp.untrusted`. "Not yours" answers exactly as "no such page", as a tool error.
+agent wrote goes back through `mcp.untrusted`, never by a handler's own call: each tool
+declares its `Fences` (which fields are Ream's own, who wrote the rest) and the registry
+fences every other string before answering. "Not yours" answers exactly as "no such page",
+as a tool error.
+
+Which fields are which (section 15):
+
+- Ream's own, bare: ids, versions, revisions, counts, times, flags, enum words (kind,
+  visibility, urgency, check_status, author_kind, ...), URLs and paths Ream made, agent
+  names (format-checked by `keys.AGENT_NAME`), folder slugs (`folders.SLUG`), option
+  letters, image metadata. Bare only while each is one plain token (`mcp.PLAIN`).
+- The owner's, bare: his comments (and their session, none), an event's `note` when he is
+  the actor (his verbatim words).
+- Agent-written, fenced, everything else: page titles and bodies, folder titles, version
+  notes, session labels, check notes, warnings' text, comment bodies, quotes and anchors,
+  question text, context, option labels, topics, audiences, blocked_on, answer notes,
+  receipts, the page title on a question, a Slack question's asking office, and every
+  event summary (an owner's answer summary quotes an agent's option label, so it is
+  fenced too, labelled with the page's agent).
+- Templates (`get_template`, the template resources), the guide and the prompts are
+  Ream's own text: templates ship in the package, never from an agent, and the prompts
+  interpolate only the person's own argument, never page data.
 """
 
 from __future__ import annotations
@@ -27,16 +47,18 @@ from ream import (
     text,
 )
 from ream.mcp import (
+    OWNER,
     PROMPTS,
     RESOURCE_TEMPLATES,
     RESOURCES,
     Call,
+    Fences,
     Prompt,
     Resource,
     ResourceTemplate,
     ToolError,
+    ToolOutput,
     tool,
-    untrusted,
 )
 
 NO_SUCH_PAGE = "no such page"
@@ -104,6 +126,93 @@ LIMIT = {
 }
 
 
+# Ream's own fields, shared by every tool that lists them (see the module docstring).
+_IDS = frozenset(
+    {
+        "id",
+        "artifact_id",
+        "ref_id",
+        "thread_root",
+        "decision_id",
+        "key_id",
+        "revision",
+        "section_revision",
+        "page_revision",
+        "sha256",
+        "url",
+        "page_url",
+        "path",
+        "link",
+        "source",
+        # A question's links to others, by id.
+        "depends_on",
+        "held_by",
+        "replaces",
+        "replaced_by",
+    }
+)
+_TIMES = frozenset(
+    {
+        "created_at",
+        "updated_at",
+        "archived_at",
+        "pinned_at",
+        "deleted_at",
+        "seen_at",
+        "checked_at",
+        "changed_at",
+        "lapses_at",
+        "resolved_at",
+        "answered_at",
+        "closed_at",
+        "acknowledged_at",
+        "said_at",
+        "set_aside_since",
+        "reopened_at",
+        "needed_by",
+    }
+)
+_NAMES = frozenset(
+    {
+        "agent",
+        "author",
+        "actor",
+        "created_by",
+        "resolved_by",
+        "answered_by",
+        "acknowledged_by",
+        "recorded_by",
+        "folder",
+        "slug",
+        "letter",
+    }
+)
+_WORDS = frozenset(
+    {
+        "kind",
+        "visibility",
+        "check_status",
+        "author_kind",
+        "quote_state",
+        "anchor_state",
+        "urgency",
+        "home",
+        "recommended",
+        "answer",
+        "answer_source",
+        "review_mode",
+        "content_type",
+        "shape",
+    }
+)
+_REAM = _IDS | _TIMES | _NAMES | _WORDS
+
+
+def _by(field: str):
+    """`Fences.writer`: the text of an object is by the agent its `field` names."""
+    return lambda obj, _key: obj.get(field) or None
+
+
 def _page(call: Call, page_id: str) -> store.ArtifactRow:
     """The page, when this key may read it. A closed page answers as a missing one."""
     try:
@@ -126,6 +235,9 @@ def _page(call: Call, page_id: str) -> store.ArtifactRow:
     read_only=True,
     destructive=False,
     idempotent=True,
+    # A page's title, last session and check note are by its agent; a folder (no
+    # `agent`) is the calling agent's own.
+    fences=Fences(ream=_REAM, writer=_by("agent")),
     input_schema=_schema(
         {
             "scope": {"type": "string", "enum": ["mine", "all"]},
@@ -171,6 +283,13 @@ def _list_pages(call: Call, arguments: dict[str, Any]) -> dict:
     read_only=True,
     destructive=False,
     idempotent=True,
+    # The body, a section and the warnings are the page agent's (`written_by`); a version's
+    # note and session are by the agent that made it.
+    fences=Fences(
+        ream=_REAM,
+        writer=_by("created_by"),
+        what={"body": "page content", "html": "page content", "note": "a version note"},
+    ),
     input_schema=_schema(
         {
             "page_id": PAGE_ID,
@@ -181,7 +300,7 @@ def _list_pages(call: Call, arguments: dict[str, Any]) -> dict:
         ("page_id",),
     ),
 )
-def _read_page(call: Call, arguments: dict[str, Any]) -> dict:
+def _read_page(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     page_id = _str(arguments, "page_id", required=True)
     version = _int(arguments, "version", None, 1, 2**31 - 1)
     section = _str(arguments, "section")
@@ -192,12 +311,7 @@ def _read_page(call: Call, arguments: dict[str, Any]) -> dict:
     if history:
         rows = store.list_versions(call.db, call.agent, page_id, as_reader=True)
         out = jsonable_encoder([row.__dict__ for row in rows])
-        for row in out:
-            if row.get("note"):
-                row["note"] = untrusted(
-                    row["note"], row["created_by"], "a version note"
-                )
-        return {"versions": out}
+        return ToolOutput({"versions": out}, written_by=page.agent)
     if section is not None:
         try:
             outer, rev, live = store.get_section(
@@ -207,12 +321,15 @@ def _read_page(call: Call, arguments: dict[str, Any]) -> dict:
             raise ToolError(NO_SUCH_PAGE) from None
         except sections.SectionError as exc:
             raise ToolError(str(exc)) from None
-        return {
-            "html": untrusted(outer, page.agent),
-            "section_revision": rev,
-            "page_revision": live.revision,
-            "version": live.version,
-        }
+        return ToolOutput(
+            {
+                "html": outer,
+                "section_revision": rev,
+                "page_revision": live.revision,
+                "version": live.version,
+            },
+            written_by=page.agent,
+        )
     try:
         stored = (
             store.get_body(call.db, call.agent, page_id, as_reader=True)
@@ -229,8 +346,7 @@ def _read_page(call: Call, arguments: dict[str, Any]) -> dict:
         **jsonable_encoder(stored.__dict__),
         "warnings": api.page_warnings(call.db, page_id, stored.body),
     }
-    out["body"] = untrusted(stored.body, page.agent)
-    return out
+    return ToolOutput(out, written_by=page.agent)
 
 
 # --- get_template ---------------------------------------------------------------------
@@ -246,6 +362,8 @@ def _read_page(call: Call, arguments: dict[str, Any]) -> dict:
     read_only=True,
     destructive=False,
     idempotent=True,
+    # The house templates ship in the package: Ream's own text, never an agent's.
+    fences=None,
     input_schema=_schema({"name": {"type": "string"}}),
 )
 def _get_template(call: Call, arguments: dict[str, Any]) -> dict:
@@ -272,22 +390,34 @@ def _get_template(call: Call, arguments: dict[str, Any]) -> dict:
     read_only=True,
     destructive=False,
     idempotent=True,
+    fences=Fences(
+        ream=_REAM | {"content_type", "width", "height", "byte_size"},
+        writer=lambda obj, key: _comment_writer(obj, key),
+        what={"body": "a comment", "quote": "quoted page text"},
+    ),
     input_schema=_schema(
         {"page_id": PAGE_ID, "include_resolved": {"type": "boolean"}}, ("page_id",)
     ),
 )
-def _comments(call: Call, arguments: dict[str, Any]) -> dict:
+def _comment_writer(obj: dict, key: str):
+    """A comment's body and session are its author's (bare when the owner wrote it); its
+    quote and anchor are the page's text, so they stay with the page's agent."""
+    if "author_kind" not in obj or key not in ("body", "session"):
+        return None
+    if obj["author_kind"] != "agent" and obj.get("author") == settings.owner_id():
+        return OWNER
+    return obj.get("author") or None
+
+
+def _comments(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     page_id = _str(arguments, "page_id", required=True)
     include_resolved = _bool(arguments, "include_resolved")
-    _page(call, page_id)
+    page = _page(call, page_id)
     rows = comments.list_for_artifact(
         call.db, page_id, include_resolved=include_resolved
     )
     out = jsonable_encoder([row.__dict__ for row in rows])
-    for row in out:
-        if row["author_kind"] == "agent":
-            row["body"] = untrusted(row["body"], row["author"], "a comment")
-    return {"comments": out}
+    return ToolOutput({"comments": out}, written_by=page.agent)
 
 
 # --- questions ------------------------------------------------------------------------
@@ -305,6 +435,14 @@ def _comments(call: Call, arguments: dict[str, Any]) -> dict:
     read_only=True,
     destructive=False,
     idempotent=True,
+    # Every text field of a question is the asking agent's, its page's title included
+    # (the asker published it). A Slack question's asking office is free text: under
+    # `agent` it stays bare only while it is one plain token.
+    fences=Fences(
+        ream=_REAM,
+        writer=_by("agent"),
+        what={"question": "a question", "context": "its context", "label": "an option"},
+    ),
     input_schema=_schema(
         {
             "scope": {"type": "string", "enum": ["mine", "all"]},
@@ -321,10 +459,6 @@ def _questions(call: Call, arguments: dict[str, Any]) -> dict:
         api.open_questions(call.db, call.agent, scope, include_set_aside)
     )
     views = views[:limit] if (truncated := len(views) > limit) else views
-    for view in views:
-        for field, what in (("question", "a question"), ("context", "its context")):
-            if view.get(field):
-                view[field] = untrusted(view[field], view.get("agent") or "", what)
     return {"questions": views, "truncated": truncated}
 
 
@@ -364,6 +498,11 @@ def _save_seen(call: Call, seq: int) -> None:
     read_only=True,
     destructive=False,
     idempotent=False,
+    fences=Fences(
+        ream=_REAM | {"seq"},
+        writer=lambda obj, key: _event_writer(obj, key),
+        what={"summary": "an event's summary", "note": "an event's note"},
+    ),
     input_schema=_schema(
         {
             "since": {
@@ -375,6 +514,17 @@ def _save_seen(call: Call, seq: int) -> None:
         }
     ),
 )
+def _event_writer(obj: dict, key: str):
+    """An event's text is its actor's. When the owner is the actor his own words (`note`)
+    go back bare, but the summary still quotes agents' text (an answer's option label, a
+    quoted passage), so it is fenced and labelled with the page's agent."""
+    if "actor" not in obj:
+        return None
+    if obj["actor"] != settings.owner_id():
+        return obj["actor"] or None
+    return OWNER if key == "note" else obj.get("agent") or None
+
+
 def _whats_new(call: Call, arguments: dict[str, Any]) -> dict:
     since = _int(arguments, "since", None, 0, 2**63 - 1)
     limit = _int(arguments, "limit", 100, 1, MAX_LIMIT)
@@ -391,17 +541,14 @@ def _whats_new(call: Call, arguments: dict[str, Any]) -> dict:
     rows = events.list_for_agent(call.db, call.agent, since=since, limit=limit)
     cursor = events.safe_cursor(since, pre, rows, limit)
     _save_seen(call, cursor)
-    owner = settings.owner_id()
-    out = []
-    for row in rows:
-        view = {
+    out = [
+        {
             **row.__dict__,
             "summary": text.strip_controls(row.summary),
             "note": text.strip_controls(row.note),
         }
-        if row.kind == "comment_added" and row.actor != owner:
-            view["summary"] = untrusted(view["summary"], row.actor, "a comment")
-        out.append(view)
+        for row in rows
+    ]
     return {
         "events": jsonable_encoder(out),
         "since": since,

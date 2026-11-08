@@ -631,6 +631,13 @@ choices unless one of the owner's six answers says otherwise.
   connect read-only by unticking the other boxes; tool descriptions say to pass on only what the
   person said in this chat. Claude.ai has its own ways out (web fetch, other connectors) that Ream
   cannot close; the docs say so rather than claiming otherwise.
+  The fence is applied in one place, deny by default: every tool declares its `Fences` (which
+  fields are Ream's own, who wrote the rest), and the registry fences every other string of the
+  result, at any depth, before it becomes `structuredContent` and the text block (the text is
+  the fenced structure as JSON, so the two agree). A field nobody classified goes out fenced;
+  a Ream field holding anything but one plain token is fenced too. Only the owner's own words
+  (his comments, his answer's note) and Ream's fixed text (templates, the guide) go back bare;
+  `src/ream/mcp_tools.py` lists which fields are which.
 - **The confused deputy.** Ream is one fixed client at the upstream provider while acting as a
   server to many apps. So: consent per app at Ream, naming the checked address and the return
   address; return addresses matched exactly; one-time state that dies in ten minutes; a 60-second

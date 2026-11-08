@@ -15,7 +15,9 @@ one endpoint:
 Slice 1 takes agent keys only, with the key's own reach (`api.authenticate`, sharing the
 agent API's failed-key limiter). Tools are registered with `tool(...)`; each calls the module
 functions its `/api/v1` route calls, never the route over HTTP. Text another agent wrote goes
-back through `untrusted(...)` (section 15).
+back through `untrusted(...)` (section 15), applied here and nowhere else: every tool declares
+its `Fences`, and `_call_tool` fences every string of a result that is not one of Ream's own
+fields before it becomes either `structuredContent` or the text block.
 """
 
 from __future__ import annotations
@@ -24,9 +26,10 @@ import base64
 import binascii
 import json
 import logging
+import re
 import secrets
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -112,6 +115,9 @@ class ToolOutput:
 
     structured: dict[str, Any] | None = None
     text: str | None = None
+    # Who wrote the result's text where `Fences.writer` names no one (a page's agent for
+    # its body); None: the calling key's own agent.
+    written_by: str | None = None
 
 
 class ToolError(Exception):
@@ -120,6 +126,66 @@ class ToolError(Exception):
 
 
 Handler = Callable[[Call, dict[str, Any]], "ToolOutput | dict[str, Any]"]
+
+# `Fences.writer` answers this for text the owner wrote: it goes back bare.
+OWNER = object()
+
+
+@dataclass(frozen=True)
+class Fences:
+    """How a tool's result is fenced (section 15). Deny by default: EVERY string in the
+    result, at any depth, goes back inside an `untrusted` fence, except
+
+    - a value under a key in `ream`: Ream's own fields (ids, numbers, times, fixed words,
+      format-checked names), which the model must be able to pass back as they are. Even
+      there a string that is not one plain token (`PLAIN`: no space, no line break) is
+      fenced, so a free-text value that lands under a Ream key cannot go out bare; and
+    - text `writer` says the owner wrote (`OWNER`).
+
+    `writer(obj, key)` names the agent that wrote `obj[key]`, `OWNER`, or None for the
+    writer of the enclosing object (at the top, `ToolOutput.written_by`, else the calling
+    agent). A new field is fenced until someone classifies it, never the other way round.
+    `what` says what a fenced key is, for its label (default: "the <key> field")."""
+
+    ream: frozenset[str]
+    writer: Callable[[dict, str], Any] = lambda _obj, _key: None
+    what: Mapping[str, str] = field(default_factory=dict)
+
+
+# Ream's own fields hold one token each: ids, times, numbers as text, enum words, slugs,
+# URLs and paths. Anything else under such a key is fenced as if it were free text.
+PLAIN = re.compile(r"[A-Za-z0-9_.:/?=&%#~+@-]{0,512}", re.ASCII)
+# A time as a database writes it may have a space where ISO has a T.
+_TIME = re.compile(r"\d{4}-\d\d-\d\d[ T][0-9:.+-]{1,40}Z?", re.ASCII)
+
+
+def fence_result(
+    value: Any, fences: Fences, written_by: str, key: str = "", ream: bool = False
+) -> Any:
+    """`value` with every agent-written string fenced, as `Fences` says."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            who = fences.writer(value, k)
+            if who is OWNER:
+                out[k] = v
+                continue
+            out[k] = fence_result(
+                v,
+                fences,
+                written_by if who is None else str(who),
+                k,
+                ream=k in fences.ream,
+            )
+        return out
+    if isinstance(value, list | tuple):
+        return [fence_result(v, fences, written_by, key, ream) for v in value]
+    if isinstance(value, str) and value:
+        if ream and (PLAIN.fullmatch(value) or _TIME.fullmatch(value)):
+            return value
+        what = fences.what.get(key) or f"the {key or 'result'} field"
+        return untrusted(value, written_by, what)
+    return value
 
 
 @dataclass(frozen=True)
@@ -133,6 +199,9 @@ class Tool:
     permission: str | None = READ
     title: str | None = None
     output_schema: dict[str, Any] | None = None
+    # How its result is fenced; None: a result that holds no text an agent wrote, said
+    # on purpose at registration (`tool(fences=None)`).
+    fences: Fences | None = None
 
     def listing(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -171,9 +240,12 @@ def tool(
     input_schema: dict[str, Any] | None = None,
     title: str | None = None,
     output_schema: dict[str, Any] | None = None,
+    fences: Fences | None,
 ) -> Callable[[Handler], Handler]:
     """Register a tool. Every hint is given explicitly: a client reads a missing
-    `destructiveHint` as true and a missing `openWorldHint` as true."""
+    `destructiveHint` as true and a missing `openWorldHint` as true. `fences` has no
+    default either: a tool says how its result is fenced, or that it holds no text an
+    agent wrote (None)."""
 
     def register(handler: Handler) -> Handler:
         if name in TOOLS:
@@ -197,6 +269,7 @@ def tool(
             permission=permission,
             title=title,
             output_schema=output_schema,
+            fences=fences,
         )
         return handler
 
@@ -335,6 +408,8 @@ def _find_resource(call: Call, uri: str) -> tuple[str, str] | None:
     idempotent=True,
     open_world=False,
     permission=None,
+    # The caller's own key, grants and the session label it declared on this very call.
+    fences=None,
 )
 def _whoami(call: Call, _arguments: dict[str, Any]) -> ToolOutput:
     me = api.me_view(call.db, call.request, call.agent, call.session)
@@ -530,6 +605,20 @@ def _call_tool(call: Call, params: dict, id: Any) -> dict:
         return _tool_error(str(exc.detail))
     if isinstance(output, dict):
         output = ToolOutput(structured=output)
+    if found.fences is not None:
+        if output.text is not None:
+            raise RuntimeError(
+                f"MCP tool {name!r}: a fenced tool answers structured only"
+            )
+        if output.structured is not None:
+            output = ToolOutput(
+                structured=fence_result(
+                    output.structured,
+                    found.fences,
+                    output.written_by or call.agent,
+                )
+            )
+    # The text block is the fenced structure itself, so the two always say the same.
     shown = (
         output.text
         if output.text is not None
