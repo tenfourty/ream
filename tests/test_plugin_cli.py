@@ -24,6 +24,8 @@ class EP:
 @pytest.fixture()
 def world(monkeypatch):
     plugin_cli.reset()
+    # cli.main rewrites sys.argv for the verb it runs; put it back after the test.
+    monkeypatch.setattr(sys, "argv", list(sys.argv))
     for name in ("REAM_PLUGINS", "ARTIFACTS_PLUGINS", "REAM_API", "ARTIFACTS_API"):
         monkeypatch.delenv(name, raising=False)
 
@@ -396,6 +398,7 @@ def test_every_cli_entry_point_loads_the_plugins(monkeypatch):
     from ream import connect_cli, decide
 
     calls = []
+    monkeypatch.setattr(sys, "argv", list(sys.argv))
     monkeypatch.setattr(plugin_cli, "load_or_exit", lambda: calls.append("load"))
     monkeypatch.setattr(news, "announce", lambda *a, **k: None)
     for module in (client, decide, connect_cli):
