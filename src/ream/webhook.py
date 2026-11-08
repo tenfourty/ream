@@ -54,6 +54,7 @@ import base64
 import http.client
 import ipaddress
 import json
+import os
 import re
 import socket
 import ssl
@@ -337,7 +338,8 @@ def _pinned_connect(
     connects to the address it checked. Each attempt gets the per-operation timeout or
     what is left of `deadline` (a `time.monotonic()` value), whichever is less. The
     resolver (getaddrinfo) has no timeout and is not bounded here. A socket made is
-    appended to `opened`, so the deadline timer can cut it."""
+    appended to `opened` (and, once connected, a dup of its descriptor), so the deadline
+    timer can cut it, TLS handshake included."""
 
     def create(address, timeout=None, source_address=None):
         host, port = address
@@ -363,6 +365,14 @@ def _pinned_connect(
                 if opened is not None:
                     opened.append(sock)
                 sock.connect(sockaddr)
+                if opened is not None:
+                    # TLS wrapping detaches `sock` (the object in `opened` goes dead)
+                    # and the live socket is not yet known during the handshake. A dup
+                    # of the descriptor names the same kernel socket for the whole life
+                    # of the connection, so shutting it down cuts the live one.
+                    opened.append(
+                        socket.socket(family, kind, proto, fileno=os.dup(sock.fileno()))
+                    )
                 return sock
             except OSError as exc:
                 sock.close()
@@ -395,11 +405,7 @@ def http_post(hook: Webhook, body: bytes, headers: dict[str, str]) -> int:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
-                pass
-            try:
-                sock.close()
-            except OSError:
-                pass
+                pass  # a detached or closed object; its dup is in the list too
 
     # An explicit port: http.client splits "host" at the last colon when it is not given,
     # which breaks a bracket-stripped IPv6 literal.
@@ -420,7 +426,7 @@ def http_post(hook: Webhook, body: bytes, headers: dict[str, str]) -> int:
     except TimeoutError:
         raise WebhookError("timed out") from None
     except ssl.SSLError:
-        raise WebhookError("TLS failed") from None
+        raise WebhookError("timed out" if expired.is_set() else "TLS failed") from None
     except http.client.HTTPException:
         raise WebhookError(
             "timed out" if expired.is_set() else "bad response"
@@ -432,6 +438,11 @@ def http_post(hook: Webhook, body: bytes, headers: dict[str, str]) -> int:
     finally:
         timer.cancel()
         conn.close()
+        for sock in tuple(opened):
+            try:
+                sock.close()
+            except OSError:
+                pass
 
 
 def deliver(

@@ -544,3 +544,96 @@ def test_a_server_that_drips_bytes_is_cut_at_the_deadline(tmp_path, key, monkeyp
     finally:
         stop.set()
         srv.close()
+
+
+def _tls_server_files(tmp_path):
+    import datetime as dt
+
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+
+    k = Ed25519PrivateKey.generate()
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    now = dt.datetime.now(dt.UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(k.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - dt.timedelta(days=1))
+        .not_valid_after(now + dt.timedelta(days=1))
+        .sign(k, None)
+    )
+    (tmp_path / "srv.crt").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / "srv.key").write_bytes(_pem(k))
+    return str(tmp_path / "srv.crt"), str(tmp_path / "srv.key")
+
+
+@pytest.mark.parametrize("phase", ["handshake", "response"])
+def test_a_tls_server_that_drips_is_cut_at_the_deadline(
+    tmp_path, key, monkeypatch, phase
+):
+    """The deadline timer must reach the TLS socket in use, not the one wrapping detached."""
+    import socket
+    import ssl
+    import time
+
+    crt, keyf = _tls_server_files(tmp_path)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(crt, keyf)
+    monkeypatch.setattr(
+        ssl,
+        "_create_default_https_context",
+        lambda: _unverified_client_context(),
+    )
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    stop = threading.Event()
+
+    def serve():
+        raw, _ = srv.accept()
+        try:
+            if phase == "handshake":
+                raw.recv(65536)
+                while not stop.is_set():  # a TLS record header, then silence-by-drip
+                    raw.send(b"\x16")
+                    time.sleep(0.05)
+            else:
+                conn = ctx.wrap_socket(raw, server_side=True)
+                conn.recv(65536)
+                while not stop.is_set():
+                    conn.send(b"H")  # never finishes the status line
+                    time.sleep(0.05)
+        except (OSError, ssl.SSLError):
+            return
+
+    threading.Thread(target=serve, daemon=True).start()
+    monkeypatch.setattr(webhook, "DEADLINE_SECONDS", 0.7)
+    try:
+        hook = webhook.load_file(
+            _sinks_file(
+                tmp_path,
+                _entry(
+                    url=f'"https://127.0.0.1:{srv.getsockname()[1]}/in"',
+                    allow_private="true",
+                ),
+            )
+        )[0]
+        started = time.monotonic()
+        with pytest.raises(webhook.WebhookError, match="timed out"):
+            webhook.deliver(hook, _event())
+        assert time.monotonic() - started < 4
+    finally:
+        stop.set()
+        srv.close()
+
+
+def _unverified_client_context():
+    import ssl
+
+    c = ssl.create_default_context()
+    c.check_hostname = False
+    c.verify_mode = ssl.CERT_NONE
+    return c
