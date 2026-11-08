@@ -809,6 +809,15 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " primary key (plugin, interface))"
         ),
     ),
+    # 9 Nov 2026: MCP's `whats_new` cursor for an agent key (see schema.sql).
+    23: (
+        (
+            "create table mcp_events_seen ("
+            " key_id text primary key,"
+            " seq integer not null,"
+            " updated_at timestamptz not null)"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

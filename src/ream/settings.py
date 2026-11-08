@@ -70,6 +70,35 @@ PARTNER_OUT = (
     "REAM_PARTNER_SIGNING_KEY_FILE",
     "REAM_PARTNER_KEY_ID",
 )
+# The values an on/off setting takes.
+_SWITCH = {
+    "1": True,
+    "on": True,
+    "true": True,
+    "0": False,
+    "off": False,
+    "false": False,
+}
+
+
+def mcp_origin(url: str) -> str:
+    """`url` as an origin to compare: lower-case scheme and host, the port only when it is
+    not the scheme's default, no trailing slash. An `Origin` header and the setting compare
+    equal through this whatever their case or an explicit default port."""
+    parts = urlsplit(url.strip())
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower()
+    if ":" in host:
+        host = f"[{host}]"
+    try:
+        port = parts.port
+    except ValueError:
+        return url.strip().lower()
+    if port is None or port == {"https": 443, "http": 80}.get(scheme):
+        return f"{scheme}://{host}"
+    return f"{scheme}://{host}:{port}"
+
+
 PARTNER_IN = ("REAM_PARTNER_INBOUND_KEYS_FILE", "REAM_PARTNER_INBOUND_HOST")
 
 
@@ -131,6 +160,13 @@ class Settings:
     plugins: str = ""
     # The generic signed webhook sinks: a TOML file of `[[sink]]` tables (webhook.py).
     sinks_file: str = ""
+    # MCP for people's agents (docs/agent/specs/2026-11-08-mcp-oauth-design.md, 3 and 12).
+    # The origin `/mcp` is served on: the gallery origin or https://<api host>. Unset: no
+    # `/mcp` anywhere (404).
+    mcp_public_url: str = ""
+    # Whether `/mcp` takes agent keys. Unset: yes while sign-in is off, which is always
+    # until sign-in is built; `0` then refuses to start (section 7).
+    mcp_accept_keys: str = ""
 
     def __repr__(self) -> str:
         return "Settings(...)"
@@ -224,7 +260,56 @@ class Settings:
                 "the inbound partner bridge needs the outbound one: set "
                 + ", ".join(PARTNER_OUT)
             )
+        found.extend(self._mcp_problems())
         return found
+
+    def _mcp_problems(self) -> list[str]:
+        found = []
+        if self.mcp_public_url:
+            parts = urlsplit(self.mcp_public_url)
+            try:
+                port = parts.port
+            except ValueError:
+                port = -1
+            host = (parts.hostname or "").lower()
+            api = self.api_host.strip().lower().removesuffix(".")
+            if (
+                parts.scheme not in ("http", "https")
+                or not host
+                or port == -1
+                or parts.path
+                or parts.query
+                or parts.fragment
+                or parts.username is not None
+            ):
+                found.append(
+                    "REAM_MCP_PUBLIC_URL must be an origin such as https://ream.example"
+                    " (scheme and host, no path, no trailing slash)"
+                )
+            elif parts.scheme != "https" and not is_loopback(host):
+                found.append(
+                    "REAM_MCP_PUBLIC_URL must be https (plain http only on loopback)"
+                )
+            elif mcp_origin(self.mcp_public_url) not in {
+                mcp_origin(self.gallery_origin),
+                *([mcp_origin(f"https://{api}")] if api else []),
+            }:
+                found.append(
+                    "REAM_MCP_PUBLIC_URL must be the gallery origin"
+                    " (REAM_GALLERY_ORIGIN) or https://<REAM_API_HOST>"
+                )
+        if self.mcp_accept_keys and self.mcp_accept_keys.lower() not in _SWITCH:
+            found.append("REAM_MCP_ACCEPT_KEYS must be 1 or 0")
+        elif _SWITCH.get(self.mcp_accept_keys.lower()) is False:
+            found.append(
+                "REAM_MCP_ACCEPT_KEYS=0 needs sign-in, and this server has none yet:"
+                " with sign-in off, agent keys are the only credential /mcp takes"
+            )
+        return found
+
+    def mcp_accepts_keys(self) -> bool:
+        """Whether `/mcp` takes agent keys (section 7). Without sign-in, always."""
+        return _SWITCH.get(self.mcp_accept_keys.lower(), True) is not False
 
 
 _ENV = {
@@ -266,6 +351,8 @@ _ENV = {
     "proxy_notes_file": "REAM_PROXY_NOTES_FILE",
     "plugins": "REAM_PLUGINS",
     "sinks_file": "REAM_SINKS_FILE",
+    "mcp_public_url": "REAM_MCP_PUBLIC_URL",
+    "mcp_accept_keys": "REAM_MCP_ACCEPT_KEYS",
 }
 if set(_ENV) != {f.name for f in fields(Settings)}:
     raise RuntimeError("settings._ENV and Settings disagree")

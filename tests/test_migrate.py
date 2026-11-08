@@ -475,6 +475,7 @@ def _seed(database: Database) -> None:
             ["quarterdeck", 5, T1, "ob1\nob2", T0],
         ),
         ("plugin_failure", "plugin, interface, failures", ["house", "sink", 3]),
+        ("mcp_events_seen", "key_id, seq, updated_at", ["k1", 42, T1]),
         (
             "partner_question",
             (

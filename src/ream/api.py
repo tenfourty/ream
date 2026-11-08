@@ -518,6 +518,137 @@ class _BothWords(APIRouter):
         super().add_api_route(path, endpoint, **kwargs)
 
 
+def _refuse(
+    limiter: ratelimit.FailedAuthLimiter, request: Request, address: str, detail: str
+) -> None:
+    count, blocked, newly = limiter.failed(address)
+    if blocked:
+        wait = int(limiter.retry_after(address)) + 1
+        if newly:
+            _auth_log.warning(
+                "auth failed from %s on %s %s (%d in window) -- refusing "
+                "bad keys from this address for %ds",
+                address,
+                request.method,
+                request.url.path,
+                count,
+                wait,
+            )
+        # 429 and words that say it is a refusal: a client that prints this
+        # where rows go must not read as "nothing there" (homelab-ij8.99).
+        raise HTTPException(
+            429,
+            f"REFUSED: too many failed keys from this address. {detail}. "
+            f"Stop and fix the key; a working key is still accepted. "
+            f"Retry in {wait}s.",
+            headers={"retry-after": str(wait)},
+        )
+    _auth_log.warning(
+        "auth failed from %s on %s %s (%d in window)",
+        address,
+        request.method,
+        request.url.path,
+        count,
+    )
+    raise HTTPException(401, detail)
+
+
+def authenticate(
+    db: Database, limiter: ratelimit.FailedAuthLimiter, request: Request
+) -> keys.AgentKey:
+    """The agent key a request carries, verified, or an HTTPException (401, or 429 once an
+    address has failed too often). One check for `/api/v1` and `/mcp`, sharing `limiter`,
+    so switching between them does not double a caller's allowance."""
+    address = ratelimit.client_address(
+        request.headers, request.client.host if request.client else None
+    )
+    if "key" in request.query_params:
+        _refuse(
+            limiter, request, address, "a key must not be sent in a query parameter"
+        )
+    header = request.headers.get("authorization", "")
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        _refuse(limiter, request, address, "an agent key is required")
+    key = keys.verify(db, token.strip())
+    if key is None:
+        _refuse(limiter, request, address, keys.refusal_reason(db, token.strip()))
+    # The verified key's public id, for GET /me. Stashed rather than
+    # re-derived: the token itself must not be handled twice, and the id is
+    # the handle `artifacts-admin list-keys` already prints.
+    request.state.agent_key_id = key.id
+    # For the machines page's "last used" (homelab-ij8.103).
+    keys.touch(db, key.id)
+    # A rotated key's first use kills the key it replaced (homelab-ij8.34).
+    keys.first_use(db, key)
+    request.state.agent_key = key
+    return key
+
+
+def open_questions(
+    db: Database, agent: str, scope: str, include_set_aside: bool = False
+) -> list[dict]:
+    """Open questions in the order his inbox shows them, the whole ranked list
+    (`GET /questions` pages it; the MCP `questions` tool reads it too). `scope="all"`
+    needs `decisions:read-all` and is refused with 403 without it."""
+    if scope == "all":
+        if not grants.has(db, agent, grants.READ_ALL_DECISIONS):
+            raise HTTPException(
+                403,
+                f"this key authenticates as seat '{agent}', which does not "
+                "have decisions:read-all. Check GET /api/v1/me — you may be "
+                "using a different seat's key file than you intended.",
+            )
+        found = [
+            (r.decision, r.agent, r.artifact_title)
+            for r in decisions.across_seats(
+                db, limit=_ALL_OPEN, include_set_aside=include_set_aside
+            )
+        ]
+    else:
+        with db.connect() as conn:
+            titles = dict(
+                conn.execute(
+                    "select id, title from artifact where agent = %s",
+                    (agent,),
+                ).fetchall()
+            )
+        found = [
+            (d, agent, titles.get(d.artifact_id, ""))
+            for d in decisions.list_for_agent(
+                db,
+                agent,
+                limit=_ALL_OPEN,
+                kind="question",
+                include_set_aside=include_set_aside,
+            )
+        ]
+    now = datetime.now(UTC)
+    found = [f for f in found if f[0].kind == "question"]
+    ranked = [
+        (
+            (d.set_aside, bool(d.held_by), inbox.key(d, now)),
+            {
+                **decisions.public(d),
+                "agent": who,
+                "artifact_title": title,
+                "overdue": inbox.is_overdue(d, now),
+            },
+        )
+        for d, who, title in found
+    ]
+    if scope == "all":
+        # Questions whose home is the partner (asked in Slack), read-only
+        # and marked with their source, in the inbox's own order among the
+        # ready ones. One he has already answered here shows its pending
+        # answer until the home settles it.
+        for waiting in (True, False):
+            for c in partner_in.open_copies(db, _ALL_OPEN, waiting_on_him=waiting):
+                ranked.append(((False, False, inbox.key(c, now)), _slack_view(c, now)))
+    ranked.sort(key=lambda r: r[0])
+    return [view for _, view in ranked]
+
+
 def agent_router(
     db: Database, limiter: ratelimit.FailedAuthLimiter | None = None
 ) -> APIRouter:
@@ -528,61 +659,8 @@ def agent_router(
     # a caller's budget. homelab-ij8.100; the reasoning is in `ratelimit`.
     limiter = limiter or ratelimit.FailedAuthLimiter()
 
-    def _refuse(request: Request, address: str, detail: str) -> None:
-        count, blocked, newly = limiter.failed(address)
-        if blocked:
-            wait = int(limiter.retry_after(address)) + 1
-            if newly:
-                _auth_log.warning(
-                    "auth failed from %s on %s %s (%d in window) -- refusing "
-                    "bad keys from this address for %ds",
-                    address,
-                    request.method,
-                    request.url.path,
-                    count,
-                    wait,
-                )
-            # 429 and words that say it is a refusal: a client that prints this
-            # where rows go must not read as "nothing there" (homelab-ij8.99).
-            raise HTTPException(
-                429,
-                f"REFUSED: too many failed keys from this address. {detail}. "
-                f"Stop and fix the key; a working key is still accepted. "
-                f"Retry in {wait}s.",
-                headers={"retry-after": str(wait)},
-            )
-        _auth_log.warning(
-            "auth failed from %s on %s %s (%d in window)",
-            address,
-            request.method,
-            request.url.path,
-            count,
-        )
-        raise HTTPException(401, detail)
-
     def caller(request: Request) -> str:
-        address = ratelimit.client_address(
-            request.headers, request.client.host if request.client else None
-        )
-        if "key" in request.query_params:
-            _refuse(request, address, "a key must not be sent in a query parameter")
-        header = request.headers.get("authorization", "")
-        scheme, _, token = header.partition(" ")
-        if scheme.lower() != "bearer" or not token:
-            _refuse(request, address, "an agent key is required")
-        key = keys.verify(db, token.strip())
-        if key is None:
-            _refuse(request, address, keys.refusal_reason(db, token.strip()))
-        # The verified key's public id, for GET /me. Stashed rather than
-        # re-derived: the token itself must not be handled twice, and the id is
-        # the handle `artifacts-admin list-keys` already prints.
-        request.state.agent_key_id = key.id
-        # For the machines page's "last used" (homelab-ij8.103).
-        keys.touch(db, key.id)
-        # A rotated key's first use kills the key it replaced (homelab-ij8.34).
-        keys.first_use(db, key)
-        request.state.agent_key = key
-        return key.agent
+        return authenticate(db, limiter, request).agent
 
     # How long a declared session label may be. Generous enough for the shape
     # the skill recommends -- "<seat>/<short id>" -- and short enough that it
@@ -2633,64 +2711,7 @@ def agent_router(
                     "ones from GET /api/v1/decisions",
                 },
             )
-        if scope == "all":
-            if not grants.has(db, agent, grants.READ_ALL_DECISIONS):
-                raise HTTPException(
-                    403,
-                    f"this key authenticates as seat '{agent}', which does not "
-                    "have decisions:read-all. Check GET /api/v1/me — you may be "
-                    "using a different seat's key file than you intended.",
-                )
-            found = [
-                (r.decision, r.agent, r.artifact_title)
-                for r in decisions.across_seats(
-                    db, limit=_ALL_OPEN, include_set_aside=include_set_aside
-                )
-            ]
-        else:
-            with db.connect() as conn:
-                titles = dict(
-                    conn.execute(
-                        "select id, title from artifact where agent = %s",
-                        (agent,),
-                    ).fetchall()
-                )
-            found = [
-                (d, agent, titles.get(d.artifact_id, ""))
-                for d in decisions.list_for_agent(
-                    db,
-                    agent,
-                    limit=_ALL_OPEN,
-                    kind="question",
-                    include_set_aside=include_set_aside,
-                )
-            ]
-        now = datetime.now(UTC)
-        found = [f for f in found if f[0].kind == "question"]
-        ranked = [
-            (
-                (d.set_aside, bool(d.held_by), inbox.key(d, now)),
-                {
-                    **decisions.public(d),
-                    "agent": who,
-                    "artifact_title": title,
-                    "overdue": inbox.is_overdue(d, now),
-                },
-            )
-            for d, who, title in found
-        ]
-        if scope == "all":
-            # Questions whose home is the partner (asked in Slack), read-only
-            # and marked with their source, in the inbox's own order among the
-            # ready ones. One he has already answered here shows its pending
-            # answer until the home settles it.
-            for waiting in (True, False):
-                for c in partner_in.open_copies(db, _ALL_OPEN, waiting_on_him=waiting):
-                    ranked.append(
-                        ((False, False, inbox.key(c, now)), _slack_view(c, now))
-                    )
-        ranked.sort(key=lambda r: r[0])
-        views = [view for _, view in ranked]
+        views = open_questions(db, agent, scope, include_set_aside)
         start = 0
         if after is not None:
             at = next((n for n, view in enumerate(views) if view["id"] == after), None)

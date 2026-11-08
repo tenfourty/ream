@@ -1173,3 +1173,12 @@ create table if not exists plugin_failure (
     failures  integer not null default 0,
     primary key (plugin, interface)
 );
+
+-- MCP's `whats_new` cursor for an agent key (docs/agent/specs/2026-11-08-mcp-oauth-design.md,
+-- 11.3): a chat does not remember where it last looked, so the server does, one row per key.
+-- `seq` is the last event number the key was shown; no row means it has never looked.
+create table if not exists mcp_events_seen (
+    key_id     text primary key,
+    seq        bigint not null,
+    updated_at timestamptz not null
+);
