@@ -92,6 +92,17 @@ def test_since_and_the_connect_box_have_a_defined_ground():
     assert design.dark("well") != design.light("well")
 
 
+def test_the_connect_code_boxes_take_their_ground_and_text_from_values():
+    rule = re.search(r"\.cx input\{([^}]*)\}", gallery._CONNECT_CSS)
+    assert rule
+    assert "background:var(--card)" in rule[1]
+    assert "color:var(--ink)" in rule[1]
+    assert (
+        design.light("card") == "#fff"
+    )  # a browser's own input white: light did not move
+    assert design.dark("card") != design.light("card")
+
+
 def test_the_icon_carries_the_mark_colours_as_values():
     light, dark = logo.CSS.split("@media (prefers-color-scheme:dark)", 1)
     for name in ("mark-ink", "mark-lift"):

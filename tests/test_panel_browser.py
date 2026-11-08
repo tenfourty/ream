@@ -761,3 +761,74 @@ def test_selecting_text_far_down_a_page_shows_the_bar_under_it(browser, served, 
         assert not errors, errors
     finally:
         ctx.close()
+
+
+def _with_a_question_slot(db, ident):
+    """Ask one question on the page and make the page mark where it goes."""
+    from ream import decisions
+
+    asked = decisions.ask(
+        db,
+        agent="seat",
+        artifact_id=ident,
+        question="Which?",
+        options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
+        recommended="a",
+    )
+    page = store.get_owned(db, "seat", ident)
+    short = (
+        "<!doctype html><html><body><h1>Short</h1>"
+        f'<div data-artifact-decision="{asked.id}"></div></body></html>'
+    )
+    store.patch(db, "seat", ident, short, page.revision)
+
+
+_PLACES = """() => {
+  const top = e => { const x = document.querySelector(e);
+    return x ? x.getBoundingClientRect() : null };
+  const ask = top('.ask'), sheet = top('.sheet');
+  return {askBottom: ask && ask.bottom, sheetTop: sheet && sheet.top,
+          askInSheet: !!document.querySelector('.sheet .ask')}
+}"""
+
+
+def test_a_narrow_window_puts_the_question_above_a_frame_that_fills_the_rest(
+    browser, served, db
+):
+    """At 390px the question sits above the frame, the frame follows at once,
+    and no room is held open inside the frame where the question was lifted at
+    a wider width -- also when the window is narrowed AFTER the page loaded
+    (a phone turned to portrait), which used to leave the question at the foot
+    of the sheet under a blank frame."""
+    origin, ident = served
+    _with_a_question_slot(db, ident)
+
+    ctx, pg, errors = _open_page(browser, origin, ident, 390)
+    try:
+        pg.wait_for_timeout(1500)
+        fresh = pg.evaluate(_PLACES)
+    finally:
+        ctx.close()
+    assert not fresh["askInSheet"]
+    assert 0 <= fresh["sheetTop"] - fresh["askBottom"] < 120
+
+    ctx, pg, errors = _open_page(browser, origin, ident, 1400)
+    try:
+        pg.wait_for_function(
+            "() => !!document.querySelector('.sheet .ask')", timeout=10000
+        )  # lifted onto the frame, as on a desktop
+        pg.set_viewport_size({"width": 390, "height": 800})
+        pg.wait_for_function(
+            "() => !document.querySelector('.sheet .ask')", timeout=10000
+        )
+        pg.wait_for_timeout(500)
+        narrowed = pg.evaluate(_PLACES)
+        held = pg.frames[1].evaluate(
+            "() => document.querySelector('[data-artifact-decision]').style.minHeight"
+        )
+    finally:
+        ctx.close()
+    assert not narrowed["askInSheet"]
+    assert narrowed["askBottom"] <= narrowed["sheetTop"]
+    assert held in ("", "0px"), "the frame still holds room open for the question"
+    assert errors == []

@@ -1369,7 +1369,16 @@ window.addEventListener("message",function(event){
       // The stylesheet's breakpoint, in the stylesheet's unit -- never a pixel
       // number of our own. See the Python comment above this file's source.
       // `fits` too: a slot coordinate points nowhere while the frame is clipped.
-      if(fits&&liftsHere())data.slots.forEach(function(slot){
+      var lifting=fits&&liftsHere();
+      // Not lifting NOW but lifted before (a window narrowed or a phone turned to
+      // portrait): put every lifted block back where it came from, or it stays at
+      // the foot of the sheet, below a frame whose slot still holds its room open.
+      // The empty `sizes` sent below then collapses that slot.
+      if(!lifting)homes.forEach(function(hm,el){
+        if(el.parentNode===sheet&&hm&&hm!==sheet)hm.appendChild(el);
+        el.style.top=el.style.left=el.style.width="";
+      });
+      if(lifting)data.slots.forEach(function(slot){
         if(!slot||typeof slot.id!=="string"||seen.has(slot.id))return;
         seen.add(slot.id);
         var el=decisionEls.get(slot.id);
@@ -1794,7 +1803,8 @@ _CONNECT_CSS = (
     ".cx section{border:1px solid var(--line);border-radius:12px;padding:1.1rem 1.25rem}"
     ".cx h2{margin:0 0 .5rem;font-size:1.05rem}.cx p{margin:.4rem 0;line-height:1.5}"
     ".cx input{font:inherit;padding:.5rem .6rem;border:1px solid var(--line);"
-    "border-radius:8px;width:100%;box-sizing:border-box;margin:.35rem 0 .75rem}"
+    "border-radius:8px;width:100%;box-sizing:border-box;margin:.35rem 0 .75rem;"
+    "background:var(--card);color:var(--ink)}"
     ".cx .code{font:600 1.4rem/1.2 var(--mono-short);letter-spacing:.12em;text-transform:uppercase}"
     ".cx pre{white-space:pre-wrap;background:var(--well);padding:.75rem;border-radius:8px;"
     "font-size:.9rem;user-select:all}.cx .err{color:var(--connect-err)}.cx .ok{color:var(--connect-ok)}"
