@@ -245,7 +245,9 @@ def announce(stream=None) -> None:
             return
         for _tag, line, _plugin in unseen:
             print(f"new in Ream: {_clean(line)}", file=stream)
-        marks = "".join(f"{p}\t{es[0][0]}\n" for p, es in sorted(by_plugin.items()))
+        # A plug-in not loaded this run (broken, or left out by REAM_PLUGINS) keeps its mark.
+        kept = {**plug_seen, **{p: es[0][0] for p, es in by_plugin.items()}}
+        marks = "".join(f"{p}\t{m}\n" for p, m in sorted(kept.items()))
         core_mark = NEWS[0][0] if NEWS else (core_seen or "")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"{core_mark}\n{marks}", encoding="utf-8")

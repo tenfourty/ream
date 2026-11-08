@@ -92,3 +92,22 @@ def test_announce_strips_control_characters(tmp_path, monkeypatch):
     monkeypatch.setattr(news, "NEWS", (("2020-01-02", "core \x1b[31mred\rtwo"),))
     out = _run(tmp_path, monkeypatch)
     assert "\x1b" not in out and "\r" not in out and "red" in out
+
+
+def test_a_skipped_plugin_keeps_its_saved_mark(tmp_path, monkeypatch):
+    monkeypatch.setattr(news, "NEWS", (("2020-01-02", "core two"),))
+    plugin_cli.reset()
+    try:
+        _state(tmp_path).parent.mkdir(parents=True)
+        _state(tmp_path).write_text("2020-01-01\ntoy\t2020-01-05\n")
+        # A run in which the plug-in is not loaded (broken, or left out by REAM_PLUGINS)
+        # still writes the file, because a core entry is new.
+        assert "core two" in _run(tmp_path, monkeypatch)
+        assert "toy\t2020-01-05" in _state(tmp_path).read_text().splitlines()
+        # Loaded again, its newest line is not announced a second time.
+        plugin_cli.register_client_defaults(
+            "toy", news=[("2020-01-05", "plug-in five")]
+        )
+        assert _run(tmp_path, monkeypatch) == ""
+    finally:
+        plugin_cli.reset()
