@@ -338,3 +338,23 @@ do not change until he has. The aim is a clean page with no text button on it an
 needed to comment, replacing the corner Comment button chosen on 5 Nov.
 
 **Not chosen:** building the hybrid or the quiet design straight away, without seeing them side by side.
+
+## The Ream logo: the R whose top sheet lifts off the pile (8 Nov 2026)
+
+**Chosen:** the logo is the fourth-round mark in its "rooted" variant: an R whose stem is a stack of
+sheets, the top sheet lifting away in the accent colour. It goes in the gallery's bar and browser tab
+now. The docs and the repository take it when they take the name. The drawing rounds are over and the
+mark is not to be redrawn.
+
+The maintainer's own calls within this: the drawings live in `src/ream/brand/` (large and small; light,
+dark and one-colour), where the docs and the repository can use them later and the running service reads
+them. The bar shows the large drawing beside the title on the wall, and elsewhere the small drawing
+replaces the house icon as the way back to the wall. The tab icon is one small-drawing SVG at
+`/favicon.svg` that follows the reader's light or dark setting. It is the gallery's own chrome: pages on
+the content origin never get it, and the old address forwards it like any other browser path.
+
+**Not chosen:** the four other fourth-round variants (the sheet over a sliced stem, the stem as its own
+stack, the sheet curling up harder, four sheets with wider variation); further rounds of drawing.
+
+**Evidence:** the mark, where it goes now, the docs and repository later, and no further rounds:
+confirmed (decision d_01M6XGT9CRKX07VKMBHN166K28, 8 Nov 2026). The maintainer's own calls: unconfirmed.

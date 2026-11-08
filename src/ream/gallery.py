@@ -46,6 +46,7 @@ from ream import (
     inbox,
     keys,
     listening,
+    logo,
     mail,
     pagediff,
     partner_in,
@@ -264,6 +265,12 @@ main{display:block}
 .bar.bleed a.home:hover{background:var(--chip);color:var(--ink)}
 .bar.bleed a.home svg{width:1rem;height:1rem}
 .bar a.home svg{width:.9em;height:.9em;fill:currentColor}
+/* The Ream mark (logo.py). It is the way back where there is one, and sits beside the
+   title on the wall, where there is none and the large drawing has room to read. */
+.mark{display:block;flex:none}
+.mark-lg{width:2rem;height:2rem}
+.bar a.home svg.mark-sm{width:1.3em;height:1.3em}
+.bar.bleed a.home svg.mark-sm{width:1.25rem;height:1.25rem}
 /* 24px/32px at weight 500, measured off the reference's own h1. This was a
    clamp running up to 3.1rem, which on a page of 14px cards read as a magazine
    masthead over a filing cabinet. */
@@ -1259,8 +1266,6 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
   background:transparent;color:var(--danger);padding:.3rem .5rem}
 .destroyform .danger:hover{background:var(--danger);color:#fff}
 """
-
-_HOME_SVG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg>'
 
 # Served from 'self' at /gallery.js (script-src 'self' above; no inline script, no
 # CDN, no framework, no dependency). One file, single-digit KB, so the CSP change
@@ -3740,11 +3745,11 @@ def _shell(
     # The way back is an ICON on a page, a labelled pill on the index. On a
     # page the title carries the actions and the bar has to stay narrow.
     back = (
-        f'<a class="home" href="/" aria-label="All pages">{_HOME_SVG}</a>'
+        f'<a class="home" href="/" aria-label="All pages">{logo.SMALL}</a>'
         if home and title_html
-        else f'<a class="home" href="/">{_HOME_SVG} Gallery</a>'
+        else f'<a class="home" href="/">{logo.SMALL} Gallery</a>'
         if home
-        else ""
+        else logo.LARGE
     )
     # `meta` is TEXT and is escaped; `meta_html` is markup the caller built
     # itself and is not. Two parameters rather than one that sometimes escapes:
@@ -3777,7 +3782,9 @@ def _shell(
     return (
         '<!doctype html><html lang="en-GB"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>{escape(tab)}</title><style>{_CSS}</style></head><body>"
+        f"<title>{escape(tab)}</title>"
+        '<link rel="icon" type="image/svg+xml" sizes="any" href="/favicon.svg">'
+        f"<style>{_CSS}{logo.CSS}</style></head><body>"
         f"{top}"
         # The controls are their OWN row beneath the title, as the reference
         # has it: a 48px title row, 16px, then a 32px row of controls. They
@@ -4687,6 +4694,17 @@ def gallery_router(db: Database) -> APIRouter:
     forms_ui.register(
         router, db, same_origin=_same_origin_write, headers=gallery_headers
     )
+
+    @router.get("/favicon.svg")
+    def favicon() -> Response:
+        # A day: it barely changes and a browser asks for it often. private, because
+        # this origin sits behind his sign-in. Only the gallery app routes this, so the
+        # former host forwards it, and the API host and page origins have no such path.
+        return Response(
+            logo.ICON,
+            media_type="image/svg+xml",
+            headers={**gallery_headers(), "cache-control": "private, max-age=86400"},
+        )
 
     @router.get("/gallery.js")
     def gallery_script() -> Response:

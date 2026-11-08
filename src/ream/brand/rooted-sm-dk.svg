@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+ <title>Ream mark: rooted</title>
+ <g id="mark" transform="scale(32)">
+  <path fill="#e9eae4" d="M6 4H9.5C12.5 4 14 6 14 8 14 9.7 13 10.7 12 11.2L14.1 15H10.3L8.3 11.7H6V9.2H9C10 9.2 10.2 8.6 10.2 7.9 10.2 7.2 10 6.6 9 6.6H6Z"/>
+  <rect x="3" y="4" width="3" height="2" rx="0" fill="#e9eae4"/>
+  <rect x="2" y="7" width="4" height="2" rx="0" fill="#e9eae4"/>
+  <rect x="4" y="10" width="2" height="2" rx="0" fill="#e9eae4"/>
+  <rect x="2" y="13" width="4" height="2" rx="0" fill="#e9eae4"/>
+  <path fill="none" stroke="#5ec9b8" stroke-width="2" d="M1 2H9C11.5 2 13 1.7 14.6 1.2"/>
+ </g>
+</svg>
