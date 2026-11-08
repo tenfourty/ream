@@ -164,7 +164,7 @@ def test_a_down_database_keeps_counts_in_memory_and_retries(two, monkeypatch):
     import time
 
     deadline = time.monotonic() + 5
-    while plugin_api._pending and time.monotonic() < deadline:
+    while (plugin_api._pending or plugin_api._writing) and time.monotonic() < deadline:
         time.sleep(0.02)
     sinks.bind(a)
     assert plugin_api.failure_counts() == {"toy:sink": 3}  # now stored, not doubled
@@ -206,6 +206,7 @@ def test_peek_and_open_breakers_take_no_write_transaction(two):
 
             return cm()
 
+    sinks.bind(a)
     _fail("s", sinks.BREAKER_THRESHOLD)
     sinks.bind(Spy())
     assert not sinks.breaker_peek("s", T0 + timedelta(seconds=1))
