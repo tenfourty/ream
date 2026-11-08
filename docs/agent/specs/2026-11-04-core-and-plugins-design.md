@@ -562,8 +562,19 @@ drivers; CI only (not on baba).
    `sinks.py`, per sink, per process: 5 failures running (a raise or a timeout), from at least two different rows, open it for 60 s;
    outbox rows of an open sink wait uncounted, after-commit deliveries are skipped; after the
    cooldown one trial goes through (success closes, failure re-opens). `sinks.status()` shows
-   `open_breakers`. Left for 7b: scanner, mail, cli/client, text and router hooks, CLI loading of
+   `open_breakers`. Left for 7b: cli/client, text and router hooks, CLI loading of
    plug-ins, cross-process failure counts and breaker state, the core-bare CI job.
+   **7b part 2 built (`ci/slice7b-part2`).** `api.scanner(name, scan, on_error="skip")`
+   (`scanners.py`): runs where the core takes its second opinion (`store._check_secrets`, after a
+   clean pattern scan and a clean `ggscan`, bodies and the fields whose caller asks for it; and
+   `comments.second_scan`), so a plug-in scanner replaces `ggscan` in place when 9c moves it. Any
+   finding refuses as a pattern finding does. A raise or a non-list answer is counted as
+   `<plug-in>:scanner`; `skip` judges the text on the rest, `block` fails the publish
+   (`ScanFailed`) or withdraws the comment (`scanner_failed`). `api.mail_backend(name, send,
+   enabled)` (`mail.py`): one at most (a second stops start-up); `send(to, subject, text)` keeps
+   today's three arguments rather than a message object; `mail.enabled()`/`mail.send()` ask it,
+   or the built-in Mailgun code when none is registered (it moves out in 9b); a raise becomes
+   `MailFailed` (so callers are unchanged) and counts as `<plug-in>:mail`.
 8. **The plug-in repo and its pipeline** (homelab office creates the repo; lander change). It
    builds an image identical to today's from an empty plug-in set, opens a pin PR, and one real
    pin PR is merged as proof before anything moves. Core starts publishing the `-core` image and
