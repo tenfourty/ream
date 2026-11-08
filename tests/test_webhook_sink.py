@@ -597,8 +597,12 @@ def test_a_tls_server_that_drips_is_cut_at_the_deadline(
         try:
             if phase == "handshake":
                 raw.recv(65536)
-                while not stop.is_set():  # a TLS record header, then silence-by-drip
-                    raw.send(b"\x16")
+                # A valid handshake record header announcing 16 KiB, then the body a
+                # byte at a time: the client is mid-handshake and keeps waiting. (Bytes
+                # that are not a record header fail at once with a TLS error.)
+                raw.send(b"\x16\x03\x03\x40\x00")
+                while not stop.is_set():
+                    raw.send(b"\x00")
                     time.sleep(0.05)
             else:
                 conn = ctx.wrap_socket(raw, server_side=True)
