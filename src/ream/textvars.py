@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -65,6 +66,11 @@ DOC_SLOTS = {"agents.txt": SLOTS, "skill.md": ("integrations",)}
 _MAX_PLUGIN_TEXT = 20_000
 _PLUGIN_VARS: dict[str, tuple[str, str | Callable[[], str]]] = {}
 _SECTIONS: list[tuple[str, str, Callable[[str], str]]] = []
+# A plug-in's function runs inside the unauthenticated onboarding documents, so its result is
+# kept this many seconds per (plug-in, variable) or (plug-in, slot, document): a slow function
+# costs at most once per period. A fault (the empty string) is kept too.
+_TEXT_TTL = 60.0
+_CACHE: dict[tuple, tuple[float, str]] = {}
 
 
 class UnknownVariable(KeyError):
@@ -130,6 +136,16 @@ def _checked(plugin: str, value: object) -> str:
     return value
 
 
+def _cached(key: tuple, compute: Callable[[], str]) -> str:
+    now = time.monotonic()
+    hit = _CACHE.get(key)
+    if hit is not None and 0 <= now - hit[0] < _TEXT_TTL:
+        return hit[1]
+    value = compute()
+    _CACHE[key] = (now, value)
+    return value
+
+
 def _plugin_value(key: str) -> str | None:
     found = _PLUGIN_VARS.get(key)
     if found is None:
@@ -137,10 +153,14 @@ def _plugin_value(key: str) -> str | None:
     plugin, value = found
     if isinstance(value, str):
         return value
-    try:
-        return _checked(plugin, value())
-    except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
-        return _fault(plugin, exc)
+
+    def compute() -> str:
+        try:
+            return _checked(plugin, value())
+        except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
+            return _fault(plugin, exc)
+
+    return _cached(("var", plugin, key), compute)
 
 
 def section(slot: str, doc: str) -> str:
@@ -150,10 +170,14 @@ def section(slot: str, doc: str) -> str:
     for plugin, sl, fn in _SECTIONS:
         if sl != slot or slot not in DOC_SLOTS.get(doc, ()):
             continue
-        try:
-            text = _checked(plugin, fn(doc))
-        except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
-            text = _fault(plugin, exc)
+
+        def compute(plugin=plugin, fn=fn) -> str:
+            try:
+                return _checked(plugin, fn(doc))
+            except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
+                return _fault(plugin, exc)
+
+        text = _cached(("section", plugin, slot, doc), compute)
         if text.strip("\n"):
             out.append("\n" + text.strip("\n") + "\n")
     return "".join(out)

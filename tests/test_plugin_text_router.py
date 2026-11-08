@@ -39,6 +39,7 @@ def _plugin(fn):
 def world(monkeypatch):
     monkeypatch.setattr(textvars, "_PLUGIN_VARS", {})
     monkeypatch.setattr(textvars, "_SECTIONS", [])
+    monkeypatch.setattr(textvars, "_CACHE", {})
     monkeypatch.setattr(plugin_api, "_ROUTERS", {})
     monkeypatch.setattr(plugin_api, "_failures", {})
     monkeypatch.setattr(plugin_api, "_loaded", [])
@@ -64,7 +65,8 @@ def test_with_no_plugin_the_documents_carry_no_slot_marker(world):
         assert "{{" not in text
 
 
-def test_a_plugin_variable_renders_in_its_own_namespace(world):
+def test_a_plugin_variable_renders_in_its_own_namespace(world, monkeypatch):
+    monkeypatch.setattr(textvars, "_TEXT_TTL", 0)
     state = {"n": 0}
 
     def register(api):
@@ -193,6 +195,87 @@ def test_a_raising_section_is_left_out_and_leaks_nothing(world, caplog):
     assert plugin_api.failure_counts()["toy:text"] == 3
 
 
+def test_plugin_text_is_cached_so_a_slow_function_runs_once_a_period(
+    world, monkeypatch
+):
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(textvars.time, "monotonic", lambda: clock["t"])
+    calls = {"var": 0, "sec": 0, "bad": 0}
+
+    def register(api):
+        def var():
+            calls["var"] += 1
+            return "V"
+
+        def sec(doc):
+            calls["sec"] += 1
+            return f"S-{doc}"
+
+        def bad():
+            calls["bad"] += 1
+            raise RuntimeError(LEAK_MARK)
+
+        api.text_vars({"toy_v": var, "toy_bad": bad})
+        api.text_section("tools", sec)
+
+    _load(world, "toy", register)
+    for _ in range(3):
+        assert textvars.render("{{toy_v}}{{toy_bad}}") == "V"
+        assert "S-agents.txt" in textvars.section("tools", "agents.txt")
+    assert calls == {"var": 1, "sec": 1, "bad": 1}
+    assert plugin_api.failure_counts()["toy:text"] == 1
+    textvars.section("tools", "agents.txt")
+    clock["t"] += textvars._TEXT_TTL + 1
+    textvars.render("{{toy_v}}{{toy_bad}}")
+    textvars.section("tools", "agents.txt")
+    assert calls == {"var": 2, "sec": 2, "bad": 2}
+
+
+def test_a_section_with_template_markers_stays_literal(world, monkeypatch):
+    monkeypatch.setattr(textvars, "_TEXT_TTL", 0)
+
+    def register(api):
+        api.text_section("tools", lambda doc: "X {{owner_name}} {{section_tools}} Y")
+        api.text_section("integrations", lambda doc: "I {{owner_name}}")
+
+    _load(world, "toy", register)
+    agents = onboarding.agents_txt("https://x.example")
+    skill = onboarding.skill_md("https://x.example")
+    assert "X {{owner_name}} {{section_tools}} Y" in agents
+    assert "I {{owner_name}}" in agents and "I {{owner_name}}" in skill
+
+
+def test_with_no_plugin_the_documents_equal_the_base_text_with_markers_stripped(world):
+    import re
+
+    marker = re.compile(r"\{\{section_[a-z]+\}\}")
+    base = "https://x.example"
+    agents_base = onboarding.agents_txt(base)
+    skill_base = onboarding.skill_md(base)
+    assert agents_base == textvars.render(
+        marker.sub("", onboarding._TEXT),
+        base=base,
+        tools=onboarding._tools_text(base),
+        connect_line=_connect_line(base),
+        pickup_hours=onboarding.pickup.PICKUP_FRESH // onboarding.timedelta(hours=1),
+    )
+    assert skill_base == textvars.render(
+        marker.sub("", onboarding._SKILL),
+        base=base,
+        pickup_hours=onboarding.pickup.PICKUP_FRESH // onboarding.timedelta(hours=1),
+    )
+
+
+def _connect_line(base):
+    built = onboarding.wheel()
+    return (
+        f"uvx --from {base}/api/v1/tools/{built.name} artifacts-connect "
+        "--name <a-name-for-this-machine>"
+        if built
+        else "artifacts-connect --name <a-name-for-this-machine>"
+    )
+
+
 def test_an_oversize_section_is_dropped(world):
     def register(api):
         api.text_section("tools", lambda doc: "x" * (textvars._MAX_PLUGIN_TEXT + 1))
@@ -307,3 +390,72 @@ def test_a_router_host_is_not_shared_and_the_registration_must_be_well_formed(
     ):
         with pytest.raises(plugin_api.PluginError, match="bad"):
             _load(world, "bad", bad)
+
+
+def test_every_plugin_response_carries_nosniff(db, world):
+    _load(world, "toy", lambda api: api.router(_router(), "hook.example"))
+    c = _client(db, "hook.example")
+    for r in (c.get("/hook"), c.get("/boom"), c.post(f"/typed?n={LEAK_MARK}")):
+        assert r.headers["x-content-type-options"] == "nosniff"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["user:pw@h.example", "a b.example", "a/b.example", "-a.example", "nodots", "a..b"],
+)
+def test_a_malformed_router_host_stops_start_up(world, bad):
+    with pytest.raises(plugin_api.PluginError, match="toy"):
+        _load(world, "toy", lambda api: api.router(_router(), bad))
+    assert plugin_api.routers() == {}
+
+
+def test_a_non_ascii_router_host_is_idna_encoded(db, world):
+    _load(world, "toy", lambda api: api.router(_router(), "bücher.example"))
+    assert list(plugin_api.routers()) == ["xn--bcher-kva.example"]
+    assert _client(db, "xn--bcher-kva.example").get("/hook").status_code == 200
+
+
+def test_request_side_host_variants(db, world):
+    _load(world, "toy", lambda api: api.router(_router(), "hook.example"))
+    c = _client(db, "hook.example")
+    assert c.get("/hook", headers={"host": "HOOK.Example"}).status_code == 200
+    assert c.get("/hook", headers={"host": "hook.example."}).status_code == 200
+    other = _client(db, "other.example")
+    assert (
+        other.get("/hook", headers={"x-forwarded-host": "hook.example"}).status_code
+        == 404
+    )
+    assert other.get("/hook", headers={"host": ""}).status_code == 404
+
+
+def test_a_host_reserved_after_registration_still_routes_to_core(db, world):
+    _load(world, "toy", lambda api: api.router(_router(), "hook.example"))
+    with settings.override(api_host="hook.example"):
+        r = _client(db, "hook.example").get("/hook")
+    assert r.content != b'{"ok":true}' and "ok" not in r.text[:20]
+
+
+def test_a_client_disconnect_is_not_a_plugin_fault_and_websockets_close(world):
+    import asyncio
+
+    from starlette.requests import ClientDisconnect
+
+    async def app(scope, receive, send):
+        raise ClientDisconnect()
+
+    guarded = plugin_api._guard_app("toy", app)
+    sent = []
+
+    async def send(m):
+        sent.append(m)
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def run():
+        await guarded({"type": "http"}, receive, send)
+        assert sent == [] and "toy:router" not in plugin_api.failure_counts()
+        await guarded({"type": "websocket"}, receive, send)
+
+    asyncio.run(run())
+    assert sent == [{"type": "websocket.close", "code": 1008}]

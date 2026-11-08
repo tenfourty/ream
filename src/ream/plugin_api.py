@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import re
 import threading
 from collections.abc import Callable
 from importlib import metadata
@@ -187,7 +188,14 @@ class PluginAPI:
         the gallery, API, partner or content hosts, which a plug-in may not take (nor one
         another's): such a registration stops start-up. The route has no gallery or key
         authentication: it checks its own caller. A fault inside it answers a bare 500,
-        counted as `<plug-in>:router` and logged by exception type only."""
+        counted as `<plug-in>:router` and logged by exception type only. Every response
+        carries `x-content-type-options: nosniff`. The core applies NO body-size cap and no
+        authentication to the route: it must bound what it reads (as the partner inbound
+        route does with MAX_BODY) and check its caller itself. The host must be a plain
+        dotted name (a non-ASCII one is IDNA-encoded first); anything else stops start-up.
+        It may be a sibling of the gallery host: core cookies are host-only and gallery
+        writes need the same origin, but a plug-in must not set `Domain=` cookies on the
+        parent domain."""
         from fastapi import APIRouter, FastAPI
         from fastapi.exceptions import RequestValidationError
         from fastapi.responses import JSONResponse
@@ -199,6 +207,15 @@ class PluginAPI:
         name = hosts.normalise(host) if isinstance(host, str) else None
         if name is None or not name.strip("."):
             raise ValueError(f"plug-in {self._plugin!r}: router needs a host")
+        if not _HOST_NAME.fullmatch(name):
+            try:
+                name = name.encode("idna").decode("ascii")
+            except UnicodeError:
+                name = ""
+            if not _HOST_NAME.fullmatch(name):
+                raise ValueError(
+                    f"plug-in {self._plugin!r}: router host is not a plain host name"
+                )
         why = _reserved_host(name)
         if why is not None:
             raise ValueError(f"plug-in {self._plugin!r}: host {name!r} is {why}")
@@ -216,6 +233,11 @@ class PluginAPI:
 
         app.include_router(router)
         _ROUTERS[name] = (self._plugin, _guard_app(self._plugin, app))
+
+
+_HOST_NAME = re.compile(
+    r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+"
+)
 
 
 def routers() -> dict[str, Callable]:
@@ -242,26 +264,59 @@ def _guard_app(plugin: str, app: Callable) -> Callable:
     """Wrap a plug-in's ASGI app so a fault in it answers a bare 500 and is counted and
     logged by exception type only (the message may hold a request's content), instead of
     reaching the server's traceback log."""
+    import anyio
+    from starlette.requests import ClientDisconnect
     from starlette.responses import PlainTextResponse
 
     async def guarded(scope, receive, send):
+        if scope["type"] != "http":
+            if scope["type"] == "websocket":
+                # No plug-in websockets: refuse the handshake cleanly.
+                await receive()
+                await send({"type": "websocket.close", "code": 1008})
+            else:
+                await app(scope, receive, send)
+            return
         started = False
+        disconnected = False
 
         async def tracking(message):
-            nonlocal started
+            nonlocal started, disconnected
             if message["type"] == "http.response.start":
                 started = True
-            await send(message)
+                headers = [
+                    (k, v)
+                    for k, v in message.get("headers", [])
+                    if k.lower() != b"x-content-type-options"
+                ]
+                headers.append((b"x-content-type-options", b"nosniff"))
+                message = {**message, "headers": headers}
+            try:
+                await send(message)
+            except OSError:
+                disconnected = True
+                raise
 
         try:
             await app(scope, receive, tracking)
         except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
+            if disconnected or isinstance(
+                exc,
+                (
+                    ClientDisconnect,
+                    anyio.ClosedResourceError,
+                    anyio.BrokenResourceError,
+                ),
+            ):
+                return  # the client went away: not the plug-in's fault
             _count(plugin, "router")
             _log.warning("plug-in %s: route failed: %s", plugin, type(exc).__name__)
-            if scope["type"] == "http" and not started:
-                await PlainTextResponse("plug-in error", status_code=500)(
-                    scope, receive, send
-                )
+            if not started:
+                await PlainTextResponse(
+                    "plug-in error",
+                    status_code=500,
+                    headers={"x-content-type-options": "nosniff"},
+                )(scope, receive, send)
 
     return guarded
 
