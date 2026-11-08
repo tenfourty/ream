@@ -20,6 +20,10 @@ from ream import envnames, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-08",
+        "The tools are now called Ream. One command, `ream`, runs them by verb: `ream publish`, `ream ask`, `ream wait`, `ream list`, `ream admin`, `ream connect` and the rest (`ream --help` lists them), and usage and errors name the command as you ran it. Settings are REAM_<NAME> and headers are X-Ream-*; the install package is now `ream` (the onboarding document gives the exact line). Every old name keeps working for good: the artifacts-* commands, ARTIFACTS_<NAME> settings (set both with different values and the tool refuses to start), X-Artifacts-* headers, and `import artifacts`. Nothing you published or stored is renamed. Reinstall the tools to get `ream`.",
+    ),
+    (
         "2026-11-06",
         "Neutral names, old ones still work for now: a question's `for` is now `audience` (send either, `audience` wins; every read carries both); artifacts-decide wait/listening take --team and --all-teams (--office and --all-offices keep working, hidden from --help), and a session label is <team>/<ref>; listening states are sent_to_partner and partner_delayed, with the old sent_to_slack and slack_delayed beside them as legacy_state. Reinstall the tools to get the new flags.",
     ),
