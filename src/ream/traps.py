@@ -28,7 +28,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from ream import textvars
+from ream import settings, textvars
 from ream.csp import CspWarning, line_of, newline_offsets, outside_comments
 
 
@@ -39,10 +39,16 @@ from ream.csp import CspWarning, line_of, newline_offsets, outside_comments
 # this on a real page on 19 Sep, which is why every template carries the
 # attribute and why this checks for it.
 def _gallery_link(client: bool) -> re.Pattern[str]:
-    """A link to the configured gallery's host, built at call time (the host is a setting)."""
-    host = urlsplit(textvars.gallery_origin(client)).hostname or ""
+    """A link to the configured gallery's host, or to the former host while one is set (a
+    page written before a move still links the old name, which forwards to the new one and
+    needs the same `target`), built at call time (both are settings)."""
+    names = [urlsplit(textvars.gallery_origin(client)).hostname or ""]
+    former = settings.current().former_host.strip().lower().removesuffix(".")
+    if former:
+        names.append(former)
+    alternatives = "|".join(re.escape(n) for n in names)
     return re.compile(
-        r"<a\b[^>]*\bhref\s*=\s*[\"']?https?://" + re.escape(host) + r"[^>]*>",
+        r"<a\b[^>]*\bhref\s*=\s*[\"']?https?://(?:" + alternatives + r")[^>]*>",
         re.IGNORECASE,
     )
 

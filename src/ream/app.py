@@ -3,13 +3,14 @@ import time
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 
 from ream import forms, hosts, onboarding, partner_in, plugin_api, ratelimit
 from ream.api import agent_card_response, agent_router
 from ream.content import create_content_app
 from ream.db import Database
 from ream.gallery import gallery_router
+from ream.store import gallery_origin
 
 
 def _refuse_bad_forms(app: FastAPI) -> None:
@@ -177,6 +178,32 @@ def create_api_app(
     return app
 
 
+def _former_serves_api(scope) -> bool:
+    path = scope.get("path") or ""
+    return path == "/healthz" or path.startswith("/api/v1/")
+
+
+def _forward_to_gallery(scope) -> RedirectResponse:
+    """308 (the method is kept) to the same path and query on the gallery origin. The
+    Location starts with the CONFIGURED origin and the path is re-encoded from the raw
+    bytes, so nothing of the request's Host can reach it and a `//x.example` path stays
+    a path on the gallery."""
+    raw = (scope.get("raw_path") or scope.get("path", "/").encode()).decode("latin-1")
+    raw = raw.replace("\\", "%5C")
+    if not raw.startswith("/"):
+        raw = "/" + raw
+    query = (scope.get("query_string") or b"").decode("latin-1")
+    location = gallery_origin() + raw + (f"?{query}" if query else "")
+    return RedirectResponse(
+        location,
+        status_code=308,
+        headers={
+            "x-content-type-options": "nosniff",
+            "cache-control": "public, max-age=3600",
+        },
+    )
+
+
 def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
     """Fail CLOSED, not open: the content hostname is never behind Authelia (it is
     agent-published HTML), and the gallery app trusts Authelia at ITS ingress instead of
@@ -213,6 +240,12 @@ def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
             chosen = gallery
         elif hosts.is_api(host):
             chosen = api
+        elif hosts.is_former(host):
+            if _former_serves_api(scope):
+                chosen = api
+            else:
+                await _forward_to_gallery(scope)(scope, receive, send)
+                return
         elif partner_app is not None and host == partner_inbound.host:
             chosen = partner_app
         elif hosts.artifact_id(host) is not None:

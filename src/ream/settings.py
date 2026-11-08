@@ -84,6 +84,10 @@ class Settings:
     # Unset: `localhost` on the gallery's port when the gallery is on localhost.
     content_domain: str = ""
     api_host: str = ""
+    # The gallery's PREVIOUS host name, kept answering after a move: it serves the agent API
+    # as ever (agents' clients refuse redirects) and forwards every other path to the
+    # gallery origin with a 308. Unset: no former host exists, every other name 404s.
+    former_host: str = ""
     # Unset: the zone of the host.
     display_tz: str = ""
     # The request header the proxy sets to the caller's address. Unset: the socket address.
@@ -166,6 +170,18 @@ class Settings:
             )
         if "/" in self.api_host or "://" in self.api_host:
             found.append("REAM_API_HOST must be a host name, no scheme or path")
+        if self.former_host:
+            former = self.former_host.strip().lower().removesuffix(".")
+            if "/" in self.former_host or "://" in self.former_host or ":" in former:
+                found.append(
+                    "REAM_FORMER_HOST must be a host name, no scheme, port or path"
+                )
+            elif former == (parts.hostname or "").lower():
+                found.append(
+                    "REAM_FORMER_HOST must differ from the host of REAM_GALLERY_ORIGIN"
+                )
+            elif former == self.api_host.strip().lower().removesuffix("."):
+                found.append("REAM_FORMER_HOST must differ from REAM_API_HOST")
         if self.trusted_ip_header and not _HEADER_NAME.fullmatch(
             self.trusted_ip_header
         ):
@@ -216,6 +232,7 @@ _ENV = {
     "gallery_origin": "REAM_GALLERY_ORIGIN",
     "content_domain": "REAM_CONTENT_DOMAIN",
     "api_host": "REAM_API_HOST",
+    "former_host": "REAM_FORMER_HOST",
     "display_tz": "REAM_DISPLAY_TZ",
     "trusted_ip_header": "REAM_TRUSTED_IP_HEADER",
     "bind_host": "REAM_BIND_HOST",

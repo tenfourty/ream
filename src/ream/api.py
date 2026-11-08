@@ -697,6 +697,9 @@ def agent_router(
 
     def _base(request: Request) -> str:
         host = hosts.first_host_header(request.scope) or "artifacts.invalid"
+        if hosts.is_former(hosts.normalise(host)):
+            # The old address never advertises itself: the document teaches the new one.
+            return store.gallery_origin()
         return onboarding.base_url(
             request.url.scheme, host, request.headers.get("x-forwarded-proto")
         )

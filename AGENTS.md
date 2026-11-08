@@ -91,6 +91,11 @@ command-line tools. The shim package `src/artifacts/` reads no environment and m
 (`REAM_BIND_HOST`, set to `0.0.0.0` by the image) without `REAM_GALLERY_ORIGIN` refuses to
 start. A deployment sets `REAM_GALLERY_ORIGIN`, `REAM_CONTENT_DOMAIN`, the owner trio and,
 behind a proxy, `REAM_TRUSTED_IP_HEADER`.
+`REAM_FORMER_HOST` (also `ARTIFACTS_FORMER_HOST`; unset: nothing changes) names the gallery's previous host
+after a move: on it `/api/v1/*` (both words) and `/healthz` are served as on the gallery host, never redirected
+(agents' clients refuse redirects), and every other path answers 308 to the same path and query on
+`REAM_GALLERY_ORIGIN`; agents.txt, skill.md and agent.json there advertise only the gallery origin. It must
+differ from the gallery host and `REAM_API_HOST`. Runbook: `docs/agent/runbooks/former-host.md`.
 `REAM_PLUGINS` picks which installed `ream.plugins` (or old `artifacts.plugins`) entry points load at server start (unset: all;
 `none`: none; `a,b`: only those, and an unknown name stops start-up); see `src/ream/plugin_api.py`.
 

@@ -79,6 +79,19 @@ def is_api(host: str | None) -> bool:
     return configured is not None and host == configured
 
 
+def is_former(host: str | None) -> bool:
+    """True only when `host` (already normalised) equals the former_host setting: the
+    gallery's previous name, which keeps serving the agent API (a client that refuses
+    redirects must never be sent one) and forwards everything else to the gallery origin.
+    Unset (the default): no such host, and the router treats the name like any other.
+    The gallery host and the API host are checked first, so a mistaken equal setting
+    cannot shadow either."""
+    if host is None:
+        return False
+    configured = normalise(settings.current().former_host)
+    return configured is not None and host == configured
+
+
 def first_host_header(scope: dict) -> str | None:
     """The FIRST `host` header from a raw ASGI scope, decoded latin-1 (HTTP header
     bytes are not guaranteed UTF-8). `app.py`'s router and `content.py`'s app both read
