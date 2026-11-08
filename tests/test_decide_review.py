@@ -589,25 +589,55 @@ def test_wait_without_a_session_label_does_not_claim_and_says_so(
     reason="a real 9 s wait: the lease must lapse twice over without renewal"
 )
 def test_wait_renews_its_lease_while_it_runs(live, key_file, db, capsys, monkeypatch):
-    """A 4 s lease renewed when under 3.5 s remain, for a 9 s wait: without
-    renewal it would lapse twice over, and another session could take it."""
+    """A 4 s lease renewed when under 3.5 s remain, for a 9 s wait in which
+    every request takes half a second: without renewal it would lapse twice
+    over, and another session could take it. (Four requests run between the
+    first claim and the first renewal check, so a full second each would spend
+    the whole 4 s lease there; the real lease leaves 120 s for them.)
+
+    Timed on a clock the test moves, not the runner's: each request advances
+    it by its latency and a long-poll by its hold as well, so a loaded runner
+    cannot stretch a gap (CI run #585 saw 3.6 s against a 3.5 s bound). The
+    claims still go to the live server; its Date header, on the real clock, is
+    dropped so the CLI times the lease from the `lease_seconds` it names."""
     monkeypatch.setattr(decisions, "CLAIM_SECONDS", 4)
     monkeypatch.setattr(decide, "_RENEW_BELOW", 3.5)
     path, _page, rid = _setup(db, key_file, capsys)
+    now = [1000.0]
+    latency = 0.5
+    monkeypatch.setattr(decide, "_mono", lambda: now[0])
+    monkeypatch.setattr(decide, "_wall", lambda: now[0])
     claims = []
     real = decide._request
 
-    def counting(method, url, *a, **kw):
+    def timed(method, url, *a, headers_out=None, **kw):
+        sent = now[0]
+        now[0] += latency
+        if "wait=" in url:
+            # The long-poll: held for its full `wait`, and nothing happens.
+            now[0] += int(url.split("wait=")[1].split("&")[0])
+            return []
         if url.endswith(f"/reviews/{rid}/claim"):
-            claims.append(time.monotonic())
-        return real(method, url, *a, **kw)
+            claims.append(sent)
+        out = real(method, url, *a, headers_out=headers_out, **kw)
+        if headers_out is not None:
+            headers_out.pop("date", None)
+        return out
 
-    monkeypatch.setattr(decide, "_request", counting)
+    monkeypatch.setattr(decide, "_request", timed)
     args = ["--key-file", str(path), "--session", "ops-seat/me"]
+    started = now[0]
     assert decide.main([*args, "wait", "--review", rid, "--timeout", "9s"]) == 3
+    ended = now[0]
+    assert ended - started >= 8  # it stops with under a second left
     assert len(claims) >= 3, "claimed once and renewed at least twice"
-    assert max(b - a for a, b in itertools.pairwise(claims)) < 3.5
-    # Still held when the wait ends, though the first claim is 9 s old.
+    # Each renewal reaches the server before the lease it renews runs out
+    # (both sent and received a latency later), and the last one outlives
+    # the wait: the lease never lapsed.
+    lease = decisions.CLAIM_SECONDS
+    assert all(b - a < lease for a, b in itertools.pairwise(claims)), claims
+    assert claims[-1] + latency + lease > ended, claims
+    # The server took every renewal as the holder's, and still has it held.
     with pytest.raises(decisions.Claimed):
         decisions.claim_round(db, "ops-seat", rid, "ops-seat/other")
 
