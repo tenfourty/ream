@@ -201,8 +201,6 @@ def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
         else None
     )
 
-    plugin_hosts = plugin_api.routers()
-
     async def router(scope, receive, send):
         if scope["type"] == "lifespan":
             await gallery(scope, receive, send)
@@ -219,7 +217,7 @@ def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
             chosen = partner_app
         elif hosts.artifact_id(host) is not None:
             chosen = content
-        elif host in plugin_hosts:
+        elif host in (plugin_hosts := plugin_api.routers()):
             # A plug-in's inbound route on its own host (plugin_api.router); it may not
             # take any host above, and comes after them so it can never shadow one.
             chosen = plugin_hosts[host]

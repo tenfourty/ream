@@ -241,9 +241,10 @@ def test_a_router_is_served_only_on_its_host(db, world):
 
 def test_with_no_router_an_unknown_host_is_still_404(db, world):
     world()
-    plugin_api.load()
     assert plugin_api.routers() == {}
-    assert _client(db, "hook.example").get("/hook").status_code == 404
+    assert plugin_api.routers() == {}
+    r = _client(db, "hook.example").get("/hook")
+    assert r.status_code == 404
 
 
 def test_a_fault_in_a_route_is_a_bare_500_counted_and_unlogged_in_content(

@@ -60,6 +60,8 @@ _log = logging.getLogger(__name__)
 # then nothing below changes a served word.
 SLOTS = ("proxy", "tools", "integrations")  # named places in the served documents
 DOCS = ("agents.txt", "skill.md")
+# The slots each document carries a `{{section_<slot>}}` marker for.
+DOC_SLOTS = {"agents.txt": SLOTS, "skill.md": ("integrations",)}
 _MAX_PLUGIN_TEXT = 20_000
 _PLUGIN_VARS: dict[str, tuple[str, str | Callable[[], str]]] = {}
 _SECTIONS: list[tuple[str, str, Callable[[str], str]]] = []
@@ -146,7 +148,7 @@ def section(slot: str, doc: str) -> str:
     (a newline before, one after), in registration order. Empty with no plug-in."""
     out = []
     for plugin, sl, fn in _SECTIONS:
-        if sl != slot:
+        if sl != slot or slot not in DOC_SLOTS.get(doc, ()):
             continue
         try:
             text = _checked(plugin, fn(doc))

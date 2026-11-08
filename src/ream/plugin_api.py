@@ -175,7 +175,7 @@ class PluginAPI:
     def text_section(self, slot: str, fn: Callable[[str], str]) -> None:
         """Add words to a named place in the served documents (4.2, text). `slot` is one of
         `textvars.SLOTS`: `proxy` and `tools` (after the tools paragraph and the proxy note
-        in `agents.txt`) and `integrations` (the end of `agents.txt` and of `skill.md`).
+        in `agents.txt` only) and `integrations` (the end of `agents.txt` and of `skill.md`).
         `fn(doc)` gets `"agents.txt"` or `"skill.md"` and returns the paragraph for it, or
         "" for none. Several plug-ins' sections follow in registration order, each its own
         paragraph. One section per slot per plug-in."""
