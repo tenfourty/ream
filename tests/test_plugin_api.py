@@ -8,7 +8,7 @@ import types
 
 import pytest
 
-from artifacts import decisions, events, plugin_api, settings, sinks
+from ream import decisions, events, plugin_api, settings, sinks
 
 
 class EP:

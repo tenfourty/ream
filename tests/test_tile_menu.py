@@ -18,8 +18,8 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import store
-from artifacts.app import create_gallery_app
+from ream import store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 STANDFIRST = (
@@ -37,8 +37,8 @@ _PNG = bytes.fromhex(
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     return TestClient(create_gallery_app(db=db))
 
 
@@ -146,7 +146,7 @@ def test_every_tile_has_a_preview_area_even_with_no_picture(client, db):
 
 
 def _ask(db, artifact_id, question="Which?"):
-    from artifacts import decisions
+    from ream import decisions
 
     return decisions.ask(
         db,
@@ -202,7 +202,7 @@ def test_an_answered_question_stops_claiming_his_attention(client, db):
     """The count is of what is still open. A page that goes on saying "waiting
     on you" after he has answered is the exact failure that filled the top of
     his own status board with things he had already settled."""
-    from artifacts import decisions
+    from ream import decisions
 
     published = store.publish(db, "seat", "Board", PAGE)
     asked = _ask(db, published.id)
@@ -282,7 +282,7 @@ def test_a_page_with_a_question_outranks_one_that_merely_changed(client, db):
     """The wall sorts itself by what needs him. This service exists so he can
     "interact on decisions and not just visualise progress", so a page holding
     a question he has not answered leads one that is simply newer."""
-    from artifacts import decisions
+    from ream import decisions
 
     asking = store.publish(db, "seat", "Has a question", PAGE)
     store.publish(db, "seat", "Merely newer", PAGE)
@@ -303,7 +303,7 @@ def test_a_pin_still_outranks_a_question(client, db):
     """Two orderings that can disagree, and his explicit one wins. A pin is him
     saying "keep this in front of me"; a question is the service guessing that
     he will want to."""
-    from artifacts import decisions
+    from ream import decisions
 
     asking = store.publish(db, "seat", "Has a question", PAGE)
     pinned = store.publish(db, "seat", "Pinned", PAGE)
@@ -322,7 +322,7 @@ def test_a_pin_still_outranks_a_question(client, db):
 def test_the_waiting_badge_rides_the_picture_not_the_body(client, db):
     """In the body it made that tile taller and the grid equalised the whole
     row to match, leaving every other card with a hand's width of nothing."""
-    from artifacts import decisions
+    from ream import decisions
 
     published = store.publish(db, "seat", "Board", PAGE)
     decisions.ask(

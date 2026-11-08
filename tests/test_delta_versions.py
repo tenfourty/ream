@@ -11,9 +11,9 @@ import random
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import admin, frame_pass, keys, packing, repack, store
-from artifacts.app import create_gallery_app
-from artifacts.content import create_content_app
+from ream import admin, frame_pass, keys, packing, repack, store
+from ream.app import create_gallery_app
+from ream.content import create_content_app
 
 HEAD = "<!doctype html><html><head><title>Board</title></head><body>\n"
 TAIL = "</body></html>\n"
@@ -221,7 +221,7 @@ def test_a_stale_revision_still_conflicts_and_leaves_the_page_as_it_was(db):
 
 
 def test_the_wall_shows_the_current_versions_text(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     first = HEAD + '<p class="standfirst">The first thing it said.</p>\n' + TAIL
     later = first.replace("The first thing it said.", "What it says now.")
     page = store.publish(db, "seat", "Board", first)
@@ -232,7 +232,7 @@ def test_the_wall_shows_the_current_versions_text(db, monkeypatch):
 
 
 def test_the_content_server_serves_an_old_version_and_its_changes_view(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     keys.mint(db, agent="seat")
     bodies = [HEAD + f"<p>generation {i}</p>\n" + TAIL for i in range(1, 6)]
     artifact_id = _write(db, bodies)

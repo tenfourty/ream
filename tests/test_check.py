@@ -7,7 +7,7 @@ from". They hand-rolled a grep for `<form`, `src=`, `<link`, `@import` and any
 non-gallery URL, and said every agent would rediscover it.
 
 The point of doing it here is that it uses the SAME shape table the service
-does (`artifacts.csp`), derived from the real directives in the served policy,
+does (`ream.csp`), derived from the real directives in the served policy,
 so it cannot drift from what the browser will do. A grep in each agent's own
 repo certainly would.
 """
@@ -16,7 +16,7 @@ import shutil
 
 import pytest
 
-from artifacts import client
+from ream import client
 
 CLEAN = (
     "<!doctype html><html><head><title>Good</title>"
@@ -66,8 +66,8 @@ def test_it_needs_no_key_and_makes_no_request(tmp_path, capsys, monkeypatch):
     """Half the value is running it in CI, or before you have a key, or on a
     page nobody has decided to publish. Proved by pointing the key file at
     nothing and the API at an address that would fail loudly."""
-    monkeypatch.setenv("ARTIFACTS_KEY_FILE", str(tmp_path / "no-such-key"))
-    monkeypatch.setenv("ARTIFACTS_API", "https://127.0.0.1:1/api/v1")
+    monkeypatch.setenv("REAM_KEY_FILE", str(tmp_path / "no-such-key"))
+    monkeypatch.setenv("REAM_API", "https://127.0.0.1:1/api/v1")
     assert client.main(["--check", _write(tmp_path, CLEAN)]) == 0
 
 
@@ -125,7 +125,7 @@ def test_it_uses_the_services_own_shape_table_not_a_copy(tmp_path):
     ever grows its own patterns they will drift from the policy actually
     served, which is the failure the cove seat's hand-rolled grep would have
     had."""
-    from artifacts import csp
+    from ream import csp
 
     findings, _syntax, _node = client.check_page(
         '<html><body><iframe src="https://x.example"></iframe></body></html>'

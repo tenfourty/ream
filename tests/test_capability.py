@@ -3,9 +3,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import frame_pass, keys, store
-from artifacts.app import create_gallery_app
-from artifacts.content import create_content_app
+from ream import frame_pass, keys, store
+from ream.app import create_gallery_app
+from ream.content import create_content_app
 
 PAGE = "<!doctype html><html><head></head><body>hi</body></html>"
 FRAMED = {"sec-fetch-dest": "iframe"}
@@ -19,7 +19,7 @@ def published(db):
 
 @pytest.fixture()
 def content(db, published, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     client = TestClient(create_content_app(db))
     client.headers.update({"host": f"{published.id}.tenfourty.com"})
     return client
@@ -193,7 +193,7 @@ def test_a_public_page_still_needs_a_pass_in_this_part(db, content, published):
 
 
 def test_content_url_is_what_the_gallery_frames(db, published, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     assert store.content_url(published.id, "PASS") == (
         f"https://{published.id}.tenfourty.com/p/PASS/"
     )

@@ -1,4 +1,4 @@
-"""Tests for artifacts.pagediff: the new page with its changes marked."""
+"""Tests for ream.pagediff: the new page with its changes marked."""
 
 import os
 import random
@@ -8,7 +8,7 @@ from html.parser import HTMLParser
 
 import pytest
 
-from artifacts.pagediff import render_changes
+from ream.pagediff import render_changes
 
 INS = '<ins class="ar-diff-ins">'
 DEL = '<del class="ar-diff-del">'
@@ -500,7 +500,7 @@ def test_nothing_goes_before_a_frameset():
 
 # --- the safe entry point -----------------------------------------------------
 
-from artifacts import pagediff
+from ream import pagediff
 
 
 def _sleepy(old, new):
@@ -629,7 +629,7 @@ def test_a_worker_that_stops_reading_cannot_hold_a_request_for_ever():
     slot, for ever. The whole exchange now has the timeout's bound."""
     import signal
 
-    from artifacts import pagediff
+    from ream import pagediff
 
     worker = pagediff._Worker()
     try:
@@ -654,7 +654,7 @@ def test_a_worker_whose_exchange_will_not_stop_keeps_its_pipes_open(monkeypatch)
     number could send its bytes to the wrong socket."""
     import threading
 
-    from artifacts import pagediff
+    from ream import pagediff
 
     monkeypatch.setattr(pagediff, "_KILL_JOIN_SECONDS", 0.1)
     release = threading.Event()

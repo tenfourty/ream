@@ -18,8 +18,8 @@ regression in the other.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys
-from artifacts.app import create_gallery_app
+from ream import keys
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
 

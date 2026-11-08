@@ -3,7 +3,7 @@
 import pytest
 from test_client import key_file, live  # noqa: F401
 
-from artifacts import decide, decisions, store
+from ream import decide, decisions, store
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 

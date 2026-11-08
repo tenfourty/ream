@@ -11,15 +11,15 @@ leaving four real answers stranded with their decisions still open.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, keys, store
-from artifacts.app import create_gallery_app
+from ream import decisions, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body>x</body></html>"
 
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 
@@ -120,7 +120,7 @@ def test_a_closed_decision_is_refused(db, asked):
 def test_the_owning_agent_still_hears_about_it(db, asked):
     """To the agent waiting, the fact is the one it has been waiting for: Jeremy
     decided. The relay must not be silent just because it came another way."""
-    from artifacts import events
+    from ream import events
 
     decisions.record_elsewhere(
         db, asked.id, letter="b", note="his words", source="telegram", recorded_by="ops"

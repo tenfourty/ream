@@ -7,7 +7,7 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts.app import create_gallery_app
+from ream.app import create_gallery_app
 
 WHEEL = "artifacts-0.1.0-py3-none-any.whl"
 
@@ -16,7 +16,7 @@ WHEEL = "artifacts-0.1.0-py3-none-any.whl"
 def tools_dir(tmp_path, monkeypatch):
     with zipfile.ZipFile(tmp_path / WHEEL, "w") as z:
         z.writestr("artifacts/__init__.py", "")
-    monkeypatch.setenv("ARTIFACTS_TOOLS_DIR", str(tmp_path))
+    monkeypatch.setenv("REAM_TOOLS_DIR", str(tmp_path))
     return tmp_path
 
 
@@ -45,7 +45,7 @@ def test_nothing_else_is_served_from_there(gallery, tools_dir, name):
 
 
 def test_no_package_means_a_plain_404_not_a_crash(gallery, tmp_path, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_TOOLS_DIR", str(tmp_path / "missing"))
+    monkeypatch.setenv("REAM_TOOLS_DIR", str(tmp_path / "missing"))
     assert gallery.get(f"/api/v1/tools/{WHEEL}").status_code == 404
 
 
@@ -62,7 +62,7 @@ def test_the_onboarding_document_gives_the_uvx_line_for_this_address(
 def test_without_a_package_the_document_says_so_rather_than_a_dead_line(
     gallery, tmp_path, monkeypatch
 ):
-    monkeypatch.setenv("ARTIFACTS_TOOLS_DIR", str(tmp_path / "missing"))
+    monkeypatch.setenv("REAM_TOOLS_DIR", str(tmp_path / "missing"))
     text = gallery.get("/api/v1/agents.txt").text
     assert "not available from this address" in text
     assert "uvx --from" not in text
@@ -98,7 +98,7 @@ def test_the_skill_says_a_republish_opens_the_next_round(gallery):
 def test_the_skill_teaches_claiming_and_handing_back_a_review(gallery):
     text = " ".join(gallery.get("/api/v1/skill.md").text.split())
     assert (
-        "Set ARTIFACTS_SESSION so wait --review can claim the round; if it exits 8 "
+        "Set REAM_SESSION so wait --review can claim the round; if it exits 8 "
         "another session is acting on it, and if you cannot act, run "
         'artifacts-decide review-release <id> --reason "…".'
     ) in text
@@ -115,7 +115,7 @@ def test_one_page_links_the_one_package_for_find_links(gallery, tools_dir):
 
 
 def test_no_package_means_no_find_links_page(gallery, tmp_path, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_TOOLS_DIR", str(tmp_path / "missing"))
+    monkeypatch.setenv("REAM_TOOLS_DIR", str(tmp_path / "missing"))
     assert gallery.get("/api/v1/tools/").status_code == 404
 
 
@@ -130,7 +130,7 @@ def test_the_document_carries_a_stable_line_and_a_machine_readable_one(
 
 
 def test_both_exit_code_lists_name_eight_claimed():
-    from artifacts import onboarding
+    from ream import onboarding
 
     for text in (onboarding.agents_txt("http://x"), onboarding.skill_md("http://x")):
         assert "6 dismissed 7 marks 8 claimed" in text

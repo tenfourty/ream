@@ -16,17 +16,17 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import store
-from artifacts.app import create_gallery_app
+from ream import store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
-    monkeypatch.setenv("ARTIFACTS_DISPLAY_TZ", "Europe/Paris")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_DISPLAY_TZ", "Europe/Paris")
     # https, not the default http: the view cookie is set `secure`, so over a
     # plain-http test client the browser-equivalent would refuse to store it and
     # the "it is remembered" test would fail against correct production
@@ -124,7 +124,7 @@ def test_the_day_is_his_day_not_utc(client, db, monkeypatch):
     Grouping on the raw timestamp would file this morning's work under
     yesterday -- the same class of error as the 08:53 UTC stamp he caught on a
     board, and harder to spot, because a heading looks authoritative."""
-    monkeypatch.setenv("ARTIFACTS_DISPLAY_TZ", "Europe/Paris")
+    monkeypatch.setenv("REAM_DISPLAY_TZ", "Europe/Paris")
     from zoneinfo import ZoneInfo
 
     paris = ZoneInfo("Europe/Paris")
@@ -160,7 +160,7 @@ def test_a_row_carries_exactly_the_same_actions_as_a_tile(client, db):
 
 
 def test_a_row_for_a_page_with_a_question_says_so_and_takes_the_anchor(client, db):
-    from artifacts import decisions
+    from ream import decisions
 
     published = store.publish(db, "seat", "Board", PAGE)
     decisions.ask(

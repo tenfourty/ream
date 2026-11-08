@@ -16,16 +16,16 @@ Two lessons from writing it, both of which cost a round of false findings:
     the search box, so looking for a page's name in the whole page finds the
     box and reports a filter leak that is not there.
 
-Run it with `ARTIFACTS_WALK=1 uv run pytest -q -s tests/test_walkthrough.py`.
+Run it with `REAM_WALK=1 uv run pytest -q -s tests/test_walkthrough.py`.
 """
 
 import re
 
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, keys, store
-from artifacts.app import create_gallery_app
-from artifacts.db import Database
+from ream import decisions, keys, store
+from ream.app import create_gallery_app
+from ream.db import Database
 
 SAME = {"sec-fetch-site": "same-origin"}
 findings = []

@@ -11,8 +11,8 @@ import logging
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys, ratelimit
-from artifacts.app import create_app, create_gallery_app
+from ream import keys, ratelimit
+from ream.app import create_app, create_gallery_app
 
 GALLERY_HOST = "artifacts.tenfourty.site"
 API_HOST = "agents.example.test"
@@ -111,13 +111,13 @@ def test_the_address_is_the_one_nginx_sets_never_forwarded_for():
 def auth_log(caplog):
     """The auth logger does not propagate once `serve` arms it, so caplog's
     root handler would miss it. Attach directly."""
-    logger = logging.getLogger("artifacts.auth")
+    logger = logging.getLogger("ream.auth")
     propagate = logger.propagate
     # Not propagating while attached, or an unarmed logger would reach caplog
     # twice -- directly and through the root -- and every count would double.
     logger.propagate = False
     logger.addHandler(caplog.handler)
-    caplog.set_level(logging.WARNING, logger="artifacts.auth")
+    caplog.set_level(logging.WARNING, logger="ream.auth")
     yield caplog
     logger.removeHandler(caplog.handler)
     logger.propagate = propagate
@@ -189,7 +189,7 @@ def test_the_log_names_the_address_and_never_the_key(db, auth_log):
                 "x-real-ip": "203.0.113.9",
             },
         )
-    lines = [r.getMessage() for r in auth_log.records if r.name == "artifacts.auth"]
+    lines = [r.getMessage() for r in auth_log.records if r.name == "ream.auth"]
     # Two plain failures, then the one that blocked -- and silence after it.
     assert len(lines) == 3, lines
     assert all("203.0.113.9" in line for line in lines)
@@ -199,7 +199,7 @@ def test_the_log_names_the_address_and_never_the_key(db, auth_log):
 
 def test_the_gallery_host_and_the_api_host_share_one_count(db, monkeypatch):
     """Switching names must not double a caller's allowance."""
-    monkeypatch.setenv("ARTIFACTS_API_HOST", API_HOST)
+    monkeypatch.setenv("REAM_API_HOST", API_HOST)
     client = TestClient(create_app(db))
     statuses = []
     for i in range(ratelimit.THRESHOLD):

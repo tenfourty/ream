@@ -17,8 +17,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, keys, store
-from artifacts.app import create_gallery_app
+from ream import decisions, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
@@ -26,7 +26,7 @@ SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db), base_url="https://testserver")
 
 
@@ -314,7 +314,7 @@ def test_the_sweep_is_reachable_as_a_command(db, monkeypatch, capsys):
     """Built, tested and called by nothing is the failure this command exists
     not to repeat -- the uncollected-answer alert in this same service is
     exactly that. So the command is driven here, not just the function."""
-    from artifacts import admin
+    from ream import admin
 
     keys.mint(db, agent="seat")
     page = store.publish(db, "seat", "Expired", PAGE)
@@ -410,7 +410,7 @@ def _ask(db, artifact_id):
 def test_the_asking_agent_hears_when_its_question_is_set_aside(db):
     """THE POINT OF homelab-ij8.84.10, kept: an agent that armed a waiter on a
     decision whose page was then archived must not wait until its own timeout."""
-    from artifacts import events
+    from ream import events
 
     keys.mint(db, agent="seat")
     for what, tidy in (
@@ -437,7 +437,7 @@ def test_the_asking_agent_hears_when_its_question_is_set_aside(db):
 
 def test_a_page_with_nothing_open_produces_no_noise(db):
     """An event per archive regardless would train agents to ignore the feed."""
-    from artifacts import events
+    from ream import events
 
     keys.mint(db, agent="seat")
     quiet = store.publish(db, "seat", "Nothing open", PAGE)
@@ -459,7 +459,7 @@ def test_a_page_with_nothing_open_produces_no_noise(db):
 
 def test_putting_the_page_back_announces_a_reopening(db):
     """Unarchiving tells the agent: one decision_reopened per question."""
-    from artifacts import events
+    from ream import events
 
     keys.mint(db, agent="seat")
     page = store.publish(db, "seat", "Round trip", PAGE)
@@ -476,7 +476,7 @@ def test_putting_the_page_back_announces_a_reopening(db):
 def test_the_event_and_the_archive_commit_together(db):
     """The event is written on the caller's own connection, so a failed archive
     cannot leave an agent told about something that did not happen."""
-    from artifacts import events
+    from ream import events
 
     keys.mint(db, agent="seat")
     page = store.publish(db, "seat", "Asks", PAGE)

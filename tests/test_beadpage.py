@@ -4,7 +4,7 @@ import json
 import stat
 from datetime import UTC, datetime
 
-from artifacts import beadpage, traps
+from ream import beadpage, traps
 
 NOW = datetime(2026, 9, 24, 15, 0, tzinfo=UTC)
 ROWS = [

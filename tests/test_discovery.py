@@ -8,8 +8,8 @@ key where it points.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys
-from artifacts.app import create_app
+from ream import keys
+from ream.app import create_app
 
 GALLERY_HOST = "artifacts.tenfourty.site"
 API_HOST = "agents.example.com"
@@ -22,13 +22,13 @@ def client(db) -> TestClient:
 
 @pytest.fixture()
 def api_host(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_API_HOST", API_HOST)
+    monkeypatch.setenv("REAM_API_HOST", API_HOST)
     return API_HOST
 
 
 @pytest.fixture()
 def wheel(monkeypatch, tmp_path):
-    monkeypatch.setenv("ARTIFACTS_TOOLS_DIR", str(tmp_path))
+    monkeypatch.setenv("REAM_TOOLS_DIR", str(tmp_path))
     (tmp_path / "artifacts-0.1.0.post20261023080000-py3-none-any.whl").write_bytes(
         b"PK"
     )
@@ -124,7 +124,7 @@ def test_it_carries_no_key(client, db):
 def test_without_a_tool_package_there_is_no_dead_install_line(
     client, monkeypatch, tmp_path
 ):
-    monkeypatch.setenv("ARTIFACTS_TOOLS_DIR", str(tmp_path / "missing"))
+    monkeypatch.setenv("REAM_TOOLS_DIR", str(tmp_path / "missing"))
     card = client.get("/api/v1/agent.json", headers={"host": GALLERY_HOST}).json()
     assert card["cli"]["install"] is None
     assert card["version"] is None

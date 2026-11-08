@@ -11,8 +11,8 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, keys, store
-from artifacts.app import create_gallery_app
+from ream import decisions, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 PAGE_2 = PAGE.replace("<p>x</p>", "<p>y</p>")
@@ -20,7 +20,7 @@ PAGE_2 = PAGE.replace("<p>x</p>", "<p>y</p>")
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 
@@ -335,7 +335,7 @@ def _folders(client, token):
 def test_renaming_an_agent_moves_its_folders_and_its_old_key_still_finds_them(
     client, db, tokens
 ):
-    from artifacts import rename
+    from ream import rename
 
     page = publish(client, tokens["alpha"], folder="roadmap").json()
     rename.rename_agent(db, "alpha", "gamma", dry_run=False)
@@ -364,7 +364,7 @@ def test_renaming_an_agent_moves_its_folders_and_its_old_key_still_finds_them(
 def test_a_rename_merge_with_a_clashing_slug_files_both_agents_pages_in_one_folder(
     client, db, tokens
 ):
-    from artifacts import rename
+    from ream import rename
 
     publish(client, tokens["alpha"], folder="roadmap")
     publish(client, tokens["alpha"], title="only-a", folder="solo")
@@ -391,7 +391,7 @@ def test_a_rename_merge_with_a_clashing_slug_files_both_agents_pages_in_one_fold
 
 
 def test_a_rename_never_touches_a_jeremy_folder(client, db, tokens):
-    from artifacts import rename
+    from ream import rename
 
     with db.connect() as conn, conn.transaction():
         conn.execute(
@@ -588,7 +588,7 @@ def page_archived(db, page_id):
 
 
 def kinds(db, agent):
-    from artifacts import events
+    from ream import events
 
     return [r.kind for r in events.list_for_agent(db, agent, since=0, limit=100)]
 
@@ -855,7 +855,7 @@ def test_move_with_a_folder_title_names_a_new_folder_only(client, tokens):
 def test_agent_rename_merge_keeps_an_archived_survivor_and_carries_aliases(
     client, db, tokens
 ):
-    from artifacts import rename
+    from ream import rename
 
     a, b = tokens["alpha"], tokens["beta"]
     publish(client, a, title="p", folder="solo")
@@ -897,7 +897,7 @@ def test_agent_rename_merge_keeps_an_archived_survivor_and_carries_aliases(
 def test_agent_rename_merge_of_an_archived_old_folder_into_a_live_one(
     client, db, tokens
 ):
-    from artifacts import rename
+    from ream import rename
 
     a, b = tokens["alpha"], tokens["beta"]
     publish(client, b, title="live", folder="clash")

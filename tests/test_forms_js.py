@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from artifacts.content import _viewer_report
+from ream.content import _viewer_report
 
 _HARNESS = Path(__file__).parent / "js" / "forms.test.mjs"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node runtime here")
 def test_the_form_listener_behaves_when_actually_run(tmp_path, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     served = _viewer_report()
     body = served.removeprefix("<script>try{(function(){").removesuffix(
         "})()}catch(e){}</script>"
@@ -37,7 +37,7 @@ def test_the_form_listener_behaves_when_actually_run(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node runtime here")
 def test_the_gallerys_submit_bar_behaves_when_actually_run(tmp_path):
-    from artifacts.forms_ui import FORMS_JS
+    from ream.forms_ui import FORMS_JS
 
     script = tmp_path / "forms.js"
     script.write_text(FORMS_JS)

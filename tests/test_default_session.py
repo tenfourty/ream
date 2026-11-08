@@ -4,8 +4,8 @@ for stays the declared label alone."""
 
 from types import SimpleNamespace
 
-from artifacts.client import declared_session, default_session, session_label
-from artifacts.decide import _office
+from ream.client import declared_session, default_session, session_label
+from ream.decide import _office
 
 SID = "48147c82-1111-2222-3333-444455556666"
 
@@ -35,7 +35,7 @@ def test_an_explicit_label_always_wins(monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", SID)
     monkeypatch.setenv("QD_OFFICE", "quarterdeck")
     assert session_label("qd-maintainer/abc") == "qd-maintainer/abc"
-    monkeypatch.setenv("ARTIFACTS_SESSION", "qd-maintainer/env")
+    monkeypatch.setenv("REAM_SESSION", "qd-maintainer/env")
     assert session_label() == "qd-maintainer/env"
 
 

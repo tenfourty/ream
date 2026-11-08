@@ -16,8 +16,8 @@ scoped to the calling key's own agent. One seat must never reach another's page
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys, store
-from artifacts.app import create_gallery_app
+from ream import keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
@@ -25,7 +25,7 @@ SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 

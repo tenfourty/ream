@@ -9,7 +9,7 @@ from datetime import date
 
 import pytest
 
-from artifacts import beadmetrics
+from ream import beadmetrics
 
 
 def row(rid, status, *, created, closed=None, updated=None, priority=2):

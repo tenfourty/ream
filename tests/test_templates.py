@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from artifacts import csp, stamp
+from ream import csp, stamp
 
 REPO = Path(__file__).resolve().parent.parent
 CANON = REPO / "src" / "artifacts" / "templates"
@@ -188,7 +188,7 @@ def test_the_skill_directory_carries_the_same_bytes(path: Path):
     """An agent reading the skill gets what the API would serve it, exactly."""
     copy = SKILL_COPIES / path.name
     assert copy.is_file(), f"{copy} is missing — run scripts/sync-templates.py"
-    from artifacts import settings, textvars
+    from ream import settings, textvars
 
     with settings.override(
         owner_id="jeremy",

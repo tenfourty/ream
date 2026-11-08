@@ -1,6 +1,6 @@
 # Is anyone listening? Reading the line under a question
 
-Design: `specs/2026-10-29-where-an-answer-goes.md`. Code: `src/artifacts/listening.py`;
+Design: `specs/2026-10-29-where-an-answer-goes.md`. Code: `src/ream/listening.py`;
 all the wording is `listening.WORDING`.
 
 An open question on a page carries one line saying where Jeremy's answer goes:

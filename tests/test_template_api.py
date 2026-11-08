@@ -10,13 +10,13 @@ one to publish at all.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys, templates
-from artifacts.app import create_gallery_app
+from ream import keys, templates
+from ream.app import create_gallery_app
 
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 

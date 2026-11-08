@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from artifacts import (
+from ream import (
     admin,
     client,
     comments,
@@ -31,9 +31,9 @@ from artifacts import (
     store,
     templates,
 )
-from artifacts.db import Database, jsonb
-from artifacts.serve import app_from_env
-from artifacts.text import pronoun
+from ream.db import Database, jsonb
+from ream.serve import app_from_env
+from ream.text import pronoun
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
@@ -66,9 +66,9 @@ def test_the_suite_runs_as_our_deployment_does():
 
 def test_unset_is_neutral(monkeypatch):
     for name in (
-        "ARTIFACTS_OWNER_ID",
-        "ARTIFACTS_OWNER_NAME",
-        "ARTIFACTS_OWNER_PRONOUN",
+        "REAM_OWNER_ID",
+        "REAM_OWNER_NAME",
+        "REAM_OWNER_PRONOUN",
     ):
         monkeypatch.delenv(name)
     s = settings.current()
@@ -80,14 +80,14 @@ def test_unset_is_neutral(monkeypatch):
 
 
 def test_a_blank_variable_is_unset(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_OWNER_ID", "   ")
+    monkeypatch.setenv("REAM_OWNER_ID", "   ")
     assert settings.current().owner_id == "owner"
 
 
 def test_it_is_read_at_call_time(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_OWNER_ID", "ann")
+    monkeypatch.setenv("REAM_OWNER_ID", "ann")
     assert settings.current().owner_id == "ann"
-    monkeypatch.setenv("ARTIFACTS_OWNER_ID", "bob")
+    monkeypatch.setenv("REAM_OWNER_ID", "bob")
     assert settings.current().owner_id == "bob"
 
 
@@ -104,13 +104,13 @@ def test_override_layers_over_the_environment_and_ends_with_the_block():
 
 
 def test_validate_for_serve_lists_every_problem_at_once(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_OWNER_ID", "Has Spaces")
-    monkeypatch.setenv("ARTIFACTS_OWNER_PRONOUN", "xe")
+    monkeypatch.setenv("REAM_OWNER_ID", "Has Spaces")
+    monkeypatch.setenv("REAM_OWNER_PRONOUN", "xe")
     with pytest.raises(SystemExit) as exc:
         settings.validate_for_serve()
     message = str(exc.value)
-    assert "ARTIFACTS_OWNER_ID" in message
-    assert "ARTIFACTS_OWNER_PRONOUN" in message
+    assert "REAM_OWNER_ID" in message
+    assert "REAM_OWNER_PRONOUN" in message
     assert "Has Spaces" not in message
 
 
@@ -254,7 +254,7 @@ def test_the_same_id_starts_again_and_another_refuses(db):
         owner.check(db, "owner")
     assert exc.value.stored == "jeremy"
     assert "change-owner" in str(exc.value)
-    assert "ARTIFACTS_OWNER_ID=jeremy" in str(exc.value)
+    assert "REAM_OWNER_ID=jeremy" in str(exc.value)
     assert owner.stored(db) == "jeremy"
 
 
@@ -266,7 +266,7 @@ def test_the_real_entrypoint_refuses_a_database_written_for_another_owner(
     with pytest.raises(SystemExit) as exc:
         app_from_env()
     assert "someone-else" in str(exc.value)
-    assert "ARTIFACTS_OWNER_ID" in str(exc.value)
+    assert "REAM_OWNER_ID" in str(exc.value)
 
 
 def test_the_real_entrypoint_records_the_owner_on_first_start(db, monkeypatch):
@@ -281,10 +281,10 @@ def test_the_real_entrypoint_refuses_a_bad_setting_before_touching_the_database(
     db, monkeypatch
 ):
     monkeypatch.setenv("DATABASE_URL", db.dsn)
-    monkeypatch.setenv("ARTIFACTS_OWNER_ID", "No Good")
+    monkeypatch.setenv("REAM_OWNER_ID", "No Good")
     with pytest.raises(SystemExit) as exc:
         app_from_env()
-    assert "ARTIFACTS_OWNER_ID" in str(exc.value)
+    assert "REAM_OWNER_ID" in str(exc.value)
     assert owner.stored(db) is None
 
 
@@ -417,7 +417,7 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
     admin.main(["change-owner", "ann"])
     out = capsys.readouterr().out
     assert "DRY RUN" not in out
-    assert "ARTIFACTS_OWNER_ID=ann" in out
+    assert "REAM_OWNER_ID=ann" in out
     assert owner.stored(db) == "ann"
 
     with pytest.raises(SystemExit) as refused:
@@ -439,9 +439,9 @@ BASE = "https://artifacts.tenfourty.site"
 
 
 def _served(monkeypatch) -> dict[str, str]:
-    monkeypatch.setenv("ARTIFACTS_TOOLS_DIR", "/nonexistent-dir")
-    monkeypatch.setenv("ARTIFACTS_API_HOST", "agents.example.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", BASE)
+    monkeypatch.setenv("REAM_TOOLS_DIR", "/nonexistent-dir")
+    monkeypatch.setenv("REAM_API_HOST", "agents.example.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", BASE)
     return {
         "agents.txt": onboarding.agents_txt(BASE),
         "skill.md": onboarding.skill_md(BASE),

@@ -16,19 +16,19 @@ import psycopg
 import pytest
 from psycopg import sql
 
-from artifacts import admin, migrate
-from artifacts.db import Database, jsonb
+from ream import admin, migrate
+from ream.db import Database, jsonb
 
 T0 = datetime(2026, 10, 15, 9, 30, 15, 123456, tzinfo=UTC)
 T1 = T0 + timedelta(hours=1)
 
 
 def _schema_tables(filename: str) -> set[str]:
-    text = resources.files("artifacts").joinpath(filename).read_text()
+    text = resources.files("ream").joinpath(filename).read_text()
     if filename == "schema_sqlite.sql":
         # SQLite's later tables arrive as numbered steps, never as edits to
         # this file (db._SQLITE_STEPS).
-        from artifacts import db as dbmod
+        from ream import db as dbmod
 
         text += "\n".join(
             s

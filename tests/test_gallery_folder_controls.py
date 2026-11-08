@@ -7,8 +7,8 @@ the reserved `jeremy` and holds any agent's pages; agents cannot publish into it
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, events, keys, store
-from artifacts.app import create_gallery_app
+from ream import decisions, events, keys, store
+from ream.app import create_gallery_app
 
 PAGE = (
     "<!doctype html><html><head><title>t</title></head><body><h1>Hi</h1></body></html>"
@@ -19,7 +19,7 @@ CROSS = {"origin": store.gallery_origin(), "sec-fetch-site": "cross-site"}
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 
@@ -300,7 +300,7 @@ def test_a_page_in_his_folder_reads_back_folder_null_to_its_agent(client, db):
 
 
 def test_new_his_folder_takes_the_next_suffix_when_the_slug_is_taken_under_it(db):
-    from artifacts import folders
+    from ream import folders
 
     with db.connect() as conn, conn.transaction():
         first = folders.create_his(conn, "Roadmap")

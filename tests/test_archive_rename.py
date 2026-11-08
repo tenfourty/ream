@@ -11,8 +11,8 @@ because it would take his answers with it.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys, store
-from artifacts.app import create_gallery_app
+from ream import keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
@@ -20,7 +20,7 @@ SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 
@@ -55,7 +55,7 @@ def test_archiving_deletes_nothing(client, db, page):
     """The whole reason this is archiving and not deletion. Pages here carry the
     record of what he was asked and what he decided; tidying the gallery must
     not be the way that record is destroyed."""
-    from artifacts import decisions
+    from ream import decisions
 
     asked = decisions.ask(
         db,
@@ -224,7 +224,7 @@ def test_delete_is_offered_and_destroys_nothing(client, db, page):
     separate destroy-it-now. So the guard has done its job and becomes a test
     of what he actually chose. The claim it defends is the same one: the row
     exists, and pressing it destroys nothing."""
-    from artifacts import decisions
+    from ream import decisions
 
     asked = decisions.ask(
         db,

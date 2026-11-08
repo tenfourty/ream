@@ -21,8 +21,8 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import events, serve
-from artifacts.app import create_app
+from ream import events, serve
+from ream.app import create_app
 
 
 @pytest.fixture(autouse=True)
@@ -218,7 +218,7 @@ def test_a_dsn_gets_a_connect_timeout_and_keeps_one_it_already_has():
     one: `wait_for_agent` opens one connection per look, twice a second, and a
     Postgres failover mid-hold would otherwise park the loop past a deadline it
     has already promised the caller."""
-    from artifacts.db import Database
+    from ream.db import Database
 
     assert "connect_timeout=5" in Database("postgresql:///artifacts").dsn
     assert "?connect_timeout=5" in Database("postgresql:///artifacts").dsn
@@ -264,8 +264,8 @@ def test_the_shutdown_answer_is_the_feed_s_normal_empty_shape(db, monkeypatch):
     """
     from fastapi.testclient import TestClient
 
-    from artifacts import keys
-    from artifacts.app import create_gallery_app
+    from ream import keys
+    from ream.app import create_gallery_app
 
     token, _ = keys.mint(db, agent="leaving-seat")
     client = TestClient(create_gallery_app(db))

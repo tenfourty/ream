@@ -18,7 +18,7 @@ The throwaway server belongs to the xdist controller (or the only process,
 when serial), never to a worker, so a worker killed mid-run cannot orphan it.
 Servers orphaned by a killed controller are reaped at the next start.
 
-ARTIFACTS_TEST_DB=sqlite runs the same suite on SQLite instead (the SQLite
+REAM_TEST_DB=sqlite runs the same suite on SQLite instead (the SQLite
 switch, slice 5): each worker gets its own database file, no server is
 started, and a test marked `postgres_only` (it reads Postgres's catalogue or
 its own SQL is Postgres's) is skipped. CI runs the suite both ways.
@@ -48,12 +48,12 @@ import pytest
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
-from artifacts import db as _dbmod
-from artifacts import events
-from artifacts.db import Database
+from ream import db as _dbmod
+from ream import events
+from ream.db import Database
 
 _REAL_WAIT_FOR_AGENT = events.wait_for_agent
-SQLITE = os.environ.get("ARTIFACTS_TEST_DB") == "sqlite"
+SQLITE = os.environ.get("REAM_TEST_DB") == "sqlite"
 # Every SQLite database a test makes is a throwaway file, so no commit waits on
 # an fsync -- the same trade the Postgres pass makes (_no_durability, measured
 # 29 Sep 2026). With FULL, a lease test on CI's throttled runner saw single
@@ -61,24 +61,22 @@ SQLITE = os.environ.get("ARTIFACTS_TEST_DB") == "sqlite"
 if SQLITE:
     _dbmod.SQLITE_SYNCHRONOUS = "off"
 # No nightly backup-and-purge thread in a test that builds the real app.
-os.environ["ARTIFACTS_MAINTENANCE"] = "off"
+os.environ["REAM_MAINTENANCE"] = "off"
 # Our deployment's owner, as its manifest sets them (core-and-plugins design 3.2): the suite
 # stores and reads "jeremy". A test of another owner uses `settings.override(...)`.
-os.environ["ARTIFACTS_OWNER_ID"] = "jeremy"
-os.environ["ARTIFACTS_OWNER_NAME"] = "Jeremy"
-os.environ["ARTIFACTS_OWNER_PRONOUN"] = "he"
+os.environ["REAM_OWNER_ID"] = "jeremy"
+os.environ["REAM_OWNER_NAME"] = "Jeremy"
+os.environ["REAM_OWNER_PRONOUN"] = "he"
 # ...and its origins and proxy header, as the manifest sets them (design 3.3, slice 2): the
 # service has no house default for any of them. A test of another deployment, or of a fresh
 # install, uses `settings.override(...)` or monkeypatch.
-os.environ["ARTIFACTS_GALLERY_ORIGIN"] = "https://artifacts.tenfourty.site"
-os.environ["ARTIFACTS_CONTENT_DOMAIN"] = "tenfourty.com"
-os.environ["ARTIFACTS_TRUSTED_IP_HEADER"] = "X-Real-IP"
+os.environ["REAM_GALLERY_ORIGIN"] = "https://artifacts.tenfourty.site"
+os.environ["REAM_CONTENT_DOMAIN"] = "tenfourty.com"
+os.environ["REAM_TRUSTED_IP_HEADER"] = "X-Real-IP"
 # ...and its served-text settings (design 3.4, slice 3).
-os.environ["ARTIFACTS_FOOTER"] = (
-    "Published from BABA through the homelab artifacts service."
-)
-os.environ["ARTIFACTS_HOST_LABEL"] = "BABA"
-os.environ["ARTIFACTS_PROXY_NOTES_FILE"] = os.path.join(
+os.environ["REAM_FOOTER"] = "Published from BABA through the homelab artifacts service."
+os.environ["REAM_HOST_LABEL"] = "BABA"
+os.environ["REAM_PROXY_NOTES_FILE"] = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "fixtures", "house_proxy_notes.txt"
 )
 
@@ -207,7 +205,7 @@ class _ReusedApps:
     Only the plain calls are reused: a real `Database`, and for the gallery app
     no limiter of the caller's own. A test asking a factory for a second app
     gets a freshly built one, so two apps in one test are never the same
-    object. `ARTIFACTS_TEST_FRESH_APPS=1` turns reuse off entirely, to rule it
+    object. `REAM_TEST_FRESH_APPS=1` turns reuse off entirely, to rule it
     out when a test misbehaves."""
 
     real_gallery = None
@@ -217,9 +215,9 @@ class _ReusedApps:
 
     @classmethod
     def install(cls) -> None:
-        if os.environ.get("ARTIFACTS_TEST_FRESH_APPS") == "1":
+        if os.environ.get("REAM_TEST_FRESH_APPS") == "1":
             return
-        from artifacts import app as app_module
+        from ream import app as app_module
 
         cls.real_gallery = app_module.create_gallery_app
         cls.real_app = app_module.create_app
@@ -230,7 +228,7 @@ class _ReusedApps:
     def _hand_out(cls, key, db, build):
         """The app for `key`, built once by `build(held_db)` -> (app, limiters),
         pointed at `db` and with every limiter it holds as good as new."""
-        from artifacts import ratelimit
+        from ream import ratelimit
 
         entry = cls.entries.get(key)
         if entry is None:
@@ -250,7 +248,7 @@ class _ReusedApps:
         key = ("gallery", getattr(db, "dsn", None))
         if limiter is not None or type(db) is not Database or key in cls.handed:
             return cls.real_gallery(db, limiter)
-        from artifacts import ratelimit
+        from ream import ratelimit
 
         def build(held):
             fresh = ratelimit.FailedAuthLimiter()
@@ -264,7 +262,7 @@ class _ReusedApps:
         # An app with a partner endpoint is its own build, never a shared one.
         if args or kwargs or type(db) is not Database or key in cls.handed:
             return cls.real_app(db, *args, **kwargs)
-        from artifacts import ratelimit
+        from ream import ratelimit
 
         def build(held):
             # `create_app` makes its limiter itself; note it as it is made.
@@ -298,7 +296,7 @@ def _apps_hand_out_afresh():
 
 
 # How the controller hands its server to the xdist workers it spawns.
-_URI_ENV = "ARTIFACTS_TEST_PG_URI"
+_URI_ENV = "REAM_TEST_PG_URI"
 _PGDATA_PREFIX = "artifacts-pgtest-"
 
 
@@ -427,29 +425,29 @@ def _is_worker(config) -> bool:
 
 def _declared_throwaway(env) -> str | None:
     """PG_TEST_DSN, but only when the environment also declares that server a
-    throwaway (ARTIFACTS_TEST_PG_THROWAWAY=1, which CI's own service container
+    throwaway (REAM_TEST_PG_THROWAWAY=1, which CI's own service container
     sets). A developer's PG_TEST_DSN may point at a database that matters, so
     durability is never touched on the DSN alone."""
     uri = env.get("PG_TEST_DSN")
-    if uri and env.get("ARTIFACTS_TEST_PG_THROWAWAY") == "1":
+    if uri and env.get("REAM_TEST_PG_THROWAWAY") == "1":
         return uri
     return None
 
 
 def pytest_sessionstart(session) -> None:
-    """CI sets ARTIFACTS_REQUIRE_BROWSER=1: a run with no headless browser is then
+    """CI sets REAM_REQUIRE_BROWSER=1: a run with no headless browser is then
     a failure, not a pile of skips. The browser tests (comments panel, hover cards,
     thumbnails) skip when `thumbs.available()` is false, and for a long time CI had
     no browser, so they passed only on a maintainer's machine (runcove-5t3oj.81).
     Checked once, in the controller, before any test patches `thumbs.available`."""
-    if os.environ.get("ARTIFACTS_REQUIRE_BROWSER") != "1" or _is_worker(session.config):
+    if os.environ.get("REAM_REQUIRE_BROWSER") != "1" or _is_worker(session.config):
         return
-    from artifacts import thumbs
+    from ream import thumbs
 
     if not thumbs.available():
         pytest.exit(
-            "ARTIFACTS_REQUIRE_BROWSER=1 but there is no headless browser "
-            f"(ARTIFACTS_BROWSER={os.environ.get('ARTIFACTS_BROWSER')!r}, "
+            "REAM_REQUIRE_BROWSER=1 but there is no headless browser "
+            f"(REAM_BROWSER={os.environ.get('REAM_BROWSER')!r}, "
             "else chrome-headless-shell/chromium on PATH): the browser tests would "
             "skip, and in CI a skip is a failure",
             returncode=1,
@@ -536,7 +534,7 @@ def _patient_changes_view(monkeypatch):
     """The changes view waits 2 s for its worker in production; tests that
     expect a marked-up result wait 15 s, so a loaded CI box cannot flip them.
     Tests about the timeout itself pass their own short `timeout`."""
-    from artifacts import pagediff
+    from ream import pagediff
 
     monkeypatch.setattr(pagediff, "TIMEOUT_SECONDS", 15.0)
     # The matcher's own budget (1.5 s in production) too: on a starved box
@@ -550,7 +548,7 @@ def _patient_changes_view(monkeypatch):
 def _no_background_thumbnails(request, monkeypatch):
     """The service in a test has no renderer, as it has none in CI.
 
-    With a headless browser on the machine (ARTIFACTS_BROWSER), every publish
+    With a headless browser on the machine (REAM_BROWSER), every publish
     through the app started a real Chromium in the background, and every
     `artifacts-publish` then waited up to 10 s for that render to report:
     measured 30 Sep 2026, the largest single cost of a local run (a ~1 s wait
@@ -567,7 +565,7 @@ def _no_background_thumbnails(request, monkeypatch):
     tests) run before this and still see the real browser."""
     if request.node.get_closest_marker("background_thumbnails"):
         return
-    from artifacts import thumbs
+    from ream import thumbs
 
     def not_in_this_test(db, artifact_id: str, version_n: int, html: str) -> None:
         return None
@@ -578,15 +576,16 @@ def _no_background_thumbnails(request, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_inherited_office(monkeypatch, tmp_path):
-    """`artifacts-decide wait` takes its office from ARTIFACTS_SESSION and keeps
+    """`artifacts-decide wait` takes its office from REAM_SESSION and keeps
     what it has shown under XDG_STATE_HOME. Neither may leak in from the shell
     running the suite: a maintainer's own label would filter every wait test,
     and its state file would hold answers back. A test that wants either sets it."""
-    monkeypatch.delenv("ARTIFACTS_SESSION", raising=False)
+    for name in ("REAM_SESSION", "ARTIFACTS_SESSION"):
+        monkeypatch.delenv(name, raising=False)
     # Nor the agent tool's own markers, from which the CLIs build a default
     # label (runcove-5t3oj.25): a suite run inside Claude Code would label
     # every "unlabelled" request.
-    for name in ("CLAUDE_CODE_SESSION_ID", "QD_OFFICE", "ARTIFACTS_SEAT"):
+    for name in ("CLAUDE_CODE_SESSION_ID", "QD_OFFICE", "REAM_SEAT", "ARTIFACTS_SEAT"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))
 
@@ -645,7 +644,7 @@ def on_first_listen(monkeypatch):
     Refuses to arm under `brief_holds`: with the server's hold capped, a hold
     that never wakes early still "passes", because the next request finds the
     event."""
-    from artifacts import decide
+    from ream import decide
 
     def arm(action):
         assert events.wait_for_agent is _REAL_WAIT_FOR_AGENT, (
@@ -935,7 +934,7 @@ def db(_schema: _Schema, dsn: str, request):
 def _forget_clean_scans():
     """The GitGuardian clean-answer memory is per process; one test's clean
     body must not spare the next test its scan."""
-    from artifacts import ggscan
+    from ream import ggscan
 
     with ggscan._clean_lock:
         ggscan._clean.clear()

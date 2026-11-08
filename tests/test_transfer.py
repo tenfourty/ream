@@ -4,8 +4,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, events, keys, store
-from artifacts.app import create_gallery_app
+from ream import decisions, events, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]

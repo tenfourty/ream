@@ -6,8 +6,8 @@ nothing is laid over the frame, that the frame's height follows its new width,
 and that the address never changes. That is the whole claim of "comments open
 beside the page at once", so it is checked where it is true or false.
 
-Needs the system's headless browser (`ARTIFACTS_BROWSER`, found the same way as
-the thumbnail tests); without one it skips -- except where ARTIFACTS_REQUIRE_BROWSER=1
+Needs the system's headless browser (`REAM_BROWSER`, found the same way as
+the thumbnail tests); without one it skips -- except where REAM_REQUIRE_BROWSER=1
 (CI), where a missing browser fails the whole run at start (tests/conftest.py). playwright is a dev
 dependency and drives that browser; it never downloads one of its own.
 
@@ -25,13 +25,13 @@ import pytest
 from playwright import sync_api
 from test_client import _LiveServer
 
-from artifacts import comments, events, store, thumbs
-from artifacts.app import create_app
+from ream import comments, events, store, thumbs
+from ream.app import create_app
 
 pytestmark = [
     pytest.mark.skipif(
         not thumbs.available(),
-        reason="no headless browser: set ARTIFACTS_BROWSER to a chrome binary, or put "
+        reason="no headless browser: set REAM_BROWSER to a chrome binary, or put "
         "chromium on PATH; these browser tests do NOT run without one",
     ),
     pytest.mark.slow(
@@ -57,10 +57,10 @@ PANEL_PX = 384  # min(24rem,100%) at a 16px root, on any window over 24rem
 
 @pytest.fixture()
 def served(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     server = _LiveServer(create_app(db))
     origin = server.start()
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", origin)
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", origin)
     page = store.publish(db, "seat", "Board", PAGE)
     try:
         yield origin, page.id
@@ -374,7 +374,7 @@ def test_hovering_marked_text_shows_its_comment_beside_it(browser, served, db):
         )
         assert cb["width"] <= 22 * 16 + 1
         assert pg.evaluate("() => document.querySelectorAll('.hovercard').length") == 1
-        shot = os.environ.get("ARTIFACTS_HOVER_SHOT")
+        shot = os.environ.get("REAM_HOVER_SHOT")
         if shot:
             pg.screenshot(path=shot)
 
@@ -459,7 +459,7 @@ def test_a_reply_being_typed_survives_and_full_screen_shows_the_card(
         card.wait_for(state="visible", timeout=3000)
         assert card.locator(".hcact button").all_inner_texts() == ["Reply", "Open"]
         assert not card.locator("form.creply").is_visible()
-        shot = os.environ.get("ARTIFACTS_HOVER_SHOT2")
+        shot = os.environ.get("REAM_HOVER_SHOT2")
         if shot:
             pg.screenshot(path=shot)
         card.get_by_role("button", name="Reply").click()
@@ -501,7 +501,7 @@ def test_round_two_opens_on_green_insertions_and_hides_them_on_request(
     """Page review step 4: in round 2 the frame shows what changed since the
     version he sent back -- insertions green, deletions struck -- and the
     card's Hide changes link brings back the plain page."""
-    from artifacts import decisions, nudge
+    from ream import decisions, nudge
 
     origin, ident = served
     nudge_emit, nudge.emit = nudge.emit, lambda **kw: None
@@ -544,7 +544,7 @@ def test_round_two_opens_on_green_insertions_and_hides_them_on_request(
             "line-through"
         )
         assert "still on page" in pg.text_content(".carried")
-        shot = os.environ.get("ARTIFACTS_ROUND2_SHOT")
+        shot = os.environ.get("REAM_ROUND2_SHOT")
         if shot:
             pg.screenshot(path=shot)
 
@@ -564,7 +564,7 @@ def test_a_mark_made_across_a_deletion_stores_the_live_words(browser, served, db
     """Page review step 4, review fix: selecting across struck-out old words
     in round 2's changes view stores the live page's words and offsets, so
     the mark paints on the plain page too."""
-    from artifacts import decisions, nudge
+    from ream import decisions, nudge
 
     origin, ident = served
     nudge_emit, nudge.emit = nudge.emit, lambda **kw: None

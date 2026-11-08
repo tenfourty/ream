@@ -7,7 +7,7 @@ import json
 import pytest
 from test_client import key_file, live  # noqa: F401
 
-from artifacts import decide, decisions, store
+from ream import decide, decisions, store
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
@@ -30,7 +30,7 @@ def _ask(db, page, session="cove/1", question="ship?"):
 
 
 def _run(args, key_path, monkeypatch, session="cove/1") -> int:
-    monkeypatch.setenv("ARTIFACTS_SESSION", session)
+    monkeypatch.setenv("REAM_SESSION", session)
     return decide.main(["--key-file", str(key_path), *args])
 
 

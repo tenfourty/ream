@@ -9,8 +9,8 @@ agents, and a closed, deleted or unknown one answers one and the same 404.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, decisions, events, keys, store
-from artifacts.app import create_gallery_app
+from ream import comments, decisions, events, keys, store
+from ream.app import create_gallery_app
 
 PAGE = (
     "<!doctype html><html><head><title>t</title></head><body>"
@@ -25,8 +25,8 @@ OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     return TestClient(create_gallery_app(db), base_url="https://testserver")
 
 
@@ -320,7 +320,7 @@ def test_a_sqlite_file_from_before_the_session_column_is_upgraded(
 ):
     import sqlite3
 
-    from artifacts import db as dbmod
+    from ream import db as dbmod
 
     path = tmp_path / "old.db"
     steps = dict(dbmod._SQLITE_STEPS)
@@ -345,7 +345,7 @@ def test_a_sqlite_file_from_before_the_session_column_is_upgraded(
 def test_a_page_of_unclosed_headings_is_searched_in_linear_time(db):
     import time
 
-    from artifacts import comments
+    from ream import comments
 
     body = "<h2 " * 40_000 + "<h2>Shutdown</h2><p>Retries are capped</p>"
     # The best of three: a loaded CI runner once stalled one call for 5.8 s,
@@ -362,7 +362,7 @@ def test_a_page_of_unclosed_headings_is_searched_in_linear_time(db):
 
 
 def test_on_a_shared_key_another_offices_comment_is_foreign(client, db):
-    from artifacts import decide
+    from ream import decide
 
     token, _ = keys.mint(db, agent="shared")
     headers = {"Authorization": f"Bearer {token}"}
@@ -476,7 +476,7 @@ def test_a_non_owner_sees_his_comments_and_replies_under_them(client, db, seats,
 
 
 def test_a_page_over_the_input_limit_refuses_a_text_anchor(monkeypatch):
-    from artifacts import text
+    from ream import text
 
     monkeypatch.setattr(text, "INPUT_LIMIT", 100)
     with pytest.raises(comments.TextAnchorError):
@@ -529,7 +529,7 @@ def test_an_owners_own_comment_never_raises_an_event_whatever_its_label(db):
 
 
 def test_a_cut_page_has_an_unknown_quote_state(monkeypatch):
-    from artifacts import text
+    from ream import text
 
     monkeypatch.setattr(text, "VISIBLE_LIMIT", 10)
     monkeypatch.setattr(text, "SEARCH_LIMIT", 5)

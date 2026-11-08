@@ -18,8 +18,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from test_client import key_file, live  # noqa: F401
 
-from artifacts import decide, decisions, events, keys, listening, nudge, partner, store
-from artifacts.app import create_gallery_app
+from ream import decide, decisions, events, keys, listening, nudge, partner, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
@@ -32,7 +32,7 @@ def _quiet(monkeypatch):
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db))
 
 
@@ -50,7 +50,7 @@ def bridge(monkeypatch, tmp_path):
     monkeypatch.setenv(partner.ENV_ALLOW_HTTP, "1")
     monkeypatch.setenv(partner.ENV_KEY_FILE, str(path))
     monkeypatch.setenv(partner.ENV_KEY_ID, "test-key-1")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://gallery.invalid")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://gallery.invalid")
 
 
 def auth(token):
@@ -486,9 +486,9 @@ def test_a_hostile_session_label_is_escaped_on_the_page(db, client):
 
 def _run(args, key_path, monkeypatch, session="cove/1") -> int:
     if session is None:
-        monkeypatch.delenv("ARTIFACTS_SESSION", raising=False)
+        monkeypatch.delenv("REAM_SESSION", raising=False)
     else:
-        monkeypatch.setenv("ARTIFACTS_SESSION", session)
+        monkeypatch.setenv("REAM_SESSION", session)
     return decide.main(["--key-file", str(key_path), *args])
 
 
@@ -592,7 +592,7 @@ def test_help_text_states_exit_codes_and_what_it_cannot_see(capsys):
 
 
 def test_onboarding_names_the_check_before_arming_a_wait():
-    from artifacts import onboarding
+    from ream import onboarding
 
     text = onboarding.agents_txt("https://artifacts.invalid")
     assert "artifacts-decide listening" in text
@@ -604,7 +604,7 @@ def test_onboarding_names_the_check_before_arming_a_wait():
 
 
 def test_a_rename_merge_keeps_the_later_hold_and_never_shortens_one(db):
-    from artifacts import rename
+    from ream import rename
 
     now = datetime.now(UTC)
     with db.connect() as conn:

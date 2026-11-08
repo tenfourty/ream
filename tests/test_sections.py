@@ -13,9 +13,9 @@ import pytest
 from fastapi.testclient import TestClient
 from test_client import key_file, live  # noqa: F401 -- fixtures
 
-from artifacts import client as cli
-from artifacts import decisions, keys, sections, store
-from artifacts.app import create_gallery_app
+from ream import client as cli
+from ream import decisions, keys, sections, store
+from ream.app import create_gallery_app
 
 PAGE = (
     "<!doctype html><html><head><title>CI</title></head><body>"
@@ -29,8 +29,8 @@ PAGE = (
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_DISPLAY_TZ", "Europe/Paris")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_DISPLAY_TZ", "Europe/Paris")
     return TestClient(create_gallery_app(db=db))
 
 
@@ -621,7 +621,7 @@ def test_a_question_opened_during_the_update_keeps_its_slot(db, page):
 
 
 def test_a_retry_does_not_rescan_what_was_already_scanned(db, page, monkeypatch):
-    from artifacts import ggscan
+    from ream import ggscan
 
     aid, _ = page
     asked_about = []
@@ -656,7 +656,7 @@ def test_a_retry_does_not_rescan_what_was_already_scanned(db, page, monkeypatch)
 def test_a_page_too_large_for_section_updates_says_republish_whole(client, db, page):
     """The browser-faithful check is pure Python; past 512 KB it would take
     too long, so the update is refused with the way forward."""
-    from artifacts import sections
+    from ream import sections
 
     big = (
         "<!doctype html><html><body><div id='log'>x</div>"
@@ -671,7 +671,7 @@ def test_a_page_too_large_for_section_updates_says_republish_whole(client, db, p
 def test_a_huge_fragment_on_a_small_page_is_refused_before_parsing(monkeypatch):
     """The cap covers the result, not only the live page: a small page plus a
     multi-megabyte fragment is refused before the slow check sees it."""
-    from artifacts import sections
+    from ream import sections
 
     def no_parse(*_a, **_k):
         raise AssertionError("parsed a fragment that should have been refused")

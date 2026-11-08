@@ -8,8 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 from test_client import key_file, live  # noqa: F401
 
-from artifacts import comments, decide, decisions, keys, store
-from artifacts.app import create_gallery_app
+from ream import comments, decide, decisions, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
@@ -219,7 +219,7 @@ def test_reply_and_ack_send_a_fresh_key_each_invocation_and_never_print_it(
 
 
 def test_the_client_retry_reuses_the_same_key(live, key_file, monkeypatch):
-    from artifacts import client as client_mod
+    from ream import client as client_mod
 
     _path, token = key_file
     sent = []
@@ -257,7 +257,7 @@ def test_the_client_retry_reuses_the_same_key(live, key_file, monkeypatch):
 
 
 def _fail_storing(monkeypatch):
-    from artifacts import idempotency
+    from ream import idempotency
 
     def boom(content):
         raise RuntimeError("crashed before the response was stored")

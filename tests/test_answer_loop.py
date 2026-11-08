@@ -8,8 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 from test_client import key_file, live  # noqa: F401
 
-from artifacts import api, decide, decisions, keys, store
-from artifacts.app import create_gallery_app
+from ream import api, decide, decisions, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
@@ -97,7 +97,7 @@ def _event(db, n=1):
 def test_safe_cursor_is_never_above_what_was_returned_on_a_full_page():
     from types import SimpleNamespace
 
-    from artifacts import events
+    from ream import events
 
     def row(n):
         return SimpleNamespace(seq=n)

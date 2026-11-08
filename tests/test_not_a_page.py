@@ -14,15 +14,15 @@ business. This refuses one shape: a body that is not HTML at all.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys, store
-from artifacts.app import create_gallery_app
+from ream import keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
 
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 
@@ -154,7 +154,7 @@ def test_every_shim_injection_input_still_publishes(db):
     """The acceptance criteria, literally: the shim injector and this guard
     read the same regex for the same reason, so a body the injector can splice
     is a body this must accept."""
-    from artifacts import content
+    from ream import content
 
     for body in (
         "<!doctype html><p>x</p>",

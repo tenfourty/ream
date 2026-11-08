@@ -2,7 +2,7 @@
 
 import pytest
 
-from artifacts import news, onboarding, settings, templates, textvars
+from ream import news, onboarding, settings, templates, textvars
 
 
 def test_forms_follow_the_pronoun():
@@ -50,7 +50,7 @@ def _all_help(parser):
 
 
 def test_cli_help_and_messages_follow_the_owner(monkeypatch, capsys):
-    from artifacts import client, connect_cli, decide
+    from ream import client, connect_cli, decide
 
     monkeypatch.setenv("COLUMNS", "80")
     for parser in (client.build_parser(), decide.build_parser()):

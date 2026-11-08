@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from artifacts import thumbs
+from ream import thumbs
 
 # The real background render: tests elsewhere have it switched off.
 pytestmark = pytest.mark.background_thumbnails
@@ -48,7 +48,7 @@ def test_the_child_gets_no_credentials(monkeypatch):
         raise subprocess.TimeoutExpired(argv, 1)  # stop before doing any work
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:hunter2@db/artifacts")
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(thumbs, "_run", capture)
 
     assert thumbs.render(PAGE) is None
@@ -62,7 +62,7 @@ def test_the_child_is_its_own_process_group(monkeypatch):
     """The timeout is handed to the group-killing runner (the real kill is
     tested below with a real process tree)."""
     seen = {}
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(
         thumbs,
         "_run",
@@ -75,13 +75,13 @@ def test_the_child_is_its_own_process_group(monkeypatch):
 def test_no_browser_means_no_thumbnail_not_an_error(monkeypatch):
     """A deployment without a browser has a wall with gaps, not a broken
     service. Publishing must never depend on this."""
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/nonexistent/browser")
+    monkeypatch.setenv("REAM_BROWSER", "/nonexistent/browser")
     assert thumbs.available() is False
     assert thumbs.render(PAGE) is None
 
 
 def test_a_timeout_produces_nothing_rather_than_raising(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(
         thumbs,
         "_run",
@@ -93,7 +93,7 @@ def test_a_timeout_produces_nothing_rather_than_raising(monkeypatch):
 def test_output_that_is_not_a_png_is_refused(monkeypatch, tmp_path):
     """A truncated or empty file would be served as a broken image, which looks
     to a reader like the PAGE is broken rather than the thumbnail."""
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
 
     def write_rubbish(argv, **kw):
         shot = next(a for a in argv if str(a).startswith("--screenshot="))
@@ -108,7 +108,7 @@ def test_the_flags_disable_the_network(monkeypatch):
     """The page's own CSP forbids external fetches, but a CSP is enforced by the
     component being treated as untrusted, so it is not the control relied on."""
     seen = {}
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(
         thumbs,
         "_run",
@@ -128,7 +128,7 @@ def test_the_browser_runs_under_a_kernel_data_limit(monkeypatch):
     page grew past the 1.5 GiB of a test scope with no limit (22 Oct 2026). The
     kernel's per-process data limit stops it, and the sampler stays as well."""
     seen = {}
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(thumbs, "_PRLIMIT", "/usr/bin/prlimit")
     monkeypatch.setattr(
         thumbs,
@@ -149,7 +149,7 @@ def test_the_browser_runs_under_a_kernel_data_limit(monkeypatch):
 
 def test_without_prlimit_the_browser_still_runs(monkeypatch):
     seen = {}
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(thumbs, "_PRLIMIT", None)
     monkeypatch.setattr(
         thumbs,
@@ -201,7 +201,7 @@ def test_the_browser_sees_the_page_stamped_as_a_reader_would(monkeypatch):
     """The first live preview (24 Sep 2026) read "DECISION · · BABA": the date
     marker is filled in when a page is served, and the renderer was handed the
     stored body. Every wall tile had the same gap."""
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     seen = {}
 
     def read_page(argv, **kw):
@@ -301,7 +301,7 @@ def test_a_group_under_the_ceiling_is_left_alone():
 
 
 def test_a_render_that_blows_the_memory_ceiling_produces_nothing(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
 
     def blow(argv, **kw):
         assert kw["max_rss"] == thumbs.RENDER_MAX_RSS_BYTES
@@ -325,7 +325,7 @@ def test_a_normal_exit_sweeps_stragglers(tmp_path):
 
 
 def test_the_temp_dir_is_gone_after_a_timeout(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     seen = {}
 
     def hang(argv, **kw):
@@ -351,7 +351,7 @@ def _count_renders(monkeypatch, png):
         calls.append(1)
         return png, None
 
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(thumbs, "render_report", fake)
     monkeypatch.setattr(thumbs.store, "save_thumbnail", lambda *a: True)
     monkeypatch.setattr(thumbs.store, "save_render_errors", lambda *a: True)
@@ -380,7 +380,7 @@ def test_a_failing_version_is_retried_with_backoff_then_given_up(
     assert len(calls) == 1
     for expected in (2, 3):
         clock[0] += thumbs.BACKOFF_SECONDS * 4
-        with caplog.at_level("WARNING", logger="artifacts.thumbs"):
+        with caplog.at_level("WARNING", logger="ream.thumbs"):
             thumbs.render_in_background(None, "a1", 1, PAGE)
         assert len(calls) == expected
     clock[0] += 10**6  # however long we wait, it is over
@@ -416,14 +416,14 @@ def _no_browser_may_start(argv, **kw):
 def test_a_page_over_the_render_cap_starts_no_browser(monkeypatch):
     """15 Oct 2026: one 8 MiB render took the pod past 1 GiB and the kernel
     killed it. A page over the cap gets the text tile, never a browser."""
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(thumbs, "_run", _no_browser_may_start)
     big = "<p>" + "x" * thumbs.RENDER_MAX_BYTES + "</p>"
     assert thumbs.render_report(big) == (None, None)
 
 
 def test_the_cap_counts_bytes_not_characters(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(thumbs, "_run", _no_browser_may_start)
     # Under the cap in characters, over it in UTF-8 bytes.
     big = "é" * (thumbs.RENDER_MAX_BYTES // 2 + 1)
@@ -432,7 +432,7 @@ def test_the_cap_counts_bytes_not_characters(monkeypatch):
 
 
 def test_a_page_over_the_cap_queues_no_background_render(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
 
     def no_thread(*a, **kw):
         raise AssertionError("a render thread was started for a page over the cap")
@@ -445,7 +445,7 @@ def test_a_page_over_the_cap_queues_no_background_render(monkeypatch):
 def test_renders_take_turns(monkeypatch):
     """Two browsers at once would stack in one memory limit: the browser runs
     only while holding the one render slot."""
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     held = []
 
     def check_slot(argv, **kw):
@@ -466,7 +466,7 @@ def test_renders_take_turns(monkeypatch):
 def test_a_burst_of_publishes_parks_a_bounded_number_of_renders(monkeypatch):
     """One render at a time must not become a queue without end: past the
     background slots, a page gets no picture this time rather than a thread."""
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     taken = 0
     while thumbs._BACKGROUND_SLOTS.acquire(blocking=False):
         taken += 1
@@ -484,7 +484,7 @@ def test_a_burst_of_publishes_parks_a_bounded_number_of_renders(monkeypatch):
 
 
 def test_a_render_that_gets_no_turn_produces_nothing(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_BROWSER", "/bin/true")
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(thumbs, "SLOT_WAIT_SECONDS", 0.05)
     monkeypatch.setattr(thumbs, "_run", _no_browser_may_start)
     assert thumbs._RENDER_SLOT.acquire(blocking=False)

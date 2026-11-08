@@ -1,4 +1,4 @@
-from artifacts import keys
+from ream import keys
 
 
 def test_minted_token_verifies_and_carries_its_agent(db):

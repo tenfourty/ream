@@ -15,7 +15,7 @@ import re
 
 import pytest
 
-from artifacts import traps
+from ream import traps
 
 TEMPLATES = pathlib.Path(traps.__file__).parent / "templates"
 

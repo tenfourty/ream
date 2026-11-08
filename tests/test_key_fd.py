@@ -19,7 +19,7 @@ import os
 
 import pytest
 
-from artifacts import client, decide
+from ream import client, decide
 
 DUMMY = "art_" + "D" * 40
 
@@ -130,7 +130,7 @@ def test_with_neither_flag_it_still_reads_the_default_file(tmp_path, monkeypatch
     key_file = tmp_path / "key"
     key_file.write_text(DUMMY)
     key_file.chmod(0o600)
-    monkeypatch.setenv("ARTIFACTS_KEY_FILE", str(key_file))
+    monkeypatch.setenv("REAM_KEY_FILE", str(key_file))
     args = client.build_parser().parse_args(["--list"])
     assert client._resolve_key(args) == DUMMY
 
@@ -169,8 +169,8 @@ def test_a_missing_key_file_says_where_a_key_comes_from_now(
     file is missing is that it is gone ON PURPOSE -- and "no such file" alone
     sends the reader hunting for a lost key, or minting a second one for an
     identity that already exists."""
-    monkeypatch.setenv("ARTIFACTS_KEY_FILE", str(tmp_path / "shredded"))
-    monkeypatch.delenv("ARTIFACTS_KEY_FD", raising=False)
+    monkeypatch.setenv("REAM_KEY_FILE", str(tmp_path / "shredded"))
+    monkeypatch.delenv("REAM_KEY_FD", raising=False)
     assert client.main(["--list"]) == 2
     err = capsys.readouterr().err
     assert "artifacts-key" in err, "it names the wrapper"

@@ -7,9 +7,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, decisions, ggscan, keys, review, store
-from artifacts.app import create_gallery_app
-from artifacts.scan import Finding
+from ream import comments, decisions, ggscan, keys, review, store
+from ream.app import create_gallery_app
+from ream.scan import Finding
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 AWS = "AKIA" + "IOSFODNN7EXAMPLE"
@@ -17,8 +17,8 @@ AWS = "AKIA" + "IOSFODNN7EXAMPLE"
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     return TestClient(create_gallery_app(db=db), base_url="https://testserver")
 
 
@@ -283,7 +283,7 @@ def test_withdrawing_a_root_blanks_its_text_in_thread_resolved_events(db, page, 
 
 
 def test_release_says_nothing_of_replies_under_a_withdrawn_root(db, page):
-    from artifacts import holds
+    from ream import holds
 
     root = _agent_comment(db, page, "root")
     decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
@@ -326,7 +326,7 @@ def test_a_pass_stops_after_two_unavailable_answers_in_a_row(db, page, gg):
 def test_a_withdrawal_waits_for_an_in_flight_reply(db, page, gg, monkeypatch):
     import threading
 
-    from artifacts import events
+    from ream import events
 
     root = _agent_comment(db, page, "root")
     inside, go = threading.Event(), threading.Event()

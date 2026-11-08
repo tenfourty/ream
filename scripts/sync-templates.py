@@ -33,7 +33,7 @@ END = "/* ==== shared: end ==== */"
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from artifacts import settings, textvars
+from ream import settings, textvars
 
 # The canonical templates carry `{{variables}}` (textvars); the skill directories are THIS
 # house's and carry the words filled in, because an agent copies a skill file as it stands.
@@ -53,7 +53,7 @@ def house_copy(text: str) -> str:
         return textvars.render(text)
 
 
-CANON = REPO / "src" / "artifacts" / "templates"
+CANON = REPO / "src" / "ream" / "templates"
 
 # Every place a copy of the templates has to appear. The homelab tree is listed
 # because its own sessions read their skill from there; it is skipped rather

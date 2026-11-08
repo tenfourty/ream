@@ -1,5 +1,5 @@
 """Not a test: a one-shot that renders the real wall to a file so I can look at
-it. Skipped unless ARTIFACTS_RENDER_TO is set, so it never runs in CI."""
+it. Skipped unless REAM_RENDER_TO is set, so it never runs in CI."""
 
 import os
 import pathlib
@@ -7,10 +7,10 @@ import pathlib
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, store
-from artifacts.app import create_gallery_app
+from ream import decisions, store
+from ream.app import create_gallery_app
 
-OUT = os.environ.get("ARTIFACTS_RENDER_TO")
+OUT = os.environ.get("REAM_RENDER_TO")
 
 # A 1x1 PNG. The wall only asks whether a thumbnail EXISTS, so this is enough
 # to put a tile on the "has a picture" side of the mixture.
@@ -21,11 +21,11 @@ _PNG = bytes.fromhex(
 )
 
 
-@pytest.mark.skipif(not OUT, reason="set ARTIFACTS_RENDER_TO to render the wall")
+@pytest.mark.skipif(not OUT, reason="set REAM_RENDER_TO to render the wall")
 def test_render_the_wall(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
-    monkeypatch.setenv("ARTIFACTS_DISPLAY_TZ", "Europe/Paris")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_DISPLAY_TZ", "Europe/Paris")
 
     def page(title, standfirst):
         return (
@@ -98,7 +98,7 @@ def test_render_the_wall(db, monkeypatch):
     store.set_archived(db, ids[5], True, agent=None)
     # Two in the bin, one of them nearly out of time, so the countdown and its
     # "soon" state both render.
-    if os.environ.get("ARTIFACTS_RENDER_QUERY", "").endswith("deleted"):
+    if os.environ.get("REAM_RENDER_QUERY", "").endswith("deleted"):
         from datetime import UTC, datetime, timedelta
 
         for artifact_id, days in ((ids[3], 29), (ids[4], 3)):
@@ -110,6 +110,6 @@ def test_render_the_wall(db, monkeypatch):
                 )
 
     client = TestClient(create_gallery_app(db=db))
-    html = client.get("/" + os.environ.get("ARTIFACTS_RENDER_QUERY", "")).text
+    html = client.get("/" + os.environ.get("REAM_RENDER_QUERY", "")).text
     pathlib.Path(OUT).write_text(html)
     print(f"\nwrote {OUT} ({len(html)} bytes)")

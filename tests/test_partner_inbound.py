@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
-from artifacts import (
+from ream import (
     decisions,
     grants,
     hosts,
@@ -28,7 +28,7 @@ from artifacts import (
     partner_in,
     store,
 )
-from artifacts.app import create_app
+from ream.app import create_app
 
 PAGE = (
     "<!doctype html><html><head><title>t</title></head><body><p>plan</p></body></html>"
@@ -67,9 +67,9 @@ def bridge(monkeypatch, tmp_path):
     monkeypatch.setenv(partner.ENV_ALLOW_HTTP, "1")
     monkeypatch.setenv(partner.ENV_KEY_FILE, str(path))
     monkeypatch.setenv(partner.ENV_KEY_ID, "artifacts-test-1")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://gallery.invalid")
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "content.invalid")
-    monkeypatch.setenv("ARTIFACTS_API_HOST", "api.invalid")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://gallery.invalid")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "content.invalid")
+    monkeypatch.setenv("REAM_API_HOST", "api.invalid")
     return partner.config_from_env()
 
 
@@ -676,7 +676,7 @@ def test_a_review_or_closed_or_unannounced_decision_is_not_settled(
 def test_a_set_aside_question_is_not_settled_from_slack(
     db, bridge, client, partner_key, page
 ):
-    from artifacts import store
+    from ream import store
 
     parked = ask(db, page, "parked?")
     store.set_archived(db, page.id, True, agent="owner")
@@ -700,7 +700,7 @@ def test_a_set_aside_question_is_not_settled_from_slack(
 def test_an_answered_question_on_an_archived_page_is_unknown_not_refused(
     db, bridge, client, partner_key, page
 ):
-    from artifacts import store
+    from ream import store
 
     done = ask(db, page, "done?")
     decisions.answer(db, done.id, letter="a", note="", by="jeremy")
@@ -859,7 +859,7 @@ def test_hostile_text_is_escaped(db, bridge, app, client, gallery, partner_key):
 
 
 def test_the_inbox_count_includes_a_copy(db, bridge, client, partner_key):
-    from artifacts import inbox
+    from ream import inbox
 
     assert inbox.count(db) == (0, False)
     post(client, partner_key, make("asked", "qd:q1", 1, asked_body()))

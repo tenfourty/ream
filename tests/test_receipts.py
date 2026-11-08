@@ -12,8 +12,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, events, formanswer, keys, store
-from artifacts.app import create_gallery_app
+from ream import decisions, events, formanswer, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
 FORM_PAGE = (

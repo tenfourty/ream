@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import pytest
 from test_client import key_file, live  # noqa: F401 -- fixtures
 
-from artifacts import comments, decide, decisions, holds, store
+from ream import comments, decide, decisions, holds, store
 
 PAGE = "<!doctype html><title>Plan</title><p>Rotate the keys every 90 days.</p>"
 
@@ -144,7 +144,7 @@ def test_result_file_gets_the_same_bytes_and_is_never_clobbered(
 
 
 def test_new_marks_before_a_verdict_wake_with_seven(live, key_file, db, capsys):
-    from artifacts import comments
+    from ream import comments
 
     path, page, rid = _setup(db, key_file, capsys)
     comments.add(
@@ -165,7 +165,7 @@ def test_new_marks_before_a_verdict_wake_with_seven(live, key_file, db, capsys):
 
 @brief
 def test_verdict_only_ignores_marks_and_times_out(live, key_file, db, capsys):
-    from artifacts import comments
+    from ream import comments
 
     path, page, rid = _setup(db, key_file, capsys)
     comments.add(
@@ -238,7 +238,7 @@ def test_ask_review_on_a_page_that_is_not_yours_is_refused(live, key_file, db):
 
 
 def _mark(db, page):
-    from artifacts import comments
+    from ream import comments
 
     comments.add(
         db,
@@ -390,7 +390,7 @@ def _reply_as_agent(live, path, page, rid_thread):
 def test_a_reply_clears_the_marks_and_the_verdict_still_comes(
     live, key_file, db, capsys
 ):
-    from artifacts import comments
+    from ream import comments
 
     path, page, rid = _setup(db, key_file, capsys)
     root = comments.add(
@@ -478,7 +478,7 @@ def test_an_older_server_that_names_no_mode_is_said_plainly(
 def test_round_one_marks_do_not_wake_a_round_two_wait(live, key_file, db, capsys):
     """After changes requested and a republish, the marks he made in round 1
     are not new to round 2: the wait times out instead of exiting 7."""
-    from artifacts import comments
+    from ream import comments
 
     path, page, rid = _setup(db, key_file, capsys)
     comments.add(
@@ -563,7 +563,7 @@ def test_the_same_session_waiting_again_reclaims_rather_than_exit_eight(
     live, key_file, db, capsys, monkeypatch
 ):
     path, _page, rid = _setup(db, key_file, capsys)
-    monkeypatch.setenv("ARTIFACTS_SESSION", "ops-seat/me")
+    monkeypatch.setenv("REAM_SESSION", "ops-seat/me")
     decisions.claim_round(db, "ops-seat", rid, "ops-seat/me")
     decisions.answer(db, rid, letter="a", by="jeremy")
     wait = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "5s"]
@@ -574,13 +574,13 @@ def test_the_same_session_waiting_again_reclaims_rather_than_exit_eight(
 def test_wait_without_a_session_label_does_not_claim_and_says_so(
     live, key_file, db, capsys, monkeypatch
 ):
-    monkeypatch.delenv("ARTIFACTS_SESSION", raising=False)
+    monkeypatch.delenv("REAM_SESSION", raising=False)
     path, _page, rid = _setup(db, key_file, capsys)
     decisions.answer(db, rid, letter="c", by="jeremy")
     wait = ["--key-file", str(path), "wait", "--review", rid, "--timeout", "5s"]
     assert decide.main(wait) == 5
     err = capsys.readouterr().err.splitlines()
-    assert "no session label: not claiming the round (set ARTIFACTS_SESSION)" in err
+    assert "no session label: not claiming the round (set REAM_SESSION)" in err
     assert _claim_state(db, rid)[0] is None
 
 
@@ -634,13 +634,13 @@ def test_review_release_of_another_sessions_round_exits_eight(
 
 
 def test_review_release_needs_a_session_label(live, key_file, db, capsys, monkeypatch):
-    monkeypatch.delenv("ARTIFACTS_SESSION", raising=False)
+    monkeypatch.delenv("REAM_SESSION", raising=False)
     path, _page, rid = _setup(db, key_file, capsys)
     assert (
         decide.main(["--key-file", str(path), "review-release", rid, "--reason", "x"])
         == 2
     )
-    assert "ARTIFACTS_SESSION" in capsys.readouterr().err
+    assert "REAM_SESSION" in capsys.readouterr().err
 
 
 def test_a_lease_with_no_date_header_is_timed_on_the_cli_clock(monkeypatch):

@@ -11,8 +11,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, events, keys, partner, store
-from artifacts.app import create_gallery_app
+from ream import decisions, events, keys, partner, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}]
@@ -21,7 +21,7 @@ HIM = {"Remote-User": "jeremy"}
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db), base_url="https://testserver")
 
 
@@ -39,7 +39,7 @@ def bridge(monkeypatch, tmp_path):
     monkeypatch.setenv(partner.ENV_ALLOW_HTTP, "1")
     monkeypatch.setenv(partner.ENV_KEY_FILE, str(path))
     monkeypatch.setenv(partner.ENV_KEY_ID, "test-key-1")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://gallery.invalid")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://gallery.invalid")
     return partner.config_from_env()
 
 
@@ -255,7 +255,7 @@ def test_a_set_aside_question_cannot_be_answered(db, page):
 
 
 def test_the_partner_may_not_send_set_aside_or_reopened(db):
-    from artifacts import partner_in
+    from ream import partner_in
 
     assert "set_aside" not in partner_in.KINDS
     assert "reopened" not in partner_in.KINDS

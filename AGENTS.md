@@ -42,11 +42,13 @@ new name; published pages never change owner by accident.
 
 | Piece | Where |
 |---|---|
-| The service (FastAPI + Postgres) | `src/artifacts/` |
-| The agent CLIs (`artifacts-publish`, `artifacts-decide`, …) | `src/artifacts/client.py`, `decide.py` |
-| Admin commands (keys, scopes, renames) | `src/artifacts/admin.py` -> `artifacts-admin` |
-| The owner: settings, the stored id, its start-up guard | `src/artifacts/settings.py`, `src/artifacts/owner.py` |
-| The Postgres <-> SQLite copier and its verifier | `src/artifacts/migrate.py` |
+| The service (FastAPI + Postgres) | `src/ream/` |
+| The agent CLIs (`ream <verb>`; the old `artifacts-publish`, `artifacts-decide`, … too) | `src/ream/cli.py`, `client.py`, `decide.py` |
+| Setting names, new and old (`REAM_X`, `ARTIFACTS_X`) | `src/ream/envnames.py` |
+| The old import name `artifacts` (a shim; `artifacts.X` is the `ream.X` module) | `src/artifacts/__init__.py` |
+| Admin commands (keys, scopes, renames) | `src/ream/admin.py` -> `artifacts-admin` |
+| The owner: settings, the stored id, its start-up guard | `src/ream/settings.py`, `src/ream/owner.py` |
+| The Postgres <-> SQLite copier and its verifier | `src/ream/migrate.py` |
 | Runbooks (cutover, rollback, backups, restore drill, CI logs) | `docs/agent/runbooks/` |
 | Tests | `tests/` |
 | Container | `Dockerfile` |
@@ -64,28 +66,29 @@ uv run ruff check src tests
 uv run pytest -q -n auto --maxprocesses 8   # the full suite, in parallel; a throwaway Postgres per run
 uv run pytest -q tests/test_x.py            # one file, serially
 PG_TEST_DSN=postgresql://… uv run pytest -q -n auto --maxprocesses 8   # or an existing Postgres
-ARTIFACTS_TEST_DB=sqlite uv run pytest -q -n auto --maxprocesses 8      # the same suite on SQLite
+REAM_TEST_DB=sqlite uv run pytest -q -n auto --maxprocesses 8      # the same suite on SQLite
 ```
 
-Settings: every server variable is a field of `artifacts.settings.Settings`, read at call time with
+Settings: every server variable is a field of `ream.settings.Settings`, read at call time with
 `settings.current()` (tests: `settings.override(...)`, no caching, no `__repr__` that prints a value).
-`scripts/guards/no-environ-guard.sh` refuses `os.environ` in `src/artifacts` outside `settings.py`,
-`serve.py`, `admin.py` and the command-line tools. Nothing of a house is a default: a fresh install
+`scripts/guards/no-environ-guard.sh` refuses `os.environ` in `src/ream` outside `settings.py`,
+`envnames.py` (the one place a setting is read under both its names), `serve.py`, `admin.py` and the
+command-line tools. The shim package `src/artifacts/` reads no environment and is not scanned. Nothing of a house is a default: a fresh install
 (nothing set) serves `http://localhost:8000`, and a server bound to a non-loopback address
-(`ARTIFACTS_BIND_HOST`, set to `0.0.0.0` by the image) without `ARTIFACTS_GALLERY_ORIGIN` refuses to
-start. A deployment sets `ARTIFACTS_GALLERY_ORIGIN`, `ARTIFACTS_CONTENT_DOMAIN`, the owner trio and,
-behind a proxy, `ARTIFACTS_TRUSTED_IP_HEADER`.
-`ARTIFACTS_PLUGINS` picks which installed `artifacts.plugins` entry points load at server start (unset: all;
-`none`: none; `a,b`: only those, and an unknown name stops start-up); see `src/artifacts/plugin_api.py`.
+(`REAM_BIND_HOST`, set to `0.0.0.0` by the image) without `REAM_GALLERY_ORIGIN` refuses to
+start. A deployment sets `REAM_GALLERY_ORIGIN`, `REAM_CONTENT_DOMAIN`, the owner trio and,
+behind a proxy, `REAM_TRUSTED_IP_HEADER`.
+`REAM_PLUGINS` picks which installed `ream.plugins` (or old `artifacts.plugins`) entry points load at server start (unset: all;
+`none`: none; `a,b`: only those, and an unknown name stops start-up); see `src/ream/plugin_api.py`.
 
 The service runs on Postgres or SQLite, chosen by `DATABASE_URL` (`postgresql://…` or
-`sqlite:////data/artifacts.db`). Only `src/artifacts/db.py` talks to a driver; SQL elsewhere must
+`sqlite:////data/artifacts.db`). Only `src/ream/db.py` talks to a driver; SQL elsewhere must
 read the same on both (`docs/agent/specs/2026-10-09-sqlite-design.md`). CI runs the suite on both.
 
 The browser tests (comments panel, hover cards, thumbnails, shim placement) need a headless
-chromium: `ARTIFACTS_BROWSER=<path>`, or `chromium`/`chrome-headless-shell` on PATH; without one they
+chromium: `REAM_BROWSER=<path>`, or `chromium`/`chrome-headless-shell` on PATH; without one they
 skip (`-rs` names them). CI installs Debian's chromium and runs those four files serially in their own
-step of the `test-sqlite` job, which runs beside the Postgres suite's `test` job, with `ARTIFACTS_REQUIRE_BROWSER=1` (the parallel runs hide the browser: `ARTIFACTS_BROWSER=/nonexistent/browser`), which
+step of the `test-sqlite` job, which runs beside the Postgres suite's `test` job, with `REAM_REQUIRE_BROWSER=1` (the parallel runs hide the browser: `REAM_BROWSER=/nonexistent/browser`), which
 makes a missing browser fail the run at start instead of skipping -- so a green CI run means they ran.
 
 **On baba, never run the test suite** (Jeremy, 13 Oct 2026: no test-suite runs there). Push the
@@ -93,8 +96,18 @@ change to a `ci/<name>` branch instead: CI runs the full suite on it and never b
 deploys from it. Land on `main` once that run is green, then delete the branch.
 Reading a run's log without a browser, safely: `docs/agent/runbooks/ci-logs.md`.
 
+**Old names work for good** (docs/decisions.md, "Ream inside the code too"). The package is `ream`;
+`import artifacts` and `artifacts.<module>` give the same module objects as `ream.<module>` (the
+shim in `src/artifacts/`). Every setting is `REAM_<NAME>`, and `ARTIFACTS_<NAME>` is read as well
+(`envnames.py`): set to the same value is fine, set to different values refuses to start, naming both
+variables and no value. The `artifacts-*` commands, the `X-Artifacts-*` headers (both sets are
+sent) and the `artifacts.plugins` entry-point group stay. Never renamed, because stored or
+published: the SQLite `artifacts_now()`, cookie names, `data-artifact-*` attributes,
+`<!--artifacts:updated-->` markers, table and column names, `service_meta` keys, event kinds. The
+`artifacts-key` wrapper reads only `ARTIFACTS_SEAT`.
+
 **Declare which session you are on every publish.** A key may be shared by several sessions;
-without a label a page says only which KEY published it. `ARTIFACTS_SESSION="<agent>/<session
+without a label a page says only which KEY published it. `REAM_SESSION="<agent>/<session
 ref>"` rides on the page, version, decision and events. A page published without it stays
 unattributed until its next real change -- an identical republish mints no version.
 
@@ -106,8 +119,8 @@ manifests live in the homelab repo and its maintainer merges the pin PRs.
 After changing a CLI, reinstall it where agents run it (`uv tool install <checkout> --force`).
 
 **The owner is a setting** (`docs/agent/specs/2026-11-04-core-and-plugins-design.md`, 3.2). The one
-person who reads the gallery is `ARTIFACTS_OWNER_ID` (default `owner`; lower-case letters, digits,
-hyphens), `ARTIFACTS_OWNER_NAME` (default `the owner`) and `ARTIFACTS_OWNER_PRONOUN` (`they`, `he` or
+person who reads the gallery is `REAM_OWNER_ID` (default `owner`; lower-case letters, digits,
+hyphens), `REAM_OWNER_NAME` (default `the owner`) and `REAM_OWNER_PRONOUN` (`they`, `he` or
 `she`; default `they`), read at call time through `settings.current()`; a test changes them with
 `settings.override(...)`, and the suite runs as our deployment does (`jeremy`/`Jeremy`/`he`, set in
 `tests/conftest.py`). The id is **stored** (`by`, `author`, `answered_by`, `actor`, a folder's owner),

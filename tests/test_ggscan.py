@@ -10,8 +10,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import ggscan, keys, thumbs
-from artifacts.app import create_gallery_app
+from ream import ggscan, keys, thumbs
+from ream.app import create_gallery_app
 
 TOKEN = "relay-test-token"  # noqa: S105 -- a test fixture, not a credential
 PAGE = "<!doctype html><title>t</title><p>caf&eacute; &#x3c;b&#x3e; ok</p>"
@@ -113,7 +113,7 @@ def test_an_unreachable_relay_publishes_and_says_so_in_the_log(
 ):
     monkeypatch.setenv(ggscan.URL_ENV, "http://127.0.0.1:9/scan")
     monkeypatch.setenv(ggscan.TOKEN_ENV, TOKEN)
-    logger = logging.getLogger("artifacts.refusals")
+    logger = logging.getLogger("ream.refusals")
     logger.addHandler(caplog.handler)
     try:
         assert _publish(api, auth).status_code == 201

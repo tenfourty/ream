@@ -11,8 +11,8 @@ import pytest
 from fastapi.testclient import TestClient
 from test_client import live  # noqa: F401
 
-from artifacts import client, keys
-from artifacts.app import create_gallery_app
+from ream import client, keys
+from ream.app import create_gallery_app
 
 
 @pytest.fixture()

@@ -7,9 +7,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from artifacts import db as dbmod
-from artifacts import events, ids, partner, sinks, store
-from artifacts.sinks import Sink
+from ream import db as dbmod
+from ream import events, ids, partner, sinks, store
+from ream.sinks import Sink
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body>hi</body></html>"
 
@@ -229,7 +229,7 @@ def test_event_from_json_ignores_fields_it_does_not_know():
 
 
 def test_the_nudge_sink_passes_the_fields_nudge_emit_takes(db, page, monkeypatch):
-    from artifacts import nudge
+    from ream import nudge
 
     calls = []
     monkeypatch.setattr(nudge, "emit", lambda *a, **k: calls.append((a, k)))
@@ -388,7 +388,7 @@ def test_start_is_idempotent_and_stop_ends_the_sender(db, monkeypatch):
 def test_the_app_shutdown_stops_the_sender(monkeypatch):
     import asyncio
 
-    from artifacts import serve
+    from ream import serve
 
     stopped = []
     monkeypatch.setattr(sinks, "stop", lambda timeout=5.0: stopped.append(timeout))
@@ -406,7 +406,7 @@ def test_the_app_shutdown_stops_the_sender(monkeypatch):
 
 
 def _open_question(db, page, **kwargs):
-    from artifacts import decisions
+    from ream import decisions
 
     return decisions.ask(
         db,
@@ -442,7 +442,7 @@ def Event_ref(raw):
 def test_an_answer_fires_the_nudge_with_the_note_and_recommendation(
     db, page, monkeypatch
 ):
-    from artifacts import decisions, nudge
+    from ream import decisions, nudge
 
     calls = []
     monkeypatch.setattr(nudge, "emit", lambda *a, **k: calls.append(k))
@@ -464,7 +464,7 @@ def test_an_answer_fires_the_nudge_with_the_note_and_recommendation(
 def test_a_comment_nudge_carries_no_note_though_the_journal_has_his_words(
     db, page, monkeypatch
 ):
-    from artifacts import comments, nudge
+    from ream import comments, nudge
 
     calls = []
     monkeypatch.setattr(nudge, "emit", lambda *a, **k: calls.append(k))
@@ -481,7 +481,7 @@ def test_a_comment_nudge_carries_no_note_though_the_journal_has_his_words(
 
 
 def test_admin_outbox_reports_counts_by_sink(db, page, capsys, monkeypatch):
-    from artifacts import admin
+    from ream import admin
 
     with sinks.isolated(Sink("one", ("decision_answered",), deliver=lambda e: None)):
         _emit(db, _event(artifact_id=page.id))

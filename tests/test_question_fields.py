@@ -9,10 +9,10 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import db as dbmod
-from artifacts import decide, decisions, events, keys, migrate, onboarding, store
-from artifacts.app import create_gallery_app
-from artifacts.db import Database
+from ream import db as dbmod
+from ream import decide, decisions, events, keys, migrate, onboarding, store
+from ream.app import create_gallery_app
+from ream.db import Database
 
 PAGE = (
     "<!doctype html><html><head><title>t</title></head><body><p>plan</p></body></html>"
@@ -34,8 +34,8 @@ NEW_KEYS = {
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     return TestClient(create_gallery_app(db), base_url="https://testserver")
 
 
@@ -662,7 +662,7 @@ def test_a_secret_in_the_new_text_fields_is_refused(client, seats, page, fields,
 
 
 def test_read_all_and_uncollected_carry_the_new_fields(client, seats, page, db):
-    from artifacts import grants
+    from ream import grants
 
     row = ok(
         client,

@@ -4,8 +4,8 @@ good' (page review step 1, homelab-ij8.108)."""
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, decide, events, keys, store
-from artifacts.app import create_gallery_app
+from ream import comments, decide, events, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><title>t</title><p>Rotate the keys every 90 days.</p>"
 RANGE = {"kind": "range", "path": "body>p:nth-of-type(1)", "start": 0, "end": 29}
@@ -18,7 +18,7 @@ def _page(db):
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 

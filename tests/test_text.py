@@ -10,8 +10,8 @@ not; sanitising at the boundary means there is no list to keep in step.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, events, keys, text
-from artifacts.app import create_gallery_app
+from ream import decisions, events, keys, text
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
 
@@ -71,7 +71,7 @@ def test_ordinary_text_is_untouched():
 
 def test_the_nudge_path_uses_the_same_function():
     """It used to own the only copy, which is how the feed went uncleaned."""
-    from artifacts import nudge
+    from ream import nudge
 
     assert nudge._sanitize is text.sanitize
 

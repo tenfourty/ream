@@ -3,8 +3,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import frame_pass, keys, store
-from artifacts.content import SHIM, create_content_app, inject
+from ream import frame_pass, keys, store
+from ream.content import SHIM, create_content_app, inject
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
 GALLERY = "https://artifacts.tenfourty.site"
@@ -26,7 +26,7 @@ def published(db):
 
 @pytest.fixture()
 def content(db, published, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     client = TestClient(create_content_app(db))
     client.headers.update({"host": f"{published.id}.tenfourty.com"})
     return client
@@ -165,7 +165,7 @@ def test_the_viewer_report_posts_only_to_the_gallery_origin_never_to_star(
 def test_the_viewer_report_origin_is_read_at_call_time(content, token, monkeypatch):
     """Exactly like headers_for and the redirect target: a module-level constant
     computed once at import would never see this monkeypatch."""
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://elsewhere.example")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://elsewhere.example")
     text = content.get(token(), headers=FRAMED).text
     assert f",{json.dumps('https://elsewhere.example')})" in text
     assert f",{json.dumps(GALLERY)})" not in text
@@ -200,7 +200,7 @@ def test_a_page_with_no_head_still_gets_the_runtime(db, monkeypatch):
     artifact = store.publish(
         db, "headless-seat", "Bare", "<!doctype html><body>hi</body>"
     )
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     client = TestClient(create_content_app(db))
     client.headers.update({"host": f"{artifact.id}.tenfourty.com"})
     text = client.get(f"/p/{frame_pass.mint(db, artifact.id)}/", headers=FRAMED).text
@@ -209,7 +209,7 @@ def test_a_page_with_no_head_still_gets_the_runtime(db, monkeypatch):
 
 
 def test_the_gallery_origin_is_read_at_call_time(content, published, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://elsewhere.example")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://elsewhere.example")
     response = content.get(
         "/", headers={"sec-fetch-dest": "document"}, follow_redirects=False
     )
@@ -292,7 +292,7 @@ def test_an_unhandled_error_still_carries_the_base_headers(monkeypatch):
         def connect(self):
             raise RuntimeError("boom")
 
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     client = TestClient(
         create_content_app(ExplodingDB()), raise_server_exceptions=False
     )

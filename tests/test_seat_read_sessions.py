@@ -5,7 +5,7 @@ the '' row, keeping the later read."""
 
 import pytest
 
-from artifacts import events
+from ream import events
 
 
 def test_an_unlabelled_read_is_stored_with_an_empty_session(db):

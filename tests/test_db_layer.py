@@ -7,7 +7,7 @@ import pathlib
 
 import pytest
 
-from artifacts import db as dbmod
+from ream import db as dbmod
 
 
 def test_rows_are_fetched_eagerly_and_read_in_order(db):

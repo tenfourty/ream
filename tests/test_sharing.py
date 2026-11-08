@@ -6,8 +6,8 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, keys, store
-from artifacts.app import create_app, create_gallery_app
+from ream import decisions, keys, store
+from ream.app import create_app, create_gallery_app
 
 SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
 PAGE = "<!doctype html><html><head><title>t</title></head><body><p>{}</p></body></html>"
@@ -15,7 +15,7 @@ PAGE = "<!doctype html><html><head><title>t</title></head><body><p>{}</p></body>
 
 @pytest.fixture()
 def page(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return store.publish(db, "seat", "Board", PAGE.format("first words"))
 
 

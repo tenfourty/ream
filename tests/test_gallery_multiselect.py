@@ -7,8 +7,8 @@ behind the same-origin guard; agent twin: POST /api/v1/artifacts/move."""
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import store
-from artifacts.app import create_gallery_app
+from ream import store
+from ream.app import create_gallery_app
 
 PAGE = (
     "<!doctype html><html><head><title>t</title></head><body><h1>Hi</h1></body></html>"
@@ -19,7 +19,7 @@ CROSS = {"origin": store.gallery_origin(), "sec-fetch-site": "cross-site"}
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 

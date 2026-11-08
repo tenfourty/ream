@@ -11,13 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from artifacts import republish
+from ream import republish
 
 
 @pytest.fixture()
 def logged(tmp_path, monkeypatch):
     log = tmp_path / "republish.log"
-    monkeypatch.setenv("ARTIFACTS_REPUBLISH_LOG", str(log))
+    monkeypatch.setenv("REAM_REPUBLISH_LOG", str(log))
     return log
 
 
@@ -36,7 +36,7 @@ def config(tmp_path, *entries) -> Path:
 def test_no_config_is_silent_and_successful(tmp_path, logged, monkeypatch):
     """A machine-wide hook fires for every seat, and most have no config. That
     must cost nothing and say nothing, or the hook becomes noise people disable."""
-    monkeypatch.setenv("ARTIFACTS_PAGES_FILE", str(tmp_path / "absent.toml"))
+    monkeypatch.setenv("REAM_PAGES_FILE", str(tmp_path / "absent.toml"))
     assert republish.main([]) == 0
     assert not logged.exists()
 
@@ -190,7 +190,7 @@ def test_the_render_can_read_the_key_even_though_the_parent_already_did(tmp_path
     script = tmp_path / "render.sh"
     script.write_text(
         "#!/usr/bin/env bash\n"
-        f'printf %s "$(cat <&"$ARTIFACTS_KEY_FD")" > {seen}\n'
+        f'printf %s "$(cat <&"$REAM_KEY_FD")" > {seen}\n'
         "printf '<html><body>page</body></html>\\n'\n",
         encoding="utf-8",
     )
@@ -204,12 +204,12 @@ def test_a_render_with_no_key_is_not_handed_a_drained_descriptor(tmp_path, monke
     """A descriptor number left pointing at an already-read pipe is worse than
     none: the renderer reads nothing and the page publishes with its
     service-backed sections quietly missing."""
-    monkeypatch.setenv("ARTIFACTS_KEY_FD", "3")
+    monkeypatch.setenv("REAM_KEY_FD", "3")
     seen = tmp_path / "seen.txt"
     script = tmp_path / "render.sh"
     script.write_text(
         "#!/usr/bin/env bash\n"
-        f'printf %s "${{ARTIFACTS_KEY_FD:-unset}}" > {seen}\n'
+        f'printf %s "${{REAM_KEY_FD:-unset}}" > {seen}\n'
         "printf '<html><body>page</body></html>\\n'\n",
         encoding="utf-8",
     )
@@ -222,12 +222,10 @@ def test_the_key_comes_from_the_descriptor_when_there_is_no_key_file(
     tmp_path, logged, monkeypatch
 ):
     """Under `artifacts-key` there IS no key file — that is the point of it."""
-    monkeypatch.setenv("ARTIFACTS_KEY_FILE", str(tmp_path / "no-such-key"))
+    monkeypatch.setenv("REAM_KEY_FILE", str(tmp_path / "no-such-key"))
+    monkeypatch.setenv("REAM_KEY_FD", str(_fd_with("art_from-the-descriptor-9f3b2c")))
     monkeypatch.setenv(
-        "ARTIFACTS_KEY_FD", str(_fd_with("art_from-the-descriptor-9f3b2c"))
-    )
-    monkeypatch.setenv(
-        "ARTIFACTS_PAGES_FILE",
+        "REAM_PAGES_FILE",
         str(config(tmp_path, {"id": "abc", "render": "echo '<html>x</html>'"})),
     )
     got: list[str] = []
@@ -238,10 +236,10 @@ def test_the_key_comes_from_the_descriptor_when_there_is_no_key_file(
 
 
 def test_no_key_anywhere_is_logged_and_publishes_nothing(tmp_path, logged, monkeypatch):
-    monkeypatch.delenv("ARTIFACTS_KEY_FD", raising=False)
-    monkeypatch.setenv("ARTIFACTS_KEY_FILE", str(tmp_path / "no-such-key"))
+    monkeypatch.delenv("REAM_KEY_FD", raising=False)
+    monkeypatch.setenv("REAM_KEY_FILE", str(tmp_path / "no-such-key"))
     monkeypatch.setenv(
-        "ARTIFACTS_PAGES_FILE",
+        "REAM_PAGES_FILE",
         str(config(tmp_path, {"id": "abc", "render": "echo '<html>x</html>'"})),
     )
     published: list[dict] = []

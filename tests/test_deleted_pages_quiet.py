@@ -8,7 +8,7 @@ uncollected alert already follows (ij8.97): a deleted page is gone from the
 agent's view, and restoring it brings everything back.
 """
 
-from artifacts import comments, decisions, store
+from ream import comments, decisions, store
 
 PAGE = "<!doctype html><html><head><title>P</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]

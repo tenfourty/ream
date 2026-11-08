@@ -9,9 +9,9 @@ from importlib import resources
 
 import pytest
 
-from artifacts import db as dbmod
-from artifacts import decisions, events, store
-from artifacts.db import Database
+from ream import db as dbmod
+from ream import decisions, events, store
+from ream.db import Database
 
 PAGE = "<h1>x</h1>"
 
@@ -103,7 +103,7 @@ def test_postgres_upgrade_drops_the_old_checks_and_keeps_the_rest(db):
 
 def _build_v20(path) -> Database:
     database = Database(f"sqlite:///{path}")
-    script = resources.files("artifacts").joinpath("schema_sqlite.sql").read_text()
+    script = resources.files("ream").joinpath("schema_sqlite.sql").read_text()
     with database.connect() as conn, conn.transaction():
         for statement in dbmod._statements(script):
             conn.execute(statement)

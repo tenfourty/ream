@@ -1,6 +1,6 @@
 # The partner bridge
 
-Source: `src/artifacts/partner.py` (outbound) and `src/artifacts/partner_in.py`
+Source: `src/ream/partner.py` (outbound) and `src/ream/partner_in.py`
 (inbound). Tracker: runcove-5t3oj.39.4. The contract (v3) is agreed with the
 quarterdeck service. The first half of this file is what artifacts sends; the
 second, "The inbound half", is what it receives and does with it.
@@ -17,12 +17,12 @@ a message that names the variables and never a value.
 
 | Variable | Meaning |
 |---|---|
-| `ARTIFACTS_PARTNER_NAME` | the partner's name, for logs and the admin report |
-| `ARTIFACTS_PARTNER_EVENTS_URL` | where events are POSTed; must be `https://` unless the opt-in below is set |
-| `ARTIFACTS_PARTNER_SIGNING_KEY_FILE` | path to artifacts' Ed25519 private key, PEM PKCS8, unencrypted |
-| `ARTIFACTS_PARTNER_KEY_ID` | the key's id, sent in every event so the receiver can rotate keys |
+| `REAM_PARTNER_NAME` | the partner's name, for logs and the admin report |
+| `REAM_PARTNER_EVENTS_URL` | where events are POSTed; must be `https://` unless the opt-in below is set |
+| `REAM_PARTNER_SIGNING_KEY_FILE` | path to artifacts' Ed25519 private key, PEM PKCS8, unencrypted |
+| `REAM_PARTNER_KEY_ID` | the key's id, sent in every event so the receiver can rotate keys |
 
-Optional: `ARTIFACTS_PARTNER_ALLOW_HTTP=1` allows a plain `http://` URL (for an in-cluster
+Optional: `REAM_PARTNER_ALLOW_HTTP=1` allows a plain `http://` URL (for an in-cluster
 service with no TLS). Without it an `http://` URL stops start-up. When it is in use the
 service logs a warning once at start. Proxy variables in the environment are ignored, and
 redirects are never followed (a 3xx counts as a failed attempt and is retried).
@@ -136,20 +136,20 @@ understood): `artifacts-admin partner-outbox --retry <event_id>` for one, or
 
 # The inbound half
 
-Source: `src/artifacts/partner_in.py`; tests `tests/test_partner_inbound.py`.
+Source: `src/ream/partner_in.py`; tests `tests/test_partner_inbound.py`.
 
 ## Configuration
 
 Both variables, or neither. Neither means the inbound side is off: there is no
 endpoint, and the host router behaves as it did. Only one, or either without the
-outbound bridge (the four `ARTIFACTS_PARTNER_*` variables above: one partner, and the
+outbound bridge (the four `REAM_PARTNER_*` variables above: one partner, and the
 answers we send back go to the same place), stops the service at start-up with a message
 that names variables and never a value.
 
 | Variable | Meaning |
 |---|---|
-| `ARTIFACTS_PARTNER_INBOUND_KEYS_FILE` | path to a JSON object mapping `key_id` to the partner's Ed25519 PUBLIC key: PEM text (SubjectPublicKeyInfo) or the 32 raw bytes in base64. Several ids at once, for a rotation |
-| `ARTIFACTS_PARTNER_INBOUND_HOST` | the service's name inside the cluster, the only `Host` the endpoint answers on |
+| `REAM_PARTNER_INBOUND_KEYS_FILE` | path to a JSON object mapping `key_id` to the partner's Ed25519 PUBLIC key: PEM text (SubjectPublicKeyInfo) or the 32 raw bytes in base64. Several ids at once, for a rotation |
+| `REAM_PARTNER_INBOUND_HOST` | the service's name inside the cluster, the only `Host` the endpoint answers on |
 
 The host may not be the gallery's, the API host or a page origin (start-up refuses). The
 file is read once; nothing from it reaches a log or an error. It holds public keys only:
@@ -161,7 +161,7 @@ a leak of this side cannot forge an event.
 already had one mechanism for keeping one face apart from the others, and this uses it:
 the host router in `app.create_app` picks an app by the request's `Host` (gallery, API
 host, page origin; anything else is 404). The endpoint is a fourth, tiny app that is
-picked only when `Host` equals `ARTIFACTS_PARTNER_INBOUND_HOST`. So it does not exist on
+picked only when `Host` equals `REAM_PARTNER_INBOUND_HOST`. So it does not exist on
 the gallery, the API host or a page origin, and the gallery, API and content routes do not
 exist on the in-cluster host. Two further guards, because a Host header is only a claim:
 the route answers 404 when any proxy header is present (`X-Forwarded-*`, `Forwarded`,

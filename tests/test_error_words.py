@@ -3,7 +3,7 @@ caller's own text in an error is never expanded as a template."""
 
 from test_sections import _ask, client, page, section  # noqa: F401 -- fixtures
 
-from artifacts import decisions, keys, review, settings, store
+from ream import decisions, keys, review, settings, store
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body>x</body></html>"
 TWO = [{"letter": "a", "label": "x"}, {"letter": "b", "label": "y"}]

@@ -1,7 +1,7 @@
 """SQLite schema step 17 adds the four check columns to `artifact` (generated pages, slice 1)."""
 
-from artifacts import db as dbmod
-from artifacts.db import Database
+from ream import db as dbmod
+from ream.db import Database
 
 
 def test_step_17_adds_the_check_columns(tmp_path):

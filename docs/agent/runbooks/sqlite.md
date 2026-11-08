@@ -15,7 +15,7 @@ secret `artifacts-db-app` (key `uri`), and the PVC `artifacts-data` mounted at `
 | `artifacts-admin migrate-to-postgres --from <sqlite path> --to <pg DSN>` | The rollback copy |
 | `artifacts-admin restore-drill --snapshot <file>` | Integrity check, restore into a scratch file, verify, print row counts |
 
-Both migrate commands do the same thing in opposite directions (`src/artifacts/migrate.py`):
+Both migrate commands do the same thing in opposite directions (`src/ream/migrate.py`):
 
 - bring the destination's schema up to date, then **refuse unless every table is empty**;
 - refuse unless both schemas have the same tables and columns (so a new table cannot be skipped);
@@ -64,10 +64,10 @@ spec:
         - name: admin
           image: IMAGE             # the value of $IMAGE above
           command: ["artifacts-admin"]
-          args: ["migrate-from-postgres", "--from", "env:ARTIFACTS_PG_URI",
+          args: ["migrate-from-postgres", "--from", "env:REAM_PG_URI",
                  "--to", "/data/artifacts.db"]
           env:
-            - name: ARTIFACTS_PG_URI
+            - name: REAM_PG_URI
               valueFrom:
                 secretKeyRef: {name: artifacts-db-app, key: uri}
             - name: SQLITE_TMPDIR
@@ -168,7 +168,7 @@ current version of a page keeps its plain text in `version.body`; every older on
 `version.packed` as zstd, a full copy at version 1 and every hundredth after, a delta against the
 previous version in between (about 2.6 KB for an hourly board against 3.4 MB plain). New versions
 pack as they are written. Versions written earlier are packed by `artifacts-admin pack-versions`
-(or at start-up with `ARTIFACTS_PACK_VERSIONS=startup`): it verifies every version by rebuilding
+(or at start-up with `REAM_PACK_VERSIONS=startup`): it verifies every version by rebuilding
 it before blanking its old body, is safe to re-run, and prints counts and bytes saved. The file
 shrinks only on `VACUUM`, which rewrites the whole file and needs free space about the size of
 the new database; run it once after the backfill, not before a snapshot has been taken. Run the
@@ -192,7 +192,7 @@ NetworkPolicy. The rollback copies SQLite back, so writes made on SQLite are kep
    (Its rows stay readable under the old name; dropping that schema later is a separate, asked-for
    step.)
 3. Run the Job with `args: ["migrate-to-postgres", "--from", "/data/artifacts.db", "--to",
-   "env:ARTIFACTS_PG_URI"]`; check it ends in `verified …`.
+   "env:REAM_PG_URI"]`; check it ends in `verified …`.
 4. Point `DATABASE_URL` back at the CNPG secret (revert the step-4 change), and remove the PVC
    mount only if the change says so; the SQLite file stays on the PVC.
 5. `flux resume ks artifacts-app`, and smoke test as in cutover step 6.

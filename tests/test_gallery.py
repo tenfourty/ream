@@ -5,9 +5,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, keys, store
-from artifacts.app import create_gallery_app
-from artifacts.db import in_list
+from ream import decisions, keys, store
+from ream.app import create_gallery_app
+from ream.db import in_list
 
 XSS = '"><img src=x onerror=alert(1)>'
 
@@ -197,8 +197,8 @@ def test_the_list_breaks_updated_at_ties_by_id(db):
 
 def test_store_module_docstring_is_encodable():
     """A literal `\\ud800` escape in a non-raw docstring becomes a real lone surrogate in
-    `__doc__`; harmless import on 3.12, but a bare `import artifacts.store` crashes on 3.14."""
-    import artifacts.store as store_module
+    `__doc__`; harmless import on 3.12, but a bare `import ream.store` crashes on 3.14."""
+    import ream.store as store_module
 
     store_module.__doc__.encode("utf-8")
 
@@ -708,7 +708,7 @@ def test_an_uncollected_answer_says_whether_the_agent_is_even_running(db):
     an agent that is not running (someone else has to collect it) and one that is
     running and not acting (a bug to go and look at). One comparison tells them
     apart, and a message that cannot is one he learns to skip."""
-    from artifacts import events
+    from ream import events
 
     published, row = _publish_and_ask(db)
     decisions.answer(db, row.id, letter="a", by="jeremy")
@@ -726,7 +726,7 @@ def test_an_uncollected_answer_says_whether_the_agent_is_even_running(db):
 def test_a_seat_that_stopped_looking_before_he_answered_counts_as_not_running(db):
     """The comparison is "since the answer". A seat that was listening an hour
     ago and is gone now must not be described as still looking."""
-    from artifacts import events
+    from ream import events
 
     events.note_read(db, "ops-seat")
     published, row = _publish_and_ask(db)
@@ -922,7 +922,7 @@ def test_the_bar_order_is_home_title_comments_share_fullscreen_profile(db):
 
 
 def test_the_fullscreen_toggle_is_wired_by_script_where_the_api_exists(db):
-    from artifacts import gallery
+    from ream import gallery
 
     js = gallery._COMMENTS_JS
     assert "fullscreenEnabled" in js and "requestFullscreen" in js

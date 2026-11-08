@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from artifacts.db import INTEGRITY, SCHEMA_VERSION, Database
+from ream.db import INTEGRITY, SCHEMA_VERSION, Database
 
 
 @pytest.mark.postgres_only  # reads information_schema

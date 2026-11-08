@@ -13,7 +13,7 @@ Sources, read at render time:
     `health:` comments on the epic (the summary's second line);
   * the questions and reviews waiting on Jeremy, from
     `artifacts-decide list --open-only`, run with whatever key the caller holds
-    (`artifacts-republish` hands each render one on $ARTIFACTS_KEY_FD).
+    (`artifacts-republish` hands each render one on $REAM_KEY_FD).
 
 FAIL CLOSED. If the tracker cannot be read the render exits non-zero and writes
 nothing to stdout: a board that prints "nothing in flight" because `bd` failed is
@@ -41,7 +41,11 @@ HERE = Path(__file__).resolve().parent
 CARRIED = HERE / "carried.html"
 EPIC = os.environ.get("BOARD_EPIC", "runcove-5t3oj")
 BEADS_REPO = os.environ.get("BOARD_BEADS_REPO", str(Path.home() / "repos" / "runcove"))
-GALLERY = os.environ.get("ARTIFACTS_GALLERY", "https://artifacts.tenfourty.site")
+GALLERY = (
+    os.environ.get("REAM_GALLERY")
+    or os.environ.get("ARTIFACTS_GALLERY")
+    or "https://artifacts.tenfourty.site"
+)
 PARIS = ZoneInfo("Europe/Paris")
 
 PHASES = ["brainstorm", "spec", "plan", "implement", "wrap"]
@@ -126,7 +130,7 @@ def load_decisions() -> list[dict] | None:
     page that prints it because the call failed is lying.
     """
     kw = {}
-    fd = os.environ.get("ARTIFACTS_KEY_FD")
+    fd = os.environ.get("REAM_KEY_FD") or os.environ.get("ARTIFACTS_KEY_FD")
     if fd and fd.isdigit():
         kw["pass_fds"] = (int(fd),)
     try:

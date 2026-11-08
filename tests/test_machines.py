@@ -6,8 +6,8 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys, store
-from artifacts.app import create_gallery_app
+from ream import keys, store
+from ream.app import create_gallery_app
 
 SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
 PAGE = "<!doctype html><html><head><title>t</title></head><body>x</body></html>"

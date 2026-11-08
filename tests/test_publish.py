@@ -6,16 +6,16 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import db as dbmod
-from artifacts import keys, store
-from artifacts.app import create_gallery_app
+from ream import db as dbmod
+from ream import keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
 
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 
@@ -332,7 +332,7 @@ def test_an_oversized_title_refusal_is_logged_against_the_title_not_the_body(
 ):
     token, _ = keys.mint(db, agent="ops-seat")
     title = "é" * 300
-    with caplog.at_level(logging.WARNING, logger="artifacts.refusals"):
+    with caplog.at_level(logging.WARNING, logger="ream.refusals"):
         client.post(
             "/api/v1/artifacts",
             json={"title": title, "body": PAGE},
@@ -403,7 +403,7 @@ def test_a_patch_over_the_size_cap_is_refused_with_413_before_scanning(client, d
 def test_a_secret_refusal_is_logged_without_the_secret_value(client, db, caplog):
     token, _ = keys.mint(db, agent="ops-seat")
     secret = "AKIA" + "IOSFODNN7EXAMPLE"
-    with caplog.at_level(logging.WARNING, logger="artifacts.refusals"):
+    with caplog.at_level(logging.WARNING, logger="ream.refusals"):
         client.post(
             "/api/v1/artifacts",
             json={"title": "Leaky", "body": PAGE + secret},
@@ -423,7 +423,7 @@ def test_a_patch_refusal_is_logged_with_the_artifact_id(client, db, caplog):
         "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
     ).json()
     secret = "AKIA" + "IOSFODNN7EXAMPLE"
-    with caplog.at_level(logging.WARNING, logger="artifacts.refusals"):
+    with caplog.at_level(logging.WARNING, logger="ream.refusals"):
         client.patch(
             f"/api/v1/artifacts/{first['id']}",
             json={"body": PAGE + secret, "expected_revision": first["revision"]},
@@ -439,7 +439,7 @@ def test_a_size_refusal_is_logged_with_the_size_but_never_the_body(client, db, c
     token, _ = keys.mint(db, agent="ops-seat")
     size = store.MAX_BODY_BYTES + 1
     body = _padded_body(size)
-    with caplog.at_level(logging.WARNING, logger="artifacts.refusals"):
+    with caplog.at_level(logging.WARNING, logger="ream.refusals"):
         client.post(
             "/api/v1/artifacts",
             json={"title": "Board", "body": body},
@@ -458,7 +458,7 @@ def test_a_patch_size_refusal_is_logged_with_the_artifact_id(client, db, caplog)
     ).json()
     size = store.MAX_BODY_BYTES + 1
     body = _padded_body(size)
-    with caplog.at_level(logging.WARNING, logger="artifacts.refusals"):
+    with caplog.at_level(logging.WARNING, logger="ream.refusals"):
         client.patch(
             f"/api/v1/artifacts/{first['id']}",
             json={"body": body, "expected_revision": first["revision"]},
@@ -630,7 +630,7 @@ def test_a_scanner_failure_is_logged_at_error_not_warning(
     a run of these hide inside a weekly refusal count."""
     token, _ = keys.mint(db, agent="ops-seat")
     monkeypatch.setattr(store.scan, "scan", _boom)
-    with caplog.at_level(logging.WARNING, logger="artifacts.refusals"):
+    with caplog.at_level(logging.WARNING, logger="ream.refusals"):
         client.post(
             "/api/v1/artifacts",
             json={"title": "Board", "body": PAGE},

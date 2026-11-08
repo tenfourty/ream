@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from artifacts import scan
+from ream import scan
 
 FAKE_AWS = "AKIA" + "IOSFODNN7EXAMPLE"
 FAKE_PRIVATE_KEY = "-----BEGIN OPENSSH PRIVATE KEY-----"
@@ -244,7 +244,7 @@ def test_a_positive_lookaround_in_a_case_insensitive_shape_still_loads():
 
 
 def test_the_packaged_shapes_file_passes_every_load_time_guard():
-    text = (scan.resources.files("artifacts") / "secret_shapes.txt").read_text(
+    text = (scan.resources.files("ream") / "secret_shapes.txt").read_text(
         encoding="utf-8"
     )
     assert [name for name, _ in scan.parse_shapes(text)] == [

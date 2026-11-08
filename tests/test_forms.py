@@ -5,8 +5,8 @@ lists, the `form` decision, the read-back and the places a form must NOT yet sho
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, forms, keys
-from artifacts.app import create_gallery_app
+from ream import decisions, forms, keys
+from ream.app import create_gallery_app
 
 HEAD = "<!doctype html><html><head><title>P</title></head><body>"
 TAIL = "</body></html>"
@@ -300,7 +300,7 @@ def test_a_page_with_only_forms_has_no_warning():
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 

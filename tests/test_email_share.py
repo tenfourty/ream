@@ -7,8 +7,8 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import email_share, mail, store
-from artifacts.app import create_app, create_gallery_app
+from ream import email_share, mail, store
+from ream.app import create_app, create_gallery_app
 
 SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
 PAGE = "<!doctype html><html><head><title>t</title></head><body><p>{}</p></body></html>"
@@ -17,10 +17,10 @@ PAGE = "<!doctype html><html><head><title>t</title></head><body><p>{}</p></body>
 @pytest.fixture()
 def outbox(monkeypatch):
     sent = []
-    monkeypatch.setenv("ARTIFACTS_MAILGUN_KEY", "test-key-not-real")
-    monkeypatch.setenv("ARTIFACTS_MAILGUN_API", "https://api.eu.mailgun.net")
-    monkeypatch.setenv("ARTIFACTS_MAILGUN_DOMAIN", "mg.tenfourty.site")
-    monkeypatch.setenv("ARTIFACTS_MAIL_FROM", "Artifacts <artifacts@mg.tenfourty.site>")
+    monkeypatch.setenv("REAM_MAILGUN_KEY", "test-key-not-real")
+    monkeypatch.setenv("REAM_MAILGUN_API", "https://api.eu.mailgun.net")
+    monkeypatch.setenv("REAM_MAILGUN_DOMAIN", "mg.tenfourty.site")
+    monkeypatch.setenv("REAM_MAIL_FROM", "Artifacts <artifacts@mg.tenfourty.site>")
     monkeypatch.setattr(
         mail, "send", lambda to, subject, text: sent.append((to, subject, text))
     )
@@ -29,7 +29,7 @@ def outbox(monkeypatch):
 
 @pytest.fixture()
 def page(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return store.publish(db, "seat", "Plan", PAGE.format("the private plan"))
 
 
@@ -54,7 +54,7 @@ def _reader(db, url):
 
 
 def test_without_mail_configured_the_page_says_so(db, gallery, page, monkeypatch):
-    monkeypatch.delenv("ARTIFACTS_MAILGUN_KEY", raising=False)
+    monkeypatch.delenv("REAM_MAILGUN_KEY", raising=False)
     assert "Email isn&#39;t set up" in gallery.get(f"/a/{page.id}/share").text or (
         "Email isn't set up" in gallery.get(f"/a/{page.id}/share").text
     )
@@ -63,7 +63,7 @@ def test_without_mail_configured_the_page_says_so(db, gallery, page, monkeypatch
 def test_the_share_mail_and_the_door_page_follow_the_configured_owner(
     db, gallery, page, outbox, monkeypatch
 ):
-    from artifacts import settings
+    from ream import settings
 
     with settings.override(owner_name="Ann", owner_pronoun="she"):
         url = _share(gallery, page, outbox)
@@ -72,8 +72,8 @@ def test_the_share_mail_and_the_door_page_follow_the_configured_owner(
         assert body.startswith("Ann has shared a page with you: Plan")
         reader, path = _reader(db, url)
         assert "Ann shared this page with" in reader.get(path).text
-    monkeypatch.delenv("ARTIFACTS_OWNER_NAME")
-    monkeypatch.delenv("ARTIFACTS_OWNER_PRONOUN")
+    monkeypatch.delenv("REAM_OWNER_NAME")
+    monkeypatch.delenv("REAM_OWNER_PRONOUN")
     _share(gallery, page, outbox, email="other@example.com")
     assert outbox[-1][1] == "The owner shared \u201cPlan\u201d with you"
 
@@ -190,10 +190,10 @@ def test_mailgun_is_called_as_documented_and_the_key_is_never_logged(
         captured["data"] = request.data.decode()
         return _Resp()
 
-    monkeypatch.setenv("ARTIFACTS_MAILGUN_KEY", "k-123")
-    monkeypatch.setenv("ARTIFACTS_MAILGUN_API", "https://api.eu.mailgun.net")
-    monkeypatch.setenv("ARTIFACTS_MAILGUN_DOMAIN", "mg.tenfourty.site")
-    monkeypatch.setenv("ARTIFACTS_MAIL_FROM", "Artifacts <artifacts@mg.tenfourty.site>")
+    monkeypatch.setenv("REAM_MAILGUN_KEY", "k-123")
+    monkeypatch.setenv("REAM_MAILGUN_API", "https://api.eu.mailgun.net")
+    monkeypatch.setenv("REAM_MAILGUN_DOMAIN", "mg.tenfourty.site")
+    monkeypatch.setenv("REAM_MAIL_FROM", "Artifacts <artifacts@mg.tenfourty.site>")
     monkeypatch.setattr(mail.urllib.request, "urlopen", fake_urlopen)
     mail.send("a@example.com", "Hi", "Body")
     assert captured["url"] == "https://api.eu.mailgun.net/v3/mg.tenfourty.site/messages"

@@ -11,8 +11,8 @@ import pytest
 from fastapi.testclient import TestClient
 from test_client import key_file, live  # noqa: F401
 
-from artifacts import anchors, comments, content, decide, gallery, keys, store
-from artifacts.app import create_gallery_app
+from ream import anchors, comments, content, decide, gallery, keys, store
+from ream.app import create_gallery_app
 
 PAGE = (
     "<!doctype html><html><head><title>Costs</title></head><body>"
@@ -286,8 +286,8 @@ def test_an_element_anchor_may_be_bare_the_quote_is_checked_by_add():
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     return TestClient(create_gallery_app(db), base_url="https://testserver")
 
 
@@ -541,7 +541,7 @@ def test_an_agents_element_pin_goes_outdated_with_the_element(client, db, seats,
 
 
 def test_the_shim_speaks_the_pin_message_to_the_gallery_only(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     source = content._viewer_report()
     assert '"artifact-pin"' in source
     assert '"*"' not in source
@@ -551,7 +551,7 @@ def test_the_shim_speaks_the_pin_message_to_the_gallery_only(monkeypatch):
 def test_there_is_no_pin_mode_in_the_shim_the_gallery_script_or_the_page_bar(
     monkeypatch,
 ):
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     source = content._viewer_report()
     js = gallery._COMMENTS_JS
     for name in ("mode", "toggle", "exit", "hover"):
@@ -564,7 +564,7 @@ def test_there_is_no_pin_mode_in_the_shim_the_gallery_script_or_the_page_bar(
 
 
 def test_the_shim_draws_its_comment_button_in_one_closed_shadow_host(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     source = content._viewer_report()
     assert 'attachShadow({mode:"closed"})' in source
     assert "document.documentElement.appendChild(h)" in source

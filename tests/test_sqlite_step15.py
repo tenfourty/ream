@@ -1,7 +1,7 @@
 """SQLite schema step 15 adds `artifact.archived_via_folder` (folders slice 2) in place."""
 
-from artifacts import db as dbmod
-from artifacts.db import Database
+from ream import db as dbmod
+from ream.db import Database
 
 
 def test_step_15_adds_the_marker_column_and_index(tmp_path):

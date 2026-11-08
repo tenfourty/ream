@@ -18,15 +18,15 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import events, store
-from artifacts.app import create_gallery_app
+from ream import events, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
 
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     # A held read looks again every half second in production; here every
     # 20 ms, so a republish ends a test's hold at once. The hold's deadline
     # and its shutdown check are unchanged.
@@ -46,7 +46,7 @@ def page(db):
 def slots(monkeypatch):
     """The gallery's held-read slots, fresh for this test, so it can tell the
     moment a read is really holding instead of sleeping and hoping."""
-    from artifacts import gallery
+    from ream import gallery
 
     fresh = threading.BoundedSemaphore(gallery._MAX_WATCHERS)
     monkeypatch.setattr(gallery, "_watchers", fresh)
@@ -144,7 +144,7 @@ def test_too_many_watchers_are_answered_rather_than_queued(
 ):
     """Past the bound it answers at once, which is ordinary polling and
     correct -- an answer now beats a thread later."""
-    from artifacts import gallery
+    from ream import gallery
 
     slots = threading.BoundedSemaphore(1)
     monkeypatch.setattr(gallery, "_watchers", slots)

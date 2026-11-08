@@ -14,8 +14,8 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, store
-from artifacts.app import create_gallery_app
+from ream import decisions, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 
@@ -29,8 +29,8 @@ def page_about(text: str) -> str:
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     return TestClient(create_gallery_app(db=db), base_url="https://testserver")
 
 

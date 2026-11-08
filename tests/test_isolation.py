@@ -13,9 +13,9 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, decisions, events, holds, keys, ratelimit, store
-from artifacts.app import create_app, create_gallery_app
-from artifacts.db import Database
+from ream import comments, decisions, events, holds, keys, ratelimit, store
+from ream.app import create_app, create_gallery_app
+from ream.db import Database
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body>{}</body></html>"
 
@@ -202,7 +202,7 @@ def _next_test() -> None:
 
 
 def _reusing() -> bool:
-    return os.environ.get("ARTIFACTS_TEST_FRESH_APPS") != "1"
+    return os.environ.get("REAM_TEST_FRESH_APPS") != "1"
 
 
 @_FACTORIES

@@ -11,8 +11,8 @@ import stat
 
 import pytest
 
-from artifacts import keys
-from artifacts.admin import main
+from ream import keys
+from ream.admin import main
 
 AGENT = "ops-seat"
 

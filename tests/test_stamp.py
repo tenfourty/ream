@@ -12,8 +12,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import frame_pass, keys, stamp, store
-from artifacts.content import create_content_app
+from ream import frame_pass, keys, stamp, store
+from ream.content import create_content_app
 
 FRAMED = {"sec-fetch-dest": "iframe"}
 MARKED = (
@@ -25,11 +25,11 @@ MARKED = (
 @pytest.fixture()
 def paris(monkeypatch):
     """A fixed zone, so the assertions do not depend on where the test runs."""
-    monkeypatch.setenv("ARTIFACTS_DISPLAY_TZ", "Europe/Paris")
+    monkeypatch.setenv("REAM_DISPLAY_TZ", "Europe/Paris")
 
 
 def _content(db, artifact, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     client = TestClient(create_content_app(db))
     client.headers.update({"host": f"{artifact.id}.tenfourty.com"})
     return client
@@ -83,7 +83,7 @@ def test_a_naive_time_is_read_as_utc_not_as_local(paris):
 def test_an_unknown_zone_name_falls_back_instead_of_failing(monkeypatch):
     # A page that will not load teaches nobody anything about a misconfigured
     # variable; it just loses the page.
-    monkeypatch.setenv("ARTIFACTS_DISPLAY_TZ", "Mars/Olympus_Mons")
+    monkeypatch.setenv("REAM_DISPLAY_TZ", "Mars/Olympus_Mons")
     assert stamp.display_timezone() is None
     assert "2026" in stamp.format_for_display(datetime(2026, 9, 20, 8, 53))  # noqa: DTZ001 -- naive ON PURPOSE: this is the case under test
 
@@ -91,9 +91,9 @@ def test_an_unknown_zone_name_falls_back_instead_of_failing(monkeypatch):
 def test_the_zone_is_read_at_call_time_so_a_deployment_can_set_it(monkeypatch):
     # A module-level os.environ.get freezes at first import, which is how a
     # setting becomes untestable and undeployable at once.
-    monkeypatch.setenv("ARTIFACTS_DISPLAY_TZ", "Europe/Paris")
+    monkeypatch.setenv("REAM_DISPLAY_TZ", "Europe/Paris")
     first = stamp.display_timezone()
-    monkeypatch.setenv("ARTIFACTS_DISPLAY_TZ", "UTC")
+    monkeypatch.setenv("REAM_DISPLAY_TZ", "UTC")
     assert stamp.display_timezone() != first
 
 

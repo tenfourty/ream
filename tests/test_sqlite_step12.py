@@ -4,8 +4,8 @@ and is safe to run again."""
 
 from importlib import resources
 
-from artifacts import db as dbmod
-from artifacts.db import Database
+from ream import db as dbmod
+from ream.db import Database
 
 _WIDE = ",\n                'decision_set_aside', 'decision_reopened')"
 
@@ -14,7 +14,7 @@ def _build_v11(path) -> Database:
     """A database as steps 1 to 11 leave it: no `reopened_at`, and an event CHECK
     that does not know the two new kinds."""
     database = Database(f"sqlite:///{path}")
-    script = resources.files("artifacts").joinpath("schema_sqlite.sql").read_text()
+    script = resources.files("ream").joinpath("schema_sqlite.sql").read_text()
     assert _WIDE in script
     script = script.replace(_WIDE, ")")
     with database.connect() as conn, conn.transaction():

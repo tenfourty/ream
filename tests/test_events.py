@@ -14,8 +14,8 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, events, keys, store
-from artifacts.app import create_gallery_app
+from ream import decisions, events, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
 _OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
@@ -417,7 +417,7 @@ def test_past_the_waiter_ceiling_a_caller_is_answered_instead_of_queued(db):
     """Waiting costs a worker thread. Past the ceiling the app must degrade to
     ordinary polling rather than starve every other request -- including the
     gallery Jeremy is reading."""
-    from artifacts import events as events_module
+    from ream import events as events_module
 
     held = threading.Semaphore(0)
     for _ in range(events_module.MAX_WAITERS):

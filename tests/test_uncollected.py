@@ -12,8 +12,8 @@ mixes them gets muted, and a muted alert misses the real one.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, events, keys, store
-from artifacts.app import create_gallery_app
+from ream import decisions, events, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
 _OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
@@ -180,7 +180,7 @@ def test_the_operator_sees_every_seat_s_stranded_answers(client, db):
     later and nobody came back here. The blocker had been gone for a day and
     the comment saying otherwise was the only thing still enforcing it.
     """
-    from artifacts import grants
+    from ream import grants
 
     ops_token, _ = keys.mint(db, agent="ops")
     grants.grant(db, "ops", grants.READ_ALL_DECISIONS)
@@ -200,7 +200,7 @@ def test_each_row_says_whose_it_is_and_on_what(client, db):
     """An alert that says "one answer is stranded" without saying whose or on
     what page sends its reader back to the database, which is how an alert
     stops being read."""
-    from artifacts import grants
+    from ream import grants
 
     ops_token, _ = keys.mint(db, agent="ops")
     grants.grant(db, "ops", grants.READ_ALL_DECISIONS)
@@ -235,7 +235,7 @@ def test_without_the_grant_it_is_refused_and_not_quietly_narrowed(client, db):
 def test_the_default_is_still_only_your_own(client, db):
     """`scope` defaults to mine, so nothing a seat already runs starts seeing
     other seats' answers because this shipped."""
-    from artifacts import grants
+    from ream import grants
 
     ops_token, _ = keys.mint(db, agent="ops")
     grants.grant(db, "ops", grants.READ_ALL_DECISIONS)
@@ -279,7 +279,7 @@ def test_another_session_reading_does_not_make_the_asker_look_alive(client, db):
     Those need opposite responses, which is the whole reason the two states
     exist, so getting it backwards is worse than not labelling at all.
     """
-    from artifacts import events
+    from ream import events
 
     keys.mint(db, agent="seat-a")
     page = store.publish(db, "seat-a", "Asks something", PAGE)
@@ -316,7 +316,7 @@ def test_a_decision_from_before_sessions_matches_the_unlabelled_reader(client, d
     plain `=` is never true for NULL, which would have made every pre-session
     decision read as no_reader for ever, including ones being actively worked.
     """
-    from artifacts import events
+    from ream import events
 
     keys.mint(db, agent="seat-a")
     page = store.publish(db, "seat-a", "Asks something", PAGE)
@@ -339,7 +339,7 @@ def test_an_unlabelled_reader_keeps_one_row_however_often_it_reads(db):
     """NULLS NOT DISTINCT on the unique index. Without it `on conflict` never
     fires for a caller that declares nothing -- two NULLs are normally distinct
     to a unique index -- and this table grows a row per request for ever."""
-    from artifacts import events
+    from ream import events
 
     keys.mint(db, agent="seat-a")
     for _ in range(4):

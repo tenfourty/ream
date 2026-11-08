@@ -20,7 +20,7 @@
 # a credential built by interpolation and handed to a subprocess as an
 # argument — deliberately NOT `headers={"Authorization": f"Bearer {token}"}`,
 # which is the CORRECT shape (an httpx/requests header never reaches argv) and
-# appears throughout src/artifacts. A guard that flagged it would be turned
+# appears throughout src/ream. A guard that flagged it would be turned
 # off within a day.
 #
 # DELIBERATELY NOT SCANNED: a token inside a URL (?apikey=$VAR) — moving a
@@ -138,7 +138,7 @@ EOF
       "$(scan_paths "$tmp/bad_subprocess.py" >/dev/null 2>&1; echo $?)" 1
 
     # NEGATIVE CONTROLS — the correct shapes must NOT trip the guard, or
-    # src/artifacts stops being committable.
+    # src/ream stops being committable.
     cat >"$tmp/good_headers.py" <<'EOF'
 import httpx
 

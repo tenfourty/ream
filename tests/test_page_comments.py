@@ -23,16 +23,16 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, store
-from artifacts.app import create_gallery_app
+from ream import comments, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     return TestClient(create_gallery_app(db=db), base_url="https://testserver")
 
 
@@ -319,7 +319,7 @@ def test_the_panel_has_no_backdrop_and_keeps_its_id(client, db, page):
 
 
 def test_scripts_off_still_shows_the_panel_docked_and_unblurred():
-    from artifacts import gallery
+    from ream import gallery
 
     css = gallery._CSS
     target = [r for r in _rules(css, ".cpanel:target") if "display:block" in r]
@@ -334,7 +334,7 @@ def test_scripts_off_still_shows_the_panel_docked_and_unblurred():
 
 
 def test_an_open_panel_narrows_the_page_and_is_a_sheet_on_a_phone():
-    from artifacts import gallery
+    from ream import gallery
 
     css = gallery._CSS
     assert any(
@@ -350,11 +350,11 @@ def test_an_open_panel_narrows_the_page_and_is_a_sheet_on_a_phone():
 
 
 def test_the_script_never_navigates_to_open_the_panel():
-    from artifacts import gallery
+    from ream import gallery
 
     js = gallery._COMMENTS_JS
     assert not re.search(r"location\.hash\s*=(?!=)", js), "opening must not navigate"
-    assert '"artifacts.comments.open:"' in js
+    assert '"ream.comments.open:"' in js
     assert "cpanel-open" in js
 
 

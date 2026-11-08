@@ -7,7 +7,7 @@ import time
 import pytest
 from test_client import key_file, live  # noqa: F401
 
-from artifacts import comments, decide, store
+from ream import comments, decide, store
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>the plan</p></body></html>"
 
@@ -117,7 +117,7 @@ def test_replying_to_a_thread_that_is_not_yours_is_refused(live, key_file, capsy
 def gallery(db):
     from fastapi.testclient import TestClient
 
-    from artifacts.app import create_gallery_app
+    from ream.app import create_gallery_app
 
     return TestClient(create_gallery_app(db))
 
@@ -155,9 +155,9 @@ def test_the_page_view_loads_the_selection_script(db, gallery):
 
 
 def test_the_page_reports_selections_only_to_the_gallery(monkeypatch):
-    from artifacts import content
+    from ream import content
 
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://g.example")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://g.example")
     shim = content._viewer_report()
     assert "selectionchange" in shim and "artifact-selection" in shim
     assert '"*"' not in shim
@@ -207,7 +207,7 @@ def test_another_offices_comment_on_my_page_needs_my_reply(
 
 
 def test_reply_note_round_trip_and_the_hint(db, live, key_file, page, capsys):
-    from artifacts import decisions
+    from ream import decisions
 
     path, _ = key_file
     ask = decisions.ask(

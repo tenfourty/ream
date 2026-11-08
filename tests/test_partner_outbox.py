@@ -20,8 +20,8 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from artifacts import admin, decisions, partner, serve, store
-from artifacts.db import Database
+from ream import admin, decisions, partner, serve, store
+from ream.db import Database
 
 PAGE = (
     "<!doctype html><html><head><title>t</title></head><body><p>plan</p></body></html>"
@@ -106,7 +106,7 @@ def bridge(monkeypatch, tmp_path, keypair):
     monkeypatch.setenv(partner.ENV_ALLOW_HTTP, "1")
     monkeypatch.setenv(partner.ENV_KEY_FILE, str(path))
     monkeypatch.setenv(partner.ENV_KEY_ID, "test-key-1")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://gallery.invalid")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://gallery.invalid")
     return partner.config_from_env()
 
 
@@ -271,7 +271,7 @@ def test_a_rolled_back_ask_enqueues_nothing(db, page, bridge, monkeypatch):
 
 
 def test_a_rolled_back_transaction_takes_its_version_back(db, page, bridge):
-    from artifacts.db import Rollback
+    from ream.db import Rollback
 
     row = _ask(db, page)
     with db.connect() as conn, conn.transaction():
@@ -633,7 +633,7 @@ def test_delivered_rows_are_pruned_after_thirty_days(db, page, bridge):
 def test_a_database_file_from_before_the_outbox_is_upgraded(tmp_path, monkeypatch):
     import sqlite3
 
-    from artifacts import db as dbmod
+    from ream import db as dbmod
 
     path = tmp_path / "old.db"
     steps = dict(dbmod._SQLITE_STEPS)
@@ -803,7 +803,7 @@ def test_a_row_is_not_claimable_by_a_second_sender_during_its_attempt(db, page, 
 
 
 def test_an_empty_queue_takes_no_write_transaction(db, page, bridge, monkeypatch):
-    from artifacts import db as dbmod
+    from ream import db as dbmod
 
     begun = []
     for cls in (dbmod.Connection, dbmod.SqliteConnection):
@@ -842,7 +842,7 @@ def test_http_needs_the_explicit_opt_in_and_https_does_not(bridge, monkeypatch):
 
 def test_plain_http_is_logged_once_at_start(db, bridge, caplog, monkeypatch):
     monkeypatch.setattr(partner, "POLL_SECONDS", 0.05)
-    with caplog.at_level(logging.WARNING, logger="artifacts.partner"):
+    with caplog.at_level(logging.WARNING, logger="ream.partner"):
         thread = partner.start(db, bridge)
         partner.stop()
         thread.join(5)

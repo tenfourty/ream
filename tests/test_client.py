@@ -2,7 +2,7 @@
 over REAL HTTP (a uvicorn thread on an ephemeral loopback port), not TestClient --
 the point of this client is that it works with nothing but the standard library and
 a socket, so it is tested the way it will actually run. The loopback host must
-answer as the gallery: `ARTIFACTS_GALLERY_ORIGIN` is set to this server's own
+answer as the gallery: `REAM_GALLERY_ORIGIN` is set to this server's own
 `http://127.0.0.1:<port>` so `hosts.is_gallery` (host, port stripped) matches the
 `Host` header the client's own requests carry -- no test-only hook, just the same
 environment-driven read `create_app`'s router already uses in `test_router.py`.
@@ -21,8 +21,8 @@ import urllib.request
 import pytest
 import uvicorn
 
-from artifacts import client, keys
-from artifacts.app import create_app
+from ream import client, keys
+from ream.app import create_app
 
 SECRET_BODY = "<!doctype html><body>AKIA" + "IOSFODNN7EXAMPLE</body>"
 
@@ -101,11 +101,11 @@ class _LiveServer:
 
 @pytest.fixture()
 def live(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     server = _LiveServer(create_app(db))
     origin = server.start()
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", origin)
-    monkeypatch.setenv("ARTIFACTS_API", f"{origin}/api/v1")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", origin)
+    monkeypatch.setenv("REAM_API", f"{origin}/api/v1")
     try:
         yield origin
     finally:
@@ -114,7 +114,7 @@ def live(db, monkeypatch):
 
 @pytest.fixture()
 def key_file(db, tmp_path, monkeypatch):
-    monkeypatch.delenv("ARTIFACTS_KEY_FILE", raising=False)
+    monkeypatch.delenv("REAM_KEY_FILE", raising=False)
     token, _ = keys.mint(db, agent="ops-seat")
     path = tmp_path / "key"
     path.write_text(token)
@@ -330,7 +330,7 @@ def test_a_redirect_to_another_host_is_refused_and_never_reaches_it(
     )
     redirector_origin = redirector.start()
     try:
-        monkeypatch.setenv("ARTIFACTS_API", f"{redirector_origin}/api/v1")
+        monkeypatch.setenv("REAM_API", f"{redirector_origin}/api/v1")
         path = tmp_path / "key"
         path.write_text("art_" + "a" * 40)
         path.chmod(0o600)
@@ -353,7 +353,7 @@ def test_a_publish_redirected_302_also_never_reaches_the_target(tmp_path, monkey
     )
     redirector_origin = redirector.start()
     try:
-        monkeypatch.setenv("ARTIFACTS_API", f"{redirector_origin}/api/v1")
+        monkeypatch.setenv("REAM_API", f"{redirector_origin}/api/v1")
         path = tmp_path / "key"
         path.write_text("art_" + "a" * 40)
         path.chmod(0o600)
@@ -372,7 +372,7 @@ def test_a_publish_redirected_302_also_never_reaches_the_target(tmp_path, monkey
 def test_an_http_api_to_a_non_loopback_host_is_refused_before_any_connection(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setenv("ARTIFACTS_API", "http://example.com/api/v1")
+    monkeypatch.setenv("REAM_API", "http://example.com/api/v1")
     called = []
     monkeypatch.setattr(
         client,
@@ -471,7 +471,7 @@ def test_a_non_json_2xx_response_is_treated_as_a_failure(tmp_path, monkeypatch, 
     server = _BareServer("127.0.0.1", Handler)
     origin = server.start()
     try:
-        monkeypatch.setenv("ARTIFACTS_API", f"{origin}/api/v1")
+        monkeypatch.setenv("REAM_API", f"{origin}/api/v1")
         path = tmp_path / "key"
         path.write_text("art_" + "a" * 40)
         path.chmod(0o600)
@@ -887,7 +887,7 @@ def test_the_listing_keeps_its_three_columns_and_adds_state_only_when_there_is_s
 def test_a_page_this_key_does_not_own_is_refused(live, key_file, db, tmp_path, capsys):
     """The scope is the service's, not this script's -- but an agent has to see
     that it failed, so the exit code and the message matter here."""
-    from artifacts import store
+    from ream import store
 
     keys.mint(db, agent="another-seat")
     theirs = store.publish(
@@ -1165,7 +1165,7 @@ def test_the_listing_names_its_columns_on_stderr_only(live, key_file, tmp_path, 
 def test_preview_writes_the_png_and_never_claims_a_picture_it_lacks(
     live, key_file, tmp_path, capsys, monkeypatch
 ):
-    from artifacts import thumbs
+    from ream import thumbs
 
     path, _token = key_file
     page = tmp_path / "page.html"

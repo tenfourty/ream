@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from artifacts.app import create_gallery_app
+from ream.app import create_gallery_app
 
 
 def test_healthz_reports_ok():

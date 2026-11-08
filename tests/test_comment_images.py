@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from test_client import key_file, live  # noqa: F401
 
-from artifacts import (
+from ream import (
     comments,
     content,
     decide,
@@ -24,7 +24,7 @@ from artifacts import (
     keys,
     store,
 )
-from artifacts.app import create_api_app, create_gallery_app
+from ream.app import create_api_app, create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body><p>x</p></body></html>"
 
@@ -486,8 +486,8 @@ def test_anything_but_one_file_in_a_multipart_body_is_refused(body, header):
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     return TestClient(create_gallery_app(db), base_url="https://testserver")
 
 
@@ -611,7 +611,7 @@ def test_bytes_that_differ_only_in_stripped_metadata_are_one_picture(
 
 
 def test_another_agent_gets_its_own_id_for_the_same_bytes(client, db, seats, page):
-    from artifacts import store as s
+    from ream import store as s
 
     s.set_agents_can_read(db, page.id, True, agent=None)
     assert _staged(client, seats, page.id) != _staged(
@@ -790,7 +790,7 @@ def _raw_post(app, path, token, headers, receive):
 
 
 def test_a_body_over_the_cap_is_refused_without_being_held(db, page, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     token, _ = keys.mint(db, agent="owner")
     app = create_gallery_app(db)
     path = f"/api/v1/artifacts/{page.id}/comment-images"
@@ -816,7 +816,7 @@ def test_a_body_over_the_cap_is_refused_without_being_held(db, page, monkeypatch
 def test_a_declared_length_over_the_cap_is_refused_before_one_byte_is_read(
     db, page, monkeypatch
 ):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     token, _ = keys.mint(db, agent="owner")
 
     async def never():
@@ -972,8 +972,8 @@ def test_deleting_a_thread_deletes_its_pictures(client, db, seats, page):
 
 @pytest.fixture()
 def origin(db, page, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     return TestClient(
         content.create_content_app(db), base_url=f"https://{page.id}.tenfourty.com"
     )
@@ -1392,7 +1392,7 @@ def test_the_twin_holds_the_agent_routes_limits_and_error_shapes(
 
 
 def test_the_twin_streams_and_stops_at_the_cap(db, page, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     app = create_gallery_app(db)
     chunk = b"x" * 65536
     read = []

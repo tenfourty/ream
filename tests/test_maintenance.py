@@ -3,8 +3,8 @@
 import os
 from datetime import UTC, datetime, timedelta
 
-from artifacts import maintenance, store
-from artifacts.db import Database
+from ream import maintenance, store
+from ream.db import Database
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body>x</body></html>"
 

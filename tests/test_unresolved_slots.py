@@ -18,9 +18,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, frame_pass, keys, store
-from artifacts.app import create_gallery_app
-from artifacts.content import create_content_app
+from ream import decisions, frame_pass, keys, store
+from ream.app import create_gallery_app
+from ream.content import create_content_app
 
 FRAMED = {"sec-fetch-dest": "iframe"}
 TEMPLATES = Path(decisions.__file__).parent / "templates"
@@ -137,7 +137,7 @@ def test_a_page_with_no_slots_costs_no_query(db, monkeypatch):
 
 @pytest.fixture()
 def api(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     token, _ = keys.mint(db, agent="ops-seat")
     client = TestClient(create_gallery_app(db=db))
     client.headers.update({"Authorization": f"Bearer {token}"})
@@ -191,7 +191,7 @@ def test_reading_the_body_back_carries_the_same_warning(api):
 
 
 def _serve(db, monkeypatch, body: str, asks: int = 0) -> tuple[str, list[str]]:
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     art = store.publish(db, "ops-seat", "Board", page())
     real = [_ask(db, art.id) for _ in range(asks)]
     body = body.format(*real)
@@ -232,7 +232,7 @@ def test_an_id_cannot_break_out_of_the_shim(db, monkeypatch):
 
 def test_an_older_version_carries_no_note(db, monkeypatch):
     """An inert snapshot gets the null shim and nothing else, as it always has."""
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     art = store.publish(db, "ops-seat", "Board", page("nope"))
     store.patch(db, "ops-seat", art.id, page(), art.revision)
     client = TestClient(create_content_app(db))

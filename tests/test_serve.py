@@ -11,8 +11,8 @@ just reached through the real entrypoint this time.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts.db import Database
-from artifacts.serve import app_from_env
+from ream.db import Database
+from ream.serve import app_from_env
 
 
 def test_missing_database_url_exits_without_leaking_anything(monkeypatch):
@@ -31,7 +31,7 @@ def test_empty_database_url_exits_without_leaking_anything(monkeypatch):
 
 def test_returned_app_answers_healthz_only_on_the_gallery_host(dsn, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", dsn)
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     client = TestClient(app_from_env())
 
     ok = client.get("/healthz", headers={"host": "artifacts.tenfourty.site"})

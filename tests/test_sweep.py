@@ -5,8 +5,8 @@ import pytest
 from fastapi.testclient import TestClient
 from test_client import key_file, live  # noqa: F401
 
-from artifacts import client, comments, decisions, keys, store
-from artifacts.app import create_gallery_app
+from ream import client, comments, decisions, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
@@ -106,7 +106,7 @@ def test_ij8_93_an_agent_can_bin_list_and_restore_with_the_tool(
     "encoded", ["&#10;", "&#x0a;", "&#X0A", "&NewLine;", "&#0010;"]
 )
 def test_ij8_8_an_encoded_line_break_does_not_shift_line_numbers(encoded):
-    from artifacts import scan
+    from ream import scan
 
     body = (
         f"<p>first{encoded}still the first line</p>\n<p>DB_PASSWORD=hunter2fake</p>\n"
@@ -116,7 +116,7 @@ def test_ij8_8_an_encoded_line_break_does_not_shift_line_numbers(encoded):
 
 
 def test_ij8_8_a_longer_number_is_not_mistaken_for_a_line_break():
-    from artifacts import scan
+    from ream import scan
 
     # &#100; is "d": the fix must not eat the start of a longer reference.
     assert scan._text_view("&#100;&#10;x") == "d x"

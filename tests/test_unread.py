@@ -6,8 +6,8 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, keys, store
-from artifacts.app import create_gallery_app
+from ream import decisions, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body>{}</body></html>"
 
@@ -104,7 +104,7 @@ def test_an_unread_tile_has_no_tooltip(db, gallery):
 
 
 def _his(db, page, body="his question"):
-    from artifacts import comments
+    from ream import comments
 
     return comments.add(
         db, artifact_id=page.id, author_kind="human", author="jeremy", body=body
@@ -112,7 +112,7 @@ def _his(db, page, body="his question"):
 
 
 def _reply(db, page, root, session="cove/ab12", author="seat"):
-    from artifacts import comments
+    from ream import comments
 
     return comments.add(
         db,
@@ -153,7 +153,7 @@ def test_two_replies_show_the_newest_office(db, gallery):
 
 
 def test_the_owner_in_its_own_thread_he_never_spoke_in_is_not_a_reply(db, gallery):
-    from artifacts import comments
+    from ream import comments
 
     page = _publish(db, "One")
     gallery.get(f"/a/{page.id}")
@@ -171,7 +171,7 @@ def test_the_owner_in_its_own_thread_he_never_spoke_in_is_not_a_reply(db, galler
 
 
 def test_a_withdrawn_reply_does_not_mark_the_page_unread(db, gallery):
-    from artifacts import comments
+    from ream import comments
 
     page = _publish(db, "One")
     his = _his(db, page)
@@ -194,7 +194,7 @@ def test_a_reply_lifts_the_page_in_the_wall_order(db, gallery):
 
 
 def test_a_reply_under_his_answer_note_makes_the_page_unread(db, gallery):
-    from artifacts import comments
+    from ream import comments
 
     page = _publish(db, "One")
     ask = decisions.ask(

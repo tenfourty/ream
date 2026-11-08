@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import (
+from ream import (
     decide,
     decisions,
     events,
@@ -20,8 +20,8 @@ from artifacts import (
     nudge,
     store,
 )
-from artifacts.app import create_gallery_app
-from artifacts.db import jsonb
+from ream.app import create_gallery_app
+from ream.db import jsonb
 
 ORIGIN = "https://artifacts.tenfourty.site"
 
@@ -53,8 +53,8 @@ def auth(token):
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", ORIGIN)
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", ORIGIN)
     return TestClient(create_gallery_app(db=db), base_url="https://testserver")
 
 

@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, events, nudge, store
-from artifacts.app import create_gallery_app
+from ream import decisions, events, nudge, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><title>Plan</title><p>Rotate the keys.</p>"
 
@@ -19,7 +19,7 @@ def _quiet(monkeypatch):
 
 @pytest.fixture()
 def gallery(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 

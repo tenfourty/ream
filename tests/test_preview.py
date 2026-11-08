@@ -5,8 +5,8 @@ import base64
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys, store, thumbs
-from artifacts.app import create_gallery_app
+from ream import keys, store, thumbs
+from ream.app import create_gallery_app
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 20
 PAGE = "<!doctype html><title>t</title><p>x</p>"

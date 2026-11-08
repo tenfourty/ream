@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from artifacts import content, gallery, thumbs
+from ream import content, gallery, thumbs
 
 
 def test_the_selection_carries_context_either_side():
@@ -53,7 +53,7 @@ def test_the_shim_paints_through_css_highlights_and_never_the_dom():
 
 
 def test_the_shim_accepts_marks_only_from_the_gallery(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     source = content._viewer_report()
     marks_leg = source[source.index('"artifact-marks"') - 200 :]
     assert 'if(e.origin!=="https://artifacts.tenfourty.site")return;' in marks_leg
@@ -74,7 +74,7 @@ def test_the_shim_places_marks_when_actually_run(tmp_path, monkeypatch):
     """Run the served shim against a fake DOM: placed where the anchor says,
     found by search when the page moved, unplaced when ambiguous or gone,
     only from the gallery, never throwing, and nothing added but one style."""
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     served = content._viewer_report()
     body = served.removeprefix("<script>try{(function(){").removesuffix(
         "})()}catch(e){}</script>"
@@ -205,7 +205,7 @@ def test_placement_rules_in_a_real_browser(tmp_path, monkeypatch):
     SKIPPED here, not failed, wherever there is no headless browser -- CI has
     none. It runs for real, and passes, on baba, where chromium is installed.
     """
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     body = "<!doctype html>" + _ARPLACE_CASES
     shim = content.SHIM + content._viewer_report()
     html = content.inject(body, shim)
@@ -241,7 +241,7 @@ def test_the_hover_card_has_its_own_styles_from_the_tokens():
 
 
 def test_hover_messages_are_named_as_the_constraints_fix_them(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     source = content._viewer_report()
     assert '"artifact-mark-hover"' in source and '"artifact-mark-leave"' in source
     js = gallery._COMMENTS_JS

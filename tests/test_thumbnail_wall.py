@@ -11,8 +11,8 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import keys, store, thumbs
-from artifacts.app import create_gallery_app
+from ream import keys, store, thumbs
+from ream.app import create_gallery_app
 
 # The real background render: tests elsewhere have it switched off.
 pytestmark = pytest.mark.background_thumbnails
@@ -25,7 +25,7 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"fake png bytes for a test" * 4
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 

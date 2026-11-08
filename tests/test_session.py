@@ -19,8 +19,8 @@ variable, and a check that weak is worse than none because it reads like one.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, events, keys, store
-from artifacts.app import create_gallery_app
+from ream import decisions, events, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 SEAT_A = "artifacts-seat/aaa111"
@@ -29,7 +29,7 @@ SEAT_B = "homelab-31/bbb222"
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 
@@ -120,7 +120,7 @@ def test_me_echoes_back_what_you_declared(client, key):
 def test_an_absurdly_long_label_is_refused_by_the_field_that_named_it(client, key):
     got = client.get("/api/v1/me", headers=_h(key, "x" * 200))
     assert got.status_code == 422
-    assert "x-artifacts-session" in got.json()["detail"]
+    assert "x-ream-session" in got.json()["detail"]
 
 
 # --- the feed, which is what this was asked for ------------------------------

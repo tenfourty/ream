@@ -10,10 +10,10 @@ import pytest
 from fastapi.testclient import TestClient
 from test_client import key_file, live  # noqa: F401
 
-from artifacts import comments, decide, events, keys, nudge, store
-from artifacts import db as dbmod
-from artifacts.app import create_gallery_app
-from artifacts.db import Database
+from ream import comments, decide, events, keys, nudge, store
+from ream import db as dbmod
+from ream.app import create_gallery_app
+from ream.db import Database
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 
@@ -25,8 +25,8 @@ def page(db, key_file):
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     return TestClient(create_gallery_app(db), base_url="https://testserver")
 
 
@@ -177,7 +177,7 @@ def test_the_waiter_wakes_on_his_reopen_and_prints_the_thread(
     listener = on_first_listen(
         lambda: comments.reopen(db, root.id, agent=None, by="jeremy")
     )
-    monkeypatch.setenv("ARTIFACTS_SESSION", "cove/1")
+    monkeypatch.setenv("REAM_SESSION", "cove/1")
     code = decide.main(
         ["--key-file", str(path), "wait", "--page", page.id, "--timeout", "40s"]
     )
@@ -202,7 +202,7 @@ def test_the_waiter_says_so_in_json_too(
     listener = on_first_listen(
         lambda: comments.reopen(db, root.id, agent=None, by="jeremy")
     )
-    monkeypatch.setenv("ARTIFACTS_SESSION", "cove/1")
+    monkeypatch.setenv("REAM_SESSION", "cove/1")
     code = decide.main(
         [
             "--key-file",
@@ -234,7 +234,7 @@ def test_answers_only_does_not_wake_on_a_reopen(
     path, _ = key_file
     root = _settled(db, page)
     on_first_listen(lambda: comments.reopen(db, root.id, agent=None, by="jeremy"))
-    monkeypatch.setenv("ARTIFACTS_SESSION", "cove/1")
+    monkeypatch.setenv("REAM_SESSION", "cove/1")
     code = decide.main(
         [
             "--key-file",
@@ -269,7 +269,7 @@ def test_the_kind_is_known_to_the_journal():
 def test_sqlite_step_18_widens_the_event_check(tmp_path):
     """A file left by step 17 refuses the kind; migrating accepts it, twice."""
     database = Database(f"sqlite:///{tmp_path / 'v17.db'}")
-    script = resources.files("artifacts").joinpath("schema_sqlite.sql").read_text()
+    script = resources.files("ream").joinpath("schema_sqlite.sql").read_text()
     with database.connect() as conn, conn.transaction():
         for statement in dbmod._statements(script):
             conn.execute(statement)

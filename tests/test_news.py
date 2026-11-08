@@ -2,12 +2,12 @@
 
 import io
 
-from artifacts import news
+from ream import news
 
 
 def _run(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
-    monkeypatch.delenv("ARTIFACTS_NEWS", raising=False)
+    monkeypatch.delenv("REAM_NEWS", raising=False)
     out = io.StringIO()
     news.announce(out)
     return out.getvalue()
@@ -31,7 +31,7 @@ def test_it_can_be_silenced_and_never_breaks_a_command(tmp_path, monkeypatch):
     (tmp_path / "file").write_text("not a directory")
     out = io.StringIO()
     news.announce(out)  # an unwritable state dir must not raise
-    monkeypatch.setenv("ARTIFACTS_NEWS", "0")
+    monkeypatch.setenv("REAM_NEWS", "0")
     silent = io.StringIO()
     news.announce(silent)
     assert silent.getvalue() == ""

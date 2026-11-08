@@ -11,8 +11,8 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import store, text
-from artifacts.app import create_gallery_app
+from ream import store, text
+from ream.app import create_gallery_app
 
 STANDFIRST = (
     "<!doctype html><html><head><title>Board</title></head><body>"
@@ -24,8 +24,8 @@ BARE = "<!doctype html><html><head><title>Bare</title></head><body><h1>Hi</h1></
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_DISPLAY_TZ", "Europe/Paris")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_DISPLAY_TZ", "Europe/Paris")
     return TestClient(create_gallery_app(db=db))
 
 
@@ -78,7 +78,7 @@ def test_the_counts_are_not_multiplied_by_each_other(client, db):
             db, "seat-a", published.id, STANDFIRST + f"<!--{n}-->", revision
         )
         revision = updated.revision
-    from artifacts import decisions
+    from ream import decisions
 
     for n in range(2):
         decisions.ask(
@@ -96,7 +96,7 @@ def test_the_counts_are_not_multiplied_by_each_other(client, db):
 
 
 def test_one_open_question_is_singular(client, db):
-    from artifacts import decisions
+    from ream import decisions
 
     published = store.publish(db, "seat-a", "Asking", STANDFIRST)
     decisions.ask(
@@ -111,7 +111,7 @@ def test_one_open_question_is_singular(client, db):
 
 
 def test_an_answered_question_stops_shouting(client, db):
-    from artifacts import decisions
+    from ream import decisions
 
     published = store.publish(db, "seat-a", "Answered", STANDFIRST)
     asked = decisions.ask(

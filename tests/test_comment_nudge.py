@@ -22,16 +22,16 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, events, nudge, sinks, store
-from artifacts.app import create_gallery_app
+from ream import comments, events, nudge, sinks, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     return TestClient(create_gallery_app(db=db), base_url="https://testserver")
 
 
@@ -260,7 +260,7 @@ def test_a_held_waiter_is_answered_the_moment_he_comments(client, db, page, firs
     agent holding /events?wait= is answered by him pressing Comment, rather
     than on its next poll. No address for the agent is needed, so this works
     for a seat that is not on this machine."""
-    from artifacts import keys
+    from ream import keys
 
     token, _ = keys.mint(db, agent="seat")
     answer = {}

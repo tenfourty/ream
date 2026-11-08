@@ -8,8 +8,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, onboarding, store
-from artifacts.app import create_gallery_app
+from ream import decisions, onboarding, store
+from ream.app import create_gallery_app
 
 PAGE = (
     "<!doctype html><html><head><title>t</title></head><body><p>plan</p></body></html>"
@@ -250,8 +250,8 @@ def test_held_by_is_in_agent_output_and_clears_on_answer(db, client, page):
 
 
 def test_held_by_over_the_api(db, page):
-    from artifacts import keys
-    from artifacts.app import create_gallery_app as app
+    from ream import keys
+    from ream.app import create_gallery_app as app
 
     token, _ = keys.mint(db, agent="ops-seat")
     api = TestClient(app(db))
@@ -357,7 +357,7 @@ def test_onboarding_says_what_is_true_now():
 
 
 def test_read_all_scope_all_carries_held_by(db, page):
-    from artifacts import grants, keys
+    from ream import grants, keys
 
     first = ask(db, page)
     second = ask(db, page, "second?", depends_on=[first.id])
@@ -413,7 +413,7 @@ def test_for_office_names_are_escaped_where_rendered(db, page):
     # the rendering path escapes rather than that a hostile name can arrive.
     import dataclasses
 
-    from artifacts.gallery import _question_meta
+    from ream.gallery import _question_meta
 
     row = dataclasses.replace(ask(db, page, "x"), for_offices=["<i>x</i>"])
     rendered = "".join(_question_meta(row, datetime.now(UTC)))

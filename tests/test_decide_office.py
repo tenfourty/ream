@@ -10,7 +10,7 @@ import time
 import pytest
 from test_client import key_file, live  # noqa: F401
 
-from artifacts import decide, decisions, store
+from ream import decide, decisions, store
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
@@ -38,9 +38,9 @@ def _answer(db, asked, note):
 
 def _run(args, key_path, monkeypatch, session="cove/1") -> int:
     if session is None:
-        monkeypatch.delenv("ARTIFACTS_SESSION", raising=False)
+        monkeypatch.delenv("REAM_SESSION", raising=False)
     else:
-        monkeypatch.setenv("ARTIFACTS_SESSION", session)
+        monkeypatch.setenv("REAM_SESSION", session)
     return decide.main(["--key-file", str(key_path), *args])
 
 
@@ -169,7 +169,7 @@ def test_no_label_and_no_office_hears_everything_and_says_so(
     assert _run(["wait", "--timeout", "5s"], path, monkeypatch, None) == 0
     captured = capsys.readouterr()
     assert "homelab note" in captured.out
-    assert "ARTIFACTS_SESSION" in captured.err and "--team" in captured.err
+    assert "REAM_SESSION" in captured.err and "--team" in captured.err
 
 
 def test_timeout_zero_keeps_holding_and_resumes_from_its_cursor(
@@ -326,11 +326,11 @@ def test_the_timeout_exit_says_it_is_a_time_limit(
     path, _ = key_file
     assert _run(["wait", "--timeout", "0.1s"], path, monkeypatch) == 3
     err = capsys.readouterr().err
-    assert "time limit (0.1s)" in err and "ARTIFACTS_WAIT_TIMEOUT" in err
+    assert "time limit (0.1s)" in err and "REAM_WAIT_TIMEOUT" in err
 
 
 def test_the_default_timeout_can_be_raised_by_environment(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_WAIT_TIMEOUT", "3h")
+    monkeypatch.setenv("REAM_WAIT_TIMEOUT", "3h")
     assert decide.build_parser().parse_args(["wait"]).timeout == "3h"
-    monkeypatch.delenv("ARTIFACTS_WAIT_TIMEOUT")
+    monkeypatch.delenv("REAM_WAIT_TIMEOUT")
     assert decide.build_parser().parse_args(["wait"]).timeout == "55m"

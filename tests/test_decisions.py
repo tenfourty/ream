@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, keys, store
-from artifacts.app import create_gallery_app
+from ream import decisions, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
 
@@ -11,7 +11,7 @@ _OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 
@@ -407,7 +407,7 @@ def test_the_answer_event_is_addressed_to_the_agent_that_owns_the_page(client, d
     caught it that day; this test is what catches it when the shape changes again
     somewhere the database is more forgiving.
     """
-    from artifacts import events
+    from ream import events
 
     token, _ = keys.mint(db, agent="page-owner")
     artifact = _publish(client, token)
@@ -570,7 +570,7 @@ def _walk(client, token: str, url: str, limit: int) -> tuple[list[str], int]:
 
 @pytest.mark.parametrize("scope", ["mine", "all"])
 def test_a_list_over_the_old_cap_is_whole_by_default(client, db, scope):
-    from artifacts import grants
+    from ream import grants
 
     token, _ = keys.mint(db, agent="ops-seat")
     grants.grant(db, "ops-seat", grants.READ_ALL_DECISIONS)
@@ -585,7 +585,7 @@ def test_a_list_over_the_old_cap_is_whole_by_default(client, db, scope):
 
 @pytest.mark.parametrize("scope", ["mine", "all"])
 def test_a_cut_list_says_so_and_paging_returns_every_row_once(client, db, scope):
-    from artifacts import grants
+    from ream import grants
 
     token, _ = keys.mint(db, agent="ops-seat")
     grants.grant(db, "ops-seat", grants.READ_ALL_DECISIONS)
@@ -602,7 +602,7 @@ def test_a_cut_list_says_so_and_paging_returns_every_row_once(client, db, scope)
 
 
 def test_open_only_under_scope_all_is_oldest_first_and_never_silently_cut(client, db):
-    from artifacts import grants
+    from ream import grants
 
     token, _ = keys.mint(db, agent="ops-seat")
     grants.grant(db, "ops-seat", grants.READ_ALL_DECISIONS)

@@ -16,21 +16,21 @@ import logging
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import frame_pass, keys, serve, store
-from artifacts.app import create_gallery_app
-from artifacts.content import create_content_app
+from ream import frame_pass, keys, serve, store
+from ream.app import create_gallery_app
+from ream.content import create_content_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body>x</body></html>"
 
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 
 def test_a_gallery_request_is_logged_with_its_status(client, caplog):
-    with caplog.at_level(logging.INFO, logger="artifacts.gallery.access"):
+    with caplog.at_level(logging.INFO, logger="ream.gallery.access"):
         client.get("/")
     lines = [r.getMessage() for r in caplog.records]
     assert any("GET / -> 200" in line for line in lines), lines
@@ -41,7 +41,7 @@ def test_a_refused_answer_is_logged_so_a_403_is_not_silence(client, db, caplog):
     refusal is indistinguishable from a request that never arrived — which is
     exactly the position this service was in when Jeremy said it did not work.
     """
-    from artifacts import decisions
+    from ream import decisions
 
     keys.mint(db, agent="seat")
     art = store.publish(db, "seat", "Board", PAGE)
@@ -53,7 +53,7 @@ def test_a_refused_answer_is_logged_so_a_403_is_not_silence(client, db, caplog):
         options=[{"letter": "a", "label": "A"}, {"letter": "b", "label": "B"}],
         recommended="a",
     )
-    with caplog.at_level(logging.INFO, logger="artifacts.gallery.access"):
+    with caplog.at_level(logging.INFO, logger="ream.gallery.access"):
         got = client.post(
             f"/d/{asked.id}/answer",
             data={"letter": "a", "note": ""},
@@ -76,7 +76,7 @@ def test_the_content_origin_is_never_logged(db, monkeypatch, caplog):
     keys.mint(db, agent="seat")
     art = store.publish(db, "seat", "Board", PAGE)
     token = frame_pass.mint(db, art.id)
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     content = TestClient(create_content_app(db))
     content.headers.update({"host": f"{art.id}.tenfourty.com"})
     with caplog.at_level(logging.INFO):
@@ -94,13 +94,13 @@ def test_the_content_origin_is_never_logged(db, monkeypatch, caplog):
 
     # And positively: the content origin produced no access-log line at all,
     # rather than merely one that happened to omit the token.
-    assert not [r for r in caplog.records if r.name == "artifacts.gallery.access"]
+    assert not [r for r in caplog.records if r.name == "ream.gallery.access"]
 
 
 def test_healthz_is_not_logged(client, caplog):
     """Kubernetes probes it every few seconds; logging it would bury everything
     else and make the log useless for the thing it exists for."""
-    with caplog.at_level(logging.INFO, logger="artifacts.gallery.access"):
+    with caplog.at_level(logging.INFO, logger="ream.gallery.access"):
         client.get("/healthz")
     assert not [r for r in caplog.records if "healthz" in r.getMessage()]
 
@@ -109,7 +109,7 @@ def test_the_logger_is_armed_with_a_handler_at_the_entry_point():
     """Under uvicorn's own config the root logger has NO handlers and sits at
     WARNING, so an unarmed logger emits nothing at all — the same silent-success
     shape as the bug being fixed. Measured before this was written."""
-    logger = logging.getLogger("artifacts.gallery.access")
+    logger = logging.getLogger("ream.gallery.access")
     for handler in list(logger.handlers):
         logger.removeHandler(handler)
     logger.setLevel(logging.NOTSET)

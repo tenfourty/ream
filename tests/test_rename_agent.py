@@ -11,9 +11,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import admin, comments, decisions, events, keys, rename, store
-from artifacts.app import create_gallery_app
-from artifacts.db import jsonb
+from ream import admin, comments, decisions, events, keys, rename, store
+from ream.app import create_gallery_app
+from ream.db import jsonb
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]

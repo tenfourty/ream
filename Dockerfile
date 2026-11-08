@@ -48,7 +48,7 @@ FROM python:3.12-slim-bookworm
 
 # The headless browser that draws a page's thumbnail for the gallery wall
 # (homelab-ij8.22). Jeremy chose the renderer running inside the service over a
-# separate one, with the cost of that stated to him; `artifacts.thumbs` is where
+# separate one, with the cost of that stated to him; `ream.thumbs` is where
 # the constraints on the child process live, and they are the reason this is
 # acceptable rather than merely convenient.
 #
@@ -61,7 +61,7 @@ FROM python:3.12-slim-bookworm
 #
 # Debian's `chromium` rather than a downloaded bundle: apt resolves the
 # twenty-odd system libraries it needs, and the package keeps getting security
-# updates. `artifacts.thumbs` finds it on PATH, so nothing has to name the path.
+# updates. `ream.thumbs` finds it on PATH, so nothing has to name the path.
 #
 # fonts-dejavu-core is not optional. The pages deliberately use no web fonts —
 # they ask for the reader's own sans, serif and mono — so a container with no
@@ -88,10 +88,10 @@ USER 10001:10001
 EXPOSE 8000
 
 # The CMD below binds every interface. Tell the service so: a container that leaves
-# ARTIFACTS_GALLERY_ORIGIN unset then refuses to start instead of serving links to
-# localhost (settings.validate_for_serve). Set ARTIFACTS_BIND_HOST=127.0.0.1 for a local
+# REAM_GALLERY_ORIGIN unset then refuses to start instead of serving links to
+# localhost (settings.validate_for_serve). Set REAM_BIND_HOST=127.0.0.1 for a local
 # try-out that publishes the port on loopback only.
-ENV ARTIFACTS_BIND_HOST=0.0.0.0
+ENV REAM_BIND_HOST=0.0.0.0
 
 # uvicorn reads FORWARDED_ALLOW_IPS from the environment itself when it is not
 # passed on the command line (uvicorn 0.53.0, config.py: `self.forwarded_allow_ips
@@ -100,7 +100,7 @@ ENV ARTIFACTS_BIND_HOST=0.0.0.0
 # --no-access-log is not a style choice: every content-page URL carries its
 # read capability token in the path, and an access log would put it on disk.
 # --timeout-graceful-shutdown is a BACKSTOP, not the mechanism: held /events
-# requests end themselves the moment SIGTERM arrives (artifacts.serve), so
+# requests end themselves the moment SIGTERM arrives (ream.serve), so
 # uvicorn should find nothing to wait for. If something ever does hold on, 15
 # seconds is well inside Kubernetes' 30-second default grace period, so the
 # process exits on its own terms rather than being killed mid-answer.
@@ -108,4 +108,4 @@ ENV ARTIFACTS_BIND_HOST=0.0.0.0
 # zombies (homelab-o88p). -g forwards signals to the whole group, so SIGTERM
 # still reaches uvicorn for its graceful shutdown.
 ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
-CMD ["uvicorn", "artifacts.serve:app_from_env", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--proxy-headers", "--timeout-graceful-shutdown", "15"]
+CMD ["uvicorn", "ream.serve:app_from_env", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--proxy-headers", "--timeout-graceful-shutdown", "15"]

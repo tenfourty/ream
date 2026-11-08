@@ -10,9 +10,9 @@ import pytest
 from fastapi.testclient import TestClient
 from test_client import live  # noqa: F401 -- fixture
 
-from artifacts import client as cli
-from artifacts import decisions, keys, nudge, store
-from artifacts.app import create_gallery_app
+from ream import client as cli
+from ream import decisions, keys, nudge, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><title>Plan</title><p>Rotate the keys every 90 days.</p>"
 
@@ -24,7 +24,7 @@ def _quiet(monkeypatch):
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 

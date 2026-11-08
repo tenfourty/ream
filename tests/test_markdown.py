@@ -11,9 +11,9 @@ that defaults to the first heading but can be overridden.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import client as cli
-from artifacts import keys, markdown, store, templates
-from artifacts.app import create_gallery_app
+from ream import client as cli
+from ream import keys, markdown, store, templates
+from ream.app import create_gallery_app
 
 DOC = """# Weekly status
 
@@ -100,8 +100,8 @@ def test_fragment_is_bare_html():
 
 @pytest.fixture()
 def api(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_DISPLAY_TZ", "Europe/Paris")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_DISPLAY_TZ", "Europe/Paris")
     token, _ = keys.mint(db, agent="md-seat")
     return TestClient(create_gallery_app(db=db)), {"Authorization": f"Bearer {token}"}
 

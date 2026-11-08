@@ -11,8 +11,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import frame_pass, keys, store
-from artifacts.app import create_app
+from ream import frame_pass, keys, store
+from ream.app import create_app
 
 GALLERY_HOST = "artifacts.tenfourty.site"
 FRAMED = {"sec-fetch-dest": "iframe"}
@@ -42,7 +42,7 @@ ROWS = [
 
 @pytest.fixture()
 def published_id(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     keys.mint(db, agent="ops-seat")
     artifact = store.publish(
         db, "ops-seat", "Board", "<!doctype html><body>hi</body></html>"
@@ -213,10 +213,10 @@ def test_a_caller_chosen_key_name_never_returns_in_a_validation_error(db):
 
     from fastapi.testclient import TestClient
 
-    from artifacts import keys, store
-    from artifacts.app import create_gallery_app
+    from ream import keys, store
+    from ream.app import create_gallery_app
 
-    os.environ["ARTIFACTS_CONTENT_DOMAIN"] = "tenfourty.com"
+    os.environ["REAM_CONTENT_DOMAIN"] = "tenfourty.com"
     token, _ = keys.mint(db, agent="seat")
     page = store.publish(
         db,
@@ -269,7 +269,7 @@ API_HOST = "agents.tenfourty.site"
 
 @pytest.fixture()
 def api_host(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_API_HOST", API_HOST)
+    monkeypatch.setenv("REAM_API_HOST", API_HOST)
     return API_HOST
 
 
@@ -300,12 +300,12 @@ def test_the_gallery_host_still_serves_the_gallery_when_an_api_host_exists(
 def test_the_same_name_for_both_resolves_to_the_gallery(client, monkeypatch, db):
     """If the two are ever configured identically by mistake, the request must go
     to the app that sits BEHIND Authelia, not the one that does not."""
-    monkeypatch.setenv("ARTIFACTS_API_HOST", GALLERY_HOST)
+    monkeypatch.setenv("REAM_API_HOST", GALLERY_HOST)
     assert client.get("/", headers={"host": GALLERY_HOST}).status_code == 200
 
 
 def test_no_api_host_configured_leaves_every_other_name_404(client, monkeypatch):
-    monkeypatch.delenv("ARTIFACTS_API_HOST", raising=False)
+    monkeypatch.delenv("REAM_API_HOST", raising=False)
     response = client.get("/healthz", headers={"host": API_HOST})
     assert response.status_code == 404
     assert response.text == "not found"
@@ -325,7 +325,7 @@ def test_the_onboarding_document_is_open_and_names_the_address_it_was_asked_on(
     body = response.text
     assert f"://{api_host}/api/v1" in body, "the API base, at the name it was asked on"
     assert "artifacts.tenfourty.site" not in body, "and never the internal name"
-    assert "ARTIFACTS_SESSION" in body, "how to name yourself once you have a key"
+    assert "REAM_SESSION" in body, "how to name yourself once you have a key"
     # how to get a key: Jeremy approves a code; no key is ever handed out here
     # (homelab-ij8.102 replaced "ask him for one by hand")
     assert "artifacts-connect" in body and "approves" in body
@@ -375,6 +375,6 @@ def test_the_onboarding_document_never_tells_a_stranger_to_use_plain_http(
 def test_a_loopback_caller_is_told_the_truth(client, monkeypatch):
     """http is both true and harmless for localhost, and pretending otherwise
     would send someone developing against it at a port that is not listening."""
-    monkeypatch.setenv("ARTIFACTS_API_HOST", "localhost")
+    monkeypatch.setenv("REAM_API_HOST", "localhost")
     body = client.get("/agents.txt", headers={"host": "localhost:8000"}).text
     assert "http://localhost:8000/api/v1" in body

@@ -18,8 +18,8 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, nudge, store
-from artifacts.app import create_gallery_app
+from ream import decisions, nudge, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
 _OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
@@ -32,13 +32,13 @@ def _clean_nudge_state(monkeypatch):
     Without this, whichever test happens to hit the missing-token warning
     FIRST in a run would consume the one-per-process warning and every test
     after it would see none."""
-    monkeypatch.delenv("ARTIFACTS_NUDGE_URL", raising=False)
-    monkeypatch.delenv("ARTIFACTS_NUDGE_TOKEN", raising=False)
-    monkeypatch.delenv("ARTIFACTS_NUDGE_TIMEOUT", raising=False)
+    monkeypatch.delenv("REAM_NUDGE_URL", raising=False)
+    monkeypatch.delenv("REAM_NUDGE_TOKEN", raising=False)
+    monkeypatch.delenv("REAM_NUDGE_TIMEOUT", raising=False)
     # This mailbox belongs to ONE seat. Every test below emits as "ops-seat",
     # so the seat that owns the mailbox is set to match; the tests that prove
     # the gate itself override it.
-    monkeypatch.setenv("ARTIFACTS_NUDGE_AGENT", "ops-seat")
+    monkeypatch.setenv("REAM_NUDGE_AGENT", "ops-seat")
     monkeypatch.setattr(nudge, "_token_warned", False)
     monkeypatch.setattr(nudge, "_dropped_count", 0)
 
@@ -146,16 +146,16 @@ def test_unset_url_sends_nothing(monkeypatch):
 
 
 def test_url_set_but_token_unset_sends_nothing_and_warns_once(monkeypatch, caplog):
-    monkeypatch.setenv("ARTIFACTS_NUDGE_URL", "http://127.0.0.1:1/x")
+    monkeypatch.setenv("REAM_NUDGE_URL", "http://127.0.0.1:1/x")
     calls = []
     monkeypatch.setattr(nudge._executor, "submit", lambda *a, **k: calls.append(1))
-    with caplog.at_level(logging.INFO, logger="artifacts.nudge"):
+    with caplog.at_level(logging.INFO, logger="ream.nudge"):
         _emit(artifact_id="art1")
         _emit(artifact_id="art2")
     assert calls == []
     info_records = [r for r in caplog.records if r.levelno == logging.INFO]
     assert len(info_records) == 1
-    assert "ARTIFACTS_NUDGE_TOKEN" in info_records[0].getMessage()
+    assert "REAM_NUDGE_TOKEN" in info_records[0].getMessage()
 
 
 # ---------------------------------------------------------------------------
@@ -168,9 +168,9 @@ def test_a_well_formed_post_carries_the_bearer_header_and_fixed_fields(monkeypat
     receiver = _Receiver()
     origin = receiver.start()
     try:
-        monkeypatch.setenv("ARTIFACTS_NUDGE_URL", f"{origin}/v1/events/artifacts")
+        monkeypatch.setenv("REAM_NUDGE_URL", f"{origin}/v1/events/artifacts")
         monkeypatch.setenv(
-            "ARTIFACTS_NUDGE_TOKEN", "test-token-fake"
+            "REAM_NUDGE_TOKEN", "test-token-fake"
         )  # obviously fake, short
         _emit(
             kind="decision_answered",
@@ -209,8 +209,8 @@ def test_each_kind_gets_its_own_fixed_alertname(monkeypatch, kind, alertname):
     receiver = _Receiver()
     origin = receiver.start()
     try:
-        monkeypatch.setenv("ARTIFACTS_NUDGE_URL", origin)
-        monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "tok")
+        monkeypatch.setenv("REAM_NUDGE_URL", origin)
+        monkeypatch.setenv("REAM_NUDGE_TOKEN", "tok")
         _emit(kind=kind)
         assert receiver.wait()
         assert json.loads(receiver.bodies[0])["alertname"] == alertname
@@ -228,8 +228,8 @@ def test_a_hostile_summary_arrives_stripped_collapsed_and_truncated_to_200(monke
     receiver = _Receiver()
     origin = receiver.start()
     try:
-        monkeypatch.setenv("ARTIFACTS_NUDGE_URL", origin)
-        monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "tok")
+        monkeypatch.setenv("REAM_NUDGE_URL", origin)
+        monkeypatch.setenv("REAM_NUDGE_TOKEN", "tok")
         hostile = "line one\nline two\n" + "\x1b[31m" + ("z" * 500)
         _emit(summary=hostile, title=hostile)
         assert receiver.wait()
@@ -252,9 +252,9 @@ def test_a_hostile_summary_arrives_stripped_collapsed_and_truncated_to_200(monke
 
 
 def test_a_refused_connection_leaves_emit_returning_normally(monkeypatch, caplog):
-    monkeypatch.setenv("ARTIFACTS_NUDGE_URL", f"http://127.0.0.1:{_closed_port()}/x")
-    monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "tok")
-    with caplog.at_level(logging.WARNING, logger="artifacts.nudge"):
+    monkeypatch.setenv("REAM_NUDGE_URL", f"http://127.0.0.1:{_closed_port()}/x")
+    monkeypatch.setenv("REAM_NUDGE_TOKEN", "tok")
+    with caplog.at_level(logging.WARNING, logger="ream.nudge"):
         _emit()  # must not raise
         assert _wait_until(
             lambda: any("send failed" in r.getMessage() for r in caplog.records)
@@ -275,10 +275,10 @@ def test_a_hanging_receiver_leaves_emit_returning_promptly_and_normally(
     thread.start()
     try:
         host, port = server.server_address
-        monkeypatch.setenv("ARTIFACTS_NUDGE_URL", f"http://{host}:{port}/x")
-        monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "tok")
-        monkeypatch.setenv("ARTIFACTS_NUDGE_TIMEOUT", "0.2")
-        with caplog.at_level(logging.WARNING, logger="artifacts.nudge"):
+        monkeypatch.setenv("REAM_NUDGE_URL", f"http://{host}:{port}/x")
+        monkeypatch.setenv("REAM_NUDGE_TOKEN", "tok")
+        monkeypatch.setenv("REAM_NUDGE_TIMEOUT", "0.2")
+        with caplog.at_level(logging.WARNING, logger="ream.nudge"):
             started = time.monotonic()
             _emit()
             # emit() itself must return almost instantly -- the slow part
@@ -300,9 +300,9 @@ def test_a_500_response_leaves_emit_returning_normally(monkeypatch, caplog):
     receiver = _Receiver(respond_status=500)
     origin = receiver.start()
     try:
-        monkeypatch.setenv("ARTIFACTS_NUDGE_URL", origin)
-        monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "tok")
-        with caplog.at_level(logging.WARNING, logger="artifacts.nudge"):
+        monkeypatch.setenv("REAM_NUDGE_URL", origin)
+        monkeypatch.setenv("REAM_NUDGE_TOKEN", "tok")
+        with caplog.at_level(logging.WARNING, logger="ream.nudge"):
             _emit()
             assert receiver.wait()
             assert _wait_until(
@@ -319,8 +319,8 @@ def test_the_token_never_appears_in_any_log_line(monkeypatch, caplog):
     receiver = _Receiver(respond_status=500)  # forces the failure log path too
     origin = receiver.start()
     try:
-        monkeypatch.setenv("ARTIFACTS_NUDGE_URL", origin)
-        monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", fake_bearer_value)
+        monkeypatch.setenv("REAM_NUDGE_URL", origin)
+        monkeypatch.setenv("REAM_NUDGE_TOKEN", fake_bearer_value)
         with caplog.at_level(logging.DEBUG):
             _emit()
             assert receiver.wait()
@@ -343,8 +343,8 @@ def test_the_token_never_appears_in_any_log_line(monkeypatch, caplog):
 def test_a_full_queue_drops_the_event_and_counts_it_without_raising(monkeypatch):
     monkeypatch.setattr(nudge, "_slots", threading.BoundedSemaphore(1))
     nudge._slots.acquire()  # occupy the only slot -- the next emit must be dropped
-    monkeypatch.setenv("ARTIFACTS_NUDGE_URL", "http://127.0.0.1:1/x")
-    monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "tok")
+    monkeypatch.setenv("REAM_NUDGE_URL", "http://127.0.0.1:1/x")
+    monkeypatch.setenv("REAM_NUDGE_TOKEN", "tok")
 
     _emit()  # must not raise, must not block
 
@@ -360,9 +360,9 @@ def test_a_full_queue_drops_the_event_and_counts_it_without_raising(monkeypatch)
 def test_answering_a_decision_still_redirects_303_while_the_receiver_is_down(
     db, monkeypatch
 ):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_NUDGE_URL", f"http://127.0.0.1:{_closed_port()}/x")
-    monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "tok")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_NUDGE_URL", f"http://127.0.0.1:{_closed_port()}/x")
+    monkeypatch.setenv("REAM_NUDGE_TOKEN", "tok")
 
     published = store.publish(db, "ops-seat", "Board", PAGE)
     row = decisions.ask(
@@ -391,9 +391,9 @@ def test_a_page_owned_by_another_agent_is_never_pushed_to_this_mailbox(monkeypat
     receiver = _Receiver()
     origin = receiver.start()
     try:
-        monkeypatch.setenv("ARTIFACTS_NUDGE_URL", f"{origin}/v1/events/artifacts")
-        monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "test-token-fake")
-        monkeypatch.setenv("ARTIFACTS_NUDGE_AGENT", "ops-seat")
+        monkeypatch.setenv("REAM_NUDGE_URL", f"{origin}/v1/events/artifacts")
+        monkeypatch.setenv("REAM_NUDGE_TOKEN", "test-token-fake")
+        monkeypatch.setenv("REAM_NUDGE_AGENT", "ops-seat")
 
         _emit(agent="some-other-seat")
         # Then one that SHOULD arrive. Asserting only "nothing came" would pass
@@ -414,9 +414,9 @@ def test_with_no_seat_named_the_mailbox_is_never_used(monkeypatch):
     receiver = _Receiver()
     origin = receiver.start()
     try:
-        monkeypatch.setenv("ARTIFACTS_NUDGE_URL", f"{origin}/v1/events/artifacts")
-        monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "test-token-fake")
-        monkeypatch.delenv("ARTIFACTS_NUDGE_AGENT", raising=False)
+        monkeypatch.setenv("REAM_NUDGE_URL", f"{origin}/v1/events/artifacts")
+        monkeypatch.setenv("REAM_NUDGE_TOKEN", "test-token-fake")
+        monkeypatch.delenv("REAM_NUDGE_AGENT", raising=False)
 
         _emit(agent="ops-seat")
         time.sleep(0.5)
@@ -441,9 +441,9 @@ def test_the_service_carries_no_telegram_capability_at_all():
     """
     import pathlib
 
-    import artifacts
+    import ream
 
-    root = pathlib.Path(artifacts.__file__).parent
+    root = pathlib.Path(ream.__file__).parent
     offenders = []
     for path in sorted(root.rglob("*.py")):
         for number, line in enumerate(path.read_text().splitlines(), 1):
@@ -460,9 +460,9 @@ def test_the_only_push_goes_to_one_named_seats_mailbox(monkeypatch):
     operator's mailbox is what made the operator the recipient of everyone's
     answers and the owning agent the recipient of none."""
     sent = []
-    monkeypatch.setenv("ARTIFACTS_NUDGE_URL", "http://127.0.0.1:1/v1/events/artifacts")
-    monkeypatch.setenv("ARTIFACTS_NUDGE_AGENT", "homelab-ops")
-    monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "x" * 20)
+    monkeypatch.setenv("REAM_NUDGE_URL", "http://127.0.0.1:1/v1/events/artifacts")
+    monkeypatch.setenv("REAM_NUDGE_AGENT", "homelab-ops")
+    monkeypatch.setenv("REAM_NUDGE_TOKEN", "x" * 20)
     # The send is handed to a thread pool; intercepting the SUBMIT is how the
     # rest of this file observes it, and it keeps the test off the network.
     monkeypatch.setattr(nudge._executor, "submit", lambda *a, **k: sent.append(a))
@@ -508,9 +508,9 @@ def _answer_through_the_gallery(
     route rather than calling `decisions.answer` directly is deliberate -- the
     bug was in what reached the mailbox from a REAL answer, and a test that
     calls the emitter itself can only prove the emitter."""
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_NUDGE_URL", f"{origin}/v1/events/artifacts")
-    monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "test-token-fake")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_NUDGE_URL", f"{origin}/v1/events/artifacts")
+    monkeypatch.setenv("REAM_NUDGE_TOKEN", "test-token-fake")
 
     published = store.publish(db, "ops-seat", "Board", PAGE)
     row = decisions.ask(

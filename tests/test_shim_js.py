@@ -15,14 +15,14 @@ from pathlib import Path
 
 import pytest
 
-from artifacts.content import _viewer_report
+from ream.content import _viewer_report
 
 _HARNESS = Path(__file__).parent / "js" / "shim.test.mjs"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node runtime here")
 def test_the_page_shim_behaves_when_actually_run(tmp_path, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     node = shutil.which("node")
     # The served markup, with its wrapper stripped back to the body node runs.
     # Taking it from the app rather than a checked-in copy keeps one source of
@@ -54,7 +54,7 @@ _NOTES = Path(__file__).parent / "js" / "notes.test.mjs"
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node runtime here")
 def test_the_missing_question_note_behaves_when_actually_run(tmp_path, monkeypatch):
     """homelab-ij8.50: the sentence a reader sees where a slot names nothing."""
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     node = shutil.which("node")
     served = _viewer_report(["gone1", 'a"b'])
     body = served.removeprefix("<script>try{(function(){").removesuffix(

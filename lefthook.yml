@@ -1,4 +1,4 @@
-# lefthook.yml — git hook orchestration for the artifacts repo.
+# lefthook.yml — git hook orchestration for the ream repo (formerly artifacts).
 #
 # Ported from the homelab's guards on 22 Sep 2026 (ij8.76), after Jeremy asked
 # for them: until now every rule in AGENTS.md here was prose, and each one had
@@ -53,10 +53,10 @@ pre-commit:
       # nothing but bash and git, so it never skips.
       run: 'scripts/guards/secret-on-cmdline-guard.sh'
     no-environ:
-      # Refuses an os.environ read in src/artifacts outside settings.py, serve.py
+      # Refuses an os.environ read in src/ream outside settings.py, serve.py
       # and the command-line tools: every server setting goes through
       # artifacts.settings (core-and-plugins design 3.1). Needs only bash and git.
-      glob: "src/artifacts/*.py"
+      glob: "src/ream/*.py"
       run: 'scripts/guards/no-environ-guard.sh'
     ruff:
       glob: "*.py"

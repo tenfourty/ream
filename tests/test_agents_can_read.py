@@ -7,8 +7,8 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, keys, store
-from artifacts.app import create_gallery_app
+from ream import decisions, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body>{}</body></html>"
 SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
@@ -209,7 +209,7 @@ def test_pages_that_existed_before_the_setting_start_closed(db):
 
 
 def test_the_admin_review_opens_all_but_what_he_keeps(db, monkeypatch, capsys):
-    from artifacts import admin
+    from ream import admin
 
     keep = store.publish(db, "owner", "Keep", PAGE.format("k"))
     go = store.publish(db, "owner", "Go", PAGE.format("g"))

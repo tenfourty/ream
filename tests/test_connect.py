@@ -9,8 +9,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import connect, connect_cli, keys
-from artifacts.app import create_gallery_app
+from ream import connect, connect_cli, keys
+from ream.app import create_gallery_app
 
 SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
 

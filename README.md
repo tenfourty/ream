@@ -19,11 +19,11 @@ test dependency (`pgserver`) has no wheels for 3.13+.
 
 ```bash
 export DATABASE_URL=postgresql://...   # a real Postgres; migrate() runs on startup
-uv run uvicorn artifacts.serve:app_from_env --factory --reload
+uv run uvicorn ream.serve:app_from_env --factory --reload
 ```
 
 The router is fail-closed: `/healthz` only answers 200 with
-`Host: artifacts.tenfourty.site` (or whatever `ARTIFACTS_GALLERY_ORIGIN`
+`Host: artifacts.tenfourty.site` (or whatever `REAM_GALLERY_ORIGIN`
 names) and 404 on anything else, so curl it with that Host header, not the
 bare address.
 
@@ -62,7 +62,7 @@ ARTIFACTS_SEAT=baba_operator artifacts-key -- artifacts-publish page.html --titl
 artifacts-publish --key-fd 3 page.html --title "My page" 3< <(pass show artifacts/key)
 
 # Or a file, mode 600 -- it refuses anything looser:
-ARTIFACTS_KEY_FILE=~/.config/artifacts/key artifacts-publish --list
+REAM_KEY_FILE=~/.config/artifacts/key artifacts-publish --list
 ```
 
 ## Tidy one up
@@ -85,8 +85,8 @@ scoped to the calling key's own agent: another seat's page answers 404, and so
 does a page that does not exist — the same 404, so a key cannot be used to
 learn which ids are real.
 
-`$ARTIFACTS_API` (default `https://artifacts.tenfourty.site/api/v1`) and
-`$ARTIFACTS_KEY_FILE` (default `~/.config/artifacts/key`) point it elsewhere;
+`$REAM_API` (default `https://artifacts.tenfourty.site/api/v1`) and
+`$REAM_KEY_FILE` (default `~/.config/artifacts/key`) point it elsewhere;
 `--key-file` overrides both for one call.
 
 ## How deploys happen

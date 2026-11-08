@@ -9,8 +9,8 @@ from fastapi.testclient import TestClient
 from test_client import key_file, live  # noqa: F401
 from test_listening import _ask, _deliver, _run, auth, bridge, client  # noqa: F401
 
-from artifacts import events, keys, listening, onboarding, rename
-from artifacts.app import create_gallery_app
+from ream import events, keys, listening, onboarding, rename
+from ream.app import create_gallery_app
 
 
 def _put(client, token, text):
@@ -360,7 +360,7 @@ def test_cli_refuses_a_line_with_clear(db, live, key_file, capsys, monkeypatch):
 
 
 def test_cli_help_says_it_is_the_agents_word(capsys):
-    from artifacts import decide
+    from ream import decide
 
     with pytest.raises(SystemExit):
         decide.main(["pickup", "--help"])
@@ -383,7 +383,7 @@ def test_cli_takes_a_line_that_starts_with_a_dash(
 
 
 def test_cli_help_says_how_to_pass_a_dash_line(capsys):
-    from artifacts import decide
+    from ream import decide
 
     with pytest.raises(SystemExit):
         decide.main(["pickup", "--help"])

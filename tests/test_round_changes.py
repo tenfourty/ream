@@ -8,9 +8,9 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, decisions, frame_pass, nudge, pagediff, review, store
-from artifacts.app import create_gallery_app
-from artifacts.content import create_content_app
+from ream import comments, decisions, frame_pass, nudge, pagediff, review, store
+from ream.app import create_gallery_app
+from ream.content import create_content_app
 
 PAGE = (
     "<!doctype html><title>Plan</title>"
@@ -36,12 +36,12 @@ def _quiet(monkeypatch):
 
 @pytest.fixture()
 def gallery(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 
 def _content(db, page_id, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     client = TestClient(create_content_app(db))
     client.headers.update({"host": f"{page_id}.tenfourty.com"})
     return client

@@ -6,8 +6,8 @@ submit route, and what the agent reads back (docs/agent/specs/2026-10-29-form-co
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decide, decisions, events, formanswer, keys, nudge, store
-from artifacts.app import create_gallery_app
+from ream import decide, decisions, events, formanswer, keys, nudge, store
+from ream.app import create_gallery_app
 
 ORIGIN = "https://artifacts.tenfourty.site"
 SAME = {"sec-fetch-site": "same-origin"}
@@ -43,7 +43,7 @@ def page(inner: str) -> str:
 
 
 def spec_of(inner=FORM):
-    from artifacts import forms
+    from ream import forms
 
     (form,) = forms.parse(page(inner)).forms
     return form.fields, form.complete_all
@@ -159,8 +159,8 @@ def test_required_and_complete_all_name_the_blank_field():
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", ORIGIN)
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", ORIGIN)
     return TestClient(create_gallery_app(db=db), base_url="https://testserver")
 
 

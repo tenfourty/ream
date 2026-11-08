@@ -4,9 +4,9 @@ author (homelab-ij8.72)."""
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import api as api_module
-from artifacts import client, keys, store, thumbs
-from artifacts.app import create_gallery_app
+from ream import api as api_module
+from ream import client, keys, store, thumbs
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body><p>x</p></body></html>"
 

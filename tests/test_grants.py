@@ -10,8 +10,8 @@ each agent remembered to report.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import decisions, grants, keys, store
-from artifacts.app import create_gallery_app
+from ream import decisions, grants, keys, store
+from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
 _OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]

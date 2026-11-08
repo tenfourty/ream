@@ -9,7 +9,7 @@ anchor from the browser (path, offsets, prefix, suffix, heading, ids) and the
 
 import pytest
 
-from artifacts import anchors
+from ream import anchors
 
 PAGE = (
     "<!doctype html><html><body>"

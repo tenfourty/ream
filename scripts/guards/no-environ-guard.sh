@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # scripts/guards/no-environ-guard.sh — refuse a read of the process environment in
-# src/artifacts outside the modules that may make one.
+# src/ream outside the modules that may make one.
 #
-# Every setting the SERVER reads goes through `artifacts.settings` (call-time, one object,
+# Every setting the SERVER reads goes through `ream.settings` (call-time, one object,
 # `settings.override(...)` in tests; docs/agent/specs/2026-11-04-core-and-plugins-design.md 3.1).
 # A stray `os.environ` is a setting nobody validates at start-up, nobody lists in the docs and
 # no test can override.
 #
-# ALLOWED (by file name, in src/artifacts/):
-#   settings.py   the one reader
-#   serve.py      start-up switches (DATABASE_URL, ARTIFACTS_MAINTENANCE, ARTIFACTS_PACK_VERSIONS)
+# ALLOWED (by file name, in src/ream/):
+#   settings.py   the one reader of the server settings
+#   envnames.py   the one place that reads a setting under its new (REAM_) and old (ARTIFACTS_) name
+#   serve.py      start-up switches (DATABASE_URL, REAM_MAINTENANCE, REAM_PACK_VERSIONS)
 #   admin.py      the operator CLI (DATABASE_URL, SQLITE_TMPDIR, `env:NAME` DSN indirection)
 #   client.py decide.py republish.py news.py
 #                 the command-line tools' OWN variables (key file, session label, XDG dirs,
@@ -25,7 +26,7 @@
 set -uo pipefail
 SELF="no-environ-guard"
 
-ALLOWED=" settings.py serve.py admin.py client.py decide.py republish.py news.py "
+ALLOWED=" settings.py envnames.py serve.py admin.py client.py decide.py republish.py news.py "
 PATTERN='os\.environ|os\.getenv|from os import .*(environ|getenv)|\bgetenv\('
 
 # scan_paths <path>... — one line per offending file:line; returns 1 if any.
@@ -33,7 +34,7 @@ scan_paths() {
   local f hits=0 out base line
   for f in "$@"; do
     case "$f" in
-      */src/artifacts/*.py | src/artifacts/*.py) ;;
+      */src/ream/*.py | src/ream/*.py) ;;
       *) continue ;;
     esac
     [ -f "$f" ] || continue
@@ -42,7 +43,7 @@ scan_paths() {
     out="$(grep -nE -- "$PATTERN" "$f" 2>/dev/null | grep -v '# env-ok:')" || continue
     while IFS= read -r line; do
       [ -n "$line" ] || continue
-      printf '%s: environment read outside artifacts.settings — %s:%s\n' "$SELF" "$f" "$line"
+      printf '%s: environment read outside ream.settings — %s:%s\n' "$SELF" "$f" "$line"
       hits=$((hits + 1))
     done <<<"$out"
   done
@@ -50,7 +51,7 @@ scan_paths() {
 }
 
 advice() {
-  echo "$SELF: refusing — read it through artifacts.settings instead:" >&2
+  echo "$SELF: refusing — read it through ream.settings instead:" >&2
   echo "  add a field to Settings (settings.py: the dataclass and _ENV), then use" >&2
   echo "  settings.current().<field> at the point of use. A secret stays a file path." >&2
 }
@@ -68,39 +69,39 @@ case "${1:-}" in
     }
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
-    mkdir -p "$tmp/src/artifacts" "$tmp/tests"
+    mkdir -p "$tmp/src/ream" "$tmp/tests"
 
-    printf 'import os\nx = os.environ.get("A")\n' >"$tmp/src/artifacts/bad.py"
+    printf 'import os\nx = os.environ.get("A")\n' >"$tmp/src/ream/bad.py"
     check "catches os.environ.get in a service module" \
-      "$(scan_paths "$tmp/src/artifacts/bad.py" >/dev/null 2>&1; echo $?)" 1
-    printf 'import os\nx = os.environ["A"]\n' >"$tmp/src/artifacts/bad2.py"
+      "$(scan_paths "$tmp/src/ream/bad.py" >/dev/null 2>&1; echo $?)" 1
+    printf 'import os\nx = os.environ["A"]\n' >"$tmp/src/ream/bad2.py"
     check "catches os.environ[...]" \
-      "$(scan_paths "$tmp/src/artifacts/bad2.py" >/dev/null 2>&1; echo $?)" 1
-    printf 'import os\nx = os.getenv("A")\n' >"$tmp/src/artifacts/bad3.py"
+      "$(scan_paths "$tmp/src/ream/bad2.py" >/dev/null 2>&1; echo $?)" 1
+    printf 'import os\nx = os.getenv("A")\n' >"$tmp/src/ream/bad3.py"
     check "catches os.getenv" \
-      "$(scan_paths "$tmp/src/artifacts/bad3.py" >/dev/null 2>&1; echo $?)" 1
-    printf 'from os import environ\n' >"$tmp/src/artifacts/bad4.py"
+      "$(scan_paths "$tmp/src/ream/bad3.py" >/dev/null 2>&1; echo $?)" 1
+    printf 'from os import environ\n' >"$tmp/src/ream/bad4.py"
     check "catches from os import environ" \
-      "$(scan_paths "$tmp/src/artifacts/bad4.py" >/dev/null 2>&1; echo $?)" 1
+      "$(scan_paths "$tmp/src/ream/bad4.py" >/dev/null 2>&1; echo $?)" 1
 
-    printf 'import os\nx = os.environ.get("A")\n' >"$tmp/src/artifacts/settings.py"
+    printf 'import os\nx = os.environ.get("A")\n' >"$tmp/src/ream/settings.py"
     check "allows settings.py" \
-      "$(scan_paths "$tmp/src/artifacts/settings.py" >/dev/null 2>&1; echo $?)" 0
-    for name in serve admin client decide republish news; do
-      printf 'import os\nx = os.environ.get("A")\n' >"$tmp/src/artifacts/$name.py"
+      "$(scan_paths "$tmp/src/ream/settings.py" >/dev/null 2>&1; echo $?)" 0
+    for name in envnames serve admin client decide republish news; do
+      printf 'import os\nx = os.environ.get("A")\n' >"$tmp/src/ream/$name.py"
       check "allows $name.py" \
-        "$(scan_paths "$tmp/src/artifacts/$name.py" >/dev/null 2>&1; echo $?)" 0
+        "$(scan_paths "$tmp/src/ream/$name.py" >/dev/null 2>&1; echo $?)" 0
     done
     printf 'import os\nx = os.environ.get("A")  # env-ok: a child process needs it\n' \
-      >"$tmp/src/artifacts/marked.py"
+      >"$tmp/src/ream/marked.py"
     check "allows a line marked env-ok" \
-      "$(scan_paths "$tmp/src/artifacts/marked.py" >/dev/null 2>&1; echo $?)" 0
+      "$(scan_paths "$tmp/src/ream/marked.py" >/dev/null 2>&1; echo $?)" 0
     printf 'import os\nx = os.environ.get("A")\n' >"$tmp/tests/test_x.py"
     check "ignores tests/" \
       "$(scan_paths "$tmp/tests/test_x.py" >/dev/null 2>&1; echo $?)" 0
-    printf 'import os\ny = os.getpid()\n' >"$tmp/src/artifacts/fine.py"
+    printf 'import os\ny = os.getpid()\n' >"$tmp/src/ream/fine.py"
     check "does not flag other os calls" \
-      "$(scan_paths "$tmp/src/artifacts/fine.py" >/dev/null 2>&1; echo $?)" 0
+      "$(scan_paths "$tmp/src/ream/fine.py" >/dev/null 2>&1; echo $?)" 0
 
     echo "----"
     if [ "$fail" -eq 0 ]; then
@@ -114,11 +115,11 @@ case "${1:-}" in
 
   --tree)
     repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-    mapfile -t files < <(git -C "$repo" ls-files -- 'src/artifacts/*.py' 2>/dev/null)
+    mapfile -t files < <(git -C "$repo" ls-files -- 'src/ream/*.py' 2>/dev/null)
     abs=()
     for f in "${files[@]}"; do abs+=("$repo/$f"); done
     if [ "${#abs[@]}" -eq 0 ]; then
-      echo "$SELF: no tracked src/artifacts/*.py files found (unexpected)" >&2
+      echo "$SELF: no tracked src/ream/*.py files found (unexpected)" >&2
       exit 1
     fi
     if scan_paths "${abs[@]}"; then

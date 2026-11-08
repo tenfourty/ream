@@ -9,9 +9,9 @@ import logging
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import client, hosts, mail, ratelimit, settings, store
-from artifacts.app import create_app
-from artifacts.serve import app_from_env
+from ream import client, hosts, mail, ratelimit, settings, store
+from ream.app import create_app
+from ream.serve import app_from_env
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body><p>x</p></body></html>"
 
@@ -21,6 +21,7 @@ def fresh(monkeypatch):
     """A fresh install: none of the settings' variables set."""
     for name in settings._ENV.values():
         monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv("ARTIFACTS_" + name.removeprefix("REAM_"), raising=False)
 
 
 def test_the_suite_runs_with_the_manifests_origins_and_header():
@@ -34,19 +35,19 @@ def test_the_suite_runs_with_the_manifests_origins_and_header():
 def test_every_variable_is_one_field_and_back():
     assert len(set(settings._ENV.values())) == len(settings._ENV)
     for env in settings._ENV.values():
-        assert env.startswith("ARTIFACTS_")
+        assert env.startswith("REAM_")
 
 
 def test_override_takes_any_setting_and_lets_go(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://one.example")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://one.example")
     with settings.override(gallery_origin="https://two.example"):
         assert store.gallery_origin() == "https://two.example"
     assert store.gallery_origin() == "https://one.example"
 
 
 def test_the_repr_prints_no_secret(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_MAILGUN_KEY", "key-do-not-print")
-    monkeypatch.setenv("ARTIFACTS_NUDGE_TOKEN", "token-do-not-print")
+    monkeypatch.setenv("REAM_MAILGUN_KEY", "key-do-not-print")
+    monkeypatch.setenv("REAM_NUDGE_TOKEN", "token-do-not-print")
     text = f"{settings.current()!r} {settings.current()}"
     assert "do-not-print" not in text
 
@@ -61,11 +62,11 @@ def test_a_fresh_install_serves_from_loopback(fresh):
     assert s.trusted_ip_header == ""
     assert not mail.enabled()
     assert settings.defaulted() == [
-        "ARTIFACTS_OWNER_ID",
-        "ARTIFACTS_OWNER_NAME",
-        "ARTIFACTS_OWNER_PRONOUN",
-        "ARTIFACTS_GALLERY_ORIGIN",
-        "ARTIFACTS_CONTENT_DOMAIN",
+        "REAM_OWNER_ID",
+        "REAM_OWNER_NAME",
+        "REAM_OWNER_PRONOUN",
+        "REAM_GALLERY_ORIGIN",
+        "REAM_CONTENT_DOMAIN",
     ]
     assert settings.validate_for_serve().gallery_origin == "http://localhost:8000"
 
@@ -92,7 +93,7 @@ def test_a_fresh_install_routes_a_page_origin_to_the_content_app(fresh, db):
 
 
 def test_the_gallery_csp_names_the_content_origin_scheme(fresh):
-    from artifacts import gallery
+    from ream import gallery
 
     csp = gallery.gallery_headers()["content-security-policy"]
     assert "frame-src http://*.localhost:8000;" in csp
@@ -102,14 +103,14 @@ def test_the_real_entrypoint_logs_what_a_fresh_install_defaulted(
     fresh, dsn, monkeypatch, caplog
 ):
     monkeypatch.setenv("DATABASE_URL", dsn)
-    with caplog.at_level(logging.WARNING, logger="artifacts.serve"):
+    with caplog.at_level(logging.WARNING, logger="ream.serve"):
         app_from_env()
-    assert "ARTIFACTS_GALLERY_ORIGIN" in caplog.text
-    assert "ARTIFACTS_OWNER_ID" in caplog.text
+    assert "REAM_GALLERY_ORIGIN" in caplog.text
+    assert "REAM_OWNER_ID" in caplog.text
 
 
 def _serve_warnings(caplog):
-    with caplog.at_level(logging.WARNING, logger="artifacts.serve"):
+    with caplog.at_level(logging.WARNING, logger="ream.serve"):
         app_from_env()
     return [
         r.getMessage() for r in caplog.records if "TRUSTED_IP_HEADER" in r.getMessage()
@@ -120,9 +121,9 @@ def test_start_up_warns_when_exposed_without_a_trusted_ip_header(
     fresh, dsn, monkeypatch, caplog
 ):
     monkeypatch.setenv("DATABASE_URL", dsn)
-    monkeypatch.setenv("ARTIFACTS_BIND_HOST", "0.0.0.0")  # noqa: S104
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://gallery.example")
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "pages.example")
+    monkeypatch.setenv("REAM_BIND_HOST", "0.0.0.0")  # noqa: S104
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://gallery.example")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "pages.example")
     assert len(_serve_warnings(caplog)) == 1
 
 
@@ -130,13 +131,13 @@ def test_start_up_is_silent_about_the_ip_header_when_set_or_on_loopback(
     fresh, dsn, monkeypatch, caplog
 ):
     monkeypatch.setenv("DATABASE_URL", dsn)
-    monkeypatch.setenv("ARTIFACTS_BIND_HOST", "0.0.0.0")  # noqa: S104
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://gallery.example")
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "pages.example")
-    monkeypatch.setenv("ARTIFACTS_TRUSTED_IP_HEADER", "X-Real-IP")
+    monkeypatch.setenv("REAM_BIND_HOST", "0.0.0.0")  # noqa: S104
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://gallery.example")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "pages.example")
+    monkeypatch.setenv("REAM_TRUSTED_IP_HEADER", "X-Real-IP")
     assert _serve_warnings(caplog) == []
-    monkeypatch.delenv("ARTIFACTS_TRUSTED_IP_HEADER")
-    monkeypatch.setenv("ARTIFACTS_BIND_HOST", "127.0.0.1")
+    monkeypatch.delenv("REAM_TRUSTED_IP_HEADER")
+    monkeypatch.setenv("REAM_BIND_HOST", "127.0.0.1")
     caplog.clear()
     assert _serve_warnings(caplog) == []
 
@@ -150,42 +151,42 @@ def test_our_deployment_defaults_nothing_it_reports():
 
 
 def test_a_non_loopback_deployment_without_a_gallery_origin_refuses(fresh, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_BIND_HOST", "0.0.0.0")  # noqa: S104
+    monkeypatch.setenv("REAM_BIND_HOST", "0.0.0.0")  # noqa: S104
     with pytest.raises(SystemExit) as exc:
         settings.validate_for_serve()
-    assert "ARTIFACTS_GALLERY_ORIGIN" in str(exc.value)
-    assert "ARTIFACTS_BIND_HOST" in str(exc.value)
+    assert "REAM_GALLERY_ORIGIN" in str(exc.value)
+    assert "REAM_BIND_HOST" in str(exc.value)
 
 
 def test_a_non_loopback_deployment_with_its_origins_starts(fresh, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_BIND_HOST", "0.0.0.0")  # noqa: S104
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://gallery.example")
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "pages.example")
+    monkeypatch.setenv("REAM_BIND_HOST", "0.0.0.0")  # noqa: S104
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://gallery.example")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "pages.example")
     assert settings.validate_for_serve().content_domain == "pages.example"
 
 
 def test_a_gallery_off_localhost_needs_a_content_domain(fresh, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://gallery.example")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://gallery.example")
     with pytest.raises(SystemExit) as exc:
         settings.validate_for_serve()
-    assert "ARTIFACTS_CONTENT_DOMAIN" in str(exc.value)
+    assert "REAM_CONTENT_DOMAIN" in str(exc.value)
 
 
 def test_validate_collects_every_problem_and_prints_no_value(monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "gallery.example/path")
-    monkeypatch.setenv("ARTIFACTS_TRUSTED_IP_HEADER", "not a header")
-    monkeypatch.setenv("ARTIFACTS_MAILGUN_KEY", "key-do-not-print")
-    monkeypatch.setenv("ARTIFACTS_PARTNER_NAME", "p")
-    monkeypatch.setenv("ARTIFACTS_PARTNER_INBOUND_HOST", "h.example")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "gallery.example/path")
+    monkeypatch.setenv("REAM_TRUSTED_IP_HEADER", "not a header")
+    monkeypatch.setenv("REAM_MAILGUN_KEY", "key-do-not-print")
+    monkeypatch.setenv("REAM_PARTNER_NAME", "p")
+    monkeypatch.setenv("REAM_PARTNER_INBOUND_HOST", "h.example")
     with pytest.raises(SystemExit) as exc:
         settings.validate_for_serve()
     message = str(exc.value)
     for name in (
-        "ARTIFACTS_GALLERY_ORIGIN",
-        "ARTIFACTS_TRUSTED_IP_HEADER",
-        "ARTIFACTS_MAIL_FROM",
-        "ARTIFACTS_PARTNER_EVENTS_URL",
-        "ARTIFACTS_PARTNER_INBOUND_KEYS_FILE",
+        "REAM_GALLERY_ORIGIN",
+        "REAM_TRUSTED_IP_HEADER",
+        "REAM_MAIL_FROM",
+        "REAM_PARTNER_EVENTS_URL",
+        "REAM_PARTNER_INBOUND_KEYS_FILE",
     ):
         assert name in message
     assert "do-not-print" not in message
@@ -196,24 +197,24 @@ def test_the_real_entrypoint_reports_settings_before_opening_the_database(
     dsn, monkeypatch
 ):
     monkeypatch.setenv("DATABASE_URL", dsn)
-    monkeypatch.setenv("ARTIFACTS_PARTNER_NAME", "p")
+    monkeypatch.setenv("REAM_PARTNER_NAME", "p")
     with pytest.raises(SystemExit) as exc:
         app_from_env()
     assert "half-configured" in str(exc.value)
-    assert "ARTIFACTS_PARTNER_EVENTS_URL" in str(exc.value)
+    assert "REAM_PARTNER_EVENTS_URL" in str(exc.value)
 
 
 # --- the pieces that lost a house default -------------------------------------------------
 
 
 def test_mail_is_off_until_key_api_domain_and_sender_are_all_set(fresh, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_MAILGUN_KEY", "k")
+    monkeypatch.setenv("REAM_MAILGUN_KEY", "k")
     assert not mail.enabled()
     with pytest.raises(mail.MailFailed):
         mail.send("a@example.com", "s", "t")
-    monkeypatch.setenv("ARTIFACTS_MAILGUN_API", "https://api.mailgun.net")
-    monkeypatch.setenv("ARTIFACTS_MAILGUN_DOMAIN", "mg.example")
-    monkeypatch.setenv("ARTIFACTS_MAIL_FROM", "Pages <pages@mg.example>")
+    monkeypatch.setenv("REAM_MAILGUN_API", "https://api.mailgun.net")
+    monkeypatch.setenv("REAM_MAILGUN_DOMAIN", "mg.example")
+    monkeypatch.setenv("REAM_MAIL_FROM", "Pages <pages@mg.example>")
     assert mail.enabled()
 
 
@@ -222,12 +223,12 @@ def test_the_trusted_ip_header_is_a_setting(monkeypatch):
     assert ratelimit.client_address(headers, "10.0.0.1") == "203.0.113.9"
     with settings.override(trusted_ip_header="CF-Connecting-IP"):
         assert ratelimit.client_address(headers, "10.0.0.1") == "198.51.100.4"
-    monkeypatch.delenv("ARTIFACTS_TRUSTED_IP_HEADER")
+    monkeypatch.delenv("REAM_TRUSTED_IP_HEADER")
     assert ratelimit.client_address(headers, "10.0.0.1") == "10.0.0.1"
 
 
 def test_the_cli_endpoint_keeps_the_house_default_until_the_plugin_has_it(monkeypatch):
-    monkeypatch.delenv("ARTIFACTS_API", raising=False)
+    monkeypatch.delenv("REAM_API", raising=False)
     assert client._api_base() == "https://artifacts.tenfourty.site/api/v1"
-    monkeypatch.setenv("ARTIFACTS_API", "http://127.0.0.1:8000/api/v1")
+    monkeypatch.setenv("REAM_API", "http://127.0.0.1:8000/api/v1")
     assert client._api_base() == "http://127.0.0.1:8000/api/v1"

@@ -6,9 +6,9 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, decisions, holds, keys, nudge, store
-from artifacts.app import create_gallery_app
-from artifacts.db import Database, in_list
+from ream import comments, decisions, holds, keys, nudge, store
+from ream.app import create_gallery_app
+from ream.db import Database, in_list
 
 PAGE = (
     "<!doctype html><title>Plan</title>"
@@ -242,7 +242,7 @@ def _gate_after(monkeypatch, module, name):
 def test_a_verdict_that_lands_before_the_mark_leaves_it_unheld(db, monkeypatch):
     import threading
 
-    from artifacts import review, store
+    from ream import review, store
 
     page = _page(db)
     row = decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
@@ -268,7 +268,7 @@ def test_a_verdict_that_lands_before_the_mark_leaves_it_unheld(db, monkeypatch):
 def test_a_verdict_that_waits_for_the_mark_releases_it(db, monkeypatch):
     import threading
 
-    from artifacts import review
+    from ream import review
 
     page = _page(db)
     row = decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
@@ -321,7 +321,7 @@ def _held_flags(db, page):
 
 
 def test_a_verdict_releases_his_held_marks_without_extra_events(db, nudges):
-    from artifacts import review
+    from ream import review
 
     page, row, made = _held_review(db)
     decisions.answer(db, row.id, letter="c", by="jeremy")
@@ -355,7 +355,7 @@ def test_approved_with_held_marks_counts_as_approved_with_notes(db, nudges):
 
 
 def test_dismissed_releases_them_as_context(db, nudges):
-    from artifacts import review
+    from ream import review
 
     page, row, _ = _held_review(db)
     decisions.answer(db, row.id, letter="d", by="jeremy")
@@ -440,7 +440,7 @@ def test_closing_or_archiving_releases_held_marks(db, nudges):
 def test_a_flip_racing_approved_never_drops_a_mark(db, monkeypatch, nudges):
     import threading
 
-    from artifacts import review
+    from ream import review
 
     page, row, _made = _held_review(db, marks=2)
     reached, go = _gate_after(monkeypatch, holds, "approved_letter")
@@ -532,7 +532,7 @@ SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
 
 @pytest.fixture()
 def gclient(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 
@@ -621,7 +621,7 @@ def test_the_panel_tags_a_held_row_and_the_page_gets_the_flag(db, gclient, nudge
 
 
 def test_the_shim_names_the_held_highlight():
-    from artifacts import content
+    from ream import content
 
     source = content._viewer_report()
     assert "ar-held" in source and "underline dotted" in source

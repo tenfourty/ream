@@ -5,14 +5,14 @@ from importlib import resources
 
 import pytest
 
-from artifacts import db as dbmod
-from artifacts.db import Database
+from ream import db as dbmod
+from ream.db import Database
 
 
 def _build_v5(path, *, mangle: bool = False) -> Database:
     """A database exactly as steps 1 to 5 leave it."""
     database = Database(f"sqlite:///{path}")
-    script = resources.files("artifacts").joinpath("schema_sqlite.sql").read_text()
+    script = resources.files("ream").joinpath("schema_sqlite.sql").read_text()
     if mangle:
         assert "'in-person', 'other'" in script
         script = script.replace("'in-person', 'other'", "'in-person','other'")

@@ -18,7 +18,7 @@ import pytest
 # available here; pytest resolves them by name.
 from test_client import key_file, live  # noqa: F401
 
-from artifacts import decide, decisions, keys, store
+from ream import decide, decisions, keys, store
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 
@@ -495,7 +495,7 @@ def test_a_global_flag_after_the_command_says_so_rather_than_blaming_the_install
         )
     err = capsys.readouterr().err
     assert "goes BEFORE the command" in err
-    assert "ARTIFACTS_SESSION" in err, "and names the way that avoids the trap"
+    assert "REAM_SESSION" in err, "and names the way that avoids the trap"
     assert "uv tool install" not in err, (
         "it blamed the install for a flag that is present and merely misplaced"
     )
@@ -548,7 +548,7 @@ def test_writing_without_a_session_label_says_so_on_stderr(
     live, key_file, page, capsys, monkeypatch
 ):
     """homelab-ij8.106: an unlabelled write is allowed but never silent."""
-    monkeypatch.delenv("ARTIFACTS_SESSION", raising=False)
+    monkeypatch.delenv("REAM_SESSION", raising=False)
     path, _ = key_file
     assert (
         _run(
@@ -712,7 +712,7 @@ def test_a_seat_set_on_a_bare_command_names_the_wrapper_call(
     bare `ARTIFACTS_SEAT=x artifacts-…` finds no key, and the error says the
     exact wrapped command instead of a generic hint."""
     monkeypatch.setenv("ARTIFACTS_SEAT", "homelab_maintainer")
-    monkeypatch.delenv("ARTIFACTS_KEY_FD", raising=False)
+    monkeypatch.delenv("REAM_KEY_FD", raising=False)
     assert decide.main(["--key-file", str(tmp_path / "nope"), "list"]) == 2
     err = capsys.readouterr().err
     assert "cannot read key file" in err

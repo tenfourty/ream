@@ -9,8 +9,8 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, decisions, keys, nudge, store
-from artifacts.app import create_gallery_app
+from ream import comments, decisions, keys, nudge, store
+from ream.app import create_gallery_app
 
 PAGE = (
     "<!doctype html><title>Plan</title>"
@@ -27,7 +27,7 @@ def _quiet(monkeypatch):
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     return TestClient(create_gallery_app(db=db))
 
 
@@ -371,7 +371,7 @@ def _gate_after(monkeypatch, module, name):
 def test_a_verdict_holding_the_lock_lands_on_round_one(db, monkeypatch, letter):
     """The verdict locks the review first; the republish waits, then sees the
     verdict and opens round 2 only if it was changes requested."""
-    from artifacts import holds
+    from ream import holds
 
     page = _page(db)
     review = decisions.ask_review(db, agent="seat", artifact_id=page.id)

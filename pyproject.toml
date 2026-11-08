@@ -1,5 +1,5 @@
 [project]
-name = "artifacts"
+name = "ream"
 version = "0.1.0"
 description = "A self-hosted artifacts publisher: agents publish HTML pages over a keyed API; Jeremy views them in an Authelia-gated gallery."
 readme = "README.md"
@@ -30,13 +30,20 @@ server = [
 ]
 
 [project.scripts]
-artifacts-admin = "artifacts.admin:main"
-artifacts-publish = "artifacts.client:run"
-artifacts-decide = "artifacts.decide:run"
-artifacts-bead-metrics = "artifacts.beadmetrics:main"
-artifacts-republish = "artifacts.republish:main"
-artifacts-connect = "artifacts.connect_cli:run"
-artifacts-beads-page = "artifacts.beadpage:run"
+ream = "ream.cli:main"
+# The old command names work for good, beside the verbs of `ream`.
+artifacts-admin = "ream.admin:main"
+artifacts-publish = "ream.client:run"
+artifacts-decide = "ream.decide:run"
+artifacts-bead-metrics = "ream.beadmetrics:main"
+artifacts-republish = "ream.republish:main"
+artifacts-connect = "ream.connect_cli:run"
+artifacts-beads-page = "ream.beadpage:run"
+
+# Two top-level packages ship in the one wheel: `ream`, and `artifacts`, the old import
+# name kept for good (a shim whose modules ARE the ream modules).
+[tool.uv.build-backend]
+module-name = ["ream", "artifacts"]
 
 [build-system]
 requires = ["uv_build>=0.12.9,<0.13.0"]
@@ -61,7 +68,7 @@ dev = [
 # in tests/conftest.py for where the slow tests go.
 # -rs: the summary names every skipped test and why. Browser tests skip where
 # there is no headless browser (a laptop without one; CI installs chromium and sets
-# ARTIFACTS_REQUIRE_BROWSER=1, so there a missing browser fails), and a bare "13 skipped"
+# REAM_REQUIRE_BROWSER=1, so there a missing browser fails), and a bare "13 skipped"
 # hid that for weeks (runcove-5t3oj.77).
 addopts = "--dist=worksteal -rs"
 # A test that hangs fails after 5 minutes with every thread's stack printed,
@@ -78,7 +85,7 @@ timeout_method = "signal"
 # reason at the mark. At most ten may carry it; everything else stays under 1 s.
 markers = [
     "slow(reason): genuinely needs more than a second; says why",
-    "postgres_only: reads Postgres's catalogue or runs Postgres's own SQL; skipped when ARTIFACTS_TEST_DB=sqlite",
+    "postgres_only: reads Postgres's catalogue or runs Postgres's own SQL; skipped when REAM_TEST_DB=sqlite",
     "background_thumbnails: publishes in this test start the real background thumbnail render (off by default in tests; see tests/conftest.py)",
 ]
 

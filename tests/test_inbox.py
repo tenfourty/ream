@@ -7,8 +7,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import comments, decisions, grants, inbox, keys, onboarding, store
-from artifacts.app import create_gallery_app
+from ream import comments, decisions, grants, inbox, keys, onboarding, store
+from ream.app import create_gallery_app
 
 PAGE = (
     "<!doctype html><html><head><title>t</title></head><body><p>plan</p></body></html>"
@@ -20,8 +20,8 @@ HIM = {"Remote-User": "jeremy"}
 
 @pytest.fixture()
 def client(db, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
-    monkeypatch.setenv("ARTIFACTS_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     return TestClient(create_gallery_app(db), base_url="https://testserver")
 
 

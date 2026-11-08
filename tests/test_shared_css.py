@@ -13,8 +13,8 @@ the way this service exists to stop. It has to come from the page's own host.
 import pytest
 from fastapi.testclient import TestClient
 
-from artifacts import content, keys, store, templates, textvars
-from artifacts.content import create_content_app
+from ream import content, keys, store, templates, textvars
+from ream.content import create_content_app
 
 PAGE = "<!doctype html><html><head><title>Board</title></head><body>hi</body></html>"
 
@@ -27,7 +27,7 @@ def published(db):
 
 @pytest.fixture()
 def client(db, published, monkeypatch):
-    monkeypatch.setenv("ARTIFACTS_CONTENT_DOMAIN", "tenfourty.com")
+    monkeypatch.setenv("REAM_CONTENT_DOMAIN", "tenfourty.com")
     c = TestClient(create_content_app(db))
     c.headers.update({"host": f"{published.id}.tenfourty.com"})
     return c
@@ -99,7 +99,7 @@ def test_it_carries_the_content_origins_minimum_headers(client):
 def test_a_page_that_links_it_is_not_a_csp_warning(db):
     """The link a page writes must not be reported as a remote stylesheet --
     it is same-origin, which is exactly what the policy permits."""
-    from artifacts import csp
+    from ream import csp
 
     body = (
         '<!doctype html><html><head><link rel="stylesheet" href="/_shared.css">'
