@@ -88,10 +88,10 @@ session on that machine can reach.
 
 ## The tools
 
-{{tools}}
+{{tools}}{{section_tools}}
 If you would rather not install anything, every one of them is a plain HTTPS
 call with a bearer token — the machine-readable contract is at
-{{base}}/api/v1/openapi.json, which needs your key.{{proxy_notes}}
+{{base}}/api/v1/openapi.json, which needs your key.{{proxy_notes}}{{section_proxy}}
 
 A skill file that teaches any agent to use this service, in the open SKILL.md
 format, is at {{base}}/api/v1/skill.md — save it wherever your agent keeps
@@ -464,7 +464,7 @@ purpose). Do not try other keys; ask {{owner_them}} for the content, or to open 
     route list    {{base}}/api/v1/agent.json  (JSON, for a client without the tools)
 
 Everything under /api/v1 except these documents and the tools needs a key.
-"""
+{{section_integrations}}"""
 
 
 def tools_dir() -> Path:
@@ -637,6 +637,12 @@ def agent_card(public_only: bool = False) -> dict:
     }
 
 
+def _sections(doc: str) -> dict[str, str]:
+    """The plug-in text slots (`textvars.section`) as `{{section_<slot>}}` values, every slot
+    present so a template may name it; each is empty with no plug-in installed."""
+    return {f"section_{slot}": textvars.section(slot, doc) for slot in textvars.SLOTS}
+
+
 def agents_txt(base: str) -> str:
     """The document, with the address it was asked on written into it."""
     base = base.rstrip("/")
@@ -655,6 +661,7 @@ def agents_txt(base: str) -> str:
         tools=_tools_text(base),
         connect_line=connect_line,
         pickup_hours=pickup.PICKUP_FRESH // timedelta(hours=1),
+        **_sections("agents.txt"),
     )
 
 
@@ -894,7 +901,7 @@ you cannot publish into those, and a page {{owner_they}} file{{owner_s}} there r
   `--close-to-agents`. A 404 on someone else's page means it is closed: ask
   {{owner_them}}, do not try other keys.
 - Never put a key on a command line or in a message.
-"""
+{{section_integrations}}"""
 
 
 def skill_md(base: str) -> str:
@@ -902,6 +909,7 @@ def skill_md(base: str) -> str:
         _SKILL,
         base=base.rstrip("/"),
         pickup_hours=pickup.PICKUP_FRESH // timedelta(hours=1),
+        **_sections("skill.md"),
     )
 
 

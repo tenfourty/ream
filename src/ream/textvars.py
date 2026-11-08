@@ -38,7 +38,9 @@ clause saying what it does to a request held open. They are separated by a line 
 
 from __future__ import annotations
 
+import logging
 import re
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -52,8 +54,107 @@ _SPLIT = re.compile(r"^%%[ \t]*$", re.MULTILINE)
 _NO_HOLD_NOTE = "may pass through a proxy that cuts a request held too long,"
 
 
+_log = logging.getLogger(__name__)
+
+# What a plug-in may add (design 4.2, "text"). Both registries are empty with no plug-in, and
+# then nothing below changes a served word.
+SLOTS = ("proxy", "tools", "integrations")  # named places in the served documents
+DOCS = ("agents.txt", "skill.md")
+_MAX_PLUGIN_TEXT = 20_000
+_PLUGIN_VARS: dict[str, tuple[str, str | Callable[[], str]]] = {}
+_SECTIONS: list[tuple[str, str, Callable[[str], str]]] = []
+
+
 class UnknownVariable(KeyError):
     """A `{{name}}` that nothing defines."""
+
+
+def plugin_prefix(plugin: str) -> str:
+    """The namespace a plug-in's variables live in: its name, lower-cased, runs of anything
+    but letters and digits made `_`, then `_`. Core names never start with a plug-in's."""
+    return re.sub(r"[^a-z0-9]+", "_", plugin.lower()).strip("_") + "_"
+
+
+def register_var(plugin: str, name: str, value: str | Callable[[], str]) -> None:
+    """Add `{{name}}` for `plugin`. `name` must be lower-case, start with the plug-in's own
+    prefix (`plugin_prefix`), not be a core variable, and not be taken. `value` is a string
+    or a function of no arguments read each time the text is served."""
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+        raise ValueError(
+            f"plug-in {plugin!r}: variable name {name!r} is not lower_snake"
+        )
+    if not name.startswith(plugin_prefix(plugin)):
+        raise ValueError(
+            f"plug-in {plugin!r}: variable {name!r} must start with {plugin_prefix(plugin)!r}"
+        )
+    if name in variables() or name.startswith("section_"):
+        raise ValueError(f"plug-in {plugin!r}: variable {name!r} is a core name")
+    if name in _PLUGIN_VARS:
+        raise ValueError(f"plug-in {plugin!r}: variable {name!r} is already registered")
+    if not isinstance(value, str) and not callable(value):
+        raise TypeError(
+            f"plug-in {plugin!r}: variable {name!r} needs a string or function"
+        )
+    _PLUGIN_VARS[name] = (plugin, value)
+
+
+def register_section(plugin: str, slot: str, fn: Callable[[str], str]) -> None:
+    """Add text to a named slot. `fn(doc)` gets `agents.txt` or `skill.md` and returns the
+    paragraph(s) for it, or "" for none. One section per (plug-in, slot)."""
+    if slot not in SLOTS:
+        raise ValueError(f"plug-in {plugin!r}: unknown text slot {slot!r}")
+    if not callable(fn):
+        raise TypeError(f"plug-in {plugin!r}: text section {slot!r} needs a function")
+    if any(p == plugin and sl == slot for p, sl, _f in _SECTIONS):
+        raise ValueError(f"plug-in {plugin!r}: text section {slot!r} is registered")
+    _SECTIONS.append((plugin, slot, fn))
+
+
+def _fault(plugin: str, exc: BaseException | None = None) -> str:
+    """A plug-in's text could not be had: say nothing in its place. The type, never the
+    message (it may hold content), is all that is logged."""
+    from ream import plugin_api
+
+    plugin_api.count_failure(plugin, "text")
+    _log.warning(
+        "plug-in %s: text failed: %s", plugin, type(exc).__name__ if exc else "BadValue"
+    )
+    return ""
+
+
+def _checked(plugin: str, value: object) -> str:
+    if not isinstance(value, str) or len(value) > _MAX_PLUGIN_TEXT:
+        return _fault(plugin)
+    return value
+
+
+def _plugin_value(key: str) -> str | None:
+    found = _PLUGIN_VARS.get(key)
+    if found is None:
+        return None
+    plugin, value = found
+    if isinstance(value, str):
+        return value
+    try:
+        return _checked(plugin, value())
+    except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
+        return _fault(plugin, exc)
+
+
+def section(slot: str, doc: str) -> str:
+    """What plug-ins add at `slot` of `doc`: each non-empty section as its own paragraph
+    (a newline before, one after), in registration order. Empty with no plug-in."""
+    out = []
+    for plugin, sl, fn in _SECTIONS:
+        if sl != slot:
+            continue
+        try:
+            text = _checked(plugin, fn(doc))
+        except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
+            text = _fault(plugin, exc)
+        if text.strip("\n"):
+            out.append("\n" + text.strip("\n") + "\n")
+    return "".join(out)
 
 
 def _read_notes(path: str) -> tuple[str, str]:
@@ -122,14 +223,18 @@ def variables(client: bool = False) -> dict[str, str]:
 
 
 def _lookup(name: str, table: dict[str, str]) -> str:
-    if name in table:
-        return table[name]
+    def get(key: str) -> str | None:
+        return table[key] if key in table else _plugin_value(key)
+
     lower = name[0].lower() + name[1:]
-    if name.upper() == name and name.lower() in table:
-        return table[name.lower()].upper()
-    if lower in table:
-        value = table[lower]
-        return value[:1].upper() + value[1:]
+    for key, shape in (
+        (name, str),
+        (name.lower() if name.upper() == name else "", str.upper),
+        (lower, lambda v: v[:1].upper() + v[1:]),
+    ):
+        value = get(key) if key else None
+        if value is not None:
+            return shape(value)
     raise UnknownVariable(name)
 
 

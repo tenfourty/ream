@@ -27,7 +27,7 @@ import threading
 from collections.abc import Callable
 from importlib import metadata
 
-from ream import decisions, mail, scanners, settings, sinks
+from ream import decisions, hosts, mail, scanners, settings, sinks, store, textvars
 
 API_VERSION = (1, 0)
 GROUP = "ream.plugins"
@@ -38,6 +38,8 @@ _log = logging.getLogger(__name__)
 _lock = threading.Lock()
 _failures: dict[tuple[str, str], int] = {}
 _loaded: list[str] = []
+# Inbound routes plug-ins mounted, by normalised host: (plug-in, guarded ASGI app).
+_ROUTERS: dict[str, tuple[str, Callable]] = {}
 
 
 class PluginError(Exception):
@@ -158,6 +160,110 @@ class PluginAPI:
         `enabled()` says whether mail is on. One backend at most; it replaces the
         built-in Mailgun code. `name` is only for the log."""
         mail.register_backend(self._plugin, send, enabled)
+
+    def text_vars(self, values: dict) -> None:
+        """Add `{{name}}` template variables (4.2, text). Each name must start with this
+        plug-in's own prefix (its name, lower-case, `_` for anything but letters and
+        digits, then `_`: plug-in `beads-page` -> `beads_page_...`), so a plug-in can never
+        take a core name or another's. A value is a string or a function of no arguments
+        read each time a text is served; one that raises or returns a non-string renders
+        as nothing and is counted as `<plug-in>:text`. Core served texts name none of
+        them: they are for a plug-in's own `text_section` words and templates."""
+        for name, value in dict(values).items():
+            textvars.register_var(self._plugin, name, value)
+
+    def text_section(self, slot: str, fn: Callable[[str], str]) -> None:
+        """Add words to a named place in the served documents (4.2, text). `slot` is one of
+        `textvars.SLOTS`: `proxy` and `tools` (after the tools paragraph and the proxy note
+        in `agents.txt`) and `integrations` (the end of `agents.txt` and of `skill.md`).
+        `fn(doc)` gets `"agents.txt"` or `"skill.md"` and returns the paragraph for it, or
+        "" for none. Several plug-ins' sections follow in registration order, each its own
+        paragraph. One section per slot per plug-in."""
+        textvars.register_section(self._plugin, slot, fn)
+
+    def router(self, router, host: str) -> None:
+        """Mount an inbound route on a dedicated host (4.2, routes). `router` is a FastAPI
+        `APIRouter`; it is served only for requests whose Host is exactly `host`, never on
+        the gallery, API, partner or content hosts, which a plug-in may not take (nor one
+        another's): such a registration stops start-up. The route has no gallery or key
+        authentication: it checks its own caller. A fault inside it answers a bare 500,
+        counted as `<plug-in>:router` and logged by exception type only."""
+        from fastapi import APIRouter, FastAPI
+        from fastapi.exceptions import RequestValidationError
+        from fastapi.responses import JSONResponse
+
+        if not isinstance(router, APIRouter):
+            raise TypeError(
+                f"plug-in {self._plugin!r}: router needs a FastAPI APIRouter"
+            )
+        name = hosts.normalise(host) if isinstance(host, str) else None
+        if name is None or not name.strip("."):
+            raise ValueError(f"plug-in {self._plugin!r}: router needs a host")
+        why = _reserved_host(name)
+        if why is not None:
+            raise ValueError(f"plug-in {self._plugin!r}: host {name!r} is {why}")
+        if name in _ROUTERS:
+            raise ValueError(
+                f"plug-in {self._plugin!r}: host {name!r} is taken by {_ROUTERS[name][0]!r}"
+            )
+        app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+        @app.exception_handler(RequestValidationError)
+        async def _no_echo(_request, exc):
+            # Where a field went wrong, never what was sent (as the core's own apps do).
+            errors = [{"loc": list(e["loc"]), "type": e["type"]} for e in exc.errors()]
+            return JSONResponse(status_code=422, content={"detail": errors})
+
+        app.include_router(router)
+        _ROUTERS[name] = (self._plugin, _guard_app(self._plugin, app))
+
+
+def routers() -> dict[str, Callable]:
+    """The ASGI app each plug-in route is served by, keyed by its normalised host. `create_app`
+    reads this when it builds the host router; empty with no plug-in."""
+    return {host: app for host, (_p, app) in _ROUTERS.items()}
+
+
+def _reserved_host(host: str) -> str | None:
+    """Why a plug-in may not serve `host`, or None. Read at call time, from the settings."""
+    if hosts.is_gallery(host):
+        return "the gallery host"
+    if hosts.is_api(host):
+        return "the API host"
+    if host == hosts.normalise(settings.current().partner_inbound_host):
+        return "the partner inbound host"
+    content = store.content_host()
+    if host == content or host.endswith("." + content):
+        return "the content domain"
+    return None
+
+
+def _guard_app(plugin: str, app: Callable) -> Callable:
+    """Wrap a plug-in's ASGI app so a fault in it answers a bare 500 and is counted and
+    logged by exception type only (the message may hold a request's content), instead of
+    reaching the server's traceback log."""
+    from starlette.responses import PlainTextResponse
+
+    async def guarded(scope, receive, send):
+        started = False
+
+        async def tracking(message):
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await app(scope, receive, tracking)
+        except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
+            _count(plugin, "router")
+            _log.warning("plug-in %s: route failed: %s", plugin, type(exc).__name__)
+            if scope["type"] == "http" and not started:
+                await PlainTextResponse("plug-in error", status_code=500)(
+                    scope, receive, send
+                )
+
+    return guarded
 
 
 def _entry_points() -> list:

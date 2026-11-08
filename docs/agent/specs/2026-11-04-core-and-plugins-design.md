@@ -592,6 +592,28 @@ drivers; CI only (not on baba).
    ggscan's slot (bodies, previews, `gitguardian=True` fields, agent comments' second scan),
    not on titles, decision fields or human comments; widening that waits for 9c, when ggscan
    moves into a plug-in.
+   **7b part 3 built (`ci/slice7b-part3`).** `api.text_vars({name: str | fn})`: each name must
+   start with the plug-in's own prefix (its name lower-cased, anything but letters and digits
+   made `_`, then `_`; `beads-page` -> `beads_page_`), so it cannot take a core name or another
+   plug-in's, and a core variable name is refused (open in the spec; simplest reading: a
+   namespace, not a reserved list). A value may be a function, read each time a text is served.
+   Core texts name none of them: they are for a plug-in's own words. `api.text_section(slot,
+   fn)`: slots `proxy` and `tools` (agents.txt) and `integrations` (the end of agents.txt and of
+   skill.md), the spec's three; `fn(doc)` gets `agents.txt` or `skill.md` and returns the
+   paragraph or `""`; sections follow in registration order, one per slot per plug-in. The
+   templates carry `{{section_<slot>}}`, empty with no plug-in, so every served-text digest is
+   unchanged. A value or section that raises, is not a string or exceeds 20,000 characters
+   renders as nothing (served words are not a security check, so failing quiet is the safe
+   side), is counted as `<plug-in>:text` and logged by exception type only. `api.router(router,
+   host)`: `router` is a FastAPI `APIRouter`, mounted in its own app (no docs, no schema, a 422
+   that never echoes input) and served only when the normalised Host equals `host`; the host may
+   not be the gallery, API, partner-inbound or content domain (or under it), nor another
+   plug-in's, and `create_app` checks plug-in hosts last so one can never shadow a core host.
+   The route has no gallery or key authentication (it checks its own caller, as `partner_in`
+   does). A fault in it answers a bare 500, is counted as `<plug-in>:router` and logged by type
+   only. Any registration error stops start-up naming the plug-in. Left for 7b now: cli/client
+   hooks, CLI loading of plug-ins, cross-process failure counts and
+   breaker state, the core-bare CI job.
 8. **The plug-in repo and its pipeline** (homelab office creates the repo; lander change). It
    builds an image identical to today's from an empty plug-in set, opens a pin PR, and one real
    pin PR is merged as proof before anything moves. Core starts publishing the `-core` image and
