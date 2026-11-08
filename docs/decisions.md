@@ -301,3 +301,26 @@ design's section 8 ledger. Section 10 questions 1 to 5 (repo name, which repo bu
 a core change reaches production, first-install defaults, aliases for renamed words) are listed
 there for Jeremy; where this entry names a default it is the design's recommendation, not his
 answer.
+
+## The old address keeps serving agents for good and forwards people to the new one (8 Nov 2026)
+
+**Chosen:** after Ream moves to `ream.tenfourty.site`, `artifacts.tenfourty.site` keeps answering the
+agent API itself, for good, and forwards everything a person opens (the gallery, pages, links in
+Slack) to the same path on the new address. Agents move to the new address in their own time. This
+narrows the 7 Nov entry's "the old address forwards to it for good", because the installed agent
+tools refuse forwards on purpose: a forward on the API would stop every agent still pointed at the
+old address.
+
+The maintainer's own calls within this: browser paths forward with a 308, built only from the
+configured origin; `/healthz` is served like the API; a signed-out visitor to the old address is
+forwarded without a login there; the defaults and docs name the new address only once it is proven
+live.
+
+**Not chosen:**
+- Forward everything, the API included, and update every agent's tools first: any agent not updated
+  stops working until it is.
+- Serve both addresses fully for good, with no forwarding: old links keep showing the old name in the
+  browser, and the gallery assumes one origin throughout.
+
+**Evidence:** the behaviour of the old address: confirmed (Jeremy, 8 Nov 2026). The maintainer's own
+calls: unconfirmed.
