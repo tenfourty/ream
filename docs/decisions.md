@@ -381,3 +381,60 @@ scale, which would have changed the look.
 **Evidence:** a standard look first, with the logo guide and the named values as the minimum,
 look unchanged, and per-install looks later as their own work: confirmed (the owner, 8 Nov
 2026). The maintainer's own calls: unconfirmed.
+
+## Ream for GitGuardian: the eight design questions answered, and MCP sign-in for people's agents (8 Nov 2026)
+
+**Chosen:** the company deployment (Ream installed for the people inside GitGuardian) works as
+follows.
+
+1. A person's own agent can read everything its person can, so it can summarise the pages shared
+   with them.
+2. Sharing outside GitGuardian is off at launch: company people only. It is looked at again once
+   the service has run for a while.
+3. A question an agent asks on a page can be answered by the person it is addressed to and by the
+   page's owners.
+4. No office moves onto the company deployment until it has run on its own for a month.
+5. The core ships generic live-data sources set up by configuration (any JSON API, metrics queries,
+   SQL). A source that needs more, such as Snowflake's login, is a plug-in.
+6. A live source always runs with the viewer's own login. A source with no per-person login is not
+   offered.
+7. Teams come from the groups the company login sends at each sign-in, and a session lasts at most
+   12 hours, so leaving a team takes effect within a day.
+8. The company deployment keeps its data in Supabase's Postgres and its page bodies in Supabase's
+   storage. Sign-in stays the company login.
+9. Most people at GitGuardian use Claude.ai, so the basic case is a person's own agent there. Ream
+   offers itself as an MCP server with an OAuth sign-in: a person connects Claude.ai (or another
+   agent) once, signs in, and from then on that agent acts for them with no key to paste. The agent
+   field names the client, for example "Alice, via Claude.ai". Keys stay for machines, offices and
+   CI, which have no person behind them. The MCP sign-in goes into the core, so the homelab gets it
+   first, behind the owner's own login, and he tries it from Claude.ai before the company build
+   starts. It moves to the front of the company build order.
+
+**Not chosen:**
+- A personal agent reads only the pages shared with the agent itself: a person would have to share
+  every page a second time before their agent could summarise it.
+- The homelab's secret links and email codes on the company deployment from the start: it opens
+  company pages to people outside before the service has a track record.
+- Anyone with editor access may answer: a question meant for one person could be answered by
+  someone else on the page.
+- gg-ops moves first, as soon as the company deployment runs (the recommendation): the deployment
+  proves itself on its own first.
+- Configuration only for live sources: Snowflake's login cannot be written as configuration. A code
+  plug-in for every source: each new source would need a code change.
+- The viewer's login where the source supports it, and a read-only service account where it does
+  not (the recommendation): a shared account can show a viewer data their own access would not.
+  Service accounts for the tracker and forge, as first written: the same objection, for every
+  source.
+- The login's groups plus a nightly directory check, or a nightly directory sync alone: more moving
+  parts, for what the 12-hour session cap already gives.
+- Supabase's Postgres with page bodies in S3: two providers where one serves. Supabase for sign-in
+  as well: the company login is already where people and their groups are.
+- MCP with OAuth for everything, keys retired: machines, offices and CI have no person to sign in.
+  The MCP server last, after the company deployment, as first written: it is the case most people at
+  GitGuardian meet first.
+
+**Evidence:** questions 1 to 8; the MCP sign-in, with keys kept beside it, built into the core and
+tried on the homelab first, and first in the build order: confirmed (Jeremy, 8 Nov 2026; the MCP
+sign-in comes from his comment on the design page). Awaiting his confirmation: he said he and the
+house offices keep using the homelab Ream and the company deployment is a separate install; whether
+that means no house office ever moves, gg-ops included, so that answer 4 drops out, is unconfirmed.
