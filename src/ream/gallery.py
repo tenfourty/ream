@@ -1122,7 +1122,10 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
 .row-wrap .menu[open]{z-index:30}
 .row-wrap.asking .row{box-shadow:inset 2px 0 0 var(--now-solid)}
 /* SELECT MODE (folders design 3.3): a checkbox per page on the corner where the dots were,
-   inside one form; the bar is stuck to the foot of the screen so it is under his thumb. */
+   inside one form; the bar is stuck to the foot of the screen so it is under his thumb.
+   It is .pickbar, never .selbar: that is the comment bar's class, this is the same
+   stylesheet, and sharing it once made the comment bar sticky and off screen
+   (tests/test_css_layout_clash.py). */
 .sel-pick{position:absolute;z-index:6;margin:0;display:flex;align-items:center;
   justify-content:center;cursor:pointer}
 .sel-pick input{width:22px;height:22px;margin:0;accent-color:var(--accent)}
@@ -1130,10 +1133,10 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
   border-radius:8px}
 .row-wrap > .sel-pick{top:50%;left:0;width:44px;height:44px;transform:translateY(-50%)}
 .row-wrap.sel .row{padding-left:2.9rem}
-.selbar{position:sticky;bottom:0;z-index:50;display:flex;flex-wrap:wrap;gap:var(--space-5);
+.pickbar{position:sticky;bottom:0;z-index:50;display:flex;flex-wrap:wrap;gap:var(--space-5);
   align-items:center;padding:var(--space-6) var(--space-75);margin-top:var(--space-10);background:var(--card);
   border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-dock)}
-.selbar .btn{min-height:40px}
+.pickbar .btn{min-height:40px}
 .selnote{margin:var(--space-5) 0;color:var(--muted);font-size:var(--text-md)}
 /* WHAT GOES FIRST WHEN THERE IS NO ROOM. A list is scanned for titles, so the
    title wins and the metadata yields -- in order: the agent, then the waiting
@@ -3097,7 +3100,7 @@ def _select_form(main: str, back: str, note: str = "") -> str:
         f'{shown}<p class="selnote">Tick pages, then choose what to do with them '
         "(at most 200 at once).</p>"
         f"{main}"
-        '<div class="selbar">'
+        '<div class="pickbar">'
         '<button class="btn primary" type="submit" name="do" value="choose">'
         "Move to folder</button>"
         '<button class="btn" type="submit" name="do" value="out">Take out of folder</button>'

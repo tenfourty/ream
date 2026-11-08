@@ -709,3 +709,55 @@ def test_hovering_a_chart_offers_a_corner_comment_that_starts_a_comment_on_it(
         assert not errors, errors
     finally:
         ctx.close()
+
+
+FAR_PAGE = (
+    "<!doctype html><html><head><title>F</title></head><body>"
+    + "".join(
+        f"<p>Filler {n}: " + "words to push the heading down. " * 12 + "</p>"
+        for n in range(60)
+    )
+    + '<h2 id="far">A heading far down the page</h2>'
+    + "<p>And a last paragraph under it.</p></body></html>"
+)
+
+
+def test_selecting_text_far_down_a_page_shows_the_bar_under_it(browser, served, db):
+    """runcove-5t3oj.85: the wall's select-mode bar once shared the class `.selbar`
+    with this bar, and its later `position:sticky` rule won, so the page-coordinate
+    `top` set here pushed the bar off screen for any selection more than about one
+    window down. Playwright's "visible" ignores the viewport, so the box is checked."""
+    origin, _ = served
+    page = store.publish(db, "seat", "Far", FAR_PAGE)
+    ctx, pg, errors = _open_page(browser, origin, page.id, 1400, height=800)
+    try:
+        _frame_height_settled(pg)
+        heading = pg.frame_locator("#artifact-frame").locator("#far")
+        heading.scroll_into_view_if_needed()
+        frame = pg.frames[1]
+        frame.evaluate(
+            """() => {const h = document.getElementById('far');
+                     const r = document.createRange(); r.selectNodeContents(h);
+                     const s = getSelection(); s.removeAllRanges(); s.addRange(r);}"""
+        )
+        pg.locator(".selbar").wait_for(state="visible", timeout=5000)
+        got = pg.evaluate(
+            """() => { const bar = document.querySelector('.selbar');
+                      const b = bar.getBoundingClientRect();
+                      const h = document.getElementById('artifact-frame')
+                        .getBoundingClientRect().top + window.scrollY;
+                      return {top: b.top, bottom: b.bottom, left: b.left, right: b.right,
+                              position: getComputedStyle(bar).position,
+                              scrollY, innerHeight, innerWidth, frameTop: h} }"""
+        )
+        far = frame.evaluate(
+            "() => document.getElementById('far').getBoundingClientRect().top"
+        )
+        # The heading really is far down: at least one and a half windows.
+        assert got["frameTop"] + far >= 1.5 * got["innerHeight"], (got, far)
+        assert got["position"] == "absolute", got
+        assert 0 <= got["top"] and got["bottom"] <= got["innerHeight"], got
+        assert 0 <= got["left"] and got["right"] <= got["innerWidth"], got
+        assert not errors, errors
+    finally:
+        ctx.close()
