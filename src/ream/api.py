@@ -1,8 +1,12 @@
 """The agent-facing publish API: mint a key with `ream.keys.mint`, then
-POST/PATCH pages under `/api/v1/artifacts`. Every route is scoped to the
+POST/PATCH pages under `/api/v1/pages`. Every route is scoped to the
 calling key's agent -- `caller` reads the agent from the verified key alone,
 never from a header, query parameter or body field, so nothing else can
-influence whose artifacts a request sees or changes.
+influence whose pages a request sees or changes.
+
+`/api/v1/artifacts` is the old name for the same routes and keeps working for
+good: every handler is registered under both words (see `_BothWords`), the same
+function, not a redirect, because callers POST.
 """
 
 import base64
@@ -489,10 +493,35 @@ def agent_card_response(request: Request) -> JSONResponse:
     )
 
 
+def _page_word(path: str) -> str | None:
+    """The `/pages` spelling of an `/artifacts` route path, or None if it has none."""
+    if path == "/artifacts" or path.startswith("/artifacts/"):
+        return "/pages" + path[len("/artifacts") :]
+    if path.startswith("/folders/") and path.endswith("/artifacts"):
+        return path[: -len("artifacts")] + "pages"
+    return None
+
+
+class _BothWords(APIRouter):
+    """A router that serves each `/artifacts` route under `/pages` as well.
+
+    `/pages` is the main name (a page is what an agent makes); `/artifacts` is
+    the old one and stays for good. Both are registered against the same
+    handler, `/pages` first, so a route declared before its `{id}` sibling
+    (`/artifacts/deleted`) keeps that order under both words.
+    """
+
+    def add_api_route(self, path: str, endpoint, **kwargs):  # type: ignore[override]
+        alias = _page_word(path)
+        if alias is not None:
+            super().add_api_route(alias, endpoint, **kwargs)
+        super().add_api_route(path, endpoint, **kwargs)
+
+
 def agent_router(
     db: Database, limiter: ratelimit.FailedAuthLimiter | None = None
 ) -> APIRouter:
-    router = APIRouter(prefix="/api/v1")
+    router = _BothWords(prefix="/api/v1")
 
     # One limiter per app, SHARED when `create_app` mounts this router on both
     # the gallery host and the API host: otherwise switching names would double
@@ -1037,7 +1066,7 @@ def agent_router(
                 409, "the artifact moved on; read it and patch again"
             ) from exc
         except store.NotFound as exc:
-            raise HTTPException(404, "no such artifact") from exc
+            raise HTTPException(404, "no such page") from exc
 
     def _section_refusal(exc: Exception) -> HTTPException:
         """A section update's refusals, as the whole-page update words them
@@ -1099,7 +1128,7 @@ def agent_router(
                 503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
             )
         if isinstance(exc, store.NotFound):
-            return HTTPException(404, "no such artifact")
+            return HTTPException(404, "no such page")
         raise exc
 
     _SECTION_REFUSALS = (
@@ -1198,7 +1227,7 @@ def agent_router(
         try:
             return store.get_owned(db, agent, artifact_id, as_reader=True).__dict__
         except store.NotFound as exc:
-            raise HTTPException(404, "no such artifact") from exc
+            raise HTTPException(404, "no such page") from exc
 
     @router.get("/artifacts/{artifact_id}/body")
     def read_body(artifact_id: str, agent: str = Depends(caller)):
@@ -1213,7 +1242,7 @@ def agent_router(
         try:
             stored = store.get_body(db, agent, artifact_id, as_reader=True)
         except store.NotFound as exc:
-            raise HTTPException(404, "no such artifact") from exc
+            raise HTTPException(404, "no such page") from exc
         return {
             **stored.__dict__,
             "warnings": _warnings_for(artifact_id, stored.body),
@@ -1278,7 +1307,7 @@ def agent_router(
         try:
             store.get_owned(db, agent, artifact_id, as_reader=True)
         except store.NotFound as exc:
-            raise HTTPException(404, "no such artifact") from exc
+            raise HTTPException(404, "no such page") from exc
         # `renderer`: whether this deployment renders at all, so a client never
         # waits for a render that cannot come.
         return {**store.render_report(db, artifact_id), "renderer": thumbs.available()}
@@ -1301,7 +1330,7 @@ def agent_router(
                 for row in store.list_versions(db, agent, artifact_id, as_reader=True)
             ]
         except store.NotFound as exc:
-            raise HTTPException(404, "no such artifact") from exc
+            raise HTTPException(404, "no such page") from exc
 
     @router.get("/artifacts/{artifact_id}/versions/{n}")
     def read_version_body(artifact_id: str, n: int, agent: str = Depends(caller)):
@@ -1467,7 +1496,7 @@ def agent_router(
                 "the vault's seat name (homelab_ops) is also accepted.",
             ) from None
         if old is None:
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return {"id": artifact_id, "from": old, "to": store.owner(db, artifact_id)}
 
     @router.post("/artifacts/{artifact_id}/agents")
@@ -1480,7 +1509,7 @@ def agent_router(
         if not store.set_agents_can_read(
             db, artifact_id, payload.can_read, agent=agent
         ):
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return store.get_owned(db, agent, artifact_id).__dict__
 
     # --- the shelf: what Jeremy can do to a page in the gallery, an agent can
@@ -1500,7 +1529,7 @@ def agent_router(
     def archive(artifact_id: str, payload: ArchiveBody, agent: str = Depends(caller)):
         """Take one of this agent's own pages off the wall, or put it back."""
         if not store.set_archived(db, artifact_id, payload.archived, agent=agent):
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return store.get_owned(db, agent, artifact_id).__dict__
 
     @router.post("/artifacts/{artifact_id}/rename")
@@ -1548,14 +1577,14 @@ def agent_router(
                 503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
             ) from exc
         if not renamed:
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return store.get_owned(db, agent, artifact_id).__dict__
 
     @router.post("/artifacts/{artifact_id}/pin")
     def pin(artifact_id: str, payload: PinBody, agent: str = Depends(caller)):
         """Pin one of this agent's own pages to the front of the wall."""
         if not store.set_pinned(db, artifact_id, payload.pinned, agent=agent):
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return store.get_owned(db, agent, artifact_id).__dict__
 
     @router.post("/artifacts/{artifact_id}/touch")
@@ -1589,7 +1618,7 @@ def agent_router(
                     conn=conn,
                 )
             except store.NotFound as exc:
-                raise HTTPException(404, "no such artifact") from exc
+                raise HTTPException(404, "no such page") from exc
             except store.PageChanged as exc:
                 raise HTTPException(
                     409, f"page changed since revision {exc.given}, re-fetch"
@@ -1636,7 +1665,7 @@ def agent_router(
         try:
             published, body = store.duplicate(db, artifact_id, agent=agent)
         except store.NotFound as exc:
-            raise HTTPException(404, "no such artifact") from exc
+            raise HTTPException(404, "no such page") from exc
         thumbs.render_in_background(db, published.id, published.version, body)
         return published.__dict__
 
@@ -1652,7 +1681,7 @@ def agent_router(
         his gallery.
         """
         if not store.set_deleted(db, artifact_id, True, agent=agent):
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return {"id": artifact_id, "deleted": True}
 
     @router.post("/artifacts/{artifact_id}/restore")
@@ -1660,7 +1689,7 @@ def agent_router(
         """Put one of this agent's deleted pages back, address and history
         intact."""
         if not store.set_deleted(db, artifact_id, False, agent=agent):
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return store.get_owned(db, agent, artifact_id).__dict__
 
     @router.post("/artifacts/{artifact_id}/destroy")
@@ -1675,7 +1704,7 @@ def agent_router(
         if payload.confirm.strip().lower() != "destroy":
             raise HTTPException(422, {"detail": 'confirm must be the word "destroy"'})
         if not store.destroy(db, artifact_id, agent=agent):
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         return {"id": artifact_id, "destroyed": True}
 
     def _check_anchor_state(value: str | None) -> None:
@@ -1710,7 +1739,7 @@ def agent_router(
         try:
             store.get_owned(db, agent, artifact_id, as_reader=True)
         except store.NotFound as exc:
-            raise HTTPException(404, "no such artifact") from exc
+            raise HTTPException(404, "no such page") from exc
         # Another office's page shows every comment, his included: access to
         # the page is the one control (Jeremy, 21 Oct 2026). A held mark stays
         # out, as it does for the owner.
@@ -1974,7 +2003,7 @@ def agent_router(
         except comments.NoSuchDecision as exc:
             raise HTTPException(404, "no such decision") from exc
         except store.NotFound as exc:
-            raise HTTPException(404, "no such artifact") from exc
+            raise HTTPException(404, "no such page") from exc
 
     @router.post("/artifacts/{artifact_id}/comment-images", status_code=201)
     async def upload_comment_image(
@@ -1993,7 +2022,7 @@ def agent_router(
 
         # Cheapest first: a page the caller cannot read costs no body.
         if not await run_in_threadpool(readable):
-            raise HTTPException(404, "no such artifact")
+            raise HTTPException(404, "no such page")
         try:
             return await image_store.stage_upload(request, db, artifact_id, agent)
         except images.ImageRefused as exc:
@@ -2082,7 +2111,7 @@ def agent_router(
                 mode=payload.mode if payload else None,
             )
         except store.NotFound as exc:
-            raise HTTPException(404, "no such artifact") from exc
+            raise HTTPException(404, "no such page") from exc
         return decisions.public(row)
 
     @router.get("/reviews/{review_id}")
@@ -2319,7 +2348,7 @@ def agent_router(
                 },
             ) from exc
         except store.NotFound as exc:
-            raise HTTPException(404, "no such artifact") from exc
+            raise HTTPException(404, "no such page") from exc
 
     # ANSWERED DECISIONS COME BACK BY DEFAULT (homelab-ij8.33). This route used
     # to hide them, so an agent reading its page back after Jeremy had answered
@@ -2375,7 +2404,7 @@ def agent_router(
             if not grants.has(db, agent, grants.READ_ALL_DECISIONS) or not store.exists(
                 db, artifact_id
             ):
-                raise HTTPException(404, "no such artifact") from exc
+                raise HTTPException(404, "no such page") from exc
         # Outcomes come back WITH the decisions, in one extra query for the
         # whole page rather than one per question. A caller reading "what
         # happened here" should not have to know to ask twice, and the one
@@ -2434,7 +2463,7 @@ def agent_router(
         try:
             store.get_owned(db, agent, artifact_id)
         except store.NotFound as exc:
-            raise HTTPException(404, "no such artifact") from exc
+            raise HTTPException(404, "no such page") from exc
         return forms.for_page(db, artifact_id, include_closed=include_closed)
 
     @router.get("/decisions")
@@ -3387,7 +3416,7 @@ def agent_router(
         raise HTTPException(
             404,
             {
-                "detail": f"no such route on an artifact: {unknown!r}",
+                "detail": f"no such route on a page: {unknown!r}",
                 "did_you_mean": (
                     "body -- the page's own HTML, to the agent that published it"
                     if unknown in ("source", "content", "html", "raw", "page", "text")
