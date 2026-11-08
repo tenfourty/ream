@@ -918,11 +918,13 @@ def _plugin_loader_env(request, monkeypatch):
 def _unbound_shared_state():
     """`serve.app_from_env` binds the shared breaker state and failure counts to its
     database; no test may inherit that (or leave its own) binding."""
-    from ream import sinks
+    from ream import plugin_api, sinks
 
     sinks.bind(None)
+    plugin_api.stop_writer()
     yield
     sinks.bind(None)
+    plugin_api.stop_writer()
 
 
 @pytest.fixture(autouse=True)

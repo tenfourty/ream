@@ -57,7 +57,14 @@ _ROUTERS: dict[str, tuple[str, Callable]] = {}
 def failure_counts() -> dict[str, int]:
     """Failures caught, keyed `<plug-in>:<interface>`. With the sink sender's database
     bound (`sinks.bind`) this is the total over every process using it; otherwise, or
-    if it cannot be read, the count since this process started."""
+    if it cannot be read, the count since this process started.
+
+    Bound, a key reports the stored total PLUS this process's still-unstored increments
+    (`_pending`). That is right for several processes: the stored total holds what every
+    process has flushed, and the pending ones are exactly what this process has counted
+    and not flushed (a write that failed earlier is retried, never lost), so nothing is
+    counted twice. A max of memory and the stored total would be wrong across
+    processes, since memory knows only this process's share."""
     db = sinks.shared()
     if db is not None:
         _flush()
@@ -67,7 +74,12 @@ def failure_counts() -> dict[str, int]:
                     "select plugin, interface, failures from plugin_failure"
                     " order by plugin, interface"
                 ).fetchall()
-            return {f"{p}:{i}": n for p, i, n in rows}
+            total = {(p, i): n for p, i, n in rows}
+            with _lock:
+                for (d, p, i), n in _pending.items():
+                    if d is db:
+                        total[(p, i)] = total.get((p, i), 0) + n
+            return {f"{p}:{i}": n for (p, i), n in sorted(total.items())}
         except Exception:  # noqa: BLE001 -- a counter must not break a status call
             _log.warning("plug-in failure counts: shared copy unreachable")
     with _lock:
@@ -84,47 +96,130 @@ def count_failure(plugin: str, interface: str) -> None:
     _count(plugin, interface)
 
 
-_pending: set[threading.Thread] = set()
+# --- the one writer of the shared failure counts ---------------------------------
+# A caught failure is counted in memory at once and queued here; ONE daemon thread
+# (started on the first count with a database bound, stopped by `sinks.stop`) stores
+# the queue, one upsert per key and one connection per flush, so a plug-in route that
+# faults on every request costs a dict update, not a thread and a connection each.
+# Off the caller's thread because the caller may be inside a transaction of its own
+# (the answer hook is), and on SQLite a second writer would wait for that commit.
+_MAX_PENDING_KEYS = 1000
+_RETRY_SECONDS = 2.0
+_pending: dict[tuple[object, str, str], int] = {}
+_cond = threading.Condition(_lock)
+_wake = threading.Event()
+_writer: threading.Thread | None = None
+_writer_stop: threading.Event | None = None
+_writing = False
+_store_failing = False
 
 
 def _count(plugin: str, interface: str) -> None:
+    global _writer, _writer_stop
+    db = sinks.shared()
     with _lock:
         _failures[(plugin, interface)] = _failures.get((plugin, interface), 0) + 1
-    db = sinks.shared()
-    if db is None:
-        return
-    # On its own thread: the caller may be inside a transaction of its own (the answer
-    # hook is), and on SQLite a second writer would wait for that commit.
-    thread = threading.Thread(
-        target=_store_count, args=(db, plugin, interface), daemon=True
-    )
-    with _lock:
-        _pending.add(thread)
-    thread.start()
-
-
-def _store_count(db, plugin: str, interface: str) -> None:
-    try:
-        with db.connect() as conn, conn.transaction():
-            conn.execute(
-                "insert into plugin_failure (plugin, interface, failures)"
-                " values (%s, %s, 1) on conflict (plugin, interface)"
-                " do update set failures = plugin_failure.failures + 1",
-                (plugin, interface),
+        if db is None:
+            return
+        key = (db, plugin, interface)
+        if key in _pending or len(_pending) < _MAX_PENDING_KEYS:
+            _pending[key] = _pending.get(key, 0) + 1
+        if _writer is None or not _writer.is_alive():
+            _writer_stop = threading.Event()
+            _writer = threading.Thread(
+                target=_write_loop,
+                args=(_writer_stop,),
+                name="plugin-failure-writer",
+                daemon=True,
             )
+            _writer.start()
+    _wake.set()
+
+
+def _store(batch: dict[tuple[object, str, str], int]) -> None:
+    """Store `batch`, one connection per database, one upsert per key."""
+    by_db: dict[object, list[tuple[str, str, int]]] = {}
+    for (db, plugin, interface), n in batch.items():
+        by_db.setdefault(db, []).append((plugin, interface, n))
+    for db, items in by_db.items():
+        with db.connect() as conn, conn.transaction():
+            for plugin, interface, n in items:
+                conn.execute(
+                    "insert into plugin_failure (plugin, interface, failures)"
+                    " values (%s, %s, %s) on conflict (plugin, interface)"
+                    " do update set failures = plugin_failure.failures + %s",
+                    (plugin, interface, n, n),
+                )
+
+
+def _flush_once() -> bool:
+    """Store what is pending. On a failure the increments go back (bounded) and the
+    failure is logged once per streak. Returns whether it all went in."""
+    global _writing, _store_failing
+    with _cond:
+        if not _pending:
+            return True
+        batch = dict(_pending)
+        _pending.clear()
+        _writing = True
+    ok = True
+    try:
+        _store(batch)
     except Exception:  # noqa: BLE001 -- the in-memory count stands
-        _log.warning("plug-in failure count not stored", exc_info=True)
-    finally:
-        with _lock:
-            _pending.discard(threading.current_thread())
+        ok = False
+    with _cond:
+        if ok:
+            _store_failing = False
+        else:
+            for key, n in batch.items():
+                if key in _pending or len(_pending) < _MAX_PENDING_KEYS:
+                    _pending[key] = _pending.get(key, 0) + n
+            if not _store_failing:
+                _log.warning("plug-in failure counts not stored", exc_info=True)
+            _store_failing = True
+        _writing = False
+        _cond.notify_all()
+    return ok
+
+
+def _write_loop(stop: threading.Event) -> None:
+    while not stop.is_set():
+        _wake.wait()
+        _wake.clear()
+        if stop.is_set():
+            break
+        while not stop.is_set() and not _flush_once():
+            if stop.wait(_RETRY_SECONDS):  # down: try again shortly, not in a spin
+                break
+    _flush_once()  # last try on the way out
+
+
+def stop_writer(timeout: float = 2.0) -> None:
+    """Stop the writer (after one last try to store) and forget what is queued.
+    `sinks.stop` calls it; the next count starts a new one."""
+    global _writer, _writer_stop, _store_failing
+    with _lock:
+        thread, flag = _writer, _writer_stop
+        _writer = _writer_stop = None
+    if flag is not None:
+        flag.set()
+        _wake.set()
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(timeout)
+    with _cond:
+        _pending.clear()
+        _store_failing = False
+        _cond.notify_all()
 
 
 def _flush(timeout: float = 5.0) -> None:
-    """Wait for the counts still being stored (a status call wants them in)."""
-    with _lock:
-        threads = list(_pending)
-    for t in threads:
-        t.join(timeout)
+    """Wait for the writer to go idle (a status call wants the counts in). Gives up
+    at once while the database is failing: the pending ones are added in memory."""
+    _wake.set()
+    with _cond:
+        _cond.wait_for(
+            lambda: _store_failing or (not _pending and not _writing), timeout
+        )
 
 
 class PluginAPI:

@@ -178,6 +178,20 @@ def _shared_or_none(work):
         return None
 
 
+def _shared_read_or_none(work):
+    """Like `_shared_or_none` for a read: a plain connection, no transaction (on SQLite
+    `transaction()` is BEGIN IMMEDIATE, a writer lock taken for a read)."""
+    db = _shared
+    if db is None:
+        return None
+    try:
+        with db.connect() as conn:
+            return (work(conn),)
+    except Exception:  # noqa: BLE001 -- a breaker must never stop a delivery
+        _log.warning("sink breaker state: shared copy unreachable", exc_info=True)
+        return None
+
+
 def breaker_peek(name: str, now: datetime) -> bool:
     """Whether a delivery to `name` could be tried now: closed, or the cooldown has
     passed. Read-only: it spends no trial, so it is safe to ask about every sink."""
@@ -188,7 +202,7 @@ def breaker_peek(name: str, now: datetime) -> bool:
         ).fetchone()
         return row is None or row[0] is None or now >= row[0]
 
-    got = _shared_or_none(work)
+    got = _shared_read_or_none(work)
     if got is not None:
         return got[0]
     with _lock:
@@ -281,7 +295,7 @@ def open_breakers(now: datetime | None = None) -> dict[str, str]:
         ).fetchall()
         return {r[0]: r[1].isoformat() for r in rows if r[1] > when}
 
-    got = _shared_or_none(work)
+    got = _shared_read_or_none(work)
     if got is not None:
         return got[0]
     with _lock:
@@ -632,7 +646,10 @@ def stop(timeout: float = 5.0) -> None:
     """Ask the sender to stop and wait briefly for it (a deliver in flight is
     bounded by DELIVER_TIMEOUT_SECONDS, so it may outlast `timeout`)."""
     global _thread, _stop
+    from ream import plugin_api
+
     bind(None)
+    plugin_api.stop_writer(timeout)
     with _lock:
         thread, flag = _thread, _stop
         if flag is not None:

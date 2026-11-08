@@ -659,10 +659,18 @@ drivers; CI only (not on baba).
    trial is taken by exactly one process. **Choices:** (a) with no database bound (the command
    line tools, unit tests) or one that cannot be reached, the old in-memory copy answers, so
    a breaker can never stop a delivery by failing itself; (b) failure counts are
-   written on a short-lived thread, because the caller may be inside its own transaction (the
-   answer hook is) and on SQLite a second writer would wait for that commit; the in-memory
-   count is always kept and `failure_counts()` reads the database total after waiting for
-   the stores in flight; (c) `late_failures` (after-commit raises) stays per process: it is a
+   counted in memory at once and stored by ONE long-lived daemon writer (started on the first
+   count with a database bound, stopped by `sinks.stop()`), which coalesces the queued
+   increments into one upsert per key and one connection per flush, off the caller's thread
+   because the caller may be inside its own transaction (the answer hook is) and on SQLite a
+   second writer would wait for that commit; a route faulting on every request therefore costs
+   a dict update, not a thread and a Postgres connection each; if the database is down the
+   increments stay queued (bounded to 1000 keys), the writer retries every two seconds and
+   logs once per failure streak; `failure_counts()` waits (bounded) for the writer to go idle
+   and reports the stored total plus this process's still-unstored increments, so another
+   process's share is kept and nothing is counted twice; `breaker_peek` and `open_breakers`
+   read on a plain connection, not a write transaction (on SQLite that is `begin immediate`);
+   (c) `late_failures` (after-commit raises) stays per process: it is a
    process counter by its own wording and has no breaker meaning. CI job `core-bare`
    (`.forgejo/workflows/ci.yml`): asserts no `ream.plugins`/`artifacts.plugins` entry point is
    installed, sets `REAM_PLUGINS=none`, and runs the whole suite on Postgres and on SQLite
