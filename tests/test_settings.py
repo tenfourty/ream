@@ -232,3 +232,41 @@ def test_the_cli_endpoint_keeps_the_house_default_until_the_plugin_has_it(monkey
     assert client._api_base() == "https://artifacts.tenfourty.site/api/v1"
     monkeypatch.setenv("REAM_API", "http://127.0.0.1:8000/api/v1")
     assert client._api_base() == "http://127.0.0.1:8000/api/v1"
+
+
+@pytest.mark.parametrize(
+    ("values", "problem"),
+    [
+        ({"mcp_public_url": "https://artifacts.tenfourty.site"}, None),
+        ({"mcp_public_url": "https://ARTIFACTS.tenfourty.site:443"}, None),
+        (
+            {
+                "mcp_public_url": "https://api.tenfourty.site",
+                "api_host": "api.tenfourty.site",
+            },
+            None,
+        ),
+        ({"mcp_public_url": "https://artifacts.tenfourty.site/mcp"}, "an origin"),
+        ({"mcp_public_url": "https://artifacts.tenfourty.site/"}, "an origin"),
+        ({"mcp_public_url": "artifacts.tenfourty.site"}, "an origin"),
+        ({"mcp_public_url": "http://artifacts.tenfourty.site"}, "must be https"),
+        ({"mcp_public_url": "https://elsewhere.example"}, "gallery origin"),
+        ({"mcp_accept_keys": "1"}, None),
+        ({"mcp_accept_keys": "maybe"}, "REAM_MCP_ACCEPT_KEYS must be 1 or 0"),
+        ({"mcp_accept_keys": "0"}, "needs sign-in"),
+    ],
+)
+def test_the_mcp_settings_are_checked_at_start(values, problem):
+    with settings.override(**values) as current:
+        found = [p for p in current.problems() if "MCP" in p]
+    if problem is None:
+        assert found == []
+    else:
+        assert len(found) == 1 and problem in found[0], found
+        assert "elsewhere.example" not in found[0]
+
+
+def test_mcp_takes_keys_unless_told_not_to():
+    assert settings.current().mcp_accepts_keys() is True
+    with settings.override(mcp_accept_keys="0") as current:
+        assert current.mcp_accepts_keys() is False

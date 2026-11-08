@@ -10,6 +10,7 @@ from ream.api import agent_card_response, agent_router
 from ream.content import create_content_app
 from ream.db import Database
 from ream.gallery import gallery_router
+from ream.mcp import mcp_router
 from ream.store import gallery_origin
 
 
@@ -128,7 +129,9 @@ def create_gallery_app(
         return {"status": "ok"}
 
     if db is not None:
+        limiter = limiter or ratelimit.FailedAuthLimiter()
         app.include_router(agent_router(db, limiter))
+        app.include_router(mcp_router(db, limiter))
         app.include_router(gallery_router(db))
         _well_known(app)
     return app
@@ -193,7 +196,9 @@ def create_api_app(
         )
 
     if db is not None:
+        limiter = limiter or ratelimit.FailedAuthLimiter()
         app.include_router(agent_router(db, limiter))
+        app.include_router(mcp_router(db, limiter))
         _well_known(app)
     return app
 

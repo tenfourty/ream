@@ -60,6 +60,7 @@ new name; published pages never change owner by accident.
 | Setting names, new and old (`REAM_X`, `ARTIFACTS_X`) | `src/ream/envnames.py` |
 | The old import name `artifacts` (a shim; `artifacts.X` is the `ream.X` module) | `src/artifacts/__init__.py` |
 | Admin commands (keys, scopes, renames) | `src/ream/admin.py` -> `artifacts-admin` |
+| MCP at `/mcp` (transport, tool registry, the content fence) | `src/ream/mcp.py`; trying it: `docs/mcp.md` |
 | The owner: settings, the stored id, its start-up guard | `src/ream/settings.py`, `src/ream/owner.py` |
 | The Postgres <-> SQLite copier and its verifier | `src/ream/migrate.py` |
 | The logo: its drawings, and the gallery's bar mark and tab icon cut from them | `src/ream/brand/`, `src/ream/logo.py` |
@@ -101,6 +102,9 @@ after a move: on it `/api/v1/*` (both words) and `/healthz` are served as on the
 differ from the gallery host and `REAM_API_HOST`. Runbook: `docs/agent/runbooks/former-host.md`.
 `REAM_PLUGINS` picks which installed `ream.plugins` (or old `artifacts.plugins`) entry points load at server start (unset: all;
 `none`: none; `a,b`: only those, and an unknown name stops start-up); see `src/ream/plugin_api.py`.
+`REAM_MCP_PUBLIC_URL` turns on `/mcp` (MCP over stateless HTTP, `src/ream/mcp.py`) on that origin, which must be
+the gallery origin or `https://<REAM_API_HOST>` (unset: 404); `REAM_MCP_ACCEPT_KEYS` says whether it takes agent keys
+(unset: yes; `0` refuses to start until browser sign-in exists). How to try it: `docs/mcp.md`.
 `REAM_SINKS_FILE` (also `ARTIFACTS_SINKS_FILE`; unset: none) names a TOML file of `[[sink]]` signed-webhook sinks that
 need no plug-in: format, signing and the addresses it refuses are in `docs/plugins.md` and `src/ream/webhook.py`.
 
