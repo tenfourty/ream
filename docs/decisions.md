@@ -330,3 +330,11 @@ internet can reach.
 
 **Evidence:** the behaviour of the old address: confirmed (Jeremy, 8 Nov 2026). The maintainer's own
 calls: unconfirmed.
+
+## Commenting on a page: compare three designs on a prototype before changing it (8 Nov 2026)
+
+**Chosen:** the owner compares three designs on a clickable prototype and then picks one; the live pages
+do not change until he has. The aim is a clean page with no text button on it and no hidden knowledge
+needed to comment, replacing the corner Comment button chosen on 5 Nov.
+
+**Not chosen:** building the hybrid or the quiet design straight away, without seeing them side by side.
