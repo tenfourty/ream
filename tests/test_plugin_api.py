@@ -281,14 +281,84 @@ def test_a_raising_hook_rolls_the_answer_back_naming_the_plugin(db, world, caplo
     assert "toy" in str(err.value) and "secret" not in str(err.value)
     assert "secret" not in caplog.text
     with db.connect() as conn:
-        (answer,) = conn.execute(
-            "select answer from decision where id = %s", (q.id,)
+        (answer, answered_at, acked_at) = conn.execute(
+            "select answer, answered_at, acknowledged_at from decision where id = %s",
+            (q.id,),
         ).fetchone()
         (n,) = conn.execute(
             "select count(*) from event where kind = 'decision_answered'"
         ).fetchone()
+        (outbox,) = conn.execute("select count(*) from outbox").fetchone()
+        (partner,) = conn.execute("select count(*) from partner_outbox").fetchone()
     assert answer is None and n == 0  # not half-applied
+    assert answered_at is None and acked_at is None
+    assert outbox == 0 and partner == 0
     assert plugin_api.failure_counts() == {"toy:on_answer": 1}
+
+
+def test_a_second_plugins_hook_stays_quiet_for_the_first_plugins_source(db, world):
+    seen = []
+
+    def one(api):
+        api.answer_source("chat-one", "One")
+        api.on_answer("mark", lambda c, d, a: seen.append(("one", a.source)))
+
+    def two(api):
+        api.answer_source("chat-two", "Two")
+        api.on_answer("mark", lambda c, d, a: seen.append(("two", a.source)))
+
+    world(EP("one", _with_module(one, "1")), EP("two", _with_module(two, "1")))
+    plugin_api.load()
+    decisions.answer(db, _ask(db).id, letter="a", by="owner", source="chat-one")
+    assert seen == [("one", "chat-one")]
+
+
+def test_record_elsewhere_does_not_run_the_hook(db, world):
+    seen = []
+
+    def register(api):
+        api.answer_source("toy-chat", "Toy", relay=True)
+        api.on_answer("mark", lambda c, d, a: seen.append(a.source))
+
+    world(EP("toy", _with_module(register, "1")))
+    plugin_api.load()
+    decisions.record_elsewhere(
+        db,
+        _ask(db).id,
+        letter="a",
+        note="said so",
+        source="toy-chat",
+        recorded_by="seat-a",
+    )
+    assert seen == []
+
+
+@pytest.mark.parametrize("name", ["slack", "page"])
+def test_a_plugin_cannot_register_slack_or_page(world, name):
+    def register(api):
+        api.answer_source(name, "Mine", relay=True)
+
+    world(EP("toy", _with_module(register, "1")))
+    with pytest.raises(plugin_api.PluginError, match="toy"):
+        plugin_api.load()
+    assert name not in decisions.relay_sources()
+
+
+def test_an_unregistered_source_is_still_refused(db, world):
+    world()
+    with pytest.raises(decisions.InvalidSource):
+        decisions.answer(db, _ask(db).id, letter="a", by="owner", source="nope")
+
+
+def test_the_same_hook_name_twice_from_a_plugin_is_refused(world):
+    def register(api):
+        api.answer_source("toy-chat", "Toy")
+        api.on_answer("mark", lambda *a: None)
+        api.on_answer("mark", lambda *a: None)
+
+    world(EP("toy", _with_module(register, "1")))
+    with pytest.raises(plugin_api.PluginError, match="toy"):
+        plugin_api.load()
 
 
 def test_on_answer_needs_an_answer_source_first_and_stops_start_up(world):

@@ -1117,6 +1117,11 @@ _RELAY: list[str] = []
 _VERIFIED_LABELS: dict[str, str] = {}
 _ROUTE_LABELS: dict[str, str] = {}
 
+# Names no plug-in may register: 'slack' means quarterdeck verified who pressed, and
+# core's partner bridge alone stores it; a plug-in taking it with relay=True would let
+# an agent key record answers stamped as Slack-verified.
+_RESERVED_SOURCES = ("page", "slack")
+
 _SOURCE_NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 
 
@@ -1137,7 +1142,7 @@ def register_source(
     `route_label_of`."""
     if not isinstance(name, str) or not _SOURCE_NAME.match(name):
         raise ValueError(f"answer source {name!r}: lower-case letters, digits, hyphens")
-    if name in CORE_SOURCES:
+    if name in CORE_SOURCES or name in _RESERVED_SOURCES:
         raise ValueError(f"answer source {name!r} is core's")
     if label is not None:
         if not isinstance(label, str) or not label.strip() or len(label) > 40:
@@ -1191,7 +1196,12 @@ def register_answer_hook(
 ) -> None:
     """Run `fn(conn, decision, answer)` inside the transaction of every answer whose
     stored source is one of `sources` (the plug-in's own), after the row is written and
-    before the commit. A raise aborts the answer as `AnswerHookFailed`."""
+    before the commit. A raise aborts the answer as `AnswerHookFailed`. Only `answer()`
+    runs hooks, not `record_elsewhere`: a hook is for answers the person gave through
+    the plug-in's own inbound path, never for an agent's relay of what he said. A
+    second hook of the same (plug-in, name) is refused."""
+    if any(p == plugin and n == name for p, n, _f, _s in _ANSWER_HOOKS):
+        raise ValueError(f"plug-in {plugin!r}: on_answer hook {name!r} is registered")
     _ANSWER_HOOKS.append((plugin, name, fn, sources))
 
 

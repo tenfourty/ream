@@ -13,7 +13,10 @@ that does not start.
 A sink a plug-in registers is wrapped: when `deliver` raises, the failure is logged with the
 plug-in and interface and counted per plug-in (`failure_counts()`; also under
 `plugin_failures` in `sinks.status()`), and then raised on, so the outbox retries and an
-after-commit failure is dropped by the machinery that already does both.
+after-commit failure is dropped by the machinery that already does both. A timeout is
+not counted there: the outbox gives up waiting while the plug-in's `deliver` is still
+running, so the wrapper sees no failure; the outbox row's `last_error` says
+`TimeoutError`, and the circuit breaker counts it.
 """
 
 from __future__ import annotations
@@ -126,7 +129,9 @@ class PluginAPI:
         answer's transaction, after the row is written and before the commit, for answers
         stored with a source THIS plug-in registered (`answer_source`, called first: a
         plug-in with none is refused, so the hook stays with the plug-in that vouches
-        for its own inbound answers). `answer` is a `decisions.Answer`. A raise aborts
+        for its own inbound answers). It is for answers the person gave through the
+        plug-in's own inbound path (`decisions.answer`), NOT for relays: an agent's
+        `record_elsewhere` never runs it. `answer` is a `decisions.Answer`. A raise aborts
         the whole answer (`decisions.AnswerHookFailed`, naming the plug-in)."""
         if not self._sources:
             raise ValueError(

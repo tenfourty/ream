@@ -216,7 +216,9 @@ once-only marker per subject and stage) is the chasing design's table, not this 
    is written and before the commit; raising aborts the whole answer. Only an answer-source
    plug-in that vouches for its own inbound answers may use it (today: `partner_in`, which marks
    the question answered as the owner via the partner and must not half-apply). Everything else is
-   a sink.
+   a sink. The hook is for answers the person gave through the plug-in's own inbound path
+   (`decisions.answer`); an agent's relay (`record_elsewhere`) never runs it. `slack` and `page` are
+   reserved names: no plug-in may register them as a source.
 4. **Scanner.** `api.scanner(name, scan, on_error="skip"|"block")`: `scan(text) -> list[Finding]`,
    called alongside the core's pattern scan on publish and on comment save
    (`store.py:449`, `comments.py:1639`). `on_error` preserves today's `ggscan` behaviour exactly
@@ -557,7 +559,7 @@ drivers; CI only (not on baba).
    (`answer_source` first, else start-up stops); a raise aborts the answer as
    `decisions.AnswerHookFailed` naming the plug-in, and is counted as `<plug-in>:on_answer`.
    `decisions.answer` accepts any registered source, not only `page`/`slack`. Circuit breaker in
-   `sinks.py`, per sink, per process: 5 failures running (a raise or a timeout) open it for 60 s;
+   `sinks.py`, per sink, per process: 5 failures running (a raise or a timeout), from at least two different rows, open it for 60 s;
    outbox rows of an open sink wait uncounted, after-commit deliveries are skipped; after the
    cooldown one trial goes through (success closes, failure re-opens). `sinks.status()` shows
    `open_breakers`. Left for 7b: scanner, mail, cli/client, text and router hooks, CLI loading of
