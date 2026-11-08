@@ -52,7 +52,7 @@ def _save_key(path: Path, key: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog=prog_name("artifacts-connect"),
-        description="connect this machine to {{owner_name}}'s artifacts space; {{owner_they}} approve{{owner_s}} a code",
+        description="connect this machine to {{owner_name}}'s Ream (formerly artifacts); {{owner_they}} approve{{owner_s}} a code. Also run as `ream connect`.",
         formatter_class=client._HelpFormatter,
     )
     parser.add_argument(

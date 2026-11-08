@@ -122,9 +122,7 @@ def _ask(args, key: str) -> dict:
     if args.for_office:
         # Both names: a server from before the rename reads only `for`.
         body["audience"] = body["for"] = args.for_office
-    return _request(
-        "POST", f"{_api_base()}/artifacts/{args.artifact}/decisions", key, body
-    )
+    return _request("POST", f"{_api_base()}/pages/{args.artifact}/decisions", key, body)
 
 
 def _carries(row: dict) -> list[str]:
@@ -642,7 +640,7 @@ def _upload_pictures(
     page: str, base: str, key: str, pictures: list[bytes]
 ) -> list[str]:
     return [
-        _upload_image(f"{base}/artifacts/{page}/comment-images", key, data)["image_id"]
+        _upload_image(f"{base}/pages/{page}/comment-images", key, data)["image_id"]
         for data in pictures
     ]
 
@@ -778,7 +776,7 @@ def _fmt_thread(thread: dict, *, on_page: bool = False) -> str:
 def _open_threads(
     key: str, base: str, page: str | None = None, office: str | None = None
 ) -> list[dict]:
-    url = f"{base}/artifacts/{page}/comments" if page else f"{base}/comments"
+    url = f"{base}/pages/{page}/comments" if page else f"{base}/comments"
     rows = _request("GET", url, key, None)
     me = None
     if any(r.get("author_kind") == "agent" for r in rows):
@@ -1112,13 +1110,13 @@ def _wait(args, key: str, base: str) -> int:
         # published the page whose waiter hears it.
         nonlocal page_sessions
         if page_sessions is None:
-            listed = _request("GET", f"{base}/artifacts", key, None) or []
+            listed = _request("GET", f"{base}/pages", key, None) or []
             page_sessions = {p["id"]: p.get("last_session") for p in listed}
         return page_sessions.get(thread.get("artifact_id"))
 
     def current() -> list[dict]:
         url = (
-            f"{base}/artifacts/{page}/decisions?include_answered=true"
+            f"{base}/pages/{page}/decisions?include_answered=true"
             if page
             else f"{base}/decisions?include_answered=true&scope=mine"
         )
@@ -1224,9 +1222,7 @@ def _wait(args, key: str, base: str) -> int:
         """This office's questions and reviews on the waited page."""
         nonlocal page_gone
         try:
-            rows = (
-                _request("GET", f"{base}/artifacts/{page}/decisions", key, None) or []
-            )
+            rows = _request("GET", f"{base}/pages/{page}/decisions", key, None) or []
         except HTTPFailure as exc:
             # A BINNED page answers 404 like a missing one: nothing on it is
             # waiting, and the set-aside event already said why.
@@ -1620,9 +1616,7 @@ def _wait_review(args, key: str, base: str) -> int:
         # whose last word is still his -- `_threads`' own "needs your reply" rule
         # -- so replying clears it, and it still travels with the verdict.
         threads = _threads(
-            _request(
-                "GET", f"{base}/artifacts/{review['artifact_id']}/comments", key, None
-            )
+            _request("GET", f"{base}/pages/{review['artifact_id']}/comments", key, None)
         )
         fresh = [
             t
@@ -1730,7 +1724,11 @@ def _wait_review(args, key: str, base: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = _StaleAwareParser(
         prog=prog_name("artifacts-decide"),
-        description="ask {{owner_name}} a lettered question on a page, and read the answer",
+        description=(
+            "Ream (formerly artifacts): ask {{owner_name}} a lettered question on a page, "
+            "and read the answer. Also run as `ream ask`, `ream wait` and so on; this "
+            "older command name still works."
+        ),
         epilog=(
             "A form published in a page (data-artifact-form) is answered in the gallery: "
             "`list`, `answers` and `wait` print its submitted record, one `name: value` "
@@ -2307,7 +2305,7 @@ def main(argv: list[str] | None = None) -> int:
             body = (
                 {"mode": "live"} if args.live else {"mode": "held"} if args.hold else {}
             )
-            row = _request("POST", f"{base}/artifacts/{args.page}/reviews", key, body)
+            row = _request("POST", f"{base}/pages/{args.page}/reviews", key, body)
             # A server older than hold/live ignores the mode and names none; say
             # so rather than print "None" or let --live pass for granted.
             mode = row.get("review_mode") or "unknown, the server predates hold/live"
@@ -2325,7 +2323,7 @@ def main(argv: list[str] | None = None) -> int:
             keep = "false" if args.open_only else "true"
             rows = _request(
                 "GET",
-                f"{base}/artifacts/{args.artifact}/decisions"
+                f"{base}/pages/{args.artifact}/decisions"
                 f"?include_answered={keep}&include_closed={keep}",
                 key,
                 None,
@@ -2467,7 +2465,7 @@ def main(argv: list[str] | None = None) -> int:
                 idempotency_key=args.idempotency_key or str(uuid.uuid4()),
             )
             page_id = written["artifact_id"]
-            page = _request("GET", f"{base}/artifacts/{page_id}", key, None)
+            page = _request("GET", f"{base}/pages/{page_id}", key, None)
             owner = page.get("agent") or "unknown"
             label = page.get("last_session")
             print(
@@ -2548,7 +2546,7 @@ def main(argv: list[str] | None = None) -> int:
             if not text.strip():
                 raise UsageError("nothing to say: the comment text is empty")
             pictures = _read_pictures(args.image)
-            page = _request("GET", f"{base}/artifacts/{args.page}", key, None)
+            page = _request("GET", f"{base}/pages/{args.page}", key, None)
             payload: dict = {"body": text}
             if pictures:
                 payload["images"] = _upload_pictures(args.page, base, key, pictures)
@@ -2560,7 +2558,7 @@ def main(argv: list[str] | None = None) -> int:
                     payload["anchor"]["section"] = args.section
             written = _request(
                 "POST",
-                f"{base}/artifacts/{args.page}/comments",
+                f"{base}/pages/{args.page}/comments",
                 key,
                 payload,
                 idempotency_key=args.idempotency_key or str(uuid.uuid4()),
@@ -2613,7 +2611,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             _request(
                 "POST",
-                f"{base}/artifacts/{thread['artifact_id']}/comments",
+                f"{base}/pages/{thread['artifact_id']}/comments",
                 key,
                 {
                     "body": args.text,

@@ -182,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog=prog_name("artifacts-beads-page"),
         description=(
-            "Print a status page drawn from a seat's beads (the children of one "
+            "Print a status page for Ream (formerly artifacts), drawn from a seat's beads (the children of one "
             "parent). Put it in ~/.config/artifacts/pages.toml as a `render` "
             "line and artifacts-republish keeps the page current."
         ),

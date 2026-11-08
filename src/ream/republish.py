@@ -204,7 +204,7 @@ def republish_one(entry: dict, key: str) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Republish this seat's pages from their render commands."
+        description="Republish this seat's pages on Ream (formerly artifacts) from their render commands."
     )
     parser.add_argument(
         "--config", help="override ~/.config/artifacts/pages.toml", default=None

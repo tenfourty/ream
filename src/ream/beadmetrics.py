@@ -194,7 +194,7 @@ def _velocity(closed: list[dict], today: date, age: int | None) -> dict | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="An arc's counts and velocity from the beads tracker, as JSON."
+        description="An arc's counts and velocity from the beads tracker, as JSON, for a page on Ream (formerly artifacts)."
     )
     parser.add_argument(
         "--prefix", required=True, help="bead id prefix, e.g. homelab-ij8."

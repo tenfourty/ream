@@ -637,7 +637,7 @@ def _raw_request(
 
 
 def _upload_image(url: str, key: str, data: bytes) -> dict:
-    """POST one picture to `/artifacts/<id>/comment-images` as multipart/form-data."""
+    """POST one picture to `/pages/<id>/comment-images` as multipart/form-data."""
     boundary = "----artifacts-" + uuid.uuid4().hex
     body = (
         (
@@ -704,7 +704,7 @@ def _move(
     body: dict = {"ids": ids, "folder": folder}
     if folder_title and folder is not None:
         body["folder_title"] = folder_title
-    return _request("POST", f"{_api_base()}/artifacts/move", key, body)
+    return _request("POST", f"{_api_base()}/pages/move", key, body)
 
 
 def _folder_action(args, key: str) -> int | None:
@@ -846,7 +846,7 @@ def _publish(
     }
     if refresh_every:
         payload["refresh_every"] = refresh_every
-    return _request("POST", f"{_api_base()}/artifacts", key, payload)
+    return _request("POST", f"{_api_base()}/pages", key, payload)
 
 
 def _rendered(file_path: str, key: str, title: str | None = None) -> str:
@@ -862,7 +862,7 @@ def _rendered(file_path: str, key: str, title: str | None = None) -> str:
 
 
 def _read_current(artifact_id: str, key: str) -> dict:
-    return _request("GET", f"{_api_base()}/artifacts/{artifact_id}", key, None)
+    return _request("GET", f"{_api_base()}/pages/{artifact_id}", key, None)
 
 
 def _patch(
@@ -913,7 +913,7 @@ def _patch(
     if refresh_every is not None:
         payload["refresh_every"] = refresh_every  # 0 clears it
     try:
-        return _request("PATCH", f"{_api_base()}/artifacts/{artifact_id}", key, payload)
+        return _request("PATCH", f"{_api_base()}/pages/{artifact_id}", key, payload)
     except HTTPFailure as exc:
         if exc.status != 409:
             raise
@@ -1019,9 +1019,7 @@ def _touch(args, key: str) -> int:
     elif args.refresh_every:
         payload["refresh_every"] = parse_interval(args.refresh_every)
     try:
-        done = _request(
-            "POST", f"{_api_base()}/artifacts/{args.touch}/touch", key, payload
-        )
+        done = _request("POST", f"{_api_base()}/pages/{args.touch}/touch", key, payload)
     except HTTPFailure as exc:
         if exc.status != 409:
             raise
@@ -1059,7 +1057,7 @@ def _touch(args, key: str) -> int:
 
 
 def _versions(artifact_id: str, key: str) -> list[dict]:
-    return _request("GET", f"{_api_base()}/artifacts/{artifact_id}/versions", key, None)
+    return _request("GET", f"{_api_base()}/pages/{artifact_id}/versions", key, None)
 
 
 # C0/C1 controls (ESC included), DEL, and the bidi overrides that reorder what
@@ -1104,7 +1102,7 @@ def _print_versions(rows: list[dict]) -> None:
 def _fetch(artifact_id: str, key: str, version: int | None = None) -> str:
     """The page's own HTML, back to the agent that published it.
 
-    `GET /artifacts/{id}/body` has existed since 19 Sep and nobody could find
+    `GET /pages/{id}/body` has existed since 19 Sep and nobody could find
     it. On 21 Sep a seat lost a page's source to a tmpfs scratchpad, guessed
     /source, /content, /html, /versions, /revisions and /history, got 404 from
     every one, and concluded a live page was permanently un-updatable. Its own
@@ -1119,9 +1117,9 @@ def _fetch(artifact_id: str, key: str, version: int | None = None) -> str:
     # is then this plus an ordinary update -- no new verb, and the roll-back
     # lands as a new version rather than rewriting history.
     where = (
-        f"/artifacts/{artifact_id}/versions/{version}"
+        f"/pages/{artifact_id}/versions/{version}"
         if version is not None
-        else f"/artifacts/{artifact_id}/body"
+        else f"/pages/{artifact_id}/body"
     )
     got = _request("GET", f"{_api_base()}{where}", key, None)
     body = got.get("body")
@@ -1138,7 +1136,7 @@ def _fetch(artifact_id: str, key: str, version: int | None = None) -> str:
 
 def _section_url(artifact_id: str, element_id: str) -> str:
     return (
-        f"{_api_base()}/artifacts/{quote(artifact_id, safe='')}"
+        f"{_api_base()}/pages/{quote(artifact_id, safe='')}"
         f"/sections/{quote(element_id, safe='')}"
     )
 
@@ -1283,12 +1281,12 @@ def _list(key: str, everyone: bool = False, folder: str | None = None) -> list[d
     if folder is not None:
         return _request(
             "GET",
-            f"{_api_base()}/folders/{quote(folder, safe='')}/artifacts",
+            f"{_api_base()}/folders/{quote(folder, safe='')}/pages",
             key,
             None,
         )
     scope = "?scope=all" if everyone else ""
-    return _request("GET", f"{_api_base()}/artifacts{scope}", key, None)
+    return _request("GET", f"{_api_base()}/pages{scope}", key, None)
 
 
 def _shelf(action: str, artifact_id: str, key: str, payload: dict) -> dict:
@@ -1303,9 +1301,7 @@ def _shelf(action: str, artifact_id: str, key: str, payload: dict) -> dict:
     agent that published a page months ago, and no longer has the file, can
     still fix its name or take it off the wall.
     """
-    return _request(
-        "POST", f"{_api_base()}/artifacts/{artifact_id}/{action}", key, payload
-    )
+    return _request("POST", f"{_api_base()}/pages/{artifact_id}/{action}", key, payload)
 
 
 def _inline_scripts(body: str) -> list[tuple[int, str]]:
@@ -1485,7 +1481,7 @@ def _report_render(artifact_id: str, key: str) -> None:
     while time.monotonic() < deadline:
         try:
             report = _request(
-                "GET", f"{_api_base()}/artifacts/{artifact_id}/render", key, None
+                "GET", f"{_api_base()}/pages/{artifact_id}/render", key, None
             )
         except HTTPFailure:
             return
@@ -1692,7 +1688,14 @@ class _Parser(argparse.ArgumentParser):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = _Parser(prog=prog_name("artifacts-publish"))
+    parser = _Parser(
+        prog=prog_name("artifacts-publish"),
+        description=(
+            "Publish a page to Ream (formerly artifacts), update it, list and "
+            "fetch pages. Also run as `ream publish`; this older command name "
+            "still works."
+        ),
+    )
     parser.add_argument(
         "file",
         nargs="?",
@@ -2272,9 +2275,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.delete:
             print(
                 json.dumps(
-                    _request(
-                        "DELETE", f"{_api_base()}/artifacts/{args.delete}", key, None
-                    )
+                    _request("DELETE", f"{_api_base()}/pages/{args.delete}", key, None)
                 )
             )
             print(
@@ -2288,7 +2289,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             moved = _request(
                 "POST",
-                f"{_api_base()}/artifacts/{args.give}/transfer",
+                f"{_api_base()}/pages/{args.give}/transfer",
                 key,
                 {"to": args.to},
             )
@@ -2301,13 +2302,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.restore:
             _print_shelf(
-                _request(
-                    "POST", f"{_api_base()}/artifacts/{args.restore}/restore", key, {}
-                )
+                _request("POST", f"{_api_base()}/pages/{args.restore}/restore", key, {})
             )
             return 0
         if args.deleted:
-            rows = _request("GET", f"{_api_base()}/artifacts/deleted", key, None)
+            rows = _request("GET", f"{_api_base()}/pages/deleted", key, None)
             if not rows:
                 print("nothing in the bin")
             for item in rows:
