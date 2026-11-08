@@ -36,7 +36,7 @@ artifacts-admin = "ream.admin:main"
 artifacts-publish = "ream.client:run"
 artifacts-decide = "ream.decide:run"
 artifacts-bead-metrics = "ream.beadmetrics:main"
-artifacts-republish = "ream.republish:main"
+artifacts-republish = "ream.republish:run"
 artifacts-connect = "ream.connect_cli:run"
 artifacts-beads-page = "ream.beadpage:run"
 

@@ -36,7 +36,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 
-from ream import settings, templates, textvars
+from ream import plugin_cli, settings, templates, textvars
 from ream.cli import prog_name
 
 BD_ENV = "REAM_BD"
@@ -205,4 +205,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run() -> None:
+    # The console script only: the page's links start from the API endpoint,
+    # which a plug-in may supply (`client_defaults(api_url=...)`).
+    plugin_cli.load_or_exit()
     sys.exit(main())

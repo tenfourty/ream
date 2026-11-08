@@ -402,21 +402,21 @@ def test_a_plugin_session_value_must_be_a_plain_label(world, monkeypatch):
 
 
 def test_every_cli_entry_point_loads_the_plugins(monkeypatch):
-    from ream import connect_cli, decide
+    from ream import beadpage, connect_cli, decide, republish
 
     calls = []
     monkeypatch.setattr(sys, "argv", list(sys.argv))
     monkeypatch.setattr(plugin_cli, "load_or_exit", lambda: calls.append("load"))
     monkeypatch.setattr(news, "announce", lambda *a, **k: None)
-    for module in (client, decide, connect_cli):
+    for module in (client, decide, connect_cli, republish, beadpage):
         monkeypatch.setattr(module, "main", lambda *a, **k: 0)
         with pytest.raises(SystemExit):
             module.run()
-    assert calls == ["load"] * 3
+    assert calls == ["load"] * 5
     monkeypatch.setattr(sys, "argv", ["ream", "--help"])
     with pytest.raises(SystemExit):
         cli.main(["--help"])
-    assert calls == ["load"] * 4
+    assert calls == ["load"] * 6
 
 
 def test_a_global_flag_may_come_before_a_plugin_verb(world, monkeypatch):

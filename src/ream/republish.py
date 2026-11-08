@@ -46,7 +46,7 @@ import tomllib
 from datetime import datetime
 from pathlib import Path
 
-from ream import client, envnames
+from ream import client, envnames, plugin_cli
 
 RENDER_TIMEOUT = 120
 
@@ -239,5 +239,12 @@ def main(argv: list[str] | None = None) -> int:
     return 1 if failed else 0
 
 
+def run() -> None:
+    # In run(), not main(): the console script only. A plug-in may supply the
+    # endpoint (`client_defaults(api_url=...)`) that `client._update` resolves.
+    plugin_cli.load_or_exit()
+    sys.exit(main())
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    run()
