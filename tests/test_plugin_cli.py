@@ -94,14 +94,17 @@ def test_a_plugin_verb_fault_prints_the_type_only(world, capsys):
         "",
     ],
 )
-def test_a_plugin_may_not_take_a_reserved_or_malformed_verb(world, verb):
+def test_a_plugin_may_not_take_a_reserved_or_malformed_verb(world, monkeypatch, verb):
+    # Naming the plug-in makes a failure stop; the default selection skips it instead.
+    monkeypatch.setenv("REAM_PLUGINS", "toy")
     world(EP("toy", lambda api: api.cli(verb, lambda: 0, "x")))
     with pytest.raises(plugin_cli.PluginError) as err:
         plugin_cli.load_for_cli()
     assert "'toy'" in str(err.value)
 
 
-def test_two_plugins_cannot_share_a_verb(world):
+def test_two_plugins_cannot_share_a_verb(world, monkeypatch):
+    monkeypatch.setenv("REAM_PLUGINS", "a,b")
     world(
         EP("a", lambda api: api.cli("same", lambda: 0, "x")),
         EP("b", lambda api: api.cli("same", lambda: 0, "y")),
@@ -111,7 +114,9 @@ def test_two_plugins_cannot_share_a_verb(world):
     assert "'b'" in str(err.value)
 
 
-def test_load_or_exit_stops_the_tool_naming_the_plugin(world, capsys):
+def test_load_or_exit_stops_the_tool_naming_the_plugin(world, monkeypatch, capsys):
+    monkeypatch.setenv("REAM_PLUGINS", "toy")
+
     def bad(api):
         raise RuntimeError("leaky-text")
 
@@ -191,7 +196,8 @@ def test_client_defaults_endpoint_applies_only_when_ream_api_is_unset(
         7,
     ],
 )
-def test_a_bad_endpoint_is_refused_and_changes_nothing(world, url):
+def test_a_bad_endpoint_is_refused_and_changes_nothing(world, monkeypatch, url):
+    monkeypatch.setenv("REAM_PLUGINS", "toy")
     world(EP("toy", lambda api: api.client_defaults(api_url=url, session_envs=["A"])))
     with pytest.raises(plugin_cli.PluginError):
         plugin_cli.load_for_cli()
@@ -199,7 +205,8 @@ def test_a_bad_endpoint_is_refused_and_changes_nothing(world, url):
     assert plugin_cli.session_envs() == []
 
 
-def test_only_one_plugin_supplies_the_endpoint(world):
+def test_only_one_plugin_supplies_the_endpoint(world, monkeypatch):
+    monkeypatch.setenv("REAM_PLUGINS", "a,b")
     world(
         EP("a", lambda api: api.client_defaults(api_url="https://a.example/api")),
         EP("b", lambda api: api.client_defaults(api_url="https://b.example/api")),
