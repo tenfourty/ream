@@ -29,6 +29,8 @@ class MailFailed(Exception):
 # The mail backend a plug-in registered (core-and-plugins design, 4.2 item 5): one at
 # most. With none, the built-in Mailgun code below is the backend (it moves out in 9b).
 _backend: tuple[str, Callable, Callable] | None = None
+# A raising `enabled` is logged once per process (gallery asks on every render).
+_enabled_fault_logged = False
 
 
 def register_backend(plugin: str, send: Callable, enabled: Callable) -> None:
@@ -39,11 +41,17 @@ def register_backend(plugin: str, send: Callable, enabled: Callable) -> None:
     _backend = (plugin, send, enabled)
 
 
-def _fail(plugin: str, exc: Exception) -> None:
+def _fail(plugin: str, exc: Exception, *, once: bool = False) -> None:
+    global _enabled_fault_logged
     from ream import plugin_api  # late: plugin_api imports the modules that call this
 
     plugin_api.count_failure(plugin, "mail")
-    _log.warning("plug-in %s: mail backend failed: %s", plugin, type(exc).__name__)
+    level = logging.WARNING
+    if once:
+        if _enabled_fault_logged:
+            level = logging.DEBUG
+        _enabled_fault_logged = True
+    _log.log(level, "plug-in %s: mail backend failed: %s", plugin, type(exc).__name__)
 
 
 def enabled() -> bool:
@@ -54,7 +62,7 @@ def enabled() -> bool:
     try:
         return bool(_backend[2]())
     except Exception as exc:  # noqa: BLE001 -- a plug-in may raise anything
-        _fail(_backend[0], exc)
+        _fail(_backend[0], exc, once=True)
         return False
 
 
@@ -64,6 +72,8 @@ def send(to: str, subject: str, text: str) -> None:
     is kept."""
     if _backend is None:
         return _mailgun_send(to, subject, text)
+    if not enabled():
+        raise MailFailed("mail is not configured")
     try:
         _backend[1](to, subject, text)
     except Exception as exc:  # noqa: BLE001 -- a plug-in may raise anything

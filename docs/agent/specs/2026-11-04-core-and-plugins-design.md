@@ -570,11 +570,20 @@ drivers; CI only (not on baba).
    `comments.second_scan`), so a plug-in scanner replaces `ggscan` in place when 9c moves it. Any
    finding refuses as a pattern finding does. A raise or a non-list answer is counted as
    `<plug-in>:scanner`; `skip` judges the text on the rest, `block` fails the publish
-   (`ScanFailed`) or withdraws the comment (`scanner_failed`). `api.mail_backend(name, send,
+   (`ScanFailed`) or leaves the comment unscanned for the sweeper to retry. `api.mail_backend(name, send,
    enabled)` (`mail.py`): one at most (a second stops start-up); `send(to, subject, text)` keeps
    today's three arguments rather than a message object; `mail.enabled()`/`mail.send()` ask it,
    or the built-in Mailgun code when none is registered (it moves out in 9b); a raise becomes
    `MailFailed` (so callers are unchanged) and counts as `<plug-in>:mail`.
+   Review fixes: a `block` scanner fault on a comment's second scan leaves the comment intact and
+   unscanned (the sweeper retries; only a publish fails closed); a clean answer from a plug-in
+   scanner counts as scanned when no relay is configured; a finding's shape must be a non-empty
+   `str` of at most 64 characters, else the answer is a scanner error; each scanner call is
+   bounded (`SCAN_TIMEOUT_SECONDS`; a timeout is a scanner error); a backend whose `enabled()`
+   is false or raises refuses to send (`MailFailed`). **Scope:** plug-in scanners run in
+   ggscan's slot (bodies, previews, `gitguardian=True` fields, agent comments' second scan),
+   not on titles, decision fields or human comments; widening that waits for 9c, when ggscan
+   moves into a plug-in.
 8. **The plug-in repo and its pipeline** (homelab office creates the repo; lander change). It
    builds an image identical to today's from an empty plug-in set, opens a pin PR, and one real
    pin PR is merged as proof before anything moves. Core starts publishing the `-core` image and

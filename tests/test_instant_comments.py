@@ -412,26 +412,82 @@ def test_a_comment_the_relay_always_refuses_does_not_block_a_newer_one(
     assert _stamped(db, new.id) and not _stamped(db, old.id)
 
 
-def test_a_plugin_scanner_finding_withdraws_the_comment(db, page, gg, monkeypatch):
+def _body_state(db, cid):
+    with db.connect() as conn:
+        return conn.execute(
+            "select body, withdrawn_at is not null, withdrawn_kind from comment"
+            " where id = %s",
+            (cid,),
+        ).fetchone()
+
+
+def _toy(monkeypatch, fn, on_error="skip"):
     from ream import scanners
 
     monkeypatch.setattr(scanners, "_SCANNERS", [])
-    scanners.register("toy", "toy", lambda text: [Finding(shape="toy_x", line=1)])
+    scanners.register("toy", "toy", fn, on_error)
+
+
+def _boom(text):
+    raise RuntimeError("leaky detail")
+
+
+def test_a_plugin_scanner_finding_withdraws_the_comment(db, page, gg, monkeypatch):
+    _toy(monkeypatch, lambda text: [Finding(shape="toy_x", line=1)])
     row = _agent_comment(db, page, "fine")
     assert comments.second_scan(db, row.id) == "withdrawn"
     assert comments.list_for_artifact(db, page.id) == []
+    assert _body_state(db, row.id) == ("", True, "toy_x")
 
 
-def test_a_blocking_plugin_scanner_that_fails_withdraws_the_comment(
-    db, page, gg, monkeypatch
+def test_a_failing_block_scanner_leaves_the_comment_intact_and_unscanned(
+    db, page, gg, monkeypatch, caplog
 ):
     from ream import scanners
 
-    monkeypatch.setattr(scanners, "_SCANNERS", [])
+    _toy(monkeypatch, _boom, "block")
+    row = _agent_comment(db, page, "fine")
+    assert comments.second_scan(db, row.id) == "unavailable"
+    assert _body_state(db, row.id) == ("fine", False, None)
+    assert not _stamped(db, row.id)
+    assert "leaky detail" not in caplog.text
+    # the sweeper retries once the scanner works again
+    _age(db, row.id)
+    scanners._SCANNERS[:] = []
+    scanners.register("toy", "toy", lambda text: [])
+    assert comments.sweep_unscanned(db) == 1
+    assert _stamped(db, row.id)
 
-    def boom(text):
-        raise RuntimeError
 
-    scanners.register("toy", "toy", boom, "block")
+def test_a_clean_plugin_answer_counts_as_scanned_when_the_relay_is_unset(
+    db, page, gg, monkeypatch
+):
+    _toy(monkeypatch, lambda text: [])
+    gg.result = None  # ggscan.scan: no relay configured
+    monkeypatch.setattr(ggscan, "configured", lambda: False)
+    row = _agent_comment(db, page, "fine")
+    assert comments.second_scan(db, row.id) == "scanned"
+    assert _stamped(db, row.id)
+
+
+def test_a_skipped_plugin_scanner_is_no_answer_when_the_relay_is_unset(
+    db, page, gg, monkeypatch
+):
+    _toy(monkeypatch, _boom, "skip")
+    gg.result = None
+    row = _agent_comment(db, page, "fine")
+    assert comments.second_scan(db, row.id) == "unavailable"
+    assert not _stamped(db, row.id)
+    assert _body_state(db, row.id) == ("fine", False, None)
+
+
+def test_a_relay_finding_means_the_plugin_scanners_are_not_asked(
+    db, page, gg, monkeypatch
+):
+    asked = []
+    _toy(monkeypatch, lambda text: asked.append(text) or [])
+    gg.result = [Finding(shape="ggshield_x", line=1)]
     row = _agent_comment(db, page, "fine")
     assert comments.second_scan(db, row.id) == "withdrawn"
+    assert asked == []
+    assert _body_state(db, row.id) == ("", True, "ggshield_x")

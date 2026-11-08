@@ -53,7 +53,6 @@ from ream.anchors import (
     _tight,
 )
 from ream.db import Connection, Database, in_list, jsonb
-from ream.scan import Finding
 
 # A comment is a remark about a page, not a page in itself -- 8 KB is generous for
 # prose and small enough that a thread of hundreds never becomes its own storage
@@ -1703,17 +1702,28 @@ def second_scan(db: Database, comment_id: str) -> str:
                 (datetime.now(UTC), comment_id),
             )
         # The quote was only ever built-in scanned; the relay sees it too.
-        text = body + "\n" + quote
-        found = ggscan.scan(text)
+        scanned_text = body + "\n" + quote
+        found = ggscan.scan(scanned_text)
+        plugin_answered = False
         if not found:
-            # Scanners a plug-in registered; a `block` scanner that fails withdraws the
-            # comment, as a finding would. Nothing registered: no change.
+            # Scanners a plug-in registered. A `block` scanner that fails leaves the
+            # comment unscanned for the sweeper to retry (an outage must not wipe
+            # comments); a publish under `block` still fails closed.
             try:
-                extra = scanners.run(text)
-            except scanners.ScannerBlocked:
-                extra = [Finding(shape="scanner_failed", line=1)]
+                extra, plugin_answered = scanners.run_detailed(scanned_text)
+            except scanners.ScannerBlocked as exc:
+                _log.error(
+                    "comment left unscanned: scanner blocked: plugin=%s scanner=%s"
+                    " comment=%s",
+                    exc.plugin,
+                    exc.name,
+                    comment_id,
+                )
+                return "unavailable"
             if extra:
                 found = extra
+        if found is None and plugin_answered:
+            found = []  # no relay answer, but a plug-in scanner gave a real clean one
         if found is None:
             if ggscan.configured():
                 _log.warning(
