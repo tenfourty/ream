@@ -22,6 +22,7 @@ import urllib.request
 from pathlib import Path
 
 from ream import client, textvars
+from ream.cli import prog_name
 
 _WAIT_LIMIT_SECONDS = 16 * 60
 
@@ -50,7 +51,7 @@ def _save_key(path: Path, key: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="artifacts-connect",
+        prog=prog_name("artifacts-connect"),
         description="connect this machine to {{owner_name}}'s artifacts space; {{owner_they}} approve{{owner_s}} a code",
         formatter_class=client._HelpFormatter,
     )

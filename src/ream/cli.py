@@ -75,6 +75,14 @@ def _help() -> str:
 _VALUE_FLAGS = ("--key-file", "--key-fd", "--session")
 
 
+def prog_name(default: str) -> str:
+    """The program name to show in usage and errors: `ream <verb>` (or `ream`) when run
+    through this dispatcher, which sets sys.argv[0] so; otherwise the old `artifacts-*`
+    command's own name."""
+    first = sys.argv[0] if sys.argv else ""
+    return first if first == "ream" or first.startswith("ream ") else default
+
+
 def _find_verb(args: list[str]) -> int | None:
     """The verb is the first positional word. Only decide's own global flags may come
     before it; anything else in front (`ream --title list publish ...`) is no verb."""
@@ -113,8 +121,9 @@ def main(argv: list[str] | None = None) -> None:
     else:
         module_name, function_name = _OTHER[verb]
         rest = before + after
-    # Hint text in the old programs names `sys.argv[0]`; "ream <verb>" reads right there.
-    sys.argv = [f"ream {verb}"] + rest
+    # The old programs show `prog_name(...)` in usage and errors; "ream <verb>" reads right there.
+    # decide keeps its verb among its own arguments, so its usage reads `ream ask ...`.
+    sys.argv = ["ream" if verb in DECIDE_VERBS else f"ream {verb}"] + rest
     function = getattr(importlib.import_module(module_name), function_name)
     result = function()
     raise SystemExit(result)

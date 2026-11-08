@@ -38,6 +38,7 @@ from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
 from ream import envnames, images, news, pickup, textvars
+from ream.cli import prog_name
 from ream.client import (
     Conflict,
     HTTPFailure,
@@ -1728,7 +1729,7 @@ def _wait_review(args, key: str, base: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = _StaleAwareParser(
-        prog="artifacts-decide",
+        prog=prog_name("artifacts-decide"),
         description="ask {{owner_name}} a lettered question on a page, and read the answer",
         epilog=(
             "A form published in a page (data-artifact-form) is answered in the gallery: "

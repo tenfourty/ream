@@ -37,6 +37,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 
 from ream import settings, templates, textvars
+from ream.cli import prog_name
 
 BD_ENV = "REAM_BD"
 RECENT_DAYS = 7
@@ -179,7 +180,7 @@ def render(rows: list[dict], title: str, now: datetime | None = None) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="artifacts-beads-page",
+        prog=prog_name("artifacts-beads-page"),
         description=(
             "Print a status page drawn from a seat's beads (the children of one "
             "parent). Put it in ~/.config/artifacts/pages.toml as a `render` "

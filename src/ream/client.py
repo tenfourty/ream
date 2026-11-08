@@ -30,6 +30,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from ream import csp, envnames, news, settings, textvars, traps
+from ream.cli import prog_name
 
 _DEFAULT_KEY_FILE = "~/.config/artifacts/key"
 
@@ -1691,7 +1692,7 @@ class _Parser(argparse.ArgumentParser):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = _Parser(prog="artifacts-publish")
+    parser = _Parser(prog=prog_name("artifacts-publish"))
     parser.add_argument(
         "file",
         nargs="?",

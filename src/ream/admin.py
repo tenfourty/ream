@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from ream import grants, keys
+from ream.cli import prog_name
 
 # The database modules are imported by the commands that use them, never here:
 # `new-key` needs no database and must run where only the client is installed
@@ -289,7 +290,7 @@ def cmd_change_owner(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="artifacts-admin")
+    parser = argparse.ArgumentParser(prog=prog_name("artifacts-admin"))
     sub = parser.add_subparsers(dest="command", required=True)
 
     new_key = sub.add_parser(
