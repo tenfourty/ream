@@ -4,7 +4,7 @@ A deployment names sinks in a TOML file (`REAM_SINKS_FILE`, also read as `ARTIFA
 
     [[sink]]
     name = "chase"                         # lower-case letters, digits, hyphens
-    kinds = ["answer_dropped"]             # any of events.KINDS and events.BRIDGE_KINDS
+    kinds = ["set_aside"]             # any of events.KINDS and events.BRIDGE_KINDS
     url = "https://hooks.example/in"
     signing_key_file = "chase.pem"         # Ed25519, PEM PKCS8, unencrypted; relative to this file
     key_id = "k1"                          # the receiver picks its public key from this
@@ -250,6 +250,10 @@ def register_all() -> list[str]:
 # --- the request ------------------------------------------------------------------
 
 
+# An IPv6 address is allowed only inside global unicast, so any range not listed below
+# (IPv4-translated ::ffff:0:0:0/96, unique-local, link-local, reserved) fails closed.
+_GLOBAL_UNICAST_V6 = ipaddress.ip_network("2000::/3")
+
 # IPv6 ranges that carry an IPv4 address (or are deprecated/unroutable): refused whole,
 # without unwrapping, because a translator or tunnel on the path could turn them into a
 # connection to the embedded (possibly internal) IPv4 address.
@@ -277,7 +281,9 @@ def address_allowed(ip: str, allow_private: bool) -> bool:
     if isinstance(addr, ipaddress.IPv6Address):
         if addr.ipv4_mapped is not None:
             addr = addr.ipv4_mapped
-        elif any(addr in net for net in _EMBEDDING_V6):
+        elif addr not in _GLOBAL_UNICAST_V6 or any(
+            addr in net for net in _EMBEDDING_V6
+        ):
             return False
     return addr.is_global and not addr.is_multicast
 

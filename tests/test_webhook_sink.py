@@ -41,7 +41,7 @@ def _sinks_file(tmp_path, body: str):
 def _entry(**over):
     fields = {
         "name": "hook-a",
-        "kinds": '["decision_answered", "answer_dropped"]',
+        "kinds": '["decision_answered", "set_aside"]',
         "url": '"https://hooks.example/in"',
         "signing_key_file": '"k.pem"',
         "key_id": '"k1"',
@@ -78,7 +78,7 @@ def test_a_valid_file_loads(tmp_path, key):
     path = _sinks_file(tmp_path, _entry() + _entry(name="hook-b", key_id='"k2"'))
     hooks = webhook.load_file(path)
     assert [h.name for h in hooks] == ["hook-a", "hook-b"]
-    assert hooks[0].kinds == ("decision_answered", "answer_dropped")
+    assert hooks[0].kinds == ("decision_answered", "set_aside")
     assert hooks[0].key_id == "k1"
     assert "k.pem" not in repr(hooks[0]) and "PRIVATE" not in repr(hooks[0])
 
@@ -170,9 +170,9 @@ def test_register_all_adds_each_sink_to_the_registry(tmp_path, key):
     with sinks.isolated(), settings.override(sinks_file=path):
         assert webhook.register_all() == ["hook-a"]
         found = {s.name: s for s in sinks.registered()}
-        assert found["hook-a"].kinds == ("decision_answered", "answer_dropped")
+        assert found["hook-a"].kinds == ("decision_answered", "set_aside")
         assert found["hook-a"].delivery == "outbox"
-        assert [s.name for s in sinks.matching("answer_dropped")] == ["hook-a"]
+        assert [s.name for s in sinks.matching("set_aside")] == ["hook-a"]
 
 
 def test_no_setting_registers_nothing():
@@ -261,6 +261,9 @@ def test_deliver_raises_on_a_non_2xx_and_not_on_a_2xx(tmp_path, key):
         "2002:a9fe:a9fe::1",
         "2001:0:4136:e378:8000:63bf:3fff:fdd2",
         "fec0::1",
+        "::ffff:0:a9fe:a9fe",
+        "4000::1",
+        "100::1",
     ],
 )
 def test_private_and_special_addresses_are_refused_by_default(ip):

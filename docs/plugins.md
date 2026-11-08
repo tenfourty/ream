@@ -155,7 +155,7 @@ and circuit breaker above. A bad file stops start-up naming the sink and the fie
 ```toml
 [[sink]]
 name = "chase"                  # lower-case letters, digits, hyphens; not a name already in use
-kinds = ["answer_dropped"]      # the same kinds as api.sink
+kinds = ["set_aside"]      # the same kinds as api.sink
 url = "https://hooks.example/in"
 signing_key_file = "chase.pem"  # Ed25519, PEM PKCS8, unencrypted; relative to this file
 key_id = "k1"                   # the receiver picks its public key from this
@@ -174,7 +174,10 @@ What it will and will not talk to (`src/ream/webhook.py`): https only unless `al
 credentials in the URL; the socket is opened only to a public address (private, loopback,
 link-local such as cloud metadata, CGNAT, multicast and unspecified ranges are refused unless
 `allow_private`), checked on the address actually connected to, so DNS rebinding cannot get past
-it; redirects are never followed and a 3xx is a failure; no proxy from the environment; 10 seconds
+it. An IPv6 address is allowed only inside global unicast (`2000::/3`) and outside the
+embedding ranges (NAT64 `64:ff9b::/96`, 6to4, Teredo and the like), so anything unlisted is
+refused. Limit: a network-specific NAT64 prefix inside `2000::/3` cannot be recognised by this
+filter, so a deployment that runs one must block it at the network; redirects are never followed and a 3xx is a failure; no proxy from the environment; 10 seconds
 per socket operation; the response body is never read; a body over 64 KiB is a failure, never a
 truncated send. Errors stored with a failed row say a status or a class of failure, never the URL.
 
