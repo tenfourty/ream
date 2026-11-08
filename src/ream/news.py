@@ -13,6 +13,7 @@ Add a line here in the same commit as the change it describes.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -168,6 +169,14 @@ def _state_file() -> Path:
     return Path(base) / "artifacts" / "news-seen"
 
 
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _clean(line: str) -> str:
+    """No C0/C1 control character reaches the terminal (a plug-in's line is not trusted)."""
+    return _CONTROL.sub("", line)
+
+
 def entries() -> list[tuple[str, str]]:
     """`NEWS` (and any plug-in's lines, merged newest first) with the owner's words filled
     in, as the tools print it."""
@@ -177,10 +186,27 @@ def entries() -> list[tuple[str, str]]:
     return [(day, textvars.render(line, client=True)) for day, line in merged]
 
 
+def _read_state(path: Path) -> tuple[str | None, dict[str, str]]:
+    """`(core marker, {plug-in: marker})`. The first line is the core's marker, as it always
+    was; later lines are `<plug-in>\t<id>`. No file: `(None, {})`."""
+    if not path.exists():
+        return None, {}
+    lines = path.read_text(encoding="utf-8").splitlines()
+    core = lines[0].strip() if lines else ""
+    marks: dict[str, str] = {}
+    for line in lines[1:]:
+        name, sep, day = line.partition("\t")
+        if sep and name.strip() and day.strip():
+            marks[name.strip()] = day.strip()
+    return core, marks
+
+
 def announce(stream=None) -> None:
     """Print the entries this machine has not seen, then remember the newest.
 
-    Never raises and never touches stdout: this runs before every command, and
+    The core's entries and each plug-in's are tracked apart: a plug-in's entry never moves
+    the core's marker (the first line of the state file), so a later core entry is still
+    shown. Never raises and never touches stdout: this runs before every command, and
     a note about new features must not be the thing that breaks a pipeline.
     `ARTIFACTS_NEWS=0` silences it.
     """
@@ -189,16 +215,39 @@ def announce(stream=None) -> None:
     stream = stream or sys.stderr
     path = _state_file()
     try:
-        seen = path.read_text(encoding="utf-8").strip() if path.exists() else None
-        every = entries()
-        unseen = [entry for entry in every if seen is None or entry[0] > seen]
-        if seen is None:
-            unseen = unseen[:FIRST_RUN]
+        core_seen, plug_seen = _read_state(path)
+        rendered = [
+            (day, textvars.render(line, client=True), None) for day, line in NEWS
+        ]
+        by_plugin: dict[str, list[tuple[str, str, str]]] = {}
+        for plugin, day, line in plugin_cli.news_by_plugin():
+            by_plugin.setdefault(plugin, []).append(
+                (day, textvars.render(line, client=True), plugin)
+            )
+        if core_seen is None:
+            # Nothing recorded on this machine: the newest line of all, not a history.
+            every = sorted(
+                [*rendered, *(e for es in by_plugin.values() for e in es)],
+                key=lambda e: e[0],
+                reverse=True,
+            )
+            unseen = every[:FIRST_RUN]
+        else:
+            unseen = [e for e in rendered if e[0] > core_seen]
+            for plugin, es in by_plugin.items():
+                mark = plug_seen.get(plugin)
+                if mark is None:
+                    unseen.extend(es[:FIRST_RUN])
+                else:
+                    unseen.extend(e for e in es if e[0] > mark)
+            unseen.sort(key=lambda e: e[0], reverse=True)
         if not unseen:
             return
-        for _tag, line in unseen:
-            print(f"new in Ream: {line}", file=stream)
+        for _tag, line, _plugin in unseen:
+            print(f"new in Ream: {_clean(line)}", file=stream)
+        marks = "".join(f"{p}\t{es[0][0]}\n" for p, es in sorted(by_plugin.items()))
+        core_mark = NEWS[0][0] if NEWS else (core_seen or "")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(every[0][0] + "\n", encoding="utf-8")
+        path.write_text(f"{core_mark}\n{marks}", encoding="utf-8")
     except OSError:
         return

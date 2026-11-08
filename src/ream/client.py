@@ -90,7 +90,8 @@ def default_session() -> str | None:
     # house's own (kept in the core until the house plug-in exists, design step 9).
     office = ""
     for name in plugin_cli.session_envs():
-        office = os.environ.get(name, "").strip()
+        # A value that is not a plain label is ignored and the next source is tried.
+        office = plugin_cli.session_label(os.environ.get(name)) or ""
         if office:
             break
     if not office:

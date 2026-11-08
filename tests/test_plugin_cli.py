@@ -2,9 +2,14 @@
 and the CLI's loading of plug-ins. Plug-ins are loaded without installing a package:
 `plugin_cli.entry_points` is replaced."""
 
+import sys
+from datetime import UTC, datetime
+
 import pytest
 
 from ream import cli, client, news, plugin_api, plugin_cli
+
+TODAY = datetime.now(UTC).date().isoformat()
 
 
 class EP:
@@ -72,7 +77,21 @@ def test_a_plugin_verb_fault_prints_the_type_only(world, capsys):
     assert "RuntimeError" in err and "secret-value-123" not in err
 
 
-@pytest.mark.parametrize("verb", ["publish", "ask", "admin", "help", "Bad Name", ""])
+@pytest.mark.parametrize(
+    "verb",
+    [
+        "publish",
+        "ask",
+        "admin",
+        "help",
+        "connect",
+        "republish",
+        "beads-page",
+        "bead-metrics",
+        "Bad Name",
+        "",
+    ],
+)
 def test_a_plugin_may_not_take_a_reserved_or_malformed_verb(world, verb):
     world(EP("toy", lambda api: api.cli(verb, lambda: 0, "x")))
     with pytest.raises(plugin_cli.PluginError) as err:
@@ -208,13 +227,196 @@ def test_plugin_news_merges_newest_first_and_is_validated(world):
         EP(
             "toy",
             lambda api: api.client_defaults(
-                news=[("2999-01-01", "from the plug-in"), ("2000-01-01", "old")]
+                news=[(TODAY, "from the plug-in"), ("2000-01-01", "old")]
             ),
         )
     )
     plugin_cli.load_for_cli()
     ids = [day for day, _ in news.entries()]
-    assert ids[0] == "2999-01-01" and ids[-1] == "2000-01-01"
+    assert ids[0] >= TODAY and ids[-1] == "2000-01-01"
     plugin_cli.reset()
     with pytest.raises(ValueError):
         plugin_cli.register_client_defaults("toy", news=[("yesterday", "x")])
+
+
+def test_plugin_news_refuses_a_future_id_and_control_characters(world):
+    for bad in (
+        [("2999-01-01", "from the future")],
+        [("2026-13-45", "not a date")],
+        [(TODAY, "esc \x1b[31mred")],
+        [(TODAY, "two\nlines")],
+        [(TODAY, "cr\rhere")],
+        [(TODAY, "c1 \x9bcsi")],
+    ):
+        with pytest.raises(ValueError):
+            plugin_cli.register_client_defaults("toy", news=bad)
+    assert plugin_cli.news() == []
+
+
+# Default selection: a broken plug-in is skipped; a named one stops the tool.
+
+
+def test_a_broken_plugin_is_skipped_with_a_warning_by_default(world, capsys):
+    def bad(api):
+        api.cli("half", lambda: 0, "registered before it failed")
+        raise RuntimeError("leaky-text")
+
+    world(EP("bad", bad), EP("good", lambda api: api.cli("fine", lambda: 0, "ok")))
+    plugin_cli.load_or_exit()
+    err = capsys.readouterr().err
+    assert "'bad'" in err and "RuntimeError" in err and "leaky-text" not in err
+    assert "REAM_PLUGINS=none" in err
+    assert [c.name for c in plugin_cli.commands()] == ["fine"]
+
+
+def test_a_failing_plugin_load_is_skipped_too(world, capsys):
+    class Broken(EP):
+        def load(self):
+            raise ImportError("no module secret-path")
+
+    world(Broken("bad", None))
+    plugin_cli.load_or_exit()
+    err = capsys.readouterr().err
+    assert "'bad'" in err and "ImportError" in err and "secret-path" not in err
+
+
+def test_a_named_broken_plugin_still_exits_2_with_the_hint(world, monkeypatch, capsys):
+    def bad(api):
+        raise RuntimeError("leaky-text")
+
+    world(EP("bad", bad))
+    monkeypatch.setenv("REAM_PLUGINS", "bad")
+    with pytest.raises(SystemExit) as stop:
+        plugin_cli.load_or_exit()
+    assert stop.value.code == 2
+    err = capsys.readouterr().err
+    assert "'bad'" in err and "REAM_PLUGINS=none" in err and "leaky-text" not in err
+
+
+def test_conflicting_plugin_settings_exit_2_without_a_value(world, monkeypatch, capsys):
+    world()
+    monkeypatch.setenv("REAM_PLUGINS", "aaa")
+    monkeypatch.setenv("ARTIFACTS_PLUGINS", "bbb")
+    with pytest.raises(SystemExit) as stop:
+        plugin_cli.load_or_exit()
+    assert stop.value.code == 2
+    err = capsys.readouterr().err
+    assert "REAM_PLUGINS" in err and "aaa" not in err and "bbb" not in err
+
+
+def test_the_server_start_still_stops_on_a_broken_plugin(world):
+    def bad(api):
+        raise RuntimeError("x")
+
+    with pytest.raises(plugin_cli.PluginError):
+        plugin_cli.register_all(
+            [EP("bad", bad)], "", plugin_api.PluginAPI, plugin_cli._log
+        )
+
+
+@pytest.mark.parametrize("exc", [SystemExit(3), KeyboardInterrupt()])
+def test_exit_and_interrupt_in_register_become_a_plugin_error(world, exc):
+    def bad(api):
+        raise exc
+
+    world(EP("bad", bad))
+    with pytest.raises(plugin_cli.PluginError) as err:
+        plugin_cli.register_all(
+            [EP("bad", bad)], "bad", plugin_cli.CliPluginAPI, plugin_cli._log
+        )
+    assert type(exc).__name__ in str(err.value)
+
+
+def test_help_with_no_plugin_is_the_text_it_always_was(world):
+    world()
+    plugin_cli.load_for_cli()
+    assert "{" not in cli._help() and "\n\nThe old `artifacts-*`" in cli._help()
+
+
+# api_url
+
+
+def test_the_environment_and_settings_win_over_a_plugin_endpoint(world, monkeypatch):
+    from ream import settings
+
+    world(
+        EP(
+            "toy",
+            lambda api: api.client_defaults(api_url="https://ream.example.org/api/v1"),
+        )
+    )
+    plugin_cli.load_for_cli()
+    monkeypatch.setenv("ARTIFACTS_API", "http://localhost:9/old")
+    assert client._api_base() == "http://localhost:9/old"
+    monkeypatch.delenv("ARTIFACTS_API")
+    with settings.override(api_url="http://localhost:7/x"):
+        assert client._api_base() == "http://localhost:7/x"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://ream.example.org/api",
+        "https://x.example:0/api",
+        "https://x.example:99999/api",
+        "https://x.example:abc/api",
+    ],
+)
+def test_an_unsafe_endpoint_is_refused_at_registration(world, url):
+    with pytest.raises(ValueError):
+        plugin_cli.register_client_defaults("toy", api_url=url)
+    assert plugin_cli.default_api_url() is None
+
+
+def test_a_loopback_http_endpoint_is_fine_and_a_trailing_slash_goes(world):
+    plugin_cli.register_client_defaults("toy", api_url="http://127.0.0.1:8000/api/v1//")
+    assert plugin_cli.default_api_url() == "http://127.0.0.1:8000/api/v1"
+
+
+# session label
+
+
+def test_a_plugin_session_value_must_be_a_plain_label(world, monkeypatch):
+    world(EP("toy", lambda api: api.client_defaults(session_envs=["TOY_A", "TOY_B"])))
+    plugin_cli.load_for_cli()
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "48147c82-aaaa")
+    monkeypatch.setenv("QD_OFFICE", "qd-office")
+    monkeypatch.setenv("TOY_A", "bad label/with\x1b")
+    assert client.default_session() == "qd-office/48147c82"
+    monkeypatch.setenv("TOY_B", "Good.Label_1")
+    assert client.default_session() == "good.label_1/48147c82"
+    monkeypatch.setenv("TOY_B", "x" * 65)
+    assert client.default_session() == "qd-office/48147c82"
+
+
+# every entry point loads the plug-ins
+
+
+def test_every_cli_entry_point_loads_the_plugins(monkeypatch):
+    from ream import connect_cli, decide
+
+    calls = []
+    monkeypatch.setattr(plugin_cli, "load_or_exit", lambda: calls.append("load"))
+    monkeypatch.setattr(news, "announce", lambda *a, **k: None)
+    for module in (client, decide, connect_cli):
+        monkeypatch.setattr(module, "main", lambda *a, **k: 0)
+        with pytest.raises(SystemExit):
+            module.run()
+    assert calls == ["load"] * 3
+    monkeypatch.setattr(sys, "argv", ["ream", "--help"])
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+    assert calls == ["load"] * 4
+
+
+def test_a_global_flag_may_come_before_a_plugin_verb(world, monkeypatch):
+    seen = {}
+
+    def main():
+        seen["argv"] = list(sys.argv)
+        return 0
+
+    world(EP("toy", lambda api: api.cli("tracker", main, "x")))
+    with pytest.raises(SystemExit):
+        cli.main(["--session", "me/abc", "tracker", "--y"])
+    assert seen["argv"] == ["ream tracker", "--session", "me/abc", "--y"]

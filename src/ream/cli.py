@@ -62,7 +62,7 @@ the command line on unchanged, so `ream VERB --help` shows that program's own he
   connect        connect a machine                    (artifacts-connect)
   beads-page     a page of the tracker's beads        (artifacts-beads-page)
   bead-metrics   an arc's counts and velocity         (artifacts-bead-metrics)
-
+{plugin_section}
 The old `artifacts-*` commands keep working.
 """
 
@@ -70,17 +70,17 @@ The old `artifacts-*` commands keep working.
 def _help() -> str:
     rest = [v for v in DECIDE_VERBS if v not in ("ask", "wait")]
     lines = ", ".join(rest)
-    text = _HELP.format(decide_rest=f"also (artifacts-decide): {lines}")
-    # Plug-in verbs, when any is installed; with none the text is exactly the above.
+    # Plug-in verbs, when any is installed; with none the section is empty and the text is
+    # exactly what it was before plug-ins.
     extra = plugin_cli.commands()
-    if extra:
-        text = text.replace(
-            "\nThe old `artifacts-*`",
-            "\nFrom plug-ins:\n"
-            + "".join(f"  {c.name:<14} {c.help}\n" for c in extra)
-            + "\nThe old `artifacts-*`",
-        )
-    return text
+    section = (
+        "\nFrom plug-ins:\n" + "".join(f"  {c.name:<14} {c.help}\n" for c in extra)
+        if extra
+        else ""
+    )
+    return _HELP.format(
+        decide_rest=f"also (artifacts-decide): {lines}", plugin_section=section
+    )
 
 
 # The global flags of `artifacts-decide` that take a value; they may come before the verb.

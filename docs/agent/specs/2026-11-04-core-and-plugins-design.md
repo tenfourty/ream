@@ -234,6 +234,18 @@ once-only marker per subject and stage) is the chasing design's table, not this 
    `ARTIFACTS_SEAT`) and news lines. The tracker pages (`artifacts-beads-page`,
    `artifacts-bead-metrics`) are CLI commands.
 
+   *Trust and cost of the CLI hooks (7b part 4).* A plug-in's `register` runs in every
+   command-line process, on every start, with the caller's rights (it can read the key file):
+   it must be cheap and side-effect free (no network, files or subprocesses), and the user
+   installs only plug-ins they trust. `api_url` applies only when `REAM_API`/`ARTIFACTS_API` is
+   unset and keys are not bound to an endpoint; it is held to the request path's rules (https,
+   or http to loopback; valid port; no userinfo, query or fragment; trailing "/" dropped).
+   A `session_envs` value must match `^[a-z0-9][a-z0-9._-]{0,63}$` (lower-cased) or the next
+   source is tried. News ids are dates not later than today (UTC), text one printable line;
+   the "seen" state is kept per source and a plug-in's entry never moves the core's marker. With
+   `REAM_PLUGINS` unset a plug-in that fails to load or register is skipped with a warning on
+   stderr; naming plug-ins makes a failure exit 2; the server's start-up still stops.
+
 Plus **text**: `api.text_vars({...})` (extra template variables) and `api.text_section(slot,
 fn)` for named slots in `agents.txt`/`skill.md` (`proxy`, `tools`, `integrations`), so the
 tracker-page paragraph of `skill.md` ships with the plug-in. And **routes**:

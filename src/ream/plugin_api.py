@@ -260,7 +260,17 @@ class PluginAPI:
         holding the office part of the default session label, asked before the core's own
         `QD_OFFICE` and seat; `news` is `(YYYY-MM-DD[a-z], text)` lines printed once per
         machine with the core's. Used by the command-line process; the server only checks
-        the registration."""
+        the registration.
+
+        A plug-in runs in-process with the caller's rights and can read the key file;
+        `api_url` only applies when `REAM_API`/`ARTIFACTS_API` is unset, and a key is not
+        bound to an endpoint, so install only plug-ins you trust. `api_url` must be https
+        (or http to a loopback host), with a valid port, no userinfo, query or fragment; a
+        trailing "/" is dropped. A `session_envs` value is used only if it matches
+        `^[a-z0-9][a-z0-9._-]{0,63}$` (lower-cased first). `news` ids are real dates not
+        later than today (UTC), the text one printable line; the core's "seen" marker is
+        never moved by them. `register` runs on every start of every command-line tool: keep
+        it cheap and free of side effects (no network, files or subprocesses)."""
         plugin_cli.register_client_defaults(self._plugin, api_url, session_envs, news)
 
 
