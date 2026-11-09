@@ -586,10 +586,11 @@ def test_the_detail_page_loads_gallery_js_and_inlines_no_script(db):
     # every <script> tag on this page carries a src -- none is inline, which the CSP
     # (script-src 'self', no 'unsafe-inline') would refuse to run anyway. The one
     # exception is the marks DATA block (page review step 1), which a browser
-    # never executes: exactly one, and exactly that non-executable type.
+    # never executes: exactly one, and exactly that non-executable type. The forms
+    # DATA block is the same kind and is on every live page.
     assert (
         re.search(
-            r"<script(?![^>]*\bsrc=)(?! type=\"application/json\" id=\"artifact-marks\">)[^>]*>",
+            r"<script(?![^>]*\bsrc=)(?! type=\"application/json\" id=\"artifact-(?:marks|forms)\">)[^>]*>",
             page,
         )
         is None
