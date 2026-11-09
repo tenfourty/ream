@@ -97,6 +97,7 @@ class Provider:
         return {k: v for k, v in claims.items() if v is not None}
 
     def __call__(self, method, url, body, headers):
+        url = url.replace("HTTPS://AUTH.example:443", ISSUER)
         self.calls.append((method, url, body, headers))
         if self.down and method == "GET":
             raise oidc.SignInRefused("the sign-in provider could not be reached (down)")
@@ -558,6 +559,8 @@ def test_loopback_http_is_refused_under_an_https_issuer(provider, db):
     oidc.clear_caches()
     with pytest.raises(oidc.SignInRefused, match="authorization_endpoint"):
         oidc.begin(CALLBACK)
+    provider.discovery_extra = {"token_endpoint": "http://localhost/token"}
+    oidc.clear_caches()
     with pytest.raises(oidc.SignInRefused, match="token_endpoint"):
         sign_in_as(provider, db)
 
