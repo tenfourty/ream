@@ -152,15 +152,11 @@ without a label a page says only which KEY published it. `REAM_SESSION="<agent>/
 ref>"` rides on the page, version, decision and events. A page published without it stays
 unattributed until its next real change -- an identical republish mints no version.
 
-**A push to `main` asks to deploy.** CI tests, builds an image (also pushed as
-`runcove/artifacts-core:<sha12>`, the base the plug-in repo will build on; nothing consumes it yet), and opens a pin PR on the
-deployment's manifest repo that moves production onto that image
-(`.forgejo/scripts/pin-pr.sh`); production moves when that PR is merged. On the homelab the
-manifests live in the homelab repo and its maintainer merges the pin PRs.
-Once the repo Actions variable `REAM_IMAGE_FROM` is `ream-homelab` (unset today), `pin` is skipped and
-`core-lock` (`.forgejo/scripts/core-lock-pr.sh`, secret `CORE_LOCK_TOKEN`) instead opens a PR on `runcove/ream-homelab`
-moving its `core.lock` to the core image, set to merge when that repo's checks succeed; ream-homelab builds the deployed
-image and opens the pin PR. Cut-over and rollback: `docs/agent/runbooks/image-from-ream-homelab.md`.
+**A push to `main` asks to deploy.** CI tests, builds an image and pushes it as
+`runcove/artifacts-core:<sha12>`, then the `core-lock` job (`.forgejo/scripts/core-lock-pr.sh`, secret
+`CORE_LOCK_TOKEN`) opens a PR on `runcove/ream-homelab` moving its `core.lock` to that image, set to merge when that
+repo's checks succeed. ream-homelab builds the deployed image and opens the homelab pin PR, which the homelab maintainer
+merges. Core's own `pin` job (`pin-pr.sh`) is off. How it flows, and rollback: `docs/agent/runbooks/image-from-ream-homelab.md`.
 
 After changing a CLI, reinstall it where agents run it (`uv tool install <checkout> --force`).
 

@@ -702,12 +702,13 @@ drivers; CI only (not on baba).
    `core-lock` job (main only, after `image`, only when `core_ref` is non-empty) open or update the one PR
    on `runcove/ream-homelab` (branch `core-lock/next`, title `core: lock <sha12>`) that moves `core.lock`,
    then ask the forge to merge it when checks succeed (`merge_when_checks_succeed`); it stands down when
-   the lock already names this commit or a newer one, and needs the secret `CORE_LOCK_TOKEN`. The
-   repo variable `REAM_IMAGE_FROM` is the switch: `ream-homelab` runs `core-lock` and skips `pin`;
-   unset (today) runs `pin` as before and skips `core-lock`. Runbook:
-   `docs/agent/runbooks/image-from-ream-homelab.md`. **Not proven end to end:** the job runs only on
-   `main`; only the script's offline selftest runs on a `ci/**` branch. TODO (next): set the token and
-   the variable (homelab), then watch the first real lock PR merge.
+   the lock already names this commit or a newer one, and needs the secret `CORE_LOCK_TOKEN`. It only
+   touches a PR whose head is `core-lock/next` on ream-homelab itself and whose head sha is the commit it
+   just pushed. **Cut over (9 Nov 2026):** `core-lock` is the only path on main, core's `pin` job is
+   `if: false` (homelab's lander no longer accepts this repo as a source; ream-homelab's own pin job
+   is on). Runbook: `docs/agent/runbooks/image-from-ream-homelab.md`. **Not proven end to end:** the job
+   runs only on `main`; only the script's offline selftest runs on a `ci/**` branch. TODO: watch the
+   first real lock PR merge.
 9. **Move, one at a time, each its own slice:** (9a) `beadpage`/`beadmetrics` and their console
    scripts, (9b) Mailgun, (9c) `ggscan`, (9d) doorbell, (9e) quarterdeck sink and inbound
    (the largest; includes the `slack` answer source and `on_answer` hook). Each: copy into the
