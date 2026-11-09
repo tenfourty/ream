@@ -882,6 +882,7 @@ def _publish(
     folder: str | None = None,
     folder_title: str | None = None,
     refresh_every: int | None = None,
+    comments: str | None = None,
 ) -> dict:
     body = _read_page(file_path)
     payload = {
@@ -892,6 +893,8 @@ def _publish(
     }
     if refresh_every:
         payload["refresh_every"] = refresh_every
+    if comments:
+        payload["comments"] = comments
     return _request("POST", f"{_api_base()}/pages", key, payload)
 
 
@@ -921,6 +924,7 @@ def _patch(
     folder: str | None = None,
     folder_title: str | None = None,
     refresh_every: int | None = None,
+    comments: str | None = None,
 ) -> dict:
     """PATCH with `expected_revision`, and REFUSE on a conflict rather than
     retrying.
@@ -958,6 +962,8 @@ def _patch(
     payload.update(_folder_fields(folder, folder_title))
     if refresh_every is not None:
         payload["refresh_every"] = refresh_every  # 0 clears it
+    if comments:
+        payload["comments"] = comments
     try:
         return _request("PATCH", f"{_api_base()}/pages/{artifact_id}", key, payload)
     except HTTPFailure as exc:
@@ -984,6 +990,7 @@ def _update(
     folder: str | None = None,
     folder_title: str | None = None,
     refresh_every: int | None = None,
+    comments: str | None = None,
 ) -> dict:
     """A whole-page update. With `if_revision` (the hash or version number the
     caller last published or read), refuse if the page has moved on since: a
@@ -1016,6 +1023,7 @@ def _update(
         folder=folder,
         folder_title=folder_title,
         refresh_every=refresh_every,
+        comments=comments,
     )
 
 
@@ -1567,6 +1575,15 @@ def _print_warnings(result: dict) -> None:
             warning.get("line"),
             warning.get("hint"),
         )
+        message = warning.get("message")
+        if isinstance(shape, str) and isinstance(message, str):
+            # A fact about the whole page, not a place in it.
+            print(
+                f"warning: {shape}: {_printable(message)}"
+                + (f" -- {_printable(hint)}" if isinstance(hint, str) else ""),
+                file=sys.stderr,
+            )
+            continue
         if not isinstance(shape, str) or not isinstance(line, int):
             continue
         print(
@@ -1927,6 +1944,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="with FILE --update ID or --touch ID: stop promising an interval (no flag)",
     )
+    shelf.add_argument(
+        "--comments",
+        choices=("on", "off"),
+        help=(
+            "whether commenting starts on or off for a reader of the page. Required when"
+            " FILE publishes a NEW page. Off for a page a script redraws or a status"
+            " board: no pill on selected words, and the reader can still turn commenting"
+            " on for that page. With FILE --update ID it changes the setting; with"
+            " --update ID alone it changes only the setting."
+        ),
+    )
     shelf.add_argument("--pin", metavar="ID", help="pin a page to the front")
     shelf.add_argument("--unpin", metavar="ID", help="unpin it")
     shelf.add_argument("--duplicate", metavar="ID", help="copy a page to a new address")
@@ -2067,6 +2095,7 @@ def _touch_misuse(args) -> str | None:
                 ("--versions", args.versions),
                 ("--preview", args.preview),
                 ("--check", args.check),
+                ("--comments", args.comments),
             )
             if value
         ]
@@ -2434,6 +2463,19 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.section:
             raise UsageError("--section goes with --update ID or --fetch ID")
+        if args.update and not args.file and args.comments:
+            warn_if_unlabelled("update")
+            done = _request(
+                "POST",
+                f"{_api_base()}/pages/{args.update}/comments",
+                key,
+                {"comments": args.comments},
+            )
+            print(
+                json.dumps({"id": done.get("id"), "comments": done.get("comments")}),
+            )
+            print(f"commenting now starts {args.comments}", file=sys.stderr)
+            return 0
         if args.update:
             if not args.file:
                 print("FILE is required with --update", file=sys.stderr)
@@ -2455,6 +2497,7 @@ def main(argv: list[str] | None = None) -> int:
                     if args.refresh_every
                     else None
                 ),
+                comments=args.comments,
             )
             _print_published(updated)
             if not updated.get("unchanged"):
@@ -2463,6 +2506,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.file and (args.title or _is_markdown(args.file)):
             # A markdown page may go without --title: its first `# heading`
             # names it, and the service refuses one that has neither.
+            if not args.comments:
+                print(
+                    "--comments on|off is required for a new page: say whether"
+                    " commenting starts on or off for a reader. Choose off for a page a"
+                    " script redraws or a status board (the reader can still turn it on"
+                    " for that page), on for anything else.",
+                    file=sys.stderr,
+                )
+                return 2
             warn_if_unlabelled("publish")
             published = _publish(
                 args.file,
@@ -2471,6 +2523,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.folder,
                 args.folder_title,
                 parse_interval(args.refresh_every) if args.refresh_every else None,
+                comments=args.comments,
             )
             _print_published(published)
             _report_render(published["id"], key)
@@ -2484,6 +2537,7 @@ def main(argv: list[str] | None = None) -> int:
             " | --rename-folder SLUG [--to NEW] [--folder-title NAME]"
             " | --archive-folder SLUG [--confirm] | --unarchive-folder SLUG"
             " | --rename ID --title TITLE | --archive ID | --unarchive ID"
+            " | --update ID --comments on|off"
             " | --pin ID | --unpin ID | --duplicate ID | --fetch ID [FILE]"
             " | --touch ID [--status ok|failed] [--note TEXT] [--if-revision REV]"
             " [--refresh-every 30m | --no-refresh]",

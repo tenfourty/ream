@@ -656,6 +656,15 @@ _FORMAT = {"type": "string", "enum": ["html", "markdown"]}
 _FOLDER = {"type": "string", "description": "One of your folders, by slug."}
 _FOLDER_TITLE = {"type": "string", "description": "The name of a NEW folder."}
 _REFRESH = {"type": ["integer", "null"], "description": "Seconds, 60 to a year."}
+_COMMENTS = {
+    "type": "string",
+    "enum": ["on", "off"],
+    "description": (
+        "Whether commenting starts on or off for a reader of the page. Off for a page a script "
+        "redraws or a status board: no pill on selected words, and the reader can turn it on "
+        "for that page. Required on a new page (refused without it); optional on an update."
+    ),
+}
 
 # A write's result is the calling agent's own (its page, its folder, its title): every
 # string not Ream's own is fenced, labelled with the calling agent.
@@ -683,6 +692,7 @@ _OWN = Fences(ream=_REAM)
             "folder": _FOLDER,
             "folder_title": _FOLDER_TITLE,
             "refresh_every": _REFRESH,
+            "comments": _COMMENTS,
             "session": SESSION,
         },
         ("body",),
@@ -691,7 +701,15 @@ _OWN = Fences(ream=_REAM)
 def _publish_page(call: Call, arguments: dict[str, Any]) -> dict:
     fields = {
         k: k
-        for k in ("title", "body", "format", "folder", "folder_title", "refresh_every")
+        for k in (
+            "title",
+            "body",
+            "format",
+            "folder",
+            "folder_title",
+            "refresh_every",
+            "comments",
+        )
     }
     _only(arguments, {*fields, "session"})
     payload = _body(api.PublishBody, arguments, fields)
@@ -710,6 +728,7 @@ _PAGE_FIELDS = {
         "folder",
         "folder_title",
         "refresh_every",
+        "comments",
     )
 }
 _SECTION_FIELDS = {
@@ -756,6 +775,7 @@ _SECTION_FIELDS = {
             "folder": _FOLDER,
             "folder_title": _FOLDER_TITLE,
             "refresh_every": _REFRESH,
+            "comments": _COMMENTS,
             "session": SESSION,
         },
         ("page_id",),
@@ -788,6 +808,8 @@ _ORGANISE = (
     "file",
     "unfile",
     "restore",
+    "comments_on",
+    "comments_off",
 )
 
 
@@ -797,7 +819,8 @@ _ORGANISE = (
     description=(
         "One of your pages: rename it (title), pin or unpin it, archive or unarchive "
         "it, file it in one of your folders (folder; folder_title names a new one) or "
-        "take it out (unfile), or restore it after delete_page."
+        "take it out (unfile), restore it after delete_page, or say whether commenting "
+        "starts on or off for its readers (comments_on, comments_off)."
     ),
     read_only=False,
     destructive=False,
@@ -832,6 +855,8 @@ def _organise_page(call: Call, arguments: dict[str, Any]) -> dict:
         out = api.archive_page(db, agent, page_id, action == "archive")
     elif action == "restore":
         out = api.restore_page(db, agent, page_id)
+    elif action in ("comments_on", "comments_off"):
+        out = api.comments_page(db, agent, page_id, action.removeprefix("comments_"))
     else:
         # POST /pages/move with one id; its answer as it is (`missing` says "no such
         # page" and "not yours" alike).

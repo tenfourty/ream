@@ -127,7 +127,9 @@ def test_publish_then_update_then_list_round_trip(live, key_file, tmp_path, caps
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>hi</body></html>")
 
-    rc = client.main(["--key-file", str(path), str(page), "--title", "Board"])
+    rc = client.main(
+        ["--key-file", str(path), str(page), "--title", "Board", "--comments", "on"]
+    )
     assert rc == 0
     published = json.loads(capsys.readouterr().out.strip())
     assert published["url"].startswith("https://")
@@ -166,7 +168,9 @@ def test_a_raced_update_is_refused_rather_than_overwriting_the_other_writer(
     path, token = key_file
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>hi</body></html>")
-    rc = client.main(["--key-file", str(path), str(page), "--title", "Board"])
+    rc = client.main(
+        ["--key-file", str(path), str(page), "--title", "Board", "--comments", "on"]
+    )
     assert rc == 0
     published = json.loads(capsys.readouterr().out.strip())
 
@@ -214,7 +218,9 @@ def test_a_refused_secret_shaped_body_shows_the_422_detail_and_exits_1(
     page = tmp_path / "page.html"
     page.write_text(SECRET_BODY)
 
-    rc = client.main(["--key-file", str(path), str(page), "--title", "Leaky"])
+    rc = client.main(
+        ["--key-file", str(path), str(page), "--title", "Leaky", "--comments", "on"]
+    )
     assert rc == 1
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -230,7 +236,9 @@ def test_a_group_readable_key_file_is_refused(live, tmp_path, capsys):
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>hi</body></html>")
 
-    rc = client.main(["--key-file", str(path), str(page), "--title", "Board"])
+    rc = client.main(
+        ["--key-file", str(path), str(page), "--title", "Board", "--comments", "on"]
+    )
     assert rc == 2
     captured = capsys.readouterr()
     assert "chmod 600" in captured.err
@@ -241,14 +249,18 @@ def test_the_key_never_appears_in_any_captured_output(live, key_file, tmp_path, 
     page = tmp_path / "page.html"
     page.write_text(SECRET_BODY)  # forces a 422 -- an error path too
 
-    client.main(["--key-file", str(path), str(page), "--title", "Leaky"])
+    client.main(
+        ["--key-file", str(path), str(page), "--title", "Leaky", "--comments", "on"]
+    )
     captured = capsys.readouterr()
     assert token not in captured.out
     assert token not in captured.err
 
     good = tmp_path / "good.html"
     good.write_text("<!doctype html><body>hi</body></html>")
-    client.main(["--key-file", str(path), str(good), "--title", "Board"])
+    client.main(
+        ["--key-file", str(path), str(good), "--title", "Board", "--comments", "on"]
+    )
     client.main(["--key-file", str(path), "--list"])
     captured = capsys.readouterr()
     assert token not in captured.out
@@ -360,7 +372,9 @@ def test_a_publish_redirected_302_also_never_reaches_the_target(tmp_path, monkey
         page = tmp_path / "page.html"
         page.write_text("<!doctype html><body>hi</body></html>")
 
-        rc = client.main(["--key-file", str(path), str(page), "--title", "Board"])
+        rc = client.main(
+            ["--key-file", str(path), str(page), "--title", "Board", "--comments", "on"]
+        )
 
         assert rc == 1
         assert received == []
@@ -449,7 +463,15 @@ def test_a_missing_file_is_a_usage_error_not_a_traceback(tmp_path, capsys):
     path.chmod(0o600)
 
     rc = client.main(
-        ["--key-file", str(path), str(tmp_path / "does-not-exist.html"), "--title", "X"]
+        [
+            "--key-file",
+            str(path),
+            str(tmp_path / "does-not-exist.html"),
+            "--title",
+            "X",
+            "--comments",
+            "on",
+        ]
     )
 
     assert rc == 2
@@ -502,7 +524,9 @@ def test_stdout_is_a_whitelist_and_the_set_is_deliberate(
     page.write_text("<!doctype html><body>hi</body></html>")
     expected = {"id", "page_url", "url", "revision", "title", "bytes"}
 
-    client.main(["--key-file", str(path), str(page), "--title", "Board"])
+    client.main(
+        ["--key-file", str(path), str(page), "--title", "Board", "--comments", "on"]
+    )
     published = json.loads(capsys.readouterr().out.strip())
     assert set(published.keys()) == expected
 
@@ -520,7 +544,9 @@ def test_the_two_addresses_are_not_the_same_and_one_is_for_a_person(
     path, _token = key_file
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>hi</body></html>")
-    client.main(["--key-file", str(path), str(page), "--title", "Board"])
+    client.main(
+        ["--key-file", str(path), str(page), "--title", "Board", "--comments", "on"]
+    )
     published = json.loads(capsys.readouterr().out.strip())
 
     assert published["page_url"] != published["url"]
@@ -537,7 +563,9 @@ def test_the_echo_says_what_was_actually_stored(live, key_file, tmp_path, capsys
     body = "<!doctype html><body>a real page, not a placeholder</body></html>"
     page.write_text(body)
 
-    client.main(["--key-file", str(path), str(page), "--title", "Board"])
+    client.main(
+        ["--key-file", str(path), str(page), "--title", "Board", "--comments", "on"]
+    )
     seen = capsys.readouterr()
     published = json.loads(seen.out.strip())
     assert published["title"] == "Board"
@@ -611,7 +639,15 @@ def test_key_absence_also_covers_401_and_a_double_409_and_a_usage_error(
 
     # A usage error (missing FILE).
     rc = client.main(
-        ["--key-file", str(path), str(tmp_path / "nope.html"), "--title", "X"]
+        [
+            "--key-file",
+            str(path),
+            str(tmp_path / "nope.html"),
+            "--title",
+            "X",
+            "--comments",
+            "on",
+        ]
     )
     assert rc == 2
     captured = capsys.readouterr()
@@ -633,7 +669,9 @@ def test_a_csp_warning_reaches_stderr_and_leaves_stdout_parseable(
         "<body>hi</body></html>\n"
     )
 
-    rc = client.main(["--key-file", str(path), str(page), "--title", "Board"])
+    rc = client.main(
+        ["--key-file", str(path), str(page), "--title", "Board", "--comments", "on"]
+    )
 
     assert rc == 0
     captured = capsys.readouterr()
@@ -649,7 +687,9 @@ def test_a_clean_publish_prints_no_warning_line(live, key_file, tmp_path, capsys
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>hi</body></html>")
 
-    rc = client.main(["--key-file", str(path), str(page), "--title", "Board"])
+    rc = client.main(
+        ["--key-file", str(path), str(page), "--title", "Board", "--comments", "on"]
+    )
 
     assert rc == 0
     captured = capsys.readouterr()
@@ -799,7 +839,9 @@ def test_the_services_own_refusal_is_shown_and_never_retried(monkeypatch):
 def _publish_one(path, tmp_path, capsys, title="Board") -> str:
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>hi</body></html>")
-    client.main(["--key-file", str(path), str(page), "--title", title])
+    client.main(
+        ["--key-file", str(path), str(page), "--title", title, "--comments", "on"]
+    )
     return json.loads(capsys.readouterr().out.strip())["id"]
 
 
@@ -971,7 +1013,12 @@ def test_fetch_reports_the_pages_warnings_and_keeps_stdout_the_page(
     body = '<!doctype html>\n<script src="https://cdn.example/x.js"></script>\n'
     page = tmp_path / "page.html"
     page.write_text(body)
-    assert client.main(["--key-file", str(path), str(page), "--title", "Board"]) == 0
+    assert (
+        client.main(
+            ["--key-file", str(path), str(page), "--title", "Board", "--comments", "on"]
+        )
+        == 0
+    )
     published = json.loads(capsys.readouterr().out.strip())
 
     assert client.main(["--key-file", str(path), "--fetch", published["id"]]) == 0
@@ -1003,6 +1050,8 @@ def test_the_listing_names_the_session_that_published_each_page(
             str(page),
             "--title",
             "Board",
+            "--comments",
+            "on",
             "--session",
             "mine/111",
         ]
@@ -1130,7 +1179,12 @@ def test_matches_answers_same_differs_and_refused_with_three_codes(
     path, _token = key_file
     page = tmp_path / "page.html"
     page.write_text("<!doctype html>\n<title>Board</title>\n<p>one</p>\n")
-    assert client.main(["--key-file", str(path), str(page), "--title", "Board"]) == 0
+    assert (
+        client.main(
+            ["--key-file", str(path), str(page), "--title", "Board", "--comments", "on"]
+        )
+        == 0
+    )
     pid = json.loads(capsys.readouterr().out.strip())["id"]
     run = ["--key-file", str(path), "--matches", pid]
 
@@ -1154,7 +1208,12 @@ def test_the_listing_names_its_columns_on_stderr_only(live, key_file, tmp_path, 
     path, _token = key_file
     page = tmp_path / "page.html"
     page.write_text("<!doctype html>\n<title>Board</title>\n<p>x</p>\n")
-    assert client.main(["--key-file", str(path), str(page), "--title", "Board"]) == 0
+    assert (
+        client.main(
+            ["--key-file", str(path), str(page), "--title", "Board", "--comments", "on"]
+        )
+        == 0
+    )
     capsys.readouterr()
     assert client.main(["--key-file", str(path), "--list"]) == 0
     out, err = capsys.readouterr()
@@ -1195,7 +1254,12 @@ def test_a_page_goes_over_the_wire_as_utf8_not_escapes(
     page = tmp_path / "page.html"
     body = "<!doctype html>\n<title>Café</title>\n<p>naïve — 日本</p>\n"
     page.write_text(body, encoding="utf-8")
-    assert client.main(["--key-file", str(path), str(page), "--title", "Café"]) == 0
+    assert (
+        client.main(
+            ["--key-file", str(path), str(page), "--title", "Café", "--comments", "on"]
+        )
+        == 0
+    )
     pid = json.loads(capsys.readouterr().out.strip())["id"]
     assert client.main(["--key-file", str(path), "--fetch", pid]) == 0
     assert capsys.readouterr().out == body
@@ -1213,7 +1277,17 @@ def test_folder_on_publish_says_created_once_and_names_it_after(
     path, _ = key_file
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>hi</body></html>")
-    args = ["--key-file", str(path), str(page), "--title", "Board", "--folder", "road"]
+    args = [
+        "--key-file",
+        str(path),
+        str(page),
+        "--title",
+        "Board",
+        "--comments",
+        "on",
+        "--folder",
+        "road",
+    ]
 
     assert client.main(args) == 0
     first = capsys.readouterr()
@@ -1238,9 +1312,11 @@ def test_folders_and_list_folder_and_no_folder(live, key_file, tmp_path, capsys)
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>hi</body></html>")
     base = ["--key-file", str(path)]
-    client.main([*base, str(page), "--title", "In", "--folder", "road"])
+    client.main(
+        [*base, str(page), "--title", "In", "--comments", "on", "--folder", "road"]
+    )
     inside = json.loads(capsys.readouterr().out)["id"]
-    client.main([*base, str(page), "--title", "Out"])
+    client.main([*base, str(page), "--title", "Out", "--comments", "on"])
     capsys.readouterr()
 
     assert client.main([*base, "--folders"]) == 0
@@ -1267,7 +1343,17 @@ def test_a_bad_folder_slug_is_refused_by_the_service_with_a_message(
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>hi</body></html>")
     rc = client.main(
-        ["--key-file", str(path), str(page), "--title", "B", "--folder", "Road Map"]
+        [
+            "--key-file",
+            str(path),
+            str(page),
+            "--title",
+            "B",
+            "--comments",
+            "on",
+            "--folder",
+            "Road Map",
+        ]
     )
     assert rc == 1
     assert "folder" in capsys.readouterr().err
@@ -1285,8 +1371,8 @@ def test_no_folder_and_all_misuse_are_usage_errors(live, key_file, tmp_path, cap
     page.write_text("<!doctype html><body>hi</body></html>")
     base = ["--key-file", str(path)]
     for extra in (
-        [str(page), "--title", "T", "--no-folder"],
-        [str(page), "--title", "T", "--folder", ""],
+        [str(page), "--title", "T", "--comments", "on", "--no-folder"],
+        [str(page), "--title", "T", "--comments", "on", "--folder", ""],
         ["--no-folder"],
     ):
         assert client.main([*base, *extra]) == 2
@@ -1307,7 +1393,7 @@ def test_move_files_pages_and_says_created_and_missing(
     base = ["--key-file", str(path)]
     ids = []
     for i in range(2):
-        client.main([*base, str(page), "--title", f"P{i}"])
+        client.main([*base, str(page), "--title", f"P{i}", "--comments", "on"])
         ids.append(json.loads(capsys.readouterr().out)["id"])
 
     assert client.main([*base, "--move", *ids, "nonesuch", "--folder", "road"]) == 0
@@ -1365,7 +1451,7 @@ def test_move_folder_title_and_the_folder_rename_and_archive_flags(
     base = ["--key-file", str(path)]
     page = tmp_path / "page.html"
     page.write_text("<!doctype html><body>hi</body></html>")
-    client.main([*base, str(page), "--title", "One"])
+    client.main([*base, str(page), "--title", "One", "--comments", "on"])
     one = json.loads(capsys.readouterr().out)["id"]
     moved = client.main(
         [*base, "--move", one, "--folder", "cps", "--folder-title", "Cove"]
@@ -1405,7 +1491,10 @@ def test_move_folder_title_and_the_folder_rename_and_archive_flags(
 
 
 def _published(client_main, base, page, capsys, *extra):
-    assert client_main([*base, str(page), "--title", "Board", *extra]) == 0
+    assert (
+        client_main([*base, str(page), "--title", "Board", "--comments", "on", *extra])
+        == 0
+    )
     return json.loads(capsys.readouterr().out)["id"]
 
 
@@ -1511,7 +1600,12 @@ def test_touch_misuse_is_a_usage_error(live, key_file, tmp_path, capsys):
     assert "--touch" in capsys.readouterr().err
     both = [*base, "--touch", "abc", "--refresh-every", "5m", "--no-refresh"]
     assert client.main(both) == 2
-    assert client.main([*base, str(page), "--title", "T", "--no-refresh"]) == 2
+    assert (
+        client.main(
+            [*base, str(page), "--title", "T", "--comments", "on", "--no-refresh"]
+        )
+        == 2
+    )
     capsys.readouterr()
     assert client.main([*base, "--refresh-every", "5m"]) == 2
 

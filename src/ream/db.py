@@ -948,6 +948,13 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
     27: ("alter table decision add column asked_by text",),
     # 9 Nov 2026: comment.kind takes explain, shorten and fix; its CHECK goes (see schema.sql).
     28: (_drop_comment_kind_check,),
+    # 9 Nov 2026: whether commenting starts on or off on a page (see schema.sql).
+    29: (
+        (
+            "alter table artifact add column comments_default text"
+            " check (comments_default in ('on', 'off'))"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

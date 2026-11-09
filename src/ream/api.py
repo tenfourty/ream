@@ -175,6 +175,10 @@ class PublishBody(BaseModel):
     # How often this publisher promises to vouch for the page, in seconds (60 to a year); a page
     # that goes quiet for 2.5 of them is flagged. Omitted, null or 0 declares nothing.
     refresh_every: int | None = None
+    # Whether commenting starts "on" or "off" for a reader of this page (9 Nov 2026). Off: no pill
+    # on selected words and nothing inviting a comment, until the reader presses Comment or turns
+    # it on. Required on a new page (422 without it); rows from before it was required are null, read as on.
+    comments: Literal["on", "off"] | None = None
 
 
 _BAD_SLUG = {
@@ -237,6 +241,12 @@ class PatchBody(BaseModel):
     folder_title: str | None = None
     # Omitted keeps the declared interval; a number declares it; null or 0 clears it.
     refresh_every: int | None = None
+    # Omitted (or null) keeps the page's setting; "on" or "off" sets it.
+    comments: Literal["on", "off"] | None = None
+
+
+class CommentsBody(BaseModel):
+    comments: Literal["on", "off"]
 
 
 class TouchBody(BaseModel):
@@ -790,11 +800,26 @@ SECTION_REFUSALS = (
 )
 
 
+_COMMENTS_REQUIRED = {
+    "field": "comments",
+    "detail": (
+        'a new page must say whether commenting starts on or off: send comments: "on" or '
+        '"off" (ream publish FILE --comments on|off). Choose off for a page a script '
+        "redraws or a status board; the reader can still turn commenting on for that page. "
+        "If your tool does not know this flag, it is out of date: reinstall it "
+        "(uv tool install ream --force, or the install line in /api/v1/agents.txt). "
+        "An update of an existing page does not need it."
+    ),
+}
+
+
 def publish_page(
     db: Database, agent: str, seat_session: str | None, payload: PublishBody
 ) -> dict:
     """POST /pages, for the route and the MCP `publish_page` tool."""
     body, title = payload.body, payload.title
+    if payload.comments is None:
+        raise HTTPException(422, _COMMENTS_REQUIRED)
     if payload.format == "html" and title is None:
         # As before markdown: an HTML publish names its page.
         raise HTTPException(422, {"field": "title", "detail": "title is required"})
@@ -813,12 +838,14 @@ def publish_page(
             folder=payload.folder,
             folder_title=payload.folder_title,
             refresh_every=payload.refresh_every,
+            comments=payload.comments,
         )
         # After the write, never inside it: a publish must not wait on a
         # browser, nor fail because of one. See thumbs.render_in_background.
         thumbs.render_in_background(db, published.id, published.version, body)
         return {
             **published.__dict__,
+            "comments": payload.comments,
             "warnings": page_warnings(db, published.id, body),
         }
     except store.BadInterval as exc:
@@ -897,6 +924,7 @@ def update_page(
                 if "refresh_every" in payload.model_fields_set
                 else store.KEEP
             ),
+            comments=(payload.comments if payload.comments is not None else store.KEEP),
         )
         # After the write, never inside it: a publish must not wait on a
         # browser, nor fail because of one. See thumbs.render_in_background.
@@ -1093,6 +1121,13 @@ def rename_page(db: Database, agent: str, artifact_id: str, title: str) -> dict:
 def pin_page(db: Database, agent: str, artifact_id: str, pinned: bool) -> dict:
     """POST /pages/{id}/pin, for the route and the MCP `organise_page` tool."""
     if not store.set_pinned(db, artifact_id, pinned, agent=agent):
+        raise HTTPException(404, "no such page")
+    return store.get_owned(db, agent, artifact_id).__dict__
+
+
+def comments_page(db: Database, agent: str, artifact_id: str, comments: str) -> dict:
+    """POST /pages/{id}/comments, for the route and the MCP `organise_page` tool."""
+    if not store.set_comments(db, artifact_id, comments, agent=agent):
         raise HTTPException(404, "no such page")
     return store.get_owned(db, agent, artifact_id).__dict__
 
@@ -2300,6 +2335,13 @@ def agent_router(
     def pin(artifact_id: str, payload: PinBody, agent: str = Depends(caller)):
         """Pin one of this agent's own pages to the front of the wall."""
         return pin_page(db, agent, artifact_id, payload.pinned)
+
+    @router.post("/artifacts/{artifact_id}/comments")
+    def comments(artifact_id: str, payload: CommentsBody, agent: str = Depends(caller)):
+        """Say whether commenting starts on or off for readers of one of this agent's own pages.
+        The reader's own choice for that page wins. A page that is not the caller's answers
+        exactly as a missing one."""
+        return comments_page(db, agent, artifact_id, payload.comments)
 
     @router.post("/artifacts/{artifact_id}/touch")
     def touch(

@@ -360,7 +360,12 @@ def test_cli_fetch_then_update_a_section_round_trip(live, key_file, tmp_path, ca
     path, _ = key_file
     whole = tmp_path / "page.html"
     whole.write_text(PAGE)
-    assert cli.main(["--key-file", str(path), str(whole), "--title", "CI"]) == 0
+    assert (
+        cli.main(
+            ["--key-file", str(path), str(whole), "--title", "CI", "--comments", "on"]
+        )
+        == 0
+    )
     capsys.readouterr()
     listing = cli._list(path.read_text())
     aid = listing[0]["id"]

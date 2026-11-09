@@ -1302,3 +1302,10 @@ begin
         execute format('alter table comment drop constraint %I', c.conname);
     end loop;
 end $$;
+
+-- WHETHER COMMENTING STARTS ON OR OFF ON A PAGE (9 Nov 2026). The publishing agent chooses:
+-- "off" means the ways in start off for a reader (no pill on selected words, nothing inviting
+-- a comment) and the reader can turn commenting on for that page. Null: the publisher did not
+-- say, which a reader's page treats as on. Nullable, no default, so "not stated" is recorded.
+alter table artifact add column if not exists comments_default text
+    check (comments_default in ('on', 'off'));

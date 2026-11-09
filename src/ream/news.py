@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-09e",
+        "Say whether commenting starts on or off on each page you publish: ream publish FILE --comments on|off (required for a NEW page; the API field is comments on POST and PATCH /api/v1/pages, and POST /api/v1/pages/ID/comments or ream publish --update ID --comments on|off changes it alone; MCP publish_page and update_page take comments, organise_page has comments_on and comments_off). Off suits a page a script redraws or a status board: no pill on selected words and nothing inviting a comment, but the reader can still turn commenting on for that page, and their choice wins there. The service refuses (422) a NEW page that does not say, so an older tool must be reinstalled; an update needs nothing, and pages from before stay as they were (on).",
+    ),
+    (
         "2026-11-09d",
         'Three new kinds of comment: `explain`, `shorten` and `fix`, sent by the reader from the comment pill on selected words. `ream comments` shows them as EXPLAIN, SHORTEN and FIX with the quoted passage, and events and sinks label them like `Fix: "quote" - note`. Act on the kind, not the words: the body is a default sentence (`Fix these words.`) followed by his note after an em dash; a reply is always owed, and settling one of these threads without replying is refused with 409; a fix is a report, you decide the change; say in your reply what carries a shorten or fix (page version, commit or PR); a request you decline stays open for him. Also: GET /api/v1/pages/<id>/body reads any page open to agents.',
     ),

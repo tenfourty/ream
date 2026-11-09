@@ -2495,9 +2495,22 @@ var touch=false,mq=null;
 try{mq=window.matchMedia?window.matchMedia("(pointer: coarse), (hover: none)"):null}catch(x){}
 function touchNow(){touch=!!(mq&&mq.matches);if(B&&B.classList)B.classList.toggle("ctouch",touch);steps()}
 if(mq){if(mq.addEventListener)mq.addEventListener("change",touchNow);else if(mq.addListener)mq.addListener(touchNow)}
-// OFFER COMMENTS WHEN I SELECT TEXT: on unless he turned it off, remembered here.
-var offer=true,OK="ream.comments.offer",sw=document.getElementById("coffer");
+// OFFER COMMENTS WHEN I SELECT TEXT: on unless he turned it off, remembered here. A page its
+// agent published with comments "off" starts with it off (data-comments-default on the
+// panel); his choice FOR THAT PAGE (pressing Comment, or the switch) is remembered under the
+// page's id and wins over the page's setting. His global choice still applies to every page
+// that is on.
+var offer=true,OK="ream.comments.offer",sw=document.getElementById("coffer"),
+  cp=document.getElementById("comments"),
+  offPage=!!(cp&&cp.getAttribute&&cp.getAttribute("data-comments-default")==="off"),
+  PK=OK+":"+K.slice(K.indexOf(":")+1),mine=null;
 try{offer=window.localStorage.getItem(OK)!=="0"}catch(x){}
+try{mine=window.localStorage.getItem(PK)}catch(x){}
+if(mine==="1"||mine==="0")offer=mine==="1";else if(offPage)offer=false;
+function chooseHere(on){offer=!!on;if(offPage||mine!==null){mine=offer?"1":"0";
+  try{window.localStorage.setItem(PK,mine)}catch(x){}}
+  else{try{window.localStorage.setItem(OK,offer?"1":"0")}catch(x){}}
+  if(sw)sw.checked=offer}
 // HOW TO COMMENT: the steps in the panel, shown while Comment is lit. The words
 // follow the switch and the touch rule the moment either changes (textContent only).
 var lit=false;
@@ -2509,7 +2522,7 @@ function steps(){var how=document.getElementById("chow");if(!how)return;
     li[2].textContent="Or write in the box below about the whole page."}
   how.hidden=!lit}
 if(sw){sw.checked=offer;sw.addEventListener("change",function(){
-  offer=!!sw.checked;try{window.localStorage.setItem(OK,offer?"1":"0")}catch(x){}
+  chooseHere(!!sw.checked);
   if(!offer){bar.hidden=true}steps()})}
 window.addEventListener("message",function(e){
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
@@ -2658,6 +2671,9 @@ function setLit(on){lit=!!on;if(B&&B.classList)B.classList.toggle("cmode-on",lit
 modeBtn=function(){
   if(lit){setLit(false);panel(false);return}
   if(!isOpen())wholePage();
+  // On a page that starts with commenting off, pressing Comment turns it fully on for this
+  // page, the pill included, and that is remembered for this page only.
+  if(offPage&&(!offer||mine!=="1")){chooseHere(true)}
   tab("open");panel(true);setLit(true)};
 litOff=function(){if(lit)setLit(false)};
 // Escape: the pill first, then Comment itself; the panel stays until the next Escape.
@@ -3460,6 +3476,7 @@ def _render_comments(
     everywhere: list | None = None,
     only_thread: str | None = None,
     db: Database | None = None,
+    comments_default: str | None = None,
 ) -> str:
     """The conversation on a page: threads, replies, and a box to start one --
     and, with `everywhere`, every page's conversations in the same drawer.
@@ -3695,7 +3712,9 @@ def _render_comments(
     # real button. No backdrop link: there is no backdrop.
     out = [
         (
-            '<aside class="cpanel" id="comments" aria-label="Comments" data-ctab="open">'
+            '<aside class="cpanel" id="comments" aria-label="Comments" data-ctab="open"'
+            + (' data-comments-default="off"' if comments_default == "off" else "")
+            + ">"
             '<div class="chead"><h2>Comments</h2>'
             '<a class="cclose" href="#_" aria-label="Close comments">\u00d7</a></div>'
             # Filled by /comments.js from the page's own report of the marks
@@ -6337,7 +6356,7 @@ def gallery_router(db: Database) -> APIRouter:
         with db.connect() as conn:
             row = conn.execute(
                 "select title, read_token, agent, archived_at, updated_at,"
-                " current_version, agents_can_read, deleted_at"
+                " current_version, agents_can_read, deleted_at, comments_default"
                 " from artifact where id = %s",
                 (artifact_id,),
             ).fetchone()
@@ -6535,7 +6554,7 @@ def gallery_router(db: Database) -> APIRouter:
                 # about a page is read once you have read the page; putting it
                 # above would be the mistake Jeremy already named about the
                 # questions -- "it feels odd to have the questions at the top".
-                f"{_render_comments(comment_rows, artifact_id, everywhere, db=db)}"
+                f"{_render_comments(comment_rows, artifact_id, everywhere, db=db, comments_default=row[8])}"
                 f"{_rename_dialog(artifact_id, row[0])}"
                 f"{_link_dialog(artifact_id)}"
                 # The open marks /comments.js posts into the frame to be

@@ -245,6 +245,23 @@ class ArtifactRow:
     check_note: str | None = None
     lapsed: bool = False
     lapses_at: datetime | None = None
+    # Whether commenting starts "on" or "off" on this page, as its publisher chose (9 Nov 2026);
+    # None: not stated, which a reader's page treats as on.
+    comments: str | None = None
+
+
+COMMENTS_CHOICES = ("on", "off")
+
+
+class BadComments(Exception):
+    """`comments` is neither "on" nor "off"."""
+
+
+def valid_comments(value):
+    """None stays None (not stated); "on" and "off" pass; anything else is `BadComments`."""
+    if value is not None and value not in COMMENTS_CHOICES:
+        raise BadComments(value)
+    return value
 
 
 # The declared refresh interval's bounds, in seconds (one minute to a year), and how many
@@ -599,8 +616,12 @@ def publish(
     folder: str | None = None,
     folder_title: str | None = None,
     refresh_every: int | None = None,
+    comments: str | None = None,
 ) -> Published:
-    """`refresh_every` declares how often the publisher promises to vouch for the page (seconds,
+    """`comments` ("on" or "off"; None: not stated, stored as null) is whether commenting
+    starts on or off for a reader of this page (`BadComments` otherwise).
+
+    `refresh_every` declares how often the publisher promises to vouch for the page (seconds,
     60 to a year; `BadInterval` otherwise). The publish itself is the first check.
 
     `folder` files the new page in the agent's own folder of that slug, creating it on first
@@ -619,6 +640,7 @@ def publish(
     _guard(body, MAX_BODY_BYTES, "body", agent=agent, artifact_id=None)
     _check_folder(folder, folder_title, agent=agent, artifact_id=None)
     interval = valid_interval(refresh_every)
+    comments = valid_comments(comments)
     # A bad form is refused before anything is stored (FormRefused -> 422).
     parsed_forms = forms.parse(body)
     artifact_id, revision = ids.new_id(), _revision(body, 1)
@@ -641,9 +663,21 @@ def publish(
         conn.execute(
             "insert into artifact"
             " (id, title, agent, read_token, current_version, session,"
-            "  created_at, updated_at, refresh_every, checked_at, check_status)"
-            " values (%s, %s, %s, %s, null, %s, %s, %s, %s, %s, 'ok')",
-            (artifact_id, title, agent, token, session, now, now, interval, now),
+            "  created_at, updated_at, refresh_every, checked_at, check_status,"
+            "  comments_default)"
+            " values (%s, %s, %s, %s, null, %s, %s, %s, %s, %s, 'ok', %s)",
+            (
+                artifact_id,
+                title,
+                agent,
+                token,
+                session,
+                now,
+                now,
+                interval,
+                now,
+                comments,
+            ),
         )
         conn.execute(
             "insert into version (artifact_id, n, body, revision, created_by, session,"
@@ -780,8 +814,11 @@ def patch(
     folder: str | None = None,
     folder_title: str | None = None,
     refresh_every: int | None | _Keep = KEEP,
+    comments: str | None | _Keep = KEEP,
 ) -> Published:
-    """Every call is also a check: it records that the publisher vouched for the page just now
+    """`comments` omitted keeps the page's setting; "on" or "off" sets it.
+
+    Every call is also a check: it records that the publisher vouched for the page just now
     (`_record_check`), including an identical body and a section update. `refresh_every` omitted
     keeps the declared interval; None or 0 clears it; a number declares it.
 
@@ -815,6 +852,8 @@ def patch(
         )
     _check_folder(folder, folder_title, agent=agent, artifact_id=artifact_id)
     interval = _interval_arg(refresh_every)
+    if not isinstance(comments, _Keep):
+        comments = valid_comments(comments)
     # A bad form is refused before anything is stored (FormRefused -> 422).
     parsed_forms = forms.parse(body)
     with db.connect() as conn:
@@ -864,6 +903,7 @@ def patch(
                         conn, artifact_id, agent, folder, folder_title
                     )
                 _record_check(conn, artifact_id, interval)
+                _write_comments(conn, artifact_id, comments)
             return Published(
                 folder=filed,
                 id=artifact_id,
@@ -970,6 +1010,7 @@ def patch(
                     else None
                 )
                 _record_check(conn, artifact_id, interval)
+                _write_comments(conn, artifact_id, comments)
         except DUPLICATE_KEY as exc:
             # Two patches raced the same `expected_revision`: both passed the
             # check above (nothing here takes a lock), but only one of them
@@ -1005,6 +1046,29 @@ def patch(
 
 def _interval_arg(value) -> int | None | _Keep:
     return value if isinstance(value, _Keep) else valid_interval(value)
+
+
+def _write_comments(conn, artifact_id: str, comments) -> None:
+    if not isinstance(comments, _Keep) and comments is not None:
+        conn.execute(
+            "update artifact set comments_default = %s where id = %s",
+            (comments, artifact_id),
+        )
+
+
+def set_comments(db: Database, artifact_id: str, comments: str, *, agent: str) -> bool:
+    """Set whether commenting starts "on" or "off" on one of `agent`'s own pages. A shelf fact:
+    no version. False if nothing matched (a missing page and "not yours" are one answer)."""
+    valid_comments(comments)
+    if comments is None:
+        raise BadComments(comments)
+    where, params = _scoped(artifact_id, agent)
+    with db.connect() as conn:
+        done = conn.execute(
+            f"update artifact set comments_default = %s {where}",  # noqa: S608 -- see _scoped
+            (comments, *params),
+        )
+        return done.rowcount > 0
 
 
 def _record_check(
@@ -1358,7 +1422,11 @@ def get_owned(
             " and v.n = a.current_version where a.id = %s",
             (row[0],),
         ).fetchone()
+        comments = conn.execute(
+            "select comments_default from artifact where id = %s", (row[0],)
+        ).fetchone()
     return ArtifactRow(
+        comments=comments[0] if comments else None,
         id=row[0],
         title=row[1],
         agent=row[2],
@@ -1633,7 +1701,7 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             " page_read.read_version, page_read.read_at, artifact.agents_can_read,"
             " case when folder.owner = artifact.agent then folder.slug end,"
             " artifact.refresh_every, artifact.checked_at, artifact.check_status,"
-            " artifact.check_note, version.created_at"
+            " artifact.check_note, version.created_at, artifact.comments_default"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
@@ -1662,6 +1730,7 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             seen_at=row[11],
             agents_can_read=row[12],
             folder=row[13],
+            comments=row[19],
             **_check_fields(row[14:19], row[7], now),
         )
         for row in rows
@@ -1694,7 +1763,7 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
             " page_read.read_version, page_read.read_at, artifact.agents_can_read,"
             " case when folder.owner = artifact.agent then folder.slug end,"
             " artifact.refresh_every, artifact.checked_at, artifact.check_status,"
-            " artifact.check_note, version.created_at"
+            " artifact.check_note, version.created_at, artifact.comments_default"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
@@ -1725,6 +1794,7 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
             seen_at=row[11] if row[2] == agent else None,
             agents_can_read=row[12],
             folder=row[13] if row[2] == agent else None,
+            comments=row[19],
             **_check_fields(row[14:19], row[7], now),
         )
         for row in rows

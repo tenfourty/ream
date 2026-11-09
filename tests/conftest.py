@@ -962,3 +962,44 @@ def _forget_clean_scans():
     with ggscan._clean_lock:
         ggscan._clean.clear()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _new_pages_say_comments(request, monkeypatch):
+    """The service refuses a NEW page that does not say whether commenting starts on or off
+    (9 Nov 2026). Most tests publish through the HTTP API to get a page, not to test that, so
+    the test client adds `comments: "on"` to a publish (POST /pages or /artifacts, or the MCP
+    publish_page tool) that does not carry the key. A test that sends the key itself, even as
+    null, is left as it sends it; `no_default_comments` leaves a whole test alone."""
+    if request.node.get_closest_marker("no_default_comments"):
+        return
+    from starlette.testclient import TestClient
+
+    real = TestClient.request
+
+    def request_with_comments(self, method, url, *args, **kwargs):
+        payload = kwargs.get("json")
+        if method.upper() == "POST" and isinstance(payload, dict):
+            path = str(url).split("?")[0]
+            if path.endswith(("/api/v1/artifacts", "/api/v1/pages")) and (
+                "body" in payload and "comments" not in payload
+            ):
+                kwargs["json"] = {**payload, "comments": "on"}
+            elif path.endswith("/mcp") and payload.get("method") == "tools/call":
+                params = payload.get("params") or {}
+                arguments = params.get("arguments")
+                if (
+                    params.get("name") == "publish_page"
+                    and isinstance(arguments, dict)
+                    and "comments" not in arguments
+                ):
+                    kwargs["json"] = {
+                        **payload,
+                        "params": {
+                            **params,
+                            "arguments": {**arguments, "comments": "on"},
+                        },
+                    }
+        return real(self, method, url, *args, **kwargs)
+
+    monkeypatch.setattr(TestClient, "request", request_with_comments)

@@ -570,3 +570,29 @@ package to install from (a medium slice, and a second release path to keep hones
 
 **Evidence:** Jeremy, 9 Nov 2026. Anonymous reads also need the `runcove` organisation to be
 visible, which homelab has put to him separately.
+
+## Each page says whether commenting starts on or off (9 Nov 2026)
+
+The agent that publishes a page chooses, per page, whether commenting starts **on** or **off**
+(`comments: "on" | "off"`, `ream publish --comments on|off`). Off suits a page a script redraws or
+a status board. Off means the ways in start off: selecting words shows no pill (the reader's
+"Offer comments when I select text" switch starts off on that page) and nothing on the page
+invites a comment. The Comment control is still there. If the reader presses it, or turns the
+switch on, commenting is fully on for that page and works as on any page. The reader's choice is
+remembered in the browser for that page only (`ream.comments.offer:<page id>`), and on that page it
+wins over the agent's setting. The reader's global switch still applies to pages that are on. The
+agent changes it later with `POST /pages/{id}/comments`, `ream publish --update ID --comments`, or
+the MCP `organise_page` actions `comments_on` and `comments_off`; Jeremy's gallery has no control
+for it, since his own switch overrides it per page.
+
+Stored as a nullable column (`artifact.comments_default`). **A NEW page published without the
+setting is refused, from day one**, by the server (422 on `/api/v1/pages` under both words, naming
+`comments: "on" or "off"`, `ream publish --comments on|off`, and that an older tool needs
+reinstalling), by the MCP `publish_page` tool (the same refusal) and by the CLI. An update of an
+existing page does not need it. Rows published before this change stay null and behave as on.
+
+**Not chosen:** off disabling commenting entirely. Only the pill off, with other invitations still
+shown. The reader's switch overriding every page. The page's setting being fixed against the
+reader's choice. Tools-only enforcement with a grace list for the server. No requirement.
+
+**Evidence:** confirmed (Jeremy, 9 Nov 2026).

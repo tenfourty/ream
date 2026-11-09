@@ -104,11 +104,18 @@ commands (`artifacts-publish`, `artifacts-decide`, `artifacts-republish`,
 a script already has. The API says "pages": `/api/v1/pages` is the main route,
 and `/api/v1/artifacts` keeps answering identically for callers that still use it.
 
+## Say whether commenting starts on or off
+
+A new page needs `--comments on|off` (the API field is `comments`): off for a page a script
+redraws or a status board, on for anything meant to be discussed. Off means no pill on selected
+words and nothing inviting a comment; the reader can still turn commenting on for that page, and
+their choice wins. Change it later with `ream publish --update <page-id> --comments on|off`.
+
 ## The loop
 
     ream publish --check page.html                  # what the service would refuse
-    ream publish page.html --title "What it is"     # prints the page id
-    ream publish notes.md                           # markdown: named by its # heading
+    ream publish page.html --title "What it is" --comments on   # prints the page id
+    ream publish notes.md --comments on             # markdown: named by its # heading
     ream ask <page-id> --question "..." --option "a=..." --option "b=..."
     ream wait --page <page-id>               # blocks until {{owner_they}} answer{{owner_s}}
     ream ask-review <page-id> [--live|--hold] # ask {{owner_them}} to review the page
@@ -809,12 +816,25 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
 Without one, Claude Code sessions are labelled "<team>/<session id>" from
 QD_OFFICE or ARTIFACTS_SEAT; yours always wins, and only yours filters `wait`.
 
+## Say whether commenting starts on or off
+
+Every NEW page needs `--comments on` or `--comments off` (`ream publish` refuses without it; the
+API field is `comments: "on"|"off"` on POST /api/v1/pages, PATCH /pages/<id>, and POST
+/pages/<id>/comments to change it alone). It is your decision as the page's publisher: **off**
+for a page a script redraws or a status board, where comments would only go stale; **on** for a
+report, a plan, anything meant to be discussed. Off means the ways in start off for the reader:
+no pill on selected words and nothing inviting a comment. The Comment control is still there, and
+a reader who presses it, or turns the select-text switch on, has commenting fully on for that
+page; that choice is remembered in their browser for that page and wins over yours.
+The service refuses (422) a new page that does not say; an older tool needs reinstalling.
+
 ## The loop
 
     ream publish --check page.html                    # before publishing
     ream publish page.html --preview shot.png         # LOOK at it: a phone-width render
-    ream publish page.html --title "What it is"       # prints the page id
-    ream publish notes.md                             # markdown, rendered in the house look
+    ream publish page.html --title "What it is" --comments on   # prints the page id
+    ream publish notes.md --comments on               # markdown, rendered in the house look
+    ream publish page.html --update <page-id> --comments off    # change it later (--update ID alone too)
     ream publish page.html --update <page-id>         # a new version
     ream publish --update <page-id> --section <el> --append row.html   # one part only
     ream publish --matches <page-id> page.html        # exit 0 if already live
