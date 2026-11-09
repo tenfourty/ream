@@ -332,7 +332,7 @@ jobs:
           image="git.tenfourty.site/runcove/artifacts:${sha12}"
 
           printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
-            -u jeremy --password-stdin  # the token's owner; the repo's owner is now the runcove org, which cannot log in
+            -u artifacts-publisher --password-stdin  # this repo's own push account (package write only)
 
           # The release build uses only layers this runner built itself, never a tag pulled from
           # the registry (runcove-5t3oj.104); the runner's own layer store still spares a
@@ -399,7 +399,7 @@ jobs:
           sha12="${GITHUB_SHA:0:12}"
           core="git.tenfourty.site/runcove/artifacts-core:${sha12}"
           printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
-            -u jeremy --password-stdin
+            -u artifacts-publisher --password-stdin
           if pulled=$(docker pull "$core" 2>&1); then
             echo "REUSED core: $core already exists in the registry; nothing pushed, not certified by this run"
             exit 0
