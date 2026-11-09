@@ -723,3 +723,21 @@ sharing, and live Snowflake data, from one codebase and two separate deployments
 **Not chosen:** approving with changes, or not yet. The owner picked (a) with nothing added.
 
 **Evidence:** confirmed (Jeremy, 9 Nov 2026), decision d_01M70JRY80X9C684D05WXD1GP3; tracker runcove-5t3oj.46.
+
+## Our homelab's add-ons to Ream live in a private repo named ream-homelab (9 Nov 2026)
+
+**Chosen:** the house-specific parts that leave the core (tracker pages, Mailgun, the secret scanner,
+the doorbell, the quarterdeck sink and answer source) live in a new private forge repo,
+`ream-homelab`, in the same organisation as this one. The homelab office creates it, and the artifacts
+office can write to it. This answers question 10.1 of
+`docs/agent/specs/2026-11-04-core-and-plugins-design.md`. The design named the repo
+`artifacts-homelab`; it was asked as `ream-homelab` after the project's rename.
+
+**Why:** this repo holds only the core, and our install's specifics need a home of their own that
+another deployment never has to carry.
+
+**Not chosen:** the same repo named `ream-plugins`, which reads as if it were for everyone's
+plug-ins. A folder inside the homelab repo, which would tie Ream add-on changes to the homelab
+repo's review and landing.
+
+**Evidence:** confirmed (Jeremy, 9 Nov 2026), decision d_01M70N0880RG906YRFG5S27Y3H.
