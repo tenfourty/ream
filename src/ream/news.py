@@ -22,7 +22,7 @@ from ream import envnames, plugin_cli, textvars
 NEWS: tuple[tuple[str, str], ...] = (
     (
         "2026-11-09d",
-        'Three new kinds of comment: `explain`, `shorten` and `fix`, sent by the reader from the comment pill on selected words. `ream comments` shows them as EXPLAIN, SHORTEN and FIX with the quoted passage, and events and sinks label them like `Fix: "quote" - note`. Act on the kind, not the words: a tap with no note carries a default sentence; a fix is a report, you decide the change; say in your reply what carries a shorten or fix (page version, commit or PR); a request you decline stays open for him. Also: GET /api/v1/pages/<id>/body reads any page open to agents.',
+        'Three new kinds of comment: `explain`, `shorten` and `fix`, sent by the reader from the comment pill on selected words. `ream comments` shows them as EXPLAIN, SHORTEN and FIX with the quoted passage, and events and sinks label them like `Fix: "quote" - note`. Act on the kind, not the words: the body is a default sentence (`Fix these words.`) followed by his note after an em dash; a reply is always owed, and settling one of these threads without replying is refused with 409; a fix is a report, you decide the change; say in your reply what carries a shorten or fix (page version, commit or PR); a request you decline stays open for him. Also: GET /api/v1/pages/<id>/body reads any page open to agents.',
     ),
     (
         "2026-11-09c",

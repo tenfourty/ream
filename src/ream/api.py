@@ -1123,6 +1123,12 @@ def comment_resolve(db: Database, agent: str, comment_id: str) -> dict:
         return comments.resolve(db, comment_id, by=agent, agent=agent).__dict__
     except store.NotFound as exc:
         raise HTTPException(404, "no such comment") from exc
+    except comments.ReplyOwed as exc:
+        raise HTTPException(
+            409,
+            "reply first: an explain, shorten or fix thread is always owed a reply, "
+            "even a bare tap. Post your reply under the thread, then settle it.",
+        ) from exc
 
 
 def comment_reopen(db: Database, agent: str, comment_id: str) -> dict:

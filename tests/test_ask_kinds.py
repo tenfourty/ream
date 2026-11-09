@@ -46,7 +46,16 @@ def client(db, monkeypatch):
 def test_the_kinds_are_stored_as_sent(db, kind):
     assert kind in comments.KINDS
     row = _ask(db, _page(db), kind, "the note")
-    assert row.kind == kind and row.body == "the note"
+    assert row.kind == kind
+    assert row.body == f"{comments.DEFAULT_BODY[kind]} — the note"
+
+
+def test_the_default_words_are_the_contract():
+    assert comments.DEFAULT_BODY == {
+        "explain": "Explain these words.",
+        "shorten": "Shorten these words.",
+        "fix": "Fix these words.",
+    }
 
 
 @pytest.mark.parametrize("kind", ASK)
@@ -67,6 +76,60 @@ def test_the_event_summary_is_never_empty_and_is_labelled(db, kind):
     assert bare.strip() and noted.strip()
     assert bare == f'{label}: "{QUOTE}"'
     assert noted == f'{label}: "{QUOTE}" — the 90 looks wrong'
+
+
+def _reply(db, page, root, author_kind, author, agent=None):
+    return comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind=author_kind,
+        author=author,
+        body="done",
+        thread_root=root.id,
+        agent=agent,
+    )
+
+
+@pytest.mark.parametrize("kind", ASK)
+def test_an_agent_cannot_settle_without_replying(db, kind):
+    page = _page(db)
+    root = _ask(db, page, kind)
+    with pytest.raises(comments.ReplyOwed):
+        comments.resolve(db, root.id, by="seat", agent="seat")
+    # his own reply is not the agent's
+    _reply(db, page, root, "human", "jeremy")
+    with pytest.raises(comments.ReplyOwed):
+        comments.resolve(db, root.id, by="seat", agent="seat")
+    _reply(db, page, root, "agent", "seat", agent="seat")
+    assert comments.resolve(db, root.id, by="seat", agent="seat").resolved_at
+
+
+@pytest.mark.parametrize("kind", ASK)
+def test_the_owner_may_settle_without_a_reply(db, kind):
+    page = _page(db)
+    root = _ask(db, page, kind)
+    assert comments.resolve(db, root.id, by="jeremy", agent=None).resolved_at
+
+
+def test_a_plain_comment_may_still_be_settled_without_a_reply(db):
+    page = _page(db)
+    root = _ask(db, page, "comment", "a remark")
+    assert comments.resolve(db, root.id, by="seat", agent="seat").resolved_at
+
+
+@pytest.mark.parametrize("kind", ASK)
+def test_settling_over_the_api_says_reply_first(client, db, kind):
+    page = _page(db)
+    root = _ask(db, page, kind)
+    token, _ = keys.mint(db, agent="seat")
+    auth = {"Authorization": f"Bearer {token}"}
+    r = client.post(f"/api/v1/comments/{root.id}/resolve", headers=auth)
+    assert r.status_code == 409 and "reply first" in r.text
+    _reply(db, page, root, "agent", "seat", agent="seat")
+    assert (
+        client.post(f"/api/v1/comments/{root.id}/resolve", headers=auth).status_code
+        == 200
+    )
 
 
 @pytest.mark.parametrize("kind", ASK)

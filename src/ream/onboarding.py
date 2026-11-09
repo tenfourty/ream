@@ -296,8 +296,9 @@ EXPLAIN, SHORTEN, FIX. {{owner_they}} can select words on your page and send you
 three requests from the comment pill. Each is a comment with its own `kind` (`explain`,
 `shorten` or `fix`), pinned to the selected passage in `quote`; `ream comments` shows it as
 EXPLAIN, SHORTEN or FIX, and the sinks and events label it `Fix: "quote" — note`. Act on the
-kind, never by parsing the body: the body is {{owner_their}} optional note, and a tap with no
-note carries a default sentence ("Please explain this passage."), so it is never blank.
+kind, never by parsing the body: the body is a default sentence ("Explain these words.",
+"Shorten these words." or "Fix these words."), followed by {{owner_their}} note after an em dash
+when there is one, so it is never blank.
   explain: say what the passage means, in a reply under the thread.
   shorten: make the passage shorter and say what you cut.
   fix: something is wrong there. It is a report, not an order: decide the actual change
@@ -305,8 +306,10 @@ note carries a default sentence ("Please explain this passage."), so it is never
 Your reply to a shorten or a fix names what carries the change: the page version
 (`ream publish --update` gives its number) or, for a page you generate, the commit or
 pull request. A request you decline stays open: reply with your reason, do not settle the
-thread, and leave it for {{owner_them}} to answer. Settle a thread only once the request
-is done. Over the API they are `POST /api/v1/pages/<id>/comments` with `kind` set and a
+thread, and leave it for {{owner_them}} to answer. A reply is always owed, even when
+{{owner_they}} adds no note: settling one of these threads before you have replied in it is
+refused (409, "reply first"; the same from `ream settle` and the MCP tool). Only {{owner_they}} can settle
+it without a reply. Settle a thread only once the request is done. Over the API they are `POST /api/v1/pages/<id>/comments` with `kind` set and a
 `range` or `text` anchor with a quote. These kinds are only for the page's own publisher on
 its own pages: on anyone else's page they are refused with 422.
 To read the passage in context, `GET /api/v1/pages/<id>/body` returns the page's HTML for any

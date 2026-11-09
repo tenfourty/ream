@@ -73,13 +73,14 @@ MAX_QUOTE_BYTES = 2_000
 # what this passage means), `shorten` (make it shorter) and `fix` (something is wrong
 # here; the agent decides the change, it is never applied verbatim). They are kinds, not a
 # convention in the body: an agent acts on `kind`, never by parsing the words. A bare tap
-# gets the words in `DEFAULT_BODY`, so the comment is never blank.
+# gets the words in `DEFAULT_BODY`, so the comment is never blank; a note is stored after
+# them as `<default> — <note>`, so an old tool that prints only the body still shows the kind.
 ASK_KINDS = ("explain", "shorten", "fix")
 KINDS = ("comment", "remove", "looks_good", *ASK_KINDS)
 DEFAULT_BODY = {
-    "explain": "Please explain this passage.",
-    "shorten": "Please make this passage shorter.",
-    "fix": "Something is wrong with this passage. Please fix it.",
+    "explain": "Explain these words.",
+    "shorten": "Shorten these words.",
+    "fix": "Fix these words.",
 }
 # What a kind is called wherever a mark is labelled: summaries, sinks, the gallery.
 LABEL = {
@@ -190,6 +191,12 @@ class InvalidKind(Exception):
 
 
 class NoSuchThread(Exception): ...
+
+
+class ReplyOwed(Exception):
+    """An agent tried to settle an explain, shorten or fix thread it has not replied
+    to. A reply is always owed for those kinds, even to a bare tap; only the owner,
+    in the gallery, may settle without one."""
 
 
 class NoSuchDecision(Exception):
@@ -598,7 +605,12 @@ def _event_summary(kind: str, quote: str, body: str) -> str:
     if not label:
         return body
     short = " ".join((quote or "").split())[:120]
-    note = "" if body == DEFAULT_BODY.get(kind) else body.strip()
+    default = DEFAULT_BODY.get(kind, "")
+    note = body.strip()
+    if note == default:
+        note = ""
+    elif default and note.startswith(default + " — "):
+        note = note[len(default) + 3 :].strip()
     return f'{label}: "{short}"' + (f" — {note}" if note else "")
 
 
@@ -683,6 +695,8 @@ def add(
         raise InvalidKind()
     if kind in ASK_KINDS and not body.strip() and thread_root is None:
         body = DEFAULT_BODY[kind]  # a bare tap still says something, in words
+    elif kind in ASK_KINDS and thread_root is None:
+        body = f"{DEFAULT_BODY[kind]} — {body.strip()}"  # his note after the default
     if is_reply:
         # A thread is one conversation; letting a reply carry its own mark
         # would put a second, independent "remove this" or "looks good" on
@@ -1523,6 +1537,19 @@ def resolve(
                 (root_id,),
             ).fetchone()
             owning_agent, title, page_session, root_body, root_quote, root_held = owner
+            if agent is not None:
+                root_kind = conn.execute(
+                    "select kind from comment where id = %s", (root_id,)
+                ).fetchone()[0]
+                if (
+                    root_kind in ASK_KINDS
+                    and not conn.execute(
+                        "select 1 from comment where thread_root = %s"
+                        " and author_kind <> 'human' limit 1",
+                        (root_id,),
+                    ).fetchone()
+                ):
+                    raise ReplyOwed()
             with conn.transaction():
                 conn.execute(
                     "update comment set resolved_at = %s, resolved_by = %s"

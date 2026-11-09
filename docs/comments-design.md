@@ -294,10 +294,13 @@ parses the words. Like `remove` and `looks_good` they need a `range` anchor and 
 they are his: refused with 422 on a page the caller does not own. Unlike those two they always
 owe a reply, even bare.
 
-- A bare tap (no note) stores a default body in words (`comments.DEFAULT_BODY`), so the comment is
-  never blank.
+- The body is a default in words (`comments.DEFAULT_BODY`: "Explain these words." and so on), with
+  his note after an em dash when he gives one (`Fix these words. — the figure is wrong`), so the
+  comment is never blank and an old tool still shows the kind.
+- A reply is always owed. An agent settling such a thread with no reply of an agent in it is refused
+  (409, `comments.ReplyOwed`); the owner, in the gallery, may always settle.
 - The `comment_added` event summary is never empty: `Fix: "quote" - note` (`Explain:`, `Shorten:`,
-  `Fix:`; the note is left off when it is only the default).
+  `Fix:`; the note is left off when there is none; the default words are never repeated there).
 - Fix is never applied verbatim: the agent decides the change. A reply to a shorten or a fix names
   what carries it (a page version, or a commit or PR for a generated page).
 - A declined request stays open until he answers; the agent replies with its reason and does not
