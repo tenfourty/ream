@@ -152,7 +152,8 @@ without a label a page says only which KEY published it. `REAM_SESSION="<agent>/
 ref>"` rides on the page, version, decision and events. A page published without it stays
 unattributed until its next real change -- an identical republish mints no version.
 
-**A push to `main` asks to deploy.** CI tests, builds an image, and opens a pin PR on the
+**A push to `main` asks to deploy.** CI tests, builds an image (also pushed as
+`runcove/artifacts-core:<sha12>`, the base the plug-in repo will build on; nothing consumes it yet), and opens a pin PR on the
 deployment's manifest repo that moves production onto that image
 (`.forgejo/scripts/pin-pr.sh`); production moves when that PR is merged. On the homelab the
 manifests live in the homelab repo and its maintainer merges the pin PRs.

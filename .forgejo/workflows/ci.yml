@@ -278,6 +278,8 @@ jobs:
     # The pushed image as <repo>:<sha12>@sha256:<digest>, for the pin job.
     outputs:
       ref: ${{ steps.build.outputs.ref }}
+      # The core image's ref (empty if its step failed); nothing reads it yet.
+      core_ref: ${{ steps.core.outputs.ref }}
     steps:
       - uses: actions/checkout@v4
 
@@ -369,6 +371,47 @@ jobs:
             echo "PUBLISHED image=${image} digest=${digest}"
           else
             echo "REUSED image=${image} digest=${digest} (existing tag, not built or certified by this run)"
+          fi
+
+      # The plug-in-free core image (core-and-plugins design 7.1 option A, step 8): the same
+      # build, tagged as runcove/artifacts-core:<sha12>, for the plug-in repo to build on.
+      # The image built above IS the core image today (core carries no plug-in installed from
+      # outside). Nothing consumes it yet and the pin job never reads it, so a failure here is
+      # reported but does not fail the job: production's path is the step above. It logs in
+      # again with the same token. A re-run reuses an existing core tag, as above.
+      - name: push core image
+        id: core
+        continue-on-error: true
+        env:
+          REGISTRY_PASSWORD: "${{ secrets.REGISTRY_PUSH_TOKEN }}"
+        run: |
+          set -eu
+          [ -n "$REGISTRY_PASSWORD" ] || { echo "REGISTRY_PUSH_TOKEN is not set on this repo" >&2; exit 1; }
+          sha12="${GITHUB_SHA:0:12}"
+          src="git.tenfourty.site/runcove/artifacts:${sha12}"
+          core="git.tenfourty.site/runcove/artifacts-core:${sha12}"
+          printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
+            -u jeremy --password-stdin
+          reused=0
+          if pulled=$(docker pull "$core" 2>&1); then
+            echo "$core is already in the registry (a re-run): reusing it, nothing pushed"
+            reused=1
+          else
+            case "$pulled" in
+              *"manifest unknown"*|*"not found"*) ;;
+              *) echo "$pulled" >&2; echo "could not tell whether $core exists" >&2; exit 1 ;;
+            esac
+            docker tag "$src" "$core"
+            docker push "$core"
+          fi
+          digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$core" \
+            | grep -m1 '^git.tenfourty.site/runcove/artifacts-core@sha256:' | cut -d@ -f2)
+          [ -n "$digest" ] || { echo "no registry digest for $core after the push" >&2; exit 1; }
+          echo "ref=${core}@${digest}" >> "$GITHUB_OUTPUT"
+          if [ "$reused" = 0 ]; then
+            echo "PUBLISHED core image=${core} digest=${digest}"
+          else
+            echo "REUSED core image=${core} digest=${digest} (existing tag, not built by this run)"
           fi
 
   # Opens the pull request on the homelab repo that moves production onto this image

@@ -688,6 +688,17 @@ drivers; CI only (not on baba).
    builds an image identical to today's from an empty plug-in set, opens a pin PR, and one real
    pin PR is merged as proof before anything moves. Core starts publishing the `-core` image and
    the lock-bump PRs; `core-with-house` job added informational.
+   **Core half, part 1 built (`ci/core-image`, 9 Nov 2026).** On a push to `main` the `image` job
+   has a second step, `push core image` (`continue-on-error`, so it never fails the job or the pin):
+   it tags the image the step before built as `git.tenfourty.site/runcove/artifacts-core:<sha12>`,
+   pushes it with the same login, and logs `PUBLISHED core image=... digest=...` (job output
+   `core_ref`; a re-run reuses an existing tag and logs `REUSED core`). The core image is today's
+   image: core still carries our in-tree plug-ins until step 9, so "plug-in-free" means free of
+   anything installed from outside. Today's image, `pin` and deploy are untouched; a `ci/**`
+   branch still builds and pushes nothing. **Not built:** `core-with-house` (left out: it needs
+   `runcove/ream-homelab`, which does not exist, so it could only skip; added when the repo
+   exists), and the lock-bump bot that opens the `core.lock` PR on the plug-in repo.
+   TODO (next): the lock-bump bot, after the homelab office creates `runcove/ream-homelab`.
 9. **Move, one at a time, each its own slice:** (9a) `beadpage`/`beadmetrics` and their console
    scripts, (9b) Mailgun, (9c) `ggscan`, (9d) doorbell, (9e) quarterdeck sink and inbound
    (the largest; includes the `slack` answer source and `on_answer` hook). Each: copy into the
