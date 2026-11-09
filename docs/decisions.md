@@ -741,3 +741,21 @@ plug-ins. A folder inside the homelab repo, which would tie Ream add-on changes 
 repo's review and landing.
 
 **Evidence:** confirmed (Jeremy, 9 Nov 2026), decision d_01M70N0880RG906YRFG5S27Y3H.
+
+## The ream-homelab repo builds the image that runs in production (9 Nov 2026)
+
+**Chosen:** this repo's CI publishes a plug-in-free core image and its wheel. `ream-homelab` builds
+the deployed image `FROM` that core image (its digest kept in a `core.lock` file there), installs our
+plug-ins, runs both suites, and opens the homelab pin PR. The production image keeps its present name.
+The homelab pin lander learns to bind a digest to `ream-homelab`'s CI run instead of this repo's.
+This answers question 10.2 of `docs/agent/specs/2026-11-04-core-and-plugins-design.md` (option A,
+section 7.1).
+
+**Why:** this repo stays only the core, and a change to one of our plug-ins goes straight to its own
+repo without a commit here.
+
+**Not chosen:** this repo building the image by cloning the add-on repo at a pinned version, which
+ties every add-on change to a core commit and blurs who owns what runs. A third repo that only
+assembles the image is worth it only if a second deployment of our own appears.
+
+**Evidence:** confirmed (Jeremy, 9 Nov 2026), decision d_01M70N0BMCAY974EP7602BX092.
