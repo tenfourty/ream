@@ -393,7 +393,10 @@ follows.
    the service has run for a while.
 3. A question an agent asks on a page can be answered by the person it is addressed to and by the
    page's owners.
-4. No office moves onto the company deployment until it has run on its own for a month.
+4. No house office ever moves onto the company deployment, gg-ops included (9 Nov 2026, replacing
+   "not until it has run on its own for a month"): he and every house office stay on the homelab's
+   instance; the company's is for GitGuardian people and their agents. Both run the same Ream
+   version, deployed separately and configured differently.
 5. The core ships generic live-data sources set up by configuration (any JSON API, metrics queries,
    SQL). A source that needs more, such as Snowflake's login, is a plug-in.
 6. A live source always runs with the viewer's own login. A source with no per-person login is not
@@ -435,9 +438,9 @@ follows.
 
 **Evidence:** questions 1 to 8; the MCP sign-in, with keys kept beside it, built into the core and
 tried on the homelab first, and first in the build order: confirmed (Jeremy, 8 Nov 2026; the MCP
-sign-in comes from his comment on the design page). Awaiting his confirmation: he said he and the
-house offices keep using the homelab Ream and the company deployment is a separate install; whether
-that means no house office ever moves, gg-ops included, so that answer 4 drops out, is unconfirmed.
+sign-in comes from his comment on the design page). Answer 4 as now written: confirmed (Jeremy,
+9 Nov 2026: the house offices stay on the homelab's instance for good and the design drops its
+"move" step).
 
 ## Ream in Claude.ai: the six sign-in choices (8 Nov 2026)
 
