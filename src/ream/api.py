@@ -757,6 +757,890 @@ def page_warnings(db: Database, artifact_id: str, body: str) -> list[dict]:
     return out
 
 
+SECTION_REFUSALS = (
+    store.NotFound,
+    store.RevisionMismatch,
+    store.PageChanged,
+    store.OpenDecisionDropped,
+    store.NotAPage,
+    store.BodyTooLarge,
+    store.InvalidText,
+    store.SecretFound,
+    store.ScanFailed,
+)
+
+
+def publish_page(
+    db: Database, agent: str, seat_session: str | None, payload: PublishBody
+) -> dict:
+    """POST /pages, for the route and the MCP `publish_page` tool."""
+    body, title = payload.body, payload.title
+    if payload.format == "html" and title is None:
+        # As before markdown: an HTML publish names its page.
+        raise HTTPException(422, {"field": "title", "detail": "title is required"})
+    if payload.format == "markdown":
+        body, named = _markdown_page(payload.body, title)
+        if not named:
+            raise HTTPException(422, {"field": "title", "detail": _NO_MARKDOWN_TITLE})
+        title = named
+    try:
+        published = store.publish(
+            db,
+            agent,
+            title,
+            body,
+            session=seat_session,
+            folder=payload.folder,
+            folder_title=payload.folder_title,
+            refresh_every=payload.refresh_every,
+        )
+        # After the write, never inside it: a publish must not wait on a
+        # browser, nor fail because of one. See thumbs.render_in_background.
+        thumbs.render_in_background(db, published.id, published.version, body)
+        return {
+            **published.__dict__,
+            "warnings": page_warnings(db, published.id, body),
+        }
+    except store.BadInterval as exc:
+        raise HTTPException(422, _BAD_INTERVAL) from exc
+    except store.NotAPage as exc:
+        # 422, not 413: the body is not too much, it is not a page. Named
+        # like every other refusal so a caller can tell them apart without
+        # reading prose (homelab-ij8.28 -- a builder script's "wrote
+        # <path>" log line was published as a status page).
+        raise HTTPException(
+            422,
+            {
+                "field": exc.field,
+                "detail": (
+                    "body does not look like an HTML page: no doctype and "
+                    "no HTML tag anywhere in it. If a command's output "
+                    "reached this call instead of your file, that is the "
+                    "usual cause."
+                ),
+            },
+        ) from exc
+    except store.BodyTooLarge as exc:
+        raise HTTPException(
+            413,
+            {
+                "field": exc.field,
+                "size": exc.size,
+                "detail": f"{exc.field} exceeds the size limit",
+            },
+        ) from exc
+    except store.InvalidText as exc:
+        raise HTTPException(
+            422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+        ) from exc
+    except store.SecretFound as found:
+        raise HTTPException(
+            422, _refused_detail(found.field, found.findings)
+        ) from found
+    except store.ScanFailed as exc:
+        raise HTTPException(
+            503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+        ) from exc
+    except folders.BadSlug as exc:
+        raise HTTPException(422, _BAD_SLUG) from exc
+    except folders.FolderArchived as exc:
+        raise HTTPException(409, _archived_folder(exc.slug)) from exc
+
+
+def update_page(
+    db: Database,
+    agent: str,
+    seat_session: str | None,
+    artifact_id: str,
+    payload: PatchBody,
+) -> dict:
+    """PATCH /pages/{id}, for the route and the MCP `update_page` tool."""
+    body = payload.body
+    if payload.format == "markdown":
+        # The title keeps its usual rule on update: omitted keeps the name
+        # the page has. The masthead and <title> follow the markdown.
+        body, _ = _markdown_page(payload.body, payload.title)
+    try:
+        published = store.patch(
+            db,
+            agent,
+            artifact_id,
+            body,
+            payload.expected_revision,
+            title=payload.title,
+            session=seat_session,
+            note=store.page_note(payload.note, agent=agent, artifact_id=artifact_id),
+            folder=payload.folder,
+            folder_title=payload.folder_title,
+            refresh_every=(
+                payload.refresh_every
+                if "refresh_every" in payload.model_fields_set
+                else store.KEEP
+            ),
+        )
+        # After the write, never inside it: a publish must not wait on a
+        # browser, nor fail because of one. See thumbs.render_in_background.
+        thumbs.render_in_background(db, published.id, published.version, body)
+        return {
+            **published.__dict__,
+            "warnings": page_warnings(db, published.id, body),
+        }
+    except store.BadInterval as exc:
+        raise HTTPException(422, _BAD_INTERVAL) from exc
+    except store.NotAPage as exc:
+        # 422, not 413: the body is not too much, it is not a page. Named
+        # like every other refusal so a caller can tell them apart without
+        # reading prose (homelab-ij8.28 -- a builder script's "wrote
+        # <path>" log line was published as a status page).
+        raise HTTPException(
+            422,
+            {
+                "field": exc.field,
+                "detail": (
+                    "body does not look like an HTML page: no doctype and "
+                    "no HTML tag anywhere in it. If a command's output "
+                    "reached this call instead of your file, that is the "
+                    "usual cause."
+                ),
+            },
+        ) from exc
+    except store.BodyTooLarge as exc:
+        raise HTTPException(
+            413,
+            {
+                "field": exc.field,
+                "size": exc.size,
+                "detail": f"{exc.field} exceeds the size limit",
+            },
+        ) from exc
+    except store.InvalidText as exc:
+        raise HTTPException(
+            422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+        ) from exc
+    except store.SecretFound as found:
+        raise HTTPException(
+            422, _refused_detail(found.field, found.findings)
+        ) from found
+    except store.ScanFailed as exc:
+        raise HTTPException(
+            503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+        ) from exc
+    except folders.BadSlug as exc:
+        raise HTTPException(422, _BAD_SLUG) from exc
+    except folders.FolderArchived as exc:
+        raise HTTPException(409, _archived_folder(exc.slug)) from exc
+    except store.RevisionMismatch as exc:
+        raise HTTPException(
+            409, "the artifact moved on; read it and patch again"
+        ) from exc
+    except store.NotFound as exc:
+        raise HTTPException(404, "no such page") from exc
+
+
+def update_page_section(
+    db: Database,
+    agent: str,
+    seat_session: str | None,
+    artifact_id: str,
+    element_id: str,
+    payload: SectionBody,
+) -> dict:
+    """PATCH /pages/{id}/sections/{el}, for the route and the MCP `update_page` tool."""
+    from ream import sections
+
+    fragment = payload.html
+    if payload.format == "markdown" and fragment is not None:
+        fragment = markdown.render_fragment(_markdown_input(fragment))
+    try:
+        result = store.patch_section(
+            db,
+            agent,
+            artifact_id,
+            element_id,
+            payload.op,
+            fragment,
+            if_revision=payload.if_revision,
+            if_section=payload.if_section,
+            note=payload.note,
+            notify=payload.notify,
+            session=seat_session,
+        )
+    except (sections.SectionError, *SECTION_REFUSALS) as exc:
+        raise section_refusal(exc) from exc
+    published = result.published
+    if not published.unchanged:
+        thumbs.render_in_background(db, published.id, published.version, result.body)
+    return {
+        "page_revision": published.revision,
+        "section_revision": result.section_revision,
+        "version": published.version,
+        "unchanged": published.unchanged,
+        "section": result.label,
+        "page_url": published.page_url,
+        "bytes": published.bytes,
+        "warnings": page_warnings(db, published.id, result.body),
+    }
+
+
+def move_to_folder(db: Database, agent: str, payload: MoveBody) -> dict:
+    """POST /pages/move, for the route and the MCP `organise_page` tool."""
+    try:
+        moved, missing, filed = store.move_many(
+            db, agent, payload.ids, payload.folder, payload.folder_title
+        )
+    except store.BodyTooLarge as exc:
+        raise HTTPException(
+            413,
+            {
+                "field": exc.field,
+                "size": exc.size,
+                "detail": f"{exc.field} exceeds the size limit",
+            },
+        ) from exc
+    except store.InvalidText as exc:
+        raise HTTPException(
+            422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+        ) from exc
+    except store.SecretFound as found:
+        raise HTTPException(
+            422, _refused_detail(found.field, found.findings)
+        ) from found
+    except store.ScanFailed as exc:
+        raise HTTPException(
+            503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+        ) from exc
+    except folders.BadSlug as exc:
+        raise HTTPException(422, _BAD_SLUG) from exc
+    except folders.FolderArchived as exc:
+        raise HTTPException(409, _archived_folder(exc.slug)) from exc
+    return {"moved": moved, "missing": missing, "folder": filed}
+
+
+def archive_page(db: Database, agent: str, artifact_id: str, archived: bool) -> dict:
+    """POST /pages/{id}/archive, for the route and the MCP `organise_page` tool."""
+    if not store.set_archived(db, artifact_id, archived, agent=agent):
+        raise HTTPException(404, "no such page")
+    return store.get_owned(db, agent, artifact_id).__dict__
+
+
+def rename_page(db: Database, agent: str, artifact_id: str, title: str) -> dict:
+    """POST /pages/{id}/rename, for the route and the MCP `organise_page` tool."""
+    try:
+        renamed = store.rename(db, artifact_id, title, agent=agent)
+    except store.NotAPage as exc:
+        # 422, not 413: the body is not too much, it is not a page. Named
+        # like every other refusal so a caller can tell them apart without
+        # reading prose (homelab-ij8.28 -- a builder script's "wrote
+        # <path>" log line was published as a status page).
+        raise HTTPException(
+            422,
+            {
+                "field": exc.field,
+                "detail": (
+                    "body does not look like an HTML page: no doctype and "
+                    "no HTML tag anywhere in it. If a command's output "
+                    "reached this call instead of your file, that is the "
+                    "usual cause."
+                ),
+            },
+        ) from exc
+    except store.BodyTooLarge as exc:
+        raise HTTPException(
+            413,
+            {
+                "field": exc.field,
+                "size": exc.size,
+                "detail": f"{exc.field} exceeds the size limit",
+            },
+        ) from exc
+    except store.InvalidText as exc:
+        raise HTTPException(
+            422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+        ) from exc
+    except store.SecretFound as found:
+        raise HTTPException(
+            422, _refused_detail(found.field, found.findings)
+        ) from found
+    except store.ScanFailed as exc:
+        raise HTTPException(
+            503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+        ) from exc
+    if not renamed:
+        raise HTTPException(404, "no such page")
+    return store.get_owned(db, agent, artifact_id).__dict__
+
+
+def pin_page(db: Database, agent: str, artifact_id: str, pinned: bool) -> dict:
+    """POST /pages/{id}/pin, for the route and the MCP `organise_page` tool."""
+    if not store.set_pinned(db, artifact_id, pinned, agent=agent):
+        raise HTTPException(404, "no such page")
+    return store.get_owned(db, agent, artifact_id).__dict__
+
+
+def delete_page(db: Database, agent: str, artifact_id: str) -> dict:
+    """DELETE /pages/{id}, for the route and the MCP `delete_page` tool."""
+    if not store.set_deleted(db, artifact_id, True, agent=agent):
+        raise HTTPException(404, "no such page")
+    return {"id": artifact_id, "deleted": True}
+
+
+def restore_page(db: Database, agent: str, artifact_id: str) -> dict:
+    """POST /pages/{id}/restore, for the route and the MCP `organise_page` tool."""
+    if not store.set_deleted(db, artifact_id, False, agent=agent):
+        raise HTTPException(404, "no such page")
+    return store.get_owned(db, agent, artifact_id).__dict__
+
+
+def comment_resolve(db: Database, agent: str, comment_id: str) -> dict:
+    """POST /comments/{id}/resolve, for the route and the MCP `comment` tool."""
+    try:
+        # `agent=` EXPLICITLY, never left to the default. The default is
+        # None, which means "the gallery, acting for Jeremy" and skips the
+        # ownership check entirely -- correct there, and a privilege
+        # escalation here, where any key could then resolve any seat's
+        # threads. Spelled out so the keyed path cannot acquire the
+        # gallery's authority by someone changing a default.
+        return comments.resolve(db, comment_id, by=agent, agent=agent).__dict__
+    except store.NotFound as exc:
+        raise HTTPException(404, "no such comment") from exc
+
+
+def comment_reopen(db: Database, agent: str, comment_id: str) -> dict:
+    """POST /comments/{id}/reopen, for the route and the MCP `comment` tool."""
+    try:
+        # `agent=` EXPLICITLY, for the reason spelled out on resolve above:
+        # the default would skip the ownership check.
+        return comments.reopen(db, comment_id, agent=agent, by=agent).__dict__
+    except store.NotFound as exc:
+        raise HTTPException(404, "no such comment") from exc
+
+
+def ask_question(
+    db: Database,
+    agent: str,
+    seat_session: str | None,
+    artifact_id: str,
+    payload: DecisionBody,
+) -> dict:
+    """POST /pages/{id}/decisions, for the route and the MCP `ask` tool."""
+    try:
+        row = decisions.ask(
+            db,
+            agent=agent,
+            artifact_id=artifact_id,
+            question=payload.question,
+            options=payload.options,
+            recommended=payload.recommended,
+            session=seat_session,
+            context=payload.context,
+            topic=payload.topic,
+            depends_on=payload.depends_on,
+            replaces=payload.replaces,
+            urgency=payload.urgency,
+            blocked_on=payload.blocked_on,
+            needed_by=payload.needed_by,
+            for_offices=payload.audience_sent()[0],
+            audience_field=payload.audience_sent()[1],
+        )
+        out = decisions.public(row)
+        if row.set_aside:
+            out["warning"] = (
+                f"this page is {row.set_aside_why}; the question is set aside "
+                "until it is unarchived"
+            )
+        return out
+    except store.NotAPage as exc:
+        # 422, not 413: the body is not too much, it is not a page. Named
+        # like every other refusal so a caller can tell them apart without
+        # reading prose (homelab-ij8.28 -- a builder script's "wrote
+        # <path>" log line was published as a status page).
+        raise HTTPException(
+            422,
+            {
+                "field": exc.field,
+                "detail": (
+                    "body does not look like an HTML page: no doctype and "
+                    "no HTML tag anywhere in it. If a command's output "
+                    "reached this call instead of your file, that is the "
+                    "usual cause."
+                ),
+            },
+        ) from exc
+    except store.BodyTooLarge as exc:
+        raise HTTPException(
+            413,
+            {
+                "field": exc.field,
+                "size": exc.size,
+                "detail": f"{exc.field} exceeds the size limit",
+            },
+        ) from exc
+    except store.InvalidText as exc:
+        raise HTTPException(
+            422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+        ) from exc
+    except store.SecretFound as found:
+        raise HTTPException(
+            422, _refused_detail(found.field, found.findings)
+        ) from found
+    except store.ScanFailed as exc:
+        raise HTTPException(
+            503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+        ) from exc
+    except decisions.InvalidOptions as exc:
+        raise HTTPException(
+            422, {"field": exc.field, "detail": "not a valid set of options"}
+        ) from exc
+    except decisions.InvalidField as exc:
+        raise HTTPException(422, {"field": exc.field, "detail": exc.detail}) from exc
+    except decisions.NotReplaceable as exc:
+        raise HTTPException(
+            409,
+            {
+                "field": exc.field,
+                "state": exc.state,
+                "replaced_by": exc.replaced_by,
+                "detail": (
+                    f"the decision you replace was already replaced by"
+                    f" {exc.replaced_by}: if your earlier ask got no reply,"
+                    " that question is the one it created"
+                    if exc.replaced_by
+                    else f"the decision you replace is already {exc.state}, so"
+                    " there is nothing left to replace: ask without"
+                    " `replaces`, or read its answer"
+                ),
+            },
+        ) from exc
+    except store.NotFound as exc:
+        raise HTTPException(404, "no such page") from exc
+
+
+def close_question(db: Database, agent: str, decision_id: str) -> dict:
+    """POST /decisions/{id}/close, for the route and the MCP `close_question` tool."""
+    try:
+        return decisions.public(decisions.close(db, agent, decision_id))
+    except store.NotFound as exc:
+        raise HTTPException(404, "no such decision") from exc
+
+
+def record_relay(
+    db: Database, agent: str, decision_id: str, payload: RecordBody
+) -> dict:
+    """POST /decisions/{id}/record, for the route and the MCP `record_answer` tool."""
+    said_at = None
+    if payload.said_at:
+        try:
+            said_at = datetime.fromisoformat(payload.said_at)
+        except ValueError:
+            raise HTTPException(422, "said_at must be an ISO 8601 timestamp") from None
+    found = decisions.get_owned(db, agent, decision_id)
+    if found is not None and found.kind == "form":
+        return _record_form(db, found, payload, said_at, agent)
+    if payload.fields is not None:
+        if found is None:
+            raise HTTPException(404, "no such open decision")
+        raise HTTPException(422, "`fields` is for a form; send a letter")
+    if payload.letter is None:
+        raise HTTPException(
+            422, textvars.render("send the letter {{owner_they}} chose")
+        )
+    try:
+        row = decisions.record_elsewhere(
+            db,
+            decision_id,
+            letter=payload.letter,
+            note=payload.note,
+            source=payload.source,
+            recorded_by=agent,
+            said_at=said_at,
+            round=payload.round,
+        )
+    except decisions.InvalidSource:
+        raise HTTPException(
+            422,
+            "source must be one of "
+            f"{', '.join(decisions.relay_sources())} — 'page' is refused, "
+            + textvars.render(
+                "because it means {{owner_name}} answered on the page "
+                "{{owner_themselves}}"
+            ),
+        ) from None
+    except decisions.InvalidAnswer:
+        raise HTTPException(422, "that letter is not one of the options") from None
+    except decisions.AlreadyDecided as exc:
+        named, current = exc.round, exc.current
+        raise HTTPException(
+            409,
+            {
+                "field": "answer",
+                # The verdict that counted, from its round when rounds
+                # exist: a stale relay's round has been cleared off the row.
+                "verdict": (
+                    named.verdict
+                    if named is not None and named.verdict is not None
+                    else decisions.VERDICTS.get(exc.row.answer)
+                ),
+                "answered_at": (
+                    named.closed_at
+                    if named is not None and named.closed_at is not None
+                    else exc.row.answered_at
+                ),
+                "round": current.n if current is not None else None,
+                "verdict_round": named.n if named is not None else None,
+                "message": (
+                    f"This review already has a verdict for round {named.n}: "
+                    f"{named.verdict}"
+                    if named is not None and named.verdict is not None
+                    else None
+                ),
+            },
+        ) from None
+    except store.NotFound:
+        raise HTTPException(404, "no such open decision") from None
+    return decisions.public(row)
+
+
+def section_refusal(exc: Exception) -> HTTPException:
+    """A section update's refusals, as the whole-page update words them
+    wherever the cause is the same."""
+    from ream import sections
+
+    if isinstance(exc, sections.SectionChanged):
+        return HTTPException(409, "section changed, re-fetch")
+    if isinstance(exc, sections.SectionError):
+        return HTTPException(422, {"field": "section", "detail": str(exc)})
+    if isinstance(exc, store.OpenDecisionDropped):
+        return HTTPException(
+            422,
+            {
+                "field": "section",
+                "decision": exc.decision_id,
+                "detail": (
+                    f"this would remove the slot of open question "
+                    f"{exc.decision_id} ({exc.question!r}), "
+                    + textvars.render(
+                        "which {{owner_they}} {{owner_has}} not answered. "
+                        "Keep its data-artifact-decision slot, "
+                        "or close the question first. Nothing was changed."
+                    )
+                ),
+            },
+        )
+    if isinstance(exc, store.PageChanged):
+        return HTTPException(409, f"page changed since revision {exc.given}, re-fetch")
+    if isinstance(exc, store.RevisionMismatch):
+        return HTTPException(409, "page changed, re-fetch")
+    if isinstance(exc, store.NotAPage):
+        return HTTPException(
+            422,
+            {
+                "field": exc.field,
+                "detail": "the resulting page does not look like an HTML page",
+            },
+        )
+    if isinstance(exc, store.BodyTooLarge):
+        return HTTPException(
+            413,
+            {
+                "field": exc.field,
+                "size": exc.size,
+                "detail": f"{exc.field} exceeds the size limit",
+            },
+        )
+    if isinstance(exc, store.InvalidText):
+        return HTTPException(
+            422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+        )
+    if isinstance(exc, store.SecretFound):
+        return HTTPException(422, _refused_detail(exc.field, exc.findings))
+    if isinstance(exc, store.ScanFailed):
+        return HTTPException(503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL})
+    if isinstance(exc, store.NotFound):
+        return HTTPException(404, "no such page")
+    raise exc
+
+
+def _element_anchor(db: Database, artifact_id, anchor, agent) -> tuple[dict, str]:
+    """An agent's `element` anchor, `{"kind": "element", "id": "..."}`, into
+    the stored shape: the id must be on the current version exactly once
+    (`sections.locate` says if it is not), and the server fills the tag,
+    the heading it sits under, the words either side and the quote from
+    the page, which an agent cannot measure."""
+    bad = HTTPException(
+        422,
+        {
+            "field": "anchor",
+            "detail": 'an element anchor is {"kind": "element", "id": "<the '
+            "element's id, which is on the page exactly once>\"}",
+        },
+    )
+    element_id = anchor.get("id")
+    if (
+        set(anchor) - {"kind", "id"}
+        or not isinstance(element_id, str)
+        or not anchors.ID_RE.fullmatch(element_id)
+    ):
+        raise bad
+    current = store.get_body(db, agent, artifact_id, as_reader=True)
+    try:
+        found = sections.locate(current.body, element_id)
+    except sections.SectionError as exc:
+        raise HTTPException(
+            422, {"field": "anchor", "detail": str(exc), "matches": 0}
+        ) from exc
+    return anchors.element_anchor(current.body, element_id, found)
+
+
+def _text_anchor(db: Database, artifact_id, payload, agent) -> tuple[dict | None, str]:
+    """Turn an agent's `text` anchor into the stored shape: a `quote` anchor
+    carrying the heading the server found the passage under, which the
+    gallery paints and re-finds after a republish (an agent cannot compute
+    the DOM path the browser's range anchor needs). Anything else passes
+    through unchanged."""
+    anchor = payload.anchor
+    if (
+        payload.thread_root is not None
+        or not isinstance(anchor, dict)
+        or anchor.get("kind") not in ("text", "element")
+    ):
+        return anchor, payload.quote
+    if anchor.get("kind") == "element":
+        return _element_anchor(db, artifact_id, anchor, agent)
+    quote, section = anchor.get("quote"), anchor.get("section")
+    if (
+        set(anchor) - {"kind", "quote", "section"}
+        or not isinstance(quote, str)
+        or not (section is None or isinstance(section, str))
+    ):
+        raise HTTPException(
+            422,
+            {
+                "field": "anchor",
+                "detail": 'a text anchor is {"kind": "text", "quote": "...", '
+                '"section": "optional heading text"}',
+            },
+        )
+    store._check_size(
+        quote,
+        comments.MAX_QUOTE_BYTES,
+        "quote",
+        agent=agent,
+        artifact_id=artifact_id,
+    )
+    current = store.get_body(db, agent, artifact_id, as_reader=True)
+    try:
+        comments.resolve_text_anchor(current.body, quote, section)
+    except comments.TextAnchorError as exc:
+        raise HTTPException(
+            422,
+            {
+                "field": "anchor",
+                "detail": exc.detail,
+                "matches": exc.matches,
+            },
+        ) from exc
+    heading, heading_id = anchors.heading_for_quote(current.body, quote, section)
+    found: dict = {"kind": "quote"}
+    if heading:
+        found["heading"] = heading
+    if heading_id:
+        found["heading_id"] = heading_id
+    return found, quote
+
+
+def refuse_decision_anchor(payload: CommentBody) -> None:
+    """A new thread under his answer is started at /decisions/{id}/replies, never by a
+    comment: refused on POST /pages/{id}/comments and the MCP `comment` tool alike."""
+    if (
+        payload.thread_root is None
+        and isinstance(payload.anchor, dict)
+        and payload.anchor.get("kind") == "decision"
+    ):
+        raise HTTPException(
+            422,
+            {
+                "field": "anchor",
+                "detail": (
+                    textvars.render(
+                        "a thread under {{owner_their}} answer is started with "
+                    )
+                    + "POST /api/v1/decisions/{decision_id}/replies"
+                ),
+            },
+        )
+
+
+def add_comment(
+    db: Database,
+    artifact_id: str,
+    payload: CommentBody,
+    agent: str,
+    conn,
+    seat_session: str | None,
+    later: list,
+) -> dict:
+    """An agent's comment, as POST /pages/{id}/comments and a reply under his answer
+    write it (the MCP `comment` tool too). `later` collects what runs once the write
+    has committed (the nudges and the second scan); the caller runs it after answering.
+    `conn` is the idempotency transaction, or None."""
+    try:
+        anchor, quote = _text_anchor(db, artifact_id, payload, agent)
+        row = comments.add(
+            db,
+            conn=conn,
+            artifact_id=artifact_id,
+            author_kind="agent",
+            author=agent,
+            body=payload.body,
+            anchor=anchor,
+            quote=quote,
+            thread_root=payload.thread_root,
+            agent=agent,
+            kind=payload.kind,
+            session=seat_session,
+            after_commit=later,
+            image_ids=payload.images,
+        )
+        # Where the pin stands on the page now, in the reply: the agent
+        # learns at write time, not on its next listing.
+        row = comments.with_state(db, row, conn)
+        # GitGuardian checks the saved comment straight after the response.
+        later.append(partial(comments.second_scan, db, row.id))
+        return row.__dict__
+    except store.NotAPage as exc:
+        # 422, not 413: the body is not too much, it is not a page. Named
+        # like every other refusal so a caller can tell them apart without
+        # reading prose (homelab-ij8.28 -- a builder script's "wrote
+        # <path>" log line was published as a status page).
+        raise HTTPException(
+            422,
+            {
+                "field": exc.field,
+                "detail": (
+                    "body does not look like an HTML page: no doctype and "
+                    "no HTML tag anywhere in it. If a command's output "
+                    "reached this call instead of your file, that is the "
+                    "usual cause."
+                ),
+            },
+        ) from exc
+    except store.BodyTooLarge as exc:
+        raise HTTPException(
+            413,
+            {
+                "field": exc.field,
+                "size": exc.size,
+                "detail": f"{exc.field} exceeds the size limit",
+            },
+        ) from exc
+    except store.InvalidText as exc:
+        raise HTTPException(
+            422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+        ) from exc
+    except store.SecretFound as found:
+        raise HTTPException(
+            422, _refused_detail(found.field, found.findings)
+        ) from found
+    except store.ScanFailed as exc:
+        raise HTTPException(
+            503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+        ) from exc
+    except images.ImageRefused as exc:
+        raise HTTPException(
+            exc.status, {"field": exc.field, "detail": exc.detail}
+        ) from exc
+    except comments.InvalidAnchor as exc:
+        raise HTTPException(
+            422, {"field": exc.field, "detail": "not a valid anchor"}
+        ) from exc
+    except comments.InvalidKind as exc:
+        raise HTTPException(
+            422,
+            {
+                "field": exc.field,
+                "detail": (
+                    "kind must be comment, remove or looks_good, with a "
+                    "quoted range for the last two"
+                ),
+            },
+        ) from exc
+    except comments.VerdictRefused as exc:
+        raise HTTPException(
+            422,
+            {
+                "field": exc.field,
+                "detail": textvars.render(
+                    "on a page you do not own only kind comment is allowed: "
+                    "remove and looks_good are {{owner_name}}'s. Say it in the body "
+                    "of a plain comment instead."
+                ),
+            },
+        ) from exc
+    except comments.NoSuchThread as exc:
+        raise HTTPException(
+            422,
+            {
+                "field": "thread_root",
+                "detail": "no open root comment with that id on this artifact",
+            },
+        ) from exc
+    except comments.NoSuchDecision as exc:
+        raise HTTPException(404, "no such decision") from exc
+    except store.NotFound as exc:
+        raise HTTPException(404, "no such page") from exc
+
+
+def _record_form(db: Database, found, payload: RecordBody, said_at, agent: str):
+    """The per-field relay of a form (formanswer.relay): every field stored with its
+    source, none of it his own submit, none over a later submit of his."""
+    if payload.source not in decisions.relay_sources():
+        raise HTTPException(
+            422,
+            "source must be one of "
+            f"{', '.join(decisions.relay_sources())} — 'page' is refused, "
+            + textvars.render(
+                "because it means {{owner_name}} answered on the page "
+                "{{owner_themselves}}"
+            ),
+        )
+    if payload.letter is not None or not payload.fields:
+        raise HTTPException(
+            422, "a form is relayed per field: send fields {name: value}"
+        )
+    try:
+        done = formanswer.relay(
+            db,
+            found.id,
+            fields_given=payload.fields,
+            note=payload.note,
+            source=payload.source,
+            recorded_by=agent,
+            said_at=said_at,
+        )
+    except formanswer.SubmitRefused as exc:
+        # 422 a bad value; 409 the form changed while this was relayed: send it again.
+        raise HTTPException(
+            exc.status, {"detail": exc.detail, "field": exc.field}
+        ) from None
+    except store.NotFound:
+        raise HTTPException(404, "no such open decision") from None
+    except store.BodyTooLarge as exc:
+        raise HTTPException(
+            413,
+            {"field": exc.field, "detail": f"{exc.field} exceeds the size limit"},
+        ) from None
+    except store.SecretFound as hit:
+        raise HTTPException(422, _refused_detail(hit.field, hit.findings)) from hit
+    except store.ScanFailed as exc:
+        raise HTTPException(
+            503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
+        ) from exc
+    row = decisions.get_owned(db, agent, found.id)
+    out = decisions.public(row)
+    out["relayed"] = {"applied": done["applied"], "skipped": done["skipped"]}
+    return out
+
+
 def agent_router(
     db: Database, limiter: ratelimit.FailedAuthLimiter | None = None
 ) -> APIRouter:
@@ -1002,79 +1886,7 @@ def agent_router(
         agent: str = Depends(caller),
         seat_session: str | None = Depends(session),
     ):
-        body, title = payload.body, payload.title
-        if payload.format == "html" and title is None:
-            # As before markdown: an HTML publish names its page.
-            raise HTTPException(422, {"field": "title", "detail": "title is required"})
-        if payload.format == "markdown":
-            body, named = _markdown_page(payload.body, title)
-            if not named:
-                raise HTTPException(
-                    422, {"field": "title", "detail": _NO_MARKDOWN_TITLE}
-                )
-            title = named
-        try:
-            published = store.publish(
-                db,
-                agent,
-                title,
-                body,
-                session=seat_session,
-                folder=payload.folder,
-                folder_title=payload.folder_title,
-                refresh_every=payload.refresh_every,
-            )
-            # After the write, never inside it: a publish must not wait on a
-            # browser, nor fail because of one. See thumbs.render_in_background.
-            thumbs.render_in_background(db, published.id, published.version, body)
-            return {
-                **published.__dict__,
-                "warnings": _warnings_for(published.id, body),
-            }
-        except store.BadInterval as exc:
-            raise HTTPException(422, _BAD_INTERVAL) from exc
-        except store.NotAPage as exc:
-            # 422, not 413: the body is not too much, it is not a page. Named
-            # like every other refusal so a caller can tell them apart without
-            # reading prose (homelab-ij8.28 -- a builder script's "wrote
-            # <path>" log line was published as a status page).
-            raise HTTPException(
-                422,
-                {
-                    "field": exc.field,
-                    "detail": (
-                        "body does not look like an HTML page: no doctype and "
-                        "no HTML tag anywhere in it. If a command's output "
-                        "reached this call instead of your file, that is the "
-                        "usual cause."
-                    ),
-                },
-            ) from exc
-        except store.BodyTooLarge as exc:
-            raise HTTPException(
-                413,
-                {
-                    "field": exc.field,
-                    "size": exc.size,
-                    "detail": f"{exc.field} exceeds the size limit",
-                },
-            ) from exc
-        except store.InvalidText as exc:
-            raise HTTPException(
-                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
-            ) from exc
-        except store.SecretFound as found:
-            raise HTTPException(
-                422, _refused_detail(found.field, found.findings)
-            ) from found
-        except store.ScanFailed as exc:
-            raise HTTPException(
-                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
-            ) from exc
-        except folders.BadSlug as exc:
-            raise HTTPException(422, _BAD_SLUG) from exc
-        except folders.FolderArchived as exc:
-            raise HTTPException(409, _archived_folder(exc.slug)) from exc
+        return publish_page(db, agent, seat_session, payload)
 
     @router.patch("/artifacts/{artifact_id}")
     def update(
@@ -1083,163 +1895,7 @@ def agent_router(
         agent: str = Depends(caller),
         seat_session: str | None = Depends(session),
     ):
-        body = payload.body
-        if payload.format == "markdown":
-            # The title keeps its usual rule on update: omitted keeps the name
-            # the page has. The masthead and <title> follow the markdown.
-            body, _ = _markdown_page(payload.body, payload.title)
-        try:
-            published = store.patch(
-                db,
-                agent,
-                artifact_id,
-                body,
-                payload.expected_revision,
-                title=payload.title,
-                session=seat_session,
-                note=store.page_note(
-                    payload.note, agent=agent, artifact_id=artifact_id
-                ),
-                folder=payload.folder,
-                folder_title=payload.folder_title,
-                refresh_every=(
-                    payload.refresh_every
-                    if "refresh_every" in payload.model_fields_set
-                    else store.KEEP
-                ),
-            )
-            # After the write, never inside it: a publish must not wait on a
-            # browser, nor fail because of one. See thumbs.render_in_background.
-            thumbs.render_in_background(db, published.id, published.version, body)
-            return {
-                **published.__dict__,
-                "warnings": _warnings_for(published.id, body),
-            }
-        except store.BadInterval as exc:
-            raise HTTPException(422, _BAD_INTERVAL) from exc
-        except store.NotAPage as exc:
-            # 422, not 413: the body is not too much, it is not a page. Named
-            # like every other refusal so a caller can tell them apart without
-            # reading prose (homelab-ij8.28 -- a builder script's "wrote
-            # <path>" log line was published as a status page).
-            raise HTTPException(
-                422,
-                {
-                    "field": exc.field,
-                    "detail": (
-                        "body does not look like an HTML page: no doctype and "
-                        "no HTML tag anywhere in it. If a command's output "
-                        "reached this call instead of your file, that is the "
-                        "usual cause."
-                    ),
-                },
-            ) from exc
-        except store.BodyTooLarge as exc:
-            raise HTTPException(
-                413,
-                {
-                    "field": exc.field,
-                    "size": exc.size,
-                    "detail": f"{exc.field} exceeds the size limit",
-                },
-            ) from exc
-        except store.InvalidText as exc:
-            raise HTTPException(
-                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
-            ) from exc
-        except store.SecretFound as found:
-            raise HTTPException(
-                422, _refused_detail(found.field, found.findings)
-            ) from found
-        except store.ScanFailed as exc:
-            raise HTTPException(
-                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
-            ) from exc
-        except folders.BadSlug as exc:
-            raise HTTPException(422, _BAD_SLUG) from exc
-        except folders.FolderArchived as exc:
-            raise HTTPException(409, _archived_folder(exc.slug)) from exc
-        except store.RevisionMismatch as exc:
-            raise HTTPException(
-                409, "the artifact moved on; read it and patch again"
-            ) from exc
-        except store.NotFound as exc:
-            raise HTTPException(404, "no such page") from exc
-
-    def _section_refusal(exc: Exception) -> HTTPException:
-        """A section update's refusals, as the whole-page update words them
-        wherever the cause is the same."""
-        from ream import sections
-
-        if isinstance(exc, sections.SectionChanged):
-            return HTTPException(409, "section changed, re-fetch")
-        if isinstance(exc, sections.SectionError):
-            return HTTPException(422, {"field": "section", "detail": str(exc)})
-        if isinstance(exc, store.OpenDecisionDropped):
-            return HTTPException(
-                422,
-                {
-                    "field": "section",
-                    "decision": exc.decision_id,
-                    "detail": (
-                        f"this would remove the slot of open question "
-                        f"{exc.decision_id} ({exc.question!r}), "
-                        + textvars.render(
-                            "which {{owner_they}} {{owner_has}} not answered. "
-                            "Keep its data-artifact-decision slot, "
-                            "or close the question first. Nothing was changed."
-                        )
-                    ),
-                },
-            )
-        if isinstance(exc, store.PageChanged):
-            return HTTPException(
-                409, f"page changed since revision {exc.given}, re-fetch"
-            )
-        if isinstance(exc, store.RevisionMismatch):
-            return HTTPException(409, "page changed, re-fetch")
-        if isinstance(exc, store.NotAPage):
-            return HTTPException(
-                422,
-                {
-                    "field": exc.field,
-                    "detail": "the resulting page does not look like an HTML page",
-                },
-            )
-        if isinstance(exc, store.BodyTooLarge):
-            return HTTPException(
-                413,
-                {
-                    "field": exc.field,
-                    "size": exc.size,
-                    "detail": f"{exc.field} exceeds the size limit",
-                },
-            )
-        if isinstance(exc, store.InvalidText):
-            return HTTPException(
-                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
-            )
-        if isinstance(exc, store.SecretFound):
-            return HTTPException(422, _refused_detail(exc.field, exc.findings))
-        if isinstance(exc, store.ScanFailed):
-            return HTTPException(
-                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
-            )
-        if isinstance(exc, store.NotFound):
-            return HTTPException(404, "no such page")
-        raise exc
-
-    _SECTION_REFUSALS = (
-        store.NotFound,
-        store.RevisionMismatch,
-        store.PageChanged,
-        store.OpenDecisionDropped,
-        store.NotAPage,
-        store.BodyTooLarge,
-        store.InvalidText,
-        store.SecretFound,
-        store.ScanFailed,
-    )
+        return update_page(db, agent, seat_session, artifact_id, payload)
 
     @router.get("/artifacts/{artifact_id}/sections/{element_id}")
     def read_section(artifact_id: str, element_id: str, agent: str = Depends(caller)):
@@ -1252,8 +1908,8 @@ def agent_router(
             outer, rev, live = store.get_section(
                 db, agent, artifact_id, element_id, as_reader=True
             )
-        except (sections.SectionError, *_SECTION_REFUSALS) as exc:
-            raise _section_refusal(exc) from exc
+        except (sections.SectionError, *SECTION_REFUSALS) as exc:
+            raise section_refusal(exc) from exc
         return {
             "html": outer,
             "section_revision": rev,
@@ -1272,42 +1928,9 @@ def agent_router(
         """Apply one operation to one element of the LIVE page and store the
         whole result as a new version. Every check a whole-page update runs,
         runs on the whole resulting page."""
-        from ream import sections
-
-        fragment = payload.html
-        if payload.format == "markdown" and fragment is not None:
-            fragment = markdown.render_fragment(_markdown_input(fragment))
-        try:
-            result = store.patch_section(
-                db,
-                agent,
-                artifact_id,
-                element_id,
-                payload.op,
-                fragment,
-                if_revision=payload.if_revision,
-                if_section=payload.if_section,
-                note=payload.note,
-                notify=payload.notify,
-                session=seat_session,
-            )
-        except (sections.SectionError, *_SECTION_REFUSALS) as exc:
-            raise _section_refusal(exc) from exc
-        published = result.published
-        if not published.unchanged:
-            thumbs.render_in_background(
-                db, published.id, published.version, result.body
-            )
-        return {
-            "page_revision": published.revision,
-            "section_revision": result.section_revision,
-            "version": published.version,
-            "unchanged": published.unchanged,
-            "section": result.label,
-            "page_url": published.page_url,
-            "bytes": published.bytes,
-            "warnings": _warnings_for(published.id, result.body),
-        }
+        return update_page_section(
+            db, agent, seat_session, artifact_id, element_id, payload
+        )
 
     # DECLARED BEFORE /artifacts/{artifact_id}, and it has to be. FastAPI
     # matches in declaration order, so with the parameterised route first this
@@ -1548,36 +2171,7 @@ def agent_router(
     def move_pages(payload: MoveBody, agent: str = Depends(caller)):
         """File several of this agent's own pages in one of its folders in one go, or take
         them out (`folder: null`). `missing` covers "no such page" and "not yours" alike."""
-        try:
-            moved, missing, filed = store.move_many(
-                db, agent, payload.ids, payload.folder, payload.folder_title
-            )
-        except store.BodyTooLarge as exc:
-            raise HTTPException(
-                413,
-                {
-                    "field": exc.field,
-                    "size": exc.size,
-                    "detail": f"{exc.field} exceeds the size limit",
-                },
-            ) from exc
-        except store.InvalidText as exc:
-            raise HTTPException(
-                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
-            ) from exc
-        except store.SecretFound as found:
-            raise HTTPException(
-                422, _refused_detail(found.field, found.findings)
-            ) from found
-        except store.ScanFailed as exc:
-            raise HTTPException(
-                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
-            ) from exc
-        except folders.BadSlug as exc:
-            raise HTTPException(422, _BAD_SLUG) from exc
-        except folders.FolderArchived as exc:
-            raise HTTPException(409, _archived_folder(exc.slug)) from exc
-        return {"moved": moved, "missing": missing, "folder": filed}
+        return move_to_folder(db, agent, payload)
 
     @router.post("/artifacts/{artifact_id}/transfer")
     def transfer(artifact_id: str, payload: TransferBody, agent: str = Depends(caller)):
@@ -1626,64 +2220,18 @@ def agent_router(
     @router.post("/artifacts/{artifact_id}/archive")
     def archive(artifact_id: str, payload: ArchiveBody, agent: str = Depends(caller)):
         """Take one of this agent's own pages off the wall, or put it back."""
-        if not store.set_archived(db, artifact_id, payload.archived, agent=agent):
-            raise HTTPException(404, "no such page")
-        return store.get_owned(db, agent, artifact_id).__dict__
+        return archive_page(db, agent, artifact_id, payload.archived)
 
     @router.post("/artifacts/{artifact_id}/rename")
     def rename(artifact_id: str, payload: RenameBody, agent: str = Depends(caller)):
         """Rename without republishing -- the whole body is not needed to fix a
         name, and an agent that no longer holds the file should not have to."""
-        try:
-            renamed = store.rename(db, artifact_id, payload.title, agent=agent)
-        except store.NotAPage as exc:
-            # 422, not 413: the body is not too much, it is not a page. Named
-            # like every other refusal so a caller can tell them apart without
-            # reading prose (homelab-ij8.28 -- a builder script's "wrote
-            # <path>" log line was published as a status page).
-            raise HTTPException(
-                422,
-                {
-                    "field": exc.field,
-                    "detail": (
-                        "body does not look like an HTML page: no doctype and "
-                        "no HTML tag anywhere in it. If a command's output "
-                        "reached this call instead of your file, that is the "
-                        "usual cause."
-                    ),
-                },
-            ) from exc
-        except store.BodyTooLarge as exc:
-            raise HTTPException(
-                413,
-                {
-                    "field": exc.field,
-                    "size": exc.size,
-                    "detail": f"{exc.field} exceeds the size limit",
-                },
-            ) from exc
-        except store.InvalidText as exc:
-            raise HTTPException(
-                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
-            ) from exc
-        except store.SecretFound as found:
-            raise HTTPException(
-                422, _refused_detail(found.field, found.findings)
-            ) from found
-        except store.ScanFailed as exc:
-            raise HTTPException(
-                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
-            ) from exc
-        if not renamed:
-            raise HTTPException(404, "no such page")
-        return store.get_owned(db, agent, artifact_id).__dict__
+        return rename_page(db, agent, artifact_id, payload.title)
 
     @router.post("/artifacts/{artifact_id}/pin")
     def pin(artifact_id: str, payload: PinBody, agent: str = Depends(caller)):
         """Pin one of this agent's own pages to the front of the wall."""
-        if not store.set_pinned(db, artifact_id, payload.pinned, agent=agent):
-            raise HTTPException(404, "no such page")
-        return store.get_owned(db, agent, artifact_id).__dict__
+        return pin_page(db, agent, artifact_id, payload.pinned)
 
     @router.post("/artifacts/{artifact_id}/touch")
     def touch(
@@ -1778,17 +2326,13 @@ def agent_router(
         the recovery below is an agent-facing route and not only a button in
         his gallery.
         """
-        if not store.set_deleted(db, artifact_id, True, agent=agent):
-            raise HTTPException(404, "no such page")
-        return {"id": artifact_id, "deleted": True}
+        return delete_page(db, agent, artifact_id)
 
     @router.post("/artifacts/{artifact_id}/restore")
     def restore(artifact_id: str, agent: str = Depends(caller)):
         """Put one of this agent's deleted pages back, address and history
         intact."""
-        if not store.set_deleted(db, artifact_id, False, agent=agent):
-            raise HTTPException(404, "no such page")
-        return store.get_owned(db, agent, artifact_id).__dict__
+        return restore_page(db, agent, artifact_id)
 
     @router.post("/artifacts/{artifact_id}/destroy")
     def destroy(artifact_id: str, payload: DestroyBody, agent: str = Depends(caller)):
@@ -1861,30 +2405,14 @@ def agent_router(
         answers, acknowledges or closes a decision. `anchor` may be
         `{"kind": "text", "quote": ..., "section": optional heading}`: the
         server finds the passage in the page's current version."""
-        if (
-            payload.thread_root is None
-            and isinstance(payload.anchor, dict)
-            and payload.anchor.get("kind") == "decision"
-        ):
-            raise HTTPException(
-                422,
-                {
-                    "field": "anchor",
-                    "detail": (
-                        textvars.render(
-                            "a thread under {{owner_their}} answer is started with "
-                        )
-                        + "POST /api/v1/decisions/{decision_id}/replies"
-                    ),
-                },
-            )
+        refuse_decision_anchor(payload)
         # Run once the keyed transaction has committed; empty on a replay.
         later: list = []
 
         def write(conn) -> tuple[int, object]:
             later.clear()  # a retried attempt must not send the last one's nudge
-            return 201, _add_comment(
-                artifact_id, payload, background, agent, conn, seat_session, later
+            return 201, add_comment(
+                db, artifact_id, payload, agent, conn, seat_session, later
             )
 
         response = idempotency.run(
@@ -1898,210 +2426,6 @@ def agent_router(
         for send in later:
             background.add_task(send)
         return response
-
-    def _element_anchor(artifact_id, anchor, agent) -> tuple[dict, str]:
-        """An agent's `element` anchor, `{"kind": "element", "id": "..."}`, into
-        the stored shape: the id must be on the current version exactly once
-        (`sections.locate` says if it is not), and the server fills the tag,
-        the heading it sits under, the words either side and the quote from
-        the page, which an agent cannot measure."""
-        bad = HTTPException(
-            422,
-            {
-                "field": "anchor",
-                "detail": 'an element anchor is {"kind": "element", "id": "<the '
-                "element's id, which is on the page exactly once>\"}",
-            },
-        )
-        element_id = anchor.get("id")
-        if (
-            set(anchor) - {"kind", "id"}
-            or not isinstance(element_id, str)
-            or not anchors.ID_RE.fullmatch(element_id)
-        ):
-            raise bad
-        current = store.get_body(db, agent, artifact_id, as_reader=True)
-        try:
-            found = sections.locate(current.body, element_id)
-        except sections.SectionError as exc:
-            raise HTTPException(
-                422, {"field": "anchor", "detail": str(exc), "matches": 0}
-            ) from exc
-        return anchors.element_anchor(current.body, element_id, found)
-
-    def _text_anchor(artifact_id, payload, agent) -> tuple[dict | None, str]:
-        """Turn an agent's `text` anchor into the stored shape: a `quote` anchor
-        carrying the heading the server found the passage under, which the
-        gallery paints and re-finds after a republish (an agent cannot compute
-        the DOM path the browser's range anchor needs). Anything else passes
-        through unchanged."""
-        anchor = payload.anchor
-        if (
-            payload.thread_root is not None
-            or not isinstance(anchor, dict)
-            or anchor.get("kind") not in ("text", "element")
-        ):
-            return anchor, payload.quote
-        if anchor.get("kind") == "element":
-            return _element_anchor(artifact_id, anchor, agent)
-        quote, section = anchor.get("quote"), anchor.get("section")
-        if (
-            set(anchor) - {"kind", "quote", "section"}
-            or not isinstance(quote, str)
-            or not (section is None or isinstance(section, str))
-        ):
-            raise HTTPException(
-                422,
-                {
-                    "field": "anchor",
-                    "detail": 'a text anchor is {"kind": "text", "quote": "...", '
-                    '"section": "optional heading text"}',
-                },
-            )
-        store._check_size(
-            quote,
-            comments.MAX_QUOTE_BYTES,
-            "quote",
-            agent=agent,
-            artifact_id=artifact_id,
-        )
-        current = store.get_body(db, agent, artifact_id, as_reader=True)
-        try:
-            comments.resolve_text_anchor(current.body, quote, section)
-        except comments.TextAnchorError as exc:
-            raise HTTPException(
-                422,
-                {
-                    "field": "anchor",
-                    "detail": exc.detail,
-                    "matches": exc.matches,
-                },
-            ) from exc
-        heading, heading_id = anchors.heading_for_quote(current.body, quote, section)
-        found: dict = {"kind": "quote"}
-        if heading:
-            found["heading"] = heading
-        if heading_id:
-            found["heading_id"] = heading_id
-        return found, quote
-
-    def _add_comment(
-        artifact_id,
-        payload,
-        background,
-        agent,
-        conn=None,
-        seat_session=None,
-        later=None,
-    ):
-        try:
-            anchor, quote = _text_anchor(artifact_id, payload, agent)
-            row = comments.add(
-                db,
-                conn=conn,
-                artifact_id=artifact_id,
-                author_kind="agent",
-                author=agent,
-                body=payload.body,
-                anchor=anchor,
-                quote=quote,
-                thread_root=payload.thread_root,
-                agent=agent,
-                kind=payload.kind,
-                session=seat_session,
-                after_commit=later,
-                image_ids=payload.images,
-            )
-            # Where the pin stands on the page now, in the reply: the agent
-            # learns at write time, not on its next listing.
-            row = comments.with_state(db, row, conn)
-            # GitGuardian checks the saved comment straight after the response.
-            if later is not None:
-                later.append(partial(comments.second_scan, db, row.id))
-            else:
-                background.add_task(comments.second_scan, db, row.id)
-            return row.__dict__
-        except store.NotAPage as exc:
-            # 422, not 413: the body is not too much, it is not a page. Named
-            # like every other refusal so a caller can tell them apart without
-            # reading prose (homelab-ij8.28 -- a builder script's "wrote
-            # <path>" log line was published as a status page).
-            raise HTTPException(
-                422,
-                {
-                    "field": exc.field,
-                    "detail": (
-                        "body does not look like an HTML page: no doctype and "
-                        "no HTML tag anywhere in it. If a command's output "
-                        "reached this call instead of your file, that is the "
-                        "usual cause."
-                    ),
-                },
-            ) from exc
-        except store.BodyTooLarge as exc:
-            raise HTTPException(
-                413,
-                {
-                    "field": exc.field,
-                    "size": exc.size,
-                    "detail": f"{exc.field} exceeds the size limit",
-                },
-            ) from exc
-        except store.InvalidText as exc:
-            raise HTTPException(
-                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
-            ) from exc
-        except store.SecretFound as found:
-            raise HTTPException(
-                422, _refused_detail(found.field, found.findings)
-            ) from found
-        except store.ScanFailed as exc:
-            raise HTTPException(
-                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
-            ) from exc
-        except images.ImageRefused as exc:
-            raise HTTPException(
-                exc.status, {"field": exc.field, "detail": exc.detail}
-            ) from exc
-        except comments.InvalidAnchor as exc:
-            raise HTTPException(
-                422, {"field": exc.field, "detail": "not a valid anchor"}
-            ) from exc
-        except comments.InvalidKind as exc:
-            raise HTTPException(
-                422,
-                {
-                    "field": exc.field,
-                    "detail": (
-                        "kind must be comment, remove or looks_good, with a "
-                        "quoted range for the last two"
-                    ),
-                },
-            ) from exc
-        except comments.VerdictRefused as exc:
-            raise HTTPException(
-                422,
-                {
-                    "field": exc.field,
-                    "detail": textvars.render(
-                        "on a page you do not own only kind comment is allowed: "
-                        "remove and looks_good are {{owner_name}}'s. Say it in the body "
-                        "of a plain comment instead."
-                    ),
-                },
-            ) from exc
-        except comments.NoSuchThread as exc:
-            raise HTTPException(
-                422,
-                {
-                    "field": "thread_root",
-                    "detail": "no open root comment with that id on this artifact",
-                },
-            ) from exc
-        except comments.NoSuchDecision as exc:
-            raise HTTPException(404, "no such decision") from exc
-        except store.NotFound as exc:
-            raise HTTPException(404, "no such page") from exc
 
     @router.post("/artifacts/{artifact_id}/comment-images", status_code=201)
     async def upload_comment_image(
@@ -2151,25 +2475,11 @@ def agent_router(
 
     @router.post("/comments/{comment_id}/resolve")
     def resolve_comment(comment_id: str, agent: str = Depends(caller)):
-        try:
-            # `agent=` EXPLICITLY, never left to the default. The default is
-            # None, which means "the gallery, acting for Jeremy" and skips the
-            # ownership check entirely -- correct there, and a privilege
-            # escalation here, where any key could then resolve any seat's
-            # threads. Spelled out so the keyed path cannot acquire the
-            # gallery's authority by someone changing a default.
-            return comments.resolve(db, comment_id, by=agent, agent=agent).__dict__
-        except store.NotFound as exc:
-            raise HTTPException(404, "no such comment") from exc
+        return comment_resolve(db, agent, comment_id)
 
     @router.post("/comments/{comment_id}/reopen")
     def reopen_comment(comment_id: str, agent: str = Depends(caller)):
-        try:
-            # `agent=` EXPLICITLY, for the reason spelled out on resolve above:
-            # the default would skip the ownership check.
-            return comments.reopen(db, comment_id, agent=agent, by=agent).__dict__
-        except store.NotFound as exc:
-            raise HTTPException(404, "no such comment") from exc
+        return comment_reopen(db, agent, comment_id)
 
     @router.get("/comments")
     def list_all_comments(
@@ -2355,98 +2665,7 @@ def agent_router(
         agent: str = Depends(caller),
         seat_session: str | None = Depends(session),
     ):
-        try:
-            row = decisions.ask(
-                db,
-                agent=agent,
-                artifact_id=artifact_id,
-                question=payload.question,
-                options=payload.options,
-                recommended=payload.recommended,
-                session=seat_session,
-                context=payload.context,
-                topic=payload.topic,
-                depends_on=payload.depends_on,
-                replaces=payload.replaces,
-                urgency=payload.urgency,
-                blocked_on=payload.blocked_on,
-                needed_by=payload.needed_by,
-                for_offices=payload.audience_sent()[0],
-                audience_field=payload.audience_sent()[1],
-            )
-            out = decisions.public(row)
-            if row.set_aside:
-                out["warning"] = (
-                    f"this page is {row.set_aside_why}; the question is set aside "
-                    "until it is unarchived"
-                )
-            return out
-        except store.NotAPage as exc:
-            # 422, not 413: the body is not too much, it is not a page. Named
-            # like every other refusal so a caller can tell them apart without
-            # reading prose (homelab-ij8.28 -- a builder script's "wrote
-            # <path>" log line was published as a status page).
-            raise HTTPException(
-                422,
-                {
-                    "field": exc.field,
-                    "detail": (
-                        "body does not look like an HTML page: no doctype and "
-                        "no HTML tag anywhere in it. If a command's output "
-                        "reached this call instead of your file, that is the "
-                        "usual cause."
-                    ),
-                },
-            ) from exc
-        except store.BodyTooLarge as exc:
-            raise HTTPException(
-                413,
-                {
-                    "field": exc.field,
-                    "size": exc.size,
-                    "detail": f"{exc.field} exceeds the size limit",
-                },
-            ) from exc
-        except store.InvalidText as exc:
-            raise HTTPException(
-                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
-            ) from exc
-        except store.SecretFound as found:
-            raise HTTPException(
-                422, _refused_detail(found.field, found.findings)
-            ) from found
-        except store.ScanFailed as exc:
-            raise HTTPException(
-                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
-            ) from exc
-        except decisions.InvalidOptions as exc:
-            raise HTTPException(
-                422, {"field": exc.field, "detail": "not a valid set of options"}
-            ) from exc
-        except decisions.InvalidField as exc:
-            raise HTTPException(
-                422, {"field": exc.field, "detail": exc.detail}
-            ) from exc
-        except decisions.NotReplaceable as exc:
-            raise HTTPException(
-                409,
-                {
-                    "field": exc.field,
-                    "state": exc.state,
-                    "replaced_by": exc.replaced_by,
-                    "detail": (
-                        f"the decision you replace was already replaced by"
-                        f" {exc.replaced_by}: if your earlier ask got no reply,"
-                        " that question is the one it created"
-                        if exc.replaced_by
-                        else f"the decision you replace is already {exc.state}, so"
-                        " there is nothing left to replace: ask without"
-                        " `replaces`, or read its answer"
-                    ),
-                },
-            ) from exc
-        except store.NotFound as exc:
-            raise HTTPException(404, "no such page") from exc
+        return ask_question(db, agent, seat_session, artifact_id, payload)
 
     # ANSWERED DECISIONS COME BACK BY DEFAULT (homelab-ij8.33). This route used
     # to hide them, so an agent reading its page back after Jeremy had answered
@@ -2749,10 +2968,7 @@ def agent_router(
 
     @router.post("/decisions/{decision_id}/close")
     def close_decision(decision_id: str, agent: str = Depends(caller)):
-        try:
-            return decisions.public(decisions.close(db, agent, decision_id))
-        except store.NotFound as exc:
-            raise HTTPException(404, "no such decision") from exc
+        return close_question(db, agent, decision_id)
 
     # "Seen it" is a separate call from "done with it" on purpose: the alert that
     # catches a lost answer needs the first fact, and most answers here are acted on
@@ -2772,129 +2988,7 @@ def agent_router(
         accountable party is not something a caller gets to nominate. `source`
         cannot be 'page' — that value means he tapped it himself.
         """
-        said_at = None
-        if payload.said_at:
-            try:
-                said_at = datetime.fromisoformat(payload.said_at)
-            except ValueError:
-                raise HTTPException(
-                    422, "said_at must be an ISO 8601 timestamp"
-                ) from None
-        found = decisions.get_owned(db, agent, decision_id)
-        if found is not None and found.kind == "form":
-            return _record_form(found, payload, said_at, agent)
-        if payload.fields is not None:
-            if found is None:
-                raise HTTPException(404, "no such open decision")
-            raise HTTPException(422, "`fields` is for a form; send a letter")
-        if payload.letter is None:
-            raise HTTPException(
-                422, textvars.render("send the letter {{owner_they}} chose")
-            )
-        try:
-            row = decisions.record_elsewhere(
-                db,
-                decision_id,
-                letter=payload.letter,
-                note=payload.note,
-                source=payload.source,
-                recorded_by=agent,
-                said_at=said_at,
-                round=payload.round,
-            )
-        except decisions.InvalidSource:
-            raise HTTPException(
-                422,
-                "source must be one of "
-                f"{', '.join(decisions.relay_sources())} — 'page' is refused, "
-                + textvars.render(
-                    "because it means {{owner_name}} answered on the page "
-                    "{{owner_themselves}}"
-                ),
-            ) from None
-        except decisions.InvalidAnswer:
-            raise HTTPException(422, "that letter is not one of the options") from None
-        except decisions.AlreadyDecided as exc:
-            named, current = exc.round, exc.current
-            raise HTTPException(
-                409,
-                {
-                    "field": "answer",
-                    # The verdict that counted, from its round when rounds
-                    # exist: a stale relay's round has been cleared off the row.
-                    "verdict": (
-                        named.verdict
-                        if named is not None and named.verdict is not None
-                        else decisions.VERDICTS.get(exc.row.answer)
-                    ),
-                    "answered_at": (
-                        named.closed_at
-                        if named is not None and named.closed_at is not None
-                        else exc.row.answered_at
-                    ),
-                    "round": current.n if current is not None else None,
-                    "verdict_round": named.n if named is not None else None,
-                    "message": (
-                        f"This review already has a verdict for round {named.n}: "
-                        f"{named.verdict}"
-                        if named is not None and named.verdict is not None
-                        else None
-                    ),
-                },
-            ) from None
-        except store.NotFound:
-            raise HTTPException(404, "no such open decision") from None
-        return decisions.public(row)
-
-    def _record_form(found, payload: RecordBody, said_at, agent: str):
-        """The per-field relay of a form (formanswer.relay): every field stored with its
-        source, none of it his own submit, none over a later submit of his."""
-        if payload.source not in decisions.relay_sources():
-            raise HTTPException(
-                422,
-                "source must be one of "
-                f"{', '.join(decisions.relay_sources())} — 'page' is refused, "
-                + textvars.render(
-                    "because it means {{owner_name}} answered on the page "
-                    "{{owner_themselves}}"
-                ),
-            )
-        if payload.letter is not None or not payload.fields:
-            raise HTTPException(
-                422, "a form is relayed per field: send fields {name: value}"
-            )
-        try:
-            done = formanswer.relay(
-                db,
-                found.id,
-                fields_given=payload.fields,
-                note=payload.note,
-                source=payload.source,
-                recorded_by=agent,
-                said_at=said_at,
-            )
-        except formanswer.SubmitRefused as exc:
-            # 422 a bad value; 409 the form changed while this was relayed: send it again.
-            raise HTTPException(
-                exc.status, {"detail": exc.detail, "field": exc.field}
-            ) from None
-        except store.NotFound:
-            raise HTTPException(404, "no such open decision") from None
-        except store.BodyTooLarge as exc:
-            raise HTTPException(
-                413,
-                {"field": exc.field, "detail": f"{exc.field} exceeds the size limit"},
-            ) from None
-        except store.SecretFound as hit:
-            raise HTTPException(422, _refused_detail(hit.field, hit.findings)) from hit
-        except store.ScanFailed as exc:
-            raise HTTPException(
-                503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
-            ) from exc
-        row = decisions.get_owned(db, agent, found.id)
-        out = decisions.public(row)
-        out["relayed"] = {"applied": done["applied"], "skipped": done["skipped"]}
-        return out
+        return record_relay(db, agent, decision_id, payload)
 
     @router.post("/decisions/{decision_id}/outcome", status_code=201)
     def add_outcome(
@@ -3023,8 +3117,8 @@ def agent_router(
                     anchor={"kind": "decision", "decision_id": decision_id},
                 )
             )
-            return 201, _add_comment(
-                artifact_id, body, background, agent, conn, seat_session, later
+            return 201, add_comment(
+                db, artifact_id, body, agent, conn, seat_session, later
             )
 
         response = idempotency.run(
