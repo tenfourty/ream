@@ -34,7 +34,7 @@ _STYLE = (
     "#artifact-forms-bar button.fgo,.fsheet button.fgo{background:var(--accent,#2a6df4);"
     "border-color:var(--accent,#2a6df4);color:var(--on-accent,#fff)}"
     "#artifact-forms-bar .fbar.fsent .fcount{opacity:1;color:var(--ok,#2f7a45);font-weight:600}"
-    "#artifact-forms-bar button[disabled],.fsheet button[disabled]{opacity:.45;cursor:not-allowed}"
+    "#artifact-forms-bar button[disabled],.fsheet button[disabled]{opacity:.7;cursor:not-allowed;filter:grayscale(.5)}"
     ".fscrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:40;display:flex;"
     "align-items:center;justify-content:center;padding:1rem}"
     ".fsheet{background:var(--card,#fff);color:var(--ink,#111);max-width:42rem;width:100%;"
@@ -55,13 +55,10 @@ _STYLE = (
 )
 
 
-def block(db, artifact_id: str) -> str:
-    """The `<style>`, mount point, JSON data block and script tag for a page's open
-    forms; empty when the page has none. The data is the STORED field list at each
+def payload(db, artifact_id: str) -> dict:
+    """The page's open forms as the bar draws them: the STORED field list at each
     form's latest version, which the script trusts over anything the page says."""
     shown = forms.for_page(db, artifact_id)
-    if not shown:
-        return ""
     with db.connect() as conn:
         records = {
             did: rec
@@ -71,7 +68,7 @@ def block(db, artifact_id: str) -> str:
                 (artifact_id,),
             ).fetchall()
         }
-    payload = {
+    return {
         "artifact_id": artifact_id,
         "forms": [
             {
@@ -88,11 +85,18 @@ def block(db, artifact_id: str) -> str:
             for f in shown
         ],
     }
+
+
+def block(db, artifact_id: str) -> str:
+    """The `<style>`, mount point, JSON data block and script tag for a live page, drawn
+    even when no form is open yet: a form that turns up while he reads (a new version, or
+    one published meanwhile) is fetched from `/a/{id}/forms.json` by the script and gets
+    its Submit bar without a reload."""
     return (
         _STYLE
         + '<div id="artifact-forms-bar"></div>'
         + '<script type="application/json" id="artifact-forms">'
-        + _script_json(payload)
+        + _script_json(payload(db, artifact_id))
         + "</script>"
         + '<script src="/forms.js" defer></script>'
     )
@@ -114,6 +118,24 @@ def register(
             FORMS_JS,
             media_type="text/javascript; charset=utf-8",
             headers={**headers(), "cache-control": "no-cache"},
+        )
+
+    @router.get("/a/{artifact_id}/forms.json")
+    def forms_data(artifact_id: str) -> JSONResponse:
+        """The page's open forms, as the bar draws them: the same payload the page view
+        carries, for a form that turned up after the page loaded. Display only, behind
+        the same sign-in as the page; an archived, binned or unknown page is 404, as
+        its view draws no bar."""
+        with db.connect() as conn:
+            row = conn.execute(
+                "select archived_at, deleted_at from artifact where id = %s",
+                (artifact_id,),
+            ).fetchone()
+        if row is None or row[0] is not None or row[1] is not None:
+            raise HTTPException(404, "no such page")
+        return JSONResponse(
+            payload(db, artifact_id),
+            headers={**headers(), "cache-control": "no-store"},
         )
 
     @router.post("/a/{artifact_id}/forms/{form}")
@@ -187,10 +209,9 @@ FORMS_JS = r"""(function(){
 "use strict";
 var data=null,frame=document.getElementById("artifact-frame"),bar=document.getElementById("artifact-forms-bar");
 try{data=JSON.parse(document.getElementById("artifact-forms").textContent)}catch(e){}
-if(!data||!frame||!bar||!Array.isArray(data.forms)||!data.forms.length)return;
+if(!data||!frame||!bar||!Array.isArray(data.forms))return;
 var origin;try{origin=new URL(frame.getAttribute("src"),location.href).origin}catch(e){return}
 var FMX=200,FMV=10000,by=Object.create(null);
-document.body.classList.add("fhas");
 function key(f){return"artifact-form:"+data.artifact_id+":"+f.form}
 function isBlank(spec,v){
   if(spec.type==="checkbox"&&!(spec.options&&spec.options.length))return false;
@@ -323,7 +344,13 @@ function sheet(f){
     .catch(function(){err.textContent="It was not sent: the gallery could not be reached.";
       err.hidden=false;go.disabled=false})});
   document.body.appendChild(scrim);go.focus()}
-data.forms.forEach(function(f){
+// A form that turned up after the page loaded: the page's snapshot names a form this bar has
+// no data for, so ask the gallery for the page's current open forms (stored fields, never the
+// page's claim) and draw the bar for the ones not yet drawn. One ask in flight at a time.
+var asking=false;
+function addForm(f){
+  if(by[f.form]||!f||typeof f.form!=="string"||!Array.isArray(f.fields))return false;
+  document.body.classList.add("fhas");
   f.values=null;f.awaiting=false;f.editing=false;f.ready=false;f.shown="";by[f.form]=f;
   var row=el("div","fbar"),t=el("span","ftitle",f.title);f.row=row;
   f.count=el("span","fcount");f.go=el("button","fgo","Submit");f.go.type="button";
@@ -333,16 +360,28 @@ data.forms.forEach(function(f){
     var box=el("details","fstale"),sum=el("summary","",f.title+": "+f.stale.length+" earlier answer"+(f.stale.length>1?"s":"")+" not carried");
     box.appendChild(sum);
     f.stale.forEach(function(x){box.appendChild(el("p","",(x.label||x.name)+" \u2014 "+staleLine(x)))});
-    bar.appendChild(box)}});
+    bar.appendChild(box)}
+  return true}
+data.forms.forEach(addForm);
+function fetchForms(then){
+  if(asking||typeof fetch!=="function")return;asking=true;
+  fetch("/a/"+encodeURIComponent(data.artifact_id)+"/forms.json",{credentials:"same-origin",headers:{"Accept":"application/json"}})
+  .then(function(r){return r.ok?r.json():null})
+  .then(function(j){asking=false;var added=false;
+    if(j&&Array.isArray(j.forms))j.forms.forEach(function(f){if(addForm(f))added=true});
+    if(added)then()})
+  .catch(function(){asking=false})}
 addEventListener("message",function(e){
   if(e.source!==frame.contentWindow||e.origin!==origin)return;
-  var d=e.data;
+  handle(e.data,true)});
+function handle(d,again){
   if(!d||typeof d!=="object"||typeof d.form!=="string")return;
   if(d.type==="artifact-form-edit"){var g=by[d.form];
     if(g&&g.answered&&!g.editing){g.editing=true;refresh(g);sync(g,true)}return}
   if(d.type!=="artifact-form")return;
   if(!d.values||typeof d.values!=="object")return;
-  var f=by[d.form];if(!f)return;
+  var f=by[d.form];
+  if(!f){if(again&&d.type==="artifact-form")fetchForms(function(){handle(d,false)});return}
   f.ready=true;if(d.load===true)f.shown="";
   if(d.load===true){var fill=fillOf(f,load(f));
     if(fill){f.awaiting=true;frame.contentWindow.postMessage({type:"artifact-form-fill",form:f.form,values:fill},origin);sync(f,false);return}}
@@ -352,6 +391,6 @@ addEventListener("message",function(e){
   // The sheet is open on an earlier set of values: close it rather than let it say one
   // thing and send another; he reopens it to review the new ones.
   if(f.closeSheet&&JSON.stringify(body(f))!==before)f.closeSheet();
-  refresh(f);sync(f,false)});
+  refresh(f);sync(f,false)}
 })();
 """

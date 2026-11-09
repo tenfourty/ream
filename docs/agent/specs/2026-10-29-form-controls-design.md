@@ -101,6 +101,12 @@ is stored. The gallery posts the batch to its own route (`POST /c/{id}/forms/{fo
 guarded like every gallery form; the server validates every value against the stored field list
 and refuses with a `422` naming the field.
 
+A form that turns up after the page loaded (a new version adds one, or the agent publishes while
+he reads) still gets its bar without a reload: a live page always carries the mount and
+`/forms.js`, and when the page reports a form the bar has no data for, `forms.js` fetches the
+current open forms from `GET /a/{id}/forms.json` (the stored fields, the same payload as the page
+view; 404 for an archived, binned or unknown page) and draws it. Display only, so it has no agent twin.
+
 Drafts live in the browser tab only (prior art Q6; my call): a reload or a republish replays a
 draft by name without firing events, capped at 200 fields and 2,000 characters a value, as lavish
 does.

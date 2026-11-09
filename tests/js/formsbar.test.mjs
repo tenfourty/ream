@@ -34,9 +34,9 @@ const DATA = { artifact_id: "art1", forms: [{
       options: [{ value: "cat", label: "Cat" }, { value: "dog", label: "Dog" }] },
   ] }] };
 
-function build({ draft = null, fetchImpl, form = {}, draftVersion = null } = {}) {
+function build({ draft = null, fetchImpl, form = {}, draftVersion = null, noForms = false } = {}) {
   const bar = node("div"), dataEl = node("script"), frame = node("iframe");
-  dataEl.textContent = JSON.stringify({ ...DATA, forms: [{ ...DATA.forms[0], ...form }] });
+  dataEl.textContent = JSON.stringify({ ...DATA, forms: noForms ? [] : [{ ...DATA.forms[0], ...form }] });
   frame.attrs.src = ORIGIN + "/p/tok/";
   const win = { posted: [], postMessage(m, o) { this.posted.push([m, o]); } };
   frame.contentWindow = win;
@@ -59,7 +59,6 @@ function build({ draft = null, fetchImpl, form = {}, draftVersion = null } = {})
   };
   const names = Object.keys(scope);
   new Function(...names, src)(...names.map((n) => scope[n]));
-  const row = bar.children[0];
   return {
     bar, win, store, fetched, body,
     count: () => all(bar).find((n) => n.className === "fcount").textContent,
@@ -236,5 +235,47 @@ const snap = (values, load = false) => ({ type: "artifact-form", form: "rollout"
   ok(st.includes("On record, relayed from slack by ops: from chat"), "the sheet notes a relayed value");
   ok(st.includes("Earlier answer, version 1: old") && st.includes("(it read: Why not)"), "the sheet notes a stale answer and its old wording");
   ok(st.includes("Gone (no longer asked)") && st.includes("the question was removed"), "the sheet lists a removed field's answer");
+}
+
+// A form that turns up after the page loaded: the page was drawn with no open form, then the
+// shim reports a snapshot for one. The bar asks the gallery for the stored fields and draws.
+{
+  const late = (extra = {}) => ({ ...DATA, forms: [{ ...DATA.forms[0], ...extra }] });
+  const served = (payload) => () => Promise.resolve({ ok: true, status: 200, json: async () => payload });
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  const g = build({ noForms: true, fetchImpl: served(late()) });
+  ok(g.bar.children.length === 0, "a page with no open form starts with an empty bar");
+  g.send(snap({ region: "a", why: "", pets: [] }, true));
+  await settle();
+  ok(g.fetched.length === 1 && g.fetched[0][0] === "/a/art1/forms.json", "an unknown form's snapshot fetches the page's current forms");
+  ok(g.bar.children.length === 1 && g.go() && g.go().textContent === "Submit", "the late form gets its Submit bar");
+  ok(g.count() === "1 of 3 answered" && g.go().disabled === false, "the snapshot that raised it is applied once the bar is drawn");
+  g.send(snap({ region: "a", why: "x", pets: [] }));
+  ok(g.fetched.length === 1 && g.count() === "2 of 3 answered", "a form that is drawn is not fetched again");
+
+  const none = build({ noForms: true, fetchImpl: served({ ...DATA, forms: [] }) });
+  none.send(snap({ region: "a" }));
+  none.send(snap({ region: "a" }));
+  await settle();
+  ok(none.fetched.length >= 1 && none.bar.children.length === 0, "a form the gallery does not list draws nothing");
+
+  const down = build({ noForms: true, fetchImpl: () => Promise.reject(new Error("offline")) });
+  down.send(snap({ region: "a" }));
+  await settle();
+  ok(down.bar.children.length === 0, "a failed fetch draws nothing and throws nothing");
+
+  const wrong = build({ noForms: true, fetchImpl: served(late()) });
+  wrong.send(snap({ region: "a" }), { origin: "https://evil.example" });
+  await settle();
+  ok(wrong.fetched.length === 0, "a snapshot from another origin never triggers a fetch");
+
+  // The stored fields are authoritative: a page claiming other fields cannot add any.
+  const claim = build({ noForms: true, fetchImpl: served(late()) });
+  claim.send(snap({ region: "a", sneaky: "yes" }));
+  await settle();
+  claim.go().click();
+  const sheetText = all(all(claim.body).find((n) => n.className === "fscrim")).map((n) => n.textContent).join("|");
+  ok(!sheetText.includes("sneaky"), "a field only the page claims never reaches the sheet");
 }
 console.log(`\n${passes} passed, ${fails} failed`);

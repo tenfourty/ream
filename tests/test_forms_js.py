@@ -55,4 +55,4 @@ def test_the_gallerys_submit_bar_behaves_when_actually_run(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
-    assert passed >= 24, result.stdout
+    assert passed >= 59, result.stdout

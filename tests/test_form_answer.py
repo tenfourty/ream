@@ -543,3 +543,60 @@ def test_an_archived_pages_gallery_view_draws_no_submit_bar(client, db, made):
     assert store.set_archived(db, made["page"]["id"], True, agent="ops")
     html = client.get(f"/a/{made['page']['id']}").text
     assert 'id="artifact-forms"' not in html and "/forms.js" not in html
+
+
+# --- a form that turns up after the page loaded ---------------------------------
+
+
+def test_a_live_page_with_no_form_still_carries_the_bar_for_a_late_one(client, db):
+    token, _ = keys.mint(db, agent="ops")
+    plain = client.post(
+        "/api/v1/artifacts",
+        json={"title": "Plain", "body": page("<p>nothing to answer</p>")},
+        headers=auth(token),
+    ).json()
+    html = client.get(f"/a/{plain['id']}").text
+    assert (
+        'id="artifact-forms-bar"' in html and '<script src="/forms.js" defer>' in html
+    )
+    assert '"forms":[]' in html.replace(" ", "")
+    late = client.patch(
+        f"/api/v1/artifacts/{plain['id']}",
+        json={"body": page(FORM), "expected_revision": plain["revision"]},
+        headers=auth(token),
+    )
+    assert late.status_code == 200, late.text
+    data = client.get(f"/a/{plain['id']}/forms.json")
+    assert data.status_code == 200 and data.headers["cache-control"] == "no-store"
+    assert [f["form"] for f in data.json()["forms"]] == ["rollout"]
+
+
+def test_forms_json_is_the_stored_payload_the_page_view_carries(client, made):
+    data = client.get(f"/a/{made['page']['id']}/forms.json").json()
+    assert data["artifact_id"] == made["page"]["id"]
+    (form,) = data["forms"]
+    assert form["form"] == "rollout" and form["version"] == 1
+    assert "region" in {f["name"] for f in form["fields"]}
+
+
+def test_forms_json_answers_404_for_an_archived_or_unknown_page(client, db, made):
+    pid = made["page"]["id"]
+    assert client.get("/a/nosuchpage/forms.json").status_code == 404
+    assert store.set_archived(db, pid, True, agent="ops")
+    assert client.get(f"/a/{pid}/forms.json").status_code == 404
+
+
+def test_forms_json_leaves_out_a_closed_form(client, db):
+    token, _ = keys.mint(db, agent="ops")
+    page_ = client.post(
+        "/api/v1/artifacts",
+        json={"title": "Board", "body": page(FORM)},
+        headers=auth(token),
+    ).json()
+    gone = client.patch(
+        f"/api/v1/artifacts/{page_['id']}",
+        json={"body": page("<p>gone</p>"), "expected_revision": page_["revision"]},
+        headers=auth(token),
+    )
+    assert gone.status_code == 200, gone.text
+    assert client.get(f"/a/{page_['id']}/forms.json").json()["forms"] == []
