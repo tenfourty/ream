@@ -120,14 +120,44 @@ def test_an_unknown_poll_token_looks_like_an_expired_one(gallery):
 
 
 def test_an_open_door_is_a_limited_door(gallery):
-    for _ in range(connect.MAX_PENDING_PER_ADDRESS):
-        _ask(gallery, address="198.51.100.9")
+    for i in range(connect.MAX_PENDING_PER_ADDRESS):
+        _ask(gallery, name=f"vm-{i}", address="198.51.100.9")
     refused = gallery.post(
         "/api/v1/connect", json={"name": "x"}, headers={"x-real-ip": "198.51.100.9"}
     )
     assert refused.status_code == 429
     assert refused.json()["detail"].startswith("REFUSED")
     _ask(gallery, address="198.51.100.10")  # another address is unaffected
+
+
+def test_five_machines_behind_one_address_can_all_wait(gallery):
+    for i in range(5):
+        _ask(gallery, name=f"office-{i}", address="198.51.100.20")
+
+
+def test_the_same_name_from_one_address_replaces_its_earlier_request(db, gallery):
+    first = _ask(gallery, name="office-1", address="198.51.100.21")
+    for _ in range(connect.MAX_PENDING_PER_ADDRESS + 2):
+        last = _ask(gallery, name="office-1", address="198.51.100.21")
+    assert _poll(gallery, first) == {"status": "expired"}
+    assert _poll(gallery, last)["status"] != "expired"
+    with db.connect() as conn:
+        live = conn.execute(
+            "select count(*) from connect_request where expires_at > %s",
+            (datetime.now(UTC),),
+        ).fetchone()[0]
+    assert live == 1
+
+
+def test_the_global_ceiling_still_refuses(gallery, monkeypatch):
+    monkeypatch.setattr(connect, "MAX_PENDING_TOTAL", 3)
+    for i in range(3):
+        _ask(gallery, name=f"m-{i}", address=f"198.51.100.{30 + i}")
+    refused = gallery.post(
+        "/api/v1/connect", json={"name": "x"}, headers={"x-real-ip": "198.51.100.99"}
+    )
+    assert refused.status_code == 429
+    assert "too many requests" in refused.json()["detail"]
 
 
 def test_a_name_already_connected_is_refused_until_its_key_is_revoked(db, gallery):

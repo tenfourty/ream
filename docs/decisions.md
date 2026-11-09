@@ -655,3 +655,19 @@ archive, so there is no separate archive for comments.
 mistake, not only put it out of the way.
 
 **Evidence:** Jeremy, 9 Nov 2026.
+
+## Several machines behind one address can connect at once (9 Nov 2026)
+
+Five office VMs share one NAT address, and the connect flow allowed only 3 waiting requests per
+address, so two of them got `429 REFUSED` and had to wait for the others to expire. The
+per-address cap is now 10 (`connect.MAX_PENDING_PER_ADDRESS`); the ceiling of 50 across all
+addresses stays, and it is what bounds a flood. A repeat request from the same address under the
+same name replaces its earlier one (that one expires at once, so its code and poll token stop
+working) instead of using a second slot, so a machine that lost its code can simply ask again.
+Nothing else changed: the request is still open and unauthenticated, every request still dies
+after 15 minutes, and only the owner can approve, by typing the code.
+
+**Not chosen:** removing the per-address cap. It lost because one address could then fill the
+global ceiling alone and lock every other machine out.
+
+**Evidence:** tracker runcove-5t3oj.102, 9 Nov 2026.

@@ -8,8 +8,9 @@ no prompt carries it, no chat transcript ever holds it.
 THE THREE STEPS AND WHO MAY TAKE THEM
 
   request  -- anyone, no key (POST /api/v1/connect). It is how a stranger
-              starts, so it is open, and so it is limited: a few pending
-              requests per address, a ceiling across all of them, and every
+              starts, so it is open, and so it is limited: a limited number
+              of pending requests per address (a repeat under the same name
+              replaces the earlier one), a ceiling across all of them, and every
               request dies unapproved after `LIFETIME_SECONDS`.
   approve  -- Jeremy only, in the gallery behind his login, by typing the code.
               Deliberately no agent equivalent: this is the gate itself, the
@@ -35,7 +36,9 @@ from ream import keys
 from ream.db import Database
 
 LIFETIME_SECONDS = 15 * 60
-MAX_PENDING_PER_ADDRESS = 3
+# Several machines can share one address (five office VMs behind one NAT), so the
+# per-address cap is generous; the global ceiling is what bounds a flood.
+MAX_PENDING_PER_ADDRESS = 10
 MAX_PENDING_TOTAL = 50
 
 # No 0/O, 1/I/L, 2/Z, 5/S, 8/B: a human reads this off one screen and types it
@@ -82,7 +85,18 @@ class Started:
 
 def request(db: Database, suggested_name: str | None, from_address: str) -> Started:
     now = datetime.now(UTC)
+    name = clean_name(suggested_name)
     with db.connect() as conn:
+        if name:
+            # The same machine asking again (it lost its code) replaces its own
+            # earlier request instead of using a second slot: the old one expires
+            # now, so its code and poll token stop working.
+            conn.execute(
+                "update connect_request set expires_at = %s"
+                " where from_address = %s and suggested_name = %s"
+                " and expires_at > %s and approved_at is null and denied_at is null",
+                (now, from_address, name, now),
+            )
         mine, total = conn.execute(
             "select count(*) filter (where from_address = %s), count(*)"
             " from connect_request"
@@ -108,7 +122,7 @@ def request(db: Database, suggested_name: str | None, from_address: str) -> Star
                     secrets.token_hex(12),
                     code,
                     _hash(poll),
-                    clean_name(suggested_name),
+                    name,
                     from_address,
                     now + timedelta(seconds=LIFETIME_SECONDS),
                 ),
