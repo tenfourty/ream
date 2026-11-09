@@ -832,3 +832,34 @@ def test_a_narrow_window_puts_the_question_above_a_frame_that_fills_the_rest(
     assert narrowed["askBottom"] <= narrowed["sheetTop"]
     assert held in ("", "0px"), "the frame still holds room open for the question"
     assert errors == []
+
+
+def test_the_connect_page_fits_a_phone_without_clipping_its_boxes(browser, served):
+    """At 390px the code boxes and the paste box stay inside the window: the
+    page does not scroll sideways and no box or card reaches past the right
+    edge (a long unbroken line in the paste box used to widen the whole column)."""
+    origin, _ = served
+    ctx = browser.new_context(viewport={"width": 390, "height": 800})
+    try:
+        pg = ctx.new_page()
+        pg.goto(f"{origin}/connect")
+        pg.wait_for_load_state("load")
+        pg.wait_for_selector(".cx .boxes input")  # the script swapped in the boxes
+        got = pg.evaluate(
+            """() => {
+              const w = document.documentElement.clientWidth;
+              const right = e => e.getBoundingClientRect().right;
+              const els = [...document.querySelectorAll(
+                '.cx section, .cx pre, .cx input')];
+              return {w, scroll: document.documentElement.scrollWidth,
+                      n: document.querySelectorAll('.cx .boxes input').length,
+                      pre: !!document.querySelector('.cx pre'),
+                      over: els.filter(e => right(e) > w + 0.5)
+                               .map(e => e.className || e.tagName)}
+            }"""
+        )
+    finally:
+        ctx.close()
+    assert got["n"] == 8 and got["pre"]
+    assert got["over"] == []
+    assert got["scroll"] <= got["w"]
