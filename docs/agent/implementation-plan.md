@@ -2617,6 +2617,10 @@ Docs land with the code (the agent guide and `agents.txt` from slice 1; the runb
   `artifacts-admin list-apps` and `revoke-app`.
 - **Tests:** Revoke stops the next call and forgets consent; lapsed apps listed as lapsed; no token
   or hash on the page.
+- **Ledger (9 Nov 2026):** built on `ci/mcp-slice6`: `mcp_apps.listed`, `_apps_section` and
+  `POST /machines/apps/{id}/revoke` (gallery), `artifacts-admin list-apps` / `revoke-app`; both end
+  an app through `oauth.end_app` (reasons `owner`, `admin`). No `/api/v1` twin: §10 gives agents
+  only `POST /oauth/revoke` (the app ending itself) and says no tool lists or revokes apps.
 
 ### Slice 7 (S): his Claude passes on his answers
 

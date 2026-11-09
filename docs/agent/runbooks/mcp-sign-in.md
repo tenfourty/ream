@@ -51,6 +51,8 @@ An app ends by itself, reason recorded in `mcp_app.revoked_reason`, when:
 |---|---|
 | `reuse` | an authorization code was presented twice |
 | `refresh_reuse` | a spent refresh token was presented again (two parties hold it). It can also mean a client lost the response to a refresh; the person simply connects again |
+| `owner` | the owner pressed Revoke on `/machines` |
+| `admin` | `artifacts-admin revoke-app` |
 | `revoked` | the app presented its refresh token to `/oauth/revoke` |
 | `lapsed` | idle for the window, or past the cap, found by the clean-up |
 
@@ -58,9 +60,13 @@ An app ends by itself, reason recorded in `mcp_app.revoked_reason`, when:
 
 - By the app: `POST /oauth/revoke` with `token=<rmr_...>` ends it; with an `rmo_` token only that
   access token goes.
-- By the operator, today: set `revoked_at` and `revoked_reason` (for example `operator`) on the
-  `mcp_app` row and delete its `mcp_token` rows, in one transaction. A page and admin command
-  for this are slice 6 ("Connected apps"); until then this is the way. The next call fails with
-  401 and a new consent is needed.
+- By the owner: "Connected apps" on the gallery's "Machines and keys" page (`/machines`) lists
+  each live app with its permissions, last use and lapse date; Revoke asks once more, then ends it
+  (reason `owner`). Lapsed and revoked apps fold under "Revoked or lapsed".
+- By the operator: `artifacts-admin list-apps` (id, host, live/lapsed/ended, permissions, dates,
+  reason) and `artifacts-admin revoke-app <app_id>` (reason `admin`).
+- Either way the app's tokens are deleted in the same transaction, so the next `/mcp` call fails
+  with 401, and its remembered consent is gone: the next sign-in shows the consent screen again.
+  There is no `/api/v1` twin: apps act as the owner, so no agent key may list or end them.
 - Everything at once: turn `REAM_MCP_SIGN_IN` off (the endpoints answer 404 and stored tokens
   stop working), or end every app as above.

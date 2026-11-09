@@ -20,6 +20,7 @@ import re
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import NamedTuple
 
 from ream import db as dbmod
 from ream import reach, settings
@@ -319,6 +320,33 @@ def apps_of(db: Database, person: str) -> list[App]:
             (person,),
         ).fetchall()
     return [_app_row(r) for r in rows]
+
+
+class Listed(NamedTuple):
+    """An app and how its client calls itself, for the machines page and the admin list."""
+
+    app: App
+    host: str
+    name: str
+
+    def state(self, now: datetime | None = None) -> str:
+        """ "live", "lapsed" (not revoked, but past its idle lapse or cap) or "ended"."""
+        if self.app.revoked_at is not None:
+            return "ended"
+        return "live" if self.app.live(now) else "lapsed"
+
+
+def listed(db: Database, person: str) -> list[Listed]:
+    """Every app `person` has connected, newest first, with its client's host and name."""
+    cols = ", ".join("a." + c.strip() for c in _APP_COLUMNS.split(","))
+    with db.connect() as conn:
+        rows = conn.execute(
+            f"select {cols}, c.host, c.name from mcp_app a"  # noqa: S608 -- fixed columns
+            " left join mcp_client c on c.id = a.client_id where a.person = %s"
+            " order by a.created_at desc, a.id",
+            (person,),
+        ).fetchall()
+    return [Listed(_app_row(r), r[14] or "", r[15] or "") for r in rows]
 
 
 # --- Reach (section 11.2) -------------------------------------------------------------------

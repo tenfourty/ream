@@ -1219,7 +1219,7 @@ create unique index if not exists mcp_agent_pair on mcp_agent (person, client_id
 -- One person's consent for one app (cove's "connected app"; spec 8). `id` is 'app_' + random,
 -- the public handle; `agent` the person-and-app agent above; `permissions` a subset of
 -- ["read","write","relay"]; `idle_expires_at` slides 30 days on each refresh, `expires_at`
--- is the absolute cap, 90 days from consent; `revoked_reason` is 'revoked' | 'app' | 'reuse'
+-- is the absolute cap, 90 days from consent; `revoked_reason` is 'revoked' | 'owner' | 'app' | 'reuse'
 -- | 'lapsed' | 'admin'; `events_seen` is whats_new's cursor. One live app per person and app.
 create table if not exists mcp_app (
     id              text primary key,

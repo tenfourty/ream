@@ -127,6 +127,30 @@ def cmd_list_keys(_args: argparse.Namespace) -> None:
         print(f"{row.id}\t{row.agent}\t{row.created_at}\t{row.revoked_at or '-'}")
 
 
+def cmd_list_apps(_args: argparse.Namespace) -> None:
+    from ream import mcp_apps, settings
+
+    db = _open_db()
+    now = datetime.now(UTC)
+    for item in mcp_apps.listed(db, settings.owner_id()):
+        a = item.app
+        print(
+            f"{a.id}\t{item.host or '-'}\t{item.state(now)}\t{','.join(a.permissions) or '-'}"
+            f"\t{a.created_at}\t{a.last_used_at or '-'}\t{a.revoked_reason or '-'}"
+        )
+
+
+def cmd_revoke_app(args: argparse.Namespace) -> None:
+    from ream import mcp_apps, oauth
+
+    db = _open_db()
+    found = mcp_apps.app(db, args.app_id)
+    if found is None or found.revoked_at is not None:
+        raise SystemExit(f"no connected app with id {args.app_id}")
+    oauth.end_app(db, found.id, "admin", datetime.now(UTC))
+    print(f"revoked app_id={found.id} agent={found.agent}")
+
+
 def cmd_outbox(_args: argparse.Namespace) -> None:
     """The core outbox, read-only: counts by sink, never an event."""
     from ream import sinks
@@ -319,6 +343,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_keys_parser = sub.add_parser("list-keys")
     list_keys_parser.set_defaults(func=cmd_list_keys)
+
+    list_apps_parser = sub.add_parser("list-apps")
+    list_apps_parser.set_defaults(func=cmd_list_apps)
+
+    revoke_app = sub.add_parser("revoke-app")
+    revoke_app.add_argument("app_id")
+    revoke_app.set_defaults(func=cmd_revoke_app)
 
     partner_outbox = sub.add_parser(
         "partner-outbox",

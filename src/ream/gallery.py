@@ -49,6 +49,8 @@ from ream import (
     listening,
     logo,
     mail,
+    mcp_apps,
+    oauth,
     pagediff,
     partner_in,
     rename,
@@ -1867,7 +1869,78 @@ boxes[Math.min(pre.length,7)].focus();
 """
 
 
-def _machines_page(machines, confirm: str = "", note: str = "") -> str:
+_APP_WORDS = {
+    "read": "read pages, comments and questions",
+    "write": "publish, comment and ask",
+    "relay": "pass on your answers",
+}
+
+
+def _apps_section(apps, confirm_app: str = "") -> str:
+    """The "Connected apps" section (spec 10): one row per live app, Revoke asking once
+    more, and the lapsed and revoked ones folded away. Never a token or a hash: the page
+    reads only the consent row."""
+    now = datetime.now(UTC)
+    live = [a for a in apps if a.state(now) == "live"]
+    gone = [a for a in apps if a.state(now) != "live"]
+    parts = [
+        (
+            "<section><h2>Connected apps</h2>"
+            f"<p>{len(live)} signed in as {escape(settings.owner_name())}.</p></section>"
+        )
+    ]
+    for item in live:
+        a = item.app
+        ident = escape(a.id)
+        shown = mcp_apps.via(item.host) if item.host else a.agent
+        words = ", ".join(_APP_WORDS.get(p, p) for p in a.permissions) or "none"
+        used = _ago(a.last_used_at) if a.last_used_at else "not since it connected"
+        lapses = min(a.idle_expires_at, a.expires_at).strftime("%-d %b %Y")
+        facts = [
+            f"<dt>Permissions</dt><dd>{escape(words)}</dd>",
+            f"<dt>Connected</dt><dd>{escape(_ago(a.created_at) or 'just now')}</dd>",
+            f"<dt>Last used</dt><dd>{escape(used)}</dd>",
+            f"<dt>Lapses on</dt><dd>{lapses}</dd>",
+        ]
+        if item.name:
+            facts.insert(0, f"<dt>Calls itself</dt><dd>{escape(item.name)}</dd>")
+        if confirm_app == a.id:
+            action = (
+                f'<p class="err">Revoke {escape(shown)}? It stops at its next call, and '
+                "signing in from it again asks you once more. Its pages stay.</p>"
+                f'<form method="post" action="/machines/apps/{ident}/revoke" class="row">'
+                '<button class="btn primary" type="submit">Revoke</button>'
+                '<a class="btn" href="/machines">Cancel</a></form>'
+            )
+        else:
+            action = (
+                '<form class="row" method="get" action="/machines">'
+                f'<input type="hidden" name="revoke_app" value="{ident}">'
+                '<button class="btn" type="submit">Revoke</button></form>'
+            )
+        parts.append(
+            f"<section><h3>{escape(shown)}</h3><dl>{''.join(facts)}</dl>{action}</section>"
+        )
+    if gone:
+        rows = []
+        for i in gone:
+            who = mcp_apps.via(i.host) if i.host else i.app.agent
+            what = (
+                f"revoked {_ago(i.app.revoked_at) or 'just now'}"
+                if i.state(now) == "ended"
+                else "lapsed"
+            )
+            rows.append(f"<li>{escape(who)} &middot; {escape(what)}</li>")
+        parts.append(
+            f"<section><details><summary>Revoked or lapsed ({len(gone)})</summary>"
+            f"<ul>{''.join(rows)}</ul></details></section>"
+        )
+    return "".join(parts)
+
+
+def _machines_page(
+    machines, confirm: str = "", note: str = "", apps=(), confirm_app: str = ""
+) -> str:
     """Every connected machine: its name (his to change), when it connected,
     when it was last used, which sessions have published with it, and how many
     pages it has -- and revoke, which asks once more before it acts
@@ -1928,6 +2001,8 @@ def _machines_page(machines, confirm: str = "", note: str = "") -> str:
             f"<section><details><summary>Revoked ({len(gone)})</summary><ul>{rows}</ul>"
             "</details></section>"
         )
+    if apps:
+        parts.append(_apps_section(apps, confirm_app))
     parts.append("</div>")
     return "".join(parts)
 
@@ -6512,10 +6587,16 @@ def gallery_router(db: Database) -> APIRouter:
         )
 
     @router.get("/machines", response_class=HTMLResponse)
-    def machines_page(revoke: str = "") -> HTMLResponse:
+    def machines_page(revoke: str = "", revoke_app: str = "") -> HTMLResponse:
         return HTMLResponse(
             _shell(
-                "Machines and keys", _machines_page(keys.machines(db), confirm=revoke)
+                "Machines and keys",
+                _machines_page(
+                    keys.machines(db),
+                    confirm=revoke,
+                    apps=mcp_apps.listed(db, settings.owner_id()),
+                    confirm_app=revoke_app,
+                ),
             ),
             headers={**gallery_headers(), "cache-control": "no-store"},
         )
@@ -6541,6 +6622,31 @@ def gallery_router(db: Database) -> APIRouter:
         )
         return HTMLResponse(
             _shell("Machines and keys", _machines_page(keys.machines(db), note=note)),
+            headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.post("/machines/apps/{app_id}/revoke", response_class=HTMLResponse)
+    def machine_app_revoke(app_id: str, request: Request) -> HTMLResponse:
+        """Ends the app at once: its tokens go, so its next call fails, and its
+        remembered consent goes with it. Only the owner's own apps."""
+        _same_origin_write(request)
+        found = mcp_apps.app(db, app_id)
+        if found is None or found.person != settings.owner_id():
+            raise HTTPException(404, "no such app")
+        if found.revoked_at is None:
+            oauth.end_app(db, app_id, "owner", datetime.now(UTC))
+            note = "Revoked. That app stops at its next call."
+        else:
+            note = "That app was already revoked."
+        return HTMLResponse(
+            _shell(
+                "Machines and keys",
+                _machines_page(
+                    keys.machines(db),
+                    note=note,
+                    apps=mcp_apps.listed(db, settings.owner_id()),
+                ),
+            ),
             headers={**gallery_headers(), "cache-control": "no-store"},
         )
 
