@@ -499,8 +499,117 @@ def issue_tokens(db: Database, app: mcp_apps.App, now: datetime) -> dict[str, An
     }
 
 
+def _slide_idle(db: Database, app_id: str, now: datetime) -> None:
+    with db.connect() as conn:
+        conn.execute(
+            "update mcp_app set last_used_at = %s, idle_expires_at = %s where id = %s",
+            (now, now + mcp_apps.IDLE_LASTS, app_id),
+        )
+
+
+def refresh(db: Database, form, now: datetime) -> JSONResponse:
+    """The refresh_token grant, strict rotation (section 9): each use spends the token and
+    gives a new one; a spent one presented again ends the app, since two parties hold it."""
+    raw = str(form.get("refresh_token", ""))
+    if not raw.startswith(REFRESH_PREFIX):
+        return _grant_error("invalid_grant", "unknown refresh token")
+    digest = _hash(raw)
+    with db.connect() as conn:
+        row = conn.execute(
+            "select app_id, used_at, expires_at from mcp_token"
+            " where token_sha256 = %s and kind = 'refresh'",
+            (digest,),
+        ).fetchone()
+    if row is None:
+        return _grant_error("invalid_grant", "unknown refresh token")
+    app_id, used_at, ends = row
+    if used_at is not None:
+        end_app(db, app_id, "refresh_reuse", now)
+        return _grant_error("invalid_grant", "this refresh token was already used")
+    app = mcp_apps.app(db, app_id)
+    if ends is None or now >= ends or app is None or not app.live(now):
+        return _grant_error("invalid_grant", "this connection has ended")
+    if not _same(form.get("client_id"), app.client_id):
+        return _grant_error("invalid_grant", "this token was issued to another client")
+    sent_resource = form.get("resource")
+    if sent_resource is not None and not _same(str(sent_resource), resource()):
+        return _grant_error("invalid_target", "resource does not match")
+    with db.connect() as conn:  # one conditional update: the race has one winner
+        won = conn.execute(
+            "update mcp_token set used_at = %s"
+            " where token_sha256 = %s and kind = 'refresh' and used_at is null",
+            (now, digest),
+        ).rowcount
+    if won != 1:  # lost the race: the token is spent, so it is a second presentation
+        end_app(db, app_id, "refresh_reuse", now)
+        return _grant_error("invalid_grant", "this refresh token was already used")
+    _slide_idle(db, app_id, now)
+    return JSONResponse(issue_tokens(db, app, now), headers=_NO_STORE)
+
+
+def revoke(db: Database, form, now: datetime | None = None) -> None:
+    """RFC 7009. Never says whether the token was known. An access token goes alone; a
+    refresh token ends its app and everything it holds."""
+    now = now or datetime.now(UTC)
+    raw = str(form.get("token", ""))
+    if not raw.startswith((ACCESS_PREFIX, REFRESH_PREFIX)):
+        return
+    with db.connect() as conn:
+        row = conn.execute(
+            "select app_id, kind from mcp_token where token_sha256 = %s", (_hash(raw),)
+        ).fetchone()
+    if row is None:
+        return
+    app = mcp_apps.app(db, row[0])
+    client = form.get("client_id")
+    if app is None or (client is not None and not _same(str(client), app.client_id)):
+        return
+    if row[1] == "refresh":
+        end_app(db, app.id, "revoked", now)
+    else:
+        with db.connect() as conn:
+            conn.execute("delete from mcp_token where token_sha256 = %s", (_hash(raw),))
+
+
+def sweep(db: Database, now: datetime | None = None) -> int:
+    """Drop sign-ins that are over or used and tokens that are expired or spent. A day's
+    grace keeps a just-spent row around for the reuse check."""
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(days=1)
+    with db.connect() as conn, conn.transaction():
+        lapsed = [
+            r[0]
+            for r in conn.execute(
+                "select id from mcp_app where revoked_at is null"
+                " and (idle_expires_at <= %s or expires_at <= %s)",
+                (now, now),
+            ).fetchall()
+        ]
+        for app_id in lapsed:
+            conn.execute(
+                "update mcp_app set revoked_at = %s, revoked_reason = 'lapsed'"
+                " where id = %s",
+                (now, app_id),
+            )
+            conn.execute("delete from mcp_token where app_id = %s", (app_id,))
+        n = len(lapsed)
+        n += conn.execute(
+            "delete from mcp_signin where expires_at < %s"
+            " or (used_at is not null and used_at < %s)",
+            (cutoff, cutoff),
+        ).rowcount
+        n += conn.execute(
+            "delete from mcp_token where expires_at < %s"
+            " or (used_at is not null and used_at < %s)",
+            (cutoff, cutoff),
+        ).rowcount
+    return n
+
+
 def token(db: Database, form, now: datetime | None = None) -> JSONResponse:
     now = now or datetime.now(UTC)
+    if form.get("grant_type") == "refresh_token":
+        return refresh(db, form, now)
     if form.get("grant_type") != "authorization_code":
         return _grant_error("unsupported_grant_type", "only authorization_code here")
     for name in ("client_id", "redirect_uri", "resource", "code", "code_verifier"):
@@ -572,7 +681,8 @@ def verify_access(
     if app.last_used_at is None or now - app.last_used_at > TOUCH_EVERY:
         with db.connect() as conn:
             conn.execute(
-                "update mcp_app set last_used_at = %s where id = %s", (now, app.id)
+                "update mcp_app set last_used_at = %s, idle_expires_at = %s where id = %s",
+                (now, now + mcp_apps.IDLE_LASTS, app.id),
             )
     return app
 
@@ -638,5 +748,15 @@ def oauth_router(db: Database, limiter: ratelimit.FailedAuthLimiter) -> APIRoute
             if blocked:
                 return _grant_error("invalid_request", "too many failures; wait", 429)
         return answer
+
+    @router.post("/oauth/revoke", include_in_schema=False)
+    async def revoke_route(request: Request):
+        if not on(request, _public_here):
+            return gone()
+        form = await request.form()
+        from starlette.concurrency import run_in_threadpool
+
+        await run_in_threadpool(revoke, db, form)
+        return Response(status_code=200, headers=_NO_STORE)
 
     return router

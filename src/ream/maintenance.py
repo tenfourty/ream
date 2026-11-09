@@ -96,7 +96,7 @@ def next_run(now: datetime) -> datetime:
 def nightly(db: Database) -> None:
     """The snapshot (SQLite only), then the purge. A failed snapshot stops the
     purge: nothing is destroyed that is not in a backup."""
-    from ream import image_store, store
+    from ream import image_store, oauth, store
 
     folder = backup_folder(db)
     if folder is not None:
@@ -104,6 +104,7 @@ def nightly(db: Database) -> None:
         _log.info("backup written: %s", made.name)
     gone = store.purge_expired(db)
     image_store.sweep(db)
+    oauth.sweep(db)
     # After the purge, so the statistics describe what is left.
     db.optimize()
     _log.info("purge: %d destroyed%s", len(gone), "".join(f" {g}" for g in gone))

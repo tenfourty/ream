@@ -256,6 +256,12 @@ def create_app(
         ).fetchone()
         if owner is None:
             raise AppRefused(f"{agent!r} is not the agent for this person and app")
+        conn.execute(  # a lapsed app no longer holds the pair
+            "update mcp_app set revoked_at = %s, revoked_reason = %s"
+            " where person = %s and client_id = %s and revoked_at is null"
+            " and (idle_expires_at <= %s or expires_at <= %s)",
+            (now, "lapsed", person, client_id, now, now),
+        )
         live = conn.execute(
             "select 1 from mcp_app where person = %s and client_id = %s"
             " and revoked_at is null",
