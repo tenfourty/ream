@@ -581,11 +581,11 @@ def test_the_gallery_script_draws_pins_with_text_content_only():
         assert rule in gallery._CSS
 
 
-def test_the_page_bar_has_a_comment_on_page_button_that_works_without_scripts():
+def test_the_page_bar_has_one_comment_control_that_works_without_scripts():
     bar = gallery._comments_button("p1", 0)
-    assert 'class="pagecbtn"' in bar and "Comment on page" in bar
-    assert 'href="#cwhole"' in bar and bar.index("pagecbtn") < bar.index('class="cbtn')
-    assert ".pagecbtn" in gallery._CSS
+    assert 'class="cbtn"' in bar and 'href="#comments"' in bar and ">Comment<" in bar
+    assert "pagecbtn" not in bar and "Comment on page" not in bar
+    assert "pagecbtn" not in gallery._CSS
 
 
 # --- the CLI -------------------------------------------------------------------------

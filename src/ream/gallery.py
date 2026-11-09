@@ -712,10 +712,10 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
    homelab-ij8.108): same look, laid out as a row with gaps. */
 .selbar{position:absolute;z-index:60;display:flex;padding:2px;background:var(--ink);color:var(--paper);
   border-radius:.55rem;box-shadow:var(--shadow-float)}
-/* The pill's pointer, at --ax from its left edge, under it or (.below) over it. */
-.selbar::before{content:"";position:absolute;width:8px;height:8px;background:var(--ink);
-  transform:rotate(45deg);bottom:-3px;left:var(--ax,50%);margin-left:-4px;border-radius:1px}
-.selbar.below::before{bottom:auto;top:-3px}
+/* The pill's pointer: a child the script places by `left`, under the pill or (.below) over it. */
+.selptr{position:absolute;width:8px;height:8px;background:var(--ink);pointer-events:none;
+  transform:rotate(45deg);bottom:-3px;left:50%;margin-left:-4px;border-radius:1px}
+.selbar.below .selptr{bottom:auto;top:-3px}
 /* The author-origin `display:flex` above always beats the user-agent
    stylesheet's `[hidden]{display:none}` -- origin, not specificity, decides
    that fight, and author rules win it regardless of selector weight. Without
@@ -2478,6 +2478,7 @@ bar=document.createElement("div");bar.className="selbar";bar.hidden=true;
 [["comment","Comment"]].forEach(function(k){
   var b=document.createElement("button");b.type="button";b.textContent=k[1];b.dataset.kind=k[0];
   bar.appendChild(b)});
+var ptr=document.createElement("i");ptr.className="selptr";bar.appendChild(ptr);
 host().appendChild(bar);
 var last=null;
 function num(v){return typeof v==="number"&&isFinite(v)}
@@ -2526,7 +2527,7 @@ window.addEventListener("message",function(e){
     if(below)top=r.top+window.scrollY+d.rect.top+d.rect.height+gap}
   var left=Math.max(6,cx-w/2);
   bar.style.top=top+"px";bar.style.left=left+"px";
-  if(bar.style.setProperty)bar.style.setProperty("--ax",Math.max(10,Math.min(cx-left,w-10))+"px");
+  ptr.style.left=Math.max(10,Math.min(cx-left,w-10))+"px";
   if(bar.classList)bar.classList.toggle("below",below)});
 bar.addEventListener("click",function(e){
   var b=e.target&&e.target.closest?e.target.closest("button"):null;

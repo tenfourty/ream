@@ -58,7 +58,7 @@ function clock() {
                if (!next) break; const [t, fn] = due.get(next); due.delete(next); now = t; fn(); }
              now = end; } };
 }
-function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false, threads = [], page = "abc", seed = null } = {}) {
+function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false, threads = [], page = "abc", seed = null, touch = false, offer = true } = {}) {
   const framePosts = [];
   const frameWin = { postMessage: (m, o) => framePosts.push([m, o]) };
   const frameOn = {};
@@ -94,7 +94,12 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
   const cbtn = el("a"); cbtn.className = "cbtn";
   const byId = { "artifact-frame": iframe, "artifact-marks": marksEl, "marks-unplaced": unplacedEl, comments: noPanel ? null : panel };
   const pagebtn = el("a"); pagebtn.className = "pagecbtn";
-  const docOn = {}, extra = { ".cbtn": cbtn, ".pagecbtn": pagebtn };
+  // The select-text switch and the how-to box with its three steps.
+  const sw = el("input"); sw.id = "coffer"; sw.checked = true; byId.coffer = sw;
+  const how = el("div"); how.id = "chow"; how.hidden = true;
+  const steps = [el("li"), el("li"), el("li")]; steps.forEach((li) => how.appendChild(li));
+  how.querySelectorAll = (q) => (q === "li" ? steps : []); byId.chow = how;
+  const docOn = {}, extra = { ".cbtn": cbtn };
   const doc = { getElementById: (id) => byId[id] || null,
                 createElement: (t) => { const n = el(t); if (t === "template") Object.defineProperty(n, "innerHTML", { set(h) { n.content = { firstElementChild: { html: h } }; } }); return n; },
                 body: docBody,
@@ -105,7 +110,10 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
   const localStorage = storage ? { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) }
     : { getItem() { throw new Error("denied"); }, setItem() { throw new Error("denied"); } };
   const history = { entries: 0, replaced: [], pushState() { this.entries++; }, replaceState(s, t, u) { this.replaced.push(u); } };
-  const win = { scrollX: 0, scrollY: 50, innerWidth: 1000, innerHeight: 700, localStorage, history,
+  const mqList = [];
+  const matchMedia = (q) => ({ get matches() { return /pointer/.test(q) ? touch : 1000 >= 896; }, media: q, addEventListener: (t, fn) => mqList.push(fn) });
+  const setTouch = (v) => { touch = v; mqList.forEach((fn) => fn({})); };
+  const win = { matchMedia, scrollX: 0, scrollY: 50, innerWidth: 1000, innerHeight: 700, localStorage, history,
                 addEventListener: (t, f, c) => (((c ? capture : listeners)[t] ||= []).push(f)) };
   const location = { hash, pathname: "/a/" + page, search: "" };
   const FD = function (f) { this.form = f; this.fields = []; };
@@ -115,7 +123,7 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
     doc, win, location, URL, fetchImpl || undefined, FD, clk.setTimeout, clk.clearTimeout);
   const bar = docBody.children.find((c) => c.className === "selbar");
   const buttons = {};
-  if (bar) bar.children.forEach((b) => (buttons[b.dataset.kind] = b));
+  if (bar) bar.children.forEach((b) => { if (b.tag === "button") buttons[b.dataset.kind] = b; });
   const send = (data, { source = frameWin, origin = "https://abc.tenfourty.com" } = {}) =>
     (listeners.message || []).forEach((fn) => fn({ source, origin, data }));
   const click = (kind) => bar.on.click({ target: buttons[kind] });
@@ -134,7 +142,7 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
   const card = () => docBody.children.filter((c) => c.className === "hovercard");
   const scroll = () => (listeners.scroll || []).concat(capture.scroll || []).forEach((fn) => fn({}));
   return { bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload, submit, extra, doc,
-           panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist, press, fsChange, pagebtn, win, docOn, tabBtns };
+           panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist, press, fsChange, pagebtn, win, docOn, tabBtns, sw, how, steps, setTouch, matchMedia, mqList };
 }
 const SEL = { type: "artifact-selection", quote: "the plan",
               anchor: { kind: "range", path: "body>p:nth-of-type(1)", start: 4, end: 12 },
@@ -142,10 +150,10 @@ const SEL = { type: "artifact-selection", quote: "the plan",
 
 { const g = build();
   ok(g.bar && g.bar.hidden === true, "a hidden action bar exists");
-  ok(["comment", "remove", "looks_good"].every((k) => g.buttons[k]), "with all three actions");
+  ok(Object.keys(g.buttons).join() === "comment", "offering only Comment");
   g.send(SEL);
   ok(g.bar.hidden === false, "a selection shows it");
-  ok(g.bar.style.top === "204px" && g.bar.style.left === "30px", "under the selection, in page coordinates");
+  ok(g.bar.style.top === "145px" && g.bar.style.left === "15px", "above the selection, in page coordinates");
   g.click("comment");
   const quote = g.form.children.find((c) => c.name === "quote");
   const anchor = g.form.children.find((c) => c.name === "anchor");
@@ -168,20 +176,6 @@ const SEL = { type: "artifact-selection", quote: "the plan",
   ok(g.bar.hidden === true, "clearing the selection hides it");
   g.send({ ...SEL, rect: { top: "x", left: 1, height: 1 } });
   ok(g.bar.hidden === true, "a malformed rect is ignored"); }
-{ const g = build();
-  g.send(SEL);
-  g.click("remove");
-  const kind = g.form.children.find((c) => c.name === "kind");
-  ok(kind && kind.value === "remove", "remove sets kind");
-  ok(g.body.placeholder === "Add a note (optional)", "and offers an optional note");
-  ok(g.form.submits === 1, "an empty note submits the mark on one tap"); }
-{ const g = build();
-  g.send(SEL);
-  g.body.value = "already typing a note";
-  g.click("looks_good");
-  const kind = g.form.children.find((c) => c.name === "kind");
-  ok(kind && kind.value === "looks_good", "looks_good sets kind");
-  ok(g.form.submits === 0, "a note already in progress is never submitted for them"); }
 { const g = build();
   g.send(SEL);
   g.bar.on.click({ target: g.bar });
@@ -419,9 +413,11 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
   g.tap(g.cbtn); g.key("Enter");
   ok(g.isOpen(), "a key other than Escape leaves it open");
   g.key("Escape");
-  ok(!g.isOpen() && g.store.get("ream.comments.open:abc") === "0", "Escape closes it, and that is remembered");
+  ok(g.isOpen() && g.cbtn.attrs["aria-pressed"] === "false", "Escape turns Comment off first and leaves the panel");
+  g.key("Escape");
+  ok(!g.isOpen() && g.store.get("ream.comments.open:abc") === "0", "a second Escape closes it, and that is remembered");
   g.extra[".dlg:target,details.menu[open]"] = el("div");
-  g.tap(g.cbtn); g.key("Escape");
+  g.tap(g.cbtn); g.key("Escape"); g.key("Escape");
   ok(g.isOpen(), "Escape with a dialog or menu open closes that first, not the panel"); }
 { const g = build({ stored: "1" });
   ok(g.isOpen() && g.cbtn.attrs["aria-expanded"] === "true", "a viewer who left it open finds it open"); }
@@ -662,12 +658,12 @@ const btnOf = (c, label) => c.querySelectorAll("button").find((b) => b.textConte
   ok(fs.children.filter((c) => c.className === "hovercard").length === 0, "leaving or entering full screen puts it away");
   ok(g.bar.parentNode === fs, "the selection bar moves into the full-screen element too");
   g.send({ ...SEL, rect: { ...SEL.rect, top: 900, vt: 30, vl: 10 } });
-  ok(g.bar.hidden === false && g.bar.style.position === "fixed" && g.bar.style.top === "154px" && g.bar.style.left === "30px",
-     "and sits under the selection as the frame shows it, since the frame scrolls itself there");
+  ok(g.bar.hidden === false && g.bar.style.position === "fixed" && g.bar.style.top === "95px" && g.bar.style.left === "15px",
+     "and sits above the selection as the frame shows it, since the frame scrolls itself there");
   g.doc.fullscreenElement = null; g.fsChange();
   ok(g.bar.parentNode === g.docBody && g.bar.hidden === true, "back in the page when full screen ends");
   g.send(SEL);
-  ok(g.bar.style.position === "" && g.bar.style.top === "204px", "placed in page coordinates again"); }
+  ok(g.bar.style.position === "" && g.bar.style.top === "145px", "placed in page coordinates again"); }
 
 // ===== ELEMENT PINS (pinned comments) ========================================
 // A pick the frame reports (its corner Comment button, drawn by the page's own shim)
@@ -685,20 +681,59 @@ const badgesOf = (g) => g.docBody.children.filter((c) => c.className === "pinbad
   const g = build();
   ok(g.extra[".pinmodebtn"] === undefined, "the page bar has no Pin button to find"); }
 
-// COMMENT ON PAGE
+// THE COMMENT CONTROL: one control lights comment mode and opens the panel
 { const g = build();
-  g.send(SEL); g.click("comment");
-  ok(g.form.querySelector(".cquote") && g.form.querySelector("input[name=anchor]"), "a selection filled the composer");
   g.panel.setAttribute("data-ctab", "resolved");
-  let focused = 0; g.body.focus = () => focused++;
-  const ev = { prevented: false, preventDefault() { ev.prevented = true; } };
-  g.pagebtn.on.click(ev);
+  g.send(SEL);
+  const ev = g.tap(g.cbtn);
   ok(ev.prevented, "the link's jump is replaced by the script");
   ok(g.isOpen() && g.panel.getAttribute("data-ctab") === "open", "the panel opens on the Open tab");
-  ok(!g.form.querySelector(".cquote") && !g.form.querySelector("input[name=anchor]") && !g.form.querySelector("input[name=quote]"),
-     "the composer is the whole page again: no quote, no anchor");
-  ok(g.body.placeholder === "Comment on this page" && focused === 1, "with its own placeholder, and focus in the field");
-  ok(g.bar.hidden === true, "and the selection bar goes"); }
+  ok(g.cbtn.attrs["aria-pressed"] === "true" && g.docBody.classList.contains("cmode-on"), "and the control is lit");
+  ok(g.body.placeholder === "Comment on this page", "with its own placeholder");
+  ok(g.bar.hidden === true, "and the selection bar goes");
+  ok(g.how.hidden === false, "the how-to box shows while lit");
+  ok(g.framePosts.some(([m]) => m.type === "artifact-comment-mode" && m.on === true), "the frame is told the mode is on");
+  g.tap(g.cbtn);
+  ok(!g.isOpen() && g.cbtn.attrs["aria-pressed"] === "false" && g.how.hidden === true, "pressing it again turns it off and closes the panel");
+  ok(g.framePosts.filter(([m]) => m.type === "artifact-comment-mode").pop()[0].on === false, "and the frame is told it is off"); }
+// Escape turns the mode off; the frame's own message does the same
+{ const g = build();
+  g.tap(g.cbtn); g.send({ type: "artifact-comment-off" });
+  ok(g.cbtn.attrs["aria-pressed"] === "false" && g.isOpen(), "artifact-comment-off turns Comment off and leaves the panel");
+  const bad = build(); bad.tap(bad.cbtn); bad.send({ type: "artifact-comment-off" }, { origin: "https://evil.example" });
+  ok(bad.cbtn.attrs["aria-pressed"] === "true", "from another origin it is ignored");
+  const h = build(); h.tap(h.cbtn); h.send(SEL);
+  h.key("Escape");
+  ok(h.cbtn.attrs["aria-pressed"] === "true", "Escape takes the pill first and keeps Comment lit"); }
+// THE SELECT-TEXT SWITCH: on by default, remembered
+{ const g = build();
+  ok(g.sw.checked === true, "the switch starts on");
+  g.send(SEL); ok(g.bar.hidden === false, "so a selection offers the pill");
+  g.sw.checked = false; g.sw.on.change();
+  ok(g.store.get("ream.comments.offer") === "0" && g.bar.hidden === true, "turning it off is remembered and drops the pill");
+  g.send(SEL); ok(g.bar.hidden === true, "and a selection then shows none");
+  g.sw.checked = true; g.sw.on.change();
+  ok(g.store.get("ream.comments.offer") === "1", "turning it on is remembered too");
+  const h = build({ seed: [["ream.comments.offer", "0"]] });
+  ok(h.sw.checked === false, "a stored off is read back");
+  h.send(SEL); ok(h.bar.hidden === true, "and no pill is offered");
+  const d = build({ storage: false });
+  ok(d.sw.checked === true, "with storage denied it stays on"); }
+// THE HOW-TO STEPS follow the switch and the touch rule
+{ const g = build();
+  g.tap(g.cbtn);
+  ok(/^Click a chart/.test(g.steps[0].textContent) && /pill/.test(g.steps[1].textContent), "with the switch on and a mouse: Click, and the pill step");
+  g.sw.checked = false; g.sw.on.change();
+  ok(/off/.test(g.steps[1].textContent) && !/pill/.test(g.steps[1].textContent), "with the switch off the second step says so");
+  const t = build({ touch: true }); t.tap(t.cbtn);
+  ok(/^Tap a chart/.test(t.steps[0].textContent), "on touch the first step says Tap"); }
+// THE TOUCH RULE: the main pointer, not the screen size
+{ const g = build({ touch: true });
+  ok(g.docBody.classList.contains("ctouch"), "a coarse or hover-less main pointer gets the touch layout");
+  g.setTouch(false);
+  ok(!g.docBody.classList.contains("ctouch"), "and a mouse does not, however narrow the window");
+  ok(/matchMedia\("\(pointer: coarse\), \(hover: none\)"\)/.test(src), "the query is the pointer one");
+  const m = build({ touch: false }); ok(!m.docBody.classList.contains("ctouch"), "a mouse on any width gets the pointer layout"); }
 
 // CTRL+SHIFT+M
 const CHORD = { key: "M", ctrlKey: true, shiftKey: true };

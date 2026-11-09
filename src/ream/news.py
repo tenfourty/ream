@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-09b",
+        'Commenting on a page is simpler: one Comment control, with a count, replaces the corner button, "Comment on page" and the bubble. Press it and it stays lit; point at a chart, table cell or picture to get a box, click to comment, and press it again (or Escape) to switch it off. Selecting words shows a dark pill with Comment. A switch, "Offer comments when I select text", turns the pill off, and a "How to comment" box at the top of the panel walks through the steps ("Tap" on a touch screen). Remove and Looks good are gone from the page; the API still accepts them and old ones still show.',
+    ),
+    (
         "2026-11-09",
         "{{owner_name}}'s signed-in Claude can now ask him a question on any page he can read, not only on pages it published. The card says the question came from his Claude, not from the page's agent, and his answer goes back to the Claude that asked. The page's agent sees a `question_asked` event, and only the asker can close the question. A key still asks on its own pages only.",
     ),

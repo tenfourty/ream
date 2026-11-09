@@ -265,3 +265,23 @@ itself (the keyed API only lets the owner, so it is always silent there) or the 
 is held back; reopening an open thread writes nothing. `artifacts-decide wait` wakes
 on it and prints the thread under a `REOPENED by <who>` line.
 Pointing at or focusing a thread lights its spot on the page in either tab.
+
+## One Comment control, comment mode and the pill (9 Nov 2026)
+
+This section supersedes "Comment on page" and the per-element corner button above.
+
+- **One Comment control** in the page bar, with the count of open comments. It replaces the
+  corner button, "Comment on page" and the selection bubble.
+- **Pressing it lights comment mode**, which stays lit with no band. While lit, a chart, table
+  (by the cell) or picture gets a box when pointed at, and a click starts a comment on it. Links
+  still work. Pressing it again, or Escape, turns the mode off (the shim hears
+  `artifact-comment-off`); a second Escape closes the panel.
+- **A dark pill above selected words**, offering only Comment. Explain, Shorten and Fix come
+  later as new kinds. The reader UI no longer offers Remove or Looks good; the API still
+  accepts both, and an existing thread of either kind still displays with its label.
+- **"Offer comments when I select text"** is a switch, on by default, kept in `localStorage`.
+  Off: selecting words shows no pill; Comment mode and the keyboard chord still work.
+- **"How to comment"**: numbered steps in a highlighted box at the top of the comments panel
+  whenever Comment is lit. The steps change with the switch and say "Tap" on touch.
+- **Touch layout** is chosen by `matchMedia("(pointer: coarse), (hover: none)")`, not by
+  screen size.

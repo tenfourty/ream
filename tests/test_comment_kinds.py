@@ -416,3 +416,35 @@ def test_a_bare_looks_good_needs_no_reply():
         ]
     )[0]
     assert replied["needs_reply"] is False
+
+
+@pytest.mark.parametrize(
+    ("kind", "label"), [("remove", "Remove this"), ("looks_good", "Looks good")]
+)
+def test_an_existing_remove_or_looks_good_thread_still_shows_its_label(
+    client, db, kind, label
+):
+    """The reader's screen no longer offers these kinds, but threads made earlier
+    (or by the API, which still accepts them) display as they always did."""
+    page = _page(db)
+    comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="",
+        kind=kind,
+        quote="Rotate the keys every 90 days.",
+        anchor=RANGE,
+    )
+    html = client.get(f"/a/{page.id}").text
+    assert f'class="ckind ckind-{kind}">{label}</span>' in html
+
+
+def test_the_page_view_has_the_how_to_box_and_the_select_text_switch(client, db):
+    page = _page(db)
+    html = client.get(f"/a/{page.id}").text
+    assert 'id="chow"' in html and "How to comment" in html
+    assert 'id="coffer" checked' in html, "the switch is on by default"
+    assert "Offer comments when I select text" in html
+    assert "Comment on page" not in html and "pagecbtn" not in html

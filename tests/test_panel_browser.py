@@ -222,7 +222,13 @@ def test_on_a_wide_window_the_panel_docks_in_place_and_is_remembered(
         same = _geometry(pg)
         assert same["open"] and same["entries"] == closed["entries"]
 
-        # Escape closes it, with the address untouched.
+        # Escape turns Comment off first, a second one closes the panel, with the address
+        # untouched.
+        pg.keyboard.press("Escape")
+        pg.wait_for_function(
+            "() => document.querySelector('.cbtn').getAttribute('aria-pressed') === 'false'"
+        )
+        assert _geometry(pg)["open"]
         pg.keyboard.press("Escape")
         pg.wait_for_function("() => !document.body.classList.contains('cpanel-open')")
         after = _geometry(pg)
@@ -597,7 +603,9 @@ def test_a_mark_made_across_a_deletion_stores_the_live_words(browser, served, db
                      const s = getSelection(); s.removeAllRanges(); s.addRange(r);}"""
         )
         pg.locator(".selbar").wait_for(state="visible", timeout=5000)
-        pg.click(".selbar button[data-kind=remove]")
+        pg.click(".selbar button[data-kind=comment]")
+        pg.fill("form.cnew input[name=body]", "a note on the words")
+        pg.press("form.cnew input[name=body]", "Enter")
         for _ in range(50):
             rows = [
                 c
@@ -645,24 +653,33 @@ CHART_PAGE = (
 )
 
 
-def test_hovering_a_chart_offers_a_corner_comment_that_starts_a_comment_on_it(
+def test_with_comment_lit_pointing_at_a_chart_boxes_it_and_a_click_starts_a_comment_on_it(
     browser, served, db
 ):
-    """Point at a chart: a Comment button appears in its corner, drawn by the
-    page's own shim (one host on the document element, closed shadow root).
-    Pressing it opens the composer on that element, as a pin-mode pick used to.
-    The paragraph beside it gets no button."""
+    """Press Comment, then point at a chart: a box is drawn round it by the page's
+    own shim (one host on the document element, closed shadow root), and a click
+    on it opens the composer on that element. The paragraph beside it gets no box,
+    and with Comment off nothing is drawn at all."""
     origin, _ = served
     page = store.publish(db, "seat", "Chart", CHART_PAGE)
     ctx, pg, errors = _open_page(browser, origin, page.id, 1400)
     try:
         _frame_height_settled(pg)
         frame = pg.frames[1]
-        box = pg.locator("#artifact-frame").bounding_box()
         host_state = """() => { const h = document.documentElement.lastElementChild;
             return h && h.nodeName === 'AR-COMMENT-HOST'
               ? getComputedStyle(h).display : 'none' }"""
         assert frame.evaluate(host_state) == "none"
+        # Unlit: pointing at the chart draws nothing.
+        box = pg.locator("#artifact-frame").bounding_box()
+        pg.mouse.move(box["x"] + 200, box["y"] + 200)
+        pg.wait_for_timeout(300)
+        assert frame.evaluate(host_state) == "none", "unlit, nothing is drawn"
+        pg.click(".cbtn")
+        pg.wait_for_function("() => document.body.classList.contains('cmode-on')")
+        _frame_height_settled(pg)
+        pg.wait_for_timeout(300)
+        box = pg.locator("#artifact-frame").bounding_box()
         rect = frame.evaluate(
             """() => { const b = document.getElementById('chart').getBoundingClientRect();
                       return {l: b.left, t: b.top, r: b.right, b: b.bottom} }"""
@@ -688,14 +705,11 @@ def test_hovering_a_chart_offers_a_corner_comment_that_starts_a_comment_on_it(
                               inbody: !!document.body.querySelector('ar-comment-host')} }"""
         )
         assert not host["inbody"], "the button is outside the page's own content"
-        assert rect["t"] <= host["t"] <= rect["t"] + 20
-        assert rect["r"] - 20 <= host["r"] <= rect["r"] + 1
+        assert rect["t"] - 2 <= host["t"] <= rect["t"] + 2
+        assert rect["r"] - 2 <= host["r"] <= rect["r"] + 2, "the box is round the chart"
         # The page's own text is untouched by it.
         assert "Comment" not in frame.evaluate("() => document.body.innerText")
-        pg.mouse.click(
-            box["x"] + (host["l"] + host["r"]) / 2,
-            box["y"] + (host["t"] + host["b"]) / 2,
-        )
+        pg.mouse.click(box["x"] + rect["l"] + 120, box["y"] + rect["t"] + 90)
         quote = pg.locator(".cquote")
         quote.wait_for(state="visible", timeout=5000)
         assert "Latency" in quote.inner_text()
@@ -897,7 +911,7 @@ def _retro_page():
     )
 
 
-def test_the_corner_comment_sits_at_the_thing_pointed_at_on_a_long_page(
+def test_the_comment_box_sits_round_the_thing_pointed_at_on_a_long_page(
     browser, served, db
 ):
     """Owner, 9 Nov: the Comment pill showed at the top of the content column,
@@ -916,7 +930,10 @@ def test_the_corner_comment_sits_at_the_thing_pointed_at_on_a_long_page(
             if (!h || h.nodeName !== 'AR-COMMENT-HOST') return null;
             if (getComputedStyle(h).display === 'none') return null;
             const b = h.getBoundingClientRect();
-            return {t: b.top, r: b.right} }"""
+            return {t: b.top, l: b.left, r: b.right, b: b.bottom} }"""
+        pg.click(".cbtn")
+        pg.wait_for_function("() => document.body.classList.contains('cmode-on')")
+        _frame_height_settled(pg)
 
         def point_at(selector, dx=0.5, dy=0.5):
             # The frame is as tall as the page, so it is the gallery that scrolls.
@@ -968,8 +985,16 @@ def test_the_corner_comment_sits_at_the_thing_pointed_at_on_a_long_page(
             # At the corner of what was pointed at (a table's button may sit at
             # the corner of the cell under the pointer): inside its box, never
             # at the top of the column.
-            assert r["t"] - 1 <= got["t"] <= r["t"] + r["h"], (sel, r, got)
-            assert r["l"] <= got["r"] <= r["l"] + r["w"] + 1, (sel, r, got)
+            assert r["t"] - 1 <= got["t"] and got["b"] <= r["t"] + r["h"] + 1, (
+                sel,
+                r,
+                got,
+            )
+            assert r["l"] - 1 <= got["l"] and got["r"] <= r["l"] + r["w"] + 1, (
+                sel,
+                r,
+                got,
+            )
         # Selecting words, at the top and far down: the bar is under the words.
         for sel in ("p.lead", "section:last-of-type p:last-of-type"):
             r = point_at(sel)
@@ -985,10 +1010,10 @@ def test_the_corner_comment_sits_at_the_thing_pointed_at_on_a_long_page(
             bar = None
             for _ in range(30):  # the bar moves when the new selection arrives
                 bar = pg.locator(".selbar").bounding_box()
-                if bar and line - 5 <= bar["y"] <= line + r["h"] + 40:
+                if bar and line - 60 <= bar["y"] <= line + r["h"] + 40:
                     break
                 pg.wait_for_timeout(100)
-            assert bar and line - 5 <= bar["y"] <= line + r["h"] + 40, (sel, bar, line)
+            assert bar and line - 60 <= bar["y"] <= line + r["h"] + 40, (sel, bar, line)
         assert not errors, errors
     finally:
         ctx.close()

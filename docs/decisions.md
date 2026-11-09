@@ -490,3 +490,24 @@ Ream re-reading the person's groups from the company login at every hourly renew
 login's refresh token for this); if the login refuses, the connection ends. Not chosen: a short
 absolute lifetime, which would mean signing in again in Claude.ai every day. Evidence: confirmed
 (Jeremy, 9 Nov 2026, the recommended option).
+
+## Commenting on a page: one Comment control, a lit mode and a pill (9 Nov 2026)
+
+**Chosen:** the reader gets one Comment control, with a count, that replaces the corner button,
+"Comment on page" and the bubble. Pressing it lights a mode that stays lit with no band: a chart,
+table (by the cell) or picture gets a box when pointed at and a click starts a comment, while links
+still work; pressing it again, or Escape, turns the mode off. Selected words get a dark pill
+offering Comment only. An "Offer comments when I select text" switch, on by default and kept in the
+browser, turns the pill off. A "How to comment" box of numbered steps sits at the top of the
+comments panel whenever Comment is lit; its steps change with the switch and say "Tap" on touch.
+The touch layout follows the main pointer (`(pointer: coarse), (hover: none)`).
+
+**Explain, Shorten and Fix** will come later as three new kinds, reviewed by the offices on 9 Nov.
+**Remove and Looks good** are retired from the reader's screen; the API still accepts them and
+existing threads of those kinds still display.
+
+**Not chosen:** touch decided by screen size only, or by either test. The how-to box shown only
+until his first comment, or as a tip under the button. The select-text switch off by default.
+Explain, Shorten and Fix as labelled ordinary comments, or as pre-filled comment text.
+
+**Evidence:** confirmed (Jeremy, 9 Nov 2026).

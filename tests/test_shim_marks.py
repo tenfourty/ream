@@ -27,10 +27,10 @@ def test_the_selection_carries_its_heading_and_ids_and_marks_need_no_path():
     assert 'typeof m.anchor.path==="string"' not in source
 
 
-def test_the_gallery_offers_three_actions_on_a_selection():
+def test_the_gallery_offers_only_comment_on_a_selection():
     js = gallery._COMMENTS_JS
-    for label in ("Comment", "Remove this", "Looks good"):
-        assert f'"{label}"' in js
+    assert '[["comment","Comment"]]' in js
+    assert '"Remove this"' not in js and '"Looks good"' not in js
     assert 'field("kind"' in js
 
 
