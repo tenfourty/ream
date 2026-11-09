@@ -792,3 +792,22 @@ but held by runcove's open-pull-request limit.
 lands. Asking runcove-pmo to let the fix past runcove's limit first.
 
 **Evidence:** confirmed (Jeremy, 9 Nov 2026), decision d_01M714F34A3AB7V449YNF4CYEA.
+
+## Offices' Claude sessions sign in to Ream's MCP with their own agent keys (10 Nov 2026)
+
+**Chosen:** `/mcp` takes agent keys beside the owner's sign-in (`REAM_MCP_ACCEPT_KEYS=1` on our
+deployment), so an office's Claude session uses Ream as its own agent, scoped to its own pages as the
+tool is today. The key reaches the session through a helper that reads it from the vault, never from a
+file an agent writes or a command line. This office is the pilot; the other offices then move one at a
+time. Scripts keep the self-updating `ream` tool, as decided on 9 Nov. The plan, its gap list and the
+maintainer's own calls (blocking waits stay on the tool; a key is minted for an office that has none
+when it moves; publishing from a file stays a tool job for the pilot) are in
+`docs/agent/specs/2026-11-10-offices-on-mcp.md`.
+
+**Why:** the second half of the 9 Nov decision, offices on MCP so they stop running out-of-date tools,
+needs a way for an office seat to be itself at `/mcp`; until now only apps the owner signed in could.
+
+**Not chosen:** keeping offices on the tool until people's sign-in covers agents too; allowing keys for
+the pilot office alone and deciding the rest later.
+
+**Evidence:** confirmed (Jeremy, 10 Nov 2026), decision d_01M71ARX2FGFQ28G9Q06804QGW.
