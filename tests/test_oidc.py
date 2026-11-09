@@ -788,7 +788,7 @@ def test_hostile_endpoint_spellings_never_send_the_secret_off_the_backchannel(
     assert back.seen
     for _, url, _headers in back.seen:
         assert url.startswith(BACK + "/"), url
-        assert "evil" not in url
+        assert urlsplit(url).netloc == urlsplit(BACK).netloc
 
 
 def test_a_redirect_from_the_backchannel_is_refused_with_no_second_request(back):
@@ -817,7 +817,9 @@ def test_origins_of_backchannel_spellings(url, origin):
 
 
 def test_the_backchannel_url_rewrites_an_ipv6_literal():
-    with settings.override(oidc_backchannel_url="http://[fd00::1]:9091"):
+    with settings.override(
+        oidc_issuer=ISSUER, oidc_backchannel_url="http://[fd00::1]:9091"
+    ):
         url, headers = oidc._backchannel(ISSUER + "/token", {})
     assert url == "http://[fd00::1]:9091/token"
     assert headers["Host"] == "auth.example"
