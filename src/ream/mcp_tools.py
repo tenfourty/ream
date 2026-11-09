@@ -1,4 +1,4 @@
-"""The read tools, resources and prompts `/mcp` offers (docs/agent/specs/
+"""The tools (reading and writing), resources and prompts `/mcp` offers (docs/agent/specs/
 2026-11-08-mcp-oauth-design.md, 11.3 and 15).
 
 Each tool calls the module functions its `/api/v1` route calls, with the calling key's
@@ -40,6 +40,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel, ValidationError
 
 from ream import (
     api,
@@ -58,8 +59,10 @@ from ream import (
 from ream.mcp import (
     OWNER,
     PROMPTS,
+    RELAY,
     RESOURCE_TEMPLATES,
     RESOURCES,
+    WRITE,
     Call,
     Fences,
     Prompt,
@@ -165,6 +168,8 @@ _REAM: dict[str, Callable[[str, dict], bool]] = {
             "held_by",
             "replaces",
             "replaced_by",
+            "moved",
+            "missing",
         ),
         _ID,
     ),
@@ -569,6 +574,463 @@ def _whats_new(call: Call, arguments: dict[str, Any]) -> dict:
         "cursor": cursor,
         "more": len(rows) >= limit,
     }
+
+
+# --- The writing tools (slice 2) ------------------------------------------------------
+#
+# Each builds its route's own body model from the arguments, so a field the route
+# refuses is refused here in the model's words, and calls the module function the route
+# calls. A route's refusal (a secret's field and line, a stale revision, "no such page")
+# comes back word for word as the tool error (`mcp._call_tool`).
+
+
+def _body(model: type[BaseModel], arguments: dict[str, Any], fields: dict[str, str]):
+    """`model` built from `arguments`: `fields` maps each tool argument to the model's
+    field. Arguments not in `fields` are left out (`_only` refuses the unknown ones)."""
+    try:
+        return model.model_validate(
+            {fields[k]: v for k, v in arguments.items() if k in fields}
+        )
+    except ValidationError as exc:
+        back = {v: k for k, v in fields.items()}
+        raise ToolError(
+            "; ".join(
+                f"{back.get(str(err['loc'][0]), err['loc'][0]) if err['loc'] else 'arguments'}"
+                f": {err['msg']}"
+                for err in exc.errors()
+            )
+        ) from None
+
+
+def _only(arguments: dict[str, Any], allowed: set[str]) -> None:
+    """An argument the tool does not take is refused, never ignored."""
+    unknown = sorted(set(arguments) - allowed)
+    if unknown:
+        raise ToolError(f"unknown argument: {', '.join(unknown)}")
+
+
+def _session(call: Call, arguments: dict[str, Any]) -> str:
+    """The session label a write carries (spec 11.1): the tool's `session` argument, by
+    the X-Ream-Session header's own rule, else that header, else `mcp/<YYYY-MM-DD>`."""
+    raw = arguments.get("session")
+    if raw is not None:
+        if not isinstance(raw, str):
+            raise ToolError("session must be a string")
+        label = api.session_label(raw, "session")
+        if label:
+            return label
+    return call.session or f"mcp/{datetime.now(UTC).date().isoformat()}"
+
+
+SESSION = {
+    "type": "string",
+    "maxLength": 120,
+    "description": (
+        "Which session of yours this is, as X-Ream-Session (default: that header, else "
+        "mcp/<today>)."
+    ),
+}
+_FORMAT = {"type": "string", "enum": ["html", "markdown"]}
+_FOLDER = {"type": "string", "description": "One of your folders, by slug."}
+_FOLDER_TITLE = {"type": "string", "description": "The name of a NEW folder."}
+_REFRESH = {"type": ["integer", "null"], "description": "Seconds, 60 to a year."}
+
+# A write's result is the calling agent's own (its page, its folder, its title): every
+# string not Ream's own is fenced, labelled with the calling agent.
+_OWN = Fences(ream=_REAM)
+
+
+@tool(
+    "publish_page",
+    title="Publish a page",
+    description=(
+        "Publish a new page: HTML (a whole page, with a title) or markdown (its first "
+        "heading names it). Files it in one of your folders with folder. Answers the "
+        "page's id, address and revision."
+    ),
+    read_only=False,
+    destructive=False,
+    idempotent=False,
+    permission=WRITE,
+    fences=_OWN,
+    input_schema=_schema(
+        {
+            "title": {"type": "string"},
+            "body": {"type": "string"},
+            "format": _FORMAT,
+            "folder": _FOLDER,
+            "folder_title": _FOLDER_TITLE,
+            "refresh_every": _REFRESH,
+            "session": SESSION,
+        },
+        ("body",),
+    ),
+)
+def _publish_page(call: Call, arguments: dict[str, Any]) -> dict:
+    fields = {
+        k: k
+        for k in ("title", "body", "format", "folder", "folder_title", "refresh_every")
+    }
+    _only(arguments, {*fields, "session"})
+    payload = _body(api.PublishBody, arguments, fields)
+    session = _session(call, arguments)
+    return jsonable_encoder(api.publish_page(call.db, call.agent, session, payload))
+
+
+_PAGE_FIELDS = {
+    k: k
+    for k in (
+        "body",
+        "expected_revision",
+        "title",
+        "note",
+        "format",
+        "folder",
+        "folder_title",
+        "refresh_every",
+    )
+}
+_SECTION_FIELDS = {
+    "op": "op",
+    "body": "html",
+    "expected_revision": "if_revision",
+    "section_revision": "if_section",
+    "note": "note",
+    "notify": "notify",
+    "format": "format",
+}
+
+
+@tool(
+    "update_page",
+    title="Update a page",
+    description=(
+        "A new version of one of your pages. Without section: the whole page (body, and "
+        "expected_revision: the revision you read). With section (an element's id): one "
+        "operation on that element (op replace, append, prepend or remove; body is the "
+        "fragment; expected_revision and section_revision refuse a page or element "
+        "that moved on since you read it)."
+    ),
+    read_only=False,
+    destructive=False,
+    idempotent=False,
+    permission=WRITE,
+    fences=_OWN,
+    input_schema=_schema(
+        {
+            "page_id": PAGE_ID,
+            "section": {"type": "string", "description": "An element's id."},
+            "op": {
+                "type": "string",
+                "enum": ["replace", "append", "prepend", "remove"],
+            },
+            "body": {"type": "string"},
+            "expected_revision": {"type": "string"},
+            "section_revision": {"type": "string"},
+            "title": {"type": "string"},
+            "note": {"type": "string"},
+            "notify": {"type": "boolean"},
+            "format": _FORMAT,
+            "folder": _FOLDER,
+            "folder_title": _FOLDER_TITLE,
+            "refresh_every": _REFRESH,
+            "session": SESSION,
+        },
+        ("page_id",),
+    ),
+)
+def _update_page(call: Call, arguments: dict[str, Any]) -> dict:
+    page_id = _str(arguments, "page_id", required=True)
+    section = _str(arguments, "section")
+    rest = {k: v for k, v in arguments.items() if k not in ("page_id", "section")}
+    fields = _PAGE_FIELDS if section is None else _SECTION_FIELDS
+    _only(rest, {*fields, "session"})
+    session = _session(call, rest)
+    if section is None:
+        payload = _body(api.PatchBody, rest, fields)
+        out = api.update_page(call.db, call.agent, session, page_id, payload)
+    else:
+        payload = _body(api.SectionBody, rest, fields)
+        out = api.update_page_section(
+            call.db, call.agent, session, page_id, section, payload
+        )
+    return jsonable_encoder(out)
+
+
+_ORGANISE = (
+    "rename",
+    "pin",
+    "unpin",
+    "archive",
+    "unarchive",
+    "file",
+    "unfile",
+    "restore",
+)
+
+
+@tool(
+    "organise_page",
+    title="Organise a page",
+    description=(
+        "One of your pages: rename it (title), pin or unpin it, archive or unarchive "
+        "it, file it in one of your folders (folder; folder_title names a new one) or "
+        "take it out (unfile), or restore it after delete_page."
+    ),
+    read_only=False,
+    destructive=False,
+    idempotent=False,
+    permission=WRITE,
+    fences=_OWN,
+    input_schema=_schema(
+        {
+            "page_id": PAGE_ID,
+            "action": {"type": "string", "enum": list(_ORGANISE)},
+            "title": {"type": "string"},
+            "folder": _FOLDER,
+            "folder_title": _FOLDER_TITLE,
+        },
+        ("page_id", "action"),
+    ),
+)
+def _organise_page(call: Call, arguments: dict[str, Any]) -> dict:
+    page_id = _str(arguments, "page_id", required=True)
+    action = arguments.get("action")
+    if action not in _ORGANISE:
+        raise ToolError(f"action must be one of: {', '.join(_ORGANISE)}")
+    takes = {"rename": {"title"}, "file": {"folder", "folder_title"}}.get(action, set())
+    _only(arguments, {"page_id", "action", *takes})
+    db, agent = call.db, call.agent
+    if action == "rename":
+        payload = _body(api.RenameBody, arguments, {"title": "title"})
+        out = api.rename_page(db, agent, page_id, payload.title)
+    elif action in ("pin", "unpin"):
+        out = api.pin_page(db, agent, page_id, action == "pin")
+    elif action in ("archive", "unarchive"):
+        out = api.archive_page(db, agent, page_id, action == "archive")
+    elif action == "restore":
+        out = api.restore_page(db, agent, page_id)
+    else:
+        # POST /pages/move with one id; its answer as it is (`missing` says "no such
+        # page" and "not yours" alike).
+        if action == "file" and arguments.get("folder") is None:
+            raise ToolError("folder is required to file a page: unfile takes it out")
+        payload = _body(
+            api.MoveBody,
+            {**arguments, "ids": [page_id], "folder": arguments.get("folder")},
+            {"ids": "ids", "folder": "folder", "folder_title": "folder_title"},
+        )
+        out = api.move_to_folder(db, agent, payload)
+    return jsonable_encoder(out)
+
+
+@tool(
+    "delete_page",
+    title="Delete a page",
+    description=(
+        "Delete one of your pages. It leaves the wall and its address stops answering, "
+        "but nothing is lost: organise_page with action restore puts it back, address "
+        "and history intact."
+    ),
+    read_only=False,
+    destructive=True,
+    idempotent=True,
+    permission=WRITE,
+    fences=_OWN,
+    input_schema=_schema({"page_id": PAGE_ID}, ("page_id",)),
+)
+def _delete_page(call: Call, arguments: dict[str, Any]) -> dict:
+    _only(arguments, {"page_id"})
+    page_id = _str(arguments, "page_id", required=True)
+    return jsonable_encoder(api.delete_page(call.db, call.agent, page_id))
+
+
+_COMMENT_FIELDS = {k: k for k in ("body", "quote", "anchor", "thread_root", "kind")}
+
+
+@tool(
+    "comment",
+    title="Comment on a page",
+    description=(
+        "Comment on a page you may read (action comment, the default), or reply under a "
+        "thread (thread_root), or resolve or reopen a thread on your own page "
+        "(comment_id). anchor {kind: text, quote, section?} pins it to a passage. The "
+        "answer comes back fenced as the comments tool's does."
+    ),
+    read_only=False,
+    destructive=False,
+    idempotent=False,
+    permission=WRITE,
+    fences=Fences(
+        ream=_REAM,
+        writer=lambda obj, key: _comment_writer(obj, key),
+        what={"body": "a comment", "quote": "quoted page text"},
+    ),
+    input_schema=_schema(
+        {
+            "action": {"type": "string", "enum": ["comment", "resolve", "reopen"]},
+            "page_id": PAGE_ID,
+            "comment_id": {"type": "string", "description": "A thread's root comment."},
+            "body": {"type": "string"},
+            "quote": {"type": "string"},
+            "anchor": {"type": "object"},
+            "thread_root": {"type": "string"},
+            "kind": {"type": "string"},
+            "session": SESSION,
+        }
+    ),
+)
+def _comment(call: Call, arguments: dict[str, Any]) -> ToolOutput:
+    action = _choice(arguments, "action", ("comment", "resolve", "reopen"))
+    if action != "comment":
+        _only(arguments, {"action", "comment_id"})
+        comment_id = _str(arguments, "comment_id", required=True)
+        change = api.comment_resolve if action == "resolve" else api.comment_reopen
+        out = jsonable_encoder(change(call.db, call.agent, comment_id))
+        # Only a thread on the caller's own page can be resolved: its page is its own.
+        return ToolOutput({"comment": out}, written_by=call.agent)
+    _only(arguments, {"action", "page_id", "session", *_COMMENT_FIELDS})
+    page_id = _str(arguments, "page_id", required=True)
+    payload = _body(api.CommentBody, arguments, _COMMENT_FIELDS)
+    session = _session(call, arguments)
+    api.refuse_decision_anchor(payload)
+    page = _page(call, page_id)
+    later: list = []
+    out = api.add_comment(call.db, page_id, payload, call.agent, None, session, later)
+    call.after.extend(later)
+    return ToolOutput({"comment": jsonable_encoder(out)}, written_by=page.agent)
+
+
+_ASK_FIELDS = {
+    k: k
+    for k in (
+        "question",
+        "options",
+        "recommended",
+        "context",
+        "topic",
+        "depends_on",
+        "replaces",
+        "urgency",
+        "blocked_on",
+        "needed_by",
+        "audience",
+    )
+}
+
+
+@tool(
+    "ask",
+    title="Ask a question",
+    description=(
+        "Ask the person a question on one of your pages, with lettered options "
+        "([{letter, label}]; recommended is the letter you suggest). The answer reaches "
+        "you in whats_new. For now only on your own pages."
+    ),
+    read_only=False,
+    destructive=False,
+    idempotent=False,
+    permission=WRITE,
+    fences=Fences(ream=_REAM, writer=_by("agent")),
+    input_schema=_schema(
+        {
+            "page_id": PAGE_ID,
+            "question": {"type": "string"},
+            "options": {"type": "array", "items": {"type": "object"}},
+            "recommended": {"type": "string"},
+            "context": {"type": "string"},
+            "topic": {},
+            "depends_on": {},
+            "replaces": {"type": "string"},
+            "urgency": {"type": "string", "enum": list(decisions.URGENCIES)},
+            "blocked_on": {"type": "string"},
+            "needed_by": {"type": "string"},
+            "audience": {},
+            "session": SESSION,
+        },
+        ("page_id", "question", "options"),
+    ),
+)
+def _ask(call: Call, arguments: dict[str, Any]) -> dict:
+    _only(arguments, {"page_id", "session", *_ASK_FIELDS})
+    page_id = _str(arguments, "page_id", required=True)
+    payload = _body(api.DecisionBody, arguments, _ASK_FIELDS)
+    session = _session(call, arguments)
+    return jsonable_encoder(
+        api.ask_question(call.db, call.agent, session, page_id, payload)
+    )
+
+
+DECISION_ID = {"type": "string", "description": "The question's id."}
+
+
+@tool(
+    "close_question",
+    title="Withdraw a question",
+    description="Withdraw an open question you asked, unanswered.",
+    read_only=False,
+    destructive=False,
+    idempotent=True,
+    permission=WRITE,
+    fences=Fences(ream=_REAM, writer=_by("agent")),
+    input_schema=_schema({"decision_id": DECISION_ID}, ("decision_id",)),
+)
+def _close_question(call: Call, arguments: dict[str, Any]) -> dict:
+    _only(arguments, {"decision_id"})
+    decision_id = _str(arguments, "decision_id", required=True)
+    return jsonable_encoder(api.close_question(call.db, call.agent, decision_id))
+
+
+_RECORD_FIELDS = {
+    "letter": "letter",
+    "words": "note",
+    "source": "source",
+    "said_at": "said_at",
+    "round": "round",
+    "fields": "fields",
+}
+
+
+@tool(
+    "record_answer",
+    title="Pass on an answer",
+    description=(
+        "Pass on the answer the person gave you, somewhere other than its page, to one "
+        "of your open questions: the letter, their words (required) and where they said "
+        "it (source). Stored as a relay recorded by you, never as their own tap."
+    ),
+    read_only=False,
+    destructive=False,
+    idempotent=False,
+    permission=RELAY,
+    fences=Fences(ream=_REAM, writer=_by("agent")),
+    input_schema=_schema(
+        {
+            "decision_id": DECISION_ID,
+            "letter": {"type": "string"},
+            "words": {"type": "string", "description": "What they said, in full."},
+            "source": {
+                "type": "string",
+                "description": "Where they said it: "
+                + ", ".join(decisions.ANSWER_SOURCES),
+            },
+            "said_at": {"type": "string", "description": "When (ISO 8601)."},
+            "round": {"type": "integer"},
+            "fields": {"type": "object"},
+        },
+        ("decision_id", "words", "source"),
+    ),
+)
+def _record_answer(call: Call, arguments: dict[str, Any]) -> dict:
+    _only(arguments, {"decision_id", *_RECORD_FIELDS})
+    decision_id = _str(arguments, "decision_id", required=True)
+    words = arguments.get("words")
+    if not isinstance(words, str) or not words.strip():
+        raise ToolError("words is required: what they said, in full")
+    if arguments.get("source") is None:
+        raise ToolError("source is required: where they said it")
+    payload = _body(api.RecordBody, arguments, _RECORD_FIELDS)
+    return jsonable_encoder(api.record_relay(call.db, call.agent, decision_id, payload))
 
 
 # --- Resources ------------------------------------------------------------------------
