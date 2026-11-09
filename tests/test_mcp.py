@@ -820,6 +820,21 @@ def test_no_agent_written_text_leaves_a_tool_unfenced(client, on, token, db, pla
         ("comments", {"page_id": planted["mine"].id}),
         ("questions", {}),
         ("whats_new", {"since": 0}),
+        # The writing tools answer what they wrote, and the page it is on.
+        ("organise_page", {"page_id": planted["mine"].id, "action": "pin"}),
+        (
+            "organise_page",
+            {"page_id": planted["mine"].id, "action": "rename", "title": m("new")},
+        ),
+        ("comment", {"page_id": planted["theirs"].id, "body": m("my-comment")}),
+        (
+            "ask",
+            {
+                "page_id": planted["mine"].id,
+                "question": m("asked-by-tool"),
+                "options": [{"letter": "a", "label": m("tool-label")}],
+            },
+        ),
     )
     for tool_name, arguments in calls:
         result = full_result(client, token, tool_name, **arguments)
@@ -848,7 +863,22 @@ def test_every_tool_says_how_its_result_is_fenced():
 
 @pytest.mark.parametrize("mark", [m for m, _ in MARKS.values()])
 @pytest.mark.parametrize(
-    "tool_name", ["list_pages", "read_page", "comments", "questions", "whats_new"]
+    "tool_name",
+    [
+        "list_pages",
+        "read_page",
+        "comments",
+        "questions",
+        "whats_new",
+        "publish_page",
+        "update_page",
+        "organise_page",
+        "delete_page",
+        "comment",
+        "ask",
+        "close_question",
+        "record_answer",
+    ],
 )
 def test_a_mark_under_any_of_reams_own_keys_is_fenced(tool_name, mark):
     fences = mcp.TOOLS[tool_name].fences
@@ -981,3 +1011,451 @@ def test_prompts_are_listed_and_got_in_both_eras(client, on, token):
     assert "questions" in got["messages"][0]["content"]["text"]
     unknown = modern_call(client, token, "prompts/get", {"name": "nope"}, "nope")
     assert unknown["error"]["code"] == -32602
+
+
+# --- The writing tools (slice 2) --------------------------------------------------------
+
+# Spec 11.3's table: every tool and the permission it needs. A tool registered and not
+# here (or here and not registered) fails the test below.
+SPEC_TOOLS = {
+    "whoami": None,
+    "list_pages": mcp.READ,
+    "read_page": mcp.READ,
+    "get_template": mcp.READ,
+    "comments": mcp.READ,
+    "questions": mcp.READ,
+    "whats_new": mcp.READ,
+    "publish_page": mcp.WRITE,
+    "update_page": mcp.WRITE,
+    "organise_page": mcp.WRITE,
+    "delete_page": mcp.WRITE,
+    "comment": mcp.WRITE,
+    "ask": mcp.WRITE,
+    "close_question": mcp.WRITE,
+    "record_answer": mcp.RELAY,
+}
+WRITE_TOOLS = [n for n, p in SPEC_TOOLS.items() if p in (mcp.WRITE, mcp.RELAY)]
+
+SESSION = "mcp-seat/s1"
+TWIN = PAGE.format('<section id="s1">one</section><p id="p2">two</p>')
+NOT_AN_ID = "a" * 26
+OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
+SECRET = "AKIA" + "IOSFODNN7EXAMPLE"
+
+
+def test_the_tools_are_spec_11_3s_table_and_no_more(client, on, token):
+    assert {n: t.permission for n, t in mcp.TOOLS.items()} == SPEC_TOOLS
+    listed = client.post(
+        "/mcp",
+        headers=headers(token, **LEGACY_HEADERS),
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+    ).json()["result"]["tools"]
+    assert sorted(t["name"] for t in listed) == sorted(SPEC_TOOLS)
+    for name in WRITE_TOOLS:
+        hints = next(t for t in listed if t["name"] == name)["annotations"]
+        assert hints["readOnlyHint"] is False, name
+        assert hints["destructiveHint"] is (name == "delete_page"), name
+        assert hints["openWorldHint"] is False, name
+        idempotent = name in ("delete_page", "close_question")
+        assert hints["idempotentHint"] is idempotent, name
+
+
+_ID_RE = re.compile(r"\b[a-z2-7]{26}\b")
+_REV_RE = re.compile(r"\b[0-9a-f]{16}\b")
+_TIME_RE = re.compile(
+    r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d(:?\d\d)?)?"
+)
+
+
+def same(value):
+    """`value` without what differs between two twins: ids, revisions, times, addresses."""
+    if isinstance(value, dict):
+        return {
+            k: "<url>" if k in ("url", "page_url", "read_token") else same(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [same(v) for v in value]
+    if isinstance(value, str):
+        value = _ID_RE.sub("<id>", value)
+        return _TIME_RE.sub("<t>", _REV_RE.sub("<rev>", value))
+    return value
+
+
+def twins(db, agent="mcp-seat"):
+    """Two identical pages: one for the tool, one for the route."""
+    return [store.publish(db, agent, "Twin", TWIN).id for _ in range(2)]
+
+
+def page_row(db, page_id, agent="mcp-seat"):
+    row = store.get_owned(db, agent, page_id, as_reader=True).__dict__
+    return same(json.loads(json.dumps(row, default=str)))
+
+
+def events_on(db, page_id):
+    with db.connect() as conn:
+        rows = conn.execute(
+            "select agent, actor, kind, summary, note, session from event"
+            " where artifact_id = %s order by seq",
+            (page_id,),
+        ).fetchall()
+    return [tuple(r) for r in rows]
+
+
+def route(client, token, method, path, body=None):
+    """The `/api/v1` route, with the same session label the tool is given."""
+    return client.request(
+        method,
+        f"/api/v1{path}",
+        headers=headers(token, **{"x-ream-session": SESSION}),
+        json=body,
+    )
+
+
+def tool_ok(client, token, tool_name, /, **arguments):
+    error, out = call_tool(client, token, tool_name, **arguments)
+    assert not error, out
+    return unfence_all(out)
+
+
+def refusal(answer) -> str:
+    """A route's refusal as the tool words it: its text, or its detail as JSON."""
+    detail = answer.json()["detail"]
+    return detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False)
+
+
+def test_publish_page_is_the_route(client, on, token, db):
+    for body in (
+        {"title": "Plan", "body": PAGE.format("hello"), "refresh_every": 3600},
+        {"body": "# From markdown\n\nwords", "format": "markdown"},
+    ):
+        by_tool = tool_ok(client, token, "publish_page", **body, session=SESSION)
+        by_route = route(client, token, "POST", "/pages", body)
+        assert by_route.status_code == 201, by_route.text
+        assert same(by_tool) == same(by_route.json())
+        assert page_row(db, by_tool["id"]) == page_row(db, by_route.json()["id"])
+        assert store.get_owned(db, "mcp-seat", by_tool["id"]).session == SESSION
+    # A refusal of the body model is the tool's error, naming the argument.
+    error, text = call_tool(
+        client, token, "publish_page", body=PAGE.format(1), format="x"
+    )
+    assert error and text.startswith("format: ")
+
+
+def test_a_write_is_labelled_by_its_argument_else_the_header_else_mcp_and_today(
+    client, on, token, db
+):
+    from datetime import UTC, datetime
+
+    _, out = call_tool(client, token, "publish_page", title="t", body=PAGE.format(1))
+    today = datetime.now(UTC).date().isoformat()
+    assert store.get_owned(db, "mcp-seat", out["id"]).session == f"mcp/{today}"
+    result = client.post(
+        "/mcp",
+        headers=headers(token, **LEGACY_HEADERS, **{"x-ream-session": "from/header"}),
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "publish_page",
+                "arguments": {"title": "t", "body": PAGE.format(2)},
+            },
+        },
+    ).json()["result"]
+    page_id = result["structuredContent"]["id"]
+    assert store.get_owned(db, "mcp-seat", page_id).session == "from/header"
+    error, text = call_tool(
+        client, token, "publish_page", title="t", body=PAGE.format(3), session="x" * 121
+    )
+    assert error and text == "session must be at most 120 characters"
+    error, text = call_tool(client, token, "publish_page", body="b", extra=1)
+    assert error and text == "unknown argument: extra"
+
+
+def test_update_page_is_the_whole_page_and_the_section_routes(client, on, token, db):
+    one, two = twins(db)
+
+    def whole(page):
+        revision = store.get_owned(db, "mcp-seat", page).revision
+        return {"body": PAGE.format("new"), "expected_revision": revision, "note": "n"}
+
+    first = whole(one)
+    by_tool = tool_ok(
+        client, token, "update_page", page_id=one, **first, session=SESSION
+    )
+    second = whole(two)
+    by_route = route(client, token, "PATCH", f"/pages/{two}", second)
+    assert by_route.status_code == 200, by_route.text
+    assert same(by_tool) == same(by_route.json())
+    assert page_row(db, one) == page_row(db, two)
+    # A stale revision is refused in the route's words.
+    error, text = call_tool(client, token, "update_page", page_id=one, **first)
+    stale = route(client, token, "PATCH", f"/pages/{two}", second)
+    assert stale.status_code == 409
+    assert error and text == refusal(stale)
+
+    one, two = twins(db)
+    html = '<section id="s1">changed</section>'
+    by_tool = tool_ok(
+        client,
+        token,
+        "update_page",
+        page_id=one,
+        section="s1",
+        op="replace",
+        body=html,
+        notify=True,
+        session=SESSION,
+    )
+    by_route = route(
+        client,
+        token,
+        "PATCH",
+        f"/pages/{two}/sections/s1",
+        {"op": "replace", "html": html, "notify": True},
+    )
+    assert by_route.status_code == 200, by_route.text
+    assert same(by_tool) == same(by_route.json())
+    assert page_row(db, one) == page_row(db, two)
+    bodies = [store.get_body(db, "mcp-seat", p).body for p in (one, two)]
+    assert bodies[0] == bodies[1] and "changed" in bodies[0]
+    # A section's arguments on a whole-page update are refused, not ignored.
+    error, text = call_tool(client, token, "update_page", page_id=one, op="remove")
+    assert error and text == "unknown argument: op"
+
+
+ORGANISE = [
+    ({"action": "rename", "title": "Renamed"}, "/rename", {"title": "Renamed"}),
+    ({"action": "pin"}, "/pin", {"pinned": True}),
+    ({"action": "unpin"}, "/pin", {"pinned": False}),
+    ({"action": "archive"}, "/archive", {"archived": True}),
+    ({"action": "unarchive"}, "/archive", {"archived": False}),
+]
+
+
+@pytest.mark.parametrize(("arguments", "path", "body"), ORGANISE)
+def test_organise_page_is_its_route(client, on, token, db, arguments, path, body):
+    one, two = twins(db)
+    for page in (one, two):
+        store.set_pinned(db, page, True, agent="mcp-seat")
+        store.set_archived(db, page, True, agent="mcp-seat")
+    by_tool = tool_ok(client, token, "organise_page", page_id=one, **arguments)
+    by_route = route(client, token, "POST", f"/pages/{two}{path}", body)
+    assert by_route.status_code == 200, by_route.text
+    assert same(by_tool) == same(by_route.json())
+    assert page_row(db, one) == page_row(db, two)
+
+
+def test_organise_page_files_and_unfiles_as_the_move_route(client, on, token, db):
+    store.publish(db, "mcp-seat", "Filed", PAGE.format(0), folder="plans")
+    one, two = twins(db)
+    by_tool = tool_ok(
+        client, token, "organise_page", page_id=one, action="file", folder="plans"
+    )
+    by_route = route(
+        client, token, "POST", "/pages/move", {"ids": [two], "folder": "plans"}
+    )
+    assert by_route.status_code == 200, by_route.text
+    assert by_tool["moved"] == [one] and by_tool["missing"] == []
+    assert same(by_tool) == same(by_route.json())
+    assert page_row(db, one) == page_row(db, two)
+    by_tool = tool_ok(client, token, "organise_page", page_id=one, action="unfile")
+    by_route = route(
+        client, token, "POST", "/pages/move", {"ids": [two], "folder": None}
+    )
+    assert same(by_tool) == same(by_route.json())
+    assert page_row(db, one) == page_row(db, two)
+
+
+def test_delete_page_is_destructive_and_organise_page_restores_it(
+    client, on, token, db
+):
+    assert mcp.TOOLS["delete_page"].annotations["destructiveHint"] is True
+    one, two = twins(db)
+    by_tool = tool_ok(client, token, "delete_page", page_id=one)
+    by_route = route(client, token, "DELETE", f"/pages/{two}")
+    assert by_route.status_code == 200, by_route.text
+    assert same(by_tool) == same(by_route.json())
+    assert call_tool(client, token, "read_page", page_id=one) == (True, "no such page")
+    by_tool = tool_ok(client, token, "organise_page", page_id=one, action="restore")
+    by_route = route(client, token, "POST", f"/pages/{two}/restore")
+    assert by_route.status_code == 200, by_route.text
+    assert same(by_tool) == same(by_route.json())
+    assert page_row(db, one) == page_row(db, two)
+    _, read = call_tool(client, token, "read_page", page_id=one)
+    assert unfence(read["body"]) == TWIN
+
+
+def test_comment_is_the_route_with_its_events(client, on, token, db):
+    one, two = twins(db, agent="other")
+    words = {"body": "a thought", "anchor": {"kind": "text", "quote": "one"}}
+    _, fenced = call_tool(
+        client, token, "comment", page_id=one, **words, session=SESSION
+    )
+    # Fenced as the comments tool fences it: the quote is the page agent's text.
+    assert FENCED.fullmatch(fenced["comment"]["body"])
+    assert "written by agent 'other'" in fenced["comment"]["quote"].splitlines()[0]
+    by_route = route(client, token, "POST", f"/pages/{two}/comments", words)
+    assert by_route.status_code == 201, by_route.text
+    by_tool = unfence_all(fenced)["comment"]
+    assert same(by_tool) == same(by_route.json())
+    assert events_on(db, one) and events_on(db, one) == events_on(db, two)
+    # A reply under the thread, as the route writes one.
+    reply = {"body": "and another", "thread_root": by_tool["id"]}
+    by_tool = tool_ok(client, token, "comment", page_id=one, **reply, session=SESSION)
+    reply["thread_root"] = by_route.json()["id"]
+    by_route = route(client, token, "POST", f"/pages/{two}/comments", reply)
+    assert by_route.status_code == 201, by_route.text
+    assert same(by_tool["comment"]) == same(by_route.json())
+    assert events_on(db, one) == events_on(db, two)
+
+
+def test_comment_resolves_and_reopens_as_the_routes(client, on, token, db, seat):
+    one, two = twins(db)
+    roots = []
+    for page in (one, two):
+        posted = client.post(
+            f"/api/v1/pages/{page}/comments",
+            headers=headers(seat["other"]),
+            json={"body": "fix this"},
+        )
+        assert posted.status_code == 201, posted.text
+        roots.append(posted.json()["id"])
+    for action in ("resolve", "reopen"):
+        by_tool = tool_ok(client, token, "comment", action=action, comment_id=roots[0])
+        by_route = route(client, token, "POST", f"/comments/{roots[1]}/{action}")
+        assert by_route.status_code == 200, by_route.text
+        assert same(by_tool["comment"]) == same(by_route.json())
+        assert events_on(db, one) == events_on(db, two)
+
+
+def test_ask_and_close_question_are_the_routes(client, on, token, db):
+    one, two = twins(db)
+    asking = {"question": "Ship it?", "options": OPTIONS, "recommended": "a"}
+    by_tool = tool_ok(client, token, "ask", page_id=one, **asking, session=SESSION)
+    by_route = route(client, token, "POST", f"/pages/{two}/decisions", asking)
+    assert by_route.status_code == 201, by_route.text
+    assert same(by_tool) == same(by_route.json())
+    closed = tool_ok(client, token, "close_question", decision_id=by_tool["id"])
+    by_route = route(client, token, "POST", f"/decisions/{by_route.json()['id']}/close")
+    assert by_route.status_code == 200, by_route.text
+    assert same(closed) == same(by_route.json())
+    # A bad option is refused in the route's words.
+    bad = {"question": "q", "options": [{"letter": "1", "label": "x"}]}
+    error, text = call_tool(client, token, "ask", page_id=one, **bad)
+    refused = route(client, token, "POST", f"/pages/{two}/decisions", bad)
+    assert refused.status_code == 422
+    assert error and text == refusal(refused)
+
+
+def test_record_answer_is_the_relay_route_with_its_events(client, on, token, db):
+    one, two = twins(db)
+    asked = [
+        decisions.ask(
+            db, agent="mcp-seat", artifact_id=p, question="q", options=OPTIONS
+        )
+        for p in (one, two)
+    ]
+    by_tool = tool_ok(
+        client,
+        token,
+        "record_answer",
+        decision_id=asked[0].id,
+        letter="b",
+        words="b, but later",
+        source="terminal",
+    )
+    by_route = route(
+        client,
+        token,
+        "POST",
+        f"/decisions/{asked[1].id}/record",
+        {"letter": "b", "note": "b, but later", "source": "terminal"},
+    )
+    assert by_route.status_code == 200, by_route.text
+    assert same(by_tool) == same(by_route.json())
+    assert events_on(db, one) and events_on(db, one) == events_on(db, two)
+
+
+def test_record_answer_takes_only_a_keys_sources_and_needs_words(client, on, token, db):
+    page = store.publish(db, "mcp-seat", "Q", TWIN).id
+    asked = decisions.ask(
+        db, agent="mcp-seat", artifact_id=page, question="q", options=OPTIONS
+    )
+    relay = {"decision_id": asked.id, "letter": "a"}
+    error, text = call_tool(
+        client, token, "record_answer", **relay, words="yes", source="mcp"
+    )
+    refused = route(
+        client,
+        token,
+        "POST",
+        f"/decisions/{asked.id}/record",
+        {"letter": "a", "note": "yes", "source": "mcp"},
+    )
+    assert refused.status_code == 422
+    assert error and text == refusal(refused)
+    for words in ("", "   "):
+        error, text = call_tool(
+            client, token, "record_answer", **relay, words=words, source="terminal"
+        )
+        assert error and text.startswith("words is required"), words
+    error, text = call_tool(client, token, "record_answer", **relay, words="y")
+    assert error and text.startswith("source is required")
+    assert decisions.get_owned(db, "mcp-seat", asked.id).answer is None
+
+
+def test_a_secret_is_refused_in_the_routes_words_and_nothing_is_published(
+    client, on, token, db
+):
+    before = len(store.list_for_agent(db, "mcp-seat"))
+    body = {"title": "keys", "body": PAGE.format(f"key {SECRET} here")}
+    error, text = call_tool(client, token, "publish_page", **body)
+    refused = route(client, token, "POST", "/pages", body)
+    assert refused.status_code == 422
+    assert error and text == refusal(refused)
+    assert SECRET not in text
+    assert len(store.list_for_agent(db, "mcp-seat")) == before
+    page = store.publish(db, "mcp-seat", "Q", TWIN).id
+    error, text = call_tool(client, token, "comment", page_id=page, body=SECRET)
+    refused = route(client, token, "POST", f"/pages/{page}/comments", {"body": SECRET})
+    assert refused.status_code == 422
+    assert error and text == refusal(refused)
+    assert comments.list_for_artifact(db, page) == []
+
+
+def test_not_yours_answers_exactly_as_no_such_page(client, on, token, db, seat):
+    theirs = seat["theirs"]
+    calls = [
+        ("update_page", {"body": PAGE.format(1), "expected_revision": theirs.revision}),
+        ("update_page", {"section": "s1", "op": "remove"}),
+        ("organise_page", {"action": "rename", "title": "mine now"}),
+        ("organise_page", {"action": "pin"}),
+        ("organise_page", {"action": "archive"}),
+        ("organise_page", {"action": "restore"}),
+        ("delete_page", {}),
+        ("ask", {"question": "q", "options": OPTIONS}),
+    ]
+    for tool_name, arguments in calls:
+        mine = call_tool(client, token, tool_name, page_id=theirs.id, **arguments)
+        none = call_tool(client, token, tool_name, page_id=NOT_AN_ID, **arguments)
+        assert mine == none == (True, "no such page"), (tool_name, arguments)
+    closed = call_tool(client, token, "comment", page_id=seat["closed"].id, body="x")
+    assert closed == call_tool(client, token, "comment", page_id=NOT_AN_ID, body="x")
+    assert closed == (True, "no such page")
+    # Filing answers as the move route does: the id under missing, either way.
+    for page in (theirs.id, NOT_AN_ID):
+        _, out = call_tool(
+            client, token, "organise_page", page_id=page, action="file", folder="f"
+        )
+        assert out["moved"] == [] and out["missing"] == [page]
+    # A question on another agent's page is as missing as one that never was.
+    theirs_asked = decisions.ask(
+        db, agent="other", artifact_id=theirs.id, question="q", options=OPTIONS
+    )
+    assert call_tool(
+        client, token, "close_question", decision_id=theirs_asked.id
+    ) == call_tool(client, token, "close_question", decision_id=NOT_AN_ID)
+    page = store.get_owned(db, "other", theirs.id)
+    assert page.title == "Theirs" and page.pinned_at is None
