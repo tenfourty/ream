@@ -102,7 +102,7 @@ def test_step_one_accepts_a_new_page_without_the_setting_and_stores_none(
     made = client.post(
         route, json={"title": "T", "body": PAGE, **extra}, headers=auth(token)
     )
-    assert made.status_code == 200, made.text
+    assert made.status_code == 201, made.text
     (row,) = store.list_for_agent(db, "seat")
     assert row.comments is None, "not stated is stored as null, which reads as on"
 
