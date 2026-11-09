@@ -39,6 +39,8 @@ class Provider:
         self.claims = {}
         self.token_status = 200
         self.id_token_override = None
+        self.discovery_extra = {}
+        self.down = False
 
     def jwks(self):
         n = self.rsa.public_key().public_numbers()
@@ -96,12 +98,15 @@ class Provider:
 
     def __call__(self, method, url, body, headers):
         self.calls.append((method, url, body, headers))
+        if self.down and method == "GET":
+            raise oidc.SignInRefused("the sign-in provider could not be reached (down)")
         doc = {
             ISSUER + "/.well-known/openid-configuration": {
                 "issuer": ISSUER,
                 "authorization_endpoint": ISSUER + "/authorize",
                 "token_endpoint": ISSUER + "/token",
                 "jwks_uri": ISSUER + "/jwks",
+                **self.discovery_extra,
             },
             ISSUER + "/jwks": self.jwks(),
         }.get(url)
@@ -517,3 +522,122 @@ def test_a_configured_subject_pins_nothing(provider, db):
     with settings.override(oidc_owner_subject="u-1"):
         assert sign_in_as(provider, db)
     assert not _pin(db)
+
+
+def _begin_then(provider, db, **claims):
+    start = oidc.begin(CALLBACK)
+    provider.id_token_override = provider.sign(provider.good(start.nonce, **claims))
+    return start
+
+
+@pytest.mark.parametrize("key", ["token_endpoint", "jwks_uri"])
+@pytest.mark.parametrize(
+    "bad",
+    ["https://evil.example/x", "https://auth.example:8443/x", "http://auth.example/x"],
+)
+def test_an_endpoint_off_the_issuers_origin_is_refused(provider, db, key, bad):
+    provider.discovery_extra = {key: bad}
+    oidc.clear_caches()
+    with pytest.raises(oidc.SignInRefused) as caught:
+        start = _begin_then(provider, db)
+        oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
+    assert key in str(caught.value) and SECRET not in str(caught.value)
+
+
+def test_an_endpoint_with_the_issuers_origin_in_other_case_is_accepted(provider, db):
+    provider.discovery_extra = {"token_endpoint": "HTTPS://AUTH.example:443/token"}
+    oidc.clear_caches()
+    assert sign_in_as(provider, db)
+
+
+def test_loopback_http_is_refused_under_an_https_issuer(provider, db):
+    provider.discovery_extra = {
+        "token_endpoint": "http://localhost/token",
+        "authorization_endpoint": "http://localhost/authorize",
+    }
+    oidc.clear_caches()
+    with pytest.raises(oidc.SignInRefused, match="authorization_endpoint"):
+        oidc.begin(CALLBACK)
+    with pytest.raises(oidc.SignInRefused, match="token_endpoint"):
+        sign_in_as(provider, db)
+
+
+def test_the_authorization_endpoint_may_be_off_origin_but_not_http(provider):
+    provider.discovery_extra = {"authorization_endpoint": "https://login.example/a"}
+    oidc.clear_caches()
+    assert oidc.begin(CALLBACK).url.startswith("https://login.example/a?")
+
+
+def test_a_loopback_http_issuer_may_use_http_endpoints(provider, db):
+    local = "http://localhost:9091"
+    with settings.override(oidc_issuer=local):
+        doc = {
+            "issuer": local,
+            "authorization_endpoint": local + "/authorize",
+            "token_endpoint": local + "/token",
+            "jwks_uri": local + "/jwks",
+        }
+        provider.calls.clear()
+        original = provider.__call__
+
+        def fake(method, url, body, headers):
+            if url == local + "/.well-known/openid-configuration":
+                return oidc.Response(200, "application/json", json.dumps(doc).encode())
+            return original(method, url.replace(local, ISSUER), body, headers)
+
+        oidc.fetch = fake
+        oidc.clear_caches()
+        assert oidc.begin(CALLBACK).url.startswith(local + "/authorize?")
+
+
+@pytest.mark.parametrize("field", ["exp", "iat"])
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan")])
+def test_a_time_claim_that_is_not_finite_is_refused(provider, db, field, bad):
+    with pytest.raises(oidc.SignInRefused):
+        sign_in_as(provider, db, **{field: bad})
+
+
+def test_a_single_audience_with_a_wrong_azp_is_refused(provider, db):
+    with pytest.raises(oidc.SignInRefused, match="another client"):
+        sign_in_as(provider, db, azp="someone-else")
+    assert sign_in_as(provider, db, azp=CLIENT)
+
+
+def test_a_failed_fetch_is_remembered_for_a_short_while(provider, db, monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(oidc, "_now", lambda: now[0])
+    oidc.clear_caches()
+    provider.down = True
+    for _ in range(3):
+        with pytest.raises(oidc.SignInRefused):
+            oidc.begin(CALLBACK)
+    assert len([c for c in provider.calls if c[0] == "GET"]) == 1
+    now[0] += oidc.FAILURE_CACHE_SECONDS + 1
+    provider.down = False
+    assert oidc.begin(CALLBACK)
+
+
+def test_an_unknown_key_id_refreshes_the_key_set_once_a_minute(
+    provider, db, monkeypatch
+):
+    now = [1000.0]
+    monkeypatch.setattr(oidc, "_now", lambda: now[0])
+    oidc.clear_caches()
+
+    def jwks_gets():
+        return len([c for c in provider.calls if c[1] == ISSUER + "/jwks"])
+
+    for _ in range(3):
+        start = oidc.begin(CALLBACK)
+        provider.id_token_override = provider.sign(
+            provider.good(start.nonce), kid="zzz"
+        )
+        with pytest.raises(oidc.SignInRefused):
+            oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
+    assert jwks_gets() == 2  # the first fetch, one forced refresh, then no more
+    now[0] += oidc.FORCE_EVERY_SECONDS + 1
+    start = oidc.begin(CALLBACK)
+    provider.id_token_override = provider.sign(provider.good(start.nonce), kid="zzz")
+    with pytest.raises(oidc.SignInRefused):
+        oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
+    assert jwks_gets() == 3

@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import http.client
 import json
+import math
 import secrets
 import time
 from dataclasses import dataclass
@@ -85,7 +86,7 @@ def fetch(
 ) -> Response:
     """The one network call: through the address guard, no redirect, no proxy, at most
     MAX_DOCUMENT + 1 bytes, FETCH_SECONDS. The provider is the operator's choice, so a private
-    address (a home provider) is allowed. Tests replace this."""
+    address (a home provider) is allowed for the issuer's own origin only. Tests replace this."""
 
     def read(response: http.client.HTTPResponse) -> Response:
         return Response(
@@ -100,7 +101,7 @@ def fetch(
             method,
             body,
             {"User-Agent": "ream-oidc/1", **headers},
-            allow_private=True,
+            allow_private=_origin(url) == _origin(settings.current().oidc_issuer),
             deadline_seconds=FETCH_SECONDS,
             timeout=FETCH_SECONDS,
             read=read,
@@ -148,36 +149,87 @@ def _json(got: Response, what: str):
 
 
 _cache: dict[str, tuple[float, dict]] = {}
+_failed: dict[str, tuple[float, str]] = {}
+_forced: dict[str, float] = {}
+FAILURE_CACHE_SECONDS = 15
+FORCE_EVERY_SECONDS = 60
 
 
 def _cached(url: str, what: str, force: bool = False) -> dict:
+    """A public document of the provider. A failure is remembered for FAILURE_CACHE_SECONDS
+    so an outage is not an outbound fetch per request; a forced refresh (a key not found)
+    happens at most once a FORCE_EVERY_SECONDS."""
+    now = _now()
     hit = _cache.get(url)
-    if hit and not force and _now() - hit[0] < DISCOVERY_CACHE_SECONDS:
+    if (
+        force
+        and hit
+        and now - _forced.get(url, -FORCE_EVERY_SECONDS) < FORCE_EVERY_SECONDS
+    ):
+        force = False
+    if hit and not force and now - hit[0] < DISCOVERY_CACHE_SECONDS:
         return hit[1]
-    doc = _json(fetch("GET", url, None, {"Accept": "application/json"}), what)
-    _cache[url] = (_now(), doc)
+    bad = _failed.get(url)
+    if bad and now - bad[0] < FAILURE_CACHE_SECONDS:
+        raise SignInRefused(bad[1])
+    if force:
+        _forced[url] = now
+    try:
+        doc = _json(fetch("GET", url, None, {"Accept": "application/json"}), what)
+    except SignInRefused as exc:
+        _failed[url] = (now, str(exc))
+        raise
+    _failed.pop(url, None)
+    _cache[url] = (now, doc)
     return doc
 
 
 def clear_caches() -> None:
     _cache.clear()
+    _failed.clear()
+    _forced.clear()
 
 
-def _endpoint(doc: dict, key: str) -> str:
+def _origin(url: str) -> tuple[str, str, int]:
+    """Scheme, host and port of `url`, normalised (case, default port)."""
+    parts = urlsplit(url)
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    scheme = parts.scheme.lower()
+    return (
+        scheme,
+        (parts.hostname or "").lower().rstrip("."),
+        port or {"https": 443, "http": 80}.get(scheme, 0),
+    )
+
+
+def _plain_http_ok() -> bool:
+    """Plain http is for a provider that is itself http on loopback, nowhere else."""
+    scheme, host, _ = _origin(settings.current().oidc_issuer)
+    return scheme == "http" and settings.is_loopback(host)
+
+
+def _endpoint(doc: dict, key: str, *, same_origin: bool = True) -> str:
+    """An endpoint of the discovery document. The ones Ream calls itself (the token endpoint
+    and the key set) must be on the issuer's origin; the authorization endpoint only goes to
+    the browser and may be elsewhere. All are https unless the issuer is http on loopback."""
     value = doc.get(key)
     if not isinstance(value, str):
         raise SignInRefused(f"the sign-in provider's discovery document has no {key}")
     parts = urlsplit(value)
-    host = (parts.hostname or "").lower()
+    scheme, host, _ = _origin(value)
     if (
         parts.fragment
         or not host
-        or (
-            parts.scheme != "https"
-            and not (parts.scheme == "http" and settings.is_loopback(host))
-        )
+        or (scheme != "https" and not (scheme == "http" and _plain_http_ok()))
     ):
         raise SignInRefused(f"the sign-in provider's {key} is not an https address")
+    if same_origin and _origin(value) != _origin(settings.current().oidc_issuer):
+        raise SignInRefused(
+            f"the sign-in provider's {key} is not on the issuer's own origin"
+        )
     return value
 
 
@@ -204,7 +256,7 @@ def challenge(verifier: str) -> str:
 def begin(redirect_uri: str) -> Start:
     """The address to send the person to, with fresh `state`, `nonce` and PKCE verifier."""
     cfg = settings.current()
-    endpoint = _endpoint(discovery(), "authorization_endpoint")
+    endpoint = _endpoint(discovery(), "authorization_endpoint", same_origin=False)
     state = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(32)
     verifier = secrets.token_urlsafe(48)
@@ -379,7 +431,9 @@ def verify_id_token(token: str, nonce: str) -> dict:
     audiences = [aud] if isinstance(aud, str) else aud
     if not isinstance(audiences, list) or cfg.oidc_client_id not in audiences:
         raise SignInRefused("the ID token is for another client")
-    if len(audiences) > 1 and claims.get("azp") != cfg.oidc_client_id:
+    if "azp" in claims and claims["azp"] != cfg.oidc_client_id:
+        raise SignInRefused("the ID token is for another client")
+    if len(audiences) > 1 and "azp" not in claims:
         raise SignInRefused("the ID token is for another client")
     now = _now()
     exp, iat = claims.get("exp"), claims.get("iat")
@@ -400,7 +454,11 @@ def verify_id_token(token: str, nonce: str) -> dict:
 
 
 def _number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
 
 
 # --- The one reader -----------------------------------------------------------------------
