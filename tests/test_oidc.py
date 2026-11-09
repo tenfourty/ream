@@ -741,26 +741,108 @@ def test_without_a_backchannel_calls_go_to_the_issuer_with_no_extra_headers(
         assert not {"Host", "X-Forwarded-Proto", "X-Forwarded-Host"} & set(headers)
 
 
-def test_private_addresses_are_allowed_for_the_backchannel_origin_only(
+def test_private_addresses_are_allowed_for_the_trusted_origin_only(
     provider, monkeypatch
 ):
     seen = []
 
-    def fenced(url, method, body, headers, *, allow_private, **kw):
-        seen.append((url, allow_private))
+    def fenced(url, method, body, headers, *, allow_private, require_private, **kw):
+        seen.append((url, allow_private, require_private))
         return oidc.Response(200, "application/json", b"{}")
 
     monkeypatch.undo()
     monkeypatch.setattr(oidc.webhook, "fenced_request", fenced)
     with settings.override(oidc_backchannel_url=BACK):
         oidc.fetch("GET", BACK + "/x", None, {})
-        oidc.fetch("GET", ISSUER + "/x", None, {})
+        oidc.fetch("GET", ISSUER + "/x", None, {})  # never called: not trusted now
         oidc.fetch("GET", "http://elsewhere.svc:9091/x", None, {})
     assert seen == [
-        (BACK + "/x", True),
-        (ISSUER + "/x", True),
-        ("http://elsewhere.svc:9091/x", False),
+        (BACK + "/x", True, True),
+        (ISSUER + "/x", False, False),
+        ("http://elsewhere.svc:9091/x", False, True),
     ]
     seen.clear()
-    oidc.fetch("GET", BACK + "/x", None, {})
-    assert seen == [(BACK + "/x", False)]
+    oidc.fetch("GET", BACK + "/x", None, {})  # no back channel set
+    oidc.fetch("GET", ISSUER + "/x", None, {})
+    assert seen == [(BACK + "/x", False, True), (ISSUER + "/x", True, False)]
+
+
+@pytest.mark.parametrize(
+    "token_endpoint",
+    [
+        "https://auth.example@evil.example/x",
+        "https://auth.example//evil.example/x",
+        "HTTPS://AUTH.example:443/token",
+        "https://auth.example./token",
+        "https://auth.example:443/token",
+    ],
+)
+def test_hostile_endpoint_spellings_never_send_the_secret_off_the_backchannel(
+    back, db, token_endpoint
+):
+    back.discovery_extra = {"token_endpoint": token_endpoint}
+    try:
+        run(back, db)
+    except oidc.SignInRefused:
+        pass
+    assert back.seen
+    for _, url, _headers in back.seen:
+        assert url.startswith(BACK + "/"), url
+        assert "evil" not in url
+
+
+def test_a_redirect_from_the_backchannel_is_refused_with_no_second_request(back):
+    calls = []
+
+    def redirect(method, url, body, headers):
+        calls.append(url)
+        return oidc.Response(302, "text/html", b"")
+
+    oidc.fetch = redirect
+    with pytest.raises(oidc.SignInRefused):
+        oidc.begin(CALLBACK)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("url", "origin"),
+    [
+        ("http://[fd00::1]:9091/x", ("http", "fd00::1", 9091)),
+        ("http://authelia.svc.:9091/x", ("http", "authelia.svc", 9091)),
+        ("HTTP://Authelia.SVC", ("http", "authelia.svc", 80)),
+    ],
+)
+def test_origins_of_backchannel_spellings(url, origin):
+    assert oidc._origin(url) == origin
+
+
+def test_the_backchannel_url_rewrites_an_ipv6_literal():
+    with settings.override(oidc_backchannel_url="http://[fd00::1]:9091"):
+        url, headers = oidc._backchannel(ISSUER + "/token", {})
+    assert url == "http://[fd00::1]:9091/token"
+    assert headers["Host"] == "auth.example"
+
+
+def test_start_up_refuses_a_backchannel_without_the_issuer(tmp_path):
+    values = _full(tmp_path, oidc_issuer="", oidc_backchannel_url=BACK)
+    with settings.override(**values) as current:
+        found = [p for p in current.problems() if "BACKCHANNEL" in p]
+    assert found == ["REAM_OIDC_BACKCHANNEL_URL needs REAM_OIDC_ISSUER"]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "http://authelia.svc\\@evil.example",
+        "http://authelia.svc\\x",
+        "http://authelia svc:9091",
+        "http://authelia.svc:9091\n",
+        "http://authelia.svc:",
+        "http://authelia.svc:9091:",
+    ],
+)
+def test_start_up_refuses_backslash_whitespace_and_empty_port(tmp_path, bad):
+    with settings.override(**_full(tmp_path, oidc_backchannel_url=bad)) as current:
+        found = [p for p in current.problems() if "BACKCHANNEL" in p]
+    assert len(found) == 1 and "must be scheme://host" in found[0], found
+    assert bad not in found[0]

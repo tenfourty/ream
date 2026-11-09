@@ -102,6 +102,7 @@ def fetch(
             body,
             {"User-Agent": "ream-oidc/1", **headers},
             allow_private=_origin(url) in _trusted_origins(),
+            require_private=urlsplit(url).scheme == "http",
             deadline_seconds=FETCH_SECONDS,
             timeout=FETCH_SECONDS,
             read=read,
@@ -113,13 +114,11 @@ def fetch(
 
 
 def _trusted_origins() -> tuple[tuple[str, str, int], ...]:
-    """The origins a private address and (for a loopback issuer) plain http are allowed on:
-    the issuer's own and, when set, the back channel's."""
+    """The one origin a private address is allowed on: the back channel's when set (the
+    issuer is then never called), else the issuer's. Plain http is further limited, at the
+    connect, to a private address (`fetch`)."""
     cfg = settings.current()
-    found = (_origin(cfg.oidc_issuer),)
-    if cfg.oidc_backchannel_url:
-        found += (_origin(cfg.oidc_backchannel_url),)
-    return found
+    return (_origin(cfg.oidc_backchannel_url or cfg.oidc_issuer),)
 
 
 def _backchannel(url: str, headers: dict[str, str]) -> tuple[str, dict[str, str]]:

@@ -23,8 +23,9 @@ All of these are server settings; a missing or bad one refuses to start and name
      issuer's origin, ID token `iss`), then swaps only scheme, host and port, and sends
      `Host: <issuer host>`, `X-Forwarded-Proto: <issuer scheme>` and `X-Forwarded-Host` so the
      provider writes its documents for the public issuer. The browser's authorize address is
-     never rewritten; redirects are still refused. Plain http and a private address are allowed
-     for this origin only. Network policy: allow Ream to the provider's service port only. The
+     never rewritten; redirects are still refused. A private address is allowed for this origin only, and plain http
+     only to a private or loopback address (refused at the connect, so a public http value
+     never carries the secret). Network policy: allow Ream to the provider's service port only. The
      client secret then crosses the cluster network in plain http (the token call), so keep that
      path to the one service.
    - `REAM_OIDC_CLIENT_SECRET_FILE`: the path of a file holding the secret. The person who runs

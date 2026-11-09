@@ -441,8 +441,12 @@ class Settings:
                 parts = urlsplit("")
             if not self.oidc_issuer:
                 found.append("REAM_OIDC_BACKCHANNEL_URL needs REAM_OIDC_ISSUER")
+            raw = self.oidc_backchannel_url
             if (
-                parts.scheme not in ("http", "https")
+                "\\" in raw
+                or any(c.isspace() for c in raw)
+                or raw.endswith(":")
+                or parts.scheme not in ("http", "https")
                 or not parts.hostname
                 or parts.path not in ("", "/")
                 or parts.query
@@ -452,7 +456,7 @@ class Settings:
             ):
                 found.append(
                     "REAM_OIDC_BACKCHANNEL_URL must be scheme://host[:port] (http or https,"
-                    " no path, query, fragment or credentials)"
+                    " no path, query, fragment, credentials, backslash or space)"
                 )
         if self.oidc_client_secret_file:
             try:

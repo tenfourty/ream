@@ -307,6 +307,20 @@ def address_allowed(ip: str, allow_private: bool) -> bool:
     return addr.is_global and not addr.is_multicast
 
 
+def address_private(ip: str) -> bool:
+    """Whether `ip` is a private or loopback address (not link-local, so not a cloud metadata
+    address; not unspecified or multicast). Plain http is allowed only to such an address."""
+    try:
+        addr = ipaddress.ip_address(ip.split("%")[0])
+    except ValueError:
+        return False
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return (addr.is_private or addr.is_loopback) and not (
+        addr.is_link_local or addr.is_unspecified or addr.is_multicast
+    )
+
+
 def build_request(
     hook: Webhook, event: events.Event, sent_at: datetime
 ) -> tuple[bytes, dict[str, str]]:
@@ -334,6 +348,7 @@ def _pinned_connect(
     allow_private: bool,
     deadline: float | None = None,
     opened: list | None = None,
+    require_private: bool = False,
 ):
     """A `create_connection` that resolves once, refuses what the policy refuses, and
     connects to the address it checked. Each attempt gets the per-operation timeout or
@@ -349,10 +364,15 @@ def _pinned_connect(
         except OSError:
             raise WebhookError("could not resolve host") from None
         refused = False
+        needs_private = False
         last: OSError | None = None
         for family, kind, proto, _canon, sockaddr in found:
             if not address_allowed(sockaddr[0], allow_private):
                 refused = True
+                continue
+            if require_private and not address_private(sockaddr[0]):
+                refused = True
+                needs_private = True
                 continue
             budget = timeout
             if deadline is not None:
@@ -378,6 +398,8 @@ def _pinned_connect(
             except OSError as exc:
                 sock.close()
                 last = exc
+        if last is None and needs_private:
+            raise WebhookError("plain http needs a private address")
         if last is None and refused:
             raise WebhookError("refused address (not a public one)")
         raise WebhookError(
@@ -415,13 +437,15 @@ def fenced_request(
     deadline_seconds: float,
     timeout: float,
     read: Callable[[http.client.HTTPResponse], Any],
+    require_private: bool = False,
 ) -> Any:
     """One request through the address guard: resolved once, refused unless the address
     connected to is allowed (`address_allowed`), pinned to it, no proxy, no redirect
     followed (a 3xx is handed to `read` like any status). `read(response)` runs inside
     the deadline and its value is returned; the timer cuts the socket at
     `deadline_seconds`, TLS handshake and reads included. Raises WebhookError for a
-    transport failure. Also the MCP client metadata fetch (mcp_clients.py)."""
+    transport failure. `require_private` refuses any address that is not private or loopback
+    (plain http callers). Also the MCP client metadata fetch (mcp_clients.py)."""
     parts = urlsplit(url)
     https = parts.scheme == "https"
     cls = http.client.HTTPSConnection if https else http.client.HTTPConnection
@@ -441,7 +465,9 @@ def fenced_request(
     # which breaks a bracket-stripped IPv6 literal.
     port = parts.port or (443 if https else 80)
     conn = cls(parts.hostname, port, timeout=timeout)
-    conn._create_connection = _pinned_connect(allow_private, deadline, opened)  # type: ignore[attr-defined]
+    conn._create_connection = _pinned_connect(
+        allow_private, deadline, opened, require_private
+    )  # type: ignore[attr-defined]
     target = parts.path or "/"
     if parts.query:
         target += "?" + parts.query
