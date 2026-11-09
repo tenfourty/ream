@@ -109,7 +109,7 @@ differ from the gallery host and `REAM_API_HOST`. Runbook: `docs/agent/runbooks/
 `none`: none; `a,b`: only those, and an unknown name stops start-up); see `src/ream/plugin_api.py`.
 `REAM_MCP_PUBLIC_URL` turns on `/mcp` (MCP over stateless HTTP, `src/ream/mcp.py`) on that origin, which must be
 the gallery origin or `https://<REAM_API_HOST>` (unset: 404); `REAM_MCP_ACCEPT_KEYS` says whether it takes agent keys
-(unset: yes; `0` refuses to start until browser sign-in exists). How to try it: `docs/mcp.md`.
+(unset: yes while `REAM_MCP_SIGN_IN` is off, no once it is on; `1` takes them beside sign-in; `0` refuses to start unless sign-in is on). How to try it: `docs/mcp.md`.
 `REAM_SINKS_FILE` (also `ARTIFACTS_SINKS_FILE`; unset: none) names a TOML file of `[[sink]]` signed-webhook sinks that
 need no plug-in: format, signing and the addresses it refuses are in `docs/plugins.md` and `src/ream/webhook.py`.
 
