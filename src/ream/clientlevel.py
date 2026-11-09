@@ -23,7 +23,7 @@ MIN_CLIENT_LEVEL = 2
 # /api/v1/pages, both words, and the MCP publish_page tool) and the CLI. Flip it in the commit
 # that also raises CLIENT_LEVEL/MIN_CLIENT_LEVEL if tools need to be told again. Tests marked
 # `needs_comments_required` run only when it is True. Standard library only, like this module.
-COMMENTS_REQUIRED = False
+COMMENTS_REQUIRED = True
 
 # Request header the tools send, and the response headers the server answers with, each
 # under both prefixes (the old one stays for good).
