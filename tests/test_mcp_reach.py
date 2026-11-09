@@ -127,6 +127,14 @@ def test_an_app_comments_on_an_offices_page_as_the_owner_via_its_host(db, closed
     assert "Jeremy, via claude.ai" in out["structuredContent"]["comment"]["author_name"]
     stored = comments.list_for_artifact(db, closed, include_held=True)
     assert [(c.author, c.body) for c in stored] == [(app.agent, "a thought")]
+    # The second scan runs after the call, outside the app's reach, and checks no
+    # page ownership: it scans the app's comment on the office's closed page.
+    assert comments.second_scan(db, stored[0].id) in ("scanned", "unavailable")
+    with db.connect() as conn:
+        withdrawn = conn.execute(
+            "select withdrawn_at from comment where id = %s", (stored[0].id,)
+        ).fetchone()[0]
+    assert withdrawn is None
 
 
 def test_a_read_only_app_lists_and_calls_no_write_tools(db):
