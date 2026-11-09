@@ -832,7 +832,10 @@ def test_no_agent_written_text_leaves_a_tool_unfenced(client, on, token, db, pla
             {
                 "page_id": planted["mine"].id,
                 "question": m("asked-by-tool"),
-                "options": [{"letter": "a", "label": m("tool-label")}],
+                "options": [
+                    {"letter": "a", "label": m("tool-label")},
+                    {"letter": "b", "label": m("tool-label-b")},
+                ],
             },
         ),
     )
@@ -1134,7 +1137,7 @@ def test_publish_page_is_the_route(client, on, token, db):
         assert by_route.status_code == 201, by_route.text
         assert same(by_tool) == same(by_route.json())
         assert page_row(db, by_tool["id"]) == page_row(db, by_route.json()["id"])
-        assert store.get_owned(db, "mcp-seat", by_tool["id"]).session == SESSION
+        assert store.get_owned(db, "mcp-seat", by_tool["id"]).last_session == SESSION
     # A refusal of the body model is the tool's error, naming the argument.
     error, text = call_tool(
         client, token, "publish_page", body=PAGE.format(1), format="x"
@@ -1149,7 +1152,7 @@ def test_a_write_is_labelled_by_its_argument_else_the_header_else_mcp_and_today(
 
     _, out = call_tool(client, token, "publish_page", title="t", body=PAGE.format(1))
     today = datetime.now(UTC).date().isoformat()
-    assert store.get_owned(db, "mcp-seat", out["id"]).session == f"mcp/{today}"
+    assert store.get_owned(db, "mcp-seat", out["id"]).last_session == f"mcp/{today}"
     result = client.post(
         "/mcp",
         headers=headers(token, **LEGACY_HEADERS, **{"x-ream-session": "from/header"}),
@@ -1164,7 +1167,7 @@ def test_a_write_is_labelled_by_its_argument_else_the_header_else_mcp_and_today(
         },
     ).json()["result"]
     page_id = result["structuredContent"]["id"]
-    assert store.get_owned(db, "mcp-seat", page_id).session == "from/header"
+    assert store.get_owned(db, "mcp-seat", page_id).last_session == "from/header"
     error, text = call_tool(
         client, token, "publish_page", title="t", body=PAGE.format(3), session="x" * 121
     )
@@ -1196,7 +1199,8 @@ def test_update_page_is_the_whole_page_and_the_section_routes(client, on, token,
     assert error and text == refusal(stale)
 
     one, two = twins(db)
-    html = '<section id="s1">changed</section>'
+    # replace swaps the element's content, so the fragment is what goes inside #s1.
+    html = "<b>changed</b>"
     by_tool = tool_ok(
         client,
         token,
