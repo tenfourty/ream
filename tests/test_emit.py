@@ -284,6 +284,8 @@ def test_migration_adds_the_outbox_and_leaves_partner_rows_delivering(db):
             conn.execute("drop table mcp_events_seen")
             conn.execute("drop table mcp_client")
             conn.execute("drop table mcp_agent")
+            conn.execute("drop table mcp_token")
+            conn.execute("drop table mcp_signin")
             conn.execute("drop table mcp_app")
             conn.execute("pragma user_version = 19")  # the version before this table
     db.migrate()
