@@ -517,6 +517,15 @@ comment and opens its card. Page order is the frame's: the shim reports the plac
 bottom (`order` on `artifact-marks-placed`), and comments with no anchor are not in the sequence.
 Navigation only, so there is no agent route.
 
+**The comments panel lists the Open threads in page order** (Jeremy, 9 Nov 2026): comments on the
+whole page first, then the anchored ones top to bottom as the frame's `order` gives them, then those
+whose passage the page could not place, in the order they were made. The gallery reorders the list
+on each `artifact-marks-placed` and after a live swap; the server still renders oldest first. The
+Resolved list stays oldest first (the frame is only told the open marks). With no `order` from the
+page the card's arrows step through the panel's own open comments rather than not showing.
+A comment whose passage a republish removed has no mark: it cannot scroll the page, open a card or
+join the sequence, and the panel says "Outdated" on it.
+
 **Not chosen:** touch decided by screen size only, or by either test. The how-to box shown only
 until his first comment, or as a tip under the button. The select-text switch off by default.
 Explain, Shorten and Fix as labelled ordinary comments, or as pre-filled comment text.

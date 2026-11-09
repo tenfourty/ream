@@ -2153,7 +2153,7 @@ function sendMarks(){if(sent||!marks.length)return;sent=true;
 if(document.addEventListener)document.addEventListener("ream-marks",function(e){
   var m=e&&e.detail;if(!Array.isArray(m))return;
   marks=m.filter(function(x){return x&&typeof x.id==="string"});known=Object.create(null);
-  marks.forEach(function(x){known[x.id]=1});sent=true;
+  marks.forEach(function(x){known[x.id]=1});sent=true;sortPanel();
   try{f.contentWindow.postMessage({type:"artifact-marks",marks:marks},o)}catch(x){}});
 function unplacedLine(ids,overflow){var p=document.getElementById("marks-unplaced");if(!p)return;
   var n=0,seen=Object.create(null);
@@ -2175,7 +2175,7 @@ window.addEventListener("message",function(e){try{
   if(!d||typeof d!=="object")return;
   if(d.type==="artifact-state")sendMarks();
   else if(d.type==="artifact-marks-placed"&&Array.isArray(d.unplaced)){
-    order=Array.isArray(d.order)?d.order.slice(0,200).filter(function(id){return typeof id==="string"}):[];unplacedLine(d.unplaced,d.overflow);badges(d.rects)}
+    order=Array.isArray(d.order)?d.order.slice(0,200).filter(function(id){return typeof id==="string"}):[];unplacedLine(d.unplaced,d.overflow);sortPanel();badges(d.rects)}
 }catch(x){}});
 // THE DOCKED PANEL. Opened and closed by a class on <body>, never by the
 // fragment: no navigation, no history entry, nothing laid over the page. The
@@ -2266,10 +2266,34 @@ function grace(){clearTimeout(hg);hg=setTimeout(function(){hg=0;if(!busy())hide(
 var order=[],nav=null,navT=0;
 function isOpenThread(li){return !!li&&!(li.classList&&li.classList.contains("settled"))&&
   !(li.closest&&li.closest(".cpane-resolved"))}
-function seq(){return order.filter(function(id){return known[id]&&isOpenThread(thread(id))})}
+// THE PANEL IN PAGE ORDER. The server lists threads oldest first and cannot know where
+// a passage sits; the frame can (`order`). Each Open list is reordered here: comments on
+// the whole page (no quote, no mark) first, then the placed ones top to bottom, then
+// those the page could not place, in the order they came. Run on every report of the
+// frame and after a live swap of the panel. Never while a reply is being typed in it.
+function sortPanel(){try{if(!P||!P.querySelectorAll)return;var ae=document.activeElement;
+  if(ae&&P.contains&&P.contains(ae)&&ae.closest&&ae.closest("li.thread"))return;
+  var rank=Object.create(null);order.forEach(function(id,i){if(!(id in rank))rank[id]=i});
+  Array.prototype.forEach.call(P.querySelectorAll(".cpane-open ul.threads"),function(ul){
+    var lis=Array.prototype.filter.call(ul.children,function(c){return c.getAttribute&&c.getAttribute("data-mark-id")!==null});
+    var keyed=lis.map(function(li,i){var id=li.getAttribute("data-mark-id"),k;
+      if(id in rank)k=rank[id];else if(!known[id]&&!li.querySelector(".cquote"))k=-1;else k=1e6;
+      return{li:li,k:k,i:i}});
+    keyed.sort(function(a,b){return a.k-b.k||a.i-b.i});
+    if(keyed.every(function(x,j){return x.li===lis[j]}))return;
+    var after=lis.length?lis[lis.length-1].nextSibling:null;
+    keyed.forEach(function(x){ul.insertBefore(x.li,after)})})}catch(x){}}
+// The sequence Back and Forward step through: the open comments in page order. With no
+// report from the page (yet, or a sort that failed there) it is the panel's own order,
+// which sortPanel keeps in page order once the report has come.
+function seq(){var ids=order.length?order:Array.prototype.map.call(
+    P&&P.querySelectorAll?P.querySelectorAll(".cpane-open li.thread"):[],function(li){return li.getAttribute("data-mark-id")});
+  return ids.filter(function(id){return known[id]&&isOpenThread(thread(id))})}
 function askMark(id){try{f.contentWindow.postMessage({type:"artifact-mark-show",id:id},o)}catch(x){}}
 function navSettle(){clearTimeout(navT);navT=setTimeout(function(){navT=0;if(nav){nav.ph=2;askMark(nav.id)}},150)}
-function go(id){hide();clearTimeout(ht);ht=0;pend=null;nav={id:id,ph:0};askMark(id)}
+function go(id){hide();clearTimeout(ht);ht=0;pend=null;var mine=nav={id:id,ph:0};askMark(id);
+  // A mark the page cannot show never answers: do not hold the hover cards off for it.
+  setTimeout(function(){if(nav===mine&&mine.ph===0)nav=null},1500)}
 function show(id,r){var li=thread(id);if(!li)return;hide();
   var c=document.createElement("div");c.className="hovercard";c.setAttribute("role","dialog");
   c.setAttribute("aria-label","Comment");c.setAttribute("data-mark-id",id);

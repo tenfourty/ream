@@ -91,7 +91,11 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
     b.attrs["aria-selected"] = n === "open" ? "true" : "false"; return b; });
   panel.setAttribute("data-ctab", "open");
   if (commentsDefault) panel.setAttribute("data-comments-default", commentsDefault);
-  panel.querySelectorAll = (q) => (q === "li.thread" ? tlist.children.slice() : q === ".ctab" ? tabBtns : []);
+  // The real list sits in a `.cpane-open` pane; insertBefore is the real one's (the stub above only prepends).
+  tlist.insertBefore = (c, ref) => { const i = tlist.children.indexOf(c); if (i >= 0) tlist.children.splice(i, 1);
+    const j = ref ? tlist.children.indexOf(ref) : -1; if (j >= 0) tlist.children.splice(j, 0, c); else tlist.children.push(c); c.parentNode = tlist; };
+  panel.querySelectorAll = (q) => (q === "li.thread" || q === ".cpane-open li.thread" ? tlist.children.slice()
+    : q === ".cpane-open ul.threads" ? [tlist] : q === ".ctab" ? tabBtns : []);
   const cbtn = el("a"); cbtn.className = "cbtn";
   const byId = { "artifact-frame": iframe, "artifact-marks": marksEl, "marks-unplaced": unplacedEl, comments: noPanel ? null : panel };
   const pagebtn = el("a"); pagebtn.className = "pagecbtn";
@@ -935,10 +939,10 @@ const cardFor = (g, id) => { g.send(HOV(id)); g.clk.advance(150); return g.card(
 { const g = build({ marks: HMARKS, threads: hthreads() });
   g.send(STATE);
   const c = cardFor(g, "m2");
-  ok(!navOf(c).prev && c.querySelector(".hcnav") === null, "with no order from the page there are no arrows");
+  ok(navOf(c).count.textContent === "2 of 3", "with no order from the page the arrows still show, over the panel's own open comments: " + navOf(c).count.textContent);
   g.send(LEAVE); g.clk.advance(300);
   g.send({ ...ORDER, order: ["m2", 7, null, "m1"] }, { origin: "https://evil.example" });
-  ok(cardFor(g, "m2").querySelector(".hcnav") === null, "an order from another origin is ignored");
+  ok(cardFor(g, "m2").querySelector(".hccount").textContent === "2 of 3", "an order from another origin is ignored");
   g.send({ ...ORDER, order: ["m2", 7, null, "m1"] });
   g.send(LEAVE); g.clk.advance(300);
   ok(cardFor(g, "m2").querySelector(".hccount").textContent === "1 of 2", "non-string ids in an order are dropped"); }
@@ -949,5 +953,29 @@ const cardFor = (g, id) => { g.send(HOV(id)); g.clk.advance(150); return g.card(
   g.clk.advance(300); g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 80, left: 5, width: 50, height: 10 } });
   ok(g.card().length === 0, "a press elsewhere during a step cancels the card that was coming"); }
 
+// THE PANEL IN PAGE ORDER: whole-page comments first, then the placed threads top to bottom, then the unplaced.
+{ const whole = threadLi("w1");
+  const g = build({ marks: HMARKS, threads: [threadLi("m1", { kind: "remove" }), threadLi("m2", { kind: "remove" }), threadLi("m9", { kind: "remove" }), whole, threadLi("h1", { kind: "remove" })] });
+  const ids = () => g.tlist.children.map((c) => c.getAttribute("data-mark-id")).join();
+  g.send(STATE);
+  ok(ids() === "m1,m2,m9,w1,h1", "before the page reports, the panel is as the server sent it");
+  g.send({ type: "artifact-marks-placed", placed: ["h1", "m2", "m1"], unplaced: ["m9"], order: ["h1", "m2", "m1"] });
+  ok(ids() === "w1,h1,m2,m1,m9", "after the report: whole page first, placed ones in page order, the unplaced last: " + ids());
+  g.send({ type: "artifact-marks-placed", placed: ["m1", "m2", "h1"], unplaced: ["m9"], order: ["m1", "m2", "h1"] }, { origin: "https://evil.example" });
+  ok(ids() === "w1,h1,m2,m1,m9", "a report from another origin reorders nothing");
+  g.send({ type: "artifact-marks-placed", placed: ["m1", "m2", "h1"], unplaced: ["m9"], order: ["m1", "m2", "h1"] });
+  ok(ids() === "w1,m1,m2,h1,m9", "and each new report re-sorts: " + ids());
+  const c = cardFor(g, "m2");
+  ok(c.querySelector(".hccount").textContent === "2 of 3", "Back and Forward follow the same order"); }
+
+// A press on the body text of a LATER comment in a thread jumps, like a press on its quote: nothing in the
+// thread's markup (list, bubbles, paragraphs) is a link, field, button, form or label.
+{ const t = threadLi("e1", { kind: "remove" });
+  const g = build({ marks: EMARKS, threads: [t] });
+  const later = el("li"); later.className = "cmt agent"; const lp = el("p"); lp.textContent = "A reply"; later.appendChild(lp);
+  t.querySelector(".bubbles").appendChild(later);
+  g.framePosts.length = 0;
+  g.tap({ closest: (sel) => (sel === "#comments li.thread" ? t : lp.closest(sel)) });
+  ok(g.framePosts.length === 1 && g.framePosts[0][0].id === "e1", "a press on a later comment's text names the thread's mark"); }
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
