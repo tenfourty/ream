@@ -2770,3 +2770,20 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   `rename_agent` refuses to rename a person-and-app agent or to rename a key's agent onto one's
   name. Checks outside `_owned` (`store._scoped`, `move_many`: archive, pin, move, delete) are not
   widened yet. `/api/v1` is unchanged.
+- **Signing in: the provider and the owner check (9 Nov 2026, slice 5a; b5156b5, 610f4c3, 55e11e7).**
+  The server can sign the one reader in at an upstream OpenID Connect provider (`REAM_OIDC_*`,
+  `src/ream/oidc.py`): code flow with PKCE, state and nonce, the secret read from a file, claims
+  checked, the owner needs a verified email and a pinned subject, and the provider's endpoints are
+  pinned to its origin with bounded fetches. Start-up refuses a half-set sign-in.
+- **Signing in: consent and tokens (9 Nov 2026, slice 5b; 9abbfd6, e765b10, 740b050).** An app
+  sends the person to `/oauth/authorize`; after the provider he sees a consent page with three
+  boxes (read, write, relay), remembered consent skips it for the same or narrower request, and
+  the app gets a one-time code and exchanges it at `/oauth/token` for `rmo_` and `rmr_` tokens,
+  stored hashed (`mcp_token`, `mcp_signin`). `/mcp` takes the `rmo_` token; `/api/v1` refuses it;
+  a code used twice ends the app.
+- **Signing in: refresh, revoke, lapse and clean-up (9 Nov 2026, slice 5c).** An app refreshes at
+  `/oauth/token` (one conditional update spends the old `rmr_`; a spent one presented again ends
+  the app, reason `refresh_reuse`), can end itself at `/oauth/revoke`, lapses after 30 idle days
+  (every `/mcp` call and refresh slides it) and never outlives the 90-day cap; the nightly
+  clean-up drops finished sign-ins and spent or expired tokens and ends lapsed apps. Runbook
+  `docs/agent/runbooks/mcp-sign-in.md`. Not built: Connected apps page and admin commands (slice 6).

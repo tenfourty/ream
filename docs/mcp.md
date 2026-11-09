@@ -13,7 +13,7 @@ speaks MCP rather than the agent API. The design is
   `Authorization: Bearer <key>`, with exactly the key's reach on `/api/v1`. Failed keys count in
   the same limiter as `/api/v1`. `REAM_MCP_ACCEPT_KEYS` may be left unset; `0` without sign-in
   refuses to start.
-- **Sign-in, partly built.** `REAM_MCP_SIGN_IN=on` serves `/.well-known/oauth-protected-resource`
+- **Sign-in.** `REAM_MCP_SIGN_IN=on` serves `/.well-known/oauth-protected-resource`
   (and `/mcp` after it), `/.well-known/oauth-authorization-server` and `POST /oauth/register`
   on the public host, and answers `/mcp` without a sign-in token with 401 and the
   `resource_metadata` challenge; keys are then refused there unless `REAM_MCP_ACCEPT_KEYS=1`.
@@ -28,8 +28,10 @@ speaks MCP rather than the agent API. The design is
   `REAM_OIDC_OWNER_VALUE` (default the owner id; with `email`, `email_verified` must be true) say who the one reader is, and
   `REAM_OIDC_OWNER_SUBJECT` pins the provider `sub` (unset: the first owner sign-in pins issuer+sub and a different sub is refused later), and `REAM_OIDC_GROUPS_CLAIM` (default `groups`) is stored and unused. A missing value, a non-https
   issuer or an unreadable or empty secret file refuses to start, naming the setting. The sign-in
-  pages themselves (`/oauth/authorize`, `/oauth/token`) are not built yet, so an app that reaches
-  them still gets a 404.
+  pages are built: `/oauth/authorize` (consent, three boxes), `/oauth/token` (authorization_code
+  and refresh_token, strict rotation) and `/oauth/revoke` (RFC 7009). An app is idle-lapsed after
+  30 days unused and ends at `REAM_MCP_APP_MAX_LIFETIME_DAYS` (90). Turning it on, refusals and
+  ending an app: `docs/agent/runbooks/mcp-sign-in.md`.
 - **Stateless Streamable HTTP.** One `POST /mcp` per message; the answer is
   `application/json`, never a stream, never an `Mcp-Session-Id`. `GET` and `DELETE` answer 405.
   Notifications get 202. Batches get 400. Bodies over 12 MiB get 413. A request carrying an
