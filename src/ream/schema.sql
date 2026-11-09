@@ -1315,3 +1315,12 @@ alter table artifact add column if not exists comments_default text
 -- Null: not deleted. `deleted_by` is who did it (the author, by construction).
 alter table comment add column if not exists deleted_at timestamptz;
 alter table comment add column if not exists deleted_by text;
+
+-- MOVING AN AGENT TO A NEW MACHINE IS ONE APPROVAL (9 Nov 2026, docs/decisions.md).
+-- `connect_request.move`: null for a new name; 'owner' when the owner approved "same agent,
+-- new machine" on the approve page; 'self' when the agent started its own move
+-- (POST /agents/me/move), a request born approved for that agent's own name.
+-- `agent_key.retire_after`: the id of the key whose FIRST USE retires this one. Set on every
+-- live key of the agent when a move's key is minted; until then both work.
+alter table connect_request add column if not exists move text;
+alter table agent_key add column if not exists retire_after text;

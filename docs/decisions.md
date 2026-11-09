@@ -672,3 +672,34 @@ the same address could cancel it. Also not chosen: removing the per-address cap.
 global ceiling alone and lock every other machine out.
 
 **Evidence:** tracker runcove-5t3oj.102, 9 Nov 2026.
+
+## Moving an agent to a new machine is one approval (9 Nov 2026)
+
+**Chosen:** when a connect request names an agent that already exists, the owner's approve page
+offers two buttons. "Same agent, new machine" adds the new key to that agent, so its pages,
+comments and decisions stay. "New agent" approves under a different name typed on the page, checked
+as before (the agent-name pattern, the reserved owner id, an app's name, and a taken name refused
+with a clear message). A free name behaves as it did. The agent's earlier keys are marked to retire
+and stop working the first time the new key makes any authenticated call (`agent_key.retire_after`,
+enforced in `keys.first_use`, one transaction, safe to repeat); until then both work, so the old
+machine is not cut off before the new one is proven. Events: `agent_moved` when the new key is
+issued and `agent_keys_retired` when the old ones stop (written on the agent's latest page, since an
+event row belongs to a page). A machine's own request never chooses "same agent"; only the owner's tap
+does.
+
+The agent's own twin: `POST /api/v1/agents/me/move` (`ream connect --start-move`) from a working
+key makes a request already approved for the calling key's own agent and returns a one-time move
+token (15 minutes; a new ask cancels an unclaimed earlier one). The new machine runs
+`ream connect --move-token-stdin` and collects a key for the same agent with no one to approve. The
+token is the credential and is read from stdin, never an argument. There is no way to name another
+agent.
+
+**Why:** five offices moving onto VMs needed their old agents renamed by hand and the pages folded
+over with `artifacts-admin rename-agent`, one database move each.
+
+**Not chosen:** keeping the old keys until someone revokes them by hand. It lost because a
+forgotten key on a machine that was retired stays valid for good. Refusing a taken name at connect time
+was the other option. It lost because the machine would only be told no, and the move it was
+trying to make would still need the hand rename.
+
+**Evidence:** tracker runcove-5t3oj.102, 9 Nov 2026.

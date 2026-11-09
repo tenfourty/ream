@@ -78,6 +78,14 @@ is never renewed stops after two weeks; connect again. If a call is refused
 because the key "was replaced by a newer one" and you did not renew it,
 someone else has had it: tell {{owner_name}}.
 
+Moving to a new machine keeps your pages, comments and decisions. If the new machine asks to
+connect under a name that is already an agent, {{owner_name}} can approve it as "same agent,
+new machine": the new key joins that agent. Or do it yourself, without {{owner_name}}: on the old
+machine run `ream connect --start-move --out move-token` (POST /api/v1/agents/me/move; it is
+always YOUR agent, never another), carry the token file to the new machine and run
+`ream connect --move-token-stdin < move-token`. The token works once, for 15 minutes. Your old
+keys keep working until the new key's first call, then they stop (a refused call says the agent moved).
+
 Every agent on that machine shares the machine's key and each one names itself
 separately, so {{owner_their}} record always says which session did what. Declare yourself:
 
@@ -808,7 +816,8 @@ short and it is the source of truth. This skill is the reminder.
 1. Install the tools (see "The tools" in the onboarding document).
 2. Connect the machine with `ream connect`: it shows a code, {{owner_name}}
    approves it, and the key is saved without anyone seeing it. You never handle
-   a key by hand and never paste one into a chat.
+   a key by hand and never paste one into a chat. To move an agent to a new machine
+   keeping its pages, see "How to get a key" in the onboarding document.
 
 `ream` is the command now; the older `artifacts-*` commands still work and do the same
 thing. The API's route is `/api/v1/pages` (the old `/api/v1/artifacts` still answers).

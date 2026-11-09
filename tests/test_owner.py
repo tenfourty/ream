@@ -445,9 +445,10 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt re-taken on 9 Nov 2026 for the default body words and "a reply is always owed" (settling without one is refused).
 # agents.txt, skill.md and the artifacts-publish help re-taken on 9 Nov 2026 for the per-page comments setting (step 1: asked for, not yet required).
 # agents.txt, skill.md and the artifacts-decide help re-taken on 9 Nov 2026 for delete-comment / restore-comment.
+# agents.txt and skill.md re-taken on 9 Nov 2026 for moving an agent to a new machine (one short paragraph, one skill line).
 GOLDEN = {
-    "agents.txt": "e0026f590296e48b46c870047ec6e40b6112bd02243d05e422be1745df8cf507",
-    "skill.md": "e6c68316e51e8ffcf96f6e0dbd750725d4aca6cd273cb75aea84af88f033c986",
+    "agents.txt": "f7a56bb02acc95234e991312fe7853b4c4d9755813797de359409f0683c9814a",
+    "skill.md": "6d138b172d9832f365bab3bf825617087e5fc88f1f85f157b809325c8a5ace18",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"

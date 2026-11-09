@@ -158,7 +158,7 @@ def test_a_name_already_connected_is_refused_until_its_key_is_revoked(db, galler
     _token, key_id = keys.mint(db, agent="laptop")
     started = _ask(gallery)
     refused = _approve(gallery, started["code"], name="laptop")
-    assert "already the name of a connected machine" in refused.text
+    assert "Approved" not in refused.text and "already an agent" in refused.text
     keys.revoke(db, key_id)
     assert "Approved" in _approve(gallery, started["code"], name="laptop").text
 

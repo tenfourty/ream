@@ -19,6 +19,12 @@ THE THREE STEPS AND WHO MAY TAKE THEM
               /api/v1/connect/poll). The key is minted HERE, returned once,
               and never again: a second collect says "delivered", not the key.
 
+MOVING AN AGENT (9 Nov 2026). When the requested name already belongs to an agent, the
+approve page offers "same agent, new machine": the new key joins that agent, and its
+earlier keys retire at the new key's first use (`keys.first_use`). A machine can never
+choose this for itself; only the owner's approval can, or the agent's own key via
+`self_move` (POST /agents/me/move), which is scoped to the calling key's agent.
+
 WHY HE TYPES THE CODE rather than picking a request from a list: the request
 endpoint is open, so anyone can put a request in front of him. Typing the code
 his own agent is showing him approves exactly that one and no other.
@@ -32,7 +38,7 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from ream import keys
+from ream import keys, rename
 from ream.db import Database
 
 LIFETIME_SECONDS = 15 * 60
@@ -164,16 +170,71 @@ def app_agent_name(db: Database, agent: str) -> bool:
     return row is not None
 
 
-def approve(db: Database, request_id: str, agent: str) -> bool:
+def existing_agent(db: Database, suggested: str | None) -> str | None:
+    """The existing agent a requested name belongs to, or None: the name (after an
+    alias is followed, as the approve page does) is carried by a working key, is not
+    reserved and is not an app's. Those names are refused outright, so only a real
+    machine agent is ever offered "same agent, new machine"."""
+    name = clean_name(suggested)
+    if name is None:
+        return None
+    name = rename.resolve(db, name)
+    if keys.is_reserved_agent_name(name) or app_agent_name(db, name):
+        return None
+    return name if name_in_use(db, name) else None
+
+
+def approve(db: Database, request_id: str, agent: str, move: bool = False) -> bool:
+    """Record the owner's approval. `move`: the new key joins `agent`, which already
+    exists, and its earlier keys retire at the new key's first use (`collect`)."""
     now = datetime.now(UTC)
     with db.connect() as conn:
         row = conn.execute(
-            "update connect_request set approved_at = %s, agent = %s"
+            "update connect_request set approved_at = %s, agent = %s, move = %s"
             " where id = %s and expires_at > %s"
             " and approved_at is null and denied_at is null returning id",
-            (now, agent, request_id, now),
+            (now, agent, "owner" if move else None, request_id, now),
         ).fetchone()
     return row is not None
+
+
+def self_move(db: Database, agent: str, from_address: str) -> Started:
+    """An agent starts its own move (POST /agents/me/move): a request born approved for
+    `agent` itself, so the machine that holds the returned poll token collects a key for
+    that agent and nobody else. The `code` is never shown; the poll token is the
+    credential, valid once and for `LIFETIME_SECONDS`. An earlier unclaimed move of this
+    agent is cancelled, so at most one is ever open. `agent` is always the CALLING key's
+    own agent, never a name the caller typed."""
+    now = datetime.now(UTC)
+    poll = secrets.token_urlsafe(32)
+    with db.connect() as conn, conn.transaction():
+        conn.execute(
+            "update connect_request set denied_at = %s where move = 'self' and agent = %s"
+            " and delivered_at is null and denied_at is null",
+            (now, agent),
+        )
+        for _attempt in range(5):
+            code = _code()
+            inserted = conn.execute(
+                "insert into connect_request"
+                " (id, code, poll_sha256, suggested_name, from_address, expires_at,"
+                " approved_at, agent, move)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, 'self')"
+                " on conflict (code) do nothing returning id",
+                (
+                    secrets.token_hex(12),
+                    code,
+                    _hash(poll),
+                    agent,
+                    from_address,
+                    now + timedelta(seconds=LIFETIME_SECONDS),
+                    now,
+                    agent,
+                ),
+            ).fetchone()
+            if inserted:
+                return Started(code=code, poll_token=poll, expires_in=LIFETIME_SECONDS)
+    raise Refused("could not issue a move; try again")  # pragma: no cover
 
 
 def deny(db: Database, request_id: str) -> bool:
@@ -197,14 +258,14 @@ def collect(db: Database, poll_token: str) -> dict:
         # The name lock comes before the request's row lock (keys.NAME_LOCK_KEY).
         conn.advisory_lock(keys.NAME_LOCK_KEY)
         row = conn.execute(
-            "select id, approved_at, agent, denied_at, delivered_at,"  # noqa: S608 -- clause from the db layer, no caller input
+            "select id, approved_at, agent, denied_at, delivered_at, move,"  # noqa: S608 -- clause from the db layer, no caller input
             " expires_at > %s from connect_request where poll_sha256 = %s"
             + conn.for_update(),
             (now, _hash(poll_token)),
         ).fetchone()
         if row is None:
             return {"status": "expired"}
-        request_id, approved_at, agent, denied_at, delivered_at, alive = row
+        request_id, approved_at, agent, denied_at, delivered_at, move, alive = row
         if delivered_at is not None:
             return {"status": "delivered"}
         if denied_at is not None:
@@ -233,4 +294,22 @@ def collect(db: Database, poll_token: str) -> dict:
             "update connect_request set delivered_at = %s, key_id = %s where id = %s",
             (now, key_id, request_id),
         )
+        if move:
+            # Every other live key of the agent retires when this one is first used
+            # (`keys.first_use`); until then both work.
+            marked = conn.execute(
+                "update agent_key set retire_after = %s"
+                " where agent = %s and id <> %s and revoked_at is null returning id",
+                (key_id, agent, key_id),
+            ).fetchall()
+            keys.note_on_latest_page(
+                conn,
+                agent,
+                kind="agent_moved",
+                summary=(
+                    f"{agent} moved to a new machine; {len(marked)} earlier key(s) "
+                    "retire when the new key is first used"
+                ),
+                ref_id=key_id,
+            )
     return {"status": "approved", "agent": agent, "key": token}

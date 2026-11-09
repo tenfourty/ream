@@ -960,6 +960,11 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
         "alter table comment add column deleted_at timestamptz",
         "alter table comment add column deleted_by text",
     ),
+    # 9 Nov 2026: moving an agent to a new machine (see schema.sql).
+    31: (
+        "alter table connect_request add column move text",
+        "alter table agent_key add column retire_after text",
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

@@ -66,6 +66,13 @@ KINDS = (
     # question; the answer goes to the app, not here. Never written for a question an agent
     # asks on its own page.
     "question_asked",
+    # An agent moved to a new machine (9 Nov 2026; `connect.collect`): the new key was issued
+    # and the agent's earlier keys will retire at its first use. Written on the agent's most
+    # recently changed live page (an event needs a page); none when it has no page.
+    "agent_moved",
+    # The agent's earlier keys stopped working because the new machine's key was first used
+    # (`keys.first_use`). Same placement as `agent_moved`.
+    "agent_keys_retired",
 )
 
 # The other namespace (core-and-plugins design, 4.1): what the partner bridge carries.

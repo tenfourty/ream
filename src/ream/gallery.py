@@ -2963,6 +2963,28 @@ def _alias_note(typed: str | None, resolved: str | None) -> str:
     return ""
 
 
+def _connect_choice(taken: str, name: str, pending) -> str:
+    """The two ways to approve a request whose name belongs to an existing agent.
+    "New agent" comes first in the form so Enter in the name box never picks the
+    move; "Same agent" needs its own deliberate press."""
+    return (
+        f'<p class="err">{escape(taken)} is already an agent. Is this its new machine, '
+        "or a different agent?</p>"
+        "<label>New agent: a different name"
+        f'<input name="name" value="{escape(name)}" autocomplete="off"'
+        ' placeholder="e.g. laptop-2"></label>'
+        '<div class="row"><button class="btn" type="submit" name="choice" value="new">'
+        "New agent</button></div>"
+        f"<p>Or give the machine to {escape(taken)} itself: its pages, comments and "
+        "decisions stay with it. Its earlier keys keep working until this machine's "
+        "key is first used, then they stop.</p>"
+        '<div class="row"><button class="btn primary" type="submit" name="choice" '
+        f'value="same">Same agent, new machine</button>'
+        '<button class="btn" type="submit" formaction="/connect/deny">Deny</button>'
+        '<a class="btn" href="/connect">Cancel</a></div>'
+    )
+
+
 def _connect_page(
     typed: str = "",
     pending=None,
@@ -2970,6 +2992,7 @@ def _connect_page(
     ok: str = "",
     name: str = "",
     alias_note: str = "",
+    taken: str = "",
 ) -> str:
     """The page he approves a machine on. Step one asks for the code his agent
     is showing; step two shows that one request, lets him name the machine,
@@ -3013,12 +3036,19 @@ def _connect_page(
             + '<form method="post" action="/connect/approve">'
             f'<input type="hidden" name="request_id" value="{escape(pending.id)}">'
             f'<input type="hidden" name="code" value="{escape(pending.code)}">'
-            "<label>Name this machine"
-            f'<input name="name" value="{escape(suggested)}" autocomplete="off"'
-            ' placeholder="e.g. laptop" required></label>'
-            '<div class="row"><button class="btn primary" type="submit">Approve</button>'
-            f'<button class="btn" type="submit" formaction="/connect/deny">Deny</button>'
-            '<a class="btn" href="/connect">Cancel</a></div></form></section>'
+            + (
+                _connect_choice(taken, name, pending)
+                if taken
+                else (
+                    "<label>Name this machine"
+                    f'<input name="name" value="{escape(suggested)}" autocomplete="off"'
+                    ' placeholder="e.g. laptop" required></label>'
+                    '<div class="row"><button class="btn primary" type="submit">Approve</button>'
+                    '<button class="btn" type="submit" formaction="/connect/deny">Deny</button>'
+                    '<a class="btn" href="/connect">Cancel</a></div>'
+                )
+            )
+            + "</form></section>"
         )
     parts.append("</div>")
     return "".join(parts)
@@ -7168,7 +7198,7 @@ def gallery_router(db: Database) -> APIRouter:
     @router.get("/connect", response_class=HTMLResponse)
     def connect_page(code: str = "") -> HTMLResponse:
         """Step one (no code) and step two (a code he typed). homelab-ij8.102."""
-        pending, message, alias_note = None, "", ""
+        pending, message, alias_note, taken = None, "", "", ""
         if code.strip():
             pending = connect.find(db, code)
             if pending is None:
@@ -7180,10 +7210,13 @@ def gallery_router(db: Database) -> APIRouter:
                 suggested = connect.clean_name(pending.suggested_name or "")
                 if suggested is not None:
                     alias_note = _alias_note(suggested, rename.resolve(db, suggested))
+                taken = connect.existing_agent(db, pending.suggested_name) or ""
         return HTMLResponse(
             _shell(
                 "Connect a machine",
-                _connect_page(code, pending, message, alias_note=alias_note),
+                _connect_page(
+                    code, pending, message, alias_note=alias_note, taken=taken
+                ),
                 scripts='<script src="/connect.js" defer></script>'
                 if pending is None
                 else "",
@@ -7196,6 +7229,7 @@ def gallery_router(db: Database) -> APIRouter:
         request_id: str = Form(...),
         code: str = Form(...),
         name: str = Form(""),
+        choice: str = Form(""),
         _guard: None = Depends(_same_origin_write),
     ) -> HTMLResponse:
         pending = connect.find(db, code)
@@ -7203,7 +7237,28 @@ def gallery_router(db: Database) -> APIRouter:
             body = _connect_page(
                 code, None, "That request has expired or was already decided."
             )
+        elif choice == "same":
+            # Only his tap on the page reaches here (the same-origin guard), and the
+            # agent is the one the REQUEST named, never what a form field says.
+            taken = connect.existing_agent(db, pending.suggested_name)
+            if taken is None:
+                body = _connect_page(
+                    code,
+                    pending,
+                    "That name no longer belongs to an agent. Name this machine below.",
+                    name=name,
+                )
+            elif connect.approve(db, pending.id, taken, move=True):
+                body = _connect_page(
+                    ok=f"Approved as {taken}'s new machine. It will pick up its key in "
+                    "a few seconds; the earlier keys stop working once it has used its own."
+                )
+            else:
+                body = _connect_page(
+                    code, None, "That request has expired or was already decided."
+                )
         else:
+            taken = connect.existing_agent(db, pending.suggested_name) or ""
             agent = connect.clean_name(name)
             typed_name, alias_note = agent, ""
             if agent is not None:
@@ -7218,6 +7273,7 @@ def gallery_router(db: Database) -> APIRouter:
                     "Use 2 to 40 letters, digits or hyphens for the name.",
                     name=name,
                     alias_note=alias_note,
+                    taken=taken,
                 )
             elif keys.is_reserved_agent_name(agent):
                 body = _connect_page(
@@ -7226,6 +7282,7 @@ def gallery_router(db: Database) -> APIRouter:
                     f"{agent} is {keys.RESERVED_REASON}. Pick another.",
                     name=name,
                     alias_note=alias_note,
+                    taken=taken,
                 )
             elif connect.app_agent_name(db, agent):
                 body = _connect_page(
@@ -7234,14 +7291,17 @@ def gallery_router(db: Database) -> APIRouter:
                     f"{agent} is {keys.APP_AGENT_REASON}. Pick another.",
                     name=name,
                     alias_note=alias_note,
+                    taken=taken,
                 )
             elif connect.name_in_use(db, agent):
                 body = _connect_page(
                     code,
                     pending,
-                    f"{agent} is already the name of a connected machine. Pick another.",
+                    f"{agent} is already an agent. Pick another name, or choose "
+                    "same agent, new machine.",
                     name=name,
                     alias_note=alias_note,
+                    taken=taken,
                 )
             elif connect.approve(db, pending.id, agent):
                 body = _connect_page(

@@ -146,6 +146,12 @@ def refusal_reason(db: Database, token: str) -> str:
             + settings.current().owner_name
             + ", and connect again with artifacts-connect"
         )
+    if revoked_at is not None and reason == "moved":
+        return (
+            "this agent moved to a new machine and this key was retired when the new "
+            "one was first used. If this is the machine that moved, connect again "
+            "with artifacts-connect"
+        )
     if (
         revoked_at is None
         and rotating
@@ -159,25 +165,70 @@ def refusal_reason(db: Database, token: str) -> str:
 
 
 def first_use(db: Database, key: AgentKey) -> None:
-    """The first time a rotated key is used, the key it replaced dies. Until
-    then both work, so a rotate whose response was lost cannot lock a machine
-    out; after it, a copy of the old key is worthless."""
+    """The first time a rotated or moved key is used, the keys it supersedes die. Until
+    then both work, so a rotate whose response was lost cannot lock a machine out, and
+    an agent's old machine is not cut off before the new one is proven; after it, a copy
+    of an old key is worthless.
+
+    Two things die: the key this one `replaces` (a rotation), and every key marked
+    `retire_after` this one (a move to a new machine, `connect.collect`). One
+    transaction, and the `first_used_at is null` guard makes a second call a no-op, so
+    it is atomic and idempotent."""
     if not key.rotating:
         return
     now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
         row = conn.execute(
             "update agent_key set first_used_at = %s"
-            " where id = %s and first_used_at is null and replaces is not null"
-            " returning replaces",
+            " where id = %s and first_used_at is null returning replaces",
             (now, key.id),
         ).fetchone()
-        if row:
+        if row is None:
+            return
+        if row[0]:
             conn.execute(
                 "update agent_key set revoked_at = %s, revoked_reason = 'replaced'"
                 " where id = %s and revoked_at is null",
                 (now, row[0]),
             )
+        retired = conn.execute(
+            "update agent_key set revoked_at = %s, revoked_reason = 'moved'"
+            " where retire_after = %s and revoked_at is null returning id",
+            (now, key.id),
+        ).fetchall()
+        if retired:
+            note_on_latest_page(
+                conn,
+                key.agent,
+                kind="agent_keys_retired",
+                summary=f"{len(retired)} earlier key(s) retired: the new machine's key was first used",
+                ref_id=key.id,
+            )
+
+
+def note_on_latest_page(
+    conn, agent: str, *, kind: str, summary: str, ref_id: str | None
+) -> None:
+    """Write an agent-level event, on the agent's most recently changed live page (an
+    event row belongs to a page). Nothing when the agent has no page. Inside the
+    caller's transaction."""
+    from ream import events
+
+    page = conn.execute(
+        "select id from artifact where agent = %s and deleted_at is null"
+        " order by updated_at desc limit 1",
+        (agent,),
+    ).fetchone()
+    if page is not None:
+        events.append(
+            conn,
+            artifact_id=page[0],
+            agent=agent,
+            actor=agent,
+            kind=kind,
+            summary=summary,
+            ref_id=ref_id,
+        )
 
 
 class NotRotating(Exception):
@@ -199,8 +250,10 @@ def rotate(db: Database, key: AgentKey) -> tuple[str, str]:
             (datetime.now(UTC), key.id),
         )
         conn.execute(
-            "insert into agent_key (id, agent, token_sha256, rotating, replaces, label)"
-            " select %s, agent, %s, true, id, label from agent_key where id = %s",
+            "insert into agent_key"
+            " (id, agent, token_sha256, rotating, replaces, label, retire_after)"
+            " select %s, agent, %s, true, id, label, retire_after from agent_key"
+            " where id = %s",
             (key_id, _hash(token), key.id),
         )
     return token, key_id

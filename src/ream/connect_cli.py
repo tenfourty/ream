@@ -58,6 +58,35 @@ def _save_key(path: Path, key: str) -> None:
     client.save_key_file(path, key)
 
 
+def _start_move(args) -> int:
+    """On the machine that already has a key: ask the service for a move token for THIS
+    key's own agent (POST /agents/me/move). The token is a one-time credential for the
+    new machine; it is written to --out (mode 600) when asked, else printed."""
+    args.key_fd = (
+        None  # this command has no --key-fd; _resolve_key reads the file or env
+    )
+    try:
+        key = client._resolve_key(args)
+        made = client._request("POST", f"{client._api_base()}/agents/me/move", key, {})
+    except (client.HTTPFailure, client.UsageError) as exc:
+        print(f"artifacts-connect: could not start a move: {exc}", file=sys.stderr)
+        return 1
+    token = made["move_token"]
+    if args.out:
+        client.save_key_file(Path(args.out), token)
+        where = f"The move token is in {args.out}"
+    else:
+        print(token)
+        where = "The move token is printed above"
+    print(
+        f"{where}. It works once, for {made['expires_in'] // 60} minutes. On the new "
+        "machine run: ream connect --move-token-stdin  (token on stdin). This "
+        f"machine's keys for {made['agent']} stop working once the new one is used.",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog=prog_name("artifacts-connect"),
@@ -73,7 +102,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--force", action="store_true", help="replace a key this machine already has"
     )
+    parser.add_argument(
+        "--start-move",
+        action="store_true",
+        help="run on the machine that already has a key: ask for a one-time move token "
+        "so a NEW machine joins as this same agent (its pages, comments and decisions "
+        "stay); this machine's keys stop working once the new one is first used",
+    )
+    parser.add_argument(
+        "--out",
+        help="with --start-move: write the move token to this file (mode 600) instead of printing it",
+    )
+    parser.add_argument(
+        "--move-token-stdin",
+        action="store_true",
+        help="run on the NEW machine: read the move token from stdin and collect a key "
+        "for the same agent, with no one to approve",
+    )
     args = parser.parse_args(argv)
+    if args.start_move:
+        return _start_move(args)
 
     key_path = client._key_file_path(args.key_file)
     if key_path.exists() and not args.force:
@@ -85,20 +133,31 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     base = client._api_base()
-    try:
-        started = _post(f"{base}/connect", {"name": args.name or socket.gethostname()})
-    except (client.HTTPFailure, client.UsageError) as exc:
-        print(f"artifacts-connect: could not ask for access: {exc}", file=sys.stderr)
-        return 1
-
-    print(
-        textvars.words("Ask {{owner_name}} to approve this machine.\n\n")
-        + f"    Code:  {started['code']}\n"
-        + f"    Where: {started['approve_at']}\n\n"
-        + textvars.words("Waiting for {{owner_them}} ")
-        + f"(the code expires in {started['expires_in'] // 60} minutes)...",
-        flush=True,
-    )
+    if args.move_token_stdin:
+        token = sys.stdin.readline().strip()
+        if not token:
+            print("artifacts-connect: no move token on stdin", file=sys.stderr)
+            return 2
+        started = {"poll_token": token, "expires_in": 15 * 60, "interval": 5}
+        print("Collecting a key for the agent that started this move...", flush=True)
+    else:
+        try:
+            started = _post(
+                f"{base}/connect", {"name": args.name or socket.gethostname()}
+            )
+        except (client.HTTPFailure, client.UsageError) as exc:
+            print(
+                f"artifacts-connect: could not ask for access: {exc}", file=sys.stderr
+            )
+            return 1
+        print(
+            textvars.words("Ask {{owner_name}} to approve this machine.\n\n")
+            + f"    Code:  {started['code']}\n"
+            + f"    Where: {started['approve_at']}\n\n"
+            + textvars.words("Waiting for {{owner_them}} ")
+            + f"(the code expires in {started['expires_in'] // 60} minutes)...",
+            flush=True,
+        )
     interval = max(2, int(started.get("interval", 5)))
     deadline = time.monotonic() + min(_WAIT_LIMIT_SECONDS, started["expires_in"] + 60)
     while time.monotonic() < deadline:

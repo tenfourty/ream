@@ -1960,6 +1960,30 @@ def agent_router(
             headers={"cache-control": "no-store"},
         )
 
+    @router.post("/agents/me/move", status_code=201)
+    def move_agent(request: Request, agent: str = Depends(caller)):
+        """Start moving THIS agent to a new machine, without the owner (9 Nov 2026). Scoped
+        to the calling key's own agent: there is no way to name another. Returns a one-time
+        `move_token`; the new machine runs `ream connect --move-token-stdin` with it and
+        collects a key for this same agent, so its pages, comments and decisions stay.
+        Every earlier key of the agent keeps working until the new key's first use, then
+        retires. The token is the credential: hand it only to the new machine. It lives 15
+        minutes, and asking again cancels an earlier unclaimed one."""
+        address = ratelimit.client_address(
+            request.headers, request.client.host if request.client else None
+        )
+        started = connect.self_move(db, agent, address)
+        return JSONResponse(
+            {
+                "agent": agent,
+                "move_token": started.poll_token,
+                "expires_in": started.expires_in,
+                "interval": 5,
+            },
+            status_code=201,
+            headers={"cache-control": "no-store"},
+        )
+
     @router.get("/me")
     def whoami(
         request: Request,
