@@ -231,7 +231,7 @@ function sayable(c){return !!(IDR.test(c.id||"")||etext(c,1)||elabel(c)||hdOf(c)
 function obMake(){if(obH)return obH;
   try{var h=document.createElement("ar-comment-host"),r=h.attachShadow({mode:"closed"}),
       st=document.createElement("style"),b=document.createElement("div");
-    st.textContent="div{all:initial;display:block;box-sizing:border-box;width:100%;height:100%;"+
+    st.textContent="div{all:initial;pointer-events:none;display:block;box-sizing:border-box;width:100%;height:100%;"+
       "border:2px solid #0f6f63;border-radius:4px;background:rgba(15,111,99,.10)}";
     r.appendChild(st);r.appendChild(b);
     h.style.cssText="display:none!important";

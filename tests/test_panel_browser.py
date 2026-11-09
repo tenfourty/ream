@@ -709,25 +709,10 @@ def test_with_comment_lit_pointing_at_a_chart_boxes_it_and_a_click_starts_a_comm
         assert rect["r"] - 2 <= host["r"] <= rect["r"] + 2, "the box is round the chart"
         # The page's own text is untouched by it.
         assert "Comment" not in frame.evaluate("() => document.body.innerText")
-        from playwright.sync_api import TimeoutError as PWTimeout
-
-        frame.evaluate(
-            """() => { window.__seen = [];
-                addEventListener('click', e => __seen.push([e.target.nodeName,
-                    e.defaultPrevented]), false) }"""
-        )
-        pg.evaluate(
-            """() => { window.__msgs = [];
-                addEventListener('message', e => __msgs.push(e.data && e.data.type)) }"""
-        )
+        # The box lets the click through to the chart itself.
         pg.mouse.click(box["x"] + rect["l"] + 120, box["y"] + rect["t"] + 90)
         quote = pg.locator(".cquote")
-        try:
-            quote.wait_for(state="visible", timeout=5000)
-        except PWTimeout:
-            raise AssertionError(
-                (frame.evaluate("() => __seen"), pg.evaluate("() => __msgs"), errors)
-            ) from None
+        quote.wait_for(state="visible", timeout=5000)
         assert "Latency" in quote.inner_text()
         anchor = json.loads(
             pg.locator("form input[name=anchor]").first.get_attribute("value")
