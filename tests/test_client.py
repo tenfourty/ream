@@ -21,7 +21,7 @@ import urllib.request
 import pytest
 import uvicorn
 
-from ream import client, keys
+from ream import client, clientlevel, keys
 from ream.app import create_app
 
 SECRET_BODY = "<!doctype html><body>AKIA" + "IOSFODNN7EXAMPLE</body>"
@@ -1621,6 +1621,9 @@ def test_parse_interval():
             client.parse_interval(bad)
 
 
+@pytest.mark.skipif(
+    not clientlevel.COMMENTS_REQUIRED, reason="step 2 (the refusal) is off"
+)
 def test_a_new_page_without_comments_is_refused_but_an_update_is_not(
     live, key_file, tmp_path, capsys
 ):
@@ -1635,5 +1638,16 @@ def test_a_new_page_without_comments_is_refused_but_an_update_is_not(
     artifact_id = _publish_one(path, tmp_path, capsys)
     page.write_text("<!doctype html><body>two</body></html>")
     code = client.main(["--key-file", str(path), str(page), "--update", artifact_id])
+    capsys.readouterr()
+    assert code == 0
+
+
+@pytest.mark.skipif(clientlevel.COMMENTS_REQUIRED, reason="step 2 is on")
+def test_step_one_accepts_a_new_page_without_comments(live, key_file, tmp_path, capsys):
+    """Step 1: the tool does not insist on --comments; the page is stored with no setting."""
+    path, _ = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>hi</body></html>")
+    code = client.main(["--key-file", str(path), str(page), "--title", "Board"])
     capsys.readouterr()
     assert code == 0

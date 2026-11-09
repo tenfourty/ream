@@ -40,6 +40,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ream import (
     anchors,
+    clientlevel,
     comments,
     connect,
     csp,
@@ -818,7 +819,7 @@ def publish_page(
 ) -> dict:
     """POST /pages, for the route and the MCP `publish_page` tool."""
     body, title = payload.body, payload.title
-    if payload.comments is None:
+    if payload.comments is None and clientlevel.COMMENTS_REQUIRED:
         raise HTTPException(422, _COMMENTS_REQUIRED)
     if payload.format == "html" and title is None:
         # As before markdown: an HTML publish names its page.

@@ -10,7 +10,7 @@ as "no such page". The suite adds `comments: "on"` to a publish that omits the k
 import pytest
 from fastapi.testclient import TestClient
 
-from ream import keys, settings, store
+from ream import clientlevel, keys, settings, store
 from ream.app import create_app, create_gallery_app
 
 pytestmark = pytest.mark.no_default_comments
@@ -70,6 +70,13 @@ def test_a_publish_stores_the_setting_under_both_words(client, db, token, word, 
     assert store.get_owned(db, "seat", made.json()["id"]).comments == word
 
 
+needs_step2 = pytest.mark.skipif(
+    not clientlevel.COMMENTS_REQUIRED,
+    reason="step 2 of the comments setting (the refusal) is off: clientlevel.COMMENTS_REQUIRED",
+)
+
+
+@needs_step2
 @pytest.mark.parametrize("route", ["/api/v1/pages", "/api/v1/artifacts"])
 @pytest.mark.parametrize("extra", [{}, {"comments": None}])
 def test_a_new_page_without_the_setting_is_refused_saying_what_to_send(
@@ -84,6 +91,20 @@ def test_a_new_page_without_the_setting_is_refused_saying_what_to_send(
     for words in ('"on"', '"off"', "--comments on|off", "reinstall"):
         assert words in detail["detail"]
     assert store.list_for_agent(db, "seat") == [], "nothing was stored"
+
+
+@pytest.mark.skipif(clientlevel.COMMENTS_REQUIRED, reason="step 2 is on")
+@pytest.mark.parametrize("route", ["/api/v1/pages", "/api/v1/artifacts"])
+@pytest.mark.parametrize("extra", [{}, {"comments": None}])
+def test_step_one_accepts_a_new_page_without_the_setting_and_stores_none(
+    client, db, token, route, extra
+):
+    made = client.post(
+        route, json={"title": "T", "body": PAGE, **extra}, headers=auth(token)
+    )
+    assert made.status_code == 200, made.text
+    (row,) = store.list_for_agent(db, "seat")
+    assert row.comments is None, "not stated is stored as null, which reads as on"
 
 
 def test_a_value_other_than_on_or_off_is_refused(client, token):
@@ -198,11 +219,25 @@ def _mcp(db, token, name, arguments):
         ).json()["result"]
 
 
-def test_the_mcp_publish_tool_requires_the_setting_and_stores_it(db, token):
+@needs_step2
+def test_the_mcp_publish_tool_refuses_a_new_page_without_the_setting(db, token):
     refused = _mcp(db, token, "publish_page", {"title": "T", "body": PAGE})
     assert refused["isError"] is True
     assert "comments" in refused["content"][0]["text"]
     assert store.list_for_agent(db, "seat") == []
+
+
+@pytest.mark.skipif(clientlevel.COMMENTS_REQUIRED, reason="step 2 is on")
+def test_step_one_the_mcp_publish_tool_accepts_a_new_page_without_the_setting(
+    db, token
+):
+    made = _mcp(db, token, "publish_page", {"title": "T", "body": PAGE})
+    assert not made["isError"], made
+    (row,) = store.list_for_agent(db, "seat")
+    assert row.comments is None
+
+
+def test_the_mcp_publish_tool_stores_the_setting(db, token):
     made = _mcp(
         db, token, "publish_page", {"title": "T", "body": PAGE, "comments": "off"}
     )

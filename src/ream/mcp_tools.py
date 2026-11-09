@@ -662,7 +662,8 @@ _COMMENTS = {
     "description": (
         "Whether commenting starts on or off for a reader of the page. Off for a page a script "
         "redraws or a status board: no pill on selected words, and the reader can turn it on "
-        "for that page. Required on a new page (refused without it); optional on an update."
+        "for that page. Say it on every new page: it is coming to be required for a new page "
+        "(refused without it), so pass it now; optional on an update."
     ),
 }
 
@@ -677,7 +678,8 @@ _OWN = Fences(ream=_REAM)
     description=(
         "Publish a new page: HTML (a whole page, with a title) or markdown (its first "
         "heading names it). Files it in one of your folders with folder. Answers the "
-        "page's id, address and revision."
+        "page's id, address and revision. Pass comments (on or off) now: a new page "
+        "without it will soon be refused."
     ),
     read_only=False,
     destructive=False,

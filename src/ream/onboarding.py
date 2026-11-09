@@ -106,7 +106,8 @@ and `/api/v1/artifacts` keeps answering identically for callers that still use i
 
 ## Say whether commenting starts on or off
 
-A new page needs `--comments on|off` (the API field is `comments`): off for a page a script
+Say `--comments on|off` on every new page (the API field is `comments`). It is coming to be
+required for a new page, so pass it now in every script: off for a page a script
 redraws or a status board, on for anything meant to be discussed. Off means no pill on selected
 words and nothing inviting a comment; the reader can still turn commenting on for that page, and
 their choice wins. Change it later with `ream publish --update <page-id> --comments on|off`.
@@ -818,15 +819,17 @@ QD_OFFICE or ARTIFACTS_SEAT; yours always wins, and only yours filters `wait`.
 
 ## Say whether commenting starts on or off
 
-Every NEW page needs `--comments on` or `--comments off` (`ream publish` refuses without it; the
-API field is `comments: "on"|"off"` on POST /api/v1/pages, PATCH /pages/<id>, and POST
+Say `--comments on` or `--comments off` on every NEW page. It is coming to be required (a new page
+without it will soon be refused, and `ream publish` will insist), so scripts should pass it now; today
+a page without it is accepted and reads as on. The API field is `comments: "on"|"off"` on POST /api/v1/pages, PATCH /pages/<id>, and POST
 /pages/<id>/comments-setting to change it alone). It is your decision as the page's publisher: **off**
 for a page a script redraws or a status board, where comments would only go stale; **on** for a
 report, a plan, anything meant to be discussed. Off means the ways in start off for the reader:
 no pill on selected words and nothing inviting a comment. The Comment control is still there, and
 a reader who presses it, or turns the select-text switch on, has commenting fully on for that
 page; that choice is remembered in their browser for that page and wins over yours.
-The service refuses (422) a new page that does not say; an older tool needs reinstalling.
+Once required, the service refuses (422) a new page that does not say; a tool that does not know
+the flag needs reinstalling (the tools update themselves).
 
 ## The loop
 

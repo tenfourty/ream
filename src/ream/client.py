@@ -1948,8 +1948,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--comments",
         choices=("on", "off"),
         help=(
-            "whether commenting starts on or off for a reader of the page. Required when"
-            " FILE publishes a NEW page. Off for a page a script redraws or a status"
+            "whether commenting starts on or off for a reader of the page. Will be required when"
+            " FILE publishes a NEW page: pass it now in every script, because a NEW page"
+            " without it will soon be refused. Off for a page a script redraws or a status"
             " board: no pill on selected words, and the reader can still turn commenting"
             " on for that page. With FILE --update ID it changes the setting; with"
             " --update ID alone it changes only the setting."
@@ -2506,7 +2507,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.file and (args.title or _is_markdown(args.file)):
             # A markdown page may go without --title: its first `# heading`
             # names it, and the service refuses one that has neither.
-            if not args.comments:
+            if not args.comments and clientlevel.COMMENTS_REQUIRED:
                 print(
                     "--comments on|off is required for a new page: say whether"
                     " commenting starts on or off for a reader. Choose off for a page a"

@@ -443,9 +443,10 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt and skill.md re-taken on 9 Nov 2026 for explain, shorten and fix (the kinds paragraph, the body route).
 # agents.txt re-taken again, and the artifacts-decide help, on 9 Nov 2026 for the review fixes (em dash, publisher-only kinds, help names the new kinds).
 # agents.txt re-taken on 9 Nov 2026 for the default body words and "a reply is always owed" (settling without one is refused).
+# agents.txt, skill.md and the artifacts-publish help re-taken on 9 Nov 2026 for the per-page comments setting (step 1: asked for, not yet required).
 GOLDEN = {
-    "agents.txt": "d894b4bbf70454205f212244c04c93fa97dcf430bed5a75c99ee6112535cbbb7",
-    "skill.md": "d0a6a503bf85014bfcfae914d4075c51a8c12e3718bc9da56b654a31a737cd85",
+    "agents.txt": "a7ef0fbb233211310dcd5aaacd772717e892f470fb8352de8ba2cc7f5c90a710",
+    "skill.md": "1b5961876c5a397262358697757e81e006fe30bd677f32e29f7d3846ac7ad513",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"
@@ -489,7 +490,7 @@ FOOTER = "<footer>Published from BABA through the homelab artifacts service.</fo
 NEWS_TAIL = 26  # every entry so far; newer ones are added in front, so these never move
 NEWS_TAIL_DIGEST = "08b7ad27fd383101cc42c10f0994c8368d6fa5b33dc1617635d6068b5902f467"
 HELP_DIGEST = {
-    "artifacts-publish": "ba422008ab456de297687fab35da6e52bee9dd5ee710872327a6e637c21adb7e",
+    "artifacts-publish": "15f17397e44e4a050aaa22cabc01e6d462ba19a335c7beb39492430b519f638b",
     "artifacts-decide": "e8a9964cc83de7742fb1f5538cb3166cb785b445adb922e4465570fcce20397d",
 }
 

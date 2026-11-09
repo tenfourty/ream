@@ -14,8 +14,16 @@ copy gets wrong). Raise `CLIENT_LEVEL` to the same number in that commit. Standa
 only: the command-line tools import this.
 """
 
-CLIENT_LEVEL = 1
-MIN_CLIENT_LEVEL = 1
+CLIENT_LEVEL = 2
+MIN_CLIENT_LEVEL = 2
+
+# STEP 2 SWITCH (comments-setting rollout, 9 Nov 2026). While False a NEW page published without
+# a comments setting is accepted (stored null, read as on); `ream publish` does not insist on
+# --comments. Setting True turns on the refusal everywhere at once: the server (422 on
+# /api/v1/pages, both words, and the MCP publish_page tool) and the CLI. Flip it in the commit
+# that also raises CLIENT_LEVEL/MIN_CLIENT_LEVEL if tools need to be told again. Tests marked
+# `needs_comments_required` run only when it is True. Standard library only, like this module.
+COMMENTS_REQUIRED = False
 
 # Request header the tools send, and the response headers the server answers with, each
 # under both prefixes (the old one stays for good).
