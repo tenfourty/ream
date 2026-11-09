@@ -2041,7 +2041,8 @@ def move_many(
         moved = [i for i in wanted if i in owner_of]
         missing = [i for i in wanted if i not in owner_of]
         filed = None
-        for owner in dict.fromkeys(owner_of[i] for i in moved):
+        owners = list(dict.fromkeys(owner_of[i] for i in moved))
+        for owner in owners:
             ids = [i for i in moved if owner_of[i] == owner]
             if folder is None:
                 target = None
@@ -2051,6 +2052,9 @@ def move_many(
                 )
                 if filed is None or owner == agent:
                     filed = {"slug": canonical, "created": created}
+                if len(owners) > 1:
+                    # One folder's `created` would be a half-truth over several owners.
+                    filed = {"slug": canonical, "filed": "under each page's own agent"}
             conn.execute(
                 "update artifact set folder_id = %s, archived_via_folder = null"  # noqa: S608 -- placeholders only
                 f" where agent = %s and deleted_at is null and id in {in_list(ids)}",

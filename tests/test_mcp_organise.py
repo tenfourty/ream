@@ -247,6 +247,60 @@ def test_an_apps_questions_never_list_the_trash_of_another_agent(db):
     assert {q["id"] for q in key["structuredContent"]["questions"]} == {on_binned.id}
 
 
+def test_filing_a_mixed_batch_files_each_page_under_its_own_agent(db):
+    app = _app(db)
+    other = _app(db, CLAUDE_CODE)
+    own = store.publish(db, app.agent, "Own", PAGE.format("x"))
+    sibling = store.publish(db, other.agent, "Sibling", PAGE.format("x"))
+    office = store.publish(db, "office", "Office", PAGE.format("x"))
+    with mcp.reach.acting(_as(db, app).reach):
+        moved, missing, filed = store.move_many(
+            db, app.agent, [own.id, sibling.id, office.id, NO_PAGE], "work"
+        )
+    assert set(moved) == {own.id, sibling.id}
+    # An office's page and an unknown id are both just missing.
+    assert missing == [office.id, NO_PAGE]
+    assert filed is not None and "created" not in filed
+    with db.connect() as conn:
+        owners = dict(
+            conn.execute(
+                "select a.id, f.owner from artifact a join folder f on f.id = a.folder_id"
+            ).fetchall()
+        )
+        office_folders = conn.execute(
+            "select count(*) from folder where owner = %s", ("office",)
+        ).fetchone()[0]
+    assert owners == {own.id: app.agent, sibling.id: other.agent}
+    assert office_folders == 0
+    assert _row(db, office.id)["folder"] is None
+
+
+def test_an_app_cannot_destroy_a_siblings_page_and_it_reads_as_a_missing_one(db):
+    app = _app(db)
+    other = _app(db, CLAUDE_CODE)
+    page = store.publish(db, other.agent, "Theirs", PAGE.format("x"))
+    with mcp.reach.acting(_as(db, app).reach):
+        refused = store.destroy(db, page.id, agent=app.agent)
+        missing = store.destroy(db, NO_PAGE, agent=app.agent)
+    assert refused is False and missing is False
+    assert store.get_owned(db, other.agent, page.id).agent == other.agent
+
+
+def test_an_apps_set_aside_questions_include_a_siblings_archived_page_not_its_trash(db):
+    app = _app(db)
+    other = _app(db, CLAUDE_CODE)
+    archived = store.publish(db, other.agent, "Archived", PAGE.format("x"))
+    binned = store.publish(db, other.agent, "Binned", PAGE.format("x"))
+    on_archived = _ask(db, other.agent, archived.id, "archived question")
+    on_binned = _ask(db, other.agent, binned.id, "binned question")
+    assert store.set_archived(db, archived.id, True, agent=other.agent)
+    assert store.set_deleted(db, binned.id, True, agent=other.agent)
+    out = _tool(_as(db, app), "questions", include_set_aside=True)
+    _ok(out)
+    ids = {q["id"] for q in out["structuredContent"]["questions"]}
+    assert on_archived.id in ids and on_binned.id not in ids
+
+
 def test_a_read_only_app_has_no_organise_tool(db):
     app = _app(db, permissions=("read",))
     listed = {t["name"] for t in _send(_as(db, app), "tools/list", {})["tools"]}

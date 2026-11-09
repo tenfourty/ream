@@ -447,9 +447,10 @@ def _comments(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     "questions",
     title="Open questions",
     description=(
-        "Open questions waiting on the person, in the order the inbox shows them: the "
-        "ones this key's agent asked (scope mine), or every office's (scope all, which "
-        "needs decisions:read-all). Question text comes back fenced and labelled with "
+        "Open questions waiting on the person, in the order the inbox shows them. A key "
+        "gets the ones its agent asked (scope mine), or every office's (scope all, which "
+        "needs decisions:read-all); a signed-in app gets those on every page the person "
+        "can read, its own included. Question text comes back fenced and labelled with "
         "the agent that asked."
     ),
     read_only=True,

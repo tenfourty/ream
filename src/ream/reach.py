@@ -5,6 +5,8 @@ The `/mcp` endpoint sets the caller's reach for the length of one message (`acti
 store's one page check (`store._owned`, and `store.list_readable`) asks `widened(agent)`
 whether the agent it was given is acting with a wider reach than a key's. Nothing else sets
 it, so `/api/v1` and every key behave exactly as before: a key's reach widens nothing.
+`_scoped` (rename, pin, archive, delete, restore) widens the same way; purge (`destroy`),
+transfer and who-can-read never do (`widen=False`).
 """
 
 from __future__ import annotations
