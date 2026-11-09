@@ -34,7 +34,8 @@ revisions, [Claude's connector authentication](https://claude.com/docs/connector
 4. **Homelab sign-in.** Through Authelia's standard OIDC sign-in, as the forge does: the same path
    the company sign-on takes.
 5. **Lifetime.** A row in "Machines and keys" with Revoke; hour-long tokens renewed silently; it
-   lapses after 30 days unused.
+   lapses after 30 days unused, and ends 90 days after consent so he signs in again, as cove's do
+   (Jeremy, 9 Nov 2026).
 6. **Which apps.** Any MCP app, shown by its checked address, once approved on the consent screen;
    a deployment may set an allowed list.
 
