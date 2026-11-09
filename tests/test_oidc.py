@@ -720,7 +720,7 @@ def test_a_backchannel_discovery_for_another_issuer_is_still_refused(back, db):
 
 @pytest.mark.parametrize("key", ["token_endpoint", "jwks_uri"])
 def test_a_backchannel_endpoint_off_the_issuers_origin_is_still_refused(back, db, key):
-    back.discovery_extra = {key: BACK + "/token"}
+    back.discovery_extra = {key: "https://authelia.svc.cluster.local:9091/x"}
     with pytest.raises(oidc.SignInRefused, match="issuer's own origin"):
         run(back, db)
     assert all(u.startswith(BACK + "/") for _, u, _ in back.seen)
