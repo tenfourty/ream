@@ -637,18 +637,6 @@ def agent_card(public_only: bool = False) -> dict:
             "all_routes": {"path": "/api/v1/openapi.json", "needs_key": True},
         },
         "cli": {
-            "client_level": {
-                "current": clientlevel.CLIENT_LEVEL,
-                "minimum": clientlevel.MIN_CLIENT_LEVEL,
-                "header": clientlevel.CLIENT_HEADER,
-                "outdated_response_header": clientlevel.OUTDATED_HEADER,
-                "install_source": settings.current().client_install_source or None,
-                "note": (
-                    "a tool installs itself only from the source fixed in its own "
-                    "settings, never from install_source here; REAM_NO_SELF_UPDATE=1 "
-                    "turns the update off"
-                ),
-            },
             "install": (
                 "uv tool install --force --no-index --find-links "
                 f"{first}/api/v1/tools/ {package_name()}"
@@ -666,7 +654,32 @@ def agent_card(public_only: bool = False) -> dict:
             "onboarding": f"{first}/api/v1/agents.txt",
             "skill": f"{first}/api/v1/skill.md",
         },
+        **_client_level_card(),
         **_mcp_card(public_only),
+    }
+
+
+def _client_level_card() -> dict:
+    """The `client_level` entry top-level entry, only where the deployment
+    advertises where its tools are installed from (REAM_CLIENT_INSTALL_SOURCE). Unset, the card
+    is byte-for-byte what it was (tests/test_owner.py pins it); the levels ride every /api/v1
+    response header either way."""
+    source = settings.current().client_install_source
+    if not source:
+        return {}
+    return {
+        "client_level": {
+            "current": clientlevel.CLIENT_LEVEL,
+            "minimum": clientlevel.MIN_CLIENT_LEVEL,
+            "header": clientlevel.CLIENT_HEADER,
+            "outdated_response_header": clientlevel.OUTDATED_HEADER,
+            "install_source": source,
+            "note": (
+                "a tool installs itself only from the source fixed in its own settings "
+                "(main branch), never from install_source here; REAM_NO_SELF_UPDATE=1 "
+                "turns the update off"
+            ),
+        }
     }
 
 

@@ -1,7 +1,6 @@
 """The tools say which level they are on and reinstall themselves when the service says they
 are out of date (Jeremy, 9 Nov 2026). The install source is the client's own, never the server's."""
 
-import io
 import os
 import time
 import urllib.request
@@ -18,7 +17,11 @@ STALE = {"x-ream-client-outdated": "true"}
 
 @pytest.fixture()
 def http(db) -> TestClient:
-    return TestClient(create_app(db), follow_redirects=False)
+    return TestClient(
+        create_app(db),
+        base_url="https://artifacts.tenfourty.site",
+        follow_redirects=False,
+    )
 
 
 # ---- the tool says its level -------------------------------------------------------
@@ -94,11 +97,15 @@ def test_the_signal_rides_an_error_answer_too_and_not_the_gallery(http):
 
 
 def test_the_agent_card_declares_the_level(http, monkeypatch):
-    card = http.get("/api/v1/agent.json").json()["cli"]["client_level"]
+    assert "client_level" not in http.get("/api/v1/agent.json").json(), (
+        "unset: unchanged"
+    )
+    monkeypatch.setenv("REAM_CLIENT_INSTALL_SOURCE", SOURCE)
+    card = http.get("/api/v1/agent.json").json()["client_level"]
     assert card["current"] == clientlevel.CLIENT_LEVEL
     assert card["minimum"] == clientlevel.MIN_CLIENT_LEVEL
     assert "install_ref" not in card
-    assert card["install_source"] is None
+    assert card["install_source"] == SOURCE
 
 
 # ---- the tool decides to update ----------------------------------------------------
@@ -130,8 +137,20 @@ class _Run:
         return [c for c, _ in self.calls if c[:3] == ["uv", "tool", "install"]]
 
 
+class _Out:
+    """What the tool printed to stderr so far (capsys, read as often as asked)."""
+
+    def __init__(self, capsys):
+        self.capsys = capsys
+        self.text = ""
+
+    def getvalue(self):
+        self.text += self.capsys.readouterr().err
+        return self.text
+
+
 @pytest.fixture()
-def updater(monkeypatch, tmp_path):
+def updater(monkeypatch, tmp_path, capsys):
     for name in (
         "REAM_NO_SELF_UPDATE",
         "ARTIFACTS_NO_SELF_UPDATE",
@@ -143,14 +162,17 @@ def updater(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("REAM_INSTALL_SOURCE", SOURCE)
     monkeypatch.setattr(selfupdate, "_done", False)
-    monkeypatch.setattr(selfupdate.shutil, "which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr(
+        selfupdate.shutil,
+        "which",
+        lambda name: name if name.startswith("/") else f"/bin/{name}",
+    )
     run = _Run()
     monkeypatch.setattr(selfupdate.subprocess, "run", run)
     execs = []
     monkeypatch.setattr(selfupdate.os, "execv", lambda *a: execs.append(a))
     monkeypatch.setattr(selfupdate, "_ORIGINAL_ARGV", ["/bin/ream", "list"])
-    out = io.StringIO()
-    monkeypatch.setattr(selfupdate.sys, "stderr", out)
+    out = _Out(capsys)
     return type("Rig", (), {"run": run, "execs": execs, "out": out})
 
 

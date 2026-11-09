@@ -517,7 +517,7 @@ Explain, Shorten and Fix as labelled ordinary comments, or as pre-filled comment
 **Chosen:** every call from `ream` and the `artifacts-*` commands sends its client level
 (`X-Ream-Client`, and `X-Artifacts-Client`). Every `/api/v1` response carries the oldest level the
 service wants (`X-Ream-Client-Min`) and, only when the caller is older, `X-Ream-Client-Outdated:
-true`; the call is answered as usual. `agent.json` declares the same under `cli.client_level`.
+true`; the call is answered as usual. `agent.json` declares the same under `client_level` where `REAM_CLIENT_INSTALL_SOURCE` is set.
 **The server only signals.** It names no ref, version or source to install.
 When a tool is told it is out of date it runs `uv tool install --force --refresh <source>@main`,
 where the source is the tool's own and `main` is the reviewed, CI-gated branch, then repeats the same
