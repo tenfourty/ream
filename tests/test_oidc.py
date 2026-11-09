@@ -171,7 +171,7 @@ def test_the_owner_signs_in(provider, db, alg):
     assert login.person == settings.owner_id()
     assert login.subject == "u-1"
     assert login.groups == ("admins",)
-    method, url, body, headers = provider.calls[-1]
+    method, url, body, headers = [c for c in provider.calls if c[0] == "POST"][-1]
     assert (method, url) == ("POST", ISSUER + "/token")
     form = {k: v[0] for k, v in parse_qs(body.decode()).items()}
     assert form["grant_type"] == "authorization_code"
@@ -192,11 +192,11 @@ def refused(provider, db, text, **kw):
 
 
 def test_a_wrong_nonce_is_refused(provider, db):
-    refused(provider, "different sign-in", claims=provider.good("someone-elses"))
+    refused(provider, db, "different sign-in", claims=provider.good("someone-elses"))
 
 
 def test_a_missing_nonce_is_refused(provider, db):
-    refused(provider, "different sign-in", claims=provider.good(None, nonce=None))
+    refused(provider, db, "different sign-in", claims=provider.good(None, nonce=None))
 
 
 def test_a_wrong_audience_is_refused(provider, db):
