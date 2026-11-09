@@ -5,9 +5,10 @@ is older than `clientlevel.MIN_CLIENT_LEVEL`. That is ALL the server says: it na
 no version and no ref. This module reacts, once per process:
 
 * it runs `uv tool install --force --refresh <source>@main`, checks the installed copy is not
-  older than this one, and after a safe call (GET/HEAD) runs the same command again; after a
-  call that changes something it does not repeat it (that would post twice), so the next call
-  is the new tool;
+  older than this one, and re-runs the same command once, but only if this process has sent
+  nothing but GET/HEAD and has not read stdin; otherwise (that would post twice) it says the next
+  command is the new tool. uv runs in a minimal environment (no REAM_/ARTIFACTS_ variable, nothing
+  named KEY, TOKEN, SECRET or PASSWORD); the attempt is claimed with an exclusive, no-symlink create;
 * if uv is missing, the install fails or the installed copy is OLDER, it prints one line with
   the command to run by hand and carries on as it is.
 
@@ -31,11 +32,13 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
 import tomllib
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from ream import clientlevel, envnames
 
@@ -49,6 +52,31 @@ _INSTALL_TIMEOUT = 300
 _MIN_GAP = 3600  # seconds between two attempts on one machine
 
 _done = False  # one decision per process
+_mutated = False  # this process sent a change, or read stdin: it must never run twice
+
+_ENV_KEEP = ("PATH", "HOME", "TMPDIR", "LANG", "REQUESTS_CA_BUNDLE")
+_ENV_KEEP_PREFIX = ("XDG_", "UV_", "SSL_CERT_")
+_ENV_SECRET = re.compile(r"KEY|TOKEN|SECRET|PASSWORD", re.IGNORECASE)
+
+
+def note_mutation() -> None:
+    """A request that changes something went out, or stdin was read: a re-exec would repeat
+    it, so this process never re-execs (it still installs)."""
+    global _mutated
+    _mutated = True
+
+
+def _install_env() -> dict[str, str]:
+    """The environment uv runs in: the few variables it needs, none of ours and none that
+    looks like a credential."""
+    env = {}
+    for name, value in os.environ.items():
+        upper = name.upper()
+        if upper.startswith(("REAM_", "ARTIFACTS_")) or _ENV_SECRET.search(upper):
+            continue
+        if upper in _ENV_KEEP or upper.startswith(_ENV_KEEP_PREFIX):
+            env[name] = value
+    return env
 
 
 def configured_source() -> str | None:
@@ -118,19 +146,42 @@ def _stamp_path() -> Path:
 
 
 def _attempt_allowed() -> bool:
-    """True, and records the attempt, unless one was made in the last hour."""
+    """True, and records the attempt, unless one was made in the last hour. The claim is one
+    atomic exclusive create (no symlink followed), so two processes cannot both win."""
     path = _stamp_path()
     try:
-        if time.time() - path.stat().st_mtime < _MIN_GAP:
-            return False
-    except OSError:
-        pass
-    try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(str(int(time.time())), encoding="utf-8")
     except OSError:
         return False  # cannot record it, so cannot rate-limit it: do not install
-    return True
+    for _ in range(2):
+        try:
+            fd = os.open(
+                path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+            )
+        except FileExistsError:
+            pass
+        except OSError:
+            return False
+        else:
+            os.close(fd)
+            return True
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            continue  # gone since: claim it
+        except OSError:
+            return False
+        if not stat.S_ISREG(info.st_mode) or time.time() - info.st_mtime < _MIN_GAP:
+            return False  # recent, or not a plain file (a symlink is never followed)
+        try:
+            os.unlink(path)  # stale: clear it, then race fairly for the new claim
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return False
+    return False
 
 
 def _run(command: list[str], timeout: int = _INSTALL_TIMEOUT):
@@ -141,6 +192,7 @@ def _run(command: list[str], timeout: int = _INSTALL_TIMEOUT):
         text=True,
         timeout=timeout,
         check=False,
+        env=_install_env(),
     )
 
 
@@ -151,7 +203,10 @@ def _installed_level() -> int | None:
         where = _run(["uv", "tool", "dir"], 30)
         if where.returncode != 0:
             return None
-        python = Path(where.stdout.strip()) / "ream" / "bin" / "python"
+        # The tool's directory is named for the tool: `ream`, or `artifacts` when that is how
+        # it was installed -- read from where this process lives, not assumed.
+        name = Path(sys.prefix).name or "ream"
+        python = Path(where.stdout.strip()) / name / "bin" / "python"
         answer = _run(
             [
                 str(python),
@@ -168,20 +223,33 @@ def _installed_level() -> int | None:
         return None
 
 
-def _manual_line(headers) -> str:
+def _host(address: str) -> str | None:
+    try:
+        return (urlsplit(address.removeprefix("git+")).hostname or "").lower() or None
+    except ValueError:
+        return None
+
+
+def _manual_line(headers, api_url: str | None) -> str:
     """The line for a tool with no fixed source. The server's note is printed for a person to
-    run once; nothing here executes it."""
+    run once, and only when it names the very host this tool was talking to; nothing here
+    executes it."""
     line = (
         "this tool is out of date (the service asks for a newer one). Reinstall it with "
-        "the install line in the service's onboarding document."
+        "the install line in the service's onboarding document (/api/v1/agents.txt)."
     )
     note = (headers.get(clientlevel.SOURCE_HEADER.lower()) or "").strip()
     if note and _SOURCE.fullmatch(note) and ".." not in note:
-        line += f" Run this once and later updates are automatic: uv tool install --force {note}"
+        host = _host(note)
+        if host and host == _host(api_url or ""):
+            line += (
+                " Run this once and later updates are automatic: "
+                f"uv tool install --force {note}"
+            )
     return line
 
 
-def on_response(method: str, headers) -> None:
+def on_response(method: str, headers, api_url: str | None = None) -> None:
     """Called with every API response's headers (lower-case names). Does nothing unless the
     server says this tool is out of date, and then at most once per process."""
     global _done
@@ -192,7 +260,7 @@ def on_response(method: str, headers) -> None:
     _done = True
     source = configured_source()
     if source is None:
-        _say(_manual_line(headers))
+        _say(_manual_line(headers, api_url))
         return
     command = command_for(source)
     line = " ".join(command)
@@ -225,16 +293,22 @@ def on_response(method: str, headers) -> None:
             f"this command carries on as it is. Run by hand: {line}"
         )
         return
-    if method.upper() in {"GET", "HEAD"} and _ORIGINAL_ARGV and _ORIGINAL_ARGV[0]:
-        os.environ[_GUARD] = "1"
-        sys.stdout.flush()
-        sys.stderr.flush()
-        program = _ORIGINAL_ARGV[0]
-        if not Path(program).is_file():
-            program = shutil.which(program) or program
-        try:
-            os.execv(program, _ORIGINAL_ARGV)  # noqa: S606 -- our own command, once
-        except OSError:
-            _say("updated; run the command again to use the new tool.")
+    if method.upper() not in {"GET", "HEAD"}:
+        note_mutation()
+    if _mutated:
+        _say("updated; your next command uses the new tool")
         return
-    _say("updated; the next call uses the new tool.")
+    program = _ORIGINAL_ARGV[0] if _ORIGINAL_ARGV else ""
+    if program and not os.path.isabs(program):
+        # Never from the working directory: a bare name is looked up on PATH only.
+        program = (shutil.which(program) or "") if os.sep not in program else ""
+    if not program:
+        _say("updated; run the command again to use the new tool.")
+        return
+    os.environ[_GUARD] = "1"
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        os.execv(program, _ORIGINAL_ARGV)  # noqa: S606 -- our own command, once
+    except OSError:
+        _say("updated; run the command again to use the new tool.")

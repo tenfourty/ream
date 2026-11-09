@@ -615,6 +615,8 @@ def _exchange(
 ) -> bytes:
     """Send `request`, retrying through a rolling deploy, and return the body bytes.
     Raises HTTPFailure for anything but a 2xx."""
+    if request.get_method().upper() not in {"GET", "HEAD"}:
+        selfupdate.note_mutation()  # sent once is sent: no re-exec may repeat it
     for attempt in range(_ROLLING_ATTEMPTS):
         try:
             with _opener.open(request, timeout=timeout) as response:
@@ -624,13 +626,14 @@ def _exchange(
                 }
                 if headers_out is not None:
                     headers_out.update(seen)
-            selfupdate.on_response(request.get_method(), seen)
+            selfupdate.on_response(request.get_method(), seen, request.full_url)
             break
         except urllib.error.HTTPError as exc:
             raw = exc.read()
             selfupdate.on_response(
                 request.get_method(),
                 {k.lower(): v for k, v in (exc.headers or {}).items()},
+                request.full_url,
             )
             if exc.code in _ROLLING_STATUSES and attempt < _ROLLING_ATTEMPTS - 1:
                 # The service updates itself on every push, and while the new

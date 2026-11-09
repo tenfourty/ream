@@ -37,7 +37,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
-from ream import envnames, images, news, pickup, plugin_cli, textvars
+from ream import envnames, images, news, pickup, plugin_cli, selfupdate, textvars
 from ream.cli import prog_name
 from ream.client import (
     Conflict,
@@ -60,6 +60,14 @@ from ream.client import (
 )
 
 _w = textvars.words
+
+
+def _read_text_arg(value: str) -> str:
+    """`-` reads the text from stdin; stdin cannot be replayed, so the tool never re-execs."""
+    if value != "-":
+        return value
+    selfupdate.note_mutation()
+    return sys.stdin.read()
 
 
 def _options(pairs: list[str]) -> list[dict]:
@@ -2458,7 +2466,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"recorded on {written['decision_id']}: {written['body']}")
             return 0
         if args.cmd == "reply-note":
-            text = sys.stdin.read() if args.text == "-" else args.text
+            text = _read_text_arg(args.text)
             if not text.strip():
                 raise UsageError("nothing to say: the reply text is empty")
             written = _request(
@@ -2546,7 +2554,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise UsageError("--section needs --quote")
             if args.element and (args.quote or args.section):
                 raise UsageError("--element and --quote cannot be used together")
-            text = sys.stdin.read() if args.text == "-" else args.text
+            text = _read_text_arg(args.text)
             if not text.strip():
                 raise UsageError("nothing to say: the comment text is empty")
             pictures = _read_pictures(args.image)

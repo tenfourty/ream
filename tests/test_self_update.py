@@ -162,6 +162,7 @@ def updater(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("REAM_INSTALL_SOURCE", SOURCE)
     monkeypatch.setattr(selfupdate, "_done", False)
+    monkeypatch.setattr(selfupdate, "_mutated", False)
     monkeypatch.setattr(
         selfupdate.shutil,
         "which",
@@ -225,7 +226,7 @@ def test_a_call_that_changes_something_is_not_repeated(updater):
     selfupdate.on_response("POST", STALE)
     assert len(updater.run.installs) == 1
     assert updater.execs == [], "a POST that went through must not be sent twice"
-    assert "next call" in updater.out.getvalue()
+    assert "your next command uses the new tool" in updater.out.getvalue()
 
 
 def test_a_current_answer_does_nothing(updater):
@@ -330,7 +331,9 @@ def test_no_key_is_ever_printed(updater, monkeypatch):
 
 def test_the_exchange_hands_the_answers_headers_to_the_updater(monkeypatch):
     seen = []
-    monkeypatch.setattr(selfupdate, "on_response", lambda m, h: seen.append((m, h)))
+    monkeypatch.setattr(
+        selfupdate, "on_response", lambda m, h, u=None: seen.append((m, h, u))
+    )
 
     class _Opener:
         def open(self, request, timeout=None):
@@ -350,7 +353,9 @@ def test_the_exchange_hands_the_answers_headers_to_the_updater(monkeypatch):
 
     monkeypatch.setattr(client, "_opener", _Opener())
     client._request("GET", "https://example.invalid/api/v1/me", "k", None)
-    assert seen == [("GET", {"x-ream-client-outdated": "true"})]
+    assert seen == [
+        ("GET", {"x-ream-client-outdated": "true"}, "https://example.invalid/api/v1/me")
+    ]
 
 
 def _receipt(tmp_path, monkeypatch, text):
@@ -418,7 +423,11 @@ def test_the_hint_carries_the_servers_note_and_installs_nothing(
 ):
     _receipt(tmp_path, monkeypatch, None)
     note = "git+https://forge.example/runcove/artifacts"
-    selfupdate.on_response("GET", {**STALE, "x-ream-install-source": note})
+    selfupdate.on_response(
+        "GET",
+        {**STALE, "x-ream-install-source": note},
+        "https://forge.example/api/v1/x",
+    )
     assert updater.run.calls == []
     assert updater.execs == []
     assert f"uv tool install --force {note}" in updater.out.getvalue()
@@ -433,3 +442,206 @@ def test_a_note_that_is_not_a_git_address_is_not_even_printed(
     )
     assert updater.run.calls == []
     assert "evil.example" not in updater.out.getvalue()
+
+
+def test_a_note_on_another_host_is_not_printed_as_a_command(
+    updater, tmp_path, monkeypatch
+):
+    _receipt(tmp_path, monkeypatch, None)
+    note = "git+https://forge.example/runcove/artifacts"
+    for api in ("https://other.example/api/v1/me", None):
+        monkeypatch.setattr(selfupdate, "_done", False)
+        selfupdate.on_response("GET", {**STALE, "x-ream-install-source": note}, api)
+    text = updater.out.getvalue()
+    assert "forge.example" not in text
+    assert "uv tool install" not in text
+    assert "/api/v1/agents.txt" in text
+
+
+# ---- a command that changed something, or read stdin, is never run twice -----------
+
+
+def test_a_post_before_the_out_of_date_answer_means_no_re_exec(updater):
+    selfupdate.note_mutation()  # what _exchange does as a POST goes out
+    selfupdate.on_response("GET", STALE)  # the stale answer arrives on a later GET
+    assert len(updater.run.installs) == 1, "it still installs"
+    assert updater.execs == []
+    assert "updated; your next command uses the new tool" in updater.out.getvalue()
+
+
+def test_the_exchange_and_connect_flag_a_post(monkeypatch):
+    monkeypatch.setattr(selfupdate, "_mutated", False)
+    monkeypatch.setattr(selfupdate, "on_response", lambda *a: None)
+
+    class _Opener:
+        def open(self, request, timeout=None):
+            raise OSError("stop")
+
+    monkeypatch.setattr(client, "_opener", _Opener())
+    with pytest.raises(client.HTTPFailure):
+        client._exchange(
+            client._raw_request("GET", "https://example.invalid/x", "k"), 1, None
+        )
+    assert selfupdate._mutated is False
+    with pytest.raises(client.HTTPFailure):
+        client._exchange(
+            client._raw_request("POST", "https://example.invalid/x", "k", b"{}"),
+            1,
+            None,
+        )
+    assert selfupdate._mutated is True
+
+
+def test_connect_post_flags_and_feeds_the_check(monkeypatch):
+    from ream import connect_cli
+
+    monkeypatch.setattr(selfupdate, "_mutated", False)
+    seen = []
+    monkeypatch.setattr(selfupdate, "on_response", lambda m, h, u=None: seen.append(m))
+
+    class _R:
+        headers = {"X-Ream-Client-Outdated": "true"}  # noqa: RUF012
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    class _Opener:
+        def open(self, request, timeout=None):
+            return _R()
+
+    monkeypatch.setattr(client, "_opener", _Opener())
+    connect_cli._post("https://example.invalid/api/v1/connect", {})
+    assert selfupdate._mutated is True
+    assert seen == ["POST"]
+
+
+def test_reading_stdin_means_no_re_exec(updater, monkeypatch):
+    import io
+
+    from ream import decide
+
+    monkeypatch.setattr(decide.sys, "stdin", io.StringIO("hello"))
+    assert decide._read_text_arg("-") == "hello"
+    assert decide._read_text_arg("plain") == "plain"
+    selfupdate.on_response("GET", STALE)
+    assert len(updater.run.installs) == 1
+    assert updater.execs == []
+
+
+# ---- the atomic stamp --------------------------------------------------------------
+
+
+def test_the_stamp_is_claimed_exclusively(updater):
+    assert selfupdate._attempt_allowed() is True
+    assert selfupdate._attempt_allowed() is False
+    stamp = selfupdate._stamp_path()
+    assert (stamp.stat().st_mode & 0o777) == 0o600
+
+
+def test_a_symlink_at_the_stamp_path_is_refused(updater, tmp_path):
+    stamp = selfupdate._stamp_path()
+    stamp.parent.mkdir(parents=True)
+    target = tmp_path / "victim"
+    target.write_text("keep")
+    stamp.symlink_to(target)
+    assert selfupdate._attempt_allowed() is False
+    assert target.read_text() == "keep"
+    assert stamp.is_symlink(), "the link is left alone, not followed or replaced"
+    old = time.time() - selfupdate._MIN_GAP - 5
+    os.utime(stamp, (old, old), follow_symlinks=False)
+    assert selfupdate._attempt_allowed() is False, "even an old-looking link"
+
+
+def test_a_stale_stamp_is_replaced_once(updater):
+    assert selfupdate._attempt_allowed() is True
+    stamp = selfupdate._stamp_path()
+    old = time.time() - selfupdate._MIN_GAP - 5
+    os.utime(stamp, (old, old))
+    assert selfupdate._attempt_allowed() is True
+    assert selfupdate._attempt_allowed() is False
+
+
+# ---- the install's environment, the tool directory, argv[0] ------------------------
+
+
+def test_the_install_environment_has_no_key_or_ream_variables(updater, monkeypatch):
+    for name, value in {
+        "REAM_KEY": "a",
+        "ARTIFACTS_API": "b",
+        "MY_API_TOKEN": "c",
+        "SOME_SECRET": "d",
+        "DB_PASSWORD": "e",
+        "UV_PUBLISH_TOKEN": "f",
+        "UV_INDEX_URL": "https://index.example/simple",
+        "XDG_CONFIG_HOME": "/cfg",
+        "SSL_CERT_FILE": "/ca.pem",
+        "LANG": "C",
+        "UNRELATED": "g",
+    }.items():
+        monkeypatch.setenv(name, value)
+    selfupdate.on_response("GET", STALE)
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+    env = updater.run.calls[0][1]["env"]
+    assert {
+        "PATH",
+        "HOME",
+        "UV_INDEX_URL",
+        "XDG_CONFIG_HOME",
+        "SSL_CERT_FILE",
+        "LANG",
+    } <= set(env)
+    for dropped in (
+        "REAM_KEY",
+        "ARTIFACTS_API",
+        "MY_API_TOKEN",
+        "SOME_SECRET",
+        "DB_PASSWORD",
+        "UV_PUBLISH_TOKEN",
+        "UNRELATED",
+    ):
+        assert dropped not in env
+    assert all("env" in kw for _, kw in updater.run.calls)
+
+
+def test_the_tool_directory_name_comes_from_where_the_tool_lives(
+    updater, tmp_path, monkeypatch
+):
+    env = tmp_path / "tools" / "artifacts"
+    env.mkdir(parents=True)
+    monkeypatch.setattr(selfupdate.sys, "prefix", str(env))
+    assert selfupdate._installed_level() == clientlevel.CLIENT_LEVEL
+    python = [c[0] for c, _ in updater.run.calls if c[0].endswith("/python")]
+    assert python == ["/tools/artifacts/bin/python"]
+
+
+def test_a_bare_argv0_is_looked_up_on_path_never_in_the_working_directory(
+    updater, monkeypatch
+):
+    monkeypatch.setattr(selfupdate, "_ORIGINAL_ARGV", ["ream", "list"])
+    selfupdate.on_response("GET", STALE)
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+    assert updater.execs == [("/bin/ream", ["ream", "list"])]
+
+
+def test_a_relative_or_unfindable_argv0_is_not_executed(updater, monkeypatch):
+    for argv0 in ("./ream", "sub/ream"):
+        selfupdate._stamp_path().unlink(missing_ok=True)
+        monkeypatch.setattr(selfupdate, "_done", False)
+        monkeypatch.setattr(selfupdate, "_ORIGINAL_ARGV", [argv0, "list"])
+        selfupdate.on_response("GET", STALE)
+    monkeypatch.setattr(selfupdate, "_done", False)
+    monkeypatch.setattr(selfupdate, "_ORIGINAL_ARGV", ["ream", "list"])
+    selfupdate._stamp_path().unlink(missing_ok=True)
+    monkeypatch.setattr(
+        selfupdate.shutil, "which", lambda n: None if n == "ream" else f"/bin/{n}"
+    )
+    selfupdate.on_response("GET", STALE)
+    assert len(updater.run.installs) == 3, "each really installed"
+    assert updater.execs == []
+    assert selfupdate._GUARD not in selfupdate.os.environ

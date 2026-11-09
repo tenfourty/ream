@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from ream import client, plugin_cli, textvars
+from ream import client, plugin_cli, selfupdate, textvars
 from ream.cli import prog_name
 
 _WAIT_LIMIT_SECONDS = 16 * 60
@@ -35,10 +35,18 @@ def _post(url: str, body: dict) -> dict:
     request.add_header("Content-Type", "application/json")
     request.add_header("User-Agent", client._USER_AGENT)
     client._add_client_level(request)
+    selfupdate.note_mutation()  # a POST: no re-exec may repeat it
     try:
         with client._opener.open(request, timeout=client._REQUEST_TIMEOUT) as response:
-            return json.loads(response.read() or b"{}")
+            raw = response.read()
+            selfupdate.on_response(
+                "POST", {k.lower(): v for k, v in response.headers.items()}, url
+            )
+            return json.loads(raw or b"{}")
     except urllib.error.HTTPError as exc:
+        selfupdate.on_response(
+            "POST", {k.lower(): v for k, v in (exc.headers or {}).items()}, url
+        )
         raise client.HTTPFailure(
             exc.code, client._detail(exc.read(), exc.headers)
         ) from None
