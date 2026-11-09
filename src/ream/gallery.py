@@ -183,11 +183,6 @@ main{display:block}
   cursor:pointer}
 .sharebtn:hover,.fsbtn:hover{background:var(--chip-hover);color:var(--ink)}
 .fsbtn[hidden]{display:none}
-.pagecbtn{display:inline-flex;align-items:center;height:1.75rem;padding:0 var(--space-5);
-  border:1px solid var(--line);border-radius:.45rem;background:var(--card);color:var(--ink);
-  font:inherit;font-size:var(--text-sm);text-decoration:none;white-space:nowrap}
-.pagecbtn:hover{border-color:var(--accent)}
-@media (max-width:34rem){.pagecbtn{padding:0 var(--space-4)}}
 .acts .mi{width:1rem;height:1rem;opacity:1}
 @media (max-width:34rem){.sharebtn span{display:none}}
 /* The PAGE view only (the wall and the lists keep .wrap as it was): the agent's
@@ -447,6 +442,25 @@ body:not(.cjs) .wrap.full:has(.cpanel:target){margin-right:min(24rem,100%)}
   text-decoration:none;cursor:pointer}
 .cclose:hover{background:var(--chip-hover);color:var(--ink)}
 .cbtn[aria-expanded="true"]{background:var(--chip);color:var(--ink)}
+/* ONE Comment control: lit (aria-pressed) while comment mode is on, with the
+   count beside it. The touch layout (body.ctouch: the main pointer is a finger,
+   whatever the screen's size) makes it a larger target. */
+.cbtn .cw{font-size:var(--text-sm)}
+.cbtn[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.cbtn[aria-pressed="true"] .cn{background:var(--on-accent);color:var(--accent)}
+body.ctouch .cbtn{height:2.5rem;padding:0 var(--space-7);gap:var(--space-4)}
+/* HOW TO COMMENT: numbered steps in a tinted box at the top of the panel, shown
+   while Comment is lit; and the select-text switch under it. Script-only. */
+.chow{margin:0 0 .9rem;padding:.6rem .8rem;border-radius:.55rem;background:var(--accent-soft);
+  font-size:var(--text-sm);line-height:1.4}
+.chow[hidden],body:not(.cjs) .coffer{display:none}
+.chow b{display:block;color:var(--accent-ink);font-weight:600}
+.chow ol{margin:.2rem 0 0;padding-left:1.2rem}
+.chow li{margin:.15rem 0}
+.coffer{display:flex;align-items:center;gap:var(--space-4);margin:0 0 .9rem;font-size:var(--text-sm);
+  color:var(--muted);cursor:pointer}
+body.ctouch .coffer{min-height:2.5rem}
+body.ctouch .coffer input{width:1.25rem;height:1.25rem}
 /* THE PANEL ON A PHONE: a bottom sheet, 70vh, sliding up over the page. The one
    place it may cover the page, because a 24rem column beside a 390px page is
    two columns of two-word lines -- and it still has no backdrop and no blur. */
@@ -696,7 +710,12 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
   background:var(--card);color:var(--ink);box-shadow:var(--shadow-float);cursor:pointer}
 /* The three-action bar that replaced the single .selbtn (page review step 1,
    homelab-ij8.108): same look, laid out as a row with gaps. */
-.selbar{position:absolute;z-index:60;display:flex;gap:var(--space-4)}
+.selbar{position:absolute;z-index:60;display:flex;padding:2px;background:var(--ink);color:var(--paper);
+  border-radius:.55rem;box-shadow:var(--shadow-float)}
+/* The pill's pointer, at --ax from its left edge, under it or (.below) over it. */
+.selbar::before{content:"";position:absolute;width:8px;height:8px;background:var(--ink);
+  transform:rotate(45deg);bottom:-3px;left:var(--ax,50%);margin-left:-4px;border-radius:1px}
+.selbar.below::before{bottom:auto;top:-3px}
 /* The author-origin `display:flex` above always beats the user-agent
    stylesheet's `[hidden]{display:none}` -- origin, not specificity, decides
    that fight, and author rules win it regardless of selector weight. Without
@@ -739,9 +758,12 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
 .hcact button{padding:var(--space-3) .65rem;cursor:pointer;border:1px solid var(--line);
   border-radius:.45rem;background:var(--card);color:var(--ink);font:500 .8rem/1 var(--sans-short)}
 .hcact button:hover{background:var(--chip-hover)}
-.selbar button{font:500 .8rem/1 var(--sans-short);
-  padding:var(--space-45) var(--space-7);border-radius:8px;border:1px solid var(--accent);
-  background:var(--card);color:var(--ink);box-shadow:var(--shadow-float);cursor:pointer}
+.selbar button{position:relative;height:1.5rem;padding:0 .6rem;border:0;border-radius:.4rem;
+  background:transparent;color:inherit;font:500 .8rem/1 var(--sans-short);white-space:nowrap;cursor:pointer}
+.selbar button+button{border-left:1px solid color-mix(in srgb,var(--paper) 24%,transparent);border-radius:0}
+.selbar button:hover{background:color-mix(in srgb,var(--paper) 18%,transparent)}
+.selbar button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+body.ctouch .selbar button{height:2.5rem;padding:0 .9rem;font-size:.9rem}
 .cquote{margin:0 0 var(--space-4);padding:var(--space-3) var(--space-6);border-left:3px solid var(--accent);opacity:.85;
   font-size:.85rem;white-space:pre-wrap}
 .ckind{font:600 var(--text-xs) var(--mono);text-transform:uppercase}
@@ -2145,8 +2167,9 @@ window.addEventListener("message",function(e){try{
 // replaced away so a reload obeys the memory rather than the old link.
 var P=document.getElementById("comments"),B=document.body,bar=null,
   seg=String(location.pathname||"").split("/"),K="ream.comments.open:"+(seg[1]==="a"&&seg[2]?seg[2]:seg.join("/"));
+var modeBtn=null,litOff=null,escHook=null;
 function isOpen(){return !!(B&&B.classList.contains("cpanel-open"))}
-function panel(on,keep){if(!P)return;B.classList.toggle("cpanel-open",on);
+function panel(on,keep){if(!P)return;B.classList.toggle("cpanel-open",on);if(!on&&litOff)litOff();
   var c=document.querySelector(".cbtn");if(c)c.setAttribute("aria-expanded",on?"true":"false");
   // The frame reflows to its new width and reports its height on `resize`;
   // a selection bar placed against the old layout would point at nothing.
@@ -2169,7 +2192,9 @@ if(P&&B&&B.classList){
   document.addEventListener("click",function(e){
     var t=e.target&&e.target.closest?e.target.closest(".cbtn,.cclose,.ctab"):null;
     if(t&&t.getAttribute("data-ctab")){e.preventDefault();tab(t.getAttribute("data-ctab"));return}
-    if(t){e.preventDefault();var shut=t.className==="cclose";panel(!shut&&!isOpen());
+    if(t){e.preventDefault();var shut=t.className==="cclose";
+      if(!shut&&modeBtn&&String(t.className).indexOf("cbtn")>=0){modeBtn();return}
+      panel(!shut&&!isOpen());
       // The close button is inside what just hid: keyboard focus would fall
       // to <body>, so it goes back to the control that opens the panel.
       if(shut){var c=document.querySelector(".cbtn");if(c&&c.focus)c.focus()}return}
@@ -2181,6 +2206,8 @@ if(P&&B&&B.classList){
   // Escape closes first, and the panel only when nothing else is open.
   window.addEventListener("keydown",function(e){
     if(e.key==="Escape"&&hc){hide();if(e.stopPropagation)e.stopPropagation();return}
+    if(e.key==="Escape"&&escHook&&!document.querySelector(".dlg:target,details.menu[open]")&&escHook()){
+      if(e.stopPropagation)e.stopPropagation();return}
     if(e.key!=="Escape"||!isOpen()||document.querySelector(".dlg:target,details.menu[open]"))return;
     var back=P.contains(document.activeElement);panel(false);
     if(back){var c=document.querySelector(".cbtn");if(c&&c.focus)c.focus()}},true)}
@@ -2446,7 +2473,9 @@ if(document.addEventListener)document.addEventListener("submit",function(e){
   upload(fm,mine).then(go,function(err){say(fm,(err&&err.message)||"The picture was not sent.");setBusy(fm,false)})});
 if(!form)return;
 bar=document.createElement("div");bar.className="selbar";bar.hidden=true;
-[["comment","Comment"],["remove","Remove this"],["looks_good","Looks good"]].forEach(function(k){
+// The pill's actions, [kind, label]: only Comment for now. More are added to this
+// list (each is a button the bar's click handler already routes by its kind).
+[["comment","Comment"]].forEach(function(k){
   var b=document.createElement("button");b.type="button";b.textContent=k[1];b.dataset.kind=k[0];
   bar.appendChild(b)});
 host().appendChild(bar);
@@ -2454,42 +2483,69 @@ var last=null;
 function num(v){return typeof v==="number"&&isFinite(v)}
 function field(n,v){var x=form.querySelector("input[name="+n+"]");
   if(!x){x=document.createElement("input");x.type="hidden";x.name=n;form.appendChild(x)}x.value=v}
+// Touch or pointer: how the page is being touched, not how wide the screen is. A
+// finger as the main pointer gets the touch layout at any size; a mouse or
+// trackpad gets the pointer layout, a touchscreen laptop included. Kept current.
+var touch=false,mq=null;
+try{mq=window.matchMedia?window.matchMedia("(pointer: coarse), (hover: none)"):null}catch(x){}
+function touchNow(){touch=!!(mq&&mq.matches);if(B&&B.classList)B.classList.toggle("ctouch",touch);steps()}
+if(mq){if(mq.addEventListener)mq.addEventListener("change",touchNow);else if(mq.addListener)mq.addListener(touchNow)}
+// OFFER COMMENTS WHEN I SELECT TEXT: on unless he turned it off, remembered here.
+var offer=true,OK="ream.comments.offer",sw=document.getElementById("coffer");
+try{offer=window.localStorage.getItem(OK)!=="0"}catch(x){}
+// HOW TO COMMENT: the steps in the panel, shown while Comment is lit. The words
+// follow the switch and the touch rule the moment either changes (textContent only).
+var lit=false;
+function steps(){var how=document.getElementById("chow");if(!how)return;
+  var li=how.querySelectorAll?how.querySelectorAll("li"):[];
+  if(li.length>=3){
+    li[0].textContent=(touch?"Tap":"Click")+" a chart, table or picture to comment on it. Links still work.";
+    li[1].textContent=offer?"Select words, then pick Comment from the pill above them.":"Selecting words is off. Turn it on below to comment on words.";
+    li[2].textContent="Or write in the box below about the whole page."}
+  how.hidden=!lit}
+if(sw){sw.checked=offer;sw.addEventListener("change",function(){
+  offer=!!sw.checked;try{window.localStorage.setItem(OK,offer?"1":"0")}catch(x){}
+  if(!offer){bar.hidden=true}steps()})}
 window.addEventListener("message",function(e){
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
   if(!d||typeof d!=="object"||d.type!=="artifact-selection")return;
   if(typeof d.quote!=="string"||!d.quote||!d.anchor||!d.rect||!num(d.rect.top)||!num(d.rect.left)||!num(d.rect.height)){
     bar.hidden=true;last=null;return}
-  last=d;var r=f.getBoundingClientRect();
-  // In full screen the frame scrolls itself, so the page's own offsets are no
-  // use: the bar is fixed under the selection as the frame shows it (vt/vl).
-  if(document.fullscreenElement&&num(d.rect.vt)&&num(d.rect.vl)){bar.style.position="fixed";
-    bar.style.top=(r.top+Math.min(Math.max(0,d.rect.vt+d.rect.height),r.height)+6)+"px";bar.style.left=(r.left+Math.min(Math.max(0,d.rect.vl),r.width))+"px"}
-  else{bar.style.position="";
-    bar.style.top=(r.top+window.scrollY+d.rect.top+d.rect.height+6)+"px";
-    bar.style.left=(r.left+window.scrollX+Math.max(0,d.rect.left))+"px"}
-  bar.hidden=false});
+  last=d;if(!offer){bar.hidden=true;return}
+  var r=f.getBoundingClientRect(),sw2=num(d.rect.width)?d.rect.width:0,fs=!!document.fullscreenElement&&num(d.rect.vt)&&num(d.rect.vl);
+  bar.hidden=false;
+  var w=bar.offsetWidth||90,h=bar.offsetHeight||28,gap=7,cx,top,below;
+  // The pill sits above the words with its pointer down at them; on touch, or with
+  // no room above, below them. In full screen the frame scrolls itself, so the
+  // bar is fixed by where the frame shows the words (vt/vl).
+  if(fs){bar.style.position="fixed";cx=r.left+Math.min(Math.max(0,d.rect.vl+sw2/2),r.width);
+    top=r.top+d.rect.vt-h-gap;below=touch||top<56;
+    if(below)top=r.top+Math.min(Math.max(0,d.rect.vt+d.rect.height),r.height)+gap}
+  else{bar.style.position="";cx=r.left+window.scrollX+d.rect.left+sw2/2;
+    top=r.top+window.scrollY+d.rect.top-h-gap;below=touch||top-window.scrollY<56;
+    if(below)top=r.top+window.scrollY+d.rect.top+d.rect.height+gap}
+  var left=Math.max(6,cx-w/2);
+  bar.style.top=top+"px";bar.style.left=left+"px";
+  if(bar.style.setProperty)bar.style.setProperty("--ax",Math.max(10,Math.min(cx-left,w-10))+"px");
+  if(bar.classList)bar.classList.toggle("below",below)});
 bar.addEventListener("click",function(e){
   var b=e.target&&e.target.closest?e.target.closest("button"):null;
   if(b)chosen(b.dataset.kind)});
 function chosen(kind){
-  if(!last)return;
+  if(!last||kind!=="comment")return;
   field("quote",last.quote.slice(0,500));field("anchor",JSON.stringify(last.anchor));
   field("kind",kind);
   var q=form.querySelector(".cquote");
   if(!q){q=document.createElement("blockquote");q.className="cquote";form.insertBefore(q,form.firstChild)}
   q.textContent=last.quote.slice(0,500);panel(true);
   var i=form.querySelector("input[name=body]");
-  if(kind==="comment"){
-    if(i){i.placeholder="Comment on the selected text";i.focus()}
-  }else{
-    if(i){i.placeholder="Add a note (optional)";if(!i.value){form.requestSubmit()}}
-  }}
+  if(i){i.placeholder="Comment on the selected text";i.focus()}}
 // CTRL+SHIFT+M (Cmd+Shift+M on a Mac) is the one keyboard shortcut: with words
 // selected it does what the bar's Comment button does. It arrives either as a
 // key here or as `artifact-comment-key` from the frame, where focus usually is.
 // Nothing selected: a short hint, nothing else. No single letter does this.
 function chord(){
-  if(last&&!bar.hidden){chosen("comment");return}
+  if(last&&(!bar.hidden||!offer)){chosen("comment");return}
   var h=document.querySelector(".cchordhint");
   if(!h){h=document.createElement("div");h.className="cchordhint";h.setAttribute("role","status");
     host().appendChild(h)}
@@ -2560,23 +2616,42 @@ function spot(e,on){try{var li=e.target&&e.target.closest?e.target.closest(".thr
 if(P&&P.addEventListener){
   P.addEventListener("mouseover",function(e){spot(e,true)});P.addEventListener("focusin",function(e){spot(e,true)});
   P.addEventListener("mouseout",function(e){spot(e,false)});P.addEventListener("focusout",function(e){spot(e,false)})}
-// COMMENT ON PAGE. The bar's button opens the panel on Open with the composer
-// set to the whole page: whatever a selection or a pin had put in it goes, and
-// the field takes focus. Without scripts it is a link to that form.
-var pg=document.querySelector(".pagecbtn");
-if(pg)pg.addEventListener("click",function(e){
-  if(e&&e.preventDefault)e.preventDefault();
+// THE COMMENT CONTROL. Pressing it lights comment mode and opens the panel on Open
+// with the steps showing; pressing it again turns the mode off and closes the panel.
+// While lit the frame boxes a chart, table, cell or picture that is pointed at and a
+// click on it starts a comment (`artifact-pin`); nothing is sent until he writes. The
+// frame is told on every change and again whenever it loads. Without scripts the
+// control is a link to the panel, as before.
+function wholePage(){
   bar.hidden=true;last=null;
   ["quote","anchor","kind"].forEach(function(n){drop(form.querySelector("input[name="+n+"]"))});
   drop(form.querySelector(".cquote"));
-  var i=form.querySelector("input[name=body]");if(i)i.placeholder="Comment on this page";
-  tab("open");panel(true);if(i&&i.focus)i.focus()});
+  var i=form.querySelector("input[name=body]");if(i)i.placeholder="Comment on this page"}
+function tellFrame(){try{f.contentWindow.postMessage({type:"artifact-comment-mode",on:lit},o)}catch(e){}}
+function setLit(on){lit=!!on;if(B&&B.classList)B.classList.toggle("cmode-on",lit);
+  var c=document.querySelector(".cbtn");
+  if(c){c.setAttribute("aria-pressed",lit?"true":"false");if(lit)c.setAttribute("role","button")}
+  steps();tellFrame()}
+modeBtn=function(){
+  if(lit){setLit(false);panel(false);return}
+  if(!isOpen())wholePage();
+  tab("open");panel(true);setLit(true)};
+litOff=function(){if(lit)setLit(false)};
+// Escape: the pill first, then Comment itself; the panel stays until the next Escape.
+escHook=function(){
+  if(!bar.hidden){bar.hidden=true;last=null;return true}
+  if(lit){setLit(false);return true}
+  return false};
+(function(){var c=document.querySelector(".cbtn");if(c)c.setAttribute("aria-pressed","false")})();
+touchNow();
 document.addEventListener("fullscreenchange",function(){drop(po);po=null;pbs.forEach(drop);pbs=[]});
 window.addEventListener("message",function(e){try{
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
   if(!d||typeof d!=="object")return;
   if(d.type==="artifact-pin-rects")badges(d.rects);
-  else if(d.type==="artifact-pin")takePin(d)
+  else if(d.type==="artifact-pin")takePin(d);
+  else if(d.type==="artifact-state"){if(lit)tellFrame()}
+  else if(d.type==="artifact-comment-off"){bar.hidden=true;last=null;if(lit)setLit(false)}
 }catch(x){}});
 })();
 // Full screen: the sheet, not the page, so the bar's own chrome drops away and
@@ -3605,6 +3680,13 @@ def _render_comments(
             # Filled by /comments.js from the page's own report of the marks
             # it could not place; empty and hidden until then.
             '<p class="cunplaced" id="marks-unplaced" hidden></p>'
+            # HOW TO COMMENT, shown by /comments.js while Comment is lit, and the
+            # select-text switch. The steps' words are set there (they change with
+            # the switch and with how the page is touched).
+            '<div class="chow" id="chow" hidden><b>How to comment</b><ol>'
+            "<li></li><li></li><li></li></ol></div>"
+            '<label class="coffer"><input type="checkbox" id="coffer" checked>'
+            "<span>Offer comments when I select text.</span></label>"
             f"{scope}{tabs(n_open, n_resolved)}"
         )
     ]
@@ -3720,9 +3802,9 @@ def _comments_button(artifact_id: str, open_count: int) -> str:
     again."""
     count = f'<span class="cn">{open_count}</span>' if open_count else ""
     return (
-        '<a class="pagecbtn" href="#cwhole">Comment on page</a>'
         f'<a class="cbtn{" has" if open_count else ""}" href="#comments"'
-        f' aria-controls="comments" aria-label="Comments">{_icon("comment")}{count}</a>'
+        f' aria-controls="comments" aria-label="Comment">{_icon("comment")}'
+        f'<span class="cw">Comment</span>{count}</a>'
     )
 
 

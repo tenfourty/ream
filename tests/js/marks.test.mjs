@@ -656,15 +656,17 @@ const elMark = (over = {}) => ({ id: "e1", kind: "comment", quote: "", anchor: {
   ok(g.reports()[0][0].placed.length === 0, "and place nothing");
 }
 
-// 24. THE COMMENT BUTTON: one host element outside the page's own content, shown while
-// the pointer is over a chart, a table or a picture, and a click on it reports the pick
+// 24. COMMENT MODE: lit by the gallery (and only by it), a box is drawn round a chart,
+// table, cell or picture that is pointed at, and a click on it reports the pick. Unlit,
+// nothing is drawn and no click is touched. One host element outside the page's content.
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const hostOf = (g) => g.doc.documentElement.childNodes.find((n) => n.nodeName === "AR-COMMENT-HOST");
-const btnOf = (g) => hostOf(g) && hostOf(g).shadow.childNodes.find((n) => n.nodeName === "BUTTON");
 const shown = (g) => !!hostOf(g) && !/display:none/.test(hostOf(g).style.cssText);
 const hover = (g, x = 30, y = 25, pointerType = "mouse") => { g.fire("pointermove", { clientX: x, clientY: y, pointerType }); g.flush(); };
 const pins = (g) => g.posted.filter(([m]) => m && m.type === "artifact-pin");
-const pickWith = (g, x, y) => { hover(g, x, y); const b = btnOf(g); const c = ev(); b.ls.click.forEach((f) => f(c)); return pins(g).at(-1); };
+const lit = (g, on = true) => g.raw({ type: "artifact-comment-mode", on });
+const clickAt = (g, x, y, extra = {}) => { const c = ev({ target: g.doc.elementFromPoint(x, y), ...extra }); g.fire("click", c); return c; };
+const pickWith = (g, x, y) => { lit(g); hover(g, x, y); clickAt(g, x, y); return pins(g).at(-1); };
 const sized = (g) => { g.doc.documentElement.clientWidth = 800; g.doc.documentElement.clientHeight = 600; return g; };
 {
   const chart = el("svg", "revenue", { "aria-label": "Revenue by quarter" });
@@ -674,55 +676,117 @@ const sized = (g) => { g.doc.documentElement.clientWidth = 800; g.doc.documentEl
   let target = p;
   const body = E("body", E("h2", "Costs"), chart, p);
   const g = sized(build(body, {}, { hit: () => target }));
-  ok(!hostOf(g), "nothing is added to the page until a chart, table or picture is pointed at");
-  hover(g);
-  ok(!hostOf(g) && pins(g).length === 0, "pointing at a paragraph shows nothing: text is commented on by selecting it");
   target = chart; hover(g, 30, 30);
-  ok(shown(g) && hostOf(g).parentNode === g.doc.documentElement, "pointing at a chart shows the button, on the document element");
+  ok(!hostOf(g), "Comment off: pointing at a chart draws nothing and adds nothing to the page");
+  const c0 = clickAt(g, 30, 30);
+  ok(c0.prevented === 0 && c0.stopped === 0 && pins(g).length === 0, "and a click is the page's own: nothing swallowed, nothing posted");
+  lit(g);
+  target = p; hover(g);
+  ok(!hostOf(g) && pins(g).length === 0, "lit: pointing at a paragraph draws nothing; text is commented on by selecting it");
+  const cp = clickAt(g, 30, 205);
+  ok(cp.prevented === 0 && pins(g).length === 0, "and clicking a paragraph is the page's own");
+  target = chart; hover(g, 30, 30);
+  ok(shown(g) && hostOf(g).parentNode === g.doc.documentElement, "lit: pointing at a chart draws the box, on the document element");
   ok(!body.children.includes(hostOf(g)) && hostOf(g).childNodes.length === 0, "not in the page's body, and no light-tree text for any walk to find");
   ok(hostOf(g).shadow.mode === "closed", "its shadow root is closed, so the page cannot reach into it");
   const css = hostOf(g).style.cssText;
-  ok(/position:fixed/.test(css) && /top:26px/.test(css) && /right:496px/.test(css), "in the chart's top right corner, in viewport terms: " + css);
-  ok(btnOf(g).textContent === "Comment" && btnOf(g).getAttribute("aria-label") === "Comment on chart", "it says Comment and is named for what it is: " + btnOf(g).getAttribute("aria-label"));
+  ok(/position:fixed/.test(css) && /top:20px/.test(css) && /left:10px/.test(css) && /width:300px/.test(css) && /height:150px/.test(css) && /pointer-events:none/.test(css), "round the chart, in viewport terms, letting the pointer through: " + css);
   ok(hostOf(g).shadow.childNodes[0].nodeName === "STYLE" && /all:initial/.test(hostOf(g).shadow.childNodes[0].textContent), "with styles of its own inside the shadow root, cut off from the page's CSS");
   chart.rect = rectOf(60, 10, 300, 150);
   g.fire("scroll", {});
-  ok(/top:66px/.test(hostOf(g).style.cssText), "it follows the chart when the frame scrolls");
-  g.fire("resize", {});
-  chart.rect = rectOf(60, 10, 200, 150); g.fire("resize", {});
-  ok(/right:596px/.test(hostOf(g).style.cssText), "and when the frame is resized");
-  const c0 = ev(); g.fire("click", c0);
-  ok(c0.prevented === 0 && c0.stopped === 0 && pins(g).length === 0, "a click on the page is the page's own: nothing is swallowed, nothing posted");
-  const c = ev(); btnOf(g).ls.click.forEach((f) => f(c));
-  ok(c.prevented === 1 && c.stopped === 1, "pressing the button does not reach the page");
+  ok(/top:60px/.test(hostOf(g).style.cssText), "it follows the chart when the frame scrolls");
+  const c = clickAt(g, 30, 30);
+  ok(c.prevented === 1 && c.stopped === 1, "a click on the chart is taken, so the page does not also act on it");
   ok(pins(g).length === 1 && pins(g)[0][1] === GALLERY, "and reports a pin, to the gallery only");
   const m = pins(g)[0][0];
   ok(m.anchor.kind === "element" && m.anchor.id === "revenue" && m.anchor.tag === "svg" && m.anchor.label === "Revenue by quarter" && m.quote === "Revenue by quarter", "the anchor a pick always produced: " + JSON.stringify(m.anchor));
-  ok(!shown(g), "the button goes once it is used");
+  ok(!shown(g), "the box goes once it is used");
+  target = chart; hover(g, 30, 70);
+  ok(shown(g), "pointing at it again draws it again");
   target = p; hover(g, 30, 205);
-  target = chart; hover(g, 30, 30);
-  target = p; hover(g, 30, 205);
-  ok(shown(g), "moving off a chart does not drop the button at once (the pointer may be heading for it)");
-  await sleep(380);
-  ok(!shown(g), "but it goes a moment later");
-  target = hostOf(g); hover(g, 300, 30);
-  ok(!shown(g), "pointing at the button itself (the host) never re-picks");
-  target = chart; hover(g, 30, 30); target = hostOf(g); hover(g, 300, 30);
-  await sleep(380);
-  ok(shown(g), "the pointer on the button keeps it");
+  ok(!shown(g), "moving off to text takes the box away");
+  target = chart; hover(g, 30, 70);
+  lit(g, false);
+  ok(!shown(g), "turning Comment off takes it away");
+  const c2 = clickAt(g, 30, 70);
+  ok(c2.prevented === 0 && pins(g).length === 1, "and the page's clicks are its own again");
+  lit(g, "yes"); hover(g, 30, 70);
+  ok(!shown(g), "only a true on lights the mode");
+}
+// links, controls and selections are never captured, even over a chart or a table
+{
+  const a = el("a", "", { href: "https://example.com/x" }, "details");
+  const t = el("table", "plans", {}, E("tr", E("td", a)));
+  t.rect = rectOf(100, 10, 300, 50);
+  const g = sized(build(E("body", E("p", "x"), t), {}, { hit: () => a }));
+  lit(g);
+  const c = clickAt(g, 30, 105);
+  ok(c.prevented === 0 && c.stopped === 0 && pins(g).length === 0, "a link inside a table keeps working: the click is not captured");
+  const bare = el("a", "", {}, "anchor only"), t2 = el("table", "t2", {}, E("tr", E("td", bare)));
+  t2.rect = rectOf(100, 10, 300, 50);
+  const g2 = sized(build(E("body", t2), {}, { hit: () => bare }));
+  lit(g2);
+  ok(clickAt(g2, 30, 105) && pins(g2).length === 1, "an anchor with no href is not a link: it is part of the table");
+  const btn = el("button", "", {}, "go"), t3 = el("table", "t3", {}, E("tr", E("td", btn)));
+  t3.rect = rectOf(100, 10, 300, 50);
+  const g3 = sized(build(E("body", t3), {}, { hit: () => btn }));
+  lit(g3);
+  const cb = clickAt(g3, 30, 105);
+  ok(cb.prevented === 0 && pins(g3).length === 0, "a button inside a table is the page's own too");
+  const t4 = el("table", "t4", {}, E("tr", E("td", "Pro")));
+  t4.rect = rectOf(100, 10, 300, 50);
+  const g4 = sized(build(E("body", t4), {}, { hit: () => t4 }));
+  lit(g4);
+  g4.setSelection({ toString: () => "some words", rangeCount: 1 });
+  const cs = clickAt(g4, 30, 105);
+  ok(cs.prevented === 0 && pins(g4).length === 0, "words being selected are left alone: no pin while a selection stands");
+  g4.setSelection(null);
+  clickAt(g4, 30, 105);
+  ok(pins(g4).length === 1, "and with nothing selected the same click starts a comment");
 }
 {
   const t = el("table", "plans", {}, E("tr", E("td", "Pro")));
   t.rect = rectOf(100, 10, 300, 50);
   const g = sized(build(E("body", E("p", "x"), t), {}, { hit: () => t }));
   g.raw({ type: "artifact-pin-mode", on: true });
-  const c = ev({ clientX: 30, clientY: 105 }); g.fire("click", c);
-  ok(c.prevented === 0 && pins(g).length === 0, "the gallery can no longer switch a mode on: the page's clicks stay its own");
+  const c = clickAt(g, 30, 105);
+  ok(c.prevented === 0 && pins(g).length === 0, "the old pin-mode message still does nothing");
   for (const k of ["c", "C", "Escape", "ArrowUp", "ArrowDown"]) g.fire("keydown", ev({ key: k, target: E("p") }));
-  ok(g.posted.length === 0, "no single-letter key, Escape or arrow says anything to the gallery");
-  ok(!/artifact-pin-(mode|toggle|exit|hover)|crosshair/.test(src), "the pin-mode messages, the cursor style and the C key are gone from the shim");
+  ok(g.posted.length === 0, "unlit, no single-letter key, Escape or arrow says anything to the gallery");
+  ok(!/artifact-pin-(mode|toggle|exit|hover)|crosshair/.test(src), "the old pin-mode messages and the cursor style are not in the shim");
 }
 
+// 29. the keyboard, while lit: a focused chart, table or picture is boxed; Enter starts a
+// comment on it; Escape turns Comment off and says so
+{
+  const fig = el("figure", "fig", { tabindex: "0" }, E("figcaption", "Latency"));
+  fig.rect = rectOf(10, 10, 300, 120);
+  const link = el("a", "", {}, "a link"); link.rect = rectOf(300, 10, 40, 10);
+  const g = sized(build(E("body", fig, link), {}, { hit: () => null }));
+  fig.fv = true; g.fire("focusin", { target: fig });
+  ok(!shown(g), "unlit: keyboard focus on a figure draws nothing");
+  lit(g);
+  fig.fv = false; g.fire("focusin", { target: fig });
+  ok(!shown(g), "focus that came from a mouse click (not focus-visible) shows nothing");
+  fig.fv = true; g.fire("focusin", { target: fig });
+  ok(shown(g), "lit: keyboard focus on a figure draws its box");
+  const tab = ev({ key: "Tab", target: fig }); g.fire("keydown", tab);
+  ok(tab.prevented === 0, "Tab is the page's own");
+  const o = ev({ key: "Enter", target: link }); g.fire("keydown", o);
+  ok(o.prevented === 0 && pins(g).length === 0, "Enter on anything else is the page's own");
+  const en = ev({ key: "Enter", target: fig }); g.fire("keydown", en);
+  ok(en.prevented === 1 && pins(g).length === 1 && pins(g)[0][0].anchor.id === "fig", "Enter on the focused figure reports the same pin");
+  ok(!shown(g), "and the box goes");
+  g.fire("focusin", { target: fig });
+  g.fire("focusin", { target: Object.assign(E("p"), { fv: true }) });
+  ok(!shown(g), "focus moving to text takes the box away");
+  g.fire("focusin", { target: fig });
+  const before = g.posted.length;
+  g.fire("keydown", ev({ key: "Escape", target: fig }));
+  const off = g.posted.slice(before).filter(([m]) => m.type === "artifact-comment-off");
+  ok(off.length === 1 && off[0][1] === GALLERY && Object.keys(off[0][0]).length === 1 && !shown(g), "Escape tells the gallery Comment is off, with only its type, and puts the box away");
+  ok(g.posted.filter(([m]) => m.type === "artifact-comment-key").length === 0, "no chord was needed");
+}
 // 25. what a pin carries: capped evidence, in the charset the service accepts
 {
   const long = "word ".repeat(80);
@@ -756,7 +820,6 @@ const sized = (g) => { g.doc.documentElement.clientWidth = 800; g.doc.documentEl
   let m1 = pickWith(g, 5, 5)[0];
   ok(m1.quote === "Revenue by quarter" && m1.anchor.label === "Revenue by quarter" && m1.anchor.tag === "img", "an image is quoted by its alt text, which is also its label: " + JSON.stringify(m1.anchor));
   ok(m1.anchor.ordinal === 1 && m1.anchor.heading === "Costs", "with no id, its place among the images under its heading");
-  ok(btnOf(g).getAttribute("aria-label") === "Comment on picture", "a picture is named a picture");
   pick = bare;
   m1 = pickWith(g, 5, 205)[0];
   ok(m1.quote === "Revenue, 2026" && m1.anchor.label === "Revenue, 2026" && m1.anchor.ordinal === 2, "an image with no alt text takes its figure's caption: " + JSON.stringify(m1.anchor));
@@ -772,50 +835,25 @@ const sized = (g) => { g.doc.documentElement.clientWidth = 800; g.doc.documentEl
   c2.rect = rectOf(60, 100, 80, 20); c1.rect = rectOf(60, 10, 80, 20);
   let [m] = [pickWith(g, 110, 65)[0]];
   ok(m.anchor.tag === "td" && m.anchor.row === "Pro" && m.anchor.column === "Price" && m.quote === "$12 a month", "a cell names its row and column: " + JSON.stringify(m.anchor));
-  ok(btnOf(g) && btnOf(g).getAttribute("aria-label") === "Comment on table cell", "and the button says it is on a table cell");
   pick = c1; m = pickWith(g, 10, 65)[0];
   ok(!("row" in m.anchor) && m.anchor.column === "Plan", "the first cell is its own row header: no row label");
   th2.attrs.colspan = "2"; pick = c2; m = pickWith(g, 110, 65)[0];
   ok(!("column" in m.anchor) && m.anchor.row === "Pro", "a colspan in the header makes the column ambiguous: left out, never mislabelled");
 }
 
-// 28. an element with nothing to go by gets no button
+// 28. an element with nothing to go by gets no box and no pin
 {
   const lone = el("img");
   lone.rect = rectOf(0, 0, 10, 10);
   const plain = el("div"); plain.rect = rectOf(20, 0, 10, 10);
   let pick = lone;
   const g = sized(build(E("body", lone, plain), {}, { hit: () => pick }));
-  hover(g, 5, 5);
-  ok(!shown(g), "no id, no heading, no text, no label: no button, so nothing that could not be found again");
-  pick = plain; hover(g, 5, 25);
+  lit(g); hover(g, 5, 5); clickAt(g, 5, 5);
+  ok(!shown(g) && pins(g).length === 0, "no id, no heading, no text, no label: no box, so nothing that could not be found again");
+  pick = plain; hover(g, 5, 25); clickAt(g, 5, 25);
   ok(!shown(g) && pins(g).length === 0, "and a plain block that is no chart, table or picture gets none either");
 }
 
-// 29. the keyboard: a focused chart, table or picture offers its button
-{
-  const fig = el("figure", "fig", { tabindex: "0" }, E("figcaption", "Latency"));
-  fig.rect = rectOf(10, 10, 300, 120);
-  const link = el("a", "", {}, "a link"); link.rect = rectOf(300, 10, 40, 10);
-  const g = sized(build(E("body", fig, link), {}, { hit: () => null }));
-  g.fire("focusin", { target: fig });
-  ok(!shown(g), "focus that came from a mouse click (not focus-visible) shows nothing");
-  fig.fv = true; g.fire("focusin", { target: fig });
-  ok(shown(g) && btnOf(g).getAttribute("aria-label") === "Comment on figure", "keyboard focus on a figure shows its button, labelled for it");
-  const k = ev({ key: "Tab", target: fig }); g.fire("keydown", k);
-  ok(k.prevented === 1 && g.focused() === btnOf(g), "Tab from the focused figure lands on its button");
-  let b = ev({ key: "Escape" }); btnOf(g).ls.keydown.forEach((f) => f(b));
-  ok(b.prevented === 1 && g.focused() === fig && !shown(g), "Escape on the button gives focus back to the figure and puts the button away");
-  g.fire("focusin", { target: fig });
-  const o = ev({ key: "Tab", target: link }); g.fire("keydown", o);
-  ok(o.prevented === 0, "Tab from anything else is the page's own");
-  btnOf(g).ls.click.forEach((f) => f(ev()));
-  ok(pins(g).length === 1 && pins(g)[0][0].anchor.id === "fig", "pressing it with the keyboard reports the same pin");
-  fig.fv = true; g.fire("focusin", { target: fig });
-  g.fire("focusin", { target: Object.assign(E("p"), { fv: true }) });
-  ok(!shown(g), "focus moving to text takes the button away");
-  ok(g.posted.filter(([m]) => m.type === "artifact-comment-key").length === 0, "no chord was needed");
-}
 // the chord is still forwarded, and nothing else is
 {
   const g = sized(build(E("body", E("p", "x")), {}));
@@ -831,7 +869,7 @@ const sized = (g) => { g.doc.documentElement.clientWidth = 800; g.doc.documentEl
   ok(ck().length === 2, "no single letter, and no other modifier mix, does it");
 }
 
-// 30. touch: a first tap shows the button and the page still gets its tap; wrappers are no candidate; an id is preferred
+// 30. touch: while lit, a tap on a table is a comment on it; wrappers are no candidate; an id is preferred
 {
   const pic = el("img", "", { alt: "Map" }), para = el("p", "", {}, "text"), box = el("div", "card", {}, pic, para), wrapper = el("div", "app", {}, box);
   const body = E("body", wrapper);
@@ -839,10 +877,11 @@ const sized = (g) => { g.doc.documentElement.clientWidth = 800; g.doc.documentEl
   wrapper.rect = rectOf(0, 0, 800, 1000); box.rect = rectOf(100, 100, 300, 40); para.rect = rectOf(110, 110, 280, 20); pic.rect = rectOf(100, 100, 30, 30);
   let pick = wrapper;
   const g = sized(build(body, {}, { hit: () => pick }));
+  lit(g);
   hover(g, 5, 5);
-  ok(!shown(g), "over a wrapper that is the whole page: no button");
+  ok(!shown(g), "over a wrapper that is the whole page: no box");
   pick = para; hover(g, 120, 115);
-  ok(shown(g) && /top:106px/.test(hostOf(g).style.cssText) && /right:406px/.test(hostOf(g).style.cssText), "the nearest ancestor with an id is preferred when it is not much larger, and holds a picture: " + hostOf(g).style.cssText);
+  ok(shown(g) && /top:100px/.test(hostOf(g).style.cssText) && /left:100px/.test(hostOf(g).style.cssText), "the nearest ancestor with an id is preferred when it is not much larger, and holds a picture: " + hostOf(g).style.cssText);
   for (let i = 0; i < 20; i++) g.fire("pointermove", { clientX: 120 + i, clientY: 115, pointerType: "mouse" });
   ok(g.flush() === 1, "a burst of moves is one check per animation frame");
 }
@@ -851,29 +890,33 @@ const sized = (g) => { g.doc.documentElement.clientWidth = 800; g.doc.documentEl
   table.rect = rectOf(50, 10, 300, 60); cell.rect = rectOf(50, 10, 100, 30);
   let pick = link;
   const g = sized(build(E("body", E("p", "x"), table), {}, { hit: () => pick }));
+  lit(g);
   const d = ev({ clientX: 20, clientY: 60, pointerType: "touch" });
   g.fire("pointerdown", d);
-  ok(shown(g) && d.prevented === 0 && d.stopped === 0, "a first tap on a table shows its button, and the tap itself is untouched: links and controls still work");
-  await sleep(380);
-  ok(shown(g), "on touch it stays until the next tap elsewhere");
+  ok(shown(g) && d.prevented === 0 && d.stopped === 0, "a touch on a table draws its box, and the touch itself is untouched");
+  const tap = ev({ target: link }); g.fire("click", tap);
+  ok(tap.prevented === 0 && pins(g).length === 0, "a tap on a link in it still opens the link");
+  pick = cell;
+  const tap2 = ev({ target: cell }); g.fire("click", tap2);
+  ok(tap2.prevented === 1 && pins(g).length === 1 && pins(g)[0][0].anchor.tag === "td", "a tap on the cell starts a comment on that cell");
   pick = null; g.fire("pointerdown", { clientX: 600, clientY: 500, pointerType: "touch" });
-  ok(!shown(g), "a tap elsewhere puts it away");
+  ok(!shown(g), "a touch elsewhere puts the box away");
 }
 
-// 30b. the button is never in what the page reports: not in a quote, a path or a selection
+// 30b. the box is never in what the page reports: not in a quote, a path or a selection
 {
   const t = el("table", "plans", {}, "Plan Pro costs twelve dollars");
   t.rect = rectOf(100, 10, 300, 50);
   const p = E("p", "Rotate the keys every 90 days.");
   const g = sized(build(E("body", p, t), {}, { immediateTimers: true, hit: () => t }));
-  hover(g, 30, 105);
-  ok(shown(g), "(the button is up)");
+  lit(g); hover(g, 30, 105);
+  ok(shown(g), "(the box is up)");
   g.setSelection({ rangeCount: 1, toString: () => "Rotate the keys", getRangeAt: () => { const r = new g.Range(); r.setStart(p.childNodes[0], 0); r.setEnd(p.childNodes[0], 15); return r; } });
   g.fireDoc("selectionchange");
   const [[sm]] = g.posted.filter(([m]) => m && m.type === "artifact-selection");
   ok(sm.quote === "Rotate the keys" && !/Comment/.test(JSON.stringify(sm)), "a selection report never carries the button's word");
   ok(sm.anchor.path === "body>p:nth-of-type(1)", "nor does it move the path");
-  const m = pickWith(g, 30, 105)[0];
+  g.setSelection(null); const m = pickWith(g, 30, 105)[0];
   ok(!/Comment/.test(JSON.stringify(m)) && m.quote === "Plan Pro costs twelve dollars", "a pin's quote and evidence never carry it either");
   ok(g.send && (g.send([mark({ quote: "Comment", anchor: { path: "nope" } })]), g.reports().at(-1)[0].unplaced.join() === "m1"), "and text searches cannot find 'Comment' on the page");
   ok(g.doc.documentElement.childNodes.filter((n) => n.nodeName === "AR-COMMENT-HOST").length === 1, "there is exactly one host, however often it is shown");

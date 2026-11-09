@@ -80,17 +80,20 @@ DIFF_STYLE = (
 )
 
 
-PIN_JS = r"""// ELEMENT COMMENTS (pinned comments). A chart, a table or a picture shows a small
-// "Comment" button in its corner while the pointer is over it (or it has keyboard
-// focus; on touch, after a first tap on it). Pressing it reports the element
-// (`artifact-pin` {anchor, quote, rect}) and the gallery opens the composer on it.
-// The button is ONE host element appended to the document element, outside the
+PIN_JS = r"""// ELEMENT COMMENTS (pinned comments). The gallery's Comment control lights this
+// page's comment mode (`artifact-comment-mode` {on}, from the gallery's origin
+// only). While lit, pointing at a chart, table, table cell or picture draws a box
+// round it, and a click on it reports the element (`artifact-pin` {anchor, quote,
+// rect}); the gallery opens the composer on it and nothing is sent until he writes.
+// Links, controls and selections are never captured; Escape reports
+// `artifact-comment-off`. Unlit, nothing is drawn and no click is touched.
+// The box is ONE host element appended to the document element, outside the
 // page's own content, with a closed shadow root and its own styles: it never
 // changes the page's layout or text, is never in a quote, a path or a selection,
 // and the page's CSS cannot reach it. What leaves the page is capped evidence --
 // text 200, ids 128, 32 characters of words either side -- to the gallery's
 // origin only.
-var EP=[],rt=0,obH=null,obB=null,obC=null,obK=0,obT=0,obTouch=0;
+var EP=[],rt=0,obH=null,obB=null,obC=null,obK=0,obT=0,obTouch=0,cmode=0;
 var TAGR=/^[a-z][a-z0-9-]{0,15}$/,BLK={IMG:1,SVG:1,CANVAS:1,VIDEO:1,PICTURE:1,IFRAME:1,OBJECT:1};
 var VIS=["table","figure","svg","img","canvas","picture","video"];
 function tn(e){return String(e&&e.nodeName||"").toLowerCase()}
@@ -227,49 +230,61 @@ function oname(e){var n=tn(e);
 function sayable(c){return !!(IDR.test(c.id||"")||etext(c,1)||elabel(c)||hdOf(c))}
 function obMake(){if(obH)return obH;
   try{var h=document.createElement("ar-comment-host"),r=h.attachShadow({mode:"closed"}),
-      st=document.createElement("style"),b=document.createElement("button");
-    st.textContent="button{all:initial;box-sizing:border-box;display:inline-flex;align-items:center;"+
-      "font:500 12.5px/1.4 system-ui,sans-serif;padding:3px 10px;border-radius:14px;border:1px solid #0f6f63;"+
-      "background:#fff;color:#0b4f46;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.22);"+
-      "-webkit-tap-highlight-color:transparent}"+
-      "button:hover{background:#e7f3f1}button:focus-visible{outline:2px solid #0f6f63;outline-offset:2px}";
-    b.type="button";b.textContent="Comment";
-    b.addEventListener("mousedown",function(e){try{if(e.preventDefault)e.preventDefault()}catch(x){}});
-    b.addEventListener("click",function(e){try{if(e.preventDefault)e.preventDefault();
-      if(e.stopPropagation)e.stopPropagation();var c=obC;obHide();if(c)pin(c)}catch(x){}});
-    b.addEventListener("keydown",function(e){try{
-      if(e.key==="Escape"||(e.key==="Tab"&&e.shiftKey)){var c=obC;
-        if(e.preventDefault)e.preventDefault();obHide();if(c&&c.focus)c.focus()}}catch(x){}});
-    b.addEventListener("blur",function(){try{if(!obTouch)obHide()}catch(x){}});
+      st=document.createElement("style"),b=document.createElement("div");
+    st.textContent="div{all:initial;display:block;box-sizing:border-box;width:100%;height:100%;"+
+      "border:2px solid #0f6f63;border-radius:4px;background:rgba(15,111,99,.10)}";
     r.appendChild(st);r.appendChild(b);
     h.style.cssText="display:none!important";
     document.documentElement.appendChild(h);obH=h;obB=b;return h}catch(x){obH=null;return null}}
 function obHide(){clearTimeout(obT);obT=0;obC=null;obK=0;if(obH)obH.style.cssText="display:none!important"}
+// The box drawn round what is pointed at: fixed over the element, letting every
+// pointer event through to the page.
 function obPos(){try{if(!obC||!obH)return;
   var r=obC.getBoundingClientRect(),d=document.documentElement,W=d.clientWidth||window.innerWidth||0,H=d.clientHeight||window.innerHeight||0;
   if(!(r.width>0&&r.height>0)||r.bottom<=0||(H&&r.top>=H)||(W&&r.left>=W)){obH.style.cssText="display:none!important";return}
-  var t=Math.max(r.top,0)+6,rt2=(W?Math.max(0,W-Math.min(r.right,W)):0)+6;
   obH.style.cssText="all:initial!important;display:block!important;position:fixed!important;z-index:2147483647!important;"+
-    "top:"+Math.round(t)+"px!important;right:"+Math.round(rt2)+"px!important"}catch(x){}}
+    "pointer-events:none!important;top:"+Math.round(r.top)+"px!important;left:"+Math.round(r.left)+"px!important;"+
+    "width:"+Math.round(r.width)+"px!important;height:"+Math.round(r.height)+"px!important"}catch(x){}}
 function obShow(c,kb){clearTimeout(obT);obT=0;
-  if(!c||!sayable(c)){obHide();return}
+  if(!cmode||!c||!sayable(c)){obHide();return}
   if(!obMake())return;
-  obC=c;obK=kb?1:0;obB.setAttribute("aria-label","Comment on "+oname(c));obPos()}
-function obLook(){try{if(obK)return;
+  obC=c;obK=kb?1:0;obPos()}
+function obLook(){try{if(!cmode||obK)return;
   var e=document.elementFromPoint(px,py),c;
   if(e&&obH&&e===obH)return;
   c=e?pickEl(e):null;
-  if(c&&visual(c)){if(c===obC){clearTimeout(obT);obT=0;obPos()}else obShow(c,0)}
-  else if(obC){if(obTouch)obHide();else if(!obT)obT=setTimeout(obHide,300)}}catch(x){}}
+  if(c&&visual(c)){if(c===obC)obPos();else obShow(c,0)}
+  else if(obC)obHide()}catch(x){}}
+// Comment is lit or not: only the gallery's word for it, from its own origin.
+addEventListener("message",function(m){try{
+  if(m.origin!==__ORIGIN__)return;var d=m.data;
+  if(!d||typeof d!=="object"||d.type!=="artifact-comment-mode")return;
+  cmode=d.on===true?1:0;if(!cmode)obHide()}catch(x){}});
+// While lit, a click on a chart, table, cell or picture starts a comment on it
+// (nothing is sent until he writes). A link, a control, a selection being made
+// and anything else is the page's own.
+function ownClick(t){for(var e=t;e&&e.nodeType===1;e=e.parentNode){var n=String(e.nodeName).toUpperCase();
+  if((n==="A"&&e.getAttribute&&e.getAttribute("href")!==null)||n==="BUTTON"||n==="INPUT"||n==="SELECT"||
+     n==="TEXTAREA"||n==="SUMMARY"||n==="LABEL"||n==="AREA")return 1;
+  if(e.getAttribute&&e.getAttribute("contenteditable")!==null)return 1}
+  return 0}
+addEventListener("click",function(e){try{
+  if(!cmode||!e||!e.target||e.target.nodeType!==1||ownClick(e.target))return;
+  var s=getSelection();if(s&&String(s).trim())return;
+  var c=pickEl(e.target);if(!c||!visual(c)||!sayable(c))return;
+  e.preventDefault();if(e.stopPropagation)e.stopPropagation();
+  obHide();pin(c)}catch(x){}},true);
 addEventListener("focusin",function(e){try{var t=e&&e.target,c;
-  if(!t||t===obH||t.nodeType!==1)return;
+  if(!cmode||!t||t===obH||t.nodeType!==1)return;
   c=t.matches&&t.matches(":focus-visible")?pickEl(t):null;
   if(c&&visual(c))obShow(c,1);else if(obK)obHide()}catch(x){}},true);
-// Tab from a focused chart, table or picture goes to its button; the page's own
-// Tab order is otherwise left alone.
+// Escape turns Comment off (the gallery hears it and unlights the control); Enter
+// or Space on a focused chart, table or picture starts a comment on it.
 addEventListener("keydown",function(e){try{
-  if(!e||e.key!=="Tab"||e.shiftKey||e.ctrlKey||e.metaKey||e.altKey||!obK||!obC||e.target!==obC||!obB||!obB.focus)return;
-  e.preventDefault();obB.focus()}catch(x){}},true);
+  if(!cmode||!e)return;
+  if(e.key==="Escape"){obHide();parent.postMessage({type:"artifact-comment-off"},__ORIGIN__);return}
+  if((e.key==="Enter"||e.key===" ")&&obK&&obC&&e.target===obC){
+    e.preventDefault();var c=obC;obHide();pin(c)}}catch(x){}},true);
 addEventListener("scroll",obPos,true);
 addEventListener("resize",obPos);
 // Ctrl+Shift+M (Cmd+Shift+M): comment on the selection. The gallery owns the
