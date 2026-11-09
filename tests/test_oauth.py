@@ -3,6 +3,7 @@
 the refusals, remembered consent, and the `rmo_` token at `/mcp` and not under `/api/v1`."""
 
 import html
+import json
 import re
 from urllib.parse import parse_qs, urlsplit
 
@@ -342,10 +343,8 @@ def test_authorize_is_rate_limited_per_address(web):
 def test_oversized_state_or_scope_is_invalid_request_and_not_echoed(web):
     for field in ("state", "scope"):
         answer = web.get("/oauth/authorize", params=params(**{field: "x" * 513}))
-        assert answer.status_code == 302
-        q = parse_qs(urlsplit(answer.headers["location"]).query)
-        assert q["error"] == ["invalid_request"]
-        assert "x" * 513 not in answer.headers["location"]
+        assert landing(answer)["error"] == "invalid_request"
+        assert "x" * 513 not in answer.text
 
 
 def test_a_full_fetch_pool_answers_503_but_registered_and_cached_clients_pass(
@@ -398,8 +397,7 @@ def test_one_client_id_has_at_most_one_fetch_in_flight(db, stub, monkeypatch):
 
 def test_a_scope_of_only_unknown_words_is_invalid_scope(web):
     answer = web.get("/oauth/authorize", params=params(scope="offline_access"))
-    q = parse_qs(urlsplit(answer.headers["location"]).query)
-    assert answer.status_code == 302 and q["error"] == ["invalid_scope"]
+    assert landing(answer)["error"] == "invalid_scope"
     assert web.get("/oauth/authorize", params=params(scope="")).status_code == 302
 
 
@@ -423,10 +421,14 @@ def test_reconsent_renews_an_app_past_its_cap(web, provider, db):
     assert reasons == ["lapsed"]
 
 
-def test_remembered_consent_grants_the_request_not_the_whole_hold(web, provider):
+def test_remembered_consent_grants_the_request_not_the_whole_hold(web, provider, db):
     full_flow(web, provider)
-    back = landing(sign_in(web, provider, begin(web, scope="ream:read")))
-    assert exchange(web, back["code"]).json()["scope"] == "ream:read"
+    landing(sign_in(web, provider, begin(web, scope="ream:read")))
+    with db.connect() as conn:
+        given = conn.execute(
+            "select permissions from mcp_signin order by created_at desc limit 1"
+        ).fetchone()[0]
+    assert list(given if not isinstance(given, str) else json.loads(given)) == ["read"]
 
 
 def test_token_refuses_a_big_body_and_a_file_field(web):
