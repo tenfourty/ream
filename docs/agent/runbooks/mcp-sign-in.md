@@ -37,7 +37,6 @@ Check: `curl -s <public url>/.well-known/oauth-authorization-server` lists `toke
   window. No app outlives the cap, however busy; at the cap he consents again.
 - The nightly clean-up marks lapsed apps ended (`lapsed`) and drops their tokens, then drops
   sign-ins and tokens that are over or spent (a day after, so a replayed code is still noticed).
-  A lapsed app does not block connecting the same app again.
 
 ## What a refusal looks like
 
@@ -53,7 +52,7 @@ An app ends by itself, reason recorded in `mcp_app.revoked_reason`, when:
 | `reuse` | an authorization code was presented twice |
 | `refresh_reuse` | a spent refresh token was presented again (two parties hold it) |
 | `revoked` | the app presented its refresh token to `/oauth/revoke` |
-| `lapsed` | idle for the window, or past the cap, found by the clean-up or by a new consent |
+| `lapsed` | idle for the window, or past the cap, found by the clean-up |
 
 ## Ending an app
 

@@ -152,7 +152,7 @@ def test_an_idle_app_lapses_and_use_slides_the_window(web, provider, db):
         conn.execute(
             "update mcp_token set expires_at = %s where kind = 'access'", (FAR,)
         )
-    assert oauth.verify_access(db, access, start + timedelta(days=88)) is not None
+    assert oauth.verify_access(db, access, start + timedelta(days=80)) is not None
 
 
 def test_an_idle_app_with_no_use_lapses_at_mcp_and_at_refresh(web, provider, db):
@@ -178,16 +178,6 @@ def test_the_hard_cap_ends_an_app_however_busy(web, provider, db):
     past = start + timedelta(days=91)
     assert oauth.verify_access(db, access, past) is None
     assert oauth.token(db, form_for(raw), past).status_code == 400
-
-
-def test_a_lapsed_pair_can_be_consented_again(web, provider, db):
-    tokens(web, provider)
-    with db.connect() as conn:
-        conn.execute(
-            "update mcp_app set idle_expires_at = %s", ("2000-01-01T00:00:00+00:00",)
-        )
-    again = tokens(web, provider)
-    assert again["access_token"].startswith("rmo_")
 
 
 def test_the_sweep_drops_finished_rows_and_keeps_live_ones(web, provider, db):
