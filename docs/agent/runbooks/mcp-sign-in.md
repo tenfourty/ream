@@ -17,7 +17,7 @@ All of these are server settings; a missing or bad one refuses to start and name
    - Optional `REAM_OIDC_BACKCHANNEL_URL` (`scheme://host[:port]`, no path, query or
      credentials; start-up refuses otherwise, and refuses it without the issuer): where Ream's
      own calls to the provider go (discovery, token, keys), for a deployment whose pod must not
-     use the public address. On the homelab: `http://authelia.authelia.svc.cluster.local:9091`
+     use the public address. On the homelab: `http://authelia.auth.svc.cluster.local:80` (namespace `auth`, port 80; homelab 95b40043)
      with the issuer still `https://authelia.tenfourty.site`. Ream takes the URL it would have
      called, checks it against the issuer as usual (discovery `issuer`, endpoints on the
      issuer's origin, ID token `iss`), then swaps only scheme, host and port, and sends
