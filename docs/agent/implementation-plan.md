@@ -2731,3 +2731,18 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   his words required). Each tool builds its route's body and calls the route's module function,
   so refusals, secret scanning and events match the route's; a write is labelled with its
   `session` argument, the `X-Ream-Session` header, or `mcp/<date>`. `docs/mcp.md`.
+- **Ream says how to sign in, and knows which app is asking (9 Nov 2026; slice 3 of MCP
+  sign-in).** With `REAM_MCP_SIGN_IN=on` beside `REAM_MCP_PUBLIC_URL`, the public host serves the
+  protected-resource document (both paths) and the authorization-server document (§4), and `/mcp`
+  answers a missing or unknown credential with 401 and the `resource_metadata` challenge. A key
+  there gets the same 401 with the "Agent keys are not accepted" words and a WARN
+  `reason=key_on_mcp` naming its public id, unless `REAM_MCP_ACCEPT_KEYS=1`. `ream/mcp_clients.py`
+  reads a client metadata document through `webhook.fenced_request` (the address guard shared with
+  the webhook sink: public addresses only, pinned, no redirect, `application/json`, 64 KiB, 5 s,
+  kept 60 s in the new `mcp_client` table, SQLite step 24) and checks its `client_id` byte for byte
+  and its return addresses; `POST /oauth/register` registers public loopback clients, 10 an hour
+  per address (IPv6 by /64), 1000 stored, an unused one gone after 24 hours.
+  `REAM_MCP_ALLOWED_CLIENT_HOSTS` refuses before anything is fetched or stored;
+  `REAM_MCP_TRUSTED_CLIENT_HOSTS` only labels an app Verified. Until slice 5 builds
+  `/oauth/authorize` and `/oauth/token`, `REAM_MCP_SIGN_IN=on` refuses to start, so no deployment
+  advertises pages that are not there; with the settings unset nothing served changes.

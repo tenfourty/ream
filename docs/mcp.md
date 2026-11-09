@@ -9,10 +9,18 @@ speaks MCP rather than the agent API. The design is
 - **Off until set.** `REAM_MCP_PUBLIC_URL` is an origin with no path: the gallery origin
   (`REAM_GALLERY_ORIGIN`) or `https://<REAM_API_HOST>`. Anything else refuses to start. Unset,
   `/mcp` answers 404 everywhere; set, it is served on that host only.
-- **Agent keys only.** Browser sign-in is not built yet, so `/mcp` takes an agent key as
+- **Agent keys, until sign-in is finished.** `/mcp` takes an agent key as
   `Authorization: Bearer <key>`, with exactly the key's reach on `/api/v1`. Failed keys count in
-  the same limiter as `/api/v1`. `REAM_MCP_ACCEPT_KEYS` may be left unset; `0` refuses to start
-  until sign-in exists.
+  the same limiter as `/api/v1`. `REAM_MCP_ACCEPT_KEYS` may be left unset; `0` without sign-in
+  refuses to start.
+- **Sign-in, partly built.** `REAM_MCP_SIGN_IN=on` serves `/.well-known/oauth-protected-resource`
+  (and `/mcp` after it), `/.well-known/oauth-authorization-server` and `POST /oauth/register`
+  on the public host, and answers `/mcp` without a sign-in token with 401 and the
+  `resource_metadata` challenge; keys are then refused there unless `REAM_MCP_ACCEPT_KEYS=1`.
+  `REAM_MCP_ALLOWED_CLIENT_HOSTS` (unset: any; `none`: no app) limits which apps may ask,
+  `REAM_MCP_TRUSTED_CLIENT_HOSTS` which are labelled Verified, and
+  `REAM_MCP_SELF_REGISTRATION_REDIRECTS` (default `localhost`; `none`: off) which return hosts
+  registration accepts. Until `/oauth/authorize` and `/oauth/token` exist, `on` refuses to start.
 - **Stateless Streamable HTTP.** One `POST /mcp` per message; the answer is
   `application/json`, never a stream, never an `Mcp-Session-Id`. `GET` and `DELETE` answer 405.
   Notifications get 202. Batches get 400. Bodies over 12 MiB get 413. A request carrying an
