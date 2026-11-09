@@ -573,3 +573,7 @@ def validate_for_serve() -> Settings:
 
 def owner_id() -> str:
     return current().owner_id
+
+
+def owner_name() -> str:
+    return current().owner_name

@@ -837,6 +837,40 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " on mcp_client (registered_from, created_at) where kind = 'registered'"
         ),
     ),
+    # 9 Nov 2026: the person-and-app agents and the apps people let in over MCP (see
+    # schema.sql).
+    25: (
+        (
+            "create table mcp_agent ("
+            " agent text primary key,"
+            " person text not null,"
+            " client_id text not null,"
+            " host text not null,"
+            " created_at timestamptz not null default (artifacts_now()))"
+        ),
+        "create unique index mcp_agent_pair on mcp_agent (person, client_id)",
+        (
+            "create table mcp_app ("
+            " id text primary key,"
+            " person text not null,"
+            " client_id text not null,"
+            " agent text not null,"
+            " permissions jsonb not null,"
+            " redirect_uri text not null,"
+            " groups jsonb not null default '[]',"
+            " created_at timestamptz not null default (artifacts_now()),"
+            " last_used_at timestamptz,"
+            " idle_expires_at timestamptz not null,"
+            " expires_at timestamptz not null,"
+            " revoked_at timestamptz,"
+            " revoked_reason text,"
+            " events_seen integer not null default 0)"
+        ),
+        (
+            "create unique index mcp_app_live"
+            " on mcp_app (person, client_id) where revoked_at is null"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

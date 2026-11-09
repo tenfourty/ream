@@ -2746,3 +2746,12 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   `REAM_MCP_TRUSTED_CLIENT_HOSTS` only labels an app Verified. Until slice 5 builds
   `/oauth/authorize` and `/oauth/token`, `REAM_MCP_SIGN_IN=on` refuses to start, so no deployment
   advertises pages that are not there; with the settings unset nothing served changes.
+- **A person-and-app agent and the apps a person lets in, stored (9 Nov 2026; first half of slice 4
+  of MCP sign-in).** The `mcp_agent` and `mcp_app` tables (§8; SQLite step 25) and
+  `ream/mcp_apps.py`: the first consent from an app makes `<person>--<host slug>` (`-2`, `-3` for
+  another app on the same host; the slug cut, never the person, to fit `keys.AGENT_NAME`), never
+  the owner id and never a name a key, a rename's old name or a page already answers to, and the
+  same pair always gets its agent back. A consent stores its permissions (read, write, relay), a
+  30-day idle lapse and a 90-day cap, one live app per person and app. `display_name` shows a
+  person-and-app agent as "<owner name>, via <host>" (`settings.owner_name()`). Nothing calls them
+  yet: `Reach` and permission gating are the second half.

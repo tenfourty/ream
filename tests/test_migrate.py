@@ -495,6 +495,41 @@ def _seed(database: Database) -> None:
             ],
         ),
         (
+            "mcp_agent",
+            "agent, person, client_id, host, created_at",
+            [
+                "jeremy--claude-ai",
+                "jeremy",
+                "https://claude.ai/oauth/client",
+                "claude.ai",
+                T0,
+            ],
+        ),
+        (
+            "mcp_app",
+            (
+                "id, person, client_id, agent, permissions, redirect_uri, groups,"
+                " created_at, last_used_at, idle_expires_at, expires_at, revoked_at,"
+                " revoked_reason, events_seen"
+            ),
+            [
+                "app_x",
+                "jeremy",
+                "https://claude.ai/oauth/client",
+                "jeremy--claude-ai",
+                j(["read", "write"]),
+                "https://claude.ai/api/mcp/auth_callback",
+                j(["Zürich team"]),
+                T0,
+                T1,
+                T1,
+                T1,
+                None,
+                None,
+                7,
+            ],
+        ),
+        (
             "partner_question",
             (
                 "source, version, asking_office, title, options, context, state,"

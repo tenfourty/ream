@@ -1201,3 +1201,41 @@ create table if not exists mcp_client (
 );
 create index if not exists mcp_client_registered_idx
     on mcp_client (registered_from, created_at) where kind = 'registered';
+
+-- The agent name each person-and-app pair publishes under (docs/agent/specs/
+-- 2026-11-08-mcp-oauth-design.md, 8 and 11.1): `<person>--<host slug>`, `-2`, `-3` for a
+-- second app on the same host. Never deleted: pages keep it after the app is revoked, and a
+-- later consent from the same app reuses it. `host` is the app's checked address, shown as
+-- "<owner name>, via <host>".
+create table if not exists mcp_agent (
+    agent      text primary key,
+    person     text not null,
+    client_id  text not null,
+    host       text not null,
+    created_at timestamptz not null default now()
+);
+create unique index if not exists mcp_agent_pair on mcp_agent (person, client_id);
+
+-- One person's consent for one app (cove's "connected app"; spec 8). `id` is 'app_' + random,
+-- the public handle; `agent` the person-and-app agent above; `permissions` a subset of
+-- ["read","write","relay"]; `idle_expires_at` slides 30 days on each refresh, `expires_at`
+-- is the absolute cap, 90 days from consent; `revoked_reason` is 'revoked' | 'app' | 'reuse'
+-- | 'lapsed' | 'admin'; `events_seen` is whats_new's cursor. One live app per person and app.
+create table if not exists mcp_app (
+    id              text primary key,
+    person          text not null,
+    client_id       text not null,
+    agent           text not null,
+    permissions     jsonb not null,
+    redirect_uri    text not null,
+    groups          jsonb not null default '[]',
+    created_at      timestamptz not null default now(),
+    last_used_at    timestamptz,
+    idle_expires_at timestamptz not null,
+    expires_at      timestamptz not null,
+    revoked_at      timestamptz,
+    revoked_reason  text,
+    events_seen     bigint not null default 0
+);
+create unique index if not exists mcp_app_live
+    on mcp_app (person, client_id) where revoked_at is null;
