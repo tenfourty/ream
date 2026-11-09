@@ -150,7 +150,7 @@ const SEL = { type: "artifact-selection", quote: "the plan",
 
 { const g = build();
   ok(g.bar && g.bar.hidden === true, "a hidden action bar exists");
-  ok(Object.keys(g.buttons).join() === "comment", "offering only Comment");
+  ok(Object.keys(g.buttons).join() === "comment,explain,shorten,fix", "offering Comment, Explain, Shorten and Fix");
   g.send(SEL);
   ok(g.bar.hidden === false, "a selection shows it");
   ok(g.bar.style.top === "145px" && g.bar.style.left === "15px", "above the selection, in page coordinates");

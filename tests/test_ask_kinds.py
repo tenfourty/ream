@@ -162,6 +162,7 @@ def test_the_pill_offers_the_three_kinds(client):
 
 def test_onboarding_teaches_the_kinds_and_the_body_route():
     text = onboarding.agents_txt("https://x.example")
+    text = " ".join(text.split())  # the text is wrapped; a phrase may span a line
     for word in (
         "EXPLAIN, SHORTEN, FIX",
         "Act on the kind, never by parsing the body",
@@ -182,7 +183,7 @@ def test_the_body_404_hint_no_longer_calls_it_publisher_only():
 
     src = inspect.getsource(api)
     assert 'to the agent that published it"' not in src
-    assert "while the page is open to agents" in src
+    assert "agent that published it, and to any agent while the page is " in src
 
 
 # ---- SQLite: a file at version 27 (comment.kind still has its CHECK) -------------------
