@@ -441,8 +441,9 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt and skill.md re-taken on 9 Nov 2026 for MCP slice 1: each gains only a short static
 # paragraph saying /mcp takes the same key (agent.json is unchanged while REAM_MCP_PUBLIC_URL is unset).
 # agents.txt and skill.md re-taken on 9 Nov 2026 for explain, shorten and fix (the kinds paragraph, the body route).
+# agents.txt re-taken again, and the artifacts-decide help, on 9 Nov 2026 for the review fixes (em dash, publisher-only kinds, help names the new kinds).
 GOLDEN = {
-    "agents.txt": "7d35cfd0ce0a0a97a79de6e53eef2f7f86cdfb045307b5c2facffdc4b5b160d5",
+    "agents.txt": "9b8478fb175653e0aa551c08b7457821e21010baeaa9e4a28e90ca23de00271f",
     "skill.md": "4d458dfa917269da1a5c4fd08e3f634630288ac5065f9161ead1f890e7bb3878",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
@@ -488,7 +489,7 @@ NEWS_TAIL = 26  # every entry so far; newer ones are added in front, so these ne
 NEWS_TAIL_DIGEST = "08b7ad27fd383101cc42c10f0994c8368d6fa5b33dc1617635d6068b5902f467"
 HELP_DIGEST = {
     "artifacts-publish": "ba422008ab456de297687fab35da6e52bee9dd5ee710872327a6e637c21adb7e",
-    "artifacts-decide": "0201cb0dd41d3a70a3d29046ba4ccafe06fb676e415f17cdc14bd5050718b75c",
+    "artifacts-decide": "e8a9964cc83de7742fb1f5538cb3166cb785b445adb922e4465570fcce20397d",
 }
 
 

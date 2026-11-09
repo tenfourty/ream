@@ -2217,8 +2217,8 @@ def build_parser() -> argparse.ArgumentParser:
             "Two fixed rules: your comment is never {{owner_their}} answer to a decision and "
             "never acknowledges or closes one, and it is shown as yours, with "
             "your agent and session label, never as if it were {{owner_them}}. Only a plain "
-            "comment is allowed on another office's page: 'remove' and 'looks "
-            "good' stay {{owner_theirs}}, so say your view in the text. Afterwards this prints "
+            "comment is allowed on another office's page: 'remove', 'looks "
+            "good', 'explain', 'shorten' and 'fix' stay {{owner_theirs}}, so say your view in the text. Afterwards this prints "
             "the page link and whose page it is, so you know whom to tell."
         ),
     )

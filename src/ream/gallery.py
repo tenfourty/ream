@@ -7178,7 +7178,9 @@ def gallery_router(db: Database) -> APIRouter:
         image: Annotated[list[str] | None, Form()] = None,
         _guard: None = Depends(_same_origin_write),
     ):
-        if kind == "comment" and not body.strip():
+        # A reply is always talk (comments.add forces its kind to `comment`), so
+        # it needs words whatever kind the form named.
+        if (kind == "comment" or thread_root) and not body.strip():
             raise HTTPException(422, "a comment needs some words")
         parsed_anchor = None
         if anchor:

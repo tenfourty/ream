@@ -448,3 +448,23 @@ def test_the_page_view_has_the_how_to_box_and_the_select_text_switch(client, db)
     assert 'id="coffer" checked' in html, "the switch is on by default"
     assert "Offer comments when I select text" in html
     assert "Comment on page" not in html and "pagecbtn" not in html
+
+
+@pytest.mark.parametrize("kind", ["explain", "shorten", "fix", "remove", "looks_good"])
+def test_the_gallery_form_refuses_an_empty_reply_whatever_its_kind(client, db, kind):
+    page = _page(db)
+    root = comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="a note",
+    )
+    r = client.post(
+        f"/c/{page.id}",
+        data={"kind": kind, "body": " ", "thread_root": root.id},
+        headers=SAME_ORIGIN,
+        follow_redirects=False,
+    )
+    assert r.status_code == 422
+    assert len(comments.list_for_artifact(db, page.id)) == 1
