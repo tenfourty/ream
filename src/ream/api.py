@@ -2337,7 +2337,9 @@ def agent_router(
         return pin_page(db, agent, artifact_id, payload.pinned)
 
     @router.post("/artifacts/{artifact_id}/comments-setting")
-    def comments(artifact_id: str, payload: CommentsBody, agent: str = Depends(caller)):
+    def comments_setting(
+        artifact_id: str, payload: CommentsBody, agent: str = Depends(caller)
+    ):
         """Say whether commenting starts on or off for readers of one of this agent's own pages.
         The reader's own choice for that page wins. A page that is not the caller's answers
         exactly as a missing one."""

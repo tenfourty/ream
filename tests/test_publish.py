@@ -352,7 +352,7 @@ def test_a_lone_surrogate_in_the_title_is_refused_not_a_500(client, db):
     response = _post_raw_json(
         client,
         "/api/v1/artifacts",
-        {"title": "bad\udc80title", "body": PAGE},
+        {"title": "bad\udc80title", "body": PAGE, "comments": "on"},
         auth(token),
     )
     assert response.status_code == 422
@@ -364,7 +364,7 @@ def test_a_lone_surrogate_in_the_body_is_refused_not_a_500(client, db):
     response = _post_raw_json(
         client,
         "/api/v1/artifacts",
-        {"title": "Board", "body": PAGE + "\udc80"},
+        {"title": "Board", "body": PAGE + "\udc80", "comments": "on"},
         auth(token),
     )
     assert response.status_code == 422

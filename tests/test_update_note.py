@@ -118,7 +118,20 @@ def test_a_secret_in_a_whole_page_note_is_refused_and_nothing_lands(client, db, 
 
 def _publish(path, page_file, capsys):
     page_file.write_text(PAGE)
-    assert cli.main(["--key-file", str(path), str(page_file), "--title", "B"]) == 0
+    assert (
+        cli.main(
+            [
+                "--key-file",
+                str(path),
+                str(page_file),
+                "--title",
+                "B",
+                "--comments",
+                "on",
+            ]
+        )
+        == 0
+    )
     return json.loads(capsys.readouterr().out.strip())
 
 
