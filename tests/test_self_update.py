@@ -118,19 +118,21 @@ class _Run:
 
     def __init__(self):
         self.install_code = 0
+        self.install_stderr = ""
         self.level = str(clientlevel.CLIENT_LEVEL)
         self.calls = []
 
     def __call__(self, command, **kwargs):
         self.calls.append((command, kwargs))
-        out, code = "", 0
+        out, err, code = "", "", 0
         if command[:3] == ["uv", "tool", "install"]:
             code = self.install_code
+            err = self.install_stderr
         elif command[:3] == ["uv", "tool", "dir"]:
             out = "/tools\n"
         elif command[0].endswith("/python"):
             out = self.level + "\n"
-        return type("Done", (), {"returncode": code, "stdout": out})()
+        return type("Done", (), {"returncode": code, "stdout": out, "stderr": err})()
 
     @property
     def installs(self):
@@ -645,3 +647,102 @@ def test_a_relative_or_unfindable_argv0_is_not_executed(updater, monkeypatch):
     assert len(updater.run.installs) == 3, "each really installed"
     assert updater.execs == []
     assert selfupdate._GUARD not in selfupdate.os.environ
+
+
+# ---- never wait on a prompt; say plainly when the source needs a login --------------
+
+
+def test_the_install_never_waits_on_a_prompt(updater):
+    selfupdate.on_response("GET", STALE)
+    install = [kw for c, kw in updater.run.calls if c[:3] == ["uv", "tool", "install"]]
+    assert install[0]["stdin"] is selfupdate.subprocess.DEVNULL
+    assert install[0]["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "fatal: could not read Username for 'https://forge.example': terminal prompts disabled",
+        "remote: Authentication failed for 'https://forge.example/runcove/artifacts'",
+        "error: HTTP status client error (401 Unauthorized) for url",
+        "fatal: terminal prompts disabled",
+    ],
+)
+def test_an_authentication_failure_says_the_source_needs_a_login(updater, stderr):
+    updater.run.install_code = 1
+    updater.run.install_stderr = stderr + " token=SEKRIT-CRED"
+    selfupdate.on_response("GET", STALE)
+    text = updater.out.getvalue()
+    assert "needs a login on this machine" in text
+    assert SOURCE in text
+    assert " ".join(MAIN_COMMAND) in text
+    assert "SEKRIT" not in text and "Username" not in text
+    assert updater.execs == []
+
+
+def test_another_failure_is_not_called_a_login_problem(updater):
+    updater.run.install_code = 1
+    updater.run.install_stderr = "error: no space left on device"
+    selfupdate.on_response("GET", STALE)
+    assert "login" not in updater.out.getvalue()
+    assert "Run by hand" in updater.out.getvalue()
+
+
+def test_a_login_failure_is_not_retried_within_the_hour(updater, monkeypatch):
+    updater.run.install_code = 1
+    updater.run.install_stderr = "fatal: could not read Username"
+    selfupdate.on_response("GET", STALE)
+    monkeypatch.setattr(selfupdate, "_done", False)
+    selfupdate.on_response("GET", STALE)
+    assert len(updater.run.installs) == 1
+
+
+# ---- what is installed ----------------------------------------------------------------
+
+
+def test_installed_commit_comes_from_the_receipt(tmp_path, monkeypatch):
+    sha = "66eca1f0123456789abcdef0123456789abcdef0"
+    _receipt(
+        tmp_path,
+        monkeypatch,
+        '[tool]\nrequirements = [{ name = "ream", '
+        f'git = "https://forge.example/runcove/artifacts?rev={sha}" }}]\n',
+    )
+    assert selfupdate.installed_commit() == sha
+    _receipt(tmp_path, monkeypatch, None)
+    (tmp_path / "toolenv" / "uv-receipt.toml").unlink(missing_ok=True)
+    assert selfupdate.installed_commit() is None
+    _receipt(
+        tmp_path,
+        monkeypatch,
+        '[tool]\nrequirements = [{ name = "ream", directory = "/x" }]\n',
+    )
+    assert selfupdate.installed_commit() is None
+
+
+@pytest.mark.parametrize("argv", [["--version"], ["version"]])
+def test_ream_version_prints_version_level_and_commit(argv, monkeypatch, capsys):
+    from ream import cli
+
+    monkeypatch.setattr(selfupdate, "installed_commit", lambda: "abc1234def")
+    monkeypatch.setattr(cli.plugin_cli, "load_or_exit", lambda: None)
+    for name in ("REAM_KEY", "ARTIFACTS_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(SystemExit) as stop:
+        cli.main(argv)
+    assert stop.value.code == 0
+    out = capsys.readouterr().out
+    assert out.startswith("ream ")
+    assert f"level {clientlevel.CLIENT_LEVEL}" in out
+    assert "commit abc1234def" in out
+
+
+def test_ream_version_without_a_known_commit(monkeypatch, capsys):
+    from ream import cli
+
+    monkeypatch.setattr(selfupdate, "installed_commit", lambda: None)
+    monkeypatch.setattr(cli.plugin_cli, "load_or_exit", lambda: None)
+    with pytest.raises(SystemExit):
+        cli.main(["--version"])
+    assert "commit" not in capsys.readouterr().out

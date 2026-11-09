@@ -555,6 +555,15 @@ tool prints that command, with the server's `X-Ream-Install-Source` note if pres
 to run. A source the server advertises
 (`REAM_CLIENT_INSTALL_SOURCE`) is information for a person; it is never installed from.
 
+**Unattended and private sources.** The install never waits on a prompt (`stdin` is /dev/null,
+`GIT_TERMINAL_PROMPT=0`). When uv or git's output says it was refused for want of a login
+("could not read Username", "Authentication failed", 401, "terminal prompts disabled"), the tool
+says the source needs a login on this machine, names it and prints the by-hand command; the
+captured output is matched, never printed. The once-an-hour stamp still applies to a failing
+machine. `ream --version` / `ream version` print the package version, client level and, when
+uv's receipt records one (`?rev=`), the commit; the `artifacts-*` commands do not take
+`--version` (separate entry points).
+
 **Not chosen:** the version check alone (a stale tool is told, and nobody acts until a call fails).
 MCP only, with scripts reinstalled by hand (scripts are the part that goes stale unseen). A ref
 named by the server (a spoofed or compromised server could then install any commit, an unreviewed

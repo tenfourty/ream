@@ -76,6 +76,9 @@ def _install_env() -> dict[str, str]:
             continue
         if upper in _ENV_KEEP or upper.startswith(_ENV_KEEP_PREFIX):
             env[name] = value
+    env["GIT_TERMINAL_PROMPT"] = (
+        "0"  # git never waits for a username on an unattended run
+    )
     return env
 
 
@@ -126,6 +129,45 @@ def _receipt_source() -> str | None:
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
     return None
+
+
+def installed_commit() -> str | None:
+    """The commit uv installed this tool from, when its receipt says (`?rev=<sha>` on the git
+    address, or a `rev` key); None for a path install or an unreadable receipt."""
+    try:
+        with open(Path(sys.prefix) / "uv-receipt.toml", "rb") as handle:
+            requirements = tomllib.load(handle)["tool"]["requirements"]
+        for item in requirements:
+            if item.get("name") not in {"ream", "artifacts"}:
+                continue
+            git = item.get("git")
+            if not isinstance(git, str):
+                continue
+            rev = item.get("rev")
+            if not isinstance(rev, str):
+                match = re.search(r"(?:^|&)rev=([^&#]+)", urlsplit(git).query)
+                rev = match.group(1) if match else None
+            if rev and re.fullmatch(r"[0-9A-Za-z._/-]{1,64}", rev):
+                return rev
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+    return None
+
+
+_AUTH_FAILURE = re.compile(
+    r"could not read (username|password)|authentication failed|terminal prompts disabled"
+    r"|\b401\b|invalid username or password|permission denied \(publickey",
+    re.IGNORECASE,
+)
+
+
+def _auth_failure(result) -> bool:
+    """True when the install's own output says it was refused for want of a login. The output
+    is only matched, never printed: it may carry a credential."""
+    text = (
+        f"{getattr(result, 'stderr', '') or ''}\n{getattr(result, 'stdout', '') or ''}"
+    )
+    return bool(_AUTH_FAILURE.search(text))
 
 
 def _disabled() -> bool:
@@ -279,12 +321,20 @@ def on_response(method: str, headers, api_url: str | None = None) -> None:
         )
         return
     _say("this tool is out of date; updating ...")
+    result = None
     try:
-        ok = _run(command).returncode == 0
+        result = _run(command)
+        ok = result.returncode == 0
     except (OSError, subprocess.SubprocessError):
         ok = False
     if not ok:
-        _say(f"the update failed. Run by hand: {line}")
+        if result is not None and _auth_failure(result):
+            _say(
+                f"the update failed: the source {source} needs a login on this machine "
+                f"(a git credential for that host). Log in, then run by hand: {line}"
+            )
+        else:
+            _say(f"the update failed. Run by hand: {line}")
         return
     level = _installed_level()
     if level is None or level < clientlevel.CLIENT_LEVEL:

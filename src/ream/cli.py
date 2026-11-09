@@ -13,7 +13,7 @@ stay for good. Standard library only at import: a tool is loaded when its verb i
 import importlib
 import sys
 
-from ream import plugin_cli, selfupdate  # noqa: F401 -- first: it records the real argv
+from ream import plugin_cli, selfupdate  # first: it records the real argv
 
 # verb -> (module, function). A function is called with no arguments, as a console script is,
 # and reads sys.argv; its return value is the exit status.
@@ -62,6 +62,7 @@ the command line on unchanged, so `ream VERB --help` shows that program's own he
   connect        connect a machine                    (artifacts-connect)
   beads-page     a page of the tracker's beads        (artifacts-beads-page)
   bead-metrics   an arc's counts and velocity         (artifacts-bead-metrics)
+  version        this tool's version, level and commit (also: ream --version)
 {plugin_section}
 The old `artifacts-*` commands keep working.
 """
@@ -127,6 +128,23 @@ def _run_plugin_verb(command) -> int:
     return result if isinstance(result, int) else 0
 
 
+def version_line() -> str:
+    """`ream 0.1.0 (level 1, commit 66eca1f...)`: needs no key and no network."""
+    from importlib import metadata
+
+    from ream import clientlevel
+
+    try:
+        package = metadata.version("ream")
+    except metadata.PackageNotFoundError:
+        package = "unknown"
+    parts = [f"level {clientlevel.CLIENT_LEVEL}"]
+    commit = selfupdate.installed_commit()
+    if commit:
+        parts.append(f"commit {commit}")
+    return f"ream {package} ({', '.join(parts)})\n"
+
+
 def main(argv: list[str] | None = None) -> None:
     # The plug-ins selected by REAM_PLUGINS register their verbs and client defaults first.
     plugin_cli.load_or_exit()
@@ -135,6 +153,9 @@ def main(argv: list[str] | None = None) -> None:
         stream = sys.stdout if args else sys.stderr
         stream.write(_help())
         raise SystemExit(0 if args else 2)
+    if args in (["--version"], ["version"]):
+        sys.stdout.write(version_line())
+        raise SystemExit(0)
     index = _find_verb(args)
     if index is None:
         sys.stderr.write(f"ream: no such verb in: {' '.join(args)}\n\n{_help()}")
