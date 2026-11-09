@@ -1811,7 +1811,7 @@ _CONNECT_CSS = (
     ".cx dl{display:grid;grid-template-columns:auto 1fr;gap:.25rem .75rem;margin:.5rem 0}"
     ".cx dt{opacity:.7}.cx .row{display:flex;gap:.5rem;flex-wrap:wrap}"
     ".cx .boxes{display:flex;gap:.35rem;align-items:center;margin:.35rem 0 .9rem}"
-    ".cx .boxes input{width:2.4rem;height:2.9rem;margin:0;padding:0;text-align:center;"
+    ".cx .boxes input{width:2.4rem;min-width:0;height:2.9rem;margin:0;padding:0;text-align:center;"
     "font:600 1.35rem var(--mono-short);text-transform:uppercase}"
     ".cx .boxes .dash{padding:0 .2rem;opacity:.5}</style>"
 )
