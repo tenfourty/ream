@@ -46,6 +46,11 @@ agent the action, never the disguise.*
 Scope is not symmetry. His controls are unscoped because the wall is his and the proxy is in
 front of it; agent routes are scoped to the calling key's own agent, and "not yours" answers
 **identically** to "no such page", so a key cannot be walked to learn which ids are real.
+The one route scoped otherwise is recording a relay (`POST /decisions/{id}/record`): any key may
+record what he said elsewhere on any agent's open plain question, because an ops seat often hears
+the answer meant for another; the recording key is stored as `recorded_by`, never as his tap
+(`tests/test_record_answer.py`). A signed-in app's relay stays within its reach and never replaces
+his own tap.
 
 A request is identified by its key, never by a name it claims. Renaming an agent
 (`artifacts-admin rename-agent`) moves everything it owns, and its old key keeps working as the
