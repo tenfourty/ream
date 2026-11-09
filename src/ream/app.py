@@ -5,7 +5,17 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 
-from ream import decisions, forms, hosts, onboarding, partner_in, plugin_api, ratelimit
+from ream import (
+    clientlevel,
+    decisions,
+    forms,
+    hosts,
+    onboarding,
+    partner_in,
+    plugin_api,
+    ratelimit,
+    settings,
+)
 from ream.api import agent_card_response, agent_router
 from ream.content import create_content_app
 from ream.db import Database
@@ -84,6 +94,7 @@ def create_gallery_app(
     _refuse_bad_forms(app)
     _scrub_validation_errors(app)
     _refuse_failed_answer_hooks(app)
+    _say_what_tools_need(app)
 
     @app.middleware("http")
     async def _log_gallery_requests(request: Request, call_next):
@@ -172,6 +183,7 @@ def create_api_app(
     _refuse_bad_forms(app)
     _scrub_validation_errors(app)
     _refuse_failed_answer_hooks(app)
+    _say_what_tools_need(app)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -204,6 +216,33 @@ def create_api_app(
         app.include_router(oauth_router(db, limiter))
         _well_known(app)
     return app
+
+
+def _say_what_tools_need(app: FastAPI) -> None:
+    """On every /api/v1 response: the oldest tool level wanted, the version to move to and
+    where tools are installed from (when set), and `Outdated: true` when the caller's own
+    level (`X-Ream-Client`, or the old name; none is level 0) is older. The call is
+    answered as usual either way. See clientlevel.py and selfupdate.py."""
+
+    @app.middleware("http")
+    async def _tools_headers(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/api/v1/"):
+            current = settings.current()
+            put = {clientlevel.MIN_HEADER: str(clientlevel.MIN_CLIENT_LEVEL)}
+            if current.client_install_ref:
+                put[clientlevel.REF_HEADER] = current.client_install_ref
+            if current.client_install_source:
+                put[clientlevel.SOURCE_HEADER] = current.client_install_source
+            sent = request.headers.get(
+                clientlevel.CLIENT_HEADER
+            ) or request.headers.get(clientlevel.old_name(clientlevel.CLIENT_HEADER))
+            if clientlevel.level_of(sent) < clientlevel.MIN_CLIENT_LEVEL:
+                put[clientlevel.OUTDATED_HEADER] = "true"
+            for name, value in put.items():
+                response.headers[name] = value
+                response.headers[clientlevel.old_name(name)] = value
+        return response
 
 
 def _former_serves_api(scope) -> bool:

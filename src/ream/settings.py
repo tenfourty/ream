@@ -149,6 +149,12 @@ class Settings:
     # as ever (agents' clients refuse redirects) and forwards every other path to the
     # gallery origin with a 308. Unset: no former host exists, every other name 404s.
     former_host: str = ""
+    # Self-updating tools (clientlevel.py, selfupdate.py). The version (a tag or commit hash) a
+    # tool older than the minimum level is told to move to, and a note of where tools are
+    # installed from (advertised, never installed from: each tool has its own fixed source).
+    # Unset: no ref is named / no source is advertised.
+    client_install_ref: str = ""
+    client_install_source: str = ""
     # Unset: the zone of the host.
     display_tz: str = ""
     # The request header the proxy sets to the caller's address. Unset: the socket address.
@@ -290,6 +296,17 @@ class Settings:
                 )
             elif former == self.api_host.strip().lower().removesuffix("."):
                 found.append("REAM_FORMER_HOST must differ from REAM_API_HOST")
+        if self.client_install_ref and not re.fullmatch(
+            r"(?:v?\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z.]{1,20})?|[0-9a-f]{7,40})",
+            self.client_install_ref,
+        ):
+            found.append(
+                "REAM_CLIENT_INSTALL_REF must be a version tag or a commit hash"
+            )
+        if self.client_install_source and not re.fullmatch(
+            r"git\+https://[A-Za-z0-9._~/:-]+", self.client_install_source
+        ):
+            found.append("REAM_CLIENT_INSTALL_SOURCE must be a git+https:// address")
         if self.trusted_ip_header and not _HEADER_NAME.fullmatch(
             self.trusted_ip_header
         ):
@@ -537,6 +554,8 @@ _ENV = {
     "content_domain": "REAM_CONTENT_DOMAIN",
     "api_host": "REAM_API_HOST",
     "former_host": "REAM_FORMER_HOST",
+    "client_install_ref": "REAM_CLIENT_INSTALL_REF",
+    "client_install_source": "REAM_CLIENT_INSTALL_SOURCE",
     "display_tz": "REAM_DISPLAY_TZ",
     "trusted_ip_header": "REAM_TRUSTED_IP_HEADER",
     "bind_host": "REAM_BIND_HOST",

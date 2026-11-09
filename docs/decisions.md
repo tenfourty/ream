@@ -511,3 +511,31 @@ until his first comment, or as a tip under the button. The select-text switch of
 Explain, Shorten and Fix as labelled ordinary comments, or as pre-filled comment text.
 
 **Evidence:** confirmed (Jeremy, 9 Nov 2026).
+
+## The tools check their version on every call and reinstall themselves (9 Nov 2026)
+
+**Chosen:** every call from `ream` and the `artifacts-*` commands sends its client level
+(`X-Ream-Client`, and `X-Artifacts-Client`). Every `/api/v1` response carries the oldest level the
+service wants (`X-Ream-Client-Min`), the version to move to (`X-Ream-Client-Ref`, from
+`REAM_CLIENT_INSTALL_REF`, unset: none) and, only when the caller is older, `X-Ream-Client-Outdated:
+true`; the call is answered as usual. `agent.json` declares the same under `cli.client_level`.
+When a tool is told it is out of date it runs `uv tool install --force <source>@<ref>` and repeats
+the same command once (a call that already changed something is not repeated, so nothing posts
+twice). With uv missing or the install failing it prints one line with the exact command and carries
+on; `REAM_NO_SELF_UPDATE=1` turns the install off and prints the line. Offices' Claude sessions then
+move to MCP, while scripts keep the self-updating tool.
+
+**The version identity is a client level**, an integer bumped by hand in `src/ream/clientlevel.py`
+when a change needs new tools. The package version has been 0.1.0 since the first commit and the
+module's install time says when, not what.
+
+**The install source is fixed on the client and never taken from the server.** It is the tool's own
+`REAM_INSTALL_SOURCE` (a `git+https://` address) or the first line of
+`~/.config/ream/install-source`, written when the tool is installed. The server may name only a ref,
+and the tool accepts only a version tag or a commit hash. A source the server advertises is
+information for a person; it is never installed from.
+
+**Not chosen:** the version check alone (a stale tool is told, and nobody acts until a call fails).
+MCP only, with scripts reinstalled by hand (scripts are the part that goes stale unseen).
+
+**Evidence:** Jeremy, 9 Nov 2026.

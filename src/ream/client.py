@@ -29,7 +29,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
-from ream import csp, envnames, news, plugin_cli, settings, textvars, traps
+from ream import (
+    clientlevel,
+    csp,
+    envnames,
+    news,
+    plugin_cli,
+    selfupdate,
+    settings,
+    textvars,
+    traps,
+)
 from ream.cli import prog_name
 
 _DEFAULT_KEY_FILE = "~/.config/artifacts/key"
@@ -68,6 +78,16 @@ _SESSION_HEADER_OLD = "X-Artifacts-Session"
 # and lets any other agent string through. Without this, every agent outside
 # the house using these commands was turned away before reaching the service.
 _USER_AGENT = "artifacts-client/1"
+
+
+def _add_client_level(request: urllib.request.Request) -> None:
+    """Say which generation of the tools this is on every call (clientlevel.py), under both
+    header names. A number, not a credential."""
+    value = str(clientlevel.CLIENT_LEVEL)
+    request.add_unredirected_header(clientlevel.CLIENT_HEADER, value)
+    request.add_unredirected_header(
+        clientlevel.old_name(clientlevel.CLIENT_HEADER), value
+    )
 
 
 def declared_session(explicit: str | None = None) -> str | None:
@@ -560,6 +580,7 @@ def _request(
     # argument. bandit's file:// concern (S310) does not apply here.
     request = urllib.request.Request(url, data=data, method=method)  # noqa: S310
     request.add_header("User-Agent", _USER_AGENT)
+    _add_client_level(request)
     # `add_unredirected_header`, not `add_header`: the latter is copied onto a
     # redirect's follow-up request by urllib's own default handler, to whatever
     # host and scheme the redirect names. `_RefuseRedirects` above already
@@ -598,13 +619,19 @@ def _exchange(
         try:
             with _opener.open(request, timeout=timeout) as response:
                 raw = response.read()
+                seen = {
+                    k.lower(): v for k, v in getattr(response, "headers", {}).items()
+                }
                 if headers_out is not None:
-                    headers_out.update(
-                        {k.lower(): v for k, v in response.headers.items()}
-                    )
+                    headers_out.update(seen)
+            selfupdate.on_response(request.get_method(), seen)
             break
         except urllib.error.HTTPError as exc:
             raw = exc.read()
+            selfupdate.on_response(
+                request.get_method(),
+                {k.lower(): v for k, v in (exc.headers or {}).items()},
+            )
             if exc.code in _ROLLING_STATUSES and attempt < _ROLLING_ATTEMPTS - 1:
                 # The service updates itself on every push, and while the new
                 # copy takes over the front door answers with its own error page
@@ -642,6 +669,7 @@ def _raw_request(
     _check_url_scheme(url)
     request = urllib.request.Request(url, data=data, method=method)  # noqa: S310 -- the operator's https API address, see _request
     request.add_header("User-Agent", _USER_AGENT)
+    _add_client_level(request)
     request.add_unredirected_header("Authorization", f"Bearer {key}")
     if _session:
         request.add_unredirected_header(_SESSION_HEADER, _session)

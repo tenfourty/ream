@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-09c",
+        "The tools now keep themselves current. Every call says which level the tool is on (X-Ream-Client); when the service wants a newer one the tool reinstalls itself with `uv tool install --force` from its own fixed source (REAM_INSTALL_SOURCE, a git+https address, or the first line of ~/.config/ream/install-source), at the version the service names, and repeats the command once. With no source set, uv missing or the install failing, it prints one line with the command to run by hand and carries on. REAM_NO_SELF_UPDATE=1 turns the install off. It never installs from an address the service sends.",
+    ),
+    (
         "2026-11-09b",
         'Commenting on a page is simpler: one Comment control, with a count, replaces the corner button, "Comment on page" and the bubble. Press it and it stays lit; point at a chart, table cell or picture to get a box, click to comment, and press it again (or Escape) to switch it off. Selecting words shows a dark pill with Comment. A switch, "Offer comments when I select text", turns the pill off, and a "How to comment" box at the top of the panel walks through the steps ("Tap" on a touch screen). Remove and Looks good are gone from the page; the API still accepts them and old ones still show.',
     ),

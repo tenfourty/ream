@@ -13,7 +13,7 @@ stay for good. Standard library only at import: a tool is loaded when its verb i
 import importlib
 import sys
 
-from ream import plugin_cli
+from ream import plugin_cli, selfupdate  # noqa: F401 -- first: it records the real argv
 
 # verb -> (module, function). A function is called with no arguments, as a console script is,
 # and reads sys.argv; its return value is the exit status.

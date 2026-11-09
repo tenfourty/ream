@@ -1,0 +1,39 @@
+"""The client protocol level: the one number that says which generation of tools this is.
+
+Not the package version: that has been 0.1.0 since the first commit and does not change with a
+release, and the module's install time says when a copy was made, not what it can do. So the
+tools carry a level, bumped BY HAND in the commit that needs it.
+
+* `CLIENT_LEVEL` is what this copy of the tools is. Sent on every call as `X-Ream-Client`
+  (and `X-Artifacts-Client`).
+* `MIN_CLIENT_LEVEL` is the oldest level the server wants. A call from an older tool (or from
+  one that sends no level, which is level 0) is answered normally and flagged out of date.
+
+Raise `MIN_CLIENT_LEVEL` only when a change needs new tools (a verb, a header or a route an old
+copy gets wrong). Raise `CLIENT_LEVEL` to the same number in that commit. Standard library
+only: the command-line tools import this.
+"""
+
+CLIENT_LEVEL = 1
+MIN_CLIENT_LEVEL = 1
+
+# Request header the tools send, and the response headers the server answers with, each
+# under both prefixes (the old one stays for good).
+CLIENT_HEADER = "X-Ream-Client"
+OUTDATED_HEADER = "X-Ream-Client-Outdated"
+MIN_HEADER = "X-Ream-Client-Min"
+REF_HEADER = "X-Ream-Client-Ref"
+SOURCE_HEADER = "X-Ream-Install-Source"
+
+
+def old_name(header: str) -> str:
+    """The `X-Artifacts-` spelling of a `X-Ream-` header."""
+    return "X-Artifacts-" + header.removeprefix("X-Ream-")
+
+
+def level_of(value: str | None) -> int:
+    """The level a request header states; anything missing or not a whole number is 0."""
+    try:
+        return max(0, int((value or "").strip()))
+    except ValueError:
+        return 0

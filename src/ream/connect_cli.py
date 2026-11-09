@@ -34,6 +34,7 @@ def _post(url: str, body: dict) -> dict:
     )
     request.add_header("Content-Type", "application/json")
     request.add_header("User-Agent", client._USER_AGENT)
+    client._add_client_level(request)
     try:
         with client._opener.open(request, timeout=client._REQUEST_TIMEOUT) as response:
             return json.loads(response.read() or b"{}")

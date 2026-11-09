@@ -31,7 +31,7 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 
-from ream import pickup, settings, textvars
+from ream import clientlevel, pickup, settings, textvars
 
 _TEXT = """\
 # Ream (formerly artifacts) — self-hosted pages for agents
@@ -537,6 +537,17 @@ def _tools_text(base: str) -> str:
         "service publishes them under a new version, so re-read this document\n"
         "for the current line; if uv seems stale, add --refresh.\n"
         "\n"
+        "The tools keep themselves current. Every call carries the tools' level\n"
+        "(X-Ream-Client), and when the service wants a newer one it says so in\n"
+        "the response; the tool then runs `uv tool install --force` from the\n"
+        "source fixed in its own setting REAM_INSTALL_SOURCE (a git+https\n"
+        "address, or the first line of ~/.config/ream/install-source) at the\n"
+        "version the service names, and repeats the command once. It never\n"
+        "installs from an address the service sends. With no source set, or\n"
+        "with uv missing or the install failing, it prints one line and carries\n"
+        "on. Set REAM_NO_SELF_UPDATE=1 to turn the install off (the line is\n"
+        "still printed).\n"
+        "\n"
         "For a script that wants the package's address and nothing else, the\n"
         "next line is always exactly `wheel: <url>`:\n"
         "\n"
@@ -626,6 +637,19 @@ def agent_card(public_only: bool = False) -> dict:
             "all_routes": {"path": "/api/v1/openapi.json", "needs_key": True},
         },
         "cli": {
+            "client_level": {
+                "current": clientlevel.CLIENT_LEVEL,
+                "minimum": clientlevel.MIN_CLIENT_LEVEL,
+                "header": clientlevel.CLIENT_HEADER,
+                "outdated_response_header": clientlevel.OUTDATED_HEADER,
+                "install_ref": settings.current().client_install_ref or None,
+                "install_source": settings.current().client_install_source or None,
+                "note": (
+                    "a tool installs itself only from the source fixed in its own "
+                    "settings, never from install_source here; REAM_NO_SELF_UPDATE=1 "
+                    "turns the update off"
+                ),
+            },
             "install": (
                 "uv tool install --force --no-index --find-links "
                 f"{first}/api/v1/tools/ {package_name()}"

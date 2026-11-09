@@ -12,7 +12,7 @@
 #   envnames.py   the one place that reads a setting under its new (REAM_) and old (ARTIFACTS_) name
 #   serve.py      start-up switches (DATABASE_URL, REAM_MAINTENANCE, REAM_PACK_VERSIONS)
 #   admin.py      the operator CLI (DATABASE_URL, SQLITE_TMPDIR, `env:NAME` DSN indirection)
-#   client.py decide.py republish.py news.py
+#   client.py decide.py republish.py news.py selfupdate.py
 #                 the command-line tools' OWN variables (key file, session label, XDG dirs,
 #                 wait timeout): they run on other machines with no server settings
 # The shim package src/artifacts/ is held to the same rule and to more: it may contain only
@@ -29,7 +29,7 @@
 set -uo pipefail
 SELF="no-environ-guard"
 
-ALLOWED=" settings.py envnames.py serve.py admin.py client.py decide.py republish.py news.py "
+ALLOWED=" settings.py envnames.py serve.py admin.py client.py decide.py republish.py news.py selfupdate.py "
 PATTERN='os\.environ|os\.getenv|from os import .*(environ|getenv)|\bgetenv\('
 
 # scan_paths <path>... — one line per offending file:line; returns 1 if any.
