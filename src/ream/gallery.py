@@ -531,6 +531,10 @@ body.ctouch .coffer input{width:1.25rem;height:1.25rem}
   color:var(--ink);font:var(--text-sm)/1.4 var(--sans-short)}
 .cnew button{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
 .cresolve{margin:var(--space-5) 0 0}
+.cdel{display:inline;margin:0 0 0 var(--space-5)}
+.cdel button{padding:0 var(--space-4);cursor:pointer;border:0;background:none;color:var(--muted);
+  font:var(--text-sm)/1.4 var(--sans-system);text-decoration:underline}
+.cmt.gone p{color:var(--muted);font-style:italic}
 .cnew,.creply{flex-wrap:wrap}
 .cattach{display:none;flex:1 1 100%;flex-wrap:wrap;align-items:center;gap:var(--space-4)}
 .cpics-on .cattach{display:flex}
@@ -2580,6 +2584,32 @@ if(document.addEventListener)document.addEventListener("submit",function(e){
       fail(fm)})}
   if(!mine.length){go([]);return}
   upload(fm,mine).then(go,function(err){say(fm,(err&&err.message)||"The picture was not sent.");setBusy(fm,false)})});
+// DELETING YOUR OWN COMMENT: the Delete form in a bubble (the panel's, or the card's copy of
+// it) is posted with fetch, then the panel is refreshed like a settle; a toast offers Undo
+// for a few seconds (the server allows ten minutes). Any failure falls back to a plain submit.
+var tt=null,tm=0;
+function dropToast(){clearTimeout(tm);tm=0;if(tt&&tt.parentNode)tt.parentNode.removeChild(tt);tt=null}
+function refreshPanel(tid){want=tid;var ev={detail:{handled:false}};
+  try{ev=new CustomEvent("ream-refresh",{detail:{handled:false}});document.dispatchEvent(ev)}catch(x){}
+  if(!ev.detail||!ev.detail.handled)location.reload()}
+function undoToast(cid,tid){dropToast();
+  var t=document.createElement("div");t.className="newer ctoast";t.setAttribute("role","status");
+  var s=document.createElement("span");s.textContent="Deleted \\u00b7";t.appendChild(s);
+  var u=document.createElement("button");u.type="button";u.textContent="Undo";
+  u.addEventListener("click",function(){u.disabled=true;
+    fetch("/c/"+cid+"/restore",{method:"POST",headers:{Accept:"application/json"},credentials:"same-origin"})
+    .then(function(r){if(!r.ok)throw new Error("status");dropToast();refreshPanel(tid)})
+    .catch(function(){u.disabled=false;s.textContent="Could not undo \\u00b7"})});
+  t.appendChild(u);document.body.appendChild(t);tt=t;tm=setTimeout(dropToast,15000)}
+if(document.addEventListener)document.addEventListener("submit",function(e){
+  var fm=e.target;if(!fm||!/(^|\\s)cdel(\\s|$)/.test(fm.className||"")||typeof fetch!=="function")return;
+  var cid=(fm.getAttribute("action")||"").split("/")[2];if(!cid)return;
+  e.preventDefault();
+  var th=fm,tid=null;while(th&&!(th.getAttribute&&th.getAttribute("data-mark-id")))th=th.parentNode;
+  if(th)tid=th.getAttribute("data-mark-id");
+  fetch("/c/"+cid+"/delete",{method:"POST",headers:{Accept:"application/json"},credentials:"same-origin"})
+  .then(function(r){if(!r.ok)throw new Error("status");undoToast(cid,tid);refreshPanel(tid)})
+  .catch(function(){location.reload()})});
 if(!form)return;
 bar=document.createElement("div");bar.className="selbar";bar.hidden=true;
 // The pill's actions, [kind, label]. Comment opens the composer for his words; Explain,
@@ -3661,12 +3691,27 @@ def _bubble(row, tokens: dict[str, str] | None = None) -> str:
     # `quoted()` below (final review, Item 4a).
     note = f"<p>{escape(row.body)}</p>" if row.body.strip() else ""
     held = '<span class="htag">held</span>' if getattr(row, "held", False) else ""
+    if getattr(row, "deleted_at", None):
+        # Its author took it back out; replies under it keep the thread whole. No words,
+        # no pictures, no actions.
+        return (
+            f'<li class="cmt gone {escape(row.author_kind)}">'
+            "<p>Comment deleted</p></li>"
+        )
+    # Delete is his own comments only (the route answers 404 to anything else).
+    own = row.author_kind == "human" and row.author == settings.owner_id()
+    delete = (
+        f'<form class="cdel" method="post" action="/c/{escape(row.id)}/delete">'
+        '<button type="submit">Delete</button></form>'
+        if own
+        else ""
+    )
     return (
         f'<li class="cmt {escape(row.author_kind)}">'
         f'<span class="cwho">{who}</span>'
         f"{via}"
         f'<span class="cwhen">{escape(when)}</span>'
-        f"{held}"
+        f"{held}{delete}"
         f"{note}{_pictures(row, tokens)}</li>"
     )
 
@@ -7621,5 +7666,40 @@ def gallery_router(db: Database) -> APIRouter:
         except store.NotFound as exc:
             raise HTTPException(404, "no such comment") from exc
         return RedirectResponse(f"/a/{row.artifact_id}#comments", status_code=303)
+
+    def _delete_answer(request: Request, row):
+        if "application/json" in request.headers.get("accept", ""):
+            return {"id": row.id, "deleted": row.deleted_at is not None}
+        return RedirectResponse(f"/a/{row.artifact_id}#comments", status_code=303)
+
+    @router.post("/c/{comment_id}/delete")
+    def delete_comment(
+        request: Request,
+        comment_id: str,
+        _guard: None = Depends(_same_origin_write),
+    ):
+        try:
+            row = comments.delete(
+                db, comment_id, author_kind="human", author=settings.owner_id()
+            )
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such comment") from exc
+        return _delete_answer(request, row)
+
+    @router.post("/c/{comment_id}/restore")
+    def restore_comment(
+        request: Request,
+        comment_id: str,
+        _guard: None = Depends(_same_origin_write),
+    ):
+        try:
+            row = comments.restore(
+                db, comment_id, author_kind="human", author=settings.owner_id()
+            )
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such comment") from exc
+        except comments.RestoreExpired as exc:
+            raise HTTPException(409, "too late to restore this comment") from exc
+        return _delete_answer(request, row)
 
     return router

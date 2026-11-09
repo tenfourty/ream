@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-09f",
+        "You can delete a comment you wrote, with a short undo: ream delete-comment ID (DELETE /api/v1/comments/ID; the MCP comment tool has it too), and ream restore-comment ID (POST /api/v1/comments/ID/restore) takes it back for 10 minutes. It is a soft delete and only your own comments: anyone else's answers as if it did not exist. Under a thread others replied in, a 'Comment deleted' placeholder stays; a thread with nothing live left disappears. The page's owner hears of it as a comment_deleted event (comment_restored on undo). Your tool updates itself to learn the verbs.",
+    ),
+    (
         "2026-11-09e",
         "Say whether commenting starts on or off on each page you publish: ream publish FILE --comments on|off (pass it now in every script: it will soon be REQUIRED for a NEW page; the API field is comments on POST and PATCH /api/v1/pages, and POST /api/v1/pages/ID/comments-setting or ream publish --update ID --comments on|off changes it alone; MCP publish_page and update_page take comments, organise_page has comments_on and comments_off). Off suits a page a script redraws or a status board: no pill on selected words and nothing inviting a comment, but the reader can still turn commenting on for that page, and their choice wins there. Today a NEW page that does not say is accepted and reads as on; once the service starts refusing it (422), a script without the flag fails, so add it now. Your tool updates itself to learn the flag. An update needs nothing, and pages from before stay as they were (on).",
     ),

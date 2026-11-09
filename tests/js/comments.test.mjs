@@ -1060,5 +1060,49 @@ const REAL = (id, opts = {}) => { const li = threadLi(id, opts); li.html = "<li>
   g.framePosts.length = 0;
   g.tap({ closest: (sel) => (sel === "#comments li.thread" ? t : lp.closest(sel)) });
   ok(g.framePosts.length === 1 && g.framePosts[0][0].id === "e1", "a press on a later comment's text names the thread's mark"); }
+// DELETING YOUR OWN COMMENT (9 Nov 2026): the Delete form in a bubble, in the panel or in the card's copy,
+// is posted with fetch; a toast offers Undo for about fifteen seconds; the panel is refreshed.
+const withDelete = (li, cid) => { const f = el("form"); f.className = "cdel"; f.setAttribute("action", "/c/" + cid + "/delete");
+  li.querySelector(".cmt").appendChild(f); return f; };
+const toastOf = (g) => g.docBody.children.find((c) => c.className === "newer ctoast");
+{ const fetches = [];
+  const g = build({ marks: HMARKS, threads: hthreads(), fetchImpl: (url, o) => { fetches.push([url, o]); return Promise.resolve({ ok: true, status: 200 }); } });
+  g.docOn["ream-refresh"] = [(e) => { e.detail.handled = true; }];
+  const fm = withDelete(g.tlist.children[1], "c9");
+  const ev = g.submit(fm); await tick(); await tick();
+  ok(ev.prevented && fetches.length === 1 && fetches[0][0] === "/c/c9/delete" && fetches[0][1].method === "POST"
+     && fetches[0][1].headers.Accept === "application/json" && fetches[0][1].credentials === "same-origin",
+     "Delete posts the comment's delete action as JSON, with the cookie");
+  ok(g.dispatched.some((e) => e.type === "ream-refresh"), "then the panel is asked to refresh");
+  const t = toastOf(g);
+  ok(t && t.children[0].textContent === "Deleted \u00b7" && t.children[1].textContent === "Undo", "a toast says Deleted and offers Undo");
+  g.clk.advance(14000); ok(toastOf(g) === t, "it is still there after fourteen seconds");
+  g.clk.advance(1500); ok(!toastOf(g), "and gone after about fifteen");
+  g.submit(fm); await tick(); await tick();
+  g.dispatched.length = 0;
+  toastOf(g).children[1].on.click({}); await tick(); await tick();
+  ok(fetches[2][0] === "/c/c9/restore" && fetches[2][1].method === "POST", "Undo posts the restore action");
+  ok(!toastOf(g) && g.dispatched.some((e) => e.type === "ream-refresh"), "the toast goes and the panel is refreshed again"); }
+{ // From the card: the card's cloned form works the same, and a refused restore says so.
+  const fetches = [];
+  const g = build({ marks: HMARKS, threads: hthreads(), fetchImpl: (url, o) => { fetches.push(url);
+    return Promise.resolve({ ok: !/restore/.test(url), status: /restore/.test(url) ? 409 : 200 }); } });
+  g.docOn["ream-refresh"] = [(e) => { e.detail.handled = true; }];
+  withDelete(g.tlist.children[1], "c9");
+  g.send(HOV("m2")); g.clk.advance(150);
+  const cf = g.card()[0].querySelector("form.cdel");
+  ok(cf && cf.parentNode, "the card carries a copy of the Delete form");
+  const ev = g.submit(cf); await tick(); await tick();
+  ok(ev.prevented && fetches[0] === "/c/c9/delete" && toastOf(g), "deleting from the card posts it and shows the toast");
+  toastOf(g).children[1].on.click({}); await tick(); await tick();
+  ok(toastOf(g) && toastOf(g).children[0].textContent === "Could not undo \u00b7" && toastOf(g).children[1].disabled === false,
+     "an Undo the server refuses says so and can be tried again"); }
+{ let reloaded = 0;
+  const g = build({ marks: HMARKS, threads: hthreads(), fetchImpl: () => Promise.reject(new Error("net")) });
+  g.location.reload = () => { reloaded++; };
+  g.submit(withDelete(g.tlist.children[1], "c9")); await tick(); await tick();
+  ok(reloaded === 1 && !toastOf(g), "a failed delete reloads the page and shows no toast");
+  const other = el("form"); other.className = "cresolve";
+  ok(!g.submit(other).prevented, "a form that is not a Delete is left alone"); }
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

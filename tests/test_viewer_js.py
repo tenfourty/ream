@@ -143,7 +143,7 @@ def test_the_comment_on_selection_button_behaves_when_actually_run(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
-    assert passed >= 289, result.stdout
+    assert passed >= 301, result.stdout
 
 
 _LIVEJS = Path(__file__).parent / "js" / "live.test.mjs"

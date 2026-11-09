@@ -500,6 +500,40 @@ def test_a_reply_being_typed_survives_and_full_screen_shows_the_card(
         ctx.close()
 
 
+def test_the_card_deletes_his_own_comment_and_undo_brings_it_back(browser, served, db):
+    """9 Nov 2026: Delete in the card removes his own comment (the thread, its mark and the
+    card go with it), a toast offers Undo, and Undo puts the comment back."""
+    origin, ident = served
+    root = _mark(db, ident, 3, "DELETEME note")
+    ctx, pg, errors = _open_page(browser, origin, ident, 1400)
+    try:
+        _frame_height_settled(pg)
+        _marks_painted(pg.frames[1], 1)
+        _point_at(pg, 3)
+        card = pg.locator(".hovercard")
+        card.wait_for(state="visible", timeout=3000)
+        card.locator("form.cdel button").click()
+        pg.locator(".ctoast").wait_for(state="visible", timeout=5000)
+        assert "Deleted" in pg.locator(".ctoast").inner_text()
+        pg.wait_for_function(
+            "() => !document.querySelector('.hovercard')"
+            " && !document.querySelector('#comments').innerText.includes('DELETEME')",
+            timeout=8000,
+        )
+        assert comments.list_for_artifact(db, ident, include_resolved=True) == []
+        pg.locator(".ctoast button", has_text="Undo").click()
+        pg.wait_for_function(
+            "() => document.querySelector('#comments').innerText.includes('DELETEME')"
+            " && !document.querySelector('.ctoast')",
+            timeout=8000,
+        )
+        back = comments.list_for_artifact(db, ident, include_resolved=True)
+        assert [r.id for r in back] == [root.id] and back[0].deleted_at is None
+        assert not errors, errors
+    finally:
+        ctx.close()
+
+
 def test_the_card_replies_and_settles_in_place(browser, served, db):
     """9 Nov 2026: the card over marked words does what the panel does. A reply
     typed in it and sent with Enter lands in the thread and the card shows it;

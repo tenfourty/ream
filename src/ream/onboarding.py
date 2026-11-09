@@ -193,6 +193,8 @@ last word is {{owner_theirs}}:
     ream reply <thread-id> "your answer"     # {{owner_they}} see{{owner_s}} it on the page
     ream settle <thread-id>                  # when it is dealt with
     ream reopen <thread-id>                  # if it was settled too soon
+    ream delete-comment <comment-id>         # one you wrote by mistake (the old artifacts-decide delete-comment works too)
+    ream restore-comment <comment-id>        # takes a deletion back, for 10 minutes only
 
 If {{OWNER_THEY}} reopen{{owner_s}} a thread {{owner_they}} had settled (the Reopen button in the comments panel), you get a
 `thread_reopened` event (actor {{owner_id}}, ref_id the thread's id, summary "reopened: <what it
@@ -896,6 +898,8 @@ answer is a broken promise, and so is an unanswered comment:
     ream reply <thread-id> "your answer"
     ream settle <thread-id>
     ream reopen <thread-id>                    # puts a settled thread back among the open ones (silent: only {{OWNER_THEIR}} reopen wakes you, as a thread_reopened event)
+    ream delete-comment <comment-id>           # soft delete of a comment YOU wrote; anyone else's answers as if missing. A thread others replied in keeps a "Comment deleted" placeholder
+    ream restore-comment <comment-id>          # within 10 minutes of the delete (409 after); the page's owner, if not you, gets comment_deleted / comment_restored events
 
 To comment on another office's page (any page open to agents), whole or on a
 quoted passage; its owner is told, and the output names them:

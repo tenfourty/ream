@@ -444,9 +444,10 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt re-taken again, and the artifacts-decide help, on 9 Nov 2026 for the review fixes (em dash, publisher-only kinds, help names the new kinds).
 # agents.txt re-taken on 9 Nov 2026 for the default body words and "a reply is always owed" (settling without one is refused).
 # agents.txt, skill.md and the artifacts-publish help re-taken on 9 Nov 2026 for the per-page comments setting (step 1: asked for, not yet required).
+# agents.txt, skill.md and the artifacts-decide help re-taken on 9 Nov 2026 for delete-comment / restore-comment.
 GOLDEN = {
-    "agents.txt": "a7ef0fbb233211310dcd5aaacd772717e892f470fb8352de8ba2cc7f5c90a710",
-    "skill.md": "1b5961876c5a397262358697757e81e006fe30bd677f32e29f7d3846ac7ad513",
+    "agents.txt": "e0026f590296e48b46c870047ec6e40b6112bd02243d05e422be1745df8cf507",
+    "skill.md": "e6c68316e51e8ffcf96f6e0dbd750725d4aca6cd273cb75aea84af88f033c986",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"
@@ -491,7 +492,7 @@ NEWS_TAIL = 26  # every entry so far; newer ones are added in front, so these ne
 NEWS_TAIL_DIGEST = "08b7ad27fd383101cc42c10f0994c8368d6fa5b33dc1617635d6068b5902f467"
 HELP_DIGEST = {
     "artifacts-publish": "15f17397e44e4a050aaa22cabc01e6d462ba19a335c7beb39492430b519f638b",
-    "artifacts-decide": "e8a9964cc83de7742fb1f5538cb3166cb785b445adb922e4465570fcce20397d",
+    "artifacts-decide": "2a31c966178e2ea6ce7fa9f4ecb40c7c4e4b9506890802b05534e75dd3572a10",
 }
 
 

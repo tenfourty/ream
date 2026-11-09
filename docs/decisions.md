@@ -636,3 +636,22 @@ shown. The reader's switch overriding every page. The page's setting being fixed
 reader's choice. Tools-only enforcement with a grace list for the server. No requirement.
 
 **Evidence:** confirmed (Jeremy, 9 Nov 2026).
+
+## Delete your own comment, with undo (9 Nov 2026)
+
+The owner can delete his own comments, in the comment card over highlighted words and in the
+sidebar panel, and an agent can delete its own over the API (`DELETE /api/v1/comments/{id}`,
+`ream delete-comment`, the MCP `comment` tool). Everyone gets an undo for 10 minutes: the gallery
+shows "Deleted · Undo" for about 15 seconds, and the API and tools restore (`POST
+/api/v1/comments/{id}/restore`, `ream restore-comment`) until the window closes, after which it
+answers 409. It is a soft delete: the row stays, and the page's owning agent hears of it as a
+`comment_deleted` (and `comment_restored`) event. Only your own comment can be deleted; anyone
+else's answers exactly as if it did not exist. A deleted first comment that others replied under
+stays as a "Comment deleted" placeholder with no words, so the thread is not torn in two; a thread
+with nothing live left disappears, and its mark leaves the page. Settling a thread is already the
+archive, so there is no separate archive for comments.
+
+**Not chosen:** "settling is enough". It lost because he wants to remove a comment made by
+mistake, not only put it out of the way.
+
+**Evidence:** Jeremy, 9 Nov 2026.

@@ -1573,12 +1573,22 @@ def resolve(
             # settled, in words, rather than only by id.
             owner = conn.execute(
                 "select artifact.agent, artifact.title, artifact.session,"
-                " root.body, root.quote, root.held"
+                " root.body, root.quote, root.held, root.deleted_at"
                 " from comment root join artifact on artifact.id = root.artifact_id"
                 " where root.id = %s",
                 (root_id,),
             ).fetchone()
-            owning_agent, title, page_session, root_body, root_quote, root_held = owner
+            (
+                owning_agent,
+                title,
+                page_session,
+                root_body,
+                root_quote,
+                root_held,
+                gone,
+            ) = owner
+            if gone is not None:  # a deleted root's words never leave in an event
+                root_body = ""
             if agent is not None:
                 root_kind = conn.execute(
                     "select kind from comment where id = %s", (root_id,)
@@ -1680,16 +1690,23 @@ def reopen(
         if row is None:
             raise store.NotFound()
         root_id = row[3] if row[3] is not None else row[0]
-        owning_agent, title, page_session, root_body, root_quote, root_held, was = (
-            conn.execute(
-                "select artifact.agent, artifact.title, artifact.session,"
-                " root.body, root.quote, root.held, root.resolved_at"
-                " from comment root join artifact on artifact.id = root.artifact_id"
-                " where root.id = %s",
-                (root_id,),
-            ).fetchone()
-        )
-        summary = _reopened_summary(root_quote, root_body)
+        (
+            owning_agent,
+            title,
+            page_session,
+            root_body,
+            root_quote,
+            root_held,
+            was,
+            gone,
+        ) = conn.execute(
+            "select artifact.agent, artifact.title, artifact.session,"
+            " root.body, root.quote, root.held, root.resolved_at, root.deleted_at"
+            " from comment root join artifact on artifact.id = root.artifact_id"
+            " where root.id = %s",
+            (root_id,),
+        ).fetchone()
+        summary = _reopened_summary(root_quote, "" if gone is not None else root_body)
         with conn.transaction():
             conn.execute(
                 "update comment set resolved_at = null, resolved_by = null"
