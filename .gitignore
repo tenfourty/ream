@@ -5,3 +5,6 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 dist/
+
+# Claude Code saves "don't ask again" approvals here, word for word: never commit it.
+/.claude/settings.local.json
