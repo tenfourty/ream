@@ -315,7 +315,7 @@ def test_the_owner_claim_and_value_are_settings(provider, db):
     with settings.override(oidc_owner_claim="email", oidc_owner_value="j@example.org"):
         start = oidc.begin(CALLBACK)
         provider.id_token_override = provider.sign(
-            provider.good(start.nonce, email="j@example.org")
+            provider.good(start.nonce, email="j@example.org", email_verified=True)
         )
         assert oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK).person == (
             settings.owner_id()
