@@ -3963,7 +3963,15 @@ def _ago(moment: datetime | None) -> str:
     return moment.strftime("%-d %b")
 
 
-def _provenance(row) -> str:
+def _passed_on(row, hosts: dict[str, str] | None) -> tuple[str, str]:
+    """For an answer a signed-in app passed on (source `mcp`, MCP design 11.5): where he said
+    it ("claude.ai", the app's host) and who recorded it ("Jeremy, via claude.ai"). Both
+    escaped; the host comes from the app, never a literal."""
+    host = (hosts or {}).get(row.recorded_by or "") or "an app"
+    return escape(host), escape(mcp_apps.via(host))
+
+
+def _provenance(row, hosts: dict[str, str] | None = None) -> str:
     """Who wrote a relayed answer down, from where, and when he said it.
 
     Empty for a tap: the ordinary case needs no explanation, and a badge on
@@ -3972,6 +3980,15 @@ def _provenance(row) -> str:
     """
     if not row.answer_source or row.answer_source == "page":
         return ""
+    if row.answer_source == decisions.MCP_SOURCE:
+        where, recorder = _passed_on(row, hosts)
+        said = f" ({escape(_when(row.said_at))})" if row.said_at else ""
+        return (
+            f'<p class="relayed-note">{escape(settings.owner_name())} said '
+            f"({escape(row.answer or '')}) in {where}{said}. Recorded by {recorder}, "
+            "not tapped on this page. If that is not what you meant, answer it "
+            "again here.</p>"
+        )
     if row.answer_source == "slack":
         return (
             f'<p class="relayed-note">You answered this in {_partner()}, verified by '
@@ -4248,6 +4265,7 @@ def _render_decisions(
     note_threads: dict[str, list] | None = None,
     prev_read_at: datetime | str | None = None,
     routes: dict[str, listening.Route] | None = None,
+    app_hosts: dict[str, str] | None = None,
 ) -> tuple[str, str]:
     """The asks block: one `<form>` per open-or-answered decision, each with a submit
     button per lettered option -- the whole interaction the MVP exists to offer, and
@@ -4645,7 +4663,14 @@ def _render_decisions(
             # `answer_source` is never null on an answered row, so an unmarked
             # entry here genuinely means he tapped it.
             relayed = ""
-            if row.answer_source == "slack":
+            if row.answer_source == decisions.MCP_SOURCE:
+                where, _ = _passed_on(row, app_hosts)
+                relayed = (
+                    f'<span class="relayed" title="{escape(settings.owner_name())} said '
+                    f'this in {where}; passed on by the app, not tapped on this page">'
+                    f"said in {where}</span>"
+                )
+            elif row.answer_source == "slack":
                 relayed = (
                     f'<span class="relayed" title="Answered in {_partner()}, '
                     f'verified by {_sink_name()}; not tapped on this page">'
@@ -4678,7 +4703,7 @@ def _render_decisions(
                 # he sees it without opening the entry.
                 + (_presence_line(row, "span") if row.answer == "c" else "")
                 + "</summary>"
-                f'<div class="settled-body">{_provenance(row)}{pickup}{note}'
+                f'<div class="settled-body">{_provenance(row, app_hosts)}{pickup}{note}'
                 f"{thread_html}"
                 # SAID WHERE THE HAND IS. The section already carries "nothing
                 # here is locked", but that sits at the foot of the whole list,
@@ -6285,6 +6310,13 @@ def gallery_router(db: Database) -> APIRouter:
             round_view=round_view,
             presence=presence,
             listening_since=events.last_read(db, row[2]),
+            app_hosts={
+                r.recorded_by: found.host
+                for r in shown_rows
+                if r.answer_source == decisions.MCP_SOURCE
+                and r.recorded_by
+                and (found := mcp_apps.mcp_agent(db, r.recorded_by)) is not None
+            },
             routes=listening.for_decisions(
                 db,
                 row[2],

@@ -1232,18 +1232,31 @@ def close_question(db: Database, agent: str, decision_id: str) -> dict:
 
 
 def record_relay(
-    db: Database, agent: str, decision_id: str, payload: RecordBody
+    db: Database,
+    agent: str,
+    decision_id: str,
+    payload: RecordBody,
+    *,
+    by_app: bool = False,
 ) -> dict:
-    """POST /decisions/{id}/record, for the route and the MCP `record_answer` tool."""
+    """POST /decisions/{id}/record, for the route and the MCP `record_answer` tool.
+
+    `by_app`: a signed-in app passing on what the person said in its chat (MCP design
+    11.5). The source is then `mcp` and only `mcp`, the question may be on any page, and
+    it is stored as the same relay a key's is, never as a tap. A key's route never sets it."""
     said_at = None
     if payload.said_at:
         try:
             said_at = datetime.fromisoformat(payload.said_at)
         except ValueError:
             raise HTTPException(422, "said_at must be an ISO 8601 timestamp") from None
-    found = decisions.get_owned(db, agent, decision_id)
+    found = (
+        decisions.get_any(db, decision_id)
+        if by_app
+        else decisions.get_owned(db, agent, decision_id)
+    )
     if found is not None and found.kind == "form":
-        return _record_form(db, found, payload, said_at, agent)
+        return _record_form(db, found, payload, said_at, agent, by_app=by_app)
     if payload.fields is not None:
         if found is None:
             raise HTTPException(404, "no such open decision")
@@ -1262,6 +1275,7 @@ def record_relay(
             recorded_by=agent,
             said_at=said_at,
             round=payload.round,
+            by_app=by_app,
         )
     except decisions.InvalidSource:
         raise HTTPException(
@@ -1598,10 +1612,22 @@ def add_comment(
         raise HTTPException(404, "no such page") from exc
 
 
-def _record_form(db: Database, found, payload: RecordBody, said_at, agent: str):
+def _record_form(
+    db: Database,
+    found,
+    payload: RecordBody,
+    said_at,
+    agent: str,
+    *,
+    by_app: bool = False,
+):
     """The per-field relay of a form (formanswer.relay): every field stored with its
     source, none of it his own submit, none over a later submit of his."""
-    if payload.source not in decisions.relay_sources():
+    if (
+        payload.source != decisions.MCP_SOURCE
+        if by_app
+        else (payload.source not in decisions.relay_sources())
+    ):
         raise HTTPException(
             422,
             "source must be one of "
@@ -1643,7 +1669,7 @@ def _record_form(db: Database, found, payload: RecordBody, said_at, agent: str):
         raise HTTPException(
             503, {"field": exc.field, "detail": _SCAN_FAILED_DETAIL}
         ) from exc
-    row = decisions.get_owned(db, agent, found.id)
+    row = decisions.get_any(db, found.id)
     out = decisions.public(row)
     out["relayed"] = {"applied": done["applied"], "skipped": done["skipped"]}
     return out

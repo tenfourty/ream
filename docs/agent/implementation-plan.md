@@ -2622,6 +2622,14 @@ Docs land with the code (the agent guide and `agents.txt` from slice 1; the runb
   an app through `oauth.end_app` (reasons `owner`, `admin`). No `/api/v1` twin: §10 gives agents
   only `POST /oauth/revoke` (the app ending itself) and says no tool lists or revokes apps.
 
+- **Ledger, slice 7 (9 Nov 2026):** built on `ci/mcp-slice7`: `decisions.MCP_SOURCE` (`mcp`, a
+  core stored source, in `CORE_SOURCES` and reserved against plug-ins, not in `ANSWER_SOURCES`);
+  `record_elsewhere(..., by_app=True)` is the only writer and takes `mcp` and nothing else, a key's
+  path refuses `mcp`. `record_answer` for an app with `relay` goes through `api.record_relay(...,
+  by_app=True)`: any open question on any page the app reads (`decisions.get_any`), forms per
+  field via `formanswer.relay`; the review's first-verdict rule is untouched. Gallery:
+  "Jeremy said (b) in claude.ai" with "Recorded by Jeremy, via claude.ai" (host from the app).
+
 ### Slice 7 (S): his Claude passes on his answers
 
 - **Builds:** the core stored source `mcp`; `record_answer` for an app with `relay` on any open

@@ -1096,8 +1096,13 @@ def list_for_agent(
 # reader can switch on it, and so a seat cannot invent a source that sounds more
 # authoritative than it is.
 ANSWER_SOURCES = ("terminal", "telegram", "in-person", "other")
-# The sources core itself writes: a tap, and the four a seat may relay from.
-CORE_SOURCES = ("page", *ANSWER_SOURCES)
+# 'mcp' is a signed-in app passing on what the person said in its chat (MCP design 11.5).
+# Like 'slack' it is stored but NOT in ANSWER_SOURCES: only `record_elsewhere(...,
+# by_app=True)`, called from the `record_answer` tool for an app holding `relay`, writes
+# it, so a key cannot claim it and an app can claim no other source.
+MCP_SOURCE = "mcp"
+# The sources core itself writes: a tap, the four a seat may relay from, and the app's.
+CORE_SOURCES = ("page", *ANSWER_SOURCES, MCP_SOURCE)
 
 # Sources a plug-in writes, registered at import time (core-and-plugins design,
 # section 5). A stored value is data, not code: a row whose source is not
@@ -1120,7 +1125,7 @@ _ROUTE_LABELS: dict[str, str] = {}
 # Names no plug-in may register: 'slack' means quarterdeck verified who pressed, and
 # core's partner bridge alone stores it; a plug-in taking it with relay=True would let
 # an agent key record answers stamped as Slack-verified.
-_RESERVED_SOURCES = ("page", "slack")
+_RESERVED_SOURCES = ("page", "slack", "mcp")
 
 _SOURCE_NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 
@@ -1677,6 +1682,7 @@ def record_elsewhere(
     recorded_by: str,
     said_at: datetime | None = None,
     round: int | None = None,
+    by_app: bool = False,
 ) -> DecisionRow:
     """Record an answer Jeremy gave somewhere that is not the page.
 
@@ -1708,7 +1714,12 @@ def record_elsewhere(
     REVIEW is refused too: the first verdict counts, relayed or tapped.
     `round`, when given, must be the review's current round (see `answer`).
     """
-    if source not in relay_sources():
+    # A signed-in app relays as source 'mcp' and nothing else; a key relays as anything
+    # but 'mcp' (it is not in `relay_sources()`), so neither can claim the other's.
+    if by_app:
+        if source != MCP_SOURCE:
+            raise InvalidSource(source)
+    elif source not in relay_sources():
         raise InvalidSource(source)
     require_stored_source(source)
     if not recorded_by:
@@ -2111,6 +2122,17 @@ def get_owned(db: Database, agent: str, decision_id: str) -> DecisionRow | None:
             " join artifact on artifact.id = decision.artifact_id"
             " where decision.id = %s and artifact.agent = %s",
             (decision_id, agent),
+        ).fetchone()
+        return None if row is None else _with_held(conn, [_row_to_decision(row)])[0]
+
+
+def get_any(db: Database, decision_id: str) -> DecisionRow | None:
+    """One decision whoever's page it is, for a caller that reads every page (a signed-in
+    app, MCP design 11.2/11.5). Never reach it from a key's route: `get_owned` is theirs."""
+    with db.connect() as conn:
+        row = conn.execute(
+            f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
+            (decision_id,),
         ).fetchone()
         return None if row is None else _with_held(conn, [_row_to_decision(row)])[0]
 

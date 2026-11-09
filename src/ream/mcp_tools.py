@@ -1019,9 +1019,11 @@ _RECORD_FIELDS = {
     "record_answer",
     title="Pass on an answer",
     description=(
-        "Pass on the answer the person gave you, somewhere other than its page, to one "
-        "of your open questions: the letter, their words (required) and where they said "
-        "it (source). Stored as a relay recorded by you, never as their own tap."
+        "Pass on the answer the person gave you, somewhere other than its page, to an "
+        "open question: the letter and their words (required), in full. Connected app: "
+        "any open question put to the person, on any page you can read; the source is "
+        "recorded for you (mcp). Key: your own open questions, and where they said it "
+        "(source). Stored as a relay recorded by you, never as their own tap."
     ),
     read_only=False,
     destructive=False,
@@ -1035,22 +1037,29 @@ _RECORD_FIELDS = {
             "words": {"type": "string", "description": "What they said, in full."},
             "source": {
                 "type": "string",
-                "description": "Where they said it: "
-                + ", ".join(decisions.ANSWER_SOURCES),
+                "description": "Key only: where they said it: "
+                + ", ".join(decisions.ANSWER_SOURCES)
+                + ". A connected app leaves it out.",
             },
             "said_at": {"type": "string", "description": "When (ISO 8601)."},
             "round": {"type": "integer"},
             "fields": {"type": "object"},
         },
-        ("decision_id", "words", "source"),
+        ("decision_id", "words"),
     ),
 )
 def _record_answer(call: Call, arguments: dict[str, Any]) -> dict:
-    if call.app is not None or not call.reach.can_relay:
-        # A signed-in app relays only as source `mcp` (11.5), not built yet: meanwhile
-        # it may not claim a key's sources.
-        raise ToolError("Passing on answers from a connected app is not available yet")
+    if not call.reach.can_relay:
+        raise ToolError("You were not given leave to pass on answers")
     _only(arguments, {"decision_id", *_RECORD_FIELDS})
+    by_app = call.app is not None
+    if by_app:
+        # 11.5: an app relays as `mcp` and can claim no other source.
+        if arguments.get("source") not in (None, decisions.MCP_SOURCE):
+            raise ToolError(
+                "leave source out: a connected app's answers are recorded as mcp"
+            )
+        arguments = {**arguments, "source": decisions.MCP_SOURCE}
     decision_id = _str(arguments, "decision_id", required=True)
     words = arguments.get("words")
     if not isinstance(words, str) or not words.strip():
@@ -1058,7 +1067,9 @@ def _record_answer(call: Call, arguments: dict[str, Any]) -> dict:
     if arguments.get("source") is None:
         raise ToolError("source is required: where they said it")
     payload = _body(api.RecordBody, arguments, _RECORD_FIELDS)
-    return jsonable_encoder(api.record_relay(call.db, call.agent, decision_id, payload))
+    return jsonable_encoder(
+        api.record_relay(call.db, call.agent, decision_id, payload, by_app=by_app)
+    )
 
 
 # --- Resources ------------------------------------------------------------------------

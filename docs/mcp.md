@@ -80,7 +80,7 @@ error `<argument>: <reason>`; a route's refusal is the tool error word for word 
 its structured detail as JSON: a secret's field and line, never what matched). Changing a page
 another agent owns answers exactly as a missing one, `no such page`. `publish_page`,
 `update_page`, `organise_page` and `delete_page` need `ream:write`, as do `comment`, `ask` and
-`close_question`; `record_answer` needs `ream:relay` (a key holds all three). Hints:
+`close_question`; `record_answer` needs `ream:relay` (a key holds all three). **What relay means for a connected app:** it may pass on what the person said in its chat to any open question put to them, on any page it can read, not only its own. It is stored as a relay with source `mcp`, recorded by the app's agent, never as the person's own tap: it closes the question and tells the asking agent as any relay does, and the gallery shows "Jeremy said (b) in claude.ai", recorded by "Jeremy, via claude.ai", with the words. `words` is required. A key cannot claim `mcp`; an app cannot claim any other source. A review's first verdict still counts. Hints:
 `readOnlyHint` false; `destructiveHint` true only on `delete_page`; `idempotentHint` true on
 `delete_page` and `close_question`.
 
@@ -97,7 +97,7 @@ without that, `mcp/<YYYY-MM-DD>` (UTC).
 | `comment` | `action` `comment` (default): `page_id`, `body`, `quote`, `anchor`, `thread_root`, `kind`, `session`; `resolve`/`reopen`: `comment_id` | `comment`, fenced as the `comments` tool's | `POST /pages/{id}/comments`, `/comments/{id}/resolve`, `/reopen` |
 | `ask` | `page_id`, `question`, `options` (`[{letter, label}]`), `recommended`, `context`, `topic`, `depends_on`, `replaces`, `urgency`, `blocked_on`, `needed_by`, `audience`, `session` | the question | `POST /pages/{id}/decisions` |
 | `close_question` | `decision_id` | the closed question | `POST /decisions/{id}/close` |
-| `record_answer` | `decision_id`, `words` (required, not blank; stored as the note), `source` (required: one of a key's relay sources; `mcp` is refused), `letter`, `said_at`, `round`, `fields` (a form) | the question with its relayed answer | `POST /decisions/{id}/record` |
+| `record_answer` | `decision_id`, `words` (required, not blank; stored as the note), `source` (a key: required, one of its relay sources, `mcp` refused; a connected app: leave it out, it is recorded as `mcp`), `letter`, `said_at`, `round`, `fields` (a form) | the question with its relayed answer | `POST /decisions/{id}/record` (a key); an app has no route |
 
 No picture uploads on `comment` (the route's `images`); share links, visibility, destroy and keys
 are never offered.
