@@ -222,6 +222,9 @@ class Settings:
     # must have for the one reader (unset: the owner id).
     oidc_owner_claim: str = ""
     oidc_owner_value: str = ""
+    # The provider's `sub` of the one reader. Unset: the first owner sign-in pins issuer+sub in
+    # `service_meta` and a later different sub is refused. Set, it wins over the pin.
+    oidc_owner_subject: str = ""
     # Stored on the app; unused in the core (unset: `groups`).
     oidc_groups_claim: str = ""
 
@@ -525,6 +528,7 @@ _ENV = {
     "oidc_scopes": "REAM_OIDC_SCOPES",
     "oidc_owner_claim": "REAM_OIDC_OWNER_CLAIM",
     "oidc_owner_value": "REAM_OIDC_OWNER_VALUE",
+    "oidc_owner_subject": "REAM_OIDC_OWNER_SUBJECT",
     "oidc_groups_claim": "REAM_OIDC_GROUPS_CLAIM",
 }
 if set(_ENV) != {f.name for f in fields(Settings)}:

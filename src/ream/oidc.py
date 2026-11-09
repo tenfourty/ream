@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from urllib.parse import urlencode, urlsplit
 
 from ream import settings, webhook
+from ream.db import Database
 
 FETCH_SECONDS = 5.0
 MAX_DOCUMENT = 256 * 1024
@@ -226,7 +227,9 @@ def begin(redirect_uri: str) -> Start:
 # --- Step two: the person is back ---------------------------------------------------------
 
 
-def finish(code: str, verifier: str, nonce: str, redirect_uri: str) -> Login:
+def finish(
+    db: Database, code: str, verifier: str, nonce: str, redirect_uri: str
+) -> Login:
     """Exchange `code`, check the ID token and the single reader. Raises SignInRefused or
     NotOwner; returns a Login for the owner."""
     cfg = settings.current()
@@ -257,7 +260,7 @@ def finish(code: str, verifier: str, nonce: str, redirect_uri: str) -> Login:
     if not isinstance(token, str) or not token:
         raise SignInRefused("the sign-in provider sent no ID token")
     claims = verify_id_token(token, nonce)
-    return owner_login(claims)
+    return owner_login(db, claims)
 
 
 def _form_quote(value: str) -> str:
@@ -403,11 +406,21 @@ def _number(value) -> bool:
 # --- The one reader -----------------------------------------------------------------------
 
 
-def owner_login(claims: dict) -> Login:
-    """The Login for `claims` if they name the owner (section 13), else NotOwner. The claim
-    is a string, or a list that holds the value."""
+PIN_KEY = "oidc_owner_sub"
+
+
+def owner_login(db: Database, claims: dict) -> Login:
+    """The Login for `claims` if they name the owner (section 13), else NotOwner.
+
+    Three checks, all constant-time where they compare a secret-ish value:
+    * the claim is a string, or a list that holds the value; when the claim is `email`,
+      `email_verified` must also be exactly true (an address the person typed proves nothing);
+    * the `sub` is the owner's: `REAM_OIDC_OWNER_SUBJECT` if set, else the issuer+sub pinned in
+      `service_meta` by the first successful owner sign-in (a later different sub is refused);
+    * only then is the pin written (once; the loser of a race re-reads and compares)."""
     cfg = settings.current()
-    got = claims.get(cfg.oidc_owner_claim_name())
+    claim = cfg.oidc_owner_claim_name()
+    got = claims.get(claim)
     want = cfg.oidc_owner_value_or_default()
     held = got if isinstance(got, list) else [got]
     if not want or not any(
@@ -415,10 +428,29 @@ def owner_login(claims: dict) -> Login:
         for v in held
     ):
         raise NotOwner()
+    if claim == "email" and claims.get("email_verified") is not True:
+        raise NotOwner()
+    sub = claims["sub"]
+    if cfg.oidc_owner_subject:
+        if not hmac.compare_digest(sub.encode(), cfg.oidc_owner_subject.encode()):
+            raise NotOwner()
+    else:
+        value = f"{cfg.oidc_issuer} {sub}"
+        with db.connect() as conn:
+            conn.execute(
+                "insert into service_meta (key, value) values (%s, %s)"
+                " on conflict (key) do nothing",
+                (PIN_KEY, value),
+            )
+            pinned = conn.execute(
+                "select value from service_meta where key = %s", (PIN_KEY,)
+            ).fetchone()[0]
+        if not hmac.compare_digest(pinned.encode(), value.encode()):
+            raise NotOwner()
     groups = claims.get(cfg.oidc_groups_claim_name())
     return Login(
         cfg.owner_id,
-        claims["sub"],
+        sub,
         tuple(g for g in groups if isinstance(g, str))
         if isinstance(groups, list)
         else (),

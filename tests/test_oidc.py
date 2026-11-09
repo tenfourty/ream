@@ -135,16 +135,16 @@ def provider(tmp_path, monkeypatch):
     oidc.clear_caches()
 
 
-def run(provider, claims=None, alg="RS256", **sign):
+def run(provider, db, claims=None, alg="RS256", **sign):
     """begin, let the fake provider answer with a token, finish."""
     start = oidc.begin(CALLBACK)
     provider.id_token_override = provider.sign(
         claims if claims is not None else provider.good(start.nonce), alg=alg, **sign
     )
-    return start, oidc.finish("the-code", start.verifier, start.nonce, CALLBACK)
+    return start, oidc.finish(db, "the-code", start.verifier, start.nonce, CALLBACK)
 
 
-def test_begin_sends_the_person_with_pkce_state_and_nonce(provider):
+def test_begin_sends_the_person_with_pkce_state_and_nonce(provider, db):
     start = oidc.begin(CALLBACK)
     parts = urlsplit(start.url)
     query = {k: v[0] for k, v in parse_qs(parts.query).items()}
@@ -166,8 +166,8 @@ def test_the_pkce_challenge_matches_rfc_7636():
 
 
 @pytest.mark.parametrize("alg", ["RS256", "ES256"])
-def test_the_owner_signs_in(provider, alg):
-    start, login = run(provider, alg=alg)
+def test_the_owner_signs_in(provider, db, alg):
+    start, login = run(provider, db, alg=alg)
     assert login.person == settings.owner_id()
     assert login.subject == "u-1"
     assert login.groups == ("admins",)
@@ -183,126 +183,126 @@ def test_the_owner_signs_in(provider, alg):
     assert sent == f"{CLIENT}:{SECRET}"
 
 
-def refused(provider, text, **kw):
+def refused(provider, db, text, **kw):
     with pytest.raises(oidc.SignInRefused) as caught:
-        run(provider, **kw)
+        run(provider, db, **kw)
     assert text in str(caught.value)
     assert SECRET not in str(caught.value)
     return caught.value
 
 
-def test_a_wrong_nonce_is_refused(provider):
+def test_a_wrong_nonce_is_refused(provider, db):
     refused(provider, "different sign-in", claims=provider.good("someone-elses"))
 
 
-def test_a_missing_nonce_is_refused(provider):
+def test_a_missing_nonce_is_refused(provider, db):
     refused(provider, "different sign-in", claims=provider.good(None, nonce=None))
 
 
-def test_a_wrong_audience_is_refused(provider):
+def test_a_wrong_audience_is_refused(provider, db):
     start = oidc.begin(CALLBACK)
     claims = provider.good(start.nonce, aud="another-client")
     provider.id_token_override = provider.sign(claims)
     with pytest.raises(oidc.SignInRefused, match="another client"):
-        oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+        oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
 
 
-def test_an_audience_list_needs_our_azp(provider):
+def test_an_audience_list_needs_our_azp(provider, db):
     start = oidc.begin(CALLBACK)
     for azp, ok in ((None, False), ("other", False), (CLIENT, True)):
         claims = provider.good(start.nonce, aud=[CLIENT, "other"], azp=azp)
         provider.id_token_override = provider.sign(claims)
         if ok:
-            assert oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+            assert oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
         else:
             with pytest.raises(oidc.SignInRefused):
-                oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+                oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
 
 
-def test_a_wrong_issuer_is_refused(provider):
+def test_a_wrong_issuer_is_refused(provider, db):
     start = oidc.begin(CALLBACK)
     provider.id_token_override = provider.sign(
         provider.good(start.nonce, iss="https://evil.example")
     )
     with pytest.raises(oidc.SignInRefused, match="another issuer"):
-        oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+        oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
 
 
-def test_an_expired_token_is_refused_and_a_small_skew_is_not(provider):
+def test_an_expired_token_is_refused_and_a_small_skew_is_not(provider, db):
     start = oidc.begin(CALLBACK)
     now = int(time.time())
     provider.id_token_override = provider.sign(
         provider.good(start.nonce, iat=now - 400, exp=now - 120)
     )
     with pytest.raises(oidc.SignInRefused, match="expired"):
-        oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+        oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
     provider.id_token_override = provider.sign(
         provider.good(start.nonce, iat=now - 400, exp=now - 10)
     )
-    assert oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+    assert oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
 
 
-def test_a_token_issued_in_the_future_is_refused(provider):
+def test_a_token_issued_in_the_future_is_refused(provider, db):
     start = oidc.begin(CALLBACK)
     now = int(time.time())
     provider.id_token_override = provider.sign(
         provider.good(start.nonce, iat=now + 600, exp=now + 900)
     )
     with pytest.raises(oidc.SignInRefused, match="future"):
-        oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+        oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
 
 
-def test_a_token_without_exp_or_iat_is_refused(provider):
+def test_a_token_without_exp_or_iat_is_refused(provider, db):
     for missing in ("exp", "iat"):
         start = oidc.begin(CALLBACK)
         provider.id_token_override = provider.sign(
             provider.good(start.nonce, **{missing: None})
         )
         with pytest.raises(oidc.SignInRefused):
-            oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+            oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
 
 
-def test_a_bad_signature_or_algorithm_is_refused(provider):
+def test_a_bad_signature_or_algorithm_is_refused(provider, db):
     other = rsa.generate_private_key(65537, 2048)
     start = oidc.begin(CALLBACK)
     provider.id_token_override = provider.sign(provider.good(start.nonce), key=other)
     with pytest.raises(oidc.SignInRefused, match="signature"):
-        oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+        oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
     for alg in ("none", "HS256"):
         provider.id_token_override = provider.sign(provider.good(start.nonce), alg=alg)
         with pytest.raises(oidc.SignInRefused, match="algorithm"):
-            oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+            oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
 
 
-def test_an_unknown_key_id_is_refused(provider):
+def test_an_unknown_key_id_is_refused(provider, db):
     start = oidc.begin(CALLBACK)
     provider.id_token_override = provider.sign(provider.good(start.nonce), kid="zzz")
     with pytest.raises(oidc.SignInRefused, match="does not publish"):
-        oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+        oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
 
 
 @pytest.mark.parametrize("junk", ["", "a.b", "a.b.c", "!!.??.@@"])
-def test_a_malformed_token_is_refused(provider, junk):
+def test_a_malformed_token_is_refused(provider, db, junk):
     start = oidc.begin(CALLBACK)
     provider.id_token_override = junk
     with pytest.raises(oidc.SignInRefused):
-        oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+        oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
 
 
-def test_a_token_endpoint_error_is_refused(provider):
+def test_a_token_endpoint_error_is_refused(provider, db):
     start = oidc.begin(CALLBACK)
     provider.token_status = 400
     with pytest.raises(oidc.SignInRefused, match="HTTP 400"):
-        oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+        oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
 
 
-def test_a_non_owner_is_refused_and_nothing_is_stored(provider):
+def test_a_non_owner_is_refused_and_nothing_is_stored(provider, db):
     start = oidc.begin(CALLBACK)
     provider.id_token_override = provider.sign(
         provider.good(start.nonce, preferred_username="mallory", sub="mallory-sub")
     )
     with pytest.raises(oidc.NotOwner) as caught:
-        oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+        oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
     assert isinstance(caught.value, oidc.SignInRefused)
     assert str(caught.value) == (
         f"Only {settings.current().owner_name} can sign in to this Ream"
@@ -311,31 +311,31 @@ def test_a_non_owner_is_refused_and_nothing_is_stored(provider):
     assert all("mallory" not in json.dumps(v[1]) for v in oidc._cache.values())
 
 
-def test_the_owner_claim_and_value_are_settings(provider):
+def test_the_owner_claim_and_value_are_settings(provider, db):
     with settings.override(oidc_owner_claim="email", oidc_owner_value="j@example.org"):
         start = oidc.begin(CALLBACK)
         provider.id_token_override = provider.sign(
             provider.good(start.nonce, email="j@example.org")
         )
-        assert oidc.finish("c", start.verifier, start.nonce, CALLBACK).person == (
+        assert oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK).person == (
             settings.owner_id()
         )
         provider.id_token_override = provider.sign(provider.good(start.nonce))
         with pytest.raises(oidc.NotOwner):  # no email claim
-            oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+            oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
 
 
-def test_a_claim_that_is_a_list_must_hold_the_value(provider):
+def test_a_claim_that_is_a_list_must_hold_the_value(provider, db):
     with settings.override(oidc_owner_claim="groups", oidc_owner_value="admins"):
-        assert run(provider)[1].person == settings.owner_id()
+        assert run(provider, db)[1].person == settings.owner_id()
     with (
         settings.override(oidc_owner_claim="groups", oidc_owner_value="staff"),
         pytest.raises(oidc.NotOwner),
     ):
-        run(provider)
+        run(provider, db)
 
 
-def test_a_discovery_document_for_another_issuer_is_refused(provider, monkeypatch):
+def test_a_discovery_document_for_another_issuer_is_refused(provider, db, monkeypatch):
     def lying(method, url, body, headers):
         return oidc.Response(
             200,
@@ -349,17 +349,17 @@ def test_a_discovery_document_for_another_issuer_is_refused(provider, monkeypatc
         oidc.begin(CALLBACK)
 
 
-def test_the_secret_is_read_when_needed_and_never_shown(provider, tmp_path, caplog):
+def test_the_secret_is_read_when_needed_and_never_shown(provider, db, tmp_path, caplog):
     import logging
 
     caplog.set_level(logging.DEBUG)
-    run(provider)
+    run(provider, db)
     assert SECRET not in caplog.text
     with settings.override(oidc_client_secret_file=str(tmp_path / "gone")):
         start = oidc.begin(CALLBACK)
         provider.id_token_override = provider.sign(provider.good(start.nonce))
         with pytest.raises(oidc.SignInRefused) as caught:
-            oidc.finish("c", start.verifier, start.nonce, CALLBACK)
+            oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
         assert "gone" not in str(caught.value)
 
 
@@ -452,3 +452,68 @@ def test_the_oidc_settings_read_under_both_names(monkeypatch):
     monkeypatch.setenv("REAM_OIDC_CLIENT_ID", "new")
     with pytest.raises(SystemExit):
         settings.current()
+
+
+def sign_in_as(provider, db, **claims):
+    start = oidc.begin(CALLBACK)
+    provider.id_token_override = provider.sign(provider.good(start.nonce, **claims))
+    return oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
+
+
+@pytest.mark.parametrize("verified", [None, False, "true", 1])
+def test_an_email_that_is_not_verified_is_refused(provider, db, verified):
+    with settings.override(oidc_owner_claim="email", oidc_owner_value="j@example.org"):
+        with pytest.raises(oidc.NotOwner):
+            sign_in_as(provider, db, email="j@example.org", email_verified=verified)
+        assert not _pin(db)
+
+
+def test_a_verified_email_signs_in(provider, db):
+    with settings.override(oidc_owner_claim="email", oidc_owner_value="j@example.org"):
+        assert sign_in_as(provider, db, email="j@example.org", email_verified=True)
+
+
+def _pin(db):
+    with db.connect() as conn:
+        return conn.execute(
+            "select value from service_meta where key = %s", (oidc.PIN_KEY,)
+        ).fetchone()
+
+
+def test_the_first_owner_sign_in_pins_the_subject(provider, db):
+    assert sign_in_as(provider, db).subject == "u-1"
+    assert _pin(db)[0] == f"{ISSUER} u-1"
+    assert sign_in_as(provider, db).subject == "u-1"
+
+
+def test_a_different_subject_with_the_owners_claim_is_refused_after_the_pin(
+    provider, db
+):
+    with settings.override(oidc_owner_claim="email", oidc_owner_value="j@example.org"):
+        sign_in_as(provider, db, email="j@example.org", email_verified=True)
+        with pytest.raises(oidc.NotOwner):
+            sign_in_as(
+                provider, db, sub="u-2", email="j@example.org", email_verified=True
+            )
+    assert _pin(db)[0] == f"{ISSUER} u-1"
+
+
+def test_a_non_owner_pins_nothing(provider, db):
+    with pytest.raises(oidc.NotOwner):
+        sign_in_as(provider, db, preferred_username="mallory")
+    assert not _pin(db)
+
+
+def test_the_configured_subject_wins_over_the_pin(provider, db):
+    sign_in_as(provider, db)  # pins u-1
+    with settings.override(oidc_owner_subject="u-2"):
+        assert sign_in_as(provider, db, sub="u-2").subject == "u-2"
+        with pytest.raises(oidc.NotOwner):
+            sign_in_as(provider, db, sub="u-1")
+    assert _pin(db)[0] == f"{ISSUER} u-1"
+
+
+def test_a_configured_subject_pins_nothing(provider, db):
+    with settings.override(oidc_owner_subject="u-1"):
+        assert sign_in_as(provider, db)
+    assert not _pin(db)
