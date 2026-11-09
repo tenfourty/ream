@@ -135,18 +135,12 @@ def test_five_machines_behind_one_address_can_all_wait(gallery):
         _ask(gallery, name=f"office-{i}", address="198.51.100.20")
 
 
-def test_the_same_name_from_one_address_replaces_its_earlier_request(db, gallery):
+def test_a_repeat_under_the_same_name_leaves_the_first_request_approvable(gallery):
     first = _ask(gallery, name="office-1", address="198.51.100.21")
-    for _ in range(connect.MAX_PENDING_PER_ADDRESS + 2):
-        last = _ask(gallery, name="office-1", address="198.51.100.21")
-    assert _poll(gallery, first) == {"status": "expired"}
-    assert _poll(gallery, last)["status"] != "expired"
-    with db.connect() as conn:
-        live = conn.execute(
-            "select count(*) from connect_request where expires_at > %s",
-            (datetime.now(UTC),),
-        ).fetchone()[0]
-    assert live == 1
+    second = _ask(gallery, name="office-1", address="198.51.100.21")
+    assert first["code"] != second["code"]
+    assert _poll(gallery, first)["status"] != "expired"
+    assert "Approved" in _approve(gallery, first["code"], name="office-1").text
 
 
 def test_the_global_ceiling_still_refuses(gallery, monkeypatch):

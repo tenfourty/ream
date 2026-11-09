@@ -661,13 +661,14 @@ mistake, not only put it out of the way.
 Five office VMs share one NAT address, and the connect flow allowed only 3 waiting requests per
 address, so two of them got `429 REFUSED` and had to wait for the others to expire. The
 per-address cap is now 10 (`connect.MAX_PENDING_PER_ADDRESS`); the ceiling of 50 across all
-addresses stays, and it is what bounds a flood. A repeat request from the same address under the
-same name replaces its earlier one (that one expires at once, so its code and poll token stop
-working) instead of using a second slot, so a machine that lost its code can simply ask again.
-Nothing else changed: the request is still open and unauthenticated, every request still dies
+addresses stays, and it is what bounds a flood. Every waiting request counts against the caps, and a
+repeat request never expires or alters an earlier one: replacing by name would let any machine
+behind the same address cancel another's waiting request just by asking for its name. Nothing else
+changed: the request is still open and unauthenticated, every request still dies
 after 15 minutes, and only the owner can approve, by typing the code.
 
-**Not chosen:** removing the per-address cap. It lost because one address could then fill the
+**Not chosen:** replacing an earlier request of the same name. It lost because a neighbour behind
+the same address could cancel it. Also not chosen: removing the per-address cap. It lost because one address could then fill the
 global ceiling alone and lock every other machine out.
 
 **Evidence:** tracker runcove-5t3oj.102, 9 Nov 2026.
