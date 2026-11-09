@@ -351,3 +351,85 @@ def test_the_exchange_hands_the_answers_headers_to_the_updater(monkeypatch):
     monkeypatch.setattr(client, "_opener", _Opener())
     client._request("GET", "https://example.invalid/api/v1/me", "k", None)
     assert seen == [("GET", {"x-ream-client-outdated": "true"})]
+
+
+def _receipt(tmp_path, monkeypatch, text):
+    env = tmp_path / "toolenv"
+    env.mkdir(exist_ok=True)
+    if text is not None:
+        (env / "uv-receipt.toml").write_text(text)
+    monkeypatch.setattr(selfupdate.sys, "prefix", str(env))
+    monkeypatch.delenv("REAM_INSTALL_SOURCE", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "nocfg"))
+
+
+GIT = 'git = "https://forge.example/runcove/artifacts@v1"'
+
+
+def test_a_git_receipt_gives_its_address_without_the_ref(
+    updater, tmp_path, monkeypatch
+):
+    _receipt(
+        tmp_path, monkeypatch, f'[tool]\nrequirements = [{{ name = "ream", {GIT} }}]\n'
+    )
+    assert selfupdate.configured_source() == SOURCE
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.installs == [MAIN_COMMAND]
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '[tool]\nrequirements = [{ name = "ream", directory = "/home/x/repos/artifacts" }]\n',
+        None,
+        "this is [not toml",
+        "[tool]\nrequirements = 5\n",
+        '[tool]\nrequirements = [{ name = "ream", git = "http://forge.example/x" }]\n',
+    ],
+)
+def test_a_path_missing_or_malformed_receipt_gives_no_source(
+    updater, tmp_path, monkeypatch, text
+):
+    _receipt(tmp_path, monkeypatch, text)
+    assert selfupdate.configured_source() is None
+
+
+def test_setting_then_file_then_receipt(updater, tmp_path, monkeypatch):
+    _receipt(
+        tmp_path, monkeypatch, f'[tool]\nrequirements = [{{ name = "ream", {GIT} }}]\n'
+    )
+    assert selfupdate.configured_source() == SOURCE  # receipt
+    (tmp_path / "nocfg" / "ream").mkdir(parents=True)
+    (tmp_path / "nocfg" / "ream" / "install-source").write_text(
+        "git+https://file.example/a\n"
+    )
+    assert (
+        selfupdate.configured_source() == "git+https://file.example/a"
+    )  # file over receipt
+    monkeypatch.setenv("REAM_INSTALL_SOURCE", "git+https://env.example/b")
+    assert (
+        selfupdate.configured_source() == "git+https://env.example/b"
+    )  # env over both
+
+
+def test_the_hint_carries_the_servers_note_and_installs_nothing(
+    updater, tmp_path, monkeypatch
+):
+    _receipt(tmp_path, monkeypatch, None)
+    note = "git+https://forge.example/runcove/artifacts"
+    selfupdate.on_response("GET", {**STALE, "x-ream-install-source": note})
+    assert updater.run.calls == []
+    assert updater.execs == []
+    assert f"uv tool install --force {note}" in updater.out.getvalue()
+
+
+def test_a_note_that_is_not_a_git_address_is_not_even_printed(
+    updater, tmp_path, monkeypatch
+):
+    _receipt(tmp_path, monkeypatch, None)
+    selfupdate.on_response(
+        "GET", {**STALE, "x-ream-install-source": "https://evil.example/x.sh; rm -rf /"}
+    )
+    assert updater.run.calls == []
+    assert "evil.example" not in updater.out.getvalue()

@@ -12,8 +12,9 @@ no version and no ref. This module reacts, once per process:
   the command to run by hand and carries on as it is.
 
 SECURITY. The SOURCE is fixed on the client: `REAM_INSTALL_SOURCE` (or `ARTIFACTS_`) in the
-tool's own environment, or the first line of `$XDG_CONFIG_HOME/ream/install-source`, written at
-install time. What the server sends (`X-Ream-Install-Source`) is never read here. The ref is a
+tool's own environment, or the first line of `$XDG_CONFIG_HOME/ream/install-source`, or, with
+neither, the `git` requirement in uv's own receipt (`uv-receipt.toml` in `sys.prefix`) when the
+tool was installed from a git+https address; a path install gives none. What the server sends (`X-Ream-Install-Source`) is never read here. The ref is a
 constant, `main`: the reviewed, CI-gated branch, so a hostile or spoofed server cannot choose
 which commit is installed (an unreviewed `ci/` branch, say). No downgrade: the installed copy's
 level must be at least this one's. At most one attempt an hour per machine (a stamp file), so a
@@ -33,6 +34,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 from ream import clientlevel, envnames
@@ -61,6 +63,40 @@ def configured_source() -> str | None:
             value = None
     if value and _SOURCE.fullmatch(value) and ".." not in value:
         return value
+    if value:
+        return None  # a setting that is wrong is not replaced by a guess
+    return _receipt_source()
+
+
+def _clean(address: str) -> str | None:
+    """`git+https://host/path[@ref][#frag]` as `git+https://host/path`, or None."""
+    address = address.split("#", 1)[0].split("?", 1)[0]
+    if not address.startswith("git+"):
+        address = "git+" + address
+    scheme, _, rest = address.partition("://")
+    rest = rest.rsplit("@", 1)[0] if "@" in rest.rsplit("/", 1)[-1] else rest
+    address = f"{scheme}://{rest}"
+    if _SOURCE.fullmatch(address) and ".." not in address:
+        return address
+    return None
+
+
+def _receipt_source() -> str | None:
+    """The git address uv recorded when it installed this tool (`uv-receipt.toml` beside
+    `sys.prefix`): only its requirement is read. A path install, a missing or unreadable
+    receipt gives None. The ref is dropped; the tool always installs `main`."""
+    try:
+        with open(Path(sys.prefix) / "uv-receipt.toml", "rb") as handle:
+            receipt = tomllib.load(handle)
+        requirements = receipt["tool"]["requirements"]
+        for item in requirements:
+            if item.get("name") not in {"ream", "artifacts"}:
+                continue
+            git = item.get("git")
+            if isinstance(git, str) and git.startswith(("https://", "git+https://")):
+                return _clean(git)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
     return None
 
 
@@ -132,6 +168,19 @@ def _installed_level() -> int | None:
         return None
 
 
+def _manual_line(headers) -> str:
+    """The line for a tool with no fixed source. The server's note is printed for a person to
+    run once; nothing here executes it."""
+    line = (
+        "this tool is out of date (the service asks for a newer one). Reinstall it with "
+        "the install line in the service's onboarding document."
+    )
+    note = (headers.get(clientlevel.SOURCE_HEADER.lower()) or "").strip()
+    if note and _SOURCE.fullmatch(note) and ".." not in note:
+        line += f" Run this once and later updates are automatic: uv tool install --force {note}"
+    return line
+
+
 def on_response(method: str, headers) -> None:
     """Called with every API response's headers (lower-case names). Does nothing unless the
     server says this tool is out of date, and then at most once per process."""
@@ -143,10 +192,7 @@ def on_response(method: str, headers) -> None:
     _done = True
     source = configured_source()
     if source is None:
-        _say(
-            "this tool is out of date (the service asks for a newer one). Reinstall it with "
-            "the install line in the service's onboarding document."
-        )
+        _say(_manual_line(headers))
         return
     command = command_for(source)
     line = " ".join(command)

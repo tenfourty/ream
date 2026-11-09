@@ -536,7 +536,12 @@ module's install time says when, not what.
 
 **The install source is fixed on the client and never taken from the server.** It is the tool's own
 `REAM_INSTALL_SOURCE` (a `git+https://` address) or the first line of
-`~/.config/ream/install-source`, written when the tool is installed. A source the server advertises
+`~/.config/ream/install-source`, written when the tool is installed; with neither, the `git`
+requirement in uv's own `uv-receipt.toml` (in `sys.prefix`), ref dropped, only when it is a
+`https` git address. A path install (a checkout) has none, so reinstalling once from the forge
+address (`uv tool install --force git+<forge address>`) is what makes updates automatic; the
+tool prints that command, with the server's `X-Ream-Install-Source` note if present, for a person
+to run. A source the server advertises
 (`REAM_CLIENT_INSTALL_SOURCE`) is information for a person; it is never installed from.
 
 **Not chosen:** the version check alone (a stale tool is told, and nobody acts until a call fails).
