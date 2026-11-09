@@ -211,6 +211,19 @@ class Settings:
     # The return hosts open registration accepts; `localhost` means loopback. Unset:
     # `localhost`; `none`: registration is off.
     mcp_self_registration_redirects: str = ""
+    # The upstream OpenID Connect provider the one reader signs in with (section 12; oidc.py).
+    # Needed, all three, when sign-in is on. The secret is a FILE's path, never a value.
+    oidc_issuer: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret_file: str = ""
+    # Unset: `openid profile email groups`.
+    oidc_scopes: str = ""
+    # The ID-token claim that names the person (unset: `preferred_username`) and the value it
+    # must have for the one reader (unset: the owner id).
+    oidc_owner_claim: str = ""
+    oidc_owner_value: str = ""
+    # Stored on the app; unused in the core (unset: `groups`).
+    oidc_groups_claim: str = ""
 
     def __repr__(self) -> str:
         return "Settings(...)"
@@ -348,13 +361,7 @@ class Settings:
         elif _SWITCH.get(sign_in):
             if not self.mcp_public_url:
                 found.append("REAM_MCP_SIGN_IN=on needs REAM_MCP_PUBLIC_URL")
-            # This version serves the documents, registration and the challenge; the
-            # sign-in itself (/oauth/authorize, /oauth/token) comes later. Until then a
-            # server that advertised it would send every app to pages that are not there.
-            found.append(
-                "REAM_MCP_SIGN_IN=on is not finished in this version (no /oauth/authorize"
-                " or /oauth/token yet): leave it unset"
-            )
+            found.extend(self._oidc_problems())
         if self.mcp_accept_keys and self.mcp_accept_keys.lower() not in _SWITCH:
             found.append("REAM_MCP_ACCEPT_KEYS must be 1 or 0")
         elif _SWITCH.get(self.mcp_accept_keys.lower()) is False and not _SWITCH.get(
@@ -375,6 +382,64 @@ class Settings:
                     " or none"
                 )
         return found
+
+    def _oidc_problems(self) -> list[str]:
+        """What sign-in needs of its upstream provider (section 12). Names settings, never
+        values; the secret file is checked for being readable and not empty, not shown."""
+        found = []
+        for field_name in ("oidc_issuer", "oidc_client_id", "oidc_client_secret_file"):
+            if not getattr(self, field_name):
+                found.append(f"REAM_MCP_SIGN_IN=on needs {_ENV[field_name]}")
+        if self.oidc_issuer:
+            parts = urlsplit(self.oidc_issuer)
+            try:
+                _ = parts.port
+            except ValueError:
+                parts = urlsplit("")
+            host = (parts.hostname or "").lower()
+            if (
+                parts.scheme not in ("http", "https")
+                or not host
+                or parts.query
+                or parts.fragment
+                or parts.username is not None
+            ):
+                found.append(
+                    "REAM_OIDC_ISSUER must be the provider's issuer URL (https, no query"
+                    " or fragment)"
+                )
+            elif parts.scheme != "https" and not is_loopback(host):
+                found.append(
+                    "REAM_OIDC_ISSUER must be https (plain http only on loopback)"
+                )
+        if self.oidc_client_secret_file:
+            try:
+                with open(self.oidc_client_secret_file, "rb") as handle:
+                    empty = not handle.read(4096).strip()
+            except OSError as exc:
+                found.append(
+                    f"REAM_OIDC_CLIENT_SECRET_FILE cannot be read ({type(exc).__name__})"
+                )
+            else:
+                if empty:
+                    found.append("REAM_OIDC_CLIENT_SECRET_FILE is empty")
+        if "openid" not in self.oidc_scope_list():
+            found.append("REAM_OIDC_SCOPES must include openid")
+        if self.oidc_owner_value_or_default() == "":
+            found.append("REAM_OIDC_OWNER_VALUE must not be blank")
+        return found
+
+    def oidc_scope_list(self) -> list[str]:
+        return (self.oidc_scopes or "openid profile email groups").split()
+
+    def oidc_owner_claim_name(self) -> str:
+        return self.oidc_owner_claim or "preferred_username"
+
+    def oidc_owner_value_or_default(self) -> str:
+        return self.oidc_owner_value or self.owner_id
+
+    def oidc_groups_claim_name(self) -> str:
+        return self.oidc_groups_claim or "groups"
 
     def mcp_signs_in(self) -> bool:
         """Whether the authorization server is on (section 7): `REAM_MCP_SIGN_IN=on`
@@ -454,6 +519,13 @@ _ENV = {
     "mcp_trusted_client_hosts": "REAM_MCP_TRUSTED_CLIENT_HOSTS",
     "mcp_allowed_client_hosts": "REAM_MCP_ALLOWED_CLIENT_HOSTS",
     "mcp_self_registration_redirects": "REAM_MCP_SELF_REGISTRATION_REDIRECTS",
+    "oidc_issuer": "REAM_OIDC_ISSUER",
+    "oidc_client_id": "REAM_OIDC_CLIENT_ID",
+    "oidc_client_secret_file": "REAM_OIDC_CLIENT_SECRET_FILE",
+    "oidc_scopes": "REAM_OIDC_SCOPES",
+    "oidc_owner_claim": "REAM_OIDC_OWNER_CLAIM",
+    "oidc_owner_value": "REAM_OIDC_OWNER_VALUE",
+    "oidc_groups_claim": "REAM_OIDC_GROUPS_CLAIM",
 }
 if set(_ENV) != {f.name for f in fields(Settings)}:
     raise RuntimeError("settings._ENV and Settings disagree")

@@ -20,7 +20,16 @@ speaks MCP rather than the agent API. The design is
   `REAM_MCP_ALLOWED_CLIENT_HOSTS` (unset: any; `none`: no app) limits which apps may ask,
   `REAM_MCP_TRUSTED_CLIENT_HOSTS` which are labelled Verified, and
   `REAM_MCP_SELF_REGISTRATION_REDIRECTS` (default `localhost`; `none`: off) which return hosts
-  registration accepts. Until `/oauth/authorize` and `/oauth/token` exist, `on` refuses to start.
+  registration accepts. `on` also needs the upstream OpenID Connect provider the one reader signs
+  in with (`src/ream/oidc.py`): `REAM_OIDC_ISSUER` (https; its discovery document is read),
+  `REAM_OIDC_CLIENT_ID` and `REAM_OIDC_CLIENT_SECRET_FILE` (a file holding the secret, read when
+  needed, never printed or logged); optional `REAM_OIDC_SCOPES` (default `openid profile email
+  groups`, must include `openid`), `REAM_OIDC_OWNER_CLAIM` (default `preferred_username`) and
+  `REAM_OIDC_OWNER_VALUE` (default the owner id) say who the one reader is, and
+  `REAM_OIDC_GROUPS_CLAIM` (default `groups`) is stored and unused. A missing value, a non-https
+  issuer or an unreadable or empty secret file refuses to start, naming the setting. The sign-in
+  pages themselves (`/oauth/authorize`, `/oauth/token`) are not built yet, so an app that reaches
+  them still gets a 404.
 - **Stateless Streamable HTTP.** One `POST /mcp` per message; the answer is
   `application/json`, never a stream, never an `Mcp-Session-Id`. `GET` and `DELETE` answer 405.
   Notifications get 202. Batches get 400. Bodies over 12 MiB get 413. A request carrying an

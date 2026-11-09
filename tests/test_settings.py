@@ -256,19 +256,7 @@ def test_the_cli_endpoint_keeps_the_house_default_until_the_plugin_has_it(monkey
         ({"mcp_accept_keys": "0"}, "needs sign-in"),
         ({"mcp_sign_in": "maybe"}, "REAM_MCP_SIGN_IN must be on or off"),
         ({"mcp_sign_in": "off"}, None),
-        # Until the sign-in itself is built, on refuses to start (tests override it).
-        (
-            {"mcp_public_url": "https://artifacts.tenfourty.site", "mcp_sign_in": "on"},
-            "not finished in this version",
-        ),
-        (
-            {
-                "mcp_public_url": "https://artifacts.tenfourty.site",
-                "mcp_sign_in": "on",
-                "mcp_accept_keys": "0",
-            },
-            "not finished in this version",
-        ),
+        # On needs the provider's values: see test_sign_in_checks_its_provider_settings.
         ({"mcp_trusted_client_hosts": "claude.ai, Zed.dev"}, None),
         ({"mcp_trusted_client_hosts": "none"}, None),
         ({"mcp_allowed_client_hosts": "https://claude.ai"}, "host names"),
