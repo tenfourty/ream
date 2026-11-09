@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-09",
+        "{{owner_name}}'s signed-in Claude can now ask him a question on any page he can read, not only on pages it published. The card says the question came from his Claude, not from the page's agent, and his answer goes back to the Claude that asked. The page's agent sees a `question_asked` event, and only the asker can close the question. A key still asks on its own pages only.",
+    ),
+    (
         "2026-11-08b",
         'Ream (formerly artifacts) now says "pages" in its API: `/api/v1/pages` is the main route, and `/api/v1/artifacts` keeps working for good, answering exactly the same (same handlers, not a redirect, so a POST to the old route still works). `GET /api/v1/folders/SLUG/pages` is the new name of `/folders/SLUG/artifacts`. The tools and the onboarding document now use `/pages` and teach `ream <verb>` first; the artifacts-* commands still work. Reinstall the tools to get the new routes, and nothing else changes for a script that uses the old ones.',
     ),

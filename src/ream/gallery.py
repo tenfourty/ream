@@ -3981,10 +3981,10 @@ def _asker_line(row, hosts: dict[str, str] | None) -> str:
     if not asker:
         return ""
     host = (hosts or {}).get(asker)
-    who = mcp_apps.via(host) if host else asker
+    who = f"your Claude ({host or asker})"
     return (
-        f'<p class="qasker">Asked by {escape(who)}, not by this page\u2019s agent. '
-        "The answer goes to them.</p>"
+        f'<p class="qasker">From {escape(who)}, not this page\u2019s agent. '
+        "Your answer goes back to it.</p>"
     )
 
 
