@@ -1799,7 +1799,7 @@ def _rename_dialog(artifact_id: str, title: str) -> str:
 # The connect page's own look: a narrow column of plain cards. Inline because
 # the gallery CSP allows style 'unsafe-inline' and nothing else uses it.
 _CONNECT_CSS = (
-    "<style>.cx{max-width:40rem;margin:1.5rem auto;display:grid;gap:1.25rem}"
+    "<style>.cx{max-width:40rem;margin:1.5rem auto;display:grid;gap:1.25rem;grid-template-columns:minmax(0,1fr)}"
     ".cx section{border:1px solid var(--line);border-radius:12px;padding:1.1rem 1.25rem}"
     ".cx h2{margin:0 0 .5rem;font-size:1.05rem}.cx p{margin:.4rem 0;line-height:1.5}"
     ".cx input{font:inherit;padding:.5rem .6rem;border:1px solid var(--line);"
@@ -1807,7 +1807,7 @@ _CONNECT_CSS = (
     "background:var(--card);color:var(--ink)}"
     ".cx .code{font:600 1.4rem/1.2 var(--mono-short);letter-spacing:.12em;text-transform:uppercase}"
     ".cx pre{white-space:pre-wrap;background:var(--well);padding:.75rem;border-radius:8px;"
-    "font-size:.9rem;user-select:all}.cx .err{color:var(--connect-err)}.cx .ok{color:var(--connect-ok)}"
+    "font-size:.9rem;user-select:all;overflow-wrap:anywhere;overflow-x:auto;max-width:100%;box-sizing:border-box}.cx .err{color:var(--connect-err)}.cx .ok{color:var(--connect-ok)}"
     ".cx dl{display:grid;grid-template-columns:auto 1fr;gap:.25rem .75rem;margin:.5rem 0}"
     ".cx dt{opacity:.7}.cx .row{display:flex;gap:.5rem;flex-wrap:wrap}"
     ".cx .boxes{display:flex;gap:.35rem;align-items:center;margin:.35rem 0 .9rem}"
