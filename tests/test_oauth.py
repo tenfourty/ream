@@ -348,15 +348,37 @@ def test_oversized_state_or_scope_is_invalid_request_and_not_echoed(web):
         assert "x" * 513 not in answer.headers["location"]
 
 
-def test_authorize_with_no_fetch_slot_answers_503(web):
-    held = [oauth._FETCHES.acquire(blocking=False) for _ in range(4)]
-    try:
-        assert web.get("/oauth/authorize", params=params()).status_code == 503
-    finally:
-        for got in held:
-            if got:
-                oauth._FETCHES.release()
-    assert web.get("/oauth/authorize", params=params()).status_code == 302
+def test_a_full_fetch_pool_answers_503_but_registered_and_cached_clients_pass(
+    web, db, monkeypatch
+):
+    uri = "http://localhost:5555/cb"
+    made = mcp_clients.register(
+        db,
+        {"redirect_uris": [uri], "token_endpoint_auth_method": "none"},
+        "203.0.113.9",
+    )
+    assert (
+        web.get("/oauth/authorize", params=params()).status_code == 302
+    )  # caches Claude
+    full = {f"h{i}.example" for i in range(mcp_clients.MAX_FETCHES)}
+    monkeypatch.setattr(mcp_clients, "_fetching", full)
+    registered = web.get(
+        "/oauth/authorize", params=params(client_id=made["client_id"], redirect_uri=uri)
+    )
+    assert registered.status_code == 302
+    assert web.get("/oauth/authorize", params=params()).status_code == 302  # cached
+    with db.connect() as conn:
+        conn.execute(
+            "update mcp_client set fetched_at = %s", ("2000-01-01T00:00:00+00:00",)
+        )
+    assert web.get("/oauth/authorize", params=params()).status_code == 503
+
+
+def test_one_host_has_at_most_one_fetch_in_flight(db, stub, monkeypatch):
+    stub()
+    monkeypatch.setattr(mcp_clients, "_fetching", {"claude.ai"})
+    with pytest.raises(mcp_clients.FetchBusy):
+        mcp_clients.client_for(db, CLAUDE_ID)
 
 
 def test_a_scope_of_only_unknown_words_is_invalid_scope(web):

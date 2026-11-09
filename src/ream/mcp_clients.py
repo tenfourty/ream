@@ -25,6 +25,7 @@ import http.client
 import ipaddress
 import json
 import secrets
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -50,6 +51,10 @@ UNUSED_REGISTRATION_LASTS = timedelta(hours=24)
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 # What a registered app with a loopback return address counts as in the host lists.
 LOOPBACK_NAME = "localhost"
+
+
+class FetchBusy(Exception):
+    """Too many document fetches are in flight (or one is, for this host): try again shortly."""
 
 
 class ClientRefused(Exception):
@@ -211,9 +216,24 @@ def _get(url: str) -> Fetched:
         ) from None
 
 
+MAX_FETCHES = 4  # in flight at once, and at most one per host
+_fetch_lock = threading.Lock()
+_fetching: set[str] = set()
+
+
 def _document(url: str) -> Client:
-    """Fetch and check the document at `url`; a Client, or ClientRefused."""
-    got = _get(url)
+    """Fetch and check the document at `url`; a Client, or ClientRefused. Takes a fetch slot
+    (FetchBusy when none is free or the host already has a fetch in flight)."""
+    host = (urlsplit(url).hostname or "").lower()
+    with _fetch_lock:
+        if host in _fetching or len(_fetching) >= MAX_FETCHES:
+            raise FetchBusy(host)
+        _fetching.add(host)
+    try:
+        got = _get(url)
+    finally:
+        with _fetch_lock:
+            _fetching.discard(host)
     if 300 <= got.status < 400:
         raise ClientRefused(
             f"its client metadata document answered HTTP {got.status}:"

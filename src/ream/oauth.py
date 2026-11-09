@@ -14,7 +14,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-import threading
 from datetime import UTC, datetime, timedelta
 from html import escape
 from typing import Any
@@ -39,8 +38,6 @@ SCOPES = {"ream:read": "read", "ream:write": "write", "ream:relay": "relay"}
 _NO_STORE = {"cache-control": "no-store", "pragma": "no-cache"}
 MAX_FIELD = 512  # state and scope, as sent to /oauth/authorize
 MAX_FORM = 64 * 1024  # a form body at /oauth/token or the consent post
-# At most this many client-metadata fetches (each up to FETCH_SECONDS) at once.
-_FETCHES = threading.Semaphore(4)
 
 
 async def _read_form(request: Request):
@@ -238,14 +235,12 @@ def _cookie_matches(request: Request, row: dict[str, Any]) -> bool:
 def authorize(db: Database, request: Request) -> Response:
     q = request.query_params
     state = q.get("state")
-    if not _FETCHES.acquire(blocking=False):
-        return _error_page("Too many sign-ins are starting. Try again shortly.", 503)
     try:
         client = mcp_clients.client_for(db, q.get("client_id", ""))
+    except mcp_clients.FetchBusy:
+        return _error_page("Too many sign-ins are starting. Try again shortly.", 503)
     except mcp_clients.ClientRefused as exc:
         return _error_page(f"This app cannot ask to connect: {exc}")
-    finally:
-        _FETCHES.release()
     uri = q.get("redirect_uri", "")
     if not mcp_clients.redirect_matches(client.redirect_uris, uri):
         return _error_page("The return address is not one this app registered.")
