@@ -50,7 +50,7 @@ An app ends by itself, reason recorded in `mcp_app.revoked_reason`, when:
 | reason | what happened |
 |---|---|
 | `reuse` | an authorization code was presented twice |
-| `refresh_reuse` | a spent refresh token was presented again (two parties hold it) |
+| `refresh_reuse` | a spent refresh token was presented again (two parties hold it). It can also mean a client lost the response to a refresh; the person simply connects again |
 | `revoked` | the app presented its refresh token to `/oauth/revoke` |
 | `lapsed` | idle for the window, or past the cap, found by the clean-up |
 

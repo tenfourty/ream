@@ -276,7 +276,7 @@ def create_app(
                     redirect_uri,
                     dbmod.jsonb(list(groups)),
                     now,
-                    now + timedelta(days=settings.current().refresh_token_ttl_days()),
+                    now + IDLE_LASTS,
                     now + timedelta(days=settings.current().app_max_lifetime_days()),
                 ),
             )

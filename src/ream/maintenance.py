@@ -104,7 +104,10 @@ def nightly(db: Database) -> None:
         _log.info("backup written: %s", made.name)
     gone = store.purge_expired(db)
     image_store.sweep(db)
-    oauth.sweep(db)
+    try:
+        oauth.sweep(db)
+    except Exception:  # noqa: BLE001 -- the rest of the night still runs
+        _log.error("sign-in sweep failed", exc_info=True)
     # After the purge, so the statistics describe what is left.
     db.optimize()
     _log.info("purge: %d destroyed%s", len(gone), "".join(f" {g}" for g in gone))

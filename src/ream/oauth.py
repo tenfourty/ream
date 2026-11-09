@@ -473,23 +473,35 @@ def end_app(db: Database, app_id: str, reason: str, now: datetime) -> None:
         conn.execute("delete from mcp_token where app_id = %s", (app_id,))
 
 
-def issue_tokens(db: Database, app: mcp_apps.App, now: datetime) -> dict[str, Any]:
+def issue_tokens(
+    db: Database, app: mcp_apps.App, now: datetime, conn=None
+) -> dict[str, Any]:
+    """Mint and store an access and refresh pair. Given `conn`, the insert joins the
+    caller's open transaction; otherwise it makes its own."""
     cfg = settings.current()
     access, refresh = new_token(ACCESS_PREFIX), new_token(REFRESH_PREFIX)
     ttl = cfg.access_token_ttl_secs()
     refresh_ends = min(
         now + timedelta(days=cfg.refresh_token_ttl_days()), app.expires_at
     )
-    with db.connect() as conn, conn.transaction():
-        for token, kind, ends in (
-            (access, "access", now + timedelta(seconds=ttl)),
-            (refresh, "refresh", refresh_ends),
-        ):
-            conn.execute(
+    rows = (
+        (access, "access", now + timedelta(seconds=ttl)),
+        (refresh, "refresh", refresh_ends),
+    )
+
+    def insert(c) -> None:
+        for token, kind, ends in rows:
+            c.execute(
                 "insert into mcp_token (token_sha256, app_id, kind, created_at, expires_at)"
                 " values (%s, %s, %s, %s, %s)",
                 (_hash(token), app.id, kind, now, ends),
             )
+
+    if conn is not None:
+        insert(conn)
+    else:
+        with db.connect() as own, own.transaction():
+            insert(own)
     return {
         "access_token": access,
         "token_type": "Bearer",
@@ -497,14 +509,6 @@ def issue_tokens(db: Database, app: mcp_apps.App, now: datetime) -> dict[str, An
         "refresh_token": refresh,
         "scope": " ".join(f"ream:{p}" for p in app.permissions),
     }
-
-
-def _slide_idle(db: Database, app_id: str, now: datetime) -> None:
-    with db.connect() as conn:
-        conn.execute(
-            "update mcp_app set last_used_at = %s, idle_expires_at = %s where id = %s",
-            (now, now + mcp_apps.IDLE_LASTS, app_id),
-        )
 
 
 def refresh(db: Database, form, now: datetime) -> JSONResponse:
@@ -537,7 +541,10 @@ def refresh(db: Database, form, now: datetime) -> JSONResponse:
     sent_resource = form.get("resource")
     if sent_resource is not None and not _same(str(sent_resource), resource()):
         return _grant_error("invalid_target", "resource does not match")
-    with db.connect() as conn:  # one conditional update: the race has one winner
+    reused = False
+    with db.connect() as conn, conn.transaction():
+        # the spend, the slide and the new pair commit together: a failure rolls the
+        # spend back, so the client's retry still works
         won = conn.execute(
             "update mcp_token set used_at = %s"
             " where token_sha256 = %s and kind = 'refresh' and used_at is null"
@@ -545,11 +552,23 @@ def refresh(db: Database, form, now: datetime) -> JSONResponse:
             " and revoked_at is null and idle_expires_at > %s and expires_at > %s)",
             (now, digest, now, app_id, now, now),
         ).rowcount
-    if won != 1:  # lost the race: the token is spent, so it is a second presentation
-        end_app(db, app_id, "refresh_reuse", now)
-        return _grant_error("invalid_grant", "this refresh token was already used")
-    _slide_idle(db, app_id, now)
-    issued = issue_tokens(db, app, now)
+        if won == 1:
+            conn.execute(
+                "update mcp_app set last_used_at = %s, idle_expires_at = %s"
+                " where id = %s",
+                (now, now + mcp_apps.IDLE_LASTS, app_id),
+            )
+            issued = issue_tokens(db, app, now, conn)
+        else:
+            again = conn.execute(
+                "select used_at from mcp_token where token_sha256 = %s", (digest,)
+            ).fetchone()
+            reused = again is not None and again[0] is not None
+    if won != 1:
+        if reused:  # lost the race: the token is spent, so it is a second presentation
+            end_app(db, app_id, "refresh_reuse", now)
+            return _grant_error("invalid_grant", "this refresh token was already used")
+        return _grant_error("invalid_grant", "this connection has ended")
     after = mcp_apps.app(db, app_id)
     if after is None or after.revoked_at is not None:
         # the app ended between the spend and the insert (a reuse elsewhere): drop what
@@ -616,9 +635,11 @@ def sweep(db: Database, now: datetime | None = None) -> int:
             " or (used_at is not null and used_at < %s)",
             (cutoff, cutoff),
         ).rowcount
+        # a spent refresh row of a live app stays until its own expiry has passed the
+        # cutoff, so a replay of it still ends the app however late the victim comes
         n += conn.execute(
             "delete from mcp_token where expires_at < %s"
-            " or (used_at is not null and used_at < %s)",
+            " or (kind <> 'refresh' and used_at is not null and used_at < %s)",
             (cutoff, cutoff),
         ).rowcount
     return n

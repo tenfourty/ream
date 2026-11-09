@@ -191,7 +191,66 @@ def test_the_sweep_drops_finished_rows_and_keeps_live_ones(web, provider, db):
     assert oauth.sweep(db, far) >= 3
     with db.connect() as conn:
         assert conn.execute("select count(*) from mcp_signin").fetchone()[0] == 0
-        assert conn.execute("select count(*) from mcp_token").fetchone()[0] == 1
+        # the new refresh row, and the spent one until its own expiry passes
+        assert conn.execute("select count(*) from mcp_token").fetchone()[0] == 2
+    assert app_row(db)[0] is None
+
+
+def test_a_spent_refresh_row_outlives_the_sweep_so_a_late_replay_is_caught(
+    web, provider, db
+):
+    first = tokens(web, provider)
+    refresh(web, first["refresh_token"])  # the thief goes first
+    oauth.sweep(db, datetime.now(UTC) + timedelta(days=2))
+    assert refresh(web, first["refresh_token"]).status_code == 400
+    assert app_row(db)[1] == "refresh_reuse"
+
+
+def test_a_failed_insert_rolls_the_spend_back(web, provider, db, monkeypatch):
+    first = tokens(web, provider)
+    real = oauth.issue_tokens
+
+    def broken(db_, app, now, conn=None):
+        real(db_, app, now, conn)
+        raise RuntimeError("insert failed")
+
+    monkeypatch.setattr(oauth, "issue_tokens", broken)
+    try:
+        oauth.refresh(db, form_for(first["refresh_token"]), datetime.now(UTC))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("expected the failure")
+    monkeypatch.undo()
+    assert app_row(db)[0] is None
+    assert refresh(web, first["refresh_token"]).status_code == 200
+
+
+def test_a_miss_on_an_expired_or_lapsed_token_does_not_end_the_app(web, provider, db):
+    first = tokens(web, provider)
+    with db.connect() as conn:
+        conn.execute(
+            "update mcp_app set idle_expires_at = %s",
+            (datetime.now(UTC) + timedelta(seconds=1),),
+        )
+    # between the read and the spend the app lapsed: the check passes, the update misses
+    real = oauth.mcp_apps.app
+
+    def stale(db_, app_id):
+        found = real(db_, app_id)
+        with db_.connect() as conn:
+            conn.execute(
+                "update mcp_app set idle_expires_at = %s",
+                (datetime.now(UTC) - timedelta(days=1),),
+            )
+        return found
+
+    oauth.mcp_apps.app = stale
+    try:
+        got = oauth.refresh(db, form_for(first["refresh_token"]), datetime.now(UTC))
+    finally:
+        oauth.mcp_apps.app = real
+    assert got.status_code == 400
     assert app_row(db)[0] is None
 
 
