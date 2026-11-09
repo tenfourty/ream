@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+import threading
 from datetime import UTC, datetime, timedelta
 from html import escape
 from typing import Any
@@ -36,6 +37,29 @@ TOUCH_EVERY = timedelta(minutes=5)
 _ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 SCOPES = {"ream:read": "read", "ream:write": "write", "ream:relay": "relay"}
 _NO_STORE = {"cache-control": "no-store", "pragma": "no-cache"}
+MAX_FIELD = 512  # state and scope, as sent to /oauth/authorize
+MAX_FORM = 64 * 1024  # a form body at /oauth/token or the consent post
+# At most this many client-metadata fetches (each up to FETCH_SECONDS) at once.
+_FETCHES = threading.Semaphore(4)
+
+
+async def _read_form(request: Request):
+    """The form of `request`, refusing a body past MAX_FORM before it is parsed. Returns the
+    form, or None when the body is too big or its Content-Length is not a number."""
+    declared = request.headers.get("content-length")
+    try:
+        if declared is not None and int(declared) > MAX_FORM:
+            return None
+    except ValueError:
+        return None
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_FORM:
+            return None
+        chunks.append(chunk)
+    request._body = b"".join(chunks)
+    return await request.form()
 
 
 def _hash(value: str) -> str:
@@ -214,16 +238,21 @@ def _cookie_matches(request: Request, row: dict[str, Any]) -> bool:
 def authorize(db: Database, request: Request) -> Response:
     q = request.query_params
     state = q.get("state")
+    if not _FETCHES.acquire(blocking=False):
+        return _error_page("Too many sign-ins are starting. Try again shortly.", 503)
     try:
         client = mcp_clients.client_for(db, q.get("client_id", ""))
     except mcp_clients.ClientRefused as exc:
         return _error_page(f"This app cannot ask to connect: {exc}")
+    finally:
+        _FETCHES.release()
     uri = q.get("redirect_uri", "")
     if not mcp_clients.redirect_matches(client.redirect_uris, uri):
         return _error_page("The return address is not one this app registered.")
 
     def fail(error: str, note: str) -> Response:
-        return _redirect_error(uri, error, state, note)
+        echo = state if state is None or len(state) <= MAX_FIELD else None
+        return _redirect_error(uri, error, echo, note)
 
     if q.get("response_type") != "code":
         return fail("unsupported_response_type", "response_type must be code")
@@ -235,6 +264,12 @@ def authorize(db: Database, request: Request) -> Response:
     if not state:
         return fail("invalid_request", "state is required")
     scope = q.get("scope", "")
+    if len(state) > MAX_FIELD or len(scope) > MAX_FIELD:
+        return fail(
+            "invalid_request", f"state and scope are at most {MAX_FIELD} characters"
+        )
+    if scope.split() and not requested_permissions(scope):
+        return fail("invalid_scope", "none of the scopes asked for is known")
     now = datetime.now(UTC)
     start = oidc.begin(callback_uri())
     browser = secrets.token_urlsafe(32)
@@ -312,7 +347,8 @@ def callback(db: Database, request: Request) -> Response:
         and held.redirect_uri == uri
         and set(wanted) <= set(held.permissions)
     ):
-        return _allow(db, row["id"], held, list(held.permissions), now)
+        given = [p for p in held.permissions if p in wanted]
+        return _allow(db, row["id"], held, given, now)
     nonce = secrets.token_urlsafe(32)
     with db.connect() as conn:
         conn.execute(
@@ -357,16 +393,25 @@ def decide(db: Database, request: Request, form) -> Response:
                 "update mcp_signin set consent_sha256 = %s where id = %s",
                 (_hash(again), row["id"]),
             )
-        client = mcp_clients.client_for(db, row["client_id"])
+        try:
+            client = mcp_clients.client_for(db, row["client_id"])
+        except mcp_clients.ClientRefused as exc:
+            return _error_page(f"This app cannot ask to connect: {exc}")
         page = _consent_page(client, again, row["redirect_uri"], sorted(wanted))
         page.body = page.body.replace(
             b"<form", f"<p><strong>{escape(words)}</strong></p><form".encode(), 1
         )
         page.headers["content-length"] = str(len(page.body))
         return page
-    client = mcp_clients.client_for(db, row["client_id"])
+    try:
+        client = mcp_clients.client_for(db, row["client_id"])
+    except mcp_clients.ClientRefused as exc:
+        return _error_page(f"This app cannot ask to connect: {exc}")
     person = row["person"]
     held = mcp_apps.live_app(db, person, client.id)
+    if held is not None and not held.live(now):  # idle or past its cap: start afresh
+        end_app(db, held.id, "lapsed", now)
+        held = None
     if held is None:
         agent = mcp_apps.agent_for(db, person, client.id, client.host)
         held = mcp_apps.create_app(
@@ -463,6 +508,9 @@ def token(db: Database, form, now: datetime | None = None) -> JSONResponse:
     now = now or datetime.now(UTC)
     if form.get("grant_type") != "authorization_code":
         return _grant_error("unsupported_grant_type", "only authorization_code here")
+    for name in ("client_id", "redirect_uri", "resource", "code", "code_verifier"):
+        if name in form and not isinstance(form.get(name), str):
+            return _grant_error("invalid_request", f"{name} must be a plain field")
     code = str(form.get("code", ""))
     if not code:
         return _grant_error("invalid_request", "code is required")
@@ -550,6 +598,14 @@ def oauth_router(db: Database, limiter: ratelimit.FailedAuthLimiter) -> APIRoute
     def authorize_route(request: Request):
         if not on(request, _gallery_here):
             return gone()
+        address = ratelimit.client_address(
+            request.headers, request.client.host if request.client else None
+        )
+        _count, blocked, _newly = limiter.failed(address)  # every call counts
+        if blocked:
+            return _error_page(
+                "Too many sign-ins from this address. Wait a few minutes.", 429
+            )
         return authorize(db, request)
 
     @router.get(CALLBACK_PATH, include_in_schema=False)
@@ -562,7 +618,9 @@ def oauth_router(db: Database, limiter: ratelimit.FailedAuthLimiter) -> APIRoute
     async def decide_route(request: Request):
         if not on(request, _gallery_here):
             return gone()
-        form = await request.form()
+        form = await _read_form(request)
+        if form is None:
+            return _error_page("That request is too large.", 413)
         from starlette.concurrency import run_in_threadpool
 
         return await run_in_threadpool(decide, db, request, form)
@@ -574,7 +632,9 @@ def oauth_router(db: Database, limiter: ratelimit.FailedAuthLimiter) -> APIRoute
         address = ratelimit.client_address(
             request.headers, request.client.host if request.client else None
         )
-        form = await request.form()
+        form = await _read_form(request)
+        if form is None:
+            return _grant_error("invalid_request", "the request body is too large", 413)
         from starlette.concurrency import run_in_threadpool
 
         answer = await run_in_threadpool(token, db, form)

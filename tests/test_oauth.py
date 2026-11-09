@@ -326,3 +326,114 @@ def test_the_ttl_settings_must_be_positive_whole_numbers():
 def test_the_token_prefixes_are_secret_shapes():
     for token in (oauth.new_token("rmo_"), oauth.new_token("rmr_")):
         assert scan.scan(f"<p>{token}</p>")
+
+
+# --- Review round 3 ---------------------------------------------------------------------------
+
+
+def test_authorize_is_rate_limited_per_address(web):
+    codes = [
+        web.get("/oauth/authorize", params={"client_id": "nope"}).status_code
+        for _ in range(12)
+    ]
+    assert codes[0] == 400 and codes[-1] == 429
+
+
+def test_oversized_state_or_scope_is_invalid_request_and_not_echoed(web):
+    for field in ("state", "scope"):
+        answer = web.get("/oauth/authorize", params=params(**{field: "x" * 513}))
+        assert answer.status_code == 302
+        q = parse_qs(urlsplit(answer.headers["location"]).query)
+        assert q["error"] == ["invalid_request"]
+        assert "x" * 513 not in answer.headers["location"]
+
+
+def test_authorize_with_no_fetch_slot_answers_503(web):
+    held = [oauth._FETCHES.acquire(blocking=False) for _ in range(4)]
+    try:
+        assert web.get("/oauth/authorize", params=params()).status_code == 503
+    finally:
+        for got in held:
+            if got:
+                oauth._FETCHES.release()
+    assert web.get("/oauth/authorize", params=params()).status_code == 302
+
+
+def test_a_scope_of_only_unknown_words_is_invalid_scope(web):
+    answer = web.get("/oauth/authorize", params=params(scope="offline_access"))
+    q = parse_qs(urlsplit(answer.headers["location"]).query)
+    assert answer.status_code == 302 and q["error"] == ["invalid_scope"]
+    assert web.get("/oauth/authorize", params=params(scope="")).status_code == 302
+
+
+def test_reconsent_renews_an_app_past_its_cap(web, provider, db):
+    first = full_flow(web, provider)
+    assert exchange(web, first["code"]).status_code == 200
+    with db.connect() as conn:
+        conn.execute(
+            "update mcp_app set expires_at = %s", ("2000-01-01T00:00:00+00:00",)
+        )
+    back = full_flow(web, provider)
+    got = exchange(web, back["code"])
+    assert got.status_code == 200, got.text
+    with db.connect() as conn:
+        reasons = [
+            r[0]
+            for r in conn.execute(
+                "select revoked_reason from mcp_app where revoked_at is not null"
+            ).fetchall()
+        ]
+    assert reasons == ["lapsed"]
+
+
+def test_remembered_consent_grants_the_request_not_the_whole_hold(web, provider):
+    full_flow(web, provider)
+    back = landing(sign_in(web, provider, begin(web, scope="ream:read")))
+    assert exchange(web, back["code"]).json()["scope"] == "ream:read"
+
+
+def test_token_refuses_a_big_body_and_a_file_field(web):
+    big = web.post(
+        "/oauth/token",
+        content=b"a=" + b"x" * 70_000,
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+    assert big.status_code == 413
+    odd = web.post(
+        "/oauth/token",
+        data={"grant_type": "authorization_code", "code": "c"},
+        files={"client_id": ("c.txt", b"x"), "redirect_uri": ("r.txt", b"y")},
+    )
+    assert odd.status_code == 400 and odd.json()["error"] == "invalid_request"
+
+
+def test_a_client_refused_during_consent_is_a_page_not_a_500(
+    web, provider, monkeypatch
+):
+    page = sign_in(web, provider, begin(web))
+    nonce = consent_nonce(page)
+
+    def refuse(*_a, **_k):
+        raise mcp_clients.ClientRefused("gone")
+
+    monkeypatch.setattr(mcp_clients, "client_for", refuse)
+    data = {"consent": nonce, "decision": "allow"}  # nothing ticked: the re-render path
+    out = web.post("/oauth/authorize", data=data, headers=SAME)
+    assert out.status_code == 400 and "cannot ask to connect" in out.text
+
+
+def test_a_signed_in_app_can_call_whats_new_without_a_key(web, provider):
+    token = exchange(web, full_flow(web, provider)["code"]).json()["access_token"]
+    for _ in range(2):
+        out = web.post(
+            "/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "whats_new", "arguments": {}},
+            },
+            headers={"authorization": "Bearer " + token},
+        )
+        assert out.status_code == 200
+        assert not out.json()["result"].get("isError")
