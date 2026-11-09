@@ -863,3 +863,133 @@ def test_the_connect_page_fits_a_phone_without_clipping_its_boxes(browser, serve
     assert got["n"] == 8 and got["pre"]
     assert got["over"] == []
     assert got["scroll"] <= got["w"]
+
+
+def _retro_page():
+    """A long report as agents publish them: a title, a lead paragraph, a row of
+    stat cards, then sections with a table and a picture far down."""
+    cards = "".join(
+        f'<div class="card"><b>{n}</b><span>stat {n}</span></div>' for n in range(4)
+    )
+    filler = "".join(
+        f"<p>Filler paragraph {n}. " + "words " * 40 + "</p>" for n in range(12)
+    )
+    return (
+        "<!doctype html><html><head><title>Retro</title><style>"
+        ".card{padding:20px;border:1px solid #ccc}"
+        ".stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}"
+        "</style></head><body><div class='wrap' style='max-width:900px;margin:0 auto;padding:24px'>"
+        "<h1>Week 45 retro</h1>"
+        "<p class='lead'>The lead paragraph says how the week went.</p>"
+        f"<div class='stats'>{cards}</div>"
+        "<section><h2>Early</h2>" + filler + "</section>"
+        "<section><h2>Numbers</h2>"
+        "<table id='nums'><tr><th>Team</th><th>Score</th></tr>"
+        "<tr><td>Alpha</td><td>3</td></tr><tr><td>Beta</td><td>5</td></tr></table>"
+        + filler
+        + "<img id='pic' alt='A diagram' width='300' height='120' "
+        "src='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'>"
+        + filler
+        + "</section></div>"
+        # The column is not the whole page: a tall footer outside it, so the
+        # shim's page-wide-wrapper test does not rule the column out.
+        "<footer style='height:3000px'>Footer</footer></body></html>"
+    )
+
+
+def test_the_corner_comment_sits_at_the_thing_pointed_at_on_a_long_page(
+    browser, served, db
+):
+    """Owner, 9 Nov: the Comment pill showed at the top of the content column,
+    far from what he pointed at. A block that merely CONTAINS a table or a
+    picture (the card row's section, a page-wide wrapper) is not a chart, table
+    or picture: only the thing itself, or a small box around it, is offered
+    the button, and then the button is at its own corner, top of the page or
+    far down it."""
+    origin, _ = served
+    page = store.publish(db, "seat", "Retro", _retro_page())
+    ctx, pg, errors = _open_page(browser, origin, page.id, 1400)
+    try:
+        _frame_height_settled(pg)
+        frame = pg.frames[1]
+        shown = """() => { const h = document.documentElement.lastElementChild;
+            if (!h || h.nodeName !== 'AR-COMMENT-HOST') return null;
+            if (getComputedStyle(h).display === 'none') return null;
+            const b = h.getBoundingClientRect();
+            return {t: b.top, r: b.right} }"""
+
+        def point_at(selector, dx=0.5, dy=0.5):
+            # The frame is as tall as the page, so it is the gallery that scrolls.
+            top = frame.evaluate(
+                "(s) => document.querySelector(s).getBoundingClientRect().top"
+                " + scrollY",
+                selector,
+            )
+            pg.evaluate(
+                "(y) => window.scrollTo(0, document.getElementById('artifact-frame')"
+                ".getBoundingClientRect().top + scrollY + y - 300)",
+                top,
+            )
+            pg.wait_for_timeout(200)
+            fb = pg.locator("#artifact-frame").bounding_box()
+            r = frame.evaluate(
+                """(s) => { const b = document.querySelector(s).getBoundingClientRect();
+                           return {l: b.left, t: b.top, w: b.width, h: b.height} }""",
+                selector,
+            )
+            pg.mouse.move(0, 0)
+            pg.wait_for_timeout(450)
+            pg.mouse.move(
+                fb["x"] + r["l"] + r["w"] * dx, fb["y"] + r["t"] + r["h"] * dy
+            )
+            pg.wait_for_timeout(450)
+            return r
+
+        # Text, the lead, and the stat cards: no button at all.
+        for sel in ("p.lead", ".stats .card", "h1", "section p"):
+            point_at(sel)
+            assert frame.evaluate(shown) is None, f"{sel} must get no button"
+        # Padding and gaps around blocks hit the column or a section, which only
+        # CONTAIN a table or picture.
+        for sel in (".wrap", "section"):
+            for dx, dy in ((0.5, 0.0), (0.5, 0.005), (0.001, 0.5), (0.999, 0.1)):
+                point_at(sel, dx, dy)
+                assert frame.evaluate(shown) is None, f"{sel} {dx},{dy}: no button"
+        # The table and the picture, far down: the button is at their corner.
+        for sel in ("#nums", "#pic"):
+            r = point_at(sel)
+            got = frame.evaluate(shown)
+            for _ in range(20):
+                if got:
+                    break
+                pg.wait_for_timeout(100)
+                got = frame.evaluate(shown)
+            assert got, sel
+            assert r["t"] - 1 <= got["t"] <= r["t"] + 20, (sel, r, got)
+            assert r["l"] + r["w"] - 120 <= got["r"] <= r["l"] + r["w"] + 1, (
+                sel,
+                r,
+                got,
+            )
+        # Selecting words, at the top and far down: the bar is under the words.
+        for sel in ("p.lead", "section:last-of-type p:last-of-type"):
+            r = point_at(sel)
+            frame.evaluate(
+                """(s) => { const p = document.querySelector(s), g = document.createRange();
+                    g.selectNodeContents(p.firstChild);
+                    const x = getSelection(); x.removeAllRanges(); x.addRange(g);
+                    document.dispatchEvent(new Event('selectionchange')) }""",
+                sel,
+            )
+            fb = pg.locator("#artifact-frame").bounding_box()
+            line = fb["y"] + r["t"]
+            bar = None
+            for _ in range(30):  # the bar moves when the new selection arrives
+                bar = pg.locator(".selbar").bounding_box()
+                if bar and line - 5 <= bar["y"] <= line + r["h"] + 40:
+                    break
+                pg.wait_for_timeout(100)
+            assert bar and line - 5 <= bar["y"] <= line + r["h"] + 40, (sel, bar, line)
+        assert not errors, errors
+    finally:
+        ctx.close()

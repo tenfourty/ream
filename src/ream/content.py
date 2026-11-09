@@ -211,9 +211,15 @@ function pin(c){var m=pinMsg(c);if(m)parent.postMessage(m,__ORIGIN__)}
 // What the button is for: a chart, table or picture, or something inside or around
 // one. The element itself is chosen as a pick always was (the smallest block under
 // the pointer, an ancestor with an id preferred), then kept only if it is one.
-function visual(e){var i,n=String(e.nodeName).toUpperCase();
+function visual(e){var i,v,a,n=String(e.nodeName).toUpperCase();
   for(i=0;i<VIS.length;i++){
-    if(n===VIS[i].toUpperCase()||(e.closest&&e.closest(VIS[i]))||(e.querySelector&&e.querySelector(VIS[i])))return 1}
+    if(n===VIS[i].toUpperCase()||(e.closest&&e.closest(VIS[i])))return 1;
+    // A box AROUND one counts only when it is little bigger than the thing
+    // itself (a chart's frame, a figure's wrapper). A section or the page's
+    // column merely contains a table or picture: it is not one, and the button
+    // would sit at the top of the column, far from what was pointed at.
+    v=e.querySelector?e.querySelector(VIS[i]):null;
+    if(v){a=area(v);if(a>0&&area(e)<=a*3)return 1}}
   return 0}
 function oname(e){var n=tn(e);
   return n==="svg"||n==="canvas"?"chart":n==="img"||n==="picture"?"picture":n==="td"||n==="th"?"table cell":n}
