@@ -620,17 +620,23 @@ def declared_session(request: Request) -> str | None:
     never has to decide whether an empty string means unknown or means a
     session that named itself nothing.
     """
-    raw = (
+    return session_label(
         request.headers.get("x-ream-session")
         or request.headers.get("x-artifacts-session")
         or ""
-    ).strip()
+    )
+
+
+def session_label(raw: str, field: str = "x-ream-session") -> str | None:
+    """A declared session label, as `declared_session` reads one from the header (the
+    MCP write tools read their `session` argument by the same rule, naming `field`)."""
+    raw = raw.strip()
     if not raw:
         return None
     if len(raw) > _SESSION_MAX:
         raise HTTPException(
             422,
-            f"x-ream-session must be at most {_SESSION_MAX} characters",
+            f"{field} must be at most {_SESSION_MAX} characters",
         )
     # Sanitised like every other caller-supplied string that reaches
     # storage and then somebody's terminal: control characters gone,

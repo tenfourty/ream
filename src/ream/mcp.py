@@ -35,6 +35,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
+from starlette.background import BackgroundTasks
 from starlette.concurrency import run_in_threadpool
 
 from ream import api, hosts, keys, onboarding, ratelimit, settings, text
@@ -106,6 +107,10 @@ class Call:
     session: str | None
     version: str
     permissions: frozenset[str]
+    # What runs once the answer has gone, as a route's BackgroundTasks: a write tool
+    # appends the work its route would have handed to `background` (nudges, the
+    # comment's second scan).
+    after: list[Callable[[], Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -468,9 +473,17 @@ def _error_body(code: int, message: str, id: Any = None, data: Any = None) -> di
 _NO_STORE = {"cache-control": "no-store", "x-content-type-options": "nosniff"}
 
 
-def _json(status: int, body: dict, headers: dict[str, str] | None = None):
+def _json(
+    status: int,
+    body: dict,
+    headers: dict[str, str] | None = None,
+    background: BackgroundTasks | None = None,
+):
     return JSONResponse(
-        body, status_code=status, headers={**_NO_STORE, **(headers or {})}
+        body,
+        status_code=status,
+        headers={**_NO_STORE, **(headers or {})},
+        background=background,
     )
 
 
@@ -618,7 +631,14 @@ def _call_tool(call: Call, params: dict, id: Any) -> dict:
     except ToolError as exc:
         return _tool_error(str(exc))
     except HTTPException as exc:
-        return _tool_error(str(exc.detail))
+        # The route's own refusal, word for word: its text, or its structured detail
+        # (a secret's field, shape and line, never what matched) as JSON.
+        detail = exc.detail
+        return _tool_error(
+            detail
+            if isinstance(detail, str)
+            else json.dumps(detail, ensure_ascii=False, default=str)
+        )
     if isinstance(output, dict):
         output = ToolOutput(structured=output)
     if found.fences is not None:
@@ -924,7 +944,12 @@ def mcp_router(db: Database, limiter: ratelimit.FailedAuthLimiter) -> APIRouter:
         )
         # Anything else a tool raises is a bug: FastAPI's 500, logged as any route's.
         status, body = await run_in_threadpool(_dispatch, call, message)
-        return _json(status, body)
+        later = None
+        if call.after:
+            later = BackgroundTasks()
+            for task in call.after:
+                later.add_task(task)
+        return _json(status, body, background=later)
 
     return router
 
