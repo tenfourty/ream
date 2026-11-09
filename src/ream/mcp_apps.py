@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from ream import db as dbmod
-from ream import settings
+from ream import reach, settings
 from ream.db import Database
 from ream.keys import AGENT_NAME, RESERVED_REASON, is_reserved_agent_name
 
@@ -313,3 +313,25 @@ def apps_of(db: Database, person: str) -> list[App]:
             (person,),
         ).fetchall()
     return [_app_row(r) for r in rows]
+
+
+# --- Reach (section 11.2) -------------------------------------------------------------------
+
+
+def reach_of(db: Database, app: App) -> reach.Reach:
+    """What `app` may reach: every page the owner can read (closed to agents included,
+    never the trash); changes to the pages of any of `app.person`'s app agents; relaying
+    only with `relay`; and the permissions the person granted (`read` is `ream:read`)."""
+    with db.connect() as conn:
+        rows = conn.execute(
+            "select agent from mcp_agent where person = %s order by agent",
+            (app.person,),
+        ).fetchall()
+    writers = tuple(dict.fromkeys([app.agent, *(row[0] for row in rows)]))
+    return reach.Reach(
+        agent=app.agent,
+        readable=reach.READS_AS_OWNER,
+        writable_agents=writers,
+        can_relay="relay" in app.permissions,
+        permissions=frozenset(f"ream:{p}" for p in app.permissions),
+    )

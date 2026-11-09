@@ -38,7 +38,18 @@ from fastapi.responses import JSONResponse, Response
 from starlette.background import BackgroundTasks
 from starlette.concurrency import run_in_threadpool
 
-from ream import api, hosts, keys, mcp_clients, onboarding, ratelimit, settings, text
+from ream import (
+    api,
+    hosts,
+    keys,
+    mcp_apps,
+    mcp_clients,
+    onboarding,
+    ratelimit,
+    reach,
+    settings,
+    text,
+)
 from ream.db import Database
 
 _log = logging.getLogger("ream.mcp")
@@ -80,10 +91,10 @@ UNSUPPORTED_VERSION = -32022  # 2026-07-28
 
 # --- Permissions (section 11.3) -------------------------------------------------------
 
-READ = "ream:read"
-WRITE = "ream:write"
-RELAY = "ream:relay"
-PERMISSIONS = (READ, WRITE, RELAY)
+READ = reach.READ
+WRITE = reach.WRITE
+RELAY = reach.RELAY
+PERMISSIONS = reach.PERMISSIONS
 # What each permission is called where a person reads it.
 PERMISSION_WORDS = {
     READ: "read pages, comments and questions",
@@ -102,15 +113,20 @@ class Call:
 
     db: Database
     request: Request
-    key: keys.AgentKey
+    # The key it came with; None for a signed-in app (`app` says which).
+    key: keys.AgentKey | None
     agent: str
     session: str | None
     version: str
     permissions: frozenset[str]
+    # What it may reach (section 11.2): a key's own, or a signed-in app's wider one.
+    # `_dispatch` acts with it for the length of the message.
+    reach: reach.Reach
     # What runs once the answer has gone, as a route's BackgroundTasks: a write tool
     # appends the work its route would have handed to `background` (nudges, the
     # comment's second scan).
     after: list[Callable[[], Any]] = field(default_factory=list)
+    app: mcp_apps.App | None = None
 
 
 @dataclass(frozen=True)
@@ -435,6 +451,12 @@ def _find_resource(call: Call, uri: str) -> tuple[str, str] | None:
 def _whoami(call: Call, _arguments: dict[str, Any]) -> ToolOutput:
     me = api.me_view(call.db, call.request, call.agent, call.session)
     me["permissions"] = sorted(call.permissions, key=PERMISSIONS.index)
+    if call.app is not None:  # a signed-in app: who it is shown as, and its reach
+        me["shown_as"] = mcp_apps.display_name(call.db, call.agent)
+        me["reach"] = {
+            "reads": "every page the owner can read, closed to agents included",
+            "changes_pages_of": list(call.reach.writes()),
+        }
     return ToolOutput(structured=me)
 
 
@@ -749,7 +771,32 @@ def _get_prompt(call: Call, params: dict, id: Any) -> dict:
     }
 
 
+def app_call(
+    db: Database, request: Request, app: mcp_apps.App, session: str | None, version: str
+) -> Call:
+    """The call a signed-in app makes: its agent, the permissions it was granted and
+    its reach (section 11.2). Slice 5's token check makes it; tests make it directly."""
+    wide = mcp_apps.reach_of(db, app)
+    return Call(
+        db=db,
+        request=request,
+        key=None,
+        agent=app.agent,
+        session=session,
+        version=version,
+        permissions=wide.permissions,
+        reach=wide,
+        app=app,
+    )
+
+
 def _dispatch(call: Call, message: dict) -> tuple[int, dict]:
+    """Answer one message, acting with the caller's reach throughout."""
+    with reach.acting(call.reach):
+        return _dispatch_one(call, message)
+
+
+def _dispatch_one(call: Call, message: dict) -> tuple[int, dict]:
     method, id = message["method"], message["id"]
     params = message.get("params") or {}
     if not isinstance(params, dict):
@@ -1102,6 +1149,7 @@ def mcp_router(db: Database, limiter: ratelimit.FailedAuthLimiter) -> APIRouter:
             version=version,
             # A key holds every permission, within its own reach (section 11.3).
             permissions=frozenset(PERMISSIONS),
+            reach=reach.of_key(key.agent),
         )
         # Anything else a tool raises is a bug: FastAPI's 500, logged as any route's.
         status, body = await run_in_threadpool(_dispatch, call, message)

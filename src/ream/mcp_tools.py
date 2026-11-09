@@ -49,6 +49,7 @@ from ream import (
     events,
     folders,
     keys,
+    mcp_apps,
     onboarding,
     sections,
     settings,
@@ -485,6 +486,12 @@ def _questions(call: Call, arguments: dict[str, Any]) -> dict:
 
 
 def _seen(call: Call) -> int | None:
+    if call.key is None:  # a signed-in app keeps its cursor on its consent (11.3)
+        with call.db.connect() as conn:
+            row = conn.execute(
+                "select events_seen from mcp_app where id = %s", (call.app.id,)
+            ).fetchone()
+        return int(row[0]) if row is not None and row[0] else None
     with call.db.connect() as conn:
         row = conn.execute(
             "select seq from mcp_events_seen where key_id = %s", (call.key.id,)
@@ -494,6 +501,14 @@ def _seen(call: Call) -> int | None:
 
 def _save_seen(call: Call, seq: int) -> None:
     """Move this key's cursor to `seq`, never back (two calls at once keep the higher)."""
+    if call.key is None:
+        with call.db.connect() as conn:
+            conn.execute(
+                "update mcp_app set events_seen = %s where id = %s"
+                " and events_seen < %s",
+                (seq, call.app.id, seq),
+            )
+        return
     with call.db.connect() as conn:
         conn.execute(
             "insert into mcp_events_seen (key_id, seq, updated_at) values (%s, %s, %s)"
@@ -619,7 +634,13 @@ def _session(call: Call, arguments: dict[str, Any]) -> str:
         label = api.session_label(raw, "session")
         if label:
             return label
-    return call.session or f"mcp/{datetime.now(UTC).date().isoformat()}"
+    if call.session:
+        return call.session
+    today = datetime.now(UTC).date().isoformat()
+    if call.app is not None:  # a signed-in app names its host (11.1)
+        found = mcp_apps.mcp_agent(call.db, call.agent)
+        return f"{found.host if found else 'mcp'}/{today}"
+    return f"mcp/{today}"
 
 
 SESSION = {
@@ -898,7 +919,10 @@ def _comment(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     later: list = []
     out = api.add_comment(call.db, page_id, payload, call.agent, None, session, later)
     call.after.extend(later)
-    return ToolOutput({"comment": jsonable_encoder(out)}, written_by=page.agent)
+    shown = jsonable_encoder(out)
+    if call.app is not None:  # "Jeremy, via claude.ai" (11.1); stored as the agent
+        shown["author_name"] = mcp_apps.display_name(call.db, call.agent)
+    return ToolOutput({"comment": shown}, written_by=page.agent)
 
 
 _ASK_FIELDS = {
@@ -1022,6 +1046,10 @@ _RECORD_FIELDS = {
     ),
 )
 def _record_answer(call: Call, arguments: dict[str, Any]) -> dict:
+    if call.app is not None or not call.reach.can_relay:
+        # A signed-in app relays only as source `mcp` (11.5), not built yet: meanwhile
+        # it may not claim a key's sources.
+        raise ToolError("Passing on answers from a connected app is not available yet")
     _only(arguments, {"decision_id", *_RECORD_FIELDS})
     decision_id = _str(arguments, "decision_id", required=True)
     words = arguments.get("words")

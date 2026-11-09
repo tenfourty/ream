@@ -2755,3 +2755,18 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   30-day idle lapse and a 90-day cap, one live app per person and app. `display_name` shows a
   person-and-app agent as "<owner name>, via <host>" (`settings.owner_name()`). Nothing calls them
   yet: `Reach` and permission gating are the second half.
+- **A signed-in app's reach and permissions (9 Nov 2026; second half of slice 4 of MCP sign-in).**
+  `ream/reach.py`: `Reach(agent, readable, writable_agents, can_relay, permissions)` (§11.2), one
+  value per MCP message, a key's from `reach.of_key` (today's, widening nothing) and an app's from
+  `mcp_apps.reach_of`. `/mcp` acts with it for the length of a message (`reach.acting`), and the
+  store's one page check (`store._owned`, and `list_readable`) widens only for the agent acting
+  with it: an app reads every page the owner can read, closed to agents included, never the
+  trash, and changes the pages of any of the person's app agents; asking stays on its own pages
+  (`widen=False`, until §11.4). `mcp.app_call` makes an app's call (slice 5's token check will);
+  its permissions gate `tools/list` and `tools/call` as a key's do. An app's comment says
+  "Jeremy, via claude.ai" (`author_name`; stored as its agent), its `whoami` says who it is shown
+  as and its reach, its session defaults to `<host>/<date>`, its `whats_new` cursor is
+  `mcp_app.events_seen`, and `record_answer` refuses it until source `mcp` (§11.5) exists.
+  `rename_agent` refuses to rename a person-and-app agent or to rename a key's agent onto one's
+  name. Checks outside `_owned` (`store._scoped`, `move_many`: archive, pin, move, delete) are not
+  widened yet. `/api/v1` is unchanged.

@@ -63,6 +63,7 @@ from ream import (
     scanners,
     settings,
 )
+from ream import reach as caller_reach
 from ream import rename as agent_rename
 from ream.db import DUPLICATE_KEY, Database, in_list, jsonb
 from ream.text import LEADING_DOCTYPE
@@ -683,11 +684,38 @@ def publish(
     )
 
 
-def _owned(conn, artifact_id: str, agent: str, as_reader: bool = False):
+_PAGE_COLUMNS = (
+    "select id, title, agent, visibility, current_version, updated_at,"
+    " archived_at, pinned_at, agents_can_read"
+)
+
+
+def _owned(
+    conn, artifact_id: str, agent: str, as_reader: bool = False, *, widen: bool = True
+):
     """The page, if `agent` may act on it. `as_reader` widens that to READING
     a page another agent published, when the page is open to agents
     (homelab-ij8.105). Only read routes may pass it; every write stays scoped
-    to the publisher. A closed page and a missing one still look the same."""
+    to the publisher. A closed page and a missing one still look the same.
+
+    A signed-in MCP app (`reach.widened`, MCP design 11.2) reads every page the owner
+    can read, closed to agents included, never the trash, and changes the pages of any
+    of the person's app agents. `widen=False` keeps a check to `agent`'s own pages
+    whoever calls (asking on a page, until a question can have its own asker, 11.4).
+    A key's reach widens nothing: the queries below it are today's."""
+    wide = caller_reach.widened(agent) if widen else None
+    if wide is not None and as_reader and wide.reads_all():
+        return conn.execute(
+            _PAGE_COLUMNS + " from artifact where id = %s and deleted_at is null",
+            (artifact_id,),
+        ).fetchone()
+    if wide is not None and not as_reader and wide.writes_others():
+        writers = wide.writes()
+        return conn.execute(
+            _PAGE_COLUMNS + " from artifact where id = %s and deleted_at is null"
+            f" and agent in {in_list(writers)}",
+            (artifact_id, *writers),
+        ).fetchone()
     if as_reader:
         return conn.execute(
             "select id, title, agent, visibility, current_version, updated_at,"
@@ -1657,6 +1685,7 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
     is open to agents (homelab-ij8.105; Jeremy chose that agents can browse
     their colleagues' open work, 5a). Whether he has read a page is reported
     only on the caller's own rows."""
+    wide = caller_reach.widened(agent)
     with db.connect() as conn:
         rows = conn.execute(
             "select artifact.id, artifact.title, artifact.agent, artifact.visibility,"
@@ -1672,9 +1701,10 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
             " left join page_read on page_read.artifact_id = artifact.id"
             " left join folder on folder.id = artifact.folder_id"
             " where artifact.deleted_at is null"
-            " and (artifact.agent = %s or artifact.agents_can_read)"
+            " and (artifact.agent = %s or artifact.agents_can_read or %s)"
             " order by artifact.updated_at desc",
-            (agent,),
+            # A signed-in app reads every page the owner can read (MCP design 11.2).
+            (agent, wide is not None and wide.reads_all()),
         ).fetchall()
     now = datetime.now(UTC)
     return [

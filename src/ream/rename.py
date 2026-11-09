@@ -116,6 +116,17 @@ def rename_agent(
     counts: dict[str, int] = {}
     with db.connect() as conn, conn.transaction():
         conn.advisory_lock(_RENAME_LOCK_KEY)
+        # A person-and-app agent (MCP design 11.1) is named once, at its first consent,
+        # and never changes; no key's agent may take or merge into one's name.
+        for name, said in ((old, "renamed"), (new, "taken by a rename")):
+            held = conn.execute(
+                "select person from mcp_agent where agent = %s", (name,)
+            ).fetchone()
+            if held is not None:
+                raise Refused(
+                    f"{name} is a person-and-app agent (an MCP app's): its name cannot "
+                    f"be {said}"
+                )
         onward = conn.execute(
             "select new from agent_alias where old = %s", (new,)
         ).fetchone()

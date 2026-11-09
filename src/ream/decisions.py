@@ -698,7 +698,7 @@ def ask(
         store._check_size(value, 4_000, name, agent=agent, artifact_id=artifact_id)
 
     with db.connect() as conn:
-        owned = store._owned(conn, artifact_id, agent)
+        owned = store._owned(conn, artifact_id, agent, widen=False)
         if owned is None:
             raise store.NotFound()
         version_n = owned[4]
@@ -902,7 +902,7 @@ def ask_review(
     if mode is not None and mode not in holds.MODES:
         raise ValueError(mode)
     with db.connect() as conn:
-        owned = store._owned(conn, artifact_id, agent)
+        owned = store._owned(conn, artifact_id, agent, widen=False)
         if owned is None:
             raise store.NotFound()
         mode = mode or holds.get_mode(conn)
