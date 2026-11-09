@@ -261,3 +261,27 @@ def test_the_code_boxes_are_an_upgrade_the_plain_field_still_works(gallery):
     assert script.status_code == 200
     assert script.headers["content-type"].startswith("text/javascript")
     assert "http" not in script.text
+
+
+def test_start_move_never_prints_the_token_and_needs_out(tmp_path, monkeypatch, capsys):
+    from ream import client
+
+    monkeypatch.setattr(client, "_resolve_key", lambda args: "k")
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *a, **kw: {"move_token": "SECRET-MOVE", "expires_in": 900, "agent": "x"},
+    )
+    assert connect_cli.main(["--start-move"]) == 2
+    shown = capsys.readouterr()
+    assert "SECRET-MOVE" not in shown.out + shown.err
+
+    out = tmp_path / "tok"
+    assert connect_cli.main(["--start-move", "--out", str(out)]) == 0
+    shown = capsys.readouterr()
+    assert "SECRET-MOVE" not in shown.out + shown.err
+    assert out.read_text().strip() == "SECRET-MOVE"
+    assert (out.stat().st_mode & 0o777) == 0o600
+
+    assert connect_cli.main(["--start-move", "--out", str(out)]) == 1
+    assert out.read_text().strip() == "SECRET-MOVE"

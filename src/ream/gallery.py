@@ -7297,8 +7297,13 @@ def gallery_router(db: Database) -> APIRouter:
                 body = _connect_page(
                     code,
                     pending,
-                    f"{agent} is already an agent. Pick another name, or choose "
-                    "same agent, new machine.",
+                    f"{agent} is already an agent. Pick another name"
+                    + (
+                        ", or choose same agent, new machine."
+                        if taken
+                        else ". To add a machine to it, have that machine ask to "
+                        f"connect as {agent}."
+                    ),
                     name=name,
                     alias_note=alias_note,
                     taken=taken,

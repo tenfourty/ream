@@ -61,10 +61,25 @@ def _save_key(path: Path, key: str) -> None:
 def _start_move(args) -> int:
     """On the machine that already has a key: ask the service for a move token for THIS
     key's own agent (POST /agents/me/move). The token is a one-time credential for the
-    new machine; it is written to --out (mode 600) when asked, else printed."""
+    new machine; it is written to --out (mode 600, never over an existing file) and
+    never printed, so it cannot reach a transcript."""
     args.key_fd = (
         None  # this command has no --key-fd; _resolve_key reads the file or env
     )
+    if not args.out:
+        print(
+            "artifacts-connect: --start-move needs --out FILE: the move token is a "
+            "credential and is never printed",
+            file=sys.stderr,
+        )
+        return 2
+    out = Path(args.out)
+    if out.exists() or out.is_symlink():
+        print(
+            f"artifacts-connect: {out} already exists; not overwriting it",
+            file=sys.stderr,
+        )
+        return 1
     try:
         key = client._resolve_key(args)
         made = client._request("POST", f"{client._api_base()}/agents/me/move", key, {})
@@ -72,12 +87,8 @@ def _start_move(args) -> int:
         print(f"artifacts-connect: could not start a move: {exc}", file=sys.stderr)
         return 1
     token = made["move_token"]
-    if args.out:
-        client.save_key_file(Path(args.out), token)
-        where = f"The move token is in {args.out}"
-    else:
-        print(token)
-        where = "The move token is printed above"
+    client.save_key_file(out, token)
+    where = f"The move token is in {out}"
     print(
         f"{where}. It works once, for {made['expires_in'] // 60} minutes. On the new "
         "machine run: ream connect --move-token-stdin  (token on stdin). This "
@@ -111,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--out",
-        help="with --start-move: write the move token to this file (mode 600) instead of printing it",
+        help="with --start-move: REQUIRED with --start-move: write the move token to this new file (mode 600; an existing file is never overwritten); it is never printed",
     )
     parser.add_argument(
         "--move-token-stdin",

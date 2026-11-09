@@ -291,6 +291,9 @@ def test_migration_adds_the_outbox_and_leaves_partner_rows_delivering(db):
             conn.execute("alter table artifact drop column comments_default")
             conn.execute("alter table comment drop column deleted_at")
             conn.execute("alter table comment drop column deleted_by")
+            conn.execute("alter table connect_request drop column move")
+            conn.execute("alter table connect_request drop column origin_key")
+            conn.execute("alter table agent_key drop column retire_after")
             conn.execute("pragma user_version = 19")  # the version before this table
     db.migrate()
     db.migrate()  # idempotent

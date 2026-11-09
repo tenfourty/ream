@@ -172,10 +172,9 @@ def test_an_agent_moves_itself_and_only_itself(db, gallery):
     token = started.json()["move_token"]
     got = _collect(gallery, token)
     assert got["status"] == "approved" and got["agent"] == "laptop"
-    assert made["id"] in str(_pages(gallery, got["key"]).json())
     assert _collect(gallery, token) == {"status": "delivered"}
-    assert _pages(gallery, mine).status_code == 200
-    gallery.get("/api/v1/me", headers=_bearer(got["key"]))
+    assert _pages(gallery, mine).status_code == 200  # not retired until first use
+    assert made["id"] in str(_pages(gallery, got["key"]).json())
     assert _pages(gallery, mine).status_code == 401
     assert _pages(gallery, other).status_code == 200
     rival = (

@@ -365,7 +365,8 @@ def test_connecting_a_machine_under_an_old_name_means_the_new_one(db):
         "/api/v1/connect", json={"name": "x"}, headers={"x-real-ip": "203.0.113.5"}
     ).json()
     refused = approve(started["code"])
-    assert "cove-maintainer is already the name" in refused.text
+    assert "cove-maintainer is already an agent" in refused.text
+    assert "cove-seat is an old name of cove-maintainer" in refused.text
     keys.revoke(db, key_id)
     assert "Approved. cove-maintainer" in approve(started["code"]).text
     assert set(_under(db, "cove-seat").values()) == {0}
