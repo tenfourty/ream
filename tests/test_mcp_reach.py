@@ -80,12 +80,13 @@ def test_an_app_reads_a_page_closed_to_agents_and_a_key_does_not(db, closed):
     read = _tool(_as(db, app), "read_page", page_id=closed)
     assert read["isError"] is False, read
     assert "hidden words" in json.dumps(read)
-    listed = _tool(_as(db, app), "list_pages")
+    listed = _tool(_as(db, app), "list_pages", scope="all")
     assert closed in json.dumps(listed)
     # A key's reach is today's: the closed page is "no such page".
     other = _tool(_as_key(db, "seat"), "read_page", page_id=closed)
     assert other["isError"] is True
-    assert closed not in json.dumps(_tool(_as_key(db, "seat"), "list_pages"))
+    keyed = _tool(_as_key(db, "seat"), "list_pages", scope="all")
+    assert closed not in json.dumps(keyed)
 
 
 def test_an_app_cannot_change_an_offices_page(db, closed):
