@@ -502,7 +502,11 @@ browser, turns the pill off. A "How to comment" box of numbered steps sits at th
 comments panel whenever Comment is lit; its steps change with the switch and say "Tap" on touch.
 The touch layout follows the main pointer (`(pointer: coarse), (hover: none)`).
 
-**Explain, Shorten and Fix** will come later as three new kinds, reviewed by the offices on 9 Nov.
+**Explain, Shorten and Fix** shipped later the same day as three new comment kinds (`explain`,
+`shorten`, `fix`), on the pill beside Comment, after the offices reviewed the contract (page
+`25yo76njdcwxwqripobxuir7fi`). A bare tap stores `Explain these words.` (and so on), with his note
+after an em dash; agents act on the kind, never the body; a reply is always owed and an agent may
+not settle one before replying; a declined Fix stays open for him.
 **Remove and Looks good** are retired from the reader's screen; the API still accepts them and
 existing threads of those kinds still display.
 
@@ -551,3 +555,18 @@ named by the server (a spoofed or compromised server could then install any comm
 
 **Evidence:** Jeremy, 9 Nov 2026; the ref-from-the-server design was dropped after a security review
 the same day.
+
+## The Ream source is public on the forge (9 Nov 2026)
+
+**Chosen:** `runcove/artifacts` is readable by anyone on the forge, read-only, so every agent's tool
+can reinstall itself from `main` with no login, on any machine Jeremy gives a key to. Before the
+switch, the whole history and every branch were scanned for secrets (only test fixtures and prose
+matched), the repository had no issues or pull requests to carry embargoed detail, and CI logs mask
+secrets. Security fixes keep their rule: no detail in commits or public text until the fix is out.
+
+**Not chosen:** keep it private and have machines without a forge login reinstall by hand, or hand
+offices a read-only credential. Keep it private and have the service publish each release as a
+package to install from (a medium slice, and a second release path to keep honest).
+
+**Evidence:** Jeremy, 9 Nov 2026. Anonymous reads also need the `runcove` organisation to be
+visible, which homelab has put to him separately.
