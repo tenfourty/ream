@@ -776,3 +776,19 @@ split needs, and no person in the loop when the tests already prove it.
 when the tests are green. No automation at all, which would let production drift behind the core.
 
 **Evidence:** confirmed (Jeremy, 9 Nov 2026), decision d_01M70N0KES88YJDQWHJGHCM679.
+
+## The comments-setting refusal waits for the office-page scripts' fix (9 Nov 2026)
+
+**Chosen:** Ream turns on the refusal of a new page that does not say whether comments start on or
+off (`clientlevel.COMMENTS_REQUIRED`) only once quarterdeck's fix to runcove's office-page scripts,
+which makes them pass `--comments off`, is on runcove's `main`. Until then new pages without the
+setting are still accepted, so nothing that publishes today breaks. The other confirmations already
+asked for (runcove-pmo, cove) still apply.
+
+**Why:** those scripts are the last caller that does not send the setting, and their fix is ready
+but held by runcove's open-pull-request limit.
+
+**Not chosen:** turning the refusal on now, which would stop new office status pages until the fix
+lands. Asking runcove-pmo to let the fix past runcove's limit first.
+
+**Evidence:** confirmed (Jeremy, 9 Nov 2026), decision d_01M714F34A3AB7V449YNF4CYEA.
