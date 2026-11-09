@@ -60,6 +60,7 @@ from ream import (
     onboarding,
     partner_in,
     ratelimit,
+    reach,
     receipts,
     review,
     sections,
@@ -695,21 +696,31 @@ def open_questions(
             )
         ]
     else:
+        # A signed-in MCP app sees the questions on every page it may read, not only
+        # those on its own agent's pages (MCP design 11.2). A key's reach widens nothing.
+        wide = reach.widened(agent)
+        every = wide is not None and wide.reads_all()
         with db.connect() as conn:
-            titles = dict(
-                conn.execute(
-                    "select id, title from artifact where agent = %s",
-                    (agent,),
+            pages = {
+                r[0]: (r[1], r[2])
+                for r in conn.execute(
+                    "select id, title, agent from artifact where (agent = %s or %s)",
+                    (agent, every),
                 ).fetchall()
-            )
+            }
         found = [
-            (d, agent, titles.get(d.artifact_id, ""))
+            (
+                d,
+                pages.get(d.artifact_id, ("", agent))[1],
+                pages.get(d.artifact_id, ("", agent))[0],
+            )
             for d in decisions.list_for_agent(
                 db,
                 agent,
                 limit=_ALL_OPEN,
                 kind="question",
                 include_set_aside=include_set_aside,
+                any_agent=every,
             )
         ]
     now = datetime.now(UTC)

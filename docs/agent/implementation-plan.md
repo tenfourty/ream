@@ -2780,8 +2780,19 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   as and its reach, its session defaults to `<host>/<date>`, its `whats_new` cursor is
   `mcp_app.events_seen`, and `record_answer` refuses it until source `mcp` (§11.5) exists.
   `rename_agent` refuses to rename a person-and-app agent or to rename a key's agent onto one's
-  name. Checks outside `_owned` (`store._scoped`, `move_many`: archive, pin, move, delete) are not
-  widened yet. `/api/v1` is unchanged.
+  name. `/api/v1` is unchanged. (The checks outside `_owned` were widened afterwards; see the
+  next entry.)
+- **A signed-in app organises pages and reads questions (9 Nov 2026; closes the leftover of slice 4).**
+  `store._scoped` and `store.move_many` now widen for the acting app as `_owned` does for writes:
+  rename, pin, archive, file in a folder, delete and restore work on the pages of any of the
+  person's app agents (`reach.writes()`), never an office's or a key agent's, and "not yours"
+  still answers as "no such page". A filed page goes in a folder of its own agent (found or made
+  per owner), since a folder shows only on its owner's pages. Destroy, give away and who may read
+  (`purge`, `transfer`, `set_agents_can_read`) pass `widen=False`: never for an app. The
+  `questions` tool lists, for an app, every open question on a page it can read (any live page:
+  `decisions.list_for_agent(any_agent=True)`), which includes those it asked; a question on a
+  binned page is not listed. A key's `questions` and organising are unchanged. Tests:
+  `tests/test_mcp_organise.py`.
 - **Signing in: the provider and the owner check (9 Nov 2026, slice 5a; b5156b5, 610f4c3, 55e11e7).**
   The server can sign the one reader in at an upstream OpenID Connect provider (`REAM_OIDC_*`,
   `src/ream/oidc.py`): code flow with PKCE, state and nonce, the secret read from a file, claims

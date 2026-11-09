@@ -1737,7 +1737,7 @@ def set_agents_can_read(
     """Open a page to every agent in his space, or close it to him and its
     publisher (homelab-ij8.105). `agent` None is the gallery (his wall, any
     page); an agent may only change its own. False if nothing matched."""
-    where, params = _scoped(artifact_id, agent)
+    where, params = _scoped(artifact_id, agent, widen=False)
     with db.connect() as conn:
         done = conn.execute(
             f"update artifact set agents_can_read = %s {where}",  # noqa: S608 -- _scoped emits a fixed clause with placeholders, never caller text
@@ -1966,7 +1966,7 @@ def _reopen_set_aside_questions(
 
 
 def _scoped(
-    artifact_id: str, agent: str | None, *, live: bool = True
+    artifact_id: str, agent: str | None, *, live: bool = True, widen: bool = True
 ) -> tuple[str, tuple]:
     """The WHERE clause for a housekeeping write, and its parameters.
 
@@ -1991,8 +1991,19 @@ def _scoped(
     # recovering it and destroying it. Everything else must not see one, and
     # the default is therefore the safe direction: a new caller that forgets to
     # think about deletion gets the behaviour that cannot resurrect a page.
-    clause = "where id = %s" if agent is None else "where id = %s and agent = %s"
-    params = (artifact_id,) if agent is None else (artifact_id, agent)
+    # A signed-in MCP app (`reach.widened`, MCP design 11.2) organises the pages of any of
+    # the person's app agents, as `_owned` lets it change them. `widen=False` keeps a
+    # check to `agent`'s own pages whoever calls (destroy, give away, who may read:
+    # "never" for an app). A key's reach widens nothing.
+    wide = caller_reach.widened(agent) if widen and agent is not None else None
+    if agent is None:
+        clause, params = "where id = %s", (artifact_id,)
+    elif wide is not None and wide.writes_others():
+        writers = wide.writes()
+        clause = f"where id = %s and agent in {in_list(writers)}"
+        params = (artifact_id, *writers)
+    else:
+        clause, params = "where id = %s and agent = %s", (artifact_id, agent)
     if live:
         clause += " and deleted_at is null"
     return clause, params
@@ -2013,30 +2024,37 @@ def move_many(
     """
     _check_folder(folder, folder_title, agent=agent, artifact_id=None)
     wanted = list(dict.fromkeys(artifact_ids))
+    # A signed-in MCP app also files the pages of the person's other app agents (MCP
+    # design 11.2); a key files only its own. A page goes in a folder of ITS OWN agent (a
+    # folder shows only on its owner's pages), found or made per owner.
+    wide = caller_reach.widened(agent)
+    writers = wide.writes() if wide is not None and wide.writes_others() else (agent,)
     with db.connect() as conn, conn.transaction():
-        mine = {
-            r[0]
-            for r in conn.execute(
-                "select id from artifact"  # noqa: S608 -- placeholders only
-                f" where agent = %s and deleted_at is null and id in {in_list(wanted)}",
-                (agent, *wanted),
+        owner_of = dict(
+            conn.execute(
+                "select id, agent from artifact"  # noqa: S608 -- placeholders only
+                f" where agent in {in_list(writers)} and deleted_at is null"
+                f" and id in {in_list(wanted)}",
+                (*writers, *wanted),
             ).fetchall()
-        }
-        moved = [i for i in wanted if i in mine]
-        missing = [i for i in wanted if i not in mine]
+        )
+        moved = [i for i in wanted if i in owner_of]
+        missing = [i for i in wanted if i not in owner_of]
         filed = None
-        if folder is None:
-            target = None
-        elif moved:
-            target, canonical, created = folders.resolve_or_create(
-                conn, agent, folder, folder_title
-            )
-            filed = {"slug": canonical, "created": created}
-        if moved:
+        for owner in dict.fromkeys(owner_of[i] for i in moved):
+            ids = [i for i in moved if owner_of[i] == owner]
+            if folder is None:
+                target = None
+            else:
+                target, canonical, created = folders.resolve_or_create(
+                    conn, owner, folder, folder_title
+                )
+                if filed is None or owner == agent:
+                    filed = {"slug": canonical, "created": created}
             conn.execute(
                 "update artifact set folder_id = %s, archived_via_folder = null"  # noqa: S608 -- placeholders only
-                f" where agent = %s and deleted_at is null and id in {in_list(moved)}",
-                (target, agent, *moved),
+                f" where agent = %s and deleted_at is null and id in {in_list(ids)}",
+                (target, owner, *ids),
             )
         return moved, missing, filed
 
@@ -2158,7 +2176,7 @@ def destroy(db: Database, artifact_id: str, *, agent: str | None) -> bool:
     # `live=False`: the usual thing being destroyed is a page already in the
     # window. Destroying a live page is allowed too -- "this must not exist
     # anywhere" does not require deleting it first.
-    where, params = _scoped(artifact_id, agent, live=False)
+    where, params = _scoped(artifact_id, agent, live=False, widen=False)
     with db.connect() as conn, conn.transaction():
         # No foreign key on `receipt` (see purge_expired): its rows go with the page.
         conn.execute(
@@ -2838,7 +2856,7 @@ def transfer(
     owner, or None when nothing matched."""
     with db.connect() as conn, conn.transaction():
         to_agent = _live_agent(conn, to_agent)
-        where, params = _scoped(artifact_id, agent)
+        where, params = _scoped(artifact_id, agent, widen=False)
         row = conn.execute(
             f"select agent from artifact {where}"  # noqa: S608 -- fixed clause from _scoped
             + conn.for_update(),

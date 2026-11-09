@@ -1027,6 +1027,7 @@ def list_for_agent(
     kind: str | None = None,
     after: str | None = None,
     include_set_aside: bool = False,
+    any_agent: bool = False,
 ) -> list[DecisionRow]:
     """Newest first -- this is the polling surface an agent uses to learn Jeremy's
     answer, so newest matters more than oldest, exactly as `comments.list_for_agent`
@@ -1059,7 +1060,9 @@ def list_for_agent(
         # A deleted page is gone from the agent's view (ij8.110, as ij8.97 did
         # for the uncollected alert): listing its questions while their
         # outcome route answered 404 was the list and the route disagreeing.
-        " where artifact.agent = %s and artifact.deleted_at is null"
+        # `any_agent`: a signed-in MCP app lists the questions on every page it may
+        # read (MCP design 11.2), which is every live page.
+        " where (artifact.agent = %s or %s) and artifact.deleted_at is null"
     )
     if include_set_aside:
         # Except its OPEN questions, which `artifacts-decide list` shows in its SET
@@ -1083,7 +1086,7 @@ def list_for_agent(
         sql += " and decision.answer is null and decision.answer_record is null"
     if not include_set_aside:
         sql += _NOT_SET_ASIDE
-    params: list[object] = [agent]
+    params: list[object] = [agent, any_agent]
     if kind is not None:
         # In the query, so `limit` counts only this kind.
         sql += " and decision.kind = %s"
