@@ -21,12 +21,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from ream.db import Database, Rollback
-from ream.keys import AGENT_NAME, RESERVED_REASON, is_reserved_agent_name
+from ream.keys import (
+    AGENT_NAME,
+    NAME_LOCK_KEY,
+    RESERVED_REASON,
+    is_reserved_agent_name,
+)
 
-# Fixed, and distinct from db._MIGRATE_LOCK_KEY and idempotency's hashed keys
-# (which are spread over the whole bigint range, so a collision is as likely as
-# with any constant). Two renames at once serialise here.
-_RENAME_LOCK_KEY = 0x72656E61_6D650001  # "rename" + 1
+# The one name lock (keys.NAME_LOCK_KEY): two renames, or a rename and a first
+# consent or a new key's name, serialise here.
+_RENAME_LOCK_KEY = NAME_LOCK_KEY
 
 # (table.column, the WHERE clause beyond `column = old`). Plain columns only:
 # the three tables with a key on `agent` are merged separately, below.

@@ -6622,6 +6622,14 @@ def gallery_router(db: Database) -> APIRouter:
                     name=name,
                     alias_note=alias_note,
                 )
+            elif connect.app_agent_name(db, agent):
+                body = _connect_page(
+                    code,
+                    pending,
+                    f"{agent} is {keys.APP_AGENT_REASON}. Pick another.",
+                    name=name,
+                    alias_note=alias_note,
+                )
             elif connect.name_in_use(db, agent):
                 body = _connect_page(
                     code,

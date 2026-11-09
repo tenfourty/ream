@@ -105,7 +105,10 @@ def cmd_register_key(args: argparse.Namespace) -> None:
         raise SystemExit("sha256 must be exactly 64 lowercase hex characters")
     db = _open_db()
     args.agent = _current(db, args.agent)
-    key_id = keys.register(db, args.agent, args.sha256)
+    try:
+        key_id = keys.register(db, args.agent, args.sha256)
+    except keys.NameHeld as exc:
+        raise SystemExit(str(exc)) from None
     print(f"key_id={key_id} agent={args.agent}")
 
 

@@ -24,7 +24,12 @@ from datetime import UTC, datetime, timedelta
 from ream import db as dbmod
 from ream import reach, settings
 from ream.db import Database
-from ream.keys import AGENT_NAME, RESERVED_REASON, is_reserved_agent_name
+from ream.keys import (
+    AGENT_NAME,
+    NAME_LOCK_KEY,
+    RESERVED_REASON,
+    is_reserved_agent_name,
+)
 
 APP_PREFIX = "app_"
 PERMISSIONS = ("read", "write", "relay")
@@ -35,8 +40,9 @@ MAX_SUFFIX = (
     99  # -2 .. -99: more apps than that on one host is refused, not numbered on
 )
 
-# Serialises choosing a name, so two first consents never pick the same one.
-_NAME_LOCK_KEY = 0x6D637061_67000001  # "mcpag" + 1
+# Serialises choosing a name, so two first consents never pick the same one, and
+# a rename or a new key never takes a name one is picking (keys.NAME_LOCK_KEY).
+_NAME_LOCK_KEY = NAME_LOCK_KEY
 
 
 class AgentNameRefused(Exception):

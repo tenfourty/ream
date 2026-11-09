@@ -4,11 +4,15 @@ refusals, the display "<owner name>, via <host>", and apps made directly in the 
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi.testclient import TestClient
 
-from ream import keys, mcp_apps, settings
+from ream import connect, keys, mcp_apps, rename, settings
+from ream.admin import main as admin_main
+from ream.app import create_gallery_app
 
 CLAUDE_AI = "https://claude.ai/oauth/claude-ai/client.json"
 CLAUDE_CODE = "https://claude.ai/oauth/claude-code-client-metadata"
@@ -139,3 +143,55 @@ def test_an_app_is_refused_a_second_live_consent_bad_permissions_or_a_stranger_a
     assert again.id != first.id and again.agent == first.agent
     assert mcp_apps.live_app(db, _person(), CLAUDE_AI) == again
     assert len(mcp_apps.apps_of(db, _person())) == 2
+
+
+def _keys_for(db, agent: str) -> int:
+    with db.connect() as conn:
+        return conn.execute(
+            "select count(*) from agent_key where agent = %s", (agent,)
+        ).fetchone()[0]
+
+
+def test_no_key_may_take_a_person_and_app_agents_name(db, monkeypatch):
+    held = mcp_apps.agent_for(db, _person(), CLAUDE_AI, "claude.ai").agent
+    with pytest.raises(keys.NameHeld, match="person-and-app agent"):
+        keys.mint(db, held)
+    with pytest.raises(keys.NameHeld, match="person-and-app agent"):
+        keys.register(db, held, "a" * 64)
+    # artifacts-admin register-key goes through keys.register, and says why.
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    with pytest.raises(SystemExit, match="person-and-app agent"):
+        admin_main(["register-key", "--agent", held, "--sha256", "b" * 64])
+    assert _keys_for(db, held) == 0
+    # Another name still gets its key.
+    keys.mint(db, "office")
+    assert _keys_for(db, "office") == 1
+
+
+def test_connecting_a_machine_under_an_app_agents_name_is_refused(db):
+    held = mcp_apps.agent_for(db, _person(), CLAUDE_AI, "claude.ai").agent
+    gallery = TestClient(
+        create_gallery_app(db), base_url="https://artifacts.tenfourty.site"
+    )
+    started = gallery.post(
+        "/api/v1/connect", json={"name": "laptop"}, headers={"x-real-ip": "203.0.113.5"}
+    ).json()
+    page = gallery.get("/connect", params={"code": started["code"]}).text
+    request_id = re.search(r'name="request_id" value="([^"]+)"', page).group(1)
+    refused = gallery.post(
+        "/connect/approve",
+        data={"request_id": request_id, "code": started["code"], "name": held},
+        headers={"sec-fetch-site": "same-origin"},
+    )
+    assert keys.APP_AGENT_REASON in refused.text and "Approved" not in refused.text
+    # An approval that slipped past the page (the name was taken after it) still
+    # never collects a key: the request is denied instead.
+    assert connect.approve(db, request_id, held)
+    assert connect.collect(db, started["poll_token"]) == {"status": "denied"}
+    assert _keys_for(db, held) == 0
+
+
+def test_names_are_given_under_one_lock(db):
+    # A rename, a first consent and a new key's name serialise on the same lock, so
+    # a rename onto a name and a first consent picking it cannot both pass.
+    assert rename._RENAME_LOCK_KEY == mcp_apps._NAME_LOCK_KEY == keys.NAME_LOCK_KEY

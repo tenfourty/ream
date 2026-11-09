@@ -150,6 +150,16 @@ def name_in_use(db: Database, agent: str) -> bool:
     return row is not None
 
 
+def app_agent_name(db: Database, agent: str) -> bool:
+    """Whether a person-and-app agent (an MCP app's) holds `agent`: no machine may
+    take it (`keys.refuse_app_agent_name` refuses its key too)."""
+    with db.connect() as conn:
+        row = conn.execute(
+            "select 1 from mcp_agent where agent = %s", (agent,)
+        ).fetchone()
+    return row is not None
+
+
 def approve(db: Database, request_id: str, agent: str) -> bool:
     now = datetime.now(UTC)
     with db.connect() as conn:
@@ -180,6 +190,8 @@ def collect(db: Database, poll_token: str) -> dict:
         return {"status": "expired"}
     now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
+        # The name lock comes before the request's row lock (keys.NAME_LOCK_KEY).
+        conn.advisory_lock(keys.NAME_LOCK_KEY)
         row = conn.execute(
             "select id, approved_at, agent, denied_at, delivered_at,"  # noqa: S608 -- clause from the db layer, no caller input
             " expires_at > %s from connect_request where poll_sha256 = %s"
@@ -195,6 +207,16 @@ def collect(db: Database, poll_token: str) -> dict:
             return {"status": "denied"}
         if approved_at is None:
             return {"status": "pending"} if alive else {"status": "expired"}
+        try:
+            keys.refuse_app_agent_name(conn, agent)
+        except keys.NameHeld:
+            # A person-and-app agent took the name after it was approved: no key
+            # for it, ever; the machine is told no and can ask again.
+            conn.execute(
+                "update connect_request set denied_at = %s where id = %s",
+                (now, request_id),
+            )
+            return {"status": "denied"}
         token = "art_" + secrets.token_urlsafe(32)
         key_id = secrets.token_hex(8)
         conn.execute(

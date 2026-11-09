@@ -37,6 +37,31 @@ def is_reserved_agent_name(name: str) -> bool:
     return name in reserved_agent_names()
 
 
+# One lock for every step that gives an agent a name: a key made for a new name
+# (`register`, `connect.collect`), a rename or alias release (`rename`), and a
+# person-and-app agent's first consent (`mcp_apps.agent_for`). Each takes it first
+# in its transaction, before any row lock, so two of them never wait on each other
+# in opposite orders. Distinct from db's and owner's fixed keys and from the hashed
+# keys of idempotency and image_store (spread over the whole bigint range).
+NAME_LOCK_KEY = 0x72656E61_6D650001  # "rename" + 1: the lock a rename always took
+
+APP_AGENT_REASON = "it is a person-and-app agent's (an MCP app's) name"
+
+
+class NameHeld(Exception):
+    """A key may not be made under this name: the words say why."""
+
+
+def refuse_app_agent_name(conn, agent: str) -> None:
+    """Take the name lock and refuse `agent` when a person-and-app agent holds it, so
+    no key publishes under (and shares the pages of) an MCP app's agent. Call inside
+    the transaction that inserts the key, before it takes any row lock."""
+    conn.advisory_lock(NAME_LOCK_KEY)
+    held = conn.execute("select 1 from mcp_agent where agent = %s", (agent,)).fetchone()
+    if held is not None:
+        raise NameHeld(f"no key may be made for {agent!r}: {APP_AGENT_REASON}")
+
+
 @dataclass(frozen=True)
 class AgentKey:
     id: str
@@ -62,9 +87,10 @@ def register(db: Database, agent: str, token_sha256: str) -> str:
     Never sees, and never could see, the plaintext token: `artifacts-admin
     new-key` generates it on the machine that will use it and hashes it
     there, so only `token_sha256` ever reaches this function or the
-    database."""
+    database. Raises `NameHeld` for a name a person-and-app agent holds."""
     key_id = secrets.token_hex(8)
-    with db.connect() as conn:
+    with db.connect() as conn, conn.transaction():
+        refuse_app_agent_name(conn, agent)
         conn.execute(
             "insert into agent_key (id, agent, token_sha256) values (%s, %s, %s)",
             (key_id, agent, token_sha256),
