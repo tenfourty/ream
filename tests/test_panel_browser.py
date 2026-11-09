@@ -965,12 +965,11 @@ def test_the_corner_comment_sits_at_the_thing_pointed_at_on_a_long_page(
                 pg.wait_for_timeout(100)
                 got = frame.evaluate(shown)
             assert got, sel
-            assert r["t"] - 1 <= got["t"] <= r["t"] + 20, (sel, r, got)
-            assert r["l"] + r["w"] - 120 <= got["r"] <= r["l"] + r["w"] + 1, (
-                sel,
-                r,
-                got,
-            )
+            # At the corner of what was pointed at (a table's button may sit at
+            # the corner of the cell under the pointer): inside its box, never
+            # at the top of the column.
+            assert r["t"] - 1 <= got["t"] <= r["t"] + r["h"], (sel, r, got)
+            assert r["l"] <= got["r"] <= r["l"] + r["w"] + 1, (sel, r, got)
         # Selecting words, at the top and far down: the bar is under the words.
         for sel in ("p.lead", "section:last-of-type p:last-of-type"):
             r = point_at(sel)
