@@ -27,8 +27,8 @@ def page(db):
     return made
 
 
-def _ask_as_app(db, page_id, **extra):
-    app = _app(db)
+def _ask_as_app(db, page_id, app=None, **extra):
+    app = app or _app(db)
     out = _tool(_as(db, app), "ask", page_id=page_id, **ASKING, **extra)
     return app, out
 
@@ -92,8 +92,8 @@ def test_a_key_cannot_borrow_an_apps_reach_on_the_call_path(db, page):
 
 def test_an_app_cannot_ask_on_a_binned_page_or_a_missing_one(db, page):
     store.set_deleted(db, page.id, True, agent="office")
-    _, binned = _ask_as_app(db, page.id)
-    _, missing = _ask_as_app(db, ids.new_id())
+    app, binned = _ask_as_app(db, page.id)
+    _, missing = _ask_as_app(db, ids.new_id(), app=app)
     assert binned["isError"] is True
     assert binned["content"] == missing["content"]
 
@@ -207,8 +207,8 @@ def test_the_card_says_his_claude_asked(db, page):
     html = _view(db, page)
     card = html[html.index('class="ask"') :]
     assert "Which one?" in card
-    assert f"Asked by {settings.owner_name()}, via claude.ai" in card
-    assert "not by this page" in card
+    assert "From your Claude (claude.ai), not this page" in card
+    assert "Your answer goes back to it." in card
 
 
 def test_a_page_agents_own_card_carries_no_such_line(db, page):
@@ -222,7 +222,7 @@ def test_an_answered_card_still_says_who_asked(db, page):
     _, out = _ask_as_app(db, page.id)
     decisions.answer(db, out["structuredContent"]["id"], letter="a", by="jeremy")
     html = _view(db, page)
-    assert f"Asked by {settings.owner_name()}, via claude.ai" in html
+    assert "From your Claude (claude.ai)" in html
 
 
 def test_the_asker_name_is_escaped_on_the_card():

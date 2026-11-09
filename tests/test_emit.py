@@ -287,6 +287,7 @@ def test_migration_adds_the_outbox_and_leaves_partner_rows_delivering(db):
             conn.execute("drop table mcp_token")
             conn.execute("drop table mcp_signin")
             conn.execute("drop table mcp_app")
+            conn.execute("alter table decision drop column asked_by")
             conn.execute("pragma user_version = 19")  # the version before this table
     db.migrate()
     db.migrate()  # idempotent
