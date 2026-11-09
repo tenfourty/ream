@@ -440,9 +440,10 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # `ream connect`); agents.txt and agent.json did not move.
 # agents.txt and skill.md re-taken on 9 Nov 2026 for MCP slice 1: each gains only a short static
 # paragraph saying /mcp takes the same key (agent.json is unchanged while REAM_MCP_PUBLIC_URL is unset).
+# agents.txt and skill.md re-taken on 9 Nov 2026 for explain, shorten and fix (the kinds paragraph, the body route).
 GOLDEN = {
-    "agents.txt": "5b8f3e8f51a50da0c8d6b49ff8b36f0d86bfbfee5e4e94c8a90937a14e5bd14f",
-    "skill.md": "d9807773f40a56c5a7f077b9ddd37ad9094a0b893f024baf9db1184a8ed3b5da",
+    "agents.txt": "7d35cfd0ce0a0a97a79de6e53eef2f7f86cdfb045307b5c2facffdc4b5b160d5",
+    "skill.md": "4d458dfa917269da1a5c4fd08e3f634630288ac5065f9161ead1f890e7bb3878",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"

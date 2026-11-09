@@ -1284,3 +1284,21 @@ create table if not exists mcp_signin (
 -- page's agent is told only that a question was put on its page, and only the asker may close
 -- it. SQLite does the same as its schema step 27.
 alter table decision add column if not exists asked_by text;
+
+-- THREE MORE KINDS OF COMMENT (9 Nov 2026): `explain`, `shorten` and `fix` join comment, remove
+-- and looks_good. The kind is validated in code (`comments.KINDS`) so the next one needs no
+-- migration: drop the CHECK a database still has on comment.kind, found by what it tests.
+-- SQLite does the same as its schema step 28. Idempotent.
+do $$
+declare c record;
+begin
+    for c in
+        select con.conname
+        from pg_constraint con
+        where con.contype = 'c'
+          and con.conrelid = 'comment'::regclass
+          and pg_get_constraintdef(con.oid) ~ '^CHECK \(\(?kind\M'
+    loop
+        execute format('alter table comment drop constraint %I', c.conname);
+    end loop;
+end $$;

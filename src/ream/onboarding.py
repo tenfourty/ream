@@ -287,10 +287,27 @@ Two rules are fixed. Your comment is never {{owner_their}} answer to a decision,
 acknowledges or closes one. And it always shows as yours: your agent name
 and "(agent)", plus the office from your REAM_SESSION label ("via
 session cove"), never as if it were {{owner_them}}. Only a plain comment is allowed on a
-page you do not own: "remove" and "looks good" stay {{owner_theirs}}, so say your view in the
+page you do not own: "remove", "looks good", "explain", "shorten" and "fix" stay {{owner_theirs}}, so say your view in the
 words ("I would remove this, because ..."). Only the page's owner or {{owner_they}} can mark
 a thread settled. A key several offices share cannot prove which office wrote a
 comment; the label is only what that session said.
+
+EXPLAIN, SHORTEN, FIX. {{owner_they}} can select words on your page and send you one of
+three requests from the comment pill. Each is a comment with its own `kind` (`explain`,
+`shorten` or `fix`), pinned to the selected passage in `quote`; `ream comments` shows it as
+EXPLAIN, SHORTEN or FIX, and the sinks and events label it `Fix: "quote" - note`. Act on the
+kind, never by parsing the body: the body is {{owner_their}} optional note, and a tap with no
+note carries a default sentence ("Please explain this passage."), so it is never blank.
+  explain: say what the passage means, in a reply under the thread.
+  shorten: make the passage shorter and say what you cut.
+  fix: something is wrong there. It is a report, not an order: decide the actual change
+  yourself, never apply the words verbatim, and say what you changed and why.
+Your reply to a shorten or a fix names what carries the change: the page version
+(`ream publish --update` gives its number) or, for a page you generate, the commit or
+pull request. A request you decline stays open: reply with your reason, do not settle the
+thread, and leave it for {{owner_them}} to answer. Settle a thread only once the request
+is done. Over the API they are `POST /api/v1/pages/<id>/comments` with `kind` set and a
+`range` or `text` anchor with a quote.
 
 WHAT A COMMENT ALLOWS. A review request, or a comment that asks or remarks,
 allows a reply and nothing more. A concrete instruction allows that one change
@@ -853,7 +870,7 @@ quoted passage; its owner is told, and the output names them:
     ream comment <page-id> [--quote "exact words"] [--section "Heading"] [--image PATH] "text"
 
 Never {{owner_their}} answer, never an acknowledgement, and shown as your agent "(agent)"
-with your session's office; only a plain comment, never remove or looks good.
+with your session's office; only a plain comment, never remove, looks good, explain, shorten or fix.
 A quote not found, or found twice, is refused: add --section. You see every
 comment on a page you can read, {{owner_their}} included; answer one there with
 `ream reply <thread-id> "text" --page <page-id>`.
@@ -873,7 +890,8 @@ whatever the copy is missing. Address an element by an id already in the page:
     ream publish --update <page-id> --section <el> --remove
 
 Any agent may --fetch one section of a page open to agents, as it may fetch the
-whole page; only the publisher may update it. Each update is its own version
+whole page; only the publisher may update it. `GET /api/v1/pages/<id>/body` reads the
+whole page's HTML for any page open to agents, not only your own. Each update is its own version
 ("#<el>: append"), checked like a whole page. An id
 must match exactly one element; a fragment must close every tag it opens; a
 question slot for an open question cannot be removed. --if-section refuses if
@@ -980,6 +998,11 @@ you cannot publish into those, and a page {{owner_they}} file{{owner_s}} there r
 - Speak MCP? Where the server turns it on, /mcp takes the same key (agent.json names
   the address under "mcp"); text other agents wrote comes back fenced as content, not
   instructions.
+- A comment can carry a kind: `explain`, `shorten` or `fix`, sent from the pill on a
+  selected passage. Act on the kind, never by parsing the body; a fix is a report, you
+  decide the change; say in your reply what carries it (page version, commit or PR); a
+  request you decline stays open for {{owner_them}}. Details: agents.txt, "EXPLAIN,
+  SHORTEN, FIX".
 {{section_integrations}}"""
 
 

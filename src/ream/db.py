@@ -494,6 +494,42 @@ def _drop_house_checks(conn) -> None:
             )
 
 
+def _drop_comment_kind_check(conn) -> None:
+    """Step 28: remove the CHECK on `comment.kind` (explain, shorten and fix join
+    comment, remove and looks_good; the values are validated in code, `comments.KINDS`,
+    so the next kind needs no migration). Same method as step 21: edit the stored table
+    text, bump the schema cookie, prove the clause is gone or raise. Idempotent."""
+    pattern = re.compile(
+        r"\s*\bcheck\s*\(\s*kind\s+in\s*\([^()]*\)\s*\)", re.IGNORECASE
+    )
+    conn.execute("pragma writable_schema = on")
+    try:
+        row = conn.execute(
+            "select sql from sqlite_master where type = 'table' and name = 'comment'"
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("schema step 28: table comment is missing")
+        stripped = pattern.sub("", row[0])
+        if stripped != row[0]:
+            conn.execute(
+                "update sqlite_master set sql = "  # noqa: S608 -- stored text
+                + _sql_text(stripped)
+                + " where type = 'table' and name = 'comment'"
+            )
+        (cookie,) = conn.execute("pragma schema_version").fetchone()
+        conn.execute(f"pragma schema_version = {cookie + 1}")
+    finally:
+        conn.execute("pragma writable_schema = off")
+    (sql,) = conn.execute(
+        "select sql from sqlite_master where type = 'table' and name = 'comment'"
+    ).fetchone()
+    if re.search(r"\bkind\s+in\b", sql, re.IGNORECASE):
+        raise RuntimeError(
+            "schema step 28 could not remove comment.kind's CHECK: the stored "
+            "table text is not the expected shape"
+        )
+
+
 def _sql_text(text: str) -> str:
     """`text` as an SQL string literal (fixed text only, never caller input)."""
     return "'" + text.replace("'", "''") + "'"
@@ -910,6 +946,8 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
     ),
     # 9 Nov 2026: who asked a question put on a page that is not the asker's (see schema.sql).
     27: ("alter table decision add column asked_by text",),
+    # 9 Nov 2026: comment.kind takes explain, shorten and fix; its CHECK goes (see schema.sql).
+    28: (_drop_comment_kind_check,),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

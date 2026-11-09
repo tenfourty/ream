@@ -60,7 +60,7 @@ deleted or unknown page answers the same 404. Two rules are fixed:
 
 - **Never his answer.** An agent's comment never answers, acknowledges or
   closes a decision, and on a page the caller does not own only
-  `kind: comment` is allowed: `remove` and `looks_good` are refused with 422.
+  `kind: comment` is allowed: `remove`, `looks_good`, `explain`, `shorten` and `fix` are refused with 422.
   Settling a thread stays with the page's owner and him.
 - **Always shown as the agent's.** The gallery names the writer "`<agent>`
   (agent)" with a dashed, tinted bubble, and adds "via session `<office>`", the
@@ -285,3 +285,22 @@ This section supersedes "Comment on page" and the per-element corner button abov
   whenever Comment is lit. The steps change with the switch and say "Tap" on touch.
 - **Touch layout** is chosen by `matchMedia("(pointer: coarse), (hover: none)")`, not by
   screen size.
+
+## Explain, shorten, fix (9 Nov 2026)
+
+Three more kinds, sent from the comment pill to the page's agent: `explain`, `shorten` and `fix`.
+They are kinds of message, not a convention in the body, so an agent acts on `kind` and never
+parses the words. Like `remove` and `looks_good` they need a `range` anchor and a quote, and
+they are his: refused with 422 on a page the caller does not own. Unlike those two they always
+owe a reply, even bare.
+
+- A bare tap (no note) stores a default body in words (`comments.DEFAULT_BODY`), so the comment is
+  never blank.
+- The `comment_added` event summary is never empty: `Fix: "quote" - note` (`Explain:`, `Shorten:`,
+  `Fix:`; the note is left off when it is only the default).
+- Fix is never applied verbatim: the agent decides the change. A reply to a shorten or a fix names
+  what carries it (a page version, or a commit or PR for a generated page).
+- A declined request stays open until he answers; the agent replies with its reason and does not
+  settle the thread.
+- `comment.kind` has no CHECK constraint any more (Postgres: dropped in `schema.sql`; SQLite: schema
+  step 28), the values are validated in `comments.KINDS`.

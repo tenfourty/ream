@@ -1608,8 +1608,8 @@ def add_comment(
             {
                 "field": exc.field,
                 "detail": (
-                    "kind must be comment, remove or looks_good, with a "
-                    "quoted range for the last two"
+                    "kind must be comment, remove, looks_good, explain, shorten "
+                    "or fix, with a quoted range for all but comment"
                 ),
             },
         ) from exc
@@ -1620,8 +1620,8 @@ def add_comment(
                 "field": exc.field,
                 "detail": textvars.render(
                     "on a page you do not own only kind comment is allowed: "
-                    "remove and looks_good are {{owner_name}}'s. Say it in the body "
-                    "of a plain comment instead."
+                    "remove, looks_good, explain, shorten and fix are "
+                    "{{owner_name}}'s. Say it in the body of a plain comment instead."
                 ),
             },
         ) from exc
@@ -2463,7 +2463,7 @@ def agent_router(
     ):
         """Comment on a page the caller may read: its own, or another agent's
         that is open to agents. On another agent's page only a plain `comment`
-        is allowed (`remove` and `looks_good` are Jeremy's), and a comment never
+        is allowed (`remove`, `looks_good`, `explain`, `shorten` and `fix` are Jeremy's), and a comment never
         answers, acknowledges or closes a decision. `anchor` may be
         `{"kind": "text", "quote": ..., "section": optional heading}`: the
         server finds the passage in the page's current version."""
@@ -3615,7 +3615,9 @@ def agent_router(
             {
                 "detail": f"no such route on a page: {unknown!r}",
                 "did_you_mean": (
-                    "body -- the page's own HTML, to the agent that published it"
+                    "body -- the page's own HTML (GET /api/v1/pages/<id>/body), to the "
+                    "agent that published it, and to any agent while the page is "
+                    "open to agents"
                     if unknown in ("source", "content", "html", "raw", "page", "text")
                     else None
                 ),

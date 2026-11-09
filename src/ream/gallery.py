@@ -752,6 +752,7 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
 .hovercard .ckind{display:block;margin:0 0 var(--space-3);color:var(--muted)}
 .hovercard .ckind-remove{color:var(--danger)}
 .hovercard .ckind-looks_good{color:var(--ok)}
+.hovercard .ckind-explain,.hovercard .ckind-shorten,.hovercard .ckind-fix{color:var(--accent)}
 .hovercard .bubbles{max-height:14rem;overflow-y:auto}
 .hovercard .creply[hidden]{display:none}
 .hcact{display:flex;gap:var(--space-4);justify-content:flex-end;margin:var(--space-5) 0 0}
@@ -773,6 +774,7 @@ body.ctouch .selbar button{height:2.5rem;padding:0 .9rem;font-size:.9rem}
    counterpart. --ok already covers "fine as it is" the same way. */
 .ckind-remove{color:var(--danger)}
 .ckind-looks_good{color:var(--ok)}
+.ckind-explain,.ckind-shorten,.ckind-fix{color:var(--accent)}
 .cunplaced{margin:0 0 var(--space-6);font-size:.8rem;opacity:.8}
 .bar .profile{margin-left:auto}.bar .profile .mpanel{right:0;left:auto}
 /* THE PAGE BAR ON A PHONE. The title menu is the one thing in the bar that may give
@@ -2473,9 +2475,11 @@ if(document.addEventListener)document.addEventListener("submit",function(e){
   upload(fm,mine).then(go,function(err){say(fm,(err&&err.message)||"The picture was not sent.");setBusy(fm,false)})});
 if(!form)return;
 bar=document.createElement("div");bar.className="selbar";bar.hidden=true;
-// The pill's actions, [kind, label]: only Comment for now. More are added to this
-// list (each is a button the bar's click handler already routes by its kind).
-[["comment","Comment"]].forEach(function(k){
+// The pill's actions, [kind, label]. Comment opens the composer for his words; Explain,
+// Shorten and Fix are requests to the page's agent (a note is optional, a bare send says
+// it in words). Each is a button the bar's click handler routes by its kind.
+var PILL=[["comment","Comment"],["explain","Explain"],["shorten","Shorten"],["fix","Fix"]];
+PILL.forEach(function(k){
   var b=document.createElement("button");b.type="button";b.textContent=k[1];b.dataset.kind=k[0];
   bar.appendChild(b)});
 var ptr=document.createElement("i");ptr.className="selptr";bar.appendChild(ptr);
@@ -2533,14 +2537,17 @@ bar.addEventListener("click",function(e){
   var b=e.target&&e.target.closest?e.target.closest("button"):null;
   if(b)chosen(b.dataset.kind)});
 function chosen(kind){
-  if(!last||kind!=="comment")return;
+  var ask={explain:"Add a note for the explanation (optional), then send",
+    shorten:"Add a note for the shortening (optional), then send",
+    fix:"Say what is wrong (optional), then send"};
+  if(!last||(kind!=="comment"&&!ask[kind]))return;
   field("quote",last.quote.slice(0,500));field("anchor",JSON.stringify(last.anchor));
   field("kind",kind);
   var q=form.querySelector(".cquote");
   if(!q){q=document.createElement("blockquote");q.className="cquote";form.insertBefore(q,form.firstChild)}
   q.textContent=last.quote.slice(0,500);panel(true);
   var i=form.querySelector("input[name=body]");
-  if(i){i.placeholder="Comment on the selected text";i.focus()}}
+  if(i){i.placeholder=ask[kind]||"Comment on the selected text";i.focus()}}
 // CTRL+SHIFT+M (Cmd+Shift+M on a Mac) is the one keyboard shortcut: with words
 // selected it does what the bar's Comment button does. It arrives either as a
 // key here or as `artifact-comment-key` from the frame, where focus usually is.
@@ -3551,9 +3558,7 @@ def _render_comments(
         if not root.quote and pin.get("kind") != "element":
             return ""
         note = pin_note(root)
-        label = {"remove": "Remove this", "looks_good": "Looks good"}.get(
-            getattr(root, "kind", "comment"), ""
-        )
+        label = comments.LABEL.get(getattr(root, "kind", "comment"), "")
         tag = (
             f'<span class="ckind ckind-{escape(root.kind)}">{label}</span> '
             if label
@@ -7211,8 +7216,8 @@ def gallery_router(db: Database) -> APIRouter:
         except comments.InvalidKind:
             raise HTTPException(
                 422,
-                "kind must be comment, remove or looks_good, with a quoted "
-                "range for the last two",
+                "kind must be comment, remove, looks_good, explain, shorten or fix, "
+                "with a quoted range for all but comment",
             ) from None
         except comments.NoSuchDecision:
             raise HTTPException(404, "no such decision") from None

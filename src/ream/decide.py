@@ -751,9 +751,13 @@ def _fmt_thread(thread: dict, *, on_page: bool = False) -> str:
     if thread.get("element"):
         lines.append(f"  element: {_element_line(thread['element'])}")
     if thread["quote"]:
-        label = {"remove": "REMOVE THIS", "looks_good": "LOOKS GOOD"}.get(
-            thread.get("kind"), "on"
-        )
+        label = {
+            "remove": "REMOVE THIS",
+            "looks_good": "LOOKS GOOD",
+            "explain": "EXPLAIN",
+            "shorten": "SHORTEN",
+            "fix": "FIX",
+        }.get(thread.get("kind"), "on")
         lines.append(f'  {label}: "{thread["quote"]}"{_where(thread)}')
         if thread.get("anchor_state") == "edited" and thread.get("anchor_current"):
             lines.append(f'  now: "{thread["anchor_current"]}"')

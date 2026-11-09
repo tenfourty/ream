@@ -68,7 +68,27 @@ MAX_QUOTE_BYTES = 2_000
 # "remove this" and "looks good" (page review step 1, homelab-ij8.108). A reply is
 # always 'comment' -- see `add()` -- so a thread's own back-and-forth is never
 # mistaken for a fresh mark on the page.
-KINDS = ("comment", "remove", "looks_good")
+#
+# Three more (9 Nov 2026), sent from the comment pill to the page's agent: `explain` (say
+# what this passage means), `shorten` (make it shorter) and `fix` (something is wrong
+# here; the agent decides the change, it is never applied verbatim). They are kinds, not a
+# convention in the body: an agent acts on `kind`, never by parsing the words. A bare tap
+# gets the words in `DEFAULT_BODY`, so the comment is never blank.
+ASK_KINDS = ("explain", "shorten", "fix")
+KINDS = ("comment", "remove", "looks_good", *ASK_KINDS)
+DEFAULT_BODY = {
+    "explain": "Please explain this passage.",
+    "shorten": "Please make this passage shorter.",
+    "fix": "Something is wrong with this passage. Please fix it.",
+}
+# What a kind is called wherever a mark is labelled: summaries, sinks, the gallery.
+LABEL = {
+    "remove": "Remove this",
+    "looks_good": "Looks good",
+    "explain": "Explain",
+    "shorten": "Shorten",
+    "fix": "Fix",
+}
 
 # Every read of a comment row, in the fixed column order `_row_to_comment` expects.
 # Qualified with `comment.` throughout -- `list_for_agent` joins `artifact`, which
@@ -229,8 +249,8 @@ def is_foreign(
 
 
 class VerdictRefused(Exception):
-    """An agent tried `remove` or `looks_good` on a page it does not own. Those
-    marks are Jeremy's; another office's view goes in a plain comment."""
+    """An agent tried a kind other than `comment` (a mark or a request) on a page it
+    does not own. Those are Jeremy's; another office's view goes in a plain comment."""
 
     field = "kind"
 
@@ -574,11 +594,12 @@ def _row_to_comment(row) -> CommentRow:
 def _event_summary(kind: str, quote: str, body: str) -> str:
     """What a `comment_added` event says: the body, or for a mark the kind
     label and the quote (the note after it)."""
-    label = {"remove": "Remove this", "looks_good": "Looks good"}.get(kind)
+    label = LABEL.get(kind)
     if not label:
         return body
     short = " ".join((quote or "").split())[:120]
-    return f'{label}: "{short}"' + (f" — {body}" if body.strip() else "")
+    note = "" if body == DEFAULT_BODY.get(kind) else body.strip()
+    return f'{label}: "{short}"' + (f" — {note}" if note else "")
 
 
 def add(
@@ -612,7 +633,9 @@ def add(
 
     `kind` is one of `KINDS` -- `"comment"` (the default, a free-form remark),
     `"remove"` or `"looks_good"` (a mark that says something by being pinned to an
-    exact quote, not by its own words). `remove` and `looks_good` both require a
+    exact quote, not by its own words), or `"explain"`, `"shorten"` or `"fix"` (a
+    request to the page's agent about a passage; an empty body becomes the kind's
+    `DEFAULT_BODY`). All of these require a
     `range` anchor and a non-empty `quote`; without one there is nothing they are
     marking, and `InvalidKind` is raised instead of storing a mark that points at
     the whole page. A reply (`thread_root` given) is always stored as `"comment"`,
@@ -658,6 +681,8 @@ def add(
     )
     if kind not in KINDS:
         raise InvalidKind()
+    if kind in ASK_KINDS and not body.strip() and thread_root is None:
+        body = DEFAULT_BODY[kind]  # a bare tap still says something, in words
     if is_reply:
         # A thread is one conversation; letting a reply carry its own mark
         # would put a second, independent "remove this" or "looks good" on

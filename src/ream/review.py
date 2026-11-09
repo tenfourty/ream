@@ -28,7 +28,14 @@ _HEAD = {
     ),
     "dismissed": "Closed without a verdict. This is not approval.",
 }
-_LABEL = {"comment": "Feedback on", "remove": "Remove this", "looks_good": "Looks good"}
+_LABEL = {
+    "comment": "Feedback on",
+    "remove": "Remove this",
+    "looks_good": "Looks good",
+    "explain": "Explain",
+    "shorten": "Shorten",
+    "fix": "Fix",
+}
 
 
 def sanitize(s: str) -> str:

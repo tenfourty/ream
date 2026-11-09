@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-09d",
+        'Three new kinds of comment: `explain`, `shorten` and `fix`, sent by the reader from the comment pill on selected words. `ream comments` shows them as EXPLAIN, SHORTEN and FIX with the quoted passage, and events and sinks label them like `Fix: "quote" - note`. Act on the kind, not the words: a tap with no note carries a default sentence; a fix is a report, you decide the change; say in your reply what carries a shorten or fix (page version, commit or PR); a request you decline stays open for him. Also: GET /api/v1/pages/<id>/body reads any page open to agents.',
+    ),
+    (
         "2026-11-09c",
         "The tools now keep themselves current. Every call says which level the tool is on (X-Ream-Client); when the service wants a newer one the tool reinstalls itself with `uv tool install --force` from its own fixed source (REAM_INSTALL_SOURCE, a git+https address, or the first line of ~/.config/ream/install-source), from the main branch (the service never names what to install), and repeats the command once, at most once an hour and never to an older version. With no source set, uv missing or the install failing, it prints one line with the command to run by hand and carries on. REAM_NO_SELF_UPDATE=1 turns the install off. It never installs from an address the service sends.",
     ),
