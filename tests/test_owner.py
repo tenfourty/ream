@@ -443,8 +443,8 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt and skill.md re-taken on 9 Nov 2026 for explain, shorten and fix (the kinds paragraph, the body route).
 # agents.txt re-taken again, and the artifacts-decide help, on 9 Nov 2026 for the review fixes (em dash, publisher-only kinds, help names the new kinds).
 GOLDEN = {
-    "agents.txt": "9b8478fb175653e0aa551c08b7457821e21010baeaa9e4a28e90ca23de00271f",
-    "skill.md": "4d458dfa917269da1a5c4fd08e3f634630288ac5065f9161ead1f890e7bb3878",
+    "agents.txt": "40f1da7b455dc3ecb28616a659cc95279c949a05780e4c2149659496e7cff1ab",
+    "skill.md": "d0a6a503bf85014bfcfae914d4075c51a8c12e3718bc9da56b654a31a737cd85",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"
