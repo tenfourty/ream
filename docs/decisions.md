@@ -479,3 +479,9 @@ design page). Following cove's choices wherever the answers allow: Jeremy's inst
 2026. The 90-day cap: confirmed (Jeremy, 9 Nov 2026: follow cove, a connection signs in again
 every 90 days as well as lapsing after 30 days unused). The maintainer's other calls, including
 asking on another agent's page through a new asker column: unconfirmed.
+
+**Added 9 Nov 2026, the company deployment:** a long Claude.ai connection follows team changes by
+Ream re-reading the person's groups from the company login at every hourly renewal (it keeps the
+login's refresh token for this); if the login refuses, the connection ends. Not chosen: a short
+absolute lifetime, which would mean signing in again in Claude.ai every day. Evidence: confirmed
+(Jeremy, 9 Nov 2026, the recommended option).

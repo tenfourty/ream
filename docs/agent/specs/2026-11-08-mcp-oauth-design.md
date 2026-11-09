@@ -714,11 +714,12 @@ The same code, configured differently:
 - Reachable from Anthropic's cloud over the public internet (Claude.ai refuses addresses that
   resolve to a private network): a company that keeps Ream internal needs a public front door for
   the anonymous paths, restricted to Anthropic's published ranges. The API host can be that door.
-- **Open for the company design:** its rule that a session lasts at most 12 hours, so leaving a
-  team takes effect within a day (8 Nov, answer 7), meets this design's 30-day apps, whose groups
-  are read only at sign-in. Either the company sets `REAM_MCP_APP_MAX_LIFETIME_DAYS` low (daily
-  sign-ins in Claude.ai), or Ream keeps the upstream refresh token and re-reads groups at each of
-  its own refreshes. That choice belongs to the company build.
+- **Decided for the company design (Jeremy, 9 Nov 2026):** its rule that a session lasts at most
+  12 hours, so leaving a team takes effect within a day (8 Nov, answer 7), meets this design's
+  30-day apps by Ream keeping the person's upstream refresh token and re-reading their groups from
+  the company login at every hourly renewal; if the login refuses, the connection ends. Not
+  chosen: a low `REAM_MCP_APP_MAX_LIFETIME_DAYS` (daily sign-ins in Claude.ai). Built with the
+  company build; the homelab, with one reader and no teams, does not need it.
 
 ## 19. Testing
 
