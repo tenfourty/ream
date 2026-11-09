@@ -75,20 +75,52 @@ forge() { # <method> <path> <body-or-empty> <outfile>
   fi
 }
 
-# The number of the open PR whose head branch is ours, from the open-PR list in <json file>.
+# The number of the open PR whose head branch is ours AND lives in TARGET itself (a fork's PR
+# with the same branch name is never ours), from the open-PR list in <json file>.
 open_pr_number() {
-  python3 -I - "$1" "$BRANCH" <<'PY'
+  python3 -I - "$1" "$BRANCH" "$TARGET" <<'PY'
 import json, sys
-path, branch = sys.argv[1:3]
+path, branch, target = sys.argv[1:4]
 try:
     prs = json.load(open(path))
 except (OSError, ValueError):
     sys.exit(0)
 for pr in prs if isinstance(prs, list) else []:
-    if (pr.get("head") or {}).get("ref") == branch and isinstance(pr.get("number"), int):
+    head = pr.get("head") or {}
+    if (head.get("ref") == branch and (head.get("repo") or {}).get("full_name") == target
+            and isinstance(pr.get("number"), int)):
         print(pr["number"])
         break
 PY
+}
+
+# Succeeds when the PR in <json file> has its head in TARGET itself, on our branch, at <sha>.
+pr_head_is() {
+  python3 -I - "$1" "$BRANCH" "$TARGET" "$2" <<'PY'
+import json, sys
+path, branch, target, sha = sys.argv[1:5]
+try:
+    head = json.load(open(path)).get("head") or {}
+except (OSError, ValueError, AttributeError):
+    sys.exit(1)
+ok = (head.get("ref") == branch and (head.get("repo") or {}).get("full_name") == target
+      and head.get("sha") == sha)
+sys.exit(0 if ok else 1)
+PY
+}
+
+# Refuse unless PR <n>'s head is the commit we just pushed to our own branch on TARGET. The forge
+# moves a PR's head a moment after a push, so look a few times before refusing.
+verify_pr_head() { # <n> <pushed sha>
+  local tries
+  for tries in 1 2 3 4 5 6; do
+    [ "$(forge GET "/repos/$TARGET/pulls/$1" "" "$work/prcheck.json")" = 200 ] \
+      || failed "could not read PR #$1 on $TARGET"
+    pr_head_is "$work/prcheck.json" "$2" && return 0
+    say "PR #$1 head not at the pushed commit yet (try $tries of 6)"
+    sleep 5
+  done
+  refuse "PR #$1 does not have its head at $2 on $TARGET:$BRANCH; not touching it"
 }
 
 main() {
@@ -134,7 +166,8 @@ main() {
   git -C "$work/target" push --quiet --force "$FORGE/$TARGET.git" "HEAD:refs/heads/$BRANCH" \
     || failed "push to $TARGET failed"
 
-  local title="core: lock $sha12" body n code
+  local title="core: lock $sha12" body n code pushed
+  pushed=$(git -C "$work/target" rev-parse HEAD)
   # shellcheck disable=SC2016  # the backticks are Markdown in the PR body
   body=$(printf '{"title":"%s","head":"%s","base":"%s","body":"Moves `core.lock` from `%s` to `%s` ([runcove/artifacts@%s](%s/runcove/artifacts/commit/%s)). Opened by artifacts CI after the tests and core image passed; merges by itself when the checks on this repo succeed."}' \
     "$title" "$BRANCH" "$BASE_BRANCH" "$cur" "$sha12" "$sha12" "$FORGE" "$sha")
@@ -142,6 +175,7 @@ main() {
     || failed "could not list open PRs on $TARGET"
   n=$(open_pr_number "$work/open.json")
   if [ -n "$n" ]; then
+    verify_pr_head "$n" "$pushed"
     code=$(forge PATCH "/repos/$TARGET/pulls/$n" "$(printf '{"title":"%s"}' "$title")" "$work/pr.json") \
       || failed "the PR update call failed"
     [ "$code" = 201 ] || [ "$code" = 200 ] || failed "updating PR #$n returned HTTP $code"
@@ -154,6 +188,8 @@ main() {
     say "opened $FORGE/$TARGET/pulls/$n"
   fi
 
+  # Whichever PR it is, its head must be what we pushed before it is set to merge itself.
+  verify_pr_head "$n" "$pushed"
   # Merge when checks succeed: the forge merges it itself once the combined suite is green.
   code=$(forge POST "/repos/$TARGET/pulls/$n/merge" \
     '{"Do":"merge","merge_when_checks_succeed":true,"delete_branch_after_merge":true}' "$work/merge.json") \
@@ -210,10 +246,19 @@ extra"
   expect "an unknown lock was not unknown"    [ "$(decide "$d" "fedcba987654" "$b")" = unknown ]
 
   if command -v python3 >/dev/null 2>&1; then
-    printf '[{"number":4,"head":{"ref":"other"}},{"number":7,"head":{"ref":"%s"}}]' "$BRANCH" > "$t/open.json"
+    printf '[{"number":4,"head":{"ref":"other"}},{"number":7,"head":{"ref":"%s","repo":{"full_name":"%s"}}}]' "$BRANCH" "$TARGET" > "$t/open.json"
     expect "our open PR not found"  [ "$(open_pr_number "$t/open.json")" = 7 ]
     printf '[{"number":4,"head":{"ref":"other"}}]' > "$t/open.json"
     expect "another PR picked"      [ -z "$(open_pr_number "$t/open.json")" ]
+    printf '[{"number":8,"head":{"ref":"%s","repo":{"full_name":"evil/ream-homelab"}}}]' "$BRANCH" > "$t/open.json"
+    expect "a fork's PR on our branch name picked" [ -z "$(open_pr_number "$t/open.json")" ]
+    printf '{"head":{"ref":"%s","sha":"abc","repo":{"full_name":"%s"}}}' "$BRANCH" "$TARGET" > "$t/pr.json"
+    expect  "a PR at the pushed sha refused" pr_head_is "$t/pr.json" abc
+    refuses "a PR at another sha accepted" pr_head_is "$t/pr.json" abd
+    printf '{"head":{"ref":"%s","sha":"abc","repo":{"full_name":"evil/x"}}}' "$BRANCH" > "$t/pr.json"
+    refuses "a fork's PR head accepted" pr_head_is "$t/pr.json" abc
+    printf 'not json' > "$t/pr.json"
+    refuses "an unreadable PR accepted" pr_head_is "$t/pr.json" abc
     printf 'not json' > "$t/open.json"
     expect "an unreadable list picked something" [ -z "$(open_pr_number "$t/open.json")" ]
   fi
