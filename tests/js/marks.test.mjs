@@ -958,6 +958,18 @@ const sized = (g) => { g.doc.documentElement.clientWidth = 800; g.doc.documentEl
   ok(!threw, "a malformed request never throws into the page");
 }
 
+// 33. the placed marks are reported in page order (top to bottom), whatever order the gallery sent them in
+{
+  const pa = E("p", "Alpha words here."), pb = E("p", "Beta words here."), pc = E("p", "Gamma words here.");
+  const table = el("table", "tbl", {}, E("tr", E("td", "Pro")));
+  const g = build(E("body", pa, pb, table, pc), {});
+  const q = (id, quote) => mark({ id, quote, anchor: { path: "", start: 0, end: 0 } });
+  g.send([q("c", "Gamma words here."), elMark({ id: "t", anchor: { id: "tbl", tag: "table" } }), q("a", "Alpha words here."), q("b", "Beta words here."), q("gone", "not on the page")]);
+  const [[rep]] = g.reports();
+  ok(Array.isArray(rep.order) && rep.order.join() === "a,b,t,c", "the report carries `order`, the placed marks top to bottom, pins included: " + JSON.stringify(rep.order));
+  ok(!rep.order.includes("gone"), "an unplaced mark is not in the order");
+}
+
 // 32. the shim never reads the page's HTML or writes into it for a pin
 ok(!/innerHTML|outerHTML|insertAdjacentHTML/.test(src), "no HTML is read or written by the shim");
 

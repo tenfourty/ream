@@ -641,6 +641,13 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         "var un=unplaced.length>200?unplaced.slice(0,200):unplaced,"
         "ov=unplaced.length>200?unplaced.length-200:0;"
         'var pm={type:"artifact-marks-placed",placed:placed,unplaced:un};'
+        # PAGE ORDER, for Back and Forward on the gallery's comment card: the
+        # placed marks' ids from the top of the page down (document order, then
+        # the offset within one text node). Ids only; a failed sort sends none.
+        "try{var oa=hr.map(function(x){return{id:x.id,n:x.r.startContainer,o:x.r.startOffset||0}})"
+        ".concat(er.map(function(x){return{id:x.id,n:x.e,o:-1}}));"
+        "oa.sort(function(a,b){if(a.n===b.n)return a.o-b.o;var c=a.n.compareDocumentPosition(b.n);"
+        "return c&4?-1:c&2?1:0});pm.order=oa.map(function(x){return x.id})}catch(x){}"
         "if(ov>0)pm.overflow=ov;"
         "if(er.length)pm.rects=rectsOf();"
         "parent.postMessage(pm,"

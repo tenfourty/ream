@@ -510,6 +510,13 @@ not settle one before replying; a declined Fix stays open for him.
 **Remove and Looks good** are retired from the reader's screen; the API still accepts them and
 existing threads of those kinds still display.
 
+**Back and Forward on the comment card** step through the open comments in page order, skipping
+settled ones; the arrows grey out at the ends (Jeremy, 9 Nov 2026). The card shows "N of M" between
+two arrow buttons beside its kind label. A step closes the card, scrolls the page to the next
+comment and opens its card. Page order is the frame's: the shim reports the placed marks top to
+bottom (`order` on `artifact-marks-placed`), and comments with no anchor are not in the sequence.
+Navigation only, so there is no agent route.
+
 **Not chosen:** touch decided by screen size only, or by either test. The how-to box shown only
 until his first comment, or as a tip under the button. The select-text switch off by default.
 Explain, Shorten and Fix as labelled ordinary comments, or as pre-filled comment text.

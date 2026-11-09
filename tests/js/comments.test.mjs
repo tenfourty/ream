@@ -886,5 +886,68 @@ const placed = (rects, extra = {}) => ({ type: "artifact-marks-placed", placed: 
   g.tap({ closest: (sel) => (sel === "#comments li.thread" ? t : sel.startsWith("a,") ? {} : null) });
   ok(g.framePosts.length === 0, "a press on a link, field or button in the thread is left to it"); }
 
+// Back and Forward on the card: the open comments in page order (the frame's `order`), settled ones
+// skipped, greyed at the ends, a step closes the card, scrolls there and opens the next card.
+const ORDER = { type: "artifact-marks-placed", placed: ["h1", "m2", "m9", "m1"], unplaced: [], order: ["h1", "m2", "m9", "m1"] };
+const navOf = (c) => ({ prev: btnOf(c, "‹"), next: btnOf(c, "›"), count: c.querySelector(".hccount") });
+const cardFor = (g, id) => { g.send(HOV(id)); g.clk.advance(150); return g.card()[0]; };
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(STATE); g.send(ORDER);
+  const c = cardFor(g, "m2"), n = navOf(c);
+  ok(n.prev && n.next && n.prev.getAttribute("aria-label") === "Previous comment" && n.next.getAttribute("aria-label") === "Next comment",
+     "the card has Previous and Next buttons with their labels");
+  ok(n.count.textContent === "2 of 3", "N of M sits between them, and a mark with no thread in the panel (m9) is not counted");
+  ok(!n.prev.disabled && !n.next.disabled, "both are live in the middle");
+  ok(c.querySelector(".hchead") && c.querySelector(".hchead").children.includes(c.querySelector(".ckind")), "the arrows sit in the header beside the kind label");
+  ok(c.querySelector(".hcact").children.map((b) => b.textContent).join(" · ") === "Reply · Open", "Reply and Open are unchanged");
+  const before = g.framePosts.length;
+  n.next.on.click({});
+  ok(g.card().length === 0, "Next closes this card");
+  const [msg, org] = g.framePosts[g.framePosts.length - 1];
+  ok(g.framePosts.length === before + 1 && msg.type === "artifact-mark-show" && msg.id === "m1" && org === "https://abc.tenfourty.com",
+     "and asks the frame to show the next open comment in page order (skipping m9), to its own origin");
+  g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 400, left: 5, width: 50, height: 10 } }, { origin: "https://evil.example" });
+  g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 400, left: 5, width: 50, height: 10 } }, { source: {} });
+  ok(g.scrolls.length === 0, "an answer from another origin or window scrolls nothing");
+  g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 400, left: 5, width: 50, height: 10 } });
+  ok(g.scrolls.length === 1 && g.card().length === 0, "the real answer scrolls the page there, the card waits for the scroll to settle");
+  g.scroll(); g.clk.advance(100); g.scroll(); g.clk.advance(100);
+  ok(g.card().length === 0 && g.framePosts.length === before + 1, "scroll events during the step neither close nor reopen anything");
+  g.clk.advance(60);
+  ok(g.framePosts.length === before + 2 && g.framePosts[before + 1][0].id === "m1", "once settled the frame is asked once more for where it is");
+  g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 80, left: 5, width: 50, height: 10 } });
+  ok(g.card().length === 1 && g.card()[0].getAttribute("data-mark-id") === "m1", "and that comment's card opens");
+  const n2 = navOf(g.card()[0]);
+  ok(n2.count.textContent === "3 of 3" && n2.next.disabled === true && !n2.prev.disabled, "at the last, Next is greyed");
+  ok(g.scrolls.length === 1, "the second answer does not scroll again"); }
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(STATE); g.send(ORDER);
+  const n = navOf(cardFor(g, "h1"));
+  ok(n.count.textContent === "1 of 3" && n.prev.disabled === true && !n.next.disabled, "at the first, Previous is greyed");
+  ok(n.prev.on.click === undefined && g.framePosts.every(([m]) => m.type !== "artifact-mark-show"), "and a greyed arrow has no action"); }
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(STATE); g.send(ORDER);
+  g.tlist.children[1].classList.add("settled");
+  const c = cardFor(g, "h1"), n = navOf(c);
+  ok(n.count.textContent === "1 of 2", "a settled comment is not counted: " + n.count.textContent);
+  n.next.on.click({});
+  ok(g.framePosts[g.framePosts.length - 1][0].id === "m1", "and Next skips it"); }
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(STATE);
+  const c = cardFor(g, "m2");
+  ok(!navOf(c).prev && c.querySelector(".hcnav") === null, "with no order from the page there are no arrows");
+  g.send(LEAVE); g.clk.advance(300);
+  g.send({ ...ORDER, order: ["m2", 7, null, "m1"] }, { origin: "https://evil.example" });
+  ok(cardFor(g, "m2").querySelector(".hcnav") === null, "an order from another origin is ignored");
+  g.send({ ...ORDER, order: ["m2", 7, null, "m1"] });
+  g.send(LEAVE); g.clk.advance(300);
+  ok(cardFor(g, "m2").querySelector(".hccount").textContent === "1 of 2", "non-string ids in an order are dropped"); }
+{ const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(STATE); g.send(ORDER);
+  navOf(cardFor(g, "m2")).next.on.click({});
+  g.press({}); g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 80, left: 5, width: 50, height: 10 } });
+  g.clk.advance(300); g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 80, left: 5, width: 50, height: 10 } });
+  ok(g.card().length === 0, "a press elsewhere during a step cancels the card that was coming"); }
+
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

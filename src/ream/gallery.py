@@ -750,6 +750,15 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
   border-radius:.6rem;box-shadow:var(--shadow);padding:var(--space-6) var(--space-75) .65rem;
   font-size:var(--text-md)}
 .hovercard .ckind{display:block;margin:0 0 var(--space-3);color:var(--muted)}
+.hovercard .hchead{display:flex;align-items:center;justify-content:space-between;gap:var(--space-4);margin:0 0 var(--space-3)}
+.hovercard .hchead .ckind{margin:0}
+.hcnav{display:flex;align-items:center;gap:var(--space-3);color:var(--muted);font:500 var(--text-xs) var(--mono)}
+.hcnav button{width:1.5rem;height:1.5rem;padding:0;cursor:pointer;border:1px solid var(--line);
+  border-radius:.4rem;background:var(--card);color:var(--ink);font:600 .8rem/1 var(--sans-short)}
+.hcnav button:hover:not(:disabled){background:var(--chip-hover)}
+.hcnav button:disabled{opacity:.4;cursor:default}
+.hcnav button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+body.ctouch .hcnav button{width:2.5rem;height:2.5rem;font-size:1rem}
 .hovercard .ckind-remove{color:var(--danger)}
 .hovercard .ckind-looks_good{color:var(--ok)}
 .hovercard .ckind-explain,.hovercard .ckind-shorten,.hovercard .ckind-fix{color:var(--accent)}
@@ -2156,7 +2165,8 @@ window.addEventListener("message",function(e){try{
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
   if(!d||typeof d!=="object")return;
   if(d.type==="artifact-state")sendMarks();
-  else if(d.type==="artifact-marks-placed"&&Array.isArray(d.unplaced)){unplacedLine(d.unplaced,d.overflow);badges(d.rects)}
+  else if(d.type==="artifact-marks-placed"&&Array.isArray(d.unplaced)){
+    order=Array.isArray(d.order)?d.order.slice(0,200).filter(function(id){return typeof id==="string"}):[];unplacedLine(d.unplaced,d.overflow);badges(d.rects)}
 }catch(x){}});
 // THE DOCKED PANEL. Opened and closed by a class on <body>, never by the
 // fragment: no navigation, no history entry, nothing laid over the page. The
@@ -2239,11 +2249,33 @@ function thread(id){if(!P||!P.querySelectorAll)return null;var ls=P.querySelecto
 function fin(v){return typeof v==="number"&&isFinite(v)}
 function hide(){clearTimeout(hg);hg=0;if(hc){drop(hc);hc=null;hid=null}}
 function grace(){clearTimeout(hg);hg=setTimeout(function(){hg=0;if(!busy())hide()},250)}
+// BACK AND FORWARD. The frame lists the placed marks top to bottom (`order` on
+// `artifact-marks-placed`); the sequence is those still open in the panel. Going
+// to one closes this card, scrolls the page there (the same `artifact-mark-show` /
+// `artifact-mark-at` as pressing a comment), and once the scroll has settled asks
+// again for the rect and opens that mark's card.
+var order=[],nav=null,navT=0;
+function isOpenThread(li){return !!li&&!(li.classList&&li.classList.contains("settled"))&&
+  !(li.closest&&li.closest(".cpane-resolved"))}
+function seq(){return order.filter(function(id){return known[id]&&isOpenThread(thread(id))})}
+function askMark(id){try{f.contentWindow.postMessage({type:"artifact-mark-show",id:id},o)}catch(x){}}
+function navSettle(){clearTimeout(navT);navT=setTimeout(function(){navT=0;if(nav){nav.ph=2;askMark(nav.id)}},150)}
+function go(id){hide();clearTimeout(ht);ht=0;pend=null;nav={id:id,ph:0};askMark(id)}
 function show(id,r){var li=thread(id);if(!li)return;hide();
   var c=document.createElement("div");c.className="hovercard";c.setAttribute("role","dialog");
   c.setAttribute("aria-label","Comment");c.setAttribute("data-mark-id",id);
   var k=li.querySelector(".ckind"),lab=document.createElement("span");
-  lab.className=k?k.className:"ckind";lab.textContent=k?k.textContent:"Comment";c.appendChild(lab);
+  lab.className=k?k.className:"ckind";lab.textContent=k?k.textContent:"Comment";
+  var hd=document.createElement("div");hd.className="hchead";hd.appendChild(lab);c.appendChild(hd);
+  var sq=seq(),ix=sq.indexOf(id);
+  if(ix>=0){var nv=document.createElement("span");nv.className="hcnav";
+    var arrow=function(txt,label,to){var b=document.createElement("button");b.type="button";b.textContent=txt;
+      b.setAttribute("aria-label",label);
+      if(to<0||to>=sq.length)b.disabled=true;else b.addEventListener("click",function(){go(sq[to])});
+      nv.appendChild(b)};
+    arrow("\\u2039","Previous comment",ix-1);
+    var cnt=document.createElement("span");cnt.className="hccount";cnt.textContent=(ix+1)+" of "+sq.length;nv.appendChild(cnt);
+    arrow("\\u203a","Next comment",ix+1);hd.appendChild(nv)}
   var bu=li.querySelector(".bubbles");if(bu)c.appendChild(bu.cloneNode(true));
   var rf=li.querySelector("form.creply"),rc=rf?rf.cloneNode(true):null;if(rc){rc.hidden=true;c.appendChild(rc)}
   var row=document.createElement("div");row.className="hcact";c.appendChild(row);
@@ -2265,7 +2297,7 @@ function show(id,r){var li=thread(id);if(!li)return;hide();
 window.addEventListener("message",function(e){try{
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
   if(!d||typeof d!=="object")return;
-  if(d.type!=="artifact-mark-leave"&&d.type!=="artifact-mark-hover"||busy())return;
+  if(d.type!=="artifact-mark-leave"&&d.type!=="artifact-mark-hover"||busy()||nav)return;
   if(d.type==="artifact-mark-leave"){clearTimeout(ht);ht=0;pend=null;if(hc)grace();return}
   if(typeof d.id!=="string"||!known[d.id])return;
   var q=d.rect;if(!q||typeof q!=="object"||!fin(q.top)||!fin(q.left)||!fin(q.width)||!fin(q.height))return;
@@ -2275,9 +2307,9 @@ window.addEventListener("message",function(e){try{
   hide();pend={id:d.id,r:q};clearTimeout(ht);
   ht=setTimeout(function(){ht=0;var p=pend;pend=null;if(p)show(p.id,p.r)},150)
 }catch(x){}});
-window.addEventListener("scroll",function(){if(busy())return;clearTimeout(ht);ht=0;pend=null;hide()});
+window.addEventListener("scroll",function(){if(nav){if(nav.ph===1)navSettle();return}if(busy())return;clearTimeout(ht);ht=0;pend=null;hide()});
 if(document.addEventListener){
-  document.addEventListener("pointerdown",function(e){if(hc&&!(hc.contains&&hc.contains(e.target)))hide()});
+  document.addEventListener("pointerdown",function(e){if(nav){nav=null;clearTimeout(navT)}if(hc&&!(hc.contains&&hc.contains(e.target)))hide()});
   // The card and the selection bar move with full screen: outside the
   // full-screen element nothing is drawn. The bar's old place is wrong now.
   document.addEventListener("fullscreenchange",function(){
@@ -2650,6 +2682,9 @@ window.addEventListener("message",function(e){try{
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
   if(!d||d.type!=="artifact-mark-at"||typeof d.id!=="string"||!known[d.id])return;
   var q=d.rect;if(!q||typeof q!=="object"||!fin(q.top)||document.fullscreenElement)return;
+  if(nav&&nav.id===d.id&&nav.ph===2){var n2=nav;nav=null;
+    if(fin(q.left)&&fin(q.width)&&fin(q.height))show(n2.id,{top:q.top,left:q.left,width:q.width,height:q.height});return}
+  if(nav&&nav.id===d.id&&nav.ph===0){nav.ph=1;navSettle()}
   var fr=f.getBoundingClientRect(),y=window.scrollY+fr.top+q.top-(window.innerHeight||0)/3;
   if(window.scrollTo)window.scrollTo({top:Math.max(0,y),behavior:"smooth"})}catch(x){}});
 // THE COMMENT CONTROL. Pressing it lights comment mode and opens the panel on Open

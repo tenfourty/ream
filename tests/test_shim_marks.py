@@ -95,7 +95,7 @@ def test_the_shim_places_marks_when_actually_run(tmp_path, monkeypatch):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
-    assert passed >= 180, result.stdout
+    assert passed >= 183, result.stdout
 
 
 # --- Task 6: the same placement rules, proved in a real browser -------------
