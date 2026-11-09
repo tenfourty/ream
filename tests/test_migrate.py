@@ -530,6 +530,37 @@ def _seed(database: Database) -> None:
             ],
         ),
         (
+            "mcp_token",
+            "token_sha256, app_id, kind, created_at, expires_at, used_at",
+            ["h" * 64, "app_x", "refresh", T0, T1, None],
+        ),
+        (
+            "mcp_signin",
+            (
+                "id, client_id, redirect_uri, code_challenge, resource, scope,"
+                " client_state, oidc_state_sha256, browser_sha256, oidc_nonce,"
+                " oidc_verifier, person, groups, permissions, created_at, expires_at"
+            ),
+            [
+                "si1",
+                "reg_x",
+                "http://localhost:1/cb",
+                "c",
+                "https://r/mcp",
+                "",
+                "st",
+                "s" * 64,
+                "b" * 64,
+                "n",
+                "v",
+                None,
+                j([]),
+                j([]),
+                T0,
+                T1,
+            ],
+        ),
+        (
             "partner_question",
             (
                 "source, version, asking_office, title, options, context, state,"

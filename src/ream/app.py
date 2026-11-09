@@ -11,6 +11,7 @@ from ream.content import create_content_app
 from ream.db import Database
 from ream.gallery import gallery_router
 from ream.mcp import mcp_router
+from ream.oauth import oauth_router
 from ream.store import gallery_origin
 
 
@@ -132,6 +133,7 @@ def create_gallery_app(
         limiter = limiter or ratelimit.FailedAuthLimiter()
         app.include_router(agent_router(db, limiter))
         app.include_router(mcp_router(db, limiter))
+        app.include_router(oauth_router(db, limiter))
         app.include_router(gallery_router(db))
         _well_known(app)
     return app
@@ -199,6 +201,7 @@ def create_api_app(
         limiter = limiter or ratelimit.FailedAuthLimiter()
         app.include_router(agent_router(db, limiter))
         app.include_router(mcp_router(db, limiter))
+        app.include_router(oauth_router(db, limiter))
         _well_known(app)
     return app
 

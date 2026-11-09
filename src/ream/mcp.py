@@ -933,7 +933,7 @@ def _challenge() -> str:
 
 def _credential(
     db: Database, limiter: ratelimit.FailedAuthLimiter, request: Request
-) -> keys.AgentKey:
+) -> keys.AgentKey | mcp_apps.App:
     """The agent key `/mcp` acts with, or an HTTPException (401 or 429). Sign-in off: the
     agent API's own check. Sign-in on (section 7): a key only with
     `REAM_MCP_ACCEPT_KEYS=1`; a working key otherwise gets the sign-in challenge and a
@@ -946,6 +946,12 @@ def _credential(
     scheme, _, token = request.headers.get("authorization", "").partition(" ")
     token = token.strip()
     is_key = scheme.lower() == "bearer" and token.startswith("art_")
+    if scheme.lower() == "bearer" and token.startswith("rmo_"):
+        from ream import oauth
+
+        signed_in = oauth.verify_access(db, token)
+        if signed_in is not None:
+            return signed_in
     if is_key and current.mcp_accepts_keys():
         return api.authenticate(db, limiter, request)
     if is_key and "key" not in request.query_params:
@@ -1104,7 +1110,7 @@ def mcp_router(db: Database, limiter: ratelimit.FailedAuthLimiter) -> APIRouter:
             )
         raw = await _read_body(request)
         try:
-            key = await run_in_threadpool(_credential, db, limiter, request)
+            who = await run_in_threadpool(_credential, db, limiter, request)
         except HTTPException as exc:
             headers = dict(exc.headers or {})
             if exc.status_code == 401:
@@ -1140,17 +1146,30 @@ def mcp_router(db: Database, limiter: ratelimit.FailedAuthLimiter) -> APIRouter:
             ) from None
         if version == "initialize":
             version = LATEST_LEGACY
-        call = Call(
-            db=db,
-            request=request,
-            key=key,
-            agent=key.agent,
-            session=session,
-            version=version,
-            # A key holds every permission, within its own reach (section 11.3).
-            permissions=frozenset(PERMISSIONS),
-            reach=reach.of_key(key.agent),
-        )
+        if isinstance(who, mcp_apps.App):  # a signed-in app: what the person ticked
+            call = Call(
+                db=db,
+                request=request,
+                key=None,
+                agent=who.agent,
+                session=session,
+                version=version,
+                permissions=frozenset(f"ream:{p}" for p in who.permissions),
+                reach=await run_in_threadpool(mcp_apps.reach_of, db, who),
+                app=who,
+            )
+        else:
+            call = Call(
+                db=db,
+                request=request,
+                key=who,
+                agent=who.agent,
+                session=session,
+                version=version,
+                # A key holds every permission, within its own reach (section 11.3).
+                permissions=frozenset(PERMISSIONS),
+                reach=reach.of_key(who.agent),
+            )
         # Anything else a tool raises is a bug: FastAPI's 500, logged as any route's.
         status, body = await run_in_threadpool(_dispatch, call, message)
         later = None

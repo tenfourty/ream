@@ -250,7 +250,7 @@ def test_the_packaged_shapes_file_passes_every_load_time_guard():
     assert [name for name, _ in scan.parse_shapes(text)] == [
         name for name, _ in scan.SHAPES
     ]
-    assert len(scan.SHAPES) == 25  # +1 Slack token, 24 Sep 2026 (homelab-ij8.2)
+    assert len(scan.SHAPES) == 27  # +1 Slack token, 24 Sep 2026 (homelab-ij8.2)
 
 
 # --- performance: each view is scanned once per shape, not once per line

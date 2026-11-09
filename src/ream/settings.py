@@ -211,6 +211,12 @@ class Settings:
     # The return hosts open registration accepts; `localhost` means loopback. Unset:
     # `localhost`; `none`: registration is off.
     mcp_self_registration_redirects: str = ""
+    # Token lifetimes (section 9): an access token's seconds, a refresh token's idle days,
+    # and an app's absolute cap in days. Unset: 3600, 30, 90 (the cap is the owner's to
+    # decide; 90 until he does). Each must be a positive integer.
+    mcp_access_token_ttl_secs: str = ""
+    mcp_refresh_token_ttl_days: str = ""
+    mcp_app_max_lifetime_days: str = ""
     # The upstream OpenID Connect provider the one reader signs in with (section 12; oidc.py).
     # Needed, all three, when sign-in is on. The secret is a FILE's path, never a value.
     oidc_issuer: str = ""
@@ -375,6 +381,14 @@ class Settings:
                 " sign-in off, agent keys are the only credential /mcp takes"
             )
         for field_name in (
+            "mcp_access_token_ttl_secs",
+            "mcp_refresh_token_ttl_days",
+            "mcp_app_max_lifetime_days",
+        ):
+            raw = getattr(self, field_name)
+            if raw and not (raw.isascii() and raw.isdigit() and int(raw) > 0):
+                found.append(f"{_ENV[field_name]} must be a positive whole number")
+        for field_name in (
             "mcp_trusted_client_hosts",
             "mcp_allowed_client_hosts",
             "mcp_self_registration_redirects",
@@ -443,6 +457,15 @@ class Settings:
 
     def oidc_groups_claim_name(self) -> str:
         return self.oidc_groups_claim or "groups"
+
+    def access_token_ttl_secs(self) -> int:
+        return int(self.mcp_access_token_ttl_secs or 3600)
+
+    def refresh_token_ttl_days(self) -> int:
+        return int(self.mcp_refresh_token_ttl_days or 30)
+
+    def app_max_lifetime_days(self) -> int:
+        return int(self.mcp_app_max_lifetime_days or 90)
 
     def mcp_signs_in(self) -> bool:
         """Whether the authorization server is on (section 7): `REAM_MCP_SIGN_IN=on`
@@ -522,6 +545,9 @@ _ENV = {
     "mcp_trusted_client_hosts": "REAM_MCP_TRUSTED_CLIENT_HOSTS",
     "mcp_allowed_client_hosts": "REAM_MCP_ALLOWED_CLIENT_HOSTS",
     "mcp_self_registration_redirects": "REAM_MCP_SELF_REGISTRATION_REDIRECTS",
+    "mcp_access_token_ttl_secs": "REAM_MCP_ACCESS_TOKEN_TTL_SECS",
+    "mcp_refresh_token_ttl_days": "REAM_MCP_REFRESH_TOKEN_TTL_DAYS",
+    "mcp_app_max_lifetime_days": "REAM_MCP_APP_MAX_LIFETIME_DAYS",
     "oidc_issuer": "REAM_OIDC_ISSUER",
     "oidc_client_id": "REAM_OIDC_CLIENT_ID",
     "oidc_client_secret_file": "REAM_OIDC_CLIENT_SECRET_FILE",

@@ -276,8 +276,8 @@ def create_app(
                     redirect_uri,
                     dbmod.jsonb(list(groups)),
                     now,
-                    now + IDLE_LASTS,
-                    now + LASTS_AT_MOST,
+                    now + timedelta(days=settings.current().refresh_token_ttl_days()),
+                    now + timedelta(days=settings.current().app_max_lifetime_days()),
                 ),
             )
         except dbmod.DUPLICATE_KEY as exc:  # a consent stored at the same moment

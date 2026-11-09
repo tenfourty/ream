@@ -871,6 +871,43 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " on mcp_app (person, client_id) where revoked_at is null"
         ),
     ),
+    # 9 Nov 2026: sign-in tokens and sign-ins in flight (see schema.sql).
+    26: (
+        (
+            "create table mcp_token ("
+            " token_sha256 text primary key,"
+            " app_id text not null references mcp_app(id) on delete cascade,"
+            " kind text not null,"
+            " created_at timestamptz not null default (artifacts_now()),"
+            " expires_at timestamptz not null,"
+            " used_at timestamptz)"
+        ),
+        "create index mcp_token_app on mcp_token (app_id)",
+        (
+            "create table mcp_signin ("
+            " id text primary key,"
+            " client_id text not null,"
+            " redirect_uri text not null,"
+            " code_challenge text not null,"
+            " resource text not null,"
+            " scope text not null default '',"
+            " client_state text,"
+            " oidc_state_sha256 text unique,"
+            " browser_sha256 text,"
+            " oidc_nonce text,"
+            " oidc_verifier text,"
+            " person text,"
+            " groups jsonb not null default '[]',"
+            " consent_sha256 text unique,"
+            " code_sha256 text unique,"
+            " code_expires_at timestamptz,"
+            " app_id text,"
+            " permissions jsonb not null default '[]',"
+            " created_at timestamptz not null default (artifacts_now()),"
+            " expires_at timestamptz not null,"
+            " used_at timestamptz)"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

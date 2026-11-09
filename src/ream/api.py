@@ -570,6 +570,8 @@ def authenticate(
     scheme, _, token = header.partition(" ")
     if scheme.lower() != "bearer" or not token:
         _refuse(limiter, request, address, "an agent key is required")
+    if token.strip().startswith("rmo_"):  # no lookup: a sign-in token is /mcp's alone
+        _refuse(limiter, request, address, "a sign-in token works only at /mcp")
     key = keys.verify(db, token.strip())
     if key is None:
         _refuse(limiter, request, address, keys.refusal_reason(db, token.strip()))
