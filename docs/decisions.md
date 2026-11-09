@@ -480,8 +480,10 @@ included; any app named by what it says it is. The identity provider as the auth
 **Evidence:** the six answers: confirmed (Jeremy, 8 Nov 2026, each the recommended option on the
 design page). Following cove's choices wherever the answers allow: Jeremy's instruction, 8 Nov
 2026. The 90-day cap: confirmed (Jeremy, 9 Nov 2026: follow cove, a connection signs in again
-every 90 days as well as lapsing after 30 days unused). The maintainer's other calls, including
-asking on another agent's page through a new asker column: unconfirmed.
+every 90 days as well as lapsing after 30 days unused). Asking: confirmed (Jeremy, 9 Nov 2026):
+his signed-in Claude may put a question to him on any page he can read, the question showing it
+came from his Claude, not the page's agent (Ream records who asked; build step 8). Not chosen:
+asking only on pages it published itself. The maintainer's other calls: unconfirmed.
 
 **Added 9 Nov 2026, the company deployment:** a long Claude.ai connection follows team changes by
 Ream re-reading the person's groups from the company login at every hourly renewal (it keeps the
