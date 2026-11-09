@@ -216,24 +216,23 @@ def _get(url: str) -> Fetched:
         ) from None
 
 
-MAX_FETCHES = 4  # in flight at once, and at most one per host
+MAX_FETCHES = 4  # in flight at once, and at most one per client_id
 _fetch_lock = threading.Lock()
 _fetching: set[str] = set()
 
 
 def _document(url: str) -> Client:
     """Fetch and check the document at `url`; a Client, or ClientRefused. Takes a fetch slot
-    (FetchBusy when none is free or the host already has a fetch in flight)."""
-    host = (urlsplit(url).hostname or "").lower()
+    (FetchBusy when none is free or the client_id already has a fetch in flight)."""
     with _fetch_lock:
-        if host in _fetching or len(_fetching) >= MAX_FETCHES:
-            raise FetchBusy(host)
-        _fetching.add(host)
+        if url in _fetching or len(_fetching) >= MAX_FETCHES:
+            raise FetchBusy(url)
+        _fetching.add(url)
     try:
         got = _get(url)
     finally:
         with _fetch_lock:
-            _fetching.discard(host)
+            _fetching.discard(url)
     if 300 <= got.status < 400:
         raise ClientRefused(
             f"its client metadata document answered HTTP {got.status}:"
@@ -327,6 +326,25 @@ def client_for(db: Database, client_id: str, now: datetime | None = None) -> Cli
             ),
         )
     return client
+
+
+def recorded(db: Database, client_id: str) -> Client:
+    """The client as `client_for` last stored it, with no network fetch and no freshness
+    check: for the steps after /oauth/authorize, which checked it. ClientRefused when it is
+    gone, or its host is no longer allowed."""
+    now = datetime.now(UTC)
+    if isinstance(client_id, str) and client_id.startswith(REGISTERED_PREFIX):
+        return _registered(db, client_id, now)
+    with db.connect() as conn:
+        row = conn.execute(
+            "select host, name, redirect_uris from mcp_client"
+            " where id = %s and kind = 'cimd'",
+            (client_id,),
+        ).fetchone()
+    if row is None:
+        raise ClientRefused("this app is not known here any more")
+    _refuse_host(row[0])
+    return Client(client_id, "cimd", row[0], row[1], tuple(row[2]))
 
 
 def _registered(db: Database, client_id: str, now: datetime) -> Client:

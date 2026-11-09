@@ -374,9 +374,24 @@ def test_a_full_fetch_pool_answers_503_but_registered_and_cached_clients_pass(
     assert web.get("/oauth/authorize", params=params()).status_code == 503
 
 
-def test_one_host_has_at_most_one_fetch_in_flight(db, stub, monkeypatch):
+def test_callback_and_decide_complete_while_fetches_are_busy(
+    web, provider, monkeypatch
+):
+    pair = begin(web)  # authorize accepted the client and recorded it
+    monkeypatch.setattr(
+        mcp_clients, "_fetching", {f"h{i}" for i in range(mcp_clients.MAX_FETCHES)}
+    )
+    monkeypatch.setattr(
+        mcp_clients, "_get", lambda *_a: pytest.fail("no fetch after authorize")
+    )
+    page = sign_in(web, provider, pair)
+    assert page.status_code == 200
+    assert landing(allow(web, page))["code"]
+
+
+def test_one_client_id_has_at_most_one_fetch_in_flight(db, stub, monkeypatch):
     stub()
-    monkeypatch.setattr(mcp_clients, "_fetching", {"claude.ai"})
+    monkeypatch.setattr(mcp_clients, "_fetching", {CLAUDE_ID})
     with pytest.raises(mcp_clients.FetchBusy):
         mcp_clients.client_for(db, CLAUDE_ID)
 
@@ -438,7 +453,7 @@ def test_a_client_refused_during_consent_is_a_page_not_a_500(
     def refuse(*_a, **_k):
         raise mcp_clients.ClientRefused("gone")
 
-    monkeypatch.setattr(mcp_clients, "client_for", refuse)
+    monkeypatch.setattr(mcp_clients, "recorded", refuse)
     data = {"consent": nonce, "decision": "allow"}  # nothing ticked: the re-render path
     out = web.post("/oauth/authorize", data=data, headers=SAME)
     assert out.status_code == 400 and "cannot ask to connect" in out.text

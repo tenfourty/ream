@@ -325,7 +325,7 @@ def callback(db: Database, request: Request) -> Response:
     except oidc.SignInRefused as exc:
         return _error_page(str(exc) or "Sign-in was refused.", 403)
     try:
-        client = mcp_clients.client_for(db, row["client_id"])
+        client = mcp_clients.recorded(db, row["client_id"])
     except mcp_clients.ClientRefused as exc:
         return _error_page(f"This app cannot ask to connect: {exc}")
     wanted = requested_permissions(row["scope"])
@@ -389,7 +389,7 @@ def decide(db: Database, request: Request, form) -> Response:
                 (_hash(again), row["id"]),
             )
         try:
-            client = mcp_clients.client_for(db, row["client_id"])
+            client = mcp_clients.recorded(db, row["client_id"])
         except mcp_clients.ClientRefused as exc:
             return _error_page(f"This app cannot ask to connect: {exc}")
         page = _consent_page(client, again, row["redirect_uri"], sorted(wanted))
@@ -399,7 +399,7 @@ def decide(db: Database, request: Request, form) -> Response:
         page.headers["content-length"] = str(len(page.body))
         return page
     try:
-        client = mcp_clients.client_for(db, row["client_id"])
+        client = mcp_clients.recorded(db, row["client_id"])
     except mcp_clients.ClientRefused as exc:
         return _error_page(f"This app cannot ask to connect: {exc}")
     person = row["person"]
