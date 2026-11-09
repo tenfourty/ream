@@ -222,6 +222,10 @@ class Settings:
     oidc_issuer: str = ""
     oidc_client_id: str = ""
     oidc_client_secret_file: str = ""
+    # Where the server-to-server calls to the provider go (discovery, token, key set), when the
+    # issuer's public address is not one Ream should reach: scheme://host[:port], nothing else.
+    # Unset: those calls go to the issuer. Needs the issuer; checks against the issuer unchanged.
+    oidc_backchannel_url: str = ""
     # Unset: `openid profile email groups`.
     oidc_scopes: str = ""
     # The ID-token claim that names the person (unset: `preferred_username`) and the value it
@@ -429,6 +433,27 @@ class Settings:
                 found.append(
                     "REAM_OIDC_ISSUER must be https (plain http only on loopback)"
                 )
+        if self.oidc_backchannel_url:
+            parts = urlsplit(self.oidc_backchannel_url)
+            try:
+                _ = parts.port
+            except ValueError:
+                parts = urlsplit("")
+            if not self.oidc_issuer:
+                found.append("REAM_OIDC_BACKCHANNEL_URL needs REAM_OIDC_ISSUER")
+            if (
+                parts.scheme not in ("http", "https")
+                or not parts.hostname
+                or parts.path not in ("", "/")
+                or parts.query
+                or parts.fragment
+                or parts.username is not None
+                or parts.password is not None
+            ):
+                found.append(
+                    "REAM_OIDC_BACKCHANNEL_URL must be scheme://host[:port] (http or https,"
+                    " no path, query, fragment or credentials)"
+                )
         if self.oidc_client_secret_file:
             try:
                 with open(self.oidc_client_secret_file, "rb") as handle:
@@ -551,6 +576,7 @@ _ENV = {
     "oidc_issuer": "REAM_OIDC_ISSUER",
     "oidc_client_id": "REAM_OIDC_CLIENT_ID",
     "oidc_client_secret_file": "REAM_OIDC_CLIENT_SECRET_FILE",
+    "oidc_backchannel_url": "REAM_OIDC_BACKCHANNEL_URL",
     "oidc_scopes": "REAM_OIDC_SCOPES",
     "oidc_owner_claim": "REAM_OIDC_OWNER_CLAIM",
     "oidc_owner_value": "REAM_OIDC_OWNER_VALUE",

@@ -101,7 +101,7 @@ def fetch(
             method,
             body,
             {"User-Agent": "ream-oidc/1", **headers},
-            allow_private=_origin(url) == _origin(settings.current().oidc_issuer),
+            allow_private=_origin(url) in _trusted_origins(),
             deadline_seconds=FETCH_SECONDS,
             timeout=FETCH_SECONDS,
             read=read,
@@ -110,6 +110,46 @@ def fetch(
         raise SignInRefused(
             f"the sign-in provider could not be reached ({exc})"
         ) from None
+
+
+def _trusted_origins() -> tuple[tuple[str, str, int], ...]:
+    """The origins a private address and (for a loopback issuer) plain http are allowed on:
+    the issuer's own and, when set, the back channel's."""
+    cfg = settings.current()
+    found = (_origin(cfg.oidc_issuer),)
+    if cfg.oidc_backchannel_url:
+        found += (_origin(cfg.oidc_backchannel_url),)
+    return found
+
+
+def _backchannel(url: str, headers: dict[str, str]) -> tuple[str, dict[str, str]]:
+    """Where a server-side call to the provider really goes. Unset: `url` as it is. Set: the
+    back channel's scheme, host and port with `url`'s path and query, and the headers that
+    make the provider answer for the public issuer. Call it only for a `url` already checked
+    against the issuer's origin."""
+    cfg = settings.current()
+    if not cfg.oidc_backchannel_url:
+        return url, headers
+    issuer = urlsplit(cfg.oidc_issuer)
+    back = urlsplit(cfg.oidc_backchannel_url)
+    parts = urlsplit(url)
+    host = issuer.netloc.rpartition("@")[2]
+    return (
+        parts._replace(scheme=back.scheme, netloc=back.netloc).geturl(),
+        {
+            **headers,
+            "Host": host,
+            "X-Forwarded-Proto": issuer.scheme,
+            "X-Forwarded-Host": host,
+        },
+    )
+
+
+def _call(
+    method: str, url: str, body: bytes | None, headers: dict[str, str]
+) -> Response:
+    url, headers = _backchannel(url, headers)
+    return fetch(method, url, body, headers)
 
 
 def _now() -> float:
@@ -175,7 +215,7 @@ def _cached(url: str, what: str, force: bool = False) -> dict:
     if force:
         _forced[url] = now
     try:
-        doc = _json(fetch("GET", url, None, {"Accept": "application/json"}), what)
+        doc = _json(_call("GET", url, None, {"Accept": "application/json"}), what)
     except SignInRefused as exc:
         _failed[url] = (now, str(exc))
         raise
@@ -206,7 +246,8 @@ def _origin(url: str) -> tuple[str, str, int]:
 
 
 def _plain_http_ok() -> bool:
-    """Plain http is for a provider that is itself http on loopback, nowhere else."""
+    """Plain http is for a provider that is itself http on loopback, nowhere else. (The back
+    channel's own scheme is its setting's business and is not judged here.)"""
     scheme, host, _ = _origin(settings.current().oidc_issuer)
     return scheme == "http" and settings.is_loopback(host)
 
@@ -297,7 +338,7 @@ def finish(
             "code_verifier": verifier,
         }
     ).encode("ascii")
-    got = fetch(
+    got = _call(
         "POST",
         endpoint,
         body,

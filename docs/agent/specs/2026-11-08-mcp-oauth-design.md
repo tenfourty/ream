@@ -544,6 +544,7 @@ New `Settings` fields, read at call time with `settings.current()`, each `REAM_<
 | `REAM_MCP_REFRESH_TOKEN_TTL_DAYS` | `30` | `refresh_token_ttl_days` | the idle lapse |
 | `REAM_MCP_APP_MAX_LIFETIME_DAYS` | `90` | `app_max_lifetime_days` | the absolute cap |
 | `REAM_OIDC_ISSUER` | unset | (none) | the upstream provider's issuer; its discovery document is read |
+| `REAM_OIDC_BACKCHANNEL_URL` | unset | | where Ream's own calls to the provider (discovery, token, keys) go: `scheme://host[:port]` only, needs the issuer. Path and query are kept, `Host` and `X-Forwarded-Proto/Host` say the issuer; every check against the issuer is unchanged; plain http and a private address are allowed for this origin only |
 | `REAM_OIDC_CLIENT_ID` | unset | | Ream's client id there |
 | `REAM_OIDC_CLIENT_SECRET_FILE` | unset | | a file holding the client secret, read when needed, never printed |
 | `REAM_OIDC_SCOPES` | `openid profile email groups` | | |

@@ -14,6 +14,19 @@ All of these are server settings; a missing or bad one refuses to start and name
 3. The upstream provider the one reader signs in with:
    - `REAM_OIDC_ISSUER` (https; discovery is read from it);
    - `REAM_OIDC_CLIENT_ID`;
+   - Optional `REAM_OIDC_BACKCHANNEL_URL` (`scheme://host[:port]`, no path, query or
+     credentials; start-up refuses otherwise, and refuses it without the issuer): where Ream's
+     own calls to the provider go (discovery, token, keys), for a deployment whose pod must not
+     use the public address. On the homelab: `http://authelia.authelia.svc.cluster.local:9091`
+     with the issuer still `https://authelia.tenfourty.site`. Ream takes the URL it would have
+     called, checks it against the issuer as usual (discovery `issuer`, endpoints on the
+     issuer's origin, ID token `iss`), then swaps only scheme, host and port, and sends
+     `Host: <issuer host>`, `X-Forwarded-Proto: <issuer scheme>` and `X-Forwarded-Host` so the
+     provider writes its documents for the public issuer. The browser's authorize address is
+     never rewritten; redirects are still refused. Plain http and a private address are allowed
+     for this origin only. Network policy: allow Ream to the provider's service port only. The
+     client secret then crosses the cluster network in plain http (the token call), so keep that
+     path to the one service.
    - `REAM_OIDC_CLIENT_SECRET_FILE`: the path of a file holding the secret. The person who runs
      the provider creates that file; nothing here writes or prints it.
    - Register `<gallery origin>/oauth/callback` as the redirect URI at the provider.

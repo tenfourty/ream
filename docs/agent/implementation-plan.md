@@ -2810,3 +2810,8 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   (every `/mcp` call and refresh slides it) and never outlives the 90-day cap; the nightly
   clean-up drops finished sign-ins and spent or expired tokens and ends lapsed apps. Runbook
   `docs/agent/runbooks/mcp-sign-in.md`. Not built: Connected apps page and admin commands (slice 6).
+- **Signing in: a back channel to the provider (9 Nov 2026; branch `ci/oidc-backchannel`).**
+  `REAM_OIDC_BACKCHANNEL_URL` sends Ream's own discovery, token and key-set calls to another
+  address (the provider's in-cluster service) with `Host` and `X-Forwarded-*` of the public
+  issuer; issuer, endpoint-origin and `iss` checks are unchanged and the authorize address is
+  never rewritten. Start-up refuses it without the issuer or with more than scheme, host and port.

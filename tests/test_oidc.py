@@ -407,6 +407,22 @@ def test_sign_in_on_names_every_missing_provider_value():
         ({"oidc_issuer": "http://localhost:9091"}, None),
         ({"oidc_issuer": "auth.example"}, "issuer URL"),
         ({"oidc_issuer": "https://auth.example/?x=1"}, "issuer URL"),
+        ({"oidc_backchannel_url": "http://authelia.svc:9091"}, None),
+        ({"oidc_backchannel_url": "https://authelia.svc/"}, None),
+        ({"oidc_backchannel_url": ISSUER}, None),
+        ({"oidc_backchannel_url": "ftp://authelia.svc"}, "BACKCHANNEL_URL must be"),
+        ({"oidc_backchannel_url": "authelia.svc:9091"}, "BACKCHANNEL_URL must be"),
+        ({"oidc_backchannel_url": "http://authelia.svc/x"}, "BACKCHANNEL_URL must be"),
+        (
+            {"oidc_backchannel_url": "http://authelia.svc/?a=1"},
+            "BACKCHANNEL_URL must be",
+        ),
+        ({"oidc_backchannel_url": "http://authelia.svc/#f"}, "BACKCHANNEL_URL must be"),
+        (
+            {"oidc_backchannel_url": "http://u:p@authelia.svc"},
+            "BACKCHANNEL_URL must be",
+        ),
+        ({"oidc_backchannel_url": "http://u@authelia.svc"}, "BACKCHANNEL_URL must be"),
         ({"oidc_scopes": "profile email"}, "must include openid"),
         ({"oidc_scopes": "openid"}, None),
         ({"oidc_owner_claim": "email", "oidc_owner_value": "j@example.org"}, None),
@@ -644,3 +660,107 @@ def test_an_unknown_key_id_refreshes_the_key_set_once_a_minute(
     with pytest.raises(oidc.SignInRefused):
         oidc.finish(db, "c", start.verifier, start.nonce, CALLBACK)
     assert jwks_gets() == 3
+
+
+BACK = "http://authelia.svc.cluster.local:9091"
+
+
+@pytest.fixture()
+def back(provider):
+    """The provider reachable only at BACK: a request to the public issuer fails the test."""
+    seen = []
+    original = provider.__call__
+
+    def fake(method, url, body, headers):
+        seen.append((method, url, headers))
+        assert url.startswith(BACK + "/"), url
+        return original(method, url.replace(BACK, ISSUER, 1), body, headers)
+
+    oidc.fetch = fake
+    provider.seen = seen
+    with settings.override(oidc_backchannel_url=BACK):
+        yield provider
+
+
+def test_a_backchannel_sign_in_calls_the_backchannel_with_the_issuers_headers(back, db):
+    _, login = run(back, db)
+    assert login.person == "jeremy"
+    assert {(m, u) for m, u, _ in back.seen} == {
+        ("GET", BACK + "/.well-known/openid-configuration"),
+        ("GET", BACK + "/jwks"),
+        ("POST", BACK + "/token"),
+    }
+    for _, _, headers in back.seen:
+        assert headers["Host"] == "auth.example"
+        assert headers["X-Forwarded-Proto"] == "https"
+        assert headers["X-Forwarded-Host"] == "auth.example"
+    token_call = next(h for m, _, h in back.seen if m == "POST")
+    assert token_call["Authorization"].startswith("Basic ")
+
+
+def test_the_authorize_url_stays_on_the_issuer_with_a_backchannel(back):
+    assert oidc.begin(CALLBACK).url.startswith(ISSUER + "/authorize?")
+
+
+def test_the_backchannel_keeps_a_port_of_the_issuer_in_the_host_header(back, db):
+    with settings.override(oidc_issuer="https://auth.example:8443"):
+        url, headers = oidc._backchannel(
+            "https://auth.example:8443/token?x=1", {"Accept": "a"}
+        )
+    assert url == BACK + "/token?x=1"
+    assert headers["Host"] == "auth.example:8443" == headers["X-Forwarded-Host"]
+    assert headers["Accept"] == "a"
+
+
+def test_a_backchannel_discovery_for_another_issuer_is_still_refused(back, db):
+    back.discovery_extra = {"issuer": "https://other.example"}
+    with pytest.raises(oidc.SignInRefused, match="another issuer"):
+        oidc.begin(CALLBACK)
+
+
+@pytest.mark.parametrize("key", ["token_endpoint", "jwks_uri"])
+def test_a_backchannel_endpoint_off_the_issuers_origin_is_still_refused(back, db, key):
+    back.discovery_extra = {key: BACK + "/token"}
+    with pytest.raises(oidc.SignInRefused, match="issuer's own origin"):
+        run(back, db)
+    assert all(u.startswith(BACK + "/") for _, u, _ in back.seen)
+
+
+def test_a_wrong_iss_is_still_refused_with_a_backchannel(back, db):
+    with pytest.raises(oidc.SignInRefused):
+        sign_in_as(back, db, iss=BACK)
+
+
+def test_without_a_backchannel_calls_go_to_the_issuer_with_no_extra_headers(
+    provider, db
+):
+    run(provider, db)
+    assert provider.calls
+    for _, url, _, headers in provider.calls:
+        assert url.startswith(ISSUER + "/")
+        assert not {"Host", "X-Forwarded-Proto", "X-Forwarded-Host"} & set(headers)
+
+
+def test_private_addresses_are_allowed_for_the_backchannel_origin_only(
+    provider, monkeypatch
+):
+    seen = []
+
+    def fenced(url, method, body, headers, *, allow_private, **kw):
+        seen.append((url, allow_private))
+        return oidc.Response(200, "application/json", b"{}")
+
+    monkeypatch.undo()
+    monkeypatch.setattr(oidc.webhook, "fenced_request", fenced)
+    with settings.override(oidc_backchannel_url=BACK):
+        oidc.fetch("GET", BACK + "/x", None, {})
+        oidc.fetch("GET", ISSUER + "/x", None, {})
+        oidc.fetch("GET", "http://elsewhere.svc:9091/x", None, {})
+    assert seen == [
+        (BACK + "/x", True),
+        (ISSUER + "/x", True),
+        ("http://elsewhere.svc:9091/x", False),
+    ]
+    seen.clear()
+    oidc.fetch("GET", BACK + "/x", None, {})
+    assert seen == [(BACK + "/x", False)]
