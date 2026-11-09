@@ -715,6 +715,22 @@ drivers; CI only (not on baba).
    plug-in repo, ship, confirm the deployed behaviour, then delete from core in the next pin.
    Removing a console script from core means agents reinstall the tool
    (`uv tool install ... --force`); announced in `news` first.
+   **9a, first half built (`ci/9a-beadpage` on ream-homelab, 10 Nov 2026; CI green, not on its main).**
+   Plug-in `tracker-pages` (`ream_homelab.tracker_pages:register`) holds copies of `beadpage` and
+   `beadmetrics` with their tests, and registers `ream tracker-page` and `ream tracker-metrics`
+   through `api.cli` plus console scripts `ream-tracker-page` and `ream-tracker-metrics`. **Names:**
+   new, because core owns `beads-page`/`bead-metrics` (the plug-in API refuses them) and two
+   packages cannot ship `artifacts-beads-page` into one tool environment. The copy reads `REAM_BD`
+   (or `ARTIFACTS_BD`) itself at use rather than core's settings. Core needed no change. ream-homelab's
+   test job now installs the core named in `core.lock` before testing. **Not tested:** the plug-in
+   inside the production image, the command through the real `ream` dispatcher with the package
+   installed, a real `bd`.
+   **9a, second half (not built):** announce in `news` first; delete `beadpage.py`, `beadmetrics.py`,
+   their tests, the two `artifacts-*` console scripts, the `beads-page`/`bead-metrics` entries in
+   `cli.py`'s verb table and help, and `bd_command`; in the same step the plug-in takes the old
+   names (`beads-page`, `bead-metrics`, `artifacts-beads-page`, `artifacts-bead-metrics`) and drops
+   the `tracker-*` ones; agents reinstall (`uv tool install ... --force`, with the plug-in) and the
+   `render` lines in `pages.toml` keep working. Do it only after the deployed behaviour is confirmed.
 10. **Docs and decisions.** `docs/decisions.md` entry for the core-and-plug-ins split, the design
     doc's extension section, a plug-in author guide, the office doc's deployment paragraph.
     (Docs also land with each slice above; this is the consolidation.)
