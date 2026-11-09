@@ -169,7 +169,15 @@ def test_no_key_may_take_a_person_and_app_agents_name(db, monkeypatch):
 
 
 def test_connecting_a_machine_under_an_app_agents_name_is_refused(db):
-    held = mcp_apps.agent_for(db, _person(), CLAUDE_AI, "claude.ai").agent
+    # The name rule's "--" never survives the connect page's name cleaning, so the
+    # row is made directly, under a name a person could type there.
+    held = "laptop-app"
+    with db.connect() as conn:
+        conn.execute(
+            "insert into mcp_agent (agent, person, client_id, host, created_at)"
+            " values (%s, %s, %s, %s, %s)",
+            (held, _person(), CLAUDE_AI, "claude.ai", NOW),
+        )
     gallery = TestClient(
         create_gallery_app(db), base_url="https://artifacts.tenfourty.site"
     )
@@ -183,7 +191,7 @@ def test_connecting_a_machine_under_an_app_agents_name_is_refused(db):
         data={"request_id": request_id, "code": started["code"], "name": held},
         headers={"sec-fetch-site": "same-origin"},
     )
-    assert keys.APP_AGENT_REASON in refused.text and "Approved" not in refused.text
+    assert "person-and-app agent" in refused.text and "Approved" not in refused.text
     # An approval that slipped past the page (the name was taken after it) still
     # never collects a key: the request is denied instead.
     assert connect.approve(db, request_id, held)
