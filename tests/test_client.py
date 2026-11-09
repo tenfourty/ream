@@ -1619,3 +1619,21 @@ def test_parse_interval():
     for bad in ("", "m", "1.5h", "-5m", "5x", "h5"):
         with pytest.raises(client.UsageError):
             client.parse_interval(bad)
+
+
+def test_a_new_page_without_comments_is_refused_but_an_update_is_not(
+    live, key_file, tmp_path, capsys
+):
+    path, _ = key_file
+    page = tmp_path / "page.html"
+    page.write_text("<!doctype html><body>hi</body></html>")
+    code = client.main(["--key-file", str(path), str(page), "--title", "Board"])
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "--comments" in captured.err
+    assert captured.out.strip() == ""
+    artifact_id = _publish_one(path, tmp_path, capsys)
+    page.write_text("<!doctype html><body>two</body></html>")
+    code = client.main(["--key-file", str(path), str(page), "--update", artifact_id])
+    capsys.readouterr()
+    assert code == 0

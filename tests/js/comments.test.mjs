@@ -58,7 +58,7 @@ function clock() {
                if (!next) break; const [t, fn] = due.get(next); due.delete(next); now = t; fn(); }
              now = end; } };
 }
-function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false, threads = [], page = "abc", seed = null, touch = false, offer = true } = {}) {
+function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false, threads = [], page = "abc", seed = null, touch = false, offer = true, commentsDefault = null } = {}) {
   const framePosts = [];
   const frameWin = { postMessage: (m, o) => framePosts.push([m, o]) };
   const frameOn = {};
@@ -90,6 +90,7 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
   const tabBtns = ["open", "resolved"].map((n) => { const b = el("button"); b.className = "ctab"; b.attrs["data-ctab"] = n;
     b.attrs["aria-selected"] = n === "open" ? "true" : "false"; return b; });
   panel.setAttribute("data-ctab", "open");
+  if (commentsDefault) panel.setAttribute("data-comments-default", commentsDefault);
   panel.querySelectorAll = (q) => (q === "li.thread" ? tlist.children.slice() : q === ".ctab" ? tabBtns : []);
   const cbtn = el("a"); cbtn.className = "cbtn";
   const byId = { "artifact-frame": iframe, "artifact-marks": marksEl, "marks-unplaced": unplacedEl, comments: noPanel ? null : panel };
@@ -720,6 +721,27 @@ const badgesOf = (g) => g.docBody.children.filter((c) => c.className === "pinbad
   h.send(SEL); ok(h.bar.hidden === true, "and no pill is offered");
   const d = build({ storage: false });
   ok(d.sw.checked === true, "with storage denied it stays on"); }
+// A PAGE PUBLISHED WITH COMMENTS "off" starts with the switch off; his choice for that page wins
+{ const g = build({ commentsDefault: "off" });
+  ok(g.sw.checked === false, "an off page starts with the switch off");
+  g.send(SEL); ok(g.bar.hidden === true, "and a selection shows no pill");
+  const on = build({ commentsDefault: "on" });
+  ok(on.sw.checked === true, "a page marked on starts with the switch on");
+  const h = build({ commentsDefault: "off", seed: [["ream.comments.offer:abc", "1"]] });
+  ok(h.sw.checked === true, "his stored choice for the page beats the page's off");
+  h.send(SEL); ok(h.bar.hidden === false, "so the pill is offered");
+  const k = build({ commentsDefault: "off", seed: [["ream.comments.offer:abc", "0"]] });
+  ok(k.sw.checked === false, "a stored off for the page keeps it off");
+  const m = build({ commentsDefault: "off" });
+  m.tap(m.cbtn);
+  ok(m.sw.checked === true && m.store.get("ream.comments.offer:abc") === "1", "pressing Comment on an off page turns commenting on for that page");
+  ok(m.store.get("ream.comments.offer") === undefined, "and does not touch his global choice");
+  m.send(SEL); ok(m.bar.hidden === false, "the pill is then offered");
+  const n = build({ commentsDefault: "off" });
+  n.sw.checked = true; n.sw.on.change();
+  ok(n.store.get("ream.comments.offer:abc") === "1" && n.store.get("ream.comments.offer") === undefined, "the switch on an off page is remembered for that page only");
+  const q = build({ seed: [["ream.comments.offer", "0"]] });
+  q.send(SEL); ok(q.bar.hidden === true, "the global switch still governs a page that is on"); }
 // THE HOW-TO STEPS follow the switch and the touch rule
 { const g = build();
   g.tap(g.cbtn);
