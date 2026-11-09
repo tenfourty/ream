@@ -309,6 +309,18 @@ def test_the_mcp_host_lists_read_as_sets():
 
 
 def test_mcp_takes_keys_unless_told_not_to():
+    # Spec section 7: without sign-in, keys are the only credential, so always taken
+    # (and REAM_MCP_ACCEPT_KEYS=0 refuses to start); with sign-in, only when set to 1.
     assert settings.current().mcp_accepts_keys() is True
     with settings.override(mcp_accept_keys="0") as current:
+        assert current.mcp_accepts_keys() is True
+        assert any(
+            "REAM_MCP_ACCEPT_KEYS=0 needs sign-in" in p for p in current.problems()
+        )
+    on = {"mcp_public_url": "https://artifacts.example", "mcp_sign_in": "on"}
+    with settings.override(**on) as current:
+        assert current.mcp_accepts_keys() is False
+    with settings.override(**on, mcp_accept_keys="1") as current:
+        assert current.mcp_accepts_keys() is True
+    with settings.override(**on, mcp_accept_keys="0") as current:
         assert current.mcp_accepts_keys() is False

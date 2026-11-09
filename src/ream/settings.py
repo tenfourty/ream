@@ -129,7 +129,7 @@ def host_list(value: str):
     if value == "none":
         return frozenset()
     names = [n.strip().removesuffix(".") for n in value.split(",")]
-    if any(not _HOST_NAME.match(n) for n in names):
+    if any(n == "none" or not _HOST_NAME.match(n) for n in names):
         return BAD_LIST
     return frozenset(names)
 
