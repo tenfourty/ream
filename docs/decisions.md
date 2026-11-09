@@ -759,3 +759,20 @@ ties every add-on change to a core commit and blurs who owns what runs. A third 
 assembles the image is worth it only if a second deployment of our own appears.
 
 **Evidence:** confirmed (Jeremy, 9 Nov 2026), decision d_01M70N0BMCAY974EP7602BX092.
+
+## A core change reaches production through a lock update that merges itself when the combined tests pass (9 Nov 2026)
+
+**Chosen:** when this repo's `main` publishes a new core image, a bot opens a pull request on
+`ream-homelab` that moves `core.lock` to it (the same technique as `pin-pr.sh`). That pull request
+merges by itself once the combined suite (core plus our plug-ins) is green. `ream-homelab` then builds
+the deployed image and opens the homelab pin PR, which the homelab maintainer merges as today. A red
+combined suite leaves the update open for this office. This answers question 10.3 of
+`docs/agent/specs/2026-11-04-core-and-plugins-design.md`.
+
+**Why:** a core change should reach production as fast as it does today, with only the extra hop the
+split needs, and no person in the loop when the tests already prove it.
+
+**Not chosen:** this office merging each lock update by hand, which adds a wait with nothing to judge
+when the tests are green. No automation at all, which would let production drift behind the core.
+
+**Evidence:** confirmed (Jeremy, 9 Nov 2026), decision d_01M70N0KES88YJDQWHJGHCM679.
