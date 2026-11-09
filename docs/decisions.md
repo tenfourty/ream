@@ -705,3 +705,21 @@ was the other option. It lost because the machine would only be told no, and the
 trying to make would still need the hand rename.
 
 **Evidence:** tracker runcove-5t3oj.102, 9 Nov 2026.
+
+## Ream for the whole of GitGuardian: the design is approved (9 Nov 2026)
+
+**Chosen:** the design on the page "Ream for the whole of GitGuardian"
+(https://ream.tenfourty.site/a/pxaqprz3v6x2lmfhycwzsx3cjf; source kept with the office's pages) is
+approved as written. Building starts after the core clean-up, which moves the household-specific parts
+(the owner's name, Slack, mail, the secret scanner, the tracker pages) out of the core into plug-ins.
+Then it goes in the page's order: MCP sign-in for people's Claude (already built on the homelab),
+people, personal and shared agents, sharing, live data, and last the company deployment. Each step
+leaves the homelab working as it does today. The agent-facing parts (keys, the "via" line, declared
+queries, rows in) go back to the offices for review before they are built.
+
+**Why:** the owner wants Ream used across the company, with many people, personal and shared agents,
+sharing, and live Snowflake data, from one codebase and two separate deployments.
+
+**Not chosen:** approving with changes, or not yet. The owner picked (a) with nothing added.
+
+**Evidence:** confirmed (Jeremy, 9 Nov 2026), decision d_01M70JRY80X9C684D05WXD1GP3; tracker runcove-5t3oj.46.
