@@ -9,7 +9,7 @@ against text that had already been replaced.
 The server's half is here: a read that HOLDS until the version differs, which
 is the same machinery the agent-facing waiter uses and the reason gallery.js
 needs no timer. The offering and the waiting-for-his-word are driven in
-tests/js/newer.test.mjs, against the real script.
+tests/js/live.test.mjs, against the real /live.js.
 """
 
 import threading

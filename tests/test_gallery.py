@@ -561,8 +561,12 @@ def test_gallery_js_never_polls(db):
     assert "ResizeObserver" not in text  # that lives in the content shim, not here
     assert "setInterval" not in text
     assert "setTimeout" not in text
-    assert "wait=25" in text, "it holds rather than polls"
-    assert "visibilitychange" in text, "and resumes on an event, not a timer"
+    # The republish watch moved to /live.js (runtime bug .99): this file holds no timer
+    # and so cannot back a failed read off. The watch is in the other script now.
+    assert "/current" not in text
+    live = TestClient(create_gallery_app(db)).get("/live.js").text
+    assert "/current?since=" in live and "wait=25" in live
+    assert "visibilitychange" in live, "and resumes on an event, not a timer"
 
 
 @pytest.mark.parametrize("which", ["list", "detail"])

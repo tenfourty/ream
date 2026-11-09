@@ -1508,46 +1508,8 @@ document.querySelectorAll(".mlink input").forEach(function(i){
     function(){b.textContent="Copied"},function(){i.focus();i.select()})});
   i.parentNode.appendChild(b);
 });
-// A newer version, offered and never applied (homelab-ij8.74; the reasoning is
-// in the note above this string). No timer anywhere: the server holds the
-// read, so the answer arrives when something happens, and a hidden tab simply
-// stops asking until it is looked at again.
-// `window.fetch` guarded, not assumed: a browser without it simply never
-// learns about a republish, which is where this started, rather than throwing
-// on page load and taking the frame sizing down with it.
-var sheetEl=document.getElementById("artifact-sheet");
-if(sheetEl&&window.fetch){
-  var told=+sheetEl.getAttribute("data-version")||0,bar=null,watching=false;
-  var offer=function(){
-    if(bar&&bar.parentNode)bar.parentNode.removeChild(bar);
-    bar=document.createElement("div");bar.className="newer";
-    var t=document.createElement("span");
-    t.textContent="A newer version of this page has been published.";
-    var go=document.createElement("button");go.type="button";
-    go.textContent="Show it";
-    go.addEventListener("click",function(){location.reload()});
-    var no=document.createElement("button");no.type="button";
-    no.className="ghost";no.textContent="Not now";
-    no.addEventListener("click",function(){
-      if(bar&&bar.parentNode)bar.parentNode.removeChild(bar);bar=null});
-    bar.appendChild(t);bar.appendChild(go);bar.appendChild(no);
-    document.body.appendChild(bar);
-  };
-  var watch=function(){
-    if(watching||document.hidden)return;
-    watching=true;
-    window.fetch(location.pathname+"/current?since="+told+"&wait=25",
-          {credentials:"same-origin"})
-      .then(function(r){return r.ok?r.json():null})
-      .then(function(d){
-        watching=false;
-        if(d&&typeof d.n==="number"&&d.n>told){told=d.n;offer()}
-        watch();
-      }).catch(function(){watching=false});
-  };
-  document.addEventListener("visibilitychange",watch);
-  watch();
-}
+// The "newer version" offer lives in /live.js now (it needs the timer and backoff
+// this file may not hold: see the version watch there).
 })();
 """
 
@@ -2859,7 +2821,7 @@ document.addEventListener("fullscreenchange",paint);paint();
 
 # LIVE COMMENTS (9 Nov 2026). The page's agent adds, answers and settles comments
 # while Jeremy has the page open, and until now none of it reached him without a
-# reload: the only live fact was the page's version (gallery.js, `/current`), and
+# reload: the only live fact was the page's version (`/current`, watched in /live.js), and
 # a comment is not a new version. So this holds a read on
 # `/a/{id}/comments-live`, which answers the moment the page's comment signature
 # moves, with the server-rendered panel, the open count and the marks.
@@ -2879,9 +2841,46 @@ document.addEventListener("fullscreenchange",paint);paint();
 #    answer refreshes the Back/Forward order.
 _LIVE_JS = """(function(){
 "use strict";
+// THE VERSION WATCH (moved here from gallery.js, which holds no timer; runtime
+// bug .99). A newer version is OFFERED and never applied. Same schedule as the
+// comments read below: a read that came back with nothing is renewed, a non-200
+// answer and a network error both back off 5 s doubling to 60 s and the watch never
+// stops for good, and a hidden tab asks nothing until it is shown. It runs
+// whether or not the comments panel is on the page.
+var sh=document.getElementById("artifact-sheet");
+if(sh&&window.fetch){
+  var told=+sh.getAttribute("data-version")||0,bar=null,vbusy=false,vfails=0,vtimer=0;
+  var offer=function(){
+    if(bar&&bar.parentNode)bar.parentNode.removeChild(bar);
+    bar=document.createElement("div");bar.className="newer";
+    var t=document.createElement("span");
+    t.textContent="A newer version of this page has been published.";
+    var go=document.createElement("button");go.type="button";
+    go.textContent="Show it";
+    go.addEventListener("click",function(){location.reload()});
+    var no=document.createElement("button");no.type="button";
+    no.className="ghost";no.textContent="Not now";
+    no.addEventListener("click",function(){
+      if(bar&&bar.parentNode)bar.parentNode.removeChild(bar);bar=null});
+    bar.appendChild(t);bar.appendChild(go);bar.appendChild(no);
+    document.body.appendChild(bar)};
+  var vagain=function(ms){clearTimeout(vtimer);vtimer=setTimeout(vwatch,ms)};
+  var vwatch=function(){
+    if(vbusy||document.hidden)return;vbusy=true;var t0=Date.now();
+    window.fetch(location.pathname+"/current?since="+told+"&wait=25",{credentials:"same-origin"})
+      .then(function(r){if(!r.ok)throw new Error("status");return r.json()})
+      .then(function(d){
+        vbusy=false;vfails=0;
+        if(d&&typeof d.n==="number"&&d.n>told){told=d.n;offer()}
+        vagain(Date.now()-t0<1000?5000:0)})
+      .catch(function(){vbusy=false;vfails++;vagain(Math.min(60000,5000*Math.pow(2,vfails-1)))})};
+  document.addEventListener("visibilitychange",function(){if(!document.hidden){vfails=0;vagain(0)}});
+  if(window.addEventListener)window.addEventListener("online",function(){vfails=0;vagain(0)});
+  vwatch();
+}
 var P=document.getElementById("comments"),mk=document.getElementById("artifact-marks");
 if(!P||!mk||!window.fetch)return;
-var sh=document.getElementById("artifact-sheet"),sig=sh&&sh.getAttribute("data-csig")||"",busy=false,fails=0,timer=0;
+var sig=sh&&sh.getAttribute("data-csig")||"",busy=false,fails=0,timer=0;
 var KEEP=/(^|\\s)(chead|cunplaced|chow|coffer|cscope|cnew)(\\s|$)/;
 function kept(el){return el.nodeType===1&&(KEEP.test(el.className||"")||el.id==="cwhole")}
 function drafts(){var out=Object.create(null),ae=document.activeElement;
