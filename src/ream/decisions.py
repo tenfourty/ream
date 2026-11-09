@@ -247,6 +247,17 @@ class RoundRow:
     reviewed_version: int | None = None
 
 
+class TapStands(Exception):
+    """An app's relay on a question he already answered with his own tap. The tap
+    stands; he can answer again on the page if he changed his mind. `row` is the
+    question as it stands."""
+
+    def __init__(self, row: "DecisionRow") -> None:
+        super().__init__("answer")
+        self.field = "answer"
+        self.row = row
+
+
 class AlreadyDecided(Exception):
     """A second verdict on a review. The first one counts (page review design:
     'a verdict from a stale second device is refused, and he is told which
@@ -1760,14 +1771,23 @@ def record_elsewhere(
             # One verdict counts on a review, relayed or tapped: the same
             # atomic guard `answer` uses, so a relay cannot overwrite it.
             answered_at = datetime.now(UTC)
+            # An app's relay never replaces his own tap on a plain question (a
+            # review's first-verdict rule above already covers reviews).
+            keep_tap = (
+                " and (kind = 'review' or answer_source is null"
+                " or answer_source <> 'page')"
+                if by_app
+                else ""
+            )
             written = conn.execute(
-                "update decision set answer = %s, answer_note = %s,"
+                "update decision set answer = %s, answer_note = %s,"  # noqa: S608 -- fixed text, no caller input
                 " answered_at = %s, answered_by = %s,"
                 " answer_source = %s, recorded_by = %s, said_at = %s"
                 " where id = %s and (kind <> 'review' or answer is null)"
+                + keep_tap
                 # Live page at the write, as in `answer`: a relay is no more
                 # storable on a set-aside question than a tap is.
-                " and exists (select 1 from artifact a"
+                + " and exists (select 1 from artifact a"
                 " where a.id = decision.artifact_id"
                 " and a.archived_at is null and a.deleted_at is null)",
                 (
@@ -1788,6 +1808,8 @@ def record_elsewhere(
                 ).fetchone()
                 if current is None or _set_aside_fields(current)["set_aside"]:
                     raise store.NotFound()
+                if by_app and current[_KIND_IDX] != "review" and current[14] == "page":
+                    raise TapStands(_row_to_decision(current))
                 raise _already(conn, current, round)
             # A new human act: what was declared about an earlier answer (or before
             # any) is history, and the acknowledgement reads as new again.
@@ -2126,14 +2148,26 @@ def get_owned(db: Database, agent: str, decision_id: str) -> DecisionRow | None:
         return None if row is None else _with_held(conn, [_row_to_decision(row)])[0]
 
 
-def get_any(db: Database, decision_id: str) -> DecisionRow | None:
+def get_any(
+    db: Database, decision_id: str, *, within_reach_of: str | None = None
+) -> DecisionRow | None:
     """One decision whoever's page it is, for a caller that reads every page (a signed-in
-    app, MCP design 11.2/11.5). Never reach it from a key's route: `get_owned` is theirs."""
+    app, MCP design 11.2/11.5). Never reach it from a key's route: `get_owned` is theirs.
+
+    `within_reach_of`: the acting agent. The decision's page must then be one it may READ
+    right now (`store._owned` with the reach in force), else this answers None exactly as
+    for a missing decision, so a narrowed reach can never relay onto a page outside it."""
     with db.connect() as conn:
         row = conn.execute(
             f"select {_COLUMNS} from decision where decision.id = %s",  # noqa: S608 -- fixed constant, not caller input
             (decision_id,),
         ).fetchone()
+        if (
+            row is not None
+            and within_reach_of is not None
+            and store._owned(conn, row[1], within_reach_of, True) is None
+        ):
+            return None
         return None if row is None else _with_held(conn, [_row_to_decision(row)])[0]
 
 

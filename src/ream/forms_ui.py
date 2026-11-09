@@ -289,7 +289,7 @@ function sheet(f){
       r=f.relayed&&Object.prototype.hasOwnProperty.call(f.relayed,spec.name)?f.relayed[spec.name]:null;
     dd=s===null?el("dd","fblank","(blank)"):el("dd","",s);dl.appendChild(dt);dl.appendChild(dd);
     if(c!==null&&c!==s)dl.appendChild(el("dd","fnote","On record from his last send: "+c));
-    if(r&&r.text!==s)dl.appendChild(el("dd","fnote","On record, relayed from "+r.source+(r.by?" by "+r.by:"")+": "+r.text));
+    if(r&&r.text!==s)dl.appendChild(el("dd","fnote",(r.source==="mcp"?"On record, passed on by an app"+(r.by?" ("+r.by+")":""):"On record, relayed from "+r.source+(r.by?" by "+r.by:""))+": "+r.text));
     (f.stale||[]).forEach(function(x){if(x.name===spec.name)dl.appendChild(el("dd","fnote",staleLine(x,spec.label)))})});
   var names=Object.create(null);f.fields.forEach(function(spec){names[spec.name]=1});
   (f.stale||[]).forEach(function(x){if(names[x.name])return;

@@ -1251,10 +1251,13 @@ def record_relay(
         except ValueError:
             raise HTTPException(422, "said_at must be an ISO 8601 timestamp") from None
     found = (
-        decisions.get_any(db, decision_id)
+        decisions.get_any(db, decision_id, within_reach_of=agent)
         if by_app
         else decisions.get_owned(db, agent, decision_id)
     )
+    if by_app and found is None:
+        # Outside the app's reach (or no such question): one answer for both.
+        raise HTTPException(404, "no such open decision")
     if found is not None and found.kind == "form":
         return _record_form(db, found, payload, said_at, agent, by_app=by_app)
     if payload.fields is not None:
@@ -1289,6 +1292,18 @@ def record_relay(
         ) from None
     except decisions.InvalidAnswer:
         raise HTTPException(422, "that letter is not one of the options") from None
+    except decisions.TapStands as exc:
+        raise HTTPException(
+            409,
+            {
+                "field": "answer",
+                "detail": textvars.render(
+                    "{{owner_name}} already answered this on the page "
+                    f"({exc.row.answer}); an app does not replace it. If that "
+                    "changed, let {{owner_them}} answer it again on the page."
+                ),
+            },
+        ) from None
     except decisions.AlreadyDecided as exc:
         named, current = exc.round, exc.current
         raise HTTPException(
@@ -1650,6 +1665,7 @@ def _record_form(
             source=payload.source,
             recorded_by=agent,
             said_at=said_at,
+            keep_taps=by_app,
         )
     except formanswer.SubmitRefused as exc:
         # 422 a bad value; 409 the form changed while this was relayed: send it again.

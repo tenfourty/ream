@@ -150,3 +150,114 @@ def test_the_gallery_says_he_said_it_in_the_apps_host(db, asked):
 
 def test_the_tool_needs_the_relay_permission():
     assert mcp.TOOLS["record_answer"].permission == mcp.RELAY
+
+
+# --- Review round 2 ---------------------------------------------------------------------
+
+
+def test_an_app_relay_never_replaces_his_own_tap(db, asked):
+    decisions.answer(db, asked.id, letter="a", by=settings.owner_id())
+    out = _tool(
+        _as(db, _app(db)), "record_answer", decision_id=asked.id, letter="b", words="no"
+    )
+    assert out["isError"] is True
+    assert "already answered" in _text(out)
+    row = decisions.get_owned(db, "office", asked.id)
+    assert (row.answer, row.answer_source) == ("a", "page")
+
+
+def test_an_app_relay_still_replaces_another_relay(db, asked):
+    call = _as(db, _app(db))
+    _tool(call, "record_answer", decision_id=asked.id, letter="a", words="x")
+    again = _tool(call, "record_answer", decision_id=asked.id, letter="b", words="y")
+    assert again["isError"] is False, again
+    assert decisions.get_owned(db, "office", asked.id).answer == "b"
+
+
+def test_a_keys_relay_over_a_tap_is_unchanged(db, asked):
+    decisions.answer(db, asked.id, letter="a", by=settings.owner_id())
+    row = decisions.record_elsewhere(
+        db, asked.id, letter="b", note="n", source="telegram", recorded_by="office"
+    )
+    assert (row.answer, row.answer_source) == ("b", "telegram")
+
+
+FORM_PAGE = PAGE.format(
+    '<form data-artifact-form="f"><label>Why <input type="text" name="why"></label>'
+    '<label>Size <input type="text" name="size"></label></form>'
+)
+
+
+def _form(db):
+    keys.mint(db, agent="office")
+    page = store.publish(db, "office", "Form", FORM_PAGE)
+    with db.connect() as conn:
+        (did,) = conn.execute(
+            "select id from decision where artifact_id = %s and kind = 'form'",
+            (page.id,),
+        ).fetchone()
+    return page, did
+
+
+def test_an_app_relay_keeps_the_form_fields_he_tapped(db):
+    from ream import formanswer
+
+    _page, did = _form(db)
+    formanswer.submit(db, did, version=1, values={"why": "mine"})
+    out = _tool(
+        _as(db, _app(db)),
+        "record_answer",
+        decision_id=did,
+        fields={"why": "theirs", "size": "L"},
+        words="said so",
+    )
+    assert out["isError"] is False, out
+    rec = decisions.get_owned(db, "office", did).answer_record
+    assert rec["answers"]["why"] == "mine"
+    assert rec["answers"]["size"] == "L"
+    assert rec["sources"]["size"]["source"] == "mcp"
+
+
+def test_a_relay_outside_a_narrowed_reach_is_a_missing_question(db, asked):
+    import dataclasses
+
+    from ream import reach
+
+    call = _as(db, _app(db))
+    # `asked` sits on a page closed to agents; narrow the app to a key's reach.
+    narrow = dataclasses.replace(call, reach=reach.of_key(call.agent))
+    with reach.acting(narrow.reach):
+        out = _tool(
+            narrow, "record_answer", decision_id=asked.id, letter="a", words="x"
+        )
+        missing = _tool(
+            narrow, "record_answer", decision_id="nope-no-such", letter="a", words="x"
+        )
+    assert out["isError"] is True and missing["isError"] is True
+    assert _text(out) == _text(missing)
+    assert decisions.get_owned(db, "office", asked.id).answer is None
+
+
+def test_a_form_relayed_with_mcp_never_reads_as_a_tap(db):
+    from ream import decide, formrecord
+
+    _page, did = _form(db)
+    app = _app(db)
+    _tool(
+        _as(db, app),
+        "record_answer",
+        decision_id=did,
+        fields={"why": "ok"},
+        words="ok",
+    )
+    row = decisions.get_owned(db, "office", did)
+    html = gallery._provenance(row, {app.agent: "claude.ai"})
+    assert "in claude.ai" in html and "()" not in html
+    assert "not tapped on this page" in html
+    lines = "\n".join(
+        decide._fmt_form({**decisions.public(row), "answer_record": row.answer_record})
+    )
+    assert "passed on by a signed-in app (mcp)" in lines
+    assert "submitted it" not in lines
+    view = formrecord.gallery_view(row.answer_record, [{"name": "why", "type": "text"}])
+    assert view["answered"] is None and view["relayed"]["why"]["source"] == "mcp"

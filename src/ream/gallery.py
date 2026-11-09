@@ -3983,9 +3983,11 @@ def _provenance(row, hosts: dict[str, str] | None = None) -> str:
     if row.answer_source == decisions.MCP_SOURCE:
         where, recorder = _passed_on(row, hosts)
         said = f" ({escape(_when(row.said_at))})" if row.said_at else ""
+        # A form has no single letter: its fields say what was relayed.
+        letter = f" ({escape(row.answer)})" if row.answer else ""
         return (
-            f'<p class="relayed-note">{escape(settings.owner_name())} said '
-            f"({escape(row.answer or '')}) in {where}{said}. Recorded by {recorder}, "
+            f'<p class="relayed-note">{escape(settings.owner_name())} said'
+            f"{letter} in {where}{said}. Recorded by {recorder}, "
             "not tapped on this page. If that is not what you meant, answer it "
             "again here.</p>"
         )

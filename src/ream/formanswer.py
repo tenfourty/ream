@@ -374,6 +374,7 @@ def relay(
     source: str,
     recorded_by: str,
     said_at: datetime | None = None,
+    keep_taps: bool = False,
 ) -> dict:
     """Store an answer he gave somewhere that is not the page, FIELD BY FIELD, with its
     source (3.4, 3.6). A relayed field is kept as a relay (`sources`), never counts as his
@@ -456,6 +457,7 @@ def relay(
             by=recorded_by,
             said_at=said_at,
             now=now,
+            keep_taps=keep_taps,
         )
         entry = {
             "submit_id": ids.new_id(),

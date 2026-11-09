@@ -229,6 +229,7 @@ def apply_relay(
     by: str,
     said_at: datetime | None,
     now: datetime,
+    keep_taps: bool = False,
 ) -> tuple[dict, list[str], list[str]]:
     """The record after an agent relayed `relayed` (validated, non-blank values for some
     fields) as something he said elsewhere. Returns (record, applied, skipped). A relayed
@@ -252,8 +253,10 @@ def apply_relay(
         if (
             mine
             and mine.get("source") == "page"
-            and mine.get("at")
-            and as_utc(datetime.fromisoformat(mine["at"])) > at
+            and (
+                keep_taps
+                or (mine.get("at") and as_utc(datetime.fromisoformat(mine["at"])) > at)
+            )
         ):
             skipped.append(name)
             continue

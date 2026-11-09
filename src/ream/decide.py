@@ -180,6 +180,14 @@ def _answered(row: dict) -> bool:
     return bool(row.get("answer") or row.get("answer_record"))
 
 
+def _relay_how(source: str) -> str:
+    """How a relayed answer reached the record. A signed-in app's `mcp` is said as what it
+    is (the owner spoke in the app's chat; the app wrote it down), never as a tap."""
+    if source == "mcp":
+        return "passed on by a signed-in app (mcp), not tapped"
+    return f"relayed from {source}"
+
+
 def _speaker(person: str | None, source: str | None, relayer: str | None) -> str:
     """Whose answer it is, and, when a seat relayed it, which seat: `<owner-id> (relayed by
     ops-seat)`. The person is the speaker in a form and in a single answer alike; the
@@ -204,7 +212,7 @@ def _fmt_form(row: dict) -> list[str]:
     how = (
         _w("{{owner_they}} submitted it")
         if source in (None, "page")
-        else f"relayed from {source}"
+        else _relay_how(source)
     )
     head = f"  FORM {rec.get('form', row.get('form_name', '?'))} "
     head += f"(version {rec.get('version', '?')}, {how}, by {by}, "
@@ -222,7 +230,7 @@ def _fmt_form(row: dict) -> list[str]:
             shown = str(value)
         src = sources.get(name) or {}
         if src.get("source") not in (None, "page"):
-            shown += f"   [relayed from {src['source']} by {src.get('by', '?')}]"
+            shown += f"   [{_relay_how(src['source'])} by {src.get('by', '?')}]"
         lines.append(f"  {name}: {shown}")
     if rec.get("blank"):
         lines.append(f"  blank: {', '.join(rec['blank'])}")
@@ -306,11 +314,7 @@ def _fmt(row: dict) -> str:
         # Said plainly, because it is the difference between him and us. A tap
         # is 'page'; anything else was relayed by a seat, and the reader has to
         # be able to tell without knowing the vocabulary.
-        how = (
-            _w("{{owner_they}} tapped it")
-            if source == "page"
-            else f"relayed from {source}"
-        )
+        how = _w("{{owner_they}} tapped it") if source == "page" else _relay_how(source)
         # The server stamps every answer with the owner's id; a row without one prints
         # "?" like a form's does, rather than a name this client invented.
         by = _speaker(row.get("answered_by"), source, row.get("recorded_by"))
