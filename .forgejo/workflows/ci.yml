@@ -365,6 +365,7 @@ jobs:
             | grep -m1 '^git.tenfourty.site/runcove/artifacts@sha256:' | cut -d@ -f2)
           [ -n "$digest" ] || { echo "no registry digest for $image after the push" >&2; exit 1; }
           echo "ref=${image}@${digest}" >> "$GITHUB_OUTPUT"
+          echo "reused=${reused}" >> "$GITHUB_OUTPUT"
           # One line, printed once, that homelab's pin lander reads from this job's log to bind
           # the pinned digest to main's own CI run (runcove-5t3oj.19): do not reword it.
           if [ "$reused" = 0 ]; then
@@ -384,35 +385,41 @@ jobs:
         continue-on-error: true
         env:
           REGISTRY_PASSWORD: "${{ secrets.REGISTRY_PUSH_TOKEN }}"
+          # Tagged from the exact digest the build step produced, never from the mutable
+          # :<sha12> tag; and only when this run built it (reused=0).
+          BUILD_REF: ${{ steps.build.outputs.ref }}
+          BUILD_REUSED: ${{ steps.build.outputs.reused }}
         run: |
           set -eu
+          if [ "$BUILD_REUSED" != 0 ]; then
+            echo "REUSED core: the image was not built by this run (reused=${BUILD_REUSED:-unset}), so no core image is pushed or certified"
+            exit 0
+          fi
+          case "$BUILD_REF" in
+            git.tenfourty.site/runcove/artifacts:*@sha256:*) ;;
+            *) echo "unexpected build ref" >&2; exit 1 ;;
+          esac
           [ -n "$REGISTRY_PASSWORD" ] || { echo "REGISTRY_PUSH_TOKEN is not set on this repo" >&2; exit 1; }
           sha12="${GITHUB_SHA:0:12}"
-          src="git.tenfourty.site/runcove/artifacts:${sha12}"
           core="git.tenfourty.site/runcove/artifacts-core:${sha12}"
           printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
             -u jeremy --password-stdin
-          reused=0
           if pulled=$(docker pull "$core" 2>&1); then
-            echo "$core is already in the registry (a re-run): reusing it, nothing pushed"
-            reused=1
-          else
-            case "$pulled" in
-              *"manifest unknown"*|*"not found"*) ;;
-              *) echo "$pulled" >&2; echo "could not tell whether $core exists" >&2; exit 1 ;;
-            esac
-            docker tag "$src" "$core"
-            docker push "$core"
+            echo "REUSED core: $core already exists in the registry; nothing pushed, not certified by this run"
+            exit 0
           fi
+          case "$pulled" in
+            *"manifest unknown"*|*"not found"*) ;;
+            *) echo "$pulled" >&2; echo "could not tell whether $core exists" >&2; exit 1 ;;
+          esac
+          docker tag "$BUILD_REF" "$core"
+          docker push "$core"
           digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$core" \
             | grep -m1 '^git.tenfourty.site/runcove/artifacts-core@sha256:' | cut -d@ -f2)
           [ -n "$digest" ] || { echo "no registry digest for $core after the push" >&2; exit 1; }
+          [ "$digest" = "${BUILD_REF##*@}" ] || { echo "core digest differs from the built image's" >&2; exit 1; }
           echo "ref=${core}@${digest}" >> "$GITHUB_OUTPUT"
-          if [ "$reused" = 0 ]; then
-            echo "PUBLISHED core image=${core} digest=${digest}"
-          else
-            echo "REUSED core image=${core} digest=${digest} (existing tag, not built by this run)"
-          fi
+          echo "PUBLISHED core image=${core} digest=${digest}"
 
   # Opens the pull request on the homelab repo that moves production onto this image
   # (homelab-qa3c, 15 Oct 2026): the manifests live there, pinned by digest, and only a

@@ -690,9 +690,9 @@ drivers; CI only (not on baba).
    the lock-bump PRs; `core-with-house` job added informational.
    **Core half, part 1 built (`ci/core-image`, 9 Nov 2026).** On a push to `main` the `image` job
    has a second step, `push core image` (`continue-on-error`, so it never fails the job or the pin):
-   it tags the image the step before built as `git.tenfourty.site/runcove/artifacts-core:<sha12>`,
+   it tags the image the step before built (by digest) as `git.tenfourty.site/runcove/artifacts-core:<sha12>`,
    pushes it with the same login, and logs `PUBLISHED core image=... digest=...` (job output
-   `core_ref`; a re-run reuses an existing tag and logs `REUSED core`). The core image is today's
+   `core_ref`; it is tagged from the build step's exact digest, and when that step reused an existing image, or the core tag exists, it pushes nothing and logs `REUSED core`, never `PUBLISHED`). The core image is today's
    image: core still carries our in-tree plug-ins until step 9, so "plug-in-free" means free of
    anything installed from outside. Today's image, `pin` and deploy are untouched; a `ci/**`
    branch still builds and pushes nothing. **Not built:** `core-with-house` (left out: it needs
