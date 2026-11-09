@@ -2467,7 +2467,7 @@ def main(argv: list[str] | None = None) -> int:
             warn_if_unlabelled("update")
             done = _request(
                 "POST",
-                f"{_api_base()}/pages/{args.update}/comments",
+                f"{_api_base()}/pages/{args.update}/comments-setting",
                 key,
                 {"comments": args.comments},
             )

@@ -820,7 +820,7 @@ QD_OFFICE or ARTIFACTS_SEAT; yours always wins, and only yours filters `wait`.
 
 Every NEW page needs `--comments on` or `--comments off` (`ream publish` refuses without it; the
 API field is `comments: "on"|"off"` on POST /api/v1/pages, PATCH /pages/<id>, and POST
-/pages/<id>/comments to change it alone). It is your decision as the page's publisher: **off**
+/pages/<id>/comments-setting to change it alone). It is your decision as the page's publisher: **off**
 for a page a script redraws or a status board, where comments would only go stale; **on** for a
 report, a plan, anything meant to be discussed. Off means the ways in start off for the reader:
 no pill on selected words and nothing inviting a comment. The Comment control is still there, and

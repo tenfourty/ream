@@ -115,7 +115,7 @@ def test_an_update_keeps_the_setting_and_changes_it_when_given(client, db, token
 def test_the_small_route_changes_only_the_setting(client, db, token):
     page = _publish(client, token, comments="on").json()
     done = client.post(
-        f"/api/v1/pages/{page['id']}/comments",
+        f"/api/v1/pages/{page['id']}/comments-setting",
         json={"comments": "off"},
         headers=auth(token),
     )
@@ -124,7 +124,7 @@ def test_the_small_route_changes_only_the_setting(client, db, token):
     assert store.get_owned(db, "seat", page["id"]).current_version == 1, "no version"
     assert (
         client.post(
-            f"/api/v1/pages/{page['id']}/comments",
+            f"/api/v1/pages/{page['id']}/comments-setting",
             json={"comments": "sideways"},
             headers=auth(token),
         ).status_code
@@ -137,12 +137,12 @@ def test_another_key_cannot_change_it_and_is_told_what_a_missing_page_is_told(
 ):
     page = _publish(client, token, comments="on").json()
     theirs = client.post(
-        f"/api/v1/pages/{page['id']}/comments",
+        f"/api/v1/pages/{page['id']}/comments-setting",
         json={"comments": "off"},
         headers=auth(other),
     )
     missing = client.post(
-        "/api/v1/pages/nopage000000/comments",
+        "/api/v1/pages/nopage000000/comments-setting",
         json={"comments": "off"},
         headers=auth(other),
     )
