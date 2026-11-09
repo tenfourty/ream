@@ -510,6 +510,9 @@ def _slide_idle(db: Database, app_id: str, now: datetime) -> None:
 def refresh(db: Database, form, now: datetime) -> JSONResponse:
     """The refresh_token grant, strict rotation (section 9): each use spends the token and
     gives a new one; a spent one presented again ends the app, since two parties hold it."""
+    for name in ("client_id", "resource", "refresh_token"):
+        if name in form and not isinstance(form.get(name), str):
+            return _grant_error("invalid_request", f"{name} must be a plain field")
     raw = str(form.get("refresh_token", ""))
     if not raw.startswith(REFRESH_PREFIX):
         return _grant_error("invalid_grant", "unknown refresh token")
@@ -561,6 +564,11 @@ def revoke(db: Database, form, now: datetime | None = None) -> None:
     """RFC 7009. Never says whether the token was known. An access token goes alone; a
     refresh token ends its app and everything it holds."""
     now = now or datetime.now(UTC)
+    if any(
+        name in form and not isinstance(form.get(name), str)
+        for name in ("token", "client_id")
+    ):
+        return
     raw = str(form.get("token", ""))
     if not raw.startswith((ACCESS_PREFIX, REFRESH_PREFIX)):
         return
@@ -763,7 +771,9 @@ def oauth_router(db: Database, limiter: ratelimit.FailedAuthLimiter) -> APIRoute
     async def revoke_route(request: Request):
         if not on(request, _public_here):
             return gone()
-        form = await request.form()
+        form = await _read_form(request)
+        if form is None:
+            return _grant_error("invalid_request", "the request body is too large", 413)
         from starlette.concurrency import run_in_threadpool
 
         await run_in_threadpool(revoke, db, form)

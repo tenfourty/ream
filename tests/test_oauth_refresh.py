@@ -201,3 +201,18 @@ def test_the_sweep_ends_a_lapsed_app_and_its_tokens(web, provider, db):
     assert app_row(db)[1] == "lapsed"
     with db.connect() as conn:
         assert conn.execute("select count(*) from mcp_token").fetchone()[0] == 0
+
+
+def test_refresh_fields_must_be_plain_and_a_big_body_is_refused(web, provider, db):
+    first = tokens(web, provider)
+    odd = oauth.token(
+        db, {"grant_type": "refresh_token", "refresh_token": [first["refresh_token"]]}
+    )
+    assert odd.status_code == 400
+    big = web.post(
+        "/oauth/token",
+        data={"grant_type": "refresh_token", "refresh_token": "x" * 70000},
+    )
+    assert big.status_code == 413
+    assert web.post("/oauth/revoke", data={"token": "x" * 70000}).status_code == 413
+    assert refresh(web, first["refresh_token"]).status_code == 200
