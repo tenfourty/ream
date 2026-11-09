@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 from starlette.requests import Request
 
-from ream import decisions, mcp, mcp_apps, settings, store
+from ream import decisions, keys, mcp, mcp_apps, settings, store
 
 CLAUDE_AI = "https://claude.ai/oauth/claude-ai/client.json"
 CLAUDE_CODE = "https://claude.ai/oauth/claude-code-client-metadata"
@@ -135,6 +135,13 @@ def test_an_app_cannot_organise_an_offices_page_and_it_reads_as_a_missing_one(db
     ):
         refused = _organise(call, page.id, action, **more)
         missing = _organise(call, NO_PAGE, action, **more)
+        if action == "file":
+            # The move route answers 200 with `missing`, for both alike.
+            assert refused["isError"] is False and missing["isError"] is False
+            got = refused["structuredContent"]
+            assert got["moved"] == [] and got["missing"] == [page.id]
+            assert missing["structuredContent"]["moved"] == []
+            continue
         assert refused["isError"] is True and missing["isError"] is True, action
         assert refused["content"][0]["text"].replace(page.id, "ID") == (
             missing["content"][0]["text"].replace(NO_PAGE, "ID")
@@ -173,8 +180,9 @@ def test_an_apps_reach_leaves_giving_away_and_closing_a_page_alone(db):
     app = _app(db)
     other = _app(db, CLAUDE_CODE)
     page = store.publish(db, other.agent, "Theirs", PAGE.format("x"))
+    keys.mint(db, agent="office")
     with mcp.reach.acting(_as(db, app).reach):
-        assert store.transfer(db, page.id, app.agent, agent=app.agent) is None
+        assert store.transfer(db, page.id, "office", agent=app.agent) is None
         assert store.set_agents_can_read(db, page.id, False, agent=app.agent) is False
     assert store.get_owned(db, other.agent, page.id).agent == other.agent
 
