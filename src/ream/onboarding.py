@@ -542,7 +542,7 @@ def _tools_text(base: str) -> str:
         "the response; the tool then runs `uv tool install --force` from the\n"
         "source fixed in its own setting REAM_INSTALL_SOURCE (a git+https\n"
         "address, or the first line of ~/.config/ream/install-source) at the\n"
-        "version the service names, and repeats the command once. It never\n"
+        "main branch of that source, and repeats the command once. It never\n"
         "installs from an address the service sends. With no source set, or\n"
         "with uv missing or the install failing, it prints one line and carries\n"
         "on. Set REAM_NO_SELF_UPDATE=1 to turn the install off (the line is\n"
@@ -642,7 +642,6 @@ def agent_card(public_only: bool = False) -> dict:
                 "minimum": clientlevel.MIN_CLIENT_LEVEL,
                 "header": clientlevel.CLIENT_HEADER,
                 "outdated_response_header": clientlevel.OUTDATED_HEADER,
-                "install_ref": settings.current().client_install_ref or None,
                 "install_source": settings.current().client_install_source or None,
                 "note": (
                     "a tool installs itself only from the source fixed in its own "

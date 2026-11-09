@@ -2,6 +2,8 @@
 are out of date (Jeremy, 9 Nov 2026). The install source is the client's own, never the server's."""
 
 import io
+import os
+import time
 import urllib.request
 
 import pytest
@@ -11,7 +13,7 @@ from ream import client, clientlevel, keys, selfupdate
 from ream.app import create_app
 
 SOURCE = "git+https://forge.example/runcove/artifacts"
-STALE = {"x-ream-client-outdated": "true", "x-ream-client-ref": "v1.4.0"}
+STALE = {"x-ream-client-outdated": "true"}
 
 
 @pytest.fixture()
@@ -51,7 +53,6 @@ def test_the_json_and_raw_request_builders_send_it(monkeypatch):
 def test_an_old_tool_is_answered_normally_and_told_it_is_out_of_date(
     http, db, monkeypatch
 ):
-    monkeypatch.setenv("REAM_CLIENT_INSTALL_REF", "v1.4.0")
     monkeypatch.setenv("REAM_CLIENT_INSTALL_SOURCE", SOURCE)
     token, _ = keys.mint(db, agent="seat")
     auth = {"Authorization": f"Bearer {token}"}
@@ -66,12 +67,11 @@ def test_an_old_tool_is_answered_normally_and_told_it_is_out_of_date(
         assert response.headers["x-artifacts-client-min"] == str(
             clientlevel.MIN_CLIENT_LEVEL
         )
-        assert response.headers["x-ream-client-ref"] == "v1.4.0"
+        assert "x-ream-client-ref" not in response.headers, "the server names no ref"
         assert response.headers["x-ream-install-source"] == SOURCE
 
 
 def test_a_current_tool_is_not_told_anything_is_wrong(http, db, monkeypatch):
-    monkeypatch.delenv("REAM_CLIENT_INSTALL_REF", raising=False)
     monkeypatch.delenv("REAM_CLIENT_INSTALL_SOURCE", raising=False)
     token, _ = keys.mint(db, agent="seat")
     response = http.get(
@@ -82,7 +82,6 @@ def test_a_current_tool_is_not_told_anything_is_wrong(http, db, monkeypatch):
         },
     )
     assert "x-ream-client-outdated" not in response.headers
-    assert "x-ream-client-ref" not in response.headers, "unset means none"
     assert "x-ream-install-source" not in response.headers
     assert response.headers["x-ream-client-min"] == str(clientlevel.MIN_CLIENT_LEVEL)
 
@@ -95,38 +94,53 @@ def test_the_signal_rides_an_error_answer_too_and_not_the_gallery(http):
 
 
 def test_the_agent_card_declares_the_level(http, monkeypatch):
-    monkeypatch.setenv("REAM_CLIENT_INSTALL_REF", "abcdef1")
     card = http.get("/api/v1/agent.json").json()["cli"]["client_level"]
     assert card["current"] == clientlevel.CLIENT_LEVEL
     assert card["minimum"] == clientlevel.MIN_CLIENT_LEVEL
-    assert card["install_ref"] == "abcdef1"
+    assert "install_ref" not in card
     assert card["install_source"] is None
 
 
 # ---- the tool decides to update ----------------------------------------------------
 
+MAIN_COMMAND = ["uv", "tool", "install", "--force", "--refresh", f"{SOURCE}@main"]
+
 
 class _Run:
-    def __init__(self, code=0):
-        self.code = code
+    """Stands in for subprocess.run: the install, `uv tool dir`, then the installed Python."""
+
+    def __init__(self):
+        self.install_code = 0
+        self.level = str(clientlevel.CLIENT_LEVEL)
         self.calls = []
 
     def __call__(self, command, **kwargs):
         self.calls.append((command, kwargs))
-        return type("Done", (), {"returncode": self.code})()
+        out, code = "", 0
+        if command[:3] == ["uv", "tool", "install"]:
+            code = self.install_code
+        elif command[:3] == ["uv", "tool", "dir"]:
+            out = "/tools\n"
+        elif command[0].endswith("/python"):
+            out = self.level + "\n"
+        return type("Done", (), {"returncode": code, "stdout": out})()
+
+    @property
+    def installs(self):
+        return [c for c, _ in self.calls if c[:3] == ["uv", "tool", "install"]]
 
 
 @pytest.fixture()
-def updater(monkeypatch):
+def updater(monkeypatch, tmp_path):
     for name in (
         "REAM_NO_SELF_UPDATE",
         "ARTIFACTS_NO_SELF_UPDATE",
-        "REAM_SELF_UPDATED",
         "ARTIFACTS_INSTALL_SOURCE",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("REAM_SELF_UPDATED", "x")  # so the test's own change is undone
     monkeypatch.delenv("REAM_SELF_UPDATED")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("REAM_INSTALL_SOURCE", SOURCE)
     monkeypatch.setattr(selfupdate, "_done", False)
     monkeypatch.setattr(selfupdate.shutil, "which", lambda name: f"/bin/{name}")
@@ -140,55 +154,27 @@ def updater(monkeypatch):
     return type("Rig", (), {"run": run, "execs": execs, "out": out})
 
 
-def test_it_reinstalls_from_the_clients_own_source_at_the_named_ref_then_repeats(
-    updater,
-):
+def test_it_reinstalls_main_of_the_clients_own_source_then_repeats(updater):
     selfupdate.on_response("GET", STALE)
-    command, kwargs = updater.run.calls[0]
-    assert command == ["uv", "tool", "install", "--force", f"{SOURCE}@v1.4.0"]
-    assert "shell" not in kwargs
+    assert updater.run.installs == [MAIN_COMMAND]
+    assert all("shell" not in kw for _, kw in updater.run.calls)
     assert updater.execs == [("/bin/ream", ["/bin/ream", "list"])]
     assert selfupdate.os.environ["REAM_SELF_UPDATED"] == "1"
     selfupdate.os.environ.pop("REAM_SELF_UPDATED")
 
 
-def test_a_source_in_the_servers_headers_is_never_used(updater):
+def test_nothing_the_server_sends_chooses_what_is_installed(updater):
     selfupdate.on_response(
         "GET",
-        {**STALE, "x-ream-install-source": "git+https://evil.example/x"},
+        {
+            **STALE,
+            "x-ream-client-ref": "deadbeefcafe",
+            "x-ream-install-source": "git+https://evil.example/x",
+            "x-ream-client-min": "99",
+        },
     )
-    command = updater.run.calls[0][0]
-    assert "evil.example" not in " ".join(command)
-    assert command[-1].startswith(SOURCE + "@")
+    assert updater.run.installs == [MAIN_COMMAND], "main of the client's own source"
     selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
-
-
-@pytest.mark.parametrize(
-    "ref",
-    [
-        "--index-url=https://evil.example",
-        "v1.4.0 --extra",
-        "main",
-        "../x",
-        "v1.4.0@evil",
-        "git+https://evil.example/x",
-        "abc",
-        "",
-        "v1.4.0\n",
-    ],
-)
-def test_a_bad_ref_from_the_server_is_rejected(updater, ref):
-    selfupdate.on_response(
-        "GET", {"x-ream-client-outdated": "true", "x-ream-client-ref": ref}
-    )
-    assert updater.run.calls == []
-    assert updater.execs == []
-    assert "out of date" in updater.out.getvalue()
-
-
-@pytest.mark.parametrize("ref", ["v1.4.0", "2026.11.9", "585ac56", "a" * 40])
-def test_a_tag_or_a_commit_hash_is_accepted(ref):
-    assert selfupdate.valid_ref(ref)
 
 
 def test_a_source_that_is_not_a_https_git_address_is_not_used(updater, monkeypatch):
@@ -215,7 +201,7 @@ def test_with_no_source_it_prints_a_line_and_installs_nothing(updater, monkeypat
 
 def test_a_call_that_changes_something_is_not_repeated(updater):
     selfupdate.on_response("POST", STALE)
-    assert len(updater.run.calls) == 1
+    assert len(updater.run.installs) == 1
     assert updater.execs == [], "a POST that went through must not be sent twice"
     assert "next call" in updater.out.getvalue()
 
@@ -228,10 +214,46 @@ def test_a_current_answer_does_nothing(updater):
 def test_it_asks_once_per_process(updater):
     selfupdate.on_response("POST", STALE)
     selfupdate.on_response("POST", STALE)
-    assert len(updater.run.calls) == 1
+    assert len(updater.run.installs) == 1
 
 
-# ---- the loop guard, the opt-out and the failures ----------------------------------
+# ---- no downgrade, the rate limit, the loop guard, the opt-out and the failures ----
+
+
+def test_a_downgrade_is_refused_and_the_old_tool_carries_on(updater):
+    updater.run.level = str(clientlevel.CLIENT_LEVEL - 1)
+    selfupdate.on_response("GET", STALE)
+    assert updater.execs == []
+    assert " ".join(MAIN_COMMAND) in updater.out.getvalue()
+
+
+def test_an_unreadable_installed_level_is_treated_as_a_downgrade(updater):
+    updater.run.level = "not a number"
+    selfupdate.on_response("GET", STALE)
+    assert updater.execs == []
+
+
+def test_at_most_one_attempt_an_hour_per_machine(updater, monkeypatch):
+    selfupdate.on_response("POST", STALE)
+    assert len(updater.run.installs) == 1
+    monkeypatch.setattr(selfupdate, "_done", False)  # the next call, a new process
+    selfupdate.on_response("POST", STALE)
+    assert len(updater.run.installs) == 1, "a second attempt within the hour"
+    assert " ".join(MAIN_COMMAND) in updater.out.getvalue()
+    stamp = selfupdate._stamp_path()
+    old = time.time() - selfupdate._MIN_GAP - 5
+    os.utime(stamp, (old, old))
+    monkeypatch.setattr(selfupdate, "_done", False)
+    selfupdate.on_response("POST", STALE)
+    assert len(updater.run.installs) == 2, "an hour later it may try again"
+
+
+def test_a_failed_attempt_counts_against_the_hour_too(updater, monkeypatch):
+    updater.run.install_code = 1
+    selfupdate.on_response("GET", STALE)
+    monkeypatch.setattr(selfupdate, "_done", False)
+    selfupdate.on_response("GET", STALE)
+    assert len(updater.run.installs) == 1
 
 
 def test_the_loop_guard_stops_a_second_update(updater, monkeypatch):
@@ -239,7 +261,7 @@ def test_the_loop_guard_stops_a_second_update(updater, monkeypatch):
     selfupdate.on_response("GET", STALE)
     assert updater.run.calls == []
     assert updater.execs == []
-    assert f"{SOURCE}@v1.4.0" in updater.out.getvalue()
+    assert " ".join(MAIN_COMMAND) in updater.out.getvalue()
 
 
 @pytest.mark.parametrize("name", ["REAM_NO_SELF_UPDATE", "ARTIFACTS_NO_SELF_UPDATE"])
@@ -248,22 +270,22 @@ def test_the_opt_out_only_prints_the_line(updater, monkeypatch, name):
     selfupdate.on_response("GET", STALE)
     assert updater.run.calls == []
     assert updater.execs == []
-    assert f"uv tool install --force {SOURCE}@v1.4.0" in updater.out.getvalue()
+    assert " ".join(MAIN_COMMAND) in updater.out.getvalue()
 
 
 def test_without_uv_it_prints_the_exact_command(updater, monkeypatch):
     monkeypatch.setattr(selfupdate.shutil, "which", lambda name: None)
     selfupdate.on_response("GET", STALE)
     assert updater.run.calls == []
-    assert f"uv tool install --force {SOURCE}@v1.4.0" in updater.out.getvalue()
+    assert " ".join(MAIN_COMMAND) in updater.out.getvalue()
     assert "uv is not installed" in updater.out.getvalue()
 
 
 def test_a_failed_install_prints_the_command_and_carries_on(updater):
-    updater.run.code = 1
+    updater.run.install_code = 1
     selfupdate.on_response("GET", STALE)
     assert updater.execs == []
-    assert f"uv tool install --force {SOURCE}@v1.4.0" in updater.out.getvalue()
+    assert " ".join(MAIN_COMMAND) in updater.out.getvalue()
 
 
 def test_an_install_that_cannot_start_prints_the_command(updater, monkeypatch):

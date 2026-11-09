@@ -219,8 +219,8 @@ def create_api_app(
 
 
 def _say_what_tools_need(app: FastAPI) -> None:
-    """On every /api/v1 response: the oldest tool level wanted, the version to move to and
-    where tools are installed from (when set), and `Outdated: true` when the caller's own
+    """On every /api/v1 response: the oldest tool level wanted, and where tools are
+    installed from (when set; a note only), and `Outdated: true` when the caller's own
     level (`X-Ream-Client`, or the old name; none is level 0) is older. The call is
     answered as usual either way. See clientlevel.py and selfupdate.py."""
 
@@ -230,8 +230,6 @@ def _say_what_tools_need(app: FastAPI) -> None:
         if request.url.path.startswith("/api/v1/"):
             current = settings.current()
             put = {clientlevel.MIN_HEADER: str(clientlevel.MIN_CLIENT_LEVEL)}
-            if current.client_install_ref:
-                put[clientlevel.REF_HEADER] = current.client_install_ref
             if current.client_install_source:
                 put[clientlevel.SOURCE_HEADER] = current.client_install_source
             sent = request.headers.get(

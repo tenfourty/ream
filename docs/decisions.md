@@ -516,14 +516,19 @@ Explain, Shorten and Fix as labelled ordinary comments, or as pre-filled comment
 
 **Chosen:** every call from `ream` and the `artifacts-*` commands sends its client level
 (`X-Ream-Client`, and `X-Artifacts-Client`). Every `/api/v1` response carries the oldest level the
-service wants (`X-Ream-Client-Min`), the version to move to (`X-Ream-Client-Ref`, from
-`REAM_CLIENT_INSTALL_REF`, unset: none) and, only when the caller is older, `X-Ream-Client-Outdated:
+service wants (`X-Ream-Client-Min`) and, only when the caller is older, `X-Ream-Client-Outdated:
 true`; the call is answered as usual. `agent.json` declares the same under `cli.client_level`.
-When a tool is told it is out of date it runs `uv tool install --force <source>@<ref>` and repeats
-the same command once (a call that already changed something is not repeated, so nothing posts
-twice). With uv missing or the install failing it prints one line with the exact command and carries
-on; `REAM_NO_SELF_UPDATE=1` turns the install off and prints the line. Offices' Claude sessions then
-move to MCP, while scripts keep the self-updating tool.
+**The server only signals.** It names no ref, version or source to install.
+When a tool is told it is out of date it runs `uv tool install --force --refresh <source>@main`,
+where the source is the tool's own and `main` is the reviewed, CI-gated branch, then repeats the same
+command once (a call that already changed something is not repeated, so nothing posts twice).
+Guards: no downgrade (it asks the installed copy for its level and, if that is lower than its own or
+unreadable, refuses to re-exec, prints the command and carries on as the old tool); at most one
+attempt an hour per machine (a stamp file in the state directory), so a server that always says "out
+of date" cannot cause an install loop; an environment marker stops a second update in one command.
+With uv missing or the install failing it prints one line with the exact command and carries on.
+On by default; `REAM_NO_SELF_UPDATE=1` turns the install off and prints the line. Offices' Claude
+sessions then move to MCP, while scripts keep the self-updating tool.
 
 **The version identity is a client level**, an integer bumped by hand in `src/ream/clientlevel.py`
 when a change needs new tools. The package version has been 0.1.0 since the first commit and the
@@ -531,11 +536,13 @@ module's install time says when, not what.
 
 **The install source is fixed on the client and never taken from the server.** It is the tool's own
 `REAM_INSTALL_SOURCE` (a `git+https://` address) or the first line of
-`~/.config/ream/install-source`, written when the tool is installed. The server may name only a ref,
-and the tool accepts only a version tag or a commit hash. A source the server advertises is
-information for a person; it is never installed from.
+`~/.config/ream/install-source`, written when the tool is installed. A source the server advertises
+(`REAM_CLIENT_INSTALL_SOURCE`) is information for a person; it is never installed from.
 
 **Not chosen:** the version check alone (a stale tool is told, and nobody acts until a call fails).
-MCP only, with scripts reinstalled by hand (scripts are the part that goes stale unseen).
+MCP only, with scripts reinstalled by hand (scripts are the part that goes stale unseen). A ref
+named by the server (a spoofed or compromised server could then install any commit, an unreviewed
+`ci/` branch included).
 
-**Evidence:** Jeremy, 9 Nov 2026.
+**Evidence:** Jeremy, 9 Nov 2026; the ref-from-the-server design was dropped after a security review
+the same day.

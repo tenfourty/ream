@@ -1,20 +1,24 @@
 """The tools keep themselves current.
 
 The server answers every /api/v1 call with `X-Ream-Client-Outdated: true` when the calling tool
-is older than `clientlevel.MIN_CLIENT_LEVEL`, and names the version to move to in
-`X-Ream-Client-Ref`. This module reacts, once per process:
+is older than `clientlevel.MIN_CLIENT_LEVEL`. That is ALL the server says: it names no source,
+no version and no ref. This module reacts, once per process:
 
-* it runs `uv tool install --force <source>@<ref>` and, after a safe call (GET/HEAD), runs the
-  same command again; after a call that changes something it does not repeat it (that would
-  post twice), so the next call is the new tool;
-* if uv is missing or the install fails, it prints one line with the command to run by hand.
+* it runs `uv tool install --force --refresh <source>@main`, checks the installed copy is not
+  older than this one, and after a safe call (GET/HEAD) runs the same command again; after a
+  call that changes something it does not repeat it (that would post twice), so the next call
+  is the new tool;
+* if uv is missing, the install fails or the installed copy is OLDER, it prints one line with
+  the command to run by hand and carries on as it is.
 
 SECURITY. The SOURCE is fixed on the client: `REAM_INSTALL_SOURCE` (or `ARTIFACTS_`) in the
 tool's own environment, or the first line of `$XDG_CONFIG_HOME/ream/install-source`, written at
-install time. Whatever the server sends as a source (`X-Ream-Install-Source`) is never read here
-and never installed from. The server may name only a REF, and it must be a version tag or a
-commit hash (`_REF`) before it is used. The command is an argument list, never a shell string.
-No key is ever printed or passed.
+install time. What the server sends (`X-Ream-Install-Source`) is never read here. The ref is a
+constant, `main`: the reviewed, CI-gated branch, so a hostile or spoofed server cannot choose
+which commit is installed (an unreviewed `ci/` branch, say). No downgrade: the installed copy's
+level must be at least this one's. At most one attempt an hour per machine (a stamp file), so a
+server that always says "out of date" cannot cause an install loop. The command is an argument
+list, never a shell string. No key is ever printed or passed.
 
 `REAM_NO_SELF_UPDATE=1` turns the install off (the line is still printed). `REAM_SELF_UPDATED`
 is the loop guard: set on the re-exec, so one command updates at most once.
@@ -28,6 +32,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from ream import clientlevel, envnames
@@ -36,17 +41,12 @@ from ream import clientlevel, envnames
 _ORIGINAL_ARGV = list(sys.argv)
 
 _GUARD = "REAM_SELF_UPDATED"
-# A tag such as v1.2.3 or 2026.11.9, or a commit hash of 7 to 40 hex digits. Nothing else:
-# no slash, no leading dash, no @, no space.
-_REF = re.compile(r"(?:v?\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z.]{1,20})?|[0-9a-f]{7,40})")
+REF = "main"
 _SOURCE = re.compile(r"git\+https://[A-Za-z0-9._~/:-]+")
 _INSTALL_TIMEOUT = 300
+_MIN_GAP = 3600  # seconds between two attempts on one machine
 
 _done = False  # one decision per process
-
-
-def valid_ref(ref: str | None) -> bool:
-    return bool(ref) and _REF.fullmatch(ref or "") is not None
 
 
 def configured_source() -> str | None:
@@ -68,12 +68,68 @@ def _disabled() -> bool:
     return (envnames.get("NO_SELF_UPDATE") or "").lower() in {"1", "true", "yes", "on"}
 
 
-def command_for(source: str, ref: str) -> list[str]:
-    return ["uv", "tool", "install", "--force", f"{source}@{ref}"]
+def command_for(source: str) -> list[str]:
+    return ["uv", "tool", "install", "--force", "--refresh", f"{source}@{REF}"]
 
 
 def _say(text: str) -> None:
     sys.stderr.write(f"ream: {text}\n")
+
+
+def _stamp_path() -> Path:
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local/state")
+    return Path(base) / "ream" / "self-update-attempt"
+
+
+def _attempt_allowed() -> bool:
+    """True, and records the attempt, unless one was made in the last hour."""
+    path = _stamp_path()
+    try:
+        if time.time() - path.stat().st_mtime < _MIN_GAP:
+            return False
+    except OSError:
+        pass
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(int(time.time())), encoding="utf-8")
+    except OSError:
+        return False  # cannot record it, so cannot rate-limit it: do not install
+    return True
+
+
+def _run(command: list[str], timeout: int = _INSTALL_TIMEOUT):
+    return subprocess.run(  # noqa: S603 -- argument list from the client's own source
+        command,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _installed_level() -> int | None:
+    """The level of the copy `uv tool install` just wrote, asked of ITS Python (not this
+    process's modules). None when it cannot be told."""
+    try:
+        where = _run(["uv", "tool", "dir"], 30)
+        if where.returncode != 0:
+            return None
+        python = Path(where.stdout.strip()) / "ream" / "bin" / "python"
+        answer = _run(
+            [
+                str(python),
+                "-I",
+                "-c",
+                "from ream import clientlevel; print(clientlevel.CLIENT_LEVEL)",
+            ],
+            30,
+        )
+        if answer.returncode != 0:
+            return None
+        return int(answer.stdout.strip())
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
 
 
 def on_response(method: str, headers) -> None:
@@ -85,16 +141,14 @@ def on_response(method: str, headers) -> None:
     if (headers.get(clientlevel.OUTDATED_HEADER.lower()) or "").lower() != "true":
         return
     _done = True
-    ref = headers.get(clientlevel.REF_HEADER.lower())
-    ref = ref.strip() if ref else None
     source = configured_source()
-    if not valid_ref(ref) or source is None:
+    if source is None:
         _say(
             "this tool is out of date (the service asks for a newer one). Reinstall it with "
             "the install line in the service's onboarding document."
         )
         return
-    command = command_for(source, ref)
+    command = command_for(source)
     line = " ".join(command)
     if _disabled():
         _say(f"this tool is out of date. To update it run: {line}")
@@ -105,21 +159,25 @@ def on_response(method: str, headers) -> None:
     if shutil.which("uv") is None:
         _say(f"this tool is out of date and uv is not installed. Run by hand: {line}")
         return
-    _say(f"this tool is out of date; updating to {ref} ...")
-    try:
-        done = subprocess.run(  # noqa: S603 -- fixed argv from the client's own source
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=_INSTALL_TIMEOUT,
-            check=False,
+    if not _attempt_allowed():
+        _say(
+            f"this tool is out of date; an update was tried within the hour. Run: {line}"
         )
-        ok = done.returncode == 0
+        return
+    _say("this tool is out of date; updating ...")
+    try:
+        ok = _run(command).returncode == 0
     except (OSError, subprocess.SubprocessError):
         ok = False
     if not ok:
         _say(f"the update failed. Run by hand: {line}")
+        return
+    level = _installed_level()
+    if level is None or level < clientlevel.CLIENT_LEVEL:
+        _say(
+            "the installed copy is older than this one (or its level cannot be read), so "
+            f"this command carries on as it is. Run by hand: {line}"
+        )
         return
     if method.upper() in {"GET", "HEAD"} and _ORIGINAL_ARGV and _ORIGINAL_ARGV[0]:
         os.environ[_GUARD] = "1"

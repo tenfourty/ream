@@ -22,7 +22,7 @@ from ream import envnames, plugin_cli, textvars
 NEWS: tuple[tuple[str, str], ...] = (
     (
         "2026-11-09c",
-        "The tools now keep themselves current. Every call says which level the tool is on (X-Ream-Client); when the service wants a newer one the tool reinstalls itself with `uv tool install --force` from its own fixed source (REAM_INSTALL_SOURCE, a git+https address, or the first line of ~/.config/ream/install-source), at the version the service names, and repeats the command once. With no source set, uv missing or the install failing, it prints one line with the command to run by hand and carries on. REAM_NO_SELF_UPDATE=1 turns the install off. It never installs from an address the service sends.",
+        "The tools now keep themselves current. Every call says which level the tool is on (X-Ream-Client); when the service wants a newer one the tool reinstalls itself with `uv tool install --force` from its own fixed source (REAM_INSTALL_SOURCE, a git+https address, or the first line of ~/.config/ream/install-source), from the main branch (the service never names what to install), and repeats the command once, at most once an hour and never to an older version. With no source set, uv missing or the install failing, it prints one line with the command to run by hand and carries on. REAM_NO_SELF_UPDATE=1 turns the install off. It never installs from an address the service sends.",
     ),
     (
         "2026-11-09b",

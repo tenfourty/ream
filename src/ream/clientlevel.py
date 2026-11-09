@@ -22,7 +22,6 @@ MIN_CLIENT_LEVEL = 1
 CLIENT_HEADER = "X-Ream-Client"
 OUTDATED_HEADER = "X-Ream-Client-Outdated"
 MIN_HEADER = "X-Ream-Client-Min"
-REF_HEADER = "X-Ream-Client-Ref"
 SOURCE_HEADER = "X-Ream-Install-Source"
 
 

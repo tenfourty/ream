@@ -114,8 +114,8 @@ the gallery origin or `https://<REAM_API_HOST>` (unset: 404); `REAM_MCP_ACCEPT_K
 need no plug-in: format, signing and the addresses it refuses are in `docs/plugins.md` and `src/ream/webhook.py`.
 
 Tools update themselves (`src/ream/clientlevel.py`, `selfupdate.py`; decisions.md, 9 Nov 2026): every call sends
-`X-Ream-Client: <level>`, `/api/v1` answers `X-Ream-Client-Min`, `-Ref` (`REAM_CLIENT_INSTALL_REF`) and, for an older
-tool, `-Outdated: true`. **Bump `CLIENT_LEVEL` and `MIN_CLIENT_LEVEL` by hand** in a commit that needs new tools. The tool installs
+`X-Ream-Client: <level>`, `/api/v1` answers `X-Ream-Client-Min` and, for an older
+tool, `-Outdated: true` (the server names no ref; tools install `main` of their own source). **Bump `CLIENT_LEVEL` and `MIN_CLIENT_LEVEL` by hand** in a commit that needs new tools. The tool installs
 only from its own `REAM_INSTALL_SOURCE`, never from the server; `REAM_NO_SELF_UPDATE=1` turns it off.
 
 The service runs on Postgres or SQLite, chosen by `DATABASE_URL` (`postgresql://…` or
