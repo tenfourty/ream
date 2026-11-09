@@ -331,7 +331,13 @@ def test_a_document_on_a_non_public_address_is_never_connected_to(
     address, family = answer
     resolved, connected = [], []
 
+    real_getaddrinfo = socket.getaddrinfo
+
     def fake_getaddrinfo(host, port, *a, **k):
+        # Answer only the fetch's host: the test database resolves its own host
+        # through the same function and must reach the real address.
+        if host != "claude.ai":
+            return real_getaddrinfo(host, port, *a, **k)
         resolved.append(host)
         sockaddr = (
             (address, port) if family == socket.AF_INET else (address, port, 0, 0)
