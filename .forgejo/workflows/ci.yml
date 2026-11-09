@@ -80,6 +80,9 @@ jobs:
       - name: pin-pr selftest
         run: .forgejo/scripts/pin-pr.sh --selftest
 
+      - name: core-lock-pr selftest
+        run: .forgejo/scripts/core-lock-pr.sh --selftest
+
       - name: tests
         env:
           # The browser tests run in `test-sqlite`. Name no browser here (an explicit
@@ -278,7 +281,8 @@ jobs:
     # The pushed image as <repo>:<sha12>@sha256:<digest>, for the pin job.
     outputs:
       ref: ${{ steps.build.outputs.ref }}
-      # The core image's ref (empty if its step failed); nothing reads it yet.
+      # The core image's ref (empty if its step failed, or if it reused an existing image);
+      # the `core-lock` job reads it.
       core_ref: ${{ steps.core.outputs.ref }}
     steps:
       - uses: actions/checkout@v4
@@ -429,7 +433,9 @@ jobs:
     # artifacts job (homelab, 7 Nov 2026). Needs only git, curl and python3 against the forge.
     runs-on: deploy-docker
     timeout-minutes: 10
-    if: "github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')"
+    # Skipped once the repo variable REAM_IMAGE_FROM is `ream-homelab`: then `core-lock` below
+    # moves production instead (docs/agent/runbooks/image-from-ream-homelab.md). Unset: as ever.
+    if: "github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]') && vars.REAM_IMAGE_FROM != 'ream-homelab'"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -443,3 +449,29 @@ jobs:
           # validates it as <repo>:<sha12>@sha256:<digest> before using it.
           IMAGE_REF: ${{ needs.image.outputs.ref }}
         run: .forgejo/scripts/pin-pr.sh "$GITHUB_SHA" "$IMAGE_REF"
+
+  # The other path to production (docs/decisions.md, 9 Nov 2026): opens the one pull request on
+  # runcove/ream-homelab that moves its `core.lock` to this core image and asks the forge to merge
+  # it when that repo's checks succeed; ream-homelab then builds the deployed image and opens the
+  # homelab pin PR. Runs only when the repo variable REAM_IMAGE_FROM is `ream-homelab` (the
+  # cut-over, one setting) and the `image` job published a core image this run; `pin` above is
+  # its mirror image. CORE_LOCK_TOKEN belongs to an account that can push to and merge on
+  # ream-homelab only.
+  core-lock:
+    needs: [test, test-sqlite, image]
+    runs-on: deploy-docker
+    timeout-minutes: 10
+    if: "github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]') && vars.REAM_IMAGE_FROM == 'ream-homelab' && needs.image.outputs.core_ref != ''"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history: the script refuses to move the lock to an older commit.
+          fetch-depth: 0
+
+      - name: open the core.lock PR
+        env:
+          CORE_LOCK_TOKEN: ${{ secrets.CORE_LOCK_TOKEN }}
+          # Through the environment, not interpolated into the script: the script
+          # validates it as the core image's <repo>:<sha12>@sha256:<digest> before using it.
+          CORE_REF: ${{ needs.image.outputs.core_ref }}
+        run: .forgejo/scripts/core-lock-pr.sh "$GITHUB_SHA" "$CORE_REF"

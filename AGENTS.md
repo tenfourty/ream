@@ -75,7 +75,7 @@ new name; published pages never change owner by accident.
 | Tests | `tests/` |
 | Container | `Dockerfile` |
 | Deployment values | the homelab repo (`k8s/apps/artifacts/artifacts/app/`); `deploy/` here is no longer applied |
-| CI -> image -> pin PR | `.forgejo/workflows/ci.yml`, `.forgejo/scripts/pin-pr.sh` |
+| CI -> image -> pin PR | `.forgejo/workflows/ci.yml`, `.forgejo/scripts/pin-pr.sh`, `core-lock-pr.sh` |
 | The design this argues from | `docs/agent/design.md` |
 | What was decided and why the other options lost | `docs/decisions.md` |
 | The build plan and its ledger | `docs/agent/implementation-plan.md` |
@@ -157,6 +157,10 @@ unattributed until its next real change -- an identical republish mints no versi
 deployment's manifest repo that moves production onto that image
 (`.forgejo/scripts/pin-pr.sh`); production moves when that PR is merged. On the homelab the
 manifests live in the homelab repo and its maintainer merges the pin PRs.
+Once the repo Actions variable `REAM_IMAGE_FROM` is `ream-homelab` (unset today), `pin` is skipped and
+`core-lock` (`.forgejo/scripts/core-lock-pr.sh`, secret `CORE_LOCK_TOKEN`) instead opens a PR on `runcove/ream-homelab`
+moving its `core.lock` to the core image, set to merge when that repo's checks succeed; ream-homelab builds the deployed
+image and opens the pin PR. Cut-over and rollback: `docs/agent/runbooks/image-from-ream-homelab.md`.
 
 After changing a CLI, reinstall it where agents run it (`uv tool install <checkout> --force`).
 

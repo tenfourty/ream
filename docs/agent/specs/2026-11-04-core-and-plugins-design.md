@@ -698,7 +698,16 @@ drivers; CI only (not on baba).
    branch still builds and pushes nothing. **Not built:** `core-with-house` (left out: it needs
    `runcove/ream-homelab`, which does not exist, so it could only skip; added when the repo
    exists), and the lock-bump bot that opens the `core.lock` PR on the plug-in repo.
-   TODO (next): the lock-bump bot, after the homelab office creates `runcove/ream-homelab`.
+   **Core half, part 2 built (`ci/core-lock`, 9 Nov 2026): the lock-bump bot.** `core-lock-pr.sh` and a
+   `core-lock` job (main only, after `image`, only when `core_ref` is non-empty) open or update the one PR
+   on `runcove/ream-homelab` (branch `core-lock/next`, title `core: lock <sha12>`) that moves `core.lock`,
+   then ask the forge to merge it when checks succeed (`merge_when_checks_succeed`); it stands down when
+   the lock already names this commit or a newer one, and needs the secret `CORE_LOCK_TOKEN`. The
+   repo variable `REAM_IMAGE_FROM` is the switch: `ream-homelab` runs `core-lock` and skips `pin`;
+   unset (today) runs `pin` as before and skips `core-lock`. Runbook:
+   `docs/agent/runbooks/image-from-ream-homelab.md`. **Not proven end to end:** the job runs only on
+   `main`; only the script's offline selftest runs on a `ci/**` branch. TODO (next): set the token and
+   the variable (homelab), then watch the first real lock PR merge.
 9. **Move, one at a time, each its own slice:** (9a) `beadpage`/`beadmetrics` and their console
    scripts, (9b) Mailgun, (9c) `ggscan`, (9d) doorbell, (9e) quarterdeck sink and inbound
    (the largest; includes the `slack` answer source and `on_answer` hook). Each: copy into the
