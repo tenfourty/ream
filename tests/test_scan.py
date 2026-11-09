@@ -376,6 +376,14 @@ SHAPE_FIXTURES: dict[str, tuple[str, str]] = {
         "const slack = 'xoxb-111111111111-FAKEFAKEFAKEFAKE';",
         "the xoxb- prefix on its own",
     ),
+    "mcp_access_token": (
+        "const t = 'rmo_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE';",
+        "rmo_ alone, too short to be a token",
+    ),
+    "mcp_refresh_token": (
+        "const t = 'rmr_FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE';",
+        "rmr_ alone, too short to be a token",
+    ),
     "private_key_header": (
         "-----BEGIN DSA PRIVATE KEY-----\nFAKE\n-----END DSA PRIVATE KEY-----",
         "-----BEGIN CERTIFICATE-----",
