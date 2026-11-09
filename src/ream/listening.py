@@ -253,7 +253,7 @@ def for_decisions(
             "select decision.id, decision.session, decision.partner_version"  # noqa: S608 -- placeholders only
             " from decision join artifact on artifact.id = decision.artifact_id"
             f" where decision.id in {in_list(ids)}"
-            " and artifact.agent = %s and artifact.deleted_at is null",
+            " and coalesce(decision.asked_by, artifact.agent) = %s and artifact.deleted_at is null",
             (*ids, agent),
         ).fetchall()
         delivered: dict[str, bool] = {}

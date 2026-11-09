@@ -192,6 +192,103 @@ def test_the_question_can_replace_an_earlier_one_of_the_apps(db, page):
     assert decisions.get_owned(db, app.agent, old).closed_at is not None
 
 
+# --- what follows the question belongs to the asker ----------------------------------------
+
+
+def _answered_app_question(db, page):
+    app, out = _ask_as_app(db, page.id)
+    qid = out["structuredContent"]["id"]
+    decisions.answer(db, qid, letter="a", by=settings.owner_id())
+    return app, qid
+
+
+def test_the_page_agent_cannot_declare_a_receipt_on_an_apps_question(db, page):
+    from ream import receipts
+
+    qid = _answered_app_question(db, page)[1]
+    with pytest.raises(store.NotFound), db.connect() as conn, conn.transaction():
+        receipts.declare(conn, "office", qid, state="working")
+    with db.connect() as conn:
+        assert receipts.history_owned(conn, "office", qid) is None
+
+
+def test_the_asker_declares_a_receipt_and_reads_its_history(db, page):
+    from ream import receipts
+
+    app, qid = _answered_app_question(db, page)
+    with db.connect() as conn, conn.transaction():
+        receipts.declare(conn, app.agent, qid, state="working")
+    with db.connect() as conn:
+        history = receipts.history_owned(conn, app.agent, qid)
+    assert history is not None and len(history) >= 1
+
+
+def _capture_emits(monkeypatch):
+    seen = []
+    real = events.emit
+
+    def spy(conn, event):
+        seen.append((event.kind, event.agent))
+        return real(conn, event)
+
+    monkeypatch.setattr(events, "emit", spy)
+    return seen
+
+
+def test_archiving_the_page_sets_the_apps_question_aside_for_the_app(
+    db, page, monkeypatch
+):
+    app, out = _ask_as_app(db, page.id)
+    qid = out["structuredContent"]["id"]
+    seen = _capture_emits(monkeypatch)
+    store.set_archived(db, page.id, True, agent="office")
+    assert ("set_aside", app.agent) in seen
+    assert ("set_aside", "office") not in seen
+    assert [r for r in _kinds(db, app.agent, "decision_set_aside") if r.ref_id == qid]
+    assert [
+        r for r in _kinds(db, "office", "decision_set_aside") if r.ref_id == qid
+    ] == []
+
+
+def test_unarchiving_reopens_the_apps_question_for_the_app(db, page, monkeypatch):
+    app, out = _ask_as_app(db, page.id)
+    qid = out["structuredContent"]["id"]
+    store.set_archived(db, page.id, True, agent="office")
+    seen = _capture_emits(monkeypatch)
+    store.set_archived(db, page.id, False, agent="office")
+    assert ("reopened", app.agent) in seen
+    assert ("reopened", "office") not in seen
+    assert [r for r in _kinds(db, app.agent, "decision_reopened") if r.ref_id == qid]
+    assert [
+        r for r in _kinds(db, "office", "decision_reopened") if r.ref_id == qid
+    ] == []
+
+
+def test_the_purge_withdraws_the_apps_question_to_the_app(db, page, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    app, _out = _ask_as_app(db, page.id)
+    store.set_deleted(db, page.id, True, agent="office")
+    with db.connect() as conn:
+        conn.execute(
+            "update artifact set deleted_at = %s where id = %s",
+            (datetime.now(UTC) - timedelta(days=31), page.id),
+        )
+    seen = _capture_emits(monkeypatch)
+    assert store.purge_expired(db) == [page.id]
+    assert ("withdrawn", app.agent) in seen
+    assert ("withdrawn", "office") not in seen
+
+
+def test_listening_state_for_an_apps_question_is_refused_to_the_page_agent(db, page):
+    from ream import listening
+
+    app, out = _ask_as_app(db, page.id)
+    qid = out["structuredContent"]["id"]
+    assert listening.for_decisions(db, "office", [qid]) == {}
+    assert qid in listening.for_decisions(db, app.agent, [qid])
+
+
 # --- the card --------------------------------------------------------------------------
 
 

@@ -164,7 +164,7 @@ def history_owned(conn, agent: str, decision_id: str) -> list[dict] | None:
     one, someone else's, or one whose page is in the bin, as the POST answers."""
     found = conn.execute(
         "select 1 from decision join artifact on artifact.id = decision.artifact_id"
-        " where decision.id = %s and artifact.agent = %s"
+        " where decision.id = %s and coalesce(decision.asked_by, artifact.agent) = %s"
         "   and artifact.deleted_at is null",
         (decision_id, agent),
     ).fetchone()
@@ -264,7 +264,7 @@ def declare(
     owned = conn.execute(
         "select decision.artifact_id, decision.answered_at from decision"  # noqa: S608 -- fixed text, placeholders only
         " join artifact on artifact.id = decision.artifact_id"
-        " where decision.id = %s and artifact.agent = %s"
+        " where decision.id = %s and coalesce(decision.asked_by, artifact.agent) = %s"
         "   and artifact.deleted_at is null" + conn.for_update(" of decision"),
         (decision_id, agent),
     ).fetchone()

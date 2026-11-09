@@ -1841,7 +1841,7 @@ def _set_aside_open_questions(
     """
     now = datetime.now(UTC)
     rows = conn.execute(
-        "select id, question, session, kind from decision"  # noqa: S608 -- clause from the db layer, no caller input
+        "select id, question, session, kind, asked_by from decision"  # noqa: S608 -- clause from the db layer, no caller input
         " where artifact_id = %s and answered_at is null and closed_at is null"
         " order by created_at, id" + conn.for_update(),
         (artifact_id,),
@@ -1858,7 +1858,7 @@ def _set_aside_open_questions(
         from ream import holds
 
         holds.release(conn, artifact_id, emit=True)
-    for decision_id, question, asked_by_session, kind in rows:
+    for decision_id, question, asked_by_session, kind, asker in rows:
         if kind == "question":
             emissions.append(
                 events.emit(
@@ -1866,7 +1866,7 @@ def _set_aside_open_questions(
                     events.Event(
                         kind="set_aside",
                         artifact_id=artifact_id,
-                        agent=owner,
+                        agent=asker or owner,
                         actor=actor,
                         ref_id=decision_id,
                         data={
@@ -1881,7 +1881,7 @@ def _set_aside_open_questions(
         events.append(
             conn,
             artifact_id=artifact_id,
-            agent=owner,
+            agent=asker or owner,
             actor=actor,
             kind="decision_set_aside",
             summary=f"{what}: {question}",
@@ -1919,7 +1919,7 @@ def _reopen_set_aside_questions(
     rows = conn.execute(
         "update decision set reopened_at = %s"
         " where artifact_id = %s and answered_at is null and closed_at is null"
-        " returning id, question, session, kind",
+        " returning id, question, session, kind, asked_by",
         (now, artifact_id),
     ).fetchall()
     if not rows:
@@ -1927,7 +1927,7 @@ def _reopen_set_aside_questions(
     owner = conn.execute(
         "select agent from artifact where id = %s", (artifact_id,)
     ).fetchone()[0]
-    for decision_id, question, asked_by_session, kind in rows:
+    for decision_id, question, asked_by_session, kind, asker in rows:
         if kind == "question":
             emissions.append(
                 events.emit(
@@ -1935,7 +1935,7 @@ def _reopen_set_aside_questions(
                     events.Event(
                         kind="reopened",
                         artifact_id=artifact_id,
-                        agent=owner,
+                        agent=asker or owner,
                         actor=actor,
                         ref_id=decision_id,
                         data={
@@ -1950,7 +1950,7 @@ def _reopen_set_aside_questions(
         events.append(
             conn,
             artifact_id=artifact_id,
-            agent=owner,
+            agent=asker or owner,
             actor=actor,
             kind="decision_reopened",
             summary=f"{what}: {question}",
@@ -2261,7 +2261,7 @@ def purge_expired(db: Database, *, window: timedelta = DELETE_WINDOW) -> list[st
         # BEFORE the delete takes the decision rows (the outbox keeps no foreign key
         # to them, but `enqueue` bumps the decision's own counter).
         for decision_id, page_id, page_agent in conn.execute(
-            "select d.id, d.artifact_id, a.agent from decision d"
+            "select d.id, d.artifact_id, coalesce(d.asked_by, a.agent) from decision d"
             " join artifact a on a.id = d.artifact_id"
             " where a.deleted_at is not null and a.deleted_at < %s"
             " and d.kind = 'question' and d.answer is null and d.closed_at is null"
