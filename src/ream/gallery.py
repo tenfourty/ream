@@ -759,11 +759,18 @@ body.cjs .cpanel[data-ctab="resolved"] .cgroup:not(:has(.cpane-resolved)){displa
 .hcnav button:disabled{opacity:.4;cursor:default}
 .hcnav button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 body.ctouch .hcnav button{width:2.5rem;height:2.5rem;font-size:1rem}
+body.ctouch .hcact button,body.ctouch .hovercard .creply button{min-height:2.5rem;padding:0 var(--space-7)}
+body.ctouch .hovercard .creply input[name=body]{min-height:2.5rem;font-size:1rem}
 .hovercard .ckind-remove{color:var(--danger)}
 .hovercard .ckind-looks_good{color:var(--ok)}
 .hovercard .ckind-explain,.hovercard .ckind-shorten,.hovercard .ckind-fix{color:var(--accent)}
 .hovercard .bubbles{max-height:14rem;overflow-y:auto}
 .hovercard .creply[hidden]{display:none}
+.hovercard{max-height:calc(100vh - 1rem);overflow-y:auto}
+.hovercard .creply{margin:var(--space-4) 0 0}
+.hovercard .creply input[name=body]{min-width:0}
+.hovercard:focus{outline:none}
+.cgone{margin:var(--space-3) 0;color:var(--muted);font-size:var(--text-xs)}
 .hcact{display:flex;gap:var(--space-4);justify-content:flex-end;margin:var(--space-5) 0 0}
 .hcact button{padding:var(--space-3) .65rem;cursor:pointer;border:1px solid var(--line);
   border-radius:.45rem;background:var(--card);color:var(--ink);font:500 .8rem/1 var(--sans-short)}
@@ -2153,7 +2160,7 @@ function sendMarks(){if(sent||!marks.length)return;sent=true;
 if(document.addEventListener)document.addEventListener("ream-marks",function(e){
   var m=e&&e.detail;if(!Array.isArray(m))return;
   marks=m.filter(function(x){return x&&typeof x.id==="string"});known=Object.create(null);
-  marks.forEach(function(x){known[x.id]=1});sent=true;sortPanel();
+  marks.forEach(function(x){known[x.id]=1});sent=true;sortPanel();resync();
   try{f.contentWindow.postMessage({type:"artifact-marks",marks:marks},o)}catch(x){}});
 function unplacedLine(ids,overflow){var p=document.getElementById("marks-unplaced");if(!p)return;
   var n=0,seen=Object.create(null);
@@ -2243,13 +2250,16 @@ if(P&&B&&B.classList){
 // A flood cannot show a card that has not rested: a new id restarts the rest.
 // It goes on `artifact-mark-leave` after a 250 ms grace (so the pointer can
 // reach it), on leaving the card, on scroll, and when the panel moves the
-// page. It reads Reply . Open; its reply box stays hidden until Reply. A reply
-// being written (the box has the cursor, or text) is never thrown away by any
-// of those -- on a phone, the keyboard coming up scrolls the window -- so the
-// card then goes only on Escape (which is the card's alone), Open, a sent
-// reply, or a press outside it. In full screen it lives inside the
-// full-screen element, the one part of the page that is drawn.
-var hc=null,hid=null,ht=0,hg=0,pend=null;
+// page. It does what the panel does for that thread (9 Nov 2026): the whole thread, a
+// reply box, Mark settled or Reopen (a plain POST to the panel's own form action, then
+// the panel is refreshed and the card redrawn from it), and Back and Forward. There is
+// no Open: the panel is for scanning. A reply being written (the box has the cursor, or
+// text) is never thrown away by any of those -- on a phone, the keyboard coming up
+// scrolls the window -- so the card then goes only on Escape (which is the card's alone)
+// or a press outside it. A sent reply redraws the card from the thread as the server
+// returns it. In full screen it lives inside the full-screen element, the one part of
+// the page that is drawn.
+var hc=null,hid=null,hr=null,want=null,ht=0,hg=0,pend=null;
 function host(){return document.fullscreenElement||document.body}
 function busy(){var i=hc&&hc.querySelector?hc.querySelector("input[name=body]"):null;
   return !!(i&&(document.activeElement===i||i.value))}
@@ -2294,7 +2304,7 @@ function navSettle(){clearTimeout(navT);navT=setTimeout(function(){navT=0;if(nav
 function go(id){hide();clearTimeout(ht);ht=0;pend=null;var mine=nav={id:id,ph:0};askMark(id);
   // A mark the page cannot show never answers: do not hold the hover cards off for it.
   setTimeout(function(){if(nav===mine&&mine.ph===0)nav=null},1500)}
-function show(id,r){var li=thread(id);if(!li)return;hide();
+function show(id,r,fo){var li=thread(id);if(!li)return;hide();hr=r;
   var c=document.createElement("div");c.className="hovercard";c.setAttribute("role","dialog");
   c.setAttribute("aria-label","Comment");c.setAttribute("data-mark-id",id);
   var k=li.querySelector(".ckind"),lab=document.createElement("span");
@@ -2310,16 +2320,19 @@ function show(id,r){var li=thread(id);if(!li)return;hide();
     var cnt=document.createElement("span");cnt.className="hccount";cnt.textContent=(ix+1)+" of "+sq.length;nv.appendChild(cnt);
     arrow("\\u203a","Next comment",ix+1);hd.appendChild(nv)}
   var bu=li.querySelector(".bubbles");if(bu)c.appendChild(bu.cloneNode(true));
-  var rf=li.querySelector("form.creply"),rc=rf?rf.cloneNode(true):null;if(rc){rc.hidden=true;c.appendChild(rc)}
-  var row=document.createElement("div");row.className="hcact";c.appendChild(row);
+  var rf=li.querySelector("form.creply");if(rf)c.appendChild(rf.cloneNode(true));
+  var row=document.createElement("div");row.className="hcact";
   function btn(t,fn){var b=document.createElement("button");b.type="button";b.textContent=t;
-    b.addEventListener("click",fn);row.appendChild(b)}
-  if(rc)btn("Reply",function(){rc.hidden=false;var i=rc.querySelector("input[name=body]");if(i)i.focus()});
-  btn("Open",function(){hide();panel(true);tab("open");var t=thread(id);
-    if(t&&t.scrollIntoView)t.scrollIntoView({block:"nearest"})});
+    b.addEventListener("click",function(){fn(b)});row.appendChild(b)}
+  if(li.querySelector("form.cresolve"))btn("Mark settled",function(b){act(id,"cresolve",b)});
+  if(li.querySelector("form.creopen"))btn("Reopen",function(b){act(id,"creopen",b)});
+  if(row.children.length)c.appendChild(row);
   c.addEventListener("pointerenter",function(){clearTimeout(hg);hg=0});
   c.addEventListener("pointerleave",grace);
   host().appendChild(c);hc=c;hid=id;
+  // Stepped to by Back or Forward: focus lands on the card, so Tab goes to its own
+  // controls rather than out into the page.
+  if(fo&&c.focus){c.setAttribute("tabindex","-1");c.focus()}
   var fr=f.getBoundingClientRect(),FW=fin(fr.width)?fr.width:0,FH=fin(fr.height)?fr.height:0,
     W=window.innerWidth||0,H=window.innerHeight||0,cw=c.offsetWidth||0,ch=c.offsetHeight||0,
     l=Math.max(0,Math.min(r.left,FW)),t=Math.max(0,Math.min(r.top,FH)),
@@ -2327,6 +2340,31 @@ function show(id,r){var li=thread(id);if(!li)return;hide();
   if(y+ch>H-8)y=fr.top+t-ch-6;
   // Never past the frame's right edge: the docked panel is on the other side.
   c.style.left=Math.max(8,Math.min(x,Math.min(W,fr.left+FW)-cw-8))+"px";c.style.top=Math.max(8,Math.min(y,H-ch-8))+"px"}
+// SETTLING AND REOPENING FROM THE CARD: the panel's own form for that thread, posted with
+// fetch (its answer is a redirect, not read). The panel is then refreshed (`ream-refresh`,
+// answered by /live.js) and the card is redrawn from it once the new panel is in
+// (`resync`, run when the marks arrive). Any failure, or a page with no live loop, falls
+// back to what the panel's own form does: a plain submit.
+function plain(af){if(af&&af.submit)af.submit();else location.reload()}
+function act(id,cls,b){var li=thread(id),af=li&&li.querySelector?li.querySelector("form."+cls):null;
+  if(!af)return;
+  if(typeof fetch!=="function"){plain(af);return}
+  if(b)b.disabled=true;
+  fetch(af.action,{method:"POST",redirect:"manual",credentials:"same-origin"})
+  .then(function(r){if(!(r&&(r.ok||r.type==="opaqueredirect"||r.status===303)))throw new Error("status");
+    want=id;var ev={detail:{handled:false}};
+    try{ev=new CustomEvent("ream-refresh",{detail:{handled:false}});document.dispatchEvent(ev)}catch(x){}
+    if(!ev.detail||!ev.detail.handled)location.reload()})
+  .catch(function(){if(b)b.disabled=false;want=null;plain(af)})}
+// The panel was swapped (an action here, a reply by the agent): redraw the open card from
+// it, keeping a reply being written. A card with a draft is left alone unless it asked
+// for the refresh itself.
+function resync(){try{if(!hc||!hid||!hr)return;var id=hid,i=hc.querySelector("input[name=body]"),
+    dv=i?i.value:"",fo=!!i&&document.activeElement===i;
+  if(want!==id&&(dv||fo))return;want=null;
+  if(!thread(id)){hide();return}
+  show(id,hr);var n=hc&&hc.querySelector("input[name=body]");
+  if(n&&dv){n.value=dv;if(fo&&n.focus)n.focus()}}catch(x){}}
 window.addEventListener("message",function(e){try{
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
   if(!d||typeof d!=="object")return;
@@ -2478,8 +2516,12 @@ function place(fm,html,root){
   var t=document.createElement("template");t.innerHTML=html;
   var li=t.content&&t.content.firstElementChild;if(!li)throw new Error("no thread");
   var old=fm.closest?fm.closest("li.thread"):null,hx=fm.closest?fm.closest(".hovercard"):null;
-  if(hx){old=thread(hx.getAttribute("data-mark-id"));hide();if(!old)throw new Error("gone")}
-  if(old&&old.parentNode){old.parentNode.replaceChild(li,old);return false}
+  var hid2=null,hr2=null;
+  if(hx){hid2=hx.getAttribute("data-mark-id");hr2=hx===hc?hr:null;old=thread(hid2);hide();if(!old)throw new Error("gone")}
+  if(old&&old.parentNode){old.parentNode.replaceChild(li,old);
+    // A reply sent from the card: the card is drawn again from the thread as it now is.
+    if(hr2&&hid2){show(hid2,hr2);var ni=hc&&hc.querySelector("input[name=body]");if(ni&&!touch&&ni.focus)ni.focus()}
+    return false}
   // A new thread goes to the end of the OPEN list, and the panel shows that list.
   var list=document.querySelector("#comments .cpane-open > ul.threads");
   if(!list){list=document.createElement("ul");list.className="threads";
@@ -2705,18 +2747,25 @@ if(P&&P.addEventListener){
 // A comment pressed in the panel takes the page to where it is anchored: the frame is
 // told which mark (`artifact-mark-show`), flashes it, and answers where it is
 // (`artifact-mark-at`); this page scrolls to that. Links, fields and buttons in the
-// thread keep their own meaning.
+// thread keep their own meaning. A comment whose words are no longer on the page has no
+// mark to go to: it says so, once, right under its quote (a status line, textContent only).
+function gone(li){if(li.querySelector(".cgone"))return;
+  var p=document.createElement("p");p.className="cgone";p.setAttribute("role","status");
+  p.textContent="The words this comment pointed at are no longer on the page.";
+  var q=li.querySelector(".cquote");
+  if(q&&q.nextSibling&&li.insertBefore)li.insertBefore(p,q.nextSibling);else li.appendChild(p)}
 if(P&&document.addEventListener)document.addEventListener("click",function(e){try{
   var t=e.target,li=t&&t.closest?t.closest("#comments li.thread"):null,id;
   if(!li||t.closest("a,button,input,textarea,select,form,summary,label"))return;
-  id=li.getAttribute("data-mark-id");if(!id||!known[id])return;
+  id=li.getAttribute("data-mark-id");if(!id)return;
+  if(!known[id]){if(li.getAttribute("data-outdated")==="1")gone(li);return}
   f.contentWindow.postMessage({type:"artifact-mark-show",id:id},o)}catch(x){}});
 window.addEventListener("message",function(e){try{
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
   if(!d||d.type!=="artifact-mark-at"||typeof d.id!=="string"||!known[d.id])return;
   var q=d.rect;if(!q||typeof q!=="object"||!fin(q.top)||document.fullscreenElement)return;
   if(nav&&nav.id===d.id&&nav.ph===2){var n2=nav;nav=null;
-    if(fin(q.left)&&fin(q.width)&&fin(q.height))show(n2.id,{top:q.top,left:q.left,width:q.width,height:q.height});return}
+    if(fin(q.left)&&fin(q.width)&&fin(q.height))show(n2.id,{top:q.top,left:q.left,width:q.width,height:q.height},true);return}
   if(nav&&nav.id===d.id&&nav.ph===0){nav.ph=1;navSettle()}
   var fr=f.getBoundingClientRect(),y=window.scrollY+fr.top+q.top-(window.innerHeight||0)/3;
   if(window.scrollTo)window.scrollTo({top:Math.max(0,y),behavior:"smooth"})}catch(x){}});
@@ -2846,6 +2895,15 @@ function ask(){
       // answered with an instant new one.
       again(d&&d.same&&Date.now()-t0<1000?5000:0)})
     .catch(function(){busy=false;fails++;again(Math.min(60000,5000*Math.pow(2,fails-1)))})}
+// The card over a mark asked for the panel now (it settled or reopened a thread): one read
+// that does not wait, applied the same way. `handled` tells it this loop is here to answer.
+document.addEventListener("ream-refresh",function(e){
+  if(e&&e.detail)e.detail.handled=true;
+  window.fetch(location.pathname+"/comments-live?since=&wait=0"+
+      (/(^|[?&])comments=all/.test(location.search)?"&comments=all":""),{credentials:"same-origin"})
+    .then(function(r){if(!r.ok)throw new Error("status");return r.json()})
+    .then(function(d){if(d&&typeof d.sig==="string"&&typeof d.panel==="string"){try{apply(d)}catch(x){}sig=d.sig}})
+    .catch(function(){})});
 document.addEventListener("visibilitychange",function(){if(!document.hidden){fails=0;again(0)}});
 if(window.addEventListener)window.addEventListener("online",function(){fails=0;again(0)});
 ask();
@@ -3775,11 +3833,17 @@ def _render_comments(
                 f'<button type="submit">Send</button>{_ATTACH}</form>'
             )
         )
+        state = getattr(root, "anchor_state", "")
+        gone = (
+            ' data-outdated="1"'
+            if state == "outdated" or (not state and root.quote_state == "changed")
+            else ""
+        )
         return (
             # `data-mark-id` is what a hover card is copied by: the page names
             # a mark, and comments.js clones THIS escaped markup for it.
             f'<li class="thread{" settled" if resolved else ""}"'
-            f' data-mark-id="{escape(root.id)}" id="thread-{escape(root.id)}">'
+            f' data-mark-id="{escape(root.id)}" id="thread-{escape(root.id)}"{gone}>'
             f"{quoted(root)}"
             f'<ul class="bubbles">{bubble(root)}{kids}</ul>{reply}{action}</li>'
         )

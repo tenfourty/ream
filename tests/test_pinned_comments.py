@@ -525,12 +525,15 @@ def test_the_panel_lists_outdated_pins_at_the_top_and_keeps_them_in_place(db, pa
     assert "Outdated: this spot is gone from the current version" in html
     assert "it was there in version 1" in html
     assert "under Costs" in html
+    # What the click on it says "no longer on the page" keys off (comments.js `gone`).
+    assert 'data-outdated="1"' in html
 
 
 def test_the_panel_has_no_outdated_list_when_nothing_is_outdated(db, page):
     _pin(db, page)
     html = _panel(db, page)
     assert "Outdated pins" not in html
+    assert "data-outdated" not in html
     assert "Outdated:" not in html
 
 

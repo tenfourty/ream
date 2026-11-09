@@ -526,6 +526,18 @@ page the card's arrows step through the panel's own open comments rather than no
 A comment whose passage a republish removed has no mark: it cannot scroll the page, open a card or
 join the sequence, and the panel says "Outdated" on it.
 
+**The comment card over highlighted words does everything the sidebar does** (reply, resolve and
+reopen, Back and Forward, delete his own comment); Open is removed; the sidebar is for scanning and
+clicking a comment there jumps to its passage (Jeremy, 9 Nov 2026). The card shows the whole thread
+with its kind label, a reply box that is always there (Enter sends, as in the panel), and Mark
+settled or Reopen, using the panel's own routes (`/c/{id}`, `/c/{id}/resolve`, `/c/{id}/reopen`), so
+there is no new route and the agent twins are the ones that already exist. After an action the
+gallery asks `/live.js` for the panel at once (`ream-refresh`) and redraws the card from it, so the
+card and the sidebar agree; a page with no live loop reloads, as the panel's own form does. Delete
+is not in this slice: the sidebar has no delete today, so the card has none either. Pressing an
+outdated comment in the sidebar (no mark to go to) says plainly under its quote that the words it
+pointed at are no longer on the page.
+
 **Not chosen:** touch decided by screen size only, or by either test. The how-to box shown only
 until his first comment, or as a tip under the button. The select-text switch off by default.
 Explain, Shorten and Fix as labelled ordinary comments, or as pre-filled comment text.

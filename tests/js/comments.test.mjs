@@ -32,7 +32,7 @@ function el(tag) {
            removeChild(c) { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); c.parentNode = null; },
            scrollIntoView() { this.scrolled = true; },
            cloneNode(deep) { const n = el(this.tag);
-             for (const k of ["className", "textContent", "name", "type", "value"]) n[k] = this[k];
+             for (const k of ["className", "textContent", "name", "type", "value", "action"]) n[k] = this[k];
              n.attrs = { ...this.attrs }; if (deep) this.children.forEach((c) => n.appendChild(c.cloneNode(true))); return n; },
            // "tag", ".cls", "tag.cls" or "input[name=x]", over descendants.
            querySelectorAll(sel) { const out = [];
@@ -58,6 +58,7 @@ function clock() {
                if (!next) break; const [t, fn] = due.get(next); due.delete(next); now = t; fn(); }
              now = end; } };
 }
+const TPLS = new Map();
 function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefined, storage = true, hash = "", noPanel = false, threads = [], page = "abc", seed = null, touch = false, offer = true, commentsDefault = null } = {}) {
   const framePosts = [];
   const frameWin = { postMessage: (m, o) => framePosts.push([m, o]) };
@@ -104,9 +105,10 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
   const how = el("div"); how.id = "chow"; how.hidden = true;
   const steps = [el("li"), el("li"), el("li")]; steps.forEach((li) => how.appendChild(li));
   how.querySelectorAll = (q) => (q === "li" ? steps : []); byId.chow = how;
-  const docOn = {}, extra = { ".cbtn": cbtn };
+  const docOn = {}, extra = { ".cbtn": cbtn }, dispatched = [];
   const doc = { getElementById: (id) => byId[id] || null,
-                createElement: (t) => { const n = el(t); if (t === "template") Object.defineProperty(n, "innerHTML", { set(h) { n.content = { firstElementChild: { html: h } }; } }); return n; },
+                createElement: (t) => { const n = el(t); if (t === "template") Object.defineProperty(n, "innerHTML", { set(h) { n.content = { firstElementChild: TPLS.get(h) || { html: h, getAttribute: () => null } }; } }); return n; },
+                dispatchEvent: (ev) => { dispatched.push(ev); (docOn[ev.type] || []).forEach((fn) => fn(ev)); return true; },
                 body: docBody,
                 addEventListener: (t, f) => ((docOn[t] ||= []).push(f)),
                 querySelector: (q) => (q === "form.cnew" ? (noForm ? null : form) : extra[q] || null) };
@@ -148,7 +150,7 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
   const card = () => docBody.children.filter((c) => c.className === "hovercard");
   const scroll = () => (listeners.scroll || []).concat(capture.scroll || []).forEach((fn) => fn({}));
   return { scrolls, bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload, submit, extra, doc,
-           panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist, press, fsChange, pagebtn, win, docOn, tabBtns, sw, how, steps, setTouch, matchMedia, mqList };
+           panel, cbtn, docBody, dispatched, store, history, tap, key, isOpen, clk, card, scroll, tlist, press, fsChange, pagebtn, win, docOn, tabBtns, sw, how, steps, setTouch, matchMedia, mqList };
 }
 const SEL = { type: "artifact-selection", quote: "the plan",
               anchor: { kind: "range", path: "body>p:nth-of-type(1)", start: 4, end: 12 },
@@ -499,7 +501,7 @@ const OKRESP = (marks) => ({ status: 201, json: async () => ({ html: "<li>t</li>
 // HOVER CARDS. The page says only WHICH mark the pointer rests on and WHERE;
 // the card is the panel's own (already escaped) thread markup, cloned, drawn
 // by the gallery beside the text. Nothing the page sends is ever rendered.
-function threadLi(id, { note = "Move this up", kind = null, held = false, reply = true } = {}) {
+function threadLi(id, { note = "Move this up", kind = null, held = false, reply = true, settle = false, reopen = false, outdated = false } = {}) {
   const li = el("li"); li.className = "thread"; li.setAttribute("data-mark-id", id);
   if (kind) { const bq = el("blockquote"); bq.className = "cquote";
     const sp = el("span"); sp.className = "ckind ckind-" + kind; sp.textContent = kind === "remove" ? "Remove this" : "Looks good";
@@ -510,6 +512,10 @@ function threadLi(id, { note = "Move this up", kind = null, held = false, reply 
   const p = el("p"); p.textContent = note; cm.appendChild(p); ul.appendChild(cm); li.appendChild(ul);
   if (reply) { const f = el("form"); f.className = "creply"; f.action = "/c/abc";
     const i = el("input"); i.name = "body"; f.appendChild(i); li.appendChild(f); }
+  for (const [flag, cls, act] of [[settle, "cresolve", "resolve"], [reopen, "creopen", "reopen"]]) if (flag) {
+    const f = el("form"); f.className = cls; f.action = "/c/" + id + "/" + act; f.submitted = 0; f.submit = () => { f.submitted++; }; li.appendChild(f); }
+  if (outdated) { li.setAttribute("data-outdated", "1");
+    if (!li.querySelector(".cquote")) { const bq = el("blockquote"); bq.className = "cquote"; li.insertBefore(bq); } }
   return li;
 }
 const HMARKS = JSON.stringify([
@@ -517,7 +523,7 @@ const HMARKS = JSON.stringify([
   { id: "m2", kind: "comment", quote: "the rest", anchor: SEL.anchor },
   { id: "h1", kind: "", quote: "held one", anchor: SEL.anchor, held: true },
   { id: "m9", kind: "comment", quote: "no thread here", anchor: SEL.anchor }]);
-const hthreads = () => [threadLi("m1", { kind: "remove", note: "" }), threadLi("m2", { note: "Say more" }),
+const hthreads = () => [threadLi("m1", { kind: "remove", note: "" }), threadLi("m2", { note: "Say more", settle: true }),
                         threadLi("h1", { held: true, note: "Parked for later" })];
 const HOV = (id, rect = { top: 30, left: 10, width: 60, height: 18 }) => ({ type: "artifact-mark-hover", id, rect });
 const LEAVE = { type: "artifact-mark-leave" };
@@ -530,7 +536,7 @@ const btnOf = (c, label) => c.querySelectorAll("button").find((b) => b.textConte
   ok(c && g.card().length === 1, "a card after the rest");
   ok(c.getAttribute("data-mark-id") === "m2" && text(c).includes("Say more"), "showing that mark's note, from the panel's markup");
   ok(c.querySelector(".ckind") && c.querySelector(".ckind").textContent === "Comment", "labelled with its kind");
-  ok(btnOf(c, "Reply") && btnOf(c, "Open"), "with Reply and Open");
+  ok(c.querySelector("form.creply") && !btnOf(c, "Open") && !btnOf(c, "Reply"), "with its reply box showing, and no Open");
   ok(c.style.left === "30px" && c.style.top === "154px", "beside the text: the frame's position plus the rect, just under it");
   ok(g.tlist.children[1].getAttribute("data-mark-id") === "m2" && text(g.tlist.children[1]).includes("Say more"),
      "the panel keeps its own thread: the card is a copy");
@@ -548,15 +554,11 @@ const btnOf = (c, label) => c.querySelectorAll("button").find((b) => b.textConte
 { const g = build({ marks: HMARKS, threads: hthreads() });
   g.send(HOV("m2")); g.clk.advance(150);
   const [c] = g.card();
-  btnOf(c, "Reply").on.click({});
   const mine = c.querySelector("input[name=body]"), panelBox = g.tlist.children[1].querySelector("input[name=body]");
-  ok(mine && mine.focused === true && !panelBox.focused, "Reply puts the cursor in the card's own reply box");
+  ok(mine && mine !== panelBox && !g.isOpen(), "the card's reply box is its own copy, and the panel need not be open");
   mine.focused = true; g.doc.activeElement = mine;
   g.send(LEAVE); g.clk.advance(1000);
   ok(g.card().length === 1, "a card being typed in does not close when the pointer wanders off");
-  btnOf(c, "Open").on.click({});
-  ok(g.isOpen() && g.card().length === 0, "Open opens the panel and puts the card away");
-  ok(g.tlist.children[1].scrolled === true, "scrolled to that thread");
   ok(g.location.hash === "" && g.history.entries === 0, "without navigating"); }
 { const g = build({ marks: HMARKS, threads: hthreads() });
   g.tap(g.cbtn); g.send(HOV("m1")); g.clk.advance(150);
@@ -606,18 +608,16 @@ const btnOf = (c, label) => c.querySelectorAll("button").find((b) => b.textConte
   ok(g.tlist.children.length === 3 && g.tlist.children[1].html === "<li>t</li>", "a reply sent from the card replaces the panel's thread, not a new one");
   ok(g.card().length === 0 && !fm.submitted, "and the card is put away"); }
 
-// Fix wave: the card reads Reply . Open, its reply box hidden until Reply; a
+// Fix wave: the card's reply box is shown; a
 // reply being written survives hover, leave, scroll and the panel; one Escape
 // is the card's alone; a failed send falls back through the panel; the card
 // never covers the panel; a tap outside closes it; full screen shows it.
 { const g = build({ marks: HMARKS, threads: hthreads() });
   g.send(HOV("m2")); g.clk.advance(150);
   const [c] = g.card(), fm = c.querySelector("form.creply");
-  ok(fm && fm.hidden === true, "the card's reply box is hidden until Reply is pressed");
-  ok(c.querySelector(".hcact").children.map((b) => b.textContent).join(" · ") === "Reply · Open", "the card reads Reply · Open");
-  btnOf(c, "Reply").on.click({});
+  ok(fm && fm.hidden !== true, "the card's reply box is showing without pressing anything");
+  ok(c.querySelector(".hcact").children.map((b) => b.textContent).join(" · ") === "Mark settled", "the card's actions are Mark settled alone: no Open");
   const box = c.querySelector("input[name=body]");
-  ok(fm.hidden === false && box.focused === true, "Reply reveals the box and focuses it");
   g.doc.activeElement = box;
   g.send(HOV("m1")); g.clk.advance(1000);
   ok(g.card().length === 1 && g.card()[0] === c, "a reply being typed survives hovering another mark");
@@ -639,7 +639,7 @@ const btnOf = (c, label) => c.querySelectorAll("button").find((b) => b.textConte
   ok(g.card().length === 0, "a press outside the card closes it (a phone's tap)");
   g.send(HOV("m2")); g.clk.advance(150);
   const [c] = g.card(), box = c.querySelector("input[name=body]");
-  btnOf(c, "Reply").on.click({}); box.value = "typed"; g.press(el("div"));
+  box.value = "typed"; g.press(el("div"));
   ok(g.card().length === 0, "even with a reply typed: a tap outside is a choice to leave"); }
 { let rejectIt; const g = build({ marks: HMARKS, threads: hthreads(), fetchImpl: () => new Promise((_, rej) => { rejectIt = rej; }) });
   g.send(HOV("m2")); g.clk.advance(150);
@@ -903,7 +903,7 @@ const cardFor = (g, id) => { g.send(HOV(id)); g.clk.advance(150); return g.card(
   ok(n.count.textContent === "2 of 3", "N of M sits between them, and a mark with no thread in the panel (m9) is not counted");
   ok(!n.prev.disabled && !n.next.disabled, "both are live in the middle");
   ok(c.querySelector(".hchead") && c.querySelector(".hchead").children.includes(c.querySelector(".ckind")), "the arrows sit in the header beside the kind label");
-  ok(c.querySelector(".hcact").children.map((b) => b.textContent).join(" · ") === "Reply · Open", "Reply and Open are unchanged");
+  ok(c.querySelector(".hcact").children.map((b) => b.textContent).join(" · ") === "Mark settled", "and the card's actions follow its thread");
   const before = g.framePosts.length;
   n.next.on.click({});
   ok(g.card().length === 0, "Next closes this card");
@@ -967,6 +967,89 @@ const cardFor = (g, id) => { g.send(HOV(id)); g.clk.advance(150); return g.card(
   ok(ids() === "w1,m1,m2,h1,m9", "and each new report re-sorts: " + ids());
   const c = cardFor(g, "m2");
   ok(c.querySelector(".hccount").textContent === "2 of 3", "Back and Forward follow the same order"); }
+
+// THE CARD DOES WHAT THE PANEL DOES (9 Nov 2026): reply in place, settle, reopen, no Open, an outdated
+// comment that says so.
+const REAL = (id, opts = {}) => { const li = threadLi(id, opts); li.html = "<li>real</li>"; TPLS.set("<li>real</li>", li); return li; };
+{ const fetches = [];
+  const g = build({ marks: HMARKS, threads: hthreads(), fetchImpl: (url, o) => { fetches.push([url, o]);
+    return Promise.resolve({ status: 201, json: async () => ({ html: "<li>real</li>", thread_root: "m2",
+      marks: [{ id: "m2", kind: "comment", quote: "the rest", anchor: SEL.anchor }] }) }); } });
+  const repl = REAL("m2", { note: "Say more", settle: true });
+  g.send(HOV("m2")); g.clk.advance(150);
+  const [c] = g.card(), fm = c.querySelector("form.creply"), box = c.querySelector("input[name=body]");
+  box.value = "Here is my answer";
+  g.submit(fm); await tick(); await tick(); await tick();
+  ok(fetches.length === 1 && fetches[0][0] === "/c/abc" && fetches[0][1].method === "POST" && fetches[0][1].credentials === "same-origin",
+     "a reply typed in the card is POSTed to the thread's own form action");
+  ok(fetches[0][1].body.form === fm, "carrying the card's own form (its text and thread root)");
+  ok(g.tlist.children[1] === repl, "the panel's thread is replaced by the server's");
+  ok(g.card().length === 1 && g.card()[0] !== c && g.card()[0].getAttribute("data-mark-id") === "m2",
+     "and the card is drawn again from it, still beside the words");
+  ok(g.card()[0].style.left === "30px", "in the same place"); }
+{ const fetches = [];
+  const g = build({ marks: HMARKS, threads: hthreads(), fetchImpl: (url, o) => { fetches.push([url, o]); return Promise.resolve({ ok: false, type: "opaqueredirect", status: 0 }); } });
+  g.docOn["ream-refresh"] = [(e) => { e.detail.handled = true; }];
+  g.send(HOV("m2")); g.clk.advance(150);
+  const [c] = g.card();
+  ok(btnOf(c, "Mark settled") && !btnOf(c, "Reopen"), "an open thread's card offers Mark settled");
+  btnOf(c, "Mark settled").on.click({}); await tick(); await tick();
+  ok(fetches.length === 1 && fetches[0][0] === "/c/m2/resolve" && fetches[0][1].method === "POST" && fetches[0][1].redirect === "manual",
+     "Mark settled posts the panel's own resolve action, without following its redirect");
+  ok(g.dispatched.length === 1 && g.dispatched[0].type === "ream-refresh", "then the panel is asked to refresh");
+  ok(g.tlist.children[1].querySelector("form.cresolve").submitted === 0, "no plain form submit on success");
+  // The refreshed panel arrives: the thread is settled, its mark is gone, the card shows Reopen.
+  const settled = threadLi("m2", { note: "Say more", reply: false, reopen: true });
+  { const i = g.tlist.children.findIndex((l) => l.getAttribute("data-mark-id") === "m2"); g.tlist.children[i] = settled; settled.parentNode = g.tlist; }
+  g.docOn["ream-marks"].forEach((fn) => fn({ detail: [{ id: "m1", kind: "remove", quote: "the plan", anchor: SEL.anchor }] }));
+  const [c2] = g.card();
+  ok(g.card().length === 1 && c2 !== c && btnOf(c2, "Reopen") && !btnOf(c2, "Mark settled") && !c2.querySelector("form.creply"),
+     "once the new panel is in, the card is redrawn from it: Reopen, and no reply box");
+  btnOf(c2, "Reopen").on.click({}); await tick(); await tick();
+  ok(fetches.length === 2 && fetches[1][0] === "/c/m2/reopen", "Reopen posts the panel's reopen action");
+  { const i = g.tlist.children.findIndex((l) => l.getAttribute("data-mark-id") === "m2"); g.tlist.children[i] = threadLi("m2", { note: "Say more", settle: true }); g.tlist.children[i].parentNode = g.tlist; }
+  g.docOn["ream-marks"].forEach((fn) => fn({ detail: JSON.parse(HMARKS) }));
+  ok(g.card().length === 1 && btnOf(g.card()[0], "Mark settled") && g.card()[0].querySelector("form.creply"),
+     "and the card follows the reopened thread back"); }
+{ // No live loop to answer the refresh: the page reloads, which is what the panel's form did.
+  let reloaded = 0; const g = build({ marks: HMARKS, threads: hthreads(), fetchImpl: () => Promise.resolve({ ok: true, status: 200 }) });
+  g.location.reload = () => { reloaded++; };
+  g.docOn["ream-refresh"] = [];
+  g.send(HOV("m2")); g.clk.advance(150);
+  btnOf(g.card()[0], "Mark settled").on.click({}); await tick(); await tick();
+  ok(reloaded === 1, "with nothing answering ream-refresh the page reloads"); }
+{ // A failed post falls back to the panel's own form submit, and the button comes back.
+  const g = build({ marks: HMARKS, threads: hthreads(), fetchImpl: () => Promise.reject(new Error("net")) });
+  g.send(HOV("m2")); g.clk.advance(150);
+  const b = btnOf(g.card()[0], "Mark settled"); b.on.click({}); await tick(); await tick();
+  ok(g.tlist.children[1].querySelector("form.cresolve").submitted === 1 && b.disabled === false,
+     "a failed post falls back to the panel's form, so nothing is lost"); }
+{ // A reply being written is kept when the panel refreshes under the card (an agent's reply, say).
+  const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(HOV("m2")); g.clk.advance(150);
+  const [c] = g.card(), box = c.querySelector("input[name=body]"); box.value = "half";
+  g.docOn["ream-marks"].forEach((fn) => fn({ detail: JSON.parse(HMARKS) }));
+  ok(g.card()[0] === c && c.querySelector("input[name=body]").value === "half", "a refresh does not redraw a card with a reply in progress");
+  box.value = "";
+  g.docOn["ream-marks"].forEach((fn) => fn({ detail: JSON.parse(HMARKS) }));
+  ok(g.card().length === 1 && g.card()[0] !== c, "an idle card is redrawn from the refreshed panel"); }
+{ const g = build({ marks: HMARKS, threads: [threadLi("m1", { kind: "remove" }), threadLi("m2"), threadLi("h1"), threadLi("gone1", { outdated: true, note: "Old" })] });
+  const li = g.tlist.children[3], hit = () => g.tap({ closest: (sel) => (sel === "#comments li.thread" ? li : null) });
+  g.framePosts.length = 0; hit();
+  const note = li.querySelector(".cgone");
+  ok(note && note.tag === "p" && note.textContent === "The words this comment pointed at are no longer on the page." && note.getAttribute("role") === "status",
+     "pressing an outdated comment says plainly, in a status line, that its words are no longer on the page");
+  ok(g.framePosts.length === 0, "and sends the frame nothing");
+  hit(); ok(li.querySelectorAll(".cgone").length === 1, "pressing it again does not say it twice");
+  const plain = g.tlist.children[0]; g.tap({ closest: (sel) => (sel === "#comments li.thread" ? plain : null) });
+  ok(!plain.querySelector(".cgone") && g.framePosts.length === 1, "a comment with a mark still goes to its passage, with no note"); }
+{ // Back and Forward leave the keyboard in the card.
+  const g = build({ marks: HMARKS, threads: hthreads() });
+  g.send(STATE); g.send(ORDER);
+  navOf(cardFor(g, "m2")).next.on.click({});
+  g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 30, left: 10, width: 60, height: 18 } }); g.clk.advance(150);
+  g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 30, left: 10, width: 60, height: 18 } });
+  ok(g.card().length === 1 && g.card()[0].focused === true && g.card()[0].getAttribute("tabindex") === "-1", "a card reached by Back or Forward takes the keyboard's focus"); }
 
 // A press on the body text of a LATER comment in a thread jumps, like a press on its quote: nothing in the
 // thread's markup (list, bubbles, paragraphs) is a link, field, button, form or label.

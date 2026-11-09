@@ -446,7 +446,7 @@ def _point_at(pg, n):
 def test_a_reply_being_typed_survives_and_full_screen_shows_the_card(
     browser, served, db
 ):
-    """The card reads Reply . Open; Reply reveals its box. Text typed there
+    """The card shows its reply box and Mark settled, no Open. Text typed there
     survives hovering another mark. In full screen the card is drawn inside the
     full-screen sheet, where it can actually be seen."""
     origin, ident = served
@@ -463,12 +463,11 @@ def test_a_reply_being_typed_survives_and_full_screen_shows_the_card(
         _point_at(pg, 3)
         card = pg.locator(".hovercard")
         card.wait_for(state="visible", timeout=3000)
-        assert card.locator(".hcact button").all_inner_texts() == ["Reply", "Open"]
-        assert not card.locator("form.creply").is_visible()
+        assert card.locator(".hcact button").all_inner_texts() == ["Mark settled"]
+        assert card.locator("form.creply").is_visible()
         shot = os.environ.get("REAM_HOVER_SHOT2")
         if shot:
             pg.screenshot(path=shot)
-        card.get_by_role("button", name="Reply").click()
         box = card.locator("input[name=body]")
         assert box.is_visible()
         box.type("half a thought")
@@ -496,6 +495,53 @@ def test_a_reply_being_typed_survives_and_full_screen_shows_the_card(
         )
         assert seen["inside"] and seen["drawn"], seen
         assert "SECONDNOTE" in seen["text"]
+        assert not errors, errors
+    finally:
+        ctx.close()
+
+
+def test_the_card_replies_and_settles_in_place(browser, served, db):
+    """9 Nov 2026: the card over marked words does what the panel does. A reply
+    typed in it and sent with Enter lands in the thread and the card shows it;
+    Mark settled settles the thread and the card then offers Reopen."""
+    origin, ident = served
+    root = _mark(db, ident, 3, "FIRSTNOTE shorten this")
+    ctx, pg, errors = _open_page(browser, origin, ident, 1400)
+    try:
+        _frame_height_settled(pg)
+        pg.frames[1].wait_for_function(
+            "() => CSS.highlights.get('ar-comment')"
+            " && CSS.highlights.get('ar-comment').size === 1",
+            timeout=10000,
+        )
+        _point_at(pg, 3)
+        card = pg.locator(".hovercard")
+        card.wait_for(state="visible", timeout=3000)
+        box = card.locator("input[name=body]")
+        box.click()
+        box.type("A REPLY FROM THE CARD")
+        box.press("Enter")
+        pg.wait_for_function(
+            "() => document.querySelector('.hovercard')"
+            " && document.querySelector('.hovercard').innerText.includes('A REPLY FROM THE CARD')",
+            timeout=5000,
+        )
+        rows = comments.list_for_artifact(db, ident, include_resolved=True)
+        assert any(r.body == "A REPLY FROM THE CARD" for r in rows)
+        assert "A REPLY FROM THE CARD" in pg.locator("#comments").inner_text()
+
+        card.get_by_role("button", name="Mark settled").click()
+        pg.wait_for_function(
+            "() => [...document.querySelectorAll('.hovercard .hcact button')]"
+            ".some(b => b.textContent === 'Reopen')",
+            timeout=8000,
+        )
+        settled = [
+            r
+            for r in comments.list_for_artifact(db, ident, include_resolved=True)
+            if r.id == root.id
+        ]
+        assert settled and settled[0].resolved_at is not None
         assert not errors, errors
     finally:
         ctx.close()

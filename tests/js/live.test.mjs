@@ -56,7 +56,7 @@ function build({ hidden = false, search = "" } = {}) {
     "Array", "Object", "JSON", src)(
     doc, win, loc, (fn, ms) => { const t = { fn, ms }; timers.push(t); return t; }, () => {},
     class { constructor(n, o) { this.type = n; this.detail = o && o.detail; } }, encodeURIComponent, Date, Math, Array, Object, JSON);
-  return { calls, timers, events, P, mk,
+  return { calls, timers, events, P, mk, docOn,
     answer: async (p, okFlag = true) => { resolveNext(p, okFlag); await tick(); await tick(); },
     fail: async () => { rejectNext(new Error("net")); await tick(); await tick(); },
     reveal: async () => { hidden = false; (docOn.visibilitychange || []).forEach((f) => f()); await tick(); },
@@ -111,6 +111,17 @@ function build({ hidden = false, search = "" } = {}) {
 {
   const g = build({ search: "?comments=all" });
   ok(/&comments=all$/.test(g.calls[0]), "the scope he chose rides on the ask");
+}
+
+// 7. the card over a mark asks for the panel now (it settled or reopened a thread): answered at once, not held
+{
+  const g = build();
+  const ev = { detail: { handled: false } };
+  (g.docOn["ream-refresh"] || []).forEach((f) => f(ev));
+  ok(ev.detail.handled === true, "the refresh request is marked handled, so the card does not reload the page");
+  ok(g.calls.length === 2 && g.calls[1] === "/a/abc/comments-live?since=&wait=0", "it reads the panel now, without holding: " + g.calls[1]);
+  await g.answer({ sig: "s9", panel: "<aside>SETTLED</aside>", open: 1, marks: [{ id: "m2" }] });
+  ok(g.events.length === 1 && g.events[0].type === "ream-marks" && g.events[0].detail[0].id === "m2", "the panel is swapped and the marks go out as for any change");
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);
