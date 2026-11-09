@@ -537,14 +537,24 @@ def refresh(db: Database, form, now: datetime) -> JSONResponse:
     with db.connect() as conn:  # one conditional update: the race has one winner
         won = conn.execute(
             "update mcp_token set used_at = %s"
-            " where token_sha256 = %s and kind = 'refresh' and used_at is null",
-            (now, digest),
+            " where token_sha256 = %s and kind = 'refresh' and used_at is null"
+            " and expires_at > %s and exists (select 1 from mcp_app where id = %s"
+            " and revoked_at is null and idle_expires_at > %s and expires_at > %s)",
+            (now, digest, now, app_id, now, now),
         ).rowcount
     if won != 1:  # lost the race: the token is spent, so it is a second presentation
         end_app(db, app_id, "refresh_reuse", now)
         return _grant_error("invalid_grant", "this refresh token was already used")
     _slide_idle(db, app_id, now)
-    return JSONResponse(issue_tokens(db, app, now), headers=_NO_STORE)
+    issued = issue_tokens(db, app, now)
+    after = mcp_apps.app(db, app_id)
+    if after is None or after.revoked_at is not None:
+        # the app ended between the spend and the insert (a reuse elsewhere): drop what
+        # was just written so no token outlives the end
+        with db.connect() as conn:
+            conn.execute("delete from mcp_token where app_id = %s", (app_id,))
+        return _grant_error("invalid_grant", "this connection has ended")
+    return JSONResponse(issued, headers=_NO_STORE)
 
 
 def revoke(db: Database, form, now: datetime | None = None) -> None:
