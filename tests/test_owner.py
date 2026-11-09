@@ -447,7 +447,7 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt, skill.md and the artifacts-decide help re-taken on 9 Nov 2026 for delete-comment / restore-comment.
 # agents.txt and skill.md re-taken on 9 Nov 2026 for moving an agent to a new machine (one short paragraph, one skill line).
 GOLDEN = {
-    "agents.txt": "f7a56bb02acc95234e991312fe7853b4c4d9755813797de359409f0683c9814a",
+    "agents.txt": "60e13181cb961d82eb1466259e3a670b5ce7575c343fb1b0f76b19f485af7d09",
     "skill.md": "6d138b172d9832f365bab3bf825617087e5fc88f1f85f157b809325c8a5ace18",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }

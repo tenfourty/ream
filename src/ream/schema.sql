@@ -1324,3 +1324,6 @@ alter table comment add column if not exists deleted_by text;
 -- live key of the agent when a move's key is minted; until then both work.
 alter table connect_request add column if not exists move text;
 alter table agent_key add column if not exists retire_after text;
+-- `origin_key`: for a 'self' move, the key that started it. It must still be live when the
+-- move is collected, and revoking it cancels the move; it alone retires.
+alter table connect_request add column if not exists origin_key text;

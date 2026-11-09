@@ -3,6 +3,7 @@ approve page's two choices, the retiring of old keys at the new key's first use,
 agent's own twin, POST /api/v1/agents/me/move."""
 
 import re
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -147,18 +148,32 @@ def test_a_machines_own_request_never_becomes_a_move(db, gallery):
     )
 
 
+def _rotating(db, agent):
+    token, key_id = keys.mint(db, agent=agent)
+    with db.connect() as conn:
+        conn.execute("update agent_key set rotating = true where id = %s", (key_id,))
+    return token, key_id
+
+
+def _start(gallery, token):
+    return gallery.post("/api/v1/agents/me/move", headers=_bearer(token))
+
+
+def _collect(gallery, token):
+    return gallery.post("/api/v1/connect/poll", json={"poll_token": token}).json()
+
+
 def test_an_agent_moves_itself_and_only_itself(db, gallery):
-    mine, _ = keys.mint(db, agent="laptop")
-    other, _ = keys.mint(db, agent="rival")
+    mine, _ = _rotating(db, "laptop")
+    other, _ = _rotating(db, "rival")
     made = _publish(gallery, mine)
-    started = gallery.post("/api/v1/agents/me/move", headers=_bearer(mine))
+    started = _start(gallery, mine)
     assert started.status_code == 201 and started.json()["agent"] == "laptop"
     token = started.json()["move_token"]
-    got = gallery.post("/api/v1/connect/poll", json={"poll_token": token}).json()
+    got = _collect(gallery, token)
     assert got["status"] == "approved" and got["agent"] == "laptop"
     assert made["id"] in str(_pages(gallery, got["key"]).json())
-    again = gallery.post("/api/v1/connect/poll", json={"poll_token": token}).json()
-    assert again == {"status": "delivered"}
+    assert _collect(gallery, token) == {"status": "delivered"}
     assert _pages(gallery, mine).status_code == 200
     gallery.get("/api/v1/me", headers=_bearer(got["key"]))
     assert _pages(gallery, mine).status_code == 401
@@ -169,16 +184,69 @@ def test_an_agent_moves_itself_and_only_itself(db, gallery):
     assert _count(db, rival) == 1
 
 
+def test_a_self_move_retires_only_the_calling_key(db, gallery):
+    mine, _ = _rotating(db, "laptop")
+    sibling, _ = _rotating(db, "laptop")
+    got = _collect(gallery, _start(gallery, mine).json()["move_token"])
+    gallery.get("/api/v1/me", headers=_bearer(got["key"]))
+    assert _pages(gallery, mine).status_code == 401
+    assert _pages(gallery, sibling).status_code == 200
+    assert _pages(gallery, got["key"]).status_code == 200
+
+
+def test_a_house_key_cannot_start_a_move(db, gallery):
+    house, _ = keys.mint(db, agent="house-seat")
+    assert _start(gallery, house).status_code == 409
+    assert _count(db, "select count(*) from connect_request") == 0
+
+
 def test_a_move_needs_a_key_and_a_second_ask_cancels_the_first(db, gallery):
     assert gallery.post("/api/v1/agents/me/move").status_code == 401
-    mine, _ = keys.mint(db, agent="laptop")
-    first = gallery.post("/api/v1/agents/me/move", headers=_bearer(mine)).json()
-    second = gallery.post("/api/v1/agents/me/move", headers=_bearer(mine)).json()
-    body = {"poll_token": first["move_token"]}
-    assert gallery.post("/api/v1/connect/poll", json=body).json() == {
-        "status": "denied"
-    }
-    body = {"poll_token": second["move_token"]}
-    assert (
-        gallery.post("/api/v1/connect/poll", json=body).json()["status"] == "approved"
-    )
+    mine, _ = _rotating(db, "laptop")
+    first = _start(gallery, mine).json()
+    second = _start(gallery, mine).json()
+    assert _collect(gallery, first["move_token"]) == {"status": "denied"}
+    assert _collect(gallery, second["move_token"])["status"] == "approved"
+
+
+def test_an_expired_self_move_cannot_be_collected(db, gallery):
+    mine, _ = _rotating(db, "laptop")
+    token = _start(gallery, mine).json()["move_token"]
+    with db.connect() as conn:
+        conn.execute(
+            "update connect_request set expires_at = %s",
+            (datetime.now(UTC) - timedelta(seconds=1),),
+        )
+    assert _collect(gallery, token) == {"status": "expired"}
+    assert _count(db, "select count(*) from agent_key where agent = 'laptop'") == 1
+
+
+def test_an_owner_approved_request_that_expired_is_not_collected(db, gallery):
+    keys.mint(db, agent="laptop")
+    started = _ask(gallery, name="laptop")
+    _approve_as(gallery, started["code"], "same")
+    with db.connect() as conn:
+        conn.execute(
+            "update connect_request set expires_at = %s",
+            (datetime.now(UTC) - timedelta(seconds=1),),
+        )
+    assert _poll(gallery, started) == {"status": "expired"}
+
+
+def test_revoking_the_originating_key_kills_its_pending_move(db, gallery):
+    mine, key_id = _rotating(db, "laptop")
+    token = _start(gallery, mine).json()["move_token"]
+    keys.revoke(db, key_id)
+    assert _collect(gallery, token) == {"status": "denied"}
+    assert _count(db, "select count(*) from agent_key where agent = 'laptop'") == 1
+
+
+def test_the_originating_key_must_be_live_at_collect_time(db, gallery):
+    mine, key_id = _rotating(db, "laptop")
+    token = _start(gallery, mine).json()["move_token"]
+    with db.connect() as conn:  # revoked by a path that skips keys.revoke
+        conn.execute(
+            "update agent_key set revoked_at = %s where id = %s",
+            (datetime.now(UTC), key_id),
+        )
+    assert _collect(gallery, token) == {"status": "denied"}

@@ -198,13 +198,14 @@ def approve(db: Database, request_id: str, agent: str, move: bool = False) -> bo
     return row is not None
 
 
-def self_move(db: Database, agent: str, from_address: str) -> Started:
+def self_move(db: Database, agent: str, from_address: str, origin_key: str) -> Started:
     """An agent starts its own move (POST /agents/me/move): a request born approved for
     `agent` itself, so the machine that holds the returned poll token collects a key for
     that agent and nobody else. The `code` is never shown; the poll token is the
     credential, valid once and for `LIFETIME_SECONDS`. An earlier unclaimed move of this
     agent is cancelled, so at most one is ever open. `agent` is always the CALLING key's
-    own agent, never a name the caller typed."""
+    own agent, never a name the caller typed. `origin_key` is the calling key: it must stay
+    live until the move is collected (revoking it cancels the move), and it alone retires."""
     now = datetime.now(UTC)
     poll = secrets.token_urlsafe(32)
     with db.connect() as conn, conn.transaction():
@@ -218,8 +219,8 @@ def self_move(db: Database, agent: str, from_address: str) -> Started:
             inserted = conn.execute(
                 "insert into connect_request"
                 " (id, code, poll_sha256, suggested_name, from_address, expires_at,"
-                " approved_at, agent, move)"
-                " values (%s, %s, %s, %s, %s, %s, %s, %s, 'self')"
+                " approved_at, agent, move, origin_key)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, 'self', %s)"
                 " on conflict (code) do nothing returning id",
                 (
                     secrets.token_hex(12),
@@ -230,6 +231,7 @@ def self_move(db: Database, agent: str, from_address: str) -> Started:
                     now + timedelta(seconds=LIFETIME_SECONDS),
                     now,
                     agent,
+                    origin_key,
                 ),
             ).fetchone()
             if inserted:
@@ -258,20 +260,42 @@ def collect(db: Database, poll_token: str) -> dict:
         # The name lock comes before the request's row lock (keys.NAME_LOCK_KEY).
         conn.advisory_lock(keys.NAME_LOCK_KEY)
         row = conn.execute(
-            "select id, approved_at, agent, denied_at, delivered_at, move,"  # noqa: S608 -- clause from the db layer, no caller input
+            "select id, approved_at, agent, denied_at, delivered_at, move, origin_key,"  # noqa: S608 -- clause from the db layer, no caller input
             " expires_at > %s from connect_request where poll_sha256 = %s"
             + conn.for_update(),
             (now, _hash(poll_token)),
         ).fetchone()
         if row is None:
             return {"status": "expired"}
-        request_id, approved_at, agent, denied_at, delivered_at, move, alive = row
+        (
+            request_id,
+            approved_at,
+            agent,
+            denied_at,
+            delivered_at,
+            move,
+            origin_key,
+            alive,
+        ) = row
         if delivered_at is not None:
             return {"status": "delivered"}
         if denied_at is not None:
             return {"status": "denied"}
+        if not alive:  # never a key for a request past its life, approved or not
+            return {"status": "expired"}
         if approved_at is None:
-            return {"status": "pending"} if alive else {"status": "expired"}
+            return {"status": "pending"}
+        if move == "self":
+            origin = conn.execute(
+                "select 1 from agent_key where id = %s and revoked_at is null",
+                (origin_key,),
+            ).fetchone()
+            if origin is None:  # the key that started this move is gone
+                conn.execute(
+                    "update connect_request set denied_at = %s where id = %s",
+                    (now, request_id),
+                )
+                return {"status": "denied"}
         try:
             keys.refuse_app_agent_name(conn, agent)
         except keys.NameHeld:
@@ -295,13 +319,21 @@ def collect(db: Database, poll_token: str) -> dict:
             (now, key_id, request_id),
         )
         if move:
-            # Every other live key of the agent retires when this one is first used
-            # (`keys.first_use`); until then both work.
-            marked = conn.execute(
-                "update agent_key set retire_after = %s"
-                " where agent = %s and id <> %s and revoked_at is null returning id",
-                (key_id, agent, key_id),
-            ).fetchall()
+            # The keys that retire when this one is first used (`keys.first_use`); until
+            # then both work. The owner's approval retires every other live key of the
+            # agent; an agent's own move retires only the key that started it.
+            if move == "self":
+                marked = conn.execute(
+                    "update agent_key set retire_after = %s"
+                    " where id = %s and revoked_at is null returning id",
+                    (key_id, origin_key),
+                ).fetchall()
+            else:
+                marked = conn.execute(
+                    "update agent_key set retire_after = %s"
+                    " where agent = %s and id <> %s and revoked_at is null returning id",
+                    (key_id, agent, key_id),
+                ).fetchall()
             keys.note_on_latest_page(
                 conn,
                 agent,

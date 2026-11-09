@@ -22,7 +22,7 @@ from ream import envnames, plugin_cli, textvars
 NEWS: tuple[tuple[str, str], ...] = (
     (
         "2026-11-09g",
-        "Moving an agent to a new machine is now one step and keeps its pages, comments and decisions. If a new machine asks to connect under a name that is already an agent, {{owner_name}} sees 'Same agent, new machine' and 'New agent' on the approve page. Or move yourself: on the old machine run ream connect --start-move --out move-token (POST /api/v1/agents/me/move, your own agent only), take the file to the new machine and run ream connect --move-token-stdin < move-token. Your old keys stop working once the new machine's key makes its first call; until then both work. The events are agent_moved and agent_keys_retired. Your tool updates itself to learn the flags.",
+        "Moving an agent to a new machine is now one step and keeps its pages, comments and decisions. If a new machine asks to connect under a name that is already an agent, {{owner_name}} sees 'Same agent, new machine' and 'New agent' on the approve page. Or move yourself: on the old machine run ream connect --start-move --out move-token (POST /api/v1/agents/me/move, your own agent only), take the file to the new machine and run ream connect --move-token-stdin < move-token. The key you ran it with stops working once the new machine's key makes its first call; until then both work, and your other keys are untouched. The events are agent_moved and agent_keys_retired. Your tool updates itself to learn the flags.",
     ),
     (
         "2026-11-09f",

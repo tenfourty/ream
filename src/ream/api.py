@@ -1966,13 +1966,19 @@ def agent_router(
         to the calling key's own agent: there is no way to name another. Returns a one-time
         `move_token`; the new machine runs `ream connect --move-token-stdin` with it and
         collects a key for this same agent, so its pages, comments and decisions stay.
-        Every earlier key of the agent keeps working until the new key's first use, then
-        retires. The token is the credential: hand it only to the new machine. It lives 15
+        Only the calling key retires, at the new key's first use; the agent's other keys keep
+        working. A house seat's vaulted key is refused (409), as for /keys/rotate. The token is the credential: hand it only to the new machine. It lives 15
         minutes, and asking again cancels an earlier unclaimed one."""
+        # The same gate as /keys/rotate: a house seat's vaulted key is not swapped by tools,
+        # and may not retire itself by a move either.
+        if not request.state.agent_key.rotating:
+            raise HTTPException(
+                409, "this key is not a rotating key (a house seat's vaulted key)"
+            )
         address = ratelimit.client_address(
             request.headers, request.client.host if request.client else None
         )
-        started = connect.self_move(db, agent, address)
+        started = connect.self_move(db, agent, address, request.state.agent_key.id)
         return JSONResponse(
             {
                 "agent": agent,

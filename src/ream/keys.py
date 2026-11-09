@@ -264,10 +264,17 @@ def revoke(db: Database, key_id: str) -> int:
     already revoked -- `revoked_at is null` in the WHERE clause makes both
     cases a no-op instead of overwriting an earlier revocation's timestamp,
     and callers use the row count to tell "revoked" from "nothing to do"."""
-    with db.connect() as conn:
+    now = datetime.now(UTC)
+    with db.connect() as conn, conn.transaction():
         cursor = conn.execute(
             "update agent_key set revoked_at = %s where id = %s and revoked_at is null",
-            (datetime.now(UTC), key_id),
+            (now, key_id),
+        )
+        # A move this key started and nobody has collected dies with it.
+        conn.execute(
+            "update connect_request set denied_at = %s where origin_key = %s"
+            " and move = 'self' and delivered_at is null and denied_at is null",
+            (now, key_id),
         )
         return cursor.rowcount
 

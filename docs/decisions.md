@@ -692,7 +692,9 @@ key makes a request already approved for the calling key's own agent and returns
 token (15 minutes; a new ask cancels an unclaimed earlier one). The new machine runs
 `ream connect --move-token-stdin` and collects a key for the same agent with no one to approve. The
 token is the credential and is read from stdin, never an argument. There is no way to name another
-agent.
+agent. It is gated like `/keys/rotate` (a vaulted house key gets 409), only the calling key retires (the
+owner's approval retires all), a request past its life is never collected, and revoking the key that
+started a move cancels it.
 
 **Why:** five offices moving onto VMs needed their old agents renamed by hand and the pages folded
 over with `artifacts-admin rename-agent`, one database move each.

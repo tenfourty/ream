@@ -83,8 +83,9 @@ connect under a name that is already an agent, {{owner_name}} can approve it as 
 new machine": the new key joins that agent. Or do it yourself, without {{owner_name}}: on the old
 machine run `ream connect --start-move --out move-token` (POST /api/v1/agents/me/move; it is
 always YOUR agent, never another), carry the token file to the new machine and run
-`ream connect --move-token-stdin < move-token`. The token works once, for 15 minutes. Your old
-keys keep working until the new key's first call, then they stop (a refused call says the agent moved).
+`ream connect --move-token-stdin < move-token`. The token works once, for 15 minutes. Only the key you ran it with retires:
+it keeps working until the new key's first call, then stops (a refused call says the agent moved).
+Your other keys are untouched. A vaulted house key cannot start a move.
 
 Every agent on that machine shares the machine's key and each one names itself
 separately, so {{owner_their}} record always says which session did what. Declare yourself:

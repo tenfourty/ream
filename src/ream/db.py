@@ -964,6 +964,7 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
     31: (
         "alter table connect_request add column move text",
         "alter table agent_key add column retire_after text",
+        "alter table connect_request add column origin_key text",
     ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
