@@ -1531,9 +1531,13 @@ if(sheetEl&&window.fetch){
       .then(function(d){
         watching=false;
         if(d&&typeof d.n==="number"&&d.n>told){told=d.n;offer()}
-        watch();
-      }).catch(function(){watching=false});
+        // A failed read (a rollout, a 5xx, a dropped connection) is asked again
+        // after a pause, never at once and never not at all: this watch used
+        // to end for good on the first error, and spun on a non-200.
+        if(d)watch();else retry();
+      }).catch(retry);
   };
+  var retry=function(){watching=false;setTimeout(watch,5000)};
   document.addEventListener("visibilitychange",watch);
   watch();
 }
@@ -2146,6 +2150,15 @@ try{marks=JSON.parse(mk?mk.textContent:"[]");if(!Array.isArray(marks))marks=[]}c
 marks.forEach(function(m){if(m&&typeof m.id==="string")known[m.id]=1});
 function sendMarks(){if(sent||!marks.length)return;sent=true;
   try{f.contentWindow.postMessage({type:"artifact-marks",marks:marks},o)}catch(e){}}
+// LIVE (/live.js): the marks changed under an open page -- an agent's new, settled or
+// reopened thread. Unlike the first send, an EMPTY set is sent too, so the frame
+// un-paints what is no longer open; the frame answers with `artifact-marks-placed`,
+// which refreshes the unplaced line and the Back/Forward order.
+if(document.addEventListener)document.addEventListener("ream-marks",function(e){
+  var m=e&&e.detail;if(!Array.isArray(m))return;
+  marks=m.filter(function(x){return x&&typeof x.id==="string"});known=Object.create(null);
+  marks.forEach(function(x){known[x.id]=1});sent=true;
+  try{f.contentWindow.postMessage({type:"artifact-marks",marks:marks},o)}catch(x){}});
 function unplacedLine(ids,overflow){var p=document.getElementById("marks-unplaced");if(!p)return;
   var n=0,seen=Object.create(null);
   ids.slice(0,200).forEach(function(id){if(typeof id==="string"&&known[id]&&!seen[id]){seen[id]=1;n++}});
@@ -2741,6 +2754,81 @@ function paint(){var on=document.fullscreenElement===s;
 b.addEventListener("click",function(){
   try{if(document.fullscreenElement)document.exitFullscreen();else s.requestFullscreen()}catch(e){}});
 document.addEventListener("fullscreenchange",paint);paint();
+})();
+"""
+
+
+# LIVE COMMENTS (9 Nov 2026). The page's agent adds, answers and settles comments
+# while Jeremy has the page open, and until now none of it reached him without a
+# reload: the only live fact was the page's version (gallery.js, `/current`), and
+# a comment is not a new version. So this holds a read on
+# `/a/{id}/comments-live`, which answers the moment the page's comment signature
+# moves, with the server-rendered panel, the open count and the marks.
+#
+#  - No timer and no tight loop: the server holds up to 25 s; a hold that came
+#    back with nothing is renewed after a pause, an error backs off (5 s, then
+#    doubling to 60 s), and a tab that is hidden stops asking and asks again,
+#    at once, when it is shown -- which is also how a hidden tab catches up.
+#  - The panel is NOT replaced wholesale: its header, the "offer comments" switch,
+#    the scope tabs, the unplaced line and the new-comment form stay (a half-typed
+#    comment, an attached picture, the lit Comment mode are all state in them).
+#    The tab bar and the two lists are swapped for the server's, the selected tab
+#    kept, and a reply Jeremy is typing under a thread is carried into the new
+#    copy of that thread with its focus.
+#  - The marks go to comments.js as a `ream-marks` event; it posts them into the
+#    frame (empty included, so a settled mark is un-painted), and the frame's
+#    answer refreshes the Back/Forward order.
+_LIVE_JS = """(function(){
+"use strict";
+var P=document.getElementById("comments"),mk=document.getElementById("artifact-marks");
+if(!P||!mk||!window.fetch)return;
+var sh=document.getElementById("artifact-sheet"),sig=sh&&sh.getAttribute("data-csig")||"",busy=false,fails=0,timer=0;
+var KEEP=/(^|\\s)(chead|cunplaced|chow|coffer|cscope|cnew)(\\s|$)/;
+function kept(el){return el.nodeType===1&&(KEEP.test(el.className||"")||el.id==="cwhole")}
+function drafts(){var out=Object.create(null),ae=document.activeElement;
+  Array.prototype.forEach.call(P.querySelectorAll("li.thread"),function(li){
+    var i=li.querySelector("input[name=body]");
+    if(i&&(i.value||i===ae))out[li.id]={v:i.value,f:i===ae}});
+  return out}
+function apply(d){
+  var t=document.createElement("template");t.innerHTML=d.panel;
+  var na=t.content&&t.content.firstElementChild;if(!na)return;
+  var keep=drafts(),tabSel=P.getAttribute("data-ctab")||"open";
+  var form=null;
+  Array.prototype.slice.call(P.children).forEach(function(c){
+    if(c.id==="cwhole"){form=c;return}
+    if(!kept(c))P.removeChild(c)});
+  Array.prototype.slice.call(na.children).forEach(function(c){
+    if(kept(c))return;P.insertBefore(c,form)});
+  Array.prototype.forEach.call(P.querySelectorAll(".ctab"),function(b){
+    b.setAttribute("aria-selected",b.getAttribute("data-ctab")===tabSel?"true":"false")});
+  Object.keys(keep).forEach(function(id){
+    var li=document.getElementById(id),i=li&&li.querySelector("input[name=body]");
+    if(i){i.value=keep[id].v;if(keep[id].f&&i.focus)i.focus()}});
+  var b=document.querySelector(".cbtn"),n=b&&b.querySelector(".cn"),c=+d.open||0;
+  if(b){if(c){if(!n){n=document.createElement("span");n.className="cn";b.appendChild(n)}
+      n.textContent=String(c);b.classList.add("has")}
+    else{if(n)n.parentNode.removeChild(n);b.classList.remove("has")}}
+  mk.textContent=JSON.stringify(d.marks||[]);
+  document.dispatchEvent(new CustomEvent("ream-marks",{detail:d.marks||[]}))}
+function again(ms){clearTimeout(timer);timer=setTimeout(ask,ms)}
+function ask(){
+  if(busy||document.hidden)return;busy=true;var t0=Date.now();
+  window.fetch(location.pathname+"/comments-live?since="+encodeURIComponent(sig)+"&wait=25"+
+      (/(^|[?&])comments=all/.test(location.search)?"&comments=all":""),{credentials:"same-origin"})
+    .then(function(r){if(!r.ok)throw new Error("status");return r.json()})
+    .then(function(d){
+      busy=false;fails=0;
+      if(d&&typeof d.sig==="string"){
+        if(!d.same&&typeof d.panel==="string"){try{apply(d)}catch(e){}}
+        sig=d.sig}
+      // A hold that came straight back (the server is full of watchers) is not
+      // answered with an instant new one.
+      again(d&&d.same&&Date.now()-t0<1000?5000:0)})
+    .catch(function(){busy=false;fails++;again(Math.min(60000,5000*Math.pow(2,fails-1)))})}
+document.addEventListener("visibilitychange",function(){if(!document.hidden){fails=0;again(0)}});
+if(window.addEventListener)window.addEventListener("online",function(){fails=0;again(0)});
+ask();
 })();
 """
 
@@ -6342,6 +6430,73 @@ def gallery_router(db: Database) -> APIRouter:
             _watchers.release()
         return {"n": int(row[0]) if row else since}
 
+    @router.get("/a/{artifact_id}/comments-live")
+    def comments_live(
+        artifact_id: str,
+        since: str = "",
+        wait: float = Query(0, ge=0, le=_MAX_WATCH_SECONDS),
+        comments_scope: str = Query("this", alias="comments", pattern="^(this|all)$"),
+    ) -> dict:
+        """The comments panel as it is now, HELD until it is not what `since` says.
+
+        9 Nov 2026, Jeremy: an agent's new threads, replies and settles did not
+        appear on a page he had open. Only a republish was watched (`/current`),
+        and a comment change is not a new version, so the panel, its count and
+        the marks painted in the frame stayed as the page first drew them until
+        he reloaded. This is the same held read for the comments: it answers the
+        moment `comments.signature` moves, with the server-rendered panel, the
+        count and the marks, so the page does no rendering of its own and a
+        thread looks exactly as it does after a reload. `{"same": true}` when the
+        hold runs out with nothing new (the caller asks again)."""
+        with db.connect() as conn:
+            row = conn.execute(
+                "select comments_default from artifact"
+                " where id = %s and deleted_at is null",
+                (artifact_id,),
+            ).fetchone()
+        if row is None:
+            raise HTTPException(404, "no such page")
+        sig = comments.signature(db, artifact_id)
+        if since and wait > 0 and sig == since and _watchers.acquire(blocking=False):
+            try:
+                deadline = time.monotonic() + wait
+                while sig == since:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or events.wait_for_shutdown(min(1.0, remaining)):
+                        break
+                    sig = comments.signature(db, artifact_id)
+            finally:
+                _watchers.release()
+        if since and sig == since:
+            return {"same": True, "sig": sig}
+        rows = _page_comment_rows(artifact_id)
+        everywhere = (
+            comments.across_pages(db, include_resolved=True)
+            if comments_scope == "all"
+            else None
+        )
+        return {
+            "sig": sig,
+            "panel": _render_comments(
+                rows, artifact_id, everywhere, db=db, comments_default=row[0]
+            ),
+            "open": sum(
+                1 for c in rows if c.thread_root is None and c.resolved_at is None
+            ),
+            "marks": comments.marks_for_page(db, artifact_id),
+        }
+
+    def _page_comment_rows(artifact_id: str) -> list:
+        # The drawer is about the page: a thread under a decision's note lives
+        # under that decision, never in the drawer or its count.
+        return [
+            c
+            for c in comments.list_for_artifact(
+                db, artifact_id, include_resolved=True, include_held=True
+            )
+            if (c.anchor or {}).get("kind") != "decision"
+        ]
+
     def _open_round(artifact_id: str, changes: str):
         """The open review's round when it is round 2 or later, and the base
         version the frame's changes view is drawn against (None when he turned
@@ -6428,15 +6583,10 @@ def gallery_router(db: Database) -> APIRouter:
             for r in every_row
             if r.closed_at is not None and r.answer and r.id in note_threads
         ]
-        # The drawer is about the page: a thread under a decision's note lives
-        # under that decision, never in the drawer or its count.
-        comment_rows = [
-            c
-            for c in comments.list_for_artifact(
-                db, artifact_id, include_resolved=True, include_held=True
-            )
-            if (c.anchor or {}).get("kind") != "decision"
-        ]
+        # Read BEFORE the rows: a change landing between the two is then seen by
+        # /live.js as newer than what the page drew, never missed.
+        csig = comments.signature(db, artifact_id)
+        comment_rows = _page_comment_rows(artifact_id)
         # ROUND 2 AND LATER (page review step 4): the frame opens on what
         # changed since the version he sent back, and the card says the round,
         # offers Hide/Show changes and lists his earlier marks. The fallback
@@ -6579,7 +6729,7 @@ def gallery_router(db: Database) -> APIRouter:
                 # WHICH VERSION IS IN FRONT OF HIM. gallery.js compares this
                 # with what the server says is current and offers the new one
                 # rather than swapping it (homelab-ij8.74, his own ruling).
-                f' data-version="{int(row[5])}"><iframe id="artifact-frame"'
+                f' data-version="{int(row[5])}" data-csig="{csig}"><iframe id="artifact-frame"'
                 f' src="{src}" sandbox="{sandbox}" title="{escape(row[0])}"></iframe></div>'
                 f"{f'''<div class="col">{settled_below}</div>''' if settled_below else ''}"
                 # No Submit bar on a page that is archived or binned: nothing there can
@@ -6606,6 +6756,7 @@ def gallery_router(db: Database) -> APIRouter:
                 scripts=(
                     '<script src="/gallery.js" defer></script>'
                     '<script src="/comments.js" defer></script>'
+                    '<script src="/live.js" defer></script>'
                 ),
                 # The bar carries the title menu AND the comments control, which
                 # is how the reference groups them: its page bar holds the title
@@ -6860,6 +7011,14 @@ def gallery_router(db: Database) -> APIRouter:
                 ),
             ),
             headers={**gallery_headers(), "cache-control": "no-store"},
+        )
+
+    @router.get("/live.js")
+    def live_script() -> Response:
+        return Response(
+            _LIVE_JS,
+            media_type="text/javascript; charset=utf-8",
+            headers={**gallery_headers(), "cache-control": "no-cache"},
         )
 
     @router.get("/comments.js")

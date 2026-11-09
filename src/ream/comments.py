@@ -23,6 +23,7 @@ An unknown artifact and someone else's look identical either way (both `NotFound
 matching `store.publish`/`store.patch`.
 """
 
+import hashlib
 import json
 import logging
 import threading
@@ -1350,6 +1351,23 @@ def marks_for_page(db: Database, artifact_id: str) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def signature(db: Database, artifact_id: str) -> str:
+    """A short token that changes whenever anything Jeremy's panel shows for this
+    page changes: a comment or reply added, a thread settled or reopened, a
+    comment withdrawn or let through a hold. One aggregate over the page's own
+    rows (indexed on `artifact_id`), so a held read can look at it every second
+    without it costing anything. Not a version number and not meant to be
+    ordered: the gallery only asks "is it still what I showed?"."""
+    with db.connect() as conn:
+        row = conn.execute(
+            "select count(*), max(created_at), count(resolved_at), max(resolved_at),"
+            " count(withdrawn_at), coalesce(sum(case when held then 1 else 0 end), 0)"
+            " from comment where artifact_id = %s",
+            (artifact_id,),
+        ).fetchone()
+    return hashlib.sha256(repr(tuple(str(v) for v in row)).encode()).hexdigest()[:16]
 
 
 def list_for_agent(

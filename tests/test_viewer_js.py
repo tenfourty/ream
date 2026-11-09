@@ -70,7 +70,7 @@ def test_the_newer_version_offer_behaves_when_actually_run(tmp_path, monkeypatch
     assert result.returncode == 0, result.stdout + result.stderr
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
-    assert passed >= 14, result.stdout
+    assert passed >= 21, result.stdout
 
 
 _RENEW = Path(__file__).parent / "js" / "renew.test.mjs"
@@ -144,3 +144,28 @@ def test_the_comment_on_selection_button_behaves_when_actually_run(tmp_path):
     assert "0 failed" in result.stdout
     passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
     assert passed >= 253, result.stdout
+
+
+_LIVEJS = Path(__file__).parent / "js" / "live.test.mjs"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node runtime here")
+def test_the_live_comments_loop_renews_and_catches_up_when_actually_run(tmp_path):
+    """9 Nov 2026: an agent's comments never reached an open page. What matters is
+    that the held read is renewed after an answer, a quiet hold and an error, and
+    that a hidden tab asks nothing and asks again when shown."""
+    from ream.gallery import _LIVE_JS
+
+    script = tmp_path / "live.js"
+    script.write_text(_LIVE_JS)
+    result = subprocess.run(  # noqa: S603
+        [shutil.which("node"), str(_LIVEJS), str(script)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "0 failed" in result.stdout
+    passed = int(result.stdout.rsplit("\n", 2)[-2].split(" passed")[0].strip())
+    assert passed >= 14, result.stdout

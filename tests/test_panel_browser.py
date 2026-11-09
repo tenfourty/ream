@@ -1018,3 +1018,117 @@ def test_the_comment_box_sits_round_the_thing_pointed_at_on_a_long_page(
         assert not errors, errors
     finally:
         ctx.close()
+
+
+def _marks_painted(frame, n):
+    frame.wait_for_function(
+        f"() => {{const h = CSS.highlights.get('ar-comment'); return (h ? h.size : 0) === {n}}}",
+        timeout=10000,
+    )
+
+
+def _agent_mark(db, ident, body, quote, nth, **kw):
+    return comments.add(
+        db,
+        artifact_id=ident,
+        author_kind="agent",
+        author="seat",
+        body=body,
+        agent="seat",
+        quote=quote,
+        anchor={
+            "kind": "range",
+            "path": f"body>p:nth-of-type({nth})",
+            "start": 0,
+            "end": len(quote),
+        },
+        **kw,
+    )
+
+
+def test_an_agents_comments_appear_on_the_open_page_without_a_reload(
+    browser, served, db
+):
+    """9 Nov 2026, Jeremy: the agent's new threads, replies and settles did not
+    show while he had the page open. Driven in the real gallery: the panel, its
+    count, the marks painted in the frame and Back/Forward all follow, nothing
+    reloads, and a reply he is typing survives the refresh."""
+    origin, ident = served
+    ctx, pg, errors = _open_page(browser, origin, ident, 1400)
+    try:
+        _frame_height_settled(pg)
+        pg.click(".cbtn")
+        frame = pg.frames[1]
+        pg.evaluate("window.__same_document = true")
+
+        # A new anchored thread from the agent.
+        root = _agent_mark(
+            db, ident, "AGENT-ONE look here", "Paragraph 3: a sentence that wraps", 4
+        )
+        pg.wait_for_selector(f"#thread-{root.id}", timeout=10000)
+        assert "AGENT-ONE" in pg.inner_text(f"#thread-{root.id}")
+        assert pg.inner_text(".cbtn .cn") == "1"
+        _marks_painted(frame, 1)
+
+        # He starts typing a reply; then a second thread arrives from the agent.
+        pg.click(f"#thread-{root.id} input[name=body]")
+        pg.keyboard.type("half a rep")
+        second = _agent_mark(
+            db, ident, "AGENT-TWO", "Paragraph 9: a sentence that wraps", 10
+        )
+        pg.wait_for_selector(f"#thread-{second.id}", timeout=10000)
+        assert pg.inner_text(".cbtn .cn") == "2"
+        _marks_painted(frame, 2)
+        assert pg.input_value(f"#thread-{root.id} input[name=body]") == "half a rep"
+
+        # A reply from the agent lands in the thread he is looking at.
+        comments.add(
+            db,
+            artifact_id=ident,
+            author_kind="agent",
+            author="seat",
+            body="AGENT-REPLY",
+            agent="seat",
+            thread_root=root.id,
+        )
+        pg.wait_for_function(
+            "id => document.getElementById(id).innerText.includes('AGENT-REPLY')",
+            arg=f"thread-{root.id}",
+            timeout=10000,
+        )
+
+        # Back/Forward knows both marks: the page order came back from the frame
+        # after the marks were re-sent.
+        box = pg.locator("#artifact-frame").bounding_box()
+        r = frame.evaluate(
+            """() => {const t=document.querySelectorAll('p')[3].firstChild;
+                      const g=document.createRange();g.setStart(t,2);g.setEnd(t,8);
+                      const b=g.getBoundingClientRect();
+                      return {x:b.left+b.width/2,y:b.top+b.height/2}}"""
+        )
+        pg.mouse.move(box["x"] + r["x"], box["y"] + r["y"])
+        pg.locator(".hovercard").wait_for(state="visible", timeout=3000)
+        assert "1 of 2" in pg.inner_text(".hovercard .hccount")
+        pg.mouse.move(5, 5)
+
+        # The agent settles the first thread: it leaves Open, its mark goes.
+        comments.resolve(db, root.id, by="seat", agent="seat")
+        pg.wait_for_function(
+            "id => !document.querySelector('#cpane-open #' + id)",
+            arg=f"thread-{root.id}",
+            timeout=10000,
+        )
+        assert pg.inner_text(".cbtn .cn") == "1"
+        assert pg.locator(f"#cpane-resolved #thread-{root.id}").count() == 1
+        _marks_painted(frame, 1)
+
+        # And reopening brings both back.
+        comments.reopen(db, root.id, agent="seat")
+        pg.wait_for_selector(f"#cpane-open #thread-{root.id}", timeout=10000)
+        assert pg.inner_text(".cbtn .cn") == "2"
+        _marks_painted(frame, 2)
+
+        assert pg.evaluate("window.__same_document") is True, "the page reloaded"
+        assert errors == []
+    finally:
+        ctx.close()
