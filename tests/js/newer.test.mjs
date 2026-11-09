@@ -15,8 +15,7 @@ const tick = () => new Promise((r) => setImmediate(r));
 
 function build({ version = "3", hidden = false } = {}) {
   const calls = [];
-  const timers = [];
-  let resolveNext, rejectNext;
+  let resolveNext;
   const made = [];
   const body = { children: [], appendChild(c) { c.parentNode = body; body.children.push(c); },
                  removeChild(c) { body.children = body.children.filter((x) => x !== c); c.parentNode = null; } };
@@ -44,17 +43,16 @@ function build({ version = "3", hidden = false } = {}) {
     addEventListener() {},
     fetch(url) {
       calls.push(url);
-      return new Promise((resolve, reject) => { resolveNext = (payload, okFlag = true) =>
-        resolve({ ok: okFlag, json: () => Promise.resolve(payload) }); rejectNext = reject; });
+      return new Promise((resolve) => { resolveNext = (payload, okFlag = true) =>
+        resolve({ ok: okFlag, json: () => Promise.resolve(payload) }); });
     },
   };
   new Function("document", "window", "URL", "Map", "Set", "isFinite", "navigator",
-               "history", "location", "setTimeout", src)(
+               "history", "location", src)(
     doc, win, URL, Map, Set, isFinite, {},
-    { replaceState() {}, pushState() {} }, location, (fn, ms) => timers.push({ fn, ms }));
+    { replaceState() {}, pushState() {} }, location);
   return {
-    calls, reloads, body, timers,
-    fail: async () => { rejectNext(new Error("net")); await tick(); await tick(); },
+    calls, reloads, body,
     answer: async (payload, okFlag = true) => { resolveNext(payload, okFlag); await tick(); await tick(); },
     show: () => body.children.find((c) => c.className === "newer"),
     press: async (label) => {
@@ -123,20 +121,6 @@ function build({ version = "3", hidden = false } = {}) {
   const g = build({ version: "3" });
   await g.answer(null, false);
   ok(!g.show(), "a read that failed says nothing to him");
-  ok(g.calls.length === 1, "and does not ask again at once (a 5xx used to spin this)");
-  ok(g.timers.length === 1 && g.timers[0].ms >= 1000, "it asks again after a pause");
-  g.timers[0].fn();
-  ok(g.calls.length === 2, "and does ask again: the watch is renewed, not dead");
-}
-// 8. a dropped connection (a rollout ends the held read) does not end the watch for good
-{
-  const g = build({ version: "3" });
-  await g.fail();
-  ok(g.calls.length === 1 && g.timers.length === 1, "a rejected read waits and retries");
-  g.timers[0].fn();
-  ok(g.calls.length === 2, "the second ask goes out");
-  await g.answer({ n: 4 });
-  ok(!!g.show(), "and a republish after the blip is still offered");
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

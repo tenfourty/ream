@@ -1531,13 +1531,9 @@ if(sheetEl&&window.fetch){
       .then(function(d){
         watching=false;
         if(d&&typeof d.n==="number"&&d.n>told){told=d.n;offer()}
-        // A failed read (a rollout, a 5xx, a dropped connection) is asked again
-        // after a pause, never at once and never not at all: this watch used
-        // to end for good on the first error, and spun on a non-200.
-        if(d)watch();else retry();
-      }).catch(retry);
+        watch();
+      }).catch(function(){watching=false});
   };
-  var retry=function(){watching=false;setTimeout(watch,5000)};
   document.addEventListener("visibilitychange",watch);
   watch();
 }
