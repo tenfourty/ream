@@ -477,6 +477,24 @@ def _seed(database: Database) -> None:
         ("plugin_failure", "plugin, interface, failures", ["house", "sink", 3]),
         ("mcp_events_seen", "key_id, seq, updated_at", ["k1", 42, T1]),
         (
+            "mcp_client",
+            (
+                "id, kind, host, name, redirect_uris, created_at, fetched_at,"
+                " registered_from, last_used_at"
+            ),
+            [
+                "reg_x",
+                "registered",
+                "localhost",
+                "Zürich app",
+                j(["http://localhost/callback"]),
+                T0,
+                None,
+                "2001:db8::/64",
+                T1,
+            ],
+        ),
+        (
             "partner_question",
             (
                 "source, version, asking_office, title, options, context, state,"

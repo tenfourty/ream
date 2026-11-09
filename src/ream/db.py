@@ -818,6 +818,25 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " updated_at timestamptz not null)"
         ),
     ),
+    # 9 Nov 2026: the apps that may ask to connect over MCP (see schema.sql).
+    24: (
+        (
+            "create table mcp_client ("
+            " id text primary key,"
+            " kind text not null,"
+            " host text not null,"
+            " name text not null default '',"
+            " redirect_uris jsonb not null,"
+            " created_at timestamptz not null default (artifacts_now()),"
+            " fetched_at timestamptz,"
+            " registered_from text,"
+            " last_used_at timestamptz)"
+        ),
+        (
+            "create index mcp_client_registered_idx"
+            " on mcp_client (registered_from, created_at) where kind = 'registered'"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

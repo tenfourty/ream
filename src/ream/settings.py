@@ -101,6 +101,38 @@ def mcp_origin(url: str) -> str:
 
 PARTNER_IN = ("REAM_PARTNER_INBOUND_KEYS_FILE", "REAM_PARTNER_INBOUND_HOST")
 
+# Cove's trusted client hosts: an app from one of these is labelled Verified (MCP spec 5).
+MCP_TRUSTED_DEFAULT = frozenset(
+    {
+        "claude.ai",
+        "chatgpt.com",
+        "vscode.dev",
+        "zed.dev",
+        "opencode.ai",
+        "goose-docs.ai",
+        "pi.dev",
+    }
+)
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_HOST_NAME = re.compile(rf"^(?=.{{1,253}}$){_LABEL}(?:\.{_LABEL})*$")
+# What `host_list` answers for an entry that is not a bare host name.
+BAD_LIST = object()
+
+
+def host_list(value: str):
+    """A comma-separated host list setting: None when unset, an empty set for `none`, the
+    lower-cased names otherwise, or `BAD_LIST` when an entry is not a bare host name (a
+    scheme, a path, a port) or `none` is mixed with names."""
+    value = value.strip().lower()
+    if not value:
+        return None
+    if value == "none":
+        return frozenset()
+    names = [n.strip().removesuffix(".") for n in value.split(",")]
+    if any(not _HOST_NAME.match(n) for n in names):
+        return BAD_LIST
+    return frozenset(names)
+
 
 @dataclass(frozen=True, repr=False)
 class Settings:
@@ -164,9 +196,21 @@ class Settings:
     # The origin `/mcp` is served on: the gallery origin or https://<api host>. Unset: no
     # `/mcp` anywhere (404).
     mcp_public_url: str = ""
-    # Whether `/mcp` takes agent keys. Unset: yes while sign-in is off, which is always
-    # until sign-in is built; `0` then refuses to start (section 7).
+    # Whether `/mcp` takes agent keys. Unset: yes while sign-in is off, no while it is on;
+    # `0` with sign-in off refuses to start (section 7).
     mcp_accept_keys: str = ""
+    # `on` turns the authorization server on: the discovery documents, open registration
+    # and the sign-in challenge at `/mcp` (sections 4, 5 and 7). Unset: off.
+    mcp_sign_in: str = ""
+    # Hosts whose apps are labelled Verified on the consent screen (section 5). Unset:
+    # MCP_TRUSTED_DEFAULT; `none`: no host is.
+    mcp_trusted_client_hosts: str = ""
+    # The only hosts whose apps may ask to connect, refused before anything is fetched.
+    # Unset: any https host; `none`: no app at all.
+    mcp_allowed_client_hosts: str = ""
+    # The return hosts open registration accepts; `localhost` means loopback. Unset:
+    # `localhost`; `none`: registration is off.
+    mcp_self_registration_redirects: str = ""
 
     def __repr__(self) -> str:
         return "Settings(...)"
@@ -298,18 +342,71 @@ class Settings:
                     "REAM_MCP_PUBLIC_URL must be the gallery origin"
                     " (REAM_GALLERY_ORIGIN) or https://<REAM_API_HOST>"
                 )
+        sign_in = self.mcp_sign_in.lower()
+        if sign_in and sign_in not in _SWITCH:
+            found.append("REAM_MCP_SIGN_IN must be on or off")
+        elif _SWITCH.get(sign_in):
+            if not self.mcp_public_url:
+                found.append("REAM_MCP_SIGN_IN=on needs REAM_MCP_PUBLIC_URL")
+            # This version serves the documents, registration and the challenge; the
+            # sign-in itself (/oauth/authorize, /oauth/token) comes later. Until then a
+            # server that advertised it would send every app to pages that are not there.
+            found.append(
+                "REAM_MCP_SIGN_IN=on is not finished in this version (no /oauth/authorize"
+                " or /oauth/token yet): leave it unset"
+            )
         if self.mcp_accept_keys and self.mcp_accept_keys.lower() not in _SWITCH:
             found.append("REAM_MCP_ACCEPT_KEYS must be 1 or 0")
-        elif _SWITCH.get(self.mcp_accept_keys.lower()) is False:
+        elif _SWITCH.get(self.mcp_accept_keys.lower()) is False and not _SWITCH.get(
+            sign_in
+        ):
             found.append(
-                "REAM_MCP_ACCEPT_KEYS=0 needs sign-in, and this server has none yet:"
-                " with sign-in off, agent keys are the only credential /mcp takes"
+                "REAM_MCP_ACCEPT_KEYS=0 needs sign-in (REAM_MCP_SIGN_IN=on): with"
+                " sign-in off, agent keys are the only credential /mcp takes"
             )
+        for field_name in (
+            "mcp_trusted_client_hosts",
+            "mcp_allowed_client_hosts",
+            "mcp_self_registration_redirects",
+        ):
+            if host_list(getattr(self, field_name)) is BAD_LIST:
+                found.append(
+                    f"{_ENV[field_name]} must be host names separated by commas,"
+                    " or none"
+                )
         return found
 
+    def mcp_signs_in(self) -> bool:
+        """Whether the authorization server is on (section 7): `REAM_MCP_SIGN_IN=on`
+        with `/mcp` itself on."""
+        return bool(self.mcp_public_url) and bool(_SWITCH.get(self.mcp_sign_in.lower()))
+
     def mcp_accepts_keys(self) -> bool:
-        """Whether `/mcp` takes agent keys (section 7). Without sign-in, always."""
-        return _SWITCH.get(self.mcp_accept_keys.lower(), True) is not False
+        """Whether `/mcp` takes agent keys (section 7). Unset: yes without sign-in, no
+        with it; `1` takes them beside sign-in. Without sign-in, always."""
+        if not self.mcp_signs_in():
+            return True
+        return bool(_SWITCH.get(self.mcp_accept_keys.lower()))
+
+    def mcp_trusted_hosts(self) -> frozenset[str]:
+        """The hosts labelled Verified. A malformed list (refused at start) trusts none."""
+        found = host_list(self.mcp_trusted_client_hosts)
+        if found is None:
+            return MCP_TRUSTED_DEFAULT
+        return found if isinstance(found, frozenset) else frozenset()
+
+    def mcp_allowed_hosts(self) -> frozenset[str] | None:
+        """The only hosts that may ask, or None for any. A malformed list allows none."""
+        found = host_list(self.mcp_allowed_client_hosts)
+        return found if found is None or isinstance(found, frozenset) else frozenset()
+
+    def mcp_registration_hosts(self) -> frozenset[str]:
+        """The return hosts open registration accepts (`localhost`: loopback); empty
+        means registration is off. A malformed list allows none."""
+        found = host_list(self.mcp_self_registration_redirects)
+        if found is None:
+            return frozenset({"localhost"})
+        return found if isinstance(found, frozenset) else frozenset()
 
 
 _ENV = {
@@ -353,6 +450,10 @@ _ENV = {
     "sinks_file": "REAM_SINKS_FILE",
     "mcp_public_url": "REAM_MCP_PUBLIC_URL",
     "mcp_accept_keys": "REAM_MCP_ACCEPT_KEYS",
+    "mcp_sign_in": "REAM_MCP_SIGN_IN",
+    "mcp_trusted_client_hosts": "REAM_MCP_TRUSTED_CLIENT_HOSTS",
+    "mcp_allowed_client_hosts": "REAM_MCP_ALLOWED_CLIENT_HOSTS",
+    "mcp_self_registration_redirects": "REAM_MCP_SELF_REGISTRATION_REDIRECTS",
 }
 if set(_ENV) != {f.name for f in fields(Settings)}:
     raise RuntimeError("settings._ENV and Settings disagree")

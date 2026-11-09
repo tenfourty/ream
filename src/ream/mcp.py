@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response
 from starlette.background import BackgroundTasks
 from starlette.concurrency import run_in_threadpool
 
-from ream import api, hosts, keys, onboarding, ratelimit, settings, text
+from ream import api, hosts, keys, mcp_clients, onboarding, ratelimit, settings, text
 from ream.db import Database
 
 _log = logging.getLogger("ream.mcp")
@@ -841,6 +841,17 @@ async def _read_body(request: Request) -> bytes:
     return b"".join(chunks)
 
 
+async def _read_capped(request: Request, limit: int) -> bytes:
+    """The body, or ValueError once it passes `limit` bytes."""
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > limit:
+            raise ValueError("too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _served_here(request: Request) -> bool:
     public = settings.current().mcp_public_url
     if not public:
@@ -848,6 +859,107 @@ def _served_here(request: Request) -> bool:
     return hosts.normalise(hosts.first_host_header(request.scope)) == (
         (urlsplit(public).hostname or "").lower()
     )
+
+
+KEY_REFUSED = (
+    "Agent keys are not accepted at this server's /mcp. Sign in from your MCP app,"
+    " or use the agent API at /api/v1 with your key."
+)
+SIGN_IN_NEEDED = "Sign in from your MCP app: this server's /mcp takes a sign-in token"
+
+
+def _public() -> str:
+    return settings.mcp_origin(settings.current().mcp_public_url)
+
+
+def _challenge() -> str:
+    """`WWW-Authenticate` on a 401 from `/mcp` (section 4): with sign-in on, where the
+    protected-resource metadata is and the scopes; without it, the bare scheme, since
+    there is nothing to sign in to."""
+    if not settings.current().mcp_signs_in():
+        return 'Bearer realm="ream"'
+    return (
+        f'Bearer realm="ream", resource_metadata="{_public()}'
+        f'/.well-known/oauth-protected-resource/mcp", scope="{" ".join(PERMISSIONS)}"'
+    )
+
+
+def _credential(
+    db: Database, limiter: ratelimit.FailedAuthLimiter, request: Request
+) -> keys.AgentKey:
+    """The agent key `/mcp` acts with, or an HTTPException (401 or 429). Sign-in off: the
+    agent API's own check. Sign-in on (section 7): a key only with
+    `REAM_MCP_ACCEPT_KEYS=1`; a working key otherwise gets the sign-in challenge and a
+    WARN naming its public id, and is not counted as a failure. Anything else, no
+    credential included, counts in `limiter` and gets the challenge (no sign-in token can
+    be issued by this version, so none is taken yet)."""
+    current = settings.current()
+    if not current.mcp_signs_in():
+        return api.authenticate(db, limiter, request)
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    token = token.strip()
+    is_key = scheme.lower() == "bearer" and token.startswith("art_")
+    if is_key and current.mcp_accepts_keys():
+        return api.authenticate(db, limiter, request)
+    if is_key and "key" not in request.query_params:
+        found = keys.verify(db, token)
+        if found is not None:
+            _log.warning("refused at /mcp reason=key_on_mcp key=%s", found.id)
+            raise HTTPException(401, KEY_REFUSED)
+    address = ratelimit.client_address(
+        request.headers, request.client.host if request.client else None
+    )
+    api._refuse(limiter, request, address, SIGN_IN_NEEDED)
+    raise AssertionError("unreachable")  # _refuse always raises
+
+
+def _discovery_response(body: dict) -> Response:
+    return JSONResponse(
+        body,
+        headers={
+            "cache-control": "public, max-age=300",
+            "x-content-type-options": "nosniff",
+        },
+    )
+
+
+def protected_resource_metadata() -> dict[str, Any]:
+    """RFC 9728, section 4: `resource` is the MCP URL exactly, and there is one
+    authorization server, since Claude uses only the first."""
+    public = _public()
+    return {
+        "resource": f"{public}/mcp",
+        "authorization_servers": [public],
+        "scopes_supported": list(PERMISSIONS),
+        "bearer_methods_supported": ["header"],
+        "resource_name": "Ream",
+    }
+
+
+def authorization_server_metadata() -> dict[str, Any]:
+    """RFC 8414, section 4. The authorize page is the gallery's, which may be another
+    origin than the issuer; registration is listed only while it is on. `offline_access`
+    is never listed (the 2026 revision says not to)."""
+    public = _public()
+    gallery = settings.mcp_origin(settings.current().gallery_origin)
+    doc: dict[str, Any] = {
+        "issuer": public,
+        "authorization_endpoint": f"{gallery}/oauth/authorize",
+        "token_endpoint": f"{public}/oauth/token",
+        "revocation_endpoint": f"{public}/oauth/revoke",
+        "registration_endpoint": f"{public}/oauth/register",
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none"],
+        "revocation_endpoint_auth_methods_supported": ["none"],
+        "scopes_supported": list(PERMISSIONS),
+        "client_id_metadata_document_supported": True,
+        "authorization_response_iss_parameter_supported": True,
+    }
+    if not settings.current().mcp_registration_hosts():
+        del doc["registration_endpoint"]
+    return doc
 
 
 def _is_request_id(value: Any) -> bool:
@@ -876,6 +988,55 @@ def mcp_router(db: Database, limiter: ratelimit.FailedAuthLimiter) -> APIRouter:
             headers={"allow": "POST"},
         )
 
+    def _signs_in_here(request: Request) -> bool:
+        return _served_here(request) and settings.current().mcp_signs_in()
+
+    @router.get("/.well-known/oauth-protected-resource/mcp", include_in_schema=False)
+    @router.get("/.well-known/oauth-protected-resource", include_in_schema=False)
+    async def protected_resource(request: Request):
+        if not _signs_in_here(request):
+            return _not_found()
+        return _discovery_response(protected_resource_metadata())
+
+    @router.get("/.well-known/oauth-authorization-server", include_in_schema=False)
+    async def authorization_server(request: Request):
+        if not _signs_in_here(request):
+            return _not_found()
+        return _discovery_response(authorization_server_metadata())
+
+    @router.post("/oauth/register", include_in_schema=False)
+    async def register(request: Request):
+        """Open registration (RFC 7591, section 5): only while sign-in is on and
+        `REAM_MCP_SELF_REGISTRATION_REDIRECTS` is not `none`."""
+        if (
+            not _signs_in_here(request)
+            or not settings.current().mcp_registration_hosts()
+        ):
+            return _not_found()
+        try:
+            raw = await _read_capped(request, mcp_clients.MAX_DOCUMENT)
+            metadata = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            refused = mcp_clients.RegistrationRefused(
+                400, "invalid_client_metadata", "the body must be JSON, at most 64 KiB"
+            )
+        else:
+            address = ratelimit.client_address(
+                request.headers, request.client.host if request.client else None
+            )
+            try:
+                answer = await run_in_threadpool(
+                    mcp_clients.register, db, metadata, address
+                )
+            except mcp_clients.RegistrationRefused as exc:
+                refused = exc
+            else:
+                return JSONResponse(answer, status_code=201, headers=_NO_STORE)
+        headers = dict(_NO_STORE)
+        if refused.retry_after is not None:
+            headers["retry-after"] = str(refused.retry_after)
+        return JSONResponse(refused.body(), status_code=refused.status, headers=headers)
+
     @router.post("/mcp", include_in_schema=False)
     async def mcp_post(request: Request):
         if not _served_here(request):
@@ -896,11 +1057,11 @@ def mcp_router(db: Database, limiter: ratelimit.FailedAuthLimiter) -> APIRouter:
             )
         raw = await _read_body(request)
         try:
-            key = await run_in_threadpool(api.authenticate, db, limiter, request)
+            key = await run_in_threadpool(_credential, db, limiter, request)
         except HTTPException as exc:
             headers = dict(exc.headers or {})
             if exc.status_code == 401:
-                headers.setdefault("www-authenticate", 'Bearer realm="ream"')
+                headers.setdefault("www-authenticate", _challenge())
             raise _Refusal(
                 exc.status_code, AUTH_REFUSED, str(exc.detail), headers=headers
             ) from None

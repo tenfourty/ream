@@ -254,6 +254,28 @@ def test_the_cli_endpoint_keeps_the_house_default_until_the_plugin_has_it(monkey
         ({"mcp_accept_keys": "1"}, None),
         ({"mcp_accept_keys": "maybe"}, "REAM_MCP_ACCEPT_KEYS must be 1 or 0"),
         ({"mcp_accept_keys": "0"}, "needs sign-in"),
+        ({"mcp_sign_in": "maybe"}, "REAM_MCP_SIGN_IN must be on or off"),
+        ({"mcp_sign_in": "off"}, None),
+        # Until the sign-in itself is built, on refuses to start (tests override it).
+        (
+            {"mcp_public_url": "https://artifacts.tenfourty.site", "mcp_sign_in": "on"},
+            "not finished in this version",
+        ),
+        (
+            {
+                "mcp_public_url": "https://artifacts.tenfourty.site",
+                "mcp_sign_in": "on",
+                "mcp_accept_keys": "0",
+            },
+            "not finished in this version",
+        ),
+        ({"mcp_trusted_client_hosts": "claude.ai, Zed.dev"}, None),
+        ({"mcp_trusted_client_hosts": "none"}, None),
+        ({"mcp_allowed_client_hosts": "https://claude.ai"}, "host names"),
+        ({"mcp_allowed_client_hosts": "claude.ai/x"}, "host names"),
+        ({"mcp_allowed_client_hosts": "none, claude.ai"}, "host names"),
+        ({"mcp_self_registration_redirects": "localhost:3000"}, "host names"),
+        ({"mcp_self_registration_redirects": "none"}, None),
     ],
 )
 def test_the_mcp_settings_are_checked_at_start(values, problem):
@@ -264,6 +286,26 @@ def test_the_mcp_settings_are_checked_at_start(values, problem):
     else:
         assert len(found) == 1 and problem in found[0], found
         assert "elsewhere.example" not in found[0]
+
+
+def test_sign_in_without_the_public_url_names_it():
+    with settings.override(mcp_sign_in="on") as current:
+        found = current.problems()
+        assert "REAM_MCP_SIGN_IN=on needs REAM_MCP_PUBLIC_URL" in found
+        assert current.mcp_signs_in() is False
+
+
+def test_the_mcp_host_lists_read_as_sets():
+    assert settings.host_list("") is None
+    assert settings.host_list("none") == frozenset()
+    assert settings.host_list(" Claude.ai , zed.dev. ") == {"claude.ai", "zed.dev"}
+    assert settings.host_list("claude.ai:443") is settings.BAD_LIST
+    with settings.override(mcp_allowed_client_hosts="none") as current:
+        assert current.mcp_allowed_hosts() == frozenset()
+    assert settings.current().mcp_allowed_hosts() is None
+    assert settings.current().mcp_registration_hosts() == {"localhost"}
+    with settings.override(mcp_self_registration_redirects="none") as current:
+        assert current.mcp_registration_hosts() == frozenset()
 
 
 def test_mcp_takes_keys_unless_told_not_to():

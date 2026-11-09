@@ -65,6 +65,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 from ream import events, settings, sinks
@@ -392,10 +393,39 @@ def http_post(hook: Webhook, body: bytes, headers: dict[str, str]) -> int:
     DEADLINE_SECONDS: connects get what is left, and a timer cuts the socket at the
     deadline, so a server that drips bytes cannot hold the read open (a per-recv timeout
     alone resets on every byte). Name resolution is not covered."""
-    parts = urlsplit(hook.url)
+    return fenced_request(
+        hook.url,
+        "POST",
+        body,
+        headers,
+        allow_private=hook.allow_private,
+        deadline_seconds=DEADLINE_SECONDS,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        read=lambda response: response.status,
+    )
+
+
+def fenced_request(
+    url: str,
+    method: str,
+    body: bytes | None,
+    headers: dict[str, str],
+    *,
+    allow_private: bool,
+    deadline_seconds: float,
+    timeout: float,
+    read: Callable[[http.client.HTTPResponse], Any],
+) -> Any:
+    """One request through the address guard: resolved once, refused unless the address
+    connected to is allowed (`address_allowed`), pinned to it, no proxy, no redirect
+    followed (a 3xx is handed to `read` like any status). `read(response)` runs inside
+    the deadline and its value is returned; the timer cuts the socket at
+    `deadline_seconds`, TLS handshake and reads included. Raises WebhookError for a
+    transport failure. Also the MCP client metadata fetch (mcp_clients.py)."""
+    parts = urlsplit(url)
     https = parts.scheme == "https"
     cls = http.client.HTTPSConnection if https else http.client.HTTPConnection
-    deadline = time.monotonic() + DEADLINE_SECONDS
+    deadline = time.monotonic() + deadline_seconds
     opened: list = []
     expired = threading.Event()
 
@@ -410,17 +440,17 @@ def http_post(hook: Webhook, body: bytes, headers: dict[str, str]) -> int:
     # An explicit port: http.client splits "host" at the last colon when it is not given,
     # which breaks a bracket-stripped IPv6 literal.
     port = parts.port or (443 if https else 80)
-    conn = cls(parts.hostname, port, timeout=REQUEST_TIMEOUT_SECONDS)
-    conn._create_connection = _pinned_connect(hook.allow_private, deadline, opened)  # type: ignore[attr-defined]
+    conn = cls(parts.hostname, port, timeout=timeout)
+    conn._create_connection = _pinned_connect(allow_private, deadline, opened)  # type: ignore[attr-defined]
     target = parts.path or "/"
     if parts.query:
         target += "?" + parts.query
-    timer = threading.Timer(DEADLINE_SECONDS, cut)
+    timer = threading.Timer(deadline_seconds, cut)
     timer.daemon = True
     timer.start()
     try:
-        conn.request("POST", target, body, headers)
-        return conn.getresponse().status
+        conn.request(method, target, body, headers)
+        return read(conn.getresponse())
     except WebhookError:
         raise
     except TimeoutError:

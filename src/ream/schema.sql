@@ -1182,3 +1182,22 @@ create table if not exists mcp_events_seen (
     seq        bigint not null,
     updated_at timestamptz not null
 );
+
+-- An app that may ask to connect over MCP (docs/agent/specs/2026-11-08-mcp-oauth-design.md, 5
+-- and 8): a fetched client metadata document (cached; `id` is its URL) or a self-registered
+-- client (`id` is 'reg_' + random). Public clients only: never a secret. `host` is the checked
+-- address it is shown by, `name` its own claim. `registered_from` is the address (an IPv6
+-- one as its /64) a registration came from, for the hourly limit.
+create table if not exists mcp_client (
+    id              text primary key,
+    kind            text not null,
+    host            text not null,
+    name            text not null default '',
+    redirect_uris   jsonb not null,
+    created_at      timestamptz not null default now(),
+    fetched_at      timestamptz,
+    registered_from text,
+    last_used_at    timestamptz
+);
+create index if not exists mcp_client_registered_idx
+    on mcp_client (registered_from, created_at) where kind = 'registered';
