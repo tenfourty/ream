@@ -1851,7 +1851,7 @@ def _set_aside_open_questions(
     owner = conn.execute(
         "select agent from artifact where id = %s", (artifact_id,)
     ).fetchone()[0]
-    if any(kind == "review" for *_, kind in rows):
+    if any(row[3] == "review" for row in rows):
         # A set-aside review gets no verdict while the page is away; his held
         # marks go to the agent now rather than stay invisible. A reopened review
         # starts with none held.
