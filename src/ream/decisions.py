@@ -1062,16 +1062,20 @@ def list_for_agent(
         # outcome route answered 404 was the list and the route disagreeing.
         # `any_agent`: a signed-in MCP app lists the questions on every page it may
         # read (MCP design 11.2), which is every live page.
-        " where (artifact.agent = %s or %s) and artifact.deleted_at is null"
+        " where ((artifact.agent = %s and artifact.deleted_at is null)"
+        " or (%s and artifact.deleted_at is null))"
     )
     if include_set_aside:
         # Except its OPEN questions, which `artifacts-decide list` shows in its SET
         # ASIDE section as "page binned" (2 Nov 2026); answered or closed rows on a
         # binned page stay out as before.
+        # Only the caller's OWN pages (the first arm): an app never reads the trash, so
+        # the `any_agent` arm keeps `deleted_at is null`.
         sql = sql.replace(
             "artifact.deleted_at is null",
             "(artifact.deleted_at is null or (decision.answered_at is null"
             " and decision.closed_at is null))",
+            1,
         )
     if not include_closed:
         # A submitted form the agent has not acknowledged stays listed even when its

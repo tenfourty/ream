@@ -704,7 +704,8 @@ def open_questions(
             pages = {
                 r[0]: (r[1], r[2])
                 for r in conn.execute(
-                    "select id, title, agent from artifact where (agent = %s or %s)",
+                    "select id, title, agent from artifact where agent = %s"
+                    " or (%s and deleted_at is null)",
                     (agent, every),
                 ).fetchall()
             }

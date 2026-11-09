@@ -221,6 +221,24 @@ def test_a_keys_questions_are_still_its_own(db):
     assert ids == {mine.id}
 
 
+def test_an_apps_questions_never_list_the_trash_of_another_agent(db):
+    app = _app(db)
+    binned = store.publish(db, "office", "Binned", PAGE.format("x"))
+    own = store.publish(db, app.agent, "Own", PAGE.format("x"))
+    on_binned = _ask(db, "office", binned.id, "binned question")
+    on_own = _ask(db, app.agent, own.id, "own question")
+    assert store.set_deleted(db, binned.id, True, agent="office")
+    assert store.set_deleted(db, own.id, True, agent=app.agent)
+    out = _tool(_as(db, app), "questions", include_set_aside=True)
+    _ok(out)
+    ids = {q["id"] for q in out["structuredContent"]["questions"]}
+    # Its own binned page's open question is set aside as ever; the office's is not its to see.
+    assert ids == {on_own.id}
+    # A key sees what it saw before: its own, binned page included.
+    key = _tool(_as_key(db, "office"), "questions", include_set_aside=True)
+    assert {q["id"] for q in key["structuredContent"]["questions"]} == {on_binned.id}
+
+
 def test_a_read_only_app_has_no_organise_tool(db):
     app = _app(db, permissions=("read",))
     listed = {t["name"] for t in _send(_as(db, app), "tools/list", {})["tools"]}
