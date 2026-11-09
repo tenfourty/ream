@@ -1277,3 +1277,10 @@ create table if not exists mcp_signin (
     expires_at        timestamptz not null,
     used_at           timestamptz
 );
+
+-- ASKING ON ANY PAGE HE CAN READ (9 Nov 2026; MCP sign-in design 11.4). Null: the question
+-- belongs to its page's agent, as every question did before. Set: a signed-in app asked on a
+-- page that is not its own, and `asked_by` is that app's agent; the answer goes to it, the
+-- page's agent is told only that a question was put on its page, and only the asker may close
+-- it. SQLite does the same as its schema step 27.
+alter table decision add column if not exists asked_by text;

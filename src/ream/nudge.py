@@ -77,6 +77,7 @@ _ALERTNAMES = {
     "comment_added": "Jeremy left a comment",
     "thread_resolved": "Jeremy resolved a thread",
     "thread_reopened": "Jeremy reopened a thread",
+    "question_asked": "A question was put on your page",
 }
 
 # Sanitising lives in `ream.text`, not here. It used to live here and

@@ -297,6 +297,7 @@ main{display:block}
 .ask.held{border-left-color:var(--line);box-shadow:none;background:transparent}
 .ask.held .q{font-weight:500;color:var(--muted);margin:0 0 var(--space-3)}
 .ask .qroute{margin:0 0 .65rem;font-size:.82rem;color:var(--muted)}
+.ask .qasker,.settled-body .qasker{margin:0 0 .65rem;font-size:.82rem;color:var(--muted)}
 .ask .qroute.waiting_now{color:var(--ok)}
 .ask .qctx{margin:0 0 var(--space-6);font-size:.9rem;color:var(--muted);white-space:pre-line}
 .ask .qmeta{margin:0 0 .65rem;font:.74rem/1.5 var(--mono);color:var(--muted);
@@ -3971,6 +3972,22 @@ def _passed_on(row, hosts: dict[str, str] | None) -> tuple[str, str]:
     return escape(host), escape(mcp_apps.via(host))
 
 
+def _asker_line(row, hosts: dict[str, str] | None) -> str:
+    """For a question a signed-in app put on a page that is not its own (MCP design 11.4):
+    who asked, so it is never read as the page's agent speaking. Escaped; the host comes from
+    the app's own record, and an agent that is not (or is no longer) an app is shown by its
+    stored name."""
+    asker = getattr(row, "asked_by", None)
+    if not asker:
+        return ""
+    host = (hosts or {}).get(asker)
+    who = mcp_apps.via(host) if host else asker
+    return (
+        f'<p class="qasker">Asked by {escape(who)}, not by this page\u2019s agent. '
+        "The answer goes to them.</p>"
+    )
+
+
 def _provenance(row, hosts: dict[str, str] | None = None) -> str:
     """Who wrote a relayed answer down, from where, and when he said it.
 
@@ -4469,7 +4486,7 @@ def _render_decisions(
         an OPEN question, worded in `listening.WORDING`. Nothing when the caller
         gave no route (a settled card, a review, a page that does not look)."""
         route = (routes or {}).get(row.id)
-        if route is None or row.answer is not None:
+        if route is None or row.answer is not None or getattr(row, "asked_by", None):
             return ""
         return (
             f'<p class="qroute {escape(route.state)}"'
@@ -4549,6 +4566,7 @@ def _render_decisions(
             f'<div class="ask"{anchor}>'
             f'<p class="q">{tag}{escape(row.question)}</p>'
             f"{_context_block(row)}"
+            f"{_asker_line(row, app_hosts)}"
             f"{_route_line(row)}"
             f"{_since(row)}"
             f"{hint}"
@@ -4705,7 +4723,8 @@ def _render_decisions(
                 # he sees it without opening the entry.
                 + (_presence_line(row, "span") if row.answer == "c" else "")
                 + "</summary>"
-                f'<div class="settled-body">{_provenance(row, app_hosts)}{pickup}{note}'
+                f'<div class="settled-body">{_asker_line(row, app_hosts)}'
+                f"{_provenance(row, app_hosts)}{pickup}{note}"
                 f"{thread_html}"
                 # SAID WHERE THE HAND IS. The section already carries "nothing
                 # here is locked", but that sits at the foot of the whole list,
@@ -6313,11 +6332,13 @@ def gallery_router(db: Database) -> APIRouter:
             presence=presence,
             listening_since=events.last_read(db, row[2]),
             app_hosts={
-                r.recorded_by: found.host
+                who: found.host
                 for r in shown_rows
-                if r.answer_source == decisions.MCP_SOURCE
-                and r.recorded_by
-                and (found := mcp_apps.mcp_agent(db, r.recorded_by)) is not None
+                for who in (
+                    r.recorded_by if r.answer_source == decisions.MCP_SOURCE else None,
+                    r.asked_by,
+                )
+                if who and (found := mcp_apps.mcp_agent(db, who)) is not None
             },
             routes=listening.for_decisions(
                 db,

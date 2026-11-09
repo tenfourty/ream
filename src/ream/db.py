@@ -908,6 +908,8 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " used_at timestamptz)"
         ),
     ),
+    # 9 Nov 2026: who asked a question put on a page that is not the asker's (see schema.sql).
+    27: ("alter table decision add column asked_by text",),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

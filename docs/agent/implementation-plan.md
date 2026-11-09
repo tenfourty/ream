@@ -2643,6 +2643,8 @@ Docs land with the code (the agent guide and `agents.txt` from slice 1; the runb
   it does not own; the answer goes to the asker; the page's agent is told (§11.4).
 - **Tests:** every decision test passes with `asked_by` null; the app's `whats_new` wakes, not the
   office's wait; only the asker closes it.
+- **Built (9 Nov 2026):** `tests/test_ask_anywhere.py`; the design is §11.4 (status note there). The
+  page's agent is told by a `question_asked` event, not woken by `ream wait`.
 
 ### Slice 9 (M): the homelab turns it on, and the owner tries it from Claude.ai
 
@@ -2815,3 +2817,8 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   address (the provider's in-cluster service) with `Host` and `X-Forwarded-*` of the public
   issuer; issuer, endpoint-origin and `iss` checks are unchanged and the authorize address is
   never rewritten. Start-up refuses it without the issuer or with more than scheme, host and port.
+- **Asking on any page he can read (9 Nov 2026, slice 8).** A connected app can ask a question on
+  any page the person can read, not only its own. The card says "Asked by Jeremy, via claude.ai";
+  the answer wakes the app's `whats_new`, not the page's agent, which gets a `question_asked`
+  event (nudged as a comment is); only the app can withdraw it. A key still asks on its own pages
+  only. New column `decision.asked_by` (null: the page's agent). Spec §11.4.

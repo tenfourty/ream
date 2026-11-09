@@ -57,6 +57,10 @@ KINDS = (
     # He reopened a resolved comment thread (5 Nov 2026; `comments.reopen`). ref_id is the
     # thread's root. Like `thread_resolved` it is never written for the owner's own act.
     "thread_reopened",
+    # A signed-in app put a question on this agent's page (MCP design 11.4). ref_id is the
+    # question; the answer goes to the app, not here. Never written for a question an agent
+    # asks on its own page.
+    "question_asked",
 )
 
 # The other namespace (core-and-plugins design, 4.1): what the partner bridge carries.

@@ -514,8 +514,19 @@ Today a question belongs to its page's agent, who is told the answer (`decision`
 column). Answer 2's "ask anywhere" needs a question whose asker is not the page's agent: a new
 nullable `decision.asked_by` (null: the page's agent, so every existing row reads as today). The
 answer then goes to `asked_by`; the page's agent is told a question was put on its page, as a
-comment would tell it. This is its own slice, after the rest works; until it lands, `ask` works on
-the app's own pages and says so.
+comment would tell it.
+
+**Status: built (9 Nov 2026, slice 8).** `decision.asked_by` exists (schema step 27 on SQLite). An
+app's `ask` on a page that is not its own succeeds on any page the person can read (archived
+included, which sets the question aside as for any agent; never the bin); a key's `ask` still
+answers "no such page" for any page but its own. Every "my own questions" read and write (get,
+list, close, acknowledge, outcome, the uncollected alert, `depends_on`, `replaces`) goes through
+`coalesce(asked_by, page's agent)`, so the app owns the question and the page's agent can no longer
+close it. The answer events (`decision_answered`, and the bridge's `answered`) are written for the
+asker. The page's agent gets a `question_asked` journal event (actor the app, ref_id the question,
+the question as summary and note) and the same nudge a comment gets. The card says "Asked by
+Jeremy, via claude.ai", escaped, and carries no "where your answer goes" line, since that line
+speaks for the page's agent.
 
 ### 11.5 Passing on an answer (answer 1)
 

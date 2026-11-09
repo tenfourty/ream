@@ -948,9 +948,11 @@ _ASK_FIELDS = {
     "ask",
     title="Ask a question",
     description=(
-        "Ask the person a question on one of your pages, with lettered options "
+        "Ask the person a question on a page, with lettered options "
         "([{letter, label}]; recommended is the letter you suggest). The answer reaches "
-        "you in whats_new. For now only on your own pages."
+        "you in whats_new. Connected app: on any page the person can read, not only "
+        "your own; the card says it came from you, the page's agent is told a question "
+        "was put on its page, and only you can withdraw it. Key: your own pages."
     ),
     read_only=False,
     destructive=False,
@@ -992,7 +994,11 @@ DECISION_ID = {"type": "string", "description": "The question's id."}
 @tool(
     "close_question",
     title="Withdraw a question",
-    description="Withdraw an open question you asked, unanswered.",
+    description=(
+        "Withdraw an open question you asked, unanswered. Only the asker can: a "
+        "question a connected app put on another agent's page is closed by that app "
+        "alone, never by the page's agent."
+    ),
     read_only=False,
     destructive=False,
     idempotent=True,

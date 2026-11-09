@@ -53,6 +53,7 @@ from ream import (
     store,
     text,
 )
+from ream import reach as caller_reach
 from ream.db import Connection, Database, in_list, jsonb
 
 _log = logging.getLogger(__name__)
@@ -127,7 +128,7 @@ _COLUMNS = (
     ' as "archived_at [TIMESTAMPTZ]",'
     " (select x.deleted_at from artifact x where x.id = decision.artifact_id)"
     ' as "deleted_at [TIMESTAMPTZ]",'
-    " decision.answer_record"
+    " decision.answer_record, decision.asked_by"
 )
 # Positions in `_COLUMNS` that are read by index outside `_row_to_decision`.
 # Tied to its order: `session` is the 18th column, `kind` the 19th. Appending
@@ -135,6 +136,7 @@ _COLUMNS = (
 _SESSION_IDX = 17
 _KIND_IDX = 18
 _REVIEW_MODE_IDX = 19
+_ASKED_BY_IDX = 34
 
 
 @dataclass(frozen=True)
@@ -203,6 +205,16 @@ class DecisionRow:
     # receipt as {state, note, link, agent, session, comment_id, at, expires_at,
     # lapsed}, or None when it has said nothing. Derived on read, like `held_by`.
     receipt: dict | None = None
+    # Who asked, when it is not the page's agent: a signed-in app asking on a page it does
+    # not own (MCP design 11.4). None: the page's agent, as every question was before. The
+    # answer goes to this agent, and only this agent may close the question.
+    asked_by: str | None = None
+
+
+# Whose question it is, in SQL: the asker where an app asked on someone else's page, else the
+# page's agent. Every read and write "of one's own questions" goes through this, so an app's
+# question is its own and a key never reaches it by owning the page.
+_ASKER = "coalesce(decision.asked_by, artifact.agent)"
 
 
 def public(row: DecisionRow) -> dict:
@@ -541,6 +553,7 @@ def _row_to_decision(row) -> DecisionRow:
         reopened_at=row[30].isoformat() if row[30] is not None else None,
         **_set_aside_fields(row),
         answer_record=row[33],
+        asked_by=row[34],
     )
 
 
@@ -645,7 +658,7 @@ def _owned_row(conn, agent: str, decision_id: str, *, lock: bool = False):
     return conn.execute(
         f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
         " join artifact on artifact.id = decision.artifact_id"
-        " where decision.id = %s and artifact.agent = %s"
+        f" where decision.id = %s and {_ASKER} = %s"
         # Only questions: a review id answers like an unknown one.
         " and decision.kind = 'question'"
         + (conn.for_update(" of decision") if lock else ""),
@@ -710,9 +723,19 @@ def ask(
 
     with db.connect() as conn:
         owned = store._owned(conn, artifact_id, agent, widen=False)
+        asked_by = None
+        if owned is None:
+            # A signed-in app asks on any page the person can read (MCP design 11.4). Only
+            # an app's reach says so (`reach.widened` is None for a key, and for any other
+            # agent than the caller), so a key still gets the answer it always got.
+            wide = caller_reach.widened(agent)
+            if wide is not None and wide.reads_all():
+                owned = store._owned(conn, artifact_id, agent, True)
+                asked_by = agent
         if owned is None:
             raise store.NotFound()
         version_n = owned[4]
+        page_agent = owned[2]
 
         # The scanner last, on the question and every label that is actually about to
         # be stored -- ownership is confirmed above, so this cost is never spent on
@@ -745,9 +768,9 @@ def ask(
             if fields.topic_id is not None and title is None:
                 # A topic id this agent used before keeps its latest title.
                 found = conn.execute(
-                    "select decision.topic_title from decision"
+                    "select decision.topic_title from decision"  # noqa: S608 -- fixed constant, not caller input
                     " join artifact on artifact.id = decision.artifact_id"
-                    " where artifact.agent = %s and decision.topic_id = %s"
+                    f" where {_ASKER} = %s and decision.topic_id = %s"
                     " and decision.topic_title is not null"
                     " order by decision.created_at desc, decision.id desc limit 1",
                     (agent, fields.topic_id),
@@ -780,8 +803,8 @@ def ask(
                 "insert into decision"
                 " (id, artifact_id, version_n, question, options, recommended, session,"
                 " context, topic_id, topic_title, depends_on, replaces, urgency,"
-                " blocked_on, needed_by, for_offices)"
-                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                " blocked_on, needed_by, for_offices, asked_by)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     decision_id,
                     artifact_id,
@@ -799,8 +822,28 @@ def ask(
                     fields.blocked_on,
                     fields.needed_by,
                     jsonb(fields.for_offices),
+                    asked_by,
                 ),
             )
+            if asked_by is not None:
+                # The page's agent is told a question was put on its page, as a comment
+                # would tell it: a journal event it can wait on, and the same nudge. The
+                # question itself is the asker's, so it is not offered the answer.
+                emissions.append(
+                    events.emit(
+                        conn,
+                        events.Event(
+                            kind="question_asked",
+                            artifact_id=artifact_id,
+                            agent=page_agent,
+                            actor=asked_by,
+                            ref_id=decision_id,
+                            summary=question,
+                            note=question,
+                            data={"title": owned[1], "nudge_note": ""},
+                        ),
+                    )
+                )
             # The partner is told in the same transaction (partner.py): a rolled
             # back ask leaves no event. Nothing at all when the bridge is off.
             asked_body = partner.asked_body(
@@ -1011,7 +1054,7 @@ def exists(db: Database, decision_id: str, *, agent: str | None = None) -> bool:
     )
     params: list[object] = [decision_id]
     if agent is not None:
-        sql += " and artifact.agent = %s"
+        sql += f" and {_ASKER} = %s"
         params.append(agent)
     with db.connect() as conn:
         return conn.execute(sql, tuple(params)).fetchone() is not None
@@ -1062,7 +1105,7 @@ def list_for_agent(
         # outcome route answered 404 was the list and the route disagreeing.
         # `any_agent`: a signed-in MCP app lists the questions on every page it may
         # read (MCP design 11.2), which is every live page.
-        " where ((artifact.agent = %s and artifact.deleted_at is null)"
+        f" where (({_ASKER} = %s and artifact.deleted_at is null)"
         " or (%s and artifact.deleted_at is null))"
     )
     if include_set_aside:
@@ -1754,7 +1797,10 @@ def record_elsewhere(
         ).fetchone()
         if row is None:
             raise store.NotFound()
-        artifact_id, options, owning_agent = row[1], row[4], row[-1]
+        artifact_id, options = row[1], row[4]
+        # Who the answer is for: the app that asked on someone else's page, else the page's
+        # agent (MCP design 11.4).
+        owning_agent = row[_ASKED_BY_IDX] or row[-1]
         # The session that ASKED, exactly as a tapped answer carries it (see
         # `answer`). Missing until 23 Sep 2026: a relayed answer's event had no
         # session, so a waiter listening for its own session never heard it --
@@ -1957,7 +2003,10 @@ def answer(
         # exactly twelve entries. Adding the two acknowledgement columns silently
         # turned `owning_agent` into `acknowledged_by` -- always None -- and every
         # answer then tried to write an event with no agent.
-        artifact_id, options, title, owning_agent = row[1], row[4], row[-2], row[-1]
+        artifact_id, options, title = row[1], row[4], row[-2]
+        # Who the answer is for: the app that asked on someone else's page, else the page's
+        # agent (MCP design 11.4).
+        owning_agent = row[_ASKED_BY_IDX] or row[-1]
         # The session that ASKED, taken from inside _COLUMNS (last entry) rather
         # than from the end of the row, which is where the two joined columns
         # live. The event carries this so the seat that raised the question can
@@ -2149,7 +2198,7 @@ def get_owned(db: Database, agent: str, decision_id: str) -> DecisionRow | None:
         row = conn.execute(
             f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
             " join artifact on artifact.id = decision.artifact_id"
-            " where decision.id = %s and artifact.agent = %s",
+            f" where decision.id = %s and {_ASKER} = %s",
             (decision_id, agent),
         ).fetchone()
         return None if row is None else _with_held(conn, [_row_to_decision(row)])[0]
@@ -2335,7 +2384,7 @@ def _acknowledge(
     row = conn.execute(
         f"select {_COLUMNS} from decision"  # noqa: S608 -- fixed constant, not caller input
         " join artifact on artifact.id = decision.artifact_id"
-        " where decision.id = %s and artifact.agent = %s",
+        f" where decision.id = %s and {_ASKER} = %s",
         (decision_id, agent),
     ).fetchone()
     if row is None:
@@ -2426,7 +2475,7 @@ def uncollected(
     every seat, which is the operator's view.
     """
     sql = (
-        f"select {_COLUMNS}, artifact.agent, artifact.title,"  # noqa: S608 -- fixed constant, not caller input
+        f"select {_COLUMNS}, {_ASKER}, artifact.title,"  # noqa: S608 -- fixed constant, not caller input
         " seat_read.last_read_at from decision"
         " join artifact on artifact.id = decision.artifact_id"
         # Joined on the ASKING SESSION as well as the seat. The question is not
@@ -2439,7 +2488,7 @@ def uncollected(
         # unlabelled reader's row, whose session is stored as ''. Plain `=` is
         # never true for NULL, so without the coalesce every pre-session
         # decision would read as no_reader for ever.
-        " left join seat_read on seat_read.agent = artifact.agent"
+        f" left join seat_read on seat_read.agent = {_ASKER}"
         "   and seat_read.session = coalesce(decision.session, '')"
         " where decision.answered_at is not null"
         " and decision.acknowledged_at is null"
@@ -2452,7 +2501,7 @@ def uncollected(
     )
     params: list[object] = [datetime.now(UTC) - timedelta(seconds=stuck_after_seconds)]
     if agent is not None:
-        sql += " and artifact.agent = %s"
+        sql += f" and {_ASKER} = %s"
         params.append(agent)
     sql += " order by decision.answered_at asc"
 
@@ -2648,9 +2697,9 @@ def record_outcome(
     store._check_size(body, MAX_OUTCOME_BYTES, "outcome", agent=agent, artifact_id=None)
     with db.connect() as conn:
         owned = conn.execute(
-            "select decision.artifact_id from decision"
+            "select decision.artifact_id from decision"  # noqa: S608 -- fixed constant, not caller input
             " join artifact on artifact.id = decision.artifact_id"
-            " where decision.id = %s and artifact.agent = %s"
+            f" where decision.id = %s and {_ASKER} = %s"
             "   and artifact.deleted_at is null",
             (decision_id, agent),
         ).fetchone()
