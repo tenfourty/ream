@@ -2724,3 +2724,10 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   surfaced as a 500); `formanswer.relay` refuses it with `SubmitRefused` (422). Old step tests that
   expected the CHECK text after a full migration were updated. Part 2: the
   `decisions.stored_sources()` registry.
+- **MCP's writing tools, with today's keys (9 Nov 2026; slice 2 of MCP sign-in).** An agent
+  speaking MCP at `/mcp` can publish a page, update it whole or one section, rename, pin, archive,
+  file, delete and restore it, comment, resolve and reopen a thread, ask and withdraw a question,
+  and pass on an answer the person gave elsewhere (`record_answer`, a key's relay sources only,
+  his words required). Each tool builds its route's body and calls the route's module function,
+  so refusals, secret scanning and events match the route's; a write is labelled with its
+  `session` argument, the `X-Ream-Session` header, or `mcp/<date>`. `docs/mcp.md`.

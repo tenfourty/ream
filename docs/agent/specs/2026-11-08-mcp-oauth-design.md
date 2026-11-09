@@ -440,7 +440,9 @@ shown as "<owner name>, via <host>" (`Jeremy, via claude.ai`). His own gallery a
 "Jeremy"; his Claude's are stored as the agent's, never under the owner id.
 
 **Sessions.** MCP carries no session label. A tool may pass one (`session`, same rules as
-`X-Ream-Session`); otherwise the work is labelled `<host>/<YYYY-MM-DD>`.
+`X-Ream-Session`); otherwise the work is labelled `<host>/<YYYY-MM-DD>`. With a key (slice 2),
+the order is the tool's `session`, then the request's `X-Ream-Session` header, then
+`mcp/<YYYY-MM-DD>` (UTC): a key has no app host to name.
 
 ### 11.2 Reach (answer 2)
 
