@@ -101,7 +101,8 @@ _COLUMNS = (
     "comment.id, comment.artifact_id, comment.version_n, comment.thread_root,"
     " comment.anchor, comment.quote, comment.author_kind, comment.author,"
     " comment.body, comment.created_at, comment.resolved_at, comment.resolved_by,"
-    " comment.kind, comment.held, comment.review_round, comment.session"
+    " comment.kind, comment.held, comment.review_round, comment.session,"
+    " comment.deleted_at"
 )
 
 # Correlated subquery, not a join: for the comment a given row names -- itself, if it
@@ -121,10 +122,25 @@ _ROOT_RESOLVED_AT = (
 # A comment GitGuardian flagged after it was saved is withdrawn: hidden from every
 # read, and so are the replies under a withdrawn ROOT (Jeremy may have answered it
 # a second before it went). Same root-subquery shape as `_ROOT_RESOLVED_AT`.
-_VISIBLE = (
-    "comment.withdrawn_at is null and (select root.withdrawn_at from comment as root"
-    " where root.id = coalesce(comment.thread_root, comment.id)) is null"
+#
+# A DELETED comment (its author's own act, 9 Nov 2026) is shown only as a placeholder: a
+# deleted ROOT that still has a live reply under it stays, so the thread is not torn in
+# two; a deleted reply, and a thread with nothing live left in it, are gone from every read.
+# `RESTORE_WINDOW` is how long the author may take it back.
+_STILL_SHOWN = (
+    "(comment.deleted_at is null or exists (select 1 from comment as live"
+    " where live.thread_root = comment.id and live.deleted_at is null"
+    " and live.withdrawn_at is null))"
 )
+_VISIBLE = (
+    "comment.withdrawn_at is null and (select root.withdrawn_at from comment as root"  # noqa: S608 -- fixed constants
+    " where root.id = coalesce(comment.thread_root, comment.id)) is null"
+    f" and {_STILL_SHOWN}"
+)
+
+# How long after deleting a comment its author may restore it, for the gallery's "Deleted ·
+# Undo" and the API's restore route alike.
+RESTORE_WINDOW = timedelta(minutes=10)
 
 _log = logging.getLogger("ream.comments")
 
@@ -177,6 +193,9 @@ class CommentRow:
     # height, byte_size, sha256 and the API path to fetch each by (never a token).
     # Read, not a column of `comment`; see `images.with_images`.
     images: list = field(default_factory=list)
+    # When the author deleted it (isoformat), else None. A deleted comment is read only as a
+    # placeholder, under a thread that still has live replies, and its words are blank.
+    deleted_at: str | None = None
 
 
 class InvalidAnchor(Exception):
@@ -223,6 +242,7 @@ _HIS_THREAD = (
     "  where h.artifact_id = c.artifact_id"
     "    and coalesce(h.thread_root, h.id) = c.thread_root"
     "    and h.author_kind = 'human' and h.withdrawn_at is null"
+    "    and h.deleted_at is null"
     "    and h.created_at < c.created_at)"
     "  or c.anchor->>'kind' = 'decision')"
 )
@@ -230,7 +250,7 @@ UNSEEN_REPLY = (
     "c.author_kind = 'agent'"  # noqa: S608
     " and c.kind = 'comment' and (c.thread_root is not null"
     "      or c.anchor->>'kind' = 'decision')"
-    " and c.withdrawn_at is null and not c.held"
+    " and c.withdrawn_at is null and c.deleted_at is null and not c.held"
     " and (select root.withdrawn_at from comment root"
     "       where root.id = coalesce(c.thread_root, c.id)) is null"
     " and not exists (select 1 from page_read r"
@@ -588,7 +608,7 @@ def _row_to_comment(row) -> CommentRow:
         quote=row[5],
         author_kind=row[6],
         author=row[7],
-        body=row[8],
+        body="" if row[16] is not None else row[8],
         created_at=row[9].isoformat(),
         resolved_at=row[10].isoformat() if row[10] is not None else None,
         resolved_by=row[11],
@@ -596,6 +616,7 @@ def _row_to_comment(row) -> CommentRow:
         held=row[13],
         review_round=row[14],
         session=row[15],
+        deleted_at=row[16].isoformat() if row[16] is not None else None,
     )
 
 
@@ -747,9 +768,10 @@ def add(
 
         if is_reply:
             root = conn.execute(
-                "select comment.anchor, comment.quote from comment"
+                "select comment.anchor, comment.quote from comment"  # noqa: S608 -- fixed constant
                 " where comment.id = %s and comment.artifact_id = %s"
                 " and comment.thread_root is null and comment.withdrawn_at is null"
+                f" and {_STILL_SHOWN}"
                 # A held thread does not exist as far as the agent can tell.
                 " and (not comment.held or %s)",
                 (thread_root, artifact_id, agent is None),
@@ -1334,9 +1356,10 @@ def marks_for_page(db: Database, artifact_id: str) -> list[dict]:
     underline needs it; its note and its kind are not (kind is sent as "")."""
     with db.connect() as conn:
         rows = conn.execute(
-            "select id, kind, quote, anchor, held from comment"
+            "select id, kind, quote, anchor, held from comment"  # noqa: S608 -- fixed constant
             " where artifact_id = %s and thread_root is null"
             " and resolved_at is null and withdrawn_at is null"
+            f" and {_STILL_SHOWN}"
             " and anchor->>'kind' in ('range', 'quote', 'element')"
             " order by created_at asc, id asc",
             (artifact_id,),
@@ -1356,14 +1379,15 @@ def marks_for_page(db: Database, artifact_id: str) -> list[dict]:
 def signature(db: Database, artifact_id: str) -> str:
     """A short token that changes whenever anything Jeremy's panel shows for this
     page changes: a comment or reply added, a thread settled or reopened, a
-    comment withdrawn or let through a hold. One aggregate over the page's own
+    comment withdrawn or let through a hold, a comment deleted or restored. One aggregate over the page's own
     rows (indexed on `artifact_id`), so a held read can look at it every second
     without it costing anything. Not a version number and not meant to be
     ordered: the gallery only asks "is it still what I showed?"."""
     with db.connect() as conn:
         row = conn.execute(
             "select count(*), max(created_at), count(resolved_at), max(resolved_at),"
-            " count(withdrawn_at), coalesce(sum(case when held then 1 else 0 end), 0)"
+            " count(withdrawn_at), coalesce(sum(case when held then 1 else 0 end), 0),"
+            " count(deleted_at), max(deleted_at)"
             " from comment where artifact_id = %s",
             (artifact_id,),
         ).fetchone()
@@ -1693,6 +1717,116 @@ def reopen(
         if emission is not None:
             emission.fire()
     return _row_to_comment(row)
+
+
+class RestoreExpired(Exception):
+    """The comment was deleted longer ago than `RESTORE_WINDOW`."""
+
+
+def _deleted_summary(verb: str, quote: str) -> str:
+    about = " ".join((quote or "").split())[:120]
+    return f'{verb} a comment on "{about}"' if about else f"{verb} a comment"
+
+
+def _own_row(conn, comment_id: str, author_kind: str, author: str):
+    """The comment `author` wrote, with its page's owner, title and session, or None: a
+    comment that is someone else's, one that does not exist and one GitGuardian withdrew are
+    all the same None, so no caller can tell them apart. Deleted ones are found (restore
+    needs them)."""
+    return conn.execute(
+        f"select {_COLUMNS}, artifact.agent, artifact.title, artifact.session"  # noqa: S608 -- fixed constant, not caller input
+        " from comment join artifact on artifact.id = comment.artifact_id"
+        " where comment.id = %s and comment.author_kind = %s and comment.author = %s"
+        " and comment.withdrawn_at is null and (select r.withdrawn_at from comment as r"
+        " where r.id = coalesce(comment.thread_root, comment.id)) is null",
+        (comment_id, author_kind, author),
+    ).fetchone()
+
+
+def _set_deleted(
+    db: Database, comment_id: str, *, author_kind: str, author: str, deleting: bool
+) -> CommentRow:
+    """Delete (or restore) a comment its author wrote. `author_kind` and `author` are both
+    matched: the owner's comments are human and carry `settings.owner_id()`, an agent's are
+    agent and carry its own name -- an agent can never touch his, nor another agent's.
+
+    Soft: `deleted_at` is set (or cleared) and nothing is removed. Idempotent either way:
+    deleting a deleted comment, or restoring a live one, answers as it stands with no event.
+    A restore after `RESTORE_WINDOW` raises `RestoreExpired`. Anything not the author's own
+    (or missing, or withdrawn) is `store.NotFound`, the same answer for all three.
+
+    The page's owning agent hears of it (`comment_deleted`, `comment_restored`) unless it is
+    the actor, and unless the thread is still held back from it."""
+    emission = None
+    with db.connect() as conn:
+        found = _own_row(conn, comment_id, author_kind, author)
+        if found is None:
+            raise store.NotFound()
+        width = len(_COLUMNS.split(","))
+        row = found[:width]
+        owning_agent, title, page_session = found[width : width + 3]
+        was = row[16]
+        if was is not None and not deleting:
+            at = was if was.tzinfo is not None else was.replace(tzinfo=UTC)
+            if datetime.now(UTC) - at > RESTORE_WINDOW:
+                raise RestoreExpired()
+        if (deleting and was is not None) or (not deleting and was is None):
+            return _row_to_comment(row)
+        held = bool(row[13])
+        with conn.transaction():
+            if deleting:
+                conn.execute(
+                    "update comment set deleted_at = %s, deleted_by = %s"
+                    " where id = %s and deleted_at is null",
+                    (datetime.now(UTC), author, comment_id),
+                )
+            else:
+                conn.execute(
+                    "update comment set deleted_at = null, deleted_by = null"
+                    " where id = %s",
+                    (comment_id,),
+                )
+            if author != owning_agent and not held:
+                emission = events.emit(
+                    conn,
+                    events.Event(
+                        kind="comment_deleted" if deleting else "comment_restored",
+                        artifact_id=row[1],
+                        agent=owning_agent,
+                        actor=author,
+                        summary=_deleted_summary(
+                            "deleted" if deleting else "restored", row[5]
+                        ),
+                        ref_id=comment_id,
+                        session=page_session,
+                        data={"title": title},
+                    ),
+                )
+        row = conn.execute(
+            f"select {_COLUMNS} from comment where comment.id = %s",  # noqa: S608 -- fixed constant, not caller input
+            (comment_id,),
+        ).fetchone()
+        if emission is not None:
+            emission.fire()
+    return _row_to_comment(row)
+
+
+def delete(
+    db: Database, comment_id: str, *, author_kind: str, author: str
+) -> CommentRow:
+    """Delete a comment its author wrote, softly. See `_set_deleted`."""
+    return _set_deleted(
+        db, comment_id, author_kind=author_kind, author=author, deleting=True
+    )
+
+
+def restore(
+    db: Database, comment_id: str, *, author_kind: str, author: str
+) -> CommentRow:
+    """Take back a deletion within `RESTORE_WINDOW`. See `_set_deleted`."""
+    return _set_deleted(
+        db, comment_id, author_kind=author_kind, author=author, deleting=False
+    )
 
 
 # `withdrawn_kind` of a comment hidden while a `block` plug-in scanner is failing: the

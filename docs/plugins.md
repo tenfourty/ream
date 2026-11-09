@@ -109,7 +109,7 @@ def post(event):                       # event: ream.events.Event
 
 - `kinds`: any **journal kind** (`ream.events.KINDS`: `decision_answered`, `comment_added`,
   `thread_resolved`, `comment_withdrawn`, `decision_set_aside`, `decision_reopened`,
-  `receipt_set`, `thread_reopened`, and `decision_shelved`, kept for history) or **bridge kind**
+  `receipt_set`, `thread_reopened`, `comment_deleted`, `comment_restored`, and `decision_shelved`, kept for history) or **bridge kind**
   (`ream.events.BRIDGE_KINDS`: `asked`, `answered`, `withdrawn`, `replaced`, `message_added`,
   `edited`, `set_aside`, `reopened`). Bridge kinds never reach the journal or `/events`. A kind
   that is in neither list is refused at registration: start-up stops with a `PluginError`

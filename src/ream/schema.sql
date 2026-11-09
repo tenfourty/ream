@@ -1309,3 +1309,9 @@ end $$;
 -- say, which a reader's page treats as on. Nullable, no default, so "not stated" is recorded.
 alter table artifact add column if not exists comments_default text
     check (comments_default in ('on', 'off'));
+
+-- A COMMENT ITS AUTHOR DELETED (9 Nov 2026). Soft: the row and its words stay, readers do not
+-- see them, and the author may restore it for a short while (`comments.RESTORE_WINDOW`).
+-- Null: not deleted. `deleted_by` is who did it (the author, by construction).
+alter table comment add column if not exists deleted_at timestamptz;
+alter table comment add column if not exists deleted_by text;

@@ -2268,6 +2268,18 @@ def build_parser() -> argparse.ArgumentParser:
         " your own page: only {{owner_their}} reopen wakes you, as a thread_reopened event)",
     )
     reopen.add_argument("thread", metavar="THREAD-ID")
+    delete_comment = subs.add_parser(
+        "delete-comment",
+        help="delete a comment you wrote, softly: readers stop seeing it (a thread others"
+        " replied in keeps a 'comment deleted' placeholder); restore-comment takes it back"
+        " for ten minutes. Only your own comments: anything else answers as if it did not exist",
+    )
+    delete_comment.add_argument("comment", metavar="COMMENT-ID")
+    restore_comment = subs.add_parser(
+        "restore-comment",
+        help="take back delete-comment, within ten minutes of it",
+    )
+    restore_comment.add_argument("comment", metavar="COMMENT-ID")
 
     return parser
 
@@ -2310,6 +2322,8 @@ def main(argv: list[str] | None = None) -> int:
         "comment",
         "settle",
         "reopen",
+        "delete-comment",
+        "restore-comment",
     ):
         warn_if_unlabelled(args.cmd)
     try:
@@ -2597,6 +2611,17 @@ def main(argv: list[str] | None = None) -> int:
             # is for, and the service answers 404 for one that is not yours.
             _request("POST", f"{base}/comments/{args.thread}/reopen", key, {})
             print(f"reopened {args.thread}")
+            return 0
+        if args.cmd == "delete-comment":
+            row = _request("DELETE", f"{base}/comments/{args.comment}", key, None)
+            print(
+                f"deleted {args.comment}; restore-comment {args.comment} takes it back "
+                f"until {row.get('restorable_until') or 'ten minutes from now'}"
+            )
+            return 0
+        if args.cmd == "restore-comment":
+            _request("POST", f"{base}/comments/{args.comment}/restore", key, {})
+            print(f"restored {args.comment}")
             return 0
         if args.cmd in ("reply", "settle"):
             # Your own pages by default; another office's page by --page,

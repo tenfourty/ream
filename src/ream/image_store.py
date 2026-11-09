@@ -180,7 +180,7 @@ def sweep(db: Database) -> int:
 def with_images(conn: Connection, rows: list) -> list:
     """Each comment row told its pictures (`images`), in one query for the whole listing.
     The row carries the API path to fetch each by, never a token."""
-    wanted = sorted({row.id for row in rows})
+    wanted = sorted({row.id for row in rows if not getattr(row, "deleted_at", None)})
     if not wanted:
         return rows
     found: dict[str, list[dict]] = {}
@@ -213,10 +213,10 @@ def with_images(conn: Connection, rows: list) -> list:
 
 def _visible() -> str:
     """The clause that says a comment is shown at all: not withdrawn, nor under a
-    withdrawn root. The one definition `comments` lists by."""
+    withdrawn root, nor deleted by its author. `comments` lists by the first part."""
     from ream import comments
 
-    return comments._VISIBLE
+    return f"{comments._VISIBLE} and comment.deleted_at is null"
 
 
 def for_reader(

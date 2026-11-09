@@ -57,6 +57,11 @@ KINDS = (
     # He reopened a resolved comment thread (5 Nov 2026; `comments.reopen`). ref_id is the
     # thread's root. Like `thread_resolved` it is never written for the owner's own act.
     "thread_reopened",
+    # A comment's author deleted it, or took the deletion back within the short window
+    # (9 Nov 2026; `comments.delete`, `comments.restore`). ref_id is the comment. Never written
+    # for the page owner's own act on its own comment, nor for a comment still held back.
+    "comment_deleted",
+    "comment_restored",
     # A signed-in app put a question on this agent's page (MCP design 11.4). ref_id is the
     # question; the answer goes to the app, not here. Never written for a question an agent
     # asks on its own page.

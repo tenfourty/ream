@@ -955,6 +955,11 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " check (comments_default in ('on', 'off'))"
         ),
     ),
+    # 9 Nov 2026: a comment its author deleted, soft (see schema.sql).
+    30: (
+        "alter table comment add column deleted_at timestamptz",
+        "alter table comment add column deleted_by text",
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

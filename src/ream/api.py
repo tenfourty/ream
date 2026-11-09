@@ -1177,6 +1177,44 @@ def comment_reopen(db: Database, agent: str, comment_id: str) -> dict:
         raise HTTPException(404, "no such comment") from exc
 
 
+def _deleted_view(row: comments.CommentRow) -> dict:
+    """What the delete and restore routes answer: the comment (its words blank while it is
+    deleted), and until when a deletion may be taken back."""
+    out = row.__dict__
+    out["restorable_until"] = (
+        (datetime.fromisoformat(row.deleted_at) + comments.RESTORE_WINDOW).isoformat()
+        if row.deleted_at
+        else None
+    )
+    return out
+
+
+def comment_delete(db: Database, agent: str, comment_id: str) -> dict:
+    """DELETE /comments/{id}, for the route and the MCP `comment` tool. Soft, and only a
+    comment this agent wrote: someone else's and a missing one answer alike (404)."""
+    try:
+        row = comments.delete(db, comment_id, author_kind="agent", author=agent)
+    except store.NotFound as exc:
+        raise HTTPException(404, "no such comment") from exc
+    return _deleted_view(row)
+
+
+def comment_restore(db: Database, agent: str, comment_id: str) -> dict:
+    """POST /comments/{id}/restore, for the route and the MCP `comment` tool: take back a
+    deletion of your own comment, within `comments.RESTORE_WINDOW` of it."""
+    try:
+        row = comments.restore(db, comment_id, author_kind="agent", author=agent)
+    except store.NotFound as exc:
+        raise HTTPException(404, "no such comment") from exc
+    except comments.RestoreExpired as exc:
+        raise HTTPException(
+            409,
+            "too late to restore: a deleted comment can be taken back for "
+            f"{int(comments.RESTORE_WINDOW.total_seconds() // 60)} minutes only.",
+        ) from exc
+    return _deleted_view(row)
+
+
 def ask_question(
     db: Database,
     agent: str,
@@ -2593,6 +2631,18 @@ def agent_router(
     @router.post("/comments/{comment_id}/reopen")
     def reopen_comment(comment_id: str, agent: str = Depends(caller)):
         return comment_reopen(db, agent, comment_id)
+
+    @router.delete("/comments/{comment_id}")
+    def delete_comment(comment_id: str, agent: str = Depends(caller)):
+        """Delete a comment you wrote (any page you commented on). Soft: readers stop seeing
+        it, and `POST /comments/{id}/restore` takes it back for ten minutes. Under a thread
+        others replied in, a "comment deleted" placeholder stays; a thread with nothing live
+        left disappears."""
+        return comment_delete(db, agent, comment_id)
+
+    @router.post("/comments/{comment_id}/restore")
+    def restore_comment(comment_id: str, agent: str = Depends(caller)):
+        return comment_restore(db, agent, comment_id)
 
     @router.get("/comments")
     def list_all_comments(

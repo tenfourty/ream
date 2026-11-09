@@ -903,7 +903,8 @@ _COMMENT_FIELDS = {k: k for k in ("body", "quote", "anchor", "thread_root", "kin
     description=(
         "Comment on a page you may read (action comment, the default), or reply under a "
         "thread (thread_root), or resolve or reopen a thread on your own page "
-        "(comment_id). anchor {kind: text, quote, section?} pins it to a passage. The "
+        "(comment_id), or delete a comment you wrote (action delete, comment_id) and take "
+        "the deletion back within ten minutes (action restore). anchor {kind: text, quote, section?} pins it to a passage. The "
         "answer comes back fenced as the comments tool's does."
     ),
     read_only=False,
@@ -917,9 +918,15 @@ _COMMENT_FIELDS = {k: k for k in ("body", "quote", "anchor", "thread_root", "kin
     ),
     input_schema=_schema(
         {
-            "action": {"type": "string", "enum": ["comment", "resolve", "reopen"]},
+            "action": {
+                "type": "string",
+                "enum": ["comment", "resolve", "reopen", "delete", "restore"],
+            },
             "page_id": PAGE_ID,
-            "comment_id": {"type": "string", "description": "A thread's root comment."},
+            "comment_id": {
+                "type": "string",
+                "description": "A thread's root comment (resolve, reopen), or a comment you wrote (delete, restore).",
+            },
             "body": {"type": "string"},
             "quote": {"type": "string"},
             "anchor": {"type": "object"},
@@ -930,11 +937,18 @@ _COMMENT_FIELDS = {k: k for k in ("body", "quote", "anchor", "thread_root", "kin
     ),
 )
 def _comment(call: Call, arguments: dict[str, Any]) -> ToolOutput:
-    action = _choice(arguments, "action", ("comment", "resolve", "reopen"))
+    action = _choice(
+        arguments, "action", ("comment", "resolve", "reopen", "delete", "restore")
+    )
     if action != "comment":
         _only(arguments, {"action", "comment_id"})
         comment_id = _str(arguments, "comment_id", required=True)
-        change = api.comment_resolve if action == "resolve" else api.comment_reopen
+        change = {
+            "resolve": api.comment_resolve,
+            "reopen": api.comment_reopen,
+            "delete": api.comment_delete,
+            "restore": api.comment_restore,
+        }[action]
         out = jsonable_encoder(change(call.db, call.agent, comment_id))
         # Only a thread on the caller's own page can be resolved: its page is its own.
         return ToolOutput({"comment": out}, written_by=call.agent)
