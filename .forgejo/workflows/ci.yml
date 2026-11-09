@@ -334,12 +334,9 @@ jobs:
           printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
             -u jeremy --password-stdin  # the token's owner; the repo's owner is now the runcove org, which cannot log in
 
-          # Reuse the previous build's layers (the chromium install above all)
-          # from a cache tag. Nothing deploys :buildcache -- the deploy job
-          # only ever bumps the :<sha12> tag -- and a missing cache (first run,
-          # or a pruned registry) just means a cold build.
-          cache="git.tenfourty.site/runcove/artifacts:buildcache"
-          docker pull "$cache" || echo "no build cache yet: building cold"
+          # The release build uses only layers this runner built itself, never a tag pulled from
+          # the registry (runcove-5t3oj.104); the runner's own layer store still spares a
+          # rebuild of unchanged steps.
           # A re-run of a commit whose image is already in the registry must NOT rebuild and
           # re-push it: a rebuild has another digest, which would move a tag a pin may already
           # name (homelab's pin lander refuses a re-pushed tag, runcove-5t3oj.19). Reuse it.
@@ -355,11 +352,10 @@ jobs:
               *"manifest unknown"*|*"not found"*) ;;
               *) echo "$pulled" >&2; echo "could not tell whether $image exists" >&2; exit 1 ;;
             esac
-            docker build --network host --cache-from "$cache" \
+            docker build --network host \
               --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" \
-              -t "$image" -t "$cache" .
+              -t "$image" .
             docker push "$image"
-            docker push "$cache"
           fi
           digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" \
             | grep -m1 '^git.tenfourty.site/runcove/artifacts@sha256:' | cut -d@ -f2)
