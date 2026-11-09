@@ -936,6 +936,28 @@ const sized = (g) => { g.doc.documentElement.clientWidth = 800; g.doc.documentEl
   ok(g.posted.filter(([m]) => m && m.type === "artifact-pin-rects")[1][0].rects[0].top === 130, "as they are now");
 }
 
+// 33. SHOW A MARK. The gallery names a mark by id (a comment pressed in its panel); the
+// frame answers where it is, to the gallery only, and flashes the painted words.
+{
+  const p = E("p", QUOTE), q = E("p", "Another paragraph further down the page.");
+  const rects = new Map([[p.childNodes[0], [{ top: 10, left: 5, width: 200, height: 18 }]]]);
+  p.rect = { top: 10, left: 5, width: 200, height: 18 };
+  const g = build(E("body", p, q), { "body>p:nth-of-type(1)": p, "body>p:nth-of-type(2)": q }, { rects });
+  g.send([mark()]);
+  const at = () => g.posted.filter(([m]) => m && m.type === "artifact-mark-at");
+  g.raw({ type: "artifact-mark-show", id: "m1" });
+  ok(at().length === 1 && at()[0][1] === GALLERY && at()[0][0].id === "m1"
+     && at()[0][0].rect.top === 10 && at()[0][0].rect.height === 18,
+     "naming a painted mark answers with its rect, to the gallery only");
+  ok(g.registry.get("ar-flash") && g.registry.get("ar-flash").ranges.length === 1, "and flashes the words");
+  g.raw({ type: "artifact-mark-show", id: "nope" });
+  g.raw({ type: "artifact-mark-show" });
+  ok(at().length === 1, "an unknown or missing id answers nothing");
+  let threw = false;
+  try { g.raw(null); g.raw({ type: "artifact-mark-show", id: 5 }); } catch (e) { threw = true; }
+  ok(!threw, "a malformed request never throws into the page");
+}
+
 // 32. the shim never reads the page's HTML or writes into it for a pin
 ok(!/innerHTML|outerHTML|insertAdjacentHTML/.test(src), "no HTML is read or written by the shim");
 

@@ -113,7 +113,8 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
   const mqList = [];
   const matchMedia = (q) => ({ get matches() { return /pointer/.test(q) ? touch : 1000 >= 896; }, media: q, addEventListener: (t, fn) => mqList.push(fn) });
   const setTouch = (v) => { touch = v; mqList.forEach((fn) => fn({})); };
-  const win = { matchMedia, scrollX: 0, scrollY: 50, innerWidth: 1000, innerHeight: 700, localStorage, history,
+  const scrolls = [];
+  const win = { matchMedia, scrollTo: (o) => scrolls.push(o), scrollX: 0, scrollY: 50, innerWidth: 1000, innerHeight: 700, localStorage, history,
                 addEventListener: (t, f, c) => (((c ? capture : listeners)[t] ||= []).push(f)) };
   const location = { hash, pathname: "/a/" + page, search: "" };
   const FD = function (f) { this.form = f; this.fields = []; };
@@ -141,7 +142,7 @@ function build({ marks = "[]", fetchImpl = null, noForm = false, stored = undefi
   const isOpen = () => docBody.classList.contains("cpanel-open");
   const card = () => docBody.children.filter((c) => c.className === "hovercard");
   const scroll = () => (listeners.scroll || []).concat(capture.scroll || []).forEach((fn) => fn({}));
-  return { bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload, submit, extra, doc,
+  return { scrolls, bar, buttons, form, body, location, send, click, framePosts, unplacedEl, reload, submit, extra, doc,
            panel, cbtn, docBody, store, history, tap, key, isOpen, clk, card, scroll, tlist, press, fsChange, pagebtn, win, docOn, tabBtns, sw, how, steps, setTouch, matchMedia, mqList };
 }
 const SEL = { type: "artifact-selection", quote: "the plan",
@@ -844,6 +845,24 @@ const placed = (rects, extra = {}) => ({ type: "artifact-marks-placed", placed: 
   g.doc.fullscreenElement = g.docBody;
   g.send(placed([{ id: "e1", top: 100, left: 10, width: 300, height: 50 }]));
   ok(badgesOf(g).length === 0, "no badges in full screen, where page offsets would point at nothing"); }
+
+// A comment pressed in the panel takes the page to its anchor: the frame is told which
+// mark, and its answer scrolls this page there.
+{ const g = build({ marks: EMARKS, threads: [threadLi("e1")] });
+  const t = g.tlist.children[0];
+  const inside = { closest: (sel) => (sel === "#comments li.thread" ? t : sel.startsWith("a,") ? null : null) };
+  g.framePosts.length = 0;
+  g.tap(inside);
+  ok(g.framePosts.length === 1 && g.framePosts[0][0].type === "artifact-mark-show" && g.framePosts[0][0].id === "e1"
+     && g.framePosts[0][1] === "https://abc.tenfourty.com", "pressing a thread names its mark to the frame, on its origin");
+  g.send({ type: "artifact-mark-at", id: "e1", rect: { top: 900, left: 10, width: 100, height: 20 } });
+  ok(g.scrolls.length === 1 && g.scrolls[0].top === 50 + 100 + 900 - 700 / 3, "the frame's answer scrolls this page to it: " + JSON.stringify(g.scrolls));
+  g.send({ type: "artifact-mark-at", id: "invented", rect: { top: 1, left: 0, width: 1, height: 1 } });
+  g.send({ type: "artifact-mark-at", id: "e1", rect: { top: 5 } }, { origin: "https://evil.example" });
+  ok(g.scrolls.length === 1, "an unknown mark, or another origin, scrolls nothing");
+  g.framePosts.length = 0;
+  g.tap({ closest: (sel) => (sel === "#comments li.thread" ? t : sel.startsWith("a,") ? {} : null) });
+  ok(g.framePosts.length === 0, "a press on a link, field or button in the thread is left to it"); }
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

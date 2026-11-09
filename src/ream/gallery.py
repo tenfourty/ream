@@ -2624,6 +2624,21 @@ function spot(e,on){try{var li=e.target&&e.target.closest?e.target.closest(".thr
 if(P&&P.addEventListener){
   P.addEventListener("mouseover",function(e){spot(e,true)});P.addEventListener("focusin",function(e){spot(e,true)});
   P.addEventListener("mouseout",function(e){spot(e,false)});P.addEventListener("focusout",function(e){spot(e,false)})}
+// A comment pressed in the panel takes the page to where it is anchored: the frame is
+// told which mark (`artifact-mark-show`), flashes it, and answers where it is
+// (`artifact-mark-at`); this page scrolls to that. Links, fields and buttons in the
+// thread keep their own meaning.
+if(P&&document.addEventListener)document.addEventListener("click",function(e){try{
+  var t=e.target,li=t&&t.closest?t.closest("#comments li.thread"):null,id;
+  if(!li||t.closest("a,button,input,textarea,select,form,summary,label"))return;
+  id=li.getAttribute("data-mark-id");if(!id||!known[id])return;
+  f.contentWindow.postMessage({type:"artifact-mark-show",id:id},o)}catch(x){}});
+window.addEventListener("message",function(e){try{
+  if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
+  if(!d||d.type!=="artifact-mark-at"||typeof d.id!=="string"||!known[d.id])return;
+  var q=d.rect;if(!q||typeof q!=="object"||!fin(q.top)||document.fullscreenElement)return;
+  var fr=f.getBoundingClientRect(),y=window.scrollY+fr.top+q.top-(window.innerHeight||0)/3;
+  if(window.scrollTo)window.scrollTo({top:Math.max(0,y),behavior:"smooth"})}catch(x){}});
 // THE COMMENT CONTROL. Pressing it lights comment mode and opens the panel on Open
 // with the steps showing; pressing it again turns the mode off and closes the panel.
 // While lit the frame boxes a chart, table, cell or picture that is pointed at and a

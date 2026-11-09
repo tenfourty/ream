@@ -691,6 +691,35 @@ def _viewer_report(missing: Sequence[str] = ()) -> str:
         'addEventListener("pointerdown",function(e){try{if(at(e)&&e.pointerType==="touch"){obTouch=1;look()}}catch(x){}});'
         'addEventListener("pointerout",function(e){try{if(e&&!e.relatedTarget){out();if(obC&&!obK&&!obTouch&&!obT)obT=setTimeout(obHide,300)}}catch(x){}});'
         'addEventListener("scroll",function(){try{out();hk=""}catch(x){}});'
+        # SHOW A MARK (clicking a comment in the gallery's panel). The gallery names
+        # a mark by id (`artifact-mark-show`, from its origin only); the page
+        # scrolls itself to it when it scrolls at all (full screen), flashes the
+        # painted words for a moment through a highlight of their own (nothing in
+        # the page's DOM is touched), and answers `artifact-mark-at` {id, rect}
+        # so the gallery can scroll ITS page, which is what moves a frame that is
+        # as tall as its content.
+        "var FL=null,ft=0;"
+        "function mkAt(id){var i;for(i=0;i<MR.length;i++)if(MR[i].id===id)return{r:MR[i].r,e:null};"
+        "for(i=0;i<EP.length;i++)if(EP[i].id===id)return{r:null,e:EP[i].e};return null}"
+        'addEventListener("message",function(e){try{'
+        f"if(e.origin!=={origin})return;"
+        "var d=e.data;"
+        'if(!d||d.type!=="artifact-mark-show"||typeof d.id!=="string")return;'
+        "var m=mkAt(d.id);if(!m)return;"
+        "var q=m.r?(m.r.getClientRects()[0]||m.r.getBoundingClientRect()):m.e.getBoundingClientRect();"
+        "if(!q||!(q.width>=0)||!(q.height>=0))return;"
+        "var de=document.documentElement,H=window.innerHeight||de.clientHeight||0;"
+        "if(de.scrollHeight>de.clientHeight+1&&H&&window.scrollTo)"
+        'window.scrollTo({top:Math.max(0,window.scrollY+q.top-H/3),behavior:"smooth"});'
+        "if(m.r&&window.CSS&&CSS.highlights&&window.Highlight){clearTimeout(ft);"
+        'FL=new Highlight();FL.add(m.r);CSS.highlights.set("ar-flash",FL);'
+        'if(!document.getElementById("ar-flash-style")){var fs=document.createElement("style");'
+        'fs.id="ar-flash-style";fs.textContent="::highlight(ar-flash){background:rgba(255,140,0,.55)}";'
+        "(document.head||document.documentElement).appendChild(fs)}"
+        'ft=setTimeout(function(){try{CSS.highlights.delete("ar-flash")}catch(x){}},1600)}'
+        'parent.postMessage({type:"artifact-mark-at",id:d.id,rect:'
+        "{top:q.top,left:q.left,width:q.width,height:q.height}},"
+        f"{origin})}}catch(x){{}}}});"
         # The element path a selection or a pin reports: a fast path only, as the
         # service verifies it against the quote before relying on it.
         "function pth(n){var p=[],e=n;while(e&&e!==document.body&&e.nodeType===1){"
