@@ -807,8 +807,8 @@ _COMMENTS_REQUIRED = {
         'a new page must say whether commenting starts on or off: send comments: "on" or '
         '"off" (ream publish FILE --comments on|off). Choose off for a page a script '
         "redraws or a status board; the reader can still turn commenting on for that page. "
-        "If your tool does not know this flag, it is out of date: reinstall it "
-        "(uv tool install ream --force, or the install line in /api/v1/agents.txt). "
+        "If your tool does not know this flag, it is out of date: reinstall it with "
+        "the install line in /api/v1/agents.txt, exactly as written there. "
         "An update of an existing page does not need it."
     ),
 }
