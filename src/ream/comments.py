@@ -1959,6 +1959,8 @@ def second_scan(db: Database, comment_id: str) -> str:
             )
         # The quote was only ever built-in scanned; the relay sees it too.
         scanned_text = body + "\n" + quote
+        # None while a plug-in scanner named `gitguardian` has the relay scan (ggscan).
+        standing_down = ggscan.stood_down()
         found = ggscan.scan(scanned_text)
         plugin_answered = False
         if not found:
@@ -1967,7 +1969,8 @@ def second_scan(db: Database, comment_id: str) -> str:
             # comments); a publish under `block` still fails closed. Until it is
             # cleared the comment is hidden (reversibly), not shown unscanned.
             try:
-                extra, plugin_answered = scanners.run_detailed(scanned_text)
+                extra, answered = scanners.run_named(scanned_text)
+                plugin_answered = bool(answered)
             except scanners.ScannerBlocked as exc:
                 _log.error(
                     "comment left unscanned: scanner blocked: plugin=%s scanner=%s"
@@ -1980,17 +1983,22 @@ def second_scan(db: Database, comment_id: str) -> str:
                 return "unavailable"
             if extra:
                 found = extra
-        if found is None and plugin_answered and not ggscan.configured():
-            # No relay to ask at all (never configured): a plug-in scanner's real clean
-            # answer is the second opinion. A configured relay that is down stays
-            # unscanned so the sweeper asks it again.
+            elif standing_down and ggscan.STAND_DOWN_FOR in answered:
+                # The relay's scan is the `gitguardian` scanner's, and it said clean.
+                found = []
+        if found is None and plugin_answered and not ggscan.relay_expected():
+            # No relay to ask at all (never configured, no plug-in has its scan): a
+            # plug-in scanner's real clean answer is the second opinion. A relay that is
+            # expected but gave no answer (down, or `gitguardian` failed or timed out)
+            # stays unscanned so the sweeper asks it again; another scanner's clean
+            # answer does not stand in for it.
             found = []
-        if found is None and not ggscan.configured() and not scanners.registered():
+        if found is None and not ggscan.relay_expected() and not scanners.registered():
             # Nothing can ever clear a hold now (the blocking plug-in is gone and there
             # is no relay): show the comment, unscanned, as without the hold.
             _lift_scan_hold(db, comment_id)
         if found is None:
-            if ggscan.configured():
+            if ggscan.configured() and not standing_down:
                 _log.warning(
                     "comment kept on the built-in scan only: agent=%s artifact=%s "
                     "comment=%s reason=ggshield_unavailable",

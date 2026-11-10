@@ -491,7 +491,9 @@ def _check_secrets(
         # here without ever leaving the house.
         second = ggscan.scan(value)
         if second is None:
-            if ggscan.configured():
+            # Not while stood down: the relay was not asked, and the plug-in's own
+            # scanner counts and logs its own fault.
+            if ggscan.configured() and not ggscan.stood_down():
                 _refusals.warning(
                     "published on the built-in scan only: agent=%s artifact=%s "
                     "reason=ggshield_unavailable",

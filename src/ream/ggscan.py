@@ -20,10 +20,17 @@ submitted it.
 
 STANDS DOWN FOR THE PLUG-IN (core-and-plugins design, step 9c): the same scan has moved
 into the house plug-in as a scanner named `gitguardian`. While a scanner of that name is
-registered (`stood_down`), `scan` asks nobody and answers `None`, and `configured` says
-False, so the callers (`store._check_secrets`, `comments.second_scan`) read the relay as
-"not ours to ask" and take the plug-in's verdict, instead of sending every body to the relay
-twice. This is the only place that rule lives. Without such a scanner nothing here changes.
+registered (`stood_down`), `scan` asks nobody and answers `None`, so every body goes to the
+relay once, not twice. This is the only place that rule lives. Without such a scanner nothing
+here changes.
+
+THREE QUESTIONS, KEPT APART: `configured()` is only "core's settings name a relay";
+`stood_down()` is "the plug-in's scanner has the relay scan"; `relay_expected()` is "somebody
+is expected to have scanned this with the relay" (either). A `None` from `scan` while stood
+down is NOT the plug-in's clean answer, and not "no relay": `comments.second_scan` accepts a
+plug-in's clean answer as the second opinion only when `relay_expected()` is False, and while
+stood down it takes the answer of the `gitguardian` scanner itself (`scanners.run_named`),
+never another scanner's. A `gitguardian` that gave no opinion is exactly an unreachable relay.
 
 Never raises. `None` means "no second opinion was had" -- not configured,
 unreachable, refused, timed out, or answered in a shape this does not know --
@@ -106,11 +113,16 @@ def stood_down() -> bool:
 
 
 def configured() -> bool:
-    """Whether core's own relay scan is in play: the relay is set, and no plug-in
-    scanner has taken it over."""
-    if stood_down():
-        return False
+    """Whether core's settings name a relay. Unchanged by a stand-down: the plug-in may
+    or may not use the same settings."""
     return bool(settings.current().ggshield_url and settings.current().ggshield_token)
+
+
+def relay_expected() -> bool:
+    """Whether a relay scan is expected for a text: core's relay is set, or the plug-in
+    has taken the scan over. When it is, a missing answer is "the relay could not be
+    reached", never "there is no relay", and nothing else's clean answer stands in."""
+    return stood_down() or configured()
 
 
 def _shape(kind: str) -> str:

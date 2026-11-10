@@ -220,6 +220,24 @@ def test_a_slow_scanner_under_skip_lets_the_page_publish(db, world, monkeypatch)
     assert plugin_api.failure_counts() == {"toy:scanner": 1}
 
 
+def test_run_named_says_which_scanners_gave_an_answer(world):
+    def boom(text):
+        raise RuntimeError("x")
+
+    world.scanner("clean", lambda text: [])
+    world.scanner("broken", boom, on_error="skip")
+    world.scanner("dirty", lambda text: [Finding("d", 1)])
+    found, answered = scanners.run_named("x")
+    assert found == [Finding("d", 1)]
+    assert answered == ["clean", "dirty"]  # the failed one gave no answer
+    assert scanners.run_detailed("x") == (found, True)
+    assert scanners.run("x") == found
+
+
+def test_run_named_with_nothing_registered_answers_nothing(world):
+    assert scanners.run_named("x") == ([], [])
+
+
 def test_a_scanner_that_exits_is_a_scanner_error(world):
     def bye(text):
         raise SystemExit(1)

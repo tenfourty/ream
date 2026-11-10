@@ -5,6 +5,7 @@ previews are scanned too)."""
 import json
 import logging
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -289,10 +290,27 @@ def test_a_gitguardian_scanner_stands_the_relay_down(db, relay, house):
     house.scanner("gitguardian", lambda text: seen.append(text) or [])
     assert ggscan.stood_down()
     assert ggscan.scan(PAGE) is None
-    assert not ggscan.configured()
+    # "the relay is set" is a separate question from "core asks it itself": the relay is
+    # still set, and a relay scan is still expected (the plug-in's).
+    assert ggscan.configured()
+    assert ggscan.relay_expected()
     store.publish(db, "seat", "t", PAGE)
     assert relay.received == []
     assert seen == [PAGE]
+
+
+def test_a_relay_scan_is_expected_when_the_relay_is_set_or_the_plugin_has_it(
+    house, monkeypatch
+):
+    monkeypatch.delenv(ggscan.URL_ENV, raising=False)
+    monkeypatch.delenv(ggscan.TOKEN_ENV, raising=False)
+    assert not ggscan.configured()
+    assert not ggscan.relay_expected()  # nothing to ask, nobody to ask it
+    house.scanner("acme-secrets", lambda text: [])
+    assert not ggscan.relay_expected()  # another name is no relay
+    house.scanner("gitguardian", lambda text: [])
+    assert not ggscan.configured()  # core's own settings say nothing of the relay
+    assert ggscan.relay_expected()  # but the plug-in is expected to have scanned
 
 
 def test_the_plugin_verdict_decides_a_publish_not_the_relay(db, relay, house):
@@ -377,6 +395,118 @@ def test_a_gitguardian_scanner_with_no_answer_leaves_the_comment_unscanned(
     assert comments.second_scan(db, row.id) == "unavailable"
     assert not _stamped(db, row.id)  # the sweeper asks again
     assert relay.received == []
+
+
+def _clean(text):
+    return []
+
+
+def _hang(text):
+    time.sleep(2)
+    return []
+
+
+@pytest.fixture()
+def no_relay_set(monkeypatch):
+    """Core's own settings carry no relay (the plug-in reads its own configuration)."""
+    monkeypatch.delenv(ggscan.URL_ENV, raising=False)
+    monkeypatch.delenv(ggscan.TOKEN_ENV, raising=False)
+
+
+@pytest.mark.parametrize("fails", ["raises", "times out"])
+@pytest.mark.parametrize("relay_set", [True, False])
+def test_another_scanners_clean_answer_is_not_the_relays_while_stood_down(
+    db, house, monkeypatch, fails, relay_set
+):
+    """The relay scan is the `gitguardian` scanner's. When it gives no opinion the comment
+    is exactly as when today's relay is unreachable: unscanned, for the sweeper to retry.
+    A clean answer from some other scanner must not stand in for it."""
+    if relay_set:
+        monkeypatch.setenv(ggscan.URL_ENV, "http://127.0.0.1:9/scan")
+        monkeypatch.setenv(ggscan.TOKEN_ENV, TOKEN)
+    else:
+        monkeypatch.delenv(ggscan.URL_ENV, raising=False)
+        monkeypatch.delenv(ggscan.TOKEN_ENV, raising=False)
+    page = store.publish(db, "seat", "t", PAGE)
+    if fails == "raises":
+        house.scanner("gitguardian", _boom, on_error="skip")
+    else:
+        house.scanner("gitguardian", _hang, on_error="skip", timeout=0.05)
+    house.scanner("acme-secrets", _clean)
+    row = _agent_comment(db, page)
+    assert comments.second_scan(db, row.id) == "unavailable"
+    assert not _stamped(db, row.id)
+    assert comments.list_for_artifact(db, page.id) != []  # skip: still shown
+    assert plugin_api.failure_counts() == {"house:scanner": 1}
+
+
+def test_without_gitguardian_another_scanners_clean_answer_still_counts_when_no_relay_is_set(
+    db, house, no_relay_set
+):
+    """The unchanged path the case above must differ from."""
+    house.scanner("acme-secrets", _clean)
+    page = store.publish(db, "seat", "t", PAGE)
+    row = _agent_comment(db, page)
+    assert comments.second_scan(db, row.id) == "scanned"
+    assert _stamped(db, row.id)
+
+
+def test_a_clean_gitguardian_answer_clears_a_comment_though_core_has_no_relay_set(
+    db, house, no_relay_set
+):
+    house.scanner("gitguardian", _clean)
+    page = store.publish(db, "seat", "t", PAGE)
+    row = _agent_comment(db, page)
+    assert comments.second_scan(db, row.id) == "scanned"
+    assert _stamped(db, row.id)
+
+
+def test_a_clean_gitguardian_answer_needs_no_other_scanner(db, house, no_relay_set):
+    house.scanner("gitguardian", _clean)
+    house.scanner("acme-secrets", _boom, on_error="skip")  # the other one is down
+    page = store.publish(db, "seat", "t", PAGE)
+    row = _agent_comment(db, page)
+    assert comments.second_scan(db, row.id) == "scanned"
+
+
+def test_another_scanners_finding_still_withdraws_while_gitguardian_is_down(
+    db, house, no_relay_set
+):
+    page = store.publish(db, "seat", "t", PAGE)
+    house.scanner("gitguardian", _boom, on_error="skip")
+    # a finding is a finding, whoever made it
+    house.scanner("acme-secrets", lambda text: [Finding("acme_token", 1)])
+    row = _agent_comment(db, page)
+    assert comments.second_scan(db, row.id) == "withdrawn"
+
+
+def test_a_blocking_gitguardian_scanner_that_fails_holds_the_comment(
+    db, house, no_relay_set
+):
+    page = store.publish(db, "seat", "t", PAGE)
+    house.scanner("gitguardian", _boom, on_error="block")
+    house.scanner("acme-secrets", _clean)
+    row = _agent_comment(db, page)
+    assert comments.second_scan(db, row.id) == "unavailable"
+    assert not _stamped(db, row.id)
+    assert comments.list_for_artifact(db, page.id) == []  # held, reversibly
+
+
+def test_a_stood_down_publish_does_not_blame_the_relay_when_the_plugin_is_down(
+    db, house, caplog, monkeypatch
+):
+    """Core's `ggshield_unavailable` line says core's own relay was asked and did not
+    answer. While stood down it was not asked; the plug-in counts and logs its own fault."""
+    monkeypatch.setenv(ggscan.URL_ENV, "http://127.0.0.1:9/scan")
+    monkeypatch.setenv(ggscan.TOKEN_ENV, TOKEN)
+    house.scanner("gitguardian", _boom, on_error="skip")
+    logger = logging.getLogger("ream.refusals")
+    logger.addHandler(caplog.handler)
+    try:
+        store.publish(db, "seat", "t", PAGE)
+    finally:
+        logger.removeHandler(caplog.handler)
+    assert not any("ggshield_unavailable" in r.getMessage() for r in caplog.records)
 
 
 def test_without_a_plugin_a_comments_second_scan_asks_the_relay(db, relay):

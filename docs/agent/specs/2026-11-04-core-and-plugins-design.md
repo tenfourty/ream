@@ -754,13 +754,16 @@ drivers; CI only (not on baba).
    core's own copy is deleted in a later pin both would send each body to the relay, so core's
    relay scan **stands down while a scanner named `gitguardian` is registered** (mail's rule: built-in
    code only when no plug-in is there). The rule lives in one place, `ggscan.stood_down()`, read by
-   `ggscan.scan` (answers `None`, asks nobody) and `ggscan.configured()` (says False); its callers are
-   unchanged and so cover every place core calls `ggscan` (`store._check_secrets`, which serves
-   publish, update, previews and the `gitguardian=True` fields, and `comments.second_scan`, hence the
-   sweeper). With `scan` `None` and `configured()` False the comment path already does the right thing:
-   a clean answer from the plug-in counts as scanned, no answer leaves the comment unscanned for the
-   sweeper (a hold stays while the scanner is registered), and the "published on the built-in scan
-   only" log line is the plug-in's to say through its failure count. Only the name decides, not the
+   `ggscan.scan` (answers `None`, asks nobody), so the two call sites (`store._check_secrets`, which
+   serves publish, update, previews and the `gitguardian=True` fields, and `comments.second_scan`,
+   hence the sweeper) cover every place core calls `ggscan`. **Kept apart (security review):**
+   `ggscan.configured()` stays "core's settings name a relay"; `ggscan.relay_expected()` is "the relay
+   is set or the plug-in has the scan". `second_scan` takes a plug-in's clean answer as the second
+   opinion only when no relay scan is expected, and while stood down only from `gitguardian` itself
+   (`scanners.run_named` names who answered), so a `gitguardian` that raises or times out behaves as
+   today's unreachable relay (comment left unscanned for the sweeper, a hold stays) and another
+   scanner's clean answer never stands in. The "published on the built-in scan only" log line is not
+   written while stood down: the plug-in counts and logs its own fault. Only the name decides, not the
    plug-in that registered it; without such a scanner behaviour is exactly as before. **Time bound:**
    core abandoned a plug-in scanner after 10 s but waited up to 20 s for `ggscan`, so standing down
    would have turned a 10 to 20 s answer into an unscanned publish. `api.scanner(name, scan,

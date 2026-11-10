@@ -287,11 +287,13 @@ A scanner that really hangs costs one daemon thread per call, never reclaimed.
 **A scanner named `gitguardian` stands the core's own relay scan down.** The core still carries its
 ggshield relay scan (`ggscan.py`), which sends the original body to the house's relay beside the
 pattern scan. The house plug-in carries the same scan as a scanner called `gitguardian`. While a
-scanner of that exact name is registered, the core's relay scan asks nobody and says "not
-configured", so a body goes to the relay once, through the plug-in, and the plug-in's `on_error`
-and verdict decide: a finding refuses a publish or withdraws an agent comment; a clean answer
-clears a comment's second scan; no answer (`skip`) publishes on the rest and leaves a comment
-unscanned for the sweeper to retry. Only the name counts, not which plug-in registered it. With no
+scanner of that exact name is registered, the core's relay scan asks nobody, so a body goes to
+the relay once, through the plug-in, and the plug-in's `on_error` and verdict decide: a finding
+refuses a publish or withdraws an agent comment; a clean answer **from `gitguardian` itself**
+clears a comment's second scan; no answer (`skip`, a raise or a timeout) publishes on the rest and
+leaves a comment unscanned for the sweeper to retry, exactly as an unreachable relay does today,
+and another scanner's clean answer never stands in for it. Only the name counts, not which plug-in
+registered it. With no
 scanner of that name nothing changes. A plug-in that registers `gitguardian` should pass
 `timeout=20`, or a relay answer slower than 10 seconds would count as no answer. (The core's own
 relay scan is removed in a later release, once the plug-in's behaviour is confirmed in

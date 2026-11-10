@@ -148,12 +148,19 @@ def run(text: str) -> list[Finding]:
 def run_detailed(text: str) -> tuple[list[Finding], bool]:
     """Like `run`, and whether at least one scanner gave a real answer (a skipped,
     failed scanner is no answer). Raises ScannerBlocked."""
+    found, answered = run_named(text)
+    return found, bool(answered)
+
+
+def run_named(text: str) -> tuple[list[Finding], list[str]]:
+    """Like `run`, and the names of the scanners that gave a real answer (a skipped,
+    failed scanner is no answer), in registration order. Raises ScannerBlocked."""
     from ream import plugin_api  # late: plugin_api imports the modules that call this
 
     with _lock:
         scanners = list(_SCANNERS)
     found: list[Finding] = []
-    answered = False
+    answered: list[str] = []
     for s in scanners:
         try:
             result = _call_bounded(s.scan, text, s.name, s.bound())
@@ -171,6 +178,6 @@ def run_detailed(text: str) -> tuple[list[Finding], bool]:
             if s.on_error == "block":
                 raise ScannerBlocked(s.plugin, s.name) from None
             continue
-        answered = True
+        answered.append(s.name)
         found.extend(result[:MAX_FINDINGS])  # type: ignore[index]
     return found, answered
