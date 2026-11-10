@@ -235,10 +235,11 @@ CI's; the live check is the one in the gallery.
   a page with comments off, updated it, read its history and archived it, all over MCP. The pilot
   archived the page rather than deleting it.
 - Check 6 (no key anywhere): passed. The key was found in 0 local files and 0 server pod log lines.
-- Check 1 (`claude mcp list` shows `ream` connected): not recorded separately; the tools loaded
-  after the session restart and every call above went through them.
-- Checks 4 and 5 (an answer reaching the seat through `whats_new`; a wrong seat or revoked key
-  refused): not exercised in the pilot. Each office does them on its own move, announced first.
+- Check 1: passed (00:20 UTC): `claude mcp list` shows `ream` connected.
+- Check 5, in part: passed (00:20 UTC): a made-up bearer key on `POST /mcp` answers 401. A
+  revoked key and a wrong seat are checked on each office's own move.
+- Check 4 (an answer reaching the seat through `whats_new`): not exercised, because it needs
+  Jeremy to answer a throwaway question. Each office does it on its own move, announced first.
 
 ## 8. Risks
 
