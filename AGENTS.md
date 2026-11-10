@@ -116,7 +116,9 @@ need no plug-in: format, signing and the addresses it refuses are in `docs/plugi
 Tools update themselves (`src/ream/clientlevel.py`, `selfupdate.py`; decisions.md, 9 Nov 2026): every call sends
 `X-Ream-Client: <level>`, `/api/v1` answers `X-Ream-Client-Min` and, for an older
 tool, `-Outdated: true` (the server names no ref; tools install `main` of their own source). **Bump `CLIENT_LEVEL` and `MIN_CLIENT_LEVEL` by hand** in a commit that needs new tools. The tool installs
-only from its own `REAM_INSTALL_SOURCE`, never from the server; `REAM_NO_SELF_UPDATE=1` turns it off.
+only from its own `REAM_INSTALL_SOURCE`, never from the server (with none set, from what uv's
+receipt records: a git address, or the tools index it was installed from, reinstalled with the same
+`--no-index --find-links`, never a bare package name); `REAM_NO_SELF_UPDATE=1` turns it off.
 
 The service runs on Postgres or SQLite, chosen by `DATABASE_URL` (`postgresql://…` or
 `sqlite:////data/artifacts.db`). Only `src/ream/db.py` talks to a driver; SQL elsewhere must

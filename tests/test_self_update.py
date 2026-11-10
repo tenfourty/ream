@@ -402,6 +402,219 @@ def test_a_path_missing_or_malformed_receipt_gives_no_source(
     assert selfupdate.configured_source() is None
 
 
+# ---- a tool installed from the tools index updates from that same index -------------
+#
+# What uv 0.13 writes for `uv tool install --force --refresh --no-index --find-links
+# https://artifacts.tenfourty.site/api/v1/tools/ ream` (read from a real install into a
+# throwaway tool directory): the requirement is the bare name, and the index rides in
+# `[tool.options]`. Nothing in it names a git address or a path.
+
+INDEX = "https://artifacts.tenfourty.site/api/v1/tools/"
+INDEX_RECEIPT = (
+    '[tool]\nrequirements = [{ name = "ream" }]\n'
+    "entrypoints = [\n"
+    '    { name = "ream", install-path = "/home/x/.local/bin/ream", from = "ream" },\n'
+    "]\n\n"
+    f'[tool.options]\nno-index = true\nfind-links = ["{INDEX}"]\n'
+)
+INDEX_COMMAND = [
+    "uv",
+    "tool",
+    "install",
+    "--force",
+    "--refresh",
+    "--no-index",
+    "--find-links",
+    INDEX,
+    "ream",
+]
+
+
+def _index_receipt(
+    requirement='{ name = "ream" }', links=f'["{INDEX}"]', no_index="true"
+):
+    """A receipt for a tool with `requirement` and the given `[tool.options]` values (raw
+    TOML; None leaves the key out)."""
+    lines = []
+    if no_index is not None:
+        lines.append(f"no-index = {no_index}")
+    if links is not None:
+        lines.append(f"find-links = {links}")
+    return (
+        f"[tool]\nrequirements = [{requirement}]\n\n[tool.options]\n"
+        + "\n".join(lines)
+        + "\n"
+    )
+
+
+def test_a_find_links_receipt_reinstalls_from_the_same_index(
+    updater, tmp_path, monkeypatch
+):
+    _receipt(tmp_path, monkeypatch, INDEX_RECEIPT)
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.installs == [INDEX_COMMAND]
+    assert updater.execs == [("/bin/ream", ["/bin/ream", "list"])]
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_the_find_links_install_never_asks_a_public_index(
+    updater, tmp_path, monkeypatch
+):
+    """The distribution name `ream` is an unrelated package on PyPI: the name only ever goes
+    out beside `--no-index`, and the index is the receipt's, not the server's."""
+    _receipt(tmp_path, monkeypatch, INDEX_RECEIPT)
+    selfupdate.on_response(
+        "GET",
+        {**STALE, "x-ream-install-source": "git+https://evil.example/x"},
+        "https://evil.example/api/v1/me",
+    )
+    (command,) = updater.run.installs
+    assert command.index("--no-index") < command.index("ream")
+    assert command[-1] == "ream" and command[-3:-1] == ["--find-links", INDEX]
+    assert "evil.example" not in " ".join(command)
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_every_find_links_address_of_the_receipt_is_kept(
+    updater, tmp_path, monkeypatch
+):
+    other = "https://second.example/tools/"
+    _receipt(
+        tmp_path,
+        monkeypatch,
+        _index_receipt(links=f'["{INDEX}", "{other}"]'),
+    )
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.installs == [
+        [
+            *INDEX_COMMAND[:-3],
+            "--find-links",
+            INDEX,
+            "--find-links",
+            other,
+            "ream",
+        ]
+    ]
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_the_opt_out_prints_the_find_links_command_and_runs_nothing(
+    updater, tmp_path, monkeypatch
+):
+    _receipt(tmp_path, monkeypatch, INDEX_RECEIPT)
+    monkeypatch.setenv("REAM_NO_SELF_UPDATE", "1")
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.calls == []
+    assert " ".join(INDEX_COMMAND) in updater.out.getvalue()
+
+
+def test_a_failed_find_links_install_prints_the_whole_command(
+    updater, tmp_path, monkeypatch
+):
+    _receipt(tmp_path, monkeypatch, INDEX_RECEIPT)
+    updater.run.install_code = 1
+    selfupdate.on_response("GET", STALE)
+    assert "Run by hand: " + " ".join(INDEX_COMMAND) in updater.out.getvalue()
+    assert updater.execs == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # a registry install with no index recorded: a bare name would ask PyPI
+        '[tool]\nrequirements = [{ name = "ream" }]\n',
+        '[tool]\nrequirements = [{ name = "ream" }]\n\n[tool.options]\n',
+        # an index that is not the only one: PyPI could still answer for `ream`
+        _index_receipt(no_index=None),
+        _index_receipt(no_index="false"),
+        _index_receipt(no_index='"yes"'),
+        # no index at all
+        _index_receipt(links=None),
+        _index_receipt(links="[]"),
+        # an address that is not a plain web address: a directory, a file, plain http to a
+        # remote host, a login in the address, a query, another scheme, a traversal, a
+        # second argument smuggled in, a value that is not a list of text
+        _index_receipt(links='["/srv/wheels"]'),
+        _index_receipt(links='["file:///srv/wheels/"]'),
+        _index_receipt(links='["http://artifacts.example/api/v1/tools/"]'),
+        _index_receipt(links='["https://u:p@artifacts.example/tools/"]'),
+        _index_receipt(links='["https://artifacts.example/tools/?t=x"]'),
+        _index_receipt(links='["https://artifacts.example/tools/#x"]'),
+        _index_receipt(links='["https://artifacts.example/../x/"]'),
+        _index_receipt(links='["https://a.example/t/ --index-url x"]'),
+        _index_receipt(links=f'["{INDEX}", 5]'),
+        _index_receipt(links=f'"{INDEX}"'),
+        # a requirement that is not the package, or that has a source of its own
+        _index_receipt('{ name = "other" }'),
+        _index_receipt('{ name = "ream", directory = "/home/x/artifacts" }'),
+        _index_receipt('{ name = "ream", url = "https://x.example/ream.whl" }'),
+        _index_receipt('{ name = "ream", path = "/x/ream.whl" }'),
+    ],
+)
+def test_a_receipt_with_neither_a_git_address_nor_a_find_links_index_installs_nothing(
+    updater, tmp_path, monkeypatch, text
+):
+    """Never a bare package name: with no source of its own the tool prints the manual line
+    (the onboarding document's install line) and carries on."""
+    _receipt(tmp_path, monkeypatch, text)
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.calls == []
+    assert updater.execs == []
+    out = updater.out.getvalue()
+    assert "/api/v1/agents.txt" in out
+    assert "uv tool install" not in out
+
+
+def test_a_loopback_index_over_plain_http_is_allowed(updater, tmp_path, monkeypatch):
+    """A fresh install serves http://localhost:8000: its tools update from there."""
+    local = "http://localhost:8000/api/v1/tools/"
+    _receipt(tmp_path, monkeypatch, _index_receipt(links=f'["{local}"]'))
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.installs == [
+        [*INDEX_COMMAND[:-3], "--find-links", local, "ream"]
+    ]
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_a_git_requirement_still_wins_over_find_links_options(
+    updater, tmp_path, monkeypatch
+):
+    _receipt(tmp_path, monkeypatch, _index_receipt(f'{{ name = "ream", {GIT} }}'))
+    assert selfupdate.configured_source() == SOURCE
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.installs == [MAIN_COMMAND]
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_the_setting_still_comes_before_the_receipts_index(
+    updater, tmp_path, monkeypatch
+):
+    _receipt(tmp_path, monkeypatch, INDEX_RECEIPT)
+    monkeypatch.setenv("REAM_INSTALL_SOURCE", "git+https://env.example/b")
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.installs == [
+        [
+            "uv",
+            "tool",
+            "install",
+            "--force",
+            "--refresh",
+            "git+https://env.example/b@main",
+        ]
+    ]
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_a_wrong_setting_is_not_replaced_by_the_receipts_index(
+    updater, tmp_path, monkeypatch
+):
+    _receipt(tmp_path, monkeypatch, INDEX_RECEIPT)
+    monkeypatch.setenv("REAM_INSTALL_SOURCE", "https://evil.example/x.whl")
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.calls == []
+    assert updater.execs == []
+
+
 def test_setting_then_file_then_receipt(updater, tmp_path, monkeypatch):
     _receipt(
         tmp_path, monkeypatch, f'[tool]\nrequirements = [{{ name = "ream", {GIT} }}]\n'

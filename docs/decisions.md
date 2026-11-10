@@ -576,6 +576,25 @@ tool prints that command, with the server's `X-Ream-Install-Source` note if pres
 to run. A source the server advertises
 (`REAM_CLIENT_INSTALL_SOURCE`) is information for a person; it is never installed from.
 
+**A tool installed from the tools index updates from that same index (10 Nov 2026, runcove-5t3oj.106).**
+The office VMs install with `uv tool install --force --refresh --no-index --find-links
+<base>/api/v1/tools/ ream`, and uv's receipt for that holds no git address: the requirement is the
+bare name `ream` and the index rides in `[tool.options]` as `no-index = true` and `find-links =
+[...]` (read from a real install; checked on uv 0.13). Such a tool therefore had no source and never
+updated. With no setting, no file and no git requirement, the receipt's index now counts as the
+source when the requirement is the bare `ream` (no git, path, directory or url of its own),
+`no-index` is true and every `find-links` entry is an `https` address (plain `http` only to
+`localhost` or `127.0.0.1`; no login, query, fragment or space). The reinstall is `uv tool install
+--force --refresh --no-index --find-links <each address> ream`: the same flags, no ref (the index
+serves the wheel the deployed image built). **Never a bare package name:** an unrelated package
+called `ream` is on public PyPI, so the name only goes to uv beside `--no-index`; a receipt with no
+`no-index`, or with neither a git address nor an index, gets no source and prints the manual line,
+and `tests/test_no_bare_install_hint.py` still refuses a bare install line anywhere in `src`. A
+setting or file still comes first and a wrong one is still not replaced by a guess; a git
+requirement still wins over index options. Only tools that already carry this change can use it, so
+a tool installed before it is reinstalled by hand once (the onboarding line) and updates itself
+after that.
+
 **Unattended and private sources.** The install never waits on a prompt (`stdin` is /dev/null,
 `GIT_TERMINAL_PROMPT=0`). When uv or git's output says it was refused for want of a login
 ("could not read Username", "Authentication failed", 401, "terminal prompts disabled"), the tool

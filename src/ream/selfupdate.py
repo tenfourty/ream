@@ -14,10 +14,17 @@ no version and no ref. This module reacts, once per process:
 
 SECURITY. The SOURCE is fixed on the client: `REAM_INSTALL_SOURCE` (or `ARTIFACTS_`) in the
 tool's own environment, or the first line of `$XDG_CONFIG_HOME/ream/install-source`, or, with
-neither, the `git` requirement in uv's own receipt (`uv-receipt.toml` in `sys.prefix`) when the
-tool was installed from a git+https address; a path install gives none. What the server sends (`X-Ream-Install-Source`) is never read here. The ref is a
+neither, what uv's own receipt (`uv-receipt.toml` in `sys.prefix`) says the tool was installed
+from: a `git+https` address (reinstalled at `main`), or the service's tools index, when uv
+recorded `no-index` and its `find-links` addresses for the package `ream` (reinstalled with
+`uv tool install --force --refresh --no-index --find-links <the same addresses> ream`). A
+path install, and a receipt with neither, give none: the name `ream` is never handed to uv
+without `--no-index`, because an unrelated package of that name is on the public index.
+What the server sends (`X-Ream-Install-Source`) is never read here. The ref is a
 constant, `main`: the reviewed, CI-gated branch, so a hostile or spoofed server cannot choose
-which commit is installed (an unreviewed `ci/` branch, say). No downgrade: the installed copy's
+which commit is installed (an unreviewed `ci/` branch, say); a tools-index install gets the
+wheel its own index serves, and the index is the one the tool was installed from, never one
+the server names. No downgrade: the installed copy's
 level must be at least this one's. At most one attempt an hour per machine (a stamp file), so a
 server that always says "out of date" cannot cause an install loop. The command is an argument
 list, never a shell string. No key is ever printed or passed.
@@ -48,6 +55,13 @@ _ORIGINAL_ARGV = list(sys.argv)
 _GUARD = "REAM_SELF_UPDATED"
 REF = "main"
 _SOURCE = re.compile(r"git\+https://[A-Za-z0-9._~/:-]+")
+# A tools-index address: a plain web address with no login, query, fragment, space or quote.
+_INDEX_URL = re.compile(r"https?://[A-Za-z0-9._~/:-]+")
+_LOOPBACK = {"localhost", "127.0.0.1"}  # the only hosts allowed plain http
+PACKAGE = "ream"  # what the tools index serves
+# A receipt requirement with any of these keys has a source of its own (a git address, a path,
+# a URL): it is not "the package, from an index".
+_OWN_SOURCE = {"git", "path", "directory", "url", "editable", "index"}
 _INSTALL_TIMEOUT = 300
 _MIN_GAP = 3600  # seconds between two attempts on one machine
 
@@ -82,8 +96,10 @@ def _install_env() -> dict[str, str]:
     return env
 
 
-def configured_source() -> str | None:
-    """Where this client installs itself from: its own setting, never the server's."""
+def configured_source() -> str | tuple[str, ...] | None:
+    """Where this client installs itself from: its own setting, never the server's. A
+    `git+https://` address (the setting, the file or a git receipt), or, only from a receipt of
+    a tools-index install, the tuple of that index's addresses."""
     value = envnames.get("INSTALL_SOURCE")
     if not value:
         base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
@@ -112,20 +128,42 @@ def _clean(address: str) -> str | None:
     return None
 
 
-def _receipt_source() -> str | None:
-    """The git address uv recorded when it installed this tool (`uv-receipt.toml` beside
-    `sys.prefix`): only its requirement is read. A path install, a missing or unreadable
-    receipt gives None. The ref is dropped; the tool always installs `main`."""
+def _index_urls(options) -> tuple[str, ...] | None:
+    """The addresses of a tools index from the receipt's `[tool.options]`, only when uv
+    recorded `no-index = true` (so the public index cannot answer for the name `ream`) and
+    every `find-links` entry is a plain web address: https, or http to this machine."""
+    if not isinstance(options, dict) or options.get("no-index") is not True:
+        return None
+    links = options.get("find-links")
+    if not isinstance(links, list) or not links:
+        return None
+    for link in links:
+        if not isinstance(link, str) or not _INDEX_URL.fullmatch(link) or ".." in link:
+            return None
+        parts = urlsplit(link)
+        if not parts.hostname:
+            return None
+        if parts.scheme != "https" and parts.hostname not in _LOOPBACK:
+            return None
+    return tuple(links)
+
+
+def _receipt_source() -> str | tuple[str, ...] | None:
+    """What uv recorded when it installed this tool (`uv-receipt.toml` beside `sys.prefix`):
+    the git address of a git install (the ref is dropped; the tool always installs `main`), or,
+    for the package `ream` installed with `--no-index --find-links`, those addresses. A path
+    install, a receipt with neither, a missing or unreadable receipt gives None."""
     try:
         with open(Path(sys.prefix) / "uv-receipt.toml", "rb") as handle:
-            receipt = tomllib.load(handle)
-        requirements = receipt["tool"]["requirements"]
-        for item in requirements:
+            tool = tomllib.load(handle)["tool"]
+        for item in tool["requirements"]:
             if item.get("name") not in {"ream", "artifacts"}:
                 continue
             git = item.get("git")
             if isinstance(git, str) and git.startswith(("https://", "git+https://")):
                 return _clean(git)
+            if item.get("name") == PACKAGE and not _OWN_SOURCE.intersection(item):
+                return _index_urls(tool.get("options"))
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
     return None
@@ -174,8 +212,22 @@ def _disabled() -> bool:
     return (envnames.get("NO_SELF_UPDATE") or "").lower() in {"1", "true", "yes", "on"}
 
 
-def command_for(source: str) -> list[str]:
-    return ["uv", "tool", "install", "--force", "--refresh", f"{source}@{REF}"]
+def command_for(source: str | tuple[str, ...]) -> list[str]:
+    if isinstance(source, str):
+        return ["uv", "tool", "install", "--force", "--refresh", f"{source}@{REF}"]
+    # A tools index: only ever beside `--no-index`, so the package name cannot be answered by
+    # the public index.
+    links = [part for url in source for part in ("--find-links", url)]
+    return [
+        "uv",
+        "tool",
+        "install",
+        "--force",
+        "--refresh",
+        "--no-index",
+        *links,
+        PACKAGE,
+    ]
 
 
 def _say(text: str) -> None:
@@ -330,8 +382,10 @@ def on_response(method: str, headers, api_url: str | None = None) -> None:
     if not ok:
         if result is not None and _auth_failure(result):
             _say(
-                f"the update failed: the source {source} needs a login on this machine "
-                f"(a git credential for that host). Log in, then run by hand: {line}"
+                "the update failed: the source "
+                f"{source if isinstance(source, str) else ' '.join(source)} needs a login "
+                f"on this machine (a credential for that host). Log in, then run by "
+                f"hand: {line}"
             )
         else:
             _say(f"the update failed. Run by hand: {line}")
