@@ -595,6 +595,26 @@ requirement still wins over index options. Only tools that already carry this ch
 a tool installed before it is reinstalled by hand once (the onboarding line) and updates itself
 after that.
 
+**A tool installed with plug-in packages keeps them when it updates (10 Nov 2026, runcove-5t3oj.107).**
+`uv tool install --with <plug-in source> --with-executables-from <plug-in package> <core source>`
+leaves the plug-in only in uv's receipt, and the update command had no `--with`, so it came back as
+core alone and lost the plug-in's verbs and console scripts. The receipt (read from real installs on
+uv 0.13.5) lists the package first, then one `[tool].requirements` entry per `--with`: `{ name }` for
+a name the index answers, `{ name, git = "<https address>?rev=<ref>" }`, `{ name, path }`,
+`{ name, directory }` or `{ name, editable = "<dir>" }`; `--with-executables-from X` adds another
+bare `{ name = "X" }` and puts X's console scripts in `entrypoints` with `from = "X"`. The update now
+passes each extra back: `--with git+https://...[@ref]` (the recorded ref is kept, unlike the
+package's, because the person chose it), `--with <path>` / `--with-editable <dir>` (absolute,
+plain, still there), `--with <name>[extras][specifier]` only when the receipt shows
+`no-index` and `find-links` (the same index options go on the command), and
+`--with-executables-from <name>` where the receipt shows its scripts were installed. **Never a bare
+name without that index** (the public `ream` problem again). Anything else (a url, a marker, an
+`index` or `subdirectory` key, an `http` or login git address, two sources for one package, a path
+that is gone) means the tool does not update itself: it prints the manual line naming the plug-in,
+and leaves out the server's note (a reinstall from it alone would drop the plug-ins). The setting
+or file still chooses the package's source; `REAM_NO_SELF_UPDATE=1` still only prints the line,
+now with the plug-in options in it.
+
 **Unattended and private sources.** The install never waits on a prompt (`stdin` is /dev/null,
 `GIT_TERMINAL_PROMPT=0`). When uv or git's output says it was refused for want of a login
 ("could not read Username", "Authentication failed", 401, "terminal prompts disabled"), the tool

@@ -959,3 +959,420 @@ def test_ream_version_without_a_known_commit(monkeypatch, capsys):
     with pytest.raises(SystemExit):
         cli.main(["--version"])
     assert "commit" not in capsys.readouterr().out
+
+
+# ---- a tool installed with plug-in packages keeps them when it updates itself --------
+#
+# What uv 0.13.5 writes for `uv tool install --no-index --find-links <dir> --with X
+# --with-executables-from X ream` (read from real installs into throwaway tool
+# directories): `[tool].requirements` is the package first, then one entry per `--with`
+# (`{ name = "X" }` for a name that resolves from the index, `{ name = "X", git = "<address>
+# ?rev=<ref>" }` for a git address, `{ name = "X", path = "<file>" }` or `directory = ...` or
+# `editable = "<dir>"` for a path); `--with-executables-from X` adds ANOTHER bare
+# `{ name = "X" }` and puts X's console scripts in `entrypoints` with `from = "X"`; the index
+# options (`no-index`, `find-links`) are the tool's, one set for all requirements.
+
+PLUGIN = "https://forge.example/runcove/house-plugin"
+SHA = "0123456789abcdef0123456789abcdef01234567"
+HEAD = ["uv", "tool", "install", "--force", "--refresh"]
+MAIN_REQ = f'{{ name = "ream", {GIT} }}'
+INDEX_OPTIONS = f'no-index = true\nfind-links = ["{INDEX}"]'
+
+
+def _tool_receipt(*extras, main=MAIN_REQ, executables_from=(), options=None):
+    """A receipt for `main` and the given extra requirements (raw TOML tables), with console
+    scripts from `executables_from` packages, and `[tool.options]` text when given."""
+    requirements = ",\n".join(f"    {item}" for item in (main, *extras))
+    scripts = [
+        '    { name = "ream", install-path = "/h/.local/bin/ream", from = "ream" }'
+    ]
+    for package in executables_from:
+        scripts.append(
+            f'    {{ name = "{package}-cli", install-path = "/h/bin/{package}-cli", '
+            f'from = "{package}" }}'
+        )
+    text = (
+        f"[tool]\nrequirements = [\n{requirements},\n]\n"
+        "entrypoints = [\n" + ",\n".join(scripts) + ",\n]\n"
+    )
+    if options:
+        text += f"\n[tool.options]\n{options}\n"
+    return text
+
+
+def _update(updater, tmp_path, monkeypatch, text, headers=STALE):
+    _receipt(tmp_path, monkeypatch, text)
+    selfupdate.on_response("GET", headers)
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+    return updater.run.installs
+
+
+@pytest.mark.parametrize(
+    "again", [(), ('{ name = "ream" }',), ('{ name = "artifacts" }',)]
+)
+def test_a_tool_with_no_plugins_updates_exactly_as_before(
+    updater, tmp_path, monkeypatch, again
+):
+    """The package alone, or named again (`--with-executables-from ream`): no extras."""
+    installs = _update(updater, tmp_path, monkeypatch, _tool_receipt(*again))
+    assert installs == [MAIN_COMMAND]
+
+
+def test_an_unreadable_receipt_means_no_extras_and_the_update_goes_on(
+    updater, tmp_path, monkeypatch
+):
+    _receipt(tmp_path, monkeypatch, "this is [not toml")
+    monkeypatch.setenv("REAM_INSTALL_SOURCE", SOURCE)
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.installs == [MAIN_COMMAND]
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+@pytest.mark.parametrize(
+    "git, spec",
+    [
+        (f"{PLUGIN}?rev=main", f"git+{PLUGIN}@main"),
+        (f"{PLUGIN}?rev={SHA}", f"git+{PLUGIN}@{SHA}"),
+        (f"{PLUGIN}", f"git+{PLUGIN}"),
+        (f"git+{PLUGIN}?rev=v2", f"git+{PLUGIN}@v2"),
+        (f"{PLUGIN}?tag=v2", f"git+{PLUGIN}@v2"),
+        (f"{PLUGIN}?branch=stable", f"git+{PLUGIN}@stable"),
+    ],
+)
+def test_a_git_plugin_is_installed_again_from_its_recorded_address_and_ref(
+    updater, tmp_path, monkeypatch, git, spec
+):
+    extra = f'{{ name = "house-plugin", git = "{git}" }}'
+    installs = _update(updater, tmp_path, monkeypatch, _tool_receipt(extra))
+    assert installs == [[*HEAD, "--with", spec, f"{SOURCE}@main"]]
+
+
+def test_a_git_plugin_with_its_ref_in_a_key_of_its_own(updater, tmp_path, monkeypatch):
+    extra = f'{{ name = "house-plugin", git = "{PLUGIN}", rev = "v3" }}'
+    installs = _update(updater, tmp_path, monkeypatch, _tool_receipt(extra))
+    assert installs == [[*HEAD, "--with", f"git+{PLUGIN}@v3", f"{SOURCE}@main"]]
+
+
+def test_the_plugins_executables_are_asked_for_again(updater, tmp_path, monkeypatch):
+    """`--with git+... --with-executables-from house-plugin`: uv records the package twice
+    (the bare name from the second flag), and the console scripts `from = "house-plugin"`."""
+    extras = (
+        f'{{ name = "house-plugin", git = "{PLUGIN}?rev=main" }}',
+        '{ name = "house-plugin" }',
+    )
+    installs = _update(
+        updater,
+        tmp_path,
+        monkeypatch,
+        _tool_receipt(*extras, executables_from=("house-plugin",)),
+    )
+    assert installs == [
+        [
+            *HEAD,
+            "--with",
+            f"git+{PLUGIN}@main",
+            "--with-executables-from",
+            "house-plugin",
+            f"{SOURCE}@main",
+        ]
+    ]
+
+
+def test_a_plugin_without_console_scripts_gets_no_executables_flag(
+    updater, tmp_path, monkeypatch
+):
+    extra = f'{{ name = "house-plugin", git = "{PLUGIN}" }}'
+    installs = _update(updater, tmp_path, monkeypatch, _tool_receipt(extra))
+    assert installs and "--with-executables-from" not in installs[0]
+
+
+def test_a_plugin_from_the_tools_index_comes_from_the_same_index(
+    updater, tmp_path, monkeypatch
+):
+    text = _tool_receipt(
+        '{ name = "house-plugin" }',
+        '{ name = "house-plugin" }',
+        main='{ name = "ream" }',
+        executables_from=("house-plugin",),
+        options=INDEX_OPTIONS,
+    )
+    installs = _update(updater, tmp_path, monkeypatch, text)
+    assert installs == [
+        [
+            *INDEX_COMMAND[:-1],
+            "--with",
+            "house-plugin",
+            "--with-executables-from",
+            "house-plugin",
+            "ream",
+        ]
+    ]
+
+
+def test_a_plugins_version_and_extras_are_kept(updater, tmp_path, monkeypatch):
+    text = _tool_receipt(
+        '{ name = "house-plugin", specifier = ">=1.2,<2", extras = ["a", "b"] }',
+        main='{ name = "ream" }',
+        options=INDEX_OPTIONS,
+    )
+    installs = _update(updater, tmp_path, monkeypatch, text)
+    assert installs == [
+        [*INDEX_COMMAND[:-1], "--with", "house-plugin[a,b]>=1.2,<2", "ream"]
+    ]
+
+
+def test_an_index_plugin_beside_a_git_package_keeps_the_receipts_index(
+    updater, tmp_path, monkeypatch
+):
+    """The receipt says the install used `--no-index --find-links`, so the bare name has an
+    index that is not PyPI; the new command keeps those options."""
+    text = _tool_receipt('{ name = "house-plugin" }', options=INDEX_OPTIONS)
+    installs = _update(updater, tmp_path, monkeypatch, text)
+    assert installs == [
+        [
+            *HEAD,
+            "--no-index",
+            "--find-links",
+            INDEX,
+            "--with",
+            "house-plugin",
+            f"{SOURCE}@main",
+        ]
+    ]
+
+
+@pytest.mark.parametrize(
+    "key, flag",
+    [("path", "--with"), ("directory", "--with"), ("editable", "--with-editable")],
+)
+def test_a_plugin_from_a_path_is_installed_again_from_that_path(
+    updater, tmp_path, monkeypatch, key, flag
+):
+    where = tmp_path / "house-plugin"
+    where.mkdir()
+    extra = f'{{ name = "house-plugin", {key} = "{where}" }}'
+    installs = _update(updater, tmp_path, monkeypatch, _tool_receipt(extra))
+    assert installs == [[*HEAD, flag, str(where), f"{SOURCE}@main"]]
+
+
+def test_several_plugins_keep_the_receipts_order(updater, tmp_path, monkeypatch):
+    wheel = tmp_path / "other-1.0-py3-none-any.whl"
+    wheel.write_text("")
+    extras = (
+        f'{{ name = "other", path = "{wheel}" }}',
+        f'{{ name = "house-plugin", git = "{PLUGIN}?rev=main" }}',
+    )
+    installs = _update(
+        updater,
+        tmp_path,
+        monkeypatch,
+        _tool_receipt(*extras, executables_from=("house-plugin", "other")),
+    )
+    assert installs == [
+        [
+            *HEAD,
+            "--with",
+            str(wheel),
+            "--with",
+            f"git+{PLUGIN}@main",
+            "--with-executables-from",
+            "other",
+            "--with-executables-from",
+            "house-plugin",
+            f"{SOURCE}@main",
+        ]
+    ]
+
+
+def test_the_setting_still_chooses_the_package_and_the_plugins_ride_along(
+    updater, tmp_path, monkeypatch
+):
+    extra = f'{{ name = "house-plugin", git = "{PLUGIN}?rev=main" }}'
+    _receipt(tmp_path, monkeypatch, _tool_receipt(extra))
+    monkeypatch.setenv("REAM_INSTALL_SOURCE", "git+https://env.example/b")
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.installs == [
+        [*HEAD, "--with", f"git+{PLUGIN}@main", "git+https://env.example/b@main"]
+    ]
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_the_opt_out_prints_the_whole_command_with_the_plugins(
+    updater, tmp_path, monkeypatch
+):
+    extra = f'{{ name = "house-plugin", git = "{PLUGIN}?rev=main" }}'
+    _receipt(tmp_path, monkeypatch, _tool_receipt(extra))
+    monkeypatch.setenv("REAM_NO_SELF_UPDATE", "1")
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.calls == []
+    line = " ".join([*HEAD, "--with", f"git+{PLUGIN}@main", f"{SOURCE}@main"])
+    assert line in updater.out.getvalue()
+
+
+def test_a_failed_update_prints_the_whole_command_with_the_plugins(
+    updater, tmp_path, monkeypatch
+):
+    extra = f'{{ name = "house-plugin", git = "{PLUGIN}?rev=main" }}'
+    _receipt(tmp_path, monkeypatch, _tool_receipt(extra))
+    updater.run.install_code = 1
+    selfupdate.on_response("GET", STALE)
+    line = " ".join([*HEAD, "--with", f"git+{PLUGIN}@main", f"{SOURCE}@main"])
+    assert "Run by hand: " + line in updater.out.getvalue()
+    assert updater.execs == []
+
+
+@pytest.mark.parametrize(
+    "extra, options",
+    [
+        # a name with no source of its own and no index of its own: a bare name would ask
+        # the public index, where an unrelated package of the name may be
+        ('{ name = "house-plugin" }', None),
+        ('{ name = "house-plugin" }', "x = 1"),
+        ('{ name = "house-plugin", specifier = ">=1" }', None),
+        ('{ name = "house-plugin" }', f'find-links = ["{INDEX}"]'),
+        ('{ name = "house-plugin" }', f'no-index = false\nfind-links = ["{INDEX}"]'),
+        ('{ name = "house-plugin" }', "no-index = true"),
+        ('{ name = "house-plugin" }', 'no-index = true\nfind-links = ["/srv/wheels"]'),
+        (
+            '{ name = "house-plugin" }',
+            'no-index = true\nfind-links = ["http://remote.example/tools/"]',
+        ),
+        # a source that is not a plain https git address
+        ('{ name = "house-plugin", git = "http://forge.example/x" }', None),
+        ('{ name = "house-plugin", git = "ssh://git@forge.example/x" }', None),
+        ('{ name = "house-plugin", git = "file:///srv/git/x" }', None),
+        ('{ name = "house-plugin", git = "git://forge.example/x" }', None),
+        ('{ name = "house-plugin", git = "https://u:p@forge.example/x" }', None),
+        ('{ name = "house-plugin", git = "https://forge.example/../x" }', None),
+        ('{ name = "house-plugin", git = "https://forge.example/x y" }', None),
+        (f'{{ name = "house-plugin", git = "{PLUGIN}?rev=a b" }}', None),
+        (f'{{ name = "house-plugin", git = "{PLUGIN}?rev=a&tag=b" }}', None),
+        (f'{{ name = "house-plugin", git = "{PLUGIN}?rev=--evil" }}', None),
+        (f'{{ name = "house-plugin", git = "{PLUGIN}?subdirectory=sub" }}', None),
+        (f'{{ name = "house-plugin", git = "{PLUGIN}", subdirectory = "sub" }}', None),
+        (f'{{ name = "house-plugin", git = "{PLUGIN}", lfs = true }}', None),
+        (f'{{ name = "house-plugin", git = "{PLUGIN}#egg=x" }}', None),
+        (f'{{ name = "house-plugin", git = "{PLUGIN}", rev = "a b" }}', None),
+        # other sources, or keys this code does not know how to repeat
+        ('{ name = "house-plugin", url = "https://x.example/p.whl" }', None),
+        ('{ name = "house-plugin", index = "https://x.example/simple" }', None),
+        ('{ name = "house-plugin", marker = "sys_platform == \'linux\'" }', None),
+        ('{ name = "house-plugin", specifier = "@ https://evil.example/x.whl" }', None),
+        ('{ name = "house-plugin", specifier = ">=1; os_name == \'nt\'" }', None),
+        ('{ name = "house-plugin", extras = ["a b"] }', None),
+        ('{ name = "house-plugin", extras = "a" }', None),
+        ('{ name = "house plugin" }', None),
+        ('{ name = "-evil" }', None),
+        (f'{{ git = "{PLUGIN}" }}', None),
+        ('"house-plugin"', None),
+        # a path that is not a plain absolute one, or is not there any more, or that also
+        # carries a version or extras (not repeated)
+        ('{ name = "house-plugin", path = "relative/p.whl" }', None),
+        ('{ name = "house-plugin", path = "--evil" }', None),
+        ('{ name = "house-plugin", path = "/nonexistent/dir/p.whl" }', None),
+        ('{ name = "house-plugin", directory = "/nonexistent/dir" }', None),
+        ('{ name = "house-plugin", editable = "/nonexistent/dir" }', None),
+        ('{ name = "house-plugin", path = "/tmp/../etc/x.whl" }', None),
+        ('{ name = "house-plugin", path = 5 }', None),
+        ('{ name = "house-plugin", editable = true }', None),
+        # two sources for one package
+        (
+            (
+                f'{{ name = "house-plugin", git = "{PLUGIN}" }},\n'
+                f'    {{ name = "house-plugin", git = "{PLUGIN}-fork" }}'
+            ),
+            None,
+        ),
+    ],
+)
+def test_a_plugin_whose_source_cannot_be_repeated_safely_stops_the_update(
+    updater, tmp_path, monkeypatch, extra, options
+):
+    """Not updating keeps the plug-in; a reinstall without it would lose its commands. The
+    tool prints the line to run by hand and carries on as it is."""
+    text = _tool_receipt(extra, options=options)
+    installs = _update(updater, tmp_path, monkeypatch, text)
+    assert installs == []
+    assert updater.run.calls == []
+    assert updater.execs == []
+    out = updater.out.getvalue()
+    assert "/api/v1/agents.txt" in out
+    assert "uv tool install" not in out
+    assert "evil" not in out
+
+
+def test_one_bad_plugin_among_good_ones_stops_the_update(
+    updater, tmp_path, monkeypatch
+):
+    extras = (
+        f'{{ name = "good-one", git = "{PLUGIN}?rev=main" }}',
+        '{ name = "bad-one", url = "https://x.example/p.whl" }',
+    )
+    installs = _update(updater, tmp_path, monkeypatch, _tool_receipt(*extras))
+    assert installs == []
+    assert updater.run.calls == []
+    assert "bad-one" in updater.out.getvalue()
+
+
+def test_the_line_for_a_plugin_that_cannot_be_repeated_names_it_and_says_to_add_it_back(
+    updater, tmp_path, monkeypatch
+):
+    extra = '{ name = "house-plugin", url = "https://x.example/p.whl" }'
+    _update(updater, tmp_path, monkeypatch, _tool_receipt(extra))
+    out = updater.out.getvalue()
+    assert "house-plugin" in out
+    assert "--with" in out
+    assert "/api/v1/agents.txt" in out
+
+
+def test_a_plugin_that_cannot_be_repeated_stops_the_update_with_a_setting_too(
+    updater, tmp_path, monkeypatch
+):
+    """The setting names the package's source; it says nothing about the plug-ins."""
+    _receipt(
+        tmp_path,
+        monkeypatch,
+        _tool_receipt('{ name = "house-plugin", url = "https://x.example/p.whl" }'),
+    )
+    monkeypatch.setenv("REAM_INSTALL_SOURCE", SOURCE)
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.calls == []
+    assert "house-plugin" in updater.out.getvalue()
+
+
+def test_the_opt_out_with_a_plugin_that_cannot_be_repeated_runs_nothing(
+    updater, tmp_path, monkeypatch
+):
+    _receipt(
+        tmp_path,
+        monkeypatch,
+        _tool_receipt('{ name = "house-plugin", url = "https://x.example/p.whl" }'),
+    )
+    monkeypatch.setenv("REAM_NO_SELF_UPDATE", "1")
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.calls == []
+    assert "house-plugin" in updater.out.getvalue()
+
+
+def test_the_servers_note_is_not_offered_to_a_tool_with_plugins(
+    updater, tmp_path, monkeypatch
+):
+    """`uv tool install --force <note>` would drop the plug-ins: the manual line leaves it out."""
+    note = "git+https://forge.example/runcove/artifacts"
+    _receipt(
+        tmp_path,
+        monkeypatch,
+        _tool_receipt(
+            '{ name = "house-plugin", url = "https://x.example/p.whl" }',
+            main='{ name = "ream", directory = "/home/x/artifacts" }',
+        ),
+    )
+    selfupdate.on_response(
+        "GET",
+        {**STALE, "x-ream-install-source": note},
+        "https://forge.example/api/v1/x",
+    )
+    assert updater.run.calls == []
+    out = updater.out.getvalue()
+    assert "forge.example/runcove" not in out
+    assert "house-plugin" in out

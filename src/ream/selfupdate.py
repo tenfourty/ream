@@ -20,6 +20,14 @@ recorded `no-index` and its `find-links` addresses for the package `ream` (reins
 `uv tool install --force --refresh --no-index --find-links <the same addresses> ream`). A
 path install, and a receipt with neither, give none: the name `ream` is never handed to uv
 without `--no-index`, because an unrelated package of that name is on the public index.
+PLUG-INS. A tool installed with extra packages (`--with`, `--with-executables-from`) must not
+come back as the package alone. The receipt's other requirements are passed back with the same
+flags: a git (`https`, no login) address with its recorded ref, a plain absolute path or editable
+directory that still exists, or a bare name only when the receipt shows `no-index` and
+`find-links` (the command then carries them); `--with-executables-from` where the receipt shows
+that package's console scripts. An extra whose source cannot be repeated safely (a url, a marker,
+an index, a subdirectory, two sources) stops the update: the manual line names it. See
+`receipt_extras`.
 What the server sends (`X-Ream-Install-Source`) is never read here. The ref is a
 constant, `main`: the reviewed, CI-gated branch, so a hostile or spoofed server cannot choose
 which commit is installed (an unreviewed `ci/` branch, say); a tools-index install gets the
@@ -44,8 +52,10 @@ import subprocess
 import sys
 import time
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+from typing import NamedTuple
+from urllib.parse import parse_qsl, urlsplit
 
 from ream import clientlevel, envnames
 
@@ -62,6 +72,17 @@ PACKAGE = "ream"  # what the tools index serves
 # A receipt requirement with any of these keys has a source of its own (a git address, a path,
 # a URL): it is not "the package, from an index".
 _OWN_SOURCE = {"git", "path", "directory", "url", "editable", "index"}
+# The extra packages a tool was installed with (`--with`), as the receipt records them.
+_MAIN_NAMES = {"ream", "artifacts"}  # this package, under either of its names
+_PKG_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
+_VERSION_SPEC = re.compile(
+    r"[<>=!~][A-Za-z0-9.*+!<>=~, -]*"
+)  # `>=1.2,<2`: no `@`, `;` or `:`
+_REF = re.compile(r"[0-9A-Za-z][0-9A-Za-z._/-]{0,63}")
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+_BARE_KEYS = {"name", "specifier", "extras"}  # a name resolved from the index
+_GIT_KEYS = {"name", "git", "rev", "tag", "branch"}
+_PATH_OPTIONS = {"path": "--with", "directory": "--with", "editable": "--with-editable"}
 _INSTALL_TIMEOUT = 300
 _MIN_GAP = 3600  # seconds between two attempts on one machine
 
@@ -169,6 +190,182 @@ def _receipt_source() -> str | tuple[str, ...] | None:
     return None
 
 
+@dataclass(frozen=True)
+class Extras:
+    """The extra packages a tool was installed with (`uv tool install --with ...`), read from
+    uv's receipt. `args` are the options that install them again, `index` the receipt's
+    `--find-links` addresses when a bare name among them needs them, `blocked` the names of
+    extras whose source cannot be repeated safely (any one of them stops the update), `names`
+    all of them."""
+
+    args: tuple[str, ...] = ()
+    index: tuple[str, ...] | None = None
+    blocked: tuple[str, ...] = ()
+    names: tuple[str, ...] = ()
+
+
+def _normal(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+class _Flag(NamedTuple):
+    option: str  # `--with` or `--with-editable`
+    value: str
+    from_index: bool  # a name with no source of its own: only an index can answer it
+
+
+def _git_extra(item: dict) -> str | None:
+    """`git+https://host/path[@ref]` for an extra recorded as a git address, or None. Only
+    https with no login; at most one of rev, tag or branch (in the address or as a key); no
+    subdirectory, fragment or anything else uv might record."""
+    git = item["git"]
+    if not isinstance(git, str) or not git.startswith(("https://", "git+https://")):
+        return None
+    if "#" in git:
+        return None
+    address, _, query = git.removeprefix("git+").partition("?")
+    if not _SOURCE.fullmatch(f"git+{address}") or ".." in address:
+        return None
+    refs = []
+    for key, value in parse_qsl(query, keep_blank_values=True):
+        if key not in {"rev", "tag", "branch"}:
+            return None
+        refs.append(value)
+    refs.extend(item[key] for key in ("rev", "tag", "branch") if key in item)
+    if len(refs) > 1:
+        return None
+    if not refs:
+        return f"git+{address}"
+    ref = refs[0]
+    if not isinstance(ref, str) or not _REF.fullmatch(ref) or ".." in ref:
+        return None
+    return f"git+{address}@{ref}"
+
+
+def _path_extra(item: dict, key: str) -> str | None:
+    """The absolute path of an extra recorded as a path, a directory or an editable
+    directory, when it is plain and still there; otherwise None."""
+    value = item[key]
+    if (
+        not isinstance(value, str)
+        or not value.startswith("/")
+        or _CONTROL.search(value)
+        or ".." in Path(value).parts
+    ):
+        return None
+    return value if os.path.exists(value) else None
+
+
+def _extra_flag(item) -> _Flag | None:
+    """The option that installs one receipt requirement again, or None when it cannot be
+    repeated safely."""
+    if not isinstance(item, dict):
+        return None
+    keys = set(item)
+    if "git" in keys:
+        spec = _git_extra(item) if keys <= _GIT_KEYS else None
+        return _Flag("--with", spec, False) if spec else None
+    for key, option in _PATH_OPTIONS.items():
+        if key in keys:
+            path = _path_extra(item, key) if keys == {"name", key} else None
+            return _Flag(option, path, False) if path else None
+    if not keys <= _BARE_KEYS:
+        return None  # a url, an index, a marker, a subdirectory: not repeated
+    requirement = item["name"]
+    extras = item.get("extras")
+    if extras is not None:
+        if not isinstance(extras, list) or not all(
+            isinstance(extra, str) and _PKG_NAME.fullmatch(extra) for extra in extras
+        ):
+            return None
+        if extras:
+            requirement += f"[{','.join(extras)}]"
+    specifier = item.get("specifier")
+    if specifier is not None:
+        if not isinstance(specifier, str) or not _VERSION_SPEC.fullmatch(specifier):
+            return None
+        requirement += specifier
+    return _Flag("--with", requirement, True)
+
+
+def receipt_extras() -> Extras:
+    """The extra packages the receipt shows this tool was installed with, and how to install
+    them again with the same flags: `--with <source>` for a git address (its ref kept), a
+    path or an editable directory; `--with <name>` for a name only when the receipt shows the
+    tool's own `--no-index --find-links` (an index that is not the public one); and
+    `--with-executables-from <name>` where the receipt shows that package's console scripts
+    were installed. Anything else is `blocked`. A missing or unreadable receipt has none."""
+    try:
+        with open(Path(sys.prefix) / "uv-receipt.toml", "rb") as handle:
+            tool = tomllib.load(handle)["tool"]
+        requirements = tool["requirements"]
+        if not isinstance(requirements, list):
+            return Extras()
+        scripts = tool.get("entrypoints")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return Extras()
+    shown: dict[str, str] = {}  # normal name -> the spelling to print and pass
+    sources: dict[
+        str, list[tuple[str, str]]
+    ] = {}  # (flag, value) of a source of its own
+    named: dict[
+        str, list[str]
+    ] = {}  # requirements that are a name, maybe with a version
+    bad: set[str] = set()
+    unnamed = False
+    for item in requirements:
+        name = item.get("name") if isinstance(item, dict) else None
+        if not isinstance(name, str) or not _PKG_NAME.fullmatch(name):
+            unnamed = True
+            continue
+        key = _normal(name)
+        if key in _MAIN_NAMES:
+            continue
+        shown.setdefault(key, name)
+        flag = _extra_flag(item)
+        if flag is None:
+            bad.add(key)
+        elif flag.from_index:
+            named.setdefault(key, []).append(flag.value)
+        elif (flag.option, flag.value) not in sources.setdefault(key, []):
+            sources[key].append((flag.option, flag.value))
+    args: list[str] = []
+    wants_index: list[str] = []
+    for key in shown:
+        if key in bad:
+            continue
+        found = sources.get(key, [])
+        # Two sources for one package, or a version beside a source, are not repeated; the
+        # bare name that `--with-executables-from` adds beside a source asks nothing more.
+        if len(found) > 1 or (
+            found and any(_normal(s) != key for s in named.get(key, []))
+        ):
+            bad.add(key)
+        elif found:
+            args.extend(found[0])
+        else:
+            wants_index.append(key)
+            for spec in dict.fromkeys(named[key]):
+                args.extend(("--with", spec))
+    index = None
+    if wants_index:
+        index = _index_urls(tool.get("options"))
+        if index is None:
+            bad.update(wants_index)
+    made = {
+        _normal(entry["from"])
+        for entry in (scripts if isinstance(scripts, list) else [])
+        if isinstance(entry, dict) and isinstance(entry.get("from"), str)
+    }
+    for key, name in shown.items():
+        if key in made and key not in bad:
+            args.extend(("--with-executables-from", name))
+    blocked = [name for key, name in shown.items() if key in bad]
+    if unnamed:
+        blocked.append("an unnamed package")
+    return Extras(tuple(args), index, tuple(blocked), tuple(shown.values()))
+
+
 def installed_commit() -> str | None:
     """The commit uv installed this tool from, when its receipt says (`?rev=<sha>` on the git
     address, or a `rev` key); None for a path install or an unreadable receipt."""
@@ -212,22 +409,21 @@ def _disabled() -> bool:
     return (envnames.get("NO_SELF_UPDATE") or "").lower() in {"1", "true", "yes", "on"}
 
 
-def command_for(source: str | tuple[str, ...]) -> list[str]:
-    if isinstance(source, str):
-        return ["uv", "tool", "install", "--force", "--refresh", f"{source}@{REF}"]
+def command_for(
+    source: str | tuple[str, ...], extras: Extras | None = None
+) -> list[str]:
+    """The install command: the package from `source`, beside the extras the tool was
+    installed with (their `--with` options, from `receipt_extras`)."""
+    extras = extras or Extras()
+    command = ["uv", "tool", "install", "--force", "--refresh"]
     # A tools index: only ever beside `--no-index`, so the package name cannot be answered by
-    # the public index.
-    links = [part for url in source for part in ("--find-links", url)]
-    return [
-        "uv",
-        "tool",
-        "install",
-        "--force",
-        "--refresh",
-        "--no-index",
-        *links,
-        PACKAGE,
-    ]
+    # the public index. The same goes for a bare plug-in name the receipt says came from it.
+    index = source if isinstance(source, tuple) else extras.index
+    if index:
+        command += ["--no-index", *(a for url in index for a in ("--find-links", url))]
+    command += extras.args
+    command.append(f"{source}@{REF}" if isinstance(source, str) else PACKAGE)
+    return command
 
 
 def _say(text: str) -> None:
@@ -324,16 +520,30 @@ def _host(address: str) -> str | None:
         return None
 
 
-def _manual_line(headers, api_url: str | None) -> str:
-    """The line for a tool with no fixed source. The server's note is printed for a person to
-    run once, and only when it names the very host this tool was talking to; nothing here
-    executes it."""
-    line = (
-        "this tool is out of date (the service asks for a newer one). Reinstall it with "
-        "the install line in the service's onboarding document (/api/v1/agents.txt)."
+def _manual_line(headers, api_url: str | None, extras: Extras | None = None) -> str:
+    """The line for a tool with no fixed source, or whose plug-ins cannot be installed
+    again. The server's note is printed for a person to run once, and only when it names the
+    very host this tool was talking to and the tool has no plug-ins (a reinstall from the
+    note alone would drop them); nothing here executes it."""
+    extras = extras or Extras()
+    line = "this tool is out of date (the service asks for a newer one). "
+    if extras.blocked:
+        line += (
+            f"It was installed with {', '.join(extras.blocked)}, whose source cannot be "
+            "repeated safely, so it is not updating itself (that would drop them). "
+        )
+    line += (
+        "Reinstall it with the install line in the service's onboarding document "
+        "(/api/v1/agents.txt)"
     )
+    if extras.names:
+        line += (
+            ", adding your --with and --with-executables-from options for "
+            f"{', '.join(extras.names)} again"
+        )
+    line += "."
     note = (headers.get(clientlevel.SOURCE_HEADER.lower()) or "").strip()
-    if note and _SOURCE.fullmatch(note) and ".." not in note:
+    if not extras.names and note and _SOURCE.fullmatch(note) and ".." not in note:
         host = _host(note)
         if host and host == _host(api_url or ""):
             line += (
@@ -353,10 +563,11 @@ def on_response(method: str, headers, api_url: str | None = None) -> None:
         return
     _done = True
     source = configured_source()
-    if source is None:
-        _say(_manual_line(headers, api_url))
+    extras = receipt_extras()
+    if source is None or extras.blocked:
+        _say(_manual_line(headers, api_url, extras))
         return
-    command = command_for(source)
+    command = command_for(source, extras)
     line = " ".join(command)
     if _disabled():
         _say(f"this tool is out of date. To update it run: {line}")
