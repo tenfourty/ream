@@ -253,3 +253,57 @@ def test_ream_changes_hands_its_flags_to_the_publish_tool(monkeypatch):
     assert seen == [
         ["ream changes", "--changes", "abc", "--from", "1", "--changes-to", "3"]
     ]
+
+
+def test_a_diff_that_timed_out_is_kept_and_later_gets_answer_at_once(
+    db, api, seat, monkeypatch
+):
+    calls = []
+
+    def slow(*a, **k):
+        calls.append(1)
+        return {
+            "parts": [],
+            "more": 0,
+            "unknown_reason": partchanges.partdiff.REASON_SLOW,
+        }
+
+    monkeypatch.setattr(partchanges.partdiff, "changes_safely", slow)
+    monkeypatch.setattr("ream.api.partdiff.changes_safely", slow)
+    first = get(api, seat, "/changes", **{"from": 1, "to": 2}).json()
+    second = get(api, seat, "/changes", **{"from": 1, "to": 2}).json()
+    assert (
+        first["unknown_reason"]
+        == second["unknown_reason"]
+        == partchanges.partdiff.REASON_SLOW
+    )
+    assert len(calls) == 1, "the second GET recomputed a diff that already timed out"
+
+
+def test_a_worker_timeout_is_its_own_answer_not_a_transient_failure(monkeypatch):
+    from ream import pagediff
+
+    class Slow:
+        def alive(self):
+            return True
+
+        def run(self, *a):
+            raise TimeoutError
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(pagediff, "_Worker", Slow)
+    monkeypatch.setattr(pagediff, "_IDLE", [])
+    partchanges.partdiff._CACHE.clear()
+    got = partchanges.partdiff.changes_safely("<p>a</p>", "<p>b</p>")
+    assert got["unknown_reason"] == partchanges.partdiff.REASON_SLOW
+    assert partchanges.keepable(got)
+
+
+def test_two_versions_are_both_rebuilt_when_the_newer_one_is_already_cached(db, seat):
+    """A cached newer version must not start the walk above an older one asked for."""
+    with db.connect() as conn:
+        store.version_bodies(conn, seat["id"], [2])
+        got = store.version_bodies(conn, seat["id"], [1, 2])
+    assert sorted(got) == [1, 2]

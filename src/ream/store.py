@@ -1749,9 +1749,10 @@ def _rebuild(conn, artifact_id: str, start: int, group: list[int]) -> dict[int, 
             (artifact_id, start, top),
         ).fetchall()
     )
-    # Begin at the newest version in the range that is already rebuilt.
+    # Begin at the newest version in the range that is already rebuilt, but never above the
+    # oldest one asked for: the walk must pass through it.
     begin, prev = start, None
-    for n in range(top, start - 1, -1):
+    for n in range(min(group), start - 1, -1):
         sha = shas.get(n)
         cached = _rebuilt.get((artifact_id, n, sha)) if sha else None
         if cached is not None:

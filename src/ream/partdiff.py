@@ -38,6 +38,7 @@ MAX_NODES = 200_000
 MAX_DEPTH = 400
 TOP_LABEL = "Top of the page"
 REASON_FAILED = "could not tell which parts changed"
+REASON_SLOW = "too large to compare in time"
 
 _VOID = frozenset(
     [
@@ -316,6 +317,7 @@ def changes_safely(
             pagediff.TIMEOUT_SECONDS if timeout is None else timeout,
             func=compare,
             fallback=fallback,
+            on_timeout=_unknown(REASON_SLOW),
         )
     except Exception:  # noqa: BLE001
         return fallback

@@ -16,9 +16,14 @@ log = logging.getLogger(__name__)
 
 _SLOTS = threading.BoundedSemaphore(4)
 
-# Answers worth keeping: the pages were read, or are past a limit that will not change. A failure
+# Answers worth keeping: the pages were read, or are past a limit that will not change (a diff that
+# ran out of time will again, and each try would take a diff slot). A failure
 # from load or a crashed worker says nothing about the pages, so it is asked again next time.
-_KEEP_REASONS = ("too large to mark up changes", "this page draws itself with script")
+_KEEP_REASONS = (
+    "too large to mark up changes",
+    "this page draws itself with script",
+    partdiff.REASON_SLOW,
+)
 
 
 def keepable(found: dict) -> bool:

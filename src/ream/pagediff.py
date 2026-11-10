@@ -1236,12 +1236,19 @@ def render_changes_safely(
 
 
 def _run_in_worker(
-    old_html: str, new_html: str, timeout: float, func=None, fallback=None
+    old_html: str,
+    new_html: str,
+    timeout: float,
+    func=None,
+    fallback=None,
+    on_timeout=None,
 ):
     """``(result, transient)``: transient is True when the fallback came from
     load or a broken worker rather than from the pages themselves. `func` is
     another module-level function of two page texts for the same worker to run
-    (partdiff.compare), with `fallback` as its answer when none comes."""
+    (partdiff.compare), with `fallback` as its answer when none comes. `on_timeout`,
+    when given, is the answer for a worker that ran out of time: the pages themselves are
+    the cause, so it is not transient and may be kept."""
     fallback = fallback if fallback is not None else (new_html, REASON_FAILED)
     if not _SLOTS.acquire(timeout=timeout):
         return fallback, True
@@ -1252,8 +1259,10 @@ def _run_in_worker(
             worker = _Worker()
         try:
             result = worker.run(old_html, new_html, timeout, func)
-        except BaseException:  # noqa: BLE001 - timed out or broken
+        except BaseException as exc:  # noqa: BLE001 - timed out or broken
             worker.kill()  # it never serves again
+            if on_timeout is not None and isinstance(exc, TimeoutError):
+                return on_timeout, False
             return fallback, True
         with _IDLE_LOCK:
             _IDLE.append(worker)
