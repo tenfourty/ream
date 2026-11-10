@@ -977,7 +977,8 @@ page tycqi4frhe2itzs3n2axy7bhxu.
 
 Folding an agent revoked a seat key a timer still used, and the plain revoke left no reason and no
 event, so nobody could say who had cut it. Now every revocation records `revoked_by` and
-`revoked_reason` and writes an `agent_key_revoked` event; the refused request's 401 names the
-reason (never the key, never another agent). `rename-agent --revoke-keys` lists each key with its
+`revoked_reason` on the key row, and writes an `agent_key_revoked` event on the agent's latest live
+page when it has one (an event belongs to a page; a routine rotation writes none); the refused
+request's 401 shows the reason to whoever holds the key. `rename-agent --revoke-keys` lists each key with its
 last use and refuses one used in the last 24 hours unless `--force`. A plain rename or merge still
 moves keys and keeps them working.

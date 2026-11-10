@@ -76,6 +76,8 @@ class KeyRow:
     agent: str
     created_at: datetime
     revoked_at: datetime | None
+    revoked_by: str | None = None
+    revoked_reason: str | None = None
 
 
 def _hash(token: str) -> str:
@@ -194,13 +196,15 @@ def first_use(db: Database, key: AgentKey) -> None:
         if row is None:
             return
         if row[0]:
-            revoke_in(conn, row[0], actor=key.agent, reason="replaced", now=now)
+            revoke_in(
+                conn, row[0], actor=key.agent, reason="replaced", now=now, event=False
+            )
         retired = conn.execute(
-            "update agent_key set revoked_at = %s, revoked_reason = 'moved',"
-            " revoked_by = %s where retire_after = %s and revoked_at is null"
-            " returning id",
-            (now, key.agent, key.id),
+            "select id from agent_key where retire_after = %s and revoked_at is null",
+            (key.id,),
         ).fetchall()
+        for (old_id,) in retired:
+            revoke_in(conn, old_id, actor=key.agent, reason="moved", now=now)
         if retired:
             note_on_latest_page(
                 conn,
@@ -262,7 +266,14 @@ def rotate(db: Database, key: AgentKey) -> tuple[str, str]:
             (key.id,),
         ).fetchall()
         for (pending_id,) in pending:
-            revoke_in(conn, pending_id, actor=key.agent, reason="superseded", now=now)
+            revoke_in(
+                conn,
+                pending_id,
+                actor=key.agent,
+                reason="superseded",
+                now=now,
+                event=False,
+            )
         conn.execute(
             "insert into agent_key"
             " (id, agent, token_sha256, rotating, replaces, label, retire_after)"
@@ -273,13 +284,23 @@ def rotate(db: Database, key: AgentKey) -> tuple[str, str]:
     return token, key_id
 
 
-def revoke_in(conn, key_id: str, *, actor: str, reason: str, now: datetime) -> int:
+def revoke_in(
+    conn,
+    key_id: str,
+    *,
+    actor: str,
+    reason: str,
+    now: datetime,
+    event: bool = True,
+) -> int:
     """Revoke one live key on `conn`, inside the caller's transaction, recording WHO
     (`revoked_by`) and WHY (`revoked_reason`) and writing an `agent_key_revoked` event on the
     agent's latest page. Returns the rows changed: 0 for an unknown or already revoked key
     -- `revoked_at is null` in the WHERE clause leaves an earlier revocation untouched --
     and no event then. Every path that revokes a key by hand goes through here, so none
-    can skip the record (runcove-5t3oj.110)."""
+    can skip the record (runcove-5t3oj.110). The key row always records who, why and when;
+    the event goes on the agent's latest live page and is skipped when the agent has none, or
+    with `event=False` (routine rotation, which would only be noise to sinks)."""
     reason = " ".join(reason.split())[:200] or "revoked"
     row = conn.execute(
         "update agent_key set revoked_at = %s, revoked_reason = %s, revoked_by = %s"
@@ -294,6 +315,8 @@ def revoke_in(conn, key_id: str, *, actor: str, reason: str, now: datetime) -> i
         " and move = 'self' and delivered_at is null and denied_at is null",
         (now, key_id),
     )
+    if not event:
+        return 1
     note_on_latest_page(
         conn,
         row[0],
@@ -336,7 +359,8 @@ def list_keys(db: Database) -> list[KeyRow]:
     """Every key's id, agent, and timestamps — never `token_sha256`."""
     with db.connect() as conn:
         rows = conn.execute(
-            "select id, agent, created_at, revoked_at from agent_key order by created_at"
+            "select id, agent, created_at, revoked_at, revoked_by, revoked_reason"
+            " from agent_key order by created_at"
         ).fetchall()
     return [KeyRow(*row) for row in rows]
 

@@ -129,7 +129,10 @@ def cmd_revoke_key(args: argparse.Namespace) -> None:
 def cmd_list_keys(_args: argparse.Namespace) -> None:
     db = _open_db()
     for row in keys.list_keys(db):
-        print(f"{row.id}\t{row.agent}\t{row.created_at}\t{row.revoked_at or '-'}")
+        print(
+            f"{row.id}\t{row.agent}\t{row.created_at}\t{row.revoked_at or '-'}"
+            f"\t{row.revoked_by or '-'}\t{row.revoked_reason or '-'}"
+        )
 
 
 def cmd_list_apps(_args: argparse.Namespace) -> None:
@@ -353,8 +356,8 @@ def build_parser() -> argparse.ArgumentParser:
     revoke_key.add_argument("key_id")
     revoke_key.add_argument(
         "--reason",
-        help="why, recorded with the revocation and said back to a machine that "
-        "still sends the key (never put a secret in it)",
+        help="why, recorded with the revocation and shown to the key's holder in its "
+        "401 (never put a secret in it)",
     )
     revoke_key.set_defaults(func=cmd_revoke_key)
 

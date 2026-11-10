@@ -56,8 +56,9 @@ A request is identified by its key, never by a name it claims. Renaming an agent
 (`artifacts-admin rename-agent`) moves everything it owns, and its old key keeps working as the
 new name; published pages never change owner by accident. Every revocation (`revoke-key`, the
 Machines page, a rotation, `rename-agent --revoke-keys`) goes through `keys.revoke_in`, which
-records `revoked_by` and `revoked_reason` and writes an `agent_key_revoked` event; the 401 names
-the reason. A fold refuses a key used in the last 24 hours unless `--force`.
+always records `revoked_by` and `revoked_reason` on the key row and, when the agent has a live
+page, writes an `agent_key_revoked` event there (not for a routine weekly rotation); the 401 shows
+the reason to whoever holds the key. A fold refuses a key used in the last 24 hours unless `--force`.
 
 ## WHAT
 

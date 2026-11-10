@@ -76,3 +76,44 @@ def test_a_revoked_keys_refusal_names_its_reason_and_nothing_else(db):
     assert "folded into cove" in said
     assert "someone-else" not in said and token not in said
     assert keys.refusal_reason(db, "art_never-issued") == "unknown or revoked key"
+
+
+def test_a_move_retirement_records_actor_and_reason_and_writes_an_event(db):
+    from ream import store
+
+    _old_token, old_key = keys.mint(db, agent="ops-seat")
+    token, new_key = keys.mint(db, agent="ops-seat")
+    store.publish(db, "ops-seat", "board", "<p>x</p>")
+    with db.connect() as conn:
+        conn.execute("update agent_key set rotating = true where id = %s", (new_key,))
+        conn.execute(
+            "update agent_key set retire_after = %s where id = %s", (new_key, old_key)
+        )
+    keys.first_use(db, keys.verify(db, token))
+    with db.connect() as conn:
+        row = conn.execute(
+            "select revoked_by, revoked_reason from agent_key where id = %s", (old_key,)
+        ).fetchone()
+    assert tuple(row) == ("ops-seat", "moved")
+    assert [e[2] for e in _revocation_events(db)] == [old_key]
+
+
+def test_a_routine_rotation_records_the_row_but_writes_no_event(db):
+    from ream import store
+
+    _t, old_key = keys.mint(db, agent="ops-seat")
+    store.publish(db, "ops-seat", "board", "<p>x</p>")
+    with db.connect() as conn:
+        conn.execute("update agent_key set rotating = true where id = %s", (old_key,))
+    token, new_key = keys.rotate(
+        db, keys.AgentKey(id=old_key, agent="ops-seat", rotating=True)
+    )
+    with db.connect() as conn:
+        conn.execute("update agent_key set rotating = true where id = %s", (new_key,))
+    keys.first_use(db, keys.verify(db, token))
+    with db.connect() as conn:
+        row = conn.execute(
+            "select revoked_by, revoked_reason from agent_key where id = %s", (old_key,)
+        ).fetchone()
+    assert tuple(row) == ("ops-seat", "replaced")
+    assert _revocation_events(db) == []
