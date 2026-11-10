@@ -3,9 +3,9 @@
 Status: the pilot passed on 10 Nov 2026 (evidence in sections 4 and 7), and the other offices now
 move one at a time, each announced first. Jeremy confirmed the plan on 10 Nov 2026 (decision
 d_01M71ARX2FGFQ28G9Q06804QGW in `docs/decisions.md`). The rest is the plan as first written, apart
-from section 4, steps B and C of section 5, and the ledger at the end of section 7; where the build differs, section 4 says so (the helper is
-`artifacts-key --mcp-headers <seat>`, a mode of the existing wrapper, not a new `ream-mcp-headers`
-script).
+from section 4, steps B and C of section 5, and the ledger at the end of section 7. Where the build
+differs, section 4 says so: the helper is `artifacts-key --mcp-headers <seat>`, a mode of the
+existing wrapper, not a new `ream-mcp-headers` script.
 
 Direction (decision d_01M6ZWA1YH391DJN6RQVM93B3J, 9 Nov 2026), as I understand it: agents stop
 running out-of-date Ream tools in two steps; step 1, the self-updating `ream` tool, is done; step 2
@@ -231,9 +231,9 @@ Pilot-only additional check: the same flow against the SQLite and Postgres test 
 CI's; the live check is the one in the gallery.
 
 **Pilot ledger (this office, 10 Nov 2026, 00:12 UTC).**
-- Check 2 (`whoami` names the office's own seat) and the working part of check 3: passed. The
-  session published a small page with comments off, updated it, read its history and archived it
-  over MCP. The pilot archived the page rather than deleting it.
+- Check 2 (`whoami`) and the working part of check 3: passed. The session ran `whoami`, published
+  a page with comments off, updated it, read its history and archived it, all over MCP. The pilot
+  archived the page rather than deleting it.
 - Check 6 (no key anywhere): passed. The key was found in 0 local files and 0 server pod log lines.
 - Check 1 (`claude mcp list` shows `ream` connected): not recorded separately; the tools loaded
   after the session restart and every call above went through them.
