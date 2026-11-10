@@ -3,7 +3,7 @@
 # request on runcove/ream-homelab that moves its `core.lock` to this core image, and ask the
 # forge to merge it by itself when ream-homelab's checks succeed (docs/decisions.md, 9 Nov 2026;
 # runbook docs/agent/runbooks/image-from-ream-homelab.md). ream-homelab then builds the deployed
-# image and opens the homelab pin PR. Modelled on pin-pr.sh.
+# image and opens the deployment's pin PR. Modelled on pin-pr.sh.
 #
 # CORE_LOCK_TOKEN (environment only, never an argument) belongs to an account that may push
 # branches to and open and merge PRs on ream-homelab. It is read by curl from stdin and by git

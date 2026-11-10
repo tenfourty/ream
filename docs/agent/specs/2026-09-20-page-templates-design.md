@@ -43,7 +43,7 @@ the project-status template rather than from a hand-written file.
 Two families. The first six come from `anthropics/html-effectiveness`, which is
 twenty dependency-free single-file HTML pages — the same constraint this service
 already imposes, which is why Jeremy singled it out. The last two come from
-`~/repos/cove/.claude/skills/feature-flow`.
+the cove project's feature-flow skill.
 
 **What an agent publishes about work:**
 
@@ -95,10 +95,9 @@ architecture, components, data flow, error handling, test strategy and risks.
 `src/artifacts/templates/<name>.html` is the single source of truth. Inside the
 package, so the wheel carries them and the service can serve them.
 
-Copies live at `.claude/skills/lab-artifacts/templates/<name>.html` in this repo
-and in `~/repos/homelab`, because Jeremy asked for both the skill directory and
-the API. They are written by `scripts/sync-skill-templates.sh` and guarded by a
-test. Eight files across two repos is a drift machine otherwise; the two skill
+Copies live in a skill directory in this repo and in the deployment's repo,
+because Jeremy asked for both the skill directory and the API. They are written
+by a sync script and guarded by a test. Eight files across two repos is a drift machine otherwise; the two skill
 copies that exist today are byte-identical only by luck.
 
 ## The API

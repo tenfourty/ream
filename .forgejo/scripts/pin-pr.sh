@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # pin-pr.sh <sha> <image-ref> -- after main's image job, open the pull request on the
-# homelab repo that moves artifacts onto that image. It changes ONE line: the `image:` in
-# k8s/apps/artifacts/artifacts/app/deployment.yaml (homelab-qa3c, 15 Oct 2026). The
-# homelab maintainer reviews and merges it; nothing here can reach homelab's main.
+# deployment repo that moves artifacts onto that image. It changes ONE line: the `image:` in
+# k8s/apps/artifacts/artifacts/app/deployment.yaml (15 Oct 2026). The
+# deployment maintainer reviews and merges it; nothing here can reach the deployment's main.
 #
-# It pushes only to the pin bot's own fork (homelab-pin-bot/homelab, Actions off), on a
+# It pushes only to the pin bot's own fork (a fork of the deployment repo, Actions off), on a
 # branch named artifacts-pin/<sha12>, with PIN_PR_TOKEN: a token of an account that only
-# reads the homelab repo and has no access to this one. Warpgate's pin path does the same
-# (runcove warpgate-ci/scripts/pin-bump.sh).
+# reads the deployment repo and has no access to this one. Another project's pin path does the same
+# (its own pin-bump script).
 #
-# Stands down (exit 0, nothing pushed) when homelab already pins this commit, or pins a
+# Stands down (exit 0, nothing pushed) when the deployment already pins this commit, or pins a
 # commit that is NOT an ancestor of this one -- a newer run got there first, and this run
 # must not move production back. Needs the full history of this repo (fetch-depth: 0).
 #

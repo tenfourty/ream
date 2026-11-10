@@ -313,7 +313,7 @@ def render_report(
         log.info("no thumbnail: page is over %d bytes", RENDER_MAX_BYTES)
         return None, None
     # Stamped as a reader would see it. The marker is filled in when a page is
-    # SERVED, not stored, so an unstamped render showed "DECISION · · BABA" --
+    # SERVED, not stored, so an unstamped render showed "DECISION · · <host label>" --
     # found by the first live preview, 24 Sep 2026, and true of every tile on
     # the wall. A render happens at publish or preview time, so now is the date.
     html = stamp.apply(html, datetime.now(UTC))

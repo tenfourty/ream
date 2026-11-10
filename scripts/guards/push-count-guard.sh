@@ -2,8 +2,8 @@
 # scripts/guards/push-count-guard.sh — refuse a push whose outgoing range is
 # not the N commits the pusher announced.
 #
-# Ported from ~/repos/homelab/scripts/push-count-guard.sh (ij8.76,
-# 21 Sep 2026); the logic is the homelab's, the reasons are this repo's.
+# Ported from the deployment's own push-count guard (21 Sep 2026); the logic is
+# theirs, the reasons are this repo's.
 #
 # WHY HERE. AGENTS.md: "Announce a push, with hashes, before making it.
 # Verify what actually went out against the remote." A push from this repo is

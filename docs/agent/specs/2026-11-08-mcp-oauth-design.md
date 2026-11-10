@@ -111,7 +111,7 @@ consent page is behind Warpgate):
 | `POST /oauth/authorize` | Allow or Deny from the consent screen |
 | `POST /machines/apps/{id}/revoke` | Revoke from "Machines and keys" (section 10) |
 
-When the public URL is the gallery origin (the homelab), every path above is on one host and the
+When the public URL is the gallery origin, every path above is on one host and the
 proxy must let the first table through without its login (section 16). When it is the API host,
 the API host serves only the first table and `/api/v1`, and the gallery host serves only the
 second, exactly as the host router already splits them. On the former host (`REAM_FORMER_HOST`)
@@ -671,32 +671,30 @@ choices unless one of the owner's six answers says otherwise.
   upstream ID token and access token are discarded once the person is known. Ream holds no upstream
   refresh token.
 
-## 16. Homelab asks (for the homelab office)
+## 16. What a deployment sets up
 
-For the trial from Claude.ai, in the homelab repo (Ream's own manifests and Authelia's):
+For a trial from Claude.ai, a deployment does six things outside Ream's own code. Where they live
+(manifests, the sign-on provider's configuration, the proxy's rules) is the deployment's own business.
 
-1. **An Authelia OIDC client for Ream.** `client_id: ream`, a confidential client
-   (`client_secret_basic`), redirect URI `https://ream.tenfourty.site/oauth/callback`, scopes
-   `openid profile email groups`, PKCE S256 required, `authorization_policy: two_factor`, and a
-   consent mode that does not ask a second time (Ream asks). It goes in the one
-   `authelia-oidc-clients` secret file, beside the forge's and Grafana's, followed by Authelia's
-   restart.
-2. **Authelia bypass rules on `ream.tenfourty.site`** for exactly `^/mcp$`,
+1. **An OIDC client for Ream at the sign-on provider.** `client_id: ream`, a confidential client
+   (`client_secret_basic`), redirect URI `<public URL>/oauth/callback`, scopes
+   `openid profile email groups`, PKCE S256 required, the provider's strongest authorization policy,
+   and a consent mode that does not ask a second time (Ream asks).
+2. **Proxy bypass rules on the public host** for exactly `^/mcp$`,
    `^/\.well-known/oauth-protected-resource(/mcp)?$`, `^/\.well-known/oauth-authorization-server$`
    and `^/oauth/(token|revoke|register)$`, beside the existing `^/api/v1/` bypass. `/oauth/authorize`
-   and `/oauth/callback` stay behind the login. Nothing changes on `artifacts.tenfourty.site`.
-3. **Cloudflare bot protection.** Claude.ai calls from Anthropic's egress range `160.79.104.0/21`.
-   Bot Fight Mode is on for every path on the free plan; find whether that range gets through to
+   and `/oauth/callback` stay behind the login. Nothing changes on a separate API host.
+3. **Bot protection in front of the host.** Claude.ai calls from Anthropic's egress range
+   `160.79.104.0/21`. If the host sits behind a bot filter, find whether that range gets through to
    the paths above (an IP access rule, or another way), or prove it does. The first trial tests it.
-4. **Ream's settings** in `artifacts-config.env`: `REAM_MCP_PUBLIC_URL=https://ream.tenfourty.site`,
-   `REAM_MCP_SIGN_IN=on`, `REAM_OIDC_ISSUER=https://authelia.tenfourty.site`,
-   `REAM_OIDC_CLIENT_ID=ream`, `REAM_OIDC_CLIENT_SECRET_FILE=<mounted path>`, and for the first trial
+4. **Ream's settings:** `REAM_MCP_PUBLIC_URL`, `REAM_MCP_SIGN_IN=on`, `REAM_OIDC_ISSUER`,
+   `REAM_OIDC_CLIENT_ID`, `REAM_OIDC_CLIENT_SECRET_FILE=<mounted path>`, and for the first trial
    `REAM_MCP_ALLOWED_CLIENT_HOSTS=claude.ai`.
-5. **Secrets, by name only:** the OIDC client secret (one sops secret holding the value Ream reads
-   and the hash Authelia's client entry holds), mounted as a file into the Ream pod. No signing key
-   is needed: Ream's tokens are random and hashed, and it signs nothing.
-6. **The network policy** lets the Ream pod reach Authelia's OIDC endpoints (in-cluster or by its
-   public name) and, for client metadata documents, `https` on the public internet.
+5. **Secrets, by name only:** the OIDC client secret (the value Ream reads and the hash the provider's
+   client entry holds), mounted as a file into the server. No signing key is needed: Ream's tokens
+   are random and hashed, and it signs nothing.
+6. **Network reach:** the server can reach the provider's OIDC endpoints (in-cluster or by its public
+   name) and, for client metadata documents, `https` on the public internet.
 
 ## 17. Core and configuration
 

@@ -2648,7 +2648,7 @@ Docs land with the code (the agent guide and `agents.txt` from slice 1; the runb
 
 ### Slice 9 (M): the homelab turns it on, and the owner tries it from Claude.ai
 
-- **Needs the homelab office first:** the asks in §16.
+- **Needs the deployment first:** the setup in §16.
 - **Trial, by hand:** the `/.well-known` documents answer from outside (bypass and Cloudflare);
   connect read-only and ask "what is waiting on me"; reconnect with all three boxes, publish from a
   chat, pass on an answer; revoke and see the next call fail. The report says what it checked end

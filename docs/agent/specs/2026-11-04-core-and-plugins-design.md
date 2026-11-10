@@ -154,7 +154,7 @@ Everything an agent or reader is served is a template filled from settings and p
 `product` (default "artifacts"), `proxy_notes`. Syntax `{{name}}`; an unknown name fails a test
 (so a typo never ships). Applies to `onboarding._TEXT` (`agents.txt`), `_SKILL` (`skill.md`),
 `news.py`, `templates.USE_WHEN`, the eight `templates/*.html` footers and gallery links
-("Published from BABA through the homelab artifacts service" becomes `{{footer}}`, default empty),
+(the house's old footer sentence becomes `{{footer}}`, default empty),
 API error text (`api.py:1932,2695,2739`, `decisions.py:837`, `store.py:1808`: "the owner"), CLI
 help, and `mail`/share wording. `agent.json` is already neutral and is the pattern. Shipped
 comments ("every homelab page shares these", "homelab teal") are reworded.
@@ -494,10 +494,10 @@ drivers; CI only (not on the management machine).
    variables. `--help` is filled by `client._HelpFormatter` BEFORE argparse wraps, so the wrap does
    not depend on the name's length; runtime messages go through `textvars.words()`, which takes
    literals only, never a user's text. `tests/test_owner.py` digests (both `--help`s included)
-   are unchanged: with our settings every word is byte-identical. The "BABA" stamp was already the
+   are unchanged: with our settings every word is byte-identical. The host stamp was already the
    `host_label` setting (only a comment in `thumbs.py` named it).
    **Manifest values to set before the pin** (all optional for a house that wants the neutral
-   wording; ours sets them to keep today's text): `ARTIFACTS_FOOTER`, `ARTIFACTS_HOST_LABEL=BABA`,
+   wording; ours sets them to keep today's text): `ARTIFACTS_FOOTER`, `ARTIFACTS_HOST_LABEL=<the host's label>`,
    `ARTIFACTS_PROXY_NOTES_FILE` (a ConfigMap file: the proxy note, a `%%` line, the held-request
    clause). **Carried forward, not slice 3**: the nudge alert names (`nudge.py`), the gallery's
    profile chip and thread-author label (`gallery.py`) and route docstrings in OpenAPI still say

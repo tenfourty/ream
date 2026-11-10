@@ -445,5 +445,5 @@ parent domain. A fault inside the route answers a bare 500 (`plug-in error`), is
 
 The core's own plug-in tests (`tests/test_plugin_api.py` and its neighbours) use a throwaway
 in-tree plug-in per interface, including the failure cases. A plug-in's tests should cover its
-own behaviour (envelopes, wording, provider requests) and not re-test the core. On baba the test
+own behaviour (envelopes, wording, provider requests) and not re-test the core. On the management machine the test
 suite is never run; push a `ci/<name>` branch and read CI.

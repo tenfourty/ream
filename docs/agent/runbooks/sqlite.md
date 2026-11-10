@@ -2,8 +2,8 @@
 
 The design and the reasons for each step are in `docs/agent/specs/2026-10-09-sqlite-design.md`
 (§2 for backups, §5 for the migration). This file holds the commands. The deployment's own names
-(the cluster, the Flux kustomization, the backup share) live in the homelab repo; the names below
-are the ones this repo's `deploy/` uses: namespace `artifacts`, Deployment `artifacts`, the CNPG
+(the cluster, the Flux kustomization, the backup share) live in its own deployment repo; the names
+below are the ones its manifests used: namespace `artifacts`, Deployment `artifacts`, the CNPG
 secret `artifacts-db-app` (key `uri`), and the PVC `artifacts-data` mounted at `/data` (30Gi since
 20 Oct 2026; see "Sizing" below).
 
@@ -108,7 +108,7 @@ artifacts-admin restore-drill --snapshot /tmp/rehearsal.db   # and it restores, 
 
 It must end in `verified …`. Note how long it took: that is the window's copy time.
 
-**Measured, 16 Oct 2026** (homelab's one-off Job, run 8, on a dump of the live database: 1.3 GB,
+**Measured, 16 Oct 2026** (a deployment's one-off Job, run 8, on a dump of the live database: 1.3 GB,
 22 tables, 4,206 rows, `version` 2,654 rows): Postgres to SQLite, the restore-drill, and SQLite
 back to Postgres took **285 s** in all, and every table's hash after the round trip equalled the
 first copy's. The dump took 2 m 42 s and its restore 1 m 21 s. So plan a cutover copy of a few
@@ -118,7 +118,7 @@ a work volume of 10 Gi or more (the copy, the drill's own copy and its journal).
 
 ## Cutover (spec §5): done 20 Oct 2026, through the deployment repo
 
-On the homelab, changes reach the cluster only through the manifests repo, never by a hand-run
+On that deployment, changes reach the cluster only through its manifests repo, never by a hand-run
 `kubectl` or a Flux suspend. So the cutover was three merges, each checked before the next.
 Announce the window to every agent about 30 minutes ahead.
 
@@ -138,7 +138,7 @@ Announce the window to every agent about 30 minutes ahead.
    it, update it, list its versions; ask a decision on it and have a person tap it while an agent's
    `artifacts-decide wait --page <id>` waits.
 5. Force one off-site sync, then restore the newest off-site snapshot and run `restore-drill` on it
-   beside a `VACUUM INTO` copy of the live file (homelab's `scripts/restore-test-offsite-artifacts.sh`).
+   beside a `VACUUM INTO` copy of the live file (the deployment's own off-site restore-test script).
    Removing Postgres waits on this passing.
 
 The 20 Oct off-site restore test passed: the newest off-site snapshot (07:44 UTC) restored,
@@ -159,8 +159,8 @@ TOAST-compressed and SQLite stores them raw. On 20 Oct 2026 Postgres reported `v
 not the database. On the volume: the live file, its WAL, a `VACUUM INTO` temporary during each
 nightly snapshot, and the kept snapshots (`maintenance.KEEP`, uncompressed), so about
 (KEEP + 2) times the file. With seven kept that came to 23 GB of snapshots beside a 4.7 GB file,
-and the volume reached 95% on 25 Oct 2026. Since 26 Oct 2026 the volume keeps two (Jeremy's
-choice); the off-site copy and the NAS hold the history. Snapshots stay uncompressed so the
+and the volume reached 95% on 25 Oct 2026. Since 26 Oct 2026 the volume keeps two (the owner's
+choice); the off-site copy and the on-site backup copy hold the history. Snapshots stay uncompressed so the
 off-site restic copy deduplicates them night to night.
 
 **Versions stored as deltas (26 Oct 2026, spec `2026-10-26-delta-versions-design.md`).** Only the
@@ -179,7 +179,7 @@ backfill first on a copy of a snapshot (`DATABASE_URL=sqlite:////tmp/copy.db`).
 CNPG keeps running through the week, backed up by its pg_dump CronJob, with its egress
 NetworkPolicy. The rollback copies SQLite back, so writes made on SQLite are kept.
 
-1. `flux suspend ks artifacts-app`; scale the Deployment to 0 and wait for no pod (cutover step 2).
+1. `flux suspend ks <the app's kustomization>`; scale the Deployment to 0 and wait for no pod (cutover step 2).
 2. Empty the Postgres database without destroying it: the copy refuses a non-empty destination,
    and the pre-cutover rows are stale by now. Rename the old schema aside, in `psql` on the app
    database as its owner (the user in the `uri`):
@@ -195,13 +195,13 @@ NetworkPolicy. The rollback copies SQLite back, so writes made on SQLite are kep
    "env:REAM_PG_URI"]`; check it ends in `verified …`.
 4. Point `DATABASE_URL` back at the CNPG secret (revert the step-4 change), and remove the PVC
    mount only if the change says so; the SQLite file stays on the PVC.
-5. `flux resume ks artifacts-app`, and smoke test as in cutover step 6.
+5. `flux resume ks <the app's kustomization>`, and smoke test as in cutover step 6.
 
 ## Backups
 
 The app writes one snapshot a night at 04:00 UTC (`VACUUM INTO`), then purges; at start-up it takes
 one at once if the newest is over 24 h old. Snapshots are `/data/backups/artifacts-sqlite-<UTC
-date>.db`, uncompressed, two kept. Homelab's CronJob copies new ones to the backup share. List
+date>.db`, uncompressed, two kept. The deployment's CronJob copies new ones to its backup share. List
 them from the running pod:
 
 ```bash
@@ -226,9 +226,9 @@ decisions, comments): a snapshot from last night holds roughly today's numbers.
 
 ## A real restore (a corrupt or lost database)
 
-1. `flux suspend ks artifacts-app`; scale to 0 and wait for no pod.
+1. `flux suspend ks <the app's kustomization>`; scale to 0 and wait for no pod.
 2. Run the restore drill on the chosen snapshot first (Job form); it must pass.
 3. In a Job (or a debug pod) mounting the PVC: move `/data/artifacts.db`, `-wal` and `-shm` aside
    to `/data/broken-<date>/` (never delete them), then copy the snapshot to `/data/artifacts.db`.
-4. `flux resume ks artifacts-app`; smoke test. Writes since the snapshot's night are lost: say so
-   in #agents, with the snapshot's date.
+4. `flux resume ks <the app's kustomization>`; smoke test. Writes since the snapshot's night are lost: say so
+   to the agents, with the snapshot's date.

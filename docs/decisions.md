@@ -841,7 +841,7 @@ file an agent writes or a command line. This office is the pilot; the other offi
 time. Scripts keep the self-updating `ream` tool, as decided on 9 Nov. The plan, its gap list and the
 maintainer's own calls (blocking waits stay on the tool; a key is minted for an office that has none
 when it moves; publishing from a file stays a tool job for the pilot) are in
-`docs/agent/specs/2026-11-10-offices-on-mcp.md`.
+the house's deployment docs.
 
 **Why:** the second half of the 9 Nov decision, offices on MCP so they stop running out-of-date tools,
 needs a way for an office seat to be itself at `/mcp`; until now only apps the owner signed in could.
