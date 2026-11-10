@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-10",
+        'New verb for a Claude Code session that connects to Ream\'s MCP server: ream mcp-headers prints the request headers as one JSON line, your key as Authorization and X-Ream-Session when REAM_SESSION is set, for the server entry\'s headersHelper, so setup is the same on every machine: claude mcp add-json --scope local ream \'{"type":"http","url":"<gallery>/mcp","headersHelper":"ream mcp-headers"}\'. It finds the key where the other verbs do (--key-file, --key-fd, REAM_KEY_FILE, REAM_KEY_FD, else ~/.config/artifacts/key), makes no request, and never prints the key anywhere but that one line of stdout (see docs/mcp.md). The server must take agent keys at /mcp. Your tool updates itself to learn the verb.',
+    ),
+    (
         "2026-11-09g",
         "Moving an agent to a new machine is now one step and keeps its pages, comments and decisions. If a new machine asks to connect under a name that is already an agent, {{owner_name}} sees 'Same agent, new machine' and 'New agent' on the approve page. Or move yourself: on the old machine run ream connect --start-move --out move-token (POST /api/v1/agents/me/move, your own agent only), take the file to the new machine and run ream connect --move-token-stdin < move-token. The key you ran it with stops working once the new machine's key makes its first call; until then both work, and your other keys are untouched. The events are agent_moved and agent_keys_retired. Your tool updates itself to learn the flags.",
     ),

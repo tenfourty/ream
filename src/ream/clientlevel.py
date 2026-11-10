@@ -14,7 +14,7 @@ copy gets wrong). Raise `CLIENT_LEVEL` to the same number in that commit. Standa
 only: the command-line tools import this.
 """
 
-CLIENT_LEVEL = 2
+CLIENT_LEVEL = 3
 MIN_CLIENT_LEVEL = 2
 
 # STEP 2 SWITCH (comments-setting rollout, 9 Nov 2026). While False a NEW page published without

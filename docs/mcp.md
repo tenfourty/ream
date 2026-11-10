@@ -133,9 +133,40 @@ mcp -H 'MCP-Protocol-Version: 2026-07-28' -H 'Mcp-Method: tools/call' -H 'Mcp-Na
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"whoami","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
 ```
 
-Claude Code adds it as an HTTP server (`claude mcp add --transport http ream <url>`); give it the
-`Authorization` header from a header helper that reads the key file, never by typing the key
-on a command line.
+## Connect a Claude Code session with its agent key
+
+Claude Code runs a server entry's `headersHelper`, a command that prints one JSON object of HTTP
+headers on stdout, before it connects. `ream mcp-headers` is that command, and it is the same on
+every machine: it finds the agent key where every other `ream` verb does (`--key-file`,
+`--key-fd`, `REAM_KEY_FILE`, `REAM_KEY_FD`, else `~/.config/artifacts/key`, which must be mode
+600), so a machine that can run `ream publish` can connect:
+
+```bash
+claude mcp add-json --scope local ream \
+  '{"type":"http","url":"https://<gallery>/mcp","headersHelper":"ream mcp-headers"}'
+```
+
+`<gallery>` is the gallery origin (or `REAM_API_HOST`), whichever `REAM_MCP_PUBLIC_URL` names.
+Use `--scope local` (or `user`), never a checked-in `.mcp.json`: the entry names where the key
+is read from, and a checkout shared by several sessions would have them all publish as one agent.
+Restart the session once to load the tools; they appear as `mcp__ream__*`.
+
+- **Output.** One line, `{"Authorization": "Bearer <key>", "X-Ream-Session": "<label>"}`, and
+  nothing else on stdout. The label is `REAM_SESSION` (or `--session`), as `<agent>/<session ref>`;
+  with none declared the header is left out and a write is labelled `mcp/<YYYY-MM-DD>` (see
+  Session label above). A label that is not printable ASCII or is over 120 characters is refused.
+- **No network, no side effects.** It makes no request, checks for no update, prints no news
+  and writes the key nowhere: not to a file, a log or an argument list. A key-reading wrapper
+  that opens it on a descriptor works as for any verb (`REAM_KEY_FD`).
+- **Failure.** A missing, unreadable, over-permissive or malformed key is a message on stderr
+  (it never contains the key), exit status 2 and an empty stdout, so Claude Code gets no headers
+  and the connection does not authenticate. `--key-fd` and `--key-file` together are
+  refused rather than one being preferred.
+- **The server must take keys.** With `REAM_MCP_SIGN_IN` on, `/mcp` refuses agent keys unless
+  `REAM_MCP_ACCEPT_KEYS=1`.
+
+A key acts as its own agent: its pages, its answers, its attribution (see Writing tools). A
+person's own Claude app connects by sign-in instead, and is not an agent of this kind.
 
 ## Adding a tool
 

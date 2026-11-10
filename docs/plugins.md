@@ -315,7 +315,7 @@ def main():                           # called as a console script: reads sys.ar
 
 `api.cli(name, main, help)` adds `ream <name>`. `name` matches `[a-z][a-z0-9-]{0,31}`, is not a
 verb the core owns (`publish`, the decide verbs, `admin`, `republish`, `connect`, `beads-page`,
-`bead-metrics`, `help`) and is not taken by another plug-in. `main()` is called with no
+`bead-metrics`, `mcp-headers`, `help`) and is not taken by another plug-in. `main()` is called with no
 arguments as a console script is: `sys.argv[0]` reads `ream <name>` and the return value is the
 exit status. If it raises, the tool prints the exception's type only and exits 1. `help` is one
 printable line of at most 200 characters; `ream --help` gains a "From plug-ins" section only when

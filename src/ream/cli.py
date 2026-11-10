@@ -24,6 +24,7 @@ _OTHER = {
     "connect": ("ream.connect_cli", "run"),
     "beads-page": ("ream.beadpage", "run"),
     "bead-metrics": ("ream.beadmetrics", "main"),
+    "mcp-headers": ("ream.mcp_headers", "main"),
 }
 # The verbs of `artifacts-decide`, kept as the command's own sub-commands.
 DECIDE_VERBS = (
@@ -64,6 +65,7 @@ the command line on unchanged, so `ream VERB --help` shows that program's own he
   connect        connect a machine                    (artifacts-connect)
   beads-page     a page of the tracker's beads        (artifacts-beads-page)
   bead-metrics   an arc's counts and velocity         (artifacts-bead-metrics)
+  mcp-headers    the headers for Ream's MCP server, for a Claude Code headersHelper
   version        this tool's version, level and commit (also: ream --version)
 {plugin_section}
 The old `artifacts-*` commands keep working.
