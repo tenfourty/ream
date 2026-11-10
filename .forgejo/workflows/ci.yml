@@ -177,6 +177,7 @@ jobs:
           uv run pytest -v -n0 --timeout=120 --timeout-method=thread
           tests/test_panel_browser.py tests/test_shim_marks.py
           tests/test_thumbs.py tests/test_thumbnail_wall.py
+          tests/test_render_findings_browser.py
 
       # The same suite on SQLite (the SQLite switch, slice 5): one database file
       # per worker, no server; tests marked postgres_only are skipped.
