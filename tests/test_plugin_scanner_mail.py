@@ -154,6 +154,65 @@ def test_a_slow_scanner_is_a_scanner_error(world, monkeypatch):
     assert plugin_api.failure_counts() == {"toy:scanner": 1}
 
 
+def test_the_default_bound_is_cores_and_the_ceiling_is_the_relays():
+    assert scanners.SCAN_TIMEOUT_SECONDS == 10.0
+    # A scanner may ask for the time `ggscan` always had, and no more.
+    assert scanners.MAX_SCAN_TIMEOUT_SECONDS == ggscan.TIMEOUT_SECONDS == 20.0
+
+
+def test_a_scanner_may_declare_a_longer_bound(world, monkeypatch):
+    monkeypatch.setattr(scanners, "SCAN_TIMEOUT_SECONDS", 0.05)
+    world.scanner("slow", lambda text: time.sleep(0.3) or [], on_error="block")
+    with pytest.raises(scanners.ScannerBlocked):  # the default bound abandons it
+        scanners.run("x")
+    scanners._SCANNERS[:] = []
+    world.scanner(
+        "patient",
+        lambda text: time.sleep(0.3) or [Finding("late", 1)],
+        on_error="block",
+        timeout=5.0,
+    )
+    assert [f.shape for f in scanners.run("x")] == ["late"]
+
+
+def test_a_scanner_may_declare_a_shorter_bound(world):
+    world.scanner(
+        "quick", lambda text: time.sleep(2) or [], on_error="block", timeout=0.05
+    )
+    started = time.monotonic()
+    with pytest.raises(scanners.ScannerBlocked):
+        scanners.run("x")
+    assert time.monotonic() - started < 1.5
+
+
+def test_a_declared_bound_is_capped_at_the_relays(world, monkeypatch):
+    monkeypatch.setattr(scanners, "MAX_SCAN_TIMEOUT_SECONDS", 0.05)
+    world.scanner(
+        "greedy", lambda text: time.sleep(0.3) or [], on_error="block", timeout=999
+    )
+    with pytest.raises(scanners.ScannerBlocked):
+        scanners.run("x")
+
+
+def test_the_bound_is_per_scanner(world, monkeypatch):
+    monkeypatch.setattr(scanners, "SCAN_TIMEOUT_SECONDS", 0.05)
+    world.scanner("slow-default", lambda text: time.sleep(0.3) or [], on_error="skip")
+    world.scanner(
+        "slow-declared",
+        lambda text: time.sleep(0.3) or [Finding("late", 1)],
+        timeout=5.0,
+    )
+    assert scanners.run_detailed("x") == ([Finding("late", 1)], True)
+    assert plugin_api.failure_counts() == {"toy:scanner": 1}
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, "20", float("nan"), float("inf")])
+def test_a_bad_declared_bound_is_refused(world, bad):
+    with pytest.raises(ValueError, match="timeout"):
+        world.scanner("toy", lambda text: [], timeout=bad)
+    assert scanners.registered() == []
+
+
 def test_a_slow_scanner_under_skip_lets_the_page_publish(db, world, monkeypatch):
     monkeypatch.setattr(scanners, "SCAN_TIMEOUT_SECONDS", 0.05)
     world.scanner("slow", lambda text: time.sleep(1) or [], on_error="skip")

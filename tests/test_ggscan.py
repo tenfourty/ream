@@ -10,8 +10,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from fastapi.testclient import TestClient
 
-from ream import ggscan, keys, thumbs
+from ream import comments, ggscan, keys, plugin_api, scanners, store, thumbs
 from ream.app import create_gallery_app
+from ream.scan import Finding
 
 TOKEN = "relay-test-token"  # noqa: S105 -- a test fixture, not a credential
 PAGE = "<!doctype html><title>t</title><p>caf&eacute; &#x3c;b&#x3e; ok</p>"
@@ -229,3 +230,158 @@ def test_the_memory_is_bounded_and_holds_no_text(relay, monkeypatch):
         ggscan.scan(f"{PAGE}<p>{n}</p>")
     assert len(ggscan._clean) == 3
     assert all(len(k) == 64 for k in ggscan._clean)
+
+
+# STANDING DOWN (core-and-plugins design, step 9c): the relay scan moves into the house
+# plug-in as the scanner `gitguardian`. While a scanner of that name is registered, core's
+# own relay scan stays out of the way, so each body goes to the relay once, not twice.
+AWS_FINDING = {"scanned": True, "findings": [{"type": "AWS Keys", "line": 2}]}
+
+
+@pytest.fixture()
+def house(monkeypatch):
+    monkeypatch.setattr(scanners, "_SCANNERS", [])
+    monkeypatch.setattr(plugin_api, "_failures", {})
+    return plugin_api.PluginAPI("house")
+
+
+def _boom(text):
+    raise RuntimeError("down")
+
+
+def _stamped(db, comment_id):
+    with db.connect() as conn:
+        return conn.execute(
+            "select gg_scanned_at is not null from comment where id = %s",
+            (comment_id,),
+        ).fetchone()[0]
+
+
+def _agent_comment(db, page, body="fine"):
+    return comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="agent",
+        author="seat",
+        body=body,
+    )
+
+
+def test_without_a_plugin_the_relay_is_asked_as_ever(db, relay, house):
+    assert not ggscan.stood_down()
+    assert ggscan.configured()
+    store.publish(db, "seat", "t", PAGE)
+    assert [payload for _, payload in relay.received] == [{"body": PAGE}]
+
+
+def test_a_scanner_named_otherwise_does_not_stand_the_relay_down(db, relay, house):
+    seen = []
+    house.scanner("acme-secrets", lambda text: seen.append(text) or [])
+    assert not ggscan.stood_down()
+    assert ggscan.configured()
+    store.publish(db, "seat", "t", PAGE)
+    assert [payload for _, payload in relay.received] == [{"body": PAGE}]
+    assert seen == [PAGE]
+
+
+def test_a_gitguardian_scanner_stands_the_relay_down(db, relay, house):
+    seen = []
+    house.scanner("gitguardian", lambda text: seen.append(text) or [])
+    assert ggscan.stood_down()
+    assert ggscan.scan(PAGE) is None
+    assert not ggscan.configured()
+    store.publish(db, "seat", "t", PAGE)
+    assert relay.received == []
+    assert seen == [PAGE]
+
+
+def test_the_plugin_verdict_decides_a_publish_not_the_relay(db, relay, house):
+    relay.answer = AWS_FINDING
+    house.scanner("gitguardian", lambda text: [])
+    store.publish(db, "seat", "t", PAGE)  # the relay would have refused it
+    assert relay.received == []
+
+
+def test_a_plugin_finding_refuses_a_publish(db, relay, house):
+    house.scanner("gitguardian", lambda text: [Finding("ggshield_aws_keys", 3)])
+    with pytest.raises(store.SecretFound) as caught:
+        store.publish(db, "seat", "t", PAGE)
+    assert [f.shape for f in caught.value.findings] == ["ggshield_aws_keys"]
+    assert relay.received == []
+
+
+def test_a_gitguardian_scanner_that_fails_follows_its_own_on_error(db, relay, house):
+    house.scanner("gitguardian", _boom, on_error="skip")
+    store.publish(db, "seat", "t", PAGE)  # skip: the page publishes on the rest
+    assert plugin_api.failure_counts() == {"house:scanner": 1}
+    assert relay.received == []
+
+
+def test_a_blocking_gitguardian_scanner_that_fails_fails_the_publish(db, relay, house):
+    house.scanner("gitguardian", _boom, on_error="block")
+    with pytest.raises(store.ScanFailed):
+        store.publish(db, "seat", "t", PAGE)
+    assert relay.received == []
+
+
+def test_a_gitguardian_field_stands_down_too(db, relay, house):
+    seen = []
+    house.scanner("gitguardian", lambda text: seen.append(text) or [])
+    store._check_secrets(
+        "a note", "note", agent="seat", artifact_id=None, gitguardian=True
+    )
+    assert seen == ["a note"]
+    assert relay.received == []
+
+
+def test_the_relay_is_asked_again_once_the_scanner_is_gone(db, relay, house):
+    house.scanner("gitguardian", lambda text: [])
+    store.publish(db, "seat", "t", PAGE)
+    assert relay.received == []
+    scanners._SCANNERS[:] = []
+    assert not ggscan.stood_down()
+    relay.answer = AWS_FINDING
+    with pytest.raises(store.SecretFound):
+        store.publish(db, "seat", "t", PAGE + "<p>more</p>")
+    assert len(relay.received) == 1
+
+
+def test_a_comments_second_scan_asks_the_plugin_not_the_relay(db, relay, house):
+    relay.answer = AWS_FINDING  # would withdraw it, if it were asked
+    house.scanner("gitguardian", lambda text: [])
+    page = store.publish(db, "seat", "t", PAGE)
+    row = _agent_comment(db, page)
+    assert comments.second_scan(db, row.id) == "scanned"
+    assert _stamped(db, row.id)
+    assert relay.received == []
+
+
+def test_a_plugin_finding_withdraws_a_comment_and_the_relay_is_not_asked(
+    db, relay, house
+):
+    page = store.publish(db, "seat", "t", PAGE)
+    relay.received.clear()
+    house.scanner("gitguardian", lambda text: [Finding("ggshield_aws_keys", 1)])
+    row = _agent_comment(db, page)
+    assert comments.second_scan(db, row.id) == "withdrawn"
+    assert comments.list_for_artifact(db, page.id) == []
+    assert relay.received == []
+
+
+def test_a_gitguardian_scanner_with_no_answer_leaves_the_comment_unscanned(
+    db, relay, house
+):
+    house.scanner("gitguardian", _boom, on_error="skip")
+    page = store.publish(db, "seat", "t", PAGE)
+    row = _agent_comment(db, page)
+    assert comments.second_scan(db, row.id) == "unavailable"
+    assert not _stamped(db, row.id)  # the sweeper asks again
+    assert relay.received == []
+
+
+def test_without_a_plugin_a_comments_second_scan_asks_the_relay(db, relay):
+    page = store.publish(db, "seat", "t", PAGE)
+    relay.received.clear()
+    row = _agent_comment(db, page)
+    assert comments.second_scan(db, row.id) == "scanned"
+    assert len(relay.received) == 1

@@ -749,6 +749,30 @@ drivers; CI only (not on baba).
    this core has no tracker-page command at all, and a `render` line using one fails. **Not tested:**
    the plug-in under the real dispatcher with the old names, a real `bd`, and a `render` line run by
    `artifacts-republish` after the move.
+   **9c, core hook built (`ci/step-9c-standdown`, 10 Nov 2026; not on main).** The plug-in half is a
+   straight copy of `ggscan.py` registered as scanner `gitguardian` (ream-homelab, not merged); until
+   core's own copy is deleted in a later pin both would send each body to the relay, so core's
+   relay scan **stands down while a scanner named `gitguardian` is registered** (mail's rule: built-in
+   code only when no plug-in is there). The rule lives in one place, `ggscan.stood_down()`, read by
+   `ggscan.scan` (answers `None`, asks nobody) and `ggscan.configured()` (says False); its callers are
+   unchanged and so cover every place core calls `ggscan` (`store._check_secrets`, which serves
+   publish, update, previews and the `gitguardian=True` fields, and `comments.second_scan`, hence the
+   sweeper). With `scan` `None` and `configured()` False the comment path already does the right thing:
+   a clean answer from the plug-in counts as scanned, no answer leaves the comment unscanned for the
+   sweeper (a hold stays while the scanner is registered), and the "published on the built-in scan
+   only" log line is the plug-in's to say through its failure count. Only the name decides, not the
+   plug-in that registered it; without such a scanner behaviour is exactly as before. **Time bound:**
+   core abandoned a plug-in scanner after 10 s but waited up to 20 s for `ggscan`, so standing down
+   would have turned a 10 to 20 s answer into an unscanned publish. `api.scanner(name, scan,
+   on_error="skip", timeout=None)` takes an optional per-scanner bound in seconds (a positive finite
+   number, else `ValueError`), capped at `scanners.MAX_SCAN_TIMEOUT_SECONDS` (20, pinned by a test to
+   `ggscan.TIMEOUT_SECONDS`); unset it stays 10. An optional argument is a minor change, so
+   `API_VERSION` is now `(1, 1)` and `REQUIRES_API` stays `"1"` (the major); old registrations work
+   unchanged, and a plug-in on an older core that passes `timeout` fails at start-up, as 4.6 intends.
+   **Not done:** the plug-in registering with `timeout=20` (ream-homelab), deleting `ggscan.py` and
+   its settings from core (after the deployed behaviour is confirmed), widening the scanners to
+   titles, decision fields and human comments (not widened: scanners still run in `ggscan`'s slot only). **Not tested:** the plug-in
+   and this core together in the production image, and a real relay answering in 10 to 20 s.
 10. **Docs and decisions.** `docs/decisions.md` entry for the core-and-plug-ins split, the design
     doc's extension section, a plug-in author guide, the office doc's deployment paragraph.
     (Docs also land with each slice above; this is the consolidation.)

@@ -309,17 +309,25 @@ class PluginAPI:
         # The live set, so a source registered after the hook counts too.
         decisions.register_answer_hook(self._plugin, name, fn, self._sources)
 
-    def scanner(self, name: str, scan: Callable, on_error: str = "skip") -> None:
+    def scanner(
+        self,
+        name: str,
+        scan: Callable,
+        on_error: str = "skip",
+        timeout: float | None = None,
+    ) -> None:
         """Register a scanner (4.2, 4). `scan(text) -> list[scan.Finding]` is run where
         the core takes its second opinion (after a clean pattern scan: bodies, section
         notes, agent comments' second scan). `on_error="skip"`: a raise is logged and
         counted and the text is judged on the other scanners; `"block"`: it fails the
         action (`scanners.ScannerBlocked`). Under `block` an agent comment not yet
         cleared is hidden (no event), so replies to it fail as for a withdrawn comment
-        until a clean scan shows it again. Each call is bounded by
-        `scanners.SCAN_TIMEOUT_SECONDS`; a scanner that hangs costs one daemon thread
-        per call, never reclaimed."""
-        scanners.register(self._plugin, name, scan, on_error)
+        until a clean scan shows it again. Each call is bounded by `timeout` seconds
+        (API 1.1; a positive number, capped at `scanners.MAX_SCAN_TIMEOUT_SECONDS`, 20),
+        else by `scanners.SCAN_TIMEOUT_SECONDS` (10); a scanner that hangs costs one
+        daemon thread per call, never reclaimed. A scanner named `gitguardian` stands
+        the core's own relay scan (`ggscan`) down while it is registered."""
+        scanners.register(self._plugin, name, scan, on_error, timeout)
 
     def mail_backend(self, name: str, send: Callable, enabled: Callable) -> None:
         """Register the mail backend (4.2, 5). `send(to, subject, text)` raises to fail;

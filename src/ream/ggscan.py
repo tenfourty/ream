@@ -18,6 +18,13 @@ would give it the same blind spots, and a second opinion with the first one's
 blind spots is not a second opinion. So this sends `body` exactly as the agent
 submitted it.
 
+STANDS DOWN FOR THE PLUG-IN (core-and-plugins design, step 9c): the same scan has moved
+into the house plug-in as a scanner named `gitguardian`. While a scanner of that name is
+registered (`stood_down`), `scan` asks nobody and answers `None`, and `configured` says
+False, so the callers (`store._check_secrets`, `comments.second_scan`) read the relay as
+"not ours to ask" and take the plug-in's verdict, instead of sending every body to the relay
+twice. This is the only place that rule lives. Without such a scanner nothing here changes.
+
 Never raises. `None` means "no second opinion was had" -- not configured,
 unreachable, refused, timed out, or answered in a shape this does not know --
 and the caller logs that and publishes. An empty list means ggshield looked and
@@ -35,9 +42,11 @@ import threading
 import time
 import urllib.parse
 
-from ream import settings
+from ream import scanners, settings
 from ream.scan import Finding
 
+# The name of the plug-in scanner this module's relay scan stands down for.
+STAND_DOWN_FOR = "gitguardian"
 URL_ENV = "REAM_GGSHIELD_URL"
 TOKEN_ENV = "REAM_GGSHIELD_TOKEN"  # noqa: S105 -- the variable NAME, not a value
 # Inside a publish, and under the public ingress's 90 s read timeout with room
@@ -51,6 +60,7 @@ MAX_FINDINGS = 20
 
 log = logging.getLogger("ream.ggscan")
 _said_unconfigured: list[bool] = []
+_said_stood_down: list[bool] = []
 
 # ALREADY SCANNED CLEAN (Jeremy, 20 Oct 2026, runcove-5t3oj.35): a body
 # GitGuardian passed is not sent again while the answer is fresh, so a retry, a
@@ -89,7 +99,17 @@ def _remember_clean(digest: str, now: float) -> None:
             del _clean[next(iter(_clean))]  # the oldest, by insertion
 
 
+def stood_down() -> bool:
+    """Whether a plug-in scanner named `gitguardian` is registered, so this module's relay
+    scan is the plug-in's to do. Read at each call: registration happens at start-up."""
+    return STAND_DOWN_FOR in scanners.registered()
+
+
 def configured() -> bool:
+    """Whether core's own relay scan is in play: the relay is set, and no plug-in
+    scanner has taken it over."""
+    if stood_down():
+        return False
     return bool(settings.current().ggshield_url and settings.current().ggshield_token)
 
 
@@ -139,6 +159,14 @@ def _post(url: str, token: str, body: str) -> object:
 
 
 def scan(body: str) -> list[Finding] | None:
+    if stood_down():
+        if not _said_stood_down:
+            _said_stood_down.append(True)
+            log.info(
+                "ggshield relay scan stands down: plug-in scanner %s is registered",
+                STAND_DOWN_FOR,
+            )
+        return None
     cfg = settings.current()
     url, token = cfg.ggshield_url, cfg.ggshield_token
     if not url or not token:

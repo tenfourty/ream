@@ -11,11 +11,18 @@ pattern finding does. With none registered `run` returns [] without doing anythi
 rest (what `ggscan` does today when the relay cannot be reached) -- or "block" -- the
 action fails (`ScannerBlocked`). Only the exception's type is logged, never its message
 or the text.
+
+Each call is bounded: `SCAN_TIMEOUT_SECONDS` unless the scanner declared its own `timeout`
+when it registered, which is capped at `MAX_SCAN_TIMEOUT_SECONDS`.
+
+A scanner named `gitguardian` (step 9c: `ggscan`, moved into the house plug-in) makes the
+core's own relay scan stand down while it is registered: see `ggscan.stood_down`.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -31,6 +38,11 @@ MAX_SHAPE_LENGTH = 64
 # that really hangs leaks one thread per call (bounded only by how often the caller
 # calls; never reclaimed), as a hung sink does.
 SCAN_TIMEOUT_SECONDS = 10.0
+# A scanner may declare its own bound (`register(..., timeout=)`), never more than this:
+# the time the core's own relay scan (`ggscan.TIMEOUT_SECONDS`) always had, so that when
+# `ggscan` stands down for the `gitguardian` scanner (step 9c) a 10 to 20 second answer
+# is still an answer. A test pins the two together.
+MAX_SCAN_TIMEOUT_SECONDS = 20.0
 
 
 class ScannerBlocked(Exception):
@@ -48,20 +60,43 @@ class _Scanner:
     name: str
     scan: Callable
     on_error: str
+    timeout: float | None = None  # None: SCAN_TIMEOUT_SECONDS
+
+    def bound(self) -> float:
+        """Seconds one call may take: the declared bound, capped at the relay's, else
+        the default. Read at call time, so the two module constants stay settable."""
+        if self.timeout is None:
+            return SCAN_TIMEOUT_SECONDS
+        return min(self.timeout, MAX_SCAN_TIMEOUT_SECONDS)
 
 
 _SCANNERS: list[_Scanner] = []
 
 
-def register(plugin: str, name: str, scan: Callable, on_error: str = "skip") -> None:
+def register(
+    plugin: str,
+    name: str,
+    scan: Callable,
+    on_error: str = "skip",
+    timeout: float | None = None,
+) -> None:
     if not callable(scan):
         raise TypeError(f"scanner {name!r}: scan must be callable")
     if on_error not in ("skip", "block"):
         raise ValueError(f"scanner {name!r}: on_error must be 'skip' or 'block'")
+    if timeout is not None and not (
+        isinstance(timeout, (int, float))
+        and not isinstance(timeout, bool)
+        and math.isfinite(timeout)
+        and timeout > 0
+    ):
+        raise ValueError(
+            f"scanner {name!r}: timeout must be a positive number of seconds"
+        )
     with _lock:
         if any(s.name == name for s in _SCANNERS):
             raise ValueError(f"scanner {name!r} is already registered")
-        _SCANNERS.append(_Scanner(plugin, name, scan, on_error))
+        _SCANNERS.append(_Scanner(plugin, name, scan, on_error, timeout))
 
 
 def registered() -> list[str]:
@@ -78,8 +113,8 @@ def _valid(result: object) -> bool:
     )
 
 
-def _call_bounded(scan: Callable, text: str, name: str) -> object:
-    """`scan(text)` within SCAN_TIMEOUT_SECONDS, else TimeoutError. What it raises is
+def _call_bounded(scan: Callable, text: str, name: str, bound: float) -> object:
+    """`scan(text)` within `bound` seconds, else TimeoutError. What it raises is
     raised here."""
     outcome: list[tuple[bool, object]] = []
 
@@ -96,9 +131,9 @@ def _call_bounded(scan: Callable, text: str, name: str) -> object:
 
     worker = threading.Thread(target=work, name="plugin-scanner", daemon=True)
     worker.start()
-    worker.join(SCAN_TIMEOUT_SECONDS)
+    worker.join(bound)
     if not outcome:
-        raise TimeoutError(f"scanner {name}: exceeded {SCAN_TIMEOUT_SECONDS}s")
+        raise TimeoutError(f"scanner {name}: exceeded {bound}s")
     ok, value = outcome[0]
     if not ok:
         raise value  # type: ignore[misc]
@@ -121,7 +156,7 @@ def run_detailed(text: str) -> tuple[list[Finding], bool]:
     answered = False
     for s in scanners:
         try:
-            result = _call_bounded(s.scan, text, s.name)
+            result = _call_bounded(s.scan, text, s.name, s.bound())
             if not _valid(result):
                 raise TypeError("scanner did not return a list of Finding")
         except Exception as exc:  # noqa: BLE001 -- a plug-in may raise anything

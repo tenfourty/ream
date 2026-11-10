@@ -9,7 +9,9 @@ Status, 10 Nov 2026: the loader and the whole interface are built and on `main` 
 (`ream-homelab`, step 8) exists with its first plug-in. **Step 9 (moving the house code out of the
 core) is under way, one slice at a time:** the tracker-page commands (`beads-page`, `bead-metrics`)
 have left the core for the house's `tracker-pages` plug-in (9a); the house sinks (`nudge`, `partner`),
-the `slack` answer source, the GitGuardian scanner and Mailgun are still inside the core. Write
+the `slack` answer source, the GitGuardian scanner and Mailgun are still inside the core (the
+GitGuardian scanner's core hook is in: a scanner named `gitguardian` makes the core's own relay scan
+stand down, see Scanner below). Write
 against this guide for new code; do not expect the other house modules to have moved yet. The API is
 versioned (below), but only we use it: there is no promise to third parties yet.
 
@@ -69,7 +71,8 @@ error names the plug-in and, for an exception, only its **type**, never its text
 
 ## API versioning
 
-`ream.plugin_api.API_VERSION` is `(1, 0)`; `api.version` is the same tuple. A plug-in declares
+`ream.plugin_api.API_VERSION` is `(1, 1)`; `api.version` is the same tuple (1.1 added the
+optional `timeout` of `api.scanner`). A plug-in declares
 `REQUIRES_API = "1"` as module data of the module that holds `register`; the core compares the
 major number and refuses a mismatch (the server stops; a tool skips or exits as above). A plug-in
 that declares nothing is not checked. Minor releases only add registrations or optional
@@ -249,7 +252,7 @@ def scan(text):                        # -> list[Finding]
             for n, line in enumerate(text.splitlines(), 1) if "acme_live_" in line]
 ```
 
-`api.scanner(name, scan, on_error="skip")`. `scan(text)` returns a list (or tuple) of
+`api.scanner(name, scan, on_error="skip", timeout=None)`. `scan(text)` returns a list (or tuple) of
 `ream.scan.Finding(shape, line)`; `shape` is a non-empty `str` of at most 64 characters naming
 the kind of secret (never the secret). Any finding refuses the text exactly as a pattern finding
 does. At most 20 findings per call are kept.
@@ -260,9 +263,16 @@ caller asks for it, and an agent comment's second scan). They do not run on titl
 fields or the owner's own comments. Scanner names are unique.
 
 `on_error` says what a scanner that raises, returns something other than a list of `Finding`
-(including a bad shape), or takes longer than 10 seconds (`SCAN_TIMEOUT_SECONDS`) means. Only the
-exception's type is logged, never its message or the text. A `SystemExit` or other
-`BaseException` counts as an error too.
+(including a bad shape), or takes longer than its time bound means. Only the exception's type is
+logged, never its message or the text. A `SystemExit` or other `BaseException` counts as an error
+too.
+
+**The time bound is per scanner.** A call is abandoned after 10 seconds
+(`scanners.SCAN_TIMEOUT_SECONDS`) unless the scanner declared its own with `timeout=` (API 1.1): a
+positive, finite number of seconds, else `ValueError` when it registers. The core caps it at 20
+seconds (`scanners.MAX_SCAN_TIMEOUT_SECONDS`), the time the core's own relay scan always had, so
+`timeout=60` is 20 and `timeout=3` is 3. A scanner that passes nothing keeps 10. Older
+registrations work unchanged.
 
 - `"skip"`: no opinion. It is logged and counted (`<plug-in>:scanner`) and the text is judged on
   the other scanners. A page publishes.
@@ -273,6 +283,19 @@ exception's type is logged, never its message or the text. A `SystemExit` or oth
   is registered and no relay is configured. A comment already stamped scanned is never hidden.
 
 A scanner that really hangs costs one daemon thread per call, never reclaimed.
+
+**A scanner named `gitguardian` stands the core's own relay scan down.** The core still carries its
+ggshield relay scan (`ggscan.py`), which sends the original body to the house's relay beside the
+pattern scan. The house plug-in carries the same scan as a scanner called `gitguardian`. While a
+scanner of that exact name is registered, the core's relay scan asks nobody and says "not
+configured", so a body goes to the relay once, through the plug-in, and the plug-in's `on_error`
+and verdict decide: a finding refuses a publish or withdraws an agent comment; a clean answer
+clears a comment's second scan; no answer (`skip`) publishes on the rest and leaves a comment
+unscanned for the sweeper to retry. Only the name counts, not which plug-in registered it. With no
+scanner of that name nothing changes. A plug-in that registers `gitguardian` should pass
+`timeout=20`, or a relay answer slower than 10 seconds would count as no answer. (The core's own
+relay scan is removed in a later release, once the plug-in's behaviour is confirmed in
+production.)
 
 ### Mail backend
 
