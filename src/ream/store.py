@@ -1517,6 +1517,9 @@ class VersionRow:
     # What a section update says moved ("#running-now: prepend"); None on a
     # whole-page version.
     note: str | None = None
+    # Which parts this round changed against the version before it (partdiff's answer), or None
+    # when it was not computed yet or is the first version (runcove-5t3oj.56).
+    part_changes: dict | None = None
 
 
 def list_versions(
@@ -1547,7 +1550,8 @@ def list_versions(
             "select n, revision, created_at, created_by, session,"  # noqa: S608 -- clause from the db layer, no caller input
             # `body_bytes` is the plain text's size whatever is stored; a version not packed
             # yet has none, and its text is still here to measure.
-            f"       coalesce(body_bytes, {conn.byte_length('body')}), note from version"
+            f"       coalesce(body_bytes, {conn.byte_length('body')}), note, part_changes"
+            " from version"
             " where artifact_id = %s order by n desc",
             (artifact_id,),
         ).fetchall()
@@ -1561,9 +1565,83 @@ def list_versions(
             bytes=r[5],
             live=r[0] == row[4],
             note=r[6],
+            part_changes=r[7],
         )
         for r in rows
     ]
+
+
+class BadSpan(Exception):
+    """`from` is not before `to`."""
+
+
+def changes_pair(
+    db: Database,
+    agent: str,
+    artifact_id: str,
+    frm: int,
+    to: int | None = None,
+    *,
+    as_reader: bool = False,
+) -> tuple[int, str, str, dict | None]:
+    """(to, old body, new body, the stored round) for the parts view of `frm` to `to` (default:
+    the live version). The stored round is only there for a span of one round. NotFound for a page
+    or version that is not there or not this agent's to read; `BadSpan` for a backwards span."""
+    with db.connect() as conn:
+        row = _owned(conn, artifact_id, agent, as_reader)
+        if row is None:
+            raise NotFound()
+        to = row[4] if to is None else to
+        have = {
+            r[0]: r[1]
+            for r in conn.execute(
+                "select n, part_changes from version where artifact_id = %s"
+                " and n in (%s, %s)",
+                (artifact_id, frm, to),
+            ).fetchall()
+        }
+        if frm not in have or to not in have:
+            raise NotFound()
+        if frm > to:
+            raise BadSpan()
+        bodies = version_bodies(conn, artifact_id, sorted({frm, to}))
+    stored = have[to] if to == frm + 1 else None
+    return to, bodies[frm], bodies[to], stored
+
+
+def stored_part_changes(db: Database, artifact_id: str, n: int) -> dict | None:
+    """The round stored for version `n`, or None."""
+    with db.connect() as conn:
+        row = conn.execute(
+            "select part_changes from version where artifact_id = %s and n = %s",
+            (artifact_id, n),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def save_part_changes(db: Database, artifact_id: str, n: int, found: dict) -> None:
+    with db.connect() as conn:
+        conn.execute(
+            "update version set part_changes = %s where artifact_id = %s and n = %s",
+            (jsonb(found), artifact_id, n),
+        )
+
+
+def bodies_for_changes(
+    db: Database, artifact_id: str, n: int
+) -> tuple[str, str] | None:
+    """(the body before version `n`, the body of `n`), or None for a first version or a gap."""
+    if n < 2:
+        return None
+    with db.connect() as conn:
+        have = conn.execute(
+            "select n from version where artifact_id = %s and n in (%s, %s)",
+            (artifact_id, n - 1, n),
+        ).fetchall()
+        if len(have) != 2:
+            return None
+        bodies = version_bodies(conn, artifact_id, [n - 1, n])
+    return bodies[n - 1], bodies[n]
 
 
 def get_version_body(

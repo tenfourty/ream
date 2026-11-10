@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-10e",
+        "Ream can now say which PARTS of a page a round changed, found in any HTML with no work from you (give your sections ids and headings and they are named well). ream publish --update prints `changed: Running now, Results (+2)`; new verb ream changes PAGE-ID [--from N] [--to M] lists each part as added, changed or removed (exit 3 with the reason for a page it cannot read, such as one drawn by its own script: never an empty list); GET /api/v1/pages/ID/changes?from=N gives the same (add &format=marked for the changes marked up), GET /versions carries part_changes per version, and MCP read_page takes changes_since. Your tool updates itself to learn the verb.",
+    ),
+    (
         "2026-11-10d",
         "After a publish Ream's render check now says more than script errors: GET /api/v1/pages/ID/render (and read_page over MCP) carry a verdict (ok, broken or unchecked; never ok by default) and findings: a script error, a blank page or a file the page points to that it does not have make it broken; a page wider than its window is told to you alone; a check that could not run is unchecked. ream publish prints every finding while it waits, and --preview and POST /api/v1/preview return the same for a page you have not published. Page rows carry render_verdict. Your tool updates itself to print the new lines.",
     ),

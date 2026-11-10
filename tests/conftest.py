@@ -572,6 +572,11 @@ def _no_background_thumbnails(request, monkeypatch):
 
     monkeypatch.setattr(thumbs, "available", lambda: False)
     monkeypatch.setattr(thumbs, "render_in_background", not_in_this_test)
+    # Nor the changed-parts round (a thread that would write after its test ended): the route
+    # computes it on first ask, and the tests of the module call `partchanges.record` themselves.
+    from ream import partchanges
+
+    monkeypatch.setattr(partchanges, "in_background", lambda db, artifact_id, n: None)
 
 
 @pytest.fixture(autouse=True)

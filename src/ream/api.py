@@ -59,6 +59,9 @@ from ream import (
     listening,
     markdown,
     onboarding,
+    pagediff,
+    partchanges,
+    partdiff,
     partner_in,
     ratelimit,
     reach,
@@ -845,6 +848,7 @@ def publish_page(
         # After the write, never inside it: a publish must not wait on a
         # browser, nor fail because of one. See thumbs.render_in_background.
         thumbs.render_in_background(db, published.id, published.version, body)
+        partchanges.in_background(db, published.id, published.version)
         return {
             **published.__dict__,
             "comments": payload.comments,
@@ -931,6 +935,7 @@ def update_page(
         # After the write, never inside it: a publish must not wait on a
         # browser, nor fail because of one. See thumbs.render_in_background.
         thumbs.render_in_background(db, published.id, published.version, body)
+        partchanges.in_background(db, published.id, published.version)
         return {
             **published.__dict__,
             "warnings": page_warnings(db, published.id, body),
@@ -1020,6 +1025,7 @@ def update_page_section(
     published = result.published
     if not published.unchanged:
         thumbs.render_in_background(db, published.id, published.version, result.body)
+        partchanges.in_background(db, published.id, published.version)
     return {
         "page_revision": published.revision,
         "section_revision": result.section_revision,
@@ -2256,6 +2262,45 @@ def agent_router(
         except store.NotFound as exc:
             raise HTTPException(404, "no such page") from exc
 
+    @router.get("/artifacts/{artifact_id}/changes")
+    def read_changes(
+        artifact_id: str,
+        frm: int = Query(..., alias="from", ge=1),
+        to: int | None = Query(None, ge=1),
+        format: str = Query("parts", pattern="^(parts|marked)$"),
+        agent: str = Depends(caller),
+    ):
+        """Which parts of a page changed from version `from` to `to` (default: the live one)
+        (runcove-5t3oj.56). `{from, to, parts: [{id?, label, change}], more, unknown_reason}`:
+        `change` is added, changed or removed. A page this cannot read gets `unknown_reason` and
+        no parts, never an empty list that reads as "nothing changed". A span of several rounds
+        is ONE diff between its two ends. `?format=marked` returns the changes marked up in the
+        new body (the reader's view) as `body`, with `reason` when it could not.
+        Scoped like `/versions`; a page that is not yours answers like one that is not there."""
+        try:
+            end, old, new, stored = store.changes_pair(
+                db, agent, artifact_id, frm, to, as_reader=True
+            )
+        except store.NotFound as exc:
+            raise HTTPException(404, "no such page or version") from exc
+        except store.BadSpan as exc:
+            raise HTTPException(422, "from must not be after to") from exc
+        if stored is not None:
+            found = {k: v for k, v in stored.items() if k != "from"}
+        elif frm == end:
+            found = {"parts": [], "more": 0, "unknown_reason": None}
+        else:
+            found = partdiff.changes_safely(old, new)
+            if end == frm + 1 and partchanges.keepable(found):
+                store.save_part_changes(
+                    db, artifact_id, end, partchanges.round_of(found, frm)
+                )
+        out = {"from": frm, "to": end, **found}
+        if format == "marked":
+            marked, reason = pagediff.render_changes_safely(old, new)
+            out |= {"body": marked, "reason": reason}
+        return out
+
     @router.get("/artifacts/{artifact_id}/versions/{n}")
     def read_version_body(artifact_id: str, n: int, agent: str = Depends(caller)):
         """One version's stored body (homelab-50ze).
@@ -2530,6 +2575,7 @@ def agent_router(
         except store.NotFound as exc:
             raise HTTPException(404, "no such page") from exc
         thumbs.render_in_background(db, published.id, published.version, body)
+        partchanges.in_background(db, published.id, published.version)
         return published.__dict__
 
     @router.delete("/artifacts/{artifact_id}")

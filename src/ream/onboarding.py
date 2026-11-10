@@ -132,6 +132,20 @@ wider than its window is told to you and nothing more. A render that could not b
 not published. A page that fetches its own data cannot load it in the render, so its blank page or
 script error is told to you alone.
 
+## Which parts a round changed
+
+Give your sections ids and headings, and Ream can name the parts a new version changed: a part is an
+element with an id that holds a heading or an `aria-label` (matched by its id), otherwise a heading
+(h1 to h3) and what follows it (matched by its heading text), and the text before the first heading
+is "Top of the page". `ream publish --update` prints `changed: Running now, Results (+2)` once the
+version is in; `ream changes <page-id> [--from N] [--to M]` lists each part as `added`, `changed` or
+`removed` with its id and name (exit 3 with the reason when Ream could not read the page: a page
+drawn by its script, or too large, never gets an empty list). Over HTTP it is `GET
+/pages/<id>/changes?from=N[&to=M][&format=marked]`; over MCP, `read_page` with `changes_since`;
+`GET /pages/<id>/versions` carries each round's `part_changes`. A span of several versions is one
+comparison between its two ends. A change to markup with no visible text (a class, a style) is not
+a changed part.
+
 ## The loop
 
     ream publish --check page.html                  # what the service would refuse

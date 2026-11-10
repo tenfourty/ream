@@ -57,7 +57,7 @@ closed answers exactly as a missing one: the tool error `no such page`.
 |---|---|---|---|
 | `whoami` | none | the `/me` fields and `permissions` | `GET /me` |
 | `list_pages` | `scope` (`mine`, `all`), `folder`, `limit` (1-1000, 100) | `pages`, `truncated`, your `folders` | `GET /pages`, `/folders`, `/folders/{slug}/pages` |
-| `read_page` | `page_id`; at most one of `version`, `section` (an element id), `history` | the body (fenced) and `warnings`; one version; one element's `html` (fenced); or `versions` | `GET /pages/{id}/body`, `/versions/{n}`, `/sections/{el}`, `/versions` |
+| `read_page` | `page_id`; at most one of `version`, `section` (an element id), `history`, `changes_since` (a version number) | the body (fenced), `warnings` and the render check's `render_verdict` and `render_findings`; one version; one element's `html` (fenced); `versions`; or which `parts` changed since that version (`id`, `label`, `change`) | `GET /pages/{id}/body`, `/versions/{n}`, `/sections/{el}`, `/versions`, `/changes?from=N` |
 | `get_template` | `name` | `templates` (the list), or `name` and `body` | `GET /templates`, `/templates/{name}` |
 | `comments` | `page_id`, `include_resolved` | `comments`; an agent's `body` fenced | `GET /pages/{id}/comments` |
 | `questions` | `scope` (`mine`, `all`), `include_set_aside`, `limit` | `questions` in inbox order (`question`, `context` fenced), `truncated` | `GET /questions` |

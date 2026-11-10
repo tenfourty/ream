@@ -669,6 +669,12 @@ alter table version add column if not exists render_verdict text
     check (render_verdict in ('ok', 'broken', 'unchecked'));
 alter table version add column if not exists render_findings jsonb;
 
+-- WHICH PARTS OF THE PAGE A ROUND CHANGED (runcove-5t3oj.56, slice 2): partdiff's answer for this
+-- version against the one before it, {"from": n-1, "parts": [...], "more": k, "unknown_reason": s|null}.
+-- Null: not computed (yet), or the first version. Filled in the background after a publish, and on
+-- the first ask; never an empty list for a page that could not be read (that is unknown_reason).
+alter table version add column if not exists part_changes jsonb;
+
 -- HOLD OR LIVE (page review step 3, homelab-ij8.108). A mark Jeremy makes
 -- while its page is under review in 'held' mode is invisible to the agent
 -- until his verdict or until he switches to 'live'.

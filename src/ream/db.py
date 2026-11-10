@@ -980,6 +980,9 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
             " check (render_findings is null or json_valid(render_findings))"
         ),
     ),
+    # 10 Nov 2026: which parts a round changed (see schema.sql). Numbered 34: 32 is the
+    # key-revocation lane's, 33 the render findings above (runcove-5t3oj.56, slice 2).
+    34: ("alter table version add column part_changes jsonb",),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

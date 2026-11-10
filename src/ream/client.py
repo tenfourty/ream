@@ -1123,6 +1123,71 @@ def _printable(value) -> str:
     return _UNPRINTABLE.sub("", str(value if value is not None else ""))
 
 
+def _changes_line(found: dict) -> str:
+    """One line for `changed: Running now, Results (+2)`: the first two parts' names and how
+    many more. A page Ream could not read says so, never "nothing changed"."""
+    if found.get("unknown_reason"):
+        return (
+            f"could not tell which parts changed: {_printable(found['unknown_reason'])}"
+        )
+    parts = found.get("parts") or []
+    if not parts:
+        return "changed: no part with visible text"
+    names = ", ".join(_printable(p.get("label")) for p in parts[:2])
+    rest = len(parts) - 2 + int(found.get("more") or 0)
+    return f"changed: {names}" + (f" (+{rest})" if rest > 0 else "")
+
+
+def _report_changes(artifact_id: str, version, key: str) -> None:
+    """After a whole-page publish, say which parts the new version changed (runcove-5t3oj.56).
+    The route computes it when asked, so there is no waiting; silent on a first version or a
+    failure. Never fails the publish."""
+    if not isinstance(version, int) or version < 2:
+        return
+    try:
+        found = _request(
+            "GET",
+            f"{_api_base()}/pages/{artifact_id}/changes?from={version - 1}",
+            key,
+            None,
+        )
+    except HTTPFailure:
+        return
+    if isinstance(found, dict):
+        print(_changes_line(found), file=sys.stderr)
+
+
+def _print_changes(artifact_id: str, key: str, frm: int | None, to: int | None) -> int:
+    """`ream changes ID [--from N] [--to M]`: one line per changed part, `change<TAB>id<TAB>label`
+    on stdout. From defaults to the version before the live one. Exit 3, with the reason on
+    stderr, for a page Ream could not read: never a clean nothing."""
+    if frm is None:
+        live = next(
+            (r["n"] for r in _versions(artifact_id, key) if r.get("live")), None
+        )
+        if live is None or live < 2:
+            print("this page has only one version", file=sys.stderr)
+            return 0
+        frm = live - 1
+    query = f"from={frm}" + (f"&to={to}" if to is not None else "")
+    found = _request(
+        "GET", f"{_api_base()}/pages/{artifact_id}/changes?{query}", key, None
+    )
+    if found.get("unknown_reason"):
+        print(_changes_line(found), file=sys.stderr)
+        return 3
+    for part in found.get("parts") or []:
+        print(
+            f"{_printable(part.get('change'))}\t{_printable(part.get('id'))}\t"
+            f"{_printable(part.get('label'))}"
+        )
+    if found.get("more"):
+        print(f"... and {int(found['more'])} more", file=sys.stderr)
+    if not found.get("parts"):
+        print("no part with visible text changed", file=sys.stderr)
+    return 0
+
+
 def _print_versions(rows: list[dict]) -> None:
     """One line per version, newest first, and never a body.
 
@@ -2020,6 +2085,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="the page's history: which versions exist, when, and how big",
     )
     shelf.add_argument(
+        "--changes",
+        metavar="ID",
+        help="which parts of the page a round changed (see `ream changes`)",
+    )
+    shelf.add_argument(
+        "--from",
+        dest="changes_from",
+        type=int,
+        metavar="N",
+        help="with --changes, the version to compare from (default: the one before live)",
+    )
+    shelf.add_argument(
+        # `--to` is the folder rename's; `ream changes` rewrites its own `--to` to this.
+        "--changes-to",
+        dest="changes_to",
+        type=int,
+        metavar="M",
+        help="with --changes, the version to compare to (default: live); `ream changes` spells it --to",
+    )
+    shelf.add_argument(
         # NOT `--version`: that is already the install stamp, and argparse
         # refuses the clash outright -- which is the good outcome. A quieter
         # library would have let one silently shadow the other.
@@ -2414,6 +2499,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.versions:
             _print_versions(_versions(args.versions, key))
             return 0
+        if args.changes:
+            return _print_changes(args.changes, key, args.changes_from, args.changes_to)
         if args.at_version is not None and not args.fetch:
             raise UsageError(
                 "--at-version only means something with --fetch: "
@@ -2524,6 +2611,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             _print_published(updated)
             if not updated.get("unchanged"):
+                _report_changes(updated["id"], updated.get("version"), key)
                 _report_render(updated["id"], key)
             return 0
         if args.file and (args.title or _is_markdown(args.file)):
@@ -2582,6 +2670,17 @@ def main(argv: list[str] | None = None) -> int:
         # header). Only the exception's class name is ever safe to print.
         print(f"error: {type(exc).__name__}", file=sys.stderr)
         return 1
+
+
+def changes_run() -> None:
+    """`ream changes ID [--from N] [--to M]`: the publish tool's --changes, with its other flags."""
+    rest = sys.argv[1:]
+    ids = [a for a in rest if not a.startswith("-")][:1]
+    if ids and rest and rest[0] == ids[0]:
+        rest = ["--changes", rest[0], *rest[1:]]
+    rest = ["--changes-to" if a == "--to" else a for a in rest]
+    sys.argv = ["ream changes", *rest]
+    run()
 
 
 def run() -> None:

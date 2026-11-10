@@ -1108,7 +1108,7 @@ class _Worker:
     def alive(self) -> bool:
         return self.proc.poll() is None
 
-    def run(self, old_html: str, new_html: str, timeout: float):
+    def run(self, old_html: str, new_html: str, timeout: float, func=None):
         """The worker's answer within `timeout`, or TimeoutError.
 
         The whole exchange is bounded, the SEND included: a page larger than
@@ -1122,7 +1122,7 @@ class _Worker:
 
         def exchange() -> None:
             try:
-                self.conn_out.send((_render, old_html, new_html))
+                self.conn_out.send((func or _render, old_html, new_html))
                 if self.conn_in.poll(timeout):
                     outcome["result"] = self.conn_in.recv()
             except BaseException as exc:  # noqa: BLE001 -- reported below
@@ -1235,21 +1235,26 @@ def render_changes_safely(
         return new_html, REASON_FAILED
 
 
-def _run_in_worker(old_html: str, new_html: str, timeout: float):
+def _run_in_worker(
+    old_html: str, new_html: str, timeout: float, func=None, fallback=None
+):
     """``(result, transient)``: transient is True when the fallback came from
-    load or a broken worker rather than from the pages themselves."""
+    load or a broken worker rather than from the pages themselves. `func` is
+    another module-level function of two page texts for the same worker to run
+    (partdiff.compare), with `fallback` as its answer when none comes."""
+    fallback = fallback if fallback is not None else (new_html, REASON_FAILED)
     if not _SLOTS.acquire(timeout=timeout):
-        return (new_html, REASON_FAILED), True
+        return fallback, True
     try:
         with _IDLE_LOCK:
             worker = _IDLE.pop() if _IDLE else None
         if worker is None or not worker.alive():
             worker = _Worker()
         try:
-            result = worker.run(old_html, new_html, timeout)
+            result = worker.run(old_html, new_html, timeout, func)
         except BaseException:  # noqa: BLE001 - timed out or broken
             worker.kill()  # it never serves again
-            return (new_html, REASON_FAILED), True
+            return fallback, True
         with _IDLE_LOCK:
             _IDLE.append(worker)
         return result, False

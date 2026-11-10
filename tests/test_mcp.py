@@ -1526,3 +1526,27 @@ def test_not_yours_answers_exactly_as_no_such_page(client, on, token, db, seat):
     ) == call_tool(client, token, "close_question", decision_id=NOT_AN_ID)
     page = store.get_owned(db, "other", theirs.id)
     assert page.title == "Theirs" and page.pinned_at is None
+
+
+def test_read_page_changes_since_matches_the_changes_route(client, on, token, seat, db):
+    mine = seat["mine"]
+    store.patch(
+        db,
+        "mcp-seat",
+        mine.id,
+        PAGE.format("my body") + '<section id="new"><h2>New</h2><p>x</p></section>',
+        mine.revision,
+    )
+    error, read = call_tool(
+        client, token, "read_page", page_id=mine.id, changes_since=1
+    )
+    assert not error
+    route = api_get(client, token, f"/pages/{mine.id}/changes?from=1")
+    assert unfence_all(read) == route
+    assert route["parts"] and route["parts"][0]["change"] in ("added", "changed")
+    error, _ = call_tool(
+        client, token, "read_page", page_id=mine.id, changes_since=1, history=True
+    )
+    assert error
+    error, _ = call_tool(client, token, "read_page", page_id=mine.id, changes_since=9)
+    assert error

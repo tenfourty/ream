@@ -19,6 +19,7 @@ from ream import plugin_cli, selfupdate  # first: it records the real argv
 # and reads sys.argv; its return value is the exit status.
 _OTHER = {
     "publish": ("ream.client", "run"),
+    "changes": ("ream.client", "changes_run"),
     "admin": ("ream.admin", "main"),
     "republish": ("ream.republish", "main"),
     "connect": ("ream.connect_cli", "run"),
@@ -55,6 +56,7 @@ One command for Ream (formerly artifacts). Each verb runs the program of the sam
 the command line on unchanged, so `ream VERB --help` shows that program's own help.
 
   publish        publish or update a page             (artifacts-publish)
+  changes        which parts of a page a round changed (artifacts-publish --changes)
   ask            put a question on a page             (artifacts-decide ask)
   wait           wait for an answer                   (artifacts-decide wait)
   {decide_rest}
