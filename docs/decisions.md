@@ -907,8 +907,11 @@ machine without Ream's address install it with one line.
 - A placeholder on PyPI that only holds the name: it ships nothing, so install still needs Ream's
   own index, and the point of being installable by name anywhere stays unmet.
 - A client-only package (the command-line tools without the server): a second package to build and
-  release in step with this one, to hide code the forge already shows to anyone.
-- A private GitHub repository for the mirror: a release could not show where it was built from.
-- GitLab for the mirror: a second host to set up for no gain over GitHub.
+  release in step with this one, to keep private code that the public mirror shows anyway.
+- A private GitHub repository for the mirror: Jeremy chose a public one, so the source and history
+  can be read beside the package (after the history check).
+- GitLab for the mirror: Jeremy chose GitHub.
 
-**Evidence:** Jeremy, 10 Nov 2026.
+**Evidence:** Jeremy, 10 Nov 2026, decisions d_01M722KZWW0Z97CWYWCZ0M9AQ5, d_01M722M71EX3DJ899RGE1WE02Z,
+d_01M722PV8VRTT81Z8X6WWVJ8ZF, d_01M722PYG8K7JW92VDRHY65059, d_01M722RTPV2CCRZ60SGZDJBPY6, d_01M722W3X8CJFT9AC7W99YVA4M,
+d_01M722W715J66S2MH7577BEEZT, d_01M72320PF4FM5ZGHWYR1HPYDY.
