@@ -961,8 +961,14 @@ changed, and pages that render broken".
   rounds: less than he asked for.
 - No History for now, the strip being enough: it only covers what changed since his last visit.
 
-**Still open:** he asked that the changes strip can be turned off. How far that switch reaches is a
-pending question (decision d_01M72EA9194SDNW911E7KAH9RN); nothing is decided about it yet.
+**The strip can be switched off, both ways** (Jeremy, 10 Nov 2026, answer (c) on decision
+d_01M72EA9194SDNW911E7KAH9RN). The reader has one switch for the whole wall, kept between visits.
+Each page also has a way to hide its strip. That choice is remembered for that page, and a
+Show changes link in the page's menu brings the strip back. A page's own choice wins over the wall
+switch for that page, as with the commenting switches above. History and the broken-page warnings
+are never switched off by either. The office's own readings, reversible: the wall switch starts on,
+and hiding a page's strip lasts until he shows it again, not only until that page next changes.
+Options that lost: (a) one wall switch only, with Show changes per page; (b) a per-page switch only.
 
 **Evidence:** confirmed (Jeremy, 10 Nov 2026), answer (a) on questions 1, 3, 6 and 9 of the design
 page tycqi4frhe2itzs3n2axy7bhxu.
