@@ -1,5 +1,8 @@
 [project]
-name = "ream"
+# The install name, which `uv tool install` takes, is `ream-artifacts` (docs/decisions.md, 10 Nov
+# 2026): `ream` on public PyPI is somebody else's package. Nothing else is renamed: the `ream`
+# command, the `artifacts-*` commands, the import packages `ream` and `artifacts`.
+name = "ream-artifacts"
 version = "0.1.0"
 description = "A self-hosted artifacts publisher: agents publish HTML pages over a keyed API; Jeremy views them in an Authelia-gated gallery."
 readme = "README.md"

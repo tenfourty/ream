@@ -16,10 +16,17 @@ SECURITY. The SOURCE is fixed on the client: `REAM_INSTALL_SOURCE` (or `ARTIFACT
 tool's own environment, or the first line of `$XDG_CONFIG_HOME/ream/install-source`, or, with
 neither, what uv's own receipt (`uv-receipt.toml` in `sys.prefix`) says the tool was installed
 from: a `git+https` address (reinstalled at `main`), or the service's tools index, when uv
-recorded `no-index` and its `find-links` addresses for the package `ream` (reinstalled with
-`uv tool install --force --refresh --no-index --find-links <the same addresses> ream`). A
-path install, and a receipt with neither, give none: the name `ream` is never handed to uv
-without `--no-index`, because an unrelated package of that name is on the public index.
+recorded `no-index` and its `find-links` addresses for this package (reinstalled with
+`uv tool install --force --refresh --no-index --find-links <the same addresses> ream-artifacts`).
+A path install, and a receipt with neither, give none: a bare name is never handed to uv
+without `--no-index`, because an unrelated package called `ream` is on the public index.
+THE INSTALL NAME is `ream-artifacts` (decisions.md, 10 Nov 2026); the package was `ream`, and
+before that `artifacts`. A tool installed under an old name (its receipt says `ream` or
+`artifacts`) updates from the same source and comes out as `ream-artifacts`: `--force` makes the
+new tool's executables replace the old ones, and the old tool, which uv would otherwise go on
+listing with the same executables, is then uninstalled (uv removes the executables its receipt
+lists, which are the new tool's by then, so the new tool is installed once more to put them
+back). See `_retire_old_tools`.
 PLUG-INS. A tool installed with extra packages (`--with`, `--with-executables-from`) must not
 come back as the package alone. The receipt's other requirements are passed back with the same
 flags: a git (`https`, no login) address with its recorded ref, or a bare name only when the
@@ -68,12 +75,19 @@ _SOURCE = re.compile(r"git\+https://[A-Za-z0-9._~/:-]+")
 # A tools-index address: a plain web address with no login, query, fragment, space or quote.
 _INDEX_URL = re.compile(r"https?://[A-Za-z0-9._~/:-]+")
 _LOOPBACK = {"localhost", "127.0.0.1"}  # the only hosts allowed plain http
-PACKAGE = "ream"  # what the tools index serves
+# What the tools index serves, and the name uv installs the tool under. The distribution name
+# `ream` is an unrelated package on public PyPI, so the install name is `ream-artifacts`.
+PACKAGE = "ream-artifacts"
+# The names this package had before: a tool whose receipt says one of them is the same tool.
+OLD_NAMES = ("ream", "artifacts")
 # A receipt requirement with any of these keys has a source of its own (a git address, a path,
 # a URL): it is not "the package, from an index".
 _OWN_SOURCE = {"git", "path", "directory", "url", "editable", "index"}
 # The extra packages a tool was installed with (`--with`), as the receipt records them.
-_MAIN_NAMES = {"ream", "artifacts"}  # this package, under either of its names
+_MAIN_NAMES = {PACKAGE, *OLD_NAMES}  # this package, under any of its names
+# Console scripts that only a tool of ours has: how a tool directory under an old name is told
+# from a stranger's package of the same name (`ream` is one on PyPI).
+_OUR_SCRIPTS = {"artifacts-publish", "artifacts-decide", "artifacts-republish"}
 _PKG_NAME = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 _VERSION_SPEC = re.compile(
     r"[<>=!~][A-Za-z0-9.*+!<>=~, -]*"
@@ -172,18 +186,19 @@ def _index_urls(options) -> tuple[str, ...] | None:
 def _receipt_source() -> str | tuple[str, ...] | None:
     """What uv recorded when it installed this tool (`uv-receipt.toml` beside `sys.prefix`):
     the git address of a git install (the ref is dropped; the tool always installs `main`), or,
-    for the package `ream` installed with `--no-index --find-links`, those addresses. A path
-    install, a receipt with neither, a missing or unreadable receipt gives None."""
+    for this package (under its present name or an old one) installed with
+    `--no-index --find-links`, those addresses. A path install, a receipt with neither, a
+    missing or unreadable receipt gives None."""
     try:
         with open(Path(sys.prefix) / "uv-receipt.toml", "rb") as handle:
             tool = tomllib.load(handle)["tool"]
         for item in tool["requirements"]:
-            if item.get("name") not in {"ream", "artifacts"}:
+            if not _is_main(item.get("name")):
                 continue
             git = item.get("git")
             if isinstance(git, str) and git.startswith(("https://", "git+https://")):
                 return _clean(git)
-            if item.get("name") == PACKAGE and not _OWN_SOURCE.intersection(item):
+            if not _OWN_SOURCE.intersection(item):
                 return _index_urls(tool.get("options"))
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
@@ -206,6 +221,11 @@ class Extras:
 
 def _normal(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _is_main(name) -> bool:
+    """True for a receipt requirement that is this package, under any of its names."""
+    return isinstance(name, str) and _normal(name) in _MAIN_NAMES
 
 
 class _Flag(NamedTuple):
@@ -358,7 +378,7 @@ def installed_commit() -> str | None:
         with open(Path(sys.prefix) / "uv-receipt.toml", "rb") as handle:
             requirements = tomllib.load(handle)["tool"]["requirements"]
         for item in requirements:
-            if item.get("name") not in {"ream", "artifacts"}:
+            if not _is_main(item.get("name")):
                 continue
             git = item.get("git")
             if not isinstance(git, str):
@@ -471,31 +491,112 @@ def _run(command: list[str], timeout: int = _INSTALL_TIMEOUT):
     )
 
 
+def _tool_dir() -> Path | None:
+    """Where uv keeps its tools (`uv tool dir`), or None when it cannot be told."""
+    try:
+        where = _run(["uv", "tool", "dir"], 30)
+        text = where.stdout.strip()
+        if where.returncode != 0 or not text:
+            return None
+        return Path(text)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 def _installed_level() -> int | None:
     """The level of the copy `uv tool install` just wrote, asked of ITS Python (not this
     process's modules). None when it cannot be told."""
-    try:
-        where = _run(["uv", "tool", "dir"], 30)
-        if where.returncode != 0:
-            return None
-        # The tool's directory is named for the tool: `ream`, or `artifacts` when that is how
-        # it was installed -- read from where this process lives, not assumed.
-        name = Path(sys.prefix).name or "ream"
-        python = Path(where.stdout.strip()) / name / "bin" / "python"
-        answer = _run(
-            [
-                str(python),
-                "-I",
-                "-c",
-                "from ream import clientlevel; print(clientlevel.CLIENT_LEVEL)",
-            ],
-            30,
-        )
-        if answer.returncode != 0:
-            return None
-        return int(answer.stdout.strip())
-    except (OSError, subprocess.SubprocessError, ValueError):
+    where = _tool_dir()
+    if where is None:
         return None
+    # The tool's directory is named for the package: `ream-artifacts` now, which is where an
+    # update from any old name puts it. A source that still builds the old name (a fork, say)
+    # leaves it under the name this process lives in, so that is tried second.
+    for name in dict.fromkeys([PACKAGE, Path(sys.prefix).name or PACKAGE]):
+        python = where / name / "bin" / "python"
+        try:
+            answer = _run(
+                [
+                    str(python),
+                    "-I",
+                    "-c",
+                    "from ream import clientlevel; print(clientlevel.CLIENT_LEVEL)",
+                ],
+                30,
+            )
+            if answer.returncode == 0:
+                return int(answer.stdout.strip())
+        except (OSError, subprocess.SubprocessError, ValueError):
+            continue
+    return None
+
+
+def old_tools(tool_dir: Path) -> list[str]:
+    """The tools uv still has under an old name of this package (`ream`, `artifacts`), found
+    from their receipts in uv's tool directory. Only ones that are ours count: the receipt
+    names the package and lists one of our console scripts, because `ream` is also somebody
+    else's package and a tool of that name is none of ours to remove."""
+    found = []
+    for name in OLD_NAMES:
+        try:
+            with open(tool_dir / name / "uv-receipt.toml", "rb") as handle:
+                tool = tomllib.load(handle)["tool"]
+            requirements = tool["requirements"]
+            scripts = tool.get("entrypoints") or []
+            ours = any(
+                isinstance(item, dict)
+                and isinstance(item.get("name"), str)
+                and _normal(item["name"]) == name
+                for item in requirements
+            ) and any(
+                isinstance(entry, dict) and entry.get("name") in _OUR_SCRIPTS
+                for entry in scripts
+            )
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+        if ours:
+            found.append(name)
+    return found
+
+
+def _retire_old_tools(command: list[str]) -> tuple[str | None, bool]:
+    """After `command` installed `ream-artifacts`, uninstall the tool this machine still has
+    under an old name, so two tools do not claim the same executables. `--force` already made
+    the executables the new tool's; but `uv tool uninstall` removes the executables its receipt
+    lists by path, whoever they belong to now (measured on uv 0.13.5), so the new tool is
+    installed once more to put them back (the same command without `--refresh`: the wheel is
+    in uv's cache). Returns `(note, usable)`: a line to say when something went wrong, and
+    whether the new tool's commands are in place. A failed uninstall leaves the old tool
+    listed but harmless (its executables are the new tool's)."""
+    where = _tool_dir()
+    stale = old_tools(where) if where is not None else []
+    note = None
+    removed = False
+    for name in stale:
+        try:
+            gone = _run(["uv", "tool", "uninstall", name], 60)
+        except (OSError, subprocess.SubprocessError):
+            gone = None
+        if gone is not None and gone.returncode == 0:
+            removed = True
+        elif note is None:
+            note = (
+                f"the new tool is installed, but the old one named {name} could not be "
+                f"removed. Run by hand: uv tool uninstall {name} && {' '.join(command)}"
+            )
+    if removed:
+        again = [part for part in command if part != "--refresh"]
+        try:
+            ok = _run(again).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            ok = False
+        if not ok:
+            line = (
+                "the old tool is removed but the new one's commands were not put back. "
+                f"Run by hand: {' '.join(command)}"
+            )
+            return line, False
+    return note, True
 
 
 def _host(address: str) -> str | None:
@@ -509,7 +610,8 @@ def _manual_line(headers, api_url: str | None, extras: Extras | None = None) -> 
     """The line for a tool with no fixed source, or whose plug-ins cannot be installed
     again. The server's note is printed for a person to run once, and only when it names the
     very host this tool was talking to and the tool has no plug-ins (a reinstall from the
-    note alone would drop them); nothing here executes it."""
+    note alone would drop them); nothing here executes it. The note is a git address, so what
+    it installs is named by that repository, `ream-artifacts` now."""
     extras = extras or Extras()
     line = "this tool is out of date (the service asks for a newer one). "
     if extras.blocked:
@@ -592,6 +694,11 @@ def on_response(method: str, headers, api_url: str | None = None) -> None:
             "the installed copy is older than this one (or its level cannot be read), so "
             f"this command carries on as it is. Run by hand: {line}"
         )
+        return
+    note, usable = _retire_old_tools(command)
+    if note:
+        _say(note)
+    if not usable:
         return
     if method.upper() not in {"GET", "HEAD"}:
         note_mutation()

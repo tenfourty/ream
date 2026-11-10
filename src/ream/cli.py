@@ -134,10 +134,14 @@ def version_line() -> str:
 
     from ream import clientlevel
 
-    try:
-        package = metadata.version("ream")
-    except metadata.PackageNotFoundError:
-        package = "unknown"
+    package = "unknown"
+    # The install name is `ream-artifacts`; a copy installed before the rename says `ream`.
+    for name in ("ream-artifacts", *selfupdate.OLD_NAMES):
+        try:
+            package = metadata.version(name)
+            break
+        except metadata.PackageNotFoundError:
+            continue
     parts = [f"level {clientlevel.CLIENT_LEVEL}"]
     commit = selfupdate.installed_commit()
     if commit:

@@ -531,11 +531,14 @@ def wheel() -> Path | None:
     """The one tool package this service hands out, or None where there is
     none (a development checkout, or an image that failed to build one)."""
     try:
-        # `ream-*` is what the build makes now; `artifacts-*` is an image built before the
-        # rename (kept for good, so a directory holding one still serves it).
-        found = sorted(tools_dir().glob("ream-*-py3-none-any.whl")) or sorted(
-            tools_dir().glob("artifacts-*-py3-none-any.whl")
-        )
+        # `ream_artifacts-*` is what the build makes now (the install name is `ream-artifacts`,
+        # which a wheel file spells with an underscore); `ream-*` and `artifacts-*` are images
+        # built before the renames (kept for good, so a directory holding one still serves it).
+        found: list[Path] = []
+        for prefix in ("ream_artifacts", "ream", "artifacts"):
+            found = sorted(tools_dir().glob(f"{prefix}-*-py3-none-any.whl"))
+            if found:
+                break
     except OSError:
         return None
     return found[-1] if found else None
@@ -543,11 +546,13 @@ def wheel() -> Path | None:
 
 def package_name() -> str:
     """The name `uv tool install` is given: that of the wheel actually served
-    (`ream` now, `artifacts` for an image built before the rename)."""
+    (`ream-artifacts` now; `ream` or `artifacts` for an image built before a rename)."""
     built = wheel()
     if built is not None and built.name.startswith("artifacts-"):
         return "artifacts"
-    return "ream"
+    if built is not None and built.name.startswith("ream-"):
+        return "ream"
+    return "ream-artifacts"
 
 
 def _tools_text(base: str) -> str:
@@ -575,6 +580,17 @@ def _tools_text(base: str) -> str:
         "Careful: `uvx` with `--find-links` can quietly reuse an older tool that is\n"
         "already installed. Use `uvx --from <the exact wheel URL>` (the first line\n"
         "above) or `uv tool install --force --refresh ...` to be sure of the newest.\n"
+        "\n"
+        "The install name is `ream-artifacts`; the commands (`ream`, `artifacts-*`)\n"
+        "are unchanged. The package used to be called `ream`, which on the public\n"
+        "package index is somebody else's unrelated package: never install it by\n"
+        "that name, and never without the --no-index --find-links source above. A\n"
+        "tool installed from the forge address under the old name moves itself to\n"
+        "the new one the next time it updates. One installed from this index under\n"
+        "the old name will not find its package here any more: run the install\n"
+        "line above once. If `uv tool list` still shows a tool named `ream` after\n"
+        "that, run `uv tool uninstall ream` and then the install line again (the\n"
+        "uninstall also removes the commands the new tool now owns).\n"
         "\n"
         "Python 3.12 or later and nothing else: the tools use only the standard\n"
         "library. They are `artifacts-publish`, `artifacts-decide` and\n"

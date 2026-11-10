@@ -216,6 +216,12 @@ def test_the_tool_package_is_found_by_its_new_or_old_file_name(tmp_path, monkeyp
     new = tmp_path / "ream-0.1.0-py3-none-any.whl"
     new.write_bytes(b"x")
     assert onboarding.wheel() == new
+    # The install name became `ream-artifacts` (10 Nov 2026): its wheel file spells it with an
+    # underscore, and is the one served when an old directory still holds the others.
+    newest = tmp_path / "ream_artifacts-0.1.0-py3-none-any.whl"
+    newest.write_bytes(b"x")
+    assert onboarding.wheel() == newest
+    assert onboarding.package_name() == "ream-artifacts"
 
 
 def test_the_ream_command_has_every_verb_of_the_old_ones():

@@ -137,6 +137,7 @@ def test_the_document_carries_a_stable_line_and_a_machine_readable_one(
 @pytest.mark.parametrize(
     ("wheel_name", "package"),
     [
+        ("ream_artifacts-0.1.0.post20261110120000-py3-none-any.whl", "ream-artifacts"),
         ("ream-0.1.0-py3-none-any.whl", "ream"),
         ("artifacts-0.1.0-py3-none-any.whl", "artifacts"),
     ],

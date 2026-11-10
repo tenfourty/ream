@@ -2,8 +2,12 @@
 are out of date (Jeremy, 9 Nov 2026). The install source is the client's own, never the server's."""
 
 import os
+import shutil
+import subprocess
+import sys
 import time
 import urllib.request
+import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -118,7 +122,10 @@ class _Run:
 
     def __init__(self):
         self.install_code = 0
+        self.install_codes = []  # one per install, in order; then `install_code`
         self.install_stderr = ""
+        self.uninstall_code = 0
+        self.tool_dir = "/tools"
         self.level = str(clientlevel.CLIENT_LEVEL)
         self.calls = []
 
@@ -126,10 +133,16 @@ class _Run:
         self.calls.append((command, kwargs))
         out, err, code = "", "", 0
         if command[:3] == ["uv", "tool", "install"]:
-            code = self.install_code
+            code = (
+                self.install_codes[len(self.installs) - 1]
+                if len(self.installs) <= len(self.install_codes)
+                else self.install_code
+            )
             err = self.install_stderr
+        elif command[:3] == ["uv", "tool", "uninstall"]:
+            code = self.uninstall_code
         elif command[:3] == ["uv", "tool", "dir"]:
-            out = "/tools\n"
+            out = self.tool_dir + "\n"
         elif command[0].endswith("/python"):
             out = self.level + "\n"
         return type("Done", (), {"returncode": code, "stdout": out, "stderr": err})()
@@ -137,6 +150,10 @@ class _Run:
     @property
     def installs(self):
         return [c for c, _ in self.calls if c[:3] == ["uv", "tool", "install"]]
+
+    @property
+    def uninstalls(self):
+        return [c for c, _ in self.calls if c[:3] == ["uv", "tool", "uninstall"]]
 
 
 class _Out:
@@ -405,18 +422,22 @@ def test_a_path_missing_or_malformed_receipt_gives_no_source(
 # ---- a tool installed from the tools index updates from that same index -------------
 #
 # What uv 0.13 writes for `uv tool install --force --refresh --no-index --find-links
-# https://artifacts.tenfourty.site/api/v1/tools/ ream` (read from a real install into a
-# throwaway tool directory): the requirement is the bare name, and the index rides in
-# `[tool.options]`. Nothing in it names a git address or a path.
+# https://artifacts.tenfourty.site/api/v1/tools/ ream-artifacts` (read from a real install
+# into a throwaway tool directory): the requirement is the bare name, and the index rides in
+# `[tool.options]`. Nothing in it names a git address or a path. Before the install name
+# changed (10 Nov 2026) the name was `ream`: OLD_INDEX_RECEIPT, a tool that must move.
 
 INDEX = "https://artifacts.tenfourty.site/api/v1/tools/"
 INDEX_RECEIPT = (
-    '[tool]\nrequirements = [{ name = "ream" }]\n'
+    '[tool]\nrequirements = [{ name = "ream-artifacts" }]\n'
     "entrypoints = [\n"
-    '    { name = "ream", install-path = "/home/x/.local/bin/ream", from = "ream" },\n'
+    '    { name = "ream", install-path = "/home/x/.local/bin/ream", from = "ream-artifacts" },\n'
     "]\n\n"
     f'[tool.options]\nno-index = true\nfind-links = ["{INDEX}"]\n'
 )
+OLD_INDEX_RECEIPT = INDEX_RECEIPT.replace(
+    'name = "ream-artifacts"', 'name = "ream"'
+).replace('from = "ream-artifacts"', 'from = "ream"')
 INDEX_COMMAND = [
     "uv",
     "tool",
@@ -426,12 +447,12 @@ INDEX_COMMAND = [
     "--no-index",
     "--find-links",
     INDEX,
-    "ream",
+    "ream-artifacts",
 ]
 
 
 def _index_receipt(
-    requirement='{ name = "ream" }', links=f'["{INDEX}"]', no_index="true"
+    requirement='{ name = "ream-artifacts" }', links=f'["{INDEX}"]', no_index="true"
 ):
     """A receipt for a tool with `requirement` and the given `[tool.options]` values (raw
     TOML; None leaves the key out)."""
@@ -469,8 +490,8 @@ def test_the_find_links_install_never_asks_a_public_index(
         "https://evil.example/api/v1/me",
     )
     (command,) = updater.run.installs
-    assert command.index("--no-index") < command.index("ream")
-    assert command[-1] == "ream" and command[-3:-1] == ["--find-links", INDEX]
+    assert command.index("--no-index") < command.index("ream-artifacts")
+    assert command[-1] == "ream-artifacts" and command[-3:-1] == ["--find-links", INDEX]
     assert "evil.example" not in " ".join(command)
     selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
 
@@ -492,7 +513,7 @@ def test_every_find_links_address_of_the_receipt_is_kept(
             INDEX,
             "--find-links",
             other,
-            "ream",
+            "ream-artifacts",
         ]
     ]
     selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
@@ -518,12 +539,381 @@ def test_a_failed_find_links_install_prints_the_whole_command(
     assert updater.execs == []
 
 
+# ---- a tool installed under an old name moves to `ream-artifacts` --------------------
+#
+# The install name changed from `ream` (10 Nov 2026: `ream` on public PyPI is a stranger's
+# package). Measured on uv 0.13.5 with throwaway tool directories: installing `ream-artifacts`
+# over a tool named `ream` with `--force` makes the executables the new tool's but leaves BOTH
+# tools listed, each claiming the same executables; `uv tool uninstall ream` after that
+# removes the executables by path (so the new tool's go too) and the new tool has to be
+# installed again to put them back.
+
+
+def _old_tool(tool_dir, name="ream", scripts=None, package=None):
+    """The directory uv leaves for a tool called `name`, with the receipt it writes."""
+    scripts = (
+        scripts
+        if scripts is not None
+        else [
+            "artifacts-admin",
+            "artifacts-connect",
+            "artifacts-decide",
+            "artifacts-publish",
+            "artifacts-republish",
+            "ream",
+        ]
+    )
+    path = tool_dir / name
+    path.mkdir(parents=True)
+    entries = "".join(
+        f'    {{ name = "{s}", install-path = "/h/.local/bin/{s}", from = "{name}" }},\n'
+        for s in scripts
+    )
+    (path / "uv-receipt.toml").write_text(
+        f'[tool]\nrequirements = [{{ name = "{package or name}" }}]\n'
+        f"entrypoints = [\n{entries}]\n"
+    )
+    return path
+
+
+@pytest.fixture()
+def uv_tools(updater, tmp_path):
+    """uv's tool directory as `uv tool dir` reports it to the tool under test."""
+    tools = tmp_path / "uvtools"
+    tools.mkdir()
+    updater.run.tool_dir = str(tools)
+    return tools
+
+
+def _verbs(updater):
+    """The `uv tool install` and `uninstall` runs, in order, as (verb, last argument)."""
+    return [
+        (c[2], c[-1])
+        for c, _ in updater.run.calls
+        if c[:2] == ["uv", "tool"] and c[2] in {"install", "uninstall"}
+    ]
+
+
+def test_an_index_tool_installed_under_the_old_name_comes_back_as_the_new_name(
+    updater, tmp_path, monkeypatch
+):
+    """Same index, same flags: only the package name changes, and it is never bare."""
+    _receipt(tmp_path, monkeypatch, OLD_INDEX_RECEIPT)
+    assert selfupdate.configured_source() == (INDEX,)
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.installs == [INDEX_COMMAND]
+    assert all(c[-1] not in {"ream", "artifacts"} for c in updater.run.installs)
+    assert updater.execs == [("/bin/ream", ["/bin/ream", "list"])]
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_a_tool_installed_under_the_old_name_from_git_keeps_its_source(
+    updater, tmp_path, monkeypatch
+):
+    for old in ("ream", "artifacts"):
+        _receipt(
+            tmp_path,
+            monkeypatch,
+            f'[tool]\nrequirements = [{{ name = "{old}", {GIT} }}]\n',
+        )
+        monkeypatch.setattr(selfupdate, "_done", False)
+        selfupdate._stamp_path().unlink(missing_ok=True)
+        selfupdate.on_response("GET", STALE)
+        selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+    # uv names the tool after the package the git source builds: no name on the command
+    assert updater.run.installs == [MAIN_COMMAND, MAIN_COMMAND]
+
+
+@pytest.mark.parametrize("old", ["ream", "artifacts"])
+def test_an_index_receipt_under_either_old_name_gives_the_same_index(
+    updater, tmp_path, monkeypatch, old
+):
+    _receipt(tmp_path, monkeypatch, _index_receipt(f'{{ name = "{old}" }}'))
+    assert selfupdate.configured_source() == (INDEX,)
+    assert selfupdate.command_for((INDEX,))[-1] == "ream-artifacts"
+
+
+def test_the_old_tool_is_uninstalled_and_the_new_one_installed_again(
+    updater, uv_tools, tmp_path, monkeypatch
+):
+    _old_tool(uv_tools)
+    _receipt(tmp_path, monkeypatch, OLD_INDEX_RECEIPT)
+    selfupdate.on_response("GET", STALE)
+    assert _verbs(updater) == [
+        ("install", "ream-artifacts"),
+        ("uninstall", "ream"),
+        ("install", "ream-artifacts"),
+    ]
+    first, again = updater.run.installs
+    assert first == INDEX_COMMAND
+    assert again == [part for part in INDEX_COMMAND if part != "--refresh"]
+    assert "--no-index" in again, "the second install is no more bare than the first"
+    assert updater.execs == [("/bin/ream", ["/bin/ream", "list"])]
+    assert "Run by hand" not in updater.out.getvalue()
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_the_old_tool_is_removed_after_a_git_update_too(
+    updater, uv_tools, tmp_path, monkeypatch
+):
+    """The old tool's own update command names no package, so uv installs `ream-artifacts`
+    beside it and leaves the old directory: the next update of the new tool clears it."""
+    _old_tool(uv_tools)
+    _receipt(
+        tmp_path,
+        monkeypatch,
+        f'[tool]\nrequirements = [{{ name = "ream-artifacts", {GIT} }}]\n',
+    )
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.uninstalls == [["uv", "tool", "uninstall", "ream"]]
+    assert updater.run.installs == [
+        MAIN_COMMAND,
+        ["uv", "tool", "install", "--force", f"{SOURCE}@main"],
+    ]
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_both_old_names_are_removed_and_the_new_tool_put_back_once(
+    updater, uv_tools, tmp_path, monkeypatch
+):
+    _old_tool(uv_tools, "ream")
+    _old_tool(uv_tools, "artifacts")
+    _receipt(tmp_path, monkeypatch, INDEX_RECEIPT)
+    selfupdate.on_response("GET", STALE)
+    assert _verbs(updater) == [
+        ("install", "ream-artifacts"),
+        ("uninstall", "ream"),
+        ("uninstall", "artifacts"),
+        ("install", "ream-artifacts"),
+    ]
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_a_tool_called_ream_that_is_not_ours_is_left_alone(
+    updater, uv_tools, tmp_path, monkeypatch
+):
+    """`ream` is also a stranger's package: a tool directory of that name with none of our
+    console scripts is none of ours to uninstall."""
+    _old_tool(uv_tools, "ream", scripts=["ream-cli", "ream"])
+    _receipt(tmp_path, monkeypatch, INDEX_RECEIPT)
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.uninstalls == []
+    assert len(updater.run.installs) == 1
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_nothing_is_uninstalled_when_there_is_no_old_tool(
+    updater, uv_tools, tmp_path, monkeypatch
+):
+    _receipt(tmp_path, monkeypatch, INDEX_RECEIPT)
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.uninstalls == []
+    assert updater.run.installs == [INDEX_COMMAND]
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_old_tools_finds_only_ours_by_their_receipts(uv_tools):
+    assert selfupdate.old_tools(uv_tools) == []
+    _old_tool(uv_tools, "artifacts")
+    assert selfupdate.old_tools(uv_tools) == ["artifacts"]
+    _old_tool(uv_tools, "ream")
+    assert selfupdate.old_tools(uv_tools) == ["ream", "artifacts"]
+    assert selfupdate.old_tools(uv_tools / "missing") == []
+    # the new name is not an old one, and an unreadable receipt is not a tool
+    _old_tool(uv_tools, "ream-artifacts")
+    (uv_tools / "ream" / "uv-receipt.toml").write_text("this is [not toml")
+    assert selfupdate.old_tools(uv_tools) == ["artifacts"]
+
+
+def test_a_failed_install_or_a_downgrade_uninstalls_nothing(
+    updater, uv_tools, tmp_path, monkeypatch
+):
+    _old_tool(uv_tools)
+    _receipt(tmp_path, monkeypatch, OLD_INDEX_RECEIPT)
+    updater.run.install_code = 1
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.uninstalls == []
+    selfupdate._stamp_path().unlink(missing_ok=True)
+    monkeypatch.setattr(selfupdate, "_done", False)
+    updater.run.install_code = 0
+    updater.run.level = str(clientlevel.CLIENT_LEVEL - 1)
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.uninstalls == []
+    assert updater.execs == []
+
+
+def test_an_old_tool_that_cannot_be_removed_leaves_the_new_one_working(
+    updater, uv_tools, tmp_path, monkeypatch
+):
+    _old_tool(uv_tools)
+    _receipt(tmp_path, monkeypatch, OLD_INDEX_RECEIPT)
+    updater.run.uninstall_code = 2
+    selfupdate.on_response("GET", STALE)
+    out = updater.out.getvalue()
+    assert "old one named ream could not be removed" in out
+    assert "uv tool uninstall ream && " + " ".join(INDEX_COMMAND) in out
+    assert len(updater.run.installs) == 1, "nothing was removed, so nothing to put back"
+    assert updater.execs == [("/bin/ream", ["/bin/ream", "list"])], (
+        "its commands are intact"
+    )
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_when_the_new_tools_commands_are_not_put_back_it_says_so_and_stops(
+    updater, uv_tools, tmp_path, monkeypatch
+):
+    _old_tool(uv_tools)
+    _receipt(tmp_path, monkeypatch, OLD_INDEX_RECEIPT)
+    updater.run.install_codes = [0, 1]
+    selfupdate.on_response("GET", STALE)
+    out = updater.out.getvalue()
+    assert "commands were not put back" in out
+    assert "Run by hand: " + " ".join(INDEX_COMMAND) in out
+    assert updater.execs == [], "the command it would run is not on the path"
+
+
+def test_a_post_that_went_through_is_not_repeated_after_the_move(
+    updater, uv_tools, tmp_path, monkeypatch
+):
+    _old_tool(uv_tools)
+    _receipt(tmp_path, monkeypatch, OLD_INDEX_RECEIPT)
+    selfupdate.on_response("POST", STALE)
+    assert updater.execs == []
+    assert "your next command uses the new tool" in updater.out.getvalue()
+
+
+def test_the_opt_out_prints_the_new_name_for_an_old_tool_and_runs_nothing(
+    updater, tmp_path, monkeypatch
+):
+    _receipt(tmp_path, monkeypatch, OLD_INDEX_RECEIPT)
+    monkeypatch.setenv("REAM_NO_SELF_UPDATE", "1")
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.calls == []
+    assert " ".join(INDEX_COMMAND) in updater.out.getvalue()
+
+
+def test_a_tool_installed_under_the_new_name_updates_from_its_index(
+    updater, tmp_path, monkeypatch
+):
+    _receipt(tmp_path, monkeypatch, INDEX_RECEIPT)
+    assert selfupdate.configured_source() == (INDEX,)
+    assert selfupdate.installed_commit() is None
+    selfupdate.on_response("GET", STALE)
+    assert updater.run.installs == [INDEX_COMMAND]
+    selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
+
+
+def test_the_new_name_in_a_git_receipt_gives_the_commit_and_the_address(
+    tmp_path, monkeypatch
+):
+    sha = "66eca1f0123456789abcdef0123456789abcdef0"
+    _receipt(
+        tmp_path,
+        monkeypatch,
+        '[tool]\nrequirements = [{ name = "ream-artifacts", '
+        f'git = "https://forge.example/runcove/artifacts?rev={sha}" }}]\n',
+    )
+    assert selfupdate.installed_commit() == sha
+    assert selfupdate.configured_source() == SOURCE
+
+
+@pytest.mark.skipif(shutil.which("uv") is None, reason="needs uv")
+def test_the_move_with_the_real_uv_leaves_one_tool_and_all_its_commands(
+    tmp_path, monkeypatch
+):
+    """End to end, not only the command list: real `uv tool install`/`uninstall` in throwaway
+    directories, an old `ream` tool and the new `ream-artifacts` wheel from a local index."""
+    wheels = tmp_path / "wheels"
+    wheels.mkdir()
+    for distribution, module in (("ream", "ream"), ("ream_artifacts", "ream")):
+        _write_wheel(wheels, distribution, module)
+    for name, value in {
+        "UV_TOOL_DIR": str(tmp_path / "uvtools"),
+        "UV_TOOL_BIN_DIR": str(tmp_path / "bin"),
+        "UV_CACHE_DIR": str(tmp_path / "cache"),
+        "UV_PYTHON": sys.executable,
+        "UV_PYTHON_DOWNLOADS": "never",
+        "UV_NO_CONFIG": "1",
+    }.items():
+        monkeypatch.setenv(name, value)
+    index = ["--no-index", "--find-links", str(wheels)]
+    uv = ["uv", "tool"]
+    old = subprocess.run(  # noqa: S603
+        [*uv, "install", "--force", *index, "ream"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert old.returncode == 0, old.stderr
+    command = [*uv, "install", "--force", "--refresh", *index, "ream-artifacts"]
+    new = subprocess.run(command, capture_output=True, text=True, check=False)  # noqa: S603
+    assert new.returncode == 0, new.stderr
+    commands = sorted(p.name for p in (tmp_path / "bin").iterdir())
+    assert "artifacts-publish" in commands and "ream" in commands
+    listed = subprocess.run(  # noqa: S603
+        [*uv, "list"], capture_output=True, text=True, check=True
+    ).stdout
+    assert "ream v" in listed and "ream-artifacts v" in listed, "both, until the move"
+
+    note, usable = selfupdate._retire_old_tools(command)
+
+    assert (note, usable) == (None, True)
+    listed = subprocess.run(  # noqa: S603
+        [*uv, "list"], capture_output=True, text=True, check=True
+    ).stdout
+    assert "ream-artifacts v" in listed and "\nream v" not in "\n" + listed
+    assert not (tmp_path / "uvtools" / "ream").exists()
+    assert sorted(p.name for p in (tmp_path / "bin").iterdir()) == commands
+    for link in (tmp_path / "bin").iterdir():
+        assert "ream-artifacts" in str(link.resolve()), link
+
+
+def _write_wheel(directory, distribution, module):
+    """A wheel with no code to speak of: the console scripts of the real tools, which uv
+    puts on the path, and nothing else."""
+    name = distribution.replace("_", "-")
+    version = "0.1.0"
+    info = f"{distribution}-{version}.dist-info"
+    scripts = "\n".join(
+        f"{script} = {module}.cli:main"
+        for script in (
+            "ream",
+            "artifacts-admin",
+            "artifacts-connect",
+            "artifacts-decide",
+            "artifacts-publish",
+            "artifacts-republish",
+        )
+    )
+    files = {
+        f"{module}/__init__.py": "",
+        f"{info}/METADATA": f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
+        "Requires-Python: >=3.8\n",
+        f"{info}/WHEEL": "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\n"
+        "Tag: py3-none-any\n",
+        f"{info}/entry_points.txt": f"[console_scripts]\n{scripts}\n",
+    }
+    files[f"{info}/RECORD"] = (
+        "".join(f"{path},,\n" for path in files) + f"{info}/RECORD,,\n"
+    )
+    with zipfile.ZipFile(
+        directory / f"{distribution}-{version}-py3-none-any.whl", "w"
+    ) as z:
+        for path, text in files.items():
+            z.writestr(path, text)
+
+
 @pytest.mark.parametrize(
     "text",
     [
         # a registry install with no index recorded: a bare name would ask PyPI
         '[tool]\nrequirements = [{ name = "ream" }]\n',
         '[tool]\nrequirements = [{ name = "ream" }]\n\n[tool.options]\n',
+        '[tool]\nrequirements = [{ name = "ream-artifacts" }]\n',
+        '[tool]\nrequirements = [{ name = "ream-artifacts" }]\n\n[tool.options]\n',
+        # the same under the old names, with an index that is not the only one
+        _index_receipt('{ name = "ream" }', no_index="false"),
+        _index_receipt('{ name = "artifacts" }', no_index=None),
         # an index that is not the only one: PyPI could still answer for `ream`
         _index_receipt(no_index=None),
         _index_receipt(no_index="false"),
@@ -549,6 +939,11 @@ def test_a_failed_find_links_install_prints_the_whole_command(
         _index_receipt('{ name = "ream", directory = "/home/x/artifacts" }'),
         _index_receipt('{ name = "ream", url = "https://x.example/ream.whl" }'),
         _index_receipt('{ name = "ream", path = "/x/ream.whl" }'),
+        _index_receipt('{ name = "ream-artifacts", directory = "/home/x/artifacts" }'),
+        _index_receipt(
+            '{ name = "ream-artifacts", url = "https://x.example/ream_artifacts.whl" }'
+        ),
+        _index_receipt('{ name = "ream-artifacts", path = "/x/ream_artifacts.whl" }'),
     ],
 )
 def test_a_receipt_with_neither_a_git_address_nor_a_find_links_index_installs_nothing(
@@ -571,7 +966,7 @@ def test_a_loopback_index_over_plain_http_is_allowed(updater, tmp_path, monkeypa
     _receipt(tmp_path, monkeypatch, _index_receipt(links=f'["{local}"]'))
     selfupdate.on_response("GET", STALE)
     assert updater.run.installs == [
-        [*INDEX_COMMAND[:-3], "--find-links", local, "ream"]
+        [*INDEX_COMMAND[:-3], "--find-links", local, "ream-artifacts"]
     ]
     selfupdate.os.environ.pop("REAM_SELF_UPDATED", None)
 
@@ -824,15 +1219,37 @@ def test_the_install_environment_has_no_key_or_ream_variables(updater, monkeypat
     assert all("env" in kw for _, kw in updater.run.calls)
 
 
-def test_the_tool_directory_name_comes_from_where_the_tool_lives(
+def test_the_installed_copy_is_asked_under_the_new_install_name(updater):
+    """An update from any old name leaves the tool in a directory named `ream-artifacts`."""
+    assert selfupdate._installed_level() == clientlevel.CLIENT_LEVEL
+    python = [c[0] for c, _ in updater.run.calls if c[0].endswith("/python")]
+    assert python == ["/tools/ream-artifacts/bin/python"]
+
+
+def test_a_source_that_still_builds_the_old_name_is_asked_where_this_process_lives(
     updater, tmp_path, monkeypatch
 ):
     env = tmp_path / "tools" / "artifacts"
     env.mkdir(parents=True)
     monkeypatch.setattr(selfupdate.sys, "prefix", str(env))
+    answers = iter(
+        ["x", str(clientlevel.CLIENT_LEVEL)]
+    )  # the first directory: no answer
+
+    def run(command, **kwargs):
+        done = updater.run(command, **kwargs)
+        if command[0].endswith("/python"):
+            done.stdout = next(answers) + "\n"
+            done.returncode = 0 if done.stdout.strip() != "x" else 1
+        return done
+
+    monkeypatch.setattr(selfupdate.subprocess, "run", run)
     assert selfupdate._installed_level() == clientlevel.CLIENT_LEVEL
     python = [c[0] for c, _ in updater.run.calls if c[0].endswith("/python")]
-    assert python == ["/tools/artifacts/bin/python"]
+    assert python == [
+        "/tools/ream-artifacts/bin/python",
+        "/tools/artifacts/bin/python",
+    ]
 
 
 def test_a_bare_argv0_is_looked_up_on_path_never_in_the_working_directory(
@@ -1008,7 +1425,13 @@ def _update(updater, tmp_path, monkeypatch, text, headers=STALE):
 
 
 @pytest.mark.parametrize(
-    "again", [(), ('{ name = "ream" }',), ('{ name = "artifacts" }',)]
+    "again",
+    [
+        (),
+        ('{ name = "ream" }',),
+        ('{ name = "artifacts" }',),
+        ('{ name = "ream-artifacts" }',),
+    ],
 )
 def test_a_tool_with_no_plugins_updates_exactly_as_before(
     updater, tmp_path, monkeypatch, again
@@ -1086,13 +1509,15 @@ def test_a_plugin_without_console_scripts_gets_no_executables_flag(
     assert installs and "--with-executables-from" not in installs[0]
 
 
+@pytest.mark.parametrize("main", ["ream", "artifacts", "ream-artifacts"])
 def test_a_plugin_from_the_tools_index_comes_from_the_same_index(
-    updater, tmp_path, monkeypatch
+    updater, tmp_path, monkeypatch, main
 ):
+    """Under an old name or the new one, the plug-ins go with the tool to `ream-artifacts`."""
     text = _tool_receipt(
         '{ name = "house-plugin" }',
         '{ name = "house-plugin" }',
-        main='{ name = "ream" }',
+        main=f'{{ name = "{main}" }}',
         executables_from=("house-plugin",),
         options=INDEX_OPTIONS,
     )
@@ -1104,9 +1529,42 @@ def test_a_plugin_from_the_tools_index_comes_from_the_same_index(
             "house-plugin",
             "--with-executables-from",
             "house-plugin",
-            "ream",
+            "ream-artifacts",
         ]
     ]
+
+
+def test_the_plugins_are_passed_back_again_when_the_old_tool_is_retired(
+    updater, uv_tools, tmp_path, monkeypatch
+):
+    """The second install, the one that puts the commands back, is the first without
+    `--refresh`: same plug-ins, same index, same name."""
+    _old_tool(uv_tools)
+    text = _tool_receipt(
+        '{ name = "house-plugin" }',
+        '{ name = "house-plugin" }',
+        main='{ name = "ream" }',
+        executables_from=("house-plugin",),
+        options=INDEX_OPTIONS,
+    )
+    first, again = _update(updater, tmp_path, monkeypatch, text)
+    assert "--with-executables-from" in again and "--with" in again
+    assert again == [part for part in first if part != "--refresh"]
+    assert again[-1] == "ream-artifacts" and "--no-index" in again
+
+
+def test_a_plugin_that_cannot_be_repeated_still_stops_an_old_tool_from_moving(
+    updater, uv_tools, tmp_path, monkeypatch
+):
+    """A plug-in from a local path stops the update, as before; nothing is uninstalled."""
+    _old_tool(uv_tools)
+    text = _tool_receipt(
+        '{ name = "house-plugin", directory = "/home/x/house-plugin" }',
+        main='{ name = "ream" }',
+        options=INDEX_OPTIONS,
+    )
+    assert _update(updater, tmp_path, monkeypatch, text) == []
+    assert updater.run.uninstalls == []
 
 
 def test_a_plugins_version_and_extras_are_kept(updater, tmp_path, monkeypatch):
@@ -1117,7 +1575,7 @@ def test_a_plugins_version_and_extras_are_kept(updater, tmp_path, monkeypatch):
     )
     installs = _update(updater, tmp_path, monkeypatch, text)
     assert installs == [
-        [*INDEX_COMMAND[:-1], "--with", "house-plugin[a,b]>=1.2,<2", "ream"]
+        [*INDEX_COMMAND[:-1], "--with", "house-plugin[a,b]>=1.2,<2", "ream-artifacts"]
     ]
 
 
