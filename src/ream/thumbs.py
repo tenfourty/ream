@@ -409,6 +409,12 @@ def render_report(
             raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
         )
         errors = console_errors(log_text)
+        seen = {e.split(": ", 1)[-1] for e in errors}
+        errors += [
+            e
+            for e in renderfind.parse_errors(log_text, nonce)
+            if e.split(": ", 1)[-1] not in seen
+        ][: _MAX_ERRORS - len(errors)]
         check = renderfind.parse_check(log_text, nonce)
 
         try:

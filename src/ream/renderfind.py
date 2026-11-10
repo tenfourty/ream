@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import secrets
+from html.parser import HTMLParser
 
 from ream import csp, text
 
@@ -34,6 +35,9 @@ def new_nonce() -> str:
 _SCRIPT = (
     "<script>(function(){var n='%s',log=console.log.bind(console),"
     "s=document.currentScript;if(s&&s.parentNode)s.parentNode.removeChild(s);"
+    "addEventListener('error',function(e){try{if(e&&e.message)log('ream-error '+n+"
+    "' line='+(e.lineno|0)+': '+String(e.message).replace(/[\\\\\"\\r\\n]/g,' ').slice(0,300));}"
+    "catch(x){}},true);"
     "function vis(e){var r=e.getBoundingClientRect(),c=getComputedStyle(e);"
     "return r.width>0&&r.height>0&&c.visibility!=='hidden'&&c.display!=='none'"
     "&&c.opacity!=='0';}"
@@ -53,18 +57,79 @@ def script(nonce: str) -> str:
     return _SCRIPT % nonce
 
 
-_HEAD_OPEN = re.compile(r"<head(?:\s[^>]*)?>", re.IGNORECASE)
-_HTML_OPEN = re.compile(r"<html(?:\s[^>]*)?>", re.IGNORECASE)
+class _Opener(HTMLParser):
+    """Finds where the check script must go, by tokenising the page as a browser
+    would: never by searching the text, which finds "<head" inside a comment or a
+    title, where the script would not run."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.head: tuple[int, int] | None = None  # (line, col) of the tag, and its text
+        self.html: tuple[int, int, str] | None = None
+        self.first: tuple[int, int] | None = None
+        self.raw: str | None = (
+            None  # inside a title or textarea, whose text is not markup
+        )
+        self.done = False
+
+    def handle_starttag(self, tag, attrs):
+        if self.done or self.raw:
+            return
+        pos = self.getpos()
+        text = self.get_starttag_text() or ""
+        if tag == "head":
+            self.head = (*pos, text)
+            self.done = True
+        elif tag == "html":
+            self.html = (*pos, text)
+        elif tag == "body":
+            self.done = True
+            if self.first is None:
+                self.first = pos
+        else:
+            if self.first is None:
+                self.first = pos
+            if tag in ("title", "textarea"):
+                self.raw = tag
+
+    def handle_startendtag(self, tag, attrs):
+        if self.done or self.raw:
+            return
+        if self.first is None and tag not in ("html", "head"):
+            self.first = self.getpos()
+
+    def handle_endtag(self, tag):
+        if self.raw == tag:
+            self.raw = None
+
+
+def _offset(html: str, line: int, col: int) -> int:
+    at = 0
+    for _ in range(line - 1):
+        at = html.index("\n", at) + 1
+    return at + col
 
 
 def inject(html: str, nonce: str) -> str:
-    """`html` with the check script as the first thing in its head. For the
-    render copy only: the stored body is never touched."""
+    """`html` with the check script as the first thing to run: just inside its
+    head, else inside its html element, else before its first element. Found
+    with a tokenizer, so a "<head>" in a comment or a title is never the place.
+    For the render copy only: the stored body is never touched."""
     tag = script(nonce)
-    for opener in (_HEAD_OPEN, _HTML_OPEN):
-        found = opener.search(html)
+    finder = _Opener()
+    try:
+        finder.feed(html)
+        finder.close()
+    except Exception:  # noqa: BLE001 - a page the parser cannot take is still checked
+        return tag + html
+    for found in (finder.head, finder.html):
         if found:
-            return html[: found.end()] + tag + html[found.end() :]
+            line, col, text = found
+            at = _offset(html, line, col) + len(text)
+            return html[:at] + tag + html[at:]
+    if finder.first is not None:
+        at = _offset(html, *finder.first)
+        return html[:at] + tag + html[at:]
     return tag + html
 
 
@@ -85,6 +150,20 @@ def parse_check(stderr: str, nonce: str) -> dict | None:
         return None
     keys = ("text", "media", "height", "scroll", "view")
     return {k: int(v) for k, v in zip(keys, found.groups()[1:], strict=True)}
+
+
+_ERROR = re.compile(r"ream-error ([0-9a-f]{16}) line=(\d{1,9}): ([^\"\n]{0,300})")
+
+
+def parse_errors(stderr: str, nonce: str) -> list[str]:
+    """The script errors the check script itself saw (it listens in the capture
+    phase before any page code, so a page's own `window.onerror` returning true
+    cannot hide one), as "line N: message". Only lines carrying `nonce`."""
+    return [
+        f"line {m.group(2)}: {m.group(3)}"
+        for m in _ERROR.finditer(stderr or "")
+        if m.group(1) == nonce
+    ][:MAX_FINDINGS]
 
 
 # --- static: a file the page points to that Ream does not serve ---------------
@@ -153,11 +232,37 @@ def missing_files(html: str) -> list[str]:
 _LIVE = re.compile(r"\bclaude\s*\.\s*use\s*\(|\bfetch\s*\(|XMLHttpRequest|EventSource")
 
 
+class _Scripts(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.in_script = False
+        self.live = False
+
+    def handle_starttag(self, tag, attrs):
+        self.in_script = tag == "script"
+
+    def handle_endtag(self, tag):
+        if tag == "script":
+            self.in_script = False
+
+    def handle_data(self, data):
+        if self.in_script and _LIVE.search(data):
+            self.live = True
+
+
 def loads_live_data(html: str) -> bool:
-    """Whether the page's script asks Ream for data, which the render (no
-    network) cannot give it. A heuristic: it decides only whether a blank page
-    or a script error is told to the reader or to the agent alone."""
-    return bool(_LIVE.search(html))
+    """Whether the page's SCRIPT asks Ream for data, which the render (no
+    network) cannot give it. Ream keeps no per-page flag for this (a page's
+    connect-src follows whether the version is the live one), so the script is
+    read, not the text or the comments around it. It decides only whether a
+    blank page or a script error is told to the reader or to the agent alone."""
+    reader = _Scripts()
+    try:
+        reader.feed(html)
+        reader.close()
+    except Exception:  # noqa: BLE001
+        return False
+    return reader.live
 
 
 # --- the verdict ----------------------------------------------------------------

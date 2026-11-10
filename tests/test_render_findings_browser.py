@@ -76,3 +76,20 @@ def test_a_normal_page_is_ok_and_its_thumbnail_is_untouched_by_the_check(monkeyp
     monkeypatch.setattr(renderfind, "inject", lambda h, nonce: h)
     without = thumbs.render(html)
     assert with_check is not None and with_check == without
+
+
+def test_an_onerror_that_returns_true_cannot_hide_a_script_error():
+    hiding = page(
+        "<p>words</p><script>window.onerror=function(){return true};throw new Error('boom')</script>"
+    )
+    got, kinds = verdict(hiding)
+    assert got == "broken" and "script_error" in kinds
+
+
+def test_a_head_in_a_title_or_comment_cannot_forge_an_ok():
+    for html in (
+        "<!doctype html><html><head><title>&lt;<head></title></head><body></body></html>",
+        "<!-- <head> --><!doctype html><html><head></head><body></body></html>",
+    ):
+        got, kinds = verdict(html)
+        assert got == "broken" and "blank" in kinds

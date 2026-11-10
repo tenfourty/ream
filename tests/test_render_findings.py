@@ -66,6 +66,46 @@ def test_inject_without_a_head_still_places_it():
     assert out.index("<script>") < out.index("<body>")
 
 
+def test_a_head_inside_a_title_with_no_real_head_is_not_a_head():
+    page = "<html><title><head></title><body>x</body></html>"
+    out = renderfind.inject(page, NONCE)
+    assert out.index("<script>") < out.index("<title>")
+    assert out.replace(renderfind.script(NONCE), "") == page
+
+
+def test_the_forged_head_cases_place_the_script_at_the_real_head():
+    a = renderfind.inject("<html><head><title>&lt;<head></title></head></html>", NONCE)
+    assert a.index("<script>") < a.index("<title>")
+    b = renderfind.inject("<!-- <head> --><html><head></head></html>", NONCE)
+    assert b.index("<script>") > b.index("-->")
+    assert b.index("<script>") < b.index("</head>")
+
+
+def test_a_doctype_and_comments_stay_before_the_script():
+    out = renderfind.inject("<!doctype html><p>hi</p>", NONCE)
+    assert out.startswith("<!doctype html>") and out.index("<script>") < out.index(
+        "<p>"
+    )
+
+
+def test_an_error_listener_is_registered_in_capture_before_page_code():
+    tag = renderfind.script(NONCE)
+    assert "addEventListener('error'" in tag and ",true)" in tag
+
+
+def test_error_lines_with_the_right_nonce_are_read():
+    log = (
+        f'[1:1:0101/000000.1:INFO:CONSOLE:1] "ream-error {NONCE} line=3: boom", source: x (1)\n'
+        f'[1:1:0101/000000.1:INFO:CONSOLE:1] "ream-error {"f" * 16} line=4: forged", source: x (1)\n'
+    )
+    assert renderfind.parse_errors(log, NONCE) == ["line 3: boom"]
+
+
+def test_live_data_is_read_from_scripts_not_from_text_or_comments():
+    assert not renderfind.loads_live_data("<p>we fetch(x) data</p><!-- fetch( -->")
+    assert renderfind.loads_live_data("<script>fetch('/x')</script>")
+
+
 # --- the static missing-file check -------------------------------------------
 
 
