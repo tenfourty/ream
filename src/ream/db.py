@@ -968,6 +968,18 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
     ),
     # 10 Nov 2026: who revoked a key (see schema.sql).
     32: ("alter table agent_key add column revoked_by text",),
+    # 10 Nov 2026: what the whole render check made of a version (see schema.sql).
+    # Numbered 33: 32 is the key-revocation lane's (runcove-5t3oj.56, slice 1).
+    33: (
+        (
+            "alter table version add column render_verdict text"
+            " check (render_verdict in ('ok', 'broken', 'unchecked'))"
+        ),
+        (
+            "alter table version add column render_findings jsonb"
+            " check (render_findings is null or json_valid(render_findings))"
+        ),
+    ),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

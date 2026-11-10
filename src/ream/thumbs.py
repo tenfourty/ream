@@ -52,7 +52,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ream import settings, stamp, store
+from ream import renderfind, settings, stamp, store
 
 log = logging.getLogger("ream.thumbs")
 
@@ -290,6 +290,20 @@ def console_errors(stderr: str) -> list[str]:
     return found
 
 
+class Report(tuple):
+    """`(png or None, script errors)`, which is all most callers unpack, with
+    the check script's numbers (or None: it did not report) kept alongside as
+    `.check`. A tuple, so a caller and a test double that know only two things
+    keep working."""
+
+    check: dict | None
+
+    def __new__(cls, png, errors, check=None):
+        self = super().__new__(cls, (png, errors))
+        self.check = check
+        return self
+
+
 def render(html: str) -> bytes | None:
     """A PNG of the top of `html`, or None.
 
@@ -317,6 +331,9 @@ def render_report(
     # found by the first live preview, 24 Sep 2026, and true of every tile on
     # the wall. A render happens at publish or preview time, so now is the date.
     html = stamp.apply(html, datetime.now(UTC))
+    # The check script goes into the RENDER copy only, never the stored body.
+    nonce = renderfind.new_nonce()
+    html = renderfind.inject(html, nonce)
 
     # ignore_cleanup_errors: a straggler writing into the directory while it is
     # removed raised "Directory not empty" (homelab-o88p); the group is killed
@@ -388,22 +405,24 @@ def render_report(
             log.warning("thumbnail render could not start: %s", exc)
             return None, None
         raw = getattr(done, "stderr", b"") or b""
-        errors = console_errors(
+        log_text = (
             raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
         )
+        errors = console_errors(log_text)
+        check = renderfind.parse_check(log_text, nonce)
 
         try:
             data = shot.read_bytes()
         except OSError:
             log.warning("thumbnail render produced no file")
-            return None, errors
+            return Report(None, errors, check)
 
     # A real PNG or nothing. A zero-byte or truncated file would otherwise be
     # served as a broken image, which looks like the PAGE is broken.
     if not data.startswith(b"\x89PNG\r\n\x1a\n"):
         log.warning("thumbnail render produced %d bytes that are not a PNG", len(data))
-        return None, errors
-    return data, errors
+        return Report(None, errors, check)
+    return Report(data, errors, check)
 
 
 # Bounded retries per artifact version (homelab-o88p). A page whose render keeps
@@ -477,12 +496,21 @@ def render_in_background(db, artifact_id: str, version_n: int, html: str) -> Non
 
     def work() -> None:
         try:
-            png, errors = render_report(html)
+            result = render_report(html)
+            png, errors = result
             _record(key, png is not None)
             if png is not None:
                 store.save_thumbnail(db, artifact_id, version_n, png)
             if errors is not None:
-                store.save_render_errors(db, artifact_id, version_n, errors)
+                verdict, findings = renderfind.assess(
+                    errors,
+                    getattr(result, "check", None),
+                    renderfind.missing_files(html),
+                    renderfind.loads_live_data(html),
+                )
+                store.save_render_errors(
+                    db, artifact_id, version_n, errors, verdict, findings
+                )
         except Exception:  # a decoration may never reach the caller
             log.exception(
                 "thumbnail rendering failed for %s v%s", artifact_id, version_n

@@ -248,6 +248,9 @@ class ArtifactRow:
     # Whether commenting starts "on" or "off" on this page, as its publisher chose (9 Nov 2026);
     # None: not stated, which a reader's page treats as on.
     comments: str | None = None
+    # What the service's own render made of the live version (runcove-5t3oj.56): ok, broken or
+    # unchecked. Unset on a row that does not say; a version never rendered reads `unchecked`.
+    render_verdict: str | None = None
 
 
 COMMENTS_CHOICES = ("on", "off")
@@ -1409,7 +1412,8 @@ def get_owned(
         # route returns the body's current hash, never the body. `get_body()`
         # below is the route that hands the body itself back to its owner.
         revision = conn.execute(
-            "select revision, session from version where artifact_id = %s and n = %s",
+            "select revision, session, render_verdict from version"
+            " where artifact_id = %s and n = %s",
             (row[0], row[4]),
         ).fetchone()
         # Whether HE has read it is the publisher's to know, not every reader's.
@@ -1448,6 +1452,7 @@ def get_owned(
         current_version=row[4],
         revision=revision[0],
         last_session=revision[1],
+        render_verdict=revision[2] or "unchecked",
         updated_at=row[5],
         url=url_for(row[0]),
         page_url=page_url_for(row[0]),
@@ -1715,7 +1720,8 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             " page_read.read_version, page_read.read_at, artifact.agents_can_read,"
             " case when folder.owner = artifact.agent then folder.slug end,"
             " artifact.refresh_every, artifact.checked_at, artifact.check_status,"
-            " artifact.check_note, version.created_at, artifact.comments_default"
+            " artifact.check_note, version.created_at, artifact.comments_default,"
+            " version.render_verdict"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
@@ -1745,6 +1751,7 @@ def list_for_agent(db: Database, agent: str) -> list[ArtifactRow]:
             agents_can_read=row[12],
             folder=row[13],
             comments=row[19],
+            render_verdict=row[20] or "unchecked",
             **_check_fields(row[14:19], row[7], now),
         )
         for row in rows
@@ -1777,7 +1784,8 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
             " page_read.read_version, page_read.read_at, artifact.agents_can_read,"
             " case when folder.owner = artifact.agent then folder.slug end,"
             " artifact.refresh_every, artifact.checked_at, artifact.check_status,"
-            " artifact.check_note, version.created_at, artifact.comments_default"
+            " artifact.check_note, version.created_at, artifact.comments_default,"
+            " version.render_verdict"
             " from artifact"
             " join version on version.artifact_id = artifact.id"
             " and version.n = artifact.current_version"
@@ -1809,6 +1817,7 @@ def list_readable(db: Database, agent: str) -> list[ArtifactRow]:
             agents_can_read=row[12],
             folder=row[13] if row[2] == agent else None,
             comments=row[19],
+            render_verdict=row[20] or "unchecked",
             **_check_fields(row[14:19], row[7], now),
         )
         for row in rows
@@ -2974,27 +2983,52 @@ def transfer(
 
 
 def save_render_errors(
-    db: Database, artifact_id: str, version_n: int, errors: list[str]
+    db: Database,
+    artifact_id: str,
+    version_n: int,
+    errors: list[str],
+    verdict: str | None = None,
+    findings: list[dict] | None = None,
 ) -> None:
     """The page's script errors from its render, kept with that version
-    (homelab-ij8.72). An empty list means it rendered cleanly."""
+    (homelab-ij8.72). An empty list means it rendered cleanly. `verdict` (`ok`,
+    `broken` or `unchecked`) and `findings` are what the whole check made of
+    it (runcove-5t3oj.56); left out, they stay unset and read as `unchecked`."""
+    if verdict not in (None, "ok", "broken", "unchecked"):
+        raise ValueError(f"not a render verdict: {verdict!r}")
     with db.connect() as conn:
         conn.execute(
-            "update version set render_errors = %s, rendered_at = %s"
+            "update version set render_errors = %s, rendered_at = %s,"
+            " render_verdict = %s, render_findings = %s"
             " where artifact_id = %s and n = %s",
-            (jsonb(errors), datetime.now(UTC), artifact_id, version_n),
+            (
+                jsonb(errors),
+                datetime.now(UTC),
+                verdict,
+                jsonb(findings) if findings is not None else None,
+                artifact_id,
+                version_n,
+            ),
         )
 
 
 def render_report(db: Database, artifact_id: str) -> dict:
-    """For the live version: {"rendered": bool, "errors": [...]}. Not rendered
-    means the render has not finished, or this deployment has no browser."""
+    """For the live version: {"rendered": bool, "errors": [...], "verdict":
+    ok|broken|unchecked, "findings": [{kind, detail}]}. Not rendered means the
+    render has not finished, or this deployment has no browser: `unchecked`,
+    never `ok`."""
     with db.connect() as conn:
         row = conn.execute(
-            "select v.render_errors, v.rendered_at from artifact a join version v"
+            "select v.render_errors, v.rendered_at, v.render_verdict,"
+            " v.render_findings from artifact a join version v"
             " on v.artifact_id = a.id and v.n = a.current_version where a.id = %s",
             (artifact_id,),
         ).fetchone()
     if row is None or row[1] is None:
-        return {"rendered": False, "errors": []}
-    return {"rendered": True, "errors": list(row[0] or [])}
+        return {"rendered": False, "errors": [], "verdict": "unchecked", "findings": []}
+    return {
+        "rendered": True,
+        "errors": list(row[0] or []),
+        "verdict": row[2] or "unchecked",
+        "findings": list(row[3] or []),
+    }

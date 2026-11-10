@@ -121,6 +121,17 @@ redraws or a status board, on for anything meant to be discussed. Off means no p
 words and nothing inviting a comment; the reader can still turn commenting on for that page, and
 their choice wins. Change it later with `ream publish --update <page-id> --comments on|off`.
 
+## After a publish: the render check
+
+After a publish, Ream renders your page once. A script error, a blank page or a file the page
+points to that it does not have (a relative `src` or `href`) marks the render `broken`; a page
+wider than its window is told to you and nothing more. A render that could not be checked says
+`unchecked`, never fine. `ream publish` prints every finding while it waits; afterwards read
+`GET /pages/<id>/render` (`verdict`, `findings`, `errors`) or `read_page` over MCP
+(`render_verdict`, `render_findings`). `--preview` returns the same findings for a page you have
+not published. A page that fetches its own data cannot load it in the render, so its blank page or
+script error is told to you alone.
+
 ## The loop
 
     ream publish --check page.html                  # what the service would refuse

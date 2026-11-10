@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-10d",
+        "After a publish Ream's render check now says more than script errors: GET /api/v1/pages/ID/render (and read_page over MCP) carry a verdict (ok, broken or unchecked; never ok by default) and findings: a script error, a blank page or a file the page points to that it does not have make it broken; a page wider than its window is told to you alone; a check that could not run is unchecked. ream publish prints every finding while it waits, and --preview and POST /api/v1/preview return the same for a page you have not published. Page rows carry render_verdict. Your tool updates itself to print the new lines.",
+    ),
+    (
         "2026-11-10c",
         "The tool's install name is now `ream-artifacts`: the name `ream` on public PyPI is somebody else's package. Only the install name changes: the `ream` and artifacts-* commands, `import ream` and `import artifacts`, settings and headers are all as they were. Nothing to do: a tool installed under the old name updates itself to `ream-artifacts` the next time it updates, from the same place, and removes the old one. An install from scratch, or a reinstall by hand, uses the line in the onboarding document, which names `ream-artifacts`, from Ream's own index as before.",
     ),

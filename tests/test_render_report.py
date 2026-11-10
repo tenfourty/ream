@@ -62,7 +62,13 @@ def test_the_route_says_rendered_and_what_threw(db, api, monkeypatch):
     page = store.publish(db, "seat", "Board", PAGE)
     monkeypatch.setattr(api_module.thumbs, "available", lambda: True)
     before = api.get(f"/api/v1/artifacts/{page.id}/render", headers=auth).json()
-    assert before == {"rendered": False, "errors": [], "renderer": True}
+    assert before == {
+        "rendered": False,
+        "errors": [],
+        "renderer": True,
+        "verdict": "unchecked",
+        "findings": [],
+    }
     store.save_render_errors(
         db, page.id, 1, ["line 12: Uncaught ReferenceError: chart"]
     )

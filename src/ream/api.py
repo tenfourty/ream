@@ -63,6 +63,7 @@ from ream import (
     ratelimit,
     reach,
     receipts,
+    renderfind,
     review,
     sections,
     store,
@@ -2141,9 +2142,13 @@ def agent_router(
             stored = store.get_body(db, agent, artifact_id, as_reader=True)
         except store.NotFound as exc:
             raise HTTPException(404, "no such page") from exc
+        report = store.render_report(db, artifact_id)
         return {
             **stored.__dict__,
             "warnings": _warnings_for(artifact_id, stored.body),
+            # What the service's own render made of the live version (runcove-5t3oj.56).
+            "render_verdict": report["verdict"],
+            "render_findings": report["findings"],
         }
 
     @router.post("/preview")
@@ -2194,15 +2199,26 @@ def agent_router(
                 503, "another preview is rendering; try again in a few seconds"
             )
         try:
-            png, errors = thumbs.render_report(body, width, height)
+            report = thumbs.render_report(body, width, height)
+            png, errors = report
         finally:
             _PREVIEW_SLOT.release()
+        verdict, findings = "unchecked", []
+        if errors is not None:
+            verdict, findings = renderfind.assess(
+                errors,
+                getattr(report, "check", None),
+                renderfind.missing_files(body),
+                renderfind.loads_live_data(body),
+            )
         return {
             "rendered": png is not None,
             "renderer": True,
             "width": width,
             "height": height,
             "errors": errors,
+            "verdict": verdict,
+            "findings": findings,
             "png_base64": base64.b64encode(png).decode() if png else None,
         }
 

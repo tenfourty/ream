@@ -661,6 +661,14 @@ create table if not exists email_share_device (
 alter table version add column if not exists render_errors jsonb;
 alter table version add column if not exists rendered_at timestamptz;
 
+-- WHAT THE WHOLE RENDER CHECK MADE OF A VERSION (runcove-5t3oj.56, slice 1). `render_verdict`:
+-- ok, broken (a script error, a blank page or a missing file) or unchecked; `render_findings`:
+-- a list of {kind, detail}, at most 10, from renderfind.assess. Null verdict with a render
+-- date is an older render, read as unchecked. Never "ok" by default.
+alter table version add column if not exists render_verdict text
+    check (render_verdict in ('ok', 'broken', 'unchecked'));
+alter table version add column if not exists render_findings jsonb;
+
 -- HOLD OR LIVE (page review step 3, homelab-ij8.108). A mark Jeremy makes
 -- while its page is under review in 'held' mode is invisible to the agent
 -- until his verdict or until he switches to 'live'.

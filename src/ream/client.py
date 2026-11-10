@@ -1310,6 +1310,7 @@ def _preview(file_path: str | None, out: str, width: int, key: str) -> int:
     )
     for error in got.get("errors") or []:
         print(f"script error: {error}", file=sys.stderr)
+    _print_findings(got.get("findings"), "preview: ")
     if not got.get("rendered") or not got.get("png_base64"):
         why = "has no browser" if not got.get("renderer") else "could not render it"
         print(f"no preview: the service {why}", file=sys.stderr)
@@ -1525,6 +1526,26 @@ def _check_page(file_path: str) -> int:
 _RENDER_WAIT_SECONDS = 10
 
 
+_FINDING_WORDS = {
+    "blank": "looks blank",
+    "missing_file": "missing file",
+    "too_wide": "scrolls sideways",
+    "unchecked": "not checked",
+}
+
+
+def _print_findings(findings, prefix: str) -> None:
+    """The render check's findings other than script errors (those have their own
+    lines), one per line on STDERR. `unchecked` says "not checked", never "fine"
+    (runcove-5t3oj.56)."""
+    for item in findings if isinstance(findings, list) else []:
+        if not isinstance(item, dict) or item.get("kind") == "script_error":
+            continue
+        word = _FINDING_WORDS.get(str(item.get("kind")), str(item.get("kind")))
+        detail = str(item.get("detail", ""))
+        print(f"{prefix}render check, {word}: {detail}", file=sys.stderr)
+
+
 def _report_render(artifact_id: str, key: str) -> None:
     """After a publish, wait briefly for the service to render the page, and
     say LOUDLY if its scripts threw (homelab-ij8.72): an error in a page the
@@ -1543,6 +1564,7 @@ def _report_render(artifact_id: str, key: str) -> None:
             return
         if report.get("rendered"):
             errors = report.get("errors") or []
+            _print_findings(report.get("findings"), "")
             if errors:
                 print(
                     f"WARNING: rendered, the page's scripts threw {len(errors)} "
