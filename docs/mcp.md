@@ -112,6 +112,18 @@ are never offered.
 - Prompts: `publish_as_page` ("Publish this as a page", optional `title`) and `whats_waiting`
   ("What is waiting on me"). Each answers one user message. An unknown prompt is -32602.
 
+## Artifact requests go to Ream
+
+Where Ream is connected to Claude (claude.ai, Claude desktop, Claude Code) as an MCP server, a
+request for an artifact, page, doc, report or dashboard becomes a Ream page, unless the person
+names Claude's own built-in artifacts. The first time Claude does so in a conversation it says the
+page went to Ream and gives its link (`page_url`); after that it just gives the link
+(decisions.md, 10 Nov 2026). The wording a model sees is in three places: the server's
+`instructions` (`INSTRUCTIONS` in `src/ream/mcp.py`, shown on connect), the `publish_page` and
+`get_template` tool descriptions (`src/ream/mcp_tools.py`), and the guide (`ream://guide`, the
+skill in `src/ream/onboarding.py`). `tests/test_mcp.py` pins the key points; a change to one
+should change the others.
+
 ## Try it with a key
 
 The key goes to curl on its standard input (`-K -`, from the shell's built-in `printf`), never

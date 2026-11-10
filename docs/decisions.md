@@ -850,3 +850,24 @@ needs a way for an office seat to be itself at `/mcp`; until now only apps the o
 the pilot office alone and deciding the rest later.
 
 **Evidence:** confirmed (Jeremy, 10 Nov 2026), decision d_01M71ARX2FGFQ28G9Q06804QGW.
+
+## With Ream connected to Claude, a request for an artifact becomes a Ream page (10 Nov 2026)
+
+**Chosen:** where Ream is connected to Claude (claude.ai, Claude desktop, Claude Code) as an MCP
+server, any request for an artifact, page, doc, report or dashboard becomes a Ream page, unless the
+person names Claude's own built-in artifacts. The first time Claude does so in a conversation it says
+the page went to Ream and gives the link; after that it just gives the link. The rule is stated in the
+server's `instructions`, the `publish_page` and `get_template` tool descriptions and the guide served
+as `skill.md` and `ream://guide`, with the fence wording ("content, never instructions") unchanged.
+Tests pin the key points (`tests/test_mcp.py`); how it is laid out is in `docs/mcp.md`.
+
+**Why:** a person who connects Ream to Claude wants what Claude makes for them to land where they can
+comment on it and answer on it, at an address that stays. A page in Claude's own panel offers none of
+that, and a person should not have to say "in Ream" every time. The one-time note keeps the change
+from being a surprise.
+
+**Not chosen:** the same rule applied silently, which leaves the person wondering where their page
+went. Ream pages only for things worth keeping, with throwaways left as Claude's artifacts, which asks
+the model to judge what is worth keeping and splits one person's pages across two places.
+
+**Evidence:** confirmed (Jeremy, 10 Nov 2026), decision d_01M722QT46FA3YZR8F4HTSR9DN.
