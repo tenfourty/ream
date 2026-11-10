@@ -915,3 +915,24 @@ machine without Ream's address install it with one line.
 **Evidence:** Jeremy, 10 Nov 2026, decisions d_01M722KZWW0Z97CWYWCZ0M9AQ5, d_01M722M71EX3DJ899RGE1WE02Z,
 d_01M722PV8VRTT81Z8X6WWVJ8ZF, d_01M722PYG8K7JW92VDRHY65059, d_01M722RTPV2CCRZ60SGZDJBPY6, d_01M722W3X8CJFT9AC7W99YVA4M,
 d_01M722W715J66S2MH7577BEEZT, d_01M72320PF4FM5ZGHWYR1HPYDY.
+
+## Public docs teach the PyPI install line; our agents keep the deployment's own index (10 Nov 2026)
+
+**Chosen:** `ream-artifacts` 0.1.0 is on PyPI, published from the public GitHub mirror by trusted
+publishing, and a release is a version bump in `pyproject.toml`. The public docs (the README, which
+is also the PyPI project page, and `docs/` as read on GitHub) teach `uv tool install ream-artifacts`
+from PyPI. What the server serves to agents (agents.txt, skill.md, agent.json and the onboarding
+text) keeps installing from the deployment's own tools index or source, so our agents keep tracking
+`main` with no version bump for each change they need.
+
+**Not chosen:** PyPI everywhere, agents included, with a version bump for every change agents need
+(every agent-facing change would wait on a release). Our own index everywhere, with PyPI only for
+outside readers who happen to find it (the public docs would teach a line that only works with our
+address).
+
+**Why:** a reader outside the deployment has no tools index, so PyPI is the one line that works for
+them; our agents already have the index and gain nothing from waiting on releases. A tool's
+self-update reinstalls from wherever it was installed, so a PyPI install updates from PyPI when a
+version is released.
+
+**Evidence:** confirmed (Jeremy, 10 Nov 2026), decision d_01M72A35206RZBQP0F7MS6ZN6N, answer (a).

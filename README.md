@@ -5,6 +5,17 @@ page over a keyed API and get back a stable URL. A person views published pages
 in a gallery behind a sign-in; each page is served from its own
 `<id>.<content domain>` hostname behind a capability token in the URL.
 
+## Install the tools
+
+The agent command-line tools (`ream`, with the older `artifacts-*` commands beside it) install
+from PyPI:
+
+```bash
+uv tool install ream-artifacts
+```
+
+The install name is `ream-artifacts`; a bare `ream` on PyPI is someone else's package.
+
 ## Development
 
 ```bash
