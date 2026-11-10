@@ -936,3 +936,33 @@ self-update reinstalls from wherever it was installed, so a PyPI install updates
 version is released.
 
 **Evidence:** confirmed (Jeremy, 10 Nov 2026), decision d_01M72A35206RZBQP0F7MS6ZN6N, answer (a).
+
+## What each round changed, and which pages render broken (10 Nov 2026)
+
+**Chosen:** four answers on the design for tracker item runcove-5t3oj.56, the page "What each round
+changed, and pages that render broken".
+- **Renders broken** means a script error, a blank page, or a picture or file the page points to that
+  does not exist. A page wider than its window is told to the publishing agent only, not flagged on
+  the wall.
+- **A broken page** shows an amber tag on its gallery tile and a line at the top of the page saying
+  what went wrong. It clears when the agent publishes a version that renders clean.
+- **Opening a page that changed since he last read it** shows a short strip naming the changed
+  parts, each jumping to and briefly outlining its part, plus a "Show marks" link for the words added
+  and removed, on any page.
+- **History:** each page has a History entry in its menu listing each version (when, who, note,
+  changed parts); opening one shows that version with its changes marked.
+
+**Not chosen:**
+- Also flag pages wider than their window on the wall: some wide tables are intended, so it would
+  flag pages that are fine.
+- Flag script errors only: a blank page or a missing picture looks just as broken to him.
+- Show a broken page only on the page itself, or tell only the agent: he would not see it on the wall.
+- The strip alone, with words added and removed kept to review rounds, or nothing new outside review
+  rounds: less than he asked for.
+- No History for now, the strip being enough: it only covers what changed since his last visit.
+
+**Still open:** he asked that the changes strip can be turned off. How far that switch reaches is a
+pending question (decision d_01M72EA9194SDNW911E7KAH9RN); nothing is decided about it yet.
+
+**Evidence:** confirmed (Jeremy, 10 Nov 2026), answer (a) on questions 1, 3, 6 and 9 of the design
+page tycqi4frhe2itzs3n2axy7bhxu.
