@@ -91,8 +91,6 @@ def test_a_plugin_verb_fault_prints_the_type_only(world, capsys):
         "help",
         "connect",
         "republish",
-        "beads-page",
-        "bead-metrics",
         "Bad Name",
         "",
     ],
@@ -104,6 +102,36 @@ def test_a_plugin_may_not_take_a_reserved_or_malformed_verb(world, monkeypatch, 
     with pytest.raises(plugin_cli.PluginError) as err:
         plugin_cli.load_for_cli()
     assert "'toy'" in str(err.value)
+
+
+@pytest.mark.parametrize("verb", ["beads-page", "bead-metrics"])
+def test_the_tracker_verbs_left_the_core_and_a_plugin_may_take_them(
+    world, monkeypatch, capsys, verb
+):
+    # Step 9a: the core no longer owns the tracker-page verbs. With no plug-in they are no
+    # verb; a plug-in (the house's) supplies them under the same names.
+    for old in ("ream.beadpage", "ream.beadmetrics"):
+        assert old not in {m for m, _ in cli._OTHER.values()}
+    assert verb not in plugin_cli.reserved_verbs()
+    world()
+    plugin_cli.load_for_cli()
+    with pytest.raises(SystemExit) as stop:
+        cli.main([verb, "--parent", "x"])
+    assert stop.value.code == 2
+    assert "no such verb" in capsys.readouterr().err
+    seen = {}
+
+    def main():
+        seen["argv"] = list(sys.argv)
+        return 0
+
+    plugin_cli.reset()
+    monkeypatch.setenv("REAM_PLUGINS", "toy")
+    world(EP("toy", lambda api: api.cli(verb, main, "a tracker page")))
+    with pytest.raises(SystemExit) as stop:
+        cli.main([verb, "--parent", "x"])
+    assert stop.value.code == 0
+    assert seen["argv"] == [f"ream {verb}", "--parent", "x"]
 
 
 def test_two_plugins_cannot_share_a_verb(world, monkeypatch):
@@ -405,21 +433,21 @@ def test_a_plugin_session_value_must_be_a_plain_label(world, monkeypatch):
 
 
 def test_every_cli_entry_point_loads_the_plugins(monkeypatch):
-    from ream import beadpage, connect_cli, decide, republish
+    from ream import connect_cli, decide, republish
 
     calls = []
     monkeypatch.setattr(sys, "argv", list(sys.argv))
     monkeypatch.setattr(plugin_cli, "load_or_exit", lambda: calls.append("load"))
     monkeypatch.setattr(news, "announce", lambda *a, **k: None)
-    for module in (client, decide, connect_cli, republish, beadpage):
+    for module in (client, decide, connect_cli, republish):
         monkeypatch.setattr(module, "main", lambda *a, **k: 0)
         with pytest.raises(SystemExit):
             module.run()
-    assert calls == ["load"] * 5
+    assert calls == ["load"] * 4
     monkeypatch.setattr(sys, "argv", ["ream", "--help"])
     with pytest.raises(SystemExit):
         cli.main(["--help"])
-    assert calls == ["load"] * 6
+    assert calls == ["load"] * 5
 
 
 def test_a_global_flag_may_come_before_a_plugin_verb(world, monkeypatch):

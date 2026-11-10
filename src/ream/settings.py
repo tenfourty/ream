@@ -181,7 +181,6 @@ class Settings:
     partner_inbound_host: str = ""
     backup_dir: str = ""
     tools_dir: str = "/app/dist"
-    bd_command: str = "bd"
     browser: str = ""
     # The command-line tools' endpoint (`REAM_API`); see HOUSE_DEFAULT_API.
     api_url: str = HOUSE_DEFAULT_API
@@ -569,7 +568,6 @@ _ENV = {
     "partner_inbound_host": "REAM_PARTNER_INBOUND_HOST",
     "backup_dir": "REAM_BACKUP_DIR",
     "tools_dir": "REAM_TOOLS_DIR",
-    "bd_command": "REAM_BD",
     "browser": "REAM_BROWSER",
     "api_url": "REAM_API",
     "product": "REAM_PRODUCT",

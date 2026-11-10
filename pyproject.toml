@@ -35,10 +35,8 @@ ream = "ream.cli:main"
 artifacts-admin = "ream.admin:main"
 artifacts-publish = "ream.client:run"
 artifacts-decide = "ream.decide:run"
-artifacts-bead-metrics = "ream.beadmetrics:main"
 artifacts-republish = "ream.republish:run"
 artifacts-connect = "ream.connect_cli:run"
-artifacts-beads-page = "ream.beadpage:run"
 
 # Two top-level packages ship in the one wheel: `ream`, and `artifacts`, the old import
 # name kept for good (a shim whose modules ARE the ream modules).

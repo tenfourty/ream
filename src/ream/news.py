@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-10b",
+        "The tracker-page commands (ream beads-page and ream bead-metrics, and the older artifacts-beads-page and artifacts-bead-metrics) have left the core tool: a deployment that wants them supplies them from a plug-in under the same names, with the same flags and the same output, and REAM_BD (or ARTIFACTS_BD) still names the bd program but is now read by that plug-in. Without the plug-in installed beside the tool, ream beads-page answers 'no such verb' and artifacts-beads-page is not found, and a render line in pages.toml that runs either fails. If you use them, reinstall the tool with your deployment's plug-in, as its install line says; if you do not, nothing changes.",
+    ),
+    (
         "2026-11-10",
         'New verb for a Claude Code session that connects to Ream\'s MCP server: ream mcp-headers prints the request headers as one JSON line, your key as Authorization and X-Ream-Session when REAM_SESSION is set, for the server entry\'s headersHelper, so setup is the same on every machine: claude mcp add-json --scope local ream \'{"type":"http","url":"<gallery>/mcp","headersHelper":"ream mcp-headers"}\'. It finds the key where the other verbs do (--key-file, --key-fd, REAM_KEY_FILE, REAM_KEY_FD, else ~/.config/artifacts/key), makes no request, and never prints the key anywhere but that one line of stdout (see docs/mcp.md). The server must take agent keys at /mcp. Your tool updates itself to learn the verb.',
     ),
