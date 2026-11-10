@@ -4,12 +4,13 @@ A plug-in adds what is particular to one deployment (a chat bridge, a mail sende
 scanner, a house command) without touching the core. The core runs with none installed; a plug-in
 is installed beside it and found at start-up.
 
-Status, 8 Nov 2026: the loader and the whole interface are built and on `main` (steps 1 to 7 of
-`docs/agent/specs/2026-11-04-core-and-plugins-design.md`). **Step 8 (the separate plug-in repo and
-its image pipeline) and step 9 (moving the house code out of the core) are not done.** Today the
-house sinks (`nudge`, `partner`), the `slack` answer source, the GitGuardian scanner, Mailgun and
-the two tracker commands are still inside the core; no plug-in is installed in production. Write
-against this guide for new code; do not expect the house modules to have moved. The API is
+Status, 10 Nov 2026: the loader and the whole interface are built and on `main` (steps 1 to 7 of
+`docs/agent/specs/2026-11-04-core-and-plugins-design.md`), and the house's plug-in repo
+(`ream-homelab`, step 8) exists with its first plug-in. **Step 9 (moving the house code out of the
+core) is under way, one slice at a time:** the tracker-page commands (`beads-page`, `bead-metrics`)
+have left the core for the house's `tracker-pages` plug-in (9a); the house sinks (`nudge`, `partner`),
+the `slack` answer source, the GitGuardian scanner and Mailgun are still inside the core. Write
+against this guide for new code; do not expect the other house modules to have moved yet. The API is
 versioned (below), but only we use it: there is no promise to third parties yet.
 
 ## What a plug-in is
@@ -314,8 +315,8 @@ def main():                           # called as a console script: reads sys.ar
 ```
 
 `api.cli(name, main, help)` adds `ream <name>`. `name` matches `[a-z][a-z0-9-]{0,31}`, is not a
-verb the core owns (`publish`, the decide verbs, `admin`, `republish`, `connect`, `beads-page`,
-`bead-metrics`, `mcp-headers`, `help`) and is not taken by another plug-in. `main()` is called with no
+verb the core owns (`publish`, the decide verbs, `admin`, `republish`, `connect`, `mcp-headers`,
+`help`) and is not taken by another plug-in. `main()` is called with no
 arguments as a console script is: `sys.argv[0]` reads `ream <name>` and the return value is the
 exit status. If it raises, the tool prints the exception's type only and exits 1. `help` is one
 printable line of at most 200 characters; `ream --help` gains a "From plug-ins" section only when

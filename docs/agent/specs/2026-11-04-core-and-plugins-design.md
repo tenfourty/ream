@@ -640,8 +640,8 @@ drivers; CI only (not on baba).
    `client_defaults` work, the server registrations are accepted and ignored, so one `register`
    serves both processes. A registration fault stops the tool (exit 2) naming the plug-in and the
    exception's type, never its text. `cli`: a name matching `[a-z][a-z0-9-]{0,31}`, not a verb
-   the core owns (`publish`, the decide verbs, `admin`, `republish`, `connect`, `beads-page`,
-   `bead-metrics`, `help`), not taken by another plug-in; `ream <name>` calls `main()` as a
+   the core owns (`publish`, the decide verbs, `admin`, `republish`, `connect`, `help`; also
+   `beads-page` and `bead-metrics` until 9a removed them), not taken by another plug-in; `ream <name>` calls `main()` as a
    console script is called (argv[0] `ream <name>`), a raise prints the type only (exit 1), and
    `ream --help` gains a "From plug-ins" section only when one is installed (with none the text is
    unchanged, the HELP_DIGEST tests as they were). `client_defaults`: `api_url` (plain http(s),
@@ -654,8 +654,8 @@ drivers; CI only (not on baba).
    words) stay in the core as the lowest default, because with no plug-in the tools must behave
    as today and the house plug-in does not exist before step 9; they go when it does. The
    `session_env` setting (the variable holding the session id) is not made configurable here:
-   `CLAUDE_CODE_SESSION_ID` stays. The tracker-page verbs (`beads-page`, `bead-metrics`) stay
-   core verbs until 9a.
+   `CLAUDE_CODE_SESSION_ID` stays. The tracker-page verbs (`beads-page`, `bead-metrics`) stayed
+   core verbs until 9a, which removed them (see step 9).
    **7b part 5 built (`ci/slice7b-part5`); slice 7b is complete.** Breaker state and plug-in
    failure counts now live in the database: tables `sink_breaker` (sink, failures, open_until,
    failed_keys, opened_at) and `plugin_failure` (plugin, interface, failures), SQLite step 22,
@@ -725,12 +725,30 @@ drivers; CI only (not on baba).
    test job now installs the core named in `core.lock` before testing. **Not tested:** the plug-in
    inside the production image, the command through the real `ream` dispatcher with the package
    installed, a real `bd`.
-   **9a, second half (not built):** announce in `news` first; delete `beadpage.py`, `beadmetrics.py`,
-   their tests, the two `artifacts-*` console scripts, the `beads-page`/`bead-metrics` entries in
-   `cli.py`'s verb table and help, and `bd_command`; in the same step the plug-in takes the old
-   names (`beads-page`, `bead-metrics`, `artifacts-beads-page`, `artifacts-bead-metrics`) and drops
-   the `tracker-*` ones; agents reinstall (`uv tool install ... --force`, with the plug-in) and the
-   `render` lines in `pages.toml` keep working. Do it only after the deployed behaviour is confirmed.
+   **9a, second half, core side built (`ci/step-9a-second-half`, 10 Nov 2026; ea45bee; not on main).**
+   Planned as: announce in `news` first; delete `beadpage.py`, `beadmetrics.py`, their tests, the two
+   `artifacts-*` console scripts, the `beads-page`/`bead-metrics` entries in `cli.py`'s verb table and
+   help, and `bd_command`; in the same step the plug-in takes the old names (`beads-page`,
+   `bead-metrics`, `artifacts-beads-page`, `artifacts-bead-metrics`) and drops the `tracker-*` ones;
+   agents reinstall (`uv tool install ... --force`, with the plug-in) and the `render` lines in
+   `pages.toml` keep working. Do it only after the deployed behaviour is confirmed. **Done in core:**
+   news entry `2026-11-10b` (generic: names no house plug-in), in the same commit; deleted the two
+   modules, their two test files, the two console scripts in `pyproject.toml`, the two entries in
+   `cli.py`'s `_OTHER` and the two help lines, and the `bd_command` setting (`REAM_BD` and
+   `ARTIFACTS_BD` are read by the plug-in alone now; a server that still sets them ignores them).
+   `plugin_cli.reserved_verbs()` is built from `_OTHER`, so it stopped reserving `beads-page` and
+   `bead-metrics` by itself, which is what lets the plug-in take them back; a test pins both that and
+   what core alone does (below). **What the old names do now:** with no plug-in, `ream beads-page`
+   and `ream bead-metrics` are no verb (exit 2, "no such verb" and the help), and
+   `artifacts-beads-page` and `artifacts-bead-metrics` are not installed. Core carries no hint
+   message for them, because a hint would have to name the house plug-in. **Not done, in
+   ream-homelab (the other half of "the same step"):** the plug-in registers `beads-page` and
+   `bead-metrics`, ships the console scripts `artifacts-beads-page` and `artifacts-bead-metrics`
+   in place of `ream-tracker-page` and `ream-tracker-metrics`, and drops the `tracker-*` names. Until
+   that lands and an agent's tool is reinstalled with the plug-in, an agent whose tool updates to
+   this core has no tracker-page command at all, and a `render` line using one fails. **Not tested:**
+   the plug-in under the real dispatcher with the old names, a real `bd`, and a `render` line run by
+   `artifacts-republish` after the move.
 10. **Docs and decisions.** `docs/decisions.md` entry for the core-and-plug-ins split, the design
     doc's extension section, a plug-in author guide, the office doc's deployment paragraph.
     (Docs also land with each slice above; this is the consolidation.)
