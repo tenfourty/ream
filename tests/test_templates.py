@@ -23,7 +23,6 @@ from ream import csp, stamp
 REPO = Path(__file__).resolve().parent.parent
 CANON = REPO / "src" / "ream" / "templates"
 SHARED = CANON / "_shared.css"
-SKILL_COPIES = REPO / ".claude" / "skills" / "lab-artifacts" / "templates"
 
 BEGIN = "/* ==== shared: begin — do not edit here; edit _shared.css and re-sync ==== */"
 END = "/* ==== shared: end ==== */"
@@ -179,28 +178,6 @@ def test_the_shared_block_is_the_shared_block(path: Path):
         "\n"
     ), (
         f"{path.name}: the shared block has drifted from _shared.css — "
-        "run scripts/sync-templates.py"
-    )
-
-
-@pytest.mark.parametrize("path", TEMPLATES, ids=lambda p: p.stem)
-def test_the_skill_directory_carries_the_same_bytes(path: Path):
-    """An agent reading the skill gets what the API would serve it, exactly."""
-    copy = SKILL_COPIES / path.name
-    assert copy.is_file(), f"{copy} is missing — run scripts/sync-templates.py"
-    from ream import settings, textvars
-
-    with settings.override(
-        owner_id="jeremy",
-        owner_name="Jeremy",
-        owner_pronoun="he",
-        gallery_origin="https://artifacts.tenfourty.site",
-        footer="Published from BABA through the homelab artifacts service.",
-        host_label="BABA",
-    ):
-        wanted = textvars.render(path.read_text(encoding="utf-8"))
-    assert copy.read_text(encoding="utf-8") == wanted, (
-        f"{copy.name} has drifted from the canonical template — "
         "run scripts/sync-templates.py"
     )
 

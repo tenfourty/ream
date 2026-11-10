@@ -135,7 +135,7 @@ def gallery_headers() -> dict[str, str]:
 
 
 # The gallery's own look. It carries the SAME token names as the page design
-# system in .claude/skills/lab-artifacts/design-system.md, so the chrome and the
+# system in src/ream/templates/_shared.css, so the chrome and the
 # page it frames read as one document rather than two products -- Jeremy, 19 Sep
 # 2026, on the first framed board: "page is ugly ... I don't see why questions are
 # in the header and not on the page". Inline because the gallery CSP allows

@@ -141,15 +141,14 @@ def test_every_shipped_template_is_clean(name):
     assert traps.check((TEMPLATES / name).read_text()) == []
 
 
-def test_the_skeleton_is_caught_because_it_is_the_one_that_bit(tmp_path):
-    """The bare `template.html` in the skill is the file the first board was
-    built from, and it still carries PAGE TITLE in both places on purpose --
-    it is a skeleton. This is the check that would have stopped it reaching
-    Jeremy's browser tab."""
-    skeleton = pathlib.Path(".claude/skills/lab-artifacts/template.html")
-    if not skeleton.exists():  # pragma: no cover - the skill may not be checked out
-        pytest.skip("the skill's skeleton is not in this tree")
-    found = traps.check(skeleton.read_text())
+def test_the_skeleton_is_caught_because_it_is_the_one_that_bit():
+    """A bare skeleton still carries PAGE TITLE in both places on purpose -- it is
+    a skeleton. The first board was built from one, and this is the check that
+    would have stopped it reaching the reader's browser tab."""
+    skeleton = page(
+        head="<title>PAGE TITLE</title>", body="<h1>PAGE TITLE</h1>\n<p>Words.</p>"
+    )
+    found = traps.check(skeleton)
     assert [w.shape for w in found] == ["placeholder_title", "placeholder_title"]
 
 

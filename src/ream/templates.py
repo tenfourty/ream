@@ -1,10 +1,11 @@
 """The templates an agent starts a page from, served with its key.
 
 homelab-ij8.69. The templates are files in this package, so the wheel carries
-them and the same bytes reach an agent three ways: the skill directory in this
-repo, the skill directory in the homelab, and these two routes. The skill
-directories are copies kept in step by `scripts/sync-templates.py` and guarded by
-a test; THESE are the canonical bytes.
+them and the same bytes reach an agent two ways: a skill directory a deployment
+keeps, and these two routes. A skill directory is a copy of these files with the
+deployment's own words filled in; THESE are the canonical bytes, and
+`scripts/sync-templates.py` keeps their shared stylesheet block in step, guarded by
+a test.
 
 The routes exist because a skill directory is a Claude Code notion. Jeremy's
 brief is that this has to work for "agents anywhere that I give access to", and

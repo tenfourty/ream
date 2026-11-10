@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Splice the shared stylesheet into every template, then fan them out.
+"""Splice the shared stylesheet into every template.
 
 Templates are self-contained files on purpose: an agent opens one in a browser
 with nothing installed, which is the property that makes the reference repo this
@@ -18,6 +18,10 @@ Run it after editing `_shared.css`, or after adding a template. Then run
 from what this script would write — so a template edited by hand and not synced
 is caught, not shipped.
 
+A deployment that keeps filled-in copies of the templates (a skill directory with
+its own words in) makes them from these canonical files with its own script; none
+is kept here.
+
 `--check` writes nothing and exits 1 if anything is out of date.
 """
 
@@ -31,44 +35,7 @@ BEGIN = "/* ==== shared: begin — do not edit here; edit _shared.css and re-syn
 END = "/* ==== shared: end ==== */"
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
-
-from ream import settings, textvars
-
-# The canonical templates carry `{{variables}}` (textvars); the skill directories are THIS
-# house's and carry the words filled in, because an agent copies a skill file as it stands.
-HOUSE = {
-    "owner_id": "jeremy",
-    "owner_name": "Jeremy",
-    "owner_pronoun": "he",
-    "gallery_origin": "https://artifacts.tenfourty.site",
-    "footer": "Published from BABA through the homelab artifacts service.",
-    "host_label": "BABA",
-}
-
-
-def house_copy(text: str) -> str:
-    """The canonical text with this house's words in it, whatever the environment says."""
-    with settings.override(**HOUSE):
-        return textvars.render(text)
-
-
 CANON = REPO / "src" / "ream" / "templates"
-
-# Every place a copy of the templates has to appear. The homelab tree is listed
-# because its own sessions read their skill from there; it is skipped rather
-# than failed when the tree is not on this machine, so a clone of this repo
-# alone still syncs.
-SKILL_DIRS = [
-    REPO / ".claude" / "skills" / "lab-artifacts" / "templates",
-    Path.home()
-    / "repos"
-    / "homelab"
-    / ".claude"
-    / "skills"
-    / "lab-artifacts"
-    / "templates",
-]
 
 
 def templates() -> list[Path]:
@@ -120,20 +87,6 @@ def main() -> int:
                 )
             else:
                 path.write_text(wanted, encoding="utf-8")
-                written += 1
-
-        for skill_dir in SKILL_DIRS:
-            if not skill_dir.parent.exists():
-                continue  # that tree is not on this machine
-            copy = skill_dir / path.name
-            existing = copy.read_text(encoding="utf-8") if copy.exists() else None
-            if existing == house_copy(wanted):
-                continue
-            if args.check:
-                stale.append(f"{copy}: copy differs from canonical")
-            else:
-                skill_dir.mkdir(parents=True, exist_ok=True)
-                copy.write_text(house_copy(wanted), encoding="utf-8")
                 written += 1
 
     if args.check:
