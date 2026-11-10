@@ -54,7 +54,7 @@ def test_the_schema_is_reachable_with_a_key_and_names_the_real_routes(client, db
 def test_the_schema_needs_a_key(client):
     """The prefix it lives under is bypassed by Authelia, so this route's own
     check is the only thing between the shape of this API and any device on
-    the LAN."""
+    the local network."""
     response = client.get("/api/v1/openapi.json")
 
     assert response.status_code == 401

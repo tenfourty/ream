@@ -480,7 +480,7 @@ def pytest_xdist_auto_num_workers(config) -> int | None:
     """`-n auto` means one worker per CPU the process may run on, not one per
     physical core (xdist's default, with psutil installed). Most of a test's
     time here is spent waiting -- on Postgres, on a live server thread, on a
-    subprocess -- so a second worker per core fills the gaps: measured on baba
+    subprocess -- so a second worker per core fills the gaps: measured on the management machine
     (4 cores, 8 threads) 30 Sep 2026, 8 workers averaged 43 s over three runs
     where 4 averaged 48 s, alternated under the same load. `--maxprocesses`
     still caps it (CI passes 5), and

@@ -1,9 +1,9 @@
 """The nudge transport: `emit` tells a LOCAL session -- the operator's inbox on
-baba -- to go read the journal (`events.py`) sooner, rather than waiting for its
+the management machine -- to go read the journal (`events.py`) sooner, rather than waiting for its
 next poll. It is an optimisation layered on top of that journal, never the
 mechanism itself: an agent with no inbound path to it (anywhere Jeremy gives it
 access, per his own requirement) still gets every event through `GET
-/api/v1/events?since=<seq>`, and this module's entire job is to make the LAN
+/api/v1/events?since=<seq>`, and this module's entire job is to make the local-network
 case faster, never to be the only way an event reaches anyone.
 
 The one rule that matters more than the shape: a nudge must never turn a
@@ -50,7 +50,7 @@ from ream.events import MAX_NOTE_IN_EVENT
 
 _log = logging.getLogger("ream.nudge")
 
-# Two workers is plenty for a LAN POST that times out in a couple of seconds --
+# Two workers is plenty for a local POST that times out in a couple of seconds --
 # this is a courtesy notification, not a queue anything depends on. The bounded
 # semaphore in front of them (`_slots`) is the "bounded queue" the design calls
 # for: raw ThreadPoolExecutor queues work unboundedly, and an operator inbox
@@ -122,7 +122,7 @@ def _send(url: str, token: str, timeout: float, body: dict, artifact_id: str) ->
     logged the same way: the exception's TYPE and the artifact id, never the
     body, never a header, and never the token."""
     try:
-        request = urllib.request.Request(  # noqa: S310 -- a fixed LAN URL from our own env, never caller input
+        request = urllib.request.Request(  # noqa: S310 -- a fixed local URL from our own env, never caller input
             url,
             data=json.dumps(body).encode("utf-8"),
             method="POST",
@@ -155,7 +155,7 @@ def emit(
 ) -> None:
     """Record that something worth telling the operator about happened.
     `event_id` must be the journal row's `seq` (as a string) -- the receiver on
-    baba fingerprints an event on artifact id + kind + event id, so a retried
+    the management machine fingerprints an event on artifact id + kind + event id, so a retried
     send folds into one mailbox line while two different answers on the same
     page stay two lines. `title`/`summary` are caller-prepared, viewer-typed
     text and are sanitised again here (see `_sanitize`) regardless of what the

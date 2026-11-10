@@ -1,5 +1,5 @@
 """`artifacts-admin new-key` needs no database, so it must run where only the
-client is installed (the uv tool on baba has no psycopg). It used to die on
+client is installed (the uv tool on the management machine has no psycopg). It used to die on
 import: admin.py pulled in the database modules at the top (homelab
 maintainer, 7 Oct 2026, minting retrobrew_maintainer)."""
 

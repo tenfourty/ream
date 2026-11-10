@@ -16,7 +16,7 @@ markup by the gallery.
 
 **Tech Stack:** Python 3.12 (`uv`), FastAPI + uvicorn, psycopg 3 (plain SQL, no ORM), pytest with
 `pgserver` (a real ephemeral Postgres from a wheel — no container, no root; verified working on
-baba 19 Sep), ruff, httpx.
+the management machine, 19 Sep), ruff, httpx.
 
 **Spec:** `docs/plans/2026-09-19-agent-artifacts-design.md` (v3.1). Executors read both.
 
@@ -2553,7 +2553,7 @@ passes on answers as "Jeremy, via claude.ai", with no key. Keys stay for machine
 
 **Rules for every slice.** Each lands on its own, on a `ci/` branch first, with no change for a
 deployment that sets nothing: `/mcp` needs `REAM_MCP_PUBLIC_URL`, the sign-in needs
-`REAM_MCP_SIGN_IN=on`, both off by default. Tests run in CI on both databases (never on baba). New
+`REAM_MCP_SIGN_IN=on`, both off by default. Tests run in CI on both databases (never on the management machine). New
 tables go in `schema.sql` and one new `db._SQLITE_STEPS` step, and join the copier test's list.
 Settings are `Settings` fields with `REAM_*` names in `_ENV`; a half-set group refuses to start.
 Docs land with the code (the agent guide and `agents.txt` from slice 1; the runbook

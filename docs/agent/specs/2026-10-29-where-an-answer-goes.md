@@ -197,7 +197,7 @@ driver):
 
 ## 7. Tests
 
-All run on CI only (AGENTS.md: never on baba), both backends.
+All run on CI only (AGENTS.md: never on the management machine), both backends.
 
 - `tests/test_events.py`: `note_read` with `hold_seconds` sets `held_until` to now + hold + 30 s;
   with 0 it leaves an earlier `held_until` unchanged; `note_hold_end` clears it and does not

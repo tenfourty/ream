@@ -786,7 +786,7 @@ def test_a_connection_lost_mid_response_is_an_http_failure(monkeypatch, failure)
     """urllib wraps only a failure to connect in URLError: a read that times
     out, or a connection dropped after it was made, escapes as itself. The
     answer waiter retries an HTTPFailure and nothing else, so on 22 Oct 2026 a
-    read timeout while baba came back from a reboot killed it with a traceback."""
+    read timeout while the service host came back from a reboot killed it with a traceback."""
 
     class _Drops:
         def open(self, request, timeout=None):

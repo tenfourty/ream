@@ -80,7 +80,7 @@ def create_gallery_app(
     # working, over and over. But a bypassed path is an UNAUTHENTICATED path,
     # so serving it from the router rather than from FastAPI is what keeps
     # "what does this API look like" from being answerable by any device on
-    # the LAN. Every consumer the schema exists for already holds a key.
+    # the local network. Every consumer the schema exists for already holds a key.
     #
     # docs_url/redoc_url stay off: the machine-readable contract is the point,
     # and an interactive UI would be a second surface with no reader.

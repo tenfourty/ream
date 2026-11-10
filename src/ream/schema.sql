@@ -169,7 +169,7 @@ alter table decision add column if not exists acknowledged_by text;
 -- did something it did itself. `seq` is a bigserial: monotonic per database,
 -- never reset, which is what lets `?since=<seq>` be a cursor an agent keeps
 -- rather than a timestamp two events could tie on. This table is read from
--- ANYWHERE with a key (`GET /api/v1/events`); the push to baba's ops inbox
+-- ANYWHERE with a key (`GET /api/v1/events`); the push to the operator's inbox
 -- (`nudge.py`) is only an optimisation layered on top -- if it never fires,
 -- `?since=` still delivers everything.
 --
@@ -371,11 +371,11 @@ create index if not exists artifact_live_idx on artifact (deleted_at)
 
 -- WHO, when three seats share one key (homelab-ij8.32, 21 Sep 2026).
 --
--- Every page on this service is owned by 'baba-operator', because that is the
+-- Every page on this service is owned by one operator seat, because that is the
 -- one key on this machine and every session on it reads the same file. So the
 -- service is not confused about whose work it is -- it is correct, and we are
 -- one agent with three heads. Measured 21 Sep: 4 seat names exist, 1 live key
--- for baba-operator, 10 of the 13 live pages under it.
+-- for that seat, 10 of the 13 live pages under it.
 --
 -- What that costs, in the order it bites:
 --   * A waiter is woken by another seat's decision and cannot tell. Reported
@@ -433,7 +433,7 @@ alter table decision add column if not exists kind text not null default 'questi
 -- behalf, or go and look at a live agent that is not acting.
 --
 -- Keyed on `agent` alone, it answered for whichever of the three sessions
--- sharing baba's one key read most recently. So the alert could report a live
+-- sharing the management machine's one key read most recently. So the alert could report a live
 -- listener while the session that actually asked had been gone for hours --
 -- exactly the wrong answer in the one case the feature exists for. Until
 -- sessions landed this morning there was no way to tell them apart.

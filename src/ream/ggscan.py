@@ -1,4 +1,4 @@
-"""The second opinion on every page: GitGuardian's ggshield, via baba.
+"""The second opinion on every page: GitGuardian's ggshield, via a relay.
 
 homelab-ij8.2. Jeremy's ruling, 24 Sep 2026: every publish, update and preview
 is also checked by ggshield; a finding refuses the page exactly as the built-in
@@ -6,11 +6,11 @@ scanner does; and when ggshield cannot be reached the page publishes on the
 built-in scan alone and that is logged. (The bead first asked for fail-closed;
 the ruling replaced it, with the service already public on the built-in scan.)
 
-WHY A RELAY ON BABA AND NOT GGSHIELD IN THE IMAGE: baba already has ggshield
-installed and authenticated for the commit guards, so the service needs no
-GitGuardian key of its own, and the image carries no credential for an outside
-service. The relay (homelab `scripts/artifacts-ggshield-relay.py`) hands back
-the kind of secret and its line, never the value.
+WHY A RELAY AND NOT GGSHIELD IN THE IMAGE: a machine of the house already has
+ggshield installed and authenticated for the commit guards, so the service needs
+no GitGuardian key of its own, and the image carries no credential for an outside
+service. The relay (the deployment's own script) hands back the kind of secret
+and its line, never the value.
 
 WHY THE ORIGINAL BODY: the bead's critical design point. The built-in scanner
 detags, unescapes and defangs before it matches; handing ggshield those views
@@ -62,8 +62,8 @@ TOKEN_ENV = "REAM_GGSHIELD_TOKEN"  # noqa: S105 -- the variable NAME, not a valu
 # Inside a publish, and under the public ingress's 90 s read timeout with room
 # to spare. A real scan of a 40 KB page takes about two seconds.
 TIMEOUT_SECONDS = 20.0
-# Reaching baba at all gets far less. A firewall that DROPS rather than refuses
-# (baba down, a rule missing) would otherwise hold every publish for the whole
+# Reaching the relay's host at all gets far less. A firewall that DROPS rather than
+# refuses (the host down, a rule missing) would otherwise hold every publish for the whole
 # scan timeout before it fell back to the built-in scan.
 CONNECT_SECONDS = 3.0
 MAX_FINDINGS = 20

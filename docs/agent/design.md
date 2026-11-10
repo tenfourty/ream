@@ -11,7 +11,7 @@ route to real mini-app backends (§9).
 script — publishes a page with one call and gets back a URL that keeps working, that only he can
 open, and whose pages can show live lab data.
 
-**Fact base:** `~/.local/state/homelab-ops/evidence/2026-09-18/agent-artifacts/`
+**Fact base:** the house's evidence notes of 18 Sep 2026 (not in this repo)
 (`00-claude-artifacts-surface.md` — Claude's control plane and runtime contract 0.2.52 with its
 type definitions; `01-prior-art.md` — prior art, threat model, sandboxing, header rule set;
 `02-lab-fit.md` — front door, Authelia, cluster fit, live data; `03-origin-isolation.md` —
@@ -25,7 +25,7 @@ Durable facts move to `docs/services/artifacts/` once it exists. Tracked as bead
 | "artefacts are tied to a claude account… host artefacts via a new app in my homelab" | `cswap` rotates accounts to keep them in tokens, so published pages appear and disappear — two sets, same titles, different ids, within one hour on 18 Sep | The URL and the page's data belong to the lab: our Postgres, our backups, our domain. Nothing about publishing touches a claude.ai login (D3) |
 | "any of my agents… or even possibly agents that are not claude agents" | Claude's publish path is a first-party tool; nothing else can call it | A REST API with per-agent keys is the contract; a CLI and an MCP server are thin clients over it (D3, §4.3) |
 | "publicly exposed via our new warpgate setup" | The front door serves only its own sign-in page today, and Warpgate **refuses API tokens on proxied targets** (our fork, `warpgate-protocol-http/src/catchall.rs`, the `decide_public_target_access` match) — so agents could never publish through it | Two doors (D1): people through the Cloudflare tunnel + Authelia today, moving behind the front door when it carries apps; agents through `/api/v1`, which skips Authelia and checks our own key |
-| "authed via authelia and tied to only my jeremy user" | Authelia's session cookie is scoped `domain: tenfourty.site`, the whole registrable domain. **And there is no `subject:` rule anywhere in the lab's access control**, so every hostname described as "Jeremy only" is in fact open to any two-factor LDAP user (security review, verified) | Gallery stays on `tenfourty.site` where that cookie already belongs (D2), gated by an **explicit `subject: 'user:jeremy'` rule** we add. Page content lives on a different registrable domain, so the cookie never reaches agent-written JavaScript |
+| "authed via authelia and tied to only my jeremy user" | A sign-in alone admits every user the sign-in knows, so "owner only" has to be said as a rule. Ream's hosts allow only the owner: a subject rule names the owner, with an explicit deny after it | The gallery sits behind the sign-in proxy and its hosts allow only the owner (D2). Page content lives on a different registrable domain, so the sign-in cookie never reaches agent-written JavaScript |
 | "cool stuff… showing live data or beads state, lots of nice little mini-apps that are not full apps" | A claude.ai page cannot reach the lab at all | Named read-only feeds, scanned before they leave the feed service, granted per artifact *and per version* (D4, D11, §4.5) |
 | "make sure everything is fully tested and robust and securely reviewed" | The known attacks on Claude's own artifacts are documented and reproducible | Tests first, a browser-driven escape suite of twelve cases, every body scanned, CI gates, and this review repeated before exposure (§6) |
 | "default always private… make some artifacts public if we want… share via email with a magic link" | — | Three visibility levels (D8), changed **only by Jeremy in the gallery**, never by an agent key (D14) |
@@ -144,7 +144,7 @@ public gallery; replacing Grafana or Homepage.
 
 | Address | What it is | Auth |
 |---|---|---|
-| `artifacts.tenfourty.site` | The gallery: list, open, versions and diffs, agent keys, feed grants, visibility, pending-version approvals | Authelia ForwardAuth **with an explicit `subject: 'user:jeremy'` rule** |
+| `artifacts.tenfourty.site` | The gallery: list, open, versions and diffs, agent keys, feed grants, visibility, pending-version approvals | The sign-in proxy (ForwardAuth); the host allows only the owner, by a subject rule with an explicit deny after it |
 | `artifacts.tenfourty.site/api/v1/*` | The agents' door | Authelia `bypass` on the path; `Authorization: Bearer <scoped agent key>`; header identity (`Remote-User`) from a non-Authelia caller is never trusted |
 | `<id>.tenfourty.com` | One origin per artifact: the current page, its files, `/feeds/*`, `/_blob/*`. Version paths serve inert HTML | Private: capability token in the path, `Referrer-Policy: no-referrer`. Never Authelia, never a cookie |
 
@@ -175,7 +175,7 @@ working, and its exposure to cookie planting from a sibling page is a standing e
 sends an edit, not 200 KB) · `GET /artifacts/{id}` · `GET /artifacts` · `DELETE /artifacts/{id}` ·
 `POST /artifacts/{id}/assets` · `GET|PUT /artifacts/{id}/state/*` · `GET
 /artifacts/{id}/versions/{n}` and a diff · `POST /feeds/{name}/push` (authenticated inbound, for
-the two feeds that originate on baba — §4.5).
+the two feeds that originate on the management machine — §4.5).
 
 Every route is scoped to the calling key's own artifacts (D14). Visibility changes and share tokens
 are **not** in this API. Every response carries the artifact's URL; every write records which key,
@@ -204,11 +204,11 @@ outlives it (B4).
 
 | Feed | Source | Path | Note |
 |---|---|---|---|
-| `beads` (homelab) | `bd list --json` on baba | **push**: a timer on baba posts to `/feeds/beads/push` | The homelab tracker is an embedded Dolt database inside the repo on baba (`.beads/embeddeddolt`, verified) — not on the in-cluster server, so no in-cluster feed can read it |
-| `ops-status` | `ops-board.sh --json`, `ops-status.sh --json` on baba | **push**, same endpoint pattern | Snapshot with a timestamp, not live |
+| `beads` (homelab) | `bd list --json` on the management machine | **push**: a timer there posts to `/feeds/beads/push` | The homelab tracker is an embedded database inside a repo on that machine (verified) — not on the in-cluster server, so no in-cluster feed can read it |
+| `ops-status` | the ops board and status scripts' `--json` output, on the management machine | **push**, same endpoint pattern | Snapshot with a timestamp, not live |
 | `metrics` | VictoriaMetrics in-cluster | pull | Allow-listed queries only |
 | `uptime` | Uptime Kuma in-cluster | pull | Status summary only |
-| `beads` (runcove, optional, later) | `beads-dolt`, namespace `ci` | pull | Needs a `beads_reader` user with `SELECT` on `runcove.*` (the operator adds it on request) and an explicit CiliumNetworkPolicy rule for our pod — selector `app.kubernetes.io/name: beads-dolt`. **Do not label our pod into the beads group**; ask for a rule |
+| `beads` (runcove, optional, later) | the tracker's in-cluster server | pull | Needs a read-only user on the tracker's database (the operator adds it on request) and an explicit network-policy rule for our pod. **Do not label our pod into the tracker's group**; ask for a rule |
 
 Rollout order for grants: `ops-status` and `uptime` first; **the beads feed is held until a real
 browser has answered the top-level-navigation question** (§10), because beads free text is the most
@@ -336,8 +336,7 @@ pending versions and the feed guards are written test-first, against fixtures.
 12. Publishing a body containing a known test credential.
 
 ### 6.3 CI gates
-No Authelia-gated Ingress on `tenfourty.com` · the gallery's Authelia rule carries the `subject`
-rule · no agent-authored value rendered as markup in a gallery template · the §5 header set present
+No sign-in-gated Ingress on the content domain · the gallery's sign-in rule names the owner · no agent-authored value rendered as markup in a gallery template · the §5 header set present
 on every content route · the runtime shim absent from version paths · the thumbnailer's egress
 policy deny-all and its service-account token disabled · every `/api/v1` route covered by a
 key-scope test.
@@ -366,9 +365,9 @@ operator at each build-order milestone.
 
 ## 8. What this costs, honestly
 
-No new money: the domain is owned, the certificate is free at one label, and the cluster has room —
-the three Talos nodes sit at 59% / 45% / 62% memory (≈15 GiB each in use, measured 19 Sep), so a
-CNPG instance, a thumbnailer and a third ingress-nginx fit without crowding the operator's board.
+No new money: the domain is owned, the certificate is free at one label, and the cluster has room
+(measured 19 Sep), so a CNPG instance, a thumbnailer and a third ingress-nginx fit without crowding
+the operator's board.
 The real costs are a new public surface on a second domain; a service holding read-only credentials
 for four lab sources; page bodies leaving the lab to be scanned by ggshield (D12, accepted); and
 the maintenance of a runtime shim tracking a pre-1.0 contract we do not control — pinned at 0.2.52,
@@ -388,12 +387,12 @@ Apps protocol as a second runtime. Scheduled refresh and webhooks-in. Email magi
 - **Top-level navigation:** whether the framed-only rule plus the header set actually stops a page
   navigating itself out with data — a real browser answers this, and **the beads feed is held until
   it does**.
-- The cert-manager Cloudflare token's zone scope (recorded 12 Sep 2026 as all 38 zones, **not
-  re-measured**) still covers `tenfourty.com`, and a `*.tenfourty.com` wildcard issues.
+- The certificate manager's DNS token still covers the content domain (**not re-measured**), and a
+  wildcard for it issues.
 - Safari on Jeremy's phone: the gallery framing a page on the other domain, with the path
   capability token, works.
 - **Closed 19 Sep:** ingress-nginx is v1.15.1 (measured), so wildcard hosts are supported; the
-  `beads-dolt` policy selector and the absence of a read-only user are known (§4.5); the Authelia
+  tracker's policy selector and the absence of a read-only user are known (§4.5); the Authelia
   chart cannot host-pin its cookie (B1).
 
 ## 11. Review triage
@@ -422,6 +421,5 @@ in (§10); wording and memory figures (§4.2, §8); WIP stance (§6.5).
 - **B6** — feed content and page state never scanned, while `GET /state/*` is an agent's read-back
   path → local scanner on both, refusing loudly by artifact name (D15).
 
-Also corrected by that review: "Jeremy only" was never true anywhere in the lab — no `subject:`
-rule exists, so gating today is any two-factor LDAP user. The gallery adds one, and the finding
-went to the operator session as a lab-wide issue.
+Also corrected by that review: a sign-in alone does not make a host "owner only". Ream's hosts
+allow only the owner, by a subject rule with an explicit deny after it.

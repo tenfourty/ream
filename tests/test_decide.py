@@ -1,6 +1,6 @@
 """`artifacts-decide`, driven against the real app over real HTTP.
 
-homelab-ij8.24's acceptance criterion is "a seat on baba can pose a decision and
+homelab-ij8.24's acceptance criterion is "a seat on the management machine can pose a decision and
 read the answer back using only the documented commands, with the key never
 appearing on a command line or in a transcript", so that is what these check --
 the round trip end to end, and the key's absence from everything the command

@@ -13,7 +13,7 @@ No arguments. Every seat's hook invocation is identical; the difference lives in
 
     [[page]]
     id     = "y5sx7wwujjy5dszde6tkqgvuf3"
-    render = "python3 /home/tenfourty/repos/homelab/scripts/artifacts-status.py -"
+    render = "python3 /path/to/render-the-page.py -"
 
 `render` writes the page's HTML to stdout; this publishes it as a new version of
 `id`. Several `[[page]]` blocks are fine. The key is never in the config — it

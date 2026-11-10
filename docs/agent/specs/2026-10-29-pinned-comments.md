@@ -463,7 +463,7 @@ Differences from the text above, and why:
 - Tests: `tests/test_comment_images.py` (formats, limits, access, the content origin, the CLI) and
   rows for the two new tables in `tests/test_migrate.py`.
 
-## 9. Tests (written first; run by CI on a `ci/<name>` branch, never on baba)
+## 9. Tests (written first; run by CI on a `ci/<name>` branch, never on the management machine)
 
 - `tests/test_anchors.py`: each step of the resolution order, with the literal inputs the gallery and
   an agent really send (an id that vanished, a duplicated id, a heading renamed, a quote moved under

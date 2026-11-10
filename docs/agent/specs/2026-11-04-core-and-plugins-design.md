@@ -11,7 +11,7 @@ below were re-checked against `main` at `8da2c2c`.
 The service was built for one household and says so everywhere. `"jeremy"` is a literal in about
 25 call sites (some inside SQL); the default origins are `tenfourty.site`; `/api/v1/agents.txt` and
 `skill.md`, which every arriving agent reads, name him, his gallery, Cloudflare and a vault wrapper
-"as on baba"; the CLI help uses his pronoun about 60 times; `'slack'` is a value in a schema
+"as on the management machine"; the CLI help uses his pronoun about 60 times; `'slack'` is a value in a schema
 CHECK; Mailgun, GitGuardian, quarterdeck and a doorbell on one machine are imported by name from
 the middle of the decision code; the two tracker tools ship as console scripts of the core. Anyone
 else who installs it gets a service that is wrong in every sentence and cannot run without those
@@ -437,7 +437,7 @@ re-test the core; they test the house behaviour (envelopes, wording, Mailgun req
 Each slice lands alone, with no behaviour change for us. Every slice that touches served text
 ships a golden test: with our settings, `agents.txt`, `skill.md`, `agent.json`, the eight
 template footers, `news` and the CLI `--help` render byte-identical to today's. Tests on both
-drivers; CI only (not on baba).
+drivers; CI only (not on the management machine).
 
 1. **Owner settings** (first, as ruled; built on `ci/core-slice1-owner`: unset means the neutral
    `owner`/`the owner`/`they`, so a pod without the three variables refuses to start on our database). `settings.py` with the three owner fields,

@@ -206,7 +206,7 @@ def test_placement_rules_in_a_real_browser(tmp_path, monkeypatch):
     a Range painted into it actually sticks.
 
     SKIPPED here, not failed, wherever there is no headless browser -- CI has
-    none. It runs for real, and passes, on baba, where chromium is installed.
+    none. It runs for real, and passes, on the management machine, where chromium is installed.
     """
     monkeypatch.setenv("REAM_GALLERY_ORIGIN", "https://artifacts.tenfourty.site")
     body = "<!doctype html>" + _ARPLACE_CASES

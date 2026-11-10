@@ -2,7 +2,7 @@
 says so in words -- homelab-ij8.100, before the agent API goes on the internet.
 
 The rule every test here leans on: a key that WORKS is never refused. The
-internal ingress may hand every LAN caller to the app from one node address, so
+internal ingress may hand every local caller to the app from one node address, so
 blocking an address outright would let one broken agent lock out the house.
 """
 
@@ -149,7 +149,7 @@ def test_a_burst_of_bad_keys_is_refused_with_429_and_words(db):
 
 
 def test_a_working_key_from_a_blocked_address_is_still_served(db):
-    """The one that matters: a shared LAN address must not become an outage."""
+    """The one that matters: a shared local address must not become an outage."""
     client = _client(db)
     for _ in range(4):
         _bad(client)

@@ -71,7 +71,7 @@ from ream.text import LEADING_DOCTYPE
 # 3 MiB since 28 Sep 2026: an agent's real page hit the old 512 KiB, and
 # Jeremy chose 3 MiB, the most that fits under the ingresses' 4m
 # proxy-body-size with room for JSON escaping (the tools send UTF-8, not
-# \u-escapes, for that reason). Measured on baba at 3 MiB: ordinary HTML
+# \u-escapes, for that reason). Measured on the management machine at 3 MiB: ordinary HTML
 # scans in about 0.3 s, and the worst bodies found (dense entity references,
 # dense hits) take about 1.2 s. ggshield was shown to find a token at the end
 # of a 3 MiB page. It was 512 KiB from 19 Sep, when the bar was 0.5 s at 1 MiB.
@@ -210,7 +210,7 @@ class ArtifactRow:
     # A SEAT IS NOT A SESSION, and on 22 Sep 2026 that cost a wrong attribution:
     # a key is shared by every session on its machine, so `agent` above answers
     # "which key published this" and nothing at all about who was behind it. The
-    # operator's seat listed ten pages under `baba_operator` and could not tell
+    # operator's seat listed ten pages under one operator seat and could not tell
     # which were its own; the cove seat's listing grew a page published by a
     # different session under the same key, and Jeremy attributed it to the
     # wrong one. Worse, four of his answers sat uncollected for days because the

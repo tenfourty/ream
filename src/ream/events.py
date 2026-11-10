@@ -588,7 +588,7 @@ def wait_for_agent(
     This is the mechanism by which an agent anywhere hears about an answer.
     A push has to know an address for every agent; a held request does not --
     the agent is already on the other end of it, so answering it IS the
-    notification, and an agent on a laptop is served exactly like one on baba.
+    notification, and an agent on a laptop is served exactly like one on the management machine.
 
     Returns whatever is there when it gives up, which may be nothing: an empty
     answer means "nothing yet, ask again", never an error, so a caller loops on

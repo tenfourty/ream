@@ -62,7 +62,7 @@ Two consequences for this design, both load-bearing:
   in `hook` and is loud in `watch`. With a departing server now answering 200,
   strictness costs nothing — and a transport timeout is the signature of both
   the failure that lost Jeremy's answers and of a machine that cannot reach the
-  LAN.
+  service's network.
 - **Every deploy that evening silently broke every waiting agent**, and nothing
   anywhere said so. Measured once more at 20:05 CEST, on the live waiter: three
   of its ten rounds died at `300001 ms`, and its closing line still read
@@ -82,7 +82,7 @@ is chosen deliberately: hold at most 240 s against a `wait` the API caps at
 ## What ships
 
 One installer in the client package, because that is what makes this true on
-**any** machine that uses the service rather than on baba:
+**any** machine that uses the service rather than on the management machine:
 
 ```
 artifacts-notify install      # merge hooks into ~/.claude/settings.json
@@ -145,9 +145,9 @@ Hard rules, each because of a failure this repo has already had:
   cursor, or every new session pays three full timeouts before it settles.
   Three consecutive failures and the client stops calling the network, retrying
   once per 10 minutes, reset on the first success. Only `hook` honours it;
-  `watch` never does, so a real LAN outage stays visible to whoever is actually
-  waiting. Its case is **not** "a laptop away from home": the hostname has no
-  public record, so off-LAN normally means NXDOMAIN in milliseconds. It earns
+  `watch` never does, so a real network outage stays visible to whoever is actually
+  waiting. Its case is **not** "a laptop away from home": where the hostname has no
+  public record, being away from the network normally means NXDOMAIN in milliseconds. It earns
   its keep against hijacking resolvers and captive portals — the same adversary
   as the environment section below.
 - **Silent when there is nothing, and silent when there is no key.**
@@ -263,7 +263,7 @@ reads as "Jeremy has not answered".
 What this ships is N copies on N machines whose only healthy output is silence,
 so the channel is named rather than assumed: CI publishes a wheel to the forge
 and a machine installs or updates with `uv tool install --from`. The installed
-copy on baba is already stale — it has no `text.py` — which is the whole
+copy on the management machine is already stale — it has no `text.py` — which is the whole
 argument in one fact.
 
 ## The key this installs
@@ -365,7 +365,7 @@ key check do not hold there.
 # Round two — triage
 
 The review is at
-`~/.local/state/homelab-ops/briefs/2026-09-19-listener-design-review-round2.md`.
+the house's brief of 19 Sep 2026 (not in this repo).
 Its verdict — build the prerequisites only, and the list is wrong — is
 accepted. Two findings are overtaken by measurements taken after it was
 written; everything else is accepted and folded into the body above.
@@ -398,7 +398,7 @@ written; everything else is accepted and folded into the body above.
 | M2-2 | **Accepted** — the seed line says what it skipped, without ids. |
 | M2-3 | **Accepted** — the version header is validated and rejected, not merely capped. |
 | M2-4 | **Accepted** — breaker state per seat per machine, and `watch` never honours it. |
-| M2-5 | **Accepted, and it sharpens the rationale**: the hostname has no public record, so off-LAN is NXDOMAIN in milliseconds. The breaker is against hijacking resolvers and captive portals; written that way so nobody deletes it as useless. |
+| M2-5 | **Accepted, and it sharpens the rationale**: where the hostname has no public record, being away from the network is NXDOMAIN in milliseconds. The breaker is against hijacking resolvers and captive portals; written that way so nobody deletes it as useless. |
 | M2-6 | **Accepted** — the staged rollout is a numbered step with the condition that ends it early. |
 | M2-7 | **Accepted, and already done**: `artifacts-wait.sh` reads `ARTIFACTS_API` first as of `1713297c` tonight, which is why the premise reads stale. Restated as the Python client accepting the same fallback. |
 | M2-8 | **Accepted** — dated, and superseded: `a92adb3` carries both the sanitiser and the shutdown fix. |
@@ -420,7 +420,7 @@ All 22 findings accepted, none dismissed. Retained in brief:
 - **B4** the client version travels with every check.
 - **H1** the cursor advances to what was printed, never to what was fetched.
 - **H2** a first run seeds rather than replaying — relocated by M2-1.
-- **H3** a circuit breaker, so a prompt off the LAN does not pay a timeout.
+- **H3** a circuit breaker, so a prompt away from the service's network does not pay a timeout.
 - **H4** the wrapper succeeds when its target is missing.
 - **H5** parse or refuse, one tagged entry, atomic rename.
 - **H6** neither idle branch is written until the experiment picks one.

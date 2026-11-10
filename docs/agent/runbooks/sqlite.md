@@ -145,7 +145,7 @@ The 20 Oct off-site restore test passed: the newest off-site snapshot (07:44 UTC
 passed the integrity check, and held 22 tables and 4,664 rows, every table at or below the live
 count. Two things to know when running it: compare against the copy Job's counts as a floor, not
 exactly (the app writes between the copy and the snapshot), and point `TMPDIR` at disk, because
-`/tmp` on baba lives in memory and a 3.2 GB restore plus its copy exceeds it.
+`/tmp` on the management machine lives in memory and a 3.2 GB restore plus its copy exceeds it.
 
 **Measured, 20 Oct 2026**: the window took 10 minutes from the first merge to the app ready on
 SQLite (09:29 to 09:39 Paris); the copy itself 3.5 minutes, `verified 22 tables, 4646 rows`

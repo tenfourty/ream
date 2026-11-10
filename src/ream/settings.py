@@ -185,7 +185,7 @@ class Settings:
     # The command-line tools' endpoint (`REAM_API`); see HOUSE_DEFAULT_API.
     api_url: str = HOUSE_DEFAULT_API
     # Served text (3.4): what the service calls itself, the line under every shipped template,
-    # the word after the kind on a template's eyebrow ("DESIGN . BABA"), and the file holding
+    # the word after the kind on a template's eyebrow ("DESIGN . <host label>"), and the file holding
     # the notes about a proxy in front (see textvars.proxy_notes).
     product: str = "artifacts"
     footer: str = ""

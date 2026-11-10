@@ -26,7 +26,7 @@ Also asked for:
 - cove: `--if-revision` by default on whole republishes; a publish warning for a decision slot
   that is not an open question on the page, and the reverse (check against what exists:
   homelab-ij8.50 warns on a slot naming no decision); a server-side nudge for unacknowledged
-  answers, because background `artifacts-decide wait`s were reaped under memory pressure on baba
+  answers, because background `artifacts-decide wait`s were reaped under memory pressure on the management machine
   on 7 Oct; `--preview out.png` (exists).
 - homelab: a timer's publish failure is silent unless the script checks the exit code; a
   server-side "last successful publish" that the stale flag reads would catch it.

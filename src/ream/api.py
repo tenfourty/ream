@@ -1808,8 +1808,8 @@ def agent_router(
 
         Deliberately unauthenticated, and deliberately under /api/v1 as well as
         at /agents.txt on the public API host: /api/v1 is the only prefix
-        Authelia bypasses, so this is the only way an agent on the LAN — which
-        holds no Authelia session and never will — can read it at all. Asking
+        Authelia bypasses, so this is the only way an agent on the local network — which
+        holds no sign-in session and never will — can read it at all. Asking
         for it anywhere else on the gallery's hostname answers a login page.
 
         It is safe to hand to anybody: no key, no token, no database read, no
@@ -1944,7 +1944,7 @@ def agent_router(
         outside it, asking for the schema returned a 302 to a login no key can
         complete. And a bypassed prefix is an unauthenticated prefix, so the
         route carries `caller` like everything else: the shape of this API is
-        not something any device on the LAN should be able to ask for, and
+        not something any device on the local network should be able to ask for, and
         every consumer it exists for already holds a key.
         """
         return request.app.openapi()
@@ -2004,7 +2004,7 @@ def agent_router(
         """Which seat this key is, and what it may do.
 
         Exists because the answer is not obvious and getting it wrong is silent.
-        Every agent on baba reads ~/.config/artifacts/key, which belongs to ONE
+        Every agent on the management machine reads ~/.config/artifacts/key, which belongs to ONE
         seat, so a key holder's assumption about which seat it is can be wrong
         for weeks without anything saying so — and a seat grant is then applied
         to an identity nobody is actually using. Proposed by the Warpgate seat
@@ -2022,7 +2022,7 @@ def agent_router(
 
         Behind the key like everything else. Not because a template is secret --
         it is checked into a repo -- but because an unauthenticated route on this
-        prefix is a route any device on the LAN can reach, and every consumer
+        prefix is a route any device on the local network can reach, and every consumer
         this exists for already holds a key. Consistency here costs nothing and
         removes a thing to reason about.
         """
@@ -3069,7 +3069,7 @@ def agent_router(
                 # sessions looking for a missing grant on 20 Sep 2026; the grant
                 # existed and was on a different seat, because the caller was
                 # using the unsuffixed ~/.config/artifacts/key, which belongs to
-                # baba-operator. Every agent on that box shares that file, so the
+                # one operator seat. Every agent on that box shares that file, so the
                 # seat a key authenticates as is not the seat its holder assumes.
                 # The message is the cheapest place to end that puzzle.
                 raise HTTPException(
@@ -3462,7 +3462,7 @@ def agent_router(
         # Gated identically to /decisions, deliberately: two spellings of the
         # same privilege is how one of them ends up laxer than the other.
         if scope == "all" and not grants.has(db, agent, grants.READ_ALL_DECISIONS):
-            # Name the seat -- see /decisions for why. Every agent on baba
+            # Name the seat -- see /decisions for why. Every agent on the management machine
             # shares one key file, so the seat a key authenticates as is not
             # the seat its holder assumes.
             raise HTTPException(
@@ -3531,7 +3531,7 @@ def agent_router(
         # nudge, not ops." A push needs an address for every agent everywhere,
         # which no agent outside this machine has; a held request needs none --
         # the agent already holds the connection, so answering it IS the nudge,
-        # and it works identically for a session on baba and one on a laptop.
+        # and it works identically for a session on the management machine and one on a laptop.
         #
         # Held in a worker thread (this route is `def`, not `async def`, so
         # FastAPI already runs it off the event loop) and never holding a

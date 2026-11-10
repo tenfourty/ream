@@ -1,7 +1,7 @@
 """Which seat am I, and what may I do — in one request.
 
 Proposed by the Warpgate seat on 20 Sep 2026 after the answer cost an afternoon.
-Every agent on baba reads ~/.config/artifacts/key, which belongs to ONE seat, so
+Every agent on the management machine reads ~/.config/artifacts/key, which belongs to ONE seat, so
 a key holder's belief about which seat it is can be wrong for weeks with nothing
 saying so — and a grant then gets applied to an identity nobody is using. That
 is exactly what happened: `decisions?scope=all` returned 403, the grant existed,

@@ -67,7 +67,7 @@ TIMEOUT_SECONDS = 20
 # memory limit, and the kernel kills the whole container when that is crossed,
 # so one big render takes the gallery down for every reader. That happened on 15
 # Oct 2026: a single 8 MiB publish was OOM-killed at the 1 GiB limit. Measured on
-# baba with chrome-headless-shell, peak memory of one render of a plain table page:
+# the management machine with chrome-headless-shell, peak memory of one render of a plain table page:
 # 1 MiB 442 Mi, 2 MiB 458 Mi, 3 MiB 612 Mi, 8 MiB 1511 Mi. So:
 #   * no picture of a page over RENDER_MAX_BYTES: its tile is the text tile, as
 #     for any failed render (runcove-5t3oj.23);
@@ -96,7 +96,7 @@ RENDER_MAX_RSS_BYTES = 700 * 1024 * 1024
 # DOM and layout memory a JS heap cap does not. Per process, not per group: the
 # renderer is the one a page grows. A cgroup of the browser's own would bound the
 # group, but the pod's /sys/fs/cgroup is read-only and owned by root, so it would
-# need a privileged container (runcove-5t3oj.31, 22 Oct 2026). Measured on baba
+# need a privileged container (runcove-5t3oj.31, 22 Oct 2026). Measured on the management machine
 # that day with chrome-headless-shell, one render at a time:
 #   a 2 MiB table page (then the largest given a picture) fails at 640 MiB, renders
 #   at 768 MiB and above, peak PSS 631-657 MiB;

@@ -469,7 +469,7 @@ def _read_key(path: Path) -> str:
             ) from None
         raise UsageError(
             f"cannot read key file {path}: {exc.strerror}. Where keys are "
-            "vaulted (as on baba), run the command through "
+            "vaulted, run the command through "
             "`ARTIFACTS_SEAT=<seat> artifacts-key -- …`; `artifacts-key "
             "--help` lists the seats. Elsewhere, point --key-file or "
             "--key-fd at your own store."

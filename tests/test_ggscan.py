@@ -173,7 +173,7 @@ def test_not_configured_means_the_built_in_scan_only(api, auth, monkeypatch):
 def test_a_relay_that_swallows_packets_costs_seconds_not_the_scan_timeout(
     monkeypatch,
 ):
-    """baba down, or a firewall rule missing: a DROP, not a refusal. Every
+    """the relay host down, or a firewall rule missing: a DROP, not a refusal. Every
     publish would otherwise wait the full scan timeout."""
     import time
 

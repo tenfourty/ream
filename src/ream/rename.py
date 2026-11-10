@@ -1,8 +1,8 @@
 """Renaming an agent without breaking anything it has published (6 Oct 2026).
 
 Jeremy renamed every permanent agent from "seat" to "<area> maintainer", and
-one of those renames is a MERGE: baba-operator and homelab-ops both become
-homelab-maintainer, one agent with two keys. The rule that shapes all of it:
+one of those renames is a MERGE: two seats both become one maintainer
+agent, one agent with two keys. The rule that shapes all of it:
 nothing already published may break or change owner. So a rename rewrites
 every column whose value is an AGENT NAME -- live rows and history alike --
 in one transaction, and leaves an alias so a name somebody types still means

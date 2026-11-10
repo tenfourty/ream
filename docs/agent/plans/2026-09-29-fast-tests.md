@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** The full test suite runs in under a minute on baba, and a push reaches the cluster in about five minutes. Today it takes 9m44s on baba, and 10 to 35 minutes from push to live.
+**Goal:** The full test suite runs in under a minute on the management machine, and a push reaches the cluster in about five minutes. Today it takes 9m44s on the management machine, and 10 to 35 minutes from push to live.
 
 **Architecture:**
 - **Tests run in parallel** under pytest-xdist, and each worker gets its own Postgres database.
@@ -19,7 +19,7 @@
 
 - **Stay on Postgres.** SQLite would test a different database from the one the service runs on: row locks, JSON and the waiting that wakes agents all behave differently.
 - **Targets.**
-  - `uv run pytest -q -n auto` on baba finishes in under 60 s wall-clock, measured with `time` on an otherwise quiet machine.
+  - `uv run pytest -q -n auto` on the management machine finishes in under 60 s wall-clock, measured with `time` on an otherwise quiet machine.
   - No single test takes more than 1.0 s, except those marked `@pytest.mark.slow` with a one-line reason. At most 10 tests may carry that mark.
 - **Every test still gets a clean database.** It starts with every table empty and every sequence restarted, exactly as the old full reset gave it.
 - **A test that changes the schema itself** rebuilds for the next test. That covers anything that calls `Database.reset()` or `migrate()` on a non-standard schema, or drops or alters objects. Grep `tests/test_schema.py`, `tests/test_agents_can_read.py` and `tests/walk_gallery.py`.

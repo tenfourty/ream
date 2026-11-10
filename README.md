@@ -1,8 +1,8 @@
 # Ream (formerly artifacts)
 
 A self-hosted page publisher: agents publish an HTML
-page over a keyed API and get back a stable URL. Jeremy views published pages
-in an Authelia-gated gallery; each page is served from its own
+page over a keyed API and get back a stable URL. A person views published pages
+in a gallery behind a sign-in; each page is served from its own
 `<id>.<content domain>` hostname behind a capability token in the URL.
 
 ## Development
@@ -22,9 +22,9 @@ export DATABASE_URL=postgresql://...   # a real Postgres; migrate() runs on star
 uv run uvicorn ream.serve:app_from_env --factory --reload
 ```
 
-The router is fail-closed: `/healthz` only answers 200 with
-`Host: artifacts.tenfourty.site` (or whatever `REAM_GALLERY_ORIGIN`
-names) and 404 on anything else, so curl it with that Host header, not the
+The router is fail-closed: `/healthz` only answers 200 with the gallery's own
+`Host` (the host of `REAM_GALLERY_ORIGIN`; `localhost:8000` on a fresh install)
+and 404 on anything else, so curl it with that Host header, not the
 bare address.
 
 ## Mint a key for an agent
@@ -71,8 +71,9 @@ ream publish --list
 Where the key comes from, in the order to prefer:
 
 ```bash
-# A vault hands it over on a descriptor; no cleartext copy exists. On baba:
-ARTIFACTS_SEAT=baba_operator artifacts-key -- ream publish page.html --title "My page"
+# A vault hands it over on a descriptor; no cleartext copy exists. Where keys are
+# vaulted, a wrapper does it (here `artifacts-key`, with your seat's name):
+ARTIFACTS_SEAT=<seat> artifacts-key -- ream publish page.html --title "My page"
 
 # Or any store of your own that can open one:
 ream publish --key-fd 3 page.html --title "My page" 3< <(pass show artifacts/key)
@@ -108,8 +109,9 @@ learn which ids are real.
 ## How deploys happen
 
 Every push to `main` runs `.forgejo/workflows/ci.yml`: tests, then an image
-build pushed to `git.tenfourty.site/runcove/artifacts:<sha12>`, then a pin PR
-on the homelab repo that changes the one `image:` line in
-`k8s/apps/artifacts/artifacts/app/deployment.yaml` to that image, pinned by
-digest (`.forgejo/scripts/pin-pr.sh`). Production moves when that PR is merged;
-Flux applies the homelab repo. `deploy/` in this repo is no longer applied.
+build pushed to the forge's registry as `<repo>:<sha12>`, then a pull request on
+the deployment's own repo that moves its `core.lock` to that image
+(`.forgejo/scripts/core-lock-pr.sh`). That repo builds the deployed image and opens
+the pin PR; production moves when that PR is merged. The runbook is
+`docs/agent/runbooks/image-from-ream-homelab.md`. This repo keeps no deployment
+values: they are in the deployment's own repo.

@@ -218,7 +218,7 @@ def test_each_row_says_whose_it_is_and_on_what(client, db):
 def test_without_the_grant_it_is_refused_and_not_quietly_narrowed(client, db):
     """A caller that asked about every seat and got its own back would believe
     the short list -- the same lie as an empty feed from a broken wait. And the
-    403 names the seat, because every agent on baba shares one key file and the
+    403 names the seat, because every agent on the management machine shares one key file and the
     seat a key authenticates as is not the seat its holder assumes."""
     plain_token, _ = keys.mint(db, agent="no-grant-seat")
     _stranded(db, agent="seat-a", title="Somebody else's")
@@ -272,7 +272,7 @@ def _stranded(db, *, agent: str, title: str):
 def test_another_session_reading_does_not_make_the_asker_look_alive(client, db):
     """THE CASE THIS FEATURE EXISTS FOR, and the one it used to get wrong.
 
-    Three sessions on baba share one key. seat_read was keyed on the agent, so
+    Three sessions on the management machine share one key. seat_read was keyed on the agent, so
     ANY of them reading the feed marked the seat as listening -- and a stranded
     answer would report `stuck` ("a live agent is not acting; go and look")
     when the truth was `no_reader` ("the asker is gone; collect it for them").

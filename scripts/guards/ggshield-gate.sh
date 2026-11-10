@@ -13,7 +13,7 @@
 # and treats "could not scan" as a hard failure, which is where a blind gate
 # is caught.
 #
-# MEASURED on baba, 22 Sep 2026 (ij8.76), against ggshield 1.54.0:
+# MEASURED on the management machine, 22 Sep 2026 (ij8.76), against ggshield 1.54.0:
 #   * clean staged diff                    -> rc 0, "No secrets have been found"
 #   * a throwaway RSA private key staged   -> rc 1, "1 secret detected"
 #   * outside a git repo                   -> rc != 0 with "Not a git directory"

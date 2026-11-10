@@ -734,7 +734,7 @@ The same code, configured differently:
 
 ## 19. Testing
 
-All in CI on both databases (never on baba). The transport and tools against `TestClient` with
+All in CI on both databases (never on the management machine). The transport and tools against `TestClient` with
 recorded requests from each revision; the authorization server against a fake OIDC provider served
 in-process (a stub behind the module's one fetch function, issuing ID tokens with chosen
 claims) and fake client metadata documents on the same seam; the address guard with literal private,

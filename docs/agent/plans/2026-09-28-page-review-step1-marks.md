@@ -677,7 +677,7 @@ than the path.
 - [ ] **Step 2: Run**
 
 Run: `uv run pytest -q tests/test_shim_marks.py -k real_browser`
-Expected: PASS on baba (chromium present). It is SKIPPED in CI without a browser; say so in the
+Expected: PASS on the management machine (chromium present). It is SKIPPED in CI without a browser; say so in the
 test's docstring.
 
 - [ ] **Step 3: Commit**

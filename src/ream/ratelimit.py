@@ -3,7 +3,7 @@
 homelab-ij8.100, 22 Sep 2026. Jeremy made external access the priority, and the
 agent API is about to be reachable from the internet. Every route there
 authenticates a bearer key; until now nothing counted how often a caller got it
-wrong. On the LAN that was defensible -- the possible callers were the machines
+wrong. On a local network that was defensible -- the possible callers were the machines
 in the house. On the internet a failed key is free and silent, and a key is the
 only thing between a stranger and his pages.
 
@@ -15,9 +15,9 @@ told plainly why it is being turned away instead of retrying a 401 for ever.
 WHO IS "A CALLER": the address nginx hands us in `X-Real-IP`, which it sets
 itself and overwrites whatever a client sent. Behind the public ingress that is
 the visitor's real address, recovered from Cloudflare's `CF-Connecting-IP` and
-trusted only from the tunnel's own pods (k8s/flux/platform.yaml, and the
-CiliumNetworkPolicy that makes that CIDR trust safe). Behind the internal
-ingress it is the LAN peer. With no such header -- tests, a direct connection --
+trusted only from the tunnel's own pods (the deployment's platform config, and a
+network policy that makes that CIDR trust safe). Behind the internal
+ingress it is the local-network peer. With no such header -- tests, a direct connection --
 the socket's own peer.
 
 WHAT THIS DELIBERATELY DOES NOT DO, and why:
@@ -26,7 +26,7 @@ WHAT THIS DELIBERATELY DOES NOT DO, and why:
     looked up (one indexed sha256 query), and a valid key is served. The first
     draft refused everything from a blocked address before the database, and
     that would have been an outage generator: the internal ingress's
-    LoadBalancer runs with the default externalTrafficPolicy (Cluster), so LAN
+    LoadBalancer runs with the default externalTrafficPolicy (Cluster), so local
     callers may reach the app SNATed to a node address. One misconfigured agent
     would then have locked every seat in the house out for the cooldown. So a
     block turns a bad key's 401 into a 429 with Retry-After -- a plain "stop" a
