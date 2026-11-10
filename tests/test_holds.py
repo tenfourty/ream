@@ -222,8 +222,11 @@ def _until_waiting_on_a_lock(db, timeout=10.0):
     raise AssertionError("no statement ever waited on a lock")
 
 
-def _gate_after(monkeypatch, module, name):
-    """Wrap module.name so the caller pauses AFTER it returns, until released."""
+def _gate_after(monkeypatch, module, name, seen=None):
+    """Wrap module.name so the caller pauses AFTER it returns, until released.
+    A list passed as `seen` gets what the real function returned, appended
+    before the pause: what the caller was told, read in its own thread, not
+    through a row another session can change once the caller commits."""
     import threading
 
     reached, go = threading.Event(), threading.Event()
@@ -231,6 +234,8 @@ def _gate_after(monkeypatch, module, name):
 
     def wrapped(*args, **kwargs):
         out = real(*args, **kwargs)
+        if seen is not None:
+            seen.append(out)
         reached.set()
         assert go.wait(10)
         return out
@@ -272,7 +277,8 @@ def test_a_verdict_that_waits_for_the_mark_releases_it(db, monkeypatch):
 
     page = _page(db)
     row = decisions.ask_review(db, agent="seat", artifact_id=page.id, mode="held")
-    reached, go = _gate_after(monkeypatch, holds, "page_mode")
+    seen = []
+    reached, go = _gate_after(monkeypatch, holds, "page_mode", seen=seen)
     out = {}
 
     t = threading.Thread(target=lambda: out.update(row=_mark(db, page)))
@@ -287,7 +293,9 @@ def test_a_verdict_that_waits_for_the_mark_releases_it(db, monkeypatch):
     go.set()
     t.join(20)
     verdict.join(20)
-    assert out["row"].held is True
+    # The mark went in held. Not `out["row"].held`: `comments.add` reads the row
+    # back after it commits, and the verdict that was waiting may release it first.
+    assert seen == ["held"]
     [stored] = comments.list_for_artifact(db, page.id)
     assert stored.id == out["row"].id and stored.held is False
     message, _ = review.render(db, row.id, agent="seat")
@@ -506,7 +514,8 @@ def test_an_archive_racing_a_mark_leaves_no_mark_held_on_a_closed_review(
     import threading
 
     page, _row, _ = _held_review(db, marks=1)
-    reached, go = _gate_after(monkeypatch, holds, "page_mode")
+    seen = []
+    reached, go = _gate_after(monkeypatch, holds, "page_mode", seen=seen)
     out = {}
     t = threading.Thread(target=lambda: out.update(row=_mark(db, page)))
     t.start()
@@ -520,7 +529,10 @@ def test_an_archive_racing_a_mark_leaves_no_mark_held_on_a_closed_review(
     go.set()
     t.join(20)
     a.join(20)
-    assert out["row"].held is True
+    # The mark went in held. Not `out["row"].held`: `comments.add` reads the row
+    # back after it commits, and the archive that was waiting may release it first
+    # (CI run 45332 saw exactly that: the row came back held=False).
+    assert seen == ["held"]
     assert not any(_held_flags(db, page).values())
     assert len(_comment_events(db, [out["row"].id])) == 1
 
