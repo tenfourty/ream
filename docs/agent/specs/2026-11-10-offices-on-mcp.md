@@ -1,12 +1,19 @@
 # Offices' Claude sessions on MCP (plan, 10 Nov 2026)
 
-Status: a plan for Jeremy to react to. Nothing here is built, committed or changed in another
-office's files. Direction (decision d_01M6ZWA1YH391DJN6RQVM93B3J, 9 Nov 2026), as I understand it:
-agents stop running out-of-date Ream tools in two steps; step 1, the self-updating `ream` tool, is
-done; step 2 moves each office's Claude session onto Ream's MCP server, while scripts keep the
-self-updating CLI. This plan covers step 2.
+Status: the pilot passed on 10 Nov 2026 (evidence in sections 4 and 7), and the other offices now
+move one at a time, each announced first. Jeremy confirmed the plan on 10 Nov 2026 (decision
+d_01M71ARX2FGFQ28G9Q06804QGW in `docs/decisions.md`). The rest is the plan as first written, apart
+from section 4, steps B and C of section 5, and the ledger at the end of section 7; where the build differs, section 4 says so (the helper is
+`artifacts-key --mcp-headers <seat>`, a mode of the existing wrapper, not a new `ream-mcp-headers`
+script).
 
-Verified by reading this session (code, docs, homelab config); not yet verified by a live call.
+Direction (decision d_01M6ZWA1YH391DJN6RQVM93B3J, 9 Nov 2026), as I understand it: agents stop
+running out-of-date Ream tools in two steps; step 1, the self-updating `ream` tool, is done; step 2
+moves each office's Claude session onto Ream's MCP server, while scripts keep the self-updating
+CLI. This plan covers step 2.
+
+Sections 1 to 3 were verified by reading (code, docs, homelab config); the live call is the pilot
+in section 7.
 
 ## 1. What was found
 
@@ -125,18 +132,43 @@ Headline: **MCP covers publish, update, comment, ask, record and read; it lacks 
 wait, receipts/acks, the review-ask, claims, and file-based publishing.** Gaps 1, 3 and 8 are the
 ones to close (or to decide to live with) before the rest of the offices move.
 
-## 4. What changes in the shared skill
+## 4. The pilot, and what changes in the shared skill
 
-Not edited by me now; these are the changes to propose (the `ream` skill is served by the service
-and in runcove; `lab-artifacts` is the homelab maintainer's):
+**The pilot passed (10 Nov 2026, 00:12 UTC).** This office's own Claude session, signed in to
+`https://ream.tenfourty.site/mcp` as the artifacts maintainer's seat with its own agent key, did the
+whole round over MCP: `whoami`, `publish_page` (comments off), `update_page`, `read_page` with its
+history, and archive (`organise_page`) all worked. Afterwards the key was found in 0 local files and
+in 0 lines of the server pod's logs. Not exercised by the pilot, and left for each office's own
+move (section 7): a question and its answer through `ask` and `whats_new`, and a refused call
+reading as a refusal.
 
-- `ream` skill (service `skill.md` and runcove `skills/ream/SKILL.md`): lead with "if the session
-  has `mcp__ream__*` tools, use them"; keep the `ream <verb>` form as the path for scripts and
-  for a session with no MCP. State the tool names next to each CLI verb once, in a table.
-- `lab-artifacts` skill: the "Keys and seats" section gains the MCP entry and the helper (§2);
-  seat table unchanged; the session label via `X-Ream-Session`; the Telegram and look sections
-  stay. Templates: `get_template` replaces copying `templates/<name>.html` where the page is
-  written in the model anyway.
+**How an office moves.** Offices now move one at a time, each announced before it is made, with the
+order of section 5 (batch 1, then batch 2, off-baba later). Each office sets up its own seat, once,
+in its local scope (not a checked-in file, so no office can publish as another):
+
+```bash
+claude mcp add-json --scope local ream '{"type":"http","url":"https://ream.tenfourty.site/mcp","headersHelper":"artifacts-key --mcp-headers <seat>"}'
+```
+
+`<seat>` is the office's own seat name, for example `artifacts_maintainer` (`artifacts-key --help`
+lists them). As built, the helper is a mode of the existing `artifacts-key` wrapper rather than the
+separate `ream-mcp-headers` script of section 2: it prints the authentication headers itself, so
+the key is on no command line and in no file. The session restarts once to load the tools. Scripts
+and timers keep the self-updating `ream` tool (section 6).
+
+Changes to the shared skill (the `ream` skill is served by the service and in runcove;
+`lab-artifacts` is the homelab maintainer's):
+
+- `ream` skill (service `skill.md` and runcove `skills/ream/SKILL.md`): not changed yet; to propose.
+  Lead with "if the session has `mcp__ream__*` tools, use them"; keep the `ream <verb>` form as the
+  path for scripts and for a session with no MCP. State the tool names next to each CLI verb once,
+  in a table.
+- `lab-artifacts` skill: written, not yet landed. A short section says that in a Claude session the
+  `mcp__ream__*` tools come first once the seat's entry is set up (the command above), that a new
+  page always says whether comments start on or off, and that the session is passed as
+  `<agent>/<session ref>`; scripts keep the CLI. The "Keys and seats" section, the seat table and
+  the Telegram and look sections stay as they are. Templates: `get_template` replaces copying
+  `templates/<name>.html` where the page is written in the model anyway.
 - The rule "run `ream wait` in the background" becomes: wait with the CLI (kept) or poll
   `whats_new` each turn (Q2); the rule's reason (an unread answer is a question never asked) is
   unchanged.
@@ -154,11 +186,12 @@ A. **Prerequisites (before any office moves).**
    2. Ask the homelab maintainer: `REAM_MCP_ACCEPT_KEYS=1` (config), the helper script, and the
       `ream-mcp-headers` seat list. Verify after the pin PR lands, not before.
    3. Decide gaps 1, 3, 8 (Q1, Q2).
-B. **Pilot (artifacts maintainer).** Add the entry in its own scope; run the verification (§7)
-   for a day of real work, alongside `ream` for waiting; fix what breaks.
+B. **Pilot (artifacts maintainer).** Done: passed on 10 Nov 2026 (section 4, ledger in section 7).
+   The entry stays in its own scope, with `ream` kept for waiting.
 C. **Batch 1:** the other seats that already have a vaulted key and use pages often
-   (`homelab_maintainer`, `cove_maintainer`, `warpgate_maintainer`), one at a time, each by that
-   office's own session or by the homelab maintainer; I send each a short how-to message.
+   (`homelab_maintainer`, `cove_maintainer`, `warpgate_maintainer`), one at a time, each announced
+   first and done by that office's own session or by the homelab maintainer; I send each a short
+   how-to message (the setup command in section 4).
 D. **Batch 2:** `qd_maintainer`, `ch_maintainer`, `retrobrew_maintainer`, then offices with no
    key (Q4).
 E. **Off-baba** (jeremys-mac, jbrown-dev): later; `ream connect` keys live in
@@ -196,6 +229,16 @@ gallery, never a key):
 
 Pilot-only additional check: the same flow against the SQLite and Postgres test suites is already
 CI's; the live check is the one in the gallery.
+
+**Pilot ledger (this office, 10 Nov 2026, 00:12 UTC).**
+- Check 2 (`whoami` names the office's own seat) and the working part of check 3: passed. The
+  session published a small page with comments off, updated it, read its history and archived it
+  over MCP. The pilot archived the page rather than deleting it.
+- Check 6 (no key anywhere): passed. The key was found in 0 local files and 0 server pod log lines.
+- Check 1 (`claude mcp list` shows `ream` connected): not recorded separately; the tools loaded
+  after the session restart and every call above went through them.
+- Checks 4 and 5 (an answer reaching the seat through `whats_new`; a wrong seat or revoked key
+  refused): not exercised in the pilot. Each office does them on its own move, announced first.
 
 ## 8. Risks
 
