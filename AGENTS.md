@@ -74,7 +74,7 @@ new name; published pages never change owner by accident.
 | Runbooks (cutover, rollback, backups, restore drill, CI logs) | `docs/agent/runbooks/` |
 | Tests | `tests/` |
 | Container | `Dockerfile` |
-| Deployment values | the homelab repo (`k8s/apps/artifacts/artifacts/app/`); `deploy/` here is no longer applied |
+| Deployment values | the deployment's own repo (for the homelab, the homelab repo); this repo keeps none |
 | CI -> image -> pin PR | `.forgejo/workflows/ci.yml`, `.forgejo/scripts/pin-pr.sh`, `core-lock-pr.sh` |
 | The design this argues from | `docs/agent/design.md` |
 | What was decided and why the other options lost | `docs/decisions.md` |
@@ -148,7 +148,7 @@ CI's `core-bare` job runs the whole suite on both databases with `REAM_PLUGINS=n
 plug-in installed (core stands alone); a plug-in's breaker state and failure counts are shared
 through the `sink_breaker` and `plugin_failure` tables (`sinks.bind`).
 
-**On baba, never run the test suite** (Jeremy, 13 Oct 2026: no test-suite runs there). Push the
+**On the management machine, never run the test suite** (Jeremy, 13 Oct 2026: no test-suite runs there). Push the
 change to a `ci/<name>` branch instead: CI runs the full suite on it and never builds an image or
 deploys from it. Land on `main` once that run is green, then delete the branch.
 Reading a run's log without a browser, safely: `docs/agent/runbooks/ci-logs.md`.
