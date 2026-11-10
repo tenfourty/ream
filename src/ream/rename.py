@@ -18,8 +18,9 @@ named it, and `agent_key.replaces` is a key id.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+from ream import keys
 from ream.db import Database, Rollback
 from ream.keys import (
     AGENT_NAME,
@@ -94,8 +95,31 @@ def release_alias(db: Database, name: str, *, dry_run: bool) -> str:
     return row[0]
 
 
+RECENT_USE = timedelta(hours=24)
+
+
+def live_keys(db: Database, agent: str) -> list[tuple[str, datetime | None]]:
+    """The live keys of `agent` with their last use, oldest first -- what a fold would revoke."""
+    with db.connect() as conn:
+        return [
+            (row[0], row[1])
+            for row in conn.execute(
+                "select id, last_used_at from agent_key"
+                " where agent = %s and revoked_at is null order by created_at, id",
+                (agent,),
+            ).fetchall()
+        ]
+
+
 def rename_agent(
-    db: Database, old: str, new: str, *, dry_run: bool, release_name: bool = False
+    db: Database,
+    old: str,
+    new: str,
+    *,
+    dry_run: bool,
+    release_name: bool = False,
+    revoke_keys: bool = False,
+    force: bool = False,
 ) -> dict[str, int]:
     """Rename agent `old` to `new`, merging into `new` if it already exists.
 
@@ -106,7 +130,11 @@ def rename_agent(
     Returns the rows changed -- or, in a dry run, that would change -- per
     `table.column`, plus `agent_alias` for the alias rows written. Re-running a
     finished rename changes nothing and succeeds. Raises `Refused` for a bad
-    name, `old == new`, a cycle, or an `old` that names nothing at all."""
+    name, `old == new`, a cycle, or an `old` that names nothing at all.
+
+    With `revoke_keys` (a fold) every live key `old` held is revoked afterwards, reason
+    `folded`, actor `admin`, one event each, counted as `agent_key.revoked`; it is refused
+    when any of them was used in the last 24 hours unless `force`, in a dry run too."""
     for name in (old, new):
         if not AGENT_NAME.fullmatch(name):
             raise Refused(
@@ -144,6 +172,26 @@ def rename_agent(
                 f"{new} was itself renamed to {onward[0]}; rename {old} "
                 f"to {onward[0]} instead"
             )
+
+        fold: list[str] = []
+        if revoke_keys:
+            cutoff = datetime.now(UTC) - RECENT_USE
+            for key_id, used in conn.execute(
+                "select id, last_used_at from agent_key"
+                " where agent = %s and revoked_at is null order by created_at, id",
+                (old,),
+            ).fetchall():
+                fold.append(key_id)
+                if (
+                    not force
+                    and used is not None
+                    and (used if used.tzinfo else used.replace(tzinfo=UTC)) > cutoff
+                ):
+                    raise Refused(
+                        f"key {key_id} of {old} was used at {used}, within the last 24 hours; "
+                        "something may still depend on it. Move that user to another key "
+                        "first, or pass --force"
+                    )
 
         for column, extra in _PLAIN:
             table, col = column.split(".")
@@ -184,6 +232,18 @@ def rename_agent(
             "update agent_alias set new = %s where new = %s", (new, old)
         ).rowcount
         counts["agent_alias"] = aliased
+        if revoke_keys:
+            now = datetime.now(UTC)
+            counts["agent_key.revoked"] = sum(
+                keys.revoke_in(
+                    conn,
+                    key_id,
+                    actor="admin",
+                    reason="folded",
+                    now=now,
+                )
+                for key_id in fold
+            )
 
         if dry_run:
             raise Rollback()

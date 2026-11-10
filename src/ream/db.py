@@ -966,6 +966,8 @@ _SQLITE_STEPS: dict[int, tuple[str, ...]] = {
         "alter table agent_key add column retire_after text",
         "alter table connect_request add column origin_key text",
     ),
+    # 10 Nov 2026: who revoked a key (see schema.sql).
+    32: ("alter table agent_key add column revoked_by text",),
 }
 SQLITE_SCHEMA_VERSION = max(_SQLITE_STEPS)
 

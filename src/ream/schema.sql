@@ -1327,3 +1327,6 @@ alter table agent_key add column if not exists retire_after text;
 -- `origin_key`: for a 'self' move, the key that started it. It must still be live when the
 -- move is collected, and revoking it cancels the move; it alone retires.
 alter table connect_request add column if not exists origin_key text;
+-- `agent_key.revoked_by` (10 Nov 2026, runcove-5t3oj.110): who revoked it ('admin', the owner's
+-- id, or the key's own agent for a rotation); with `revoked_reason`, said back in the 401.
+alter table agent_key add column if not exists revoked_by text;

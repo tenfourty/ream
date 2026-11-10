@@ -73,6 +73,10 @@ KINDS = (
     # The agent's earlier keys stopped working because the new machine's key was first used
     # (`keys.first_use`). Same placement as `agent_moved`.
     "agent_keys_retired",
+    # A key was revoked on purpose (10 Nov 2026; `keys.revoke_in`): by an administrator, the owner
+    # on the Machines page, or a fold. Summary names the key id, who and why, never the token.
+    # ref_id is the key id. Same placement as `agent_moved`.
+    "agent_key_revoked",
 )
 
 # The other namespace (core-and-plugins design, 4.1): what the partner bridge carries.

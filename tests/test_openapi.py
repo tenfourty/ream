@@ -63,7 +63,7 @@ def test_the_schema_needs_a_key(client):
 
 def test_a_revoked_key_cannot_read_the_schema(client, db):
     token, key_id = keys.mint(db, agent="ops-seat")
-    keys.revoke(db, key_id)
+    keys.revoke(db, key_id, actor="admin")
 
     response = client.get("/api/v1/openapi.json", headers=auth(token))
 
@@ -94,3 +94,14 @@ def test_the_interactive_docs_stay_off(client):
     assert app.openapi_url is None
     assert client.get("/docs").status_code == 404
     assert client.get("/redoc").status_code == 404
+
+
+def test_a_revoked_keys_401_names_the_reason_it_was_revoked(client, db):
+    token, key_id = keys.mint(db, agent="ops-seat")
+    keys.revoke(db, key_id, actor="admin", reason="folded into cove")
+
+    response = client.get("/api/v1/openapi.json", headers=auth(token))
+
+    assert response.status_code == 401
+    assert "folded into cove" in response.text
+    assert token not in response.text

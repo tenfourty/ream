@@ -159,7 +159,7 @@ def test_a_name_already_connected_is_refused_until_its_key_is_revoked(db, galler
     started = _ask(gallery)
     refused = _approve(gallery, started["code"], name="laptop")
     assert "Approved" not in refused.text and "already an agent" in refused.text
-    keys.revoke(db, key_id)
+    keys.revoke(db, key_id, actor="admin")
     assert "Approved" in _approve(gallery, started["code"], name="laptop").text
 
 

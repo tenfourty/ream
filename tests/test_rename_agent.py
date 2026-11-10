@@ -367,7 +367,7 @@ def test_connecting_a_machine_under_an_old_name_means_the_new_one(db):
     refused = approve(started["code"])
     assert "cove-maintainer is already an agent" in refused.text
     assert "cove-seat is an old name of cove-maintainer" in refused.text
-    keys.revoke(db, key_id)
+    keys.revoke(db, key_id, actor="admin")
     assert "Approved. cove-maintainer" in approve(started["code"]).text
     assert set(_under(db, "cove-seat").values()) == {0}
 
@@ -520,3 +520,81 @@ def test_the_approve_page_says_when_a_name_is_an_old_name_of_another_agent(db):
     # typing the old name into the form is refused (cove-maintainer is in use) and says why
     refused = _approve(gallery, started["code"], "cove-seat")
     assert "cove-seat is an old name of cove-maintainer" in refused.text
+
+
+def _touch(db, key_id: str, when) -> None:
+    with db.connect() as conn:
+        conn.execute(
+            "update agent_key set last_used_at = %s where id = %s", (when, key_id)
+        )
+
+
+def _two_agents(db):
+    old_token, old_key = keys.mint(db, "cove-maintainer")
+    new_token, _ = keys.mint(db, "cove")
+    return old_token, old_key, new_token
+
+
+def test_a_fold_refuses_a_key_used_in_the_last_day_and_force_overrides(
+    db, monkeypatch, capsys
+):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    old_token, old_key, _ = _two_agents(db)
+    _touch(db, old_key, datetime.now(UTC) - timedelta(hours=2))
+
+    with pytest.raises(SystemExit) as refused:
+        admin.main(["rename-agent", "cove-maintainer", "cove", "--revoke-keys"])
+    assert "refused" in str(refused.value) and old_key in str(refused.value)
+    out = capsys.readouterr().out
+    assert f"will revoke key_id={old_key}" in out and "last_used_at=" in out
+    assert keys.verify(db, old_token) is not None  # nothing changed
+
+    with pytest.raises(SystemExit):  # a dry run shows the same refusal
+        admin.main(
+            ["rename-agent", "cove-maintainer", "cove", "--revoke-keys", "--dry-run"]
+        )
+
+    admin.main(["rename-agent", "cove-maintainer", "cove", "--revoke-keys", "--force"])
+    assert keys.verify(db, old_token) is None
+    assert "folded" in keys.refusal_reason(db, old_token)
+    with db.connect() as conn:
+        row = conn.execute(
+            "select revoked_by, revoked_reason from agent_key where id = %s", (old_key,)
+        ).fetchone()
+    assert tuple(row) == ("admin", "folded")
+
+
+def test_a_fold_of_an_idle_key_goes_through_and_a_dry_run_changes_nothing(
+    db, monkeypatch, capsys
+):
+    from ream import store
+
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    old_token, old_key, new_token = _two_agents(db)
+    store.publish(db, "cove", "board", "<p>x</p>")
+    _touch(db, old_key, datetime.now(UTC) - timedelta(days=3))
+
+    admin.main(
+        ["rename-agent", "cove-maintainer", "cove", "--revoke-keys", "--dry-run"]
+    )
+    assert f"will revoke key_id={old_key}" in capsys.readouterr().out
+    assert keys.verify(db, old_token) is not None
+
+    admin.main(["rename-agent", "cove-maintainer", "cove", "--revoke-keys"])
+    assert keys.verify(db, old_token) is None
+    assert keys.verify(db, new_token) is not None
+    with db.connect() as conn:
+        n = conn.execute(
+            "select count(*) from event where kind = 'agent_key_revoked'"
+            " and ref_id = %s",
+            (old_key,),
+        ).fetchone()[0]
+    assert n == 1
+
+
+def test_a_merge_without_the_flag_still_keeps_the_old_key_working(db, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    old_token, old_key, _ = _two_agents(db)
+    _touch(db, old_key, datetime.now(UTC))
+    admin.main(["rename-agent", "cove-maintainer", "cove"])
+    assert keys.verify(db, old_token) is not None

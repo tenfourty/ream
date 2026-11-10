@@ -52,8 +52,12 @@ kubectl -n artifacts exec deploy/artifacts -- artifacts-admin register-key \
   --agent my-agent --sha256 <the printed sha256>
 ```
 
-`artifacts-admin revoke-key <key_id>` and `artifacts-admin list-keys` manage
-keys from there; neither ever prints a token.
+`artifacts-admin revoke-key <key_id> [--reason ...]` and `artifacts-admin list-keys` manage
+keys from there; neither ever prints a token. A revocation records who did it and why, writes an
+`agent_key_revoked` event, and a machine still sending the key is told the reason in its 401.
+`artifacts-admin rename-agent <old> <new> --revoke-keys` (a fold) lists each live key of the old name
+with its last use, and refuses when any was used in the last 24 hours unless `--force`; `--dry-run`
+shows the same list.
 
 ## The skill
 

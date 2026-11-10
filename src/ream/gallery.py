@@ -7135,7 +7135,9 @@ def gallery_router(db: Database) -> APIRouter:
         """Immediate and permanent for that key; the machine can connect again
         with a new code. His pages and its pages are untouched."""
         _same_origin_write(request)
-        done = keys.revoke(db, key_id)
+        done = keys.revoke(
+            db, key_id, actor=settings.owner_id(), reason="revoked on the Machines page"
+        )
         note = (
             "Revoked. That key no longer works."
             if done

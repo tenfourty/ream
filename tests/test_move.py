@@ -235,7 +235,7 @@ def test_an_owner_approved_request_that_expired_is_not_collected(db, gallery):
 def test_revoking_the_originating_key_kills_its_pending_move(db, gallery):
     mine, key_id = _rotating(db, "laptop")
     token = _start(gallery, mine).json()["move_token"]
-    keys.revoke(db, key_id)
+    keys.revoke(db, key_id, actor="admin")
     assert _collect(gallery, token) == {"status": "denied"}
     assert _count(db, "select count(*) from agent_key where agent = 'laptop'") == 1
 

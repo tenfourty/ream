@@ -135,7 +135,7 @@ def test_a_revoked_key_cannot_read_a_body_back(client, db):
     published = client.post(
         "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)
     ).json()
-    keys.revoke(db, key_id)
+    keys.revoke(db, key_id, actor="admin")
 
     response = client.get(
         f"/api/v1/artifacts/{published['id']}/body", headers=auth(token)

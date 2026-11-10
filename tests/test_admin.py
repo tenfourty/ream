@@ -179,3 +179,26 @@ def test_list_keys_never_prints_a_hash(db, monkeypatch, capsys):
     assert key_id in out
     # No 64-char lowercase hex run anywhere in the output.
     assert re.search(r"[0-9a-f]{64}", out) is None
+
+
+def test_revoke_key_records_admin_as_actor_and_the_given_reason(db, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    token, key_id = keys.mint(db, agent=AGENT)
+    main(["revoke-key", key_id, "--reason", "seat retired"])
+    with db.connect() as conn:
+        row = conn.execute(
+            "select revoked_by, revoked_reason from agent_key where id = %s", (key_id,)
+        ).fetchone()
+    assert tuple(row) == ("admin", "seat retired")
+    assert "seat retired" in keys.refusal_reason(db, token)
+
+
+def test_revoke_key_without_a_reason_still_records_one(db, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    _token, key_id = keys.mint(db, agent=AGENT)
+    main(["revoke-key", key_id])
+    with db.connect() as conn:
+        row = conn.execute(
+            "select revoked_by, revoked_reason from agent_key where id = %s", (key_id,)
+        ).fetchone()
+    assert row[0] == "admin" and row[1]

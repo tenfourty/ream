@@ -114,7 +114,12 @@ def cmd_register_key(args: argparse.Namespace) -> None:
 
 def cmd_revoke_key(args: argparse.Namespace) -> None:
     db = _open_db()
-    rows = keys.revoke(db, args.key_id)
+    rows = keys.revoke(
+        db,
+        args.key_id,
+        actor="admin",
+        reason=args.reason or "revoked by an administrator",
+    )
     if rows == 0:
         raise SystemExit(f"no active key with id {args.key_id}")
     agent = keys.agent_of(db, args.key_id)
@@ -242,6 +247,11 @@ def cmd_rename_agent(args: argparse.Namespace) -> None:
     from ream import rename
 
     db = _open_db()
+    if args.revoke_keys:
+        for key_id, used in rename.live_keys(db, args.old):
+            print(
+                f"will revoke key_id={key_id} agent={args.old} last_used_at={used or 'never'}"
+            )
     try:
         counts = rename.rename_agent(
             db,
@@ -249,6 +259,8 @@ def cmd_rename_agent(args: argparse.Namespace) -> None:
             args.new,
             dry_run=args.dry_run,
             release_name=args.release_name,
+            revoke_keys=args.revoke_keys,
+            force=args.force,
         )
     except rename.Refused as exc:
         raise SystemExit(f"refused: {exc}") from None
@@ -339,6 +351,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     revoke_key = sub.add_parser("revoke-key")
     revoke_key.add_argument("key_id")
+    revoke_key.add_argument(
+        "--reason",
+        help="why, recorded with the revocation and said back to a machine that "
+        "still sends the key (never put a secret in it)",
+    )
     revoke_key.set_defaults(func=cmd_revoke_key)
 
     list_keys_parser = sub.add_parser("list-keys")
@@ -404,6 +421,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     rename_agent.add_argument(
         "--dry-run", action="store_true", help="count what would change, change nothing"
+    )
+    rename_agent.add_argument(
+        "--revoke-keys",
+        action="store_true",
+        help="also revoke every live key of the old name (a fold): lists each with its "
+        "last use, and refuses if any was used in the last 24 hours unless --force "
+        "(with --dry-run, shows the same list and the same refusal)",
+    )
+    rename_agent.add_argument(
+        "--force",
+        action="store_true",
+        help="with --revoke-keys, revoke even a key used in the last 24 hours",
     )
     rename_agent.set_defaults(func=cmd_rename_agent)
 

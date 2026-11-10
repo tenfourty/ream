@@ -972,3 +972,12 @@ Options that lost: (a) one wall switch only, with Show changes per page; (b) a p
 
 **Evidence:** confirmed (Jeremy, 10 Nov 2026), answer (a) on questions 1, 3, 6 and 9 of the design
 page tycqi4frhe2itzs3n2axy7bhxu.
+
+## Revoking a key records who and why (10 Nov 2026, runcove-5t3oj.110)
+
+Folding an agent revoked a seat key a timer still used, and the plain revoke left no reason and no
+event, so nobody could say who had cut it. Now every revocation records `revoked_by` and
+`revoked_reason` and writes an `agent_key_revoked` event; the refused request's 401 names the
+reason (never the key, never another agent). `rename-agent --revoke-keys` lists each key with its
+last use and refuses one used in the last 24 hours unless `--force`. A plain rename or merge still
+moves keys and keeps them working.

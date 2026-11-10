@@ -103,7 +103,7 @@ def test_without_a_key_nothing_is_served(client):
 def test_a_revoked_key_stops_working(client, db):
     token, key_id = keys.mint(db, agent="going-away")
     assert client.get("/api/v1/templates", headers=auth(token)).status_code == 200
-    keys.revoke(db, key_id)
+    keys.revoke(db, key_id, actor="admin")
     assert client.get("/api/v1/templates", headers=auth(token)).status_code == 401
 
 

@@ -161,6 +161,14 @@ def refusal_reason(db: Database, token: str) -> str:
             "this key expired: machine keys replace themselves weekly and this one "
             "was not replaced in two weeks. Connect again with artifacts-connect"
         )
+    if revoked_at is not None and reason == "folded":
+        return (
+            "this key was retired when its agent was folded into another. If this "
+            "machine still needs to publish, connect again with artifacts-connect"
+        )
+    if revoked_at is not None and reason and reason != "superseded":
+        # Only this key's own record, said to whoever holds this exact key.
+        return f"this key was revoked: {reason}"
     return "unknown or revoked key"
 
 
@@ -186,15 +194,12 @@ def first_use(db: Database, key: AgentKey) -> None:
         if row is None:
             return
         if row[0]:
-            conn.execute(
-                "update agent_key set revoked_at = %s, revoked_reason = 'replaced'"
-                " where id = %s and revoked_at is null",
-                (now, row[0]),
-            )
+            revoke_in(conn, row[0], actor=key.agent, reason="replaced", now=now)
         retired = conn.execute(
-            "update agent_key set revoked_at = %s, revoked_reason = 'moved'"
-            " where retire_after = %s and revoked_at is null returning id",
-            (now, key.id),
+            "update agent_key set revoked_at = %s, revoked_reason = 'moved',"
+            " revoked_by = %s where retire_after = %s and revoked_at is null"
+            " returning id",
+            (now, key.agent, key.id),
         ).fetchall()
         if retired:
             note_on_latest_page(
@@ -207,7 +212,13 @@ def first_use(db: Database, key: AgentKey) -> None:
 
 
 def note_on_latest_page(
-    conn, agent: str, *, kind: str, summary: str, ref_id: str | None
+    conn,
+    agent: str,
+    *,
+    kind: str,
+    summary: str,
+    ref_id: str | None,
+    actor: str | None = None,
 ) -> None:
     """Write an agent-level event, on the agent's most recently changed live page (an
     event row belongs to a page). Nothing when the agent has no page. Inside the
@@ -224,7 +235,7 @@ def note_on_latest_page(
             conn,
             artifact_id=page[0],
             agent=agent,
-            actor=agent,
+            actor=actor or agent,
             kind=kind,
             summary=summary,
             ref_id=ref_id,
@@ -244,11 +255,14 @@ def rotate(db: Database, key: AgentKey) -> tuple[str, str]:
     token = "art_" + secrets.token_urlsafe(32)
     key_id = secrets.token_hex(8)
     with db.connect() as conn, conn.transaction():
-        conn.execute(
-            "update agent_key set revoked_at = %s, revoked_reason = 'superseded'"
+        now = datetime.now(UTC)
+        pending = conn.execute(
+            "select id from agent_key"
             " where replaces = %s and first_used_at is null and revoked_at is null",
-            (datetime.now(UTC), key.id),
-        )
+            (key.id,),
+        ).fetchall()
+        for (pending_id,) in pending:
+            revoke_in(conn, pending_id, actor=key.agent, reason="superseded", now=now)
         conn.execute(
             "insert into agent_key"
             " (id, agent, token_sha256, rotating, replaces, label, retire_after)"
@@ -259,24 +273,52 @@ def rotate(db: Database, key: AgentKey) -> tuple[str, str]:
     return token, key_id
 
 
-def revoke(db: Database, key_id: str) -> int:
+def revoke_in(conn, key_id: str, *, actor: str, reason: str, now: datetime) -> int:
+    """Revoke one live key on `conn`, inside the caller's transaction, recording WHO
+    (`revoked_by`) and WHY (`revoked_reason`) and writing an `agent_key_revoked` event on the
+    agent's latest page. Returns the rows changed: 0 for an unknown or already revoked key
+    -- `revoked_at is null` in the WHERE clause leaves an earlier revocation untouched --
+    and no event then. Every path that revokes a key by hand goes through here, so none
+    can skip the record (runcove-5t3oj.110)."""
+    reason = " ".join(reason.split())[:200] or "revoked"
+    row = conn.execute(
+        "update agent_key set revoked_at = %s, revoked_reason = %s, revoked_by = %s"
+        " where id = %s and revoked_at is null returning agent",
+        (now, reason, actor, key_id),
+    ).fetchone()
+    if row is None:
+        return 0
+    # A move this key started and nobody has collected dies with it.
+    conn.execute(
+        "update connect_request set denied_at = %s where origin_key = %s"
+        " and move = 'self' and delivered_at is null and denied_at is null",
+        (now, key_id),
+    )
+    note_on_latest_page(
+        conn,
+        row[0],
+        kind="agent_key_revoked",
+        summary=f"key {key_id} revoked by {actor}: {reason}",
+        ref_id=key_id,
+        actor=actor,
+    )
+    return 1
+
+
+def revoke(
+    db: Database,
+    key_id: str,
+    *,
+    actor: str,
+    reason: str = "revoked by an administrator",
+) -> int:
     """Returns the number of rows changed: 0 for an unknown id, or for one
-    already revoked -- `revoked_at is null` in the WHERE clause makes both
-    cases a no-op instead of overwriting an earlier revocation's timestamp,
-    and callers use the row count to tell "revoked" from "nothing to do"."""
-    now = datetime.now(UTC)
+    already revoked, so callers can tell "revoked" from "nothing to do".
+    `actor` is who did it (`admin`, the owner's id, ...), never defaulted."""
     with db.connect() as conn, conn.transaction():
-        cursor = conn.execute(
-            "update agent_key set revoked_at = %s where id = %s and revoked_at is null",
-            (now, key_id),
+        return revoke_in(
+            conn, key_id, actor=actor, reason=reason, now=datetime.now(UTC)
         )
-        # A move this key started and nobody has collected dies with it.
-        conn.execute(
-            "update connect_request set denied_at = %s where origin_key = %s"
-            " and move = 'self' and delivered_at is null and denied_at is null",
-            (now, key_id),
-        )
-        return cursor.rowcount
 
 
 def agent_of(db: Database, key_id: str) -> str | None:
