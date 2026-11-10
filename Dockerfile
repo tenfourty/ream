@@ -40,9 +40,22 @@ RUN uv sync --frozen --no-dev --no-editable --extra server
 # so agents kept running yesterday's tools. A version per build means a new
 # filename, hence a new URL, on every deploy -- and agents.txt always prints
 # whatever file is here.
+#
+# THE SAME CODE, BUILT TWICE (decisions.md, 10 Nov 2026). The install name is `ream-artifacts`
+# (`ream_artifacts-*.whl`), but a tool installed before that has `ream` in its receipt, and the
+# self-update it runs asks this index for `ream`. So the second build changes only the
+# distribution name to `ream` (`ream-*.whl`, same version, same code) and the index offers
+# both: an old tool's update succeeds, and the code it gets moves it to `ream-artifacts` the
+# next time. The checks fail the build if either wheel is missing or either name is wrong.
 RUN sed -i "0,/^version = \"\([0-9.]*\)\"/s//version = \"\1.post$(date -u +%Y%m%d%H%M%S)\"/" pyproject.toml \
  && grep -m1 '^version' pyproject.toml \
- && uv build --wheel --out-dir /app/dist
+ && uv build --wheel --out-dir /app/dist \
+ && sed -i '0,/^name = "ream-artifacts"$/s//name = "ream"/' pyproject.toml \
+ && grep -qx 'name = "ream"' pyproject.toml \
+ && uv build --wheel --out-dir /app/dist \
+ && [ "$(ls /app/dist/ream_artifacts-*-py3-none-any.whl | wc -l)" = 1 ] \
+ && [ "$(ls /app/dist/ream-*-py3-none-any.whl | wc -l)" = 1 ] \
+ && ls /app/dist
 
 FROM python:3.12-slim-bookworm
 

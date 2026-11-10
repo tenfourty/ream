@@ -123,6 +123,17 @@ receipt records: a git address, or the tools index it was installed from, reinst
 cannot be repeated safely the tool does not update itself and prints the manual line;
 `REAM_NO_SELF_UPDATE=1` turns it off.
 
+**The install name is `ream-artifacts`** (decisions.md, 10 Nov 2026; `ream` on public PyPI is a
+stranger's package; the commands and import names are unchanged). A tool whose receipt says `ream`
+or `artifacts` hops to it on its next update, and `selfupdate._retire_old_tools` uninstalls the old
+one. **The tools index must also carry a wheel under the old name `ream`**: a tool installed before
+the rename runs the old self-update, which asks the index for `ream`, and with only `ream_artifacts-*`
+there every such tool would stay stale for good. So the Dockerfile builds the wheel twice (the second
+with only the distribution name swapped to `ream`, same version and code), `onboarding.wheels()` lists
+both, and `/api/v1/tools/` and `/api/v1/tools/<name>` serve both (`tests/test_tools.py`). The documents
+and install lines name only `ream-artifacts`. Do not drop the `ream` wheel while a tool with `ream` in
+its receipt may exist.
+
 The service runs on Postgres or SQLite, chosen by `DATABASE_URL` (`postgresql://…` or
 `sqlite:////data/artifacts.db`). Only `src/ream/db.py` talks to a driver; SQL elsewhere must
 read the same on both (`docs/agent/specs/2026-10-09-sqlite-design.md`). CI runs the suite on both.

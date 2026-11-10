@@ -871,3 +871,44 @@ went. Ream pages only for things worth keeping, with throwaways left as Claude's
 the model to judge what is worth keeping and splits one person's pages across two places.
 
 **Evidence:** confirmed (Jeremy, 10 Nov 2026), decision d_01M722QT46FA3YZR8F4HTSR9DN.
+
+## The install name is ream-artifacts, and the tool goes on public PyPI from a public GitHub mirror (10 Nov 2026)
+
+**Chosen:** three linked things.
+- The package Ream installs as is named `ream-artifacts` (it was `ream`). `ream` on public PyPI is
+  somebody else's package, so a bare `ream` handed to uv without `--no-index` can install a
+  stranger's code. Only the install name changes: the `ream` and `artifacts-*` commands, the `ream`
+  and `artifacts` import names, settings, headers and everything stored keep their names. Install
+  lines keep naming Ream's own tools index (`--no-index --find-links <gallery>/api/v1/tools/
+  ream-artifacts`).
+- A tool installed under the old name keeps updating. Its self-update asks the index for `ream`,
+  so the index also carries the same code built under the old distribution name `ream` (the image
+  builds the wheel twice, and `/api/v1/tools/` lists both); the old tool's update succeeds, and
+  the code it receives moves it to `ream-artifacts` at its next update and uninstalls the old
+  tool. The old-name wheel stays while any tool with `ream` in its receipt may exist.
+- The real tool goes on public PyPI as `ream-artifacts`, and every release from `main` is published
+  there, so the code becomes public there as well as on the forge. The upload is by PyPI trusted
+  publishing (no stored token) from a public GitHub repository on Jeremy's personal account, which
+  mirrors `main`, every commit as it lands. `ci/` branches are never mirrored and stay private. A
+  history clean-up comes before the repository goes public. Nothing is wired to PyPI yet, and
+  install lines keep naming Ream's own index until it is. Once every commit is public as it lands,
+  the rule that security fixes carry no detail in commits or public text until the fix is out binds
+  `main` too.
+
+**Why:** the name `ream` was never ours on PyPI, and a package a person can install by name from
+anywhere needs a name that is. Publishing the real tool, not a stub, is what lets an agent on a
+machine without Ream's address install it with one line.
+
+**Not chosen:**
+- Keep `ream`: the stranger's package keeps the name on PyPI, so every install line needs
+  `--no-index` for ever, and one missed flag installs somebody else's code.
+- `ream-artefacts`: a second spelling beside the `artifacts` that the commands, the import name and
+  the old package already use, so it would be mistyped and mis-searched.
+- A placeholder on PyPI that only holds the name: it ships nothing, so install still needs Ream's
+  own index, and the point of being installable by name anywhere stays unmet.
+- A client-only package (the command-line tools without the server): a second package to build and
+  release in step with this one, to hide code the forge already shows to anyone.
+- A private GitHub repository for the mirror: a release could not show where it was built from.
+- GitLab for the mirror: a second host to set up for no gain over GitHub.
+
+**Evidence:** Jeremy, 10 Nov 2026.

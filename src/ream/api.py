@@ -1861,29 +1861,34 @@ def agent_router(
 
     @router.get("/tools/")
     def tools_index():
-        """One link, to the one package: the page uv's `--find-links` reads, so
-        an install line never changes between deploys (the homelab ops seat, 24
-        Sep 2026: "a stable alias would make uv tool install --force a
-        one-liner"). A redirect or a fixed filename cannot do this -- measured:
-        uv refuses a URL without `.whl`, and a wheel filename without a version.
-        Still never a directory listing: it names only what `wheel()` names."""
-        built = onboarding.wheel()
-        if built is None:
+        """The page uv's `--find-links` reads, so an install line never changes between
+        deploys (the homelab ops seat, 24 Sep 2026: "a stable alias would make uv tool
+        install --force a one-liner"). A redirect or a fixed filename cannot do this --
+        measured: uv refuses a URL without `.whl`, and a wheel filename without a version.
+        One link to the one package, and a second to the same code under the name `ream`, so
+        a tool installed before the install name became `ream-artifacts` can still update
+        itself (`onboarding.wheels`). Still never a directory listing: it names only what
+        `wheels()` names."""
+        built = onboarding.wheels()
+        if not built:
             raise HTTPException(404, "no tools are available from this address")
-        name = html.escape(built.name)
+        links = "".join(
+            f'<a href="{html.escape(each.name)}">{html.escape(each.name)}</a>\n'
+            for each in built
+        )
         return HTMLResponse(
-            f'<!doctype html><title>tools</title><a href="{name}">{name}</a>\n',
+            f"<!doctype html><title>tools</title>{links}",
             headers={"x-content-type-options": "nosniff", "cache-control": "no-cache"},
         )
 
     @router.get("/tools/{name}")
     def tools(name: str):
         """The tool package, open: an agent on another machine installs it before
-        it has any key (homelab-ij8.68). Only the one file the image built, by
-        exact name -- never a path, never a listing. It contains no secret: it is
+        it has any key (homelab-ij8.68). Only the files the image built, by exact
+        name -- never a path, never a listing. It contains no secret: it is
         this repository's code, which is also in the image."""
-        built = onboarding.wheel()
-        if built is None or name != built.name:
+        built = {each.name: each for each in onboarding.wheels()}.get(name)
+        if built is None:
             raise HTTPException(404, "no such file")
         return FileResponse(
             built,

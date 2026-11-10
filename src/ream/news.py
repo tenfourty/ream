@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-10c",
+        "The tool's install name is now `ream-artifacts`: the name `ream` on public PyPI is somebody else's package. Only the install name changes: the `ream` and artifacts-* commands, `import ream` and `import artifacts`, settings and headers are all as they were. Nothing to do: a tool installed under the old name updates itself to `ream-artifacts` the next time it updates, from the same place, and removes the old one. An install from scratch, or a reinstall by hand, uses the line in the onboarding document, which names `ream-artifacts`, from Ream's own index as before.",
+    ),
+    (
         "2026-11-10b",
         "The tracker-page commands (ream beads-page and ream bead-metrics, and the older artifacts-beads-page and artifacts-bead-metrics) have left the core tool: a deployment that wants them supplies them from a plug-in under the same names, with the same flags and the same output, and REAM_BD (or ARTIFACTS_BD) still names the bd program but is now read by that plug-in. Without the plug-in installed beside the tool, ream beads-page answers 'no such verb' and artifacts-beads-page is not found, and a render line in pages.toml that runs either fails. If you use them, reinstall the tool with your deployment's plug-in, as its install line says; if you do not, nothing changes.",
     ),

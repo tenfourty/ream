@@ -544,6 +544,32 @@ def wheel() -> Path | None:
     return found[-1] if found else None
 
 
+def wheels() -> list[Path]:
+    """Every file the tools index offers: the one tool package (`wheel()`), and, beside a
+    `ream_artifacts-*` one, the same code under the name `ream` (the Dockerfile builds it twice).
+
+    WHY THE SECOND ONE. A tool already installed from this index has `ream` in its receipt and
+    its self-update, the code of that day, asks the index for `ream` (`uv tool install --force
+    --no-index --find-links <index> ream`). With only `ream_artifacts-*` here that ask finds
+    nothing and every such tool stays at the version it has for good. With the old-name wheel
+    the ask succeeds, installs this code, and this code (selfupdate.py) moves to
+    `ream-artifacts` the next time it updates. Never drop it while a `ream` receipt may exist
+    (decisions.md, 10 Nov 2026). A directory with no `ream_artifacts-*` file (an image built
+    before the rename) offers its one file, as before."""
+    built = wheel()
+    if built is None:
+        return []
+    found = [built]
+    if built.name.startswith("ream_artifacts-"):
+        try:
+            old = sorted(tools_dir().glob("ream-*-py3-none-any.whl"))
+        except OSError:
+            old = []
+        if old:
+            found.append(old[-1])
+    return found
+
+
 def package_name() -> str:
     """The name `uv tool install` is given: that of the wheel actually served
     (`ream-artifacts` now; `ream` or `artifacts` for an image built before a rename)."""

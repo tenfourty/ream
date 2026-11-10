@@ -119,6 +119,101 @@ def test_one_page_links_the_one_package_for_find_links(gallery, tools_dir):
     assert f'href="{WHEEL}"' in page.text
 
 
+NEW_WHEEL = "ream_artifacts-0.1.0.post20261110120000-py3-none-any.whl"
+OLD_WHEEL = "ream-0.1.0.post20261110120000-py3-none-any.whl"
+
+
+@pytest.fixture()
+def both_wheels(tmp_path, monkeypatch):
+    for name in (NEW_WHEEL, OLD_WHEEL):
+        with zipfile.ZipFile(tmp_path / name, "w") as z:
+            z.writestr("ream/__init__.py", "")
+    monkeypatch.setenv("REAM_TOOLS_DIR", str(tmp_path))
+    return tmp_path
+
+
+def test_the_index_offers_the_tool_under_both_names(gallery, both_wheels):
+    """10 Nov 2026: the install name is `ream-artifacts`, but a tool installed before it has
+    `ream` in its receipt and asks this index for `ream` when it updates itself. The index
+    lists the same code under both names, so that ask succeeds and every office's tool keeps
+    updating; the code it gets then moves it to `ream-artifacts`."""
+    import re
+
+    page = gallery.get("/api/v1/tools/")
+    assert page.status_code == 200
+    assert page.headers["cache-control"] == "no-cache"
+    hrefs = re.findall(r'<a href="([^"]+)">', page.text)
+    assert sorted(hrefs) == sorted([NEW_WHEEL, OLD_WHEEL])
+    assert page.text.count("<a ") == 2
+    # each is served by its exact name, byte for byte
+    for name in (NEW_WHEEL, OLD_WHEEL):
+        got = gallery.get(f"/api/v1/tools/{name}")
+        assert got.status_code == 200
+        assert got.content == (both_wheels / name).read_bytes()
+    # only those two: another version of either name is not here
+    assert gallery.get("/api/v1/tools/ream-9.9.9-py3-none-any.whl").status_code == 404
+    assert (
+        gallery.get("/api/v1/tools/ream_artifacts-9.9.9-py3-none-any.whl").status_code
+        == 404
+    )
+
+
+def test_the_old_name_is_for_old_tools_only_the_documents_teach_the_new_one(
+    gallery, both_wheels
+):
+    """The documents name one wheel, the `ream-artifacts` one, however many the index holds."""
+    from ream import onboarding
+
+    base = "https://artifacts.tenfourty.site/api/v1/tools/"
+    text = gallery.get("/api/v1/agents.txt").text
+    assert f"--find-links {base} ream-artifacts\n" in text
+    assert [line for line in text.splitlines() if line.startswith("wheel: ")] == [
+        f"wheel: {base}{NEW_WHEEL}"
+    ]
+    assert onboarding.wheel().name == NEW_WHEEL
+    assert onboarding.package_name() == "ream-artifacts"
+    assert [each.name for each in onboarding.wheels()] == [NEW_WHEEL, OLD_WHEEL]
+
+
+@pytest.mark.parametrize(
+    "only", ["ream-0.1.0-py3-none-any.whl", "artifacts-0.1.0-py3-none-any.whl"]
+)
+def test_an_image_built_before_the_rename_offers_its_one_file(
+    gallery, tmp_path, monkeypatch, only
+):
+    with zipfile.ZipFile(tmp_path / only, "w") as z:
+        z.writestr("x/__init__.py", "")
+    monkeypatch.setenv("REAM_TOOLS_DIR", str(tmp_path))
+    page = gallery.get("/api/v1/tools/")
+    assert page.text.count("<a ") == 1
+    assert f'href="{only}"' in page.text
+
+
+def test_the_new_name_alone_offers_no_old_one(gallery, tmp_path, monkeypatch):
+    with zipfile.ZipFile(tmp_path / NEW_WHEEL, "w") as z:
+        z.writestr("x/__init__.py", "")
+    monkeypatch.setenv("REAM_TOOLS_DIR", str(tmp_path))
+    assert gallery.get("/api/v1/tools/").text.count("<a ") == 1
+    assert gallery.get(f"/api/v1/tools/{OLD_WHEEL}").status_code == 404
+
+
+def test_the_dockerfile_builds_the_wheel_under_both_names():
+    """What puts both wheels in the index is the image build, which no test run here makes: so
+    the Dockerfile's two builds are held to their text. The second build changes only the
+    distribution name; the build fails if either wheel is missing."""
+    from pathlib import Path
+
+    docker = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text()
+    assert docker.count("uv build --wheel --out-dir /app/dist") == 2
+    assert 'name = "ream-artifacts"' in docker
+    assert 's//name = "ream"/' in docker
+    assert "/app/dist/ream_artifacts-*-py3-none-any.whl" in docker
+    assert "/app/dist/ream-*-py3-none-any.whl" in docker
+    # the name the build swaps from is the one pyproject.toml has
+    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+    assert '\nname = "ream-artifacts"\n' in pyproject
+
+
 def test_no_package_means_no_find_links_page(gallery, tmp_path, monkeypatch):
     monkeypatch.setenv("REAM_TOOLS_DIR", str(tmp_path / "missing"))
     assert gallery.get("/api/v1/tools/").status_code == 404
