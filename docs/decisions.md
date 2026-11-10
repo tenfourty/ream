@@ -604,13 +604,13 @@ a name the index answers, `{ name, git = "<https address>?rev=<ref>" }`, `{ name
 `{ name, directory }` or `{ name, editable = "<dir>" }`; `--with-executables-from X` adds another
 bare `{ name = "X" }` and puts X's console scripts in `entrypoints` with `from = "X"`. The update now
 passes each extra back: `--with git+https://...[@ref]` (the recorded ref is kept, unlike the
-package's, because the person chose it), `--with <path>` / `--with-editable <dir>` (absolute,
-plain, still there), `--with <name>[extras][specifier]` only when the receipt shows
+package's, because the person chose it), `--with <name>[extras][specifier]` only when the receipt shows
 `no-index` and `find-links` (the same index options go on the command), and
 `--with-executables-from <name>` where the receipt shows its scripts were installed. **Never a bare
-name without that index** (the public `ream` problem again). Anything else (a url, a marker, an
-`index` or `subdirectory` key, an `http` or login git address, two sources for one package, a path
-that is gone) means the tool does not update itself: it prints the manual line naming the plug-in,
+name without that index** (the public `ream` problem again). Anything else (a local path or editable
+directory, whose contents may have changed since the install, so building it again would run code
+nobody chose; a url, a marker, an `index` or `subdirectory` key, an `http` or login git address,
+two sources for one package) means the tool does not update itself: it prints the manual line naming the plug-in,
 and leaves out the server's note (a reinstall from it alone would drop the plug-ins). The setting
 or file still chooses the package's source; `REAM_NO_SELF_UPDATE=1` still only prints the line,
 now with the plug-in options in it.

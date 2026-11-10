@@ -1141,25 +1141,24 @@ def test_an_index_plugin_beside_a_git_package_keeps_the_receipts_index(
     ]
 
 
-@pytest.mark.parametrize(
-    "key, flag",
-    [("path", "--with"), ("directory", "--with"), ("editable", "--with-editable")],
-)
-def test_a_plugin_from_a_path_is_installed_again_from_that_path(
-    updater, tmp_path, monkeypatch, key, flag
+@pytest.mark.parametrize("key", ["path", "directory", "editable"])
+def test_a_plugin_from_a_local_path_stops_the_update(
+    updater, tmp_path, monkeypatch, key
 ):
+    """What is at a local path now is not what was installed: building it again would run
+    code nobody chose. The tool prints the line to run by hand instead."""
     where = tmp_path / "house-plugin"
     where.mkdir()
     extra = f'{{ name = "house-plugin", {key} = "{where}" }}'
     installs = _update(updater, tmp_path, monkeypatch, _tool_receipt(extra))
-    assert installs == [[*HEAD, flag, str(where), f"{SOURCE}@main"]]
+    assert installs == []
+    assert updater.run.calls == []
+    assert "/api/v1/agents.txt" in updater.out.getvalue()
 
 
 def test_several_plugins_keep_the_receipts_order(updater, tmp_path, monkeypatch):
-    wheel = tmp_path / "other-1.0-py3-none-any.whl"
-    wheel.write_text("")
     extras = (
-        f'{{ name = "other", path = "{wheel}" }}',
+        f'{{ name = "other", git = "{PLUGIN}-other?rev=v1" }}',
         f'{{ name = "house-plugin", git = "{PLUGIN}?rev=main" }}',
     )
     installs = _update(
@@ -1172,7 +1171,7 @@ def test_several_plugins_keep_the_receipts_order(updater, tmp_path, monkeypatch)
         [
             *HEAD,
             "--with",
-            str(wheel),
+            f"git+{PLUGIN}-other@v1",
             "--with",
             f"git+{PLUGIN}@main",
             "--with-executables-from",
@@ -1265,8 +1264,7 @@ def test_a_failed_update_prints_the_whole_command_with_the_plugins(
         ('{ name = "-evil" }', None),
         (f'{{ git = "{PLUGIN}" }}', None),
         ('"house-plugin"', None),
-        # a path that is not a plain absolute one, or is not there any more, or that also
-        # carries a version or extras (not repeated)
+        # a local path, an editable directory, malformed or not: never built again
         ('{ name = "house-plugin", path = "relative/p.whl" }', None),
         ('{ name = "house-plugin", path = "--evil" }', None),
         ('{ name = "house-plugin", path = "/nonexistent/dir/p.whl" }', None),

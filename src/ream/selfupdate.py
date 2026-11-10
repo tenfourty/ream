@@ -22,11 +22,11 @@ path install, and a receipt with neither, give none: the name `ream` is never ha
 without `--no-index`, because an unrelated package of that name is on the public index.
 PLUG-INS. A tool installed with extra packages (`--with`, `--with-executables-from`) must not
 come back as the package alone. The receipt's other requirements are passed back with the same
-flags: a git (`https`, no login) address with its recorded ref, a plain absolute path or editable
-directory that still exists, or a bare name only when the receipt shows `no-index` and
-`find-links` (the command then carries them); `--with-executables-from` where the receipt shows
-that package's console scripts. An extra whose source cannot be repeated safely (a url, a marker,
-an index, a subdirectory, two sources) stops the update: the manual line names it. See
+flags: a git (`https`, no login) address with its recorded ref, or a bare name only when the
+receipt shows `no-index` and `find-links` (the command then carries them); `--with-executables-from` where the receipt shows
+that package's console scripts. An extra whose source cannot be repeated safely (a local path or
+editable directory, whose contents may have changed since; a url, a marker, an index, a
+subdirectory, two sources) stops the update: the manual line names it. See
 `receipt_extras`.
 What the server sends (`X-Ream-Install-Source`) is never read here. The ref is a
 constant, `main`: the reviewed, CI-gated branch, so a hostile or spoofed server cannot choose
@@ -82,7 +82,7 @@ _REF = re.compile(r"[0-9A-Za-z][0-9A-Za-z._/-]{0,63}")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _BARE_KEYS = {"name", "specifier", "extras"}  # a name resolved from the index
 _GIT_KEYS = {"name", "git", "rev", "tag", "branch"}
-_PATH_OPTIONS = {"path": "--with", "directory": "--with", "editable": "--with-editable"}
+_LOCAL_SOURCES = {"path", "directory", "editable"}
 _INSTALL_TIMEOUT = 300
 _MIN_GAP = 3600  # seconds between two attempts on one machine
 
@@ -209,7 +209,7 @@ def _normal(name: str) -> str:
 
 
 class _Flag(NamedTuple):
-    option: str  # `--with` or `--with-editable`
+    option: str  # `--with`
     value: str
     from_index: bool  # a name with no source of its own: only an index can answer it
 
@@ -242,20 +242,6 @@ def _git_extra(item: dict) -> str | None:
     return f"git+{address}@{ref}"
 
 
-def _path_extra(item: dict, key: str) -> str | None:
-    """The absolute path of an extra recorded as a path, a directory or an editable
-    directory, when it is plain and still there; otherwise None."""
-    value = item[key]
-    if (
-        not isinstance(value, str)
-        or not value.startswith("/")
-        or _CONTROL.search(value)
-        or ".." in Path(value).parts
-    ):
-        return None
-    return value if os.path.exists(value) else None
-
-
 def _extra_flag(item) -> _Flag | None:
     """The option that installs one receipt requirement again, or None when it cannot be
     repeated safely."""
@@ -265,10 +251,10 @@ def _extra_flag(item) -> _Flag | None:
     if "git" in keys:
         spec = _git_extra(item) if keys <= _GIT_KEYS else None
         return _Flag("--with", spec, False) if spec else None
-    for key, option in _PATH_OPTIONS.items():
-        if key in keys:
-            path = _path_extra(item, key) if keys == {"name", key} else None
-            return _Flag(option, path, False) if path else None
+    if keys & _LOCAL_SOURCES:
+        # What is at a local path now is not what was installed: building it again would run
+        # code nobody chose, so a plug-in from a path or an editable directory is not repeated.
+        return None
     if not keys <= _BARE_KEYS:
         return None  # a url, an index, a marker, a subdirectory: not repeated
     requirement = item["name"]
@@ -290,8 +276,7 @@ def _extra_flag(item) -> _Flag | None:
 
 def receipt_extras() -> Extras:
     """The extra packages the receipt shows this tool was installed with, and how to install
-    them again with the same flags: `--with <source>` for a git address (its ref kept), a
-    path or an editable directory; `--with <name>` for a name only when the receipt shows the
+    them again with the same flags: `--with <source>` for a git address (its ref kept); `--with <name>` for a name only when the receipt shows the
     tool's own `--no-index --find-links` (an index that is not the public one); and
     `--with-executables-from <name>` where the receipt shows that package's console scripts
     were installed. Anything else is `blocked`. A missing or unreadable receipt has none."""
