@@ -2156,12 +2156,22 @@ def agent_router(
         body = payload.body
         if payload.format == "markdown":
             body, _ = _markdown_page(payload.body, None)
-        if len(body.encode()) > store.MAX_BODY_BYTES:
+        try:
+            size = len(body.encode())
+        except UnicodeEncodeError as exc:  # a lone surrogate from JSON's \ud800
+            raise HTTPException(
+                422, {"field": "body", "detail": "body is not valid UTF-8"}
+            ) from exc
+        if size > store.MAX_BODY_BYTES:
             raise HTTPException(
                 413, f"body is larger than {store.MAX_BODY_BYTES} bytes"
             )
         try:
             store.check_body(body, agent=agent)
+        except store.InvalidText as exc:
+            raise HTTPException(
+                422, {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"}
+            ) from exc
         except store.SecretFound as found:
             raise HTTPException(
                 422, _refused_detail(found.field, found.findings)
@@ -2452,6 +2462,11 @@ def agent_router(
                 ) from exc
             except store.BadInterval as exc:
                 raise HTTPException(422, _BAD_INTERVAL) from exc
+            except store.InvalidText as exc:
+                raise HTTPException(
+                    422,
+                    {"field": exc.field, "detail": f"{exc.field} is not valid UTF-8"},
+                ) from exc
             except store.SecretFound as found:
                 raise HTTPException(
                     422, _refused_detail(found.field, found.findings)

@@ -413,23 +413,28 @@ def _revision(body: str, n: int) -> str:
     return hashlib.sha256(f"{n}:{body}".encode()).hexdigest()[:16]
 
 
+def _invalid_text(field: str, agent: str, artifact_id: str | None) -> InvalidText:
+    """The refusal for text that cannot be encoded as UTF-8, logged, ready to raise."""
+    # A lone surrogate (`"\ud800"`) survives JSON decoding -- Python's str happily holds
+    # one -- but neither `utf-8` nor Postgres `text` can, so this is a refusal, not a bug
+    # to repair around. Never echo the text; only the field name says anything about what
+    # was sent.
+    _refusals.warning(
+        "publish refused: agent=%s artifact=%s field=%s reason=invalid_text",
+        agent,
+        artifact_id or "-",
+        field,
+    )
+    return InvalidText(field)
+
+
 def _check_size(
     value: str, limit: int, field: str, *, agent: str, artifact_id: str | None
 ) -> None:
     try:
         size = len(value.encode("utf-8"))
     except UnicodeEncodeError as exc:
-        # A lone surrogate (`"\ud800"`) survives JSON decoding -- Python's str
-        # happily holds one -- but neither `utf-8` nor Postgres `text` can, so
-        # this is a refusal, not a bug to repair around. Never echo the text;
-        # only the field name says anything about what was sent.
-        _refusals.warning(
-            "publish refused: agent=%s artifact=%s field=%s reason=invalid_text",
-            agent,
-            artifact_id or "-",
-            field,
-        )
-        raise InvalidText(field) from exc
+        raise _invalid_text(field, agent, artifact_id) from exc
     if size > limit:
         _refusals.warning(
             "publish refused: agent=%s artifact=%s field=%s reason=body_too_large size=%d",
@@ -457,6 +462,13 @@ def _check_secrets(
     second_opinion: bool = True,
     gitguardian: bool = False,
 ) -> None:
+    # Every field that is scanned is stored, and text that cannot be encoded as UTF-8 can be
+    # neither stored nor sent to a second scanner: refuse it here, as `_check_size` does,
+    # before any scanner is asked (a note has no size check of its own to do it first).
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise _invalid_text(field, agent, artifact_id) from exc
     try:
         findings = scan.scan(value)
     except Exception as exc:

@@ -32,7 +32,10 @@ plug-in's clean answer as the second opinion only when `relay_expected()` is Fal
 stood down it takes the answer of the `gitguardian` scanner itself (`scanners.run_named`),
 never another scanner's. A `gitguardian` that gave no opinion is exactly an unreachable relay.
 
-Never raises. `None` means "no second opinion was had" -- not configured,
+Never raises for anything the relay does; the one exception is text that cannot be encoded as
+UTF-8 (`UnencodableText`, a `UnicodeEncodeError`), which is the text's fault and not "the relay
+could not be reached" (the stores refuse such text before they ask). `None` means "no second
+opinion was had" -- not configured,
 unreachable, refused, timed out, or answered in a shape this does not know --
 and the caller logs that and publishes. An empty list means ggshield looked and
 found nothing.
@@ -138,8 +141,19 @@ class _Refused(Exception):
         self.status = status
 
 
+class UnencodableText(UnicodeEncodeError):
+    """The text cannot be encoded as UTF-8, so nothing was sent. The text's fault, never the
+    relay's: `scan` raises it instead of reading it as an unreachable relay."""
+
+
 def _post(url: str, token: str, body: str) -> object:
     """One POST, with a short connect and a long read."""
+    try:
+        payload = json.dumps({"body": body}, ensure_ascii=False).encode()
+    except UnicodeEncodeError as exc:
+        # Kept apart from every other encoding error in this call (a header, say), which is
+        # the relay's own configuration and does read as unreachable.
+        raise UnencodableText(*exc.args) from exc
     parts = urllib.parse.urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ValueError("REAM_GGSHIELD_URL is not an http(s) URL")
@@ -155,7 +169,7 @@ def _post(url: str, token: str, body: str) -> object:
         conn.request(
             "POST",
             parts.path or "/",
-            body=json.dumps({"body": body}, ensure_ascii=False).encode(),
+            body=payload,
             headers={
                 "content-type": "application/json",
                 "authorization": f"Bearer {token}",
@@ -193,6 +207,8 @@ def scan(body: str) -> list[Finding] | None:
         return []
     try:
         answer = _post(url, token, body)
+    except UnencodableText:
+        raise
     except _Refused as exc:
         log.warning("ggshield relay refused the scan: HTTP %s", exc.status)
         return None

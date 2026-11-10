@@ -60,8 +60,13 @@ def run(
         raise HTTPException(
             422, "Idempotency-Key must be 1 to 128 printable ASCII characters"
         )
+    # `surrogatepass`: text that cannot be encoded as UTF-8 must reach the action's own
+    # refusal (a 422), not fail here while the request is only being fingerprinted. The bytes
+    # of every encodable request are unchanged.
     digest = hashlib.sha256(
-        json.dumps(body, sort_keys=True, ensure_ascii=False, default=str).encode()
+        json.dumps(body, sort_keys=True, ensure_ascii=False, default=str).encode(
+            "utf-8", "surrogatepass"
+        )
     ).hexdigest()
     now = datetime.now(UTC)
     with db.connect() as conn, conn.transaction():
