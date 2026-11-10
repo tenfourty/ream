@@ -76,6 +76,7 @@ new name; published pages never change owner by accident.
 | Container | `Dockerfile` |
 | Deployment values | the deployment's own repo (for the homelab, the homelab repo); this repo keeps none |
 | CI -> image -> pin PR | `.forgejo/workflows/ci.yml`, `.forgejo/scripts/pin-pr.sh`, `core-lock-pr.sh` |
+| PyPI release (`ream-artifacts`, from the public GitHub mirror by trusted publishing; a release is a version bump on main) | `.github/workflows/publish.yml` (GitHub only; the forge runs `.forgejo/`) |
 | The design this argues from | `docs/agent/design.md` |
 | What was decided and why the other options lost | `docs/decisions.md` |
 | The build plan and its ledger | `docs/agent/implementation-plan.md` |

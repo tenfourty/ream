@@ -1,0 +1,59 @@
+# Publishes ream-artifacts to PyPI from the public GitHub mirror (docs/decisions.md, 10 Nov 2026).
+# Runs on GitHub only: the forge reads .forgejo/workflows and ignores this folder.
+# Trusted publishing: PyPI's publisher for ream-artifacts is pinned to tenfourty/ream, this file
+# and the environment `pypi` (limited to main). No secret is stored anywhere.
+# Every main commit is mirrored, so an unchanged version is skipped: a release is a version bump
+# in pyproject.toml.
+name: publish
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: build the sdist and wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+          ls dist
+          # Only ream-artifacts goes to PyPI (`ream` there is someone else's package).
+          for f in dist/*; do
+            case "$(basename "$f")" in ream_artifacts-*) ;; *) echo "unexpected file $f" >&2; exit 1;; esac
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ream-artifacts/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          skip-existing: true
