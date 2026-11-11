@@ -72,8 +72,9 @@ error names the plug-in and, for an exception, only its **type**, never its text
 
 ## API versioning
 
-`ream.plugin_api.API_VERSION` is `(1, 1)`; `api.version` is the same tuple (1.1 added the
-optional `timeout` of `api.scanner`). A plug-in declares
+`ream.plugin_api.API_VERSION` is `(1, 2)`; `api.version` is the same tuple (1.1 added the
+optional `timeout` of `api.scanner`; 1.2 added `api.sink(..., stage=)`, `api.schema`,
+`api.on_start` and `api.on_stop`, all optional: a 1.0 or 1.1 plug-in runs unchanged). A plug-in declares
 `REQUIRES_API = "1"` as module data of the module that holds `register`; the core compares the
 major number and refuses a mismatch (the server stops; a tool skips or exits as above). A plug-in
 that declares nothing is not checked. Minor releases only add registrations or optional
@@ -89,6 +90,8 @@ dataclass only gains fields, so a plug-in must ignore fields it does not know.
 | `api.on_answer(...)` | run in an answer's transaction | yes | ignored |
 | `api.scanner(...)` | a second opinion on text | yes | ignored |
 | `api.mail_backend(...)` | send mail | yes | ignored |
+| `api.schema(...)` | the plug-in's own tables (1.2) | yes | ignored |
+| `api.on_start(...)`, `api.on_stop(...)` | start and stop a thread of the plug-in's own (1.2) | yes | ignored |
 | `api.cli(...)` | add `ream <name>` | checked | yes |
 | `api.client_defaults(...)` | the tools' endpoint, session label, news | checked | yes |
 | `api.text_vars(...)` | extra `{{variables}}` | yes | ignored |
@@ -153,6 +156,48 @@ the plug-in failure counts are shared by every process on the database (tables `
 `plugin_failure`), so several workers see one breaker per sink. With no database bound (the
 tools, unit tests) or one that cannot be reached, a per-process copy answers, so a breaker can
 never stop a delivery by failing itself. `sinks.status()` reports `open_breakers`.
+
+### Staging in the action's transaction, tables, start and stop (API 1.2)
+
+For a plug-in that keeps its own queue (the quarterdeck bridge needs a per-question version
+number written in the same transaction as the answer), three registrations work together:
+
+```python
+def register(api):
+    api.schema(["create table if not exists acme_queue (id text primary key, n integer not null,"
+                " body jsonb not null, created_at timestamptz not null)"])
+    api.sink("acme", ["asked", "answered"], stage=enqueue, label="Acme")   # no deliver
+    api.on_start(lambda db: start_sender(db))   # a thread of the plug-in's own
+    api.on_stop(stop_sender)
+```
+
+- **`stage(conn, event)`** (`api.sink(name, kinds, stage=fn, label=...)`, outbox delivery only;
+  exactly one of `deliver` and `stage`) is called in the action's own transaction, in the same
+  place and order as the core's own staging sinks, so it can write `conn` (the plug-in's tables).
+  The core writes no outbox row and calls no `deliver`: the plug-in's own sender delivers.
+  **If it raises**, only its own writes are undone (it runs in a savepoint), the failure is
+  logged by type and counted as `<plug-in>:stage`, and the action goes on: the answer, the
+  journal row and the other sinks are kept. The event is then **not staged for that sink** and
+  nothing retries it, so a plug-in that cannot afford a gap must catch what it can handle and
+  keep its own reconciliation. (Unlike `on_answer`, which rolls the answer back.)
+- **`api.schema(statements)`**: the plug-in's tables, created at start-up after the core's
+  migration, on Postgres and SQLite, once and idempotently, under the same lock as the core's
+  migration. Only `create table if not exists` and `create [unique] index if not exists ... on`
+  are accepted, every name starts with the plug-in's name in lower case with other characters as
+  `_` (`acme-chat` -> `acme_chat_`), a `references` may name only the plug-in's own tables, and a
+  statement may hold no `;`, `%`, comment or `as select`; a breach stops start-up naming the
+  plug-in (never the text), as does a statement the database refuses. Write the neutral subset:
+  `text`, `integer`, `bigint`, `boolean` (defaults `true`/`false`), `timestamptz`, `jsonb`, constant
+  defaults, primary key, unique, not null. There is no migration after first creation: a change is
+  a new table or index, never an edit. A plug-in table is outside the core's schema and backups
+  logic: a plug-in owns its rows and their pruning.
+- **`api.on_start(fn)`**: `fn(db)` runs once after the tables exist and the core's outbox sender
+  is up, in plug-in name order; it must return promptly (start a thread, do not run the loop).
+  **`api.on_stop(fn)`**: `fn()` runs at shutdown, last started first, each isolated, best effort
+  (a killed process runs none). A raise in either is logged by type, counted
+  (`<plug-in>:start`, `<plug-in>:stop`) and neither stops the server nor the other plug-ins.
+  A sender that a start hook did not manage to start leaves its queue to wait; with the
+  plug-in absent the rows stay, as the outbox's do.
 
 ### Webhook sinks without a plug-in
 
@@ -436,7 +481,7 @@ parent domain. A fault inside the route answers a bare 500 (`plug-in error`), is
 - Every call into a plug-in is wrapped. A raise becomes a log line carrying the plug-in and the
   interface (exception type only, never its message or any content) and a count. Read the
   counts with `ream.plugin_api.failure_counts()` (keys `<plug-in>:<interface>`, with interfaces
-  `sink`, `on_answer`, `scanner`, `mail`, `text`, `router`); `sinks.status()` carries them as
+  `sink`, `stage`, `start`, `stop`, `on_answer`, `scanner`, `mail`, `text`, `router`); `sinks.status()` carries them as
   `plugin_failures`. With the database bound they are totals over every process.
 - A sink or route fault never takes down a request or the sender thread. Outbox failures retry,
   after-commit failures are logged, a repeatedly failing sink is paused by its breaker.
@@ -444,7 +489,9 @@ parent domain. A fault inside the route answers a bare 500 (`plug-in error`), is
   back) and a `block` scanner that fails (the publish fails or the comment is held).
 - A plug-in that raises while registering, requires another API major, or is named in
   `REAM_PLUGINS` but not installed stops the server's start-up, naming it.
-- No plug-in may add database tables or change core SQL, supply gallery pages or JavaScript, or
+- A `stage` failure never loses the action (savepoint, logged, counted; the event is not staged
+  for that sink); a start or stop hook failure never stops the server.
+- A plug-in may add its own tables (`api.schema`, 1.2) but may not change core tables or SQL, supply gallery pages or JavaScript, or
   serve the reader. The service stays single-reader.
 
 ## Testing a plug-in

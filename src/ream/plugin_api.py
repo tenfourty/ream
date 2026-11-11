@@ -3,8 +3,9 @@
 A plug-in is a Python package with an entry point in the group `ream.plugins` (or the old
 `artifacts.plugins`, kept for good)
 naming a function `register(api: PluginAPI) -> None`. The server calls each once at
-start-up, in name order. Registrations: `sink`, `answer_source`, `on_answer`, `scanner`, `mail_backend`,
-`cli`, `client_defaults` (the last two matter to the command-line tools: `plugin_cli.py`).
+start-up, in name order. Registrations: `sink` (with an optional in-transaction `stage`), `answer_source`, `on_answer`,
+`scanner`, `mail_backend`, `schema`, `on_start`, `on_stop`, `cli`, `client_defaults` (the last
+two matter to the command-line tools: `plugin_cli.py`).
 
 A plug-in that raises while registering, names a major API version this core does not
 speak, or is named in `REAM_PLUGINS` but not installed, stops start-up
@@ -53,6 +54,11 @@ _failures: dict[tuple[str, str], int] = {}
 _loaded: list[str] = []
 # Inbound routes plug-ins mounted, by normalised host: (plug-in, guarded ASGI app).
 _ROUTERS: dict[str, tuple[str, Callable]] = {}
+# API 1.2: plug-in tables (plug-in, one checked statement), and start / stop hooks
+# (plug-in, fn), in registration order.
+_SCHEMA: list[tuple[str, str]] = []
+_STARTS: list[tuple[str, Callable]] = []
+_STOPS: list[tuple[str, Callable]] = []
 
 
 def failure_counts() -> dict[str, int]:
@@ -238,17 +244,36 @@ class PluginAPI:
         self,
         name: str,
         kinds: tuple[str, ...] | list[str],
-        deliver: Callable,
+        deliver: Callable | None = None,
         delivery: str = "outbox",
         *,
         label: str | None = None,
+        stage: Callable | None = None,
     ) -> None:
         """Register an event sink (4.2, 1). `deliver(event)` returns on success and
         raises to retry (outbox) or be logged (after commit). A kind that is not one of
         `events.KINDS` or `events.BRIDGE_KINDS` is refused (`PluginError`, naming the
         plug-in and the kind): the sink would otherwise never match. Plug-ins cannot
-        declare kinds of their own, so these two lists are the whole set."""
+        declare kinds of their own, so these two lists are the whole set.
+
+        API 1.2: `stage(conn, event)` (outbox delivery only) runs in the action's own
+        transaction, where the core's own staging sinks run, so the plug-in can write
+        its own queue in the plug-in's tables (`schema`). It runs inside a savepoint: a
+        raise undoes only its own writes, is logged and counted (`<plug-in>:stage`),
+        and the action, its journal row and the other sinks go on; the event is simply
+        not staged for this sink. With `stage` the core writes no outbox row and calls
+        no `deliver`: the plug-in's own sender (`on_start`) delivers. A sink needs
+        exactly one of `deliver` and `stage`."""
         plugin = self._plugin
+        if (deliver is None) == (stage is None):
+            raise PluginError(
+                f"plug-in {plugin!r}: sink {name!r} needs exactly one of deliver"
+                " and stage"
+            )
+        if stage is not None and delivery != "outbox":
+            raise PluginError(
+                f"plug-in {plugin!r}: sink {name!r}: stage is for delivery='outbox'"
+            )
         known = (*events.KINDS, *events.BRIDGE_KINDS)
         for kind in kinds:
             if kind not in known:
@@ -256,6 +281,34 @@ class PluginAPI:
                     f"plug-in {plugin!r}: sink {name!r} names unknown event kind"
                     f" {str(kind)[:60]!r}"
                 )
+
+        if stage is not None:
+
+            def guarded_stage(conn, event):
+                # A savepoint, so a database error inside the plug-in's writes (which
+                # on Postgres would poison the whole transaction) undoes only them.
+                try:
+                    with conn.transaction():
+                        stage(conn, event)
+                except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
+                    _count(plugin, "stage")
+                    _log.warning(
+                        "plug-in %s: sink %s stage failed: %s",
+                        plugin,
+                        name,
+                        type(exc).__name__,
+                    )
+
+            sinks.register(
+                sinks.Sink(
+                    name,
+                    tuple(kinds),
+                    stage=guarded_stage,
+                    delivery=delivery,
+                    label=label,
+                )
+            )
+            return
 
         def guarded(event):
             try:
@@ -335,6 +388,36 @@ class PluginAPI:
         `enabled()` says whether mail is on. One backend at most; with none, mail is
         off. `name` is only for the log."""
         mail.register_backend(self._plugin, send, enabled)
+
+    def schema(self, statements: list[str] | tuple[str, ...]) -> None:
+        """Declare this plug-in's own tables (API 1.2). Each statement is created at
+        start-up, after the core's migration and before any sink or hook runs, on
+        Postgres and on SQLite, idempotently. Only `create table if not exists
+        <prefix>_...` and `create [unique] index if not exists <prefix>_... on
+        <prefix>_...` are accepted, where `<prefix>` is the plug-in's name in lower
+        case with every run of other characters as `_`; no `;`, no `%`, no comment, no
+        `as select`, and a `references` may name only the plug-in's own tables. Write
+        the dialect-neutral subset: `text`, `integer`, `bigint`, `boolean`
+        (default `true`/`false`), `timestamptz`, `jsonb`, plain constant defaults and
+        primary key / unique / not null. There is no migration after the first
+        creation: a later change is a new table or index, never an edit."""
+        if isinstance(statements, str):
+            raise PluginError(f"plug-in {self._plugin!r}: schema takes a list")
+        checked = [_check_ddl(self._plugin, st) for st in statements]
+        _SCHEMA.extend((self._plugin, st) for st in checked)
+
+    def on_start(self, fn: Callable) -> None:
+        """Run `fn(db)` once when the server has started (API 1.2): after the plug-in
+        tables exist and the core's outbox sender is up, in name order of plug-in. For a
+        sender thread of the plug-in's own; `fn` must return promptly. A raise is
+        logged, counted (`<plug-in>:start`) and does not stop the server."""
+        _STARTS.append((self._plugin, fn))
+
+    def on_stop(self, fn: Callable) -> None:
+        """Run `fn()` once when the server shuts down (API 1.2), in the reverse order of
+        start, each isolated: a raise is logged, counted (`<plug-in>:stop`) and the
+        rest still run. Best effort: a killed process runs none."""
+        _STOPS.append((self._plugin, fn))
 
     def text_vars(self, values: dict) -> None:
         """Add `{{name}}` template variables (4.2, text). Each name must start with this
@@ -439,6 +522,81 @@ class PluginAPI:
         never moved by them. `register` runs on every start of every command-line tool: keep
         it cheap and free of side effects (no network, files or subprocesses)."""
         plugin_cli.register_client_defaults(self._plugin, api_url, session_envs, news)
+
+
+def _prefix(plugin: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", plugin.lower()).strip("_") + "_"
+
+
+_DDL_TABLE = re.compile(
+    r"\s*create\s+table\s+if\s+not\s+exists\s+([a-z][a-z0-9_]*)\s*\(", re.IGNORECASE
+)
+_DDL_INDEX = re.compile(
+    r"\s*create\s+(?:unique\s+)?index\s+if\s+not\s+exists\s+([a-z][a-z0-9_]*)"
+    r"\s+on\s+([a-z][a-z0-9_]*)\s*\(",
+    re.IGNORECASE,
+)
+_DDL_REFERENCES = re.compile(r"\breferences\s+([a-z0-9_\"]+)", re.IGNORECASE)
+
+
+def _check_ddl(plugin: str, statement: str) -> str:
+    """One schema statement, or PluginError (naming the plug-in and never the text)."""
+    prefix = _prefix(plugin)
+
+    def refuse(why: str):
+        raise PluginError(f"plug-in {plugin!r}: schema statement refused: {why}")
+
+    if not isinstance(statement, str) or not statement.strip():
+        refuse("not a statement")
+    if re.search(r";|%|--|/\*", statement):
+        refuse("no ';', '%' or comment allowed")
+    table = _DDL_TABLE.match(statement)
+    index = None if table else _DDL_INDEX.match(statement)
+    if table is None and index is None:
+        refuse("only create table / index if not exists")
+    names = [table.group(1)] if table else list(index.groups())
+    for name in names:
+        if not name.lower().startswith(prefix):
+            refuse(f"names must start with {prefix!r}")
+    for ref in _DDL_REFERENCES.findall(statement):
+        if not ref.lower().startswith(prefix):
+            refuse("references only the plug-in's own tables")
+    if re.search(r"\bas\s+select\b", statement, re.IGNORECASE):
+        refuse("no as select")
+    return statement.strip()
+
+
+def apply_schema(db) -> None:
+    """Create every plug-in's tables (idempotent). `serve` calls it after `load()`; a
+    failure stops start-up, like any other registration fault."""
+    if not _SCHEMA:
+        return
+    try:
+        db.ensure_plugin_tables([st for _p, st in _SCHEMA])
+    except Exception as exc:  # noqa: BLE001
+        raise PluginError(
+            f"plug-in schema could not be created: {type(exc).__name__}"
+        ) from None
+
+
+def start_all(db) -> None:
+    """Call every plug-in's start hook, each isolated."""
+    for plugin, fn in tuple(_STARTS):
+        try:
+            fn(db)
+        except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
+            _count(plugin, "start")
+            _log.warning("plug-in %s: start failed: %s", plugin, type(exc).__name__)
+
+
+def stop_all() -> None:
+    """Call every plug-in's stop hook, last registered first, each isolated."""
+    for plugin, fn in reversed(list(_STOPS)):
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
+            _count(plugin, "stop")
+            _log.warning("plug-in %s: stop failed: %s", plugin, type(exc).__name__)
 
 
 _HOST_NAME = re.compile(

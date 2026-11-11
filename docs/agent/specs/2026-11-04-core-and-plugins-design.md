@@ -804,6 +804,35 @@ drivers; CI only (not on the management machine).
    **Behaviour change:** a half-set group no longer stops a core start (the plug-in checks its own).
    Tests: `test_plugin_scanner_mail.py` (backend path, no-backend path, the warning),
    `test_email_share.py` (a registered backend stands in for the sender), `test_settings.py`.
+   **9e, not a stand-down: the plug-in API grows first (11 Nov 2026).** The quarterdeck bridge
+   (`partner.py`, `partner_in.py`, and what `inbox`, `gallery`, `api`, `listening`, `app`, `serve`,
+   `admin` and `decisions` read from them) cannot move the way 9d's doorbell did, because the plug-in
+   API could not express it: a `stage(conn, event)` that writes in the answering transaction (the
+   per-question `partner_version` and the outbox row are written there), tables of the plug-in's
+   own, a sender thread to start and stop, and the inbound copies the inbox, gallery and listening
+   read. The spec's done-when stands: quarterdeck leaves core entirely (not a generic bridge kept
+   in core). Sliced: **9e-1, built (`ci/plugin-api-1-2`): plug-in API 1.2, additive**, in core only:
+   `api.sink(name, kinds, stage=fn)` (exactly one of `deliver` and `stage`, outbox delivery; run in
+   a savepoint inside the action's transaction where the built-in `partner` stage sink runs; a raise
+   undoes only its own writes, is logged and counted as `<plug-in>:stage`, and the answer is kept,
+   the event not staged for that sink); `api.schema([...])` (a plug-in's own tables, only
+   `create table|index if not exists`, names prefixed with the plug-in's name, created after the
+   core's migration under its lock on both databases; `Database.ensure_plugin_tables`);
+   `api.on_start(fn(db))` and `api.on_stop(fn())` (called from `serve.py` after `sinks.start` and
+   from the lifespan shutdown before `sinks.stop`, each isolated). `API_VERSION` is `(1, 2)`; the
+   CLI's no-op API accepts the new calls. Tests: `tests/test_plugin_api_1_2.py` (a fake plug-in
+   using all three, the failure and refusal cases). Nothing moved; `partner.py` is untouched.
+   **Next, 9e-2: the plug-in's read side.** A way for a plug-in to contribute the inbound copies
+   that `inbox.py` (`partner_in.open_copies`, `count_waiting`), `gallery.py` (open and settled
+   copies, `answer_here`), `api.py` (`_slack_view`) and `listening.py` (`partner.enabled()`, the
+   bridge state) read today, and the admin outbox status; then 9e-3, the quarterdeck plug-in's
+   outbound half (stage sink, own `quarterdeck_*` tables, sender) with core's `partner` sink
+   standing down while a sink named `quarterdeck` is registered; 9e-4, the inbound half (`slack`
+   answer source, `on_answer`, router) and the deletion from core. **Open for 9e-3:** the existing
+   `partner_outbox`, `partner_question` and the version tables are core's and hold live rows; a
+   plug-in's names must carry its prefix, so the move needs a copy or a read-through of those rows.
+   **Not run here:** the full suite on Postgres (CI on `ci/plugin-api-1-2`); the new file passed
+   serially on SQLite.
 10. **Docs and decisions.** `docs/decisions.md` entry for the core-and-plug-ins split, the design
     doc's extension section, a plug-in author guide, the office doc's deployment paragraph.
     (Docs also land with each slice above; this is the consolidation.)

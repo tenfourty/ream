@@ -1162,6 +1162,17 @@ class Database:
             conn.advisory_lock(_MIGRATE_LOCK_KEY)
             conn.execute(sql)
 
+    def ensure_plugin_tables(self, statements: list[str]) -> None:
+        """Run a plug-in's `create ... if not exists` statements (already checked by
+        `plugin_api.schema`), in one transaction, under the same lock `migrate` takes on
+        Postgres so two pods starting together cannot race. Idempotent."""
+        if not statements:
+            return
+        with self.connect() as conn, conn.transaction():
+            conn.advisory_lock(_MIGRATE_LOCK_KEY)  # a no-op on SQLite (begin immediate)
+            for statement in statements:
+                conn.execute(statement)
+
     def _migrate_sqlite(self) -> None:
         """Numbered steps under PRAGMA user_version, each run statement by
         statement inside one BEGIN IMMEDIATE (never executescript, which

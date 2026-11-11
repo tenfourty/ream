@@ -82,6 +82,7 @@ def _arm_shutdown_signals(app):
             async def watching(message):
                 # The app has finished shutting down: stop the core outbox sender.
                 if message["type"].startswith("lifespan.shutdown"):
+                    plugin_api.stop_all()
                     sinks.stop(timeout=2.0)
                 await send(message)
 
@@ -207,6 +208,7 @@ def app_from_env():
     # Plug-ins register before anything serves; one that cannot stops the start.
     try:
         plugin_api.load()
+        plugin_api.apply_schema(db)  # the plug-ins' own tables (API 1.2)
     except plugin_api.PluginError as exc:
         raise SystemExit(str(exc)) from None
     # The webhook sinks of REAM_SINKS_FILE, after the plug-ins so a name clash with one of
@@ -234,4 +236,5 @@ def app_from_env():
     # Breaker state and plug-in failure counts in the database: one view over all workers.
     sinks.bind(db)
     sinks.start(db)
+    plugin_api.start_all(db)  # plug-in start hooks (API 1.2)
     return _arm_shutdown_signals(create_app(db, inbound))
