@@ -7,6 +7,7 @@ import re
 import time
 
 import pytest
+import scalecheck
 from fastapi.testclient import TestClient
 
 from ream import api as api_module
@@ -206,24 +207,12 @@ SHAPES = {
 }
 READS = {
     "missing_files": lambda page, budget: renderfind.missing_files(page, budget),
-    "loads_live_data": lambda page, budget: renderfind.loads_live_data(
-        FETCH + page, budget
-    ),
+    "loads_live_data": lambda page, budget: renderfind.loads_live_data(page, budget),
     "inject": lambda page, budget: renderfind.inject(page, NONCE, budget),
 }
-
-
-def _page(first, unit, chars):
-    return first + (unit * (chars // len(unit) + 1))[:chars]
-
-
-def _best(read, page, runs):
-    best = float("inf")
-    for _ in range(runs):
-        began = time.perf_counter()
-        read(page, renderfind.Budget(600))
-        best = min(best, time.perf_counter() - began)
-    return best
+# What each read has to see first for its work to be done at all, in the page's
+# own characters (a page over the cap is not read, so nothing can be added to one).
+STARTS = {"loads_live_data": FETCH}
 
 
 # The patterns that were slow were the ones in `missing_files`, so it gets every
@@ -246,16 +235,27 @@ CASES = [
 @pytest.mark.parametrize(("read", "shape"), CASES)
 def test_eight_times_the_page_costs_about_eight_times_the_time(read, shape):
     """A read that grows with the square of the page takes 64 times as long on
-    eight times the page; one that grows with the page, about 8 (the limit here
-    is 20). Both pages are big enough that a squared read takes minutes. The
-    smaller time is floored at 0.2 s so a read too fast to time cannot fail."""
+    eight times the page; one that grows with the page, about 8 (the limit is 20,
+    tests/scalecheck.py), on pages of 1 MiB and 8 MiB."""
     first, unit = SHAPES[shape]
-    size = 256 * 1024
-    small, large = _page(first, unit, size), _page(first, unit, 8 * size)
-    t_small = _best(READS[read], small, 2)
-    t_large = _best(READS[read], large, 1)
-    assert t_large < 5, f"{read} took {t_large:.1f}s on {len(large)} characters"
-    assert t_large < 20 * max(t_small, 0.2), (read, t_small, t_large)
+
+    def reads(text):
+        done = READS[read](text, renderfind.Budget(600))
+        assert done is not None, "the page was not read"
+
+    scalecheck.assert_linear(reads, STARTS.get(read, "") + first, unit)
+
+
+def test_the_big_page_is_inside_the_cap_so_it_is_read():
+    assert 8 * scalecheck.MOST <= renderfind.MAX_SCAN_CHARS
+
+
+@pytest.mark.parametrize("probe", [True, False])
+def test_the_scaling_check_fails_a_read_that_grows_with_the_square(probe):
+    """Without this, a check that passes everything would look like a fast read."""
+    quadratic = re.compile(r"<a[^>]*>")
+    with pytest.raises(AssertionError, match="times as long"):
+        scalecheck.assert_linear(quadratic.search, "", "<a ", start=4096, probe=probe)
 
 
 def test_pathological_pages_are_read_at_once_and_still_answered_sanely():
