@@ -14,8 +14,8 @@ copy gets wrong). Raise `CLIENT_LEVEL` to the same number in that commit. Standa
 only: the command-line tools import this.
 """
 
-CLIENT_LEVEL = 3
-MIN_CLIENT_LEVEL = 2
+CLIENT_LEVEL = 4
+MIN_CLIENT_LEVEL = 4
 
 # STEP 2 SWITCH (comments-setting rollout, 9 Nov 2026). While False a NEW page published without
 # a comments setting is accepted (stored null, read as on); `ream publish` does not insist on
