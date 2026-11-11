@@ -77,6 +77,10 @@ class Sink:
     stage: Callable[[Connection, Event], None] | None = None
     # Human words for wording ("waiting for quarterdeck"); None shows `name`.
     label: str | None = None
+    # The plug-in that registered it (its entry-point name); None for core's own and
+    # for a REAM_SINKS_FILE webhook. Step 9e-3 asks "is the bridge's owner staging
+    # here" by this, never by a sink's name.
+    plugin: str | None = None
 
     def __post_init__(self) -> None:
         if self.delivery not in DELIVERIES:
@@ -93,8 +97,9 @@ _builtins_loaded = False
 # The plug-in sink that takes over core's doorbell (step 9d); logged once per process.
 DOORBELL_PLUGIN_SINK = "doorbell"
 _doorbell_stood_down_logged = False
-# Core's `partner` stage sink stands down once a plug-in holds the bridge (step 9e-3,
-# `partner.claim_bridge`, read in the staging transaction). Logged once.
+# Core's `partner` stage sink stands down while the plug-in that holds the bridge (step
+# 9e-3, `partner.claim_bridge`, read in the staging transaction) has its stage for the
+# event's kind registered in this process. Logged once.
 _partner_stood_down_logged = False
 _late_failures = 0
 # sink name -> [consecutive failures, open until (None: closed), the distinct rows that
@@ -350,6 +355,20 @@ def registered() -> list[Sink]:
     _ensure_builtins()
     with _lock:
         return list(_sinks.values())
+
+
+def bridge_stage_of(plugin: str, kind: str | None = None) -> bool:
+    """Whether plug-in `plugin` has a stage sink registered in this process for bridge
+    kind `kind` (None: for any bridge kind). Step 9e-3: core's partner stage stands down
+    only when the bridge's owner can stage the event here, so an event raised in a process
+    without it (a command-line tool, another REAM_PLUGINS) still lands in core's outbox."""
+    from ream.events import BRIDGE_KINDS
+
+    wanted = BRIDGE_KINDS if kind is None else (kind,)
+    return any(
+        s.plugin == plugin and s.stage is not None and set(wanted) & set(s.kinds)
+        for s in registered()
+    )
 
 
 def matching(kind: str) -> list[Sink]:
@@ -719,16 +738,22 @@ def _builtin_sinks() -> list[Sink]:
         )
 
     def stage_partner(conn: Connection, event: Event) -> None:
-        # Step 9e-3: once a plug-in holds the bridge (a database fact, read in this
-        # transaction, so a process that did not load the plug-in stands down too), its
-        # own stage writes the event (version from `partner.next_version`) and the
-        # partner is told once.
+        # Step 9e-3: core stands down only when the plug-in that holds the bridge (a
+        # database fact, read in this transaction) has its stage for this kind loaded in
+        # this process; that stage then writes the event (version from
+        # `partner.next_version`). Anywhere else (a command-line tool, another
+        # REAM_PLUGINS) core writes it to its own outbox, which core's sender leaves
+        # alone while the key is set and the owner's sender empties with `hand_over`:
+        # one writer per event, and nothing lost.
         global _partner_stood_down_logged
-        if partner.bridge_owner(conn) is not None:
+        owner = partner.bridge_owner(conn)
+        if owner is not None and bridge_stage_of(owner, event.kind):
             if not _partner_stood_down_logged:
                 _partner_stood_down_logged = True
                 _log.info("core partner stage stands down: a plug-in holds the bridge")
             return
+        if owner is not None and not bridge_stage_of(owner):
+            partner.note_owner_absent(owner)
         # The body is already the partner's own shape (partner.*_body). `at` is an
         # ISO string in `data` because an event is JSON.
         at = event.data.get("at")

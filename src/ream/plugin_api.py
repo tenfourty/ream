@@ -347,6 +347,7 @@ class PluginAPI:
                     stage=guarded_stage,
                     delivery=delivery,
                     label=label,
+                    plugin=plugin,
                 )
             )
             return
@@ -363,7 +364,12 @@ class PluginAPI:
 
         sinks.register(
             sinks.Sink(
-                name, tuple(kinds), deliver=guarded, delivery=delivery, label=label
+                name,
+                tuple(kinds),
+                deliver=guarded,
+                delivery=delivery,
+                label=label,
+                plugin=plugin,
             )
         )
 

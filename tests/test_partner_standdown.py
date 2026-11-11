@@ -18,7 +18,17 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from ream import decisions, listening, partner, plugin_api, readside, sinks, store
+from ream import (
+    admin,
+    decisions,
+    listening,
+    partner,
+    plugin_api,
+    plugin_cli,
+    readside,
+    sinks,
+    store,
+)
 from ream.events import BRIDGE_KINDS
 from ream.sinks import Sink
 
@@ -69,6 +79,7 @@ def page(db):
 def _fresh_log_flags(monkeypatch):
     monkeypatch.setattr(sinks, "_partner_stood_down_logged", False)
     monkeypatch.setattr(partner, "_sender_stood_down_logged", False)
+    monkeypatch.setattr(partner, "_owner_absent_warned", False)
 
 
 def _ask(db, page):
@@ -112,7 +123,7 @@ class FakeQuarterdeck:
         self.staged.append((event.ref_id, version, event.kind))
 
     def sink(self):
-        return Sink("quarterdeck", BRIDGE_KINDS, stage=self.stage)
+        return Sink("quarterdeck", BRIDGE_KINDS, stage=self.stage, plugin=self.owner)
 
 
 def _claim(db, owner="qd"):
@@ -177,12 +188,57 @@ def test_core_stage_stands_down_once_claimed_and_logs_once(db, page, bridge, cap
     assert said[0].levelno == logging.INFO
 
 
-def test_core_stands_down_in_a_process_without_the_plugin(db, page, bridge):
-    # Another process (other REAM_PLUGINS) has only core's sinks: the database decides.
+def test_core_stages_in_a_process_without_the_owners_stage(db, page, bridge, caplog):
+    # A process where the owner's stage is not loaded (`artifacts-admin purge-deleted`,
+    # another REAM_PLUGINS): nobody else would write the event, so core's outbox keeps
+    # it, and the plug-in's next hand-over moves it. The owner being absent is a WARNING,
+    # once per process.
+    caplog.set_level(logging.WARNING, logger="ream.partner")
     _claim(db)
     with sinks.isolated(*sinks._builtin_sinks()):
-        _ask(db, page)
+        d = _ask(db, page)
+        decisions.answer(db, d.id, letter="a", by="jeremy")
+    assert [(r[1], r[2]) for r in _outbox(db)] == [(1, "asked"), (2, "answered")]
+    said = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(said) == 1
+    assert "'qd'" in said[0].getMessage()
+    with db.connect() as conn, conn.transaction():
+        moved = partner.hand_over(conn, datetime.now(UTC))
+    assert [r["version"] for r in moved.rows] == [1, 2]
     assert _outbox(db) == []
+
+
+def test_a_cli_process_still_tells_the_partner(db, page, bridge):
+    # The command-line plug-in API registers no sink (`artifacts-admin purge-deleted`
+    # withdraws a purged page's open question there): the event must still be staged.
+    _claim(db)
+    with sinks.isolated(*sinks._builtin_sinks()):
+        plugin_cli.CliPluginAPI("qd").sink("quarterdeck", BRIDGE_KINDS, stage=_boom)
+        d = _ask(db, page)
+        decisions.answer(db, d.id, letter="a", by="jeremy")
+    assert [r[2] for r in _outbox(db)] == ["asked", "answered"]
+
+
+def test_another_plugins_bridge_stage_does_not_silence_core(db, page, bridge):
+    # The check is by owner, never by sink name: a stage sink named quarterdeck that
+    # belongs to another plug-in leaves core writing.
+    other = FakeQuarterdeck(owner="other")
+    _claim(db)
+    with sinks.isolated(*sinks._builtin_sinks(), other.sink()):
+        _ask(db, page)
+    assert [(r[1], r[2]) for r in _outbox(db)] == [(1, "asked")]
+    assert other.staged == []
+
+
+def test_core_stages_the_kinds_the_owners_stage_does_not_take(db, page, bridge):
+    qd = FakeQuarterdeck()
+    only_asked = Sink("quarterdeck", ("asked",), stage=qd.stage, plugin="qd")
+    _claim(db)
+    with sinks.isolated(*sinks._builtin_sinks(), only_asked):
+        d = _ask(db, page)
+        decisions.answer(db, d.id, letter="a", by="jeremy")
+    assert qd.staged == [(d.id, 1, "asked")]
+    assert [(r[1], r[2]) for r in _outbox(db)] == [(2, "answered")]
 
 
 def test_exactly_one_stages_before_and_after_the_claim(db, page, bridge):
@@ -523,3 +579,163 @@ def test_api_1_4_accepts_delivered(monkeypatch):
     assert readside.contributors()[0].delivered is not None
     with pytest.raises(plugin_api.PluginError, match="not callable"):
         plugin_api.PluginAPI("qd2").read_side(delivered=1)
+
+
+# --- second review round ----------------------------------------------------------------
+
+
+def test_two_claims_at_once_the_second_is_refused_cleanly(db, monkeypatch):
+    # Two plug-in processes claim together: both read "nobody", the first inserts. The
+    # second must get BridgeHeld, never the primary key's raw database error.
+    _claim(db, "other")
+    real = partner.bridge_owner
+    reads = []
+
+    def stale_first_read(conn):
+        reads.append(1)
+        return None if len(reads) == 1 else real(conn)
+
+    monkeypatch.setattr(partner, "bridge_owner", stale_first_read)
+    with pytest.raises(partner.BridgeHeld), db.connect() as conn, conn.transaction():
+        partner.claim_bridge(conn, "qd")
+    monkeypatch.setattr(partner, "bridge_owner", real)
+    with db.connect() as conn:
+        assert partner.bridge_owner(conn) == "other"
+
+
+def test_a_claim_between_two_rows_of_a_pass_stops_the_pass(db, page, bridge):
+    # The sender reads the owner per row, inside the claim: a plug-in that took the bridge
+    # after the pass began gets the second question, core never sends it.
+    with sinks.isolated(*sinks._builtin_sinks()):
+        _ask(db, page)
+        _ask(db, page)
+
+    class ClaimsOnFirstCall(FakePartner):
+        def __call__(self, url, body, headers, timeout):
+            if not self.calls:
+                _claim(db)
+            return super().__call__(url, body, headers, timeout)
+
+    fake = ClaimsOnFirstCall()
+    with sinks.isolated(*sinks._builtin_sinks()):
+        assert partner.sender_pass(db, bridge, post=fake) == (1, 0)
+    assert len(fake.calls) == 1
+    assert sorted(r[3] is None for r in _outbox(db)) == [False, True]
+
+
+def test_core_outbox_clear_holds_what_core_still_has(db, page, bridge):
+    # The fragment the plug-in's claim statement must carry, so a row core committed
+    # after the hand-over's `held` snapshot still holds the question's later versions.
+    with sinks.isolated(*sinks._builtin_sinks()):
+        held = _ask(db, page)
+    with sinks.isolated():
+        free = _ask(db, page)
+    clear = partner.core_outbox_clear("d.id")
+    query = "select d.id from decision d where " + clear  # noqa: S608 -- fixed text
+    with db.connect() as conn:
+        got = {r[0] for r in conn.execute(query).fetchall()}
+    assert free.id in got and held.id not in got
+    fake = FakePartner()
+    assert partner.deliver_due(db, bridge, post=fake) == (1, 0)
+    with db.connect() as conn:
+        got = {r[0] for r in conn.execute(query).fetchall()}
+    assert {free.id, held.id} <= got  # delivered rows hold nothing
+
+
+@pytest.mark.parametrize("bad", ["", "d.id; drop table x", "1x", "a.b.c", "d.id--"])
+def test_core_outbox_clear_takes_only_a_column_name(bad):
+    with pytest.raises(ValueError):
+        partner.core_outbox_clear(bad)
+
+
+def test_status_names_the_owner_and_whether_its_stage_is_here(db):
+    assert partner.status(db)["bridge_owner"] is None
+    _claim(db)
+    with sinks.isolated(*sinks._builtin_sinks()):
+        got = partner.status(db)
+    assert (got["bridge_owner"], got["bridge_owner_loaded"]) == ("qd", False)
+    with sinks.isolated(*sinks._builtin_sinks(), FakeQuarterdeck().sink()):
+        assert partner.status(db)["bridge_owner_loaded"] is True
+
+
+def test_start_up_warns_once_when_the_owner_is_not_loaded(db, caplog):
+    caplog.set_level(logging.WARNING, logger="ream.partner")
+    with sinks.isolated(*sinks._builtin_sinks()):
+        partner.warn_if_owner_absent(db)  # nobody holds it: nothing to say
+        assert caplog.records == []
+        _claim(db)
+        with sinks.isolated(*sinks._builtin_sinks(), FakeQuarterdeck().sink()):
+            partner.warn_if_owner_absent(db)
+        assert caplog.records == []
+        partner.warn_if_owner_absent(db)
+        partner.warn_if_owner_absent(db)
+    said = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(said) == 1
+    assert "partner-bridge --release" in said[0].getMessage()
+
+
+def test_a_standing_down_sender_warns_when_the_owner_is_not_here(
+    db, page, bridge, caplog
+):
+    caplog.set_level(logging.INFO, logger="ream.partner")
+    _claim(db)
+    with sinks.isolated(*sinks._builtin_sinks()):
+        assert partner.sender_pass(db, bridge, post=FakePartner()) is None
+    assert [r.levelno for r in caplog.records if "'qd'" in r.getMessage()] == [
+        logging.WARNING
+    ]
+
+
+class _EntryPoint:
+    def __init__(self, name):
+        self.name = name
+
+
+def test_admin_partner_bridge_shows_the_owner(db, monkeypatch, capsys):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    admin.main(["partner-bridge"])
+    assert "held by core" in capsys.readouterr().out
+    _claim(db)
+    admin.main(["partner-bridge"])
+    assert "held by plug-in 'qd'" in capsys.readouterr().out
+
+
+def test_admin_release_gives_core_the_bridge_when_the_owner_is_gone(
+    db, page, bridge, monkeypatch, capsys
+):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    monkeypatch.setattr(plugin_cli, "entry_points", list)
+    _claim(db)
+    with sinks.isolated(*sinks._builtin_sinks()):
+        _ask(db, page)  # queued in core's outbox while the owner is absent
+    admin.main(["partner-bridge", "--release"])
+    out = capsys.readouterr().out
+    assert "released" in out and "1 undelivered" in out
+    with db.connect() as conn:
+        assert partner.bridge_owner(conn) is None
+    with sinks.isolated(*sinks._builtin_sinks()):
+        assert partner.sender_pass(db, bridge, post=FakePartner()) == (1, 0)
+
+
+def test_admin_release_refuses_while_the_owner_is_installed_here(db, monkeypatch):
+    # Installed and selected by this shell's REAM_PLUGINS: the plug-in's own release
+    # command gives its rows back too; clearing the key here would strand them.
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    monkeypatch.delenv("REAM_PLUGINS", raising=False)
+    monkeypatch.delenv("ARTIFACTS_PLUGINS", raising=False)
+    monkeypatch.setattr(plugin_cli, "entry_points", lambda: [_EntryPoint("qd")])
+    _claim(db)
+    with pytest.raises(SystemExit, match="'qd' is installed"):
+        admin.main(["partner-bridge", "--release"])
+    with db.connect() as conn:
+        assert partner.bridge_owner(conn) == "qd"
+    monkeypatch.setenv("REAM_PLUGINS", "none")  # installed but not selected: allowed
+    admin.main(["partner-bridge", "--release"])
+    with db.connect() as conn:
+        assert partner.bridge_owner(conn) is None
+
+
+def test_admin_release_with_nobody_holding_it_says_so(db, monkeypatch, capsys):
+    monkeypatch.setenv("DATABASE_URL", db.dsn)
+    admin.main(["partner-bridge", "--release"])
+    assert "held by core" in capsys.readouterr().out

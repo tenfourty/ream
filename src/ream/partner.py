@@ -33,6 +33,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -443,7 +444,8 @@ def _claim(db: Database, now: datetime, limit: int = 1) -> list[dict]:
     Postgres the select takes `for update of o skip locked`, so two processes
     claiming together get different rows; the lease (`claimed_until`) then holds
     the row without holding a transaction open across the network. SQLite has
-    one process and `begin immediate` already serialises writers."""
+    one process and `begin immediate` already serialises writers. Nothing is due
+    while a plug-in holds the bridge (step 9e-3), read in the same statement."""
     due = (
         " where o.delivered_at is null and o.parked_at is null"
         " and o.next_attempt_at <= %s"
@@ -451,11 +453,14 @@ def _claim(db: Database, now: datetime, limit: int = 1) -> list[dict]:
         " and not exists (select 1 from partner_outbox p"
         "   where p.decision_id = o.decision_id and p.version < o.version"
         "   and p.delivered_at is null)"
+        # Step 9e-3: the owner is read here, in the statement that takes the row, so a
+        # plug-in that claimed the bridge after the pass began gets every later row.
+        " and not exists (select 1 from service_meta m where m.key = %s)"
     )
     with db.connect() as conn:
         waiting = conn.execute(
             "select 1 from partner_outbox o" + due + " limit 1",  # noqa: S608 -- fixed text
-            (now, now),
+            (now, now, BRIDGE_OWNER_KEY),
         ).fetchone()
     if waiting is None:
         return []
@@ -467,7 +472,7 @@ def _claim(db: Database, now: datetime, limit: int = 1) -> list[dict]:
             + due
             + " order by o.created_at, o.version limit %s"
             + conn.for_update(" of o skip locked"),
-            (now, now, limit),
+            (now, now, BRIDGE_OWNER_KEY, limit),
         ).fetchall()
         for row in rows:
             conn.execute(
@@ -601,6 +606,9 @@ def unpark(
 # The switch is a database fact, not a per-process registry: every process of the new
 # image reads it in the transaction it stages in, and once per sender pass.
 BRIDGE_OWNER_KEY = "partner_bridge_owner"
+# The key names a plug-in whose bridge stage is not loaded in this process (step 9e-3,
+# second review round): said once per process, at WARNING.
+_owner_absent_warned = False
 
 
 class BridgeHeld(Exception):
@@ -617,19 +625,75 @@ def bridge_owner(conn: Connection) -> str | None:
 
 def claim_bridge(conn: Connection, owner: str) -> None:
     """Take the outbound bridge from core, in the caller's transaction: the plug-in calls
-    it in the same transaction as its first `hand_over`. From its commit, core's stage and
-    sender stand down in every process that reads it, and the owner's stage must stage
-    (`bridge_owner(conn) == owner`). The same owner again changes nothing; another owner
-    is refused (`BridgeHeld`)."""
+    it in the same transaction as its first `hand_over`. `owner` must be the plug-in's own
+    entry-point name (the name `api.sink` records on its sinks): core stands down only
+    where a stage sink of that plug-in is loaded, and a failing stage fails the action
+    (`plugin_api.BridgeStageFailed`) only when the stored owner is that name. From its
+    commit, core's sender stands down in every process, and core's stage wherever the
+    owner's stage is loaded; elsewhere core's stage goes on writing core's outbox for the
+    owner's `hand_over` to move. The same owner again changes nothing; another owner is
+    refused (`BridgeHeld`), also when two claim at once (the insert does nothing on a
+    conflict and the owner is read again)."""
     held = bridge_owner(conn)
     if held == owner:
         return
     if held is not None:
         raise BridgeHeld(f"the partner bridge is held by {held!r}")
     conn.execute(
-        "insert into service_meta (key, value) values (%s, %s)",
+        "insert into service_meta (key, value) values (%s, %s) on conflict do nothing",
         (BRIDGE_OWNER_KEY, owner),
     )
+    held = bridge_owner(conn)
+    if held != owner:
+        raise BridgeHeld(f"the partner bridge is held by {held!r}")
+
+
+_COLUMN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?")
+
+
+def core_outbox_clear(column: str) -> str:
+    """A WHERE fragment, true when core's outbox has no undelivered row for the question
+    `column` names (`o.decision_id`, say). The plug-in's claim statement must carry it:
+    `hand_over`'s `held` is a snapshot, and on Postgres a staging transaction that has not
+    committed yet (core's stage in a process without the owner's stage) can add a row
+    after it, so the claim checks again in the statement that takes the row. `column`
+    is a column name, optionally qualified; anything else is a ValueError."""
+    if not _COLUMN.fullmatch(column):
+        raise ValueError("core_outbox_clear takes a column name")
+    return (
+        "not exists (select 1 from partner_outbox core_p"  # noqa: S608 -- a checked column name only
+        f" where core_p.decision_id = {column} and core_p.delivered_at is null)"
+    )
+
+
+def _owner_here(owner: str) -> bool:
+    from ream import sinks
+
+    return sinks.bridge_stage_of(owner)
+
+
+def note_owner_absent(owner: str) -> None:
+    """Say once per process, at WARNING, that the bridge's owner has no bridge stage
+    loaded here. Its name only, no value."""
+    global _owner_absent_warned
+    if _owner_absent_warned:
+        return
+    _owner_absent_warned = True
+    _log.warning(
+        "partner bridge: held by plug-in %r, whose bridge stage is not loaded in this"
+        " process; its partner events wait in core's outbox for that plug-in's sender."
+        " If the plug-in was removed, run `artifacts-admin partner-bridge --release`",
+        owner,
+    )
+
+
+def warn_if_owner_absent(db: Database) -> None:
+    """At server start, after the plug-ins load: `note_owner_absent` if the key names a
+    plug-in whose bridge stage this process did not load."""
+    with db.connect() as conn:
+        owner = bridge_owner(conn)
+    if owner is not None and not _owner_here(owner):
+        note_owner_absent(owner)
 
 
 def release_bridge(conn: Connection, owner: str, rows: list[dict]) -> int:
@@ -817,8 +881,12 @@ def status(db: Database, now: datetime | None = None) -> dict:
             " where last_error is not null and delivered_at is null"
             " order by last_error_at desc limit 1"
         ).fetchone()
+        owner = bridge_owner(conn)
     return {
         "enabled": enabled(),
+        # Step 9e-3: who holds the bridge, and whether its stage is loaded here.
+        "bridge_owner": owner,
+        "bridge_owner_loaded": owner is not None and _owner_here(owner),
         "depth": depth,
         "oldest_undelivered_age_seconds": age(None if first is None else first[0]),
         "parked": len(parked),
@@ -845,7 +913,8 @@ def sender_pass(
     process sees it whatever plug-ins it loaded), the plug-in sends instead (its sender
     takes this outbox's rows with `hand_over`), so this delivers nothing, logs that once
     at INFO and returns None; pruning goes on, since the inbound tables are still
-    core's. Read each pass."""
+    core's. Read each pass, and again per row inside `_claim`, so a claim landing
+    mid-pass stops it before the next row."""
     global _sender_stood_down_logged
     result: tuple[int, int] | None = None
     with db.connect() as conn:
@@ -854,6 +923,8 @@ def sender_pass(
         if not _sender_stood_down_logged:
             _sender_stood_down_logged = True
             _log.info("core partner sender stands down: a plug-in holds the bridge")
+        if not _owner_here(holder):
+            note_owner_absent(holder)
     else:
         result = (
             deliver_due(db, config) if post is None else deliver_due(db, config, post)

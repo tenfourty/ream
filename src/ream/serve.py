@@ -217,6 +217,9 @@ def app_from_env():
         webhook.register_all()
     except webhook.WebhookConfigError as exc:
         raise SystemExit(str(exc)) from None
+    # Step 9e-3: the database says a plug-in holds the partner bridge, but its stage is
+    # not loaded here (removed without `artifacts-admin partner-bridge --release`?).
+    partner.warn_if_owner_absent(db)
     _warn_second_scan_off()
     _warn_mail_off()
     comments.start_sweeper(db)

@@ -181,6 +181,44 @@ def cmd_outbox(_args: argparse.Namespace) -> None:
         )
 
 
+def cmd_partner_bridge(args: argparse.Namespace) -> None:
+    """Who holds the outbound partner bridge (step 9e-3), and with --release give it back
+    to core when the plug-in that claimed it is gone. Refused while that plug-in is
+    installed here and selected by this shell's REAM_PLUGINS, the set a server started
+    from this environment would load (this command loads no plug-in itself): then its own
+    release command is the way, since it also gives its undelivered rows back to core."""
+    from ream import envnames, partner, plugin_cli
+
+    db = _open_db()
+    with db.connect() as conn:
+        owner = partner.bridge_owner(conn)
+    if owner is None:
+        print("partner bridge: held by core")
+        return
+    waiting = partner.status(db)["depth"]
+    print(f"partner bridge: held by plug-in {owner!r}")
+    print(f"undelivered in core's outbox: {waiting}")
+    if not args.release:
+        return
+    if owner in plugin_cli.selected_names(envnames.get("PLUGINS") or ""):
+        raise SystemExit(
+            f"plug-in {owner!r} is installed and selected by REAM_PLUGINS here: run its"
+            " own release command, which gives its undelivered events back to core too"
+        )
+    with db.connect() as conn, conn.transaction():
+        try:
+            partner.release_bridge(conn, owner, [])
+        except partner.BridgeHeld:
+            raise SystemExit(
+                "the bridge changed hands meanwhile: run it again"
+            ) from None
+    print(
+        "released: core holds the partner bridge again, and its sender sends the"
+        f" {waiting} undelivered event(s) in core's outbox. Undelivered events left in"
+        f" {owner!r}'s own tables are not moved."
+    )
+
+
 def cmd_partner_outbox(args: argparse.Namespace) -> None:
     from ream import partner
 
@@ -198,6 +236,11 @@ def cmd_partner_outbox(args: argparse.Namespace) -> None:
         return "-" if value is None else f"{value}s"
 
     print(f"partner bridge: {'on' if report['enabled'] else 'off in this shell'}")
+    if report["bridge_owner"] is not None:
+        print(
+            f"held by plug-in {report['bridge_owner']!r}: core's sender stands down"
+            " (`artifacts-admin partner-bridge`)"
+        )
     print(f"undelivered events: {report['depth']}")
     print(f"oldest undelivered: {secs(report['oldest_undelivered_age_seconds'])}")
     print(
@@ -387,6 +430,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--retry-parked", action="store_true", help="release every parked event"
     )
     partner_outbox.set_defaults(func=cmd_partner_outbox)
+
+    partner_bridge = sub.add_parser(
+        "partner-bridge",
+        help="partner bridge: who holds it; --release gives it back to core after its"
+        " plug-in was removed (needs DATABASE_URL)",
+    )
+    partner_bridge.add_argument(
+        "--release",
+        action="store_true",
+        help="clear the plug-in's hold (refused while it is installed and selected here)",
+    )
+    partner_bridge.set_defaults(func=cmd_partner_bridge)
 
     outbox = sub.add_parser(
         "outbox",

@@ -281,6 +281,19 @@ def entry_points() -> list:
     return list(found.values())
 
 
+def selected_names(wanted: str) -> set[str]:
+    """The installed plug-ins a REAM_PLUGINS value selects, by name, as `register_all`
+    would pick them, but never raising: a named plug-in that is not installed is simply
+    not in the set."""
+    found = {ep.name for ep in entry_points()}
+    wanted = wanted.strip()
+    if wanted.lower() == "none":
+        return set()
+    if wanted:
+        return {n.strip() for n in wanted.split(",")} & found
+    return found
+
+
 def register_all(
     eps: list,
     wanted: str,
