@@ -2777,10 +2777,13 @@ def unresolved_slots(
     """
     body = csp.outside_comments(body)
     first: dict[str, int] = {}
+    line, seen = 1, 0  # counted from the last new slot, not from the top of the page
     for match in _SLOT_IN_BODY.finditer(body):
         slot = match.group(1) or match.group(2)
         if slot not in first:
-            first[slot] = body.count("\n", 0, match.start()) + 1
+            line += body.count("\n", seen, match.start())
+            seen = match.start()
+            first[slot] = line
     if not first:
         return []
     with db.connect() as conn:

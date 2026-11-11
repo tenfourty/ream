@@ -239,3 +239,25 @@ def test_an_older_version_carries_no_note(db, monkeypatch):
     client.headers.update({"host": f"{art.id}.tenfourty.com"})
     served = client.get(f"/p/{frame_pass.mint(db, art.id, 1)}/", headers=FRAMED).text
     assert "var gone=" not in served
+
+
+def test_the_line_of_each_slot_is_where_it_first_appears_on_a_long_page(db):
+    """Counted from the line of the slot before, not from the top of the page for each
+    (which made a page of many slots take time with the square of its size)."""
+    art = store.publish(db, "ops-seat", "Board", page())
+    slots = [f"slot-{n}" for n in range(300)]
+    body = "<!doctype html>\n" + "".join(
+        f"<p>row {n}</p>\n<div data-artifact-decision='{slot}'></div>\n"
+        + (
+            "<p>again</p>\n<div data-artifact-decision='slot-0'></div>\n"
+            if n % 7
+            else ""
+        )
+        for n, slot in enumerate(slots)
+    )
+    found = dict(decisions.unresolved_slots(db, art.id, body))
+    assert list(found) == slots
+    lines = body.split("\n")
+    for slot, line in found.items():
+        assert f"'{slot}'" in lines[line - 1]
+        assert not any(f"'{slot}'" in earlier for earlier in lines[: line - 1])
