@@ -247,8 +247,8 @@ checkout; `scripts/guards/run-selftests.sh` tells you whether this one is protec
 
 The secret scan is the exception to "degrade to a SKIP": it refuses when ggshield is missing or
 cannot scan, and only `GGSHIELD_SKIP=1` lets that through, saying loudly that nothing was scanned. It
-runs ggshield with `GITGUARDIAN_DONT_LOAD_ENV=1` and `--config-path` on an empty temporary file, so the
-checkout's own `.env` and `.gitguardian.yaml` are never read. The other guards still degrade to a
+runs ggshield with `GITGUARDIAN_DONT_LOAD_ENV=1`, `--config-path` on an empty temporary file and `--instance` on the default dashboard, so the
+checkout's own `.env` and `.gitguardian.yaml`, and the instance variables, are never used. The other guards still degrade to a
 clean SKIP when their tool is missing, saying so loudly. Each has a `--selftest`; CI runs all of them, plus the whole-tree secret scan, on every
 push.
 

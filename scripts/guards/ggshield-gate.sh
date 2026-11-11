@@ -46,6 +46,7 @@
 #         scripts/guards/ggshield-gate.sh --selftest # rc mapping, with a stub
 set -uo pipefail
 SELF="ggshield-gate"
+INSTANCE="https://dashboard.gitguardian.com"
 
 run_gate() {
   if [ "${GGSHIELD_SKIP:-0}" = "1" ]; then
@@ -62,7 +63,10 @@ run_gate() {
   cfg=$(mktemp) || { echo "$SELF: REFUSED — no temporary file; NOTHING was scanned." >&2; return 1; }
   # No pipe: a pipeline's rc is the LAST command's, so `ggshield … | head`
   # reports head's success and a finding reads as clean.
-  out=$(GITGUARDIAN_DONT_LOAD_ENV=1 ggshield --config-path "$cfg" secret scan pre-commit 2>&1)
+  # --instance outranks GITGUARDIAN_INSTANCE and GITGUARDIAN_API_URL (measured);
+  # both are also unset for the call.
+  out=$(env -u GITGUARDIAN_INSTANCE -u GITGUARDIAN_API_URL GITGUARDIAN_DONT_LOAD_ENV=1 \
+    ggshield --config-path "$cfg" --instance "$INSTANCE" secret scan pre-commit 2>&1)
   rc=$?
   rm -f "$cfg"
 
@@ -103,6 +107,7 @@ selftest() {
 {
   echo "args: $*"
   echo "dont_load_env=${GITGUARDIAN_DONT_LOAD_ENV-unset}"
+  echo "env_instance=${GITGUARDIAN_INSTANCE-unset} env_api_url=${GITGUARDIAN_API_URL-unset}"
 } >"${GGSHIELD_STUB_LOG:-/dev/null}"
 echo "stub ggshield: rc ${GGSHIELD_STUB_RC:-0}"
 exit "${GGSHIELD_STUB_RC:-0}"
@@ -158,6 +163,29 @@ EOF
   check "the scan sets GITGUARDIAN_DONT_LOAD_ENV=1" 0 0 "$(cat "$log")" "dont_load_env=1"
   check "the scan passes --config-path" 0 0 "$(cat "$log")" "args: --config-path "
   check "the scan is a pre-commit scan" 0 0 "$(cat "$log")" "secret scan pre-commit"
+  check "the scan pins the instance" 0 0 "$(cat "$log")" "--instance https://dashboard.gitguardian.com "
+
+  # Planted values: a checkout's .gitguardian.yaml and .env, and the two
+  # environment variables, all naming another host. The stub must see the
+  # pinned instance and none of the planted values (the stub reads no file
+  # itself; ggshield's own handling of these is measured in the header).
+  local plant="$tmp/checkout"
+  mkdir -p "$plant"
+  printf 'instance: https://planted.example\n' >"$plant/.gitguardian.yaml"
+  printf 'GITGUARDIAN_INSTANCE=https://planted.example\nGITGUARDIAN_API_URL=https://planted.example/v1\n' >"$plant/.env"
+  : >"$log"
+  out=$(cd "$plant" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" \
+    GITGUARDIAN_INSTANCE=https://planted.example GITGUARDIAN_API_URL=https://planted.example/v1 \
+    env -u GGSHIELD_SKIP bash "$self" 2>&1); rc=$?
+  check "the scan runs beside planted config" "$rc" 0 "$out" "clean"
+  check "planted: the instance is the pinned one" 0 0 "$(cat "$log")" "--instance https://dashboard.gitguardian.com "
+  check "planted: the stub sees GITGUARDIAN_INSTANCE unset" 0 0 "$(cat "$log")" "env_instance=unset"
+  check "planted: the stub sees GITGUARDIAN_API_URL unset" 0 0 "$(cat "$log")" "env_api_url=unset"
+  if grep -q planted "$log"; then
+    printf '  FAIL  a planted value reached ggshield\n'; sed 's/^/        /' "$log"; fail=1
+  else
+    printf '  ok    no planted value reached ggshield\n'
+  fi
   local cfg
   cfg=$(sed -n 's/^args: --config-path \([^ ]*\) .*/\1/p' "$log")
   if [ -n "$cfg" ] && [ "$cfg" != ".gitguardian.yaml" ] && [ "${cfg#"$PWD"/}" = "$cfg" ]; then
