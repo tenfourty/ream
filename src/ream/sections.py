@@ -474,8 +474,28 @@ def check_balanced(fragment: str, *, foreign: bool = False) -> None:
 
 _PLACEHOLDER = "artifacts-section-placeholder"
 
+# html5lib (pure Python) reads a page at about 4.6 s and 94 MiB per MiB of
+# attribute-heavy markup, with no bound of its own, and an update parses twice. So
+# every parse of a page goes through `_parse`, which refuses one over this size
+# (in bytes, as the publish limit is), and `apply` caps what it would produce too.
+# About 2 s for a 100 KB page; the pages agents keep updating run 40-140 KB
+# (feedback, 6 Oct 2026); larger ones are republished whole.
+SECTION_PAGE_MAX = 512 * 1024
+
+
+class TooLargeError(SectionError): ...
+
 
 def _parse(body: str):
+    """The one way into html5lib: a page over SECTION_PAGE_MAX is refused here, so no
+    caller can hand it a page it would take minutes and a gigabyte on."""
+    size = len(body.encode("utf-8"))
+    if size > SECTION_PAGE_MAX:
+        raise TooLargeError(
+            f"this page is {size // 1024} KB; the browser-faithful check works on "
+            f"pages up to {SECTION_PAGE_MAX // 1024} KB -- read or republish the "
+            "whole page instead"
+        )
     import html5lib
 
     return html5lib.parse(body, treebuilder="etree", namespaceHTMLElements=False)
@@ -555,8 +575,22 @@ def _excise(el, parent) -> None:
 class OutsideChanged(SectionError): ...
 
 
+def check_readable(body: str) -> None:
+    """Refuse a page too large to read one section of, before any parsing: the
+    section read checks the element with a browser-faithful parse, which is only
+    run on a page up to SECTION_PAGE_MAX."""
+    size = len(body.encode("utf-8"))
+    if size > SECTION_PAGE_MAX:
+        raise TooLargeError(
+            f"this page is {size // 1024} KB; reading one section works on pages up "
+            f"to {SECTION_PAGE_MAX // 1024} KB -- read the whole page instead"
+        )
+
+
 def check_target(body: str, element_id: str) -> None:
-    """The browser sees exactly one element with this id, outside <template>."""
+    """The browser sees exactly one element with this id, outside <template>.
+    Raises TooLargeError for a page over SECTION_PAGE_MAX."""
+    check_readable(body)
     _one_target(_parse(body), element_id)
 
 
@@ -604,16 +638,6 @@ class Applied:
     # the page (`data-artifact-decision` attributes, never a text match).
     slots_before: frozenset = frozenset()
     slots_after: frozenset = frozenset()
-
-
-# The browser-faithful check (html5lib, pure Python) parses the page twice per
-# update: about 2 s for a 100 KB page, so a page near the 8 MB publish limit
-# would take minutes. The pages agents keep updating run 40-140 KB (feedback,
-# 6 Oct 2026); larger ones are republished whole.
-SECTION_PAGE_MAX = 512 * 1024
-
-
-class TooLargeError(SectionError): ...
 
 
 def apply(

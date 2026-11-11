@@ -673,6 +673,71 @@ def test_a_page_too_large_for_section_updates_says_republish_whole(client, db, p
         sections.apply(big, "log", "append", "<p>new</p>")
 
 
+def _over_the_cap() -> str:
+    body = (
+        "<!doctype html><html><body><div id='log'>x</div>"
+        + ("<p>" + "filler " * 100 + "</p>") * 800
+        + "</body></html>"
+    )
+    assert len(body.encode()) > sections.SECTION_PAGE_MAX
+    return body
+
+
+def test_reading_a_section_of_a_page_over_the_cap_is_refused_before_html5lib(
+    monkeypatch,
+):
+    """`check_target` parsed the whole live body with html5lib whatever its size
+    (4.6 s and 94 MiB per MiB of attribute-heavy markup): past the cap it says to
+    read the whole page, and parses nothing."""
+
+    def no_parse(*_a, **_k):
+        raise AssertionError("html5lib was handed a page over the cap")
+
+    monkeypatch.setattr(sections, "_parse", no_parse)
+    with pytest.raises(sections.TooLargeError, match="read the whole page"):
+        sections.check_target(_over_the_cap(), "log")
+    with pytest.raises(sections.TooLargeError, match="read the whole page"):
+        sections.check_readable(_over_the_cap())
+
+
+def test_every_way_into_html5lib_is_behind_the_cap():
+    """Not only `check_target`: `verify` and `_parse` itself refuse a page over the
+    cap, counted in bytes (the text below is under the cap in characters)."""
+    small = "<!doctype html><html><body><div id='log'>x</div></body></html>"
+    wide = "\u00e9" * (sections.SECTION_PAGE_MAX // 2 + 1)  # two bytes each
+    assert len(wide) < sections.SECTION_PAGE_MAX < len(wide.encode())
+    with pytest.raises(sections.TooLargeError, match="whole page"):
+        sections._parse("<p>" + wide + "</p>")
+    with pytest.raises(sections.TooLargeError, match="whole page"):
+        sections.verify(_over_the_cap(), small, "log", "replace")
+    with pytest.raises(sections.TooLargeError, match="whole page"):
+        sections.verify(small, _over_the_cap(), "log", "replace")
+    sections.check_target(small, "log")  # a small page is read as before
+
+
+def test_the_section_read_of_a_page_over_the_cap_is_the_refusal_an_update_gets(
+    client, db, page
+):
+    """GET a section of a page over the cap: 422, as a section update of it is,
+    saying to read the whole page, and the same through the store."""
+    _, token = page
+    made = client.post(
+        "/api/v1/artifacts",
+        json={"title": "Big", "body": _over_the_cap()},
+        headers=auth(token),
+    )
+    assert made.status_code == 201, made.text
+    aid = made.json()["id"]
+    got = client.get(f"/api/v1/artifacts/{aid}/sections/log", headers=auth(token))
+    assert got.status_code == 422
+    assert got.json()["detail"]["field"] == "section"
+    assert "read the whole page" in got.json()["detail"]["detail"]
+    with pytest.raises(sections.TooLargeError, match="read the whole page"):
+        store.get_section(db, "ci-seat", aid, "log")
+    whole = client.get(f"/api/v1/artifacts/{aid}", headers=auth(token))
+    assert whole.status_code == 200  # the way forward the message names works
+
+
 def test_a_huge_fragment_on_a_small_page_is_refused_before_parsing(monkeypatch):
     """The cap covers the result, not only the live page: a small page plus a
     multi-megabyte fragment is refused before the slow check sees it."""

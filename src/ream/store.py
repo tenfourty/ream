@@ -1286,6 +1286,7 @@ def get_section(
     from ream import sections
 
     live = get_body(db, agent, artifact_id, as_reader=as_reader)
+    sections.check_readable(live.body)  # before the walker reads the whole page
     where = sections.locate(live.body, element_id)
     # The walker found it; a browser must find the same single element too.
     sections.check_target(live.body, element_id)
