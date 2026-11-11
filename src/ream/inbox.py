@@ -28,7 +28,7 @@ offers something better, and a review is already flagged on the wall by its page
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from ream import comments, decisions, partner_in
+from ream import comments, decisions, partner_in, readside
 from ream.db import Database
 
 URGENCY_RANK = {"blocking": 0, "by": 1, "when_you_can": 2}
@@ -170,7 +170,7 @@ def _decision_items(db: Database, limit: int) -> tuple[list[Item], bool]:
 
 
 def _slack_items(db: Database, limit: int) -> tuple[list[Item], bool]:
-    found = partner_in.open_copies(db, limit)
+    found = readside.open_copies(db, limit)
     return [
         Item(
             kind="partner_question",
@@ -236,7 +236,7 @@ def count(db: Database, limit: int | None = None) -> tuple[int, bool]:
     reviews, questions, open_rows = decisions.open_counts(db)
     with db.connect() as conn:
         replies = conn.execute(f"select count(*){_REPLY_FROM_WHERE}").fetchone()[0]
-    slacked = partner_in.count_waiting(db)
+    slacked = readside.count_waiting(db)
     capped = open_rows >= limit or replies >= limit or slacked >= limit
     return reviews + questions + replies + slacked, capped
 

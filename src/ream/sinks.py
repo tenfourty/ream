@@ -582,6 +582,13 @@ def prune(db: Database, now: datetime | None = None) -> int:
         ).rowcount
 
 
+def _read_side_outbox(db: Database) -> dict[str, dict]:
+    """Each plug-in's own outbox report (`api.read_side(outbox_status=)`), by plug-in."""
+    from ream import readside
+
+    return readside.outbox_statuses(db)
+
+
 def _plugin_failures() -> dict[str, int]:
     from ream import plugin_api
 
@@ -611,6 +618,7 @@ def status(db: Database) -> dict:
         "late_failures": late_failures(),
         "plugin_failures": _plugin_failures(),
         "open_breakers": open_breakers(),
+        "read_side_outbox": _read_side_outbox(db),
     }
 
 

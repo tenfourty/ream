@@ -165,6 +165,11 @@ def cmd_outbox(_args: argparse.Namespace) -> None:
 
     report = sinks.status(_open_db())
     names = sorted({*report["pending"], *report["parked"], *report["delivered"]})
+    for plugin, own in sorted(report.get("read_side_outbox", {}).items()):
+        print(
+            f"plug-in {plugin}\t"
+            + "\t".join(f"{k}={v}" for k, v in sorted(own.items()))
+        )
     if not names:
         print("outbox: empty")
         return

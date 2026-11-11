@@ -24,7 +24,7 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from ream import decisions, events, partner
+from ream import decisions, events, readside
 from ream.db import Database, in_list
 from ream.pickup import PICKUP_FRESH
 
@@ -270,7 +270,7 @@ def for_decisions(
             (*ids, agent),
         ).fetchall()
         delivered: dict[str, bool] = {}
-        if found and partner.enabled():
+        if found and readside.bridge_on():
             own = [r[0] for r in found]
             for decision_id, at in conn.execute(
                 "select decision_id, delivered_at from partner_outbox"  # noqa: S608 -- placeholders only
@@ -280,7 +280,7 @@ def for_decisions(
                 delivered[decision_id] = at is not None
     readers = _readers(db, agent)
     stored = get_pickup(db, agent)
-    bridge_on = partner.enabled()
+    bridge_on = readside.bridge_on()
     out: dict[str, Route] = {}
     for decision_id, label, version in found:
         mine = [r for r in readers if _reads_for(label, agent, r[0])]
@@ -374,7 +374,7 @@ def status(db: Database, agent: str, decision_id: str | None = None) -> dict | N
         "now": now.isoformat(),
         "ttl_grace_seconds": events.HOLD_GRACE_SECONDS,
         **sessions(db, agent, now),
-        "bridge": {"enabled": partner.enabled()},
+        "bridge": {"enabled": readside.bridge_on()},
         "pickup": get_pickup(db, agent),
         "pickup_fresh_hours": PICKUP_FRESH // timedelta(hours=1),
     }

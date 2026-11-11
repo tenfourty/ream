@@ -84,7 +84,7 @@ def test_a_plugin_stages_in_the_transaction_starts_stops_and_owns_a_table(
         log.append("stage")
 
     def register(api):
-        assert api.version == (1, 2)
+        assert api.version >= (1, 2)
         api.schema(
             [TABLE, "create index if not exists toy_queue_n_idx on toy_queue (n)"]
         )

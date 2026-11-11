@@ -72,9 +72,9 @@ error names the plug-in and, for an exception, only its **type**, never its text
 
 ## API versioning
 
-`ream.plugin_api.API_VERSION` is `(1, 2)`; `api.version` is the same tuple (1.1 added the
+`ream.plugin_api.API_VERSION` is `(1, 3)`; `api.version` is the same tuple (1.1 added the
 optional `timeout` of `api.scanner`; 1.2 added `api.sink(..., stage=)`, `api.schema`,
-`api.on_start` and `api.on_stop`, all optional: a 1.0 or 1.1 plug-in runs unchanged). A plug-in declares
+`api.on_start` and `api.on_stop`; 1.3 added `api.read_side`, all optional: a 1.0 or 1.1 plug-in runs unchanged). A plug-in declares
 `REQUIRES_API = "1"` as module data of the module that holds `register`; the core compares the
 major number and refuses a mismatch (the server stops; a tool skips or exits as above). A plug-in
 that declares nothing is not checked. Minor releases only add registrations or optional
@@ -92,6 +92,7 @@ dataclass only gains fields, so a plug-in must ignore fields it does not know.
 | `api.mail_backend(...)` | send mail | yes | ignored |
 | `api.schema(...)` | the plug-in's own tables (1.2) | yes | ignored |
 | `api.on_start(...)`, `api.on_stop(...)` | start and stop a thread of the plug-in's own (1.2) | yes | ignored |
+| `api.read_side(...)` | questions whose home is a chat partner: copies, count, bridge state, outbox report (1.3) | yes | ignored |
 | `api.cli(...)` | add `ream <name>` | checked | yes |
 | `api.client_defaults(...)` | the tools' endpoint, session label, news | checked | yes |
 | `api.text_vars(...)` | extra `{{variables}}` | yes | ignored |
@@ -228,6 +229,50 @@ def register(api):
   (`<plug-in>:start`, `<plug-in>:stop`) and neither stops the server nor the other plug-ins.
   A sender that a start hook did not manage to start leaves its queue to wait; with the
   plug-in absent the rows stay, as the outbox's do.
+
+### The read side: copies, count, bridge state, outbox report (API 1.3)
+
+A bridge to a chat partner keeps a copy of each question whose home is the partner, which
+the gallery's inbox, the question list (`GET /api/v1/questions?scope=all`) and the listening
+state show. Core's own partner code is the built-in contributor and always answers first;
+`api.read_side(...)` adds a plug-in's, merged in behind it. Every argument is optional (give at
+least one), once per plug-in, keyword only:
+
+| Argument | Called as | Returns |
+|---|---|---|
+| `open_copies` | `fn(db, limit, waiting_on_him=True)` | list of `ream.partner_in.Copy`; `waiting_on_him=False` asks only for those he has already answered here (pending) |
+| `settled_copies` | `fn(db, since, limit)` | copies answered since `since` |
+| `count_waiting` | `fn(db)` | a non-negative int: copies waiting on him |
+| `answer` | `fn(db, qid, letter=, note=)` | the `Copy` after he answers it in the gallery; `store.NotFound` for one that is not yours |
+| `enabled` | `fn()` | whether your bridge runs here (feeds `bridge.enabled` in the listening state) |
+| `outbox_status` | `fn(db)` | a small dict of counts and codes; shown in `sinks.status()["read_side_outbox"]` and by `artifacts-admin outbox` where plug-ins are loaded (the admin shell does not load them today) |
+
+```python
+from ream import partner_in, store
+
+def register(api):
+    def open_copies(db, limit, waiting_on_him=True):
+        return my_rows(db, limit, pending=not waiting_on_him)   # -> [partner_in.Copy(...)]
+
+    def answer(db, qid, *, letter, note=""):
+        row = my_row(db, qid)
+        if row is None:
+            raise store.NotFound()            # not mine: core tries the next, then 404
+        return save_pending(db, row, letter, note)
+
+    api.read_side(open_copies=open_copies, count_waiting=lambda db: count(db),
+                  answer=answer, enabled=lambda: True)
+```
+
+Rules. A copy's `source` must be unique across core and every plug-in: one core (or an earlier
+plug-in) already lists is dropped, and the merged list is cut to `limit` in creation order (the
+inbox's own ordering still ranks them). A plug-in's copies are read-only to agents, as core's
+are, and appear only for a key with the read-all-decisions grant and `scope=all`, exactly as
+before: the agent routes' "not yours is no such" scoping is unchanged. `answer` may raise the
+store's own refusals (`BodyTooLarge`, `InvalidText`, `SecretFound`, `ScanFailed`) and
+`decisions.InvalidAnswer`, which the gallery answers as it does for core's copies; any other
+raise is counted and that plug-in skipped, so the answer ends as a 404 if nobody takes it. The
+copies are ranked and rendered by core, so a plug-in cannot supply markup.
 
 ### Webhook sinks without a plug-in
 
@@ -511,7 +556,7 @@ parent domain. A fault inside the route answers a bare 500 (`plug-in error`), is
 - Every call into a plug-in is wrapped. A raise becomes a log line carrying the plug-in and the
   interface (exception type only, never its message or any content) and a count. Read the
   counts with `ream.plugin_api.failure_counts()` (keys `<plug-in>:<interface>`, with interfaces
-  `sink`, `stage`, `start`, `stop`, `on_answer`, `scanner`, `mail`, `text`, `router`); `sinks.status()` carries them as
+  `sink`, `stage`, `start`, `stop`, `read_side`, `on_answer`, `scanner`, `mail`, `text`, `router`); `sinks.status()` carries them as
   `plugin_failures`. With the database bound they are totals over every process.
 - A sink or route fault never takes down a request or the sender thread. Outbox failures retry,
   after-commit failures are logged, a repeatedly failing sink is paused by its breaker.
@@ -524,6 +569,9 @@ parent domain. A fault inside the route answers a bare 500 (`plug-in error`), is
   rather than half (`commit` in a stage cannot be contained and is forbidden: what the action
   wrote before it stays); a start or stop hook failure never stops the server, and a stop hook gets
   2 seconds.
+- A `read_side` call that raises, or returns a copy that is not a `partner_in.Copy`, a count that
+  is not a non-negative int or a status that is not a dict, is logged by type, counted
+  (`<plug-in>:read_side`) and treated as nothing contributed: the page still renders.
 - A plug-in may add its own tables (`api.schema`, 1.2) but may not change core tables or SQL, supply gallery pages or JavaScript, or
   serve the reader. The service stays single-reader.
 

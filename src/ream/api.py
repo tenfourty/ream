@@ -66,6 +66,7 @@ from ream import (
     partner_in,
     ratelimit,
     reach,
+    readside,
     receipts,
     renderfind,
     review,
@@ -761,7 +762,7 @@ def open_questions(
         # ready ones. One he has already answered here shows its pending
         # answer until the home settles it.
         for waiting in (True, False):
-            for c in partner_in.open_copies(db, _ALL_OPEN, waiting_on_him=waiting):
+            for c in readside.open_copies(db, _ALL_OPEN, waiting_on_him=waiting):
                 ranked.append(((False, False, inbox.key(c, now)), _slack_view(c, now)))
     ranked.sort(key=lambda r: r[0])
     return [view for _, view in ranked]

@@ -52,7 +52,7 @@ from ream import (
     mcp_apps,
     oauth,
     pagediff,
-    partner_in,
+    readside,
     rename,
     settings,
     sinks,
@@ -6078,8 +6078,8 @@ def gallery_router(db: Database) -> APIRouter:
             db, [i.id for i in rows if i.kind == "question"]
         )
         slack_status = _render_slack_status(
-            partner_in.open_copies(db, waiting_on_him=False),
-            partner_in.settled_copies(db, datetime.now(UTC) - timedelta(days=7)),
+            readside.open_copies(db, waiting_on_him=False),
+            readside.settled_copies(db, datetime.now(UTC) - timedelta(days=7)),
         )
         return HTMLResponse(
             _shell(
@@ -7580,7 +7580,7 @@ def gallery_router(db: Database) -> APIRouter:
         recorded as PENDING and sent to the home; it settles when the home says
         so (partner_in.answer_here)."""
         try:
-            partner_in.answer_here(db, question_id, letter=letter, note=note)
+            readside.answer_here(db, question_id, letter=letter, note=note)
         except store.BodyTooLarge as exc:
             raise HTTPException(413, f"{exc.field} exceeds the size limit") from exc
         except store.InvalidText as exc:

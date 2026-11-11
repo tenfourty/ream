@@ -36,7 +36,7 @@ from urllib.parse import urlsplit
 
 from ream import envnames
 
-API_VERSION = (1, 2)
+API_VERSION = (1, 3)
 GROUP = "ream.plugins"
 # The old group name, read for good beside the new one.
 OLD_GROUP = "artifacts.plugins"
@@ -382,6 +382,9 @@ class CliPluginAPI:
         return None
 
     def on_stop(self, *args, **kwargs) -> None:
+        return None
+
+    def read_side(self, *args, **kwargs) -> None:
         return None
 
     def text_vars(self, *args, **kwargs) -> None:

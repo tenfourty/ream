@@ -4,7 +4,7 @@ A plug-in is a Python package with an entry point in the group `ream.plugins` (o
 `artifacts.plugins`, kept for good)
 naming a function `register(api: PluginAPI) -> None`. The server calls each once at
 start-up, in name order. Registrations: `sink` (with an optional in-transaction `stage`), `answer_source`, `on_answer`,
-`scanner`, `mail_backend`, `schema`, `on_start`, `on_stop`, `cli`, `client_defaults` (the last
+`scanner`, `mail_backend`, `schema`, `on_start`, `on_stop`, `read_side`, `cli`, `client_defaults` (the last
 two matter to the command-line tools: `plugin_cli.py`).
 
 A plug-in that raises while registering, names a major API version this core does not
@@ -38,6 +38,7 @@ from ream import (
     hosts,
     mail,
     plugin_cli,
+    readside,
     scanners,
     settings,
     sinks,
@@ -444,6 +445,55 @@ class PluginAPI:
         thread of its own, and one still running then is left behind and counted.
         Best effort: a killed process runs none."""
         _STOPS.append((self._plugin, fn))
+
+    def read_side(
+        self,
+        *,
+        open_copies: Callable | None = None,
+        settled_copies: Callable | None = None,
+        count_waiting: Callable | None = None,
+        answer: Callable | None = None,
+        enabled: Callable | None = None,
+        outbox_status: Callable | None = None,
+    ) -> None:
+        """Contribute to what the inbox, gallery, question list and listening state read
+        about questions whose home is a chat partner (API 1.3). Core's own partner code
+        answers first and stays; yours is merged in behind it. All arguments are optional
+        (give at least one), once per plug-in:
+
+        - `open_copies(db, limit, waiting_on_him=True)`: a list of `ream.partner_in.Copy`
+          (oldest first is not required; core sorts), `waiting_on_him=False` meaning only
+          those he has already answered here (pending).
+        - `settled_copies(db, since, limit)`: copies answered since `since`.
+        - `count_waiting(db)`: a non-negative int, those waiting on him.
+        - `answer(db, qid, *, letter, note)`: he answers one in the gallery. Return the
+          `Copy`, or raise `store.NotFound` for a question that is not yours (core then
+          tries the next plug-in and finally answers 404).
+        - `enabled()`: whether your bridge is running here.
+        - `outbox_status(db)`: a small dict of counts and codes for the admin report (never
+          a body or a key).
+
+        A copy's `source` must be unique: one core (or an earlier plug-in) already lists is
+        dropped. A call that raises, or returns the wrong shape, is logged by type, counted
+        (`<plug-in>:read_side`) and treated as nothing contributed."""
+        given = {
+            "open_copies": open_copies,
+            "settled_copies": settled_copies,
+            "count_waiting": count_waiting,
+            "answer": answer,
+            "enabled": enabled,
+            "outbox_status": outbox_status,
+        }
+        for name, fn in given.items():
+            if fn is not None and not callable(fn):
+                raise PluginError(
+                    f"plug-in {self._plugin!r}: read_side {name} is not callable"
+                )
+        if all(fn is None for fn in given.values()):
+            raise PluginError(f"plug-in {self._plugin!r}: read_side gives nothing")
+        if any(c.plugin == self._plugin for c in readside.contributors()):
+            raise PluginError(f"plug-in {self._plugin!r}: read_side given twice")
+        readside.register(readside.Contributor(self._plugin, **given))
 
     def text_vars(self, values: dict) -> None:
         """Add `{{name}}` template variables (4.2, text). Each name must start with this

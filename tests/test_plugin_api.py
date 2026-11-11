@@ -68,7 +68,7 @@ def _event():
 
 def _plugin(seen):
     def register(api):
-        assert api.version == plugin_api.API_VERSION == (1, 2)
+        assert api.version == plugin_api.API_VERSION == (1, 3)
         api.sink("toy", ("decision_answered",), seen.append, "after_commit")
         api.answer_source(
             "toy-chat",

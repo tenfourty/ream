@@ -837,17 +837,32 @@ drivers; CI only (not on the management machine).
    sequences and materialized views count as names; a table statement ends at its
    column list (no `as table`, `as values`, `inherits`); a database refusal names the plug-in; each
    stop hook gets 2 seconds, like the core's sender.
-   **Next, 9e-2: the plug-in's read side.** A way for a plug-in to contribute the inbound copies
-   that `inbox.py` (`partner_in.open_copies`, `count_waiting`), `gallery.py` (open and settled
-   copies, `answer_here`), `api.py` (`_slack_view`) and `listening.py` (`partner.enabled()`, the
-   bridge state) read today, and the admin outbox status; then 9e-3, the quarterdeck plug-in's
+   **9e-2, built (`ci/plugin-read-side`, 11 Nov 2026): plug-in API 1.3, additive**, in core only:
+   `api.read_side(open_copies=, settled_copies=, count_waiting=, answer=, enabled=,
+   outbox_status=)`, keyword-only, all optional (at least one), once per plug-in. New
+   `src/ream/readside.py` is the one place the readers go through: `inbox.py`, `gallery.py`
+   (open and settled copies, `answer_here`), `api.py` (the `scope=all` list) and `listening.py`
+   (`bridge_on()`) now call it instead of `partner_in` / `partner` directly. Core's partner code
+   is the built-in contributor and answers first; a plug-in's copies are merged behind it (a
+   `source` seen already is dropped, ordered by creation, cut to `limit`), counts add, `enabled`
+   is core's or any plug-in's, and `answer` goes to each plug-in in turn for a question core
+   does not hold (`store.NotFound` passes it on). A contributor that raises or returns the wrong
+   shape is logged by type, counted as `<plug-in>:read_side`, and ignored. The outbox report is in
+   `sinks.status()["read_side_outbox"]` and printed by `artifacts-admin outbox`. `API_VERSION` is
+   `(1, 3)`; the CLI's no-op API accepts the call. Tests: `tests/test_plugin_read_side.py`; two
+   existing files only had their version pin loosened. Core's own partner behaviour is untouched.
+   **Left for 9e-3:** `listening`'s per-question "delivered" lookup still reads core's
+   `partner_outbox` (a plug-in's outbox would need a contributor argument for it);
+   `artifacts-admin` does not load plug-ins, so a plug-in's outbox line appears only where they
+   are loaded (or 9e-3 gives the admin shell a way to); a plug-in `answer` that fails other than
+   by the store's refusals ends as a 404, not a 503. Next, 9e-3, the quarterdeck plug-in's
    outbound half (stage sink, own `quarterdeck_*` tables, sender) with core's `partner` sink
    standing down while a sink named `quarterdeck` is registered; 9e-4, the inbound half (`slack`
    answer source, `on_answer`, router) and the deletion from core. **Open for 9e-3:** the existing
    `partner_outbox`, `partner_question` and the version tables are core's and hold live rows; a
    plug-in's names must carry its prefix, so the move needs a copy or a read-through of those rows.
-   **Not run here:** the full suite on Postgres (CI on `ci/plugin-api-1-2`); the new file passed
-   serially on SQLite.
+   **Not run here (9e-2):** the full suite and Postgres (CI on `ci/plugin-read-side`); the new
+   file, `test_plugin_api.py` and `test_plugin_api_1_2.py` passed serially on SQLite.
 10. **Docs and decisions.** `docs/decisions.md` entry for the core-and-plug-ins split, the design
     doc's extension section, a plug-in author guide, the office doc's deployment paragraph.
     (Docs also land with each slice above; this is the consolidation.)
