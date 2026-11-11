@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass
 
 from ream import scanslots
-from ream.htmlbound import BoundedParser, Budget, TooComplex
+from ream.htmlbound import BoundedParser, Budget, TooComplex, unescape
 
 OPS = ("replace", "append", "prepend", "remove")
 
@@ -142,10 +142,19 @@ class UnbalancedError(SectionError): ...
 
 
 class TooComplexError(SectionError, TooComplex):
-    """A tag in the markup is too long or too busy for the parser (`htmlbound`):
-    where a section is, or whether a fragment is balanced, cannot be told. A
-    refusal like the rest (the caller's 422), and a `TooComplex` for the readers
-    that already stop on one."""
+    """A tag in the markup is too long or too busy for the parser (`htmlbound`), or
+    a decimal character reference has more digits than a number can: where a
+    section is, or whether a fragment is balanced, cannot be told. A refusal like
+    the rest (the caller's 422), and a `TooComplex` for the readers that already
+    stop on one."""
+
+
+def _too_complex() -> TooComplexError:
+    return TooComplexError(
+        "a tag in the markup is too long or has too many attributes to read, or"
+        " the markup takes too long to read, so where its elements end cannot"
+        " be told -- nothing was changed."
+    )
 
 
 @dataclass(frozen=True)
@@ -323,11 +332,7 @@ class _Walker(BoundedParser):
                 leftover = self.rawdata
                 self.close()
         except TooComplex:
-            raise TooComplexError(
-                "a tag in the markup is too long or has too many attributes to read, or"
-                " the markup takes too long to read, so where its elements end cannot"
-                " be told -- nothing was changed."
-            ) from None
+            raise _too_complex() from None
         return leftover
 
 
@@ -335,11 +340,12 @@ def _clean_label(raw: str) -> str:
     """Heading text as a one-line name: entities decoded, whitespace
     collapsed, control and escape characters stripped (it reaches terminals
     through --versions and the update echo), capped at LABEL_MAX."""
-    import html as _html
-
     from ream import text
 
-    return text.sanitize(_html.unescape(raw), LABEL_MAX).strip()
+    try:
+        return text.sanitize(unescape(raw), LABEL_MAX).strip()
+    except TooComplex:
+        raise _too_complex() from None
 
 
 # What an addressable id may contain. Real ids on these pages are slugs; a
@@ -501,7 +507,12 @@ def _parse(body: str):
         )
     import html5lib
 
-    return html5lib.parse(body, treebuilder="etree", namespaceHTMLElements=False)
+    try:
+        return html5lib.parse(body, treebuilder="etree", namespaceHTMLElements=False)
+    except ValueError:
+        # html5lib reads a decimal reference with `int()`, which refuses over 4300
+        # digits (`sys.get_int_max_str_digits()`): a page it cannot read, not a 500.
+        raise _too_complex() from None
 
 
 def _render(root) -> str:

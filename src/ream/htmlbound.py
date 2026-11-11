@@ -120,6 +120,19 @@ REPLACED = ("check_for_whole_start_tag", "goahead", "parse_endtag", "updatepos")
 _UNESCAPE_CODE = _unescape.__code__
 
 
+def unescape(text: str) -> str:
+    """`html.unescape` for the text of a page that a regular expression took out of it
+    (an attribute value, a label), not the parser: it raises `TooComplex` for a decimal
+    reference of more digits than `int` reads, as the parser does, so a reader that
+    degrades on one degrades on the other. Nothing else in `src/ream` calls
+    `html.unescape` (tests/test_htmlbound.py), except `scan`, which strips such a
+    reference before it unescapes."""
+    try:
+        return _unescape(text)
+    except ValueError as exc:
+        raise TooComplex from exc
+
+
 def _came_from_unescape(exc: BaseException) -> bool:
     """Whether `exc` was raised under `html.unescape`, which the parser calls on text and
     on attribute values when `convert_charrefs` is on. It reads a decimal reference

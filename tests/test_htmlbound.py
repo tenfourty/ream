@@ -20,7 +20,16 @@ from html.parser import HTMLParser
 import pytest
 import scalecheck
 
-from ream import anchors, forms, htmlbound, pagediff, partdiff, sections, text
+from ream import (
+    anchors,
+    forms,
+    htmlbound,
+    pagediff,
+    partdiff,
+    renderfind,
+    sections,
+    text,
+)
 
 SRC = pathlib.Path(__file__).resolve().parents[1] / "src"
 BASE = SRC / "ream" / "htmlbound.py"
@@ -631,6 +640,160 @@ def test_a_decimal_reference_in_an_attribute_value_is_too_complex_too(read):
 def test_a_decimal_reference_of_the_most_digits_int_reads_is_still_read(read):
     digits = sys.get_int_max_str_digits()
     assert OTHER_READS[read]("&#" + "1" * digits + ";") is None
+
+
+# Every public reader of a page, on pages that hold `&#` and 5000 digits where a reader
+# could meet it: in text, in a heading, in an attribute the parser reads, and in an
+# attribute or a heading that only a regular expression reads (inside a comment or a
+# script, which the parser never unescapes). Each gives its own degrade: the value it
+# returns when it cannot read the page, or the refusal its caller already answers (what
+# is listed with it). Never the ValueError of `int()`, which is a 500.
+_DIGITS = "&#" + "1" * 5000
+_BIG_PAGES = {
+    "in text": f'<h2 id="x">Head</h2><p>words {_DIGITS}</p>',
+    "in a heading": f'<h2 id="x">{_DIGITS}</h2><p>words</p>',
+    "in a section's heading": f'<section id="x"><h2>{_DIGITS};</h2>words</section>',
+    "in an alt": f'<h2>Head</h2><img id="x" alt="{_DIGITS}"><p>words</p>',
+    "in a title": f'<h2 id="x" title="{_DIGITS}">Head</h2><p>words</p>',
+    "in a field": (
+        f'<h2>Head</h2><form><input name=a value="{_DIGITS}">'
+        f"<textarea name=b>{_DIGITS}</textarea></form>"
+    ),
+    "in a comment's alt": (
+        f'<h2>Head</h2><div id="x"><!-- <img alt="{_DIGITS}"> --><p>words</p></div>'
+    ),
+    "in a script's title": (
+        f'<h2>Head</h2><div id="x"><script>var a=\'<img title="{_DIGITS}">\'</script>'
+        "words</div>"
+    ),
+}
+_QUOTE_PIN = {"kind": "quote", "heading": "Head"}
+_EDIT = "<p>new</p>"
+
+
+def _located(page):
+    return sections.locate(page, "x")
+
+
+# name: (the read, what it may raise for a page it cannot read)
+_PUBLIC_READS = {
+    "text.visible": (text.visible, ()),
+    "text.readable": (text.readable, ()),
+    "text.searchable": (text.searchable, ()),
+    "text.describe": (text.describe, ()),
+    "forms.parse": (forms.parse, (forms.FormRefused,)),
+    "forms.warnings": (forms.warnings, ()),
+    "sections.locate": (_located, (sections.SectionError,)),
+    "sections.locate_many": (
+        lambda page: sections.locate_many(page, {"x"}),
+        (sections.SectionError,),
+    ),
+    "sections.check_target": (
+        lambda page: sections.check_target(page, "x"),
+        (sections.SectionError,),
+    ),
+    "sections.check_balanced": (sections.check_balanced, (sections.SectionError,)),
+    "sections.verify": (
+        lambda page: sections.verify(page, page + _EDIT, "x", "replace"),
+        (sections.SectionError,),
+    ),
+    "sections.apply": (
+        lambda page: sections.apply(page, "x", "remove", None),
+        (sections.SectionError,),
+    ),
+    "anchors.resolve": (
+        lambda page: anchors.resolve(_QUOTE_PIN, "words", page, ("words", "words")),
+        (),
+    ),
+    "anchors.resolve an element": (
+        lambda page: anchors.resolve({"kind": "element", "id": "x"}, "words", page),
+        (),
+    ),
+    "anchors.heading_for_quote": (
+        lambda page: anchors.heading_for_quote(page, "words"),
+        (),
+    ),
+    "anchors.heading_before": (lambda page: anchors.heading_before(page, 99), ()),
+    "anchors.current_quote": (
+        lambda page: anchors.current_quote(
+            {"kind": "quote", "prefix": "a", "suffix": "b"}, "words", page
+        ),
+        (),
+    ),
+    "anchors.current_quote of an element": (
+        lambda page: anchors.current_quote({"kind": "element", "id": "x"}, "w", page),
+        (),
+    ),
+    "anchors.element_anchor": (
+        lambda page: anchors.element_anchor(page, "x", _located(page)),
+        (htmlbound.TooComplex,),
+    ),
+    "anchors.element_label": (anchors.element_label, (htmlbound.TooComplex,)),
+    "anchors.element_quote": (anchors.element_quote, (htmlbound.TooComplex,)),
+    "anchors.PageIndex.labels": (
+        lambda page: anchors.PageIndex(page).labels,
+        (htmlbound.TooComplex,),
+    ),
+    "renderfind.inject": (lambda page: renderfind.inject(page, "n"), ()),
+    "renderfind.missing_files": (renderfind.missing_files, ()),
+    "renderfind.loads_live_data": (renderfind.loads_live_data, ()),
+    "renderfind.static_scan": (renderfind.static_scan, ()),
+    "pagediff.render_changes": (
+        lambda page: pagediff.render_changes(page, page + _EDIT),
+        (),
+    ),
+    "pagediff.render_changes_safely": (
+        lambda page: pagediff.render_changes_safely(page, page + _EDIT),
+        (),
+    ),
+    "partdiff.compare": (lambda page: partdiff.compare(page, page + _EDIT), ()),
+    "partdiff.changes_safely": (
+        lambda page: partdiff.changes_safely(page, page + _EDIT),
+        (),
+    ),
+}
+
+
+@pytest.mark.parametrize("where", sorted(_BIG_PAGES))
+@pytest.mark.parametrize("name", sorted(_PUBLIC_READS))
+def test_no_public_reader_gives_a_value_error_for_a_decimal_reference_of_5000_digits(
+    name, where
+):
+    read, degrades = _PUBLIC_READS[name]
+    try:
+        read(_BIG_PAGES[where])
+    except degrades:
+        pass  # (an empty tuple catches nothing)
+
+
+def test_the_pages_of_thousands_of_digits_are_ones_int_refuses():
+    for page in _BIG_PAGES.values():
+        assert "1" * (sys.get_int_max_str_digits() + 1) in page
+
+
+def test_nothing_in_src_calls_html_unescape_but_the_two_that_guard_it():
+    """`html.unescape` raises ValueError for a decimal reference of over 4300 digits.
+    `htmlbound.unescape` turns it into TooComplex; `scan` strips such a reference first
+    (`_defang_huge_decimal_charrefs`). Any other call is a 500 waiting for a page."""
+    allowed = {str(BASE), str(SRC / "ream" / "scan.py")}
+    found = set()
+    for path, source in _the_source().items():
+        for node in ast.walk(ast.parse(source)):
+            by_attribute = (
+                isinstance(node, ast.Attribute)
+                and node.attr == "unescape"
+                and not (
+                    isinstance(node.value, ast.Name) and node.value.id == "htmlbound"
+                )
+            )
+            by_import = (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "html"
+                and any(alias.name == "unescape" for alias in node.names)
+            )
+            if (by_attribute or by_import) and path not in allowed:
+                found.add(path)
+    assert found == set()
 
 
 def test_a_value_error_of_a_handler_is_not_taken_for_it():

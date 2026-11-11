@@ -13,11 +13,10 @@ from here, so nothing in this file may import `comments`.
 
 import difflib
 import hashlib
-import html
 import re
 
 from ream import scanslots, sections, text
-from ream.htmlbound import BoundedParser, Budget, TooComplex
+from ream.htmlbound import BoundedParser, Budget, TooComplex, unescape
 
 CURRENT = "current"
 EDITED = "edited"
@@ -294,7 +293,7 @@ class PageIndex:
         if self._labels is None:
             found = []
             for m in _ANY_LABEL.finditer(self.body):
-                found.append(_tight(html.unescape(m.group(1) or m.group(2) or "")))
+                found.append(_tight(unescape(m.group(1) or m.group(2) or "")))
                 if len(found) >= _LABELS_MAX:
                     break
             self._labels = found
@@ -580,17 +579,17 @@ def element_label(outer: str) -> str:
     for name in _LABEL_ATTRS:
         m = _ATTR[name].search(start)
         if m:
-            label = _clean(html.unescape(m.group(1) or m.group(2) or ""))
+            label = _clean(unescape(m.group(1) or m.group(2) or ""))
             if label:
                 return label[:QUOTE_MAX]
     if start[:4].lower() == "<svg":
         inner = _svg_title(outer)
         if inner:
-            label = _clean(html.unescape(re.sub(r"<[^>]*>", "", inner)))
+            label = _clean(unescape(re.sub(r"<[^>]*>", "", inner)))
             if label:
                 return label[:QUOTE_MAX]
     for m in _ANY_LABEL.finditer(outer, len(start)):
-        label = _clean(html.unescape(m.group(1) or m.group(2) or ""))
+        label = _clean(unescape(m.group(1) or m.group(2) or ""))
         if label:
             return label[:QUOTE_MAX]
     return ""

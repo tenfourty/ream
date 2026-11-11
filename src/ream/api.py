@@ -51,6 +51,7 @@ from ream import (
     forms,
     grants,
     hosts,
+    htmlbound,
     idempotency,
     image_store,
     images,
@@ -1548,11 +1549,23 @@ def _element_anchor(db: Database, artifact_id, anchor, agent) -> tuple[dict, str
     current = store.get_body(db, agent, artifact_id, as_reader=True)
     try:
         found = sections.locate(current.body, element_id)
+        # A label read with a regular expression, outside the parser, can be too
+        # long to read as well (`htmlbound.unescape`): a refusal like the rest.
+        return anchors.element_anchor(current.body, element_id, found)
     except sections.SectionError as exc:
         raise HTTPException(
             422, {"field": "anchor", "detail": str(exc), "matches": 0}
         ) from exc
-    return anchors.element_anchor(current.body, element_id, found)
+    except htmlbound.TooComplex as exc:
+        raise HTTPException(
+            422,
+            {
+                "field": "anchor",
+                "detail": "the element's label is too long to read -- name it by a"
+                " text anchor instead",
+                "matches": 0,
+            },
+        ) from exc
 
 
 def _text_anchor(db: Database, artifact_id, payload, agent) -> tuple[dict | None, str]:

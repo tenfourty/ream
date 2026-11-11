@@ -599,3 +599,22 @@ def test_a_page_with_a_decimal_reference_of_thousands_of_digits_is_not_a_500(
         listed = client.get(f"/api/v1/artifacts/{big.id}/comments", headers=seats[who])
         assert listed.status_code == 200, listed.text
         assert plain.json()["id"] in [row["id"] for row in listed.json()]
+
+
+def test_an_element_anchor_on_a_label_of_thousands_of_digits_is_a_422_not_a_500(
+    client, db, seats
+):
+    """A label the page's parser never reads (here in a comment inside the element)
+    is read by a regular expression and unescaped by `htmlbound.unescape`: too many
+    digits is a refusal, as an element the parser cannot read is."""
+    label = "&#" + "1" * 5000
+    body = (
+        "<!doctype html><html><body><h2>Chart</h2>"
+        f'<div id="chart"><!-- <img alt="{label}"> --><p>Lines</p></div>'
+        "</body></html>"
+    )
+    big = store.publish(db, "owner", "Chart", body)
+    got = _post(client, seats, big.id, anchor={"kind": "element", "id": "chart"})
+    assert got.status_code == 422, got.text
+    assert got.json()["detail"]["field"] == "anchor"
+    assert comments.list_for_artifact(db, big.id) == []
