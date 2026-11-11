@@ -112,7 +112,10 @@ def test_done_blocked_and_wont_do_strips(db, settled):
     art, row = settled
     _declare(db, row, state="done", note="shipped", link="https://x.test/pr/1")
     page = _page(db, art)
-    assert f"Answered, ops-seat, {SESSION}. shipped" in page
+    assert f"Answered, ops-seat, {SESSION}." in page
+    # the outcome shows the note; the strip does not repeat it
+    assert page.count("<li>shipped</li>") == 1
+    assert "ops-seat, " + SESSION + ". shipped" not in page
     assert '<a href="https://x.test/pr/1"' in page
     _declare(db, row, state="blocked", note="needs a key")
     assert f"Blocked, ops-seat, {SESSION}. needs a key" in _page(db, art)

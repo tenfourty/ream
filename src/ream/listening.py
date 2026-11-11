@@ -81,12 +81,13 @@ WORDING = {
 }
 # What the gallery's strip says of an agent's current receipt (receipts design 4.3).
 # {who} is "agent" or "agent, session"; {note} is filled or empty; a link is the gallery's to draw.
+# A done carries no note here: its receipt also writes the outcome ("What it led to"), which shows it.
 # Slice 3 adds its "{agent} was told in Slack {when}" line beside these.
 RECEIPT_WORDING = {
     "seen": "{agent} picked this up {when}.",
     "working": "Working, {who}.{note}",
     "lapsed": "Lapsed: {agent} said working {ago}.{note}",
-    "done": "Answered, {who}.{note}",
+    "done": "Answered, {who}.",
     "blocked": "Blocked, {who}.{note}",
     "wont_do": "Won't do, {who}.{note}",
 }
