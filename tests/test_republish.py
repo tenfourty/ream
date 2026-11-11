@@ -409,3 +409,40 @@ def test_a_failing_touch_is_logged_never_raised(logged, monkeypatch):
     assert republish.republish_one({"id": "p", "render": "exit 1"}, "k") is False
     assert "touch (ok) failed" in logged.read_text()
     assert "touch (failed) failed" in logged.read_text()
+
+
+def test_an_ok_touch_logs_one_line_with_the_refresh_promise(
+    logged, monkeypatch, touches
+):
+    stub_service(monkeypatch, before="same", after="same")
+    entry = {"id": "p", "render": PAGE, "refresh_every": "30m"}
+    assert republish.republish_one(entry, "k")
+    assert "p: touched ok, refresh promise 1800s\n" in logged.read_text()
+
+
+def test_an_ok_touch_without_a_promise_logs_touched_ok_only(
+    logged, monkeypatch, touches
+):
+    stub_service(monkeypatch)
+    assert republish.republish_one({"id": "p", "render": "exit 3"}, "k")
+    lines = [ln for ln in logged.read_text().splitlines() if "touched" in ln]
+    assert len(lines) == 1 and lines[0].endswith("p: touched ok")
+
+
+def test_a_failed_touch_status_logs_touched_failed(logged, monkeypatch, touches):
+    stub_service(monkeypatch)
+    assert republish.republish_one({"id": "p", "render": "exit 1"}, "k") is False
+    assert logged.read_text().count("p: touched failed\n") == 1
+
+
+def test_a_touch_that_errors_logs_the_failure_line_not_touched_ok(logged, monkeypatch):
+    stub_service(monkeypatch, before="same", after="same")
+
+    def boom(*a, **k):
+        raise RuntimeError("touch refused")
+
+    monkeypatch.setattr(republish.client, "_post_touch", boom)
+    republish.republish_one({"id": "p", "render": PAGE}, "k")
+    text = logged.read_text()
+    assert "p: touch (ok) failed: RuntimeError: touch refused" in text
+    assert "touched ok" not in text

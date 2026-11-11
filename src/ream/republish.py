@@ -32,7 +32,10 @@ does not look like a dead timer:
   * the render failed (non-zero exit, timeout, empty or not-a-page output): nothing
     is published and the page is touched as FAILED, so a reader sees the job broke.
 
-A touch that fails is logged and never raised. A bad `timeout` or `refresh_every`
+Each touch that lands logs one line (`<id>: touched ok`, with `, refresh promise
+<seconds>s` when set; `<id>: touched failed` for the failed status), so a page owner
+can see from the log that the page was vouched for. A touch that fails is logged
+(`touch (<status>) failed: ...`) and never raised. A bad `timeout` or `refresh_every`
 logs and skips that page (the run goes on to the others and exits 1).
 
 THREE PROPERTIES, and they are the reason this is a command rather than a line
@@ -263,6 +266,9 @@ def _touch(
         )
     except Exception as exc:  # noqa: BLE001 -- nothing may propagate to the caller
         _log(f"{entry['id']}: touch ({status}) failed: {type(exc).__name__}: {exc}")
+        return
+    promise = "" if refresh is None else f", refresh promise {refresh}s"
+    _log(f"{entry['id']}: touched {status}{promise}")
 
 
 def republish_one(entry: dict, key: str) -> bool:
