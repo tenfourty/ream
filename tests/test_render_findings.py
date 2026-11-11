@@ -339,6 +339,22 @@ def test_a_parser_that_fails_is_not_read_and_never_no_live_data(monkeypatch):
     assert "unchecked" in kinds(found)
 
 
+def test_a_failure_while_looking_for_missing_files_is_not_read_and_never_none_missing(
+    monkeypatch,
+):
+    """As for the live-data read: any failure that is not the budget running out leaves
+    the page unread, None, and never the empty list that says nothing is missing."""
+    page = '<img src="logo.png">'
+
+    def fails(*_args):
+        raise ValueError("the reader gave up")
+
+    assert renderfind.missing_files(page) == ["logo.png"]
+    monkeypatch.setattr(renderfind, "_tags", fails)
+    assert renderfind.missing_files(page) is None
+    assert renderfind.static_scan(page)[0] is None
+
+
 def test_the_budget_reads_the_clock_every_few_tokens_and_stays_spent(monkeypatch):
     now = [100.0]
 

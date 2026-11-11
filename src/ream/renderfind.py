@@ -343,11 +343,13 @@ def missing_files(html: str, budget: Budget | None = None) -> list[str] | None:
     and fragment links, other hosts and anything inside a comment or a script's
     text are not looked at. In page order, each once, capped.
 
-    None when the page was not read (over the size cap, or the budget ran out):
-    that is never the same as an empty list."""
+    None when the page was not read (over the size cap, the budget ran out, or a
+    failure part-way): that is never the same as an empty list."""
     try:
         return _missing_files(html, Budget() if budget is None else budget)
     except TooComplex:
+        return None
+    except Exception:  # noqa: BLE001 - not read to its end: not "no missing files"
         return None
 
 
