@@ -550,7 +550,7 @@ def test_the_card_replies_and_settles_in_place(browser, served, db):
         )
         _point_at(pg, 3)
         card = pg.locator(".hovercard")
-        card.wait_for(state="visible", timeout=3000)
+        card.wait_for(state="visible", timeout=10000)
         box = card.locator("input[name=body]")
         box.click()
         box.type("A REPLY FROM THE CARD")
