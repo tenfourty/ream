@@ -297,7 +297,7 @@ def _blank_script_bodies(html: str, budget: Budget) -> str:
 def _tags(html: str, budget: Budget) -> Iterator[tuple[str, str]]:
     """(lower-case name, the text up to its first ">") of each resource tag in
     the page, in order: none inside a comment or a closed script's text."""
-    body = _blank_script_bodies(csp.outside_comments(html), budget)
+    body = _blank_script_bodies(csp.outside_comments(html, budget), budget)
     at = 0
     while True:
         found = _TAG.search(body, at)

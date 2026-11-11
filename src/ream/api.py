@@ -774,7 +774,9 @@ def page_warnings(db: Database, artifact_id: str, body: str) -> list[dict]:
     given (homelab-ij8.35). Publish time is the one moment the author is
     definitely looking (homelab-ij8.50).
     """
-    out = csp.as_json(body) + traps.as_json(body) + forms.warnings(body)
+    # One budget for the page checks of a request: they draw on it together.
+    budget = renderfind.Budget()
+    out = csp.as_json(body, budget) + traps.as_json(body, budget) + forms.warnings(body)
     for slot, line in decisions.unresolved_slots(db, artifact_id, body):
         out.append(
             {

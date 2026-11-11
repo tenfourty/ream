@@ -230,7 +230,7 @@ def check(
 
 
 def _check(body: str, client: bool, budget: Budget) -> list[CspWarning]:
-    visible = outside_comments(body)
+    visible = outside_comments(body, budget)
     newlines = newline_offsets(visible)
     budget.check()
     found: list[CspWarning] = []
@@ -322,6 +322,6 @@ def _check(body: str, client: bool, budget: Budget) -> list[CspWarning]:
     return sorted(found, key=lambda w: (w.line, w.shape))
 
 
-def as_json(body: str) -> list[dict]:
+def as_json(body: str, budget: Budget | None = None) -> list[dict]:
     """`check()` in the shape the API returns it, matching `csp.as_json`."""
-    return [warning.__dict__ for warning in check(body)]
+    return [warning.__dict__ for warning in check(body, budget=budget)]
