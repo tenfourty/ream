@@ -950,13 +950,51 @@ drivers; CI only (not on the management machine).
    must do:** a stage sink on `events.BRIDGE_KINDS` that stages only while `bridge_owner(conn)` is
    its name, with `next_version`, into its `quarterdeck_outbox` (core's columns); a sender (on
    start/stop) that on its first pass calls `claim_bridge` and `hand_over` in one transaction,
-   then each pass `hand_over`s, claims as core's `_claim` does skipping `held`, and keeps the
-   wire invariants above (Retry-After included); `read_side(enabled=, outbox_status=,
+   then each pass `hand_over`s, claims as core's `_claim` does skipping `held` **and with
+   `partner.core_outbox_clear("o.decision_id")` in the claim statement itself** (second round,
+   D), passes its own entry-point name as `owner`, and keeps the wire invariants above
+   (Retry-After included); `read_side(enabled=, outbox_status=,
    delivered=)`; a command that runs `release_bridge` before a rollback. `artifacts-admin
    partner-outbox` still reports and releases only core's outbox. **Not run here:** the full
    suite and Postgres (CI on `ci/partner-standdown`); the new file and `test_partner_outbox.py`,
    `test_plugin_read_side.py`, `test_plugin_api.py`, `test_plugin_api_1_2.py`, `test_emit.py`
    passed serially on SQLite.
+   **Second review round (11 Nov 2026).** (A) *Round one's fix lost events:* core's stage stood
+   down wherever the key was set, so an event raised in a process where the owner's stage is not
+   loaded was written nowhere: `artifacts-admin purge-deleted` (`store.purge_expired` emits
+   `withdrawn` in a CLI process, whose plug-in API registers no sink) and any server with another
+   `REAM_PLUGINS`. Now core's stage stands down only when the key is set **and** the owner's stage
+   for that kind is registered in this process (`sinks.bridge_stage_of`, by the plug-in name
+   `api.sink` now records on each `Sink`, never by a sink's name); elsewhere it writes core's
+   outbox, which core's sender leaves alone while the key is set and the owner's `hand_over`
+   empties. Still one writer per event: the plug-in's stage writes only while it owns the bridge
+   and is loaded. The key stays the sender's switch. (B) *An owner removed without
+   `release_bridge`* no longer loses anything (A queues in core's outbox), and is visible: a
+   WARNING once per process (at server start, `partner.warn_if_owner_absent`, and when a stage or
+   sender pass meets it), `partner.status` gains `bridge_owner` and `bridge_owner_loaded`,
+   `artifacts-admin partner-outbox` names the holder, and `artifacts-admin partner-bridge
+   [--release]` shows it and clears the key. `--release` is refused while the owner is installed
+   in the shell's environment and selected by its `REAM_PLUGINS` (`plugin_cli.selected_names`,
+   the set a server started there would load; the admin command loads no plug-in, so "loaded in
+   this process" would always be false there): the plug-in's own release also moves its rows.
+   (C) *A pass that began before the claim could send a later version:* the owner is now read in
+   `_claim`'s own statement, per row (`not exists` on `service_meta`), so a claim landing between
+   two rows stops the pass. (D) *`held` is a snapshot:* on Postgres an uncommitted staging
+   transaction's row can appear in core's outbox after the hand-over, so the plug-in could send
+   v(n+1) before core's v(n) reaches it. The contract now makes the plug-in's claim statement
+   re-check core's outbox (`partner.core_outbox_clear(column)`, a checked column name in a fixed
+   fragment, tested). *A lock serialising `stage_partner` with `claim_bridge`: no.* With (A),
+   core's stage legitimately writes core's outbox at any time after the claim, so a lock at the
+   claim would not remove the need for the per-claim re-check, and it would add a cross-process
+   lock (Postgres advisory, nothing on SQLite) to every bridge event's transaction. (E) *Two
+   claims at once:* `claim_bridge` inserts with `on conflict do nothing` and reads the owner
+   again, so the second gets `BridgeHeld`, never the primary key's raw error. Also: the owner
+   must be the plug-in's own entry-point name (documented on `claim_bridge`; not checked, since a
+   plug-in's sender may claim from a process whose registry core cannot vouch for, and a wrong
+   name only leaves core staging). Tests: `tests/test_partner_standdown.py` (round one's
+   "stands down without the plug-in" test, which asserted the loss, replaced; a CLI process, another
+   plug-in's stage, a kind the owner does not stage, a claim mid-pass, the fragment, two claims,
+   the warning, status, the admin command); the same files passed serially on SQLite.
 10. **Docs and decisions.** `docs/decisions.md` entry for the core-and-plug-ins split, the design
     doc's extension section, a plug-in author guide, the office doc's deployment paragraph.
     (Docs also land with each slice above; this is the consolidation.)

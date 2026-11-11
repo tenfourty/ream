@@ -283,20 +283,39 @@ before the first plug-in's `answer` is called, so `answer` only ever gets a note
 
 ### Taking over core's partner bridge (step 9e-3, until 9e-4)
 
-Who sends to the partner is a **database fact**, not a registration: the `service_meta` key
+Who **sends** to the partner is a **database fact**: the `service_meta` key
 `partner_bridge_owner`. While it is unset, core's outbound bridge (`ream.partner`, the built-in
-`partner` stage sink and its sender) works as before. Once a plug-in claims it, core's stage and
-sender stand down in **every** process that reads the database, whatever plug-ins that process
-loaded, logging each once at INFO. A sink's name silences nothing. The helpers, in `ream.partner`,
-go away with that module in 9e-4:
+`partner` stage sink and its sender) works as before. Once a plug-in claims it, core's sender
+stands down in **every** process that reads the database (it checks the key in the very statement
+that takes each row, so a claim landing mid-pass stops the pass before its next row). Core's
+**stage** stands down only where the owner's stage for that event's kind is loaded: in a process
+without it (a command-line tool such as `artifacts-admin purge-deleted`, whose plug-in API
+registers no sink, or a server with another `REAM_PLUGINS`) core goes on writing the event to its
+own outbox, and the owner's sender moves it with `hand_over` on its next pass. So each event has
+exactly one writer and none is lost. The check is by owner (the plug-in name recorded on each
+sink `api.sink` registers), never by a sink's name. Each stand-down logs once at INFO; a server
+process where the key names a plug-in whose bridge stage is not loaded logs a WARNING once, at
+start and when it first meets it (`partner.status` reports `bridge_owner` and
+`bridge_owner_loaded`). The helpers, in `ream.partner`, go away with that module in 9e-4:
 
 | Helper | Use |
 |---|---|
 | `bridge_owner(conn)` | who holds the bridge: your plug-in's name, or `None` while core does. Your stage stages only when it is your name, so before the claim core stages and you do not, after it the reverse, exactly one writer in the same transaction |
-| `claim_bridge(conn, owner)` | take the bridge, in the **same transaction as your first `hand_over`**; the same owner again is a no-op, another is refused (`BridgeHeld`) |
+| `claim_bridge(conn, owner)` | take the bridge, in the **same transaction as your first `hand_over`**. `owner` must be **your plug-in's own entry-point name**: core's stage stands down only where a stage sink of that name's plug-in is loaded, and `BridgeStageFailed` fires only for it. The same owner again is a no-op; another is refused (`BridgeHeld`), also when two processes claim at once |
+| `core_outbox_clear(column)` | a WHERE fragment, true when core's outbox has no undelivered row for the question `column` names (`"o.decision_id"`). **Your claim statement must carry it**: `held` is a snapshot, and on Postgres a staging transaction not yet committed can add a row to core's outbox after it, so without the re-check you could send version n+1 before core's n reaches you |
 | `next_version(conn, decision_id, kind)` | in your stage, in the answering transaction: the question's next partner version, or `None` (not announced, or not a plain question: send nothing). Core keeps the counter until 9e-4, so the versions run on unbroken across the switch and back |
 | `hand_over(conn, now, limit=200)` | in your sender, each pass, in one transaction with your inserts: moves core's undelivered outbox rows (whole questions, parked ones parked) to you by returning and deleting them; the lease is checked under the row lock, and a question not wholly locked is left in core; `.held` names the questions core still has rows for (leased, locked elsewhere, or past `limit`): send none of a held question's rows that pass |
 | `release_bridge(conn, owner, rows)` | the undo, in one transaction: your undelivered rows go back to core's outbox (duplicates skipped) and the key is cleared, so there is never a moment with two senders or none. Expose it as a command the operator runs **before** removing the plug-in (core cannot call it once the plug-in is gone) |
+
+**Rollback when the plug-in was removed without its release command.** Core's sender stays
+silent while the key is set, but nothing is lost: every process now lacks the owner's stage, so
+core's stage queues each event in core's outbox, where `artifacts-admin partner-outbox` shows the
+depth and the holder, and the server warns at start. `artifacts-admin partner-bridge` shows who
+holds the bridge; `artifacts-admin partner-bridge --release` clears the key, and core's sender
+sends what queued. It is refused while that plug-in is installed in the shell's environment and
+selected by its `REAM_PLUGINS` (the set a server started from there would load; the command loads
+no plug-in itself): then run the plug-in's own release, which also gives its undelivered rows
+back. Rows left in a removed plug-in's own tables are not moved.
 
 A stage of the plug-in that holds the bridge is the only writer of a bridge event, so its
 failure fails the action (`plugin_api.BridgeStageFailed`, the answer is not saved), as core's own
