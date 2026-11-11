@@ -109,6 +109,47 @@ def test_every_gallery_link_is_reported_not_just_the_first():
     assert found[0].line < found[1].line, "and each names its own line"
 
 
+HOST = urlsplit(GALLERY).hostname
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        f"//{HOST}/a/abc",
+        f"&#104;ttps://{HOST}/a/abc",
+        f"https&colon;//{HOST}/a/abc",
+        f"https://{HOST.replace('a', '&#97;', 1)}/a/abc",
+        f" https://{HOST}/a/abc",
+        f"\n\t https://{HOST}/a/abc ",
+        f"  //{HOST}/a/abc",
+        f"htt\tps://{HOST}/a/abc",
+    ],
+    ids=[
+        "protocol-relative",
+        "entity in the scheme",
+        "colon entity",
+        "entity in the host",
+        "leading space",
+        "leading whitespace",
+        "space and protocol-relative",
+        "tab inside the scheme",
+    ],
+)
+def test_the_other_shapes_a_browser_reads_as_a_gallery_link_are_caught(href):
+    [found] = traps.check(page(body=f'<a href="{href}">Wall</a>'))
+    assert found.shape == "gallery_link_same_tab"
+
+
+def test_a_protocol_relative_link_to_another_host_is_not_this_check():
+    assert traps.check(page(body='<a href="//example.com/a/abc">Else</a>')) == []
+    assert traps.check(page(body='<a href="&#104;ttps://example.com/">Else</a>')) == []
+
+
+def test_the_other_shapes_with_a_new_tab_are_fine():
+    body = f'<a href=" //{HOST}/x" target="_blank">Wall</a>'
+    assert traps.check(page(body=body)) == []
+
+
 # --- the id that does not exist yet -------------------------------------------
 
 

@@ -29,7 +29,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from ream import renderfind, settings, textvars
+from ream import htmlbound, renderfind, settings, textvars
 from ream.csp import CspWarning, line_of, newline_offsets, outside_comments
 from ream.renderfind import Budget, TooComplex
 
@@ -40,17 +40,42 @@ from ream.renderfind import Budget, TooComplex
 # top-level navigation -- so a same-tab link goes nowhere at all. The owner found
 # this on a real page on 19 Sep, which is why every template carries the
 # attribute and why this checks for it.
-def _gallery_href(client: bool) -> re.Pattern[str]:
-    """An `href` to the configured gallery's host, or to the former host while one is set (a
-    page written before a move still links the old name, which forwards to the new one and
-    needs the same `target`), built at call time (both are settings)."""
+def _gallery_host(client: bool) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    """The start of an address that reaches the configured gallery's host, or the former
+    host while one is set (a page written before a move still links the old name, which
+    forwards to the new one and needs the same `target`), built at call time (both are
+    settings). It takes `https://host`, `http://host` and `//host` (the page's own
+    scheme), as an address reads after `_decoded`."""
     names = [urlsplit(textvars.gallery_origin(client)).hostname or ""]
     former = settings.current().former_host.strip().lower().removesuffix(".")
     if former:
         names.append(former)
     alternatives = "|".join(re.escape(n) for n in names)
-    return re.compile(
-        r"\bhref\s*=\s*[\"']?https?://(?:" + alternatives + ")", re.IGNORECASE
+    bare = re.compile(alternatives, re.IGNORECASE)
+    return re.compile(r"(?:https?:)?//(?:" + alternatives + ")", re.IGNORECASE), bare
+
+
+# What follows `href=`: an optional quote, whitespace, then the value as far as the next quote
+# or `>`, read ahead (zero-width) so an `href=` inside another's value is still found, and
+# capped so a tag of many of them costs no more than its length times the cap.
+_HREF_VALUE = re.compile(r"\bhref\s*=\s*[\"']?\s*(?=([^\"'>]{0,2048}))", re.IGNORECASE)
+_URL_NOISE = re.compile(r"[\t\n\r]")
+
+
+def _decoded(value: str) -> str:
+    """An `href` value as a browser reads it as an address: character references
+    decoded, tab and newline dropped from anywhere, leading and trailing ASCII
+    whitespace and control characters stripped, `\\` taken for `/`."""
+    if "&" in value:
+        value = htmlbound.unescape(value)
+    value = _URL_NOISE.sub("", value).strip("".join(map(chr, range(0x21))))
+    return value.replace("\\", "/")
+
+
+def _reaches_gallery(tag: str, host: re.Pattern[str]) -> bool:
+    return any(
+        host.match(_decoded(found.group(1))) is not None
+        for found in _HREF_VALUE.finditer(tag)
     )
 
 
@@ -72,8 +97,10 @@ def _gallery_links(
     (no later one has a `>` either), and an `<a` inside another tag's reach is part of
     that tag, whether or not that one is a gallery link.
     """
-    href = _gallery_href(client)
-    if href.search(text) is None:
+    host, bare = _gallery_host(client)
+    # Without a character reference, an address to the gallery names its host in the
+    # page; with one, the host may be spelled out of references, so every tag is read.
+    if "&" not in text and bare.search(text) is None:
         return  # no link to the gallery anywhere: nothing to find
     at = 0
     while True:
@@ -85,7 +112,7 @@ def _gallery_links(
             return
         budget.step()
         at = end + 1
-        if href.search(text, opened.end(), end) is not None:
+        if _reaches_gallery(text[opened.end() : end], host):
             yield (
                 opened.start(),
                 _HAS_BLANK_TARGET.search(text, opened.start(), at) is not None,
