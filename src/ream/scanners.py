@@ -1,22 +1,23 @@
 """Scanners a plug-in registers (core-and-plugins design, 4.2 item 4).
 
 The core's own pattern scan (`scan.py`) always runs. A registered scanner is an extra
-opinion taken in the same place the core takes its second opinion (`ggscan`): after the
-pattern scan came back clean, on a body and on a field whose caller asks for the second
-opinion, and on an agent comment's second scan. Any finding refuses exactly as a
-pattern finding does. With none registered `run` returns [] without doing anything.
+opinion, the second opinion on a text: taken after the pattern scan came back clean, on a
+body and on a field whose caller asks for the second opinion, and on an agent comment's
+second scan. Any finding refuses exactly as a pattern finding does. With none registered
+`run` returns [] without doing anything.
 
 `on_error` says what a scanner that raises (or returns something that is not a list of
 `Finding`) means: "skip" -- no opinion, logged and counted, the page publishes on the
-rest (what `ggscan` does today when the relay cannot be reached) -- or "block" -- the
-action fails (`ScannerBlocked`). Only the exception's type is logged, never its message
-or the text.
+rest -- or "block" -- the action fails (`ScannerBlocked`). Only the exception's type is
+logged, never its message or the text.
 
 Each call is bounded: `SCAN_TIMEOUT_SECONDS` unless the scanner declared its own `timeout`
 when it registered, which is capped at `MAX_SCAN_TIMEOUT_SECONDS`.
 
-A scanner named `gitguardian` (step 9c: `ggscan`, moved into the house plug-in) makes the
-core's own relay scan stand down while it is registered: see `ggscan.stood_down`.
+A scanner named `gitguardian` (`SECOND_OPINION`) is the second opinion that GitGuardian's
+ggshield gives on every page and every agent comment (step 9c: it was core's own `ggscan`,
+and is the house plug-in's scanner now; core asks no relay itself). An agent comment is
+stamped scanned by it alone while it is registered: see `comments.second_scan`.
 """
 
 from __future__ import annotations
@@ -33,15 +34,17 @@ _log = logging.getLogger(__name__)
 _lock = threading.Lock()
 MAX_FINDINGS = 20
 MAX_SHAPE_LENGTH = 64
+# The name of the scanner that is the second opinion on a comment (see the module doc). Only
+# the name counts, not the plug-in that registered it.
+SECOND_OPINION = "gitguardian"
 # One plug-in scanner call is abandoned after this long and counts as a scanner error
 # (`on_error` applies). It runs in a daemon thread that cannot be killed, so a scanner
 # that really hangs leaks one thread per call (bounded only by how often the caller
 # calls; never reclaimed), as a hung sink does.
 SCAN_TIMEOUT_SECONDS = 10.0
 # A scanner may declare its own bound (`register(..., timeout=)`), never more than this:
-# the time the core's own relay scan (`ggscan.TIMEOUT_SECONDS`) always had, so that when
-# `ggscan` stands down for the `gitguardian` scanner (step 9c) a 10 to 20 second answer
-# is still an answer. A test pins the two together.
+# the time the relay scan always had (it was core's own `ggscan` before step 9c), so that a
+# 10 to 20 second answer from the `gitguardian` scanner is still an answer.
 MAX_SCAN_TIMEOUT_SECONDS = 20.0
 
 

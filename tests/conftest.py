@@ -973,17 +973,6 @@ def db(_schema: _Schema, dsn: str, request):
 
 
 @pytest.fixture(autouse=True)
-def _forget_clean_scans():
-    """The GitGuardian clean-answer memory is per process; one test's clean
-    body must not spare the next test its scan."""
-    from ream import ggscan
-
-    with ggscan._clean_lock:
-        ggscan._clean.clear()
-    yield
-
-
-@pytest.fixture(autouse=True)
 def _new_pages_say_comments(request, monkeypatch):
     """The service refuses a NEW page that does not say whether commenting starts on or off
     (9 Nov 2026). Most tests publish through the HTTP API to get a page, not to test that, so

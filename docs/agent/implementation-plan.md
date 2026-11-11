@@ -2822,3 +2822,8 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   the answer wakes the app's `whats_new`, not the page's agent, which gets a `question_asked`
   event (nudged as a comment is); only the app can withdraw it. A key still asks on its own pages
   only. New column `decision.asked_by` (null: the page's agent). Spec §11.4.
+- **The GitGuardian second scan leaves the core (11 Nov 2026, step 9c of core-and-plugins).** Core no
+  longer carries its own ggshield relay scan (`ggscan.py` and the `ggshield_*` settings are deleted):
+  the house plug-in's scanner `gitguardian` is the second opinion on pages and agent comments, and a
+  comment it gave no answer for is left unscanned for the sweeper. A deployment that still sets
+  `REAM_GGSHIELD_*` starts as before. Ledger: `specs/2026-11-04-core-and-plugins-design.md`, step 9c.

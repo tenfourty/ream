@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from ream import comments, decisions, ggscan, keys, review, store
+from ream import comments, decisions, keys, plugin_api, review, scanners, store
 from ream.app import create_gallery_app
 from ream.scan import Finding
 
@@ -35,7 +35,9 @@ def page(db):
 
 @pytest.fixture()
 def gg(monkeypatch):
-    """Counts relay calls; `gg.result` is what it answers."""
+    """The `gitguardian` plug-in scanner, as a fake registered as the plug-in does. Counts
+    calls; `gg.result` is what it answers, and None is no opinion (it raises, as the
+    plug-in's `NoOpinion` does)."""
 
     class Relay:
         def __init__(self):
@@ -46,10 +48,13 @@ def gg(monkeypatch):
 
     def scan(body):
         relay.calls.append(body)
+        if relay.result is None:
+            raise RuntimeError("no opinion")
         return relay.result
 
-    monkeypatch.setattr(ggscan, "scan", scan)
-    monkeypatch.setattr(ggscan, "configured", lambda: True)
+    monkeypatch.setattr(scanners, "_SCANNERS", [])
+    monkeypatch.setattr(plugin_api, "_failures", {})
+    scanners.register("house", "gitguardian", scan, "skip", 20.0)
     return relay
 
 
@@ -137,13 +142,15 @@ def test_a_finding_withdraws_it_and_tells_the_agent(client, db, auth, page, gg, 
     assert "hunter2" not in caplog.text
 
 
-def test_an_unreachable_relay_keeps_it_and_logs(client, db, auth, page, gg, caplog):
+def test_a_scanner_with_no_opinion_keeps_it_and_logs(
+    client, db, auth, page, gg, caplog
+):
     gg.result = None
     caplog.set_level(logging.WARNING)
     assert _post(client, auth, page, "still here").status_code == 201
     assert [r.body for r in comments.list_for_artifact(db, page.id)] == ["still here"]
-    assert "comment kept on the built-in scan only" in caplog.text
-    assert "reason=ggshield_unavailable" in caplog.text
+    assert "scanner gitguardian failed (skip)" in caplog.text
+    assert "no opinion" not in caplog.text  # the type is logged, never the message
     assert _events(db, "comment_withdrawn") == []
 
 
@@ -185,7 +192,7 @@ def test_a_withdrawn_root_hides_its_replies_without_breaking(
     assert "reply" not in message + str(view)
 
 
-def test_publish_still_waits_for_ggshield(db, gg):
+def test_publish_still_waits_for_the_second_opinion(db, gg):
     store.publish(db, "seat", "Board", PAGE)
     assert len(gg.calls) == 1
 
@@ -248,7 +255,7 @@ def test_the_sweep_skips_what_it_should(db, page, gg):
     assert not _stamped(db, new.id)
 
 
-def test_an_unavailable_relay_leaves_it_unstamped_for_the_next_pass(db, page, gg):
+def test_no_opinion_leaves_it_unstamped_for_the_next_pass(db, page, gg):
     row = _agent_comment(db, page)
     _age(db, row.id)
     gg.result = None
@@ -392,7 +399,7 @@ def test_a_withdrawal_leaves_migrate_working_and_blanks_reply_quotes(db, page, g
     assert held == 0
 
 
-def test_a_comment_the_relay_always_refuses_does_not_block_a_newer_one(
+def test_a_comment_it_never_answers_for_does_not_block_a_newer_one(
     db, page, monkeypatch
 ):
     old = _agent_comment(db, page, "old")
@@ -403,10 +410,12 @@ def test_a_comment_the_relay_always_refuses_does_not_block_a_newer_one(
 
     def scan(body):
         seen.append(body.split("\n")[0])
-        return None if body.startswith("old") else []
+        if body.startswith("old"):
+            raise RuntimeError("no opinion")
+        return []
 
-    monkeypatch.setattr(ggscan, "scan", scan)
-    monkeypatch.setattr(ggscan, "configured", lambda: True)
+    monkeypatch.setattr(scanners, "_SCANNERS", [])
+    scanners.register("house", "gitguardian", scan)
     comments.sweep_unscanned(db)
     comments.sweep_unscanned(db)
     assert _stamped(db, new.id) and not _stamped(db, old.id)
@@ -422,8 +431,6 @@ def _body_state(db, cid):
 
 
 def _toy(monkeypatch, fn, on_error="skip"):
-    from ream import scanners
-
     monkeypatch.setattr(scanners, "_SCANNERS", [])
     scanners.register("toy", "toy", fn, on_error)
 
@@ -432,7 +439,7 @@ def _boom(text):
     raise RuntimeError("leaky detail")
 
 
-def test_a_plugin_scanner_finding_withdraws_the_comment(db, page, gg, monkeypatch):
+def test_a_plugin_scanner_finding_withdraws_the_comment(db, page, monkeypatch):
     _toy(monkeypatch, lambda text: [Finding(shape="toy_x", line=1)])
     row = _agent_comment(db, page, "fine")
     assert comments.second_scan(db, row.id) == "withdrawn"
@@ -441,10 +448,8 @@ def test_a_plugin_scanner_finding_withdraws_the_comment(db, page, gg, monkeypatc
 
 
 def test_a_failing_block_scanner_leaves_the_comment_intact_and_unscanned(
-    db, page, gg, monkeypatch, caplog
+    db, page, monkeypatch, caplog
 ):
-    from ream import scanners
-
     _toy(monkeypatch, _boom, "block")
     row = _agent_comment(db, page, "fine")
     assert comments.second_scan(db, row.id) == "unavailable"
@@ -464,62 +469,45 @@ def test_a_failing_block_scanner_leaves_the_comment_intact_and_unscanned(
 
 
 def test_a_hidden_pending_comment_is_still_withdrawn_by_a_finding(
-    db, page, gg, monkeypatch
+    db, page, monkeypatch
 ):
-    from ream import scanners
-
     _toy(monkeypatch, _boom, "block")
     row = _agent_comment(db, page, "fine")
     comments.second_scan(db, row.id)
     scanners._SCANNERS[:] = []
-    gg.result = [Finding(shape="ggshield_x", line=1)]
+    scanners.register(
+        "house", "gitguardian", lambda text: [Finding(shape="ggshield_x", line=1)]
+    )
     assert comments.second_scan(db, row.id) == "withdrawn"
     assert _body_state(db, row.id) == ("", True, "ggshield_x")
 
 
-def test_a_clean_plugin_answer_counts_as_scanned_when_the_relay_is_unset(
-    db, page, gg, monkeypatch
+def test_a_clean_plugin_answer_counts_as_scanned_when_no_gitguardian_is_registered(
+    db, page, monkeypatch
 ):
     _toy(monkeypatch, lambda text: [])
-    gg.result = None  # ggscan.scan: no relay configured
-    monkeypatch.setattr(ggscan, "configured", lambda: False)
     row = _agent_comment(db, page, "fine")
     assert comments.second_scan(db, row.id) == "scanned"
     assert _stamped(db, row.id)
 
 
-def test_a_clean_plugin_answer_is_not_enough_when_a_configured_relay_is_down(
-    db, page, gg, monkeypatch
-):
-    _toy(monkeypatch, lambda text: [])
-    gg.result = None  # configured (the fixture) but unavailable
+def test_a_clean_plugin_answer_is_not_enough_when_gitguardian_is_down(db, page, gg):
+    gg.result = None  # registered, but it gives no opinion
+    scanners.register("toy", "toy", lambda text: [])
     row = _agent_comment(db, page, "fine")
     assert comments.second_scan(db, row.id) == "unavailable"
     assert not _stamped(db, row.id)
     assert [c.id for c in comments.list_for_artifact(db, page.id)] == [row.id]
 
 
-def test_a_skipped_plugin_scanner_is_no_answer_when_the_relay_is_unset(
-    db, page, gg, monkeypatch
+def test_a_skipped_plugin_scanner_is_no_answer_when_no_gitguardian_is_registered(
+    db, page, monkeypatch
 ):
     _toy(monkeypatch, _boom, "skip")
-    gg.result = None
     row = _agent_comment(db, page, "fine")
     assert comments.second_scan(db, row.id) == "unavailable"
     assert not _stamped(db, row.id)
     assert _body_state(db, row.id) == ("fine", False, None)
-
-
-def test_a_relay_finding_means_the_plugin_scanners_are_not_asked(
-    db, page, gg, monkeypatch
-):
-    asked = []
-    _toy(monkeypatch, lambda text: asked.append(text) or [])
-    gg.result = [Finding(shape="ggshield_x", line=1)]
-    row = _agent_comment(db, page, "fine")
-    assert comments.second_scan(db, row.id) == "withdrawn"
-    assert asked == []
-    assert _body_state(db, row.id) == ("", True, "ggshield_x")
 
 
 def _event_count(db):
@@ -527,7 +515,7 @@ def _event_count(db):
         return conn.execute("select count(*) from event").fetchone()[0]
 
 
-def test_a_hold_emits_no_event(db, page, gg, monkeypatch):
+def test_a_hold_emits_no_event(db, page, monkeypatch):
     _toy(monkeypatch, _boom, "block")
     row = _agent_comment(db, page, "fine")
     before = _event_count(db)
@@ -537,7 +525,7 @@ def test_a_hold_emits_no_event(db, page, gg, monkeypatch):
 
 
 def test_a_late_failing_scan_does_not_hide_a_comment_already_scanned(
-    db, page, gg, monkeypatch
+    db, page, monkeypatch
 ):
     _toy(monkeypatch, lambda text: [])
     row = _agent_comment(db, page, "fine")
@@ -548,16 +536,12 @@ def test_a_late_failing_scan_does_not_hide_a_comment_already_scanned(
     assert _body_state(db, row.id) == ("fine", False, None)
 
 
-def test_a_hold_nothing_can_clear_is_lifted(db, page, gg, monkeypatch):
-    from ream import scanners
-
+def test_a_hold_nothing_can_clear_is_lifted(db, page, monkeypatch):
     _toy(monkeypatch, _boom, "block")
     row = _agent_comment(db, page, "fine")
     comments.second_scan(db, row.id)
     assert _body_state(db, row.id) == ("fine", True, "scan_blocked")
-    scanners._SCANNERS[:] = []  # the blocking plug-in is gone
-    gg.result = None
-    monkeypatch.setattr(ggscan, "configured", lambda: False)
+    scanners._SCANNERS[:] = []  # the blocking plug-in is gone, and no scanner is left
     assert comments.second_scan(db, row.id) == "unavailable"
     assert _body_state(db, row.id) == ("fine", False, None)
     assert not _stamped(db, row.id)

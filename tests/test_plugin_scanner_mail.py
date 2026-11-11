@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from ream import ggscan, mail, plugin_api, scanners, store
+from ream import mail, plugin_api, scanners, store
 from ream.scan import Finding
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body><p>{}</p></body></html>"
@@ -17,7 +17,6 @@ def world(monkeypatch):
     monkeypatch.setattr(scanners, "_SCANNERS", [])
     monkeypatch.setattr(mail, "_backend", None)
     monkeypatch.setattr(plugin_api, "_failures", {})
-    monkeypatch.setattr(ggscan, "scan", lambda body: [])  # the relay: clean
     return plugin_api.PluginAPI("toy")
 
 
@@ -156,8 +155,8 @@ def test_a_slow_scanner_is_a_scanner_error(world, monkeypatch):
 
 def test_the_default_bound_is_cores_and_the_ceiling_is_the_relays():
     assert scanners.SCAN_TIMEOUT_SECONDS == 10.0
-    # A scanner may ask for the time `ggscan` always had, and no more.
-    assert scanners.MAX_SCAN_TIMEOUT_SECONDS == ggscan.TIMEOUT_SECONDS == 20.0
+    # A scanner may ask for the time the relay scan always had, and no more.
+    assert scanners.MAX_SCAN_TIMEOUT_SECONDS == 20.0
 
 
 def test_a_scanner_may_declare_a_longer_bound(world, monkeypatch):
@@ -266,16 +265,6 @@ def test_a_scanners_exception_text_never_reaches_logs_or_the_error(world, caplog
     assert "SECRET-IN-EXCEPTION" not in caplog.text
     assert "SECRET-IN-EXCEPTION" not in str(c.value)
     assert c.value.__cause__ is None
-
-
-def test_a_relay_finding_skips_the_plugin_scanners(db, world, monkeypatch):
-    asked = []
-    world.scanner("toy", lambda text: asked.append(text) or [])
-    monkeypatch.setattr(ggscan, "scan", lambda body: [Finding("gg_x", 1)])
-    with pytest.raises(store.SecretFound) as caught:
-        store.publish(db, "seat", "t", PAGE.format("fine"))
-    assert [f.shape for f in caught.value.findings] == ["gg_x"]
-    assert asked == []
 
 
 def test_a_gitguardian_field_is_scanned_by_plugins_and_a_plain_one_is_not(world):

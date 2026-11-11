@@ -17,9 +17,11 @@ leaves `gallery_origin` unset refuses to start (`validate_for_serve`).
 only a label: `owner.check` records it in `service_meta` and refuses to start on a database
 written for another one.
 
-SECRETS. Settings hold paths and ids (`..._KEY_FILE`). Three values are still read from the
+SECRETS. Settings hold paths and ids (`..._KEY_FILE`). Two values are still read from the
 environment as the VALUE, because the deployment mounts them that way (Mailgun key, nudge
-token, ggshield token); they are never printed: `Settings` has no field-listing `__repr__`.
+token); they are never printed: `Settings` has no field-listing `__repr__`. (The ggshield
+relay's address and token are no longer core settings: the house plug-in's `gitguardian`
+scanner reads `GGSHIELD_URL` and `GGSHIELD_TOKEN` itself, and core ignores them.)
 """
 
 from __future__ import annotations
@@ -171,8 +173,6 @@ class Settings:
     nudge_agent: str = ""
     nudge_token: str = ""  # a VALUE; never printed
     nudge_timeout: str = "2.0"
-    ggshield_url: str = ""
-    ggshield_token: str = ""  # a VALUE; never printed
     partner_name: str = ""
     partner_events_url: str = ""
     partner_signing_key_file: str = ""
@@ -571,8 +571,6 @@ _ENV = {
     "nudge_agent": "REAM_NUDGE_AGENT",
     "nudge_token": "REAM_NUDGE_TOKEN",
     "nudge_timeout": "REAM_NUDGE_TIMEOUT",
-    "ggshield_url": "REAM_GGSHIELD_URL",
-    "ggshield_token": "REAM_GGSHIELD_TOKEN",
     "partner_name": "REAM_PARTNER_NAME",
     "partner_events_url": "REAM_PARTNER_EVENTS_URL",
     "partner_signing_key_file": "REAM_PARTNER_SIGNING_KEY_FILE",

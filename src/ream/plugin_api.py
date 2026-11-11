@@ -325,8 +325,9 @@ class PluginAPI:
         until a clean scan shows it again. Each call is bounded by `timeout` seconds
         (API 1.1; a positive number, capped at `scanners.MAX_SCAN_TIMEOUT_SECONDS`, 20),
         else by `scanners.SCAN_TIMEOUT_SECONDS` (10); a scanner that hangs costs one
-        daemon thread per call, never reclaimed. A scanner named `gitguardian` stands
-        the core's own relay scan (`ggscan`) down while it is registered."""
+        daemon thread per call, never reclaimed. The scanner named `gitguardian` is the
+        second opinion on an agent comment (`scanners.SECOND_OPINION`): while it is
+        registered, only its clean answer stamps a comment scanned."""
         scanners.register(self._plugin, name, scan, on_error, timeout)
 
     def mail_backend(self, name: str, send: Callable, enabled: Callable) -> None:

@@ -36,7 +36,6 @@ from datetime import UTC, datetime, timedelta
 from ream import (
     anchors,
     events,
-    ggscan,
     holds,
     ids,
     image_store,
@@ -1941,78 +1940,66 @@ def withdraw(db: Database, comment_id: str, *, kind: str) -> bool:
 
 
 def second_scan(db: Database, comment_id: str) -> str:
-    """The background job after an agent's comment is saved: GitGuardian on the
-    saved body. A finding withdraws the comment; an unreachable relay leaves it
-    up on the built-in scan and says so. Never raises -- a background task's
-    exception is lost, so it is logged and swallowed.
+    """The background job after an agent's comment is saved: the second opinion on the
+    saved body, from the scanners a plug-in registered (scanners.py), GitGuardian's
+    ggshield being the one named `gitguardian`. A finding withdraws the comment; no
+    opinion from `gitguardian` (it raised or timed out) leaves it up on the built-in
+    scan, unstamped, for the sweeper to ask again (`scanners` counts and logs the failure).
+    Never raises -- a background task's exception is lost, so it is logged and swallowed.
 
-    Returns "scanned", "withdrawn", "unavailable" (no answer from the relay)
-    or "gone" (nothing to scan, or the scan itself failed)."""
+    Returns "scanned", "withdrawn", "unavailable" (no second opinion was had) or "gone"
+    (nothing to scan, or the scan itself failed)."""
     try:
         with db.connect() as conn:
             row = conn.execute(
-                "select body, artifact_id, author, quote from comment"
+                "select body, quote from comment"
                 " where id = %s and (withdrawn_at is null or withdrawn_kind = %s)"
                 " and author_kind = 'agent'",
                 (comment_id, _SCAN_HOLD),
             ).fetchone()
         if row is None:
             return "gone"
-        body, artifact_id, author, quote = row
+        body, quote = row
         with db.connect() as conn:
             conn.execute(
                 "update comment set gg_attempted_at = %s where id = %s",
                 (datetime.now(UTC), comment_id),
             )
-        # The quote was only ever built-in scanned; the relay sees it too.
+        # The quote was only ever built-in scanned; the scanners see it too.
         scanned_text = body + "\n" + quote
-        # None while a plug-in scanner named `gitguardian` has the relay scan (ggscan).
-        standing_down = ggscan.stood_down()
-        found = ggscan.scan(scanned_text)
-        plugin_answered = False
-        if not found:
-            # Scanners a plug-in registered. A `block` scanner that fails leaves the
-            # comment unscanned for the sweeper to retry (an outage must not wipe
-            # comments); a publish under `block` still fails closed. Until it is
-            # cleared the comment is hidden (reversibly), not shown unscanned.
-            try:
-                extra, answered = scanners.run_named(scanned_text)
-                plugin_answered = bool(answered)
-            except scanners.ScannerBlocked as exc:
-                _log.error(
-                    "comment left unscanned: scanner blocked: plugin=%s scanner=%s"
-                    " comment=%s",
-                    exc.plugin,
-                    exc.name,
-                    comment_id,
-                )
-                _hide_pending_scan(db, comment_id)
-                return "unavailable"
-            if extra:
-                found = extra
-            elif standing_down and ggscan.STAND_DOWN_FOR in answered:
-                # The relay's scan is the `gitguardian` scanner's, and it said clean.
-                found = []
-        if found is None and plugin_answered and not ggscan.relay_expected():
-            # No relay to ask at all (never configured, no plug-in has its scan): a
-            # plug-in scanner's real clean answer is the second opinion. A relay that is
-            # expected but gave no answer (down, or `gitguardian` failed or timed out)
-            # stays unscanned so the sweeper asks it again; another scanner's clean
-            # answer does not stand in for it.
+        # A `block` scanner that fails leaves the comment unscanned for the sweeper to
+        # retry (an outage must not wipe comments); a publish under `block` still fails
+        # closed. Until it is cleared the comment is hidden (reversibly), not shown
+        # unscanned.
+        found: list | None = None
+        try:
+            extra, answered = scanners.run_named(scanned_text)
+        except scanners.ScannerBlocked as exc:
+            _log.error(
+                "comment left unscanned: scanner blocked: plugin=%s scanner=%s"
+                " comment=%s",
+                exc.plugin,
+                exc.name,
+                comment_id,
+            )
+            _hide_pending_scan(db, comment_id)
+            return "unavailable"
+        if extra:
+            found = extra
+        elif scanners.SECOND_OPINION in answered:
+            # The `gitguardian` scanner looked and said clean.
             found = []
-        if found is None and not ggscan.relay_expected() and not scanners.registered():
-            # Nothing can ever clear a hold now (the blocking plug-in is gone and there
-            # is no relay): show the comment, unscanned, as without the hold.
+        elif answered and scanners.SECOND_OPINION not in scanners.registered():
+            # No `gitguardian` scanner at all: another plug-in scanner's real clean answer
+            # is the second opinion. While one is registered and gave no answer (it raised
+            # or timed out), the comment stays unscanned so the sweeper asks it again; no
+            # other scanner's clean answer stands in for it.
+            found = []
+        if found is None and not scanners.registered():
+            # Nothing can ever clear a hold now (the blocking plug-in is gone and no
+            # scanner is left): show the comment, unscanned, as without the hold.
             _lift_scan_hold(db, comment_id)
         if found is None:
-            if ggscan.configured() and not standing_down:
-                _log.warning(
-                    "comment kept on the built-in scan only: agent=%s artifact=%s "
-                    "comment=%s reason=ggshield_unavailable",
-                    author,
-                    artifact_id,
-                    comment_id,
-                )
             return "unavailable"
         if found:
             withdraw(db, comment_id, kind=found[0].shape)
@@ -2031,8 +2018,8 @@ def second_scan(db: Database, comment_id: str) -> str:
 
 def sweep_unscanned(db: Database, *, limit: int = 200) -> int:
     """Scan agent comments the background task never got to (a restart killed it),
-    oldest first, at most `limit` per pass. Stops after two consecutive comments the
-    relay could not answer for (it is down).
+    oldest first, at most `limit` per pass. Stops after two consecutive comments no
+    second opinion could be had for (the `gitguardian` scanner is down).
     Returns how many were actually checked."""
     with db.connect() as conn:
         ids = [
@@ -2050,7 +2037,7 @@ def sweep_unscanned(db: Database, *, limit: int = 200) -> int:
     unavailable = 0
     for comment_id in ids:
         status = second_scan(db, comment_id)
-        # One refusal may be this comment's alone; two in a row mean the relay
+        # One refusal may be this comment's alone; two in a row mean the scanner
         # is down and the rest would each wait out a timeout.
         unavailable = unavailable + 1 if status == "unavailable" else 0
         if unavailable >= 2:

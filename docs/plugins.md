@@ -9,9 +9,9 @@ Status, 10 Nov 2026: the loader and the whole interface are built and on `main` 
 (`ream-homelab`, step 8) exists with its first plug-in. **Step 9 (moving the house code out of the
 core) is under way, one slice at a time:** the tracker-page commands (`beads-page`, `bead-metrics`)
 have left the core for the house's `tracker-pages` plug-in (9a); the house sinks (`nudge`, `partner`),
-the `slack` answer source, the GitGuardian scanner and Mailgun are still inside the core (the
-GitGuardian scanner's core hook is in: a scanner named `gitguardian` makes the core's own relay scan
-stand down, see Scanner below). Write
+the `slack` answer source and Mailgun are still inside the core; the GitGuardian second opinion
+has left it (9c: the core's own relay scan is deleted, the house's `gitguardian` scanner is the
+second opinion, see Scanner below). Write
 against this guide for new code; do not expect the other house modules to have moved yet. The API is
 versioned (below), but only we use it: there is no promise to third parties yet.
 
@@ -270,7 +270,7 @@ too.
 **The time bound is per scanner.** A call is abandoned after 10 seconds
 (`scanners.SCAN_TIMEOUT_SECONDS`) unless the scanner declared its own with `timeout=` (API 1.1): a
 positive, finite number of seconds, else `ValueError` when it registers. The core caps it at 20
-seconds (`scanners.MAX_SCAN_TIMEOUT_SECONDS`), the time the core's own relay scan always had, so
+seconds (`scanners.MAX_SCAN_TIMEOUT_SECONDS`), the time the former core relay scan always had, so
 `timeout=60` is 20 and `timeout=3` is 3. A scanner that passes nothing keeps 10. Older
 registrations work unchanged.
 
@@ -284,20 +284,16 @@ registrations work unchanged.
 
 A scanner that really hangs costs one daemon thread per call, never reclaimed.
 
-**A scanner named `gitguardian` stands the core's own relay scan down.** The core still carries its
-ggshield relay scan (`ggscan.py`), which sends the original body to the house's relay beside the
-pattern scan. The house plug-in carries the same scan as a scanner called `gitguardian`. While a
-scanner of that exact name is registered, the core's relay scan asks nobody, so a body goes to
-the relay once, through the plug-in, and the plug-in's `on_error` and verdict decide: a finding
-refuses a publish or withdraws an agent comment; a clean answer **from `gitguardian` itself**
-clears a comment's second scan; no answer (`skip`, a raise or a timeout) publishes on the rest and
-leaves a comment unscanned for the sweeper to retry, exactly as an unreachable relay does today,
-and another scanner's clean answer never stands in for it. Only the name counts, not which plug-in
-registered it. With no
-scanner of that name nothing changes. A plug-in that registers `gitguardian` should pass
-`timeout=20`, or a relay answer slower than 10 seconds would count as no answer. (The core's own
-relay scan is removed in a later release, once the plug-in's behaviour is confirmed in
-production.)
+**A scanner named `gitguardian` is the second opinion on an agent comment.** The core has no relay
+scan of its own (it moved into the house plug-in as this scanner, 9c). Every registered scanner is
+asked on a publish, a preview and a `gitguardian=True` field, and a finding refuses. In an agent
+comment's second scan, while a scanner of that exact name is registered, only **its** clean answer
+stamps the comment scanned; if it gives no answer (`skip`, a raise or a timeout) the comment stays
+unscanned, shown, and the sweeper asks again (under `block` it is held), and another scanner's clean
+answer never stands in. With no scanner of that name, any scanner's real clean answer counts. Only
+the name counts, not which plug-in registered it. A plug-in that registers `gitguardian` should pass
+`timeout=20`, or a relay answer slower than 10 seconds would count as no answer. Core reads no
+`GGSHIELD_*` setting; a plug-in reads its own.
 
 ### Mail backend
 

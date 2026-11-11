@@ -626,7 +626,7 @@ def test_a_question_opened_during_the_update_keeps_its_slot(db, page):
 
 
 def test_a_retry_does_not_rescan_what_was_already_scanned(db, page, monkeypatch):
-    from ream import ggscan
+    from ream import scanners
 
     aid, _ = page
     asked_about = []
@@ -635,7 +635,8 @@ def test_a_retry_does_not_rescan_what_was_already_scanned(db, page, monkeypatch)
         asked_about.append(value)
         return []
 
-    monkeypatch.setattr(ggscan, "scan", scan)
+    monkeypatch.setattr(scanners, "_SCANNERS", [])
+    scanners.register("test", "gitguardian", scan)
     real_patch = store.patch
     raced = []
 

@@ -56,7 +56,6 @@ from ream import (
     events,
     folders,
     forms,
-    ggscan,
     ids,
     packing,
     scan,
@@ -450,7 +449,8 @@ def _check_size(
 
 
 def check_body(body: str, *, agent: str) -> None:
-    """Both scanners on a body that is not being stored -- a preview. Raises
+    """The pattern scan and the second opinion on a body that is not being stored -- a
+    preview. Raises
     `SecretFound` exactly as a publish would (Jeremy, 24 Sep 2026: previews
     are scanned too)."""
     _check_secrets(body, "body", agent=agent, artifact_id=None)
@@ -497,42 +497,26 @@ def _check_secrets(
             type(exc).__name__,
         )
         raise ScanFailed(field) from exc
-    # GitGuardian runs on a body, and on any other field whose caller asks for
-    # it (`gitguardian=True`: a section update's version note and part label,
-    # which are stored and shown like page text).
+    # The second opinion runs on a body, and on any other field whose caller asks for it
+    # (`gitguardian=True`: a section update's version note and part label, which are stored
+    # and shown like page text). It is the scanners a plug-in registered (scanners.py), and
+    # GitGuardian's ggshield, on the ORIGINAL body (homelab-ij8.2), is the one named
+    # `gitguardian`. Only once the built-in scan is clean: an obvious secret is refused here
+    # without ever leaving the house. Nothing registered: no call, no change.
     if not findings and (field == "body" or gitguardian) and second_opinion:
-        # The second opinion, on the ORIGINAL body (homelab-ij8.2; see ggscan).
-        # Only once the built-in scan is clean: an obvious secret is refused
-        # here without ever leaving the house.
-        second = ggscan.scan(value)
-        if second is None:
-            # Not while stood down: the relay was not asked, and the plug-in's own
-            # scanner counts and logs its own fault.
-            if ggscan.configured() and not ggscan.stood_down():
-                _refusals.warning(
-                    "published on the built-in scan only: agent=%s artifact=%s "
-                    "reason=ggshield_unavailable",
-                    agent,
-                    artifact_id or "-",
-                )
-        else:
-            findings = second
-        if not findings:
-            # Scanners a plug-in registered (scanners.py): the same slot, the same
-            # conditions. Nothing registered: no call, no change.
-            try:
-                findings = scanners.run(value)
-            except scanners.ScannerBlocked as exc:
-                _refusals.error(
-                    "publish refused: agent=%s artifact=%s field=%s"
-                    " reason=scanner_blocked plugin=%s scanner=%s",
-                    agent,
-                    artifact_id or "-",
-                    field,
-                    exc.plugin,
-                    exc.name,
-                )
-                raise ScanFailed(field) from exc
+        try:
+            findings = scanners.run(value)
+        except scanners.ScannerBlocked as exc:
+            _refusals.error(
+                "publish refused: agent=%s artifact=%s field=%s"
+                " reason=scanner_blocked plugin=%s scanner=%s",
+                agent,
+                artifact_id or "-",
+                field,
+                exc.plugin,
+                exc.name,
+            )
+            raise ScanFailed(field) from exc
     if findings:
         shapes = sorted({finding.shape for finding in findings})
         _refusals.warning(

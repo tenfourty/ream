@@ -349,7 +349,7 @@ signed-webhook sink, pattern scanner (`scan.py`, `secret_shapes.txt` with commen
 | `partner.py` quarterdeck envelope, `verified_by` mapping (`:292-293`), `for_offices` mapping | event sink `quarterdeck` |
 | `partner_in.py` (inbound route, `verified_by == "quarterdeck"`, `slack_id`, `answer_here`) | answer source `slack` + `on_answer` hook + router |
 | `nudge.py` | after-commit sink `doorbell` |
-| `ggscan.py` | scanner `gitguardian` |
+| `ggscan.py` | scanner `gitguardian` (moved and deleted from core, 9c) |
 | `mail.py` Mailgun | mail backend `mailgun` |
 | `beadpage.py`, `beadmetrics.py` and their two console scripts | CLI commands |
 | `client.py:34` default endpoint, `QD_OFFICE`/`ARTIFACTS_SEAT`, `news.py` lines naming GitGuardian and beads, the skill's tracker section | `client_defaults`, `text_section` |
@@ -683,7 +683,7 @@ drivers; CI only (not on the management machine).
    installed, sets `REAM_PLUGINS=none`, and runs the whole suite on Postgres and on SQLite
    (the browser tests stay in `test-sqlite`). `pin` does not list it in `needs` yet: the pin
    lander names its required checks in the homelab repo, so making it required (7.3) is that
-   change, not this one. `core-with-house` waits for step 8.
+   change, not this one. `core-with-house` was left out in step 8 (below).
 8. **The plug-in repo and its pipeline** (homelab office creates the repo; lander change). It
    builds an image identical to today's from an empty plug-in set, opens a pin PR, and one real
    pin PR is merged as proof before anything moves. Core starts publishing the `-core` image and
@@ -695,9 +695,10 @@ drivers; CI only (not on the management machine).
    `core_ref`; it is tagged from the build step's exact digest, and when that step reused an existing image, or the core tag exists, it pushes nothing and logs `REUSED core`, never `PUBLISHED`). The core image is today's
    image: core still carries our in-tree plug-ins until step 9, so "plug-in-free" means free of
    anything installed from outside. Today's image, `pin` and deploy are untouched; a `ci/**`
-   branch still builds and pushes nothing. **Not built:** `core-with-house` (left out: it needs
-   `runcove/ream-homelab`, which does not exist, so it could only skip; added when the repo
-   exists), and the lock-bump bot that opens the `core.lock` PR on the plug-in repo.
+   branch still builds and pushes nothing. **Not built here:** `core-with-house` (core's
+   own job; the plug-in repo now exists and its own `test` job installs the core named in
+   `core.lock` and tests the plug-ins against it, which is the drift check the job was for), and
+   the lock-bump bot, which part 2 below built.
    **Core half, part 2 built (`ci/core-lock`, 9 Nov 2026): the lock-bump bot.** `core-lock-pr.sh` and a
    `core-lock` job (main only, after `image`, only when `core_ref` is non-empty) open or update the one PR
    on `runcove/ream-homelab` (branch `core-lock/next`, title `core: lock <sha12>`) that moves `core.lock`,
@@ -706,9 +707,10 @@ drivers; CI only (not on the management machine).
    touches a PR whose head is `core-lock/next` on ream-homelab itself and whose head sha is the commit it
    just pushed. **Cut over (9 Nov 2026):** `core-lock` is the only path on main, core's `pin` job is
    `if: false` (homelab's lander no longer accepts this repo as a source; ream-homelab's own pin job
-   is on). Runbook: `docs/agent/runbooks/image-from-ream-homelab.md`. **Not proven end to end:** the job
-   runs only on `main`; only the script's offline selftest runs on a `ci/**` branch. TODO: watch the
-   first real lock PR merge.
+   is on). Runbook: `docs/agent/runbooks/image-from-ream-homelab.md`. **Proven end to end (11 Nov 2026):** the job runs only
+   on `main`, and its lock PRs (`core: lock <sha12>`, branch `core-lock/next`) have merged on
+   `runcove/ream-homelab` (#25 to #28); the production pod runs the image tagged with the plug-in
+   repo's merge commit of #28, which locks core `9cc0b61fa9e9`, then `main`.
 9. **Move, one at a time, each its own slice:** (9a) `beadpage`/`beadmetrics` and their console
    scripts, (9b) Mailgun, (9c) `ggscan`, (9d) doorbell, (9e) quarterdeck sink and inbound
    (the largest; includes the `slack` answer source and `on_answer` hook). Each: copy into the
@@ -749,33 +751,38 @@ drivers; CI only (not on the management machine).
    this core has no tracker-page command at all, and a `render` line using one fails. **Not tested:**
    the plug-in under the real dispatcher with the old names, a real `bd`, and a `render` line run by
    `artifacts-republish` after the move.
-   **9c, core hook built (`ci/step-9c-standdown`, 10 Nov 2026; not on main).** The plug-in half is a
-   straight copy of `ggscan.py` registered as scanner `gitguardian` (ream-homelab, not merged); until
-   core's own copy is deleted in a later pin both would send each body to the relay, so core's
-   relay scan **stands down while a scanner named `gitguardian` is registered** (mail's rule: built-in
-   code only when no plug-in is there). The rule lives in one place, `ggscan.stood_down()`, read by
-   `ggscan.scan` (answers `None`, asks nobody), so the two call sites (`store._check_secrets`, which
-   serves publish, update, previews and the `gitguardian=True` fields, and `comments.second_scan`,
-   hence the sweeper) cover every place core calls `ggscan`. **Kept apart (security review):**
-   `ggscan.configured()` stays "core's settings name a relay"; `ggscan.relay_expected()` is "the relay
-   is set or the plug-in has the scan". `second_scan` takes a plug-in's clean answer as the second
-   opinion only when no relay scan is expected, and while stood down only from `gitguardian` itself
-   (`scanners.run_named` names who answered), so a `gitguardian` that raises or times out behaves as
-   today's unreachable relay (comment left unscanned for the sweeper, a hold stays) and another
-   scanner's clean answer never stands in. The "published on the built-in scan only" log line is not
-   written while stood down: the plug-in counts and logs its own fault. Only the name decides, not the
-   plug-in that registered it; without such a scanner behaviour is exactly as before. **Time bound:**
-   core abandoned a plug-in scanner after 10 s but waited up to 20 s for `ggscan`, so standing down
-   would have turned a 10 to 20 s answer into an unscanned publish. `api.scanner(name, scan,
-   on_error="skip", timeout=None)` takes an optional per-scanner bound in seconds (a positive finite
-   number, else `ValueError`), capped at `scanners.MAX_SCAN_TIMEOUT_SECONDS` (20, pinned by a test to
-   `ggscan.TIMEOUT_SECONDS`); unset it stays 10. An optional argument is a minor change, so
-   `API_VERSION` is now `(1, 1)` and `REQUIRES_API` stays `"1"` (the major); old registrations work
-   unchanged, and a plug-in on an older core that passes `timeout` fails at start-up, as 4.6 intends.
-   **Not done:** the plug-in registering with `timeout=20` (ream-homelab), deleting `ggscan.py` and
-   its settings from core (after the deployed behaviour is confirmed), widening the scanners to
-   titles, decision fields and human comments (not widened: scanners still run in `ggscan`'s slot only). **Not tested:** the plug-in
-   and this core together in the production image, and a real relay answering in 10 to 20 s.
+   **9c, built in two halves (10 to 11 Nov 2026).** *The hook (on main):* the plug-in registers a
+   scanner `gitguardian` (ream-homelab: `timeout=20`, an 18 s total deadline, text that cannot be
+   encoded answered with a finding) and core's relay scan stood down while one was registered;
+   `api.scanner(..., timeout=)` (API 1.1, capped at `scanners.MAX_SCAN_TIMEOUT_SECONDS`, 20) let the
+   plug-in keep the 20 s the relay always had. *The deletion (`ci/step-9c-core`, 11 Nov 2026):*
+   proven first in production (a fresh process in the pod's own image and environment loads
+   plug-ins `gitguardian`, `mailgun`, `tracker-pages`; the scanner `gitguardian` is registered with
+   `on_error=skip`, bound 20 s; core's relay scan reported stood down and answered without asking),
+   then `ggscan.py`, `tests/test_ggscan.py`, the `ggshield_url` and `ggshield_token` settings and the
+   stand-down branches are gone. Core now has one path: `store._check_secrets` and
+   `comments.second_scan` run the registered scanners and nothing else, and name no relay. **Rules
+   kept (security review):** `scanners.SECOND_OPINION = "gitguardian"`; while a scanner of that name is
+   registered only its clean answer stamps an agent comment scanned, so a `gitguardian` that raised
+   or timed out leaves the comment unscanned for the sweeper (a `block` one holds it) and another
+   scanner's clean answer never stands in; with none of that name, any plug-in scanner's real clean
+   answer is the second opinion, and with no scanner at all the comment is shown unscanned and a hold
+   is lifted. A finding from any scanner refuses a publish or withdraws a comment; all registered
+   scanners are asked (the old relay finding short-circuited the others). **Behaviour changes:**
+   the `published on the built-in scan only ... reason=ggshield_unavailable` and
+   `comment kept on the built-in scan only` log lines are gone (the plug-in logs its own fault, core
+   logs `scanner gitguardian failed (skip)` and counts `<plug-in>:scanner`). **Settings:**
+   `REAM_GGSHIELD_URL` and `REAM_GGSHIELD_TOKEN` (and the `ARTIFACTS_` forms) are not core settings
+   now; core reads neither and never inspects unknown variables, so a deployment that still sets them
+   starts as before and the plug-in reads them itself; the one difference is that the two forms set
+   to different values no longer stop core (the plug-in raises, which is no opinion). A test pins
+   this. Tests: `tests/test_gitguardian_scanner.py` (new: a finding refuses a publish with the
+   scanner asked once; a raise or a timeout leaves a comment unscanned; the other cases above);
+   `test_instant_comments.py`, `test_unencodable_text.py`, `test_sections.py` and
+   `test_plugin_scanner_mail.py` use a fake `gitguardian` scanner. **Not done:** widening scanners to
+   titles, decision fields and human comments (they still run in the second opinion's slot only);
+   `docs/agent/plans/2026-09-29-*` and `specs/2026-10-29-pinned-comments.md` still name `ggscan` as it
+   was when written. **Not run here:** the full suite (CI on `ci/step-9c-core`).
 10. **Docs and decisions.** `docs/decisions.md` entry for the core-and-plug-ins split, the design
     doc's extension section, a plug-in author guide, the office doc's deployment paragraph.
     (Docs also land with each slice above; this is the consolidation.)

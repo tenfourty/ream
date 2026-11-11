@@ -2,8 +2,8 @@
 
 Runs against every body an agent asks to publish, and against every state
 document read back (D12, D15) -- ggshield is the authoritative gate but only
-runs in the deploy pipeline with Jeremy's token, so this is the one scanner
-that always runs.
+runs where a plug-in registers the `gitguardian` scanner (scanners.py), so this is
+the one scanner that always runs.
 
 A `Finding` says which shape fired and on which line, never what matched: a
 scanner that leaks the credential it caught is worse than no scanner. Do not
