@@ -407,3 +407,218 @@ def test_the_threes_ends_are_inside_every_read():
         for shape in THREE:
             page = _page(shape, chars)
             assert page.endswith(">") and len(page) == chars, name
+
+
+# --- the standard parser's other long matches ---------------------------------------
+#
+# The three pages above are for the match that reads a tag. The parser also looks
+# ahead, or loops, in every other place a page can open something and not close it:
+# a comment, a declaration, a marked section, a processing instruction, a "bogus"
+# comment, the end of a script, style or textarea, an entity. None of them is bounded
+# by `BoundedParser` (and the one that decides where a tag ends is not what costs time
+# here), so each is held to the same two claims on pages of 1 MiB and 8 MiB: the time
+# grows with the page and not with its square (tests/scalecheck.py), and the most
+# memory in use at once is a few copies of the page (tracemalloc), whatever the page
+# is built of. Linear is not the same as quick: the shapes made of one tiny thing
+# after another ("<" and "&<a>") cost the standard parser a call of its own each, so
+# 8 MiB takes it seconds, not milliseconds; the bound is on how that grows.
+#
+# (what comes first, what is repeated, what ends it); `scalecheck.page` builds each.
+OTHER = {
+    # comments, and what is nearly the end of one
+    "unclosed comment": ("<!--", "x", ""),
+    "comments opened over and over": ("", "<!--", ""),
+    "comment of dashes": ("<!--", "-", ""),
+    "<!- flood": ("", "<!-", ""),
+    "--! flood in a comment": ("<!-- ", "--!", ""),
+    "--!- flood in a comment": ("<!-- ", "--!-", ""),
+    "-- > flood in a comment": ("<!-- ", "-- >", ""),
+    "<!--> flood": ("", "<!-->", ""),
+    # declarations, marked sections, processing instructions
+    "unclosed doctype": ("<!DOCTYPE", " x", ""),
+    "doctypes opened over and over": ("", "<!DOCTYPE ", ""),
+    "doctype with a quote left open": ('<!DOCTYPE x "', "y", ""),
+    "unclosed CDATA": ("<![CDATA[", "x", ""),
+    "CDATA opened over and over": ("", "<![CDATA[", ""),
+    "CDATA closed over and over": ("", "<![CDATA[x]]>", ""),
+    "CDATA of ] only": ("<![CDATA[", "]", ""),
+    "<![ flood": ("", "<![", ""),
+    "<![if unclosed": ("<![if x", " ", ""),
+    "<![endif]> flood": ("", "<![endif]>", ""),
+    "unclosed <?": ("<?", "x", ""),
+    "<? flood": ("", "<?", ""),
+    "<?x ? flood": ("<?x ", "?", ""),
+    # "bogus comments": what the parser takes for a comment and that nothing closes
+    "unclosed </ x": ("</ x", " x", ""),
+    "</ x flood": ("", "</ x", ""),
+    "unclosed <!x": ("<!x", "y", ""),
+    "<!x flood": ("", "<!x", ""),
+    "<! flood": ("", "<!", ""),
+    # inside script, style and textarea: what is nearly their end tag
+    "script, </scrip flood": ("<script>", "</scrip", ""),
+    "script, </script x flood": ("<script>", "</script x", ""),
+    "script, </ flood": ("<script>", "</", ""),
+    "script, <!-- flood": ("<script>", "<!--", ""),
+    "style, </styl flood": ("<style>", "</styl", ""),
+    "style, </style x flood": ("<style>", "</style x", ""),
+    "textarea, </textare flood": ("<textarea>", "</textare", ""),
+    "title, </titl flood": ("<title>", "</titl", ""),
+    # entities in text (convert_charrefs is on)
+    "& flood": ("", "&", ""),
+    "&a flood": ("", "&a", ""),
+    "&# flood": ("", "&#", ""),
+    "&#x flood": ("", "&#x", ""),
+    "&amp; flood": ("", "&amp;", ""),
+    "& with spaces": ("", "& ", ""),
+    "one & and a long name": ("&", "a", ""),
+    "&#x and hex digits": ("&#x", "1", ""),
+    "& before each tag": ("", "&a<b>", ""),
+    # the same inside a textarea, whose text is unescaped in one piece
+    "textarea, & flood": ("<textarea>", "&", ""),
+    "textarea, &a flood": ("<textarea>", "&a", ""),
+    "textarea, &# flood": ("<textarea>", "&#", ""),
+    "textarea, &#x flood": ("<textarea>", "&#x", ""),
+    "textarea, &amp; flood": ("<textarea>", "&amp;", ""),
+    "textarea, & and a long name": ("<textarea>&", "a", ""),
+    "textarea, &#x and hex digits": ("<textarea>&#x", "1", ""),
+    # "<" with no tag after it
+    "<<< flood": ("", "<<<", ""),
+    "<a< flood": ("", "<a<", ""),
+    # a quote never closed in a tag
+    '<a x=" unclosed': ('<a x="', "x", ""),
+    "<a x=' unclosed": ("<a x='", "x", ""),
+    '<a x=" flood': ("", '<a x="', ""),
+    '<a x=" long value, then >': ('<a x="', "x", ">"),
+    # tags with a very long name, and many with a long one
+    "long tag name": ("<", "a", ">"),
+    "long tag name, no >": ("<", "a", ""),
+    "long end tag name": ("</", "a", ">"),
+    "long end tag name, no >": ("</", "a", ""),
+    "long tag name with a quote": ("<a'", "a", ">"),
+    "many tags with long names": ("", "<" + "a" * 60 + ">", ""),
+    # after <plaintext> the rest of the page is text
+    "plaintext, then x": ("<plaintext>", "x", ""),
+    "plaintext, then <a": ("<plaintext>", "<a ", ""),
+    "plaintext, then &": ("<plaintext>", "&", ""),
+    "plaintext, then its end tag": ("<plaintext>", "</plaintext>", ""),
+}
+
+
+# How much memory the reads may hold at once, as copies of the page (`tracemalloc`).
+# The base keeps its unread text (one copy) and hands the handlers pieces of it, so a
+# few copies is the most that is wanted: OTHER_COPIES. A few shapes make the standard
+# library, or the handler, keep more, and each is named with its reason:
+OTHER_COPIES = 4
+#  - `html.unescape` makes one str of about 50 bytes for each "&x" it replaces, all at
+#    once, so a page of "&a&a&a..." peaks at 27 times its own size. That is what the
+#    library builds for text outside a tag (and, at the end of the page, in a textarea
+#    or title), so it is the most a page can force on any reader, and no copy of it is
+#    kept after the call.
+UNESCAPES = {"&a flood": 32, "textarea, &a flood": 32}
+#  - `text._Visible` keeps what it is given: with a piece of one or two characters
+#    for each "<" or "&a" that is a list entry (8 bytes) and a str for every 5
+#    characters of the page, about 8 to 10 times the page. (It stops at
+#    `text.VISIBLE_LIMIT`, so the bigger the page the smaller the multiple.)
+KEPT_PIECES = {"<<< flood": 12, "& before each tag": 12}
+# Under tracemalloc a read that is called back for every few characters takes 60 to
+# 200 times as long (a page of "<" takes a minute and a half per MiB), so these are
+# read at a 64th of the size: 16 KiB and 128 KiB. Their time is measured at the full
+# size by the test above, and the copies they keep do not depend on the size.
+TRACED_SMALL = {
+    "<!--> flood",
+    "CDATA closed over and over",
+    "<![endif]> flood",
+    "&a flood",
+    "&amp; flood",
+    "& before each tag",
+    "textarea, &a flood",
+    "textarea, &amp; flood",
+    "<<< flood",
+    "many tags with long names",
+}
+
+
+def _bounded_read(page):
+    """The base itself, with no handler: what every subclass's reading starts from."""
+    parser = htmlbound.BoundedParser()
+    try:
+        parser.feed(page)
+        parser.close()
+    except htmlbound.TooComplex as exc:
+        return exc
+
+
+def _visible_read(page):
+    """A typical subclass: `text._Visible` keeps the text it is given (up to its limit)."""
+    parser = text._Visible(text.VISIBLE_LIMIT)
+    try:
+        parser.feed(page)
+        parser.close()
+    except htmlbound.TooComplex as exc:
+        return exc
+
+
+OTHER_READS = {"BoundedParser": _bounded_read, "text._Visible": _visible_read}
+
+
+def _other_page(shape: str, chars: int) -> str:
+    first, unit, last = OTHER[shape]
+    return scalecheck.page(first, unit, chars, last)
+
+
+def _copies(read: str, shape: str) -> int:
+    if shape in UNESCAPES:
+        return UNESCAPES[shape]
+    if read == "text._Visible" and shape in KEPT_PIECES:
+        return KEPT_PIECES[shape]
+    return OTHER_COPIES
+
+
+@pytest.mark.parametrize("shape", sorted(OTHER))
+@pytest.mark.parametrize("read", sorted(OTHER_READS))
+@pytest.mark.scaling
+def test_the_time_of_every_other_long_match_grows_with_the_page(read, shape):
+    first, unit, last = OTHER[shape]
+    scalecheck.assert_linear(OTHER_READS[read], first, unit, last)
+
+
+@pytest.mark.parametrize("chars", [MIB, 8 * MIB], ids=["1 MiB", "8 MiB"])
+@pytest.mark.parametrize("shape", sorted(OTHER))
+@pytest.mark.parametrize("read", sorted(OTHER_READS))
+def test_the_memory_of_every_other_long_match_is_a_few_copies_of_the_page(
+    read, shape, chars
+):
+    page = _other_page(shape, chars // 64 if shape in TRACED_SMALL else chars)
+    gave, peak = _peak(OTHER_READS[read], page)
+    assert gave is None or isinstance(gave, htmlbound.TooComplex), repr(gave)
+    copies = _copies(read, shape)
+    assert peak < copies * len(page), (
+        f"{peak / len(page):.1f} times the page of {len(page)} characters"
+        f" (the bound is {copies})"
+    )
+
+
+def test_the_sets_name_shapes_of_the_table():
+    for named in (UNESCAPES, KEPT_PIECES, TRACED_SMALL):
+        assert set(named) <= set(OTHER), set(named) - set(OTHER)
+    for shape in OTHER:
+        assert len(_other_page(shape, MIB)) == MIB, shape
+
+
+# One page of the table above is left out of it because it is not a matter of time or
+# memory: a decimal reference of more digits than `int` will read. `html.unescape` (which
+# the parser calls on text when `convert_charrefs` is on, as it is for `text`, `pagediff`
+# and `partdiff`) reads the digits with `int()`, which refuses more than
+# `sys.get_int_max_str_digits()` (4300), and the ValueError comes out of `feed()`: a
+# reader that catches only `TooComplex` does not catch it. `&#x` with any number of hex
+# digits is fine (a power of two is never limited), and is in the table. Strict, so that
+# the test that fails when this is fixed is the one that says to take the mark off.
+@pytest.mark.parametrize("lead", ["", "<textarea>"], ids=["in text", "in a textarea"])
+@pytest.mark.parametrize("read", sorted(OTHER_READS))
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValueError,
+    reason="html.unescape: int() refuses a decimal reference of over 4300 digits",
+)
+def test_a_decimal_reference_of_thousands_of_digits_is_not_an_error(read, lead):
+    assert OTHER_READS[read](lead + "&#" + "1" * 5000) is None
