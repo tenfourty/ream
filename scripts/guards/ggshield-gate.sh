@@ -9,16 +9,24 @@
 # not scan": a gate that passes when it cannot look reads as a scanned repo
 # when it is not. The way out is explicit, never silent: GGSHIELD_SKIP=1 lets
 # one commit (or a run of them, offline) through and says loudly that nothing
-# was scanned. CI runs the same scan with the dependency present.
+# was scanned.
 #
-# THE SCAN READS NOTHING FROM THE CHECKOUT. ggshield would load the checkout's
-# .gitguardian.yaml and its .env (which may name another instance or key), so
-# the script runs it with GITGUARDIAN_DONT_LOAD_ENV=1 and --config-path on an
-# empty file of its own, which "ignores local and global config files"
-# (ggshield --help). Measured with ggshield 1.56.1 and a dummy key: a .env
-# with GITGUARDIAN_API_URL was used without the variable and ignored with it;
-# a .gitguardian.yaml was loaded without --config-path and not with it; the
-# machine's stored authentication still works under both (api-status healthy).
+# THE SCAN USES ONLY ITS OWN FIXED SETTINGS: the environment variable
+# GITGUARDIAN_DONT_LOAD_ENV=1, the default dashboard as --instance, and
+# --config-path on an empty file of its own, which "ignores local and global
+# config files" (ggshield --help). The instance variables are unset for the
+# call. Measured with ggshield 1.56.1 and a dummy key: the machine's stored
+# authentication still works under these settings (api-status healthy).
+#
+# THE ggshield IT RUNS is the one on PATH, and the script refuses one that
+# resolves inside this repository's working tree (a repo virtualenv, a bin
+# directory a tool adds): the scan is run by a program from outside the tree.
+#
+# SKIPPING is exactly GGSHIELD_SKIP=1. Any other value (0, empty, yes) scans.
+#
+# CI does not run this script or ggshield; it runs the guard selftests and the
+# whole-tree scan for credentials on a command line. lefthook's own skips
+# (LEFTHOOK=0, git commit --no-verify) are outside this gate.
 #
 # MEASURED on the management machine, 22 Sep 2026 (ij8.76), against ggshield 1.54.0:
 #   * clean staged diff                    -> rc 0, "No secrets have been found"
@@ -46,6 +54,7 @@
 #         scripts/guards/ggshield-gate.sh --selftest # rc mapping, with a stub
 set -uo pipefail
 SELF="ggshield-gate"
+CFG_FILE=""
 INSTANCE="https://dashboard.gitguardian.com"
 
 run_gate() {
@@ -59,8 +68,26 @@ run_gate() {
     return 1
   fi
 
+  local gg top real
+  gg=$(command -v ggshield)
+  real=$(readlink -f -- "$gg" 2>/dev/null || printf '%s' "$gg")
+  top=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "$top" ]; then
+    top=$(readlink -f -- "$top" 2>/dev/null || printf '%s' "$top")
+    case "$real" in
+      "$top"/*)
+        echo "$SELF: REFUSED — ggshield resolves inside the repository working tree, so NOTHING was scanned." >&2
+        echo "  Put ggshield on PATH from outside the tree, or opt out for this commit with GGSHIELD_SKIP=1." >&2
+        return 1
+        ;;
+    esac
+  fi
+
   local out rc cfg
   cfg=$(mktemp) || { echo "$SELF: REFUSED — no temporary file; NOTHING was scanned." >&2; return 1; }
+  CFG_FILE=$cfg
+  # Removed on any exit; this script sets no other EXIT trap.
+  trap 'rm -f "$CFG_FILE"' EXIT
   # No pipe: a pipeline's rc is the LAST command's, so `ggshield … | head`
   # reports head's success and a finding reads as clean.
   # --instance outranks GITGUARDIAN_INSTANCE and GITGUARDIAN_API_URL (measured);
@@ -155,8 +182,7 @@ EOF
   out=$(PATH="$tmp/empty" GGSHIELD_SKIP=1 "$BASH" "$self" 2>&1); rc=$?
   check "GGSHIELD_SKIP=1 allows with ggshield absent" "$rc" 0 "$out" "NOTHING was scanned"
 
-  # The checkout's own config and .env are never read: the stub records what
-  # ggshield was called with.
+  # The scan's settings are its own: the stub records what ggshield was called with.
   : >"$log"
   out=$(PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" env -u GGSHIELD_SKIP -u GITGUARDIAN_DONT_LOAD_ENV bash "$self" 2>&1); rc=$?
   check "the scan runs" "$rc" 0 "$out" "clean"
@@ -165,35 +191,60 @@ EOF
   check "the scan is a pre-commit scan" 0 0 "$(cat "$log")" "secret scan pre-commit"
   check "the scan pins the instance" 0 0 "$(cat "$log")" "--instance https://dashboard.gitguardian.com "
 
-  # Planted values: a checkout's .gitguardian.yaml and .env, and the two
-  # environment variables, all naming another host. The stub must see the
-  # pinned instance and none of the planted values (the stub reads no file
-  # itself; ggshield's own handling of these is measured in the header).
-  local plant="$tmp/checkout"
-  mkdir -p "$plant"
-  printf 'instance: https://planted.example\n' >"$plant/.gitguardian.yaml"
-  printf 'GITGUARDIAN_INSTANCE=https://planted.example\nGITGUARDIAN_API_URL=https://planted.example/v1\n' >"$plant/.env"
+  # Foreign settings ignored: the instance variables and files in the working
+  # directory name another host; the stub must see the fixed instance and
+  # none of those values.
+  local other="$tmp/other"
+  mkdir -p "$other"
+  printf 'instance: https://other.example\n' >"$other/.gitguardian.yaml"
+  printf 'GITGUARDIAN_INSTANCE=https://other.example\nGITGUARDIAN_API_URL=https://other.example/v1\n' >"$other/.env"
   : >"$log"
-  out=$(cd "$plant" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" \
-    GITGUARDIAN_INSTANCE=https://planted.example GITGUARDIAN_API_URL=https://planted.example/v1 \
+  out=$(cd "$other" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" \
+    GITGUARDIAN_INSTANCE=https://other.example GITGUARDIAN_API_URL=https://other.example/v1 \
     env -u GGSHIELD_SKIP bash "$self" 2>&1); rc=$?
-  check "the scan runs beside planted config" "$rc" 0 "$out" "clean"
-  check "planted: the instance is the pinned one" 0 0 "$(cat "$log")" "--instance https://dashboard.gitguardian.com "
-  check "planted: the stub sees GITGUARDIAN_INSTANCE unset" 0 0 "$(cat "$log")" "env_instance=unset"
-  check "planted: the stub sees GITGUARDIAN_API_URL unset" 0 0 "$(cat "$log")" "env_api_url=unset"
-  if grep -q planted "$log"; then
-    printf '  FAIL  a planted value reached ggshield\n'; sed 's/^/        /' "$log"; fail=1
+  check "the scan runs with foreign settings present" "$rc" 0 "$out" "clean"
+  check "foreign settings ignored: the instance is the fixed one" 0 0 "$(cat "$log")" "--instance https://dashboard.gitguardian.com "
+  check "foreign settings ignored: GITGUARDIAN_INSTANCE is unset for the call" 0 0 "$(cat "$log")" "env_instance=unset"
+  check "foreign settings ignored: GITGUARDIAN_API_URL is unset for the call" 0 0 "$(cat "$log")" "env_api_url=unset"
+  if grep -q other.example "$log"; then
+    printf '  FAIL  a foreign value reached ggshield\n'; sed 's/^/        /' "$log"; fail=1
   else
-    printf '  ok    no planted value reached ggshield\n'
+    printf '  ok    no foreign value reached ggshield\n'
   fi
   local cfg
   cfg=$(sed -n 's/^args: --config-path \([^ ]*\) .*/\1/p' "$log")
   if [ -n "$cfg" ] && [ "$cfg" != ".gitguardian.yaml" ] && [ "${cfg#"$PWD"/}" = "$cfg" ]; then
-    printf '  ok    the config path is not the checkout'"'"'s own file\n'
+    printf '  ok    the config path is not the working directory'"'"'s own file\n'
   else
-    printf '  FAIL  the config path (%s) is empty or inside the checkout\n' "$cfg"
+    printf '  FAIL  the config path (%s) is empty or inside the working directory\n' "$cfg"
     fail=1
   fi
+  if [ -n "$cfg" ] && [ ! -e "$cfg" ]; then
+    printf '  ok    the temporary config file is gone after the run\n'
+  else
+    printf '  FAIL  the temporary config file (%s) is still there\n' "$cfg"
+    fail=1
+  fi
+
+  # Only exactly 1 skips.
+  local v
+  for v in 0 "" yes true 11; do
+    out=$(PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=1 GGSHIELD_SKIP="$v" bash "$self" 2>&1); rc=$?
+    check "GGSHIELD_SKIP='$v' still scans (a finding blocks)" "$rc" 1 "$out" "REFUSED"
+  done
+  out=$(PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_SKIP=0 bash "$self" 2>&1); rc=$?
+  check "GGSHIELD_SKIP=0 scans (a clean scan says clean, not SKIP)" "$rc" 0 "$out" "clean"
+
+  # A ggshield that resolves inside the working tree is refused; one outside is used.
+  local tree="$tmp/tree"
+  mkdir -p "$tree/.venv/bin"
+  git -C "$tree" init -q 2>/dev/null
+  cp "$stub_dir/ggshield" "$tree/.venv/bin/ggshield"
+  out=$(cd "$tree" && PATH="$tree/.venv/bin:$PATH" GGSHIELD_STUB_RC=0 env -u GGSHIELD_SKIP bash "$self" 2>&1); rc=$?
+  check "a ggshield inside the working tree is refused" "$rc" 1 "$out" "inside the repository"
+  check "…and nothing was scanned, with the opt-out named" "$rc" 1 "$out" "GGSHIELD_SKIP=1"
+  out=$(cd "$tree" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 env -u GGSHIELD_SKIP bash "$self" 2>&1); rc=$?
+  check "a ggshield outside the working tree is used" "$rc" 0 "$out" "clean"
 
   echo "----"
   if [ "$fail" -eq 0 ]; then
