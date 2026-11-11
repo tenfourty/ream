@@ -32,8 +32,8 @@
 #   * clean staged diff                    -> rc 0, "No secrets have been found"
 #   * a throwaway RSA private key staged   -> rc 1, "1 secret detected"
 #   * outside a git repo                   -> rc != 0 with "Not a git directory"
-#   * `ggshield api-status`                -> healthy, workspace 538208,
-#     token scopes: scan. ggshield IS authenticated on this machine; ij8.2's
+#   * `ggshield api-status`                -> healthy: ggshield IS
+#     authenticated on this machine; ij8.2's
 #     "needs a key from Jeremy" is about the scan-every-publish path, not
 #     about this host being unable to scan at all.
 #
