@@ -312,7 +312,7 @@ def _ordinary_page(chars):
     parts = [head]
     size = len(parts[0])
     n = 0
-    while size < chars - 100:
+    while size < chars - 400:
         n += 1
         words = " ".join(
             rng.choice(["alpha", "beta", "pass", "fail", "host"]) * 2 for _ in range(12)
