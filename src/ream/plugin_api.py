@@ -37,6 +37,7 @@ from ream import (
     events,
     hosts,
     mail,
+    partner,
     plugin_cli,
     readside,
     scanners,
@@ -51,6 +52,17 @@ API_VERSION = plugin_cli.API_VERSION
 GROUP = plugin_cli.GROUP
 OLD_GROUP = plugin_cli.OLD_GROUP
 PluginError = plugin_cli.PluginError
+
+
+class BridgeStageFailed(Exception):
+    """The stage of the plug-in that holds the partner bridge (step 9e-3) failed: the
+    action is not saved, as when core's own stage failed. Names the plug-in, never the
+    fault."""
+
+    def __init__(self, plugin: str) -> None:
+        super().__init__(f"plug-in {plugin!r}: partner bridge stage failed")
+        self.plugin = plugin
+
 
 _log = logging.getLogger(__name__)
 _lock = threading.Lock()
@@ -320,6 +332,13 @@ class PluginAPI:
                         name,
                         type(exc).__name__,
                     )
+                    # The plug-in that holds the partner bridge is the only writer of
+                    # this event: swallowing its failure would keep the answer and tell
+                    # the partner nothing, ever. Fail the action, as core's stage did.
+                    if event.kind in events.BRIDGE_KINDS and (
+                        partner.bridge_owner(conn) == plugin
+                    ):
+                        raise BridgeStageFailed(plugin) from None
 
             sinks.register(
                 sinks.Sink(

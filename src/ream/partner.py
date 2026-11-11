@@ -598,6 +598,52 @@ def unpark(
 
 # --- the hand-over to the house plug-in (step 9e-3; goes with this module in 9e-4) ---
 
+# The switch is a database fact, not a per-process registry: every process of the new
+# image reads it in the transaction it stages in, and once per sender pass.
+BRIDGE_OWNER_KEY = "partner_bridge_owner"
+
+
+class BridgeHeld(Exception):
+    """The bridge is held by another owner (claim), or not by this one (release)."""
+
+
+def bridge_owner(conn: Connection) -> str | None:
+    """Who holds the outbound bridge: a plug-in's name, or None while core does."""
+    row = conn.execute(
+        "select value from service_meta where key = %s", (BRIDGE_OWNER_KEY,)
+    ).fetchone()
+    return None if row is None else row[0]
+
+
+def claim_bridge(conn: Connection, owner: str) -> None:
+    """Take the outbound bridge from core, in the caller's transaction: the plug-in calls
+    it in the same transaction as its first `hand_over`. From its commit, core's stage and
+    sender stand down in every process that reads it, and the owner's stage must stage
+    (`bridge_owner(conn) == owner`). The same owner again changes nothing; another owner
+    is refused (`BridgeHeld`)."""
+    held = bridge_owner(conn)
+    if held == owner:
+        return
+    if held is not None:
+        raise BridgeHeld(f"the partner bridge is held by {held!r}")
+    conn.execute(
+        "insert into service_meta (key, value) values (%s, %s)",
+        (BRIDGE_OWNER_KEY, owner),
+    )
+
+
+def release_bridge(conn: Connection, owner: str, rows: list[dict]) -> int:
+    """The undo, run before the plug-in is removed: give `rows` (the owner's undelivered
+    outbox rows, `hand_over`'s shape) back to core's outbox and the bridge back to core,
+    in one transaction, so there is no moment with two senders or none. Refused
+    (`BridgeHeld`) unless `owner` holds it. Returns how many rows went back."""
+    if bridge_owner(conn) != owner:
+        raise BridgeHeld(f"the partner bridge is not held by {owner!r}")
+    put = take_back(conn, rows)
+    conn.execute("delete from service_meta where key = %s", (BRIDGE_OWNER_KEY,))
+    return put
+
+
 _OUTBOX_COLS = (
     "event_id",
     "decision_id",
@@ -629,6 +675,20 @@ def _body(value) -> dict:
     return json.loads(value) if isinstance(value, str | bytes) else value
 
 
+def _lock_rows(conn: Connection, picked: list[str], now: datetime) -> list[dict]:
+    """The undelivered, unleased rows of `picked`, locked for the rest of the caller's
+    transaction (Postgres: `for update skip locked`; SQLite's writer lock already holds
+    everything). The lease is checked here, under the lock, not only at the pick."""
+    found = conn.execute(
+        f"select {', '.join(_OUTBOX_COLS)} from partner_outbox"  # noqa: S608 -- fixed columns, placeholders only
+        f" where delivered_at is null and decision_id in {dbmod.in_list(picked)}"
+        " and (claimed_until is null or claimed_until <= %s)"
+        " order by created_at, version" + conn.for_update(" skip locked"),
+        (*picked, now),
+    ).fetchall()
+    return [dict(zip(_OUTBOX_COLS, r, strict=True)) for r in found]
+
+
 def hand_over(conn: Connection, now: datetime, limit: int = 200) -> Handover:
     """Move undelivered rows out of core's outbox, in the caller's open transaction:
     the rows are returned and deleted, so the caller inserts them into its own outbox
@@ -657,13 +717,24 @@ def hand_over(conn: Connection, now: datetime, limit: int = 200) -> Handover:
     ]
     rows: list[dict] = []
     if picked:
-        found = conn.execute(
-            f"select {', '.join(_OUTBOX_COLS)} from partner_outbox"  # noqa: S608 -- fixed columns, placeholders only
-            f" where delivered_at is null and decision_id in {dbmod.in_list(picked)}"
-            " order by created_at, version" + conn.for_update(" skip locked"),
-            tuple(picked),
-        ).fetchall()
-        rows = [dict(zip(_OUTBOX_COLS, r, strict=True)) for r in found]
+        locked = _lock_rows(conn, picked, now)
+        # Whole questions only: a question whose undelivered rows were not all locked
+        # here (Postgres: another transaction holds one, or a sender leased one since the
+        # pick) is given back untouched and stays in `held`.
+        wanted: dict[str, int] = dict(
+            conn.execute(
+                "select decision_id, count(*) from partner_outbox"  # noqa: S608 -- placeholders only
+                f" where delivered_at is null and decision_id in {dbmod.in_list(picked)}"
+                " group by decision_id",
+                tuple(picked),
+            ).fetchall()
+        )
+        got: dict[str, int] = {}
+        for row in locked:
+            got[row["decision_id"]] = got.get(row["decision_id"], 0) + 1
+        rows = [
+            r for r in locked if got[r["decision_id"]] == wanted.get(r["decision_id"])
+        ]
         for row in rows:
             row["body"] = _body(row["body"])
             conn.execute(
@@ -770,21 +841,19 @@ def sender_pass(
     prune_due: bool = False,
 ) -> tuple[int, int] | None:
     """One pass of the sender: deliver what is due, and prune when `prune_due`. Step
-    9e-3: while a plug-in sink named `quarterdeck` is registered, the house plug-in
-    sends instead (its sender takes this outbox's rows with `hand_over`), so this
-    delivers nothing, logs that once at INFO and returns None; pruning goes on, since
-    the inbound tables are still core's. Checked each pass, like the 9d doorbell."""
+    9e-3: once a plug-in holds the bridge (`claim_bridge`, a database fact, so every
+    process sees it whatever plug-ins it loaded), the plug-in sends instead (its sender
+    takes this outbox's rows with `hand_over`), so this delivers nothing, logs that once
+    at INFO and returns None; pruning goes on, since the inbound tables are still
+    core's. Read each pass."""
     global _sender_stood_down_logged
-    from ream import sinks  # sinks imports this module
-
     result: tuple[int, int] | None = None
-    if sinks.plugin_sink_registered(sinks.QUARTERDECK_PLUGIN_SINK):
+    with db.connect() as conn:
+        holder = bridge_owner(conn)
+    if holder is not None:
         if not _sender_stood_down_logged:
             _sender_stood_down_logged = True
-            _log.info(
-                "core partner sender stands down: a plug-in sink named quarterdeck"
-                " is registered"
-            )
+            _log.info("core partner sender stands down: a plug-in holds the bridge")
     else:
         result = (
             deliver_due(db, config) if post is None else deliver_due(db, config, post)

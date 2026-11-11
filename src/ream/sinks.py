@@ -93,9 +93,8 @@ _builtins_loaded = False
 # The plug-in sink that takes over core's doorbell (step 9d); logged once per process.
 DOORBELL_PLUGIN_SINK = "doorbell"
 _doorbell_stood_down_logged = False
-# The plug-in sink that takes over core's outbound partner bridge (step 9e-3): while it
-# is registered, core's `partner` stage sink and its sender stand down. Logged once.
-QUARTERDECK_PLUGIN_SINK = "quarterdeck"
+# Core's `partner` stage sink stands down once a plug-in holds the bridge (step 9e-3,
+# `partner.claim_bridge`, read in the staging transaction). Logged once.
 _partner_stood_down_logged = False
 _late_failures = 0
 # sink name -> [consecutive failures, open until (None: closed), the distinct rows that
@@ -351,12 +350,6 @@ def registered() -> list[Sink]:
     _ensure_builtins()
     with _lock:
         return list(_sinks.values())
-
-
-def plugin_sink_registered(name: str) -> bool:
-    """Whether a sink of this name is registered (a plug-in's stand-in for a built-in).
-    Takes the lock itself, so a caller must not hold it."""
-    return any(s.name == name for s in registered())
 
 
 def matching(kind: str) -> list[Sink]:
@@ -726,17 +719,15 @@ def _builtin_sinks() -> list[Sink]:
         )
 
     def stage_partner(conn: Connection, event: Event) -> None:
-        # Step 9e-3: the house plug-in's stage sink `quarterdeck` writes this event to
-        # its own outbox instead (taking its version from `partner.next_version`), so the
-        # partner is told once. Checked per event, as the doorbell is.
+        # Step 9e-3: once a plug-in holds the bridge (a database fact, read in this
+        # transaction, so a process that did not load the plug-in stands down too), its
+        # own stage writes the event (version from `partner.next_version`) and the
+        # partner is told once.
         global _partner_stood_down_logged
-        if plugin_sink_registered(QUARTERDECK_PLUGIN_SINK):
+        if partner.bridge_owner(conn) is not None:
             if not _partner_stood_down_logged:
                 _partner_stood_down_logged = True
-                _log.info(
-                    "core partner stage stands down: a plug-in sink named quarterdeck"
-                    " is registered"
-                )
+                _log.info("core partner stage stands down: a plug-in holds the bridge")
             return
         # The body is already the partner's own shape (partner.*_body). `at` is an
         # ISO string in `data` because an event is JSON.

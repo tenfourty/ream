@@ -283,19 +283,31 @@ before the first plug-in's `answer` is called, so `answer` only ever gets a note
 
 ### Taking over core's partner bridge (step 9e-3, until 9e-4)
 
-Core's outbound partner bridge (`ream.partner`, the built-in `partner` stage sink and its
-sender) stands down while a sink named **`quarterdeck`** is registered: core stages nothing
-and sends nothing, logging each once at INFO. The plug-in that registers it takes over with
-three helpers of `ream.partner`, which go away with that module in 9e-4:
+Who sends to the partner is a **database fact**, not a registration: the `service_meta` key
+`partner_bridge_owner`. While it is unset, core's outbound bridge (`ream.partner`, the built-in
+`partner` stage sink and its sender) works as before. Once a plug-in claims it, core's stage and
+sender stand down in **every** process that reads the database, whatever plug-ins that process
+loaded, logging each once at INFO. A sink's name silences nothing. The helpers, in `ream.partner`,
+go away with that module in 9e-4:
 
 | Helper | Use |
 |---|---|
+| `bridge_owner(conn)` | who holds the bridge: your plug-in's name, or `None` while core does. Your stage stages only when it is your name, so before the claim core stages and you do not, after it the reverse, exactly one writer in the same transaction |
+| `claim_bridge(conn, owner)` | take the bridge, in the **same transaction as your first `hand_over`**; the same owner again is a no-op, another is refused (`BridgeHeld`) |
 | `next_version(conn, decision_id, kind)` | in your stage, in the answering transaction: the question's next partner version, or `None` (not announced, or not a plain question: send nothing). Core keeps the counter until 9e-4, so the versions run on unbroken across the switch and back |
-| `hand_over(conn, now, limit=200)` | in your sender, each pass, in one transaction with your inserts: moves core's undelivered outbox rows (whole questions, parked ones parked) to you by returning and deleting them; `.held` names the questions core still has rows for (one under a live lease, or past `limit`): send none of a held question's rows that pass |
-| `take_back(conn, rows)` | the undo: puts rows of the same shape back into core's outbox (duplicates skipped) before the plug-in is removed |
+| `hand_over(conn, now, limit=200)` | in your sender, each pass, in one transaction with your inserts: moves core's undelivered outbox rows (whole questions, parked ones parked) to you by returning and deleting them; the lease is checked under the row lock, and a question not wholly locked is left in core; `.held` names the questions core still has rows for (leased, locked elsewhere, or past `limit`): send none of a held question's rows that pass |
+| `release_bridge(conn, owner, rows)` | the undo, in one transaction: your undelivered rows go back to core's outbox (duplicates skipped) and the key is cleared, so there is never a moment with two senders or none. Expose it as a command the operator runs **before** removing the plug-in (core cannot call it once the plug-in is gone) |
+
+A stage of the plug-in that holds the bridge is the only writer of a bridge event, so its
+failure fails the action (`plugin_api.BridgeStageFailed`, the answer is not saved), as core's own
+stage did; any other plug-in's stage failure stays isolated as above.
+
+**The switch must not overlap a process from before 9e-3**: such a process does not read the key
+and would go on staging and sending from core's outbox. Deploy it stop-then-start (no rolling
+update with the old image), then let the plug-in claim.
 
 The wire to the hub is unchanged: keep each row's `event_id`, `version`, `kind`, `body` and
-`created_at` as they are. The hub's invariants (the spec's 9e-3 design lists them with where
+`created_at` as they are (`hand_over` carries them). The hub's invariants (the spec's 9e-3 design lists them with where
 core stands): the `X-Partner-Key-Id` header equals the body's `key_id` and the signature covers
 the exact bytes sent; every attempt is re-stamped (`sent_at`) and re-signed, never replayed (the
 hub refuses one over 5 minutes old); an `event_id` is kept across retries and never reused (the

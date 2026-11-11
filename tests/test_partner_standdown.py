@@ -1,12 +1,14 @@
-"""Step 9e-3, core's half: the outbound partner bridge stands down while a plug-in sink
-named `quarterdeck` is registered, and core hands its live outbox rows over.
+"""Step 9e-3, core's half: the outbound partner bridge stands down once a plug-in holds it
+(`partner.claim_bridge`, a database fact every process reads), and core hands its live
+outbox rows over.
 
 Core keeps owning the per-question version counter (`decision.partner_version`) until 9e-4:
 the plug-in's stage asks `partner.next_version` in the answering transaction, so the hub
 sees one unbroken version run across the switch. Rows core wrote before the plug-in loaded
 (and the foreign answers core's inbound half still writes until 9e-4) move with
 `partner.hand_over`, which deletes what it returns in the caller's transaction, so a row
-is in exactly one outbox: never lost, never sent twice. `partner.take_back` is the undo.
+is in exactly one outbox: never lost, never sent twice. `partner.release_bridge` is the
+undo.
 """
 
 import logging
@@ -96,13 +98,16 @@ def _counter(db, decision_id):
 
 
 class FakeQuarterdeck:
-    """Stands in for the house plug-in's stage sink: takes its version from core's
-    counter, the way the plug-in does until 9e-4."""
+    """Stands in for the house plug-in's stage sink: it stages only while the database
+    says it holds the bridge, and takes its version from core's counter."""
 
-    def __init__(self):
+    def __init__(self, owner="qd"):
+        self.owner = owner
         self.staged: list[tuple[str, int | None, str]] = []
 
     def stage(self, conn, event):
+        if partner.bridge_owner(conn) != self.owner:
+            return
         version = partner.next_version(conn, event.ref_id or "", event.kind)
         self.staged.append((event.ref_id, version, event.kind))
 
@@ -110,19 +115,57 @@ class FakeQuarterdeck:
         return Sink("quarterdeck", BRIDGE_KINDS, stage=self.stage)
 
 
+def _claim(db, owner="qd"):
+    with db.connect() as conn, conn.transaction():
+        partner.claim_bridge(conn, owner)
+
+
+# --- the switch is a database fact -----------------------------------------------------
+
+
+def test_claim_bridge_sets_once_and_refuses_another_owner(db):
+    with db.connect() as conn:
+        assert partner.bridge_owner(conn) is None
+    _claim(db)
+    _claim(db)  # the same owner again: nothing changes
+    with db.connect() as conn:
+        assert partner.bridge_owner(conn) == "qd"
+    with pytest.raises(partner.BridgeHeld), db.connect() as conn, conn.transaction():
+        partner.claim_bridge(conn, "other")
+
+
+def test_a_claim_rolled_back_leaves_core_in_charge(db):
+    class Boom(Exception):
+        pass
+
+    with pytest.raises(Boom), db.connect() as conn, conn.transaction():
+        partner.claim_bridge(conn, "qd")
+        raise Boom
+    with db.connect() as conn:
+        assert partner.bridge_owner(conn) is None
+
+
 # --- the stage sink -------------------------------------------------------------------
 
 
-def test_core_stages_as_before_with_no_quarterdeck_sink(db, page, bridge):
+def test_core_stages_as_before_with_no_claim(db, page, bridge):
     with sinks.isolated(*sinks._builtin_sinks()):
         d = _ask(db, page)
     assert [(r[1], r[2]) for r in _outbox(db)] == [(1, "asked")]
     assert _counter(db, d.id) == 1
 
 
-def test_core_stage_stands_down_and_logs_once(db, page, bridge, caplog):
+def test_a_sink_merely_named_quarterdeck_does_not_silence_core(db, page, bridge):
+    named = Sink("quarterdeck", ("decision_answered",), deliver=lambda e: None)
+    with sinks.isolated(*sinks._builtin_sinks(), named):
+        _ask(db, page)
+    assert [(r[1], r[2]) for r in _outbox(db)] == [(1, "asked")]
+
+
+def test_core_stage_stands_down_once_claimed_and_logs_once(db, page, bridge, caplog):
     qd = FakeQuarterdeck()
     caplog.set_level(logging.INFO, logger="ream.sinks")
+    _claim(db)
     with sinks.isolated(*sinks._builtin_sinks(), qd.sink()):
         d = _ask(db, page)
         decisions.answer(db, d.id, letter="a", by="jeremy")
@@ -132,13 +175,62 @@ def test_core_stage_stands_down_and_logs_once(db, page, bridge, caplog):
     said = [r for r in caplog.records if "stands down" in r.getMessage()]
     assert len(said) == 1
     assert said[0].levelno == logging.INFO
-    assert "quarterdeck" in said[0].getMessage()
+
+
+def test_core_stands_down_in_a_process_without_the_plugin(db, page, bridge):
+    # Another process (other REAM_PLUGINS) has only core's sinks: the database decides.
+    _claim(db)
+    with sinks.isolated(*sinks._builtin_sinks()):
+        _ask(db, page)
+    assert _outbox(db) == []
+
+
+def test_exactly_one_stages_before_and_after_the_claim(db, page, bridge):
+    qd = FakeQuarterdeck()
+    with sinks.isolated(*sinks._builtin_sinks(), qd.sink()):
+        d = _ask(db, page)  # loaded, not yet claimed: core stages, the plug-in does not
+        _claim(db)
+        decisions.answer(db, d.id, letter="b", by="jeremy")
+    assert [(r[1], r[2]) for r in _outbox(db)] == [(1, "asked")]
+    assert qd.staged == [(d.id, 2, "answered")]
+
+
+# --- a failing stage of the bridge's holder fails the action ---------------------------
+
+
+def _plugin_stage(fn):
+    api = plugin_api.PluginAPI("qd")
+    api.sink("quarterdeck", BRIDGE_KINDS, stage=fn)
+
+
+def _boom(conn, event):
+    raise RuntimeError("down")
+
+
+def test_the_holders_failing_stage_fails_the_action(db, page, bridge):
+    _claim(db)
+    with sinks.isolated(*sinks._builtin_sinks()):
+        _plugin_stage(_boom)
+        with pytest.raises(plugin_api.BridgeStageFailed):
+            _ask(db, page)
+    with db.connect() as conn:
+        assert conn.execute("select count(*) from decision").fetchone()[0] == 0
+
+
+def test_a_failing_stage_of_a_plugin_not_holding_the_bridge_is_isolated(
+    db, page, bridge
+):
+    with sinks.isolated(*sinks._builtin_sinks()):
+        _plugin_stage(_boom)
+        _ask(db, page)  # core holds the bridge: core staged, the answer is kept
+    assert [(r[1], r[2]) for r in _outbox(db)] == [(1, "asked")]
 
 
 def test_versions_run_on_across_the_switch(db, page, bridge):
     with sinks.isolated(*sinks._builtin_sinks()):
-        d = _ask(db, page)  # core writes v1 before the plug-in loads
+        d = _ask(db, page)  # core writes v1 before the claim
     qd = FakeQuarterdeck()
+    _claim(db)
     with sinks.isolated(*sinks._builtin_sinks(), qd.sink()):
         decisions.answer(db, d.id, letter="b", by="jeremy")
     assert [(r[1], r[2]) for r in _outbox(db)] == [(1, "asked")]
@@ -177,20 +269,22 @@ def test_next_version_does_not_depend_on_cores_own_config(db, page, monkeypatch)
 # --- the sender -----------------------------------------------------------------------
 
 
-def test_core_sender_delivers_with_no_quarterdeck_sink(db, page, bridge):
-    with sinks.isolated(*sinks._builtin_sinks()):
+def test_core_sender_delivers_with_no_claim(db, page, bridge):
+    named = Sink("quarterdeck", ("decision_answered",), deliver=lambda e: None)
+    with sinks.isolated(*sinks._builtin_sinks(), named):
         _ask(db, page)
         fake = FakePartner()
         assert partner.sender_pass(db, bridge, post=fake) == (1, 0)
     assert len(fake.calls) == 1
 
 
-def test_core_sender_stands_down_and_logs_once(db, page, bridge, caplog):
+def test_core_sender_stands_down_once_claimed_and_logs_once(db, page, bridge, caplog):
     with sinks.isolated(*sinks._builtin_sinks()):
-        _ask(db, page)  # a row core staged before the plug-in loaded
+        _ask(db, page)  # a row core staged before the claim
+    _claim(db)
     caplog.set_level(logging.INFO, logger="ream.partner")
     fake = FakePartner()
-    with sinks.isolated(*sinks._builtin_sinks(), FakeQuarterdeck().sink()):
+    with sinks.isolated(*sinks._builtin_sinks()):  # no plug-in in this process
         assert partner.sender_pass(db, bridge, post=fake) is None
         assert partner.sender_pass(db, bridge, post=fake) is None
     assert fake.calls == []
@@ -203,8 +297,8 @@ def test_core_sender_stands_down_and_logs_once(db, page, bridge, caplog):
 def test_a_standing_down_sender_still_prunes(db, page, bridge, monkeypatch):
     pruned = []
     monkeypatch.setattr(partner, "prune", lambda db, now=None: pruned.append(1) or 0)
-    with sinks.isolated(*sinks._builtin_sinks(), FakeQuarterdeck().sink()):
-        partner.sender_pass(db, bridge, post=FakePartner(), prune_due=True)
+    _claim(db)
+    partner.sender_pass(db, bridge, post=FakePartner(), prune_due=True)
     assert pruned == [1]
 
 
@@ -326,6 +420,60 @@ def test_take_back_restores_rows_and_is_idempotent(db, page, bridge):
     assert len(_outbox(db)) == 1
     fake = FakePartner()
     assert partner.deliver_due(db, bridge, post=fake) == (1, 0)
+
+
+def test_release_bridge_gives_rows_back_and_core_the_bridge_at_once(db, page, bridge):
+    with sinks.isolated(*sinks._builtin_sinks()):
+        _ask(db, page)
+    with db.connect() as conn, conn.transaction():
+        partner.claim_bridge(conn, "qd")
+        rows = partner.hand_over(conn, datetime.now(UTC)).rows
+    with db.connect() as conn, conn.transaction():
+        assert partner.release_bridge(conn, "qd", rows) == 1
+    with db.connect() as conn:
+        assert partner.bridge_owner(conn) is None
+    fake = FakePartner()
+    with sinks.isolated(*sinks._builtin_sinks()):
+        assert partner.sender_pass(db, bridge, post=fake) == (1, 0)
+
+
+def test_release_bridge_refuses_another_owner_and_keeps_everything(db, page, bridge):
+    _claim(db)
+    with pytest.raises(partner.BridgeHeld), db.connect() as conn, conn.transaction():
+        partner.release_bridge(conn, "other", [])
+    with db.connect() as conn:
+        assert partner.bridge_owner(conn) == "qd"
+
+
+def test_a_question_past_the_limit_comes_back_held(db, page, bridge):
+    with sinks.isolated(*sinks._builtin_sinks()):
+        first = _ask(db, page)
+        second = _ask(db, page)
+    with db.connect() as conn, conn.transaction():
+        got = partner.hand_over(conn, datetime.now(UTC), limit=1)
+    assert [r["decision_id"] for r in got.rows] == [first.id]
+    assert got.held == {second.id}
+
+
+def test_a_question_not_wholly_locked_is_given_back(db, page, bridge, monkeypatch):
+    # Postgres: a sender elsewhere locked or leased one row between the pick and the
+    # lock. Simulated by the lock step returning only part of a question.
+    with sinks.isolated(*sinks._builtin_sinks()):
+        d = _ask(db, page)
+        decisions.answer(db, d.id, letter="a", by="jeremy")
+        other = _ask(db, page)
+    real = partner._lock_rows
+
+    def partial(conn, picked, now):
+        rows = real(conn, picked, now)
+        return [r for r in rows if not (r["decision_id"] == d.id and r["version"] == 2)]
+
+    monkeypatch.setattr(partner, "_lock_rows", partial)
+    with db.connect() as conn, conn.transaction():
+        got = partner.hand_over(conn, datetime.now(UTC))
+    assert [(r["decision_id"], r["version"]) for r in got.rows] == [(other.id, 1)]
+    assert d.id in got.held
+    assert sorted((r[0], r[1]) for r in _outbox(db)) == [(d.id, 1), (d.id, 2)]
 
 
 # --- the listening state's "delivered" (read side, API 1.4) ---------------------------

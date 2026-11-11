@@ -882,8 +882,8 @@ drivers; CI only (not on the management machine).
    for, whose rows the plug-in must not send that pass, so no later version overtakes an earlier
    one. Repeating it each pass, not once, also carries the rows staged by core before the
    plug-in loaded, by a process still on the old image, and the partner-home answers core's
-   inbound half still writes until 9e-4. `partner.take_back` is the undo (rows back into core's
-   outbox, duplicates skipped). *Why the others lost:* (a) a one-time copy at first start
+   inbound half still writes until 9e-4. `partner.release_bridge` is the undo (rows back into
+   core's outbox and the bridge back to core, one transaction; review round below). *Why the others lost:* (a) a one-time copy at first start
    strands any row written after it (an old process, core's inbound half) and, since a copy
    leaves the original, can send a row twice if core's sender still runs anywhere; (b) a plug-in
    that reads and writes core's tables until 9e-4 moves nothing (the outbox, claim and sender
@@ -907,31 +907,55 @@ drivers; CI only (not on the management machine).
    a parked row holds the later ones (`partner._claim`), which the plug-in's claim must copy; at
    the switch a row is in one outbox only (`hand_over` deletes what it returns, skips a question
    under a live lease, and `held` names every question core still has rows for, which the
-   plug-in sends nothing of that pass); core's own sender stands down while `quarterdeck` is
-   registered, and the versions come from one counter (`next_version`). (5) A 503 carries
+   plug-in sends nothing of that pass); core's own sender stands down once a plug-in holds the bridge, and the versions come from one counter (`next_version`). (5) A 503 carries
    `Retry-After` and the sender honours it: **core does not** (`http_post` returns only the
    status; a 503 is retried on core's own backoff, 5 s doubling to 15 min, which may come
    sooner than the hub asked); the plug-in must read `Retry-After` and wait at least that long
    before the row's next attempt. Core's sender is left as it is: it stands down wherever the
    plug-in runs, and it goes in 9e-4.
    **9e-3, core half built (`ci/partner-standdown`, 11 Nov 2026).** Core's built-in `partner`
-   stage sink and its sender (`partner.sender_pass`, the loop's one pass) check per event and
-   per pass whether a sink named `quarterdeck` (`sinks.QUARTERDECK_PLUGIN_SINK`) is registered
-   and, if so, stage and send nothing and log once each at INFO (no value), exactly like the 9d
-   doorbell; pruning goes on (the inbound tables are still core's). New in `partner.py`:
-   `next_version` (split out of `enqueue`, which calls it; it does not read core's partner
-   settings), `hand_over` with `Handover(rows, held)`, `take_back`. Plug-in API 1.4:
+   stage sink and its sender (`partner.sender_pass`, the loop's one pass) stand down once a plug-in
+   holds the bridge, and log once each at INFO (no value), like the 9d doorbell; pruning goes on
+   (the inbound tables are still core's). New in `partner.py`: `next_version` (split out of
+   `enqueue`, which calls it; it does not read core's partner settings), `hand_over` with
+   `Handover(rows, held)`, `take_back`, and the switch below. Plug-in API 1.4:
    `api.read_side(delivered=fn(db, decision_ids))`, merged into `listening.for_decisions`
    beside core's own `partner_outbox` lookup (closing the "left for 9e-3" item above);
-   `readside.delivered`. Core-only installs behave exactly as before. Tests:
-   `tests/test_partner_standdown.py` (new); the version pins of `test_plugin_api.py` and
-   `test_plugin_read_side.py` loosened to `>= (1, 3)`. **Not done here:** the plug-in half in
-   ream-homelab (its stage sink `quarterdeck` calling `next_version`, its `quarterdeck_outbox`
-   with core's columns, a sender that calls `hand_over` then claims as core's `_claim` does and
-   skips `held`, its `read_side(outbox_status=, delivered=)`); `artifacts-admin partner-outbox`
-   still reports and releases only core's outbox. **Not run here:** the full suite and Postgres
-   (CI on `ci/partner-standdown`); the new file and `test_partner_outbox.py`,
-   `test_plugin_read_side.py`, `test_plugin_api.py`, `test_emit.py`, `test_partner_inbound.py`
+   `readside.delivered`. Core-only installs behave exactly as before.
+   **Review round (11 Nov 2026).** (1) *The switch is a database fact:* the `service_meta` key
+   `partner_bridge_owner`, set by `partner.claim_bridge(conn, owner)` in the same transaction as
+   the plug-in's first `hand_over`, read by core's stage in the staging transaction and by its
+   sender once a pass, so a process that did not load the plug-in (another `REAM_PLUGINS`) stands
+   down too; the plug-in's stage stages only when `bridge_owner(conn)` is its name, so exactly one
+   writer per event, before and after the claim. *A process from before 9e-3 cannot read the key*
+   and would keep sending from core's outbox: the switch is deployed stop-then-start, never a
+   rolling update beside the old image (no code can fix the old image). (2) The name-only
+   registry check (`a sink named quarterdeck`) is gone: any sink of that name (a
+   `REAM_SINKS_FILE` entry, say) silenced core with nothing taking over. *9d's doorbell check has
+   the same weakness* (a sink named `doorbell` of any kind silences core's nudge); not fixed here.
+   (3) The stage of the plug-in that holds the bridge failing now fails the action
+   (`plugin_api.BridgeStageFailed`, naming the plug-in), as core's unguarded stage did; before,
+   `guarded_stage` swallowed it and the answer was kept with no outbox row anywhere. Other
+   plug-ins' stage failures stay isolated. (4) *Rollback:* `partner.release_bridge(conn, owner,
+   rows)` gives the plug-in's undelivered rows back to core's outbox and clears the key in one
+   transaction; the plug-in exposes it as a command the operator runs **before** removing the
+   plug-in (core cannot call it once the plug-in is gone). (5) `hand_over` on Postgres checks
+   the lease under the row lock (`_lock_rows`: `claimed_until is null or <= now` in the locking
+   select), and gives back untouched any question whose undelivered rows were not all locked, so
+   "whole questions only" holds against a concurrent sender. Tests:
+   `tests/test_partner_standdown.py` (new; the claim, a sink merely named `quarterdeck`, a process
+   without the plug-in, the holder's failing stage, release, a question past `limit` held, a
+   question not wholly locked given back); the version pins of `test_plugin_api.py` and
+   `test_plugin_read_side.py` loosened to `>= (1, 3)`. **What the plug-in half (ream-homelab)
+   must do:** a stage sink on `events.BRIDGE_KINDS` that stages only while `bridge_owner(conn)` is
+   its name, with `next_version`, into its `quarterdeck_outbox` (core's columns); a sender (on
+   start/stop) that on its first pass calls `claim_bridge` and `hand_over` in one transaction,
+   then each pass `hand_over`s, claims as core's `_claim` does skipping `held`, and keeps the
+   wire invariants above (Retry-After included); `read_side(enabled=, outbox_status=,
+   delivered=)`; a command that runs `release_bridge` before a rollback. `artifacts-admin
+   partner-outbox` still reports and releases only core's outbox. **Not run here:** the full
+   suite and Postgres (CI on `ci/partner-standdown`); the new file and `test_partner_outbox.py`,
+   `test_plugin_read_side.py`, `test_plugin_api.py`, `test_plugin_api_1_2.py`, `test_emit.py`
    passed serially on SQLite.
 10. **Docs and decisions.** `docs/decisions.md` entry for the core-and-plug-ins split, the design
     doc's extension section, a plug-in author guide, the office doc's deployment paragraph.
