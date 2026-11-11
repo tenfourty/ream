@@ -25,11 +25,13 @@ this is the only moment it learns).
 """
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from ream import settings, textvars
+from ream import renderfind, settings, textvars
 from ream.csp import CspWarning, line_of, newline_offsets, outside_comments
+from ream.renderfind import Budget, TooComplex
 
 
 # The gallery's own host. A link to it from inside a published page is the one
@@ -38,8 +40,8 @@ from ream.csp import CspWarning, line_of, newline_offsets, outside_comments
 # top-level navigation -- so a same-tab link goes nowhere at all. The owner found
 # this on a real page on 19 Sep, which is why every template carries the
 # attribute and why this checks for it.
-def _gallery_link(client: bool) -> re.Pattern[str]:
-    """A link to the configured gallery's host, or to the former host while one is set (a
+def _gallery_href(client: bool) -> re.Pattern[str]:
+    """An `href` to the configured gallery's host, or to the former host while one is set (a
     page written before a move still links the old name, which forwards to the new one and
     needs the same `target`), built at call time (both are settings)."""
     names = [urlsplit(textvars.gallery_origin(client)).hostname or ""]
@@ -48,12 +50,47 @@ def _gallery_link(client: bool) -> re.Pattern[str]:
         names.append(former)
     alternatives = "|".join(re.escape(n) for n in names)
     return re.compile(
-        r"<a\b[^>]*\bhref\s*=\s*[\"']?https?://(?:" + alternatives + r")[^>]*>",
-        re.IGNORECASE,
+        r"\bhref\s*=\s*[\"']?https?://(?:" + alternatives + ")", re.IGNORECASE
     )
 
 
 _HAS_BLANK_TARGET = re.compile(r"\btarget\s*=\s*[\"']?_blank\b", re.IGNORECASE)
+_A_OPEN = re.compile(r"<a\b", re.IGNORECASE)
+
+
+def _gallery_links(
+    text: str, client: bool, budget: Budget
+) -> Iterator[tuple[int, bool]]:
+    """(where, whether it has a `target` of `_blank`) of each `<a ...>` tag with an
+    `href` to the gallery, in page order.
+
+    The page is read once, front to back: each search starts where the last stopped,
+    so the time grows with the size of the page, never with the number of tags in it.
+    (A pattern of the shape `<a ... [^>]* href ... [^>]*>` run over a page of unclosed
+    tags looks to the end of the page from each one.) It gives what that pattern gave:
+    a tag runs from its `<a` to the first `>` after it, a tag with none ends the search
+    (no later one has a `>` either), and an `<a` inside another tag's reach is part of
+    that tag, whether or not that one is a gallery link.
+    """
+    href = _gallery_href(client)
+    if href.search(text) is None:
+        return  # no link to the gallery anywhere: nothing to find
+    at = 0
+    while True:
+        opened = _A_OPEN.search(text, at)
+        if opened is None:
+            return
+        end = text.find(">", opened.end())
+        if end < 0:
+            return
+        budget.step()
+        at = end + 1
+        if href.search(text, opened.end(), end) is not None:
+            yield (
+                opened.start(),
+                _HAS_BLANK_TARGET.search(text, opened.start(), at) is not None,
+            )
+
 
 # `<code>ID</code>`, and nothing looser. The old skeleton's footer read "Page
 # id <code>ID</code>", so a page built from a copy of it still carries one --
@@ -63,9 +100,33 @@ _HAS_BLANK_TARGET = re.compile(r"\btarget\s*=\s*[\"']?_blank\b", re.IGNORECASE)
 # this exact element is unambiguous.
 _PAGE_ID_PLACEHOLDER = re.compile(r"<code>\s*ID\s*</code>", re.IGNORECASE)
 
-_TITLE = re.compile(r"<title\b[^>]*>(.*?)</title\s*>", re.IGNORECASE | re.DOTALL)
-_H1 = re.compile(r"<h1\b[^>]*>(.*?)</h1\s*>", re.IGNORECASE | re.DOTALL)
+_TITLE = (
+    re.compile(r"<title\b", re.IGNORECASE),
+    re.compile(r"</title\s*>", re.IGNORECASE),
+)
+_H1 = (re.compile(r"<h1\b", re.IGNORECASE), re.compile(r"</h1\s*>", re.IGNORECASE))
 _TAGS = re.compile(r"<[^>]*>")
+
+
+def _element(
+    text: str, name: tuple[re.Pattern[str], re.Pattern[str]]
+) -> tuple[int, str] | None:
+    """(where, the text inside) of the first `<name ...>text</name>`, as a pattern of
+    that shape finds it, without looking to the end of the page from each opening tag.
+    The first opening tag is the only one that can answer: if it has no `>`, or nothing
+    closes it after its `>`, no later one has either."""
+    opening, closing = name
+    opened = opening.search(text)
+    if opened is None:
+        return None
+    end = text.find(">", opened.end())
+    if end < 0:
+        return None
+    closed = closing.search(text, end + 1)
+    if closed is None:
+        return None
+    return opened.start(), text[end + 1 : closed.start()]
+
 
 # What the templates and the skeleton actually leave behind, not a guess at
 # what a placeholder might look like. The first board published here shipped
@@ -107,14 +168,22 @@ def _load_templates() -> tuple[frozenset[str], frozenset[str]]:
     for path in (Path(__file__).resolve().parent / "templates").glob("*.html"):
         text = path.read_text(encoding="utf-8")
         bodies.add(text.strip())
-        match = _TITLE.search(text)
-        if match:
-            titles.add(_plain(match.group(1)).lower())
+        found = _element(text, _TITLE)
+        if found:
+            titles.add(_plain(found[1]).lower())
     return frozenset(bodies), frozenset(titles)
 
 
 def _plain(fragment: str) -> str:
-    return " ".join(_TAGS.sub(" ", fragment).split()).strip()
+    """`fragment` with each `<...>` (from a `<` to the first `>` after it) as a space,
+    and its whitespace collapsed.
+
+    The pattern is given only what comes before the last `>`. A `<` there always has a
+    `>` after it, so each `<` that starts a match ends it at once and the pattern never
+    reads a stretch twice; a `<` with no `>` after it, which would send it to the end of
+    the text from each one, is after the last `>` and is kept as it is."""
+    end = fragment.rfind(">") + 1
+    return " ".join((_TAGS.sub(" ", fragment[:end]) + fragment[end:]).split()).strip()
 
 
 _TEMPLATES: list[tuple[frozenset[str], frozenset[str]]] = []
@@ -126,7 +195,16 @@ def _templates() -> tuple[frozenset[str], frozenset[str]]:
     return _TEMPLATES[0]
 
 
-def check(body: str, client: bool = False) -> list[CspWarning]:
+NOT_RUN = (
+    "this page is too large or complex for the page checks (placeholder title, "
+    "template marker, page id placeholder, link to the gallery) to read in the time "
+    "allowed: they did not run, so their silence on this page means nothing"
+)
+
+
+def check(
+    body: str, client: bool = False, budget: Budget | None = None
+) -> list[CspWarning]:
     """Every trap in `body`, oldest concern first, as the same warning shape the
     CSP advisory returns -- one list reaches the author, and it should not
     matter to them which module noticed.
@@ -135,23 +213,41 @@ def check(body: str, client: bool = False) -> list[CspWarning]:
     inside `<!-- -->` never reaches a browser, and a check that fires on
     correct pages is how a warning becomes noise. Every shipped template
     carries its guidance in comments.
+
+    A page over `renderfind.MAX_SCAN_CHARS`, or one that uses up the `budget` (a
+    `Budget` of its own when none is given), is not checked any further: the answer
+    is then the one warning, `trap_checks_not_run`, and never a partial list or an
+    empty one, which would read as a clean page.
     """
+    budget = Budget() if budget is None else budget
+    try:
+        if len(body) > renderfind.MAX_SCAN_CHARS:
+            raise TooComplex
+        budget.check()
+        return _check(body, client, budget)
+    except TooComplex:
+        return [CspWarning(shape="trap_checks_not_run", line=1, hint=NOT_RUN)]
+
+
+def _check(body: str, client: bool, budget: Budget) -> list[CspWarning]:
     visible = outside_comments(body)
     newlines = newline_offsets(visible)
+    budget.check()
     found: list[CspWarning] = []
     specimens, examples = _templates()
     started = body.strip() not in specimens
 
-    for pattern, where in ((_TITLE, "<title>"), (_H1, "the page's <h1>")):
-        match = pattern.search(visible)
-        if not match:
+    for name, where in ((_TITLE, "<title>"), (_H1, "the page's <h1>")):
+        element = _element(visible, name)
+        if not element:
             continue
-        text = _plain(match.group(1))
+        at, inside = element
+        text = _plain(inside)
         if started and text.lower() in examples:
             found.append(
                 CspWarning(
                     shape="template_example_title",
-                    line=line_of(match.start(), newlines),
+                    line=line_of(at, newlines),
                     hint=(
                         f"{where} is still the template's worked example "
                         f"({text!r}). The rest of the page probably is too: "
@@ -163,7 +259,7 @@ def check(body: str, client: bool = False) -> list[CspWarning]:
             found.append(
                 CspWarning(
                     shape="placeholder_title",
-                    line=line_of(match.start(), newlines),
+                    line=line_of(at, newlines),
                     hint=(
                         f"{where} still carries the template's placeholder. It "
                         "renders exactly as written and you cannot see it: the "
@@ -177,6 +273,7 @@ def check(body: str, client: bool = False) -> list[CspWarning]:
     # the author's, so count them against the body.
     raw_newlines = newline_offsets(body)
     for match in _REPLACE_MARKER.finditer(body if started else ""):
+        budget.step()
         found.append(
             CspWarning(
                 shape="template_marker_left",
@@ -191,6 +288,7 @@ def check(body: str, client: bool = False) -> list[CspWarning]:
         )
 
     for match in _PAGE_ID_PLACEHOLDER.finditer(visible):
+        budget.step()
         found.append(
             CspWarning(
                 shape="placeholder_page_id",
@@ -204,13 +302,13 @@ def check(body: str, client: bool = False) -> list[CspWarning]:
             )
         )
 
-    for match in _gallery_link(client).finditer(visible):
-        if _HAS_BLANK_TARGET.search(match.group(0)):
+    for at, has_target in _gallery_links(visible, client, budget):
+        if has_target:
             continue
         found.append(
             CspWarning(
                 shape="gallery_link_same_tab",
-                line=line_of(match.start(), newlines),
+                line=line_of(at, newlines),
                 hint=(
                     'a link to the gallery needs target="_blank" '
                     'rel="noopener". This page is served in a sandboxed '
