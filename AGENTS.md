@@ -236,7 +236,7 @@ checkout; `scripts/guards/run-selftests.sh` tells you whether this one is protec
 
 | When | What is refused | Override |
 |---|---|---|
-| pre-commit | a secret in the staged diff (ggshield) | `GGSHIELD_SKIP=1` |
+| pre-commit | a secret in the staged diff (ggshield), or a scan that could not run (ggshield missing, no key, no network) | `GGSHIELD_SKIP=1` (logged as nothing scanned) |
 | pre-commit | a credential handed to a process as an argument | none — fix the call |
 | pre-commit | ruff and shellcheck findings in staged files | none |
 | prepare-commit-msg | `--amend` / `-c` / `-C` / `--fixup` / `--squash` | `AMEND_OVERRIDE=1` |
@@ -245,8 +245,11 @@ checkout; `scripts/guards/run-selftests.sh` tells you whether this one is protec
 | pre-push | an outgoing range that is not the count you announced | none: `PUSH_COUNT=N git push` |
 | pre-push | ruff findings, or unformatted files, anywhere in `src`/`tests` | none — `uv run ruff format <files>` |
 
-Each guard degrades to a clean SKIP when its tool is missing, and says loudly that nothing was
-scanned. Each has a `--selftest`; CI runs all of them, plus the whole-tree secret scan, on every
+The secret scan is the exception to "degrade to a SKIP": it refuses when ggshield is missing or
+cannot scan, and only `GGSHIELD_SKIP=1` lets that through, saying loudly that nothing was scanned. It
+runs ggshield with `GITGUARDIAN_DONT_LOAD_ENV=1` and `--config-path` on an empty temporary file, so the
+checkout's own `.env` and `.gitguardian.yaml` are never read. The other guards still degrade to a
+clean SKIP when their tool is missing, saying so loudly. Each has a `--selftest`; CI runs all of them, plus the whole-tree secret scan, on every
 push.
 
 What is NOT mechanical, and still yours to hold:

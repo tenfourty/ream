@@ -15,11 +15,10 @@
 # (Nothing installs it for you. `scripts/guards/run-selftests.sh` will tell
 # you whether this clone is actually protected.)
 #
-# CONTRACT, inherited from the homelab and worth keeping: every job degrades
-# to a clean SKIP when a tool is absent, so any host can still commit — with
-# one exception, the guards that need nothing but bash and git, which never
-# skip. A gate that fails closed on a missing external service is a gate that
-# gets deleted within a week.
+# CONTRACT: every job degrades to a clean SKIP when a tool is absent, so any
+# host can still commit — with two exceptions: the guards that need nothing
+# but bash and git, which never skip, and the secret scan, which refuses when
+# it cannot scan unless GGSHIELD_SKIP=1 says so out loud.
 #
 # NO AUTOFIX JOBS, deliberately. lefthook only manipulates the working tree
 # (its partial stash) for commands that restage files, and homelab-8yg is an
@@ -43,8 +42,9 @@ pre-commit:
   commands:
     ggshield:
       # Secret scan on the staged diff. The wrapper maps ggshield's exit code:
-      # 0 clean, 1 blocks, anything else (not installed, no key, no network,
-      # quota) allows the commit and says loudly that NOTHING was scanned.
+      # 0 clean allows; 1 (a secret) and anything else (not installed, no key,
+      # no network, quota) refuse, unless GGSHIELD_SKIP=1, which allows and
+      # says loudly that NOTHING was scanned.
       # Measured rc behaviour and the fabricated-token trap are in its header.
       run: 'scripts/guards/ggshield-gate.sh'
     secret-on-cmdline:
