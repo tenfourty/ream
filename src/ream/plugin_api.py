@@ -454,6 +454,7 @@ class PluginAPI:
         answer: Callable | None = None,
         enabled: Callable | None = None,
         outbox_status: Callable | None = None,
+        delivered: Callable | None = None,
     ) -> None:
         """Contribute to what the inbox, gallery, question list and listening state read
         about questions whose home is a chat partner (API 1.3). Core's own partner code
@@ -471,6 +472,9 @@ class PluginAPI:
         - `enabled()`: whether your bridge is running here.
         - `outbox_status(db)`: a small dict of counts and codes for the admin report (never
           a body or a key).
+        - `delivered(db, decision_ids)` (API 1.4): of these questions whose home is here,
+          `{id: True|False}` for each one your outbox holds an `asked` for (sent or not
+          yet); the listening state's "sent" reads it beside core's own outbox.
 
         A copy's `source` must be unique: one core (or an earlier plug-in) already lists is
         dropped. A call that raises, or returns the wrong shape, is logged by type, counted
@@ -481,6 +485,7 @@ class PluginAPI:
             "answer": answer,
             "enabled": enabled,
             "outbox_status": outbox_status,
+            "delivered": delivered,
         }
         for name, fn in given.items():
             if fn is not None and not callable(fn):

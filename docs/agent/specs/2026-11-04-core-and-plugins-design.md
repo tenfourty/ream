@@ -869,6 +869,47 @@ drivers; CI only (not on the management machine).
    plug-in's names must carry its prefix, so the move needs a copy or a read-through of those rows.
    **Not run here (9e-2):** the full suite and Postgres (CI on `ci/plugin-read-side`); the new
    file, `test_plugin_api.py` and `test_plugin_api_1_2.py` passed serially on SQLite.
+   **9e-3 design (11 Nov 2026): move on hand-over, counter stays in core.** The open question
+   above is settled this way. Core keeps owning the per-question version counter
+   (`decision.partner_version`) until 9e-4: the plug-in's stage takes its version from
+   `partner.next_version` in the answering transaction, so the hub sees one unbroken run of
+   versions across the switch and back again, and the listening state's "announced" needs no
+   change. Core's undelivered outbox rows move to the plug-in's own `quarterdeck_*` outbox with
+   `partner.hand_over`, called by the plug-in's sender on every pass: it returns and deletes
+   them in the caller's transaction, so a row is in exactly one outbox (a rollback keeps it in
+   core's); it moves whole questions only, skips a question with a row under a live lease (a
+   sender elsewhere is attempting it), and returns `held`, every question core still has rows
+   for, whose rows the plug-in must not send that pass, so no later version overtakes an earlier
+   one. Repeating it each pass, not once, also carries the rows staged by core before the
+   plug-in loaded, by a process still on the old image, and the partner-home answers core's
+   inbound half still writes until 9e-4. `partner.take_back` is the undo (rows back into core's
+   outbox, duplicates skipped). *Why the others lost:* (a) a one-time copy at first start
+   strands any row written after it (an old process, core's inbound half) and, since a copy
+   leaves the original, can send a row twice if core's sender still runs anywhere; (b) a plug-in
+   that reads and writes core's tables until 9e-4 moves nothing (the outbox, claim and sender
+   are still core's schema, and 9e-4 would need the copy anyway). Copying the counters instead
+   of borrowing them would race an old process still bumping core's; core stops bumping at the
+   switch, so 9e-4 copies a frozen column. Both databases: plain selects and deletes, Postgres
+   adding `for update skip locked`, SQLite serialised by its writer lock.
+   **9e-3, core half built (`ci/partner-standdown`, 11 Nov 2026).** Core's built-in `partner`
+   stage sink and its sender (`partner.sender_pass`, the loop's one pass) check per event and
+   per pass whether a sink named `quarterdeck` (`sinks.QUARTERDECK_PLUGIN_SINK`) is registered
+   and, if so, stage and send nothing and log once each at INFO (no value), exactly like the 9d
+   doorbell; pruning goes on (the inbound tables are still core's). New in `partner.py`:
+   `next_version` (split out of `enqueue`, which calls it; it does not read core's partner
+   settings), `hand_over` with `Handover(rows, held)`, `take_back`. Plug-in API 1.4:
+   `api.read_side(delivered=fn(db, decision_ids))`, merged into `listening.for_decisions`
+   beside core's own `partner_outbox` lookup (closing the "left for 9e-3" item above);
+   `readside.delivered`. Core-only installs behave exactly as before. Tests:
+   `tests/test_partner_standdown.py` (new); the version pins of `test_plugin_api.py` and
+   `test_plugin_read_side.py` loosened to `>= (1, 3)`. **Not done here:** the plug-in half in
+   ream-homelab (its stage sink `quarterdeck` calling `next_version`, its `quarterdeck_outbox`
+   with core's columns, a sender that calls `hand_over` then claims as core's `_claim` does and
+   skips `held`, its `read_side(outbox_status=, delivered=)`); `artifacts-admin partner-outbox`
+   still reports and releases only core's outbox. **Not run here:** the full suite and Postgres
+   (CI on `ci/partner-standdown`); the new file and `test_partner_outbox.py`,
+   `test_plugin_read_side.py`, `test_plugin_api.py`, `test_emit.py`, `test_partner_inbound.py`
+   passed serially on SQLite.
 10. **Docs and decisions.** `docs/decisions.md` entry for the core-and-plug-ins split, the design
     doc's extension section, a plug-in author guide, the office doc's deployment paragraph.
     (Docs also land with each slice above; this is the consolidation.)

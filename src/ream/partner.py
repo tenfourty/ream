@@ -216,16 +216,9 @@ def enqueue(
         raise ValueError(f"unknown partner event kind {kind!r}")
     if not enabled():
         return None
-    row = conn.execute(
-        "update decision set partner_version = partner_version + 1"
-        " where id = %s and kind = 'question'"
-        " and (partner_version > 0 or %s)"
-        " returning partner_version",
-        (decision_id, kind == "asked"),
-    ).fetchone()
-    if row is None:
+    version = next_version(conn, decision_id, kind)
+    if version is None:
         return None
-    version = row[0]
     when = at or datetime.now(UTC)
     conn.execute(
         "insert into partner_outbox"
@@ -242,6 +235,28 @@ def enqueue(
         ),
     )
     return version
+
+
+def next_version(conn: Connection, decision_id: str, kind: str) -> int | None:
+    """Bump and return the question's partner version, in the caller's open
+    transaction; None for a question that is not a plain question, or that was never
+    announced (`kind` other than `asked` while the counter is 0). Core's own stage
+    calls it through `enqueue`; while the house plug-in stands in (step 9e-3) its stage
+    calls it too, so the partner sees one unbroken run of versions across the switch
+    and back. It does not read core's partner settings: the caller decided to send.
+
+    The statement takes the row's lock (SQLite: the whole write lock), so two events
+    for one question never share a number."""
+    if kind not in KINDS:
+        raise ValueError(f"unknown partner event kind {kind!r}")
+    row = conn.execute(
+        "update decision set partner_version = partner_version + 1"
+        " where id = %s and kind = 'question'"
+        " and (partner_version > 0 or %s)"
+        " returning partner_version",
+        (decision_id, kind == "asked"),
+    ).fetchone()
+    return None if row is None else row[0]
 
 
 def asked_body(
@@ -581,6 +596,106 @@ def unpark(
         ).rowcount
 
 
+# --- the hand-over to the house plug-in (step 9e-3; goes with this module in 9e-4) ---
+
+_OUTBOX_COLS = (
+    "event_id",
+    "decision_id",
+    "version",
+    "kind",
+    "body",
+    "created_at",
+    "attempts",
+    "next_attempt_at",
+    "delivered_at",
+    "last_error",
+    "last_error_at",
+    "parked_at",
+)
+
+
+@dataclass(frozen=True)
+class Handover:
+    """What `hand_over` moved: `rows` (each a dict of `_OUTBOX_COLS`, `body` a dict),
+    and `held`, every question core's outbox still has an undelivered row for after
+    the move. The caller must send none of a held question's rows yet, or a later
+    version could reach the partner before an earlier one."""
+
+    rows: list[dict]
+    held: set[str]
+
+
+def _body(value) -> dict:
+    return json.loads(value) if isinstance(value, str | bytes) else value
+
+
+def hand_over(conn: Connection, now: datetime, limit: int = 200) -> Handover:
+    """Move undelivered rows out of core's outbox, in the caller's open transaction:
+    the rows are returned and deleted, so the caller inserts them into its own outbox
+    in the same transaction and a row is in exactly one outbox, never both and never
+    neither (a rollback keeps them here). Whole questions only, oldest first, at most
+    `limit` questions; a question with a row under a live lease (a sender elsewhere
+    is attempting it now) is skipped whole and comes back in `held`. Parked rows move
+    parked. Delivered rows stay (the listening state still reads them). Postgres locks
+    the rows it takes, skipping ones another hand-over holds; SQLite's writer lock
+    already serialises. Called repeatedly by the plug-in's sender: core's inbound half
+    still writes the partner-home answers here until 9e-4."""
+    free = (
+        " where o.delivered_at is null and not exists (select 1 from partner_outbox p"
+        "   where p.decision_id = o.decision_id and p.delivered_at is null"
+        "   and p.claimed_until is not null and p.claimed_until > %s)"
+    )
+    picked = [
+        r[0]
+        for r in conn.execute(
+            "select o.decision_id from partner_outbox o"  # noqa: S608 -- fixed text
+            + free
+            + " group by o.decision_id order by min(o.created_at), o.decision_id"
+            " limit %s",
+            (now, limit),
+        ).fetchall()
+    ]
+    rows: list[dict] = []
+    if picked:
+        found = conn.execute(
+            f"select {', '.join(_OUTBOX_COLS)} from partner_outbox"  # noqa: S608 -- fixed columns, placeholders only
+            f" where delivered_at is null and decision_id in {dbmod.in_list(picked)}"
+            " order by created_at, version" + conn.for_update(" skip locked"),
+            tuple(picked),
+        ).fetchall()
+        rows = [dict(zip(_OUTBOX_COLS, r, strict=True)) for r in found]
+        for row in rows:
+            row["body"] = _body(row["body"])
+            conn.execute(
+                "delete from partner_outbox where event_id = %s", (row["event_id"],)
+            )
+    held = {
+        r[0]
+        for r in conn.execute(
+            "select distinct decision_id from partner_outbox where delivered_at is null"
+        ).fetchall()
+    }
+    return Handover(rows=rows, held=held)
+
+
+def take_back(conn: Connection, rows: list[dict]) -> int:
+    """The undo of `hand_over`: put rows (the same dicts) back into core's outbox, in
+    the caller's transaction. A row whose event id or (question, version) is already
+    here is skipped. Returns how many went in. Leases are not restored."""
+    put = 0
+    for row in rows:
+        put += conn.execute(
+            f"insert into partner_outbox ({', '.join(_OUTBOX_COLS)})"  # noqa: S608 -- fixed columns
+            f" values ({', '.join(['%s'] * len(_OUTBOX_COLS))})"
+            " on conflict do nothing",
+            tuple(
+                dbmod.jsonb(_body(row[c])) if c == "body" else row.get(c)
+                for c in _OUTBOX_COLS
+            ),
+        ).rowcount
+    return put
+
+
 def prune(db: Database, now: datetime | None = None) -> int:
     """Forget delivered events older than KEEP_DELIVERED."""
     cutoff = (now or datetime.now(UTC)) - KEEP_DELIVERED
@@ -644,6 +759,41 @@ def status(db: Database, now: datetime | None = None) -> dict:
     }
 
 
+_sender_stood_down_logged = False
+
+
+def sender_pass(
+    db: Database,
+    config: Config,
+    post: PostFn | None = None,
+    *,
+    prune_due: bool = False,
+) -> tuple[int, int] | None:
+    """One pass of the sender: deliver what is due, and prune when `prune_due`. Step
+    9e-3: while a plug-in sink named `quarterdeck` is registered, the house plug-in
+    sends instead (its sender takes this outbox's rows with `hand_over`), so this
+    delivers nothing, logs that once at INFO and returns None; pruning goes on, since
+    the inbound tables are still core's. Checked each pass, like the 9d doorbell."""
+    global _sender_stood_down_logged
+    from ream import sinks  # sinks imports this module
+
+    result: tuple[int, int] | None = None
+    if sinks.plugin_sink_registered(sinks.QUARTERDECK_PLUGIN_SINK):
+        if not _sender_stood_down_logged:
+            _sender_stood_down_logged = True
+            _log.info(
+                "core partner sender stands down: a plug-in sink named quarterdeck"
+                " is registered"
+            )
+    else:
+        result = (
+            deliver_due(db, config) if post is None else deliver_due(db, config, post)
+        )
+    if prune_due:
+        prune(db)
+    return result
+
+
 def start(db: Database, config: Config | None) -> threading.Thread | None:
     """The sender: one daemon thread, started only when configured. It polls
     every POLL_SECONDS, never dies of an exception and never blocks start-up.
@@ -659,10 +809,10 @@ def start(db: Database, config: Config | None) -> threading.Thread | None:
         last_prune = datetime.min.replace(tzinfo=UTC)
         while not _stop.is_set():
             try:
-                deliver_due(db, config)
                 now = datetime.now(UTC)
-                if now - last_prune > _PRUNE_EVERY:
-                    prune(db, now)
+                due = now - last_prune > _PRUNE_EVERY
+                sender_pass(db, config, prune_due=due)
+                if due:
                     last_prune = now
             except Exception:  # noqa: BLE001 -- the loop must outlive one bad pass
                 _log.error("partner delivery pass failed", exc_info=True)

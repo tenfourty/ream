@@ -36,7 +36,7 @@ from urllib.parse import urlsplit
 
 from ream import envnames
 
-API_VERSION = (1, 3)
+API_VERSION = (1, 4)
 GROUP = "ream.plugins"
 # The old group name, read for good beside the new one.
 OLD_GROUP = "artifacts.plugins"

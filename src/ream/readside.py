@@ -43,6 +43,7 @@ class Contributor:
     answer: Callable | None = None
     enabled: Callable | None = None
     outbox_status: Callable | None = None
+    delivered: Callable | None = None
 
 
 # What a contributor's `answer` may raise on purpose besides NotFound: the store's refusals
@@ -256,6 +257,32 @@ def bridge_on() -> bool:
         if _call(c, c.enabled):
             return True
     return False
+
+
+def delivered(db: Database, decision_ids: list[str]) -> dict[str, bool]:
+    """Of these questions (whose home is here), which a contributor's outbox holds an
+    `asked` for, and whether it went out (API 1.4): the listening state's "sent" for a
+    question announced after the switch to a plug-in's own outbox. Merged by "any says
+    delivered". A contributor that raises or answers other than a dict of str to bool is
+    counted and ignored; ids not asked for are dropped. Core's own `partner_outbox` is
+    read by the caller."""
+    asked = set(decision_ids)
+    out: dict[str, bool] = {}
+    if not asked:
+        return out
+    for c in contributors():
+        got = _call(c, c.delivered, db, list(decision_ids))
+        if got is None:
+            continue
+        if not isinstance(got, dict) or not all(
+            isinstance(k, str) and isinstance(v, bool) for k, v in got.items()
+        ):
+            _fail(c.plugin, "BadDelivered")
+            continue
+        for key, sent in got.items():
+            if key in asked:
+                out[key] = out.get(key, False) or sent
+    return out
 
 
 def outbox_statuses(db: Database) -> dict[str, dict]:

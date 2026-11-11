@@ -278,6 +278,11 @@ def for_decisions(
                 tuple(own),
             ).fetchall():
                 delivered[decision_id] = at is not None
+    if found and readside.bridge_on():
+        # A plug-in's own outbox (step 9e-3): questions announced after the switch.
+        own = [r[0] for r in found]
+        for decision_id, sent in readside.delivered(db, own).items():
+            delivered[decision_id] = delivered.get(decision_id, False) or sent
     readers = _readers(db, agent)
     stored = get_pickup(db, agent)
     bridge_on = readside.bridge_on()

@@ -72,9 +72,10 @@ error names the plug-in and, for an exception, only its **type**, never its text
 
 ## API versioning
 
-`ream.plugin_api.API_VERSION` is `(1, 3)`; `api.version` is the same tuple (1.1 added the
+`ream.plugin_api.API_VERSION` is `(1, 4)`; `api.version` is the same tuple (1.1 added the
 optional `timeout` of `api.scanner`; 1.2 added `api.sink(..., stage=)`, `api.schema`,
-`api.on_start` and `api.on_stop`; 1.3 added `api.read_side`, all optional: a 1.0 or 1.1 plug-in runs unchanged). A plug-in declares
+`api.on_start` and `api.on_stop`; 1.3 added `api.read_side`; 1.4 added its `delivered`
+argument, all optional: a 1.0 or 1.1 plug-in runs unchanged). A plug-in declares
 `REQUIRES_API = "1"` as module data of the module that holds `register`; the core compares the
 major number and refuses a mismatch (the server stops; a tool skips or exits as above). A plug-in
 that declares nothing is not checked. Minor releases only add registrations or optional
@@ -245,6 +246,7 @@ least one), once per plug-in, keyword only:
 | `answer` | `fn(db, qid, letter=, note=)` | the `Copy` after he answers it in the gallery; `store.NotFound` for one that is not yours. `qid` is `Copy.qid`: a `qd:` source with the prefix stripped, any other source whole |
 | `enabled` | `fn()` | whether your bridge runs here (feeds `bridge.enabled` in the listening state) |
 | `outbox_status` | `fn(db)` | a small dict of counts and codes; shown in `sinks.status()["read_side_outbox"]` and by `artifacts-admin outbox` where plug-ins are loaded (the admin shell does not load them today) |
+| `delivered` (1.4) | `fn(db, decision_ids)` | `{id: bool}` for each of these questions (home here) your outbox holds an `asked` for: `True` once it went out. The listening state's "sent to the partner" reads it beside core's own outbox, any `True` wins; a wrong shape or a raise is counted and ignored |
 
 ```python
 from ream import partner_in, store
@@ -278,6 +280,22 @@ naming the plug-in), never a 404: an outage must not read as "no such question".
 copies are ranked and rendered by core, so a plug-in cannot supply markup. When core does not hold the question it checks the note's size and for a secret once,
 before the first plug-in's `answer` is called, so `answer` only ever gets a note that passed.
 `store.NotFound` from one plug-in moves on to the next.
+
+### Taking over core's partner bridge (step 9e-3, until 9e-4)
+
+Core's outbound partner bridge (`ream.partner`, the built-in `partner` stage sink and its
+sender) stands down while a sink named **`quarterdeck`** is registered: core stages nothing
+and sends nothing, logging each once at INFO. The plug-in that registers it takes over with
+three helpers of `ream.partner`, which go away with that module in 9e-4:
+
+| Helper | Use |
+|---|---|
+| `next_version(conn, decision_id, kind)` | in your stage, in the answering transaction: the question's next partner version, or `None` (not announced, or not a plain question: send nothing). Core keeps the counter until 9e-4, so the versions run on unbroken across the switch and back |
+| `hand_over(conn, now, limit=200)` | in your sender, each pass, in one transaction with your inserts: moves core's undelivered outbox rows (whole questions, parked ones parked) to you by returning and deleting them; `.held` names the questions core still has rows for (one under a live lease, or past `limit`): send none of a held question's rows that pass |
+| `take_back(conn, rows)` | the undo: puts rows of the same shape back into core's outbox (duplicates skipped) before the plug-in is removed |
+
+The wire to the hub is unchanged: keep each row's `event_id`, `version`, `kind`, `body` and
+`created_at` as they are.
 
 ### Webhook sinks without a plug-in
 

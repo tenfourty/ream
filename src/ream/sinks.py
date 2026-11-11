@@ -93,6 +93,10 @@ _builtins_loaded = False
 # The plug-in sink that takes over core's doorbell (step 9d); logged once per process.
 DOORBELL_PLUGIN_SINK = "doorbell"
 _doorbell_stood_down_logged = False
+# The plug-in sink that takes over core's outbound partner bridge (step 9e-3): while it
+# is registered, core's `partner` stage sink and its sender stand down. Logged once.
+QUARTERDECK_PLUGIN_SINK = "quarterdeck"
+_partner_stood_down_logged = False
 _late_failures = 0
 # sink name -> [consecutive failures, open until (None: closed), the distinct rows that
 # failed (capped at 2), when it last opened (None: never)]. This is the state of a
@@ -347,6 +351,12 @@ def registered() -> list[Sink]:
     _ensure_builtins()
     with _lock:
         return list(_sinks.values())
+
+
+def plugin_sink_registered(name: str) -> bool:
+    """Whether a sink of this name is registered (a plug-in's stand-in for a built-in).
+    Takes the lock itself, so a caller must not hold it."""
+    return any(s.name == name for s in registered())
 
 
 def matching(kind: str) -> list[Sink]:
@@ -716,6 +726,18 @@ def _builtin_sinks() -> list[Sink]:
         )
 
     def stage_partner(conn: Connection, event: Event) -> None:
+        # Step 9e-3: the house plug-in's stage sink `quarterdeck` writes this event to
+        # its own outbox instead (taking its version from `partner.next_version`), so the
+        # partner is told once. Checked per event, as the doorbell is.
+        global _partner_stood_down_logged
+        if plugin_sink_registered(QUARTERDECK_PLUGIN_SINK):
+            if not _partner_stood_down_logged:
+                _partner_stood_down_logged = True
+                _log.info(
+                    "core partner stage stands down: a plug-in sink named quarterdeck"
+                    " is registered"
+                )
+            return
         # The body is already the partner's own shape (partner.*_body). `at` is an
         # ISO string in `data` because an event is JSON.
         at = event.data.get("at")

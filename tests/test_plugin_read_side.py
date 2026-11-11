@@ -103,7 +103,7 @@ def gallery(db, monkeypatch):
 def test_the_api_version_is_1_3_and_the_cli_api_accepts_the_call():
     from ream import plugin_cli
 
-    assert plugin_api.API_VERSION == (1, 3)
+    assert plugin_api.API_VERSION >= (1, 3)
     assert (
         plugin_cli.CliPluginAPI("x").read_side(open_copies=lambda *a, **k: []) is None
     )
