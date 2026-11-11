@@ -306,3 +306,29 @@ def test_registration_refusals(world):
 
     with pytest.raises(PluginError, match="twice"):
         world(EP("dup", twice))
+
+
+@pytest.mark.parametrize(
+    ("note", "refusal"),
+    [
+        ("x" * (decisions.MAX_NOTE_BYTES + 1), store.BodyTooLarge),
+        ("key AKIA" + "IOSFODNN7EXAMPLE here", store.SecretFound),
+    ],
+)
+def test_a_note_is_gated_before_a_plugin_ever_sees_it(
+    world, db, gallery, note, refusal
+):
+    calls = []
+
+    def answer(db_, qid, *, letter, note=""):
+        calls.append(note)
+        return copy("qd:x1", pending=letter)
+
+    world(plugin(answer=answer))
+    with pytest.raises(refusal):
+        readside.answer_here(db, "x1", letter="a", note=note)
+    sent = gallery.post(
+        "/pq/x1/answer", data={"letter": "a", "note": note}, headers=SAME | HIM
+    )
+    assert sent.status_code in (413, 422)
+    assert calls == []

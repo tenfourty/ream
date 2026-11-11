@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from ream import decisions, partner, partner_in, store
+from ream import decisions, partner, partner_in, settings, store
 from ream.db import Database
 
 _log = logging.getLogger(__name__)
@@ -169,6 +169,16 @@ def answer_here(
     not its own. `decisions.InvalidAnswer` and the store's refusals pass through from
     whoever owns the question; any other fault in a contributor is counted and that
     contributor is skipped, so the last answer is the same 404 as for a missing id."""
+    # The note's gates run here once, before core's call or any plug-in's, so a plug-in's
+    # answer path is held to the same size and secret checks as core's (partner_in.answer_here).
+    store._check_size(
+        note,
+        decisions.MAX_NOTE_BYTES,
+        "note",
+        agent=settings.owner_id(),
+        artifact_id=None,
+    )
+    store._check_secrets(note, "note", agent=settings.owner_id(), artifact_id=None)
     try:
         return partner_in.answer_here(db, qid, letter=letter, note=note)
     except store.NotFound:

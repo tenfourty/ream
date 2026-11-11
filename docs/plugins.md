@@ -272,7 +272,8 @@ before: the agent routes' "not yours is no such" scoping is unchanged. `answer` 
 store's own refusals (`BodyTooLarge`, `InvalidText`, `SecretFound`, `ScanFailed`) and
 `decisions.InvalidAnswer`, which the gallery answers as it does for core's copies; any other
 raise is counted and that plug-in skipped, so the answer ends as a 404 if nobody takes it. The
-copies are ranked and rendered by core, so a plug-in cannot supply markup.
+copies are ranked and rendered by core, so a plug-in cannot supply markup. Core checks the note's size and for a secret once, before
+core's own copy or any plug-in's `answer` is called, so `answer` only ever gets a note that passed.
 
 ### Webhook sinks without a plug-in
 
