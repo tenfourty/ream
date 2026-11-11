@@ -114,7 +114,9 @@ jobs:
     runs-on: docker-light
     # A hung job fails here instead of holding a builder for the runner's default of hours
     # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
-    timeout-minutes: 20
+    # 30, not 20: a passing run takes 14-16 min, and on a slower docker-light runner on
+    # 11 Nov 2026 every step passed but the SQLite suite was cut off at 99% by the 20.
+    timeout-minutes: 30
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
     services:
       postgres:
