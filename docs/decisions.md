@@ -982,3 +982,36 @@ page when it has one (an event belongs to a page; a routine rotation writes none
 request's 401 shows the reason to whoever holds the key. `rename-agent --revoke-keys` lists each key with its
 last use and refuses one used in the last 24 hours unless `--force`. A plain rename or merge still
 moves keys and keeps them working.
+
+## What a card shows of an agent's receipt, and when an office is nudged (11 Nov 2026)
+
+**Chosen:** five answers on receipts (an agent telling Ream what it did with his answer: seen,
+working, done, blocked, won't do), all the recommended option:
+- **A lapsed "working".** "Working" runs out after 4 hours unless the agent renews it. Once it has
+  run out the card says "Lapsed: ‹agent› said working ‹N› hours ago", with the agent's note, so he
+  can see it was taken up and dropped.
+- **The nudge.** An answer no agent has picked up after 1 hour gets one nudge to the agent's
+  office in Slack, never repeated and never sent to him. Each office can set its own to 4 hours or
+  off.
+- **The card before and after the nudge.** "Not picked up yet", as today, then "‹agent› was told
+  in Slack at ‹time›" once the nudge has gone.
+- **Who said it.** Every state names the agent and the session, for example "working,
+  cove/lane-3" (as shipped 4 Nov; confirmed).
+- **"Done" does not close the question.** "Done", with its note and link, shows on the card, and
+  closing stays a separate step (as shipped 4 Nov; confirmed).
+
+Why: the receipts shipped on 4 Nov without a way to show them on his cards or to chase an answer
+nobody took up; these settle both, so the card line and the nudge can be built.
+
+**Not chosen:**
+- A lapsed "working" falls back to "picked up", or stays "working" until the agent changes it:
+  both hide that an agent took the answer up and dropped it.
+- Nudge after 4 hours by default, or never unless an office asks: an hour is enough for an office
+  that is running, and an office that wants quiet turns it off.
+- Leave the card as today, or add a wall-wide count of answers nobody picked up: the first hides
+  that the office was told, the count was more than he asked to see.
+- Show only the agent: several sessions share one key, so the agent alone does not say which lane
+  has it.
+- "Done" closes the question: done is the agent's word, closing stays his.
+
+**Evidence:** confirmed (Jeremy, 11 Nov 2026, five lettered answers in the receipts thread)
