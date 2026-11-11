@@ -380,7 +380,7 @@ class _Scripts(_Metered):
             raise _Found
 
 
-def _loads_live_data(html: str, budget: Budget) -> bool:
+def _loads_live_data(html: str, budget: Budget) -> bool | None:
     _admit(html, budget)
     if _LIVE.search(html) is None:
         return False  # the parser hands the script's text over unchanged: no match, no live data
@@ -392,8 +392,8 @@ def _loads_live_data(html: str, budget: Budget) -> bool:
         return True
     except TooComplex:
         raise
-    except Exception:  # noqa: BLE001
-        return False
+    except Exception:  # noqa: BLE001 - the page was not read to its end: not "no live data"
+        return None
     return reader.live
 
 
@@ -404,7 +404,8 @@ def loads_live_data(html: str, budget: Budget | None = None) -> bool | None:
     read, not the text or the comments around it. It decides only whether a
     blank page or a script error is told to the reader or to the agent alone.
 
-    None when the page was not read (over the size cap, or the budget ran out)."""
+    None when the page was not read (over the size cap, the budget ran out, or the
+    parser failed on it): that is never the same as False."""
     try:
         return _loads_live_data(html, Budget() if budget is None else budget)
     except TooComplex:

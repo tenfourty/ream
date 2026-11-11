@@ -320,6 +320,24 @@ def test_a_spent_budget_stops_every_read_before_it_starts():
     assert out == renderfind.script(NONCE) + page
 
 
+def test_a_parser_that_fails_is_not_read_and_never_no_live_data(monkeypatch):
+    """A failure that is not the budget running out leaves the page unread: None, the
+    answer that makes the verdict unchecked, and never False, which says there is no
+    live data in a page that was not read to its end."""
+    page = '<script>fetch("/x")</script>'
+
+    def fails(self, data):
+        raise ValueError("the parser gave up")
+
+    assert renderfind.loads_live_data(page) is True
+    monkeypatch.setattr(renderfind._Scripts, "feed", fails)
+    assert renderfind.loads_live_data(page) is None
+    assert renderfind.static_scan(page) == ([], None)
+    verdict, found = renderfind.assess([], {**GOOD, "text": 0, "media": 0}, [], None)
+    assert verdict == "unchecked"
+    assert "unchecked" in kinds(found)
+
+
 def test_the_budget_reads_the_clock_every_few_tokens_and_stays_spent(monkeypatch):
     now = [100.0]
 
