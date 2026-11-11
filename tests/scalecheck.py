@@ -8,7 +8,9 @@ page; one that grows with its square takes about 64 times as long. `assert_linea
 holds the ratio under 20. The ratio is only worth anything when the small run is long
 enough to measure, so a small page that takes under MIN_SMALL seconds (best of three
 runs) is doubled, up to MOST: the ratio is always taken from what was measured, with
-no floor under it to hide a read that is a little worse than linear.
+no floor under it to hide a read that is a little worse than linear. The one exception
+is a read that does the 8 MiB page in under QUICK seconds: it cannot tie up the server,
+and its ratio is of two times too short to compare.
 
 The pages start at 1 MiB, which is also as big as the small one gets: a page of
 1 MiB to 8 MiB (the cap on what a read looks at) does not cross the size where the
@@ -31,6 +33,7 @@ PROBE = (4096, 32768)  # the two small pages tried first, so a read that grows w
 PROBE_FLOOR = (
     0.005  # square fails in seconds, not in the hours its 8 MiB page would take
 )
+QUICK = 0.1  # seconds: a read of the 8 MiB cap page this quick is harmless at any ratio
 
 
 def page(first: str, unit: str, chars: int, last: str = "") -> str:
@@ -93,7 +96,8 @@ def assert_linear(
     page or more. Returns what it measured.
 
     Two small pages are timed first, with a floor under the smaller time so that a read
-    too quick to time passes; the real measure follows either way, with no floor."""
+    too quick to time passes; the real measure follows either way, with no floor under
+    the ratio, but a read of the 8 MiB cap page in under QUICK seconds passes."""
     if probe:
         low, high = (best(read, page(first, unit, n, last)) for n in PROBE)
         assert high < RATIO * max(low, PROBE_FLOOR), (
@@ -102,7 +106,10 @@ def assert_linear(
             f" for {PROBE[1] // PROBE[0]} times the page"
         )
     size, small, large = measure(read, first, unit, last, start)
-    assert large < RATIO * small, (
+    # Under QUICK on the biggest page a read is ever given, a read cannot tie up the
+    # server whatever its shape, and a ratio of two sub-millisecond times is cache noise
+    # (CI measured 0.4 ms and 9 ms on a linear read, a ratio of 24).
+    assert large < RATIO * small or (size >= MOST and large < QUICK), (
         f"{size} characters took {small * 1000:.0f} ms, {8 * size} took"
         f" {large * 1000:.0f} ms: {large / small:.0f} times as long for 8 times the page"
     )
