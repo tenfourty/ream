@@ -16,8 +16,17 @@ from fastapi import HTTPException
 from ream import anchors, api, forms, htmlbound, sections, store, text
 
 MIB = 2**20
-# The budget, one tag's work after it runs out, and the machine's own noise.
-BOUND = htmlbound.PARSE_SECONDS * 2 + 1
+# The budget these tests give each reader (the default 2 s sits too near what some of the
+# pages take on a quick machine, which flipped them), one tag's work after it runs out,
+# and the machine's own noise. The pages stay full size: they take many seconds to read.
+TEST_SECONDS = 0.25
+BOUND = TEST_SECONDS * 2 + 1
+
+
+@pytest.fixture()
+def tight_budget(monkeypatch):
+    for module in (forms, sections, text, anchors):
+        monkeypatch.setattr(module, "Budget", lambda: htmlbound.Budget(TEST_SECONDS))
 
 
 def _attributes(chars: int) -> str:
@@ -70,7 +79,9 @@ def _run(read, page):
 @pytest.mark.parametrize("shape", sorted(PAGES))
 @pytest.mark.parametrize("name", sorted(READS))
 @pytest.mark.scaling
-def test_every_reader_gives_up_on_a_page_that_would_take_it_many_seconds(name, shape):
+def test_every_reader_gives_up_on_a_page_that_would_take_it_many_seconds(
+    tight_budget, name, shape
+):
     read, chars, gives_up = READS[name]
     page = PAGES[shape](chars)
     took, gave = _run(read, page)
@@ -84,14 +95,14 @@ def test_every_reader_gives_up_on_a_page_that_would_take_it_many_seconds(name, s
 
 
 @pytest.mark.scaling
-def test_the_time_spent_is_the_budget_not_the_page():
+def test_the_time_spent_is_the_budget_not_the_page(tight_budget):
     """What a refusal costs is the budget, whatever the page: eight times the page
     does not take eight times as long."""
     page = _end_tags(8 * MIB)
     took, gave = _run(READS["sections.locate"][0], page)
     assert isinstance(gave, sections.TooComplexError)
     assert took < BOUND
-    assert took > htmlbound.PARSE_SECONDS / 2, "the page was not read at all"
+    assert took > TEST_SECONDS / 2, "the page was not read at all"
 
 
 # --- each module's reader draws on a Budget, with a short one so that no timing is needed
@@ -200,7 +211,7 @@ HUGE = 8 * MIB
 
 
 @pytest.mark.scaling
-def test_an_element_anchor_on_a_page_it_cannot_read_in_time_is_a_refusal():
+def test_an_element_anchor_on_a_page_it_cannot_read_in_time_is_a_refusal(tight_budget):
     """`api._element_anchor` locates the element in the whole live body: past the
     budget it is the 422 of every section refusal, and not a 500 or a minute."""
     page = _end_tags(HUGE)
@@ -220,7 +231,9 @@ def test_an_element_anchor_on_a_page_it_cannot_read_in_time_is_a_refusal():
 
 
 @pytest.mark.scaling
-def test_the_page_index_gives_up_on_a_page_it_cannot_locate_ids_in_in_time():
+def test_the_page_index_gives_up_on_a_page_it_cannot_locate_ids_in_in_time(
+    tight_budget,
+):
     """`anchors.PageIndex.id_span` (one pass for the ids a listing announced, or one
     for an id it did not): `TooComplex` in bounded time, which the listing treats as
     an anchor it cannot place."""
