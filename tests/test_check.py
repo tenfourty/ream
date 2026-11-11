@@ -138,6 +138,30 @@ def test_it_uses_the_services_own_shape_table_not_a_copy(tmp_path):
     ]
 
 
+# --- a check that could not run is a refusal, never a pass --------------------
+
+
+@pytest.mark.parametrize(
+    ("module", "shape"),
+    [("csp", "csp_checks_not_run"), ("traps", "trap_checks_not_run")],
+)
+def test_a_page_the_checks_could_not_read_is_refused_and_says_so(
+    tmp_path, capsys, monkeypatch, module, shape
+):
+    """Too large or too slow to read is not "nothing found": --check exits non-zero
+    on the one warning, so a script that runs it does not publish a page nobody
+    checked. (The other module is silenced so each warning is the only cause.)"""
+    from ream import csp, renderfind, traps
+
+    other = traps if module == "csp" else csp
+    monkeypatch.setattr(other, "check", lambda *a, **k: [])
+    monkeypatch.setattr(renderfind, "MAX_SCAN_CHARS", 10)
+    assert client.main(["--check", _write(tmp_path, CLEAN)]) == 1
+    captured = capsys.readouterr()
+    assert shape in captured.err
+    assert "nothing the serving policy refuses" not in captured.out
+
+
 # --- the traps a directive does not cover (homelab-ij8.36) --------------------
 
 
