@@ -6,6 +6,7 @@ import html.parser
 import random
 import re
 import time
+import tracemalloc
 from html.parser import HTMLParser
 
 import pytest
@@ -248,13 +249,118 @@ def test_a_start_tag_with_no_bracket_after_it_does_not_reach_the_parsers_long_ma
         assert renderfind.inject(page, NONCE).startswith(renderfind.script(NONCE))
     # the closed <p> and </p> of the third page, in each of the two reads, and no more
     assert len(ran) == 4
-    assert all(">" in text[at:] for text, at in ran)
+    assert all(">" in text[at:] for text, at, *_ in ran)
     ran.clear()
     assert renderfind.loads_live_data("fetch( <img <img >") is False
     assert len(ran) == 1
 
 
+# --- a tag too long for the parser's match --------------------------------------
+
+_TAG_PIECES = [
+    "img", "a", "x y", " ", " ", "\n", "\t", "\f", "/", "=", "b=", "'", '"', "'x'",
+    '"y"', "'>'", '">"', ">", ">", "=>", "/>", "<img ", "<", "\u00e9",
+]  # fmt: skip
+
+
+def _the_parsers_end_of_tag(text, name):
+    """Where the parser's own match ends the tag whose name begins at `name`, as the
+    parser takes it (after its ">"), or -1 when it is not whole."""
+    end = html.parser.locatetagend.match(text, name).end()
+    return end if text[end - 1] == ">" else -1
+
+
+@pytest.mark.skipif(
+    not renderfind._TAG_END_NEEDS_A_GT,
+    reason="this Python's parser tests tags another way",
+)
+@pytest.mark.parametrize("window", [1, 6, 30, renderfind.TAG_WINDOW])
+def test_the_end_of_a_tag_is_where_the_parser_puts_it_in_a_window_and_out_of_it(
+    window, monkeypatch
+):
+    """Inside the window the parser's own match answers; outside it the tag is read an
+    attribute at a time. Both give what the parser's match gives on the whole page
+    (the window sizes below the tags' length make most of them take the second way)."""
+    monkeypatch.setattr(renderfind, "TAG_WINDOW", window)
+    rng = random.Random(20261113 + window)
+    whole = 0
+    for _ in range(8000):
+        text = "<i" + "".join(rng.choices(_TAG_PIECES, k=rng.randint(0, 24)))
+        got = renderfind._end_of_tag(text, 1, renderfind.Budget(60))
+        assert got == _the_parsers_end_of_tag(text, 1), repr(text)
+        whole += got > 0
+    assert 1000 < whole < 7000, f"whole tags and open ones both, not {whole} of 8000"
+
+
+@pytest.mark.parametrize("window", [8, renderfind.TAG_WINDOW])
+def test_a_page_is_read_in_tokens_as_the_parser_reads_it_whatever_the_window(
+    window, monkeypatch
+):
+    monkeypatch.setattr(renderfind, "TAG_WINDOW", window)
+    pieces = [*_PIECES, *_TAG_PIECES, "</a ", "</a b='x>'>", "</a\n>", "<a b='>' "]
+    pieces += ["</ a>", "</>", "<script>", "</script", "<!-- ", "-->"]
+    rng = random.Random(20261114 + window)
+    for _ in range(4000):
+        page = "".join(rng.choices(pieces, k=rng.randint(1, 40)))
+        got = _tokens(renderfind._Metered(renderfind.Budget(60)), page)
+        assert got == _tokens(HTMLParser(convert_charrefs=False), page), page
+
+
+def _long_value():
+    return "A" * (3 * renderfind.TAG_WINDOW)
+
+
+def test_a_tag_longer_than_the_window_with_few_attributes_is_read():
+    """The advice for an image the CSP will not load is to inline it as a data: address:
+    one tag, and a megabyte of it. A page that does is a page like any other."""
+    big = f'<img alt="a > b" src="data:image/png;base64,{_long_value()}">'
+    page = f"<html><head>{big}</head><body><script>fetch('/x')</script></body></html>"
+    assert renderfind.loads_live_data(page) is True
+    quiet = page.replace("fetch", "fetch ")  # still a script; and one with no live data
+    assert renderfind.loads_live_data(quiet.replace("fetch (", "fe(")) is False
+    out = renderfind.inject(page, NONCE)
+    assert out.startswith("<html><head>" + renderfind.script(NONCE) + "<img ")
+    assert _tokens(renderfind._Metered(renderfind.Budget(60)), page) == _tokens(
+        HTMLParser(convert_charrefs=False), page
+    )
+
+
+def test_a_tag_with_more_attributes_than_a_window_of_it_allows_is_not_read():
+    """Over the window, a tag is read an attribute at a time and given up on at
+    MAX_TAG_ATTRIBUTES; inside the window the parser's own match is trusted as it
+    always was (its memory there is a few megabytes)."""
+    inside = "fetch( <img" + " a" * (renderfind.TAG_WINDOW // 4) + ">"
+    outside = "fetch( <img" + " a" * renderfind.TAG_WINDOW + ">"
+    few = "fetch( <img" + " a" * (renderfind.MAX_TAG_ATTRIBUTES // 2)
+    few += ' alt="' + _long_value() + '">'
+    assert renderfind.loads_live_data(inside) is False
+    assert renderfind.loads_live_data(outside) is None
+    assert renderfind.loads_live_data(few) is False
+    assert renderfind.inject(outside, NONCE).startswith(renderfind.script(NONCE))
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        "fetch( <img " * 30000 + ">",
+        'fetch( <img a=">" ' + "x " * 100000 + ">",
+        "fetch( </a " * 30000 + ">",
+        "fetch( </a b='>' " + "x " * 100000 + ">",
+    ],
+    ids=["start tags", "a > in quotes first", "end tags", "an end tag, a > in quotes"],
+)
+def test_a_tag_that_runs_on_to_the_end_of_the_page_leaves_it_unread(page):
+    """The ">" at the very end is the one that closes the first tag: the next one
+    (inside quotes, or none) is not the measure, nor is the tag's first ">"."""
+    began = time.perf_counter()
+    assert renderfind.loads_live_data(page) is None
+    assert renderfind.inject(page, NONCE).startswith(renderfind.script(NONCE))
+    assert renderfind.static_scan(page)[1] is None
+    assert time.perf_counter() - began < 5
+
+
 # --- the cost of reading a page grows with its size, never with its square -----
+
 
 FETCH = "fetch( "  # in the text, so the live-data read cannot skip the page
 
@@ -311,6 +417,78 @@ def test_eight_times_the_page_costs_about_eight_times_the_time(read, shape):
         assert done is not None, "the page was not read"
 
     scalecheck.assert_linear(reads, STARTS.get(read, "") + first, unit)
+
+
+# A tag that runs on to a ">" at the very end of the page, which the parser's match
+# reads in one go (3 to 4 seconds and 570 MB on a page of 8 MiB, where no budget can
+# stop it): the reads stop after the window, whatever the page's size.
+UNREAD = {
+    "unclosed img tags, one > at the end": ("fetch( ", "<img ", ">"),
+    "the same, after a > in quotes": ('fetch( <img a=">" ', "x ", ">"),
+    "unclosed end tags, one > at the end": ("fetch( ", "</a ", ">"),
+}
+UNREAD_READS = ["loads_live_data", "inject"]
+
+
+@pytest.mark.parametrize("read", UNREAD_READS)
+@pytest.mark.parametrize("shape", sorted(UNREAD))
+@pytest.mark.scaling
+def test_a_page_that_runs_on_to_the_end_costs_the_same_on_eight_times_the_page(
+    read, shape
+):
+    first, unit, last = UNREAD[shape]
+
+    def reads(text):
+        READS[read](text, renderfind.Budget(600))
+
+    _, _, large = scalecheck.assert_linear(reads, first, unit, last, probe=False)
+    assert large < renderfind.SCAN_SECONDS / 2, f"{large:.2f} s on the largest page"
+
+
+def _peak_memory(read, page):
+    """(what the read gave, the most memory in use at once while it ran, in bytes)."""
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        done = READS[read](page, renderfind.Budget(600))
+        return done, tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+@pytest.mark.parametrize("read", UNREAD_READS)
+@pytest.mark.parametrize("shape", sorted(UNREAD))
+def test_a_page_that_runs_on_to_the_end_is_given_up_on_in_a_few_copies_of_it(
+    read, shape
+):
+    """The most the reads keep is a copy or two of the page and the state of the
+    parser's match in its window (a few megabytes): four pages' worth is the bound,
+    where the match on the whole page took 70 times the size of the page."""
+    first, unit, last = UNREAD[shape]
+    page = scalecheck.page(first, unit, renderfind.MAX_SCAN_CHARS, last)
+    done, peak = _peak_memory(read, page)
+    if read == "loads_live_data":
+        assert done is None
+    assert peak < 4 * len(page), f"{peak / 2**20:.0f} MiB for {len(page) / 2**20:.0f}"
+
+
+@pytest.mark.skipif(
+    not renderfind._TAG_END_NEEDS_A_GT,
+    reason="this Python's parser tests tags another way",
+)
+def test_the_memory_meter_sees_what_the_parsers_long_match_keeps():
+    """tracemalloc counts the regular expression's state (it is allocated through the
+    interpreter's own allocator); without this, a meter that saw nothing would pass
+    the page the match takes 570 MB on."""
+    page = scalecheck.page("<img ", "<img ", 2**20, ">")
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        html.parser.locatetagend.match(page, 1)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak > 8 * len(page), f"{peak / 2**20:.0f} MiB for {len(page) / 2**20:.0f}"
 
 
 def test_the_big_page_is_inside_the_cap_so_it_is_read():
