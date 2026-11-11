@@ -68,6 +68,7 @@ from ream import (
     receipts,
     renderfind,
     review,
+    scanslots,
     sections,
     store,
     templates,
@@ -765,6 +766,22 @@ def open_questions(
     return [view for _, view in ranked]
 
 
+_CHECKS_BUSY = (
+    "the server was busy reading other pages and could not read this one in the time "
+    "allowed: these checks did not run, so their silence on this page means nothing. "
+    "Publish the page again in a few seconds to run them"
+)
+
+
+def _checks_not_run_busy() -> list[dict]:
+    """The two warnings a page gets when every scan slot stayed taken: the ones a page
+    too large for the checks gets (`csp.check`, `traps.check`), with the reason this time."""
+    return [
+        csp.CspWarning(shape=shape, line=1, hint=_CHECKS_BUSY).__dict__
+        for shape in ("csp_checks_not_run", "trap_checks_not_run")
+    ]
+
+
 def page_warnings(db: Database, artifact_id: str, body: str) -> list[dict]:
     """CSP advisories, plus every decision slot that names no decision here.
 
@@ -774,9 +791,18 @@ def page_warnings(db: Database, artifact_id: str, body: str) -> list[dict]:
     given (homelab-ij8.35). Publish time is the one moment the author is
     definitely looking (homelab-ij8.50).
     """
-    # One budget for the page checks of a request: they draw on it together.
-    budget = renderfind.Budget()
-    out = csp.as_json(body, budget) + traps.as_json(body, budget) + forms.warnings(body)
+    try:
+        # A slot for the reading, not for the database look-up below. One budget for the
+        # page checks of a request: they draw on it together.
+        with scanslots.slot(len(body)):
+            budget = renderfind.Budget()
+            out = (
+                csp.as_json(body, budget)
+                + traps.as_json(body, budget)
+                + forms.warnings(body)
+            )
+    except scanslots.ScanBusy:
+        out = _checks_not_run_busy()
     for slot, line in decisions.unresolved_slots(db, artifact_id, body):
         out.append(
             {
@@ -2213,7 +2239,7 @@ def agent_router(
             _PREVIEW_SLOT.release()
         verdict, findings = "unchecked", []
         if errors is not None:
-            missing, live = renderfind.static_scan(body)
+            missing, live = thumbs.scan_for_findings(body)
             verdict, findings = renderfind.assess(
                 errors, getattr(report, "check", None), missing, live
             )

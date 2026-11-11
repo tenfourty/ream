@@ -16,7 +16,7 @@ import hashlib
 import html
 import re
 
-from ream import sections, text
+from ream import scanslots, sections, text
 from ream.htmlbound import BoundedParser, TooComplex
 
 CURRENT = "current"
@@ -134,8 +134,9 @@ def _region(body: str, heads: list, i: int) -> str:
 
 def _headings(body: str) -> _Headings:
     parser = _Headings(body)
-    parser.feed(body)
-    parser.close()
+    with scanslots.slot(len(body)):  # ScanBusy goes up: a busy server, not this page
+        parser.feed(body)
+        parser.close()
     return parser
 
 

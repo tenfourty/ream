@@ -21,6 +21,7 @@ import re
 from dataclasses import dataclass
 from typing import ClassVar
 
+from ream import scanslots
 from ream.htmlbound import BoundedParser, TooComplex
 
 # Every C0 control character except the whitespace ones `sanitize` already
@@ -193,8 +194,10 @@ def _read(body: str, limit: int) -> _Visible | None:
     with more text than they read, `("", True)`, which each already handles."""
     parser = _Visible(limit)
     try:
-        parser.feed(body[:INPUT_LIMIT])
-        parser.close()
+        # A slot for a large page; ScanBusy goes up (a busy server, not this page).
+        with scanslots.slot(min(len(body), INPUT_LIMIT)):
+            parser.feed(body[:INPUT_LIMIT])
+            parser.close()
     except TooComplex:
         return None
     return parser

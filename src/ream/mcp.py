@@ -47,6 +47,7 @@ from ream import (
     onboarding,
     ratelimit,
     reach,
+    scanslots,
     settings,
     text,
 )
@@ -657,6 +658,8 @@ def _call_tool(call: Call, params: dict, id: Any) -> dict:
     try:
         output = found.handler(call, arguments)
     except ToolError as exc:
+        return _tool_error(str(exc))
+    except scanslots.ScanBusy as exc:  # every scan slot stayed taken: say so, try again
         return _tool_error(str(exc))
     except HTTPException as exc:
         # The route's own refusal, word for word: its text, or its structured detail

@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from ream import formrecord, ids, text
+from ream import formrecord, ids, scanslots, text
 from ream.db import jsonb
 from ream.htmlbound import BoundedParser, TooComplex
 
@@ -605,8 +605,11 @@ def parse(body: str) -> Parsed:
         return Parsed()
     walk = _Walk()
     try:
-        walk.feed(body)
-        walk.close()
+        with scanslots.slot(
+            len(body)
+        ):  # ScanBusy goes up: a busy server, not this page
+            walk.feed(body)
+            walk.close()
     except TooComplex:
         # A page whose forms cannot be read is refused like one whose forms cannot be
         # stored, never published with forms nothing reads.

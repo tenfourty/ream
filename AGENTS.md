@@ -118,6 +118,9 @@ the gallery origin or `https://<REAM_API_HOST>` (unset: 404); `REAM_MCP_ACCEPT_K
 (unset: yes while `REAM_MCP_SIGN_IN` is off, no once it is on; `1` takes them beside sign-in; `0` refuses to start unless sign-in is on). How to try it, and to connect a Claude Code session with its agent key (`ream mcp-headers` as the entry's `headersHelper`): `docs/mcp.md`.
 `REAM_SINKS_FILE` (also `ARTIFACTS_SINKS_FILE`; unset: none) names a TOML file of `[[sink]]` signed-webhook sinks that
 need no plug-in: format, signing and the addresses it refuses are in `docs/plugins.md` and `src/ream/webhook.py`.
+`REAM_SCAN_SLOTS` (also `ARTIFACTS_SCAN_SLOTS`; unset: 4) is how many scans of a page over 256 KiB one server process runs at once
+(`src/ream/scanslots.py`): the rest wait up to 5 seconds, then the publish checks and the render findings say they did not run and a reader
+that a request needs answers 503 with `Retry-After`.
 
 Tools update themselves (`src/ream/clientlevel.py`, `selfupdate.py`; decisions.md, 9 Nov 2026): every call sends
 `X-Ream-Client: <level>`, `/api/v1` answers `X-Ream-Client-Min` and, for an older

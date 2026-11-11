@@ -22,6 +22,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 
+from ream import scanslots
 from ream.htmlbound import BoundedParser, TooComplex
 
 OPS = ("replace", "append", "prepend", "remove")
@@ -317,9 +318,10 @@ class _Walker(BoundedParser):
     def finish(self) -> str:
         """Feed everything and return what the parser could not consume."""
         try:
-            self.feed(self.src)
-            leftover = self.rawdata
-            self.close()
+            with scanslots.slot(len(self.src)):  # ScanBusy goes up: a busy server
+                self.feed(self.src)
+                leftover = self.rawdata
+                self.close()
         except TooComplex:
             raise TooComplexError(
                 "a tag in the markup is too long or has too many attributes to read,"
@@ -591,12 +593,20 @@ def check_target(body: str, element_id: str) -> None:
     """The browser sees exactly one element with this id, outside <template>.
     Raises TooLargeError for a page over SECTION_PAGE_MAX."""
     check_readable(body)
-    _one_target(_parse(body), element_id)
+    # A slot whatever the size: this parser's tree of a page is far larger than the page.
+    with scanslots.slot():
+        _one_target(_parse(body), element_id)
 
 
 def verify(old: str, new: str, element_id: str, op: str) -> tuple[set, set]:
     """Refuse unless `new` differs from `old`, as a browser reads both, only
     inside the target element. Returns (slots before, slots after)."""
+    # One slot for both readings, whatever the size (`check_target`).
+    with scanslots.slot():
+        return _verify(old, new, element_id, op)
+
+
+def _verify(old: str, new: str, element_id: str, op: str) -> tuple[set, set]:
     before_tree = _parse(old)
     target, parent = _one_target(before_tree, element_id)
     tag, attrs = target.tag, dict(target.attrib)

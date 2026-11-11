@@ -14,6 +14,7 @@ from ream import (
     partner_in,
     plugin_api,
     ratelimit,
+    scanslots,
     settings,
 )
 from ream.api import agent_card_response, agent_router
@@ -45,6 +46,19 @@ def _refuse_failed_answer_hooks(app: FastAPI) -> None:
         return JSONResponse(
             status_code=503,
             content={"detail": decisions.answer_hook_failed_detail(exc.plugin)},
+        )
+
+
+def _refuse_busy_scans(app: FastAPI) -> None:
+    """Every scan slot stayed taken (`scanslots`), so a page this request needed read was
+    not: 503 with `Retry-After`, whichever route met it, never a 500."""
+
+    @app.exception_handler(scanslots.ScanBusy)
+    async def _on_scan_busy(_request: Request, exc: scanslots.ScanBusy):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": str(exc)},
+            headers={"Retry-After": str(exc.retry_after)},
         )
 
 
@@ -94,6 +108,7 @@ def create_gallery_app(
     _refuse_bad_forms(app)
     _scrub_validation_errors(app)
     _refuse_failed_answer_hooks(app)
+    _refuse_busy_scans(app)
     _say_what_tools_need(app)
 
     @app.middleware("http")
@@ -183,6 +198,7 @@ def create_api_app(
     _refuse_bad_forms(app)
     _scrub_validation_errors(app)
     _refuse_failed_answer_hooks(app)
+    _refuse_busy_scans(app)
     _say_what_tools_need(app)
 
     @app.get("/healthz")

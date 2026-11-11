@@ -52,7 +52,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ream import renderfind, settings, stamp, store
+from ream import renderfind, scanslots, settings, stamp, store
 
 log = logging.getLogger("ream.thumbs")
 
@@ -472,6 +472,17 @@ def _record(key: tuple[str, int], ok: bool) -> None:
         )
 
 
+def scan_for_findings(html: str) -> tuple[list[str] | None, bool | None]:
+    """`renderfind.static_scan` for the render findings, under a scan slot. When every
+    slot stays taken the page is unread, `(None, None)`: `renderfind.assess` then gives
+    the verdict `unchecked` with its note that those checks did not run, never `ok`."""
+    try:
+        with scanslots.slot(len(html)):
+            return renderfind.static_scan(html)
+    except scanslots.ScanBusy:
+        return None, None
+
+
 def render_in_background(db, artifact_id: str, version_n: int, html: str) -> None:
     """Render and store a thumbnail after the publish has already returned.
 
@@ -508,7 +519,7 @@ def render_in_background(db, artifact_id: str, version_n: int, html: str) -> Non
             if png is not None:
                 store.save_thumbnail(db, artifact_id, version_n, png)
             if errors is not None:
-                missing, live = renderfind.static_scan(html)
+                missing, live = scan_for_findings(html)
                 verdict, findings = renderfind.assess(
                     errors, getattr(result, "check", None), missing, live
                 )

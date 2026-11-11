@@ -46,6 +46,7 @@ DEFAULT_OWNER_NAME = "the owner"
 DEFAULT_OWNER_PRONOUN = "they"
 # A fresh install: one port on loopback.
 DEFAULT_GALLERY_ORIGIN = "http://localhost:8000"
+DEFAULT_SCAN_SLOTS = 4
 DEFAULT_BIND_HOST = "127.0.0.1"
 # The command-line tools' endpoint when `REAM_API` is unset. This is OUR house's address,
 # kept here so the many agents on several machines that run the tools with no variable set
@@ -196,6 +197,10 @@ class Settings:
     plugins: str = ""
     # The generic signed webhook sinks: a TOML file of `[[sink]]` tables (webhook.py).
     sinks_file: str = ""
+    # How many page scans (the publish checks, the render findings, and the readers of a
+    # large page's markup) one server process runs at once; the rest wait a few seconds,
+    # then give up (scanslots.py). A positive whole number. Unset: 4.
+    scan_slots: str = ""
     # MCP for people's agents (docs/agent/specs/2026-11-08-mcp-oauth-design.md, 3 and 12).
     # The origin `/mcp` is served on: the gallery origin or https://<api host>. Unset: no
     # `/mcp` anywhere (404).
@@ -396,6 +401,7 @@ class Settings:
             "mcp_access_token_ttl_secs",
             "mcp_refresh_token_ttl_days",
             "mcp_app_max_lifetime_days",
+            "scan_slots",
         ):
             raw = getattr(self, field_name)
             if raw and not (raw.isascii() and raw.isdigit() and int(raw) > 0):
@@ -498,6 +504,14 @@ class Settings:
     def access_token_ttl_secs(self) -> int:
         return int(self.mcp_access_token_ttl_secs or 3600)
 
+    def scan_slot_count(self) -> int:
+        """`scan_slots` as a number, read at every scan: a value that is not a positive
+        whole number (start-up refuses one) is the default rather than an error."""
+        raw = self.scan_slots
+        if raw.isascii() and raw.isdigit() and int(raw) > 0:
+            return int(raw)
+        return DEFAULT_SCAN_SLOTS
+
     def refresh_token_ttl_days(self) -> int:
         return int(self.mcp_refresh_token_ttl_days or 30)
 
@@ -576,6 +590,7 @@ _ENV = {
     "proxy_notes_file": "REAM_PROXY_NOTES_FILE",
     "plugins": "REAM_PLUGINS",
     "sinks_file": "REAM_SINKS_FILE",
+    "scan_slots": "REAM_SCAN_SLOTS",
     "mcp_public_url": "REAM_MCP_PUBLIC_URL",
     "mcp_accept_keys": "REAM_MCP_ACCEPT_KEYS",
     "mcp_sign_in": "REAM_MCP_SIGN_IN",
