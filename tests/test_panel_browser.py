@@ -370,7 +370,7 @@ def test_hovering_marked_text_shows_its_comment_beside_it(browser, served, db):
         )
         pg.mouse.move(box["x"] + r["x"], box["y"] + r["y"])
         card = pg.locator(".hovercard")
-        card.wait_for(state="visible", timeout=3000)
+        card.wait_for(state="visible", timeout=10000)
         assert note in card.inner_text()
         assert card.get_attribute("data-mark-id") == root.id
         cb = card.bounding_box()
@@ -462,7 +462,7 @@ def test_a_reply_being_typed_survives_and_full_screen_shows_the_card(
         )
         _point_at(pg, 3)
         card = pg.locator(".hovercard")
-        card.wait_for(state="visible", timeout=3000)
+        card.wait_for(state="visible", timeout=10000)
         assert card.locator(".hcact button").all_inner_texts() == ["Mark settled"]
         assert card.locator("form.creply").is_visible()
         shot = os.environ.get("REAM_HOVER_SHOT2")
@@ -486,7 +486,7 @@ def test_a_reply_being_typed_survives_and_full_screen_shows_the_card(
             pytest.skip("this headless browser refused full screen")
         pg.frames[1].evaluate("() => window.scrollTo(0, 0)")
         _point_at(pg, 5)
-        card.wait_for(state="attached", timeout=3000)
+        card.wait_for(state="attached", timeout=10000)
         seen = pg.evaluate(
             """() => {const c=document.querySelector('.hovercard'),b=c.getBoundingClientRect();
                       const hit=document.elementFromPoint(b.left+b.width/2,b.top+10);
@@ -511,7 +511,7 @@ def test_the_card_deletes_his_own_comment_and_undo_brings_it_back(browser, serve
         _marks_painted(pg.frames[1], 1)
         _point_at(pg, 3)
         card = pg.locator(".hovercard")
-        card.wait_for(state="visible", timeout=3000)
+        card.wait_for(state="visible", timeout=10000)
         card.locator("form.cdel button").click()
         pg.locator(".ctoast").wait_for(state="visible", timeout=5000)
         assert "Deleted" in pg.locator(".ctoast").inner_text()

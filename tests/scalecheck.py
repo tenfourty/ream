@@ -9,7 +9,7 @@ holds the ratio under 20. The ratio is only worth anything when the small run is
 enough to measure, so a small page that takes under MIN_SMALL seconds (best of three
 runs) is doubled, up to MOST: the ratio is always taken from what was measured, with
 no floor under it to hide a read that is a little worse than linear. The one exception
-is a read that does the 8 MiB page in under QUICK seconds: it cannot tie up the server,
+is a read that does the 8 MiB page in under QUICK (0.25) seconds: it cannot tie up the server,
 and its ratio is of two times too short to compare.
 
 The pages start at 1 MiB, which is also as big as the small one gets: a page of
@@ -33,7 +33,11 @@ PROBE = (4096, 32768)  # the two small pages tried first, so a read that grows w
 PROBE_FLOOR = (
     0.005  # square fails in seconds, not in the hours its 8 MiB page would take
 )
-QUICK = 0.1  # seconds: a read of the 8 MiB cap page this quick is harmless at any ratio
+# Seconds: a read of the 8 MiB cap page this quick is harmless at any ratio
+# (0.25, not 0.1: on a busy CI runner a linear read of 8 MiB took 119 ms against 5 ms for
+# 1 MiB on 11 Nov 2026, a ratio of two times too short to compare; a quadratic read of
+# 8 MiB takes seconds, so 0.25 s still catches one.)
+QUICK = 0.25
 
 
 def page(first: str, unit: str, chars: int, last: str = "") -> str:
