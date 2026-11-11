@@ -15,6 +15,7 @@ import re
 import secrets
 import time
 from collections.abc import Iterator
+from html import parser as html_parser
 from html.parser import HTMLParser
 
 from ream import csp, text
@@ -72,6 +73,21 @@ def _admit(html: str, budget: Budget) -> None:
     budget.check()
 
 
+# The parser decides whether a start tag is whole with one regular expression that
+# reads attribute after attribute to the end of the tag, or to the end of the page
+# when no ">" comes. On a page of unclosed tags (`<img <img <img ...`, where each
+# "<img" is taken for an attribute) that one match keeps about 70 bytes of its
+# state for each character, 600 MB for a page of 8 MiB, and the parser runs it
+# twice (`feed`, then `close`). The time goes on the kernel finding that memory,
+# which neither grows evenly with the page nor holds steady from run to run.
+# `_Metered.check_for_whole_start_tag` answers the question without it when no
+# ">" follows. This parser (its `locatetagend`) says a tag is whole only if the
+# match ends on a ">", and with none after the "<" it cannot, so the answer is
+# the one the match gives. Parsers of an older Python have another test, so
+# they keep their own.
+_TAG_END_NEEDS_A_GT = hasattr(html_parser, "locatetagend")
+
+
 class _Metered(HTMLParser):
     """An HTMLParser that counts every token it reads against a Budget, and stops
     with TooComplex when the budget is spent."""
@@ -79,6 +95,11 @@ class _Metered(HTMLParser):
     def __init__(self, budget: Budget) -> None:
         super().__init__(convert_charrefs=False)
         self.budget = budget
+
+    def check_for_whole_start_tag(self, i):
+        if _TAG_END_NEEDS_A_GT and self.rawdata.find(">", i + 1) < 0:
+            return -1  # incomplete: what the parser answers, without its long match
+        return super().check_for_whole_start_tag(i)
 
     def _tick(self, *_args) -> None:
         self.budget.step()

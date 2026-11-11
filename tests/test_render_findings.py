@@ -2,9 +2,11 @@
 line, the static missing-file check, the verdict, and where they are kept and
 read back (runcove-5t3oj.56, slice 1)."""
 
+import html.parser
 import random
 import re
 import time
+from html.parser import HTMLParser
 
 import pytest
 import scalecheck
@@ -186,6 +188,70 @@ def test_the_one_pass_read_finds_the_tags_the_patterns_found():
         page = "".join(rng.choices(_PIECES, k=rng.randint(1, 40)))
         got = list(renderfind._tags(page, renderfind.Budget(60)))
         assert got == _old_tags(page), page
+
+
+def _tokens(parser, page):
+    """Every token `parser` reports for `page`, in order, and the text of each start tag."""
+    seen = []
+
+    def note(kind):
+        def handler(*args):
+            tag = kind.endswith("tag") and not kind.startswith("end")
+            seen.append((kind, *args, parser.get_starttag_text() if tag else None))
+
+        return handler
+
+    for kind in (
+        "starttag", "startendtag", "endtag", "data", "comment", "decl", "pi",
+        "unknown_decl", "charref", "entityref",
+    ):  # fmt: skip
+        setattr(
+            parser, kind if kind == "unknown_decl" else "handle_" + kind, note(kind)
+        )
+    parser.feed(page)
+    parser.close()
+    return seen
+
+
+def test_a_start_tag_with_no_bracket_after_it_is_read_as_the_parser_reads_it():
+    """`_Metered` skips the parser's own test for a tag with no ">" after it; the
+    tokens must be the ones the parser gives without that."""
+    pieces = [*_PIECES, "\x00", "/", "<img src='", '<a href="x" ', "<img <img ", "=>"]
+    rng = random.Random(20261112)
+    for _ in range(6000):
+        page = "".join(rng.choices(pieces, k=rng.randint(1, 40)))
+        got = _tokens(renderfind._Metered(renderfind.Budget(60)), page)
+        assert got == _tokens(HTMLParser(convert_charrefs=False), page), page
+
+
+@pytest.mark.skipif(
+    not renderfind._TAG_END_NEEDS_A_GT,
+    reason="this Python's parser tests tags another way",
+)
+def test_a_start_tag_with_no_bracket_after_it_does_not_reach_the_parsers_long_match(
+    monkeypatch,
+):
+    """The match that reads such a tag to the end of the page costs memory and time
+    in kernel page faults, not in step with the page (the scaling tests below); it
+    is not run at all when no ">" follows, and is when one does."""
+    ran = []
+    real = html.parser.locatetagend
+
+    class Counting:
+        def match(self, *args):
+            ran.append(args)
+            return real.match(*args)
+
+    monkeypatch.setattr(html.parser, "locatetagend", Counting())
+    for page in ("<img " * 1000, '<a href="x' * 1000, "<p>ok</p><img src="):
+        assert renderfind.loads_live_data("fetch( " + page) is False
+        assert renderfind.inject(page, NONCE).startswith(renderfind.script(NONCE))
+    # the closed <p> and </p> of the third page, in each of the two reads, and no more
+    assert len(ran) == 4
+    assert all(">" in text[at:] for text, at in ran)
+    ran.clear()
+    assert renderfind.loads_live_data("fetch( <img <img >") is False
+    assert len(ran) == 1
 
 
 # --- the cost of reading a page grows with its size, never with its square -----
