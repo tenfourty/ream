@@ -570,3 +570,32 @@ def test_a_non_owner_never_sees_or_answers_a_held_mark(client, db, seats, page):
     unknown = _post(client, seats, page.id, thread_root="nope")
     assert under.status_code == unknown.status_code == 422
     assert under.json() == unknown.json()
+
+
+# --- a decimal reference of thousands of digits -------------------------------
+
+
+def test_a_page_with_a_decimal_reference_of_thousands_of_digits_is_not_a_500(
+    client, db, seats
+):
+    """`html.unescape` refuses `&#` and over 4300 digits with a ValueError (int's
+    limit); every reader of a page answers it as `TooComplex`, which a request
+    degrades on. A comment, a text-anchored comment and both listings must not 500."""
+    body = PAGE.replace("</body>", "<p>Retries &#" + "1" * 5000 + "</p></body>")
+    big = store.publish(db, "owner", "Boot design", body)
+    plain = _post(client, seats, big.id)
+    assert plain.status_code == 201
+    anchored = _post(
+        client,
+        seats,
+        big.id,
+        anchor={"kind": "text", "quote": "the unit starts after the network is up"},
+    )
+    assert anchored.status_code == 201, anchored.text
+    assert anchored.json()["anchor"] == {
+        "kind": "quote"
+    }  # no heading: unread, not a 500
+    for who in ("other", "owner"):
+        listed = client.get(f"/api/v1/artifacts/{big.id}/comments", headers=seats[who])
+        assert listed.status_code == 200, listed.text
+        assert plain.json()["id"] in [row["id"] for row in listed.json()]

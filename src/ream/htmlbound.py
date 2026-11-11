@@ -40,6 +40,7 @@ from __future__ import annotations
 import re
 import time
 from html import parser as html_parser
+from html import unescape as _unescape
 from html.parser import HTMLParser
 from typing import Protocol
 
@@ -114,7 +115,23 @@ _ATTRIBUTE = re.compile(
 
 # The methods `BoundedParser` replaces. A subclass defines none of them
 # (tests/test_htmlbound.py).
-REPLACED = ("check_for_whole_start_tag", "parse_endtag", "updatepos")
+REPLACED = ("check_for_whole_start_tag", "goahead", "parse_endtag", "updatepos")
+
+_UNESCAPE_CODE = _unescape.__code__
+
+
+def _came_from_unescape(exc: BaseException) -> bool:
+    """Whether `exc` was raised under `html.unescape`, which the parser calls on text and
+    on attribute values when `convert_charrefs` is on. It reads a decimal reference
+    (`&#` and digits) with `int()`, which refuses more digits than
+    `sys.get_int_max_str_digits()` (4300) with a ValueError. The traceback says where it
+    came from, so a ValueError from a subclass's own handler is not taken for it."""
+    tb = exc.__traceback__
+    while tb is not None:
+        if tb.tb_frame.f_code is _UNESCAPE_CODE:
+            return True
+        tb = tb.tb_next
+    return False
 
 
 def end_of_tag(rawdata: str, name: int, budget: _Budget | None = None) -> int:
@@ -156,9 +173,10 @@ def end_of_tag(rawdata: str, name: int, budget: _Budget | None = None) -> int:
 class BoundedParser(HTMLParser):
     """An HTMLParser whose tags are read by `end_of_tag`: it raises `TooComplex` from
     `feed` or `close` for a tag too long or too busy to read, where the standard
-    parser would run one match over the rest of the page. `budget` (anything with
-    `check()`, which raises TooComplex when time is up) is asked about long tags: for
-    a reader that counts its own tokens. `meter` (a `Budget`) is asked about long
+    parser would run one match over the rest of the page, and for a decimal character
+    reference of more digits than `int` reads (`&#` and over 4300 of them). `budget`
+    (anything with `check()`, which raises TooComplex when time is up) is asked about
+    long tags: for a reader that counts its own tokens. `meter` (a `Budget`) is asked about long
     tags too, and about every token the parser steps over (`updatepos`, which the
     standard parser calls after each one, an end tag or a stray "<" too)."""
 
@@ -172,6 +190,16 @@ class BoundedParser(HTMLParser):
         self._meter = meter
         self._tag_budget = budget if budget is not None else meter
         super().__init__(convert_charrefs=convert_charrefs)
+
+    def goahead(self, end):
+        # `feed` and `close` both read through here. A reference of too many digits is
+        # a page the parser cannot read, as a tag of too many attributes is: TooComplex.
+        try:
+            super().goahead(end)
+        except ValueError as exc:
+            if not _came_from_unescape(exc):
+                raise
+            raise TooComplex from exc
 
     def updatepos(self, i, j):
         if self._meter is not None:

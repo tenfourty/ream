@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import sys
 import time
 import tracemalloc
 from html.parser import HTMLParser
@@ -395,10 +396,10 @@ def test_a_diff_of_a_page_it_cannot_read_is_the_page_and_a_reason(shape):
     page = _page(shape, pagediff.MAX_BYTES - 1)
     result = partdiff.compare(page, page)
     assert result["parts"] == []
-    assert result["unknown_reason"] in {pagediff.REASON_LARGE, partdiff.REASON_FAILED}
+    assert result["unknown_reason"] == pagediff.REASON_LARGE
     doc, reason = pagediff._checked_render(page, page)
     assert doc == page
-    assert reason is None or isinstance(reason, str)
+    assert reason == pagediff.REASON_LARGE
 
 
 def test_the_threes_ends_are_inside_every_read():
@@ -605,20 +606,40 @@ def test_the_sets_name_shapes_of_the_table():
         assert len(_other_page(shape, MIB)) == MIB, shape
 
 
-# One page of the table above is left out of it because it is not a matter of time or
-# memory: a decimal reference of more digits than `int` will read. `html.unescape` (which
-# the parser calls on text when `convert_charrefs` is on, as it is for `text`, `pagediff`
-# and `partdiff`) reads the digits with `int()`, which refuses more than
-# `sys.get_int_max_str_digits()` (4300), and the ValueError comes out of `feed()`: a
-# reader that catches only `TooComplex` does not catch it. `&#x` with any number of hex
-# digits is fine (a power of two is never limited), and is in the table. Strict, so that
-# the test that fails when this is fixed is the one that says to take the mark off.
+# One page of the table above is not a matter of time or memory: a decimal reference of
+# more digits than `int` will read. `html.unescape` (which the parser calls on text and on
+# attribute values when `convert_charrefs` is on, as it is for `text`, `pagediff` and
+# `partdiff`) reads the digits with `int()`, which refuses more than
+# `sys.get_int_max_str_digits()` (4300) with a ValueError, and that came out of `feed()`
+# where a reader that catches only `TooComplex` did not catch it (a 500). `BoundedParser`
+# now answers it as `TooComplex`. `&#x` with any number of hex digits is fine (a power of
+# two is never limited), and is in the table.
 @pytest.mark.parametrize("lead", ["", "<textarea>"], ids=["in text", "in a textarea"])
 @pytest.mark.parametrize("read", sorted(OTHER_READS))
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason="html.unescape: int() refuses a decimal reference of over 4300 digits",
-)
-def test_a_decimal_reference_of_thousands_of_digits_is_not_an_error(read, lead):
-    assert OTHER_READS[read](lead + "&#" + "1" * 5000) is None
+def test_a_decimal_reference_of_thousands_of_digits_is_too_complex(read, lead):
+    gave = OTHER_READS[read](lead + "&#" + "1" * 5000)
+    assert isinstance(gave, htmlbound.TooComplex), repr(gave)
+
+
+@pytest.mark.parametrize("read", sorted(OTHER_READS))
+def test_a_decimal_reference_in_an_attribute_value_is_too_complex_too(read):
+    gave = OTHER_READS[read]('<a title="&#' + "1" * 5000 + '">x</a>')
+    assert isinstance(gave, htmlbound.TooComplex), repr(gave)
+
+
+@pytest.mark.parametrize("read", sorted(OTHER_READS))
+def test_a_decimal_reference_of_the_most_digits_int_reads_is_still_read(read):
+    digits = sys.get_int_max_str_digits()
+    assert OTHER_READS[read]("&#" + "1" * digits + ";") is None
+
+
+def test_a_value_error_of_a_handler_is_not_taken_for_it():
+    class Raises(htmlbound.BoundedParser):
+        def handle_data(self, data):
+            raise ValueError("a handler's own")
+
+    parser = Raises()
+    with pytest.raises(ValueError, match="a handler's own") as seen:
+        parser.feed("x")
+        parser.close()
+    assert not isinstance(seen.value, htmlbound.TooComplex)
