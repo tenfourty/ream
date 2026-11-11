@@ -822,6 +822,16 @@ drivers; CI only (not on the management machine).
    from the lifespan shutdown before `sinks.stop`, each isolated). `API_VERSION` is `(1, 2)`; the
    CLI's no-op API accepts the new calls. Tests: `tests/test_plugin_api_1_2.py` (a fake plug-in
    using all three, the failure and refusal cases). Nothing moved; `partner.py` is untouched.
+   **Review fixes (11 Nov 2026):** a stage that catches its own database error is still rolled back
+   to its savepoint on Postgres (a `select 1` after it raises inside the savepoint), and one that
+   ends the transaction itself (`rollback`, `commit`, SQLite's `or rollback`) fails the whole action
+   with `db.TransactionLost` instead of letting it go on in autocommit; `apply_schema` reads the
+   catalog under the lock and refuses a name the core uses (schema.sql, or anything in the catalog no
+   plug-in declares) and an index or `references` on a table the plug-in does not create itself, so a
+   plug-in named `agent` or `partner` cannot reach `agent_key` or `partner_outbox`; at load, one
+   plug-in's prefix may not cover another's (`acme`, `acme-chat`); a table statement ends at its
+   column list (no `as table`, `as values`, `inherits`); a database refusal names the plug-in; each
+   stop hook gets 2 seconds, like the core's sender.
    **Next, 9e-2: the plug-in's read side.** A way for a plug-in to contribute the inbound copies
    that `inbox.py` (`partner_in.open_copies`, `count_waiting`), `gallery.py` (open and settled
    copies, `answer_here`), `api.py` (`_slack_view`) and `listening.py` (`partner.enabled()`, the

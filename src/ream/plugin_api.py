@@ -27,8 +27,11 @@ import logging
 import re
 import threading
 from collections.abc import Callable
-from importlib import metadata
+from importlib import metadata, resources
 
+from ream import (
+    db as dbmod,
+)
 from ream import (
     decisions,
     events,
@@ -263,7 +266,10 @@ class PluginAPI:
         and the action, its journal row and the other sinks go on; the event is simply
         not staged for this sink. With `stage` the core writes no outbox row and calls
         no `deliver`: the plug-in's own sender (`on_start`) delivers. A sink needs
-        exactly one of `deliver` and `stage`."""
+        exactly one of `deliver` and `stage`. A database error the stage catches itself
+        still rolls its savepoint back and counts on Postgres (the transaction is aborted
+        there). A stage that ends the transaction (`commit`, `rollback`, SQLite's `or
+        rollback`) fails the whole action with `db.TransactionLost`."""
         plugin = self._plugin
         if (deliver is None) == (stage is None):
             raise PluginError(
@@ -290,7 +296,22 @@ class PluginAPI:
                 try:
                     with conn.transaction():
                         stage(conn, event)
+                        if not conn.in_transaction():
+                            raise dbmod.TransactionLost("a stage ended the transaction")
+                        # A stage that caught its own database error (a unique
+                        # violation, say) leaves Postgres's transaction aborted; this
+                        # raises here, inside the savepoint, so it is rolled back to
+                        # instead of RELEASE failing and losing the whole action.
+                        conn.execute("select 1")
+                except dbmod.TransactionLost:
+                    _count(plugin, "stage")
+                    raise  # the action cannot be saved: fail it whole, never half
                 except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
+                    if not conn.in_transaction():
+                        _count(plugin, "stage")
+                        raise dbmod.TransactionLost(
+                            "a stage ended the transaction"
+                        ) from None
                     _count(plugin, "stage")
                     _log.warning(
                         "plug-in %s: sink %s stage failed: %s",
@@ -396,7 +417,9 @@ class PluginAPI:
         <prefix>_...` and `create [unique] index if not exists <prefix>_... on
         <prefix>_...` are accepted, where `<prefix>` is the plug-in's name in lower
         case with every run of other characters as `_`; no `;`, no `%`, no comment, no
-        `as select`, and a `references` may name only the plug-in's own tables. Write
+        `rollback`, nothing after a table's column list, and (checked against the
+        catalog at `apply_schema`) no core name, and an index or a `references` only on
+        a table this plug-in's own statements create. Write
         the dialect-neutral subset: `text`, `integer`, `bigint`, `boolean`
         (default `true`/`false`), `timestamptz`, `jsonb`, plain constant defaults and
         primary key / unique / not null. There is no migration after the first
@@ -416,7 +439,9 @@ class PluginAPI:
     def on_stop(self, fn: Callable) -> None:
         """Run `fn()` once when the server shuts down (API 1.2), in the reverse order of
         start, each isolated: a raise is logged, counted (`<plug-in>:stop`) and the
-        rest still run. Best effort: a killed process runs none."""
+        rest still run. It must return quickly: each hook gets `STOP_SECONDS` (2) in a
+        thread of its own, and one still running then is left behind and counted.
+        Best effort: a killed process runs none."""
         _STOPS.append((self._plugin, fn))
 
     def text_vars(self, values: dict) -> None:
@@ -539,6 +564,27 @@ _DDL_INDEX = re.compile(
 _DDL_REFERENCES = re.compile(r"\breferences\s+([a-z0-9_\"]+)", re.IGNORECASE)
 
 
+def _close_of_list(statement: str, start: int) -> int | None:
+    """The index of the `)` that closes the parenthesis opened just before `start`,
+    skipping quoted text and quoted names, or None if it never closes."""
+    depth = 1
+    quote = None
+    for i in range(start, len(statement)):
+        ch = statement[i]
+        if quote:
+            if ch == quote:
+                quote = None  # a doubled quote reopens at once: same result
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+    return None
+
+
 def _check_ddl(plugin: str, statement: str) -> str:
     """One schema statement, or PluginError (naming the plug-in and never the text)."""
     prefix = _prefix(plugin)
@@ -550,10 +596,20 @@ def _check_ddl(plugin: str, statement: str) -> str:
         refuse("not a statement")
     if re.search(r";|%|--|/\*", statement):
         refuse("no ';', '%' or comment allowed")
+    # SQLite's `on conflict rollback` (or `or rollback`) would end the whole
+    # transaction it runs in; no schema statement needs the word.
+    if re.search(r"\brollback\b", statement, re.IGNORECASE):
+        refuse("no rollback")
     table = _DDL_TABLE.match(statement)
     index = None if table else _DDL_INDEX.match(statement)
     if table is None and index is None:
         refuse("only create table / index if not exists")
+    if table is not None:
+        # The statement ends at the `)` closing its column list: nothing after it,
+        # so no `as select`, `as values`, `as table`, `inherits (...)` and the like.
+        close = _close_of_list(statement, table.end())
+        if close is None or statement[close + 1 :].strip():
+            refuse("a table statement ends at its column list")
     names = [table.group(1)] if table else list(index.groups())
     for name in names:
         if not name.lower().startswith(prefix):
@@ -566,14 +622,87 @@ def _check_ddl(plugin: str, statement: str) -> str:
     return statement.strip()
 
 
+def _ddl_parts(statement: str) -> tuple[str, str, str | None, list[str]]:
+    """A checked statement's kind (`table` or `index`), its name, the table an index
+    is on, and the tables it references, all lower-case."""
+    refs = [r.lower() for r in _DDL_REFERENCES.findall(statement)]
+    table = _DDL_TABLE.match(statement)
+    if table is not None:
+        return "table", table.group(1).lower(), None, refs
+    index = _DDL_INDEX.match(statement)
+    return "index", index.group(1).lower(), index.group(2).lower(), refs
+
+
+_CORE_TABLE = re.compile(
+    r"\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?([a-z_][a-z0-9_]*)", re.IGNORECASE
+)
+_CORE_INDEX = re.compile(
+    r"\bcreate\s+(?:unique\s+)?index\s+(?:concurrently\s+)?(?:if\s+not\s+exists\s+)?"
+    r"([a-z_][a-z0-9_]*)",
+    re.IGNORECASE,
+)
+
+
+def _core_names() -> tuple[set[str], set[str]]:
+    """The core's own table and index names, read from its schema files (the
+    Postgres one holds every table; the SQLite one adds nothing new, but is read
+    too so a name only it has is still covered)."""
+    tables: set[str] = set()
+    indexes: set[str] = set()
+    for name in ("schema.sql", "schema_sqlite.sql"):
+        text = resources.files("ream").joinpath(name).read_text()
+        tables.update(m.lower() for m in _CORE_TABLE.findall(text))
+        indexes.update(m.lower() for m in _CORE_INDEX.findall(text))
+    return tables, indexes
+
+
+def _check_against(catalog_tables: set[str], catalog_indexes: set[str]) -> None:
+    """Refuse a plug-in statement that would touch something not its own: a table or
+    index name that is a core one (from the schema files, or anything in the
+    catalog that no loaded plug-in declares), or an index `on` or a `references`
+    naming a table that the same plug-in's own statements do not create. A prefix
+    alone cannot promise this: a plug-in named `agent` has the prefix of `agent_key`."""
+    own: dict[str, set[str]] = {}
+    declared_tables: set[str] = set()
+    declared_indexes: set[str] = set()
+    for plugin, statement in _SCHEMA:
+        kind, name, _on, _refs = _ddl_parts(statement)
+        if kind == "table":
+            own.setdefault(plugin, set()).add(name)
+            declared_tables.add(name)
+        else:
+            declared_indexes.add(name)
+    core_tables, core_indexes = _core_names()
+    foreign_tables = core_tables | (catalog_tables - declared_tables)
+    foreign_names = foreign_tables | core_indexes | (catalog_indexes - declared_indexes)
+    for plugin, statement in _SCHEMA:
+        kind, name, on, refs = _ddl_parts(statement)
+
+        def refuse(why: str, plugin=plugin):
+            raise PluginError(f"plug-in {plugin!r}: schema statement refused: {why}")
+
+        if name in foreign_names:
+            refuse("a name the core or another owner already uses")
+        mine = own.get(plugin, set())
+        if on is not None and on not in mine:
+            refuse("an index only on the plug-in's own tables")
+        if any(ref not in mine for ref in refs):
+            refuse("references only the plug-in's own tables")
+
+
 def apply_schema(db) -> None:
     """Create every plug-in's tables (idempotent). `serve` calls it after `load()`; a
-    failure stops start-up, like any other registration fault."""
+    failure stops start-up, like any other registration fault, naming the plug-in and
+    never the statement's text."""
     if not _SCHEMA:
         return
     try:
-        db.ensure_plugin_tables([st for _p, st in _SCHEMA])
-    except Exception as exc:  # noqa: BLE001
+        db.ensure_plugin_tables(list(_SCHEMA), _check_against)
+    except PluginError:
+        raise
+    except dbmod.PluginTableError as exc:
+        raise PluginError(str(exc)) from None
+    except Exception as exc:  # noqa: BLE001 - the database could not be reached
         raise PluginError(
             f"plug-in schema could not be created: {type(exc).__name__}"
         ) from None
@@ -589,14 +718,32 @@ def start_all(db) -> None:
             _log.warning("plug-in %s: start failed: %s", plugin, type(exc).__name__)
 
 
-def stop_all() -> None:
-    """Call every plug-in's stop hook, last registered first, each isolated."""
+STOP_SECONDS = 2.0  # each stop hook's limit, as the core's own sender gets
+
+
+def stop_all(timeout: float = STOP_SECONDS) -> None:
+    """Call every plug-in's stop hook, last registered first, each isolated and each
+    given `timeout` seconds: it runs in a daemon thread, and one still running after
+    that is left behind, logged and counted as a failure, so a stuck plug-in cannot
+    keep the core's own sender from stopping."""
     for plugin, fn in reversed(list(_STOPS)):
-        try:
-            fn()
-        except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
+        failed: list[str] = []
+
+        def run(fn=fn, failed=failed):
+            try:
+                fn()
+            except BaseException as exc:  # noqa: BLE001 - a plug-in's fault is isolated
+                failed.append(type(exc).__name__)
+
+        worker = threading.Thread(target=run, name=f"plugin-stop-{plugin}", daemon=True)
+        worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
             _count(plugin, "stop")
-            _log.warning("plug-in %s: stop failed: %s", plugin, type(exc).__name__)
+            _log.warning("plug-in %s: stop did not return in %ss", plugin, timeout)
+        elif failed:
+            _count(plugin, "stop")
+            _log.warning("plug-in %s: stop failed: %s", plugin, failed[0])
 
 
 _HOST_NAME = re.compile(
@@ -702,5 +849,14 @@ def load() -> list[str]:
     done = plugin_cli.register_all(
         _entry_points(), settings.current().plugins, PluginAPI, _log
     )
+    # One plug-in's names (tables, variables) must never fall under another's: `acme`
+    # would otherwise own every `acme_chat_...` name of `acme-chat`.
+    for one in done:
+        for other in done:
+            if one != other and _prefix(other).startswith(_prefix(one)):
+                raise PluginError(
+                    f"plug-in {other!r}: its name prefix {_prefix(other)!r} falls under"
+                    f" plug-in {one!r}'s {_prefix(one)!r}; rename one of them"
+                )
     _loaded[:] = done
     return done

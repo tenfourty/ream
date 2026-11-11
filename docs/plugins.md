@@ -180,13 +180,31 @@ def register(api):
   journal row and the other sinks are kept. The event is then **not staged for that sink** and
   nothing retries it, so a plug-in that cannot afford a gap must catch what it can handle and
   keep its own reconciliation. (Unlike `on_answer`, which rolls the answer back.)
+  **A database error it catches itself still counts on Postgres**: Postgres aborts the whole
+  transaction at the first error, so the core rolls back to the stage's savepoint (its writes,
+  even those before the error, are undone) and counts the failure, exactly as if it had raised.
+  SQLite aborts only the failed statement, so there the stage's other writes stand. To skip a
+  duplicate on both, write `insert ... on conflict do nothing` rather than catching the error.
+  **A stage must never end the transaction**: no `commit`, `rollback`, `savepoint` or `release`
+  statement, and on SQLite no `or rollback` / `on conflict rollback` (it ends the whole
+  transaction, not the statement). One that does fails the **whole** action
+  (`ream.db.TransactionLost`, counted as `<plug-in>:stage`): nothing of it is kept, and the caller
+  sees an error rather than a half-written answer.
 - **`api.schema(statements)`**: the plug-in's tables, created at start-up after the core's
   migration, on Postgres and SQLite, once and idempotently, under the same lock as the core's
   migration. Only `create table if not exists` and `create [unique] index if not exists ... on`
   are accepted, every name starts with the plug-in's name in lower case with other characters as
-  `_` (`acme-chat` -> `acme_chat_`), a `references` may name only the plug-in's own tables, and a
-  statement may hold no `;`, `%`, comment or `as select`; a breach stops start-up naming the
-  plug-in (never the text), as does a statement the database refuses. Write the neutral subset:
+  `_` (`acme-chat` -> `acme_chat_`), a table statement ends at the `)` that closes its column list
+  (no `as select`, `as table`, `as values`, `inherits` or anything else after it), and a
+  statement may hold no `;`, `%`, comment or the word `rollback`. The prefix is not the whole
+  rule: at start-up, under the lock, the core reads the database's catalog and refuses a table or
+  index name the core uses (its schema, or anything in the database no loaded plug-in declares),
+  and an index `on`, or a `references`, naming any table the plug-in's **own** statements do not
+  create; so a plug-in named `agent` or `partner` cannot touch `agent_key` or `partner_outbox`.
+  Two plug-ins whose prefixes overlap (`acme` and `acme-chat`: `acme_` covers `acme_chat_`) stop
+  start-up whatever they register. A breach stops start-up naming the plug-in (never the text),
+  as does a statement the database refuses (the error's type only; nothing of the plug-ins'
+  schema is kept). Write the neutral subset:
   `text`, `integer`, `bigint`, `boolean` (defaults `true`/`false`), `timestamptz`, `jsonb`, constant
   defaults, primary key, unique, not null. There is no migration after first creation: a change is
   a new table or index, never an edit. A plug-in table is outside the core's schema and backups
@@ -194,7 +212,10 @@ def register(api):
 - **`api.on_start(fn)`**: `fn(db)` runs once after the tables exist and the core's outbox sender
   is up, in plug-in name order; it must return promptly (start a thread, do not run the loop).
   **`api.on_stop(fn)`**: `fn()` runs at shutdown, last started first, each isolated, best effort
-  (a killed process runs none). A raise in either is logged by type, counted
+  (a killed process runs none). It must return quickly (signal the thread, join it briefly): each
+  stop hook runs in a thread of its own and is given 2 seconds, as the core's own sender is; one
+  still running after that is left behind, logged and counted as a `stop` failure, and the next
+  hook and the core's `sinks.stop` go on. A raise in either is logged by type, counted
   (`<plug-in>:start`, `<plug-in>:stop`) and neither stops the server nor the other plug-ins.
   A sender that a start hook did not manage to start leaves its queue to wait; with the
   plug-in absent the rows stay, as the outbox's do.
@@ -490,7 +511,9 @@ parent domain. A fault inside the route answers a bare 500 (`plug-in error`), is
 - A plug-in that raises while registering, requires another API major, or is named in
   `REAM_PLUGINS` but not installed stops the server's start-up, naming it.
 - A `stage` failure never loses the action (savepoint, logged, counted; the event is not staged
-  for that sink); a start or stop hook failure never stops the server.
+  for that sink), unless the stage ends the transaction itself, which fails the action whole
+  rather than half; a start or stop hook failure never stops the server, and a stop hook gets
+  2 seconds.
 - A plug-in may add its own tables (`api.schema`, 1.2) but may not change core tables or SQL, supply gallery pages or JavaScript, or
   serve the reader. The service stays single-reader.
 

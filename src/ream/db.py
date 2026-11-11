@@ -2,7 +2,7 @@ import json
 import re
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from importlib import resources
@@ -97,6 +97,23 @@ class Rollback(Exception):
     rolls back and the exception goes no further."""
 
 
+class TransactionLost(Exception):
+    """The outer transaction ended under a savepoint (a statement such as `rollback`,
+    `commit` or SQLite's `or rollback` ran inside it). Nothing more may be written on
+    the connection as if the transaction were open, so this always propagates and the
+    whole action fails; it is never swallowed as a nested failure."""
+
+
+class PluginTableError(Exception):
+    """The database refused one of a plug-in's schema statements. Carries the
+    plug-in's name and the error's type only, never the statement or its text."""
+
+    def __init__(self, plugin: str, kind: str) -> None:
+        super().__init__(f"plug-in {plugin!r}: schema could not be created: {kind}")
+        self.plugin = plugin
+        self.kind = kind
+
+
 class Json:
     """A JSON parameter, encoded by whichever backend runs the statement."""
 
@@ -184,6 +201,28 @@ class Connection:
         released when the transaction ends."""
         self._raw.execute("select pg_advisory_xact_lock(%s)", (key,))
 
+    def in_transaction(self) -> bool:
+        """Whether the server still has a transaction open on this connection (an
+        aborted one counts: it is still open until rolled back)."""
+        status = self._raw.info.transaction_status
+        return status in (
+            psycopg.pq.TransactionStatus.INTRANS,
+            psycopg.pq.TransactionStatus.INERROR,
+            psycopg.pq.TransactionStatus.ACTIVE,
+        )
+
+    def catalog(self) -> tuple[set[str], set[str]]:
+        """The names of the tables (and views) and of the indexes in the current
+        schema, lower-case."""
+        tables = self.execute(
+            "select lower(table_name) from information_schema.tables"
+            " where table_schema = current_schema()"
+        ).fetchall()
+        indexes = self.execute(
+            "select lower(indexname) from pg_indexes where schemaname = current_schema()"
+        ).fetchall()
+        return {r[0] for r in tables}, {r[0] for r in indexes}
+
     def byte_length(self, column: str) -> str:
         """The size in bytes of a text column, not its length in characters."""
         return f"octet_length({column})"
@@ -244,6 +283,19 @@ class SqliteConnection(Connection):
             yield self
         except BaseException as exc:
             self._depth = depth
+            if not self._raw.in_transaction:
+                # Something inside ended the whole transaction (a `rollback`, or an
+                # `or rollback` conflict): there is no savepoint to go back to, and a
+                # nested caller must not carry on writing in autocommit.
+                if depth == 0:
+                    if isinstance(exc, Rollback):
+                        return
+                    raise
+                if not isinstance(exc, Exception) or isinstance(exc, TransactionLost):
+                    raise
+                raise TransactionLost(
+                    "the transaction ended inside a savepoint"
+                ) from exc
             if depth == 0:
                 self._raw.execute("rollback")
             else:
@@ -253,7 +305,20 @@ class SqliteConnection(Connection):
                 return
             raise
         self._depth = depth
+        if not self._raw.in_transaction:
+            raise TransactionLost("the transaction ended before its commit")
         self._raw.execute("commit" if depth == 0 else f"release {savepoint}")
+
+    def in_transaction(self) -> bool:
+        return self._raw.in_transaction
+
+    def catalog(self) -> tuple[set[str], set[str]]:
+        rows = self.execute(
+            "select lower(type), lower(name) from sqlite_master"
+            " where type in ('table', 'view', 'index')"
+        ).fetchall()
+        tables = {name for kind, name in rows if kind != "index"}
+        return tables, {name for kind, name in rows if kind == "index"}
 
     def for_update(self, suffix: str = "") -> str:
         return ""
@@ -1162,16 +1227,29 @@ class Database:
             conn.advisory_lock(_MIGRATE_LOCK_KEY)
             conn.execute(sql)
 
-    def ensure_plugin_tables(self, statements: list[str]) -> None:
-        """Run a plug-in's `create ... if not exists` statements (already checked by
-        `plugin_api.schema`), in one transaction, under the same lock `migrate` takes on
-        Postgres so two pods starting together cannot race. Idempotent."""
+    def ensure_plugin_tables(
+        self,
+        statements: list[tuple[str, str]],
+        check: Callable[[set[str], set[str]], None] | None = None,
+    ) -> None:
+        """Run the plug-ins' `create ... if not exists` statements, `(plug-in,
+        statement)` pairs already checked by `plugin_api.schema`, in one transaction,
+        under the same lock `migrate` takes on Postgres so two pods starting together
+        cannot race. Idempotent. `check(tables, indexes)` is first handed the catalog
+        as it stands under the lock, and may raise to stop before anything runs. A
+        statement the database refuses raises `PluginTableError` naming its plug-in and
+        the error's type, never the text; the whole transaction is undone."""
         if not statements:
             return
         with self.connect() as conn, conn.transaction():
             conn.advisory_lock(_MIGRATE_LOCK_KEY)  # a no-op on SQLite (begin immediate)
-            for statement in statements:
-                conn.execute(statement)
+            if check is not None:
+                check(*conn.catalog())
+            for plugin, statement in statements:
+                try:
+                    conn.execute(statement)
+                except Exception as exc:  # noqa: BLE001 - reported by type, named
+                    raise PluginTableError(plugin, type(exc).__name__) from None
 
     def _migrate_sqlite(self) -> None:
         """Numbered steps under PRAGMA user_version, each run statement by
