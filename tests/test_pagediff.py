@@ -670,3 +670,32 @@ def test_a_worker_whose_exchange_will_not_stop_keeps_its_pipes_open(monkeypatch)
         stuck.join(5)
         worker.conn_in.close()
         worker.conn_out.close()
+
+
+# --- the pages whose tags the parser cannot be asked to read ----------------------
+
+# (what comes first, what is repeated, what ends it): the three pages of
+# tests/test_htmlbound.py that cost the standard parser a gigabyte. The diff reads
+# none of them, and says so: the page, unmarked, and REASON_LARGE -- never None, which
+# would be a diff of a page whose markup nothing read.
+LONG_TAG_PAGES = {
+    "start tags": ("fetch( ", "<img ", ">"),
+    "a > in quotes first": ('fetch( <img a=">" ', "x ", ">"),
+    "end tags": ("fetch( ", "</a ", ">"),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(LONG_TAG_PAGES))
+def test_a_page_whose_tags_cannot_be_read_is_the_page_and_the_large_reason(shape):
+    import scalecheck
+
+    from ream import partdiff
+
+    first, unit, last = LONG_TAG_PAGES[shape]
+    page = scalecheck.page(first, unit, pagediff.MAX_BYTES - 1, last)
+    assert pagediff._checked_render(page, page) == (page, pagediff.REASON_LARGE)
+    assert partdiff.compare(page, page) == {
+        "parts": [],
+        "more": 0,
+        "unknown_reason": pagediff.REASON_LARGE,
+    }
