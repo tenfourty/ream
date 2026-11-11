@@ -171,7 +171,7 @@ def app_from_env():
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
         raise SystemExit("DATABASE_URL is not set")
-    # Every problem with the settings at once (owner, origins, mail, the partner groups),
+    # Every problem with the settings at once (owner, origins, the partner groups),
     # before any connection is made; the message names variables and never a value.
     configured = settings.validate_for_serve()
     defaulted = settings.defaulted()

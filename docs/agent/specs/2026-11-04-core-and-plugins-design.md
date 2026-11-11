@@ -122,7 +122,7 @@ gallery host.
 | `gallery_origin` | `ARTIFACTS_GALLERY_ORIGIN` | `http://localhost:8000` |
 | `content_domain` | `ARTIFACTS_CONTENT_DOMAIN` | `localhost` (page content on a different port-qualified origin; see below) |
 | `api_host` | `ARTIFACTS_API_HOST` | derived from `gallery_origin` |
-| `mail_from` | `ARTIFACTS_MAIL_FROM` | mail off |
+| ~~`mail_from`~~ | ~~`ARTIFACTS_MAIL_FROM`~~ | removed in step 9b: the mail backend plug-in reads its own sender; with no backend, mail is off |
 | `display_tz` | `ARTIFACTS_DISPLAY_TZ` | UTC |
 | `trusted_ip_header` | `ARTIFACTS_TRUSTED_IP_HEADER` | none (use the socket address); today `ratelimit.py` trusts `X-Real-IP` |
 | `session_env` | `ARTIFACTS_SESSION_ENV` | `CLAUDE_CODE_SESSION_ID`; today's `QD_OFFICE`, `ARTIFACTS_SEAT` come from the plug-in (4.2, item 6) |
