@@ -451,7 +451,6 @@ class PluginAPI:
         *,
         open_copies: Callable | None = None,
         settled_copies: Callable | None = None,
-        count_waiting: Callable | None = None,
         answer: Callable | None = None,
         enabled: Callable | None = None,
         outbox_status: Callable | None = None,
@@ -465,8 +464,8 @@ class PluginAPI:
           (oldest first is not required; core sorts), `waiting_on_him=False` meaning only
           those he has already answered here (pending).
         - `settled_copies(db, since, limit)`: copies answered since `since`.
-        - `count_waiting(db)`: a non-negative int, those waiting on him.
-        - `answer(db, qid, *, letter, note)`: he answers one in the gallery. Return the
+        - `answer(db, qid, *, letter, note)`: he answers one in the gallery. `qid` is
+          `Copy.qid`: a `qd:` source with the prefix stripped, any other source whole. Return the
           `Copy`, or raise `store.NotFound` for a question that is not yours (core then
           tries the next plug-in and finally answers 404).
         - `enabled()`: whether your bridge is running here.
@@ -479,7 +478,6 @@ class PluginAPI:
         given = {
             "open_copies": open_copies,
             "settled_copies": settled_copies,
-            "count_waiting": count_waiting,
             "answer": answer,
             "enabled": enabled,
             "outbox_status": outbox_status,

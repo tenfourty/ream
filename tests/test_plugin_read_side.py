@@ -126,7 +126,7 @@ def test_a_plugin_copy_reaches_inbox_count_and_listing_in_order(world, db):
         seen["args"] = (limit, waiting_on_him)
         return [copy("qd:late", minutes=5), copy("qd:early", minutes=1)]
 
-    world(plugin(open_copies=opened, count_waiting=lambda db_: 2))
+    world(plugin(open_copies=opened))
     got = readside.open_copies(db, 10)
     assert [c.source for c in got] == ["qd:early", "qd:late"]
     assert seen["args"] == (10, True)
@@ -250,7 +250,6 @@ def test_a_contributor_that_raises_is_isolated_logged_and_counted(
         plugin(
             open_copies=boom,
             settled_copies=boom,
-            count_waiting=boom,
             enabled=boom,
             outbox_status=boom,
         )
@@ -268,13 +267,21 @@ def test_a_contributor_that_raises_is_isolated_logged_and_counted(
 def test_wrong_shapes_are_dropped_and_counted(world, db):
     world(
         plugin(
-            open_copies=lambda *a, **k: [copy("qd:ok"), {"source": "x"}, object()],
-            count_waiting=lambda db_: -4,
+            open_copies=lambda *a, **k: [
+                copy("qd:ok"),
+                {"source": "x"},
+                object(),
+                copy("qd:t", topic="not a dict"),
+                copy("qd:o", options=["a"]),
+                copy("qd:n", needed_by=datetime(2026, 12, 1, tzinfo=UTC)),
+                copy("qd:a", answered_at=datetime(2026, 12, 1, tzinfo=UTC)),
+                copy("qd:p", pending_at=5),
+            ],
             outbox_status=lambda db_: ["not", "a", "dict"],
         )
     )
     assert [c.source for c in readside.open_copies(db)] == ["qd:ok"]
-    assert readside.count_waiting(db) == 0
+    assert readside.count_waiting(db) == 1
     assert readside.outbox_statuses(db) == {}
     assert plugin_api.failure_counts()["chatty:read_side"] == 3
 
@@ -327,17 +334,79 @@ def test_registration_refusals(world):
 def test_a_note_is_gated_before_a_plugin_ever_sees_it(
     world, db, gallery, note, refusal
 ):
+    """`slack:x1` is a qid core refuses at once (not an id it could hold), so only
+    readside's own gate stands between the note and the plug-in."""
     calls = []
 
     def answer(db_, qid, *, letter, note=""):
         calls.append(note)
-        return copy("qd:x1", pending=letter)
+        return copy("slack:x1", pending=letter)
 
     world(plugin(answer=answer))
     with pytest.raises(refusal):
-        readside.answer_here(db, "x1", letter="a", note=note)
+        readside.answer_here(db, "slack:x1", letter="a", note=note)
     sent = gallery.post(
-        "/pq/x1/answer", data={"letter": "a", "note": note}, headers=SAME | HIM
+        "/pq/slack:x1/answer", data={"letter": "a", "note": note}, headers=SAME | HIM
     )
     assert sent.status_code in (413, 422)
     assert calls == []
+
+
+def test_a_second_plugin_is_tried_after_the_first_says_not_mine(world, db):
+    def first(db_, qid, *, letter, note=""):
+        raise store.NotFound()
+
+    def second(api):
+        api.read_side(answer=lambda db_, qid, *, letter, note="": copy("qd:" + qid))
+
+    world(plugin(answer=first), EP("zeta", second))
+    assert readside.answer_here(db, "x1", letter="a").source == "qd:x1"
+    with pytest.raises(store.NotFound):
+        world_none = readside.contributors()
+        readside._CONTRIBUTORS[:] = world_none[:1]
+        readside.answer_here(db, "x1", letter="a")
+
+
+def test_a_naive_dated_plugin_copy_still_renders_and_sorts_with_core_copies(
+    world, db, gallery
+):
+    naive = copy("qd:naive", created_at=datetime(2026, 11, 1))  # noqa: DTZ001 -- naive on purpose
+    world(
+        plugin(
+            open_copies=lambda *a, **k: [naive] if k.get("waiting_on_him", True) else []
+        )
+    )
+    got = readside.open_copies(db)
+    assert got[0].created_at.tzinfo is not None
+    assert gallery.get("/inbox", headers=HIM).status_code == 200
+    reader, _ = keys.mint(db, agent="reader")
+    grants.grant(db, "reader", grants.READ_ALL_DECISIONS)
+    r = gallery.get(
+        "/api/v1/questions?scope=all", headers={"Authorization": f"Bearer {reader}"}
+    )
+    assert r.status_code == 200 and any(x.get("source") == "qd:naive" for x in r.json())
+
+
+def test_a_naive_plugin_copy_sorts_against_a_core_copy(world, db, monkeypatch):
+    aware = copy("qd:core", minutes=5)
+    monkeypatch.setattr(partner_in, "open_copies", lambda *a, **k: [aware])
+    world(
+        plugin(
+            open_copies=lambda *a, **k: [
+                copy("qd:naive", created_at=datetime(2026, 11, 1))  # noqa: DTZ001 -- naive on purpose
+            ]
+        )
+    )
+    assert [c.source for c in readside.open_copies(db)] == ["qd:naive", "qd:core"]
+
+
+def test_the_count_dedupes_like_the_list(world, db, monkeypatch):
+    core = copy("qd:dup")
+    monkeypatch.setattr(partner_in, "open_copies", lambda *a, **k: [core])
+    monkeypatch.setattr(partner_in, "count_waiting", lambda db_: 1)
+    world(
+        plugin(open_copies=lambda *a, **k: [copy("qd:dup"), copy("qd:own", minutes=1)])
+    )
+    assert len(readside.open_copies(db)) == 2
+    assert readside.count_waiting(db) == 2
+    assert inbox.count(db) == (2, False)

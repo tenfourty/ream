@@ -16,8 +16,8 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 
 from ream import decisions, partner, partner_in, settings, store
 from ream.db import Database
@@ -40,15 +40,14 @@ class Contributor:
     plugin: str
     open_copies: Callable | None = None
     settled_copies: Callable | None = None
-    count_waiting: Callable | None = None
     answer: Callable | None = None
     enabled: Callable | None = None
     outbox_status: Callable | None = None
 
 
-# What a contributor's `answer` may raise on purpose: the store's refusals and a wrong letter.
+# What a contributor's `answer` may raise on purpose besides NotFound: the store's refusals
+# and a wrong letter.
 _PASS = (
-    store.NotFound,
     store.BodyTooLarge,
     store.InvalidText,
     store.SecretFound,
@@ -88,9 +87,49 @@ def _call(c: Contributor, fn: Callable | None, *args, **kwargs):
         return None
 
 
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _moment(value) -> datetime:
+    """A copy's stored time (an aware datetime or an ISO string) for ordering; never raises."""
+    if isinstance(value, datetime):
+        return _aware(value)
+    try:
+        return _aware(datetime.fromisoformat(value))
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=UTC)
+
+
+def _text_or_none(value) -> bool:
+    return value is None or isinstance(value, str)
+
+
+def _sound(i) -> bool:
+    """Whether a plug-in's value is shaped as the readers need it, so one wrong field
+    cannot break a sort or a render."""
+    return (
+        isinstance(i, partner_in.Copy)
+        and isinstance(i.source, str)
+        and bool(i.source)
+        and isinstance(i.created_at, datetime)
+        and isinstance(i.title, str)
+        and isinstance(i.asking_office, str)
+        and isinstance(i.options, list)
+        and all(isinstance(o, dict) for o in i.options)
+        and (i.topic is None or isinstance(i.topic, dict))
+        and isinstance(i.depends_on, list)
+        and isinstance(i.for_offices, list)
+        and _text_or_none(i.answered_at)
+        and _text_or_none(i.needed_by)
+        and _text_or_none(i.pending_at)
+    )
+
+
 def _copies(c: Contributor, got) -> list[partner_in.Copy]:
-    """Only real `partner_in.Copy` values with a text `source` and a datetime
-    `created_at` pass; anything else is dropped and the contributor counted once."""
+    """Only well-shaped `partner_in.Copy` values pass (`_sound`), with `created_at` made
+    aware (naive means UTC, as `inbox.moment` reads it); anything else is dropped and the
+    contributor counted once."""
     if got is None:
         return []
     try:
@@ -98,14 +137,7 @@ def _copies(c: Contributor, got) -> list[partner_in.Copy]:
     except TypeError:
         _fail(c.plugin, "NotAList")
         return []
-    good = [
-        i
-        for i in items
-        if isinstance(i, partner_in.Copy)
-        and isinstance(i.source, str)
-        and i.source
-        and isinstance(i.created_at, datetime)
-    ]
+    good = [replace(i, created_at=_aware(i.created_at)) for i in items if _sound(i)]
     if len(good) != len(items):
         _fail(c.plugin, "BadCopy")
     return good
@@ -151,22 +183,25 @@ def settled_copies(
     if not extra:
         return core
     merged = _merge(core, extra)
-    merged.sort(key=lambda x: x.answered_at or "", reverse=True)
+    merged.sort(key=lambda x: _moment(x.answered_at), reverse=True)
     return merged[:limit]
 
 
-def count_waiting(db: Database) -> int:
-    """How many open copies wait on him, across core and every contributor. A
-    contributor's count is trusted only as a non-negative integer."""
+def count_waiting(db: Database, limit: int = 500) -> int:
+    """How many open copies wait on him, counted the way the list is built: core's count,
+    plus each plug-in copy from `open_copies(waiting_on_him=True)` whose source core and
+    earlier plug-ins do not already hold, so the badge and the list never disagree."""
     total = partner_in.count_waiting(db)
+    extra: list[partner_in.Copy] = []
     for c in contributors():
-        got = _call(c, c.count_waiting, db)
-        if got is None:
-            continue
-        if isinstance(got, bool) or not isinstance(got, int) or got < 0:
-            _fail(c.plugin, "BadCount")
-            continue
-        total += got
+        extra += _copies(c, _call(c, c.open_copies, db, limit, waiting_on_him=True))
+    if not extra:
+        return total
+    held = {x.source for x in partner_in.open_copies(db, limit)}
+    for copy in extra:
+        if copy.source not in held:
+            held.add(copy.source)
+            total += 1
     return total
 
 
@@ -178,8 +213,14 @@ def answer_here(
     not its own. `decisions.InvalidAnswer` and the store's refusals pass through from
     whoever owns the question; any other fault in a contributor (or a result that is not a `Copy`) is counted and
     raises `AnswerFailed`, which the gallery answers 503: an outage never reads as 404."""
-    # The note's gates run here once, before core's call or any plug-in's, so a plug-in's
-    # answer path is held to the same size and secret checks as core's (partner_in.answer_here).
+    try:
+        return partner_in.answer_here(db, qid, letter=letter, note=note)
+    except store.NotFound:
+        pass
+    # Core does not hold it. Before any plug-in sees the note, run core's own note gates
+    # once (as `partner_in.answer_here` does), so a plug-in's path is held to the same
+    # size and secret checks. Core keeps its own gate, so a core-only install keeps its
+    # order (404 first) and scans once.
     store._check_size(
         note,
         decisions.MAX_NOTE_BYTES,
@@ -188,15 +229,13 @@ def answer_here(
         artifact_id=None,
     )
     store._check_secrets(note, "note", agent=settings.owner_id(), artifact_id=None)
-    try:
-        return partner_in.answer_here(db, qid, letter=letter, note=note)
-    except store.NotFound:
-        pass
     for c in contributors():
         if c.answer is None:
             continue
         try:
             got = c.answer(db, qid, letter=letter, note=note)
+        except store.NotFound:
+            continue  # not this plug-in's: the next may own it
         except _PASS:
             raise
         except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated

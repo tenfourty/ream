@@ -242,8 +242,7 @@ least one), once per plug-in, keyword only:
 |---|---|---|
 | `open_copies` | `fn(db, limit, waiting_on_him=True)` | list of `ream.partner_in.Copy`; `waiting_on_him=False` asks only for those he has already answered here (pending) |
 | `settled_copies` | `fn(db, since, limit)` | copies answered since `since` |
-| `count_waiting` | `fn(db)` | a non-negative int: copies waiting on him |
-| `answer` | `fn(db, qid, letter=, note=)` | the `Copy` after he answers it in the gallery; `store.NotFound` for one that is not yours |
+| `answer` | `fn(db, qid, letter=, note=)` | the `Copy` after he answers it in the gallery; `store.NotFound` for one that is not yours. `qid` is `Copy.qid`: a `qd:` source with the prefix stripped, any other source whole |
 | `enabled` | `fn()` | whether your bridge runs here (feeds `bridge.enabled` in the listening state) |
 | `outbox_status` | `fn(db)` | a small dict of counts and codes; shown in `sinks.status()["read_side_outbox"]` and by `artifacts-admin outbox` where plug-ins are loaded (the admin shell does not load them today) |
 
@@ -260,11 +259,14 @@ def register(api):
             raise store.NotFound()            # not mine: core tries the next, then 404
         return save_pending(db, row, letter, note)
 
-    api.read_side(open_copies=open_copies, count_waiting=lambda db: count(db),
-                  answer=answer, enabled=lambda: True)
+    api.read_side(open_copies=open_copies, answer=answer, enabled=lambda: True)
 ```
 
-Rules. A copy's `source` must be unique across core and every plug-in: one core (or an earlier
+Rules. There is no count argument: the badge counts the copies `open_copies(waiting_on_him=True)`
+returns after the same de-duplication as the list, so the two never disagree. A copy must be
+well-shaped (`created_at` a datetime, naive read as UTC; `answered_at`, `needed_by`, `pending_at`
+text or None; `topic` a dict or None; `options` a list of dicts; `depends_on` and `for_offices` lists),
+else it is dropped and the call counted. A copy's `source` must be unique across core and every plug-in: one core (or an earlier
 plug-in) already lists is dropped, and the merged list is cut to `limit` in creation order (the
 inbox's own ordering still ranks them). A plug-in's copies are read-only to agents, as core's
 are, and appear only for a key with the read-all-decisions grant and `scope=all`, exactly as
@@ -273,8 +275,9 @@ store's own refusals (`BodyTooLarge`, `InvalidText`, `SecretFound`, `ScanFailed`
 `decisions.InvalidAnswer`, which the gallery answers as it does for core's copies; any other
 raise (or a result that is not a `Copy`) is counted and the answer is refused with 503 ("Answer not saved",
 naming the plug-in), never a 404: an outage must not read as "no such question". The
-copies are ranked and rendered by core, so a plug-in cannot supply markup. Core checks the note's size and for a secret once, before
-core's own copy or any plug-in's `answer` is called, so `answer` only ever gets a note that passed.
+copies are ranked and rendered by core, so a plug-in cannot supply markup. When core does not hold the question it checks the note's size and for a secret once,
+before the first plug-in's `answer` is called, so `answer` only ever gets a note that passed.
+`store.NotFound` from one plug-in moves on to the next.
 
 ### Webhook sinks without a plug-in
 

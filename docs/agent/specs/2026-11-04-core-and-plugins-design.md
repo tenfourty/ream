@@ -838,13 +838,14 @@ drivers; CI only (not on the management machine).
    column list (no `as table`, `as values`, `inherits`); a database refusal names the plug-in; each
    stop hook gets 2 seconds, like the core's sender.
    **9e-2, built (`ci/plugin-read-side`, 11 Nov 2026): plug-in API 1.3, additive**, in core only:
-   `api.read_side(open_copies=, settled_copies=, count_waiting=, answer=, enabled=,
+   `api.read_side(open_copies=, settled_copies=, answer=, enabled=,
    outbox_status=)`, keyword-only, all optional (at least one), once per plug-in. New
    `src/ream/readside.py` is the one place the readers go through: `inbox.py`, `gallery.py`
    (open and settled copies, `answer_here`), `api.py` (the `scope=all` list) and `listening.py`
    (`bridge_on()`) now call it instead of `partner_in` / `partner` directly. Core's partner code
    is the built-in contributor and answers first; a plug-in's copies are merged behind it (a
-   `source` seen already is dropped, ordered by creation, cut to `limit`), counts add, `enabled`
+   `source` seen already is dropped, ordered by creation, cut to `limit`), the badge counts the
+   same de-duplicated open copies (no count argument), `enabled`
    is core's or any plug-in's, and `answer` goes to each plug-in in turn for a question core
    does not hold (`store.NotFound` passes it on). A contributor that raises or returns the wrong
    shape is logged by type, counted as `<plug-in>:read_side`, and ignored. The outbox report is in
@@ -857,7 +858,10 @@ drivers; CI only (not on the management machine).
    are loaded (or 9e-3 gives the admin shell a way to). **Review fixes (11 Nov 2026):** the note's size and
    secret checks run once in `readside.answer_here` before core's or any plug-in's call; a
    plug-in `answer` that fails other than by the store's refusals answers 503 (`AnswerFailed`).
-   Next, 9e-3, the quarterdeck plug-in's
+   **Review round 2 (11 Nov 2026):** a `NotFound` from one plug-in's `answer` now tries the
+   next; the note gate sits after core's NotFound and before the plug-in loop; a copy is
+   shape-checked (`created_at` made aware, field types) so one cannot break a sort or render;
+   `count_waiting` was dropped from the interface. Next, 9e-3, the quarterdeck plug-in's
    outbound half (stage sink, own `quarterdeck_*` tables, sender) with core's `partner` sink
    standing down while a sink named `quarterdeck` is registered; 9e-4, the inbound half (`slack`
    answer source, `on_answer`, router) and the deletion from core. **Open for 9e-3:** the existing

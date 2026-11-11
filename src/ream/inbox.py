@@ -236,7 +236,7 @@ def count(db: Database, limit: int | None = None) -> tuple[int, bool]:
     reviews, questions, open_rows = decisions.open_counts(db)
     with db.connect() as conn:
         replies = conn.execute(f"select count(*){_REPLY_FROM_WHERE}").fetchone()[0]
-    slacked = readside.count_waiting(db)
+    slacked = readside.count_waiting(db, limit)
     capped = open_rows >= limit or replies >= limit or slacked >= limit
     return reviews + questions + replies + slacked, capped
 
