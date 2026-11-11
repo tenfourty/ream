@@ -7595,6 +7595,17 @@ def gallery_router(db: Database) -> APIRouter:
             raise HTTPException(422, "not one of this question's options") from exc
         except store.NotFound as exc:
             raise HTTPException(404, "no such open question") from exc
+        except readside.AnswerFailed as exc:
+            # A plug-in's read side failed: not a missing question, so 503.
+            return HTMLResponse(
+                _shell(
+                    "Answer not saved",
+                    f"<p>{escape(decisions.answer_hook_failed_detail(exc.plugin))} "
+                    'Go back and try again, or <a href="/">return to the wall</a>.</p>',
+                ),
+                status_code=503,
+                headers=gallery_headers(),
+            )
         return RedirectResponse("/inbox", status_code=303)
 
     # --- comments: the conversation happens on the page --------------------

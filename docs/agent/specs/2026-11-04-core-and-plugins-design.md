@@ -854,8 +854,10 @@ drivers; CI only (not on the management machine).
    **Left for 9e-3:** `listening`'s per-question "delivered" lookup still reads core's
    `partner_outbox` (a plug-in's outbox would need a contributor argument for it);
    `artifacts-admin` does not load plug-ins, so a plug-in's outbox line appears only where they
-   are loaded (or 9e-3 gives the admin shell a way to); a plug-in `answer` that fails other than
-   by the store's refusals ends as a 404, not a 503. Next, 9e-3, the quarterdeck plug-in's
+   are loaded (or 9e-3 gives the admin shell a way to). **Review fixes (11 Nov 2026):** the note's size and
+   secret checks run once in `readside.answer_here` before core's or any plug-in's call; a
+   plug-in `answer` that fails other than by the store's refusals answers 503 (`AnswerFailed`).
+   Next, 9e-3, the quarterdeck plug-in's
    outbound half (stage sink, own `quarterdeck_*` tables, sender) with core's `partner` sink
    standing down while a sink named `quarterdeck` is registered; 9e-4, the inbound half (`slack`
    answer source, `on_answer`, router) and the deletion from core. **Open for 9e-3:** the existing

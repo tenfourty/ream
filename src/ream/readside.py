@@ -26,6 +26,15 @@ _log = logging.getLogger(__name__)
 _lock = threading.Lock()
 
 
+class AnswerFailed(Exception):
+    """A plug-in's `answer` raised something other than a store refusal: the answer was
+    not saved. Names the plug-in, never the fault; the gallery answers 503."""
+
+    def __init__(self, plugin: str) -> None:
+        super().__init__(f"plug-in {plugin!r} read-side answer failed")
+        self.plugin = plugin
+
+
 @dataclass(frozen=True)
 class Contributor:
     plugin: str
@@ -167,8 +176,8 @@ def answer_here(
     """He answers a copy in the gallery. Core's own copies first; a question core does
     not hold goes to each contributor in turn, which raises `store.NotFound` for one that is
     not its own. `decisions.InvalidAnswer` and the store's refusals pass through from
-    whoever owns the question; any other fault in a contributor is counted and that
-    contributor is skipped, so the last answer is the same 404 as for a missing id."""
+    whoever owns the question; any other fault in a contributor (or a result that is not a `Copy`) is counted and
+    raises `AnswerFailed`, which the gallery answers 503: an outage never reads as 404."""
     # The note's gates run here once, before core's call or any plug-in's, so a plug-in's
     # answer path is held to the same size and secret checks as core's (partner_in.answer_here).
     store._check_size(
@@ -192,10 +201,11 @@ def answer_here(
             raise
         except Exception as exc:  # noqa: BLE001 - a plug-in's fault is isolated
             _fail(c.plugin, type(exc).__name__)
-            continue
+            raise AnswerFailed(c.plugin) from None
         if isinstance(got, partner_in.Copy):
             return got
         _fail(c.plugin, "BadCopy")
+        raise AnswerFailed(c.plugin)
     raise store.NotFound()
 
 

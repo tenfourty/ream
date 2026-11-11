@@ -279,19 +279,28 @@ def test_wrong_shapes_are_dropped_and_counted(world, db):
     assert plugin_api.failure_counts()["chatty:read_side"] == 3
 
 
-def test_a_plugin_that_fails_answering_does_not_hide_the_next_one(world, db):
+def test_a_plugin_that_fails_answering_is_a_503_never_a_404(world, db, gallery):
     def boom(db_, qid, *, letter, note=""):
-        raise RuntimeError
+        raise RuntimeError("secret detail")
 
-    def good(db_, qid, *, letter, note=""):
-        return copy("qd:" + qid, pending=letter)
+    world(plugin(answer=boom))
+    with pytest.raises(readside.AnswerFailed) as caught:
+        readside.answer_here(db, "q1", letter="a")
+    assert caught.value.plugin == "chatty"
+    sent = gallery.post("/pq/q1/answer", data={"letter": "a"}, headers=SAME | HIM)
+    assert sent.status_code == 503
+    assert "chatty" in sent.text and "secret detail" not in sent.text
+    assert plugin_api.failure_counts()["chatty:read_side"] == 2
 
-    def other(api):
-        api.read_side(answer=good)
 
-    world(plugin(answer=boom), EP("zeta", other))
-    assert readside.answer_here(db, "q1", letter="a").pending_answer == "a"
-    assert plugin_api.failure_counts()["chatty:read_side"] == 1
+def test_a_plugin_answer_that_is_not_a_copy_is_a_503(world, db, gallery):
+    world(plugin(answer=lambda db_, qid, *, letter, note="": {"no": "copy"}))
+    assert (
+        gallery.post(
+            "/pq/q1/answer", data={"letter": "a"}, headers=SAME | HIM
+        ).status_code
+        == 503
+    )
 
 
 def test_registration_refusals(world):

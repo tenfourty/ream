@@ -271,7 +271,8 @@ are, and appear only for a key with the read-all-decisions grant and `scope=all`
 before: the agent routes' "not yours is no such" scoping is unchanged. `answer` may raise the
 store's own refusals (`BodyTooLarge`, `InvalidText`, `SecretFound`, `ScanFailed`) and
 `decisions.InvalidAnswer`, which the gallery answers as it does for core's copies; any other
-raise is counted and that plug-in skipped, so the answer ends as a 404 if nobody takes it. The
+raise (or a result that is not a `Copy`) is counted and the answer is refused with 503 ("Answer not saved",
+naming the plug-in), never a 404: an outage must not read as "no such question". The
 copies are ranked and rendered by core, so a plug-in cannot supply markup. Core checks the note's size and for a secret once, before
 core's own copy or any plug-in's `answer` is called, so `answer` only ever gets a note that passed.
 
