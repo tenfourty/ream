@@ -295,7 +295,13 @@ three helpers of `ream.partner`, which go away with that module in 9e-4:
 | `take_back(conn, rows)` | the undo: puts rows of the same shape back into core's outbox (duplicates skipped) before the plug-in is removed |
 
 The wire to the hub is unchanged: keep each row's `event_id`, `version`, `kind`, `body` and
-`created_at` as they are.
+`created_at` as they are. The hub's invariants (the spec's 9e-3 design lists them with where
+core stands): the `X-Partner-Key-Id` header equals the body's `key_id` and the signature covers
+the exact bytes sent; every attempt is re-stamped (`sent_at`) and re-signed, never replayed (the
+hub refuses one over 5 minutes old); an `event_id` is kept across retries and never reused (the
+hub drops a repeat for a day); one question's versions go out in order from one sender only (the
+hub drops a lower one after a higher), with a parked row holding the later ones; a 503's
+`Retry-After` is honoured (core's own sender does not do this; yours must).
 
 ### Webhook sinks without a plug-in
 

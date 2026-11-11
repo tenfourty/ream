@@ -891,6 +891,29 @@ drivers; CI only (not on the management machine).
    of borrowing them would race an old process still bumping core's; core stops bumping at the
    switch, so 9e-4 copies a frozen column. Both databases: plain selects and deletes, Postgres
    adding `for update skip locked`, SQLite serialised by its writer lock.
+   *The hub's wire invariants, which the plug-in's sender must keep (read from quarterdeck's
+   partner intake, 11 Nov 2026), and where core stands on each:* (1) the `X-Partner-Key-Id`
+   header is present and equals the body's `key_id`, and the signature is over the exact bytes
+   sent: core does this (`partner._attempt` signs the bytes `envelope` built and posts those
+   same bytes); the plug-in copies it and never re-serialises a signed body. (2) An event whose
+   `sent_at` is more than 5 minutes old on arrival is refused: core re-stamps and re-signs every
+   attempt (`envelope(row, key_id, now)`); the plug-in copies it and never replays stored bytes.
+   (3) The hub remembers an `event_id` for a day and drops a repeat; a retry keeps its id and an
+   id is never reused for another event: core's ids are random (`ids.new_id()`, no counter or
+   other state to carry), `hand_over` returns each row's `event_id` and the plug-in must insert
+   it unchanged and mint its own new ones the same way. (4) The hub keeps the latest version per
+   (source, question) and drops an older one, so the two senders must never overlap on a
+   question: within one outbox core sends only the oldest undelivered version of a question and
+   a parked row holds the later ones (`partner._claim`), which the plug-in's claim must copy; at
+   the switch a row is in one outbox only (`hand_over` deletes what it returns, skips a question
+   under a live lease, and `held` names every question core still has rows for, which the
+   plug-in sends nothing of that pass); core's own sender stands down while `quarterdeck` is
+   registered, and the versions come from one counter (`next_version`). (5) A 503 carries
+   `Retry-After` and the sender honours it: **core does not** (`http_post` returns only the
+   status; a 503 is retried on core's own backoff, 5 s doubling to 15 min, which may come
+   sooner than the hub asked); the plug-in must read `Retry-After` and wait at least that long
+   before the row's next attempt. Core's sender is left as it is: it stands down wherever the
+   plug-in runs, and it goes in 9e-4.
    **9e-3, core half built (`ci/partner-standdown`, 11 Nov 2026).** Core's built-in `partner`
    stage sink and its sender (`partner.sender_pass`, the loop's one pass) check per event and
    per pass whether a sink named `quarterdeck` (`sinks.QUARTERDECK_PLUGIN_SINK`) is registered
