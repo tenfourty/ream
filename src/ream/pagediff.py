@@ -1243,12 +1243,13 @@ def _run_in_worker(
     fallback=None,
     on_timeout=None,
 ):
-    """``(result, transient)``: transient is True when the fallback came from
-    load or a broken worker rather than from the pages themselves. `func` is
-    another module-level function of two page texts for the same worker to run
-    (partdiff.compare), with `fallback` as its answer when none comes. `on_timeout`,
-    when given, is the answer for a worker that ran out of time: the pages themselves are
-    the cause, so it is not transient and may be kept."""
+    """``(result, transient)``: transient is True when the answer is not one to keep
+    in the cache: it came from load, a broken worker or a worker that ran out of time,
+    rather than from a finished comparison of the pages. `func` is another module-level
+    function of two page texts for the same worker to run (partdiff.compare), with
+    `fallback` as its answer when none comes. `on_timeout`, when given, is the answer
+    for a worker that ran out of time; being slow on a busy machine says little about
+    the pages, so it is transient too and is asked for again."""
     fallback = fallback if fallback is not None else (new_html, REASON_FAILED)
     if not _SLOTS.acquire(timeout=timeout):
         return fallback, True
@@ -1262,7 +1263,7 @@ def _run_in_worker(
         except BaseException as exc:  # noqa: BLE001 - timed out or broken
             worker.kill()  # it never serves again
             if on_timeout is not None and isinstance(exc, TimeoutError):
-                return on_timeout, False
+                return on_timeout, True
             return fallback, True
         with _IDLE_LOCK:
             _IDLE.append(worker)

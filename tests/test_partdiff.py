@@ -1,5 +1,9 @@
 """Which parts of a page changed between two versions (runcove-5t3oj.56, slice 2)."""
 
+import time
+
+import pytest
+
 from ream import pagediff, partdiff
 
 
@@ -122,5 +126,29 @@ def test_a_span_is_one_diff_between_its_ends():
 def test_the_safe_entry_gives_the_same_answer_through_the_worker():
     old = page(sec("a", "A", "x"))
     new = page(sec("a", "A", "y"))
+    partdiff._CACHE.clear()
     assert partdiff.changes_safely(old, new) == partdiff.compare(old, new)
+    assert len(partdiff._CACHE) == 1  # a finished answer is kept
     assert partdiff.changes_safely(old, new) == partdiff.compare(old, new)  # cached
+
+
+def _sleepy_compare(old, new):
+    time.sleep(10)
+    return partdiff.compare(old, new)
+
+
+def test_a_diff_that_timed_out_is_answered_but_not_cached():
+    """A pair that only ran out of time (a busy machine, a cold worker) is asked for
+    again on the next call; one that finished is kept."""
+    old = page(sec("a", "A", "x"))
+    new = page(sec("a", "A", "z"))
+    partdiff._CACHE.clear()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(partdiff, "compare", _sleepy_compare)
+        slow = partdiff.changes_safely(old, new, timeout=0.5)
+    assert slow == {"parts": [], "more": 0, "unknown_reason": partdiff.REASON_SLOW}
+    assert len(partdiff._CACHE) == 0
+    real = partdiff.changes_safely(old, new)
+    assert real == partdiff.compare(old, new)
+    assert real["unknown_reason"] is None
+    assert len(partdiff._CACHE) == 1

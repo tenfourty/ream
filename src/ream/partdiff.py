@@ -298,7 +298,8 @@ def changes_safely(
     old_html: str, new_html: str, *, timeout: float | None = None
 ) -> dict:
     """`compare` in the diff worker (a separate process, 2 seconds, four at a time),
-    cached by the hashes of the two pages. A failure from load is answered but not cached."""
+    cached by the hashes of the two pages. An answer from load, a broken worker or a worker
+    that ran out of time (`REASON_SLOW`) is given but not cached: it is asked for again."""
     key = (
         "parts",
         hashlib.sha256(old_html.encode("utf-8", "surrogatepass")).hexdigest(),
