@@ -1,5 +1,8 @@
 """Times a read of a page on a page and on one eight times as big.
 
+These timings mean something only on a quiet machine: the tests that use them are marked
+`scaling`, skip under xdist (tests/conftest.py), and run serially in CI's own step.
+
 A read whose time grows with the page takes about 8 times as long on 8 times the
 page; one that grows with its square takes about 64 times as long. `assert_linear`
 holds the ratio under 20. The ratio is only worth anything when the small run is long
@@ -13,14 +16,17 @@ machine's cache stops holding it, which can make a linear read cost twice as muc
 character on a page a few times bigger and so push the ratio toward the limit.
 """
 
+import math
 import time
 from collections.abc import Callable
 
 RATIO = 20  # linear is about 8, squared about 64
-MIN_SMALL = 0.02  # seconds: the shortest small run the ratio is taken from
+MIN_SMALL = (
+    0.05  # seconds: the shortest timing the ratio is taken from (repeats make it up)
+)
 RUNS = 3
 MOST = 1024 * 1024  # the most the small page grows to; eight times that is the scan cap
-SLOW = 0.4  # seconds: a run this long is not repeated
+SLOW = 2.0  # seconds: a run this long is not repeated
 PROBE = (4096, 32768)  # the two small pages tried first, so a read that grows with the
 PROBE_FLOOR = (
     0.005  # square fails in seconds, not in the hours its 8 MiB page would take
@@ -34,13 +40,22 @@ def page(first: str, unit: str, chars: int, last: str = "") -> str:
 
 
 def best(read: Callable[[str], object], text: str, runs: int = RUNS) -> float:
-    """The shortest of up to `runs` timings of `read(text)`; a run over SLOW seconds
-    is the last."""
-    shortest = float("inf")
+    """The shortest of `runs` timings of one `read(text)`. A read quicker than
+    MIN_SMALL is timed as a batch of repeats lasting at least MIN_SMALL and divided,
+    so a read of a millisecond is not lost in the clock's noise; a run over SLOW
+    seconds is the last."""
+    began = time.perf_counter()
+    read(text)
+    once = time.perf_counter() - began
+    if once > SLOW:
+        return once
+    repeats = max(1, math.ceil(MIN_SMALL / max(once, 1e-6)))
+    shortest = once
     for _ in range(runs):
         began = time.perf_counter()
-        read(text)
-        took = time.perf_counter() - began
+        for _ in range(repeats):
+            read(text)
+        took = (time.perf_counter() - began) / repeats
         shortest = min(shortest, took)
         if took > SLOW:
             break

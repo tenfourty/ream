@@ -337,6 +337,7 @@ def _checked(text):
 
 
 @pytest.mark.parametrize("shape", sorted(SHAPES))
+@pytest.mark.scaling
 def test_eight_times_the_page_costs_about_eight_times_the_time(shape):
     """A check that grows with the square of the page takes 64 times as long on eight
     times the page; one that grows with the page, about 8 (the limit is 20,

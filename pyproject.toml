@@ -89,6 +89,7 @@ markers = [
     "postgres_only: reads Postgres's catalogue or runs Postgres's own SQL; skipped when REAM_TEST_DB=sqlite",
     "plugin_loader: drives the plug-in loader with entry points it fakes; REAM_PLUGINS is unset for it (the core-bare CI job sets it to none for everything else)",
     "no_default_comments: leave a publish exactly as the test sends it (the suite otherwise adds comments on to a new page's publish, which the service now requires)",
+    "scaling: compares a read's time on a page and on one eight times as big; skipped under xdist, run serially (-n0 -m scaling)",
     "background_thumbnails: publishes in this test start the real background thumbnail render (off by default in tests; see tests/conftest.py)",
 ]
 

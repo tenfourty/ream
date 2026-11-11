@@ -476,6 +476,18 @@ def pytest_configure(config) -> None:
     os.environ[_URI_ENV] = _Server.ensure()
 
 
+def _skip_scaling_under_xdist(config, items) -> None:
+    """A test marked `scaling` compares two timings, which mean nothing while other
+    workers load the machine: under xdist it skips, saying where it runs (CI's serial
+    `scaling tests` step, or `pytest -n0 -m scaling`)."""
+    if not hasattr(config, "workerinput"):  # set only in an xdist worker
+        return
+    skip = pytest.mark.skip(reason="timings: runs serially (-n0 -m scaling)")
+    for item in items:
+        if "scaling" in item.keywords:
+            item.add_marker(skip)
+
+
 def pytest_xdist_auto_num_workers(config) -> int | None:
     """`-n auto` means one worker per CPU the process may run on, not one per
     physical core (xdist's default, with psutil installed). Most of a test's
@@ -504,7 +516,9 @@ def pytest_collection_modifyitems(config, items) -> None:
     -- one that happens to start in the last seconds becomes the run's tail
     on its own. Serially, and in every test's own terms, nothing changes: the
     same tests, the same fixtures; only the order across files. Every worker
-    computes the same order, as xdist requires."""
+    computes the same order, as xdist requires. Tests marked `scaling` skip there
+    first (`_skip_scaling_under_xdist`)."""
+    _skip_scaling_under_xdist(config, items)
     workers = getattr(config, "workerinput", {}).get("workercount")
     if not workers or workers < 2:
         return
