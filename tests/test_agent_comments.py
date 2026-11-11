@@ -342,18 +342,23 @@ def test_a_sqlite_file_from_before_the_session_column_is_upgraded(
     )
 
 
-def test_a_page_of_unclosed_headings_is_searched_in_linear_time(db):
+def test_a_page_of_unclosed_headings_is_refused_in_linear_time(db):
+    """Forty thousand `<h2 ` with no ">" are one tag of forty thousand attributes,
+    which the parser's base does not read (`htmlbound.MAX_TAG_ATTRIBUTES`): the search
+    by section is refused, saying so, and quickly, as it would be on a page too large
+    to search that way."""
     import time
 
     from ream import comments
 
     body = "<h2 " * 40_000 + "<h2>Shutdown</h2><p>Retries are capped</p>"
     # The best of three: a loaded CI runner once stalled one call for 5.8 s,
-    # while the search itself takes about 0.1 s here and quadratic would take minutes.
+    # while the refusal itself takes about 0.1 s here and quadratic would take minutes.
     times = []
     for _ in range(3):
         started = time.monotonic()
-        comments.resolve_text_anchor(body, "Retries are capped", "Shutdown")
+        with pytest.raises(comments.TextAnchorError, match="too long or too busy"):
+            comments.resolve_text_anchor(body, "Retries are capped", "Shutdown")
         times.append(time.monotonic() - started)
     assert min(times) < 1.0
 

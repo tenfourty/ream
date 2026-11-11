@@ -22,10 +22,10 @@ import math
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from html.parser import HTMLParser
 
 from ream import formrecord, ids, text
 from ream.db import jsonb
+from ream.htmlbound import BoundedParser, TooComplex
 
 # Elements that never have content or an end tag.
 _VOID = frozenset(
@@ -156,7 +156,7 @@ class _FormBuild:
     legend_of_root: str = ""
 
 
-class _Walk(HTMLParser):
+class _Walk(BoundedParser):
     def __init__(self) -> None:
         super().__init__()
         self.stack: list[str] = []
@@ -604,8 +604,17 @@ def parse(body: str) -> Parsed:
     if not _MAYBE.search(body):
         return Parsed()
     walk = _Walk()
-    walk.feed(body)
-    walk.close()
+    try:
+        walk.feed(body)
+        walk.close()
+    except TooComplex:
+        # A page whose forms cannot be read is refused like one whose forms cannot be
+        # stored, never published with forms nothing reads.
+        raise FormRefused(
+            "a tag on this page is too long or has too many attributes for its"
+            " forms to be read: nothing was stored",
+            line=walk.getpos()[0],
+        ) from None
     return Parsed([_build_form(f) for f in walk.forms], walk.stray_line)
 
 

@@ -21,7 +21,8 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
-from html.parser import HTMLParser
+
+from ream.htmlbound import BoundedParser, TooComplex
 
 OPS = ("replace", "append", "prepend", "remove")
 
@@ -139,6 +140,13 @@ class AmbiguousError(SectionError): ...
 class UnbalancedError(SectionError): ...
 
 
+class TooComplexError(SectionError, TooComplex):
+    """A tag in the markup is too long or too busy for the parser (`htmlbound`):
+    where a section is, or whether a fragment is balanced, cannot be told. A
+    refusal like the rest (the caller's 422), and a `TooComplex` for the readers
+    that already stop on one."""
+
+
 @dataclass(frozen=True)
 class Located:
     tag: str
@@ -159,7 +167,7 @@ class Located:
         return body[self.inner_start : self.inner_end]
 
 
-class _Walker(HTMLParser):
+class _Walker(BoundedParser):
     """Tracks the open-element stack with absolute offsets into `src`."""
 
     def __init__(
@@ -308,9 +316,15 @@ class _Walker(HTMLParser):
 
     def finish(self) -> str:
         """Feed everything and return what the parser could not consume."""
-        self.feed(self.src)
-        leftover = self.rawdata
-        self.close()
+        try:
+            self.feed(self.src)
+            leftover = self.rawdata
+            self.close()
+        except TooComplex:
+            raise TooComplexError(
+                "a tag in the markup is too long or has too many attributes to read,"
+                " so where its elements end cannot be told -- nothing was changed."
+            ) from None
         return leftover
 
 

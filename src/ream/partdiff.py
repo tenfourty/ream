@@ -28,9 +28,9 @@ import hashlib
 import re
 import threading
 from collections import OrderedDict
-from html.parser import HTMLParser
 
 from ream import pagediff, sections, text
+from ream.htmlbound import BoundedParser, TooComplex
 
 MAX_PARTS = 50
 LABEL_MAX = sections.LABEL_MAX
@@ -84,7 +84,7 @@ class _Node:
         )
 
 
-class _Tree(HTMLParser):
+class _Tree(BoundedParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.root = _Node("#root", {})
@@ -265,7 +265,7 @@ def compare(old_html: str, new_html: str) -> dict:
             return _unknown(pagediff.REASON_SCRIPT)
         old = _parts(old_html)
         new = _parts(new_html)
-    except _TooBig:
+    except (_TooBig, TooComplex):  # too many nodes, or a tag too busy to read
         return _unknown(pagediff.REASON_LARGE)
     except Exception:  # noqa: BLE001 - any failure is "could not tell", never "no change"
         return _unknown(REASON_FAILED)

@@ -15,9 +15,9 @@ import difflib
 import hashlib
 import html
 import re
-from html.parser import HTMLParser
 
 from ream import sections, text
+from ream.htmlbound import BoundedParser, TooComplex
 
 CURRENT = "current"
 EDITED = "edited"
@@ -66,7 +66,7 @@ _ANY_LABEL = re.compile(
 _LABELS_MAX = 2000
 
 
-class _Headings(HTMLParser):
+class _Headings(BoundedParser):
     """Every CLOSED heading as (level, start, end, name): `start` is where its
     opening tag begins, `end` where its closing tag ends, both offsets into the
     body. One linear pass, so a page of unclosed `<h2` openers costs no more than
@@ -337,6 +337,8 @@ class PageIndex:
             # An id the caller did not announce: found by itself, still correct.
             try:
                 found = sections.locate(self.body, element_id)
+            except TooComplex:
+                raise
             except sections.SectionError:
                 return None
             return found.start, found.end
@@ -451,8 +453,9 @@ def resolve(
        `edited`, never `current`, never from elsewhere on the page;
     6. otherwise `outdated`.
 
-    ("", "") when nothing is known: no evidence on the pin, or more page text
-    than is searched. `note` is "" unless a pin moved.
+    ("", "") when nothing is known: no evidence on the pin, more page text
+    than is searched, or markup too long or too busy to read (`TooComplex`, from
+    the parser of `htmlbound`). `note` is "" unless a pin moved.
 
     `body` may be a `PageIndex` already built for the page, so many pins on one
     page parse it once; a plain string gets an index of its own.
@@ -460,6 +463,18 @@ def resolve(
     `facts` is the page's (visible words, the same with spaces removed), when
     the caller has them already; `body` may then be "" for a pin that names no
     heading and no id, which are the only evidence read from the HTML."""
+    try:
+        return _resolve(anchor, quote, body, facts)
+    except TooComplex:
+        return "", ""
+
+
+def _resolve(
+    anchor: dict,
+    quote: str,
+    body: "str | PageIndex",
+    facts: tuple[str, str] | None,
+) -> tuple[str, str]:
     anchor = anchor if isinstance(anchor, dict) else {}
     element_id = anchor.get("el_id") or anchor.get("id") or ""
     needle = " ".join(quote.split()).lower()
@@ -522,7 +537,10 @@ def heading_for_quote(
     if len(body) > SECTION_PAGE_MAX:
         return named, ""
     index = PageIndex(body)
-    heads = index.heads
+    try:
+        heads = index.heads
+    except TooComplex:
+        return named, ""  # markup too tangled to read: as for a page too large
     found = heads.found[:_HEADINGS_MAX]
     hits = []
     for i, head in enumerate(found):
@@ -590,7 +608,10 @@ def heading_before(body: str, pos: int) -> tuple[str, str]:
     heading, or on a page too large to search by heading."""
     if len(body) > SECTION_PAGE_MAX:
         return "", ""
-    heads = _headings(body)
+    try:
+        heads = _headings(body)
+    except TooComplex:
+        return "", ""  # markup too tangled to read: as for a page too large
     best = -1
     for i, head in enumerate(heads.found[:_HEADINGS_MAX]):
         if head[1] > pos:
@@ -638,6 +659,13 @@ def current_quote(anchor: dict, quote: str, body: "str | PageIndex") -> str:
     now between its prefix and its suffix. "" when neither can be told -- never
     a guess from elsewhere on the page, so it cannot show words the pin was not
     about. Capped at 500 characters."""
+    try:
+        return _current_quote(anchor, quote, body)
+    except TooComplex:
+        return ""  # markup too tangled to read: neither can be told
+
+
+def _current_quote(anchor: dict, quote: str, body: "str | PageIndex") -> str:
     anchor = anchor if isinstance(anchor, dict) else {}
     element_id = anchor.get("el_id") or anchor.get("id") or ""
     index = body if isinstance(body, PageIndex) else PageIndex(body, {element_id})

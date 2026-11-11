@@ -15,10 +15,9 @@ import re
 import secrets
 import time
 from collections.abc import Iterator
-from html import parser as html_parser
-from html.parser import HTMLParser
 
 from ream import csp, text
+from ream.htmlbound import BoundedParser, TooComplex
 
 MAX_FINDINGS = 10
 DETAIL_LIMIT = 300
@@ -39,10 +38,6 @@ UNREAD_NOTE = (
 # finish reports None, which is "not read" and never "nothing found".
 MAX_SCAN_CHARS = 8 * 1024 * 1024
 SCAN_SECONDS = 2.0
-
-
-class TooComplex(Exception):
-    """The page is over MAX_SCAN_CHARS, or reading it used up its budget."""
 
 
 class Budget:
@@ -73,115 +68,13 @@ def _admit(html: str, budget: Budget) -> None:
     budget.check()
 
 
-# The parser decides whether a start tag, or an end tag, is whole with one regular
-# expression that reads attribute after attribute to the end of the tag, which on a
-# page of `<img <img <img ... >` (each "<img" is taken for an attribute) is the end of
-# the page. That one match keeps about 320 bytes of its state for each attribute: 540 MB
-# for a page of 8 MiB (1.3 GB when an attribute is two characters), 3 to 6 seconds, and
-# no budget can stop a regular expression part-way. So `_Metered` runs it only on a tag
-# that a ">" ends with no quote before it (the ">" cannot be inside a quoted value) and
-# that is under TAG_WINDOW characters long, where its state is a few megabytes. Any
-# other tag is read one attribute at a time (`_end_of_tag`), a quoted value, however
-# long, being one step, and one of more than MAX_TAG_ATTRIBUTES attributes is not read:
-# TooComplex, which every reading of the page reports as "not read". Neither the next
-# ">" nor the tag's length can be the measure: a ">" inside quotes does not end the tag,
-# so a page can put one at its start and a long tag after it; and the advice of
-# `csp.py` is to inline an image as a data: address, one tag of a megabyte.
-# (`_END_TAG_USES_IT`: an older parser reads an end tag another way.)
-#
-# `_TAG_END_NEEDS_A_GT` is for the start tag with no ">" after it, where the answer
-# is the one the match gives (this parser says a tag is whole only if the match ends on
-# a ">", and with none after the "<" it cannot) and need not be asked. Parsers of an
-# older Python test tags another way, so they keep their own.
-_TAG_END_NEEDS_A_GT = hasattr(html_parser, "locatetagend")
-_END_TAG_USES_IT = "locatetagend" in HTMLParser.parse_endtag.__code__.co_names
-TAG_WINDOW = 64 * 1024
-MAX_TAG_ATTRIBUTES = 4096
-_CLOCK_AFTER = 1024  # characters: a tag this long is timed on its own
-_SHORT_TAG = 256
-
-# `html.parser.locatetagend` with its repeated group taken apart: the tag's name, and
-# one attribute. tests/test_render_findings.py holds them to the parser's own match.
-_TAG_NAME = re.compile(r"[a-zA-Z][^\t\n\r\f />]*[\t\n\r\f /]*")
-_ATTRIBUTE = re.compile(
-    r"""
-    (?<=['"\t\n\r\f /])[^\t\n\r\f />][^\t\n\r\f /=>]*
-    (?:[\t\n\r\f ]*=[\t\n\r\f ]*
-      (?:'[^']*'|"[^"]*"|(?!['"])[^>\t\n\r\f ]*)
-    )?
-    [\t\n\r\f /]*
-    """,
-    re.VERBOSE,
-)
-
-
-def _end_of_tag(rawdata: str, name: int, budget: Budget) -> int:
-    """Where the parser's own match would end the tag whose name begins at `name`
-    (after its ">"), or -1 when it is not whole; or TooComplex for a tag it should not
-    be asked about. The same answers as the parser's, on any page: each way of reading
-    the tag below is one of them.
-
-    With no quote before the first ">", that ">" ends the tag, and the parser's match
-    is asked only as far as it (so that no quote can be left open at the end of what it
-    is shown), and only when that is inside the window. Any other tag is read one
-    attribute at a time, where a quoted value, however long, is one step."""
-    closing = rawdata.find(">", name)
-    if closing < 0:
-        return -1
-    if (
-        closing - name < TAG_WINDOW
-        and rawdata.find('"', name, closing) < 0
-        and rawdata.find("'", name, closing) < 0
-    ):
-        end = html_parser.locatetagend.match(rawdata, name, closing + 1).end()
-        if closing - name > _CLOCK_AFTER:
-            budget.check()  # a tag this long took long enough that each one is timed
-        return end if rawdata[end - 1] == ">" else -1
-    named = _TAG_NAME.match(rawdata, name)
-    if named is None:
-        return -1  # not a tag name: the caller has seen a letter, so not reached
-    at = named.end()
-    for count in range(MAX_TAG_ATTRIBUTES):
-        attribute = _ATTRIBUTE.match(rawdata, at)
-        if attribute is None:
-            if count >= 64:
-                budget.check()
-            return at + 1 if rawdata.startswith(">", at) else -1
-        at = attribute.end()
-    raise TooComplex
-
-
-class _Metered(HTMLParser):
-    """An HTMLParser that counts every token it reads against a Budget, and stops
+class _Metered(BoundedParser):
+    """A BoundedParser that counts every token it reads against a Budget, and stops
     with TooComplex when the budget is spent or a tag is too long to read."""
 
     def __init__(self, budget: Budget) -> None:
-        super().__init__(convert_charrefs=False)
+        super().__init__(convert_charrefs=False, budget=budget)
         self.budget = budget
-
-    def check_for_whole_start_tag(self, i):
-        if not _TAG_END_NEEDS_A_GT:
-            return super().check_for_whole_start_tag(i)
-        if self.rawdata.find(">", i + 1) < 0:
-            return -1  # incomplete: what the parser answers, without its long match
-        return _end_of_tag(self.rawdata, i + 1, self.budget)
-
-    def parse_endtag(self, i):
-        rawdata = self.rawdata
-        if _END_TAG_USES_IT and html_parser.endtagopen.match(rawdata, i):
-            closing = rawdata.find(">", i + 2)
-            if closing < 0:
-                return -1
-            # The parser reads an end tag with the same match as a start tag. One
-            # that a ">" ends in a few characters, with no quote before it to hide a
-            # ">" in, cannot be long: the parser reads it as it is.
-            if (
-                closing - i > _SHORT_TAG
-                or rawdata.find('"', i, closing) >= 0
-                or rawdata.find("'", i, closing) >= 0
-            ) and _end_of_tag(rawdata, i + 2, self.budget) < 0:
-                return -1
-        return super().parse_endtag(i)
 
     def _tick(self, *_args) -> None:
         self.budget.step()

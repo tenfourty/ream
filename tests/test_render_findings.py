@@ -14,7 +14,7 @@ import scalecheck
 from fastapi.testclient import TestClient
 
 from ream import api as api_module
-from ream import csp, keys, renderfind, store, thumbs
+from ream import csp, htmlbound, keys, renderfind, store, thumbs
 from ream.app import create_gallery_app
 
 pytestmark = pytest.mark.background_thumbnails
@@ -226,7 +226,7 @@ def test_a_start_tag_with_no_bracket_after_it_is_read_as_the_parser_reads_it():
 
 
 @pytest.mark.skipif(
-    not renderfind._TAG_END_NEEDS_A_GT,
+    not htmlbound._TAG_END_NEEDS_A_GT,
     reason="this Python's parser tests tags another way",
 )
 def test_a_start_tag_with_no_bracket_after_it_does_not_reach_the_parsers_long_match(
@@ -271,32 +271,32 @@ def _the_parsers_end_of_tag(text, name):
 
 
 @pytest.mark.skipif(
-    not renderfind._TAG_END_NEEDS_A_GT,
+    not htmlbound._TAG_END_NEEDS_A_GT,
     reason="this Python's parser tests tags another way",
 )
-@pytest.mark.parametrize("window", [1, 6, 30, renderfind.TAG_WINDOW])
+@pytest.mark.parametrize("window", [1, 6, 30, htmlbound.TAG_WINDOW])
 def test_the_end_of_a_tag_is_where_the_parser_puts_it_in_a_window_and_out_of_it(
     window, monkeypatch
 ):
     """Inside the window the parser's own match answers; outside it the tag is read an
     attribute at a time. Both give what the parser's match gives on the whole page
     (the window sizes below the tags' length make most of them take the second way)."""
-    monkeypatch.setattr(renderfind, "TAG_WINDOW", window)
+    monkeypatch.setattr(htmlbound, "TAG_WINDOW", window)
     rng = random.Random(20261113 + window)
     whole = 0
     for _ in range(8000):
         text = "<i" + "".join(rng.choices(_TAG_PIECES, k=rng.randint(0, 24)))
-        got = renderfind._end_of_tag(text, 1, renderfind.Budget(60))
+        got = htmlbound.end_of_tag(text, 1, renderfind.Budget(60))
         assert got == _the_parsers_end_of_tag(text, 1), repr(text)
         whole += got > 0
     assert 1000 < whole < 7000, f"whole tags and open ones both, not {whole} of 8000"
 
 
-@pytest.mark.parametrize("window", [8, renderfind.TAG_WINDOW])
+@pytest.mark.parametrize("window", [8, htmlbound.TAG_WINDOW])
 def test_a_page_is_read_in_tokens_as_the_parser_reads_it_whatever_the_window(
     window, monkeypatch
 ):
-    monkeypatch.setattr(renderfind, "TAG_WINDOW", window)
+    monkeypatch.setattr(htmlbound, "TAG_WINDOW", window)
     pieces = [*_PIECES, *_TAG_PIECES, "</a ", "</a b='x>'>", "</a\n>", "<a b='>' "]
     pieces += ["</ a>", "</>", "<script>", "</script", "<!-- ", "-->"]
     rng = random.Random(20261114 + window)
@@ -307,7 +307,7 @@ def test_a_page_is_read_in_tokens_as_the_parser_reads_it_whatever_the_window(
 
 
 def _long_value():
-    return "A" * (3 * renderfind.TAG_WINDOW)
+    return "A" * (3 * htmlbound.TAG_WINDOW)
 
 
 def test_a_tag_longer_than_the_window_with_few_attributes_is_read():
@@ -329,9 +329,9 @@ def test_a_tag_with_more_attributes_than_a_window_of_it_allows_is_not_read():
     """Over the window, a tag is read an attribute at a time and given up on at
     MAX_TAG_ATTRIBUTES; inside the window the parser's own match is trusted as it
     always was (its memory there is a few megabytes)."""
-    inside = "fetch( <img" + " a" * (renderfind.TAG_WINDOW // 4) + ">"
-    outside = "fetch( <img" + " a" * renderfind.TAG_WINDOW + ">"
-    few = "fetch( <img" + " a" * (renderfind.MAX_TAG_ATTRIBUTES // 2)
+    inside = "fetch( <img" + " a" * (htmlbound.TAG_WINDOW // 4) + ">"
+    outside = "fetch( <img" + " a" * htmlbound.TAG_WINDOW + ">"
+    few = "fetch( <img" + " a" * (htmlbound.MAX_TAG_ATTRIBUTES // 2)
     few += ' alt="' + _long_value() + '">'
     assert renderfind.loads_live_data(inside) is False
     assert renderfind.loads_live_data(outside) is None
@@ -473,7 +473,7 @@ def test_a_page_that_runs_on_to_the_end_is_given_up_on_in_a_few_copies_of_it(
 
 
 @pytest.mark.skipif(
-    not renderfind._TAG_END_NEEDS_A_GT,
+    not htmlbound._TAG_END_NEEDS_A_GT,
     reason="this Python's parser tests tags another way",
 )
 def test_the_memory_meter_sees_what_the_parsers_long_match_keeps():

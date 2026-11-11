@@ -54,6 +54,7 @@ from ream.anchors import (
     _tight,
 )
 from ream.db import Connection, Database, in_list, jsonb
+from ream.htmlbound import TooComplex
 
 # A comment is a remark about a page, not a page in itself -- 8 KB is generous for
 # prose and small enough that a thread of hundreds never becomes its own storage
@@ -329,7 +330,13 @@ def resolve_text_anchor(body: str, quote: str, section: str | None = None) -> No
                 "this page is too large to search by section: quote more of the"
                 " passage instead"
             )
-        slices = _section_slices(body, section)
+        try:
+            slices = _section_slices(body, section)
+        except TooComplex:
+            raise TextAnchorError(
+                "this page's markup is too long or too busy to search by section:"
+                " quote more of the passage instead"
+            ) from None
         if not slices:
             raise TextAnchorError(
                 f"no heading named {section!r} on the current version of the page"

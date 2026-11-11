@@ -19,8 +19,9 @@ There is no list of consumers to keep in step.
 
 import re
 from dataclasses import dataclass
-from html.parser import HTMLParser
 from typing import ClassVar
+
+from ream.htmlbound import BoundedParser, TooComplex
 
 # Every C0 control character except the whitespace ones `sanitize` already
 # turns into a plain space by splitting on whitespace (tab, LF, CR, FF, VT),
@@ -155,7 +156,7 @@ VISIBLE_LIMIT = 2_000_000
 INPUT_LIMIT = 4_000_000
 
 
-class _Visible(HTMLParser):
+class _Visible(BoundedParser):
     """The words outside script, style, svg and template, in one linear pass."""
 
     _SKIP: ClassVar[set[str]] = {"script", "style", "svg", "template"}
@@ -186,6 +187,19 @@ class _Visible(HTMLParser):
         self.parts.append(data)
 
 
+def _read(body: str, limit: int) -> _Visible | None:
+    """The parser that has read the page, or None when a tag is too long or too busy
+    for it (`htmlbound.TooComplex`): the callers' answer is then the one for a page
+    with more text than they read, `("", True)`, which each already handles."""
+    parser = _Visible(limit)
+    try:
+        parser.feed(body[:INPUT_LIMIT])
+        parser.close()
+    except TooComplex:
+        return None
+    return parser
+
+
 def visible(body: str, limit: int | None = None) -> tuple[str, bool]:
     """A page's readable words, lowercased, with script, style, SVG and
     templates removed BEFORE any length limit is applied, and whether the text
@@ -197,9 +211,9 @@ def visible(body: str, limit: int | None = None) -> tuple[str, bool]:
     if len(body) <= SEARCH_LIMIT:
         words = searchable(body)
         return words, len(words) > limit
-    parser = _Visible(limit)
-    parser.feed(body[:INPUT_LIMIT])
-    parser.close()
+    parser = _read(body, limit)
+    if parser is None:
+        return "", True
     return " ".join(" ".join(parser.parts).split()).lower(), parser.truncated
 
 
@@ -208,9 +222,9 @@ def readable(body: str, limit: int | None = None) -> tuple[str, bool]:
     collapsed, for text that is shown back rather than searched. The same
     parser, the same limits."""
     limit = VISIBLE_LIMIT if limit is None else limit
-    parser = _Visible(limit)
-    parser.feed(body[:INPUT_LIMIT])
-    parser.close()
+    parser = _read(body, limit)
+    if parser is None:
+        return "", True
     return " ".join(" ".join(parser.parts).split()), parser.truncated
 
 

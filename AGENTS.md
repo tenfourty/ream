@@ -72,6 +72,7 @@ the reason to whoever holds the key. A fold refuses a key used in the last 24 ho
 | MCP at `/mcp` (transport, registries, the content fence; the tools, resources and prompts) | `src/ream/mcp.py`, `src/ream/mcp_tools.py`; trying it: `docs/mcp.md` |
 | The owner: settings, the stored id, its start-up guard | `src/ream/settings.py`, `src/ream/owner.py` |
 | The Postgres <-> SQLite copier and its verifier | `src/ream/migrate.py` |
+| HTML parsing: the one parser base every reader of a page uses (a new reader subclasses it; `tests/test_htmlbound.py` refuses any other) | `src/ream/htmlbound.py` |
 | The logo: its drawings, and the gallery's bar mark and tab icon cut from them | `src/ream/brand/`, `src/ream/logo.py` |
 | Writing a plug-in (the `ream.plugins` interfaces, `REAM_PLUGINS`, failure rules) | `docs/plugins.md` |
 | The logo guide and the gallery's named design values (colours, type, spacing) | `docs/brand.md`, `src/ream/design.py` |

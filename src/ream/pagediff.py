@@ -29,7 +29,8 @@ import time
 from bisect import bisect_left
 from collections import Counter, OrderedDict
 from difflib import Match, SequenceMatcher
-from html.parser import HTMLParser
+
+from ream.htmlbound import BoundedParser, TooComplex
 
 MAX_TOKENS = 60_000
 # The diff's own cap, below the page cap since that rose to 8 MiB (15 Oct 2026):
@@ -1009,7 +1010,7 @@ def _render_deleted(idxs: list[int], old_toks: list[str], b_all_text: bool) -> s
 # --- the safe entry point -------------------------------------------------------
 
 
-class _StartTags(HTMLParser):
+class _StartTags(BoundedParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.tags: list[tuple[str, tuple]] = []
@@ -1045,8 +1046,12 @@ def _checked_render(old_html: str, new_html: str) -> tuple[str, str | None]:
     doc, reason = render_changes(old_html, new_html)
     if reason is not None:
         return new_html, reason
-    ours = [t for t in _start_tags(doc) if t not in _OURS]
-    if ours != _start_tags(new_html):
+    try:
+        ours = [t for t in _start_tags(doc) if t not in _OURS]
+        same = ours == _start_tags(new_html)
+    except TooComplex:  # a tag too busy to read: the output cannot be proved
+        return new_html, REASON_LARGE
+    if not same:
         return new_html, REASON_FAILED
     return doc, None
 
