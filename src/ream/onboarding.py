@@ -142,7 +142,7 @@ version is in; `ream changes <page-id> [--from N] [--to M]` lists each part as `
 `removed` with its id and name (exit 3 with the reason when Ream could not read the page: a page
 drawn by its script, or too large, never gets an empty list). Over HTTP it is `GET
 /pages/<id>/changes?from=N[&to=M][&format=marked]`; over MCP, `read_page` with `changes_since`;
-`GET /pages/<id>/versions` carries each round's `part_changes`. A span of several versions is one
+`GET /pages/<id>/versions` lists the parts each round changed. A span of several versions is one
 comparison between its two ends. A change to markup with no visible text (a class, a style) is not
 a changed part.
 

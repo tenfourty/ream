@@ -447,8 +447,9 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt, skill.md and the artifacts-decide help re-taken on 9 Nov 2026 for delete-comment / restore-comment.
 # agents.txt and skill.md re-taken on 9 Nov 2026 for moving an agent to a new machine (one short paragraph, one skill line).
 # agents.txt and skill.md re-taken on 10 Nov 2026 for the artifact rule when Ream is connected to Claude over MCP (a short paragraph in each, one bullet in skill.md).
+# agents.txt and the artifacts-publish help re-taken on 11 Nov 2026 for what each round changed (`ream changes`, the paragraph on reading changes).
 GOLDEN = {
-    "agents.txt": "d00c195d140ef119880cc68d17788a7c8ed97e9e4c09bee1e3fde3fdb9cbf41c",
+    "agents.txt": "2ce909128c372965ff0b603e81100718a5c8ceeb352491ff27b0a94e467bf452",
     "skill.md": "bdf62f43296ac840ce556fa6439765f18e6134a376beb3981444080666ed26cc",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
@@ -493,7 +494,7 @@ FOOTER = "<footer>Published from BABA through the homelab artifacts service.</fo
 NEWS_TAIL = 26  # every entry so far; newer ones are added in front, so these never move
 NEWS_TAIL_DIGEST = "08b7ad27fd383101cc42c10f0994c8368d6fa5b33dc1617635d6068b5902f467"
 HELP_DIGEST = {
-    "artifacts-publish": "15f17397e44e4a050aaa22cabc01e6d462ba19a335c7beb39492430b519f638b",
+    "artifacts-publish": "493f6576b3effd57d570df65a21092c08868a2ef3dfd3f27f925d0facabdd151",
     "artifacts-decide": "2a31c966178e2ea6ce7fa9f4ecb40c7c4e4b9506890802b05534e75dd3572a10",
 }
 
