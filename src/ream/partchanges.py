@@ -32,6 +32,13 @@ def keepable(found: dict) -> bool:
     )
 
 
+def keepable_from_a_read(found: dict) -> bool:
+    """`keepable` for the answer to a reader's request: all of it except a diff that only timed
+    out. The worker after a publish keeps that one (`record`); a read asks again, so that asking
+    is never what fills the stored column."""
+    return keepable(found) and found.get("unknown_reason") != partdiff.REASON_SLOW
+
+
 def round_of(found: dict, frm: int) -> dict:
     return {"from": frm, **found}
 

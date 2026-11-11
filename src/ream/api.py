@@ -2289,7 +2289,7 @@ def agent_router(
             found = {"parts": [], "more": 0, "unknown_reason": None}
         else:
             found = partdiff.changes_safely(old, new)
-            if end == frm + 1 and partchanges.keepable(found):
+            if end == frm + 1 and partchanges.keepable_from_a_read(found):
                 store.save_part_changes(
                     db, artifact_id, end, partchanges.round_of(found, frm)
                 )

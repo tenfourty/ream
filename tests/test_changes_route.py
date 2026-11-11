@@ -4,7 +4,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from ream import keys, partchanges, store
+from ream import keys, pagediff, partchanges, store
 from ream.app import create_gallery_app
 
 
@@ -255,20 +255,19 @@ def test_ream_changes_hands_its_flags_to_the_publish_tool(monkeypatch):
     ]
 
 
-def test_a_diff_that_timed_out_is_kept_and_later_gets_answer_at_once(
+def _answer(reason):
+    return {"parts": [], "more": 0, "unknown_reason": reason}
+
+
+def test_a_diff_that_timed_out_is_not_kept_by_a_read_and_is_asked_again(
     db, api, seat, monkeypatch
 ):
     calls = []
 
     def slow(*a, **k):
         calls.append(1)
-        return {
-            "parts": [],
-            "more": 0,
-            "unknown_reason": partchanges.partdiff.REASON_SLOW,
-        }
+        return _answer(partchanges.partdiff.REASON_SLOW)
 
-    monkeypatch.setattr(partchanges.partdiff, "changes_safely", slow)
     monkeypatch.setattr("ream.api.partdiff.changes_safely", slow)
     first = get(api, seat, "/changes", **{"from": 1, "to": 2}).json()
     second = get(api, seat, "/changes", **{"from": 1, "to": 2}).json()
@@ -277,7 +276,44 @@ def test_a_diff_that_timed_out_is_kept_and_later_gets_answer_at_once(
         == second["unknown_reason"]
         == partchanges.partdiff.REASON_SLOW
     )
-    assert len(calls) == 1, "the second GET recomputed a diff that already timed out"
+    assert len(calls) == 2, "the answer is computed on each read"
+    assert store.stored_part_changes(db, seat["id"], 2) is None
+
+
+def test_the_worker_after_a_publish_still_keeps_a_diff_that_timed_out(
+    db, api, seat, monkeypatch
+):
+    calls = []
+
+    def slow(*a, **k):
+        calls.append(1)
+        return _answer(partchanges.partdiff.REASON_SLOW)
+
+    monkeypatch.setattr("ream.partchanges.partdiff.changes_safely", slow)
+    partchanges.record(db, seat["id"], 2)
+    assert store.stored_part_changes(db, seat["id"], 2)["unknown_reason"] == (
+        partchanges.partdiff.REASON_SLOW
+    )
+    got = get(api, seat, "/changes", **{"from": 1, "to": 2}).json()
+    assert got["unknown_reason"] == partchanges.partdiff.REASON_SLOW
+    assert len(calls) == 1, "a read after the worker kept it did not recompute"
+
+
+@pytest.mark.parametrize("reason", [None, pagediff.REASON_LARGE])
+def test_a_read_still_keeps_a_real_answer_and_one_that_is_too_large(
+    db, api, seat, monkeypatch, reason
+):
+    calls = []
+
+    def answer(*a, **k):
+        calls.append(1)
+        return _answer(reason)
+
+    monkeypatch.setattr("ream.api.partdiff.changes_safely", answer)
+    get(api, seat, "/changes", **{"from": 1, "to": 2})
+    get(api, seat, "/changes", **{"from": 1, "to": 2})
+    assert len(calls) == 1
+    assert store.stored_part_changes(db, seat["id"], 2)["unknown_reason"] == reason
 
 
 def test_a_worker_timeout_is_its_own_answer_not_a_transient_failure(monkeypatch):
