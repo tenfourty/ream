@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass
 
 from ream import scanslots
-from ream.htmlbound import BoundedParser, TooComplex
+from ream.htmlbound import BoundedParser, Budget, TooComplex
 
 OPS = ("replace", "append", "prepend", "remove")
 
@@ -178,7 +178,7 @@ class _Walker(BoundedParser):
         foreign: bool = False,
         wanted: frozenset[str] | None = None,
     ):
-        super().__init__(convert_charrefs=False)
+        super().__init__(convert_charrefs=False, meter=Budget())
         self.src = src
         self.target = target
         # Many ids in one pass (`locate_many`): every match carries its "id".
@@ -324,8 +324,9 @@ class _Walker(BoundedParser):
                 self.close()
         except TooComplex:
             raise TooComplexError(
-                "a tag in the markup is too long or has too many attributes to read,"
-                " so where its elements end cannot be told -- nothing was changed."
+                "a tag in the markup is too long or has too many attributes to read, or"
+                " the markup takes too long to read, so where its elements end cannot"
+                " be told -- nothing was changed."
             ) from None
         return leftover
 

@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from ream import scanslots
-from ream.htmlbound import BoundedParser, TooComplex
+from ream.htmlbound import BoundedParser, Budget, TooComplex
 
 # Every C0 control character except the whitespace ones `sanitize` already
 # turns into a plain space by splitting on whitespace (tab, LF, CR, FF, VT),
@@ -163,7 +163,7 @@ class _Visible(BoundedParser):
     _SKIP: ClassVar[set[str]] = {"script", "style", "svg", "template"}
 
     def __init__(self, limit: int) -> None:
-        super().__init__(convert_charrefs=True)
+        super().__init__(convert_charrefs=True, meter=Budget())
         self.limit = limit
         self.size = 0
         self.truncated = False
@@ -190,7 +190,7 @@ class _Visible(BoundedParser):
 
 def _read(body: str, limit: int) -> _Visible | None:
     """The parser that has read the page, or None when a tag is too long or too busy
-    for it (`htmlbound.TooComplex`): the callers' answer is then the one for a page
+    for it, or too slow to read (`htmlbound.TooComplex`): the callers' answer is then the one for a page
     with more text than they read, `("", True)`, which each already handles."""
     parser = _Visible(limit)
     try:

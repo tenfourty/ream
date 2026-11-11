@@ -21,6 +21,13 @@ the one the match gives (this parser says a tag is whole only if the match ends 
 ">", and with none after the "<" it cannot) and need not be asked. Parsers of an older
 Python test tags another way, so they keep their own.
 
+Memory is not the only cost: a page of 8 MiB of tags of 4000 attributes each, or of
+end tags, took `forms`, `sections`, `text` and `anchors` 3 to 20 seconds with every tag
+read as it is. So each of those four gives its parser a `Budget` as its `meter`
+(`PARSE_SECONDS`, made per call, started at its first token), which `BoundedParser`
+asks about every token it steps over and about each long tag, and `TooComplex` is
+raised when it is spent.
+
 Every `HTMLParser` in `src/` is a `BoundedParser`, and a subclass overrides only what
 it handles (`tests/test_htmlbound.py` walks the source and refuses anything else), so
 a new reader of pages cannot forget this. What a reader does when it raises
@@ -31,6 +38,7 @@ never get a 500 from it.
 from __future__ import annotations
 
 import re
+import time
 from html import parser as html_parser
 from html.parser import HTMLParser
 from typing import Protocol
@@ -38,11 +46,49 @@ from typing import Protocol
 
 class TooComplex(Exception):
     """A tag is too long or has too many attributes for the parser's match to be run
-    on it, or (for a reader with a budget, `renderfind.Budget`) the budget is spent."""
+    on it, or (for a reader with a budget, `renderfind.Budget` or `Budget`) the time is spent."""
+
+
+# What reading one page may cost, in time: memory is bounded by the tag rules below,
+# and this bounds the rest (a page of 8 MiB of tags of 4000 attributes each, or of
+# end tags, takes the readers 5 to 20 seconds with nothing else wrong with it).
+PARSE_SECONDS = 2.0
 
 
 class _Budget(Protocol):
     def check(self) -> None: ...
+
+
+class Budget:
+    """The time one reading of a page may take. It starts at its first use, so the
+    time a request waited for a scan slot is not spent. `check()` raises TooComplex
+    when time is up and is cheap to call between tags; `step()` is for each token, and
+    reads the clock only now and then. (`renderfind.Budget`, shared by the readings of
+    a request and started when it is made, is its own: its readers count their own
+    tokens.)"""
+
+    def __init__(self, seconds: float = PARSE_SECONDS) -> None:
+        self._seconds = seconds
+        self._deadline: float | None = None
+        self._steps = 0
+        self.spent = False
+
+    def check(self) -> None:
+        if self.spent:
+            raise TooComplex
+        now = time.monotonic()
+        if self._deadline is None:
+            self._deadline = now + self._seconds
+        if now >= self._deadline:
+            self.spent = True
+            raise TooComplex
+
+    def step(self) -> None:
+        """One more token read. Looks at the clock on the first call, then on every
+        64th, and on every call once the budget is spent."""
+        self._steps += 1
+        if self.spent or self._steps == 1 or not self._steps & 63:
+            self.check()
 
 
 _TAG_END_NEEDS_A_GT = hasattr(html_parser, "locatetagend")
@@ -68,7 +114,7 @@ _ATTRIBUTE = re.compile(
 
 # The methods `BoundedParser` replaces. A subclass defines none of them
 # (tests/test_htmlbound.py).
-REPLACED = ("check_for_whole_start_tag", "parse_endtag")
+REPLACED = ("check_for_whole_start_tag", "parse_endtag", "updatepos")
 
 
 def end_of_tag(rawdata: str, name: int, budget: _Budget | None = None) -> int:
@@ -109,15 +155,28 @@ def end_of_tag(rawdata: str, name: int, budget: _Budget | None = None) -> int:
 
 class BoundedParser(HTMLParser):
     """An HTMLParser whose tags are read by `end_of_tag`: it raises `TooComplex` from
-    `feed` or `close` for a tag too long or too busy to read, where the standard parser
-    would run one match over the rest of the page. `budget` (anything with `check()`,
-    which raises TooComplex when time is up) is asked about long tags too."""
+    `feed` or `close` for a tag too long or too busy to read, where the standard
+    parser would run one match over the rest of the page. `budget` (anything with
+    `check()`, which raises TooComplex when time is up) is asked about long tags: for
+    a reader that counts its own tokens. `meter` (a `Budget`) is asked about long
+    tags too, and about every token the parser steps over (`updatepos`, which the
+    standard parser calls after each one, an end tag or a stray "<" too)."""
 
     def __init__(
-        self, *, convert_charrefs: bool = True, budget: _Budget | None = None
+        self,
+        *,
+        convert_charrefs: bool = True,
+        budget: _Budget | None = None,
+        meter: Budget | None = None,
     ) -> None:
+        self._meter = meter
+        self._tag_budget = budget if budget is not None else meter
         super().__init__(convert_charrefs=convert_charrefs)
-        self._tag_budget = budget
+
+    def updatepos(self, i, j):
+        if self._meter is not None:
+            self._meter.step()
+        return super().updatepos(i, j)
 
     def check_for_whole_start_tag(self, i):
         if not _TAG_END_NEEDS_A_GT:

@@ -25,7 +25,7 @@ from datetime import UTC, datetime
 
 from ream import formrecord, ids, scanslots, text
 from ream.db import jsonb
-from ream.htmlbound import BoundedParser, TooComplex
+from ream.htmlbound import BoundedParser, Budget, TooComplex
 
 # Elements that never have content or an end tag.
 _VOID = frozenset(
@@ -158,7 +158,7 @@ class _FormBuild:
 
 class _Walk(BoundedParser):
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(meter=Budget())
         self.stack: list[str] = []
         # Open count per tag, so an unmatched end tag is an O(1) miss: a page of
         # a million stray `</x>` would otherwise scan the stack once each.
@@ -614,8 +614,8 @@ def parse(body: str) -> Parsed:
         # A page whose forms cannot be read is refused like one whose forms cannot be
         # stored, never published with forms nothing reads.
         raise FormRefused(
-            "a tag on this page is too long or has too many attributes for its"
-            " forms to be read: nothing was stored",
+            "a tag on this page is too long or has too many attributes, or the page"
+            " takes too long to read, for its forms to be read: nothing was stored",
             line=walk.getpos()[0],
         ) from None
     return Parsed([_build_form(f) for f in walk.forms], walk.stray_line)

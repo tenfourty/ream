@@ -17,7 +17,7 @@ import html
 import re
 
 from ream import scanslots, sections, text
-from ream.htmlbound import BoundedParser, TooComplex
+from ream.htmlbound import BoundedParser, Budget, TooComplex
 
 CURRENT = "current"
 EDITED = "edited"
@@ -73,7 +73,7 @@ class _Headings(BoundedParser):
     any other page; an opener never closed before the next heading is dropped."""
 
     def __init__(self, body: str) -> None:
-        super().__init__()
+        super().__init__(meter=Budget())
         self._body = body
         # HTMLParser counts a line at each "\n" and nothing else.
         self._lines = [0]
