@@ -2832,3 +2832,12 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   the house plug-in's mail backend sends all mail, and with none registered mail is off, as on a fresh
   install. A deployment that still sets `REAM_MAILGUN_*` or `REAM_MAIL_FROM` starts, with one warning
   if no backend is loaded. Ledger: `specs/2026-11-04-core-and-plugins-design.md`, step 9b.
+- **Receipts slice 2: the decision strip in the gallery (11 Nov 2026; branch `ci/receipts-slice2`).**
+  A settled decision's card shows the agent's current receipt in place of the pickup line: "Working,
+  cove, cove/lane-3. note", "Answered, ... note" with its link, "Blocked", "Won't do", each with a
+  "self-declared" tooltip; a card with no receipt looks as before. A `working` whose `expires_at` has
+  passed with no renewal reads "Lapsed: cove said working 5 hours ago. note" and adds "working lapsed"
+  to the summary line (owner's ruling 11 Nov 2026, `decisions.md`). One rule, `receipts.is_lapsed`,
+  serves the page and the API's `receipt.lapsed`; `current_map` and `history` take `now`. Wording in
+  `listening.RECEIPT_WORDING` (`receipt_line`); a clean place is left for slice 3's "told in Slack" line.
+  Spec §7 slice 2. Live proof on his phone is still to do after deploy.

@@ -88,6 +88,24 @@ def _iso(value) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+def is_lapsed(state: str, expires_at, now: datetime) -> bool:
+    """The one rule for a lapsed claim, for the API and the gallery alike: a `working`
+    whose `expires_at` is strictly before `now` (at the instant itself it still stands),
+    with nothing after it (a later state would have replaced it as the current receipt).
+    Computed on read, never stored. `expires_at` may be a datetime or an ISO string;
+    a naive one is UTC."""
+    if state != "working" or expires_at in (None, ""):
+        return False
+    if isinstance(expires_at, str):
+        try:
+            expires_at = datetime.fromisoformat(expires_at)
+        except ValueError:
+            return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    return expires_at < now
+
+
 def _shape(row, now: datetime) -> dict:
     """One `receipt` row (id, state, note, link, agent, session, comment_id, created_at,
     expires_at, voided_at) as the JSON an agent reads."""
@@ -102,7 +120,7 @@ def _shape(row, now: datetime) -> dict:
         "at": _iso(row[7]),
         "expires_at": _iso(expires),
         # Computed, never stored: the claim ran out and nothing came after it.
-        "lapsed": bool(row[1] == "working" and expires is not None and expires < now),
+        "lapsed": is_lapsed(row[1], expires, now),
     }
 
 
@@ -112,13 +130,13 @@ _COLUMNS = (
 )
 
 
-def current_map(conn, decisions: list) -> dict[str, dict]:
+def current_map(conn, decisions: list, now: datetime | None = None) -> dict[str, dict]:
     """The current receipt of each `DecisionRow` in `decisions`, by decision id; a
     decision with none is absent. One query for the rows and none for seen, which is on
     the row already."""
     if not decisions:
         return {}
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
     ids_ = [d.id for d in decisions]
     found: dict[str, dict] = {}
     rows = conn.execute(
@@ -171,10 +189,10 @@ def history_owned(conn, agent: str, decision_id: str) -> list[dict] | None:
     return None if found is None else history(conn, decision_id)
 
 
-def history(conn, decision_id: str) -> list[dict]:
+def history(conn, decision_id: str, now: datetime | None = None) -> list[dict]:
     """Every receipt row on a decision, oldest first, with whether it is still current.
     Seen is not here: it is the decision's own `acknowledged_at`."""
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
     rows = conn.execute(
         f"select {_COLUMNS} from receipt"  # noqa: S608 -- fixed text
         " where subject_kind = 'decision' and subject_id = %s"

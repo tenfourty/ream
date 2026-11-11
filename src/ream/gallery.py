@@ -358,6 +358,8 @@ main{display:block}
   overflow:hidden;text-overflow:ellipsis}
 .part.flagged{font-weight:700}
 .rmeta .part{display:inline}
+.settled .rstrip.done{color:var(--ok)}
+.settled .rstrip.blocked,.settled .rstrip.wont_do,.settled .rstrip.lapsed{color:var(--now);font-weight:600}
 .settled .pickup{margin:var(--space-2) var(--space-35) var(--space-5);font-size:.82rem;color:var(--muted)}
 
 
@@ -4529,6 +4531,25 @@ def _since_block(row: decisions.DecisionRow, mine: list) -> str:
     return f'<div class="since"><b>{label}</b><ul>{items}</ul></div>'
 
 
+def _receipt_strip(receipt: dict, now: datetime) -> str:
+    """The current receipt of a settled decision as one line under its card: the state,
+    the agent and session, the note and, on a done, its link. `lapsed` was computed by
+    `receipts.is_lapsed`, the same rule the API reports. The tooltip says it is the
+    agent's own word."""
+    key = listening.receipt_state(receipt)
+    link = receipt.get("link")
+    anchor = (
+        f' <a href="{escape(link)}" rel="noopener noreferrer">{escape(link)}</a>'
+        if link and receipt.get("state") == "done"
+        else ""
+    )
+    text = listening.receipt_line(receipt, _when(receipt.get("at") or ""), now)
+    return (
+        f'<p class="pickup rstrip {escape(key)}"'
+        f' title="{escape(listening.RECEIPT_TITLE)}">{escape(text)}{anchor}</p>'
+    )
+
+
 def _slack_button(option: dict, copy, chosen: str | None = None) -> str:
     recommended = option["letter"] == copy.recommended
     is_chosen = option["letter"] == chosen
@@ -5054,7 +5075,17 @@ def _render_decisions(
             # ago, which is the failure this whole listener arc exists to end. So the
             # summary line carries a mark only in the bad case -- an answer sitting
             # uncollected -- and the opened card says plainly who took it and when.
-            if row.acknowledged_at:
+            if row.receipt:
+                # The agent has declared what it did with the answer: the strip
+                # replaces the pickup line (receipts design 4.3), and anything it
+                # declared means it took the answer up, so no "not picked up".
+                unread = (
+                    '<span class="unread">working lapsed</span>'
+                    if row.receipt.get("lapsed")
+                    else ""
+                )
+                pickup = _receipt_strip(row.receipt, now)
+            elif row.acknowledged_at:
                 unread = ""
                 pickup = (
                     f'<p class="pickup">{escape(row.acknowledged_by or "the agent")} '

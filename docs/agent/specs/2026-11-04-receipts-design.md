@@ -186,8 +186,10 @@ never makes it.
 1. **Decisions** (built; departures: no `events --receipts` flag, since there is no such subcommand, the `include=receipts` query parameter is the read; no `--comment`). Schema on both drivers (`receipt`, `decision_outcome.link`), the verb and
    routes for decisions, `receipt` on the decision reads, the `receipt_set` kind that never wakes,
    `ack` aliased, reset on reopen. Tests on SQLite and Postgres. (Agents can declare and read.)
-2. **Decision strip in the gallery:** expiry computed, lapsed rendering, route line unchanged.
-   Live proof on his phone.
+2. **Decision strip in the gallery** (built 11 Nov 2026; branch `ci/receipts-slice2`; departures: the strip
+   sits on the settled card, where the pickup line was, and the open card's route line is untouched;
+   `lapsed` stays the boolean of 4.2, one rule `receipts.is_lapsed` for page and API). Expiry computed,
+   lapsed rendering, route line unchanged. Live proof on his phone still to do.
 3. **The nudge:** the per-agent setting, the one-shot send, the strip line.
 4. **Comments:** `acknowledged_*` on thread roots, `subject_kind=thread`, the comment route, the
    `threads` / `GET /comments` fields, reset on a new human comment, the thread strip.

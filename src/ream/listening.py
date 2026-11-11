@@ -79,6 +79,18 @@ WORDING = {
         "is saved. {says}{seen}"
     ),
 }
+# What the gallery's strip says of an agent's current receipt (receipts design 4.3).
+# {who} is "agent" or "agent, session"; {note} is filled or empty; a link is the gallery's to draw.
+# Slice 3 adds its "{agent} was told in Slack {when}" line beside these.
+RECEIPT_WORDING = {
+    "seen": "{agent} picked this up {when}.",
+    "working": "Working, {who}.{note}",
+    "lapsed": "Lapsed: {agent} said working {ago}.{note}",
+    "done": "Answered, {who}.{note}",
+    "blocked": "Blocked, {who}.{note}",
+    "wont_do": "Won't do, {who}.{note}",
+}
+RECEIPT_TITLE = "Self-declared by the agent; Ream has not checked it"
 SAYS = "{agent} says: {pickup}{stop}"
 SEEN = " Last seen {age}."
 NEVER_SEEN = " It has not been seen asking for events."
@@ -371,3 +383,39 @@ def status(db: Database, agent: str, decision_id: str | None = None) -> dict | N
             return None
         body["decision"] = route_view(route, now)
     return body
+
+
+def _since(then: datetime, now: datetime) -> str:
+    """How long ago, in whole units: '45 minutes ago', '1 hour ago', '5 hours ago'."""
+    minutes = max(0, int((now - then).total_seconds()) // 60)
+    if minutes < 60:
+        n, unit = minutes, "minute"
+    elif minutes < 2880:
+        n, unit = minutes // 60, "hour"
+    else:
+        n, unit = minutes // 1440, "day"
+    return f"{n} {unit}{'' if n == 1 else 's'} ago"
+
+
+def receipt_state(receipt: dict) -> str:
+    """The strip's key: the receipt's state, or `lapsed` for a working one that ran out."""
+    return "lapsed" if receipt.get("lapsed") else receipt["state"]
+
+
+def receipt_line(receipt: dict, when: str = "", now: datetime | None = None) -> str:
+    """The sentence for a current receipt (`receipts.current_map`'s dict), plain text.
+    `when` is the caller's own rendering of `receipt["at"]` (the gallery's date style);
+    `now` is a parameter so a test never waits."""
+    now = now or datetime.now(UTC)
+    key = receipt_state(receipt)
+    agent = receipt.get("agent") or "the agent"
+    session = receipt.get("session")
+    note = (receipt.get("note") or "").strip()
+    then = _moment(receipt.get("at"))
+    return RECEIPT_WORDING[key].format(
+        agent=agent,
+        who=f"{agent}, {session}" if session else agent,
+        note=f" {note}" if note else "",
+        when=when,
+        ago=_since(then, now) if then else "earlier",
+    )
