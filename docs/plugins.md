@@ -139,6 +139,10 @@ stay pending; `artifacts-admin outbox` shows counts by sink, and reinstalling dr
 **`delivery="after_commit"`**: `deliver(event)` is called once on the request thread's side,
 after the commit, best effort. A raise is logged (type only) and counted; it never reaches the
 caller and the action is already done. Use it for fire-and-forget nudges.
+**The doorbell (step 9d):** core's built-in `nudge` sink rings the doorbell itself. A plug-in that
+registers an after-commit sink named `doorbell` takes that over: checked at each delivery, core's
+sink stands down (it logs once at INFO and rings nothing) while a sink of that name is registered,
+so the two never both ring. Without one, core rings as before.
 
 **The circuit breaker** is per sink and automatic. Five failures running (a raise or a timeout),
 from at least two different events (so one poison event cannot open the breaker of a healthy

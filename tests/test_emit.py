@@ -266,6 +266,32 @@ def test_the_nudge_sink_passes_the_fields_nudge_emit_takes(db, page, monkeypatch
     assert kwargs["letter"] == "a" and kwargs["recommended"] == "b"
 
 
+def _nudge_calls(db, page, monkeypatch, *extra):
+    from ream import nudge
+
+    calls = []
+    monkeypatch.setattr(nudge, "emit", lambda *a, **k: calls.append(k))
+    with sinks.isolated(*sinks._builtin_sinks(), *extra):
+        _emit(db, _event(artifact_id=page.id, data={"title": "Plan"})).fire()
+    return calls
+
+
+def test_core_doorbell_stands_down_when_a_plugin_sink_named_doorbell_exists(
+    db, page, monkeypatch
+):
+    doorbell = Sink(
+        "doorbell",
+        ("decision_answered",),
+        deliver=lambda event: None,
+        delivery="after_commit",
+    )
+    assert _nudge_calls(db, page, monkeypatch, doorbell) == []
+
+
+def test_core_doorbell_rings_with_no_doorbell_sink(db, page, monkeypatch):
+    assert len(_nudge_calls(db, page, monkeypatch)) == 1
+
+
 @pytest.mark.usefixtures("fresh_schema")
 def test_migration_adds_the_outbox_and_leaves_partner_rows_delivering(db):
     when = datetime.now(UTC)

@@ -751,6 +751,13 @@ drivers; CI only (not on the management machine).
    this core has no tracker-page command at all, and a `render` line using one fails. **Not tested:**
    the plug-in under the real dispatcher with the old names, a real `bd`, and a `render` line run by
    `artifacts-republish` after the move.
+   **9d, core stand-down (11 Nov 2026).** The doorbell moves into the house plug-in as an
+   after-commit sink named `doorbell`. Core's built-in `nudge` sink (`sinks._builtin_sinks`,
+   `deliver_nudge`) now checks at delivery whether a sink of that name is registered and, if so,
+   rings nothing and logs once at INFO (no value named), so the two never both ring. Core's doorbell
+   code stays until the plug-in half is proven in production; deleting it is a later step. Tests in
+   `tests/test_emit.py` (rings without the plug-in sink, silent with it). **Not run here:** the full
+   suite (CI).
    **9c, built in two halves (10 to 11 Nov 2026).** *The hook (on main):* the plug-in registers a
    scanner `gitguardian` (ream-homelab: `timeout=20`, an 18 s total deadline, text that cannot be
    encoded answered with a finding) and core's relay scan stood down while one was registered;

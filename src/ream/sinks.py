@@ -90,6 +90,9 @@ class Sink:
 _lock = threading.RLock()
 _sinks: dict[str, Sink] = {}
 _builtins_loaded = False
+# The plug-in sink that takes over core's doorbell (step 9d); logged once per process.
+DOORBELL_PLUGIN_SINK = "doorbell"
+_doorbell_stood_down_logged = False
 _late_failures = 0
 # sink name -> [consecutive failures, open until (None: closed), the distinct rows that
 # failed (capped at 2), when it last opened (None: never)]. This is the state of a
@@ -677,6 +680,17 @@ def _builtin_sinks() -> list[Sink]:
     from ream import events, nudge, partner
 
     def deliver_nudge(event: Event) -> None:
+        # Step 9d: the house plug-in's after-commit sink `doorbell` rings instead, so the
+        # two never both ring. Checked at delivery (the plug-ins load after core's sinks);
+        # `registered()` takes the RLock itself, so nothing here holds it.
+        global _doorbell_stood_down_logged
+        if any(s.name == DOORBELL_PLUGIN_SINK for s in registered()):
+            if not _doorbell_stood_down_logged:
+                _doorbell_stood_down_logged = True
+                _log.info(
+                    "core doorbell stands down: a plug-in sink named doorbell is registered"
+                )
+            return
         data = event.data
         nudge.emit(
             kind=event.kind,
