@@ -7,7 +7,10 @@ scanner, using a fake one registered through the plug-in API, as the plug-in doe
 * a publish with a finding is refused, and the scanner was asked once;
 * in an agent comment's second scan, a `gitguardian` that raises or times out gave no opinion,
   so the comment is left unscanned for the sweeper to ask again (a hold stays under `block`),
-  and no other scanner's clean answer stands in for it.
+  and no other scanner's clean answer stands in for it;
+* a start with the old `GGSHIELD_URL` or `GGSHIELD_TOKEN` set and no `gitguardian` scanner
+  loaded logs ONE warning that the second scan is off, naming the variables and no value; with
+  the scanner registered, or with neither variable set, it logs nothing.
 """
 
 import logging
@@ -16,7 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from ream import comments, plugin_api, scanners, settings, store
+from ream import comments, plugin_api, scanners, serve, settings, store
 from ream.scan import Finding
 
 PAGE = "<!doctype html><title>t</title><p>caf&eacute; &#x3c;b&#x3e; ok</p>"
@@ -286,3 +289,103 @@ def test_a_deployment_that_still_sets_the_old_relay_variables_starts(monkeypatch
     settings.current()  # no EnvConflict, no unknown-variable refusal
     assert not hasattr(settings.current(), "ggshield_url")
     assert not hasattr(settings.current(), "ggshield_token")
+
+
+# --- a start that has lost the second scan says so -------------------------------
+
+_RELAY_VARIABLES = (
+    "REAM_GGSHIELD_URL",
+    "ARTIFACTS_GGSHIELD_URL",
+    "REAM_GGSHIELD_TOKEN",
+    "ARTIFACTS_GGSHIELD_TOKEN",
+)
+_SENTINEL = "relay-sentinel-0123"
+
+
+@pytest.fixture()
+def no_relay_variables(monkeypatch):
+    for name in _RELAY_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+def _start_warnings(caplog):
+    return [
+        r
+        for r in caplog.records
+        if r.name == "ream.serve" and r.levelno == logging.WARNING
+    ]
+
+
+def test_relay_variables_set_and_no_gitguardian_scanner_warns_once_naming_no_value(
+    no_relay_variables, house, caplog
+):
+    no_relay_variables.setenv("REAM_GGSHIELD_URL", _SENTINEL)
+    no_relay_variables.setenv("ARTIFACTS_GGSHIELD_TOKEN", _SENTINEL)
+    with caplog.at_level(logging.WARNING, logger="ream.serve"):
+        serve._warn_second_scan_off()
+    (record,) = _start_warnings(caplog)
+    text = record.getMessage()
+    assert "REAM_GGSHIELD_URL" in text and "ARTIFACTS_GGSHIELD_TOKEN" in text
+    assert "REAM_GGSHIELD_TOKEN" not in text  # only the ones that are set
+    assert "OFF" in text and "gitguardian" in text
+    assert _SENTINEL not in caplog.text
+
+
+def test_each_relay_variable_alone_is_enough_to_warn(no_relay_variables, house, caplog):
+    for name in _RELAY_VARIABLES:
+        caplog.clear()
+        no_relay_variables.setenv(name, _SENTINEL)
+        with caplog.at_level(logging.WARNING, logger="ream.serve"):
+            serve._warn_second_scan_off()
+        (record,) = _start_warnings(caplog)
+        assert name in record.getMessage()
+        assert _SENTINEL not in caplog.text
+        no_relay_variables.delenv(name)
+
+
+def test_relay_variables_set_with_a_gitguardian_scanner_registered_is_silent(
+    no_relay_variables, house, caplog
+):
+    no_relay_variables.setenv("REAM_GGSHIELD_URL", _SENTINEL)
+    no_relay_variables.setenv("REAM_GGSHIELD_TOKEN", _SENTINEL)
+    house.scanner("gitguardian", _clean, on_error="skip", timeout=20.0)
+    with caplog.at_level(logging.WARNING, logger="ream.serve"):
+        serve._warn_second_scan_off()
+    assert _start_warnings(caplog) == []
+
+
+def test_another_scanner_does_not_silence_the_warning(
+    no_relay_variables, house, caplog
+):
+    no_relay_variables.setenv("REAM_GGSHIELD_URL", _SENTINEL)
+    house.scanner("other", _clean)
+    with caplog.at_level(logging.WARNING, logger="ream.serve"):
+        serve._warn_second_scan_off()
+    assert len(_start_warnings(caplog)) == 1
+
+
+def test_no_relay_variable_set_is_silent_with_or_without_a_scanner(
+    no_relay_variables, house, caplog
+):
+    no_relay_variables.setenv("REAM_GGSHIELD_URL", "   ")  # blank is unset
+    with caplog.at_level(logging.WARNING, logger="ream.serve"):
+        serve._warn_second_scan_off()
+        house.scanner("gitguardian", _clean)
+        serve._warn_second_scan_off()
+    assert _start_warnings(caplog) == []
+
+
+def test_the_real_entrypoint_warns_once_when_the_second_scan_is_off(
+    db, house, no_relay_variables, caplog
+):
+    """Reached through `app_from_env`, after the plug-ins load (here none registers one)."""
+    no_relay_variables.setenv("DATABASE_URL", db.dsn)
+    no_relay_variables.setenv("REAM_MAINTENANCE", "off")
+    no_relay_variables.setenv("REAM_GGSHIELD_TOKEN", _SENTINEL)
+    with caplog.at_level(logging.WARNING, logger="ream.serve"):
+        serve.app_from_env()
+    ours = [r for r in _start_warnings(caplog) if "second scan" in r.getMessage()]
+    assert len(ours) == 1
+    assert "REAM_GGSHIELD_TOKEN" in ours[0].getMessage()
+    assert _SENTINEL not in caplog.text

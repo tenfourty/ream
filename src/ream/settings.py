@@ -680,6 +680,18 @@ def is_set(name: str) -> bool:
     return name in _overrides or bool(_env(name))
 
 
+# Settings the core no longer reads because a plug-in does (suffixes, under both prefixes).
+# The GitGuardian relay's address and token: the house plug-in's `gitguardian` scanner reads
+# them itself (step 9c). A deployment may still set them.
+RETIRED_GGSHIELD = ("GGSHIELD_URL", "GGSHIELD_TOKEN")
+
+
+def retired_ggshield_set() -> list[str]:
+    """The names (both prefixes) of the retired ggshield variables the environment sets, by
+    presence only: never a value, so it is safe to log. Empty when none is set."""
+    return [n for suffix in RETIRED_GGSHIELD for n in envnames.set_names(suffix)]
+
+
 def is_loopback(host: str) -> bool:
     host = host.strip().strip("[]").lower()
     if host == "localhost" or host.endswith(".localhost"):

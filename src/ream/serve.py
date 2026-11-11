@@ -19,6 +19,7 @@ from ream import (
     partner_in,
     plugin_api,
     repack,
+    scanners,
     settings,
     sinks,
     webhook,
@@ -122,6 +123,28 @@ def _arm_gallery_access_log() -> None:
         logger.propagate = False
 
 
+def _warn_second_scan_off() -> None:
+    """One warning when the retired ggshield variables are set and no `gitguardian` scanner
+    is registered: the GitGuardian second scan then does not run at all (pages publish on the
+    built-in scan only; agent comments are shown unscanned). Call it after the plug-ins load.
+
+    A warning, not a refusal: a core-bare install (`REAM_PLUGINS=none`, no house plug-in) must
+    still start, and a deployment may leave these two behind after moving the scan elsewhere.
+    The line names the variables and never a value (presence only:
+    `settings.retired_ggshield_set`)."""
+    stale = settings.retired_ggshield_set()
+    if not stale or scanners.SECOND_OPINION in scanners.registered():
+        return
+    log.warning(
+        "%s set, but no %r scanner plug-in is loaded: the GitGuardian second scan is OFF"
+        " (pages publish on the built-in scan only; agent comments are shown unscanned)."
+        " The core no longer reads these; install the plug-in that registers the scanner,"
+        " or unset them",
+        ", ".join(stale),
+        scanners.SECOND_OPINION,
+    )
+
+
 def app_from_env():
     """Read `DATABASE_URL`, migrate, and return the fail-closed host router
     `create_app` builds. Never includes the DSN -- or anything else read from
@@ -176,6 +199,7 @@ def app_from_env():
         webhook.register_all()
     except webhook.WebhookConfigError as exc:
         raise SystemExit(str(exc)) from None
+    _warn_second_scan_off()
     comments.start_sweeper(db)
     # The nightly backup and purge (maintenance.py). REAM_MAINTENANCE=off
     # turns it off, for tests that build the real app.

@@ -294,6 +294,8 @@ answer never stands in. With no scanner of that name, any scanner's real clean a
 the name counts, not which plug-in registered it. A plug-in that registers `gitguardian` should pass
 `timeout=20`, or a relay answer slower than 10 seconds would count as no answer. Core reads no
 `GGSHIELD_*` setting; a plug-in reads its own.
+If `REAM_GGSHIELD_URL`/`TOKEN` (or the `ARTIFACTS_` forms) are still set but no `gitguardian` scanner is
+registered after the plug-ins load, start-up logs one warning naming the variables (never a value) that the second scan is OFF; it warns and does not refuse, so a core-bare install still starts.
 
 ### Mail backend
 

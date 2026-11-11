@@ -41,6 +41,13 @@ def get(suffix: str) -> str | None:
     return new or old or None
 
 
+def set_names(suffix: str) -> list[str]:
+    """The variable names of `suffix` that are set to something non-blank, in new-then-old
+    order. Presence only: no value is returned, and a pair that differs is not an error here
+    (this answers "is it set at all", for a setting the server no longer reads)."""
+    return [name for name in names(suffix) if os.environ.get(name, "").strip()]
+
+
 def child_env(env: dict[str, str], suffix: str, value: str | None) -> None:
     """Set (or, with None, remove) both forms of `suffix` in `env`, a child's environment, so
     a child written against either name reads it."""
