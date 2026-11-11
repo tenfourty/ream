@@ -417,7 +417,8 @@ class PluginAPI:
         <prefix>_...` and `create [unique] index if not exists <prefix>_... on
         <prefix>_...` are accepted, where `<prefix>` is the plug-in's name in lower
         case with every run of other characters as `_`; no `;`, no `%`, no comment, no
-        `rollback`, nothing after a table's column list, and (checked against the
+        `rollback`, no `$`, backslash, backtick or `[` (not even in a default string),
+        nothing after a table's column list, and (checked against the
         catalog at `apply_schema`) no core name, and an index or a `references` only on
         a table this plug-in's own statements create. Write
         the dialect-neutral subset: `text`, `integer`, `bigint`, `boolean`
@@ -596,6 +597,11 @@ def _check_ddl(plugin: str, statement: str) -> str:
         refuse("not a statement")
     if re.search(r";|%|--|/\*", statement):
         refuse("no ';', '%' or comment allowed")
+    # Quoting this check cannot follow (Postgres `$$`/`$tag$` strings and `E'\''`
+    # escapes, backtick names, bracket names) could hide a `)` or a second statement
+    # from the parenthesis scanner, so none of them may appear.
+    if re.search(r"[$\\`\[]", statement):
+        refuse("no '$', backslash, backtick or '[' allowed")
     # SQLite's `on conflict rollback` (or `or rollback`) would end the whole
     # transaction it runs in; no schema statement needs the word.
     if re.search(r"\brollback\b", statement, re.IGNORECASE):
@@ -849,11 +855,19 @@ def load() -> list[str]:
     done = plugin_cli.register_all(
         _entry_points(), settings.current().plugins, PluginAPI, _log
     )
-    # One plug-in's names (tables, variables) must never fall under another's: `acme`
-    # would otherwise own every `acme_chat_...` name of `acme-chat`.
+    # Two plug-ins that both declare a schema must not have one's prefix cover the
+    # other's: `acme` could otherwise create `acme_chat_...` tables of `acme-chat`. A
+    # plug-in with no schema has no table to collide (text variables are refused by
+    # exact name), so a 1.0 or 1.1 plug-in loads as it always did.
+    declaring = {plugin for plugin, _st in _SCHEMA}
     for one in done:
         for other in done:
-            if one != other and _prefix(other).startswith(_prefix(one)):
+            if (
+                one != other
+                and one in declaring
+                and other in declaring
+                and _prefix(other).startswith(_prefix(one))
+            ):
                 raise PluginError(
                     f"plug-in {other!r}: its name prefix {_prefix(other)!r} falls under"
                     f" plug-in {one!r}'s {_prefix(one)!r}; rename one of them"

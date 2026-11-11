@@ -178,6 +178,11 @@ def test_start_and_stop_failures_are_isolated(world, db):
         "create table if not exists toy_t (id text",  # never closes
         # SQLite's conflict clause that ends the whole transaction
         "create table if not exists toy_t (id text unique on conflict rollback)",
+        # quoting the parenthesis scanner cannot follow
+        "create table if not exists toy_t (id text default $$)$$, x text)",
+        "create table if not exists toy_t (id text default E'\\'')",
+        "create table if not exists toy_t (`id` text)",
+        "create table if not exists toy_t ([id] text)",
     ],
 )
 def test_schema_statements_outside_the_rules_stop_registration(world, statement):
@@ -304,6 +309,7 @@ def test_an_or_rollback_conflict_in_a_stage_fails_the_whole_action_on_sqlite(
             ],
         ),
         ("service", ["create table if not exists service_meta (k text)"]),
+        ("partner", ["create table if not exists partner_outbox (k text)"]),
         # its own prefix, but a table its own statements never create
         ("toy", ["create table if not exists toy_t (k text references toy_other)"]),
         ("toy", ["create index if not exists toy_i on toy_other (k)"]),
@@ -327,10 +333,37 @@ def test_a_schema_that_reaches_a_table_not_its_own_is_refused(
 
 
 def test_one_plugins_prefix_may_not_cover_anothers(world):
-    world(EP("acme", lambda api: None), EP("acme-chat", lambda api: None))
+    world(
+        EP(
+            "acme",
+            lambda api: api.schema(["create table if not exists acme_t (k text)"]),
+        ),
+        EP(
+            "acme-chat",
+            lambda api: api.schema(["create table if not exists acme_chat_t (k text)"]),
+        ),
+    )
     with pytest.raises(PluginError) as exc:
         plugin_api.load()
     assert "'acme'" in str(exc.value) and "'acme-chat'" in str(exc.value)
+
+
+def test_overlapping_plugins_that_declare_no_schema_still_load(world):
+    world(EP("acme", lambda api: None), EP("acme-chat", lambda api: None))
+    assert plugin_api.load() == ["acme", "acme-chat"]
+
+
+def test_a_plugin_named_event_may_not_take_the_journal_sequence(world, db):
+    if db.sqlite:
+        pytest.skip("sequences are a Postgres relation")
+
+    def register(api):
+        api.schema(["create table if not exists event_seq_seq (k text)"])
+
+    world(EP("event", register))
+    plugin_api.load()
+    with pytest.raises(PluginError):
+        plugin_api.apply_schema(db)
 
 
 def test_a_statement_the_database_refuses_names_the_plugin(world, db, fresh_schema):

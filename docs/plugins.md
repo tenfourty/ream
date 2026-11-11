@@ -187,9 +187,12 @@ def register(api):
   duplicate on both, write `insert ... on conflict do nothing` rather than catching the error.
   **A stage must never end the transaction**: no `commit`, `rollback`, `savepoint` or `release`
   statement, and on SQLite no `or rollback` / `on conflict rollback` (it ends the whole
-  transaction, not the statement). One that does fails the **whole** action
-  (`ream.db.TransactionLost`, counted as `<plug-in>:stage`): nothing of it is kept, and the caller
-  sees an error rather than a half-written answer.
+  transaction, not the statement). `rollback` is contained: the core sees the transaction gone,
+  fails the **whole** action with `ream.db.TransactionLost` (counted as `<plug-in>:stage`), nothing
+  of it is kept and the caller sees a clean error. **`commit` is the one form the core cannot
+  contain, and it is forbidden**: it has already committed everything the action wrote before the
+  stage ran, so only the rest of the action fails (the caller sees the same error, but the earlier
+  writes, the answer included, are kept). Never run `commit` in a stage.
 - **`api.schema(statements)`**: the plug-in's tables, created at start-up after the core's
   migration, on Postgres and SQLite, once and idempotently, under the same lock as the core's
   migration. Only `create table if not exists` and `create [unique] index if not exists ... on`
@@ -201,8 +204,13 @@ def register(api):
   index name the core uses (its schema, or anything in the database no loaded plug-in declares),
   and an index `on`, or a `references`, naming any table the plug-in's **own** statements do not
   create; so a plug-in named `agent` or `partner` cannot touch `agent_key` or `partner_outbox`.
-  Two plug-ins whose prefixes overlap (`acme` and `acme-chat`: `acme_` covers `acme_chat_`) stop
-  start-up whatever they register. A breach stops start-up naming the plug-in (never the text),
+  Two plug-ins that both declare a schema and whose prefixes overlap (`acme` and `acme-chat`:
+  `acme_` covers `acme_chat_`) stop start-up; plug-ins that declare no schema are not checked, so a
+  1.0 or 1.1 plug-in loads unchanged. The catalog check covers every relation in the table name
+  space (views, materialized views, sequences) as well as tables, and indexes by their own names.
+  A statement may not hold `$`, a backslash, a backtick or `[` anywhere, a default string included
+  (the check cannot follow `$$` / `$tag$` quoting, `E'\''` escapes or bracket and backtick names);
+  the refusal never echoes the statement. A breach stops start-up naming the plug-in (never the text),
   as does a statement the database refuses (the error's type only; nothing of the plug-ins'
   schema is kept). Write the neutral subset:
   `text`, `integer`, `bigint`, `boolean` (defaults `true`/`false`), `timestamptz`, `jsonb`, constant
@@ -213,7 +221,8 @@ def register(api):
   is up, in plug-in name order; it must return promptly (start a thread, do not run the loop).
   **`api.on_stop(fn)`**: `fn()` runs at shutdown, last started first, each isolated, best effort
   (a killed process runs none). It must return quickly (signal the thread, join it briefly): each
-  stop hook runs in a thread of its own and is given 2 seconds, as the core's own sender is; one
+  stop hook runs in a thread of its own and is given 2 seconds, as the core's own sender is (hooks
+  run one after another, each with its own 2 seconds, so n slow hooks can take 2n seconds); one
   still running after that is left behind, logged and counted as a `stop` failure, and the next
   hook and the core's `sinks.stop` go on. A raise in either is logged by type, counted
   (`<plug-in>:start`, `<plug-in>:stop`) and neither stops the server nor the other plug-ins.
@@ -512,7 +521,8 @@ parent domain. A fault inside the route answers a bare 500 (`plug-in error`), is
   `REAM_PLUGINS` but not installed stops the server's start-up, naming it.
 - A `stage` failure never loses the action (savepoint, logged, counted; the event is not staged
   for that sink), unless the stage ends the transaction itself, which fails the action whole
-  rather than half; a start or stop hook failure never stops the server, and a stop hook gets
+  rather than half (`commit` in a stage cannot be contained and is forbidden: what the action
+  wrote before it stays); a start or stop hook failure never stops the server, and a stop hook gets
   2 seconds.
 - A plug-in may add its own tables (`api.schema`, 1.2) but may not change core tables or SQL, supply gallery pages or JavaScript, or
   serve the reader. The service stays single-reader.

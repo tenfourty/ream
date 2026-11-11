@@ -824,12 +824,17 @@ drivers; CI only (not on the management machine).
    using all three, the failure and refusal cases). Nothing moved; `partner.py` is untouched.
    **Review fixes (11 Nov 2026):** a stage that catches its own database error is still rolled back
    to its savepoint on Postgres (a `select 1` after it raises inside the savepoint), and one that
-   ends the transaction itself (`rollback`, `commit`, SQLite's `or rollback`) fails the whole action
-   with `db.TransactionLost` instead of letting it go on in autocommit; `apply_schema` reads the
+   ends the transaction itself (`rollback`, SQLite's `or rollback`) fails the whole action with
+   `db.TransactionLost` instead of letting it go on in autocommit, nothing kept; `commit` is
+   the one form core cannot contain (everything the action wrote before the stage is already
+   committed, only the rest fails) and is forbidden; a schema statement may hold no `$`,
+   backslash, backtick or `[`; `apply_schema` reads the
    catalog under the lock and refuses a name the core uses (schema.sql, or anything in the catalog no
    plug-in declares) and an index or `references` on a table the plug-in does not create itself, so a
-   plug-in named `agent` or `partner` cannot reach `agent_key` or `partner_outbox`; at load, one
-   plug-in's prefix may not cover another's (`acme`, `acme-chat`); a table statement ends at its
+   plug-in named `agent` or `partner` cannot reach `agent_key` or `partner_outbox`; at load, of two
+   plug-ins that both declare a schema one's prefix may not cover the other's (`acme`, `acme-chat`;
+   plug-ins with no schema load as before); the Postgres catalog check reads `pg_class`, so
+   sequences and materialized views count as names; a table statement ends at its
    column list (no `as table`, `as values`, `inherits`); a database refusal names the plug-in; each
    stop hook gets 2 seconds, like the core's sender.
    **Next, 9e-2: the plug-in's read side.** A way for a plug-in to contribute the inbound copies

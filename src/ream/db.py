@@ -212,16 +212,16 @@ class Connection:
         )
 
     def catalog(self) -> tuple[set[str], set[str]]:
-        """The names of the tables (and views) and of the indexes in the current
-        schema, lower-case."""
-        tables = self.execute(
-            "select lower(table_name) from information_schema.tables"
-            " where table_schema = current_schema()"
+        """The names of the relations that share the table name space (tables, views,
+        materialized views, sequences, foreign and partitioned tables) and of the
+        indexes in the current schema, lower-case."""
+        rows = self.execute(
+            "select lower(c.relname), c.relkind from pg_class c"
+            " join pg_namespace n on n.oid = c.relnamespace"
+            " where n.nspname = current_schema()"
         ).fetchall()
-        indexes = self.execute(
-            "select lower(indexname) from pg_indexes where schemaname = current_schema()"
-        ).fetchall()
-        return {r[0] for r in tables}, {r[0] for r in indexes}
+        tables = {name for name, kind in rows if kind not in ("i", "I")}
+        return tables, {name for name, kind in rows if kind in ("i", "I")}
 
     def byte_length(self, column: str) -> str:
         """The size in bytes of a text column, not its length in characters."""
