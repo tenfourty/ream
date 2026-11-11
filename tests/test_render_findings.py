@@ -2,11 +2,15 @@
 line, the static missing-file check, the verdict, and where they are kept and
 read back (runcove-5t3oj.56, slice 1)."""
 
+import random
+import re
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
 from ream import api as api_module
-from ream import keys, renderfind, store, thumbs
+from ream import csp, keys, renderfind, store, thumbs
 from ream.app import create_gallery_app
 
 pytestmark = pytest.mark.background_thumbnails
@@ -142,6 +146,236 @@ def test_live_data_is_recognised():
     assert not renderfind.loads_live_data("<p>fetch the milk</p>")
 
 
+def test_a_script_with_a_src_counts_and_the_read_goes_on_after_its_block():
+    page = '<script src="a.js">var s = "<img src=x.png>";</script><img src="b.png">'
+    assert renderfind.missing_files(page) == ["a.js", "b.png"]
+
+
+# The two patterns the page is no longer read with: each one looks to the end of
+# the page from every unclosed tag. Kept here, on small pages only, so the
+# single pass is held to the answers they gave.
+_OLD_TAG = re.compile(
+    r"<(img|script|source|video|audio|track|iframe|embed|link|object)\b([^>]*)>",
+    re.IGNORECASE | re.DOTALL,
+)
+_OLD_SCRIPT_BLOCK = re.compile(
+    r"<script\b[^>]*>.*?</script\s*>", re.IGNORECASE | re.DOTALL
+)
+_PIECES = [
+    "<img", "<IMG", "<script", "<SCRIPT", "</script", "</script>", "</SCRIPT  >",
+    "<link", "<object", "<source", "<a", "<scripts", "<script-x", "<imgx", ">", ">",
+    " ", "\n", '"', "'", "=", "src=", "href=", "data=", "data-src=", "rel=",
+    "rel=stylesheet", "x.png", "/a.js", "#top", "//cdn.test/x", "http://x.test/y",
+    "<!--", "-->", "--!>", "<!--->", "fetch(", "<", "&", "text", "<p>",
+]  # fmt: skip
+
+
+def _old_tags(html):
+    def keep_open(match):
+        block = match.group(0)
+        return block[: block.index(">") + 1] + "</script>"
+
+    body = _OLD_SCRIPT_BLOCK.sub(keep_open, csp.outside_comments(html))
+    return [(m.group(1).lower(), m.group(2)) for m in _OLD_TAG.finditer(body)]
+
+
+def test_the_one_pass_read_finds_the_tags_the_patterns_found():
+    rng = random.Random(20261111)
+    for _ in range(6000):
+        page = "".join(rng.choices(_PIECES, k=rng.randint(1, 40)))
+        got = list(renderfind._tags(page, renderfind.Budget(60)))
+        assert got == _old_tags(page), page
+
+
+# --- the cost of reading a page grows with its size, never with its square -----
+
+FETCH = "fetch( "  # in the text, so the live-data read cannot skip the page
+
+# name: (what comes first, what is repeated). Each pattern the page used to be
+# read with looked to the end of the page from every one of these.
+SHAPES = {
+    "unclosed img tags": ("", "<img "),
+    "unclosed script tags": ("", "<script>"),
+    "a tag, then unclosed links": ("<a ", "<link "),
+    "one long unclosed quote": ('<img src="', "a"),
+    "many unclosed quotes": ("", '<img src="x'),
+    "script closers with no >": ("<script>", "</script"),
+    "src= again and again": ("<img ", "src=x "),
+    "rel= again and again": ("<link ", "rel="),
+    "comment openers": ("", "<!--"),
+}
+READS = {
+    "missing_files": lambda page, budget: renderfind.missing_files(page, budget),
+    "loads_live_data": lambda page, budget: renderfind.loads_live_data(
+        FETCH + page, budget
+    ),
+    "inject": lambda page, budget: renderfind.inject(page, NONCE, budget),
+}
+
+
+def _page(first, unit, chars):
+    return first + (unit * (chars // len(unit) + 1))[:chars]
+
+
+def _best(read, page, runs):
+    best = float("inf")
+    for _ in range(runs):
+        began = time.perf_counter()
+        read(page, renderfind.Budget(600))
+        best = min(best, time.perf_counter() - began)
+    return best
+
+
+# The patterns that were slow were the ones in `missing_files`, so it gets every
+# shape; the two tokenizer reads get the shapes that make a tokenizer work.
+_TOKENIZED = {
+    "unclosed img tags",
+    "unclosed script tags",
+    "a tag, then unclosed links",
+    "many unclosed quotes",
+    "comment openers",
+}
+CASES = [
+    (read, shape)
+    for read in READS
+    for shape in SHAPES
+    if read == "missing_files" or shape in _TOKENIZED
+]
+
+
+@pytest.mark.parametrize(("read", "shape"), CASES)
+def test_eight_times_the_page_costs_about_eight_times_the_time(read, shape):
+    """A read that grows with the square of the page takes 64 times as long on
+    eight times the page; one that grows with the page, about 8 (the limit here
+    is 20). Both pages are big enough that a squared read takes minutes. The
+    smaller time is floored at 0.2 s so a read too fast to time cannot fail."""
+    first, unit = SHAPES[shape]
+    size = 256 * 1024
+    small, large = _page(first, unit, size), _page(first, unit, 8 * size)
+    t_small = _best(READS[read], small, 2)
+    t_large = _best(READS[read], large, 1)
+    assert t_large < 5, f"{read} took {t_large:.1f}s on {len(large)} characters"
+    assert t_large < 20 * max(t_small, 0.2), (read, t_small, t_large)
+
+
+def test_pathological_pages_are_read_at_once_and_still_answered_sanely():
+    gone = '<img src="gone.png">'
+    for page, missing in (
+        ("<img " * 200_000 + 'src="gone.png">', ["gone.png"]),
+        ("<script>" * 200_000 + gone, ["gone.png"]),
+        ("<a " + "<link " * 200_000, []),
+        ('<img src="' + "a" * 1_000_000, []),
+    ):
+        began = time.perf_counter()
+        assert renderfind.missing_files(page) == missing
+        assert renderfind.loads_live_data(page) is False
+        assert renderfind.inject(page, NONCE).startswith(renderfind.script(NONCE))
+        assert time.perf_counter() - began < 5
+
+
+# --- a page too large or too slow to read is not read, and is never clean -------
+
+
+class _Counting(renderfind.Budget):
+    steps = 0
+
+    def step(self):
+        self.steps += 1
+        super().step()
+
+
+def test_the_cap_is_inside_the_publish_limit():
+    assert renderfind.MAX_SCAN_CHARS <= store.MAX_BODY_BYTES
+
+
+def test_a_page_over_the_cap_is_not_read_at_all(monkeypatch):
+    monkeypatch.setattr(renderfind, "MAX_SCAN_CHARS", 10)
+    read = []
+
+    def reading(*args, **kwargs):
+        read.append(args)
+        raise AssertionError("the page was read")
+
+    monkeypatch.setattr(renderfind.csp, "outside_comments", reading)
+    monkeypatch.setattr(renderfind, "_Scripts", reading)
+    monkeypatch.setattr(renderfind, "_Opener", reading)
+    page = "<img src=a>"  # 11 characters
+    assert renderfind.missing_files(page) is None
+    assert renderfind.loads_live_data(page) is None
+    assert renderfind.static_scan(page) == (None, None)
+    assert renderfind.inject(page, NONCE) == renderfind.script(NONCE) + page
+    assert read == []
+    monkeypatch.undo()
+    monkeypatch.setattr(renderfind, "MAX_SCAN_CHARS", len(page))
+    assert renderfind.missing_files(page) == ["a"]
+
+
+def test_a_spent_budget_stops_every_read_before_it_starts():
+    page = '<script>fetch("/x")</script><img src="a.png">'
+    spent = renderfind.Budget(0)
+    assert renderfind.missing_files(page, spent) is None
+    assert spent.spent
+    assert renderfind.loads_live_data(page, renderfind.Budget(0)) is None
+    out = renderfind.inject(page, NONCE, renderfind.Budget(0))
+    assert out == renderfind.script(NONCE) + page
+
+
+def test_the_budget_reads_the_clock_every_few_tokens_and_stays_spent(monkeypatch):
+    now = [100.0]
+
+    class Clock:
+        monotonic = staticmethod(lambda: now[0])
+
+    monkeypatch.setattr(renderfind, "time", Clock)
+    budget = renderfind.Budget(1.0)
+    budget.check()
+    now[0] = 102.0
+    for _ in range(63):
+        budget.step()  # between two looks at the clock
+    for _ in range(3):
+        with pytest.raises(renderfind.TooComplex):
+            budget.step()
+    now[0] = 0.0
+    with pytest.raises(renderfind.TooComplex):
+        budget.check()  # spent stays spent
+
+
+def test_the_two_reads_of_a_request_draw_on_one_budget(monkeypatch):
+    page = '<script>fetch("/x")</script><img src="a.png">'
+    made = []
+
+    class Spy(renderfind.Budget):
+        def __init__(self, *args):
+            super().__init__(*args)
+            made.append(self)
+
+    monkeypatch.setattr(renderfind, "Budget", Spy)
+    assert renderfind.static_scan(page) == (["a.png"], True)
+    assert len(made) == 1
+
+    class OneLook(renderfind.Budget):
+        looks = 0
+
+        def check(self):
+            self.looks += 1
+            if self.looks > 1:
+                self.spent = True
+            super().check()
+
+    monkeypatch.setattr(renderfind, "Budget", OneLook)
+    assert renderfind.static_scan(page) == (["a.png"], None)
+
+
+def test_the_scans_stop_when_they_have_what_they_need():
+    rest = "<p>x</p>" * 2000
+    budget = _Counting()
+    renderfind.inject("<html><head>" + rest, NONCE, budget)
+    assert budget.steps <= 3
+    budget = _Counting()
+    assert renderfind.loads_live_data('<script>fetch("/x")</script>' + rest, budget)
+    assert budget.steps <= 3
+
+
 # --- the verdict -------------------------------------------------------------
 
 
@@ -195,6 +429,25 @@ def test_a_live_page_blank_or_error_goes_to_the_agent_only():
     assert all("live data" in f["detail"] for f in found)
     # a missing file is still certain on a live page
     assert renderfind.assess([], GOOD, ["a.png"], True)[0] == "broken"
+
+
+def test_a_page_that_was_not_read_is_never_ok_and_says_so():
+    said = {"kind": "unchecked", "detail": renderfind.UNREAD_NOTE}
+    for missing, live in (([], None), (None, False), (None, None)):
+        verdict, found = renderfind.assess([], GOOD, missing, live)
+        assert verdict == "unchecked" and found == [said]
+    # a missing file that was found is certain, read or not
+    verdict, found = renderfind.assess([], GOOD, ["a.png"], None)
+    assert verdict == "broken" and found[0] == said
+    # a blank page or a script error on a page not read goes to the agent alone
+    blank = {**GOOD, "text": 0, "media": 0}
+    verdict, found = renderfind.assess(["line 1: Uncaught x"], blank, None, None)
+    assert verdict == "unchecked"
+    assert kinds(found) == ["unchecked", "blank", "script_error"]
+    assert not any(renderfind.LIVE_NOTE in f["detail"] for f in found)
+    # and the finding is not pushed out by a long list of others
+    errors = [f"line {n}: Uncaught x" for n in range(30)]
+    assert renderfind.assess(errors, GOOD, None, None)[1][0] == said
 
 
 def test_findings_are_capped_and_cleaned():
@@ -307,3 +560,46 @@ def test_the_tool_prints_every_finding_and_says_unchecked_not_fine(monkeypatch, 
     assert "missing file: points to logo.png" in err
     assert "not checked: the check did not report" in err
     assert "script_error" not in err
+
+
+def test_a_preview_of_a_page_too_large_to_read_is_unchecked_never_ok(
+    db, api, monkeypatch
+):
+    token, _ = keys.mint(db, agent="seat")
+    auth = {"Authorization": f"Bearer {token}"}
+    monkeypatch.setattr(thumbs, "available", lambda: True)
+    monkeypatch.setattr(
+        thumbs, "render_report", lambda *a: thumbs.Report(b"png", [], GOOD)
+    )
+    monkeypatch.setattr(renderfind, "MAX_SCAN_CHARS", 10)
+    got = api.post("/api/v1/preview", json={"body": PAGE}, headers=auth).json()
+    assert got["rendered"] is True and got["verdict"] == "unchecked"
+    assert got["findings"] == [{"kind": "unchecked", "detail": renderfind.UNREAD_NOTE}]
+
+
+def test_the_background_render_of_a_page_too_large_to_read_is_unchecked(
+    db, monkeypatch
+):
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
+    monkeypatch.setattr(renderfind, "MAX_SCAN_CHARS", 10)
+    page = store.publish(
+        db, "seat", "Board", PAGE.replace("<p>x</p>", '<img src="logo.png">')
+    )
+    html = store.get_body(db, "seat", page.id, as_reader=True).body
+    monkeypatch.setattr(
+        thumbs, "render_report", lambda h, *a: thumbs.Report(None, [], GOOD)
+    )
+
+    class Inline:
+        def __init__(self, target, **kw):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    monkeypatch.setattr(thumbs.threading, "Thread", Inline)
+    thumbs._failures.clear()
+    thumbs.render_in_background(db, page.id, 1, html)
+    row = store.render_report(db, page.id)
+    assert row["verdict"] == "unchecked"
+    assert row["findings"] == [{"kind": "unchecked", "detail": renderfind.UNREAD_NOTE}]

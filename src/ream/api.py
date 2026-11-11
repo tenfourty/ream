@@ -2211,11 +2211,9 @@ def agent_router(
             _PREVIEW_SLOT.release()
         verdict, findings = "unchecked", []
         if errors is not None:
+            missing, live = renderfind.static_scan(body)
             verdict, findings = renderfind.assess(
-                errors,
-                getattr(report, "check", None),
-                renderfind.missing_files(body),
-                renderfind.loads_live_data(body),
+                errors, getattr(report, "check", None), missing, live
             )
         return {
             "rendered": png is not None,

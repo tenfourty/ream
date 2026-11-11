@@ -508,11 +508,9 @@ def render_in_background(db, artifact_id: str, version_n: int, html: str) -> Non
             if png is not None:
                 store.save_thumbnail(db, artifact_id, version_n, png)
             if errors is not None:
+                missing, live = renderfind.static_scan(html)
                 verdict, findings = renderfind.assess(
-                    errors,
-                    getattr(result, "check", None),
-                    renderfind.missing_files(html),
-                    renderfind.loads_live_data(html),
+                    errors, getattr(result, "check", None), missing, live
                 )
                 store.save_render_errors(
                     db, artifact_id, version_n, errors, verdict, findings
