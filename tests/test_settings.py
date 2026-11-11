@@ -46,7 +46,6 @@ def test_override_takes_any_setting_and_lets_go(monkeypatch):
 
 
 def test_the_repr_prints_no_secret(monkeypatch):
-    monkeypatch.setenv("REAM_MAILGUN_KEY", "key-do-not-print")
     monkeypatch.setenv("REAM_NUDGE_TOKEN", "token-do-not-print")
     text = f"{settings.current()!r} {settings.current()}"
     assert "do-not-print" not in text
@@ -175,7 +174,6 @@ def test_a_gallery_off_localhost_needs_a_content_domain(fresh, monkeypatch):
 def test_validate_collects_every_problem_and_prints_no_value(monkeypatch):
     monkeypatch.setenv("REAM_GALLERY_ORIGIN", "gallery.example/path")
     monkeypatch.setenv("REAM_TRUSTED_IP_HEADER", "not a header")
-    monkeypatch.setenv("REAM_MAILGUN_KEY", "key-do-not-print")
     monkeypatch.setenv("REAM_PARTNER_NAME", "p")
     monkeypatch.setenv("REAM_PARTNER_INBOUND_HOST", "h.example")
     with pytest.raises(SystemExit) as exc:
@@ -184,7 +182,6 @@ def test_validate_collects_every_problem_and_prints_no_value(monkeypatch):
     for name in (
         "REAM_GALLERY_ORIGIN",
         "REAM_TRUSTED_IP_HEADER",
-        "REAM_MAIL_FROM",
         "REAM_PARTNER_EVENTS_URL",
         "REAM_PARTNER_INBOUND_KEYS_FILE",
     ):
@@ -207,15 +204,22 @@ def test_the_real_entrypoint_reports_settings_before_opening_the_database(
 # --- the pieces that lost a house default -------------------------------------------------
 
 
-def test_mail_is_off_until_key_api_domain_and_sender_are_all_set(fresh, monkeypatch):
-    monkeypatch.setenv("REAM_MAILGUN_KEY", "k")
+def test_mail_is_off_with_no_backend_even_when_the_old_variables_are_set(
+    fresh, monkeypatch
+):
+    monkeypatch.setattr(mail, "_backend", None)
+    for name, value in (
+        ("REAM_MAILGUN_KEY", "k"),
+        ("REAM_MAILGUN_API", "https://api.mailgun.net"),
+        ("REAM_MAILGUN_DOMAIN", "mg.example"),
+        ("REAM_MAIL_FROM", "Pages <pages@mg.example>"),
+    ):
+        monkeypatch.setenv(name, value)
     assert not mail.enabled()
     with pytest.raises(mail.MailFailed):
         mail.send("a@example.com", "s", "t")
-    monkeypatch.setenv("REAM_MAILGUN_API", "https://api.mailgun.net")
-    monkeypatch.setenv("REAM_MAILGUN_DOMAIN", "mg.example")
-    monkeypatch.setenv("REAM_MAIL_FROM", "Pages <pages@mg.example>")
-    assert mail.enabled()
+    for field in ("mailgun_key", "mailgun_api", "mailgun_domain", "mail_from"):
+        assert not hasattr(settings.current(), field)
 
 
 def test_the_trusted_ip_header_is_a_setting(monkeypatch):

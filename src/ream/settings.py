@@ -17,11 +17,11 @@ leaves `gallery_origin` unset refuses to start (`validate_for_serve`).
 only a label: `owner.check` records it in `service_meta` and refuses to start on a database
 written for another one.
 
-SECRETS. Settings hold paths and ids (`..._KEY_FILE`). Two values are still read from the
-environment as the VALUE, because the deployment mounts them that way (Mailgun key, nudge
-token); they are never printed: `Settings` has no field-listing `__repr__`. (The ggshield
-relay's address and token are no longer core settings: the house plug-in's `gitguardian`
-scanner reads `GGSHIELD_URL` and `GGSHIELD_TOKEN` itself, and core ignores them.)
+SECRETS. Settings hold paths and ids (`..._KEY_FILE`). One value is still read from the
+environment as the VALUE, because the deployment mounts it that way (the nudge token); it is
+never printed: `Settings` has no field-listing `__repr__`. (The ggshield relay's address and
+token, and the Mailgun key with its API, domain and sender, are no longer core settings: the
+house plug-in's `gitguardian` scanner and mail backend read their own, and core ignores them.)
 """
 
 from __future__ import annotations
@@ -164,11 +164,6 @@ class Settings:
     # What the server binds to (the image sets 0.0.0.0). Only used to tell a local try-out
     # from a deployment at start-up.
     bind_host: str = DEFAULT_BIND_HOST
-    # Mail: the key, the API, the domain and the sender, all four or none.
-    mailgun_key: str = ""  # a VALUE (the deployment mounts it as one); never printed
-    mailgun_api: str = ""
-    mailgun_domain: str = ""
-    mail_from: str = ""
     nudge_url: str = ""
     nudge_agent: str = ""
     nudge_token: str = ""  # a VALUE; never printed
@@ -307,21 +302,6 @@ class Settings:
             self.trusted_ip_header
         ):
             found.append("REAM_TRUSTED_IP_HEADER must be one header name")
-        if self.mailgun_key:
-            missing = [
-                name
-                for name, value in (
-                    ("REAM_MAILGUN_API", self.mailgun_api),
-                    ("REAM_MAILGUN_DOMAIN", self.mailgun_domain),
-                    ("REAM_MAIL_FROM", self.mail_from),
-                )
-                if not value
-            ]
-            if missing:
-                found.append(
-                    "mail is half-configured: REAM_MAILGUN_KEY is set, so also set "
-                    + ", ".join(missing)
-                )
         out = [n for n in PARTNER_OUT if _lookup(n)]
         if out and len(out) != len(PARTNER_OUT):
             found.append(
@@ -563,10 +543,6 @@ _ENV = {
     "display_tz": "REAM_DISPLAY_TZ",
     "trusted_ip_header": "REAM_TRUSTED_IP_HEADER",
     "bind_host": "REAM_BIND_HOST",
-    "mailgun_key": "REAM_MAILGUN_KEY",
-    "mailgun_api": "REAM_MAILGUN_API",
-    "mailgun_domain": "REAM_MAILGUN_DOMAIN",
-    "mail_from": "REAM_MAIL_FROM",
     "nudge_url": "REAM_NUDGE_URL",
     "nudge_agent": "REAM_NUDGE_AGENT",
     "nudge_token": "REAM_NUDGE_TOKEN",
@@ -690,6 +666,17 @@ def retired_ggshield_set() -> list[str]:
     """The names (both prefixes) of the retired ggshield variables the environment sets, by
     presence only: never a value, so it is safe to log. Empty when none is set."""
     return [n for suffix in RETIRED_GGSHIELD for n in envnames.set_names(suffix)]
+
+
+# The mail sender's variables: the house plug-in's mail backend reads them itself (step 9b).
+# A deployment may still set them.
+RETIRED_MAIL = ("MAILGUN_KEY", "MAILGUN_API", "MAILGUN_DOMAIN", "MAIL_FROM")
+
+
+def retired_mail_set() -> list[str]:
+    """The names (both prefixes) of the retired mail variables the environment sets, by
+    presence only: never a value, so it is safe to log. Empty when none is set."""
+    return [n for suffix in RETIRED_MAIL for n in envnames.set_names(suffix)]
 
 
 def is_loopback(host: str) -> bool:

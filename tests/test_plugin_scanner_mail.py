@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from ream import mail, plugin_api, scanners, store
+from ream import mail, plugin_api, scanners, serve, store
 from ream.scan import Finding
 
 PAGE = "<!doctype html><html><head><title>t</title></head><body><p>{}</p></body></html>"
@@ -75,26 +75,84 @@ def test_bad_on_error_and_duplicate_names_are_refused(world):
         world.scanner("toy", lambda t: [])
 
 
-def test_the_backend_replaces_mailgun(world, monkeypatch):
+def test_a_registered_backend_sends_and_answers_enabled(world):
     sent = []
-    monkeypatch.setattr(
-        mail, "_mailgun_send", lambda *a: pytest.fail("Mailgun must not be used")
-    )
     world.mail_backend(
         "toy", lambda to, subject, text: sent.append((to, subject, text)), lambda: True
     )
+    assert mail.has_backend() is True
     assert mail.enabled() is True
     mail.send("a@example.com", "s", "t")
     assert sent == [("a@example.com", "s", "t")]
 
 
-def test_with_no_backend_mailgun_is_asked(world, monkeypatch):
-    monkeypatch.setattr(mail, "_mailgun_enabled", lambda: True)
-    got = []
-    monkeypatch.setattr(mail, "_mailgun_send", lambda *a: got.append(a))
-    assert mail.enabled() is True
-    mail.send("a@example.com", "s", "t")
-    assert got == [("a@example.com", "s", "t")]
+def test_with_no_backend_mail_is_off_and_sending_fails(world):
+    assert mail.has_backend() is False
+    assert mail.enabled() is False
+    with pytest.raises(mail.MailFailed):
+        mail.send("a@example.com", "s", "t")
+
+
+_MAIL_VARIABLES = (
+    "REAM_MAILGUN_KEY",
+    "ARTIFACTS_MAILGUN_KEY",
+    "REAM_MAILGUN_API",
+    "ARTIFACTS_MAILGUN_API",
+    "REAM_MAILGUN_DOMAIN",
+    "ARTIFACTS_MAILGUN_DOMAIN",
+    "REAM_MAIL_FROM",
+    "ARTIFACTS_MAIL_FROM",
+)
+_SENTINEL = "mail-sentinel-0123"
+
+
+@pytest.fixture()
+def no_mail_variables(monkeypatch):
+    for name in _MAIL_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+def _start_warnings(caplog):
+    return [
+        r
+        for r in caplog.records
+        if r.name == "ream.serve" and r.levelno == logging.WARNING
+    ]
+
+
+def test_mail_variables_set_and_no_backend_warns_once_naming_no_value(
+    world, no_mail_variables, caplog
+):
+    no_mail_variables.setenv("REAM_MAILGUN_KEY", _SENTINEL)
+    no_mail_variables.setenv("ARTIFACTS_MAIL_FROM", _SENTINEL)
+    with caplog.at_level(logging.WARNING, logger="ream.serve"):
+        serve._warn_mail_off()
+    (record,) = _start_warnings(caplog)
+    text = record.getMessage()
+    assert "REAM_MAILGUN_KEY" in text and "ARTIFACTS_MAIL_FROM" in text
+    assert "REAM_MAILGUN_API" not in text  # only the ones that are set
+    assert "OFF" in text
+    assert _SENTINEL not in caplog.text
+
+
+def test_mail_variables_set_with_a_backend_registered_is_silent(
+    world, no_mail_variables, caplog
+):
+    no_mail_variables.setenv("REAM_MAILGUN_KEY", _SENTINEL)
+    world.mail_backend("toy", lambda *a: None, lambda: True)
+    with caplog.at_level(logging.WARNING, logger="ream.serve"):
+        serve._warn_mail_off()
+    assert _start_warnings(caplog) == []
+
+
+def test_no_mail_variable_set_is_silent_without_a_backend(
+    world, no_mail_variables, caplog
+):
+    no_mail_variables.setenv("REAM_MAILGUN_KEY", "   ")  # blank is unset
+    with caplog.at_level(logging.WARNING, logger="ream.serve"):
+        serve._warn_mail_off()
+    assert _start_warnings(caplog) == []
 
 
 def test_a_backend_that_raises_is_a_mail_failure_and_counted(world):

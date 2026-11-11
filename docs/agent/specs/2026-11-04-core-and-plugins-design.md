@@ -228,8 +228,8 @@ once-only marker per subject and stage) is the chasing design's table, not this 
    only.
 5. **Mail backend.** `api.mail_backend(name, send, enabled)` with `send(to, subject, text)` (as
    built; not a message object); core has `mail.send(to, subject, text)` and
-   `mail.enabled()` that ask the one registered backend (or none: off). Mailgun moves out; the
-   sender and region/domain are settings the backend reads.
+   `mail.enabled()` that ask the one registered backend (or none: off). Mailgun has moved out (9b);
+   the sender and region/domain are settings the backend reads.
 6. **CLI command and client hooks.** `api.cli(name, main, help)` registers `artifacts <name>`
    subcommands (and keeps the standalone console script working through a one-line entry in the
    plug-in's own `pyproject`). `api.client_defaults(api_url=..., session_envs=[...],
@@ -350,7 +350,7 @@ signed-webhook sink, pattern scanner (`scan.py`, `secret_shapes.txt` with commen
 | `partner_in.py` (inbound route, `verified_by == "quarterdeck"`, `slack_id`, `answer_here`) | answer source `slack` + `on_answer` hook + router |
 | `nudge.py` | after-commit sink `doorbell` |
 | `ggscan.py` | scanner `gitguardian` (moved and deleted from core, 9c) |
-| `mail.py` Mailgun | mail backend `mailgun` |
+| `mail.py` Mailgun | mail backend `mailgun` (moved and deleted from core, 9b) |
 | `beadpage.py`, `beadmetrics.py` and their two console scripts | CLI commands |
 | `client.py:34` default endpoint, `QD_OFFICE`/`ARTIFACTS_SEAT`, `news.py` lines naming GitGuardian and beads, the skill's tracker section | `client_defaults`, `text_section` |
 
@@ -592,7 +592,7 @@ drivers; CI only (not on the management machine).
    (`ScanFailed`) or leaves the comment unscanned for the sweeper to retry. `api.mail_backend(name, send,
    enabled)` (`mail.py`): one at most (a second stops start-up); `send(to, subject, text)` keeps
    today's three arguments rather than a message object; `mail.enabled()`/`mail.send()` ask it,
-   or the built-in Mailgun code when none is registered (it moves out in 9b); a raise becomes
+   and with none registered mail is off (the built-in Mailgun code went out in 9b); a raise becomes
    `MailFailed` (so callers are unchanged) and counts as `<plug-in>:mail`.
    Review fixes: a `block` scanner fault on a comment's second scan leaves the comment intact and
    unscanned and hidden reversibly (`withdrawn_kind = 'scan_blocked'`, nothing blanked; the sweeper
@@ -783,6 +783,20 @@ drivers; CI only (not on the management machine).
    titles, decision fields and human comments (they still run in the second opinion's slot only);
    `docs/agent/plans/2026-09-29-*` and `specs/2026-10-29-pinned-comments.md` still name `ggscan` as it
    was when written. **Not run here:** the full suite (CI on `ci/step-9c-core`).
+   **9b, the Mailgun deletion (11 Nov 2026).** The house plug-in's mail backend (ream-homelab #12,
+   hardened in ad3e9a0: no redirects, https to its configured host only) already carried all
+   production mail; `mail._mailgun_send`, `_mailgun_enabled`, the `mailgun_key`, `mailgun_api`,
+   `mailgun_domain` and `mail_from` settings with their half-configured start-up refusal, and the
+   Mailgun request test are deleted. Core now has one path: the registered backend, or none, which
+   is what a fresh install had: `mail.enabled()` is false, `mail.send()` raises `MailFailed("mail is
+   not configured")`, and the share page says email is not set up. `mail.has_backend()` is new.
+   **Settings:** `REAM_MAILGUN_KEY`, `_API`, `_DOMAIN` and `REAM_MAIL_FROM` (and the `ARTIFACTS_`
+   forms) are not core settings now; core ignores them and the plug-in reads them itself. **Start-up:**
+   if any is still set (presence only, never a value) and no mail backend is registered after the
+   plug-ins load, one warning says mail is OFF (`serve._warn_mail_off`); it warns and does not refuse.
+   **Behaviour change:** a half-set group no longer stops a core start (the plug-in checks its own).
+   Tests: `test_plugin_scanner_mail.py` (backend path, no-backend path, the warning),
+   `test_email_share.py` (a registered backend stands in for the sender), `test_settings.py`.
 10. **Docs and decisions.** `docs/decisions.md` entry for the core-and-plug-ins split, the design
     doc's extension section, a plug-in author guide, the office doc's deployment paragraph.
     (Docs also land with each slice above; this is the consolidation.)

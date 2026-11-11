@@ -8,10 +8,11 @@ Status, 10 Nov 2026: the loader and the whole interface are built and on `main` 
 `docs/agent/specs/2026-11-04-core-and-plugins-design.md`), and the house's plug-in repo
 (`ream-homelab`, step 8) exists with its first plug-in. **Step 9 (moving the house code out of the
 core) is under way, one slice at a time:** the tracker-page commands (`beads-page`, `bead-metrics`)
-have left the core for the house's `tracker-pages` plug-in (9a); the house sinks (`nudge`, `partner`),
-the `slack` answer source and Mailgun are still inside the core; the GitGuardian second opinion
+have left the core for the house's `tracker-pages` plug-in (9a); the house sinks (`nudge`, `partner`)
+and the `slack` answer source are still inside the core; the GitGuardian second opinion
 has left it (9c: the core's own relay scan is deleted, the house's `gitguardian` scanner is the
-second opinion, see Scanner below). Write
+second opinion, see Scanner below), and so has Mailgun (9b: the core's own sender is deleted, the
+house's mail backend sends all mail, see Mail backend below). Write
 against this guide for new code; do not expect the other house modules to have moved yet. The API is
 versioned (below), but only we use it: there is no promise to third parties yet.
 
@@ -313,8 +314,11 @@ def send(to, subject, text):          # raise to fail
 ```
 
 `api.mail_backend(name, send, enabled)`. **One backend at most**: a second stops start-up. With
-none registered the core uses its built-in Mailgun code (which moves out at step 9b); with a
-plug-in's, Mailgun is not used at all. `send(to, subject, text)` takes three strings (not a
+none registered mail is off: `enabled()` is false, `send` raises `MailFailed`, and the share page
+says email is not set up. The core has no Mailgun code and reads no `MAILGUN_*` or `MAIL_FROM`
+setting; a backend reads its own. If `REAM_MAILGUN_KEY`, `_API`, `_DOMAIN` or `REAM_MAIL_FROM` (or the
+`ARTIFACTS_` forms) are still set but no backend is registered after the plug-ins load, start-up logs
+one warning naming the variables (never a value) that mail is OFF; it warns and does not refuse. `send(to, subject, text)` takes three strings (not a
 message object). `enabled()` is asked often (the gallery asks on every render): keep it cheap.
 If `enabled()` raises it counts as off (logged once per process); if `send` raises, callers see
 `ream.mail.MailFailed("the mail backend failed")` and nothing of your message; both are counted

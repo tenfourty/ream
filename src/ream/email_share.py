@@ -4,7 +4,7 @@ Jeremy's rulings, 24 Sep 2026: a personal link per recipient, emailed by the
 service; the first time it is opened on a device the reader confirms with a
 one-time code sent to the same inbox, so a forwarded email lets nobody else
 in; he sees who has access and withdraws each person separately. Sent through
-his Mailgun account (ream.mail).
+the mail backend a plug-in registered (ream.mail).
 
 Three secrets, all stored only as sha256: the link token (in the URL), the
 six-digit code (valid ten minutes, five tries), and the device cookie (set on

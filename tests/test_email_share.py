@@ -17,12 +17,15 @@ PAGE = "<!doctype html><html><head><title>t</title></head><body><p>{}</p></body>
 @pytest.fixture()
 def outbox(monkeypatch):
     sent = []
-    monkeypatch.setenv("REAM_MAILGUN_KEY", "test-key-not-real")
-    monkeypatch.setenv("REAM_MAILGUN_API", "https://api.eu.mailgun.net")
-    monkeypatch.setenv("REAM_MAILGUN_DOMAIN", "mg.tenfourty.site")
-    monkeypatch.setenv("REAM_MAIL_FROM", "Artifacts <artifacts@mg.tenfourty.site>")
+    # a registered mail backend that keeps what it is asked to send
     monkeypatch.setattr(
-        mail, "send", lambda to, subject, text: sent.append((to, subject, text))
+        mail,
+        "_backend",
+        (
+            "test",
+            lambda to, subject, text: sent.append((to, subject, text)),
+            lambda: True,
+        ),
     )
     return sent
 
@@ -54,7 +57,7 @@ def _reader(db, url):
 
 
 def test_without_mail_configured_the_page_says_so(db, gallery, page, monkeypatch):
-    monkeypatch.delenv("REAM_MAILGUN_KEY", raising=False)
+    monkeypatch.setattr(mail, "_backend", None)
     assert "Email isn&#39;t set up" in gallery.get(f"/a/{page.id}/share").text or (
         "Email isn't set up" in gallery.get(f"/a/{page.id}/share").text
     )
@@ -168,36 +171,3 @@ def test_a_bad_address_is_refused_in_words(db, gallery, page, outbox):
     )
     assert "look like an email address" in response.text.replace("&#39;", "'")
     assert outbox == []
-
-
-def test_mailgun_is_called_as_documented_and_the_key_is_never_logged(
-    monkeypatch, caplog
-):
-    captured = {}
-
-    class _Resp:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    def fake_urlopen(request, timeout=None):
-        captured["url"] = request.full_url
-        captured["auth"] = request.get_header("Authorization")
-        captured["data"] = request.data.decode()
-        return _Resp()
-
-    monkeypatch.setenv("REAM_MAILGUN_KEY", "k-123")
-    monkeypatch.setenv("REAM_MAILGUN_API", "https://api.eu.mailgun.net")
-    monkeypatch.setenv("REAM_MAILGUN_DOMAIN", "mg.tenfourty.site")
-    monkeypatch.setenv("REAM_MAIL_FROM", "Artifacts <artifacts@mg.tenfourty.site>")
-    monkeypatch.setattr(mail.urllib.request, "urlopen", fake_urlopen)
-    mail.send("a@example.com", "Hi", "Body")
-    assert captured["url"] == "https://api.eu.mailgun.net/v3/mg.tenfourty.site/messages"
-    assert captured["auth"].startswith("Basic ")
-    assert "to=a%40example.com" in captured["data"]
-    assert "from=Artifacts+%3Cartifacts%40mg.tenfourty.site%3E" in captured["data"]
-    assert "k-123" not in caplog.text

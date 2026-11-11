@@ -332,8 +332,8 @@ class PluginAPI:
 
     def mail_backend(self, name: str, send: Callable, enabled: Callable) -> None:
         """Register the mail backend (4.2, 5). `send(to, subject, text)` raises to fail;
-        `enabled()` says whether mail is on. One backend at most; it replaces the
-        built-in Mailgun code. `name` is only for the log."""
+        `enabled()` says whether mail is on. One backend at most; with none, mail is
+        off. `name` is only for the log."""
         mail.register_backend(self._plugin, send, enabled)
 
     def text_vars(self, values: dict) -> None:

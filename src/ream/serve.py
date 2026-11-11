@@ -13,6 +13,7 @@ from ream import (
     comments,
     envnames,
     events,
+    mail,
     maintenance,
     owner,
     partner,
@@ -145,6 +146,21 @@ def _warn_second_scan_off() -> None:
     )
 
 
+def _warn_mail_off() -> None:
+    """One warning when the retired mail variables are set and no mail backend is registered:
+    mail is then OFF (share-by-email is hidden). Call it after the plug-ins load. A warning,
+    not a refusal, as `_warn_second_scan_off`; names the variables, never a value."""
+    stale = settings.retired_mail_set()
+    if not stale or mail.has_backend():
+        return
+    log.warning(
+        "%s set, but no mail backend plug-in is loaded: mail is OFF (share-by-email is"
+        " hidden). The core no longer reads these; install the plug-in that registers the"
+        " mail backend, or unset them",
+        ", ".join(stale),
+    )
+
+
 def app_from_env():
     """Read `DATABASE_URL`, migrate, and return the fail-closed host router
     `create_app` builds. Never includes the DSN -- or anything else read from
@@ -200,6 +216,7 @@ def app_from_env():
     except webhook.WebhookConfigError as exc:
         raise SystemExit(str(exc)) from None
     _warn_second_scan_off()
+    _warn_mail_off()
     comments.start_sweeper(db)
     # The nightly backup and purge (maintenance.py). REAM_MAINTENANCE=off
     # turns it off, for tests that build the real app.

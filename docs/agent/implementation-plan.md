@@ -2827,3 +2827,8 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   the house plug-in's scanner `gitguardian` is the second opinion on pages and agent comments, and a
   comment it gave no answer for is left unscanned for the sweeper. A deployment that still sets
   `REAM_GGSHIELD_*` starts as before. Ledger: `specs/2026-11-04-core-and-plugins-design.md`, step 9c.
+- **Mailgun leaves the core (11 Nov 2026, step 9b of core-and-plugins).** Core no longer carries its
+  own Mailgun sender (`mail._mailgun_send` and the `mailgun_*` and `mail_from` settings are deleted):
+  the house plug-in's mail backend sends all mail, and with none registered mail is off, as on a fresh
+  install. A deployment that still sets `REAM_MAILGUN_*` or `REAM_MAIL_FROM` starts, with one warning
+  if no backend is loaded. Ledger: `specs/2026-11-04-core-and-plugins-design.md`, step 9b.
