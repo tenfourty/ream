@@ -194,6 +194,52 @@ def test_the_whole_check_gives_the_warnings_it_gave(seed):
         assert got == _old_check(body), repr(body)
 
 
+# The word boundary before `window` and `claude` is asked of the character before the
+# name, with `\b` in the old pattern and a lookbehind now: the same on a name at the
+# start of the page, after a letter, a digit, an underscore, a letter of another
+# alphabet, and after what is not a word character.
+BOUNDARY_PIECES = [
+    "window",
+    "claude",
+    "Window",
+    "CLAUDE",
+    ".claude",
+    ".use(",
+    ".use",
+    " . ",
+    " ",
+    ".",
+    "(",
+    "x",
+    "_",
+    "9",
+    "\u00e9",  # a letter
+    "\u0663",  # a digit of another alphabet
+    "\u203f",  # punctuation that joins words, and is not a word character
+    "-",
+    "\n",
+    "window.claude",
+    "claude.use(",
+    "xwindow.claude",
+    "_claude.use(",
+]
+
+
+@pytest.mark.parametrize("seed", [6, 7])
+def test_a_name_is_found_after_the_characters_a_word_boundary_allows(seed):
+    rng = random.Random(seed)
+    finds = 0
+    for _ in range(6000):
+        body = "".join(rng.choice(BOUNDARY_PIECES) for _ in range(rng.randint(1, 8)))
+        page = csp._Page(body, csp._fold(body))
+        want = [m.start() for m in _OLD["window_claude"].finditer(body)]
+        assert list(_finder("window_claude")(page, Budget(60))) == want, repr(body)
+        finds += bool(want)
+    assert finds > 500, (
+        f"a comparison that rarely finds anything proves little: {finds}"
+    )
+
+
 def test_a_line_is_counted_as_it_was_with_long_pages():
     body = "\n".join(["<p>x</p>"] * 700) + "\n<form>\n" + "\n<video>" * 3
     assert [(w.shape, w.line) for w in csp.check(body)] == _old_check(body)
@@ -340,6 +386,40 @@ def test_an_ordinary_page_of_the_largest_size_is_read_well_inside_its_budget():
     found = csp.check(page, budget)
     took = time.perf_counter() - began
     assert found == []
+    assert not budget.spent
+    assert took < renderfind.SCAN_SECONDS / 2, (
+        f"{took:.2f} s of {renderfind.SCAN_SECONDS}"
+    )
+
+
+# A real finding (a script from another origin), then a page of near misses of the
+# shapes that look for a call: each opening is followed by white space and not by the
+# address the shape needs. A pass over such a page that took a step in Python for each
+# opening used up the budget (5 s of the 2 s) and the finding was lost.
+PADDINGS = [
+    "fetch(   ",
+    "fetch ",
+    "eventsource ( ",
+    ".open('a', ",
+    "window  .  ",
+    "claude . ",
+]
+
+
+@pytest.mark.scaling
+@pytest.mark.parametrize("padding", PADDINGS, ids=repr)
+def test_a_page_of_near_misses_of_the_largest_size_keeps_its_finding(padding):
+    from ream import store
+
+    page = scalecheck.page(
+        "<script src=//evil.example/x.js></script>", padding, store.MAX_BODY_BYTES
+    )
+    assert len(page) <= renderfind.MAX_SCAN_CHARS
+    budget = Budget()
+    began = time.perf_counter()
+    found = csp.check(page, budget)
+    took = time.perf_counter() - began
+    assert [w.shape for w in found] == ["remote_script"]
     assert not budget.spent
     assert took < renderfind.SCAN_SECONDS / 2, (
         f"{took:.2f} s of {renderfind.SCAN_SECONDS}"

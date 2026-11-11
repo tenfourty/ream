@@ -124,11 +124,13 @@ def _words(pattern: re.Pattern[str], text: str) -> Iterator[int]:
         at = found.end()
 
 
-def _starts(pattern: re.Pattern[str]) -> Finder:
-    """A shape that is one pattern which cannot look far past where it starts."""
+def _starts(pattern: re.Pattern[str], folded: bool = True) -> Finder:
+    """A shape that is one pattern which cannot look far past where it starts.
+    `folded` says which text is read: the case of the page is what a pattern with no
+    flag asks for."""
 
     def find(page: _Page, budget: "renderfind.Budget") -> Iterator[int]:
-        for found in pattern.finditer(page.folded):
+        for found in pattern.finditer(page.folded if folded else page.visible):
             yield found.start()
 
     return find
@@ -261,63 +263,32 @@ def _forms(page: _Page, budget: "renderfind.Budget") -> Iterator[int]:
         yield opened.start()
 
 
-def _anchored(
-    alternatives: tuple[tuple[str, re.Pattern[str]], ...], folded: bool = True
-) -> Finder:
-    """A shape that is several patterns, each beginning with its own literal: the
-    start of each match, as the one pattern of all of them would find them.
-
-    Where each literal is is found as a plain string is (and the pattern tried there
-    only), not by trying the pattern at every character, which is five times as slow
-    on an ordinary page: a pattern that begins with a choice of letters has no one
-    character to look for. `folded` says which text is read: the case of the page is
-    what a pattern with no flag asks for."""
-
-    def find(page: _Page, budget: "renderfind.Budget") -> Iterator[int]:
-        text = page.folded if folded else page.visible
-        literals = [
-            (_Ahead(lambda at, literal=literal: text.find(literal, at)), pattern)
-            for literal, pattern in alternatives
-        ]
-        at = 0
-        while True:
-            where, pattern = min(
-                ((ahead.first(at), pattern) for ahead, pattern in literals),
-                key=lambda found: found[0] if found[0] >= 0 else len(text) + 1,
-            )
-            if where < 0:
-                return
-            budget.step()
-            found = pattern.match(text, where)
-            if found is None:
-                at = where + 1
-                continue
-            yield where
-            at = found.end()
-
-    return find
-
-
+# `_CONNECT` and `_CLAUDE` are one pattern each, run over the whole page, and every
+# alternative begins with a literal, so the regex engine looks for the first letters of
+# them in C and a page padded with near misses (`fetch(   ` for megabytes) costs what
+# any page of that size costs. (A Python loop with a step for each opening took three
+# times as long on such a page and used up the budget.) The time stays linear: no
+# quantifier is nested in another, an opening reads on only through white space, letters
+# or the characters of an address, each to a `(`, quote, `,`, `:` or `/` that ends it,
+# and an opening that begins inside such a stretch meets a `(` within its own first few
+# characters. The word boundary before a name is `(?<!\w<name>)` after it, a lookbehind
+# one character longer than the name, so the pattern keeps its literal start and
+# answers as `\b` does (at the start of the page too, where there is no character before).
 _CONNECT_ADDRESS = r"\s*\(\s*[\"'`]" + _REMOTE
-_CLAUDE = _anchored(
-    (
-        ("window", re.compile(r"\bwindow\s*\.\s*claude\b")),
-        ("claude", re.compile(r"\bclaude\s*\.\s*use\s*\(")),
+_CLAUDE = _starts(
+    re.compile(
+        r"window(?<!\wwindow)\s*\.\s*claude\b|claude(?<!\wclaude)\s*\.\s*use\s*\("
     ),
     folded=False,  # case matters here, so the page is read as it is
 )
-_CONNECT = _anchored(
-    tuple(
-        (name, re.compile(name + _CONNECT_ADDRESS))
-        for name in ("fetch", "eventsource", "websocket", "sendbeacon")
-    )
-    + (
-        (
-            ".open",
-            re.compile(
-                r"\.open\s*\(\s*[\"'][a-z]+[\"']\s*,\s*[\"'`]" + _REMOTE,
-            ),
-        ),
+_CONNECT = _starts(
+    re.compile(
+        "|".join(
+            name + _CONNECT_ADDRESS
+            for name in ("fetch", "eventsource", "websocket", "sendbeacon")
+        )
+        + r"|\.open\s*\(\s*[\"'][a-z]+[\"']\s*,\s*[\"'`]"
+        + _REMOTE
     )
 )
 
