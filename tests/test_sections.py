@@ -755,7 +755,16 @@ def test_a_huge_fragment_on_a_small_page_is_refused_before_parsing(monkeypatch):
         sections.apply(small, "log", "append", huge)
 
 
-def test_many_unmatched_end_tags_parse_quickly():
+@pytest.fixture()
+def roomy_budget(monkeypatch):
+    """These tests time the parse themselves, in CPU time; the reader's own wall-clock budget
+    (2 s) is not what they test, and a loaded runner ran past it (11 Nov 2026)."""
+    from ream import htmlbound
+
+    monkeypatch.setattr(sections, "Budget", lambda: htmlbound.Budget(60))
+
+
+def test_many_unmatched_end_tags_parse_quickly(roomy_budget):
     import time
 
     body = '<div id="a">' + "<span>" * 20000 + "</em>" * 20000 + "</div>"
@@ -774,7 +783,7 @@ def test_mismatched_but_matchable_end_tag_still_closes_inner_elements():
     assert body[found.start : found.end] == '<div id="a"><p>one<span>two</div>'
 
 
-def test_many_headings_after_a_closed_target_parse_quickly():
+def test_many_headings_after_a_closed_target_parse_quickly(roomy_budget):
     import time
 
     body = '<p id="a">x</p>' + "<div>" * 20000 + "<h2>t</h2>" * 20000
