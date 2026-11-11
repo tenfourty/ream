@@ -662,10 +662,14 @@ def _core_names() -> tuple[set[str], set[str]]:
     return tables, indexes
 
 
-def _check_against(catalog_tables: set[str], catalog_indexes: set[str]) -> None:
+def _check_against(
+    catalog_tables: set[str], catalog_indexes: set[str], catalog_others: set[str]
+) -> None:
     """Refuse a plug-in statement that would touch something not its own: a table or
     index name that is a core one (from the schema files, or anything in the
-    catalog that no loaded plug-in declares), or an index `on` or a `references`
+    catalog that no loaded plug-in declares, or any sequence or view, which a plug-in
+    never creates: core's `event_seq_seq` is not a plug-in table even if one declares
+    it), or an index `on` or a `references`
     naming a table that the same plug-in's own statements do not create. A prefix
     alone cannot promise this: a plug-in named `agent` has the prefix of `agent_key`."""
     own: dict[str, set[str]] = {}
@@ -679,7 +683,7 @@ def _check_against(catalog_tables: set[str], catalog_indexes: set[str]) -> None:
         else:
             declared_indexes.add(name)
     core_tables, core_indexes = _core_names()
-    foreign_tables = core_tables | (catalog_tables - declared_tables)
+    foreign_tables = core_tables | catalog_others | (catalog_tables - declared_tables)
     foreign_names = foreign_tables | core_indexes | (catalog_indexes - declared_indexes)
     for plugin, statement in _SCHEMA:
         kind, name, on, refs = _ddl_parts(statement)

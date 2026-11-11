@@ -328,7 +328,7 @@ def test_a_schema_that_reaches_a_table_not_its_own_is_refused(
     assert repr(plugin) in str(exc.value)
     assert "agent_key" not in str(exc.value) and "toy_other" not in str(exc.value)
     with db.connect() as conn:
-        tables, _ = conn.catalog()
+        tables, _, _ = conn.catalog()
     assert not {"agent_mine", "toy_t"} & tables  # nothing ran
 
 

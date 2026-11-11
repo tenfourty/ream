@@ -211,17 +211,20 @@ class Connection:
             psycopg.pq.TransactionStatus.ACTIVE,
         )
 
-    def catalog(self) -> tuple[set[str], set[str]]:
-        """The names of the relations that share the table name space (tables, views,
-        materialized views, sequences, foreign and partitioned tables) and of the
-        indexes in the current schema, lower-case."""
+    def catalog(self) -> tuple[set[str], set[str], set[str]]:
+        """The names in the current schema, lower-case: ordinary tables, indexes, and
+        every other relation that shares the table name space (sequences, views,
+        materialized views, foreign and partitioned tables). A plug-in creates only
+        ordinary tables and indexes, so a name in the third set is never its own."""
         rows = self.execute(
             "select lower(c.relname), c.relkind from pg_class c"
             " join pg_namespace n on n.oid = c.relnamespace"
             " where n.nspname = current_schema()"
         ).fetchall()
-        tables = {name for name, kind in rows if kind not in ("i", "I")}
-        return tables, {name for name, kind in rows if kind in ("i", "I")}
+        tables = {name for name, kind in rows if kind == "r"}
+        indexes = {name for name, kind in rows if kind in ("i", "I")}
+        others = {name for name, kind in rows if kind not in ("r", "i", "I")}
+        return tables, indexes, others
 
     def byte_length(self, column: str) -> str:
         """The size in bytes of a text column, not its length in characters."""
@@ -312,13 +315,14 @@ class SqliteConnection(Connection):
     def in_transaction(self) -> bool:
         return self._raw.in_transaction
 
-    def catalog(self) -> tuple[set[str], set[str]]:
+    def catalog(self) -> tuple[set[str], set[str], set[str]]:
         rows = self.execute(
             "select lower(type), lower(name) from sqlite_master"
             " where type in ('table', 'view', 'index')"
         ).fetchall()
-        tables = {name for kind, name in rows if kind != "index"}
-        return tables, {name for kind, name in rows if kind == "index"}
+        tables = {name for kind, name in rows if kind == "table"}
+        indexes = {name for kind, name in rows if kind == "index"}
+        return tables, indexes, {name for kind, name in rows if kind == "view"}
 
     def for_update(self, suffix: str = "") -> str:
         return ""
@@ -1230,7 +1234,7 @@ class Database:
     def ensure_plugin_tables(
         self,
         statements: list[tuple[str, str]],
-        check: Callable[[set[str], set[str]], None] | None = None,
+        check: Callable[[set[str], set[str], set[str]], None] | None = None,
     ) -> None:
         """Run the plug-ins' `create ... if not exists` statements, `(plug-in,
         statement)` pairs already checked by `plugin_api.schema`, in one transaction,
