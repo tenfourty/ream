@@ -1059,21 +1059,45 @@ def _since(stamp: str | None) -> str:
     return f"{seconds // 86400} d ago"
 
 
+def _post_touch(
+    page_id: str,
+    key: str,
+    *,
+    status: str = "ok",
+    note: str | None = None,
+    if_revision: str | None = None,
+    refresh_every: int | None = None,
+) -> dict:
+    """POST one touch and return the service's answer. `refresh_every` in seconds, 0 clears it.
+    A refusal raises HTTPFailure (the 409 too: `_touch` turns that into Conflict)."""
+    payload: dict = {"status": status}
+    if note:
+        payload["note"] = note
+    if if_revision:
+        payload["if_revision"] = if_revision
+    if refresh_every is not None:
+        payload["refresh_every"] = refresh_every
+    return _request("POST", f"{_api_base()}/pages/{page_id}/touch", key, payload)
+
+
 def _touch(args, key: str) -> int:
     """`--touch ID`: vouch for one of your own pages without sending it. Exit 0 only when the
     service recorded the check; a refusal (409 `--if-revision`, 404, 422) is exit 1, so a timer
     script that checks `$?` catches a rejection."""
-    payload: dict = {"status": args.status or "ok"}
-    if args.note:
-        payload["note"] = args.note
-    if args.if_revision:
-        payload["if_revision"] = args.if_revision
+    refresh = None
     if args.no_refresh:
-        payload["refresh_every"] = 0
+        refresh = 0
     elif args.refresh_every:
-        payload["refresh_every"] = parse_interval(args.refresh_every)
+        refresh = parse_interval(args.refresh_every)
     try:
-        done = _request("POST", f"{_api_base()}/pages/{args.touch}/touch", key, payload)
+        done = _post_touch(
+            args.touch,
+            key,
+            status=args.status or "ok",
+            note=args.note,
+            if_revision=args.if_revision,
+            refresh_every=refresh,
+        )
     except HTTPFailure as exc:
         if exc.status != 409:
             raise

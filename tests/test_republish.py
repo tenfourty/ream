@@ -44,9 +44,9 @@ def test_no_config_is_silent_and_successful(tmp_path, logged, monkeypatch):
 def test_a_render_that_fails_publishes_nothing(tmp_path, logged, monkeypatch):
     published = []
     monkeypatch.setattr(republish, "republish_one", lambda e, k: published.append(e))
-    assert republish.render("exit 3") is None
+    assert republish.render("exit 4") is None
     assert not published
-    assert "exited 3" in logged.read_text()
+    assert "exited 4" in logged.read_text()
 
 
 def test_a_render_that_prints_nothing_publishes_nothing(tmp_path, logged):
@@ -247,3 +247,165 @@ def test_no_key_anywhere_is_logged_and_publishes_nothing(tmp_path, logged, monke
     assert republish.main([]) == 1
     assert not published
     assert "no usable key" in logged.read_text()
+
+
+# --- per-page timeout, refresh promise, touches, and "nothing to do" (runcove-5t3oj.125) ---
+
+PAGE = "printf '<html>x</html>'"
+
+
+@pytest.fixture()
+def touches(monkeypatch):
+    """Record every touch; `_read_current`/`_update` are stubbed by each test."""
+    seen = []
+
+    def post(page_id, key, **kw):
+        seen.append({"id": page_id, **kw})
+        return {"status": kw.get("status")}
+
+    monkeypatch.setattr(republish.client, "_post_touch", post)
+    return seen
+
+
+def stub_service(monkeypatch, before="a", after="b"):
+    updates = []
+    monkeypatch.setattr(
+        republish.client, "_read_current", lambda i, k: {"revision": before}
+    )
+
+    def update(f, i, k, **kw):
+        updates.append(kw)
+        return {"revision": after}
+
+    monkeypatch.setattr(republish.client, "_update", update)
+    return updates
+
+
+def test_timeout_defaults_and_parses_the_clients_durations():
+    assert republish.timeout_of({}) == republish.RENDER_TIMEOUT == 120
+    assert republish.timeout_of({"timeout": "30m"}) == 1800
+    assert republish.timeout_of({"timeout": 90}) == 90
+    assert republish.timeout_of({"timeout": "1h"}) == 3600
+
+
+@pytest.mark.parametrize("bad", ["soon", "2h", "0", 0, True, "-5", 7200])
+def test_a_bad_timeout_is_refused(bad):
+    with pytest.raises(ValueError):
+        republish.timeout_of({"timeout": bad})
+
+
+def test_a_page_with_a_bad_timeout_is_logged_and_skipped_not_fatal(
+    tmp_path, logged, monkeypatch, touches
+):
+    updates = stub_service(monkeypatch)
+    entry = {"id": "p", "render": PAGE, "timeout": "soon"}
+    assert republish.republish_one(entry, "k") is False
+    assert "bad setting" in logged.read_text()
+    assert not updates and not touches
+
+
+def test_the_pages_timeout_reaches_the_render(tmp_path, logged, monkeypatch, touches):
+    stub_service(monkeypatch)
+    seen = []
+    monkeypatch.setattr(
+        republish, "render", lambda c, k=None, t=None: seen.append(t) or None
+    )
+    republish.republish_one({"id": "p", "render": "x", "timeout": "10m"}, "k")
+    assert seen == [600]
+
+
+def test_a_slow_render_gets_its_longer_timeout(logged, monkeypatch):
+    monkeypatch.setattr(republish, "RENDER_TIMEOUT", 0.2)
+    assert republish.render("sleep 1; " + PAGE) is None  # default: times out
+    assert republish.render("sleep 1; " + PAGE, None, 10) is not None
+
+
+def test_a_published_page_carries_the_refresh_promise(logged, monkeypatch, touches):
+    updates = stub_service(monkeypatch)
+    entry = {"id": "p", "render": PAGE, "refresh_every": "2h"}
+    assert republish.republish_one(entry, "k")
+    assert updates == [{"refresh_every": 7200}]
+    assert touches == []  # the update itself vouches for it
+
+
+def test_no_refresh_every_sends_none(logged, monkeypatch, touches):
+    updates = stub_service(monkeypatch)
+    assert republish.republish_one({"id": "p", "render": PAGE}, "k")
+    assert updates == [{}]
+
+
+def test_a_bad_refresh_every_skips_the_page(logged, monkeypatch, touches):
+    updates = stub_service(monkeypatch)
+    entry = {"id": "p", "render": PAGE, "refresh_every": "often"}
+    assert republish.republish_one(entry, "k") is False
+    assert not updates and not touches
+    assert "refresh_every" in logged.read_text()
+
+
+def test_an_identical_revision_is_touched_ok_with_the_promise(
+    logged, monkeypatch, touches
+):
+    stub_service(monkeypatch, before="same", after="same")
+    entry = {"id": "p", "render": PAGE, "refresh_every": "30m"}
+    assert republish.republish_one(entry, "k")
+    assert touches == [{"id": "p", "status": "ok", "note": None, "refresh_every": 1800}]
+
+
+def test_an_identical_revision_without_a_promise_is_touched_ok(
+    logged, monkeypatch, touches
+):
+    stub_service(monkeypatch, before="same", after="same")
+    assert republish.republish_one({"id": "p", "render": PAGE}, "k")
+    assert touches[0]["status"] == "ok" and touches[0]["refresh_every"] is None
+
+
+def test_exit_three_with_nothing_printed_is_skipped_and_touched_ok(
+    logged, monkeypatch, touches
+):
+    updates = stub_service(monkeypatch)
+    assert republish.RENDER_UNCHANGED == 3
+    entry = {"id": "p", "render": "exit 3", "refresh_every": "1h"}
+    assert republish.republish_one(entry, "k") is True
+    assert not updates
+    assert "skipped, nothing to do" in logged.read_text()
+    assert touches == [{"id": "p", "status": "ok", "note": None, "refresh_every": 3600}]
+
+
+def test_exit_three_that_printed_something_is_still_a_failure(logged):
+    assert republish.render("echo oops; exit 3") is None
+    assert republish.render("exit 3") is republish.SKIPPED
+
+
+def test_empty_output_with_exit_zero_stays_a_failure(logged, monkeypatch, touches):
+    updates = stub_service(monkeypatch)
+    assert republish.republish_one({"id": "p", "render": "true"}, "k") is False
+    assert not updates
+    assert [t["status"] for t in touches] == ["failed"]
+
+
+@pytest.mark.parametrize("cmd", ["exit 1", "echo nope"])
+def test_a_failed_render_touches_failed(logged, monkeypatch, touches, cmd):
+    updates = stub_service(monkeypatch)
+    assert republish.republish_one({"id": "p", "render": cmd}, "k") is False
+    assert not updates
+    assert [(t["id"], t["status"]) for t in touches] == [("p", "failed")]
+
+
+def test_a_timed_out_render_touches_failed(logged, monkeypatch, touches):
+    stub_service(monkeypatch)
+    monkeypatch.setattr(republish, "timeout_of", lambda e: 0.2)
+    assert republish.republish_one({"id": "p", "render": "sleep 30"}, "k") is False
+    assert [t["status"] for t in touches] == ["failed"]
+
+
+def test_a_failing_touch_is_logged_never_raised(logged, monkeypatch):
+    stub_service(monkeypatch, before="same", after="same")
+
+    def boom(*a, **k):
+        raise RuntimeError("touch refused")
+
+    monkeypatch.setattr(republish.client, "_post_touch", boom)
+    assert republish.republish_one({"id": "p", "render": PAGE}, "k") is True
+    assert republish.republish_one({"id": "p", "render": "exit 1"}, "k") is False
+    assert "touch (ok) failed" in logged.read_text()
+    assert "touch (failed) failed" in logged.read_text()

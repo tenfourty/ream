@@ -1056,6 +1056,15 @@ later ok check or publish clears it. The interval is only ever what you declare 
 year). `--touch` exits non-zero on any refusal (a moved `--if-revision` is 409), so check it in
 your timer script: `ream publish --touch <page-id> || echo "touch refused" >&2`.
 
+Let `ream republish` (or `artifacts-republish`) do the timer's work for you: a `[[page]]` block in
+~/.config/artifacts/pages.toml takes `id`, `render` (a command that prints the page's HTML) and
+two optional keys, `timeout` (how long the render may run; default 120 seconds, at most 1h;
+`"10m"`, `"1h"` or seconds) and `refresh_every` (the promise above, in the same syntax). After
+each page it vouches for it: a published page carries the promise, an identical one is touched ok,
+a render that exits 3 and prints nothing ("nothing to do") publishes nothing and is touched ok,
+and a render that fails, times out or prints nothing else is touched `failed`. A bad value logs
+and skips that page; nothing it does can fail the caller.
+
 API: POST /api/v1/pages/<id>/touch {status?: "ok"|"failed", note?, if_revision?,
 refresh_every?: seconds, 0 clears}; refresh_every also on POST and PATCH /api/v1/pages.
 

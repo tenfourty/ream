@@ -448,9 +448,10 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt and skill.md re-taken on 9 Nov 2026 for moving an agent to a new machine (one short paragraph, one skill line).
 # agents.txt and skill.md re-taken on 10 Nov 2026 for the artifact rule when Ream is connected to Claude over MCP (a short paragraph in each, one bullet in skill.md).
 # agents.txt and the artifacts-publish help re-taken on 11 Nov 2026 for what each round changed (`ream changes`, the paragraph on reading changes).
+# skill.md re-taken on 11 Nov 2026 for the pages.toml keys of `ream republish` (timeout, refresh_every, exit 3 = nothing to do).
 GOLDEN = {
     "agents.txt": "2ce909128c372965ff0b603e81100718a5c8ceeb352491ff27b0a94e467bf452",
-    "skill.md": "bdf62f43296ac840ce556fa6439765f18e6134a376beb3981444080666ed26cc",
+    "skill.md": "6eacd35a0fb418e80f90b8ddca0e46ace0dcf4ee31eac3360ef6f3306d0554ea",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"

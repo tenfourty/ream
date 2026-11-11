@@ -14,10 +14,26 @@ No arguments. Every seat's hook invocation is identical; the difference lives in
     [[page]]
     id     = "y5sx7wwujjy5dszde6tkqgvuf3"
     render = "python3 /path/to/render-the-page.py -"
+    timeout       = "10m"   # optional: how long the render may take (default 120 s, at most 1 h)
+    refresh_every = "2h"    # optional: the promise to keep this page fresh (30m, 2h, 1d or seconds)
 
 `render` writes the page's HTML to stdout; this publishes it as a new version of
 `id`. Several `[[page]]` blocks are fine. The key is never in the config — it
 stays where every other tool here finds it.
+
+After each page the run vouches for it, so a page that is checked but unchanged
+does not look like a dead timer:
+
+  * published: the update carries `refresh_every` when set. Identical to what is
+    live (no new version): the page is touched as ok, with `refresh_every` when set;
+  * the render exits `RENDER_UNCHANGED` (3) and prints nothing: "nothing to do".
+    Nothing is published, the page is touched as ok, and the log says skipped. Any
+    other empty output stays a failure;
+  * the render failed (non-zero exit, timeout, empty or not-a-page output): nothing
+    is published and the page is touched as FAILED, so a reader sees the job broke.
+
+A touch that fails is logged and never raised. A bad `timeout` or `refresh_every`
+logs and skips that page (the run goes on to the others and exits 1).
 
 THREE PROPERTIES, and they are the reason this is a command rather than a line
 of shell in the wrapper:
@@ -48,7 +64,59 @@ from pathlib import Path
 
 from ream import client, envnames, plugin_cli
 
-RENDER_TIMEOUT = 120
+RENDER_TIMEOUT = (
+    120  # the default; a [[page]] may set `timeout` up to MAX_RENDER_TIMEOUT
+)
+MAX_RENDER_TIMEOUT = 3600
+# A render that exits with this and prints nothing is saying "nothing to do": no
+# publish, a touch with status ok, logged as skipped. (Not 1 or 2, which
+# interpreters use for errors and misuse.)
+RENDER_UNCHANGED = 3
+
+
+class _Skipped:
+    """What `render` returns for an unchanged-skip: neither a page nor a failure."""
+
+    def __repr__(self) -> str:
+        return "SKIPPED"
+
+
+SKIPPED = _Skipped()
+
+
+def _duration(value, name: str) -> int:
+    """A config duration as seconds, reusing the client's `--refresh-every` syntax.
+    A TOML number is seconds. Raises ValueError with a readable reason."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError(f"{name} {value!r} is not a duration")  # noqa: TRY004 -- callers catch ValueError
+    try:
+        return client.parse_interval(str(value))
+    except client.UsageError as exc:
+        raise ValueError(
+            f"{name} {value!r} is not a duration: use seconds or 30m, 2h"
+        ) from exc
+
+
+def timeout_of(entry: dict) -> int | float:
+    """This page's render timeout in seconds; ValueError when unusable."""
+    if "timeout" not in entry:
+        return RENDER_TIMEOUT
+    seconds = _duration(entry["timeout"], "timeout")
+    if not 0 < seconds <= MAX_RENDER_TIMEOUT:
+        raise ValueError(
+            f"timeout {entry['timeout']!r} is out of range (1 s to {MAX_RENDER_TIMEOUT} s)"
+        )
+    return seconds
+
+
+def refresh_of(entry: dict) -> int | None:
+    """This page's refresh promise in seconds, or None when not set; ValueError when unusable."""
+    if "refresh_every" not in entry:
+        return None
+    seconds = _duration(entry["refresh_every"], "refresh_every")
+    if seconds <= 0:
+        raise ValueError(f"refresh_every {entry['refresh_every']!r} must be above zero")
+    return seconds
 
 
 def config_path() -> Path:
@@ -103,8 +171,10 @@ def pages(path: Path) -> list[dict]:
     return out
 
 
-def render(command: str, key: str | None = None) -> str | None:
-    """The page's HTML, or None with the reason logged.
+def render(
+    command: str, key: str | None = None, timeout: float | None = None
+) -> str | _Skipped | None:
+    """The page's HTML, SKIPPED for "nothing to do", or None with the reason logged.
 
     None covers every way this can go wrong — non-zero exit, a timeout, nothing
     on stdout, or something that is plainly not a page — because every one of
@@ -127,6 +197,9 @@ def render(command: str, key: str | None = None) -> str | None:
     pipe carrying a copy: never a command-line argument, never an environment
     variable holding the key itself, only a descriptor number — the same
     discipline `artifacts-key` follows.
+
+    Exit RENDER_UNCHANGED with nothing on stdout is SKIPPED: the render's way of
+    saying the page needs no redraw. Exit 3 WITH output is still a failure.
     """
     child_env = dict(os.environ)
     read_fd: int | None = None
@@ -148,7 +221,7 @@ def render(command: str, key: str | None = None) -> str | None:
             shell=True,
             capture_output=True,
             text=True,
-            timeout=RENDER_TIMEOUT,
+            timeout=RENDER_TIMEOUT if timeout is None else timeout,
             check=False,
             env=child_env,
             pass_fds=() if read_fd is None else (read_fd,),
@@ -159,6 +232,9 @@ def render(command: str, key: str | None = None) -> str | None:
     finally:
         if read_fd is not None:
             os.close(read_fd)
+    if done.returncode == RENDER_UNCHANGED and not done.stdout.strip():
+        _log(f"render says nothing to do (exit {RENDER_UNCHANGED}): {command!r}")
+        return SKIPPED
     if done.returncode != 0:
         _log(
             f"render exited {done.returncode}: {command!r}: {done.stderr.strip()[:300]}"
@@ -177,10 +253,33 @@ def render(command: str, key: str | None = None) -> str | None:
     return body
 
 
+def _touch(
+    entry: dict, key: str, status: str, refresh: int | None, note: str | None = None
+) -> None:
+    """Vouch for the page (or mark it failed). Logged, never raised."""
+    try:
+        client._post_touch(
+            entry["id"], key, status=status, note=note, refresh_every=refresh
+        )
+    except Exception as exc:  # noqa: BLE001 -- nothing may propagate to the caller
+        _log(f"{entry['id']}: touch ({status}) failed: {type(exc).__name__}: {exc}")
+
+
 def republish_one(entry: dict, key: str) -> bool:
-    body = render(entry["render"], key)
-    if body is None:
+    try:
+        timeout = timeout_of(entry)
+        refresh = refresh_of(entry)
+    except ValueError as exc:
+        _log(f"{entry['id']}: skipped, bad setting: {exc}")
         return False
+    body = render(entry["render"], key, timeout)
+    if body is None:
+        _touch(entry, key, "failed", None, "the render failed; see the republish log")
+        return False
+    if body is SKIPPED:
+        _log(f"{entry['id']}: skipped, nothing to do")
+        _touch(entry, key, "ok", refresh)
+        return True
     # _update reads from a path, so the rendered body goes to a temporary file
     # rather than reaching into the client's internals. TemporaryDirectory
     # rather than NamedTemporaryFile: the directory cleans itself up on every
@@ -190,13 +289,15 @@ def republish_one(entry: dict, key: str) -> bool:
         page.write_text(body, encoding="utf-8")
         try:
             before = client._read_current(entry["id"], key)["revision"]
-            result = client._update(str(page), entry["id"], key)
+            extra = {} if refresh is None else {"refresh_every": refresh}
+            result = client._update(str(page), entry["id"], key, **extra)
         except Exception as exc:  # noqa: BLE001 -- nothing may propagate to the caller
             _log(f"{entry['id']}: publish failed: {type(exc).__name__}: {exc}")
             return False
     after = result.get("revision")
     if after == before:
         _log(f"{entry['id']}: unchanged, no new version")
+        _touch(entry, key, "ok", refresh)
     else:
         _log(f"{entry['id']}: republished as {after}")
     return True

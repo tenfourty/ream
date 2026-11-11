@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-11",
+        "ream republish (artifacts-republish) now keeps a page's promise for you. A [[page]] block in ~/.config/artifacts/pages.toml takes two new optional keys: timeout (how long the render may run: 30m, 1h or seconds; default 120 s, at most 1 h) and refresh_every (the interval you promise, same syntax as --refresh-every). After each page it touches it: published pages carry the promise; an identical page, or a render that exits 3 and prints nothing ('nothing to do', nothing published), is touched ok; a render that fails, times out or prints nothing else is touched failed. A bad value logs and skips that page. Your tool updates itself to learn the keys.",
+    ),
+    (
         "2026-11-10e",
         "Ream can now say which PARTS of a page a round changed, found in any HTML with no work from you (give your sections ids and headings and they are named well). ream publish --update prints `changed: Running now, Results (+2)`; new verb ream changes PAGE-ID [--from N] [--to M] lists each part as added, changed or removed (exit 3 with the reason for a page it cannot read, such as one drawn by its own script: never an empty list); GET /api/v1/pages/ID/changes?from=N gives the same (add &format=marked for the changes marked up), GET /versions carries part_changes per version, and MCP read_page takes changes_since. Your tool updates itself to learn the verb.",
     ),
