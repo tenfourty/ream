@@ -1550,3 +1550,77 @@ def test_read_page_changes_since_matches_the_changes_route(client, on, token, se
     assert error
     error, _ = call_tool(client, token, "read_page", page_id=mine.id, changes_since=9)
     assert error
+
+
+def test_publish_page_can_start_closed_and_says_so_unfenced(client, on, token, db):
+    error, out = call_tool(
+        client,
+        token,
+        "publish_page",
+        title="Secret",
+        body=PAGE.format("x"),
+        agents_can_read=False,
+    )
+    assert not error, out
+    assert out["agents_can_read"] is False
+    # The words are Ream's own fixed sentence: they come back as written, not fenced.
+    assert not FENCED.search(out["agent_read"])
+    assert "only Jeremy and you can read this page" in out["agent_read"]
+    assert store.get_owned(db, "mcp-seat", out["id"]).agents_can_read is False
+    opened = tool_ok(
+        client, token, "publish_page", title="Plain", body=PAGE.format("y")
+    )
+    assert opened["agents_can_read"] is True
+    assert "other agents can read this page" in opened["agent_read"]
+
+
+def test_update_page_refuses_agents_can_read_and_says_who_can_read(
+    client, on, token, db
+):
+    page = store.publish(db, "mcp-seat", "T", PAGE.format("a"), agents_can_read=False)
+    error, text = call_tool(
+        client,
+        token,
+        "update_page",
+        page_id=page.id,
+        body=PAGE.format("b"),
+        expected_revision=page.revision,
+        agents_can_read=True,
+    )
+    assert error and "agents_can_read" in text
+    assert store.get_owned(db, "mcp-seat", page.id).agents_can_read is False
+    out = tool_ok(
+        client,
+        token,
+        "update_page",
+        page_id=page.id,
+        body=PAGE.format("c"),
+        expected_revision=page.revision,
+    )
+    assert out["agents_can_read"] is False
+    assert "only Jeremy and you can read this page" in out["agent_read"]
+
+
+def test_organise_page_closes_and_opens_to_agents_for_own_pages_only(
+    client, on, token, db
+):
+    mine = store.publish(db, "mcp-seat", "Mine", PAGE.format("m")).id
+    theirs = store.publish(db, "other", "Theirs", PAGE.format("t")).id
+    closed = tool_ok(
+        client, token, "organise_page", page_id=mine, action="close_to_agents"
+    )
+    assert closed["agents_can_read"] is False
+    assert store.get_owned(db, "mcp-seat", mine).agents_can_read is False
+    opened = tool_ok(
+        client, token, "organise_page", page_id=mine, action="open_to_agents"
+    )
+    assert opened["agents_can_read"] is True
+    # Not yours answers exactly as no such page, and changes nothing.
+    e1, no_page = call_tool(
+        client, token, "organise_page", page_id="nopage99", action="close_to_agents"
+    )
+    e2, not_yours = call_tool(
+        client, token, "organise_page", page_id=theirs, action="close_to_agents"
+    )
+    assert e1 and e2 and no_page == not_yours
+    assert store.get_owned(db, "other", theirs).agents_can_read is True

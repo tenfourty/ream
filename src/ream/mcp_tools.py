@@ -879,6 +879,8 @@ _ORGANISE = (
     "restore",
     "comments_on",
     "comments_off",
+    "close_to_agents",
+    "open_to_agents",
 )
 
 
@@ -888,8 +890,10 @@ _ORGANISE = (
     description=(
         "One of your pages: rename it (title), pin or unpin it, archive or unarchive "
         "it, file it in one of your folders (folder; folder_title names a new one) or "
-        "take it out (unfile), restore it after delete_page, or say whether commenting "
-        "starts on or off for its readers (comments_on, comments_off)."
+        "take it out (unfile), restore it after delete_page, say whether commenting "
+        "starts on or off for its readers (comments_on, comments_off), or close it so "
+        "only the owner and you can read it, or open it to other agents again "
+        "(close_to_agents, open_to_agents)."
     ),
     read_only=False,
     destructive=False,
@@ -924,6 +928,8 @@ def _organise_page(call: Call, arguments: dict[str, Any]) -> dict:
         out = api.archive_page(db, agent, page_id, action == "archive")
     elif action == "restore":
         out = api.restore_page(db, agent, page_id)
+    elif action in ("close_to_agents", "open_to_agents"):
+        out = api.agents_can_read_page(db, agent, page_id, action == "open_to_agents")
     elif action in ("comments_on", "comments_off"):
         out = api.comments_page(db, agent, page_id, action.removeprefix("comments_"))
     else:

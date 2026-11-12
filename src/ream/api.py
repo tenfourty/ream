@@ -1193,6 +1193,16 @@ def comments_page(db: Database, agent: str, artifact_id: str, comments: str) -> 
     return store.get_owned(db, agent, artifact_id).__dict__
 
 
+def agents_can_read_page(
+    db: Database, agent: str, artifact_id: str, can_read: bool
+) -> dict:
+    """POST /pages/{id}/agents, for the route and the MCP `organise_page` tool (open_to_agents,
+    close_to_agents). "Not yours" answers as "no such page"."""
+    if not store.set_agents_can_read(db, artifact_id, can_read, agent=agent):
+        raise HTTPException(404, "no such page")
+    return store.get_owned(db, agent, artifact_id).__dict__
+
+
 def delete_page(db: Database, agent: str, artifact_id: str) -> dict:
     """DELETE /pages/{id}, for the route and the MCP `delete_page` tool."""
     if not store.set_deleted(db, artifact_id, True, agent=agent):
@@ -2509,11 +2519,7 @@ def agent_router(
         """Open this agent's own page to every agent in his space, or close it to
         just him and this agent (homelab-ij8.105). The publisher's twin of his
         control in the gallery; nobody else's page can be changed from here."""
-        if not store.set_agents_can_read(
-            db, artifact_id, payload.can_read, agent=agent
-        ):
-            raise HTTPException(404, "no such page")
-        return store.get_owned(db, agent, artifact_id).__dict__
+        return agents_can_read_page(db, agent, artifact_id, payload.can_read)
 
     # --- the shelf: what Jeremy can do to a page in the gallery, an agent can
     # do to its own pages here. His rule, 20 Sep 2026: "ideally agents can take
