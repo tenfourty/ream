@@ -1015,3 +1015,22 @@ nobody took up; these settle both, so the card line and the nudge can be built.
 - "Done" closes the question: done is the agent's word, closing stays his.
 
 **Evidence:** confirmed (Jeremy, 11 Nov 2026, five lettered answers in the receipts thread)
+
+## The private release repo has one admin office besides the owner (12 Nov 2026)
+
+`runcove-sec/artifacts-sec`, where an embargoed fix is built and released from, gets the homelab
+office's forge account as admin of that one repository, not of its organisation. The homelab office
+reads and posts its branch rules when security asks for proof (force push off, push only by
+artifacts-maintainer, deletion off), and keeps the repository's settings. artifacts-maintainer keeps
+push only. The grant goes on homelab's permission matrix.
+
+Why: only the owner could read the branch rules, so the pipeline's last check (that nobody can
+rewrite its `main`) had no one to run it. A rule read by an admin is the proof; nobody force-pushes
+a release branch to test it.
+
+**Not chosen:**
+- The owner reads the rule and changes the settings himself: every later check would wait on him.
+- Leave it unproven: the pipeline's guarantee would rest on a setting nobody had read.
+- Admin on the organisation: wider than the one repository needs.
+
+**Evidence:** confirmed (Jeremy, 12 Nov 2026, lettered answer in #hq-artifacts)
