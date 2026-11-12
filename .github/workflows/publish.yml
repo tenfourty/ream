@@ -4,6 +4,11 @@
 # and the environment `pypi` (limited to main). No secret is stored anywhere.
 # Every main commit is mirrored, so an unchanged version is skipped: a release is a version bump
 # in pyproject.toml.
+# Every job is gated to this mirror, `github.repository == 'tenfourty/ream'`, so that in the private
+# copy runcove-sec/artifacts-sec (or anywhere else this folder is ever read) no job here is
+# dispatched, whatever a forge setting or version does with .github/workflows.
+# scripts/guards/workflow-runner-guard.sh refuses a job here without that conjunct in its `if:`;
+# if the mirror is renamed, change the name here, in the guard (GITHUB_REPO) and in PyPI's publisher.
 name: publish
 
 on:
@@ -19,6 +24,7 @@ concurrency:
 
 jobs:
   build:
+    if: github.repository == 'tenfourty/ream'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,6 +48,7 @@ jobs:
           path: dist/
 
   publish:
+    if: github.repository == 'tenfourty/ream'
     needs: build
     runs-on: ubuntu-latest
     environment:

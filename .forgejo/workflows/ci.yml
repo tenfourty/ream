@@ -31,7 +31,11 @@ jobs:
     # A hung job fails here instead of holding a builder for the runner's default of hours
     # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
     timeout-minutes: 20
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    # Only in the public repo, NAMED (not "anything but the sec repo"): a copy of this file anywhere
+    # else has its jobs skipped (the private repo runs sec.yml instead). A job whose `if:` is false
+    # is never dispatched. Every job in this file carries this gate;
+    # scripts/guards/workflow-runner-guard.sh refuses one that does not.
+    if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       postgres:
         image: postgres:18
@@ -41,7 +45,7 @@ jobs:
           # can reach.
           POSTGRES_HOST_AUTH_METHOD: trust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       # The postgres service container has no declared HEALTHCHECK, so Actions
       # starts it and moves straight on -- nothing here waits for it to accept
@@ -73,7 +77,8 @@ jobs:
       # secret-on-argv scan runs over the WHOLE tree — the pre-commit hook only
       # ever sees a staged diff. --no-lefthook because this runner has no
       # lefthook binary: it prints a loud NOT PROVEN line for the dispatch
-      # regression rather than passing silently. Needs nothing but bash and git.
+      # regression rather than passing silently. Needs bash, git and uv (the workflow-runner guard reads
+      # YAML with PyYAML, from uv when the runner image has none).
       - name: guard selftests
         run: scripts/guards/run-selftests.sh --no-lefthook
 
@@ -82,6 +87,9 @@ jobs:
 
       - name: core-lock-pr selftest
         run: .forgejo/scripts/core-lock-pr.sh --selftest
+
+      - name: sec-private-check selftest
+        run: .forgejo/scripts/sec-private-check.sh --selftest
 
       - name: tests
         env:
@@ -117,7 +125,8 @@ jobs:
     # 30, not 20: a passing run takes 14-16 min, and on a slower docker-light runner on
     # 11 Nov 2026 every step passed but the SQLite suite was cut off at 99% by the 20.
     timeout-minutes: 30
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    # Public repo only, named (see `test`); skipped in the private copy.
+    if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       postgres:
         image: postgres:18
@@ -127,7 +136,7 @@ jobs:
           # can reach.
           POSTGRES_HOST_AUTH_METHOD: trust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       # The postgres service container has no declared HEALTHCHECK, so Actions
       # starts it and moves straight on -- nothing here waits for it to accept
@@ -208,7 +217,8 @@ jobs:
   core-bare:
     runs-on: docker-light
     timeout-minutes: 25
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    # Public repo only, named (see `test`); skipped in the private copy.
+    if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       postgres:
         image: postgres:18
@@ -218,7 +228,7 @@ jobs:
       REAM_PLUGINS: none
       REAM_BROWSER: /nonexistent/browser
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: wait for postgres
         run: |
@@ -274,7 +284,9 @@ jobs:
     # A hung job fails here instead of holding a builder for the runner's default of hours
     # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
     timeout-minutes: 30
-    if: "github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')"
+    # Only the public repo publishes here (named, not "anything but the sec repo"): a copy of this
+    # file in any other repo, the private embargo repo first, never pushes to this registry.
+    if: "github.repository == 'runcove/artifacts' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       dind:
         image: docker:28-dind
@@ -298,7 +310,7 @@ jobs:
       # the `core-lock` job reads it.
       core_ref: ${{ steps.core.outputs.ref }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       # Copied from another project's build-image workflow (first ~30
       # lines): the job container has no docker CLI of its own, only the dind
@@ -449,9 +461,9 @@ jobs:
     # OFF: production now pins from ream-homelab (9 Nov 2026), whose pin job opens the deployment's pin
     # PR, and the deployment's lander no longer accepts this repo as a source; `core-lock` below is the
     # only path on main. To roll back see docs/agent/runbooks/image-from-ream-homelab.md.
-    if: false
+    if: "github.repository == 'runcove/artifacts' && false"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           # The whole history: the script refuses to move production to an older commit.
           fetch-depth: 0
@@ -474,9 +486,9 @@ jobs:
     needs: [test, test-sqlite, image]
     runs-on: deploy-docker
     timeout-minutes: 10
-    if: "github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]') && needs.image.outputs.core_ref != ''"
+    if: "github.repository == 'runcove/artifacts' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip ci]') && needs.image.outputs.core_ref != ''"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           # The whole history: the script refuses to move the lock to an older commit.
           fetch-depth: 0

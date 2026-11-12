@@ -1,0 +1,466 @@
+name: sec
+
+# The embargoed-fix pipeline (docs/agent/runbooks/embargoed-fix.md). Every job runs only in the
+# PRIVATE repo runcove-sec/artifacts-sec, so this file is inert in the public runcove/artifacts and
+# its mirror. In artifacts-sec, ci.yml's jobs stand down and this file runs instead:
+#   runner-guard  the workflow guard on this tree, first, before any job that uses SEC_CHECK_TOKEN
+#   privacy  proves the repo private with no push mirror, and the registry owner private; any
+#            doubt fails the run before a test, a build or a push
+#   tests    the same three jobs as ci.yml (copied from it: keep them in step)
+#   image    on main only: the core image and the deployed image (core + ream-homelab's plug-ins
+#            at its main), both pushed under the private owner, each proven to exist and not
+#            pullable anonymously, and everything proven private once more after the last push;
+#            prints one SEC BUILT line for the pin, only then. It never opens a pin or lock PR.
+"on":
+  push:
+    branches: [main, "sec/**"]
+  workflow_dispatch:
+
+# One sec run at a time, across every branch; a queued run never cancels the one running
+# (workflow-runner-guard.sh rule 5 requires exactly this block).
+concurrency:
+  group: sec-pipeline
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Only these two names: workflow-runner-guard.sh rule 5 refuses any other at this level.
+  # A private org of the forge (its packages are private with it), also the owner of this repository.
+  # The privacy job refuses to go on unless the forge says so. Every image name below is built
+  # from it, so the images live under git.tenfourty.site/runcove-sec/ and nowhere else.
+  SEC_REGISTRY_OWNER: runcove-sec
+  # The registry account that SEC_REGISTRY_TOKEN belongs to (it pushes the images).
+  SEC_REGISTRY_USER: artifacts-sec-publisher
+
+# Every job runs on a label only the runners dedicated to this repo carry (machines that run no
+# other jobs, with their own work and cache directories): `image`, privileged docker-in-docker, on
+# `runcove-sec`, and every other job on the unprivileged `runcove-sec-unpriv`
+# (workflow-runner-guard.sh rule 1 requires exactly that). With no such runner up, a
+# push only queues; nothing runs anywhere. Every `sec-private-check.sh repo` below also proves that
+# from the forge's runner list, and that the runner running it is one of those: it reads the
+# runner's name from SEC_RUNNER_NAME, which the runner's own config sets (runner.envs). Never set it
+# here or in a local action: workflow-runner-guard.sh refuses a workflow, or an action.yml or
+# action.yaml anywhere in the tree, that names it outside a comment.
+jobs:
+  # First, before any job that uses SEC_CHECK_TOKEN: the workflow guard on this very tree (every
+  # workflow's runner and gate, this file's job order, the runner-name variable). It needs nothing
+  # and names no secret; every other job waits for it, and the jobs that name SEC_CHECK_TOKEN list
+  # it directly (workflow-runner-guard.sh rule 5 refuses this file otherwise). No if: in this file
+  # may name a status function (always(), failure(), ...), and no job or step in it takes
+  # continue-on-error: a refusal here must stop every job after it.
+  runner-guard:
+    runs-on: runcove-sec-unpriv
+    timeout-minutes: 5
+    if: "github.repository == 'runcove-sec/artifacts-sec'"
+    steps:
+      # Exactly these two steps, in this order (workflow-runner-guard.sh rule 5): checkout pinned to
+      # a commit (data.forgejo.org's actions/checkout v4.4.0), then the guard step, which builds its
+      # own Python with PyYAML from hash-pinned downloads in a temporary directory.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: workflow guard
+        run: scripts/guards/workflow-runner-guard.sh --pinned-python
+
+  privacy:
+    runs-on: runcove-sec-unpriv
+    timeout-minutes: 5
+    needs: [runner-guard]
+    if: "github.repository == 'runcove-sec/artifacts-sec'"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: prove the repo and the registry owner private
+        env:
+          SEC_CHECK_TOKEN: ${{ secrets.SEC_CHECK_TOKEN }}
+        run: .forgejo/scripts/sec-private-check.sh repo "$GITHUB_REPOSITORY" runcove-sec-unpriv "$SEC_REGISTRY_OWNER"
+
+  test:
+    runs-on: runcove-sec-unpriv
+    # A hung job fails here instead of holding a builder for the runner's default of hours
+    # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
+    timeout-minutes: 20
+    needs: [privacy]
+    if: "github.repository == 'runcove-sec/artifacts-sec'"
+    services:
+      postgres:
+        image: postgres:18@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
+        env:
+          # No password literal anywhere: trust auth is fine for a service container
+          # that exists only for the length of this job, on a network nothing else
+          # can reach.
+          POSTGRES_HOST_AUTH_METHOD: trust
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      # The postgres service container has no declared HEALTHCHECK, so Actions
+      # starts it and moves straight on -- nothing here waits for it to accept
+      # connections. This loop is that wait: plain python3 (present on this
+      # runner image; see docs/services/forge/readme.md), no extra dependency.
+      - name: wait for postgres
+        run: |
+          for i in $(seq 1 30); do
+            python3 -c "import socket; socket.create_connection(('postgres', 5432), timeout=1).close()" \
+              && exit 0
+            sleep 1
+          done
+          echo "postgres never became reachable on port 5432" >&2
+          exit 1
+
+      # The guard's own pinned, sha256-checked uv (workflow-runner-guard.sh --install-uv).
+      - name: install uv
+        run: |
+          scripts/guards/workflow-runner-guard.sh --install-uv "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - run: uv sync --frozen --all-extras
+
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
+
+      # The commit guards (lefthook.yml, scripts/guards/) only protect a clone
+      # that ran `lefthook install`, so a guard nobody installed is no guard at
+      # all for an agent on another machine. Their selftests run here, and the
+      # secret-on-argv scan runs over the WHOLE tree — the pre-commit hook only
+      # ever sees a staged diff. --no-lefthook because this runner has no
+      # lefthook binary: it prints a loud NOT PROVEN line for the dispatch
+      # regression rather than passing silently. Needs bash, git and uv (the workflow-runner guard reads
+      # YAML with PyYAML, from uv when the runner image has none).
+      - name: guard selftests
+        run: scripts/guards/run-selftests.sh --no-lefthook
+
+      - name: pin-pr selftest
+        run: .forgejo/scripts/pin-pr.sh --selftest
+
+      - name: core-lock-pr selftest
+        run: .forgejo/scripts/core-lock-pr.sh --selftest
+
+      - name: sec-private-check selftest
+        run: .forgejo/scripts/sec-private-check.sh --selftest
+
+      - name: tests
+        env:
+          # The browser tests run in `test-sqlite`. Name no browser here (an explicit
+          # path that is no file means "none"), so these parallel runs never find one.
+          REAM_BROWSER: /nonexistent/browser
+          # connect_timeout=30: production keeps its 5 s bound (db.py), but this
+          # service shares the runner's 5.5 cores with the workers, and on a
+          # loaded host a new backend took longer than 5 s to fork (29 Sep
+          # 2026, three ConnectionTimeouts in an otherwise green run).
+          PG_TEST_DSN: postgresql://postgres@postgres:5432/postgres?connect_timeout=30
+          # This service container exists only for this job, so the tests may
+          # turn its commit flushes off (tests/conftest.py, _declared_throwaway).
+          REAM_TEST_PG_THROWAWAY: "1"
+        # -n auto (one worker per core the runner gives this job), capped at 5:
+        # more workers only queue behind each other and the Postgres service
+        # (the deployment repo's CI-builders doc); each in its own database
+        # (artifacts_test_<worker>) on this one Postgres service.
+        run: uv run pytest -q -n auto --maxprocesses 5
+
+  test-sqlite:
+    runs-on: runcove-sec-unpriv
+    # A hung job fails here instead of holding a builder for the runner's default of hours
+    # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
+    timeout-minutes: 20
+    needs: [privacy]
+    if: "github.repository == 'runcove-sec/artifacts-sec'"
+    services:
+      postgres:
+        image: postgres:18@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
+        env:
+          # No password literal anywhere: trust auth is fine for a service container
+          # that exists only for the length of this job, on a network nothing else
+          # can reach.
+          POSTGRES_HOST_AUTH_METHOD: trust
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      # The postgres service container has no declared HEALTHCHECK, so Actions
+      # starts it and moves straight on -- nothing here waits for it to accept
+      # connections. This loop is that wait: plain python3 (present on this
+      # runner image; see docs/services/forge/readme.md), no extra dependency.
+      - name: wait for postgres
+        run: |
+          for i in $(seq 1 30); do
+            python3 -c "import socket; socket.create_connection(('postgres', 5432), timeout=1).close()" \
+              && exit 0
+            sleep 1
+          done
+          echo "postgres never became reachable on port 5432" >&2
+          exit 1
+
+      # The guard's own pinned, sha256-checked uv (workflow-runner-guard.sh --install-uv).
+      - name: install uv
+        run: |
+          scripts/guards/workflow-runner-guard.sh --install-uv "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - run: uv sync --frozen --all-extras
+
+      # The browser tests (comments panel, hover cards, thumbnails, shim placement)
+      # skip without a headless browser, and until runcove-5t3oj.81 CI had none, so
+      # they only ever ran on a maintainer's machine. Debian's chromium, as the image
+      # ships it (Dockerfile): the job container is node:22-bookworm and runs as root.
+      # REAM_REQUIRE_BROWSER (below) turns a missing browser into a failure
+      # instead of a skip.
+      - name: install chromium
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends chromium fonts-dejavu-core
+          chromium --version
+          test -x /usr/bin/chromium
+
+      # The browser tests, serially and in their own step. With chromium visible to
+      # the 5-worker runs below, the first CI attempt hung (run 487: four panel tests
+      # started at once, none finished, nothing printed for 10 minutes) on a job capped
+      # at 2 CPUs and 1.5 GB; alone, the seven panel tests take ~30 s. REAM_
+      # REQUIRE_BROWSER makes a missing browser fail here instead of skipping.
+      # Postgres only: these test the page in a browser, not a database path.
+      - name: browser tests
+        env:
+          REAM_BROWSER: /usr/bin/chromium
+          REAM_REQUIRE_BROWSER: "1"
+          PG_TEST_DSN: postgresql://postgres@postgres:5432/postgres?connect_timeout=30
+          REAM_TEST_PG_THROWAWAY: "1"
+        run: >-
+          uv run pytest -v -n0 --timeout=120 --timeout-method=thread
+          tests/test_panel_browser.py tests/test_shim_marks.py
+          tests/test_thumbs.py tests/test_thumbnail_wall.py
+          tests/test_render_findings_browser.py
+
+      # The timing comparisons (tests marked `scaling`), serially: they skip in the
+      # parallel runs, where other workers share the 2 CPUs and make the 8x page look
+      # slower than it is.
+      - name: scaling tests
+        env:
+          REAM_BROWSER: /nonexistent/browser
+          PG_TEST_DSN: postgresql://postgres@postgres:5432/postgres?connect_timeout=30
+          REAM_TEST_PG_THROWAWAY: "1"
+        run: uv run pytest -q -n0 -m scaling -rs
+
+      # The same suite on SQLite (the SQLite switch, slice 5): one database file
+      # per worker, no server; tests marked postgres_only are skipped.
+      - name: tests on SQLite
+        env:
+          REAM_TEST_DB: sqlite
+          REAM_BROWSER: /nonexistent/browser
+        run: uv run pytest -q -n auto --maxprocesses 5
+
+  # core-bare (core-and-plugins design 7.3, slice 7b part 5): the whole core suite with no
+  # plug-in installed and none loaded (REAM_PLUGINS=none), on Postgres and on SQLite, so
+  # core is proven to stand alone for anyone who runs it. A job of its own beside `test`
+  # and `test-sqlite`, which are unchanged; `pin` does not wait for it yet (the deployment's pin
+  # lander names the checks it needs, and promoting this one to required is its change).
+  # The browser tests stay in `test-sqlite`: they test the page, not plug-in loading.
+  core-bare:
+    runs-on: runcove-sec-unpriv
+    timeout-minutes: 25
+    needs: [privacy]
+    if: "github.repository == 'runcove-sec/artifacts-sec'"
+    services:
+      postgres:
+        image: postgres:18@sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+    env:
+      REAM_PLUGINS: none
+      REAM_BROWSER: /nonexistent/browser
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: wait for postgres
+        run: |
+          for i in $(seq 1 30); do
+            python3 -c "import socket; socket.create_connection(('postgres', 5432), timeout=1).close()" \
+              && exit 0
+            sleep 1
+          done
+          echo "postgres never became reachable on port 5432" >&2
+          exit 1
+
+      # The guard's own pinned, sha256-checked uv (workflow-runner-guard.sh --install-uv).
+      - name: install uv
+        run: |
+          scripts/guards/workflow-runner-guard.sh --install-uv "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - run: uv sync --frozen --all-extras
+
+      # Assert the premise, positively: no plug-in entry point in either group is
+      # installed, and the loader is told to load none. A job that "passed" with a
+      # plug-in present would prove nothing.
+      - name: no plug-in installed, none selected
+        run: |
+          uv run python - <<'PY'
+          import os
+          from importlib import metadata
+          found = [
+              ep.name
+              for group in ("ream.plugins", "artifacts.plugins")
+              for ep in metadata.entry_points(group=group)
+          ]
+          assert found == [], f"plug-ins installed: {found}"
+          assert os.environ["REAM_PLUGINS"] == "none"
+          print("core-bare: 0 plug-in entry points, REAM_PLUGINS=none")
+          PY
+
+      - name: core suite on Postgres
+        env:
+          PG_TEST_DSN: postgresql://postgres@postgres:5432/postgres?connect_timeout=30
+          REAM_TEST_PG_THROWAWAY: "1"
+        run: uv run pytest -q -n auto --maxprocesses 5
+
+      - name: core suite on SQLite
+        env:
+          REAM_TEST_DB: sqlite
+        run: uv run pytest -q -n auto --maxprocesses 5
+
+  image:
+    needs: [runner-guard, privacy, test, test-sqlite, core-bare]
+    runs-on: runcove-sec
+    timeout-minutes: 40
+    if: "github.repository == 'runcove-sec/artifacts-sec' && github.ref == 'refs/heads/main'"
+    services:
+      dind:
+        image: docker:28-dind@sha256:2a232a42256f70d78e3cc5d2b5d6b3276710a0de0596c145f627ecfae90282ac
+        # Why no --dns, and why --network host on the builds: ci.yml's image job.
+        options: --privileged
+        env:
+          DOCKER_TLS_CERTDIR: ""
+    env:
+      DOCKER_HOST: tcp://dind:2375
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      # THE ORDER OF THE PROOFS, and why each sits where it does. Each one fails the job, and the
+      # SEC BUILT line is printed by the last step only, so a failure anywhere means no pin:
+      #   0. (job `privacy`)  repo and registry owner private: before any test or build
+      #   1. below            the same again on this runner: settings may have changed while the
+      #                       tests ran, and this is right before anything is pushed
+      #   2. core image       pushed, then proven to EXIST and hidden, straight after its push
+      #   3. deployed image   pushed, then proven to EXIST and hidden, straight after its push
+      #   4. after the last push: repo and owner private AGAIN, and both images hidden AGAIN.
+      #                       The repo or an image going public WHILE the pushes ran (they take
+      #                       minutes) is caught here, and the last push is the last thing that
+      #                       could have published anything.
+      #   5. the SEC BUILT line, in the same step as 4, after its checks.
+      - name: prove the repo and the registry owner private
+        env:
+          SEC_CHECK_TOKEN: ${{ secrets.SEC_CHECK_TOKEN }}
+        run: .forgejo/scripts/sec-private-check.sh repo "$GITHUB_REPOSITORY" runcove-sec "$SEC_REGISTRY_OWNER"
+
+      - name: docker cli
+        run: |
+          d=$(mktemp -d)
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$d/docker.tgz" \
+            https://download.docker.com/linux/static/stable/x86_64/docker-28.3.3.tgz
+          printf '%s  %s\n' 40c16bcf324f354b382d07e845e6a79e3493fc0c09b252dff9e1a46125589bff "$d/docker.tgz" \
+            | sha256sum -c --status -
+          tar xz -C "$d" -f "$d/docker.tgz"
+          install "$d/docker/docker" /usr/local/bin/docker
+          rm -rf "$d"
+          for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+          docker info >/dev/null
+
+      - name: build and push the core image
+        id: core
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.SEC_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          [ -n "$REGISTRY_PASSWORD" ] || { echo "SEC_REGISTRY_TOKEN is not set on this repo" >&2; exit 1; }
+          sha12="${GITHUB_SHA:0:12}"
+          repo="git.tenfourty.site/${SEC_REGISTRY_OWNER}/artifacts-core"
+          printf '%s' "$REGISTRY_PASSWORD" | docker login git.tenfourty.site \
+            -u "$SEC_REGISTRY_USER" --password-stdin  # package write on the private owner only
+          # A re-run never re-pushes a tag (another digest would move what a pin may name).
+          if pulled=$(docker pull "$repo:$sha12" 2>&1); then
+            echo "REUSED: $repo:$sha12 already exists; nothing rebuilt or pushed"
+          else
+            case "$pulled" in
+              *"manifest unknown"*|*"not found"*) ;;
+              *) echo "$pulled" >&2; echo "could not tell whether $repo:$sha12 exists" >&2; exit 1 ;;
+            esac
+            docker build --network host \
+              --build-arg CHROMIUM_REFRESH="$(date -u +%G-W%V)" -t "$repo:$sha12" .
+            docker push "$repo:$sha12"
+          fi
+          digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$repo:$sha12" \
+            | grep -m1 "^${repo}@sha256:" | cut -d@ -f2)
+          [ -n "$digest" ] || { echo "no registry digest for $repo:$sha12" >&2; exit 1; }
+          echo "ref=${repo}:${sha12}@${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: prove the core image exists and is hidden
+        env:
+          SEC_REGISTRY_TOKEN: ${{ secrets.SEC_REGISTRY_TOKEN }}
+        run: .forgejo/scripts/sec-private-check.sh image "${SEC_REGISTRY_OWNER}/artifacts-core"
+
+      # The deployed image is ream-homelab's Dockerfile at its main, on this core. ream-homelab's own
+      # CI cannot do it: it installs the core from the public repo by commit (this one is not there
+      # yet) and pushes to the public owner. Its main is never changed by this run.
+      - name: build and push the deployed image
+        id: deployed
+        env:
+          HOMELAB_READ: ${{ secrets.SEC_HOMELAB_READ_TOKEN }}
+          CORE_REF: ${{ steps.core.outputs.ref }}
+        run: |
+          set -euo pipefail
+          [ -n "$HOMELAB_READ" ] || { echo "SEC_HOMELAB_READ_TOKEN is not set on this repo" >&2; exit 1; }
+          case "$CORE_REF" in
+            "git.tenfourty.site/${SEC_REGISTRY_OWNER}/artifacts-core:"*@sha256:*) ;;
+            *) echo "unexpected core ref" >&2; exit 1 ;;
+          esac
+          src=$(mktemp -d)
+          # The token rides in git's environment as a header, never on a command line.
+          GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://git.tenfourty.site/.extraheader" \
+            GIT_CONFIG_VALUE_0="Authorization: basic $(printf 'sec:%s' "$HOMELAB_READ" | base64 -w0)" \
+            git clone --quiet --depth 1 https://git.tenfourty.site/runcove/ream-homelab.git "$src"
+          plugins=$(git -C "$src" rev-parse HEAD)
+          tag="${GITHUB_SHA:0:12}-${plugins:0:12}"
+          repo="git.tenfourty.site/${SEC_REGISTRY_OWNER}/artifacts"
+          if pulled=$(docker pull "$repo:$tag" 2>&1); then
+            echo "REUSED: $repo:$tag already exists; nothing rebuilt or pushed"
+          else
+            case "$pulled" in
+              *"manifest unknown"*|*"not found"*) ;;
+              *) echo "$pulled" >&2; echo "could not tell whether $repo:$tag exists" >&2; exit 1 ;;
+            esac
+            docker build --network host --build-arg CORE_IMAGE="$CORE_REF" -t "$repo:$tag" "$src"
+            docker push "$repo:$tag"
+          fi
+          digest=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$repo:$tag" \
+            | grep -m1 "^${repo}@sha256:" | cut -d@ -f2)
+          [ -n "$digest" ] || { echo "no registry digest for $repo:$tag" >&2; exit 1; }
+          echo "ref=${repo}:${tag}@${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: prove the deployed image exists and is hidden
+        env:
+          SEC_REGISTRY_TOKEN: ${{ secrets.SEC_REGISTRY_TOKEN }}
+        run: .forgejo/scripts/sec-private-check.sh image "${SEC_REGISTRY_OWNER}/artifacts"
+
+      # Step 4 of the order above: after the last push, everything again, then the line.
+      - name: prove everything private again, after the last push, then print the pin line
+        env:
+          SEC_CHECK_TOKEN: ${{ secrets.SEC_CHECK_TOKEN }}
+          SEC_REGISTRY_TOKEN: ${{ secrets.SEC_REGISTRY_TOKEN }}
+          DEPLOYED_REF: ${{ steps.deployed.outputs.ref }}
+        run: |
+          set -euo pipefail
+          .forgejo/scripts/sec-private-check.sh repo "$GITHUB_REPOSITORY" runcove-sec "$SEC_REGISTRY_OWNER"
+          .forgejo/scripts/sec-private-check.sh image "${SEC_REGISTRY_OWNER}/artifacts-core"
+          .forgejo/scripts/sec-private-check.sh image "${SEC_REGISTRY_OWNER}/artifacts"
+          # The one line the pin is made from (runbook: embargoed-fix.md). Do not reword it.
+          # Only reached when every check above passed (set -e).
+          echo "SEC BUILT image=${DEPLOYED_REF}"

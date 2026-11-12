@@ -23,7 +23,8 @@ the `test` job and for a rollback.
 
 ## Roll back
 
-Change `if: false` on the `pin` job in `.forgejo/workflows/ci.yml` back to its main-only condition
-and take `core-lock` off main. Homelab's pin lander must also accept `runcove/artifacts` as a source
+Change the `if:` on the `pin` job in `.forgejo/workflows/ci.yml` (now `github.repository == 'runcove/artifacts' && false`)
+back to its main-only condition, keeping the `github.repository == 'runcove/artifacts'` conjunct (the workflow-runner guard
+refuses a job without it), and take `core-lock` off main. Homelab's pin lander must also accept `runcove/artifacts` as a source
 again, which is the homelab maintainer's change; without it the pin PRs are refused. Close any open
 `core-lock/next` PR on ream-homelab by hand.

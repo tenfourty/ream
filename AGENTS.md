@@ -81,7 +81,8 @@ the reason to whoever holds the key. A fold refuses a key used in the last 24 ho
 | Container | `Dockerfile` |
 | Deployment values | the deployment's own repo (for the homelab, the homelab repo); this repo keeps none |
 | CI -> image -> pin PR | `.forgejo/workflows/ci.yml`, `.forgejo/scripts/pin-pr.sh`, `core-lock-pr.sh` |
-| PyPI release (`ream-artifacts`, from the public GitHub mirror by trusted publishing; a release is a version bump on main) | `.github/workflows/publish.yml` (GitHub only; the forge runs `.forgejo/`) |
+| An embargoed security fix: built in the private `runcove-sec/artifacts-sec` and pinned by hand before it is public | `.forgejo/workflows/sec.yml` (on the dedicated runner labels only: `runcove-sec` for the image build, `runcove-sec-unpriv` for every other job), `.forgejo/scripts/sec-private-check.sh`, `scripts/guards/workflow-runner-guard.sh`; runbook `docs/agent/runbooks/embargoed-fix.md` |
+| PyPI release (`ream-artifacts`, from the public GitHub mirror by trusted publishing; a release is a version bump on main) | `.github/workflows/publish.yml` (GitHub only; the forge runs `.forgejo/`; every job gated to `github.repository == 'tenfourty/ream'`, held by `workflow-runner-guard.sh`) |
 | The design this argues from | `docs/agent/design.md` |
 | What was decided and why the other options lost | `docs/decisions.md` |
 | The build plan and its ledger | `docs/agent/implementation-plan.md` |
@@ -243,12 +244,14 @@ checkout; `scripts/guards/run-selftests.sh` tells you whether this one is protec
 | prepare-commit-msg | …of a commit already on a remote | **also** `AMEND_PUSHED_OVERRIDE=1` |
 | commit-msg | a non-conventional subject; a `Co-Authored-By` or "Generated with Claude Code" line | `COMMIT_MSG_OVERRIDE=1` |
 | pre-push | an outgoing range that is not the count you announced | none: `PUSH_COUNT=N git push` |
+| pre-push | a push of a `sec/*` branch or tag, or of the commits of a local one under any name (`HEAD~0`, `@{-1}`, a raw id, a merge), to any remote that is not exactly `runcove-sec/artifacts-sec` (the embargoed-fix path, `docs/agent/runbooks/embargoed-fix.md`) | none |
 | pre-push | ruff findings, or unformatted files, anywhere in `src`/`tests` | none — `uv run ruff format <files>` |
+| CI selftest step (`run-selftests.sh`); run it by hand before pushing a workflow change | in `.forgejo/workflows`, a job of `sec.yml` not on exactly `runs-on: runcove-sec` (the `image` job) or `runs-on: runcove-sec-unpriv` (every other job), or any other file's job without `github.repository == 'runcove/artifacts'` as a top-level `&&` conjunct of its `if:` or on the `runcove-sec` label; in `.github/workflows` (absent is fine), any job without `github.repository == 'tenfourty/ream'` (the public GitHub mirror) as such a conjunct, or on `runcove-sec` (the private copy's secrets must never reach a shared runner: `workflow-runner-guard.sh`) | none — fix the workflow; it fails closed, also on a missing `.forgejo/workflows` or PyYAML |
 
 The secret scan is the exception to "degrade to a SKIP": it refuses when ggshield is missing or
 cannot scan, and only `GGSHIELD_SKIP=1` lets that through, saying loudly that nothing was scanned. It
 runs ggshield with `GITGUARDIAN_DONT_LOAD_ENV=1`, `--config-path` on an empty temporary file and `--instance` on the default dashboard, so the
-scan uses only its own fixed settings. It skips only on exactly `GGSHIELD_SKIP=1`, and refuses a `ggshield` that resolves inside the working tree. The other guards still degrade to a
+scan uses only its own fixed settings. It skips only on exactly `GGSHIELD_SKIP=1`, and refuses a `ggshield` that resolves inside the working tree. The other guards but `workflow-runner-guard.sh` (which fails closed) still degrade to a
 clean SKIP when their tool is missing, saying so loudly. Each has a `--selftest`; CI runs all of them, plus the whole-tree scan for credentials on a command line, on every
 push. CI does not run ggshield. lefthook's own skips (`LEFTHOOK=0`, `git commit --no-verify`) are outside the gate: nothing
 in this repo stops them, so the secret scan runs only where the hook does.

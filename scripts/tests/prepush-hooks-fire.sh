@@ -72,8 +72,8 @@ awk '/^pre-push:/{f=1} f{print}' "$REPO_ROOT/lefthook.yml" > "$CLONE/lefthook.ym
 grep -q '^pre-push:' "$CLONE/lefthook.yml" || fail "no pre-push: section found in $REPO_ROOT/lefthook.yml"
 
 mkdir -p "$CLONE/scripts/guards" "$CLONE/src" "$CLONE/tests"
-cp "$REPO_ROOT/scripts/guards/push-count-guard.sh" "$CLONE/scripts/guards/"
-chmod +x "$CLONE/scripts/guards/push-count-guard.sh"
+cp "$REPO_ROOT/scripts/guards/push-count-guard.sh" "$REPO_ROOT/scripts/guards/sec-branch-guard.sh" "$CLONE/scripts/guards/"
+chmod +x "$CLONE/scripts/guards/push-count-guard.sh" "$CLONE/scripts/guards/sec-branch-guard.sh"
 # The pre-push ruff job lints src and tests; give the throwaway clone a
 # minimal, clean pair so the job has something real to pass on.
 printf 'x = 1\n' > "$CLONE/src/ok.py"
@@ -144,6 +144,115 @@ if ( cd "$CLONE" && PUSH_COUNT="$count" git push origin HEAD:main ) >/dev/null 2
   echo "PASS (ordinary push with the announced count): allowed"
 else
   echo "FAIL (ordinary push with the announced count): refused, PUSH_COUNT=$count" >&2
+  rc=1
+fi
+
+# Cases 4-6: sec-branch-guard, through the same real dispatch. "origin" here is a local bare repo,
+# which is not runcove-sec/artifacts-sec, so a sec/* ref must be refused -- with the RIGHT push count
+# announced, so that it is sec-branch and not push-count that stops the push.
+( cd "$CLONE" && git fetch -q origin )
+HEAD_SHA=$(cd "$CLONE" && git rev-parse HEAD)
+count=$(cd "$CLONE" && git rev-list --count refs/remotes/origin/main..HEAD)
+
+assert_sec_refused() {
+  local label=$1 ref=$2; shift 2
+  local out
+  out=$(cd "$CLONE" && PUSH_COUNT="${PC:-0}" "$@" 2>&1) && {
+    echo "FAIL ($label): the push succeeded -- a sec ref reached a remote that is not artifacts-sec" >&2
+    rc=1
+    return
+  }
+  if printf '%s' "$out" | grep -q '(skip)'; then
+    echo "FAIL ($label): lefthook skipped a pre-push command:" >&2
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    rc=1
+    return
+  fi
+  if ! printf '%s' "$out" | grep -q 'sec-branch-guard: REFUSED'; then
+    echo "FAIL ($label): sec-branch-guard's refusal is absent -- it did not run, or it let the push through:" >&2
+    printf '%s\n' "$out" | sed 's/^/    /' >&2
+    rc=1
+    return
+  fi
+  if git -C "$BARE" rev-parse -q --verify "$ref" >/dev/null; then
+    echo "FAIL ($label): $ref exists on the remote after a refused push" >&2
+    rc=1
+    return
+  fi
+  echo "PASS ($label): refused by sec-branch-guard, nothing reached the remote"
+}
+
+[ "$count" -eq 0 ] || { echo "FAIL: setup, expected the clone level with origin/main, got $count ahead" >&2; exit 1; }
+# Case 4: a sec branch, named either way round.
+assert_sec_refused "sec branch push" refs/heads/sec/x git push origin HEAD:refs/heads/sec/x
+git -C "$CLONE" branch sec/y
+assert_sec_refused "sec branch push by its short name" refs/heads/sec/y git push origin sec/y
+# Case 5: a tag under sec/.
+git -C "$CLONE" tag sec/v1
+assert_sec_refused "sec tag push" refs/tags/sec/v1 git push origin sec/v1
+# The two refs above stood on an already-published commit; they are deleted so that they do not
+# stand in the way of the ordinary pushes below (a commit-less sec branch cannot be told from a fix).
+git -C "$CLONE" branch -q -D sec/y
+git -C "$CLONE" tag -d sec/v1 >/dev/null
+# Case 6: deleting a sec ref that is already on the remote is allowed (the clean-up of a leak),
+# and says so loudly. The ref is planted straight into the bare repo: the guard under test
+# would not let this clone push it.
+git -C "$BARE" update-ref refs/heads/sec/leaked "$HEAD_SHA"
+out=$(cd "$CLONE" && PUSH_COUNT=0 git push origin :sec/leaked 2>&1) && del_ok=1 || del_ok=0
+if [ "$del_ok" -eq 1 ] && printf '%s' "$out" | grep -q 'sec-branch-guard: NOTE' \
+   && ! git -C "$BARE" rev-parse -q --verify refs/heads/sec/leaked >/dev/null; then
+  echo "PASS (sec ref deletion): allowed, with the note, and the ref is gone"
+else
+  echo "FAIL (sec ref deletion): ok=$del_ok" >&2
+  printf '%s\n' "$out" | sed 's/^/    /' >&2
+  rc=1
+fi
+
+# Case 7: a remote url full of shell characters. lefthook pastes {1}/{2} into its shell text
+# unquoted (measured with 2.2.2), which would split such a url and run its `;touch` part; the
+# hook hands them over in a quoted here-document instead, so the url is data. The guard must
+# still decide on the real url, show it intact, and nothing the url spells may execute.
+HOSTILE="$STAGE/h o&s;touch $STAGE/PWN1;\$(touch $STAGE/PWN2)\`touch $STAGE/PWN3\`.git"
+git init -q --bare "$HOSTILE"
+git -C "$CLONE" remote add hostile "$HOSTILE"
+out=$(cd "$CLONE" && PUSH_COUNT=0 git push hostile HEAD:refs/heads/sec/x 2>&1) && sec_ok=1 || sec_ok=0
+if [ "$sec_ok" -eq 0 ] && printf '%s' "$out" | grep -q 'sec-branch-guard: REFUSED' \
+   && printf '%s' "$out" | grep -qF "h o&s;touch" \
+   && ! git -C "$HOSTILE" rev-parse -q --verify refs/heads/sec/x >/dev/null; then
+  echo "PASS (url with shell characters): sec ref refused, the url shown intact"
+else
+  echo "FAIL (url with shell characters): sec push ok=$sec_ok" >&2
+  printf '%s\n' "$out" | sed 's/^/    /' >&2
+  rc=1
+fi
+( cd "$CLONE" && PUSH_COUNT=0 git push -q hostile HEAD:refs/heads/main ) >/dev/null 2>&1 || {
+  echo "FAIL (url with shell characters): an ordinary push to that remote was refused" >&2; rc=1; }
+if [ -e "$STAGE/PWN1" ] || [ -e "$STAGE/PWN2" ] || [ -e "$STAGE/PWN3" ]; then
+  echo "FAIL (url with shell characters): the url was EXECUTED by the hook" >&2
+  rc=1
+else
+  echo "PASS (url with shell characters): nothing the url spells ran"
+fi
+
+# Case 8: the commits of a sec branch under another name -- BY CONTENT, the strings git really
+# hands the hook (HEAD~0, @{-1}, a raw id, a merge). The right count is announced each time.
+git -C "$CLONE" switch -q -c sec/real
+git -C "$CLONE" commit -q --allow-empty -m "chore: a commit on a sec branch"
+SEC_SHA=$(git -C "$CLONE" rev-parse HEAD)
+PC=1 assert_sec_refused "HEAD~0 from a sec branch" refs/heads/leak1 git push origin HEAD~0:refs/heads/leak1
+git -C "$CLONE" switch -q main
+PC=1 assert_sec_refused "@{-1} just after leaving it" refs/heads/leak2 git push origin '@{-1}:refs/heads/leak2'
+PC=1 assert_sec_refused "a raw commit id" refs/heads/leak3 git push origin "$SEC_SHA:refs/heads/leak3"
+git -C "$CLONE" merge -q --no-ff -m "chore: merge" sec/real
+PC=2 assert_sec_refused "main with the sec branch merged in" refs/heads/leak4 git push origin main:refs/heads/leak4
+# The release: once the local sec refs are deleted, the merged main goes (the deliberate act the
+# runbook asks for).
+git -C "$CLONE" branch -q -D sec/real
+if ( cd "$CLONE" && PUSH_COUNT=2 git push origin main:refs/heads/released ) >/dev/null 2>&1 \
+   && git -C "$BARE" rev-parse -q --verify refs/heads/released >/dev/null; then
+  echo "PASS (release): after the local sec refs are deleted the merged main is pushed"
+else
+  echo "FAIL (release): the merged main was refused although no local sec ref is left" >&2
   rc=1
 fi
 

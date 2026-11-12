@@ -34,15 +34,18 @@ run() { # run <label> <command...>
 echo "== guard selftests =="
 run "amend-guard --selftest"            scripts/guards/amend-guard.sh --selftest
 run "push-count-guard --selftest"       scripts/guards/push-count-guard.sh --selftest
+run "sec-branch-guard --selftest"       scripts/guards/sec-branch-guard.sh --selftest
 run "commit-msg-guard --selftest"       scripts/guards/commit-msg-guard.sh --selftest
 run "secret-on-cmdline-guard --selftest" scripts/guards/secret-on-cmdline-guard.sh --selftest
 run "ggshield-gate --selftest"          scripts/guards/ggshield-gate.sh --selftest
 run "no-environ-guard --selftest"       scripts/guards/no-environ-guard.sh --selftest
+run "workflow-runner-guard --selftest"  scripts/guards/workflow-runner-guard.sh --selftest
 
 echo
 echo "== whole-tree scans (the pre-commit hook only ever sees a staged diff) =="
 run "secret-on-cmdline-guard --tree"    scripts/guards/secret-on-cmdline-guard.sh --tree
 run "no-environ-guard --tree"           scripts/guards/no-environ-guard.sh --tree
+run "workflow-runner-guard (.forgejo + .github workflows)" scripts/guards/workflow-runner-guard.sh
 
 echo
 echo "== lefthook dispatch =="

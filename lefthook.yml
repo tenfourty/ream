@@ -9,7 +9,8 @@
 #   prepare-commit-msg no --amend/-c/-C/--fixup/--squash, and never on a
 #                      commit that is already on a remote
 #   commit-msg         conventional subject; no attribution trailers
-#   pre-push           the outgoing range is the one you announced; ruff again
+#   pre-push           the outgoing range is the one you announced; no sec/*
+#                      ref to a remote that is not runcove-sec/artifacts-sec; ruff again
 #
 # Install once per clone:  lefthook install
 # (Nothing installs it for you. `scripts/guards/run-selftests.sh` will tell
@@ -94,7 +95,7 @@ commit-msg:
 
 pre-push:
   commands:
-    # Both commands below carry `files: 'echo lefthook.yml'` and a `{files}`
+    # All three commands below carry `files: 'echo lefthook.yml'` and a `{files}`
     # reference at the front of `run:`. This closes homelab trap 48: lefthook
     # hard-codes every pre-push command to skip ("(skip) no matching push
     # files") whenever `git diff --name-only HEAD @{push}` is empty — a
@@ -117,6 +118,26 @@ pre-push:
       files: 'echo lefthook.yml'
       use_stdin: true
       run: ': {files}; scripts/guards/push-count-guard.sh'
+    sec-branch:
+      # Refuse a push of any sec/* ref (branch or tag, by either name of the refspec) to a
+      # remote that is not exactly runcove-sec/artifacts-sec: the embargoed-fix path
+      # (docs/agent/runbooks/embargoed-fix.md) keeps its branches in a private repo, and a push
+      # of one to the public repo cannot be recalled. Also refuses the commits of a local sec/*
+      # branch or tag under any other name (HEAD~0, @{-1}, a raw id, a merge). Needs nothing but
+      # bash and git, so it never skips, and has no override. Git hands the hook its remote name and url as $1 and $2
+      # (lefthook: {1}, {2}); use_stdin for the ref lines, as push-count.
+      # {1} and {2} go in a QUOTED here-document on fd 3, never on the command line: lefthook
+      # pastes them into the shell text unquoted, so a url with a `;`, `&`, `$` or a space (a
+      # password in a url often has one) would be split or executed, and could turn a refusal
+      # into a pass. Measured with lefthook 2.2.2; see the guard's header.
+      files: 'echo lefthook.yml'
+      use_stdin: true
+      run: |
+        : {files}
+        scripts/guards/sec-branch-guard.sh --args-on-fd3 3<<'LEFTHOOK_ARGS'
+        {1}
+        {2}
+        LEFTHOOK_ARGS
     ruff:
       # A push here becomes a production image minutes later. CI rejects a
       # lint failure after the build; this rejects it in 20 ms, before.
