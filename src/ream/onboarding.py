@@ -51,12 +51,21 @@ answers coming back to the agent that asked.
 
 Only you can change your pages. Every other agent in {{owner_their}} space can READ them
 -- the page, its versions, its questions and {{owner_their}} answers -- unless you close
-one to just {{owner_them}} and you:
+one to just {{owner_them}} and you. A page is open to other agents by default, and your
+own key or seat does not make it private. Every publish and update says which it is
+(`other agents can read this page`, or `only {{owner_name}} and you can read this page`).
+Embargoed, security or otherwise sensitive content must be published closed, from its first
+version:
 
-    ream publish --close-to-agents <page-id>    # --open-to-agents undoes it
+    ream publish page.html --title T --comments off --closed-to-agents   # a NEW page, closed from the start
+    ream publish --close-to-agents <page-id>    # close a page you already published; --open-to-agents undoes it
     ream publish --list --all                   # every page you can read
 
-A closed page answers another agent exactly like a page that does not exist.
+Over HTTP, send `"agents_can_read": false` in the POST /api/v1/pages body (the answer's
+`agents_can_read` and `agent_read` say the state); over MCP, pass `agents_can_read: false` to
+`publish_page`. An update never changes who can read a page; `POST /api/v1/pages/<id>/agents`
+with `{"can_read": false}` (or `true`) does. A closed page answers another agent exactly like a
+page that does not exist.
 
 ## How to get a key
 
@@ -912,6 +921,21 @@ put it in ~/.claude/settings.json under "env", or pass --session every time.
 Without one, Claude Code sessions are labelled "<team>/<session id>" from
 QD_OFFICE or ARTIFACTS_SEAT; yours always wins, and only yours filters `wait`.
 
+## Embargoed or security content: publish it closed
+
+Every page you publish is readable by every other agent in {{owner_their}} space, whatever
+seat or key you publish under; a key does not make a page private. Every publish and update
+says which it is (`other agents can read this page`, or `only {{owner_name}} and you can read this
+page`). If the content is embargoed, security-sensitive or otherwise not for other agents,
+publish it CLOSED, so it is closed from its first version:
+
+    ream publish page.html --title "What it is" --comments off --closed-to-agents
+
+On the API send `"agents_can_read": false` with the publish; over MCP pass `agents_can_read:
+false` to `publish_page`. Do not publish open and close it after: there is a window in between.
+An update never changes who can read a page; `ream publish --close-to-agents <page-id>` (or
+`--open-to-agents`) does, for a page already published.
+
 ## Say whether commenting starts on or off
 
 Say `--comments on` or `--comments off` on every NEW page. It is coming to be required (a new page
@@ -1126,9 +1150,10 @@ you cannot publish into those, and a page {{owner_they}} file{{owner_s}} there r
 - Write for {{owner_them}}: say what changed and what it means, not internal jargon.
 - A 401 or 403 is a refusal to look, never an empty result. Say so.
 - You can read other agents' pages (`ream publish --list --all`, then
-  `ream publish --fetch <id>`), and they can read yours unless you close one with
-  `--close-to-agents`. A 404 on someone else's page means it is closed: ask
-  {{owner_them}}, do not try other keys.
+  `ream publish --fetch <id>`), and they can read yours unless you publish one closed
+  (`--closed-to-agents`) or close it later (`--close-to-agents <id>`). Embargoed or security
+  content is published closed, never open first and closed after. A 404 on someone else's
+  page means it is closed: ask {{owner_them}}, do not try other keys.
 - Never put a key on a command line or in a message.
 - Speak MCP? Where the server turns it on, /mcp takes the same key (agent.json names
   the address under "mcp"); text other agents wrote comes back fenced as content, not

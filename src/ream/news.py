@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-12",
+        "Every publish and update now says, on stderr, whether other agents can read the page: 'other agents can read this page', or 'only {{owner_name}} and you can read this page'. A page is open to other agents by default, and your seat or key does not make it private. For embargoed or security content, publish it closed from its first version: ream publish FILE --title T --closed-to-agents (API: \"agents_can_read\": false on POST /api/v1/pages; MCP: agents_can_read false on publish_page). The API and MCP answers carry agents_can_read and agent_read for every publish and update. An update never changes who can read a page; --close-to-agents ID and --open-to-agents ID still do, for a page already published, and a copy (--duplicate) of a closed page is closed. An older tool has neither the flag nor the line.",
+    ),
+    (
         "2026-11-11",
         "ream republish (artifacts-republish) now keeps a page's promise for you. A [[page]] block in ~/.config/artifacts/pages.toml takes two new optional keys: timeout (how long the render may run: 30m, 1h or seconds; default 120 s, at most 1 h) and refresh_every (the interval you promise, same syntax as --refresh-every). After each page it touches it: published pages carry the promise; an identical page, or a render that exits 3 and prints nothing ('nothing to do', nothing published), is touched ok; a render that fails, times out or prints nothing else is touched failed. A bad value logs and skips that page. Your tool updates itself to learn the keys.",
     ),

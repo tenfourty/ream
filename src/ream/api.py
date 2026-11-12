@@ -187,6 +187,11 @@ class PublishBody(BaseModel):
     # on selected words and nothing inviting a comment, until the reader presses Comment or turns
     # it on. Required on a new page (422 without it); rows from before it was required are null, read as on.
     comments: Literal["on", "off"] | None = None
+    # False publishes the page closed to other agents (only the owner and the publisher can read
+    # it), from its first version: for embargoed or security content, which must never be open
+    # even for the moment before a second call closes it. True, the default, is open to every
+    # agent. An update cannot change it (POST /pages/{id}/agents does).
+    agents_can_read: bool = True
 
 
 _BAD_SLUG = {
@@ -848,6 +853,16 @@ _COMMENTS_REQUIRED = {
 }
 
 
+def _saying_who_reads(result: dict) -> dict:
+    """`result` plus `agent_read`: whether other agents can read the page, in plain words, beside
+    the `agents_can_read` flag. Every publish and update says it (12 Nov 2026), because a page is
+    open to agents by default and a publisher cannot see that from the outside."""
+    return {
+        **result,
+        "agent_read": textvars.agent_read_words(bool(result["agents_can_read"])),
+    }
+
+
 def publish_page(
     db: Database, agent: str, seat_session: str | None, payload: PublishBody
 ) -> dict:
@@ -874,16 +889,19 @@ def publish_page(
             folder_title=payload.folder_title,
             refresh_every=payload.refresh_every,
             comments=payload.comments,
+            agents_can_read=payload.agents_can_read,
         )
         # After the write, never inside it: a publish must not wait on a
         # browser, nor fail because of one. See thumbs.render_in_background.
         thumbs.render_in_background(db, published.id, published.version, body)
         partchanges.in_background(db, published.id, published.version)
-        return {
-            **published.__dict__,
-            "comments": payload.comments,
-            "warnings": page_warnings(db, published.id, body),
-        }
+        return _saying_who_reads(
+            {
+                **published.__dict__,
+                "comments": payload.comments,
+                "warnings": page_warnings(db, published.id, body),
+            }
+        )
     except store.BadInterval as exc:
         raise HTTPException(422, _BAD_INTERVAL) from exc
     except store.NotAPage as exc:
@@ -966,10 +984,12 @@ def update_page(
         # browser, nor fail because of one. See thumbs.render_in_background.
         thumbs.render_in_background(db, published.id, published.version, body)
         partchanges.in_background(db, published.id, published.version)
-        return {
-            **published.__dict__,
-            "warnings": page_warnings(db, published.id, body),
-        }
+        return _saying_who_reads(
+            {
+                **published.__dict__,
+                "warnings": page_warnings(db, published.id, body),
+            }
+        )
     except store.BadInterval as exc:
         raise HTTPException(422, _BAD_INTERVAL) from exc
     except store.NotAPage as exc:
@@ -1056,16 +1076,19 @@ def update_page_section(
     if not published.unchanged:
         thumbs.render_in_background(db, published.id, published.version, result.body)
         partchanges.in_background(db, published.id, published.version)
-    return {
-        "page_revision": published.revision,
-        "section_revision": result.section_revision,
-        "version": published.version,
-        "unchanged": published.unchanged,
-        "section": result.label,
-        "page_url": published.page_url,
-        "bytes": published.bytes,
-        "warnings": page_warnings(db, published.id, result.body),
-    }
+    return _saying_who_reads(
+        {
+            "page_revision": published.revision,
+            "section_revision": result.section_revision,
+            "version": published.version,
+            "unchanged": published.unchanged,
+            "section": result.label,
+            "page_url": published.page_url,
+            "bytes": published.bytes,
+            "agents_can_read": published.agents_can_read,
+            "warnings": page_warnings(db, published.id, result.body),
+        }
+    )
 
 
 def move_to_folder(db: Database, agent: str, payload: MoveBody) -> dict:
@@ -2616,7 +2639,7 @@ def agent_router(
             raise HTTPException(404, "no such page") from exc
         thumbs.render_in_background(db, published.id, published.version, body)
         partchanges.in_background(db, published.id, published.version)
-        return published.__dict__
+        return _saying_who_reads(published.__dict__)
 
     @router.delete("/artifacts/{artifact_id}")
     def delete(artifact_id: str, agent: str = Depends(caller)):

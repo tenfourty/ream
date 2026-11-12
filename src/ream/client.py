@@ -883,6 +883,7 @@ def _publish(
     folder_title: str | None = None,
     refresh_every: int | None = None,
     comments: str | None = None,
+    closed: bool = False,
 ) -> dict:
     body = _read_page(file_path)
     payload = {
@@ -895,6 +896,11 @@ def _publish(
         payload["refresh_every"] = refresh_every
     if comments:
         payload["comments"] = comments
+    if closed:
+        # Sent only when asked: an old server ignores the field and would publish the page OPEN,
+        # which `_print_published` then tells (it names the state the server answered, and an
+        # answer that omits it is called out for a page that was asked to be closed).
+        payload["agents_can_read"] = False
     return _request("POST", f"{_api_base()}/pages", key, payload)
 
 
@@ -1741,6 +1747,7 @@ def _print_published(result: dict) -> None:
             print(f"created new folder '{_printable(filed['slug'])}'", file=sys.stderr)
         else:
             print(f"in folder '{_printable(filed['slug'])}'", file=sys.stderr)
+    _say_who_reads(result)
     if result.get("unchanged"):
         print(
             "unchanged -- the body was identical, so no new version was minted. "
@@ -1748,6 +1755,48 @@ def _print_published(result: dict) -> None:
             file=sys.stderr,
         )
     _print_warnings(result)
+
+
+def _close_after_publish(page_id: str, key: str) -> bool:
+    """The fallback for `--closed-to-agents` against a server that published the page open.
+    True when the page is closed now; False (and a loud line) when it is still open."""
+    page_id = _printable(page_id)
+    try:
+        _shelf("agents", page_id, key, {"can_read": False})
+    except HTTPFailure as exc:
+        print(
+            f"WARNING: page {page_id} is OPEN to other agents: this server does not know"
+            f" --closed-to-agents and closing it afterwards failed ({exc.status})."
+            f" Close it now: {prog_name('artifacts-publish')} --close-to-agents {page_id}",
+            file=sys.stderr,
+        )
+        return False
+    print(
+        f"this server published page {page_id} open to other agents (it does not know"
+        " --closed-to-agents) and it is closed now, so it was open for a moment. "
+        + textvars.agent_read_words(False, client=True),
+        file=sys.stderr,
+    )
+    return True
+
+
+def _say_who_reads(result: dict) -> None:
+    """Whether other agents can read the page, in words, on stderr after every publish and update
+    (12 Nov 2026). A page is open to every agent unless closed, and a publisher cannot see that
+    from outside: a worker took "my seat" to mean private for embargoed content. Said on stderr,
+    like the folder, so stdout stays the whitelist callers parse. Silent only for a server too old
+    to answer it: claiming either state would be a guess."""
+    can_read = result.get("agents_can_read")
+    if not isinstance(can_read, bool):
+        return
+    line = textvars.agent_read_words(can_read, client=True)
+    page_id = result.get("id")
+    if can_read and isinstance(page_id, str):
+        line += (
+            f" (to close it: {prog_name('artifacts-publish')}"
+            f" --close-to-agents {_printable(page_id)})"
+        )
+    print(line, file=sys.stderr)
 
 
 def _print_shelf(result: dict) -> None:
@@ -2094,9 +2143,23 @@ def build_parser() -> argparse.ArgumentParser:
         "(homelab-ops; homelab_ops also works); with --rename-folder: the new slug",
     )
     shelf.add_argument(
+        "--closed-to-agents",
+        action="store_true",
+        help=(
+            "with FILE, publish a NEW page closed to other agents: only {{owner_name}} and you"
+            " can read it, from its first version (every page is open to other agents without"
+            " this). Use it for embargoed or security content. To close a page you already"
+            " published, use --close-to-agents ID; --update never changes who can read"
+        ),
+    )
+    shelf.add_argument(
         "--close-to-agents",
         metavar="ID",
-        help="only {{owner_name}} and you can read this page (other agents can by default)",
+        help=(
+            "close a page you already published: only {{owner_name}} and you can read it"
+            " (other agents can by default). To publish a new page closed, add"
+            " --closed-to-agents to the publish"
+        ),
     )
     shelf.add_argument(
         "--open-to-agents",
@@ -2362,6 +2425,15 @@ def main(argv: list[str] | None = None) -> int:
     if misuse:
         print(misuse, file=sys.stderr)
         return 2
+    if args.closed_to_agents and (args.update or not args.file):
+        # Refused rather than ignored: an ignored flag leaves a page open that was meant closed.
+        print(
+            "--closed-to-agents goes with FILE to publish a NEW page closed to other agents."
+            " An update never changes who can read a page; to close a page you already"
+            " published: --close-to-agents ID",
+            file=sys.stderr,
+        )
+        return 2
     if args.folder is not None and not args.list and not args.file:
         print(
             "--folder goes with FILE (publish or --update ID) or with --list;"
@@ -2593,6 +2665,7 @@ def main(argv: list[str] | None = None) -> int:
                     }
                 )
             )
+            _say_who_reads(done)
             _print_warnings(done)
             return 0
         if args.section:
@@ -2659,13 +2732,23 @@ def main(argv: list[str] | None = None) -> int:
                 args.folder_title,
                 parse_interval(args.refresh_every) if args.refresh_every else None,
                 comments=args.comments,
+                closed=args.closed_to_agents,
             )
             _print_published(published)
+            # A server that does not know the field publishes the page OPEN. Close it at once
+            # through the route every server has, and say so: embargoed content must not stay
+            # readable because the server was older than this tool.
+            if (
+                args.closed_to_agents
+                and published.get("agents_can_read") is not False
+                and not _close_after_publish(published["id"], key)
+            ):
+                return 1
             _report_render(published["id"], key)
             return 0
         print(
             "usage: artifacts-publish FILE --title TITLE"
-            " [--folder SLUG [--folder-title NAME]]"
+            " [--folder SLUG [--folder-title NAME]] [--closed-to-agents]"
             " | FILE --update ID [--title TITLE] [--folder SLUG | --no-folder]"
             " | --list [--folder SLUG] | --folders"
             " | --move ID [ID ...] (--folder SLUG [--folder-title NAME] | --no-folder)"

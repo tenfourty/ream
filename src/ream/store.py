@@ -163,6 +163,11 @@ class Published:
     # shows: `--folder raodmap` prints "created new folder", which no one meant (all eight
     # publishing offices asked for exactly this).
     folder: dict | None = None
+    # WHETHER OTHER AGENTS CAN READ THE PAGE, as it stands after this call. A page is open to
+    # every agent by default and a publisher cannot see that from the outside, so every publish
+    # and update answers it (12 Nov 2026: a worker took "my seat" to mean private). A publish
+    # can start the page closed; an update never changes it.
+    agents_can_read: bool = True
 
 
 @dataclass(frozen=True)
@@ -618,9 +623,14 @@ def publish(
     folder_title: str | None = None,
     refresh_every: int | None = None,
     comments: str | None = None,
+    agents_can_read: bool = True,
 ) -> Published:
     """`comments` ("on" or "off"; None: not stated, stored as null) is whether commenting
     starts on or off for a reader of this page (`BadComments` otherwise).
+
+    `agents_can_read` False stores the page closed to other agents from its first version: the
+    flag is a column of the same insert, so there is no moment when the page exists and is open
+    (an embargoed page cannot be published open and closed a call later).
 
     `refresh_every` declares how often the publisher promises to vouch for the page (seconds,
     60 to a year; `BadInterval` otherwise). The publish itself is the first check.
@@ -665,8 +675,8 @@ def publish(
             "insert into artifact"
             " (id, title, agent, read_token, current_version, session,"
             "  created_at, updated_at, refresh_every, checked_at, check_status,"
-            "  comments_default)"
-            " values (%s, %s, %s, %s, null, %s, %s, %s, %s, %s, 'ok', %s)",
+            "  comments_default, agents_can_read)"
+            " values (%s, %s, %s, %s, null, %s, %s, %s, %s, %s, 'ok', %s, %s)",
             (
                 artifact_id,
                 title,
@@ -678,6 +688,7 @@ def publish(
                 interval,
                 now,
                 comments,
+                agents_can_read,
             ),
         )
         conn.execute(
@@ -716,6 +727,7 @@ def publish(
         title=title,
         bytes=len(body.encode()),
         folder=filed,
+        agents_can_read=agents_can_read,
     )
 
 
@@ -918,6 +930,7 @@ def patch(
                 # if it reflects what a reader will now see.
                 title=title if title is not None else row[1],
                 bytes=len(body.encode()),
+                agents_can_read=bool(row[8]),
             )
 
         if scanned is None or _digest(body) not in scanned:
@@ -1042,6 +1055,7 @@ def patch(
         title=title if title is not None else row[1],
         bytes=len(body.encode()),
         folder=filed,
+        agents_can_read=bool(row[8]),
     )
 
 
@@ -2251,25 +2265,37 @@ def duplicate(
     button. Jeremy duplicating a page in his gallery does not make him its
     publisher -- the seat that wrote it is still the seat that maintains it,
     and the alternative is a page no agent can update.
+
+    The copy keeps the original's answer to "can other agents read it": a copy of a page
+    closed to agents is closed from its first version, not open until someone remembers.
     """
     scope = "" if agent is None else " and a.agent = %s"
     params = (artifact_id,) if agent is None else (artifact_id, agent)
     with db.connect() as conn:
         row = conn.execute(
-            "select a.title, a.agent, v.body from artifact a"  # noqa: S608 -- `scope` is a fixed clause with a placeholder, never caller text
+            "select a.title, a.agent, v.body, a.agents_can_read from artifact a"  # noqa: S608 -- `scope` is a fixed clause with a placeholder, never caller text
             " join version v on v.artifact_id = a.id and v.n = a.current_version"
             f" where a.id = %s and a.deleted_at is null{scope}",
             params,
         ).fetchone()
     if row is None:
         raise NotFound()
-    title, owner, body = row[0], row[1], row[2]
+    title, owner, body, agents_can_read = row[0], row[1], row[2], bool(row[3])
     # Trimmed so the suffix always fits, rather than the publish being refused
     # for a title the caller never typed.
     room = MAX_TITLE_BYTES - len(MAX_COPY_TITLE_SUFFIX.encode())
     while len(title.encode()) > room:
         title = title[:-1]
-    return publish(db, owner, f"{title}{MAX_COPY_TITLE_SUFFIX}", body), body
+    return (
+        publish(
+            db,
+            owner,
+            f"{title}{MAX_COPY_TITLE_SUFFIX}",
+            body,
+            agents_can_read=agents_can_read,
+        ),
+        body,
+    )
 
 
 # How long a deleted page can be recovered. Jeremy chose thirty days, and chose

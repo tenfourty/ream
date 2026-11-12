@@ -57,6 +57,7 @@ from ream import (
     store,
     templates,
     text,
+    textvars,
 )
 from ream.mcp import (
     OWNER,
@@ -157,6 +158,15 @@ def _agent_name(value: str, obj: dict) -> bool:
     return obj.get("home") != "partner" and re.fullmatch(_AGENT_NAME, value) is not None
 
 
+def _agent_read(value: str, _obj: dict) -> bool:
+    """`agent_read` is one of Ream's two fixed sentences about who can read a page (the owner's
+    name in the closed one is a setting, read now)."""
+    return value in (
+        textvars.agent_read_words(True),
+        textvars.agent_read_words(False),
+    )
+
+
 _KINDS = one_of(*comments.KINDS, *decisions.KINDS, *events.KINDS, *events.BRIDGE_KINDS)
 
 _REAM: dict[str, Callable[[str, dict], bool]] = {
@@ -180,6 +190,7 @@ _REAM: dict[str, Callable[[str, dict], bool]] = {
     ),
     "sha256": matches(r"[0-9a-f]{64}"),
     "render_verdict": one_of("ok", "broken", "unchecked"),
+    "agent_read": _agent_read,
     "change": one_of("added", "changed", "removed"),
     **dict.fromkeys(
         (
@@ -700,6 +711,17 @@ _COMMENTS = {
     ),
 }
 
+_AGENTS_CAN_READ = {
+    "type": "boolean",
+    "description": (
+        "Whether OTHER AGENTS can read the page. Default true: every agent in the person's "
+        "space can read it. Pass false to publish it closed, so only the person and you can read "
+        "it, from its first version: do that for embargoed, security or otherwise sensitive "
+        "content (a page cannot be published open and closed a moment later without a window). "
+        "The answer's agent_read says which it is."
+    ),
+}
+
 # A write's result is the calling agent's own (its page, its folder, its title): every
 # string not Ream's own is fenced, labelled with the calling agent.
 _OWN = Fences(ream=_REAM)
@@ -716,7 +738,9 @@ _OWN = Fences(ream=_REAM)
         "the person the page went to Ream and give them its link (page_url). Files it in "
         "one of your folders with folder. Answers the page's id, address (url), "
         "page_url (the link to give the person) and revision. Pass comments (on or off) "
-        "now: a new page without it will soon be refused. Ream then renders the page once: "
+        "now: a new page without it will soon be refused. Every page is readable by other "
+        "agents unless you pass agents_can_read false: do that for embargoed or security "
+        "content (the answer's agent_read says who can read it). Ream then renders the page once: "
         "a script error, a blank page or a missing file flags it; the report follows in "
         "read_page (render_verdict, render_findings)."
     ),
@@ -734,6 +758,7 @@ _OWN = Fences(ream=_REAM)
             "folder_title": _FOLDER_TITLE,
             "refresh_every": _REFRESH,
             "comments": _COMMENTS,
+            "agents_can_read": _AGENTS_CAN_READ,
             "session": SESSION,
         },
         ("body",),
@@ -750,6 +775,7 @@ def _publish_page(call: Call, arguments: dict[str, Any]) -> dict:
             "folder_title",
             "refresh_every",
             "comments",
+            "agents_can_read",
         )
     }
     _only(arguments, {*fields, "session"})
@@ -791,7 +817,8 @@ _SECTION_FIELDS = {
         "expected_revision: the revision you read). With section (an element's id): one "
         "operation on that element (op replace, append, prepend or remove; body is the "
         "fragment; expected_revision and section_revision refuse a page or element "
-        "that moved on since you read it). The render report follows in read_page "
+        "that moved on since you read it). The answer's agent_read says who can read the "
+        "page; an update never changes that. The render report follows in read_page "
         "(render_verdict, render_findings)."
     ),
     read_only=False,

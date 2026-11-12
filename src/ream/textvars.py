@@ -276,6 +276,17 @@ def words(text: str) -> str:
     return render(text, client=True)
 
 
+_AGENTS_CAN_READ = "other agents can read this page"
+_AGENTS_CANNOT_READ = "only {{owner_name}} and you can read this page"
+
+
+def agent_read_words(can_read: bool, *, client: bool = False) -> str:
+    """Whether other agents can read a page, in the words every publish and update answers with
+    (12 Nov 2026: a page is open to agents by default, and a worker took "my seat" to mean
+    private). `client` for a command-line tool's own words, as `render`'s."""
+    return render(_AGENTS_CAN_READ if can_read else _AGENTS_CANNOT_READ, client=client)
+
+
 def names_in(text: str) -> set[str]:
     """The names a text uses, as written (for the test that finds a typo)."""
     return {m.group(1) for m in _NAME.finditer(text)}
