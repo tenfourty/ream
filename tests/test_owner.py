@@ -449,9 +449,10 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt and skill.md re-taken on 10 Nov 2026 for the artifact rule when Ream is connected to Claude over MCP (a short paragraph in each, one bullet in skill.md).
 # agents.txt and the artifacts-publish help re-taken on 11 Nov 2026 for what each round changed (`ream changes`, the paragraph on reading changes).
 # skill.md re-taken on 11 Nov 2026 for the pages.toml keys of `ream republish` (timeout, refresh_every, exit 3 = nothing to do).
+# agents.txt, skill.md and the artifacts-publish help re-taken on 12 Nov 2026 for publishing a page closed (`--closed-to-agents`) and the read-state line.
 GOLDEN = {
-    "agents.txt": "2ce909128c372965ff0b603e81100718a5c8ceeb352491ff27b0a94e467bf452",
-    "skill.md": "6eacd35a0fb418e80f90b8ddca0e46ace0dcf4ee31eac3360ef6f3306d0554ea",
+    "agents.txt": "d435c988642b4f857a9395cc0cbfc8e1df59d1f38c6904700cfc819e37b72d2f",
+    "skill.md": "b8a667f70b18c7089bf52b2d63e2cc80fc065d2c5b3ad597a1c9216b4308e727",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"
@@ -495,7 +496,7 @@ FOOTER = "<footer>Published from BABA through the homelab artifacts service.</fo
 NEWS_TAIL = 26  # every entry so far; newer ones are added in front, so these never move
 NEWS_TAIL_DIGEST = "08b7ad27fd383101cc42c10f0994c8368d6fa5b33dc1617635d6068b5902f467"
 HELP_DIGEST = {
-    "artifacts-publish": "493f6576b3effd57d570df65a21092c08868a2ef3dfd3f27f925d0facabdd151",
+    "artifacts-publish": "d938d8ffe175eaed8386a6c6e756660a4e02f07b0109f85ddc9a9b17eeb9b6ce",
     "artifacts-decide": "2a31c966178e2ea6ce7fa9f4ecb40c7c4e4b9506890802b05534e75dd3572a10",
 }
 
