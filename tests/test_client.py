@@ -21,7 +21,7 @@ import urllib.request
 import pytest
 import uvicorn
 
-from ream import client, clientlevel, keys
+from ream import client, clientlevel, keys, store
 from ream.app import create_app
 
 SECRET_BODY = "<!doctype html><body>AKIA" + "IOSFODNN7EXAMPLE</body>"
@@ -1651,3 +1651,130 @@ def test_step_one_accepts_a_new_page_without_comments(live, key_file, tmp_path, 
     code = client.main(["--key-file", str(path), str(page), "--title", "Board"])
     capsys.readouterr()
     assert code == 0
+
+
+def _page_file(tmp_path, text="x"):
+    page = tmp_path / "page.html"
+    page.write_text(f"<!doctype html><body>{text}</body></html>")
+    return page
+
+
+def test_closed_to_agents_publishes_closed_and_says_so(
+    live, key_file, tmp_path, capsys, db
+):
+    path, _token = key_file
+    page = _page_file(tmp_path)
+    rc = client.main(
+        [
+            "--key-file",
+            str(path),
+            str(page),
+            "--title",
+            "B",
+            "--comments",
+            "off",
+            "--closed-to-agents",
+        ]
+    )
+    assert rc == 0
+    captured = capsys.readouterr()
+    published = json.loads(captured.out.strip().splitlines()[0])
+    assert "only Jeremy and you can read this page" in captured.err
+    assert store.get_owned(db, "ops-seat", published["id"]).agents_can_read is False
+
+
+def test_publish_and_update_say_who_can_read_on_stderr(
+    live, key_file, tmp_path, capsys
+):
+    path, _token = key_file
+    page = _page_file(tmp_path)
+    assert (
+        client.main(
+            ["--key-file", str(path), str(page), "--title", "B", "--comments", "off"]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert "other agents can read this page" in captured.err
+    page_id = json.loads(captured.out.strip().splitlines()[0])["id"]
+    # The state is stderr only: stdout stays the whitelisted JSON.
+    assert "can read this page" not in captured.out
+    page.write_text("<!doctype html><body>two</body></html>")
+    assert client.main(["--key-file", str(path), str(page), "--update", page_id]) == 0
+    assert "other agents can read this page" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("args", [["--update", "someid"], []])
+def test_closed_to_agents_needs_a_new_publish(live, key_file, tmp_path, capsys, args):
+    path, _token = key_file
+    page = _page_file(tmp_path)
+    argv = ["--key-file", str(path), "--closed-to-agents", *args]
+    if args:
+        argv.insert(2, str(page))
+    assert client.main(argv) == 2
+    assert "--closed-to-agents goes with FILE" in capsys.readouterr().err
+
+
+def test_old_server_that_publishes_open_is_closed_afterwards_and_says_so(
+    live, key_file, tmp_path, capsys, db, monkeypatch
+):
+    path, _token = key_file
+    real = client._request
+
+    def old_server(method, url, key, payload=None, *a, **k):
+        out = real(method, url, key, payload, *a, **k)
+        if method == "POST" and url.endswith("/pages"):
+            out = {k2: v for k2, v in out.items() if k2 != "agents_can_read"}
+        return out
+
+    monkeypatch.setattr(client, "_request", old_server)
+    page = _page_file(tmp_path)
+    rc = client.main(
+        [
+            "--key-file",
+            str(path),
+            str(page),
+            "--title",
+            "B",
+            "--comments",
+            "off",
+            "--closed-to-agents",
+        ]
+    )
+    assert rc == 0
+    captured = capsys.readouterr()
+    page_id = json.loads(captured.out.strip().splitlines()[0])["id"]
+    assert "it is closed now" in captured.err
+    assert store.get_owned(db, "ops-seat", page_id).agents_can_read is False
+
+
+def test_old_server_close_failure_exits_1_and_warns(
+    live, key_file, tmp_path, capsys, db, monkeypatch
+):
+    path, _token = key_file
+    real = client._request
+
+    def old_server(method, url, key, payload=None, *a, **k):
+        if method == "POST" and url.endswith("/agents"):
+            raise client.HTTPFailure(500, "boom")
+        out = real(method, url, key, payload, *a, **k)
+        if method == "POST" and url.endswith("/pages"):
+            out = {k2: v for k2, v in out.items() if k2 != "agents_can_read"}
+        return out
+
+    monkeypatch.setattr(client, "_request", old_server)
+    page = _page_file(tmp_path)
+    rc = client.main(
+        [
+            "--key-file",
+            str(path),
+            str(page),
+            "--title",
+            "B",
+            "--comments",
+            "off",
+            "--closed-to-agents",
+        ]
+    )
+    assert rc == 1
+    assert "is OPEN to other agents" in capsys.readouterr().err
