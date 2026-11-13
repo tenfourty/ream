@@ -11,6 +11,7 @@ cannot read."""
 from __future__ import annotations
 
 import ast
+import gc
 import pathlib
 import sys
 import time
@@ -263,18 +264,32 @@ def _page(shape: str, chars: int = 8 * MIB, lead: str = "") -> str:
     return scalecheck.page(lead + first, unit, chars, last)
 
 
-def _peak(read, page):
-    """(what the read gave or raised, the most memory in use at once, in bytes)."""
-    tracemalloc.start()
-    try:
-        tracemalloc.reset_peak()
+def _peak(read, page, bound=None):
+    """(what the read gave or raised, the most memory in use at once, in bytes).
+
+    tracemalloc counts every thread of the process, and under xdist a worker has
+    others (execnet's receiver, threads earlier tests left running): one of them
+    allocating ~150 KB while a 16 KiB page is read showed as 9 times the page. That
+    is noise added to one read, never to every read, so a peak at or over `bound`
+    is measured again, up to three reads, and the least is the answer: memory the
+    read itself holds is there in all three."""
+    least = None
+    for _ in range(3 if bound is not None else 1):
+        gc.collect()
+        tracemalloc.start()
         try:
-            gave = read(page)
-        except Exception as exc:  # noqa: BLE001 - which one is the test's to say
-            gave = exc
-        return gave, tracemalloc.get_traced_memory()[1]
-    finally:
-        tracemalloc.stop()
+            tracemalloc.reset_peak()
+            try:
+                gave = read(page)
+            except Exception as exc:  # noqa: BLE001 - which one is the test's to say
+                gave = exc
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        least = peak if least is None else min(least, peak)
+        if bound is None or least < bound:
+            break
+    return gave, least
 
 
 # Each read: (a function of the page, the page's length it is given, what it gives
@@ -599,9 +614,9 @@ def test_the_memory_of_every_other_long_match_is_a_few_copies_of_the_page(
     read, shape, chars
 ):
     page = _other_page(shape, chars // 64 if shape in TRACED_SMALL else chars)
-    gave, peak = _peak(OTHER_READS[read], page)
-    assert gave is None or isinstance(gave, htmlbound.TooComplex), repr(gave)
     copies = _copies(read, shape)
+    gave, peak = _peak(OTHER_READS[read], page, copies * len(page))
+    assert gave is None or isinstance(gave, htmlbound.TooComplex), repr(gave)
     assert peak < copies * len(page), (
         f"{peak / len(page):.1f} times the page of {len(page)} characters"
         f" (the bound is {copies})"
