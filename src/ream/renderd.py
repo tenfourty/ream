@@ -23,15 +23,18 @@ variable other than BROWSER and BIND_HOST.
 One browser at a time: a request waits up to SLOT_WAIT_SECONDS for the render
 slot, then answers 503 with Retry-After. Every render gets its own directory,
 browser profile and cache under the work directory, which is emptied at start
-and after each render. After each render no process of this uid may be left but
-this one and its ancestors; if one is, the process logs it and exits non-zero so
-that whatever supervises it starts a fresh one.
+and after each render. The process is a child subreaper
+(`prctl(PR_SET_CHILD_SUBREAPER)`, Linux only; it refuses to start without it), so a
+browser helper orphaned by a render is reparented to it rather than to pid 1. After
+each render no process descended from it may be left alive; if one is, the process
+logs it and exits non-zero so that whatever supervises it starts a fresh one.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import ctypes
 import logging
 import os
 import shutil
@@ -57,6 +60,9 @@ STRAY_GRACE_SECONDS = 2.0
 STRAY_POLL_SECONDS = 0.05
 EXIT_REFUSED = 2
 EXIT_STRAY = 3
+# prctl(2) options: make this process the reaper of its orphaned descendants.
+PR_SET_CHILD_SUBREAPER = 36
+PR_GET_CHILD_SUBREAPER = 37
 WORK_DIR_NAME = "ream-renderd"
 # The browser makes its profile, and a socket inside it, under each render's
 # directory, and a socket's path is short (108 bytes on Linux). Playwright's chrome
@@ -113,9 +119,10 @@ def _empty(path: Path) -> bool:
 # --- what is left of a render ----------------------------------------------------------
 
 
-def _read_procs() -> list[tuple[int, int, set[int], str]]:
-    """Every process in /proc as `(pid, parent pid, uids, state)`. A process that
-    goes while being read is skipped."""
+def _read_procs() -> list[tuple[int, int, str]]:
+    """Every process in /proc as `(pid, parent pid, state)`. A process that goes
+    while being read is skipped. Threads are not listed: /proc lists only
+    processes, so uvicorn's and asyncio's worker threads never appear here."""
     found = []
     for entry in os.listdir("/proc"):
         if not entry.isdigit():
@@ -130,42 +137,88 @@ def _read_procs() -> list[tuple[int, int, set[int], str]]:
             key, _, value = line.partition(":")
             fields[key] = value.split()
         try:
-            found.append(
-                (
-                    int(entry),
-                    int(fields["PPid"][0]),
-                    {int(u) for u in fields["Uid"]},
-                    fields["State"][0],
-                )
-            )
+            found.append((int(entry), int(fields["PPid"][0]), fields["State"][0]))
         except (KeyError, IndexError, ValueError):
             continue
     return found
 
 
-def strays(procs, me: int, uid: int) -> list[int]:
-    """The pids in `procs` of `uid` other than `me` and its ancestors (the process
-    supervising it). A zombie is not counted: it runs nothing and holds nothing."""
-    parent = {pid: ppid for pid, ppid, _, _ in procs}
-    mine = set()
-    pid = me
-    while pid and pid not in mine:
-        mine.add(pid)
-        pid = parent.get(pid, 0)
-    return sorted(
-        pid
-        for pid, _, uids, state in procs
-        if uid in uids and pid not in mine and state != "Z"
-    )
+def leftovers(procs, me: int) -> list[int]:
+    """The pids in `procs` descended from `me` (following PPid links down from it),
+    alive and not zombies: what a render left running. As a subreaper this process
+    inherits whatever the browser orphaned, so an orphaned grandchild is a child
+    of `me` by the time it is read here. A process merely of the same uid that this
+    process did not start (a pod's exec probe, the user's shell, another job on a
+    shared machine) is not a descendant and does not count."""
+    children: dict[int, list[int]] = {}
+    state = {}
+    for pid, ppid, st in procs:
+        children.setdefault(ppid, []).append(pid)
+        state[pid] = st
+    found: set[int] = set()
+    todo = list(children.get(me, ()))
+    while todo:
+        pid = todo.pop()
+        if pid in found or pid == me:
+            continue
+        found.add(pid)
+        todo.extend(children.get(pid, ()))
+    return sorted(pid for pid in found if state[pid] != "Z")
+
+
+def _reap_zombies(procs, me: int) -> None:
+    """Wait on every zombie child of `me`, without blocking: a subreaper inherits
+    the browser's orphans, and nothing else would ever reap them."""
+    for pid, ppid, st in procs:
+        if ppid == me and st == "Z":
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
 
 
 def _strays_after_render() -> list[int]:
+    me = os.getpid()
     deadline = time.monotonic() + STRAY_GRACE_SECONDS
     while True:
-        left = strays(_read_procs(), os.getpid(), os.getuid())
+        procs = _read_procs()
+        _reap_zombies(procs, me)
+        left = leftovers(procs, me)
         if not left or time.monotonic() >= deadline:
             return left
         time.sleep(STRAY_POLL_SECONDS)
+
+
+def _prctl(option: int, arg) -> None:
+    """prctl(2) through libc, with one argument; raises OSError on failure, and on
+    anything but Linux."""
+    if not sys.platform.startswith("linux"):
+        raise OSError("prctl needs Linux")
+    libc = ctypes.CDLL(None, use_errno=True)
+    if (
+        libc.prctl(
+            ctypes.c_int(option),
+            arg,
+            ctypes.c_ulong(0),
+            ctypes.c_ulong(0),
+            ctypes.c_ulong(0),
+        )
+        < 0
+    ):
+        errno = ctypes.get_errno()
+        raise OSError(errno, os.strerror(errno))
+
+
+def set_subreaper(on: bool = True) -> None:
+    """Make this process (or stop it being) a child subreaper: an orphaned
+    descendant is then reparented to it, not to pid 1. OSError when it cannot."""
+    _prctl(PR_SET_CHILD_SUBREAPER, ctypes.c_ulong(1 if on else 0))
+
+
+def is_subreaper() -> bool:
+    value = ctypes.c_int(0)
+    _prctl(PR_GET_CHILD_SUBREAPER, ctypes.byref(value))
+    return value.value != 0
 
 
 # --- one render --------------------------------------------------------------------------
@@ -235,7 +288,8 @@ class Renderd:
         left = _strays_after_render()
         if left:
             log.error(
-                "%d process(es) of this uid left after a render (pids %s): exiting",
+                "%d process(es) descended from this one left after a render"
+                " (pids %s): exiting",
                 len(left),
                 ",".join(map(str, left[:20])),
             )
@@ -464,6 +518,13 @@ def main(argv: list[str] | None = None) -> int:
             f"ream.renderd refuses to start: the work directory's path is over"
             f" {WORK_ROOT_MAX_CHARS} characters (--work-dir, or TMPDIR)",
             file=sys.stderr,
+        )
+        return EXIT_REFUSED
+    try:
+        set_subreaper()
+    except OSError as exc:
+        log.error(
+            "ream.renderd refuses to start: it cannot be a child subreaper: %s", exc
         )
         return EXIT_REFUSED
     work_root = prepare_work_root(work_root)

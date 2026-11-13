@@ -234,7 +234,7 @@ jobs:
           uv run pytest -v -n0 --timeout=120 --timeout-method=thread
           tests/test_panel_browser.py tests/test_shim_marks.py
           tests/test_thumbs.py tests/test_thumbnail_wall.py
-          tests/test_render_findings_browser.py
+          tests/test_render_findings_browser.py tests/test_renderd.py
 
       # The timing comparisons (tests marked `scaling`), serially: they skip in the
       # parallel runs, where other workers share the 2 CPUs and make the 8x page look

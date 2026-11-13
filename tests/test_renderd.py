@@ -1,19 +1,21 @@
 """The renderer as its own process (`ream.renderd`).
 
 Most of these call the ASGI app directly, with a fake browser run
-(`rendercore._run`) and a fake process list; the last one starts the real thing
-on loopback with a real browser.
+(`rendercore._run`) and a fake process list; the last ones start the real
+command (`python -m ream.renderd`) as a process of its own, on loopback, with a
+real browser.
 """
 
 import asyncio
 import os
+import queue
+import re
 import shutil
-import socket
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
-import time
 import zlib
 from pathlib import Path
 
@@ -30,8 +32,6 @@ CONSOLE = (
     '[1:1:1113/101010.000001:INFO:CONSOLE:3] "Uncaught ReferenceError: x is not'
     ' defined", source: file:///tmp/page.html (3)\n'
 )
-
-_REAL_READ_PROCS = renderd._read_procs
 
 needs_browser = pytest.mark.skipif(
     not rendercore.available(),
@@ -80,7 +80,7 @@ def app(work, exits, monkeypatch):
     monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(renderd, "STRAY_GRACE_SECONDS", 0)
     me = os.getpid()
-    monkeypatch.setattr(renderd, "_read_procs", lambda: [(me, 1, {os.getuid()}, "S")])
+    monkeypatch.setattr(renderd, "_read_procs", lambda: [(me, 1, "S")])
     return renderd.Renderd(work, exit=exits.append)
 
 
@@ -406,38 +406,67 @@ def test_a_long_work_directory_is_refused_at_start(monkeypatch, capsys):
 # --- what is left after a render ------------------------------------------------------
 
 
-def test_strays_are_this_uids_processes_but_itself_and_its_ancestors():
-    me, uid = 50, 1000
+def test_leftovers_are_live_descendants_of_this_process_only():
+    me = 50
     procs = [
-        (1, 0, {uid}, "S"),  # its supervisor
-        (50, 1, {uid}, "S"),  # itself
-        (60, 50, {uid}, "S"),  # a child left running
-        (61, 1, {uid}, "S"),  # a child that was reparented
-        (62, 1, {uid}, "Z"),  # a zombie: runs nothing
-        (70, 1, {0}, "S"),  # another uid
+        (1, 0, "S"),  # its supervisor
+        (40, 1, "S"),  # its parent
+        (50, 40, "S"),  # itself
+        (60, 50, "S"),  # a child left running
+        (61, 60, "S"),  # ...and that child's child
+        (62, 50, "S"),  # an orphaned grandchild, reparented to this subreaper
+        (63, 50, "Z"),  # a zombie: runs nothing
+        (70, 1, "S"),  # same uid, not started by it: an exec probe, a shell
+        (71, 70, "S"),  # ...and what that started
+        (80, 40, "S"),  # a sibling under the same parent
     ]
-    assert renderd.strays(procs, me, uid) == [60, 61]
+    assert renderd.leftovers(procs, me) == [60, 61, 62]
+    assert renderd.leftovers([(1, 0, "S"), (50, 1, "S")], me) == []
+
+
+def _after_a_render_with(client, monkeypatch, procs):
+    me = os.getpid()
+    listed = [
+        (me, 1, "S"),
+        *((pid, me if ppid == "me" else ppid, st) for pid, ppid, st in procs),
+    ]
+    monkeypatch.setattr(renderd, "_read_procs", lambda: listed)
+    return client.post(f"/v1/render?w={W}&h={H}", content=PAGE, headers=HEADERS)
 
 
 def test_a_process_left_after_a_render_ends_the_renderer(
     client, monkeypatch, exits, browser_runs, caplog
 ):
-    me = os.getpid()
-    monkeypatch.setattr(
-        renderd,
-        "_read_procs",
-        lambda: [
-            (me, 1, {os.getuid()}, "S"),
-            (424242, 1, {os.getuid()}, "S"),
-        ],
-    )
-    r = client.post(f"/v1/render?w={W}&h={H}", content=PAGE, headers=HEADERS)
+    r = _after_a_render_with(client, monkeypatch, [(424242, "me", "S")])
     assert exits == [renderd.EXIT_STRAY]
     assert r.status_code == 500 and r.content == b""
     assert "424242" in caplog.text
     # The slot is free again for whatever comes next.
     assert rendercore._RENDER_SLOT.acquire(blocking=False)
     rendercore._RENDER_SLOT.release()
+
+
+def test_an_orphaned_grandchild_ends_the_renderer(
+    client, monkeypatch, exits, browser_runs, caplog
+):
+    # The browser (424240) is gone; its helper, orphaned, was reparented to this
+    # process because it is a subreaper.
+    r = _after_a_render_with(client, monkeypatch, [(424241, "me", "S")])
+    assert exits == [renderd.EXIT_STRAY]
+    assert r.status_code == 500
+    assert "424241" in caplog.text
+
+
+def test_a_process_of_the_same_uid_it_did_not_start_is_not_a_leftover(
+    client, monkeypatch, exits, browser_runs
+):
+    # An exec probe in the pod, or the user's other processes on a shared
+    # machine: same uid, not descended from the renderer.
+    r = _after_a_render_with(
+        client, monkeypatch, [(424243, 1, "S"), (424244, 424243, "S")]
+    )
+    assert r.status_code == 200
+    assert exits == []
 
 
 def test_nothing_left_means_no_exit(client, exits, browser_runs):
@@ -448,8 +477,62 @@ def test_nothing_left_means_no_exit(client, exits, browser_runs):
 
 def test_the_process_reader_sees_this_process():
     mine = [p for p in renderd._read_procs() if p[0] == os.getpid()]
-    assert mine and os.getuid() in mine[0][2]
-    assert mine[0][1] == os.getppid()
+    assert mine and mine[0][1] == os.getppid()
+
+
+SUBREAPER_CHECK = """
+import os, subprocess, sys
+from ream import renderd
+renderd.set_subreaper()
+assert renderd.is_subreaper()
+# The shell starts a sleep and exits at once: the sleep, orphaned, is
+# reparented to this process, so it is a leftover of this process's.
+pid = int(subprocess.run(["sh", "-c", "sleep 30 >/dev/null 2>&1 & echo $!"], capture_output=True,
+                         text=True, check=True).stdout)
+try:
+    procs = renderd._read_procs()
+    assert dict((p, pp) for p, pp, _ in procs)[pid] == os.getpid()
+    assert pid in renderd.leftovers(procs, os.getpid())
+finally:
+    os.kill(pid, 9)
+    os.waitpid(pid, 0)
+print("ok")
+"""
+
+
+def test_it_can_be_a_subreaper_here():
+    """The real prctl call, in a process of its own (this one is left as it is)."""
+    done = subprocess.run(  # noqa: S603 -- argv list, no shell
+        [sys.executable, "-c", SUBREAPER_CHECK],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "ok"
+
+
+def test_it_refuses_to_start_when_it_cannot_be_a_subreaper(
+    monkeypatch, capsys, tmp_path
+):
+    for name in list(os.environ):
+        if name.startswith(("REAM_", "ARTIFACTS_")) or name == "DATABASE_URL":
+            monkeypatch.delenv(name)
+
+    def refused(on=True):
+        raise OSError(22, "Invalid argument")
+
+    monkeypatch.setattr(renderd, "set_subreaper", refused)
+    started = []
+    monkeypatch.setattr(renderd, "prepare_work_root", started.append)
+    short = tempfile.mkdtemp(prefix="rd", dir="/tmp")
+    try:
+        code = renderd.main(["--port", "1", "--work-dir", short + "/w"])
+    finally:
+        shutil.rmtree(short, ignore_errors=True)
+    assert code == renderd.EXIT_REFUSED
+    assert started == []
 
 
 # --- health -----------------------------------------------------------------------------
@@ -489,53 +572,68 @@ def test_selfcheck_fails_without_a_picture(app, monkeypatch):
 # --- the real thing ---------------------------------------------------------------------
 
 
-def _descendants_of_this_process():
-    """The real process list, cut to this process and what it started: the
-    suite shares its uid with everything else the machine runs as that user."""
-    procs = _REAL_READ_PROCS()
-    parent = {pid: ppid for pid, ppid, _, _ in procs}
-    me = os.getpid()
-
-    def ours(pid):
-        seen = set()
-        while pid and pid not in seen:
-            if pid == me:
-                return True
-            seen.add(pid)
-            pid = parent.get(pid, 0)
-        return False
-
-    return [p for p in procs if ours(p[0])]
+_LISTENING = re.compile(r"Uvicorn running on http://127\.0\.0\.1:(\d+) ")
 
 
 @pytest.fixture()
-def served(monkeypatch, exits):
-    """renderd under uvicorn on loopback, in a thread of this process."""
-    import uvicorn
-
-    monkeypatch.setattr(renderd, "_read_procs", _descendants_of_this_process)
+def served():
+    """`python -m ream.renderd` as a process of its own on loopback, on a port it
+    picks itself (`--port 0`): the fixture reads the port from its start-up line,
+    so there is no window in which another process can take it. Yields `(port,
+    process, lines)`; `lines` holds all of its log once the test is done with it."""
     # A short work directory, as in the image (`/tmp/ream-renderd`): see
     # renderd.WORK_ROOT_MAX_CHARS. pytest's own tmp_path is longer than that.
     short = Path(tempfile.mkdtemp(prefix="rd", dir="/tmp"))
-    app = renderd.Renderd(renderd.prepare_work_root(short / "w"), exit=exits.append)
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    server = uvicorn.Server(
-        uvicorn.Config(app, lifespan="on", access_log=False, log_config=None)
+    # Only what it takes: it refuses to start with anything else of the app's.
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": os.environ.get("HOME", "/"),
+        "REAM_BROWSER": rendercore.browser_path() or "",
+    }
+    proc = subprocess.Popen(  # noqa: S603 -- argv list, no shell
+        [
+            sys.executable,
+            "-m",
+            "ream.renderd",
+            "--port",
+            "0",
+            "--work-dir",
+            str(short / "w"),
+        ],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
     )
-    thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]})
-    thread.start()
-    deadline = time.monotonic() + 10
-    while not server.started and time.monotonic() < deadline:
-        time.sleep(0.02)
-    assert server.started
+    lines: list[str] = []
+    seen: queue.Queue = queue.Queue()
+
+    def read():
+        for line in proc.stderr:
+            lines.append(line)
+            seen.put(line)
+        seen.put(None)
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    port = None
     try:
-        yield port
+        while port is None:
+            line = seen.get(timeout=30)
+            assert line is not None, f"renderd ended before listening: {lines}"
+            if m := _LISTENING.search(line):
+                port = int(m.group(1))
+        yield port, proc, lines
     finally:
-        server.should_exit = True
-        thread.join(10)
-        sock.close()
+        if proc.poll() is None:
+            proc.terminate()
+        try:
+            proc.wait(15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        # Its stderr is at its end once it has exited: every line is in.
+        reader.join(15)
         shutil.rmtree(short, ignore_errors=True)
 
 
@@ -564,9 +662,8 @@ x.send(page);
 
 
 @needs_browser
-def test_a_rendered_page_cannot_drive_the_renderer(served, exits, caplog):
-    caplog.set_level("INFO", logger="ream.renderd")
-    port = served
+def test_a_rendered_page_cannot_drive_the_renderer(served):
+    port, proc, lines = served
     body = PROBE.replace("PORT", str(port)).encode()
     answer = httpx.post(
         f"http://127.0.0.1:{port}/v1/render?w={W}&h={H}&check=1",
@@ -574,16 +671,24 @@ def test_a_rendered_page_cannot_drive_the_renderer(served, exits, caplog):
         headers=HEADERS,
         timeout=60,
     )
-    assert answer.status_code == 200
+    assert answer.status_code == 200, lines
     report = renderwire.parse_answer(answer.content, W, H)
     assert report[0] is not None, "the probe page itself rendered"
-    assert exits == [], "the browser left nothing running"
 
     outcomes = [e for e in report[1] if "probe " in e]
     assert outcomes, f"the page reported what its requests did: {report[1]}"
     for line in outcomes:
         assert "status 200" not in line, line
 
-    renders = [r.getMessage() for r in caplog.records if r.name == "ream.renderd"]
-    answered = [m for m in renders if m == "POST /v1/render 200"]
-    assert answered == ["POST /v1/render 200"], renders
+    # Still up: the browser left nothing running. Asked over HTTP, so this is
+    # after the render's check has finished, not a race with it.
+    assert httpx.get(f"http://127.0.0.1:{port}/healthz", timeout=10).status_code == 200
+    assert proc.poll() is None, lines
+
+    # Stop it, so that all of its log is in, then read what it answered.
+    proc.terminate()
+    proc.wait(15)
+    served_lines = [l for l in lines if " ream.renderd " in l]
+    assert not [l for l in served_lines if "left after a render" in l], served_lines
+    answered = [l for l in served_lines if l.rstrip().endswith("POST /v1/render 200")]
+    assert len(answered) == 1, served_lines
