@@ -42,7 +42,8 @@ import threading
 import time
 from pathlib import Path
 
-from ream import renderfind, settings
+from ream import renderfind, renderwire, settings
+from ream.renderwire import Report
 
 # The logger keeps the name it had in thumbs.py, so the log reads as before.
 log = logging.getLogger("ream.thumbs")
@@ -277,20 +278,6 @@ def console_errors(stderr: str) -> list[str]:
     return found
 
 
-class Report(tuple):
-    """`(png or None, script errors)`, which is all most callers unpack, with
-    the check script's numbers (or None: it did not report) kept alongside as
-    `.check`. A tuple, so a caller and a test double that know only two things
-    keep working."""
-
-    check: dict | None
-
-    def __new__(cls, png, errors, check=None):
-        self = super().__new__(cls, (png, errors))
-        self.check = check
-        return self
-
-
 def screenshot(
     binary: str, html: str, width: int = WIDTH, height: int = HEIGHT
 ) -> tuple[bytes | None, list[str] | None]:
@@ -390,9 +377,13 @@ def screenshot(
             log.warning("thumbnail render produced no file")
             return Report(None, errors, check)
 
-    # A real PNG or nothing. A zero-byte or truncated file would otherwise be
-    # served as a broken image, which looks like the PAGE is broken.
-    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
-        log.warning("thumbnail render produced %d bytes that are not a PNG", len(data))
-        return Report(None, errors, check)
+    # A real PNG of the size asked for, or nothing. A zero-byte or truncated
+    # file would otherwise be served as a broken image, which looks like the PAGE
+    # is broken. The same check as a renderer's answer (`renderwire`), so there is
+    # one way a picture is accepted; one that fails is a render that did not run.
+    try:
+        data = renderwire.validate_png(data, int(width), int(height))
+    except renderwire.RenderAnswerInvalid as exc:
+        log.warning("thumbnail render gave no usable picture: %s", exc)
+        return None, None
     return Report(data, errors, check)
