@@ -47,7 +47,7 @@ check_message() {
     return 0
   fi
 
-  if printf '%s\n' "$body" | grep -qiE '^[[:space:]]*co-authored-by:'; then
+  if grep -qiE '^[[:space:]]*co-authored-by:' <<< "$body"; then
     echo "$SELF: REFUSED — the message carries a Co-Authored-By trailer." >&2
     echo "  AGENTS.md: conventional commits, no co-authored-by. Five commits on" >&2
     echo "  19 Sep 2026 slipped this rule; the harness re-offers the trailer every" >&2
@@ -55,7 +55,7 @@ check_message() {
     problems=1
   fi
 
-  if printf '%s\n' "$body" | grep -qiE 'generated with \[?claude code|🤖 generated with'; then
+  if grep -qiE 'generated with \[?claude code|🤖 generated with' <<< "$body"; then
     echo "$SELF: REFUSED — the message carries a 'Generated with Claude Code' line." >&2
     echo "  Same rule, same reason as the trailer above." >&2
     problems=1
@@ -65,7 +65,7 @@ check_message() {
     Merge\ *|Revert\ \"*|fixup!\ *|squash!\ *) return "$problems" ;;
   esac
 
-  if ! printf '%s\n' "$subject" | grep -qE "^($TYPES)(\([a-zA-Z0-9._/-]+\))?!?: .+"; then
+  if ! grep -qE "^($TYPES)(\([a-zA-Z0-9._/-]+\))?!?: .+" <<< "$subject"; then
     echo "$SELF: REFUSED — the subject is not a conventional commit." >&2
     echo "  got:      $subject" >&2
     echo "  expected: <type>(<scope>)?: <summary>, type one of: ${TYPES//|/, }" >&2

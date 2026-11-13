@@ -289,18 +289,18 @@ selftest() {
   # expect_refused <label> <url> <stdin text> [<cwd>]
   expect_refused() {
     run_guard "$2" "$3" "${4:-$work}"
-    if [ "$CODE" -eq 1 ] && printf '%s' "$OUT" | grep -q "$SELF: REFUSED"; then pass "$1"; else fail "$1 (code=$CODE)"; fi
+    if [ "$CODE" -eq 1 ] && grep -q "$SELF: REFUSED" <<< "$OUT"; then pass "$1"; else fail "$1 (code=$CODE)"; fi
   }
   # expect_carries <label> <url> <stdin text> [<cwd>]: refused BY CONTENT (names the sec ref found)
   expect_carries() {
     run_guard "$2" "$3" "${4:-$work}"
-    if [ "$CODE" -eq 1 ] && printf '%s' "$OUT" | grep -q "$SELF: REFUSED" \
-       && printf '%s' "$OUT" | grep -q "carries the commits of refs/"; then pass "$1"; else fail "$1 (code=$CODE)"; fi
+    if [ "$CODE" -eq 1 ] && grep -q "$SELF: REFUSED" <<< "$OUT" \
+       && grep -q "carries the commits of refs/" <<< "$OUT"; then pass "$1"; else fail "$1 (code=$CODE)"; fi
   }
   # expect_ok <label> <url> <stdin text> [<cwd>]: exit 0 and no refusal
   expect_ok() {
     run_guard "$2" "$3" "${4:-$work}"
-    if [ "$CODE" -eq 0 ] && ! printf '%s' "$OUT" | grep -q "REFUSED"; then pass "$1"; else fail "$1 (code=$CODE)"; fi
+    if [ "$CODE" -eq 0 ] && ! grep -q "REFUSED" <<< "$OUT"; then pass "$1"; else fail "$1 (code=$CODE)"; fi
   }
 
   # --- (a) the url: exactly artifacts-sec passes, in every form git can hand over
@@ -424,15 +424,15 @@ selftest() {
   set +e
   OUT=$(cd "$work" && printf '%s\n' "$seclne" | bash "$self" 2>&1); CODE=$?
   set -e
-  if [ "$CODE" -eq 1 ] && printf '%s' "$OUT" | grep -q "REFUSED"; then pass "(b) no arguments at all refused"; else fail "(b) no arguments at all (code=$CODE)"; fi
+  if [ "$CODE" -eq 1 ] && grep -q "REFUSED" <<< "$OUT"; then pass "(b) no arguments at all refused"; else fail "(b) no arguments at all (code=$CODE)"; fi
 
   # --- (a2) the lefthook form: name and url as two lines on fd 3, however odd the url is
   local hostile='https://user:p&ss;$(touch X)`touch Y`"q'"'"'x@evil.example/runcove/artifacts.git'
   set +e
   OUT=$(cd "$work" && printf '%s\n' "$seclne" | bash "$self" --args-on-fd3 3<<<"origin"$'\n'"$hostile" 2>&1); CODE=$?
   set -e
-  if [ "$CODE" -eq 1 ] && printf '%s' "$OUT" | grep -q "REFUSED" && printf '%s' "$OUT" | grep -qF 'https://***@evil.example/runcove/artifacts.git' \
-     && ! printf '%s' "$OUT" | grep -q 'p&ss'; then
+  if [ "$CODE" -eq 1 ] && grep -q "REFUSED" <<< "$OUT" && grep -qF 'https://***@evil.example/runcove/artifacts.git' <<< "$OUT" \
+     && ! grep -q 'p&ss' <<< "$OUT"; then
     pass "(a2) fd 3: a url full of shell characters is read as data, refused, redacted"
   else fail "(a2) fd 3 hostile url (code=$CODE)"; fi
   set +e
@@ -446,11 +446,11 @@ selftest() {
   set +e
   OUT=$(cd "$work" && printf '%s\n' "$seclne" | bash "$self" --args-on-fd3 3<<<"origin"$'\n'"https://git-ssh.tenfourty.site/runcove-sec/artifacts-sec.git" 2>&1); CODE=$?
   set -e
-  if [ "$CODE" -eq 1 ] && printf '%s' "$OUT" | grep -q "REFUSED"; then pass "(a2) fd 3: https on the ssh host is refused"; else fail "(a2) fd 3 https on the ssh host (code=$CODE)"; fi
+  if [ "$CODE" -eq 1 ] && grep -q "REFUSED" <<< "$OUT"; then pass "(a2) fd 3: https on the ssh host is refused"; else fail "(a2) fd 3 https on the ssh host (code=$CODE)"; fi
   set +e
   OUT=$(cd "$work" && printf '%s\n' "$seclne" | bash "$self" --args-on-fd3 2>&1); CODE=$?
   set -e
-  if [ "$CODE" -eq 1 ] && printf '%s' "$OUT" | grep -q "REFUSED"; then pass "(a2) fd 3 absent: a sec ref is refused"; else fail "(a2) fd 3 absent (code=$CODE)"; fi
+  if [ "$CODE" -eq 1 ] && grep -q "REFUSED" <<< "$OUT"; then pass "(a2) fd 3 absent: a sec ref is refused"; else fail "(a2) fd 3 absent (code=$CODE)"; fi
 
   # --- (c) every way to name a sec ref is seen, against the public url
   expect_refused "(c) sec/x"                       "$pub" "refs/heads/sec/x $sha refs/heads/sec/x $zero"$'\n'
@@ -467,7 +467,7 @@ selftest() {
   # Credentials in a refused url are never echoed.
   local pw="pw-${stage##*/}"
   run_guard "https://user:${pw}@evil.example/runcove/artifacts.git" "$seclne"$'\n'
-  if [ "$CODE" -eq 1 ] && ! printf '%s' "$OUT" | grep -q "$pw" && printf '%s' "$OUT" | grep -q 'https://\*\*\*@evil.example/'; then
+  if [ "$CODE" -eq 1 ] && ! grep -q "$pw" <<< "$OUT" && grep -q 'https://\*\*\*@evil.example/' <<< "$OUT"; then
     pass "(c) refusal redacts user:password in the url"
   else fail "(c) refusal redacts user:password (code=$CODE)"; fi
 
@@ -491,8 +491,8 @@ selftest() {
 
   # --- (f) deletions of a sec ref on the public remote: allowed, with a loud note
   run_guard "$pub" "(delete) $zero refs/heads/sec/x $sha"$'\n'
-  if [ "$CODE" -eq 0 ] && printf '%s' "$OUT" | grep -q "NOTE" && printf '%s' "$OUT" | grep -q "tell security" \
-     && ! printf '%s' "$OUT" | grep -q REFUSED; then
+  if [ "$CODE" -eq 0 ] && grep -q "NOTE" <<< "$OUT" && grep -q "tell security" <<< "$OUT" \
+     && ! grep -q REFUSED <<< "$OUT"; then
     pass "(f) deleting sec/x on the public remote allowed, with the note"
   else fail "(f) deleting sec/x on the public remote (code=$CODE)"; fi
   expect_ok "(f) deleting a tag under sec/"        "$pub" "(delete) $zero refs/tags/sec/v1 $sha"$'\n'
@@ -500,7 +500,7 @@ selftest() {
   expect_refused "(f) delete + push of another sec ref" "$pub" \
     "(delete) $zero refs/heads/sec/old $sha"$'\n'"refs/heads/sec/new $sha refs/heads/sec/new $zero"$'\n'
   run_guard https://git.tenfourty.site/runcove-sec/artifacts-sec.git "(delete) $zero refs/heads/sec/x $sha"$'\n'
-  if [ "$CODE" -eq 0 ] && ! printf '%s' "$OUT" | grep -q NOTE; then
+  if [ "$CODE" -eq 0 ] && ! grep -q NOTE <<< "$OUT"; then
     pass "(f) deleting sec/x on artifacts-sec itself: allowed, no note"
   else fail "(f) deleting sec/x on artifacts-sec itself (code=$CODE)"; fi
 
@@ -518,7 +518,7 @@ selftest() {
   expect_ok "(g) HEAD:main, detached" "$pub" "HEAD $sha refs/heads/main $sha2"$'\n' "$repo"
   # outside any repository git cannot answer, and a guard that cannot answer refuses
   run_guard "$pub" "HEAD $sha refs/heads/main $sha2"$'\n' "$stage"
-  if [ "$CODE" -eq 1 ] && printf '%s' "$OUT" | grep -q "REFUSED" && printf '%s' "$OUT" | grep -q "could not say"; then
+  if [ "$CODE" -eq 1 ] && grep -q "REFUSED" <<< "$OUT" && grep -q "could not say" <<< "$OUT"; then
     pass "(g) outside any repository: refused, fails closed"
   else fail "(g) outside any repository (code=$CODE)"; fi
 
@@ -564,7 +564,7 @@ selftest() {
   expect_carries "(h) a sha held only by a sec tag (peeled)" "$pub" "$h $h $rm_main $m1"$'\n' "$cr"
   expect_carries "(h) a branch SEC/upper, in capitals"  "$pub" "$u $u $rm_main $m1"$'\n' "$cr"
   run_guard "$pub" "HEAD~0 $f $rm_main $m1"$'\n' "$cr"
-  if printf '%s' "$OUT" | grep -q "carries the commits of refs/heads/sec/fix" && printf '%s' "$OUT" | grep -q 'HEAD~0 -> refs/heads/main'; then
+  if grep -q "carries the commits of refs/heads/sec/fix" <<< "$OUT" && grep -q 'HEAD~0 -> refs/heads/main' <<< "$OUT"; then
     pass "(h) the refusal names the sec ref it found"
   else fail "(h) the refusal names the sec ref it found"; fi
   # the sanity case: an ordinary push while sec branches exist but are not merged
@@ -600,7 +600,7 @@ selftest() {
   git -C "$c3" -c user.name=x -c user.email=x@example.invalid commit -q --allow-empty -m m0
   git -C "$c3" tag sec/blob "$(printf 'x' | git -C "$c3" hash-object -w --stdin)"
   run_guard "$pub" "$rm_main $(git -C "$c3" rev-parse HEAD) $rm_main $zero"$'\n' "$c3"
-  if [ "$CODE" -eq 1 ] && printf '%s' "$OUT" | grep -q "could not say"; then
+  if [ "$CODE" -eq 1 ] && grep -q "could not say" <<< "$OUT"; then
     pass "(h3) a sec tag that is no commit: refused, fails closed"
   else fail "(h3) a sec tag that is no commit (code=$CODE)"; fi
 

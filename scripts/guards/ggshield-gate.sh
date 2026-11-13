@@ -146,7 +146,7 @@ EOF
   log="$tmp/stub.log"
 
   check() { # check <name> <got-rc> <want-rc> <output> <must-contain>
-    if [ "$2" = "$3" ] && printf '%s' "$4" | grep -qi -- "$5"; then
+    if [ "$2" = "$3" ] && grep -qi -- "$5" <<< "$4"; then
       printf '  ok    %s\n' "$1"
     else
       printf '  FAIL  %s (rc=%s want %s, looking for "%s")\n' "$1" "$2" "$3" "$5"

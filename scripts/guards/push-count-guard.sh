@@ -197,8 +197,8 @@ selftest() {
 
   # (a) PUSH_COUNT unset, 2 outgoing -> refused, names PUSH_COUNT, shows 2 lines
   run_guard "$line_ab"
-  if [ "$CODE" -ne 0 ] && echo "$OUT" | grep -q "PUSH_COUNT" \
-     && [ "$(echo "$OUT" | grep -cE '^  [0-9a-f]{7,40} ')" -eq 2 ]; then
+  if [ "$CODE" -ne 0 ] && grep -q "PUSH_COUNT" <<< "$OUT" \
+     && [ "$(grep -cE '^  [0-9a-f]{7,40} ' <<< "$OUT")" -eq 2 ]; then
     echo "PASS (a) unset refused, names PUSH_COUNT, shows 2 lines"
   else
     echo "FAIL (a) unset with 2 outgoing: code=$CODE"; printf '%s\n' "$OUT" | sed 's/^/    /'; rc=1
@@ -206,7 +206,7 @@ selftest() {
 
   # (b) PUSH_COUNT=1, 2 outgoing -> refused, both numbers present
   run_guard "$line_ab" PUSH_COUNT=1
-  if [ "$CODE" -ne 0 ] && echo "$OUT" | grep -q "PUSH_COUNT=1" && echo "$OUT" | grep -q "2 commit"; then
+  if [ "$CODE" -ne 0 ] && grep -q "PUSH_COUNT=1" <<< "$OUT" && grep -q "2 commit" <<< "$OUT"; then
     echo "PASS (b) PUSH_COUNT=1 with 2 outgoing refused, both numbers present"
   else
     echo "FAIL (b) PUSH_COUNT=1 with 2 outgoing: code=$CODE"; printf '%s\n' "$OUT" | sed 's/^/    /'; rc=1
@@ -214,7 +214,7 @@ selftest() {
 
   # (c) PUSH_COUNT=2, 2 outgoing -> OK
   run_guard "$line_ab" PUSH_COUNT=2
-  if [ "$CODE" -eq 0 ] && echo "$OUT" | grep -q "OK, 2 commit"; then
+  if [ "$CODE" -eq 0 ] && grep -q "OK, 2 commit" <<< "$OUT"; then
     echo "PASS (c) PUSH_COUNT=2 with 2 outgoing allowed"
   else
     echo "FAIL (c) PUSH_COUNT=2 with 2 outgoing: code=$CODE"; printf '%s\n' "$OUT" | sed 's/^/    /'; rc=1
@@ -229,7 +229,7 @@ selftest() {
   fullcount=$(git -C "$clone" rev-list --count "$local3" --not --remotes)
   local line_d="refs/heads/feature $local3 refs/heads/feature $zero"
   run_guard "$line_d" "PUSH_COUNT=$fullcount"
-  if [ "$CODE" -eq 0 ] && echo "$OUT" | grep -q "OK, $fullcount commit"; then
+  if [ "$CODE" -eq 0 ] && grep -q "OK, $fullcount commit" <<< "$OUT"; then
     echo "PASS (d) new branch, PUSH_COUNT=$fullcount (commits not already on a remote) allowed"
   else
     echo "FAIL (d) new branch: code=$CODE fullcount=$fullcount"; printf '%s\n' "$OUT" | sed 's/^/    /'; rc=1
@@ -240,7 +240,7 @@ selftest() {
   git -C "$clone" checkout -q -b already-pushed "$local3"
   local line_g="refs/heads/already-pushed $local3 refs/heads/already-pushed $zero"
   run_guard "$line_g" PUSH_COUNT=0
-  if [ "$CODE" -eq 0 ] && echo "$OUT" | grep -q "OK, 0 commit"; then
+  if [ "$CODE" -eq 0 ] && grep -q "OK, 0 commit" <<< "$OUT"; then
     echo "PASS (g) new branch at an already-pushed commit, PUSH_COUNT=0 allowed"
   else
     echo "FAIL (g) new branch at already-pushed commit: code=$CODE"; printf '%s\n' "$OUT" | sed 's/^/    /'; rc=1
@@ -256,7 +256,7 @@ selftest() {
   git -C "$clone" tag v0-test "$local3"
   local line_h="refs/tags/v0-test $local3 refs/tags/v0-test $zero"
   run_guard "$line_h" PUSH_COUNT=0
-  if [ "$CODE" -eq 0 ] && echo "$OUT" | grep -q "OK, 0 commit"; then
+  if [ "$CODE" -eq 0 ] && grep -q "OK, 0 commit" <<< "$OUT"; then
     echo "PASS (h) tag on an already-pushed commit, PUSH_COUNT=0 allowed"
   else
     echo "FAIL (h) tag on already-pushed commit: code=$CODE"; printf '%s\n' "$OUT" | sed 's/^/    /'; rc=1
@@ -265,7 +265,7 @@ selftest() {
   # (i) no ref lines at all (a non-fast-forward push, measured live) -> refused
   # with the real reason, whatever PUSH_COUNT says.
   run_guard "" PUSH_COUNT=1
-  if [ "$CODE" -ne 0 ] && echo "$OUT" | grep -q "no refs at all"; then
+  if [ "$CODE" -ne 0 ] && grep -q "no refs at all" <<< "$OUT"; then
     echo "PASS (i) empty stdin refused, and names the non-fast-forward cause"
   else
     echo "FAIL (i) empty stdin: code=$CODE"; printf '%s\n' "$OUT" | sed 's/^/    /'; rc=1
@@ -279,7 +279,7 @@ selftest() {
 
   # (e) PUSH_COUNT=abc -> usage refusal
   run_guard "$line_ab" PUSH_COUNT=abc
-  if [ "$CODE" -ne 0 ] && echo "$OUT" | grep -qi "usage\|not a non-negative integer"; then
+  if [ "$CODE" -ne 0 ] && grep -qi "usage\|not a non-negative integer" <<< "$OUT"; then
     echo "PASS (e) PUSH_COUNT=abc refused with usage"
   else
     echo "FAIL (e) PUSH_COUNT=abc: code=$CODE"; printf '%s\n' "$OUT" | sed 's/^/    /'; rc=1
@@ -288,7 +288,7 @@ selftest() {
   # (f) deletion line -> zero commits, PUSH_COUNT=0 accepted, and only for it
   local line_del="refs/heads/main $zero refs/heads/main $remote0"
   run_guard "$line_del" PUSH_COUNT=0
-  if [ "$CODE" -eq 0 ] && echo "$OUT" | grep -q "OK, 0 commit"; then
+  if [ "$CODE" -eq 0 ] && grep -q "OK, 0 commit" <<< "$OUT"; then
     echo "PASS (f) deletion line skipped, PUSH_COUNT=0 allowed"
   else
     echo "FAIL (f) deletion line: code=$CODE"; printf '%s\n' "$OUT" | sed 's/^/    /'; rc=1

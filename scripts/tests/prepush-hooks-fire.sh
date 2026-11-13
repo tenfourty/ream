@@ -94,13 +94,13 @@ assert_fired() {
   local out
   out=$(cd "$CLONE" && env -u PUSH_COUNT "$@" 2>&1) || true
 
-  if printf '%s' "$out" | grep -q '(skip)'; then
+  if grep -q '(skip)' <<< "$out"; then
     echo "FAIL ($label): lefthook skipped a pre-push command — the hole is back:" >&2
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     rc=1
     return
   fi
-  if ! printf '%s' "$out" | grep -q 'push-count-guard: REFUSED -- PUSH_COUNT is not set'; then
+  if ! grep -q 'push-count-guard: REFUSED -- PUSH_COUNT is not set' <<< "$out"; then
     echo "FAIL ($label): push-count-guard's own refusal text is absent — it did not run:" >&2
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     rc=1
@@ -110,7 +110,7 @@ assert_fired() {
   # summary is printed for a skipped command too, so it proves nothing.
   # Either shape counts — the clone has no venv, so "SKIP (not installed)" is
   # the honest result on a machine where ruff is not on PATH.
-  if ! printf '%s' "$out" | grep -qE 'ruff: SKIP \(not installed\)|All checks passed'; then
+  if ! grep -qE 'ruff: SKIP \(not installed\)|All checks passed' <<< "$out"; then
     echo "FAIL ($label): the ruff pre-push command produced no output of its own — it did not run:" >&2
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     rc=1
@@ -162,13 +162,13 @@ assert_sec_refused() {
     rc=1
     return
   }
-  if printf '%s' "$out" | grep -q '(skip)'; then
+  if grep -q '(skip)' <<< "$out"; then
     echo "FAIL ($label): lefthook skipped a pre-push command:" >&2
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     rc=1
     return
   fi
-  if ! printf '%s' "$out" | grep -q 'sec-branch-guard: REFUSED'; then
+  if ! grep -q 'sec-branch-guard: REFUSED' <<< "$out"; then
     echo "FAIL ($label): sec-branch-guard's refusal is absent -- it did not run, or it let the push through:" >&2
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     rc=1
@@ -199,7 +199,7 @@ git -C "$CLONE" tag -d sec/v1 >/dev/null
 # would not let this clone push it.
 git -C "$BARE" update-ref refs/heads/sec/leaked "$HEAD_SHA"
 out=$(cd "$CLONE" && PUSH_COUNT=0 git push origin :sec/leaked 2>&1) && del_ok=1 || del_ok=0
-if [ "$del_ok" -eq 1 ] && printf '%s' "$out" | grep -q 'sec-branch-guard: NOTE' \
+if [ "$del_ok" -eq 1 ] && grep -q 'sec-branch-guard: NOTE' <<< "$out" \
    && ! git -C "$BARE" rev-parse -q --verify refs/heads/sec/leaked >/dev/null; then
   echo "PASS (sec ref deletion): allowed, with the note, and the ref is gone"
 else
@@ -216,8 +216,8 @@ HOSTILE="$STAGE/h o&s;touch $STAGE/PWN1;\$(touch $STAGE/PWN2)\`touch $STAGE/PWN3
 git init -q --bare "$HOSTILE"
 git -C "$CLONE" remote add hostile "$HOSTILE"
 out=$(cd "$CLONE" && PUSH_COUNT=0 git push hostile HEAD:refs/heads/sec/x 2>&1) && sec_ok=1 || sec_ok=0
-if [ "$sec_ok" -eq 0 ] && printf '%s' "$out" | grep -q 'sec-branch-guard: REFUSED' \
-   && printf '%s' "$out" | grep -qF "h o&s;touch" \
+if [ "$sec_ok" -eq 0 ] && grep -q 'sec-branch-guard: REFUSED' <<< "$out" \
+   && grep -qF "h o&s;touch" <<< "$out" \
    && ! git -C "$HOSTILE" rev-parse -q --verify refs/heads/sec/x >/dev/null; then
   echo "PASS (url with shell characters): sec ref refused, the url shown intact"
 else
