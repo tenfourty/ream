@@ -62,10 +62,12 @@
 #
 # FAIL CLOSED. Anything this cannot prove is a refusal: a missing .forgejo/workflows directory,
 # one with no workflow in it, a file that does not parse, a workflow with a duplicate key, a merge
-# key (<<), an anchor or alias, or a second document (Forgejo's parser and this one must read it
-# the same way), a symlink, or no jobs at all. A missing PyYAML is a failure, not a
-# skip. Why the directory matters: Forgejo reads .github/workflows ONLY when .forgejo/workflows does
-# not exist. This repo's .github/workflows/publish.yml (the GitHub mirror's PyPI release) is
+# key (<<), an anchor or alias, a second document, an explicit YAML tag (`!!str`, `!local`, `!`,
+# on a key or a value), or a mapping key that is not a string (the plain `on` key aside, which
+# PyYAML reads as true) (Forgejo's parser and this one must read it the same way), a symlink, or
+# no jobs at all. A missing PyYAML is a failure, not a skip. Why the directory matters: Forgejo
+# reads .github/workflows ONLY when .forgejo/workflows does not exist. This repo's
+# .github/workflows/publish.yml (the GitHub mirror's PyPI release) is
 # ignored while .forgejo/workflows exists; if that directory were ever renamed or emptied of its
 # files, Forgejo would fall back to publish.yml. Rule 3 keeps it out of the private copy.
 #
@@ -228,6 +230,10 @@ def refuse(where, why):
     problems.append(f"{SELF}: REFUSED {where}: {why}")
 
 
+class KeyNotString(yaml.YAMLError):
+    """A mapping key that does not load as a string (see Loader.construct_mapping)."""
+
+
 class Loader(yaml.SafeLoader):
     """SafeLoader that refuses what a second parser could read differently."""
 
@@ -237,6 +243,18 @@ class Loader(yaml.SafeLoader):
             if key_node.tag == MERGE_TAG:
                 raise yaml.YAMLError("a merge key (<<) is not allowed")
             key = self.construct_object(key_node, deep=True)
+            # Every mapping key must load as a string, so each rule below that looks a key up by
+            # its name sees every key. The one exception is the plain key `on`, which this
+            # YAML 1.1 parser reads as the boolean true (and the runner reads as the string "on").
+            plain_on = (
+                key is True and isinstance(key_node, yaml.ScalarNode)
+                and key_node.value == "on" and key_node.style is None
+            )
+            if not isinstance(key, str) and not plain_on:
+                raise KeyNotString(
+                    f"line {key_node.start_mark.line + 1}: a mapping key that is not a string "
+                    f"(a {type(key).__name__}): workflow files may use only string mapping keys [rule: string keys]"
+                )
             if key in seen:
                 raise yaml.YAMLError(f"duplicate key {key!r}")
             seen.add(key)
@@ -499,7 +517,16 @@ def check_file(path, rel):
             if isinstance(ev, yaml.AliasEvent) or getattr(ev, "anchor", None):
                 refuse(rel, "an anchor or alias: a parser could read it differently from Forgejo's")
                 return 0, 0
+            # Any explicit tag (`!!str`, `!!binary`, `!local`, `!`), on a key or a value, a scalar,
+            # a mapping or a sequence: PyYAML leaves `tag` None on every node written without one.
+            if getattr(ev, "tag", None) is not None:
+                line = ev.start_mark.line + 1
+                refuse(rel, f"line {line}: an explicit YAML tag ({str(ev.tag)[:80]}): workflow files may not use explicit YAML tags [rule: no explicit tags]")
+                return 0, 0
         docs = list(yaml.load_all(text, Loader=Loader))
+    except KeyNotString as e:
+        refuse(rel, str(e))
+        return 0, 0
     except (yaml.YAMLError, TypeError, ValueError) as e:
         refuse(rel, f"does not parse cleanly ({str(e).splitlines()[0] if str(e) else type(e).__name__})")
         return 0, 0
@@ -1495,11 +1522,15 @@ selftest() {
   supwf "$d" s1 runcove-sec-unpriv "    container:\n      image: node:22@$DG\n      env:\n        A: b\n      options: --cpus=2\n" "run: echo"
   case_ "supply: a container with image, env and options passes" 0 "$d"
   local ck
-  for ck in "credentials: {username: u, password: p}" "volumes: [\"/x:/y\"]" "ports: [\"80:80\"]" "network: host" "entrypoint: sh" "cmd: x" "Image: node:22@$DG" "OPTIONS: --privileged" "Env: {A: b}" "1: x"; do
+  for ck in "credentials: {username: u, password: p}" "volumes: [\"/x:/y\"]" "ports: [\"80:80\"]" "network: host" "entrypoint: sh" "cmd: x" "Image: node:22@$DG" "OPTIONS: --privileged" "Env: {A: b}" "\"1\": x"; do
     d=$tmp/sp_ck_${ck//[^A-Za-z0-9]/_}
     supwf "$d" s1 runcove-sec-unpriv "    container:\n      image: node:22@$DG\n      $ck\n" "run: echo"
-    case_ "supply: container key ${ck%%:*}" 1 "$d" "container has \`${ck%%:*}\`, which is not one of image, env, options (exact lower case) [rule: container keys]"
+    ck=${ck%%:*}
+    case_ "supply: container key $ck" 1 "$d" "container has \`${ck//\"/}\`, which is not one of image, env, options (exact lower case) [rule: container keys]"
   done
+  d=$tmp/sp_ck_int
+  supwf "$d" s1 runcove-sec-unpriv "    container:\n      image: node:22@$DG\n      1: x\n" "run: echo"
+  case_ "supply: container key 1 (an int key)" 1 "$d" "[rule: string keys]"
   d=$tmp/sp_ck_img
   supwf "$d" image runcove-sec "    container:\n      image: node:22@$DG\n      options: --privileged\n      OPTIONS: --privileged\n" "run: echo"
   case_ "supply: the image job's container is held to the keys too" 1 "$d" "container has \`OPTIONS\`"
@@ -1594,11 +1625,65 @@ selftest() {
   d=$tmp/sp_sv_listval
   supwf "$d" test runcove-sec-unpriv "    services: [postgres]\n" "run: echo"
   case_ "services: the key is not a mapping on an allowed job" 1 "$d" "job test: \`services\` is not a mapping [rule: services]"
-  for sk in "credentials: {username: u, password: p}" "volumes: [\"/x:/y\"]" "ports: [\"5432:5432\"]" "network: host" "entrypoint: sh" "cmd: x" "Image: postgres:18@$DG" "OPTIONS: --cpus=2" "Env: {A: b}" "1: x"; do
+  for sk in "credentials: {username: u, password: p}" "volumes: [\"/x:/y\"]" "ports: [\"5432:5432\"]" "network: host" "entrypoint: sh" "cmd: x" "Image: postgres:18@$DG" "OPTIONS: --cpus=2" "Env: {A: b}" "\"1\": x"; do
     d=$tmp/sp_sv_key_${sk//[^A-Za-z0-9]/_}
     supwf "$d" test runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18@$DG\n        $sk\n" "run: echo"
-    case_ "services: a service key ${sk%%:*}" 1 "$d" "job test: services.postgres has \`${sk%%:*}\`, which is not one of image, env, options (exact lower case) [rule: service keys]"
+    sk=${sk%%:*}
+    case_ "services: a service key $sk" 1 "$d" "job test: services.postgres has \`${sk//\"/}\`, which is not one of image, env, options (exact lower case) [rule: service keys]"
   done
+  d=$tmp/sp_sv_key_int
+  supwf "$d" test runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18@$DG\n        1: x\n" "run: echo"
+  case_ "services: a service key 1 (an int key)" 1 "$d" "[rule: string keys]"
+
+  # --- refusals: explicit YAML tags and mapping keys that are not strings ---
+  # Workflow files may not use explicit YAML tags (on a key or a value) or non-string mapping keys.
+  # The base64 words below are built here from plain key names, so no opaque blob is pasted.
+  local tg="[rule: no explicit tags]" sk_rule="[rule: string keys]" b64_services b64_container b64_uses
+  b64_services=$(printf services | base64)
+  b64_container=$(printf container | base64)
+  b64_uses=$(printf uses | base64)
+  d=$tmp/tag_services
+  supwf "$d" s1 runcove-sec-unpriv "    !!binary $b64_services:\n      redis:\n        image: redis:7\n" "run: echo"
+  case_ "tags: a !!binary key spelling services on a sec.yml job" 1 "$d" "$tg"
+  d=$tmp/tag_container
+  supwf "$d" s1 runcove-sec-unpriv "    !!binary $b64_container: node:22\n" "run: echo"
+  case_ "tags: a !!binary key spelling container on a sec.yml job" 1 "$d" "$tg"
+  d=$tmp/tag_uses
+  supwf "$d" s1 runcove-sec-unpriv "" "!!binary $b64_uses: actions/checkout@v4"
+  case_ "tags: a !!binary key spelling uses in a sec.yml step" 1 "$d" "$tg"
+  d=$tmp/tag_local
+  pubwf "$d" ci.yml "if: !local \"$G\""
+  case_ "tags: a !local tag on a value" 1 "$d" "$tg"
+  d=$tmp/tag_str
+  pubwf "$d" ci.yml "if: !!str \"$G\""
+  case_ "tags: a !!str tag (any explicit tag is refused)" 1 "$d" "$tg"
+  d=$tmp/tag_map
+  pubwf "$d" ci.yml "if: \"$G\"" "env: !!map {A: b}"
+  case_ "tags: a !!map tag on a mapping" 1 "$d" "$tg"
+  d=$tmp/tag_bare
+  pubwf "$d" ci.yml "if: ! \"$G\""
+  case_ "tags: the bare ! tag" 1 "$d" "$tg"
+  d=$tmp/tag_ghkey
+  mkdir -p "$d"
+  printf 'name: x\n"on": push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    if: "%s"\n    !!binary %s: [x]\n    steps:\n      - run: echo\n' "$H" "$(printf runs-on | base64)" >"$d/publish.yml"
+  gcase_ "tags: a !!binary key in a GitHub workflow" 1 "$d" "$tg"
+  d=$tmp/key_seq
+  pubwf "$d" ci.yml "if: \"$G\"" "? [a]
+    : x"
+  case_ "keys: a sequence as a mapping key" 1 "$d" "$sk_rule"
+  d=$tmp/key_int
+  pubwf "$d" ci.yml "if: \"$G\"" "env: {1: x}"
+  case_ "keys: an int mapping key" 1 "$d" "$sk_rule"
+  d=$tmp/key_null
+  pubwf "$d" ci.yml "if: \"$G\"" "~: x"
+  case_ "keys: a null mapping key" 1 "$d" "$sk_rule"
+  d=$tmp/key_true
+  pubwf "$d" ci.yml "if: \"$G\"" "true: x"
+  case_ "keys: a boolean key other than a plain on" 1 "$d" "$sk_rule"
+  d=$tmp/key_on
+  mkdir -p "$d"
+  printf 'name: x\non: push\njobs:\n  a:\n    runs-on: docker-light\n    if: "%s"\n    env: {"1": x}\n    steps:\n      - run: echo\n' "$G" >"$d/ci.yml"
+  case_ "keys: a plain on: and a quoted \"1\" key pass" 0 "$d" "1 workflow files"
 
   # Local actions (rule 4 reaches them too): no action.yml/action.yaml names SEC_RUNNER_NAME.
   acase_() { # <name> <want rc> <root> [<text>]
