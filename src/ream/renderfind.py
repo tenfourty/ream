@@ -433,11 +433,29 @@ UNAVAILABLE_NOTE = (
 )
 
 
-def renderer_unavailable() -> tuple[str, list[dict]]:
+# ... and of a render the renderer answered it did not run.
+NOT_RUN_NOTE = "the renderer did not render the page, so it was not checked"
+# ... and of a render whose results could not be stored.
+NOT_STORED_NOTE = (
+    "the render's results could not be stored, so the page was not checked"
+)
+
+
+def renderer_unavailable(
+    reason: str = "renderer_unavailable",
+) -> tuple[str, list[dict]]:
     """(verdict, findings) for a render the renderer (`REAM_RENDERER_URL`) gave no
-    usable answer for: `unchecked`, with one finding that says so. Kept apart from
-    "no browser here", which stores nothing and reads as not rendered."""
-    return "unchecked", [{"kind": "unchecked", "detail": UNAVAILABLE_NOTE}]
+    usable answer for (`reason` `renderwire.UNAVAILABLE`), or answered that it did
+    not render (`renderwire.NOT_RUN`): `unchecked`, with one finding that says
+    which. Kept apart from "no browser here", which stores nothing and reads as not
+    rendered."""
+    note = NOT_RUN_NOTE if reason == "renderer_not_run" else UNAVAILABLE_NOTE
+    return "unchecked", [{"kind": "unchecked", "detail": note}]
+
+
+def results_not_stored() -> tuple[str, list[dict]]:
+    """(verdict, findings) stored in place of a render's results that could not be."""
+    return "unchecked", [{"kind": "unchecked", "detail": NOT_STORED_NOTE}]
 
 
 def assess(

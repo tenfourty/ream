@@ -341,6 +341,24 @@ def test_no_browser_answers_not_run(client, monkeypatch, browser_runs):
     assert browser_runs == []
 
 
+def test_an_error_with_a_control_character_answers_not_run(
+    client, monkeypatch, browser_runs
+):
+    log = CONSOLE.replace("x is not", "x\x1b[2Jis not")
+
+    def fake_run(argv, **kw):
+        shot = next(a for a in argv if a.startswith("--screenshot="))
+        Path(shot.split("=", 1)[1]).write_bytes(png(W, H))
+        return subprocess.CompletedProcess(argv, 0, b"", log.encode())
+
+    monkeypatch.setattr(rendercore, "_run", fake_run)
+    r = client.post(f"/v1/render?w={W}&h={H}&check=1", content=PAGE, headers=HEADERS)
+    assert r.status_code == 200
+    report = renderwire.parse_answer(r.content, W, H)
+    assert tuple(report) == (None, None)
+    assert report.reason == renderwire.NOT_RUN
+
+
 # --- the work directory ----------------------------------------------------------------
 
 

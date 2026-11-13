@@ -19,9 +19,11 @@ body, answers 200 with JSON:
   * `not_run`: the browser did not run (timeout, memory, no turn, no start);
     `png_base64` and `check` are null and `errors` is empty.
 
-`call` is the app's side of that wire: one request to a renderer at
-`http://host:port` (`REAM_RENDERER_URL`), and anything short of a valid 200
-answer raises `RenderUnavailable`.
+`call` is the app's side of that wire: a request to a renderer at
+`http://host:port` (`REAM_RENDERER_URL`), asked once more after a 503's
+`Retry-After` when that fits in the deadline, and anything short of a valid 200
+answer raises `RenderUnavailable`. A `not_run` answer is a `Report` whose
+`reason` is NOT_RUN, so the app can say the renderer did not render.
 
 Standard library only, and nothing of the rest of `ream`, so the renderer can
 load it without the service around it. Errors are raised with a fixed phrase
@@ -39,6 +41,7 @@ import socket
 import struct
 import threading
 import time
+import unicodedata
 import zlib
 from urllib.parse import urlsplit
 
@@ -76,6 +79,13 @@ _IHDR_LENGTH = 13
 # The end chunk is always the same twelve bytes: no data, so a fixed CRC.
 _IEND = struct.pack(">I", 0) + b"IEND" + struct.pack(">I", zlib.crc32(b"IEND"))
 _PNG_MIN_BYTES = len(_PNG_MAGIC) + 4 + 4 + _IHDR_LENGTH + 4 + len(_IEND)
+# How many chunks a picture may hold (a browser's screenshot holds a few dozen).
+PNG_MAX_CHUNKS = 8192
+_PNG_CHUNK_MAX_LENGTH = 2**31 - 1
+# The bit depths each PNG colour type allows.
+_PNG_DEPTHS = {0: {1, 2, 4, 8, 16}, 2: {8, 16}, 3: {1, 2, 4, 8}, 4: {8, 16}, 6: {8, 16}}
+# A renderer busy: the longest Retry-After waited for (the call's deadline bounds it too).
+RETRY_AFTER_MAX_SECONDS = 10
 _DIGITS = re.compile(r"[0-9]{1,5}")
 
 
@@ -96,8 +106,11 @@ class RenderUnavailable(RuntimeError):
         super().__init__(UNAVAILABLE)
 
 
-# Why a render did not run, when that is not "no browser here" (`Report.reason`).
+# Why a render did not run, when that is not "no browser here" (`Report.reason`):
+# the renderer gave no usable answer, or answered that it did not render.
 UNAVAILABLE = "renderer_unavailable"
+NOT_RUN = "renderer_not_run"
+REASONS = (UNAVAILABLE, NOT_RUN)
 
 
 class Report(tuple):
@@ -123,26 +136,80 @@ def _is_int(value) -> bool:
 
 def validate_png(data: bytes, width: int, height: int) -> bytes:
     """`data` if it is a PNG of exactly `width` x `height`, else
-    RenderAnswerInvalid. Checks the signature, that the first chunk is a
-    13-byte IHDR with a correct CRC and the requested size, and that the data
-    ends with the IEND chunk. The pixels themselves are not decoded."""
+    RenderAnswerInvalid. Walks every chunk: the signature; each chunk's length
+    within the data and its CRC correct; at most PNG_MAX_CHUNKS of them; exactly
+    one IHDR, first, 13 bytes, of the size asked for, with a bit depth its colour
+    type allows (and compression, filter and interlace methods PNG has); at
+    least one IDAT; and IEND last, empty, with nothing after it. The pixels
+    themselves are not decoded."""
     if not isinstance(data, bytes):
         raise RenderAnswerInvalid("picture is not bytes")
     if len(data) > PNG_MAX_BYTES:
         raise RenderAnswerInvalid("picture is over the size limit")
     if not data.startswith(_PNG_MAGIC) or len(data) < _PNG_MIN_BYTES:
         raise RenderAnswerInvalid("picture is not a PNG")
-    (length,) = struct.unpack(">I", data[8:12])
-    if length != _IHDR_LENGTH or data[12:16] != b"IHDR":
-        raise RenderAnswerInvalid("picture's first chunk is not a PNG header")
-    (crc,) = struct.unpack(">I", data[29:33])
-    if crc != zlib.crc32(data[12:29]):
-        raise RenderAnswerInvalid("picture's header checksum is wrong")
-    if struct.unpack(">II", data[16:24]) != (width, height):
-        raise RenderAnswerInvalid("picture's size is not the size asked for")
-    if not data.endswith(_IEND):
-        raise RenderAnswerInvalid("picture has no end chunk")
+    view = memoryview(data)
+    pos, chunks, idat = len(_PNG_MAGIC), 0, False
+    while True:
+        if pos == len(data):
+            raise RenderAnswerInvalid("picture has no end chunk")
+        if len(data) - pos < 12:
+            raise RenderAnswerInvalid("picture has a chunk cut short")
+        (length,) = struct.unpack_from(">I", data, pos)
+        kind = data[pos + 4 : pos + 8]
+        if length > _PNG_CHUNK_MAX_LENGTH or len(data) - pos - 12 < length:
+            raise RenderAnswerInvalid("picture has a chunk cut short")
+        (crc,) = struct.unpack_from(">I", data, pos + 8 + length)
+        if crc != zlib.crc32(view[pos + 4 : pos + 8 + length]):
+            raise RenderAnswerInvalid("picture has a chunk checksum that is wrong")
+        chunks += 1
+        if chunks > PNG_MAX_CHUNKS:
+            raise RenderAnswerInvalid("picture has too many chunks")
+        if chunks == 1:
+            if kind != b"IHDR" or length != _IHDR_LENGTH:
+                raise RenderAnswerInvalid("picture's first chunk is not a PNG header")
+            _ihdr(data[pos + 8 : pos + 8 + length], width, height)
+        elif kind == b"IHDR":
+            raise RenderAnswerInvalid("picture has a second PNG header")
+        elif kind == b"IDAT":
+            idat = True
+        elif kind == b"IEND":
+            if length != 0:
+                raise RenderAnswerInvalid("picture has no end chunk")
+            if pos + 12 != len(data):
+                raise RenderAnswerInvalid("picture has bytes after its end chunk")
+            break
+        pos += 12 + length
+    if not idat:
+        raise RenderAnswerInvalid("picture has no image data")
     return data
+
+
+def _ihdr(fields: bytes, width: int, height: int) -> None:
+    w, h, depth, colour, compression, filtering, interlace = struct.unpack(
+        ">IIBBBBB", fields
+    )
+    if (w, h) != (width, height):
+        raise RenderAnswerInvalid("picture's size is not the size asked for")
+    if depth not in _PNG_DEPTHS.get(colour, ()):
+        raise RenderAnswerInvalid("picture's bit depth and colour type do not go")
+    if compression != 0 or filtering != 0 or interlace not in (0, 1):
+        raise RenderAnswerInvalid("picture's header names a method PNG has not")
+
+
+def check_error_text(item) -> str:
+    """`item` if it is a string a page's script error may be: no control character
+    (Unicode category Cc, tab and newline included) and nothing that does not
+    encode as UTF-8 (a lone surrogate). RenderAnswerInvalid otherwise."""
+    if not isinstance(item, str):
+        raise RenderAnswerInvalid("an error is not a short string")
+    try:
+        item.encode("utf-8")
+    except UnicodeEncodeError:
+        raise RenderAnswerInvalid("an error is not UTF-8") from None
+    if any(unicodedata.category(c) == "Cc" for c in item):
+        raise RenderAnswerInvalid("an error holds a control character")
+    return item
 
 
 def _errors(value) -> list[str]:
@@ -151,6 +218,7 @@ def _errors(value) -> list[str]:
     for item in value:
         if not isinstance(item, str) or len(item) > ERROR_MAX_CHARS:
             raise RenderAnswerInvalid("an error is not a short string")
+        check_error_text(item)
     return list(value)
 
 
@@ -205,7 +273,7 @@ def parse_answer(raw: bytes, width: int, height: int) -> Report:
     if outcome == "not_run":
         if encoded is not None or errors or check is not None:
             raise RenderAnswerInvalid("a render that did not run reports nothing")
-        return Report(None, None, None)
+        return Report(None, None, None, reason=NOT_RUN)
     if outcome == "no_picture":
         if encoded is not None:
             raise RenderAnswerInvalid("answer has a picture it says it has not")
@@ -291,6 +359,18 @@ def parse_request_query(query: str | bytes) -> tuple[int, int, bool]:
     return width, height, flag == "1"
 
 
+class _Busy(Exception):
+    """The renderer answered 503; `after` is its Retry-After in seconds, or None."""
+
+    def __init__(self, after: int | None) -> None:
+        super().__init__()
+        self.after = after
+
+
+# Waits between the two tries of a busy renderer (a test's to replace).
+_sleep = time.sleep
+
+
 def call(url: str, html: str, width: int, height: int, check: bool) -> Report:
     """Render `html` (already stamped) at `width` x `height` on the renderer at
     `url` (`http://host:port`), and return its answer as a `Report`. Raises
@@ -298,8 +378,11 @@ def call(url: str, html: str, width: int, height: int, check: bool) -> Report:
     `parse_answer`: no answer within CONNECT_TIMEOUT_SECONDS, the whole call
     over CALL_DEADLINE_SECONDS (a timer cuts the socket, so an answer dripped a
     byte at a time cannot hold it open), any other status (a redirect is never
-    followed, a 503 is not waited out), or an answer over RESPONSE_MAX_BYTES or
-    failing a check. No proxy is used: the request goes to `url` itself."""
+    followed), or an answer over RESPONSE_MAX_BYTES or failing a check. A 503
+    is asked once more after its `Retry-After` (whole seconds, at most
+    RETRY_AFTER_MAX_SECONDS), when the second try can start within the same
+    deadline; a 503 without one, or a second 503, is unavailable. No proxy is
+    used: the request goes to `url` itself."""
     parts = urlsplit(url)
     try:
         host, port = parts.hostname, parts.port
@@ -310,7 +393,33 @@ def call(url: str, html: str, width: int, height: int, check: bool) -> Report:
     body = html.encode("utf-8")
     target = f"/v1/render?w={int(width)}&h={int(height)}&check={1 if check else 0}"
     deadline = time.monotonic() + CALL_DEADLINE_SECONDS
-    conn = http.client.HTTPConnection(host, port, timeout=CONNECT_TIMEOUT_SECONDS)
+    try:
+        return _ask(host, port, target, body, width, height, deadline)
+    except _Busy as busy:
+        if busy.after is None or time.monotonic() + busy.after >= deadline:
+            raise RenderUnavailable() from None
+        _sleep(busy.after)
+    try:
+        return _ask(host, port, target, body, width, height, deadline)
+    except _Busy:
+        raise RenderUnavailable() from None
+
+
+def _retry_after(value: str | None) -> int | None:
+    if value is None or not re.fullmatch(r"[0-9]{1,3}", value):
+        return None
+    after = int(value)
+    return after if after <= RETRY_AFTER_MAX_SECONDS else None
+
+
+def _ask(host, port, target, body, width, height, deadline) -> Report:
+    """One request of `call`'s, all of it before `deadline` (monotonic)."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise RenderUnavailable()
+    conn = http.client.HTTPConnection(
+        host, port, timeout=min(CONNECT_TIMEOUT_SECONDS, left)
+    )
     # A dup of the connected socket's descriptor, for the timer: http.client drops
     # `conn.sock` once a response says it will close, while the response reads on.
     handle: list[socket.socket] = []
@@ -324,7 +433,7 @@ def call(url: str, html: str, width: int, height: int, check: bool) -> Report:
             except OSError:
                 pass
 
-    timer = threading.Timer(CALL_DEADLINE_SECONDS, cut)
+    timer = threading.Timer(left, cut)
     timer.daemon = True
     timer.start()
     try:
@@ -347,6 +456,8 @@ def call(url: str, html: str, width: int, height: int, check: bool) -> Report:
             },
         )
         response = conn.getresponse()
+        if response.status == 503:
+            raise _Busy(_retry_after(response.getheader("Retry-After")))
         if response.status != 200:
             raise RenderUnavailable()
         declared = response.getheader("Content-Length")
@@ -358,7 +469,7 @@ def call(url: str, html: str, width: int, height: int, check: bool) -> Report:
         if len(raw) > RESPONSE_MAX_BYTES:
             raise RenderUnavailable()
         return parse_answer(raw, width, height)
-    except RenderUnavailable:
+    except (RenderUnavailable, _Busy):
         raise
     except (OSError, http.client.HTTPException, RenderAnswerInvalid, ValueError):
         raise RenderUnavailable() from None

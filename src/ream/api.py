@@ -2287,8 +2287,8 @@ def agent_router(
             _PREVIEW_SLOT.release()
         verdict, findings = "unchecked", []
         reason = getattr(report, "reason", None)
-        if reason == renderwire.UNAVAILABLE:
-            verdict, findings = renderfind.renderer_unavailable()
+        if reason in renderwire.REASONS:
+            verdict, findings = renderfind.renderer_unavailable(reason)
         elif errors is not None:
             missing, live = thumbs.scan_for_findings(body)
             verdict, findings = renderfind.assess(
@@ -2306,7 +2306,7 @@ def agent_router(
         }
         if reason:
             # Why nothing was rendered, when it is not the page's doing: the
-            # renderer (REAM_RENDERER_URL) gave no usable answer.
+            # renderer (REAM_RENDERER_URL) gave no usable answer, or did not render.
             answer["reason"] = reason
         return answer
 

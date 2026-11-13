@@ -253,12 +253,114 @@ def test_a_redirect_is_not_followed_and_is_unchecked(db, page, stub_renderer):
     assert len(stub_renderer.requests) == 1
 
 
-def test_a_busy_renderer_is_unchecked_and_not_waited_out(db, page, stub_renderer):
-    stub_renderer.answer = lambda h: _send(h, 503, b"busy\n", Retry_After="5")
-    started = time.monotonic()
+@pytest.fixture()
+def slept(monkeypatch):
+    waits = []
+    monkeypatch.setattr(renderwire, "_sleep", waits.append)
+    return waits
+
+
+def test_a_busy_renderer_is_asked_once_more_after_its_retry_after(
+    db, page, stub_renderer, slept
+):
+    answers = iter([lambda h: _send(h, 503, b"busy\n", Retry_After="5"), valid, valid])
+    stub_renderer.answer = lambda h: next(answers)(h)
+    assert render(db, page, stub_renderer.url) == {
+        "rendered": True,
+        "errors": [],
+        "verdict": "ok",
+        "findings": [],
+    }
+    assert store.live_thumbnail(db, page.id) == png(900, 640)
+    assert slept == [5]
+    assert len(stub_renderer.requests) == 2
+
+
+def test_a_renderer_busy_twice_is_unchecked(db, page, stub_renderer, slept):
+    stub_renderer.answer = lambda h: _send(h, 503, b"busy\n", Retry_After="1")
     assert render(db, page, stub_renderer.url) == UNAVAILABLE
-    assert time.monotonic() - started < 2.5
+    assert slept == [1]
+    assert len(stub_renderer.requests) == 2
+
+
+@pytest.mark.parametrize("after", [None, "soon", "-1", "1.5", "11", "9999"])
+def test_a_busy_renderer_without_a_usable_retry_after_is_not_asked_again(
+    db, page, stub_renderer, slept, after
+):
+    headers = {} if after is None else {"Retry_After": after}
+    stub_renderer.answer = lambda h: _send(h, 503, b"busy\n", **headers)
+    assert render(db, page, stub_renderer.url) == UNAVAILABLE
+    assert slept == []
     assert len(stub_renderer.requests) == 1
+
+
+def test_a_retry_that_would_pass_the_deadline_is_not_made(
+    db, page, stub_renderer, slept, monkeypatch
+):
+    monkeypatch.setattr(renderwire, "CALL_DEADLINE_SECONDS", 4.0)
+    stub_renderer.answer = lambda h: _send(h, 503, b"busy\n", Retry_After="5")
+    assert render(db, page, stub_renderer.url) == UNAVAILABLE
+    assert slept == []
+    assert len(stub_renderer.requests) == 1
+
+
+def test_the_retry_really_waits_within_the_deadline(stub_renderer):
+    answers = iter([lambda h: _send(h, 503, b"busy\n", Retry_After="1"), valid])
+    stub_renderer.answer = lambda h: next(answers)(h)
+    started = time.monotonic()
+    report = renderwire.call(stub_renderer.url, PAGE, 900, 640, check=True)
+    assert report[0] == png(900, 640)
+    assert 1.0 <= time.monotonic() - started < renderwire.CALL_DEADLINE_SECONDS
+
+
+def test_a_renderer_that_did_not_render_is_unchecked_and_says_so(
+    db, page, stub_renderer
+):
+    not_run = json.dumps(
+        {"v": 1, "outcome": "not_run", "png_base64": None, "errors": [], "check": None}
+    ).encode()
+    stub_renderer.answer = lambda h: _send(h, 200, not_run)
+    assert render(db, page, stub_renderer.url) == {
+        **UNAVAILABLE,
+        "findings": [{"kind": "unchecked", "detail": renderfind.NOT_RUN_NOTE}],
+    }
+    assert store.live_thumbnail(db, page.id) is None
+
+
+def test_results_that_cannot_be_stored_are_stored_as_unchecked(
+    db, page, stub_renderer, monkeypatch
+):
+    stub_renderer.answer = valid
+    real = store.save_render_errors
+    calls = []
+
+    def first_fails(db, *args, **kw):
+        calls.append(args)
+        if len(calls) == 1:
+            raise RuntimeError("the write failed")
+        return real(db, *args, **kw)
+
+    monkeypatch.setattr(store, "save_render_errors", first_fails)
+    got = render(db, page, stub_renderer.url)
+    assert got["verdict"] == "unchecked"
+    assert got["findings"] == [
+        {"kind": "unchecked", "detail": renderfind.NOT_STORED_NOTE}
+    ]
+    assert store.live_thumbnail(db, page.id) == png(900, 640)
+
+
+def test_no_picture_is_kept_when_no_results_can_be_stored(
+    db, page, stub_renderer, monkeypatch
+):
+    stub_renderer.answer = valid
+
+    def fails(*args, **kw):
+        raise RuntimeError("the write failed")
+
+    monkeypatch.setattr(store, "save_render_errors", fails)
+    got = render(db, page, stub_renderer.url)
+    assert got["rendered"] is False
+    assert store.live_thumbnail(db, page.id) is None
 
 
 def test_an_unusable_answer_counts_as_a_failed_render_for_the_retries(

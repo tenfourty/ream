@@ -178,6 +178,29 @@ def test_a_renderer_with_no_usable_answer_still_answers_200_with_a_reason(
 
 
 @pytest.mark.background_thumbnails
+def test_a_renderer_that_did_not_render_answers_200_with_its_own_reason(
+    api, auth, remote
+):
+    import json
+
+    from ream import renderfind, renderwire
+
+    not_run = {
+        "v": 1,
+        "outcome": "not_run",
+        "png_base64": None,
+        "errors": [],
+        "check": None,
+    }
+    remote.answer = lambda h: _reply(h, 200, json.dumps(not_run).encode())
+    got = api.post("/api/v1/preview", json={"body": PAGE}, headers=auth).json()
+    assert got["rendered"] is False and got["renderer"] is True
+    assert got["verdict"] == "unchecked"
+    assert got["findings"] == [{"kind": "unchecked", "detail": renderfind.NOT_RUN_NOTE}]
+    assert got["reason"] == renderwire.NOT_RUN
+
+
+@pytest.mark.background_thumbnails
 def test_a_renderer_that_is_not_there_still_answers_200_with_a_reason(
     api, auth, monkeypatch
 ):

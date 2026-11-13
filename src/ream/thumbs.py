@@ -163,6 +163,17 @@ def scan_for_findings(html: str) -> tuple[list[str] | None, bool | None]:
         return None, None
 
 
+def _save_results(db, key, errors, verdict, findings) -> None:
+    """Store a render's results; if that fails, store `unchecked` with a finding
+    that says the results could not be stored (and raise if that fails too)."""
+    try:
+        store.save_render_errors(db, key[0], key[1], errors, verdict, findings)
+    except Exception:
+        log.exception("render results could not be stored for %s v%s", *key)
+        verdict, findings = renderfind.results_not_stored()
+        store.save_render_errors(db, key[0], key[1], [], verdict, findings)
+
+
 def render_in_background(db, artifact_id: str, version_n: int, html: str) -> None:
     """Render and store a thumbnail after the publish has already returned.
 
@@ -196,21 +207,20 @@ def render_in_background(db, artifact_id: str, version_n: int, html: str) -> Non
             result = render_report(html)
             png, errors = result
             _record(key, png is not None)
-            if png is not None:
-                store.save_thumbnail(db, artifact_id, version_n, png)
-            if getattr(result, "reason", None) == renderwire.UNAVAILABLE:
-                verdict, findings = renderfind.renderer_unavailable()
-                store.save_render_errors(
-                    db, artifact_id, version_n, [], verdict, findings
-                )
+            reason = getattr(result, "reason", None)
+            if reason in renderwire.REASONS:
+                verdict, findings = renderfind.renderer_unavailable(reason)
+                _save_results(db, key, [], verdict, findings)
             elif errors is not None:
                 missing, live = scan_for_findings(html)
                 verdict, findings = renderfind.assess(
                     errors, getattr(result, "check", None), missing, live
                 )
-                store.save_render_errors(
-                    db, artifact_id, version_n, errors, verdict, findings
-                )
+                _save_results(db, key, errors, verdict, findings)
+            # The picture after its results: if those could be stored neither as
+            # they are nor as unchecked, the version keeps no picture either.
+            if png is not None:
+                store.save_thumbnail(db, artifact_id, version_n, png)
         except Exception:  # a decoration may never reach the caller
             log.exception(
                 "thumbnail rendering failed for %s v%s", artifact_id, version_n

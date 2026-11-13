@@ -36,6 +36,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import threading
@@ -278,6 +279,28 @@ def console_errors(stderr: str) -> list[str]:
     return found
 
 
+def _read_shot(path: Path) -> bytes:
+    """The screenshot's bytes, at most one past `renderwire.PNG_MAX_BYTES` (so a
+    larger one is refused as over the limit). Opened without following a symlink
+    and without waiting on a FIFO, and read only if it is a regular file; OSError
+    otherwise."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("the screenshot is not a regular file")
+        want = renderwire.PNG_MAX_BYTES + 1
+        parts = []
+        while want > 0:
+            part = os.read(fd, min(want, 1024 * 1024))
+            if not part:
+                break
+            parts.append(part)
+            want -= len(part)
+        return b"".join(parts)
+    finally:
+        os.close(fd)
+
+
 def screenshot(
     binary: str,
     html: str,
@@ -388,9 +411,17 @@ def screenshot(
             if e.split(": ", 1)[-1] not in seen
         ][: _MAX_ERRORS - len(errors)]
         check = renderfind.parse_check(log_text, nonce)
+        # The same rule for an error's text as a renderer's answer (`renderwire`):
+        # one with a control character, or not UTF-8, makes the render unchecked.
+        try:
+            for error in errors:
+                renderwire.check_error_text(error)
+        except renderwire.RenderAnswerInvalid as exc:
+            log.warning("thumbnail render gave errors that cannot be kept: %s", exc)
+            return None, None
 
         try:
-            data = shot.read_bytes()
+            data = _read_shot(shot)
         except OSError:
             log.warning("thumbnail render produced no file")
             return Report(None, errors, check)
