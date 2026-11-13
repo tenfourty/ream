@@ -45,23 +45,24 @@ def _run(args, key_path, monkeypatch, session="cove/1") -> int:
 
 
 def test_another_offices_answer_does_not_wake_you_and_your_own_does(
-    db, live, key_file, page, capsys, monkeypatch, on_first_listen
+    db, live, key_file, page, capsys, monkeypatch, on_listen
 ):
     path, _ = key_file
     theirs = _ask(db, page, "homelab/2", "theirs?")
     mine = _ask(db, page, "cove/1", "mine?")
 
-    def both():
-        _answer(db, theirs, "homelab note")
-        time.sleep(0.5)
-        _answer(db, mine, "cove note")
-
-    listener = on_first_listen(both)
+    # Theirs lands during the first hold; mine only once the waiter is holding
+    # again, so the two never share a hold however loaded the machine is.
+    first = on_listen(1, lambda: _answer(db, theirs, "homelab note"))
+    second = on_listen(2, lambda: _answer(db, mine, "cove note"))
     assert _run(["wait", "--timeout", "40s"], path, monkeypatch) == 0
-    listener.thread.join(10)
-    # Theirs ended the first hold (the feed is the key's) and was dropped; the
-    # waiter held again, and its own answer ended the second.
-    assert listener.held == 2, listener.held
+    for listener in (first, second):
+        listener.thread.join(10)
+        assert not listener.thread.is_alive(), "an answer never landed"
+    # Theirs ended the first hold (the feed is the key's; a hold it did not
+    # end would run to the 40 s limit and exit 3) and was dropped; the waiter
+    # held again, and its own answer ended the second.
+    assert second.held == 2, second.held
     out = capsys.readouterr().out
     assert "cove note" in out
     assert "homelab note" not in out, "someone else's answer never wakes you"

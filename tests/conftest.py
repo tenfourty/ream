@@ -636,12 +636,17 @@ def brief_holds(monkeypatch):
 
 
 class _Listener:
-    """What `on_first_listen` armed: the thread that acts, and how many held
-    requests the waiter made."""
+    """What `on_first_listen` (or `on_listen`) armed: the thread that acts, and
+    how many held requests the waiter made (counted across every action armed
+    in the same test)."""
 
-    def __init__(self, thread: threading.Thread) -> None:
+    def __init__(self, thread: threading.Thread, counts: list[int]) -> None:
         self.thread = thread
-        self.held = 0
+        self._counts = counts
+
+    @property
+    def held(self) -> int:
+        return self._counts[0]
 
     def woke_the_first_hold(self) -> None:
         """Join the action and assert the waiter made exactly ONE held request:
@@ -654,43 +659,56 @@ class _Listener:
 
 
 @pytest.fixture()
-def on_first_listen(monkeypatch):
-    """`arm(action)`: run `action` in a thread the moment an `artifacts-decide`
-    waiter first asks the server to HOLD -- i.e. while it is listening, which is
-    what these tests are about -- instead of after a guessed sleep. Returns a
-    `_Listener`; call `woke_the_first_hold()` after the waiter returns.
+def on_listen(monkeypatch):
+    """`arm(n, action)`: run `action` in a thread the moment an `artifacts-decide`
+    waiter asks the server to HOLD for the n-th time -- i.e. once it is
+    listening again -- instead of after a guessed sleep. Call it once per
+    action; each call returns a `_Listener` whose `held` counts every held
+    request the waiter made.
 
     Refuses to arm under `brief_holds`: with the server's hold capped, a hold
     that never wakes early still "passes", because the next request finds the
     event."""
     from ream import decide
 
-    def arm(action):
+    real = decide._request
+    counts = [0]
+    actions: dict[int, _Listener] = {}
+
+    def listening(method, url, *args, **kwargs):
+        if "&wait=" in url:
+            counts[0] += 1
+            armed = actions.get(counts[0])
+            if armed is not None:
+                armed.thread.start()
+        return real(method, url, *args, **kwargs)
+
+    def arm(n, action):
         assert events.wait_for_agent is _REAL_WAIT_FOR_AGENT, (
             "a wake test must not use brief_holds: capped holds hide a hold"
             " that never wakes"
         )
-        real = decide._request
-        fired = threading.Event()
+        assert n not in actions, f"hold {n} is armed already"
 
         def go():
             time.sleep(0.05)  # let the held request reach the server first
             action()
 
-        listener = _Listener(threading.Thread(target=go, daemon=True))
-
-        def listening(method, url, *args, **kwargs):
-            if "&wait=" in url:
-                listener.held += 1
-                if not fired.is_set():
-                    fired.set()
-                    listener.thread.start()
-            return real(method, url, *args, **kwargs)
-
+        listener = actions[n] = _Listener(
+            threading.Thread(target=go, daemon=True), counts
+        )
         monkeypatch.setattr(decide, "_request", listening)
         return listener
 
     return arm
+
+
+@pytest.fixture()
+def on_first_listen(on_listen):
+    """`arm(action)`: `on_listen`'s `arm(1, action)` -- run `action` the moment
+    the waiter first asks the server to HOLD. Call `woke_the_first_hold()` on
+    the returned `_Listener` after the waiter returns."""
+    return lambda action: on_listen(1, action)
 
 
 @pytest.fixture()
