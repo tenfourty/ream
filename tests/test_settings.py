@@ -316,3 +316,60 @@ def test_mcp_takes_keys_unless_told_not_to():
         assert current.mcp_accepts_keys() is True
     with settings.override(**on, mcp_accept_keys="0") as current:
         assert current.mcp_accepts_keys() is False
+
+
+@pytest.mark.parametrize(
+    "values,problem",
+    [
+        ({"renderer_url": "http://renderer.svc:8091"}, None),
+        ({"renderer_url": "http://127.0.0.1:8091"}, None),
+        ({"renderer_url": "http://[::1]:8091"}, None),
+        ({"renderer_url": "http://renderer.svc"}, "must be http://host:port"),
+        ({"renderer_url": "https://renderer.svc:8091"}, "must be http://host:port"),
+        ({"renderer_url": "renderer.svc:8091"}, "must be http://host:port"),
+        ({"renderer_url": "http://renderer.svc:8091/"}, "must be http://host:port"),
+        ({"renderer_url": "http://renderer.svc:8091/x"}, "must be http://host:port"),
+        ({"renderer_url": "http://renderer.svc:8091?a=1"}, "must be http://host:port"),
+        ({"renderer_url": "http://renderer.svc:8091?"}, "must be http://host:port"),
+        ({"renderer_url": "http://renderer.svc:8091#f"}, "must be http://host:port"),
+        ({"renderer_url": "http://u:p@renderer.svc:8091"}, "must be http://host:port"),
+        ({"renderer_url": "http://u@renderer.svc:8091"}, "must be http://host:port"),
+        ({"renderer_url": "http://renderer.svc\\x:8091"}, "must be http://host:port"),
+        ({"renderer_url": "http://renderer.svc:8091 "}, "must be http://host:port"),
+        ({"renderer_url": "http://render er.svc:8091"}, "must be http://host:port"),
+        ({"renderer_url": "http://renderer.svc:99999"}, "must be http://host:port"),
+        ({"renderer_url": "http://renderer.svc:"}, "must be http://host:port"),
+        (
+            {"renderer_url": "http://artifacts.tenfourty.site:8091"},
+            "a host other than",
+        ),
+        (
+            {"renderer_url": "http://API.example:8091", "api_host": "api.example"},
+            "a host other than",
+        ),
+        (
+            {
+                "renderer_url": "http://old.example.:8091",
+                "former_host": "old.example",
+            },
+            "a host other than",
+        ),
+    ],
+)
+def test_the_renderer_url_is_checked_at_start(values, problem):
+    with settings.override(**values) as current:
+        found = [p for p in current.problems() if "RENDERER_URL" in p]
+    if problem is None:
+        assert found == []
+    else:
+        assert len(found) == 1 and problem in found[0], found
+        assert "renderer.svc" not in found[0] and "example" not in found[0]
+
+
+def test_the_renderer_url_is_unset_by_default_and_read_under_both_names(
+    fresh, monkeypatch
+):
+    assert settings.current().renderer_url == ""
+    assert not [p for p in settings.current().problems() if "RENDERER" in p]
+    monkeypatch.setenv("ARTIFACTS_RENDERER_URL", "http://renderer.svc:8091")
+    assert settings.current().renderer_url == "http://renderer.svc:8091"

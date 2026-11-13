@@ -51,8 +51,8 @@ log = logging.getLogger("ream.renderd")
 
 # The fixed header every render request carries. Not a secret: it makes any
 # request a browser could send without asking first come out as a 403.
-HEADER = b"x-ream-render"
-HEADER_VALUE = b"1"
+HEADER = renderwire.RENDER_HEADER.lower().encode("ascii")
+HEADER_VALUE = renderwire.RENDER_HEADER_VALUE.encode("ascii")
 # How long a request waits for the one browser before answering 503.
 SLOT_WAIT_SECONDS = 5
 RETRY_AFTER_SECONDS = 5

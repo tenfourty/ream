@@ -19,6 +19,10 @@ body, answers 200 with JSON:
   * `not_run`: the browser did not run (timeout, memory, no turn, no start);
     `png_base64` and `check` are null and `errors` is empty.
 
+`call` is the app's side of that wire: one request to a renderer at
+`http://host:port` (`REAM_RENDERER_URL`), and anything short of a valid 200
+answer raises `RenderUnavailable`.
+
 Standard library only, and nothing of the rest of `ream`, so the renderer can
 load it without the service around it. Errors are raised with a fixed phrase
 and never quote the bytes they refused.
@@ -27,10 +31,15 @@ and never quote the bytes they refused.
 from __future__ import annotations
 
 import binascii
+import http.client
 import json
 import re
+import socket
 import struct
+import threading
+import time
 import zlib
+from urllib.parse import urlsplit
 
 WIRE_VERSION = 1
 
@@ -49,6 +58,13 @@ PNG_BASE64_MAX_CHARS = 4 * ((PNG_MAX_BYTES + 2) // 3)
 WIDTH_MIN, WIDTH_MAX = 320, 1600
 HEIGHT_MIN, HEIGHT_MAX = 320, 4000
 QUERY_MAX_CHARS = 256
+# The header every render request carries, and the renderer requires (a fixed value,
+# not a secret: a request a browser could be made to send never carries it).
+RENDER_HEADER = "X-Ream-Render"
+RENDER_HEADER_VALUE = "1"
+# The app's call: how long to wait for the renderer to accept, and for the whole call.
+CONNECT_TIMEOUT_SECONDS = 2.0
+CALL_DEADLINE_SECONDS = 30.0
 
 OUTCOMES = ("rendered", "no_picture", "not_run")
 _ANSWER_KEYS = frozenset({"v", "outcome", "png_base64", "errors", "check"})
@@ -70,17 +86,33 @@ class RenderRequestInvalid(ValueError):
     """A render request's query failed a check (a 400). A fixed phrase."""
 
 
+class RenderUnavailable(RuntimeError):
+    """The renderer gave no usable answer: it could not be reached, was too slow,
+    was busy, or answered something that failed a check. One fixed phrase, never
+    anything of the response."""
+
+    def __init__(self) -> None:
+        super().__init__(UNAVAILABLE)
+
+
+# Why a render did not run, when that is not "no browser here" (`Report.reason`).
+UNAVAILABLE = "renderer_unavailable"
+
+
 class Report(tuple):
     """`(png or None, script errors)`, which is all most callers unpack, with
     the check script's numbers (or None: it did not report) kept alongside as
-    `.check`. A tuple, so a caller and a test double that know only two things
+    `.check`, and `.reason` (None, or UNAVAILABLE: the renderer gave no usable
+    answer). A tuple, so a caller and a test double that know only two things
     keep working."""
 
     check: dict | None
+    reason: str | None
 
-    def __new__(cls, png, errors, check=None):
+    def __new__(cls, png, errors, check=None, reason=None):
         self = super().__new__(cls, (png, errors))
         self.check = check
+        self.reason = reason
         return self
 
 
@@ -256,3 +288,72 @@ def parse_request_query(query: str | bytes) -> tuple[int, int, bool]:
     if flag not in ("0", "1"):
         raise RenderRequestInvalid("query check is not 0 or 1")
     return width, height, flag == "1"
+
+
+def call(url: str, html: str, width: int, height: int, check: bool) -> Report:
+    """Render `html` (already stamped) at `width` x `height` on the renderer at
+    `url` (`http://host:port`), and return its answer as a `Report`. Raises
+    RenderUnavailable for anything short of a 200 whose answer passes
+    `parse_answer`: no answer within CONNECT_TIMEOUT_SECONDS, the whole call
+    over CALL_DEADLINE_SECONDS (a timer cuts the socket, so an answer dripped a
+    byte at a time cannot hold it open), any other status (a redirect is never
+    followed, a 503 is not waited out), or an answer over RESPONSE_MAX_BYTES or
+    failing a check. No proxy is used: the request goes to `url` itself."""
+    parts = urlsplit(url)
+    try:
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        raise RenderUnavailable() from None
+    if parts.scheme != "http" or not host or port is None:
+        raise RenderUnavailable()
+    body = html.encode("utf-8")
+    target = f"/v1/render?w={int(width)}&h={int(height)}&check={1 if check else 0}"
+    deadline = time.monotonic() + CALL_DEADLINE_SECONDS
+    conn = http.client.HTTPConnection(host, port, timeout=CONNECT_TIMEOUT_SECONDS)
+
+    def cut() -> None:
+        sock = conn.sock
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    timer = threading.Timer(CALL_DEADLINE_SECONDS, cut)
+    timer.daemon = True
+    timer.start()
+    try:
+        conn.connect()
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise RenderUnavailable()
+        conn.sock.settimeout(left)
+        conn.request(
+            "POST",
+            target,
+            body,
+            {
+                RENDER_HEADER: RENDER_HEADER_VALUE,
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Length": str(len(body)),
+            },
+        )
+        response = conn.getresponse()
+        if response.status != 200:
+            raise RenderUnavailable()
+        declared = response.getheader("Content-Length")
+        if declared is not None and (
+            not declared.isdigit() or int(declared) > RESPONSE_MAX_BYTES
+        ):
+            raise RenderUnavailable()
+        raw = response.read(RESPONSE_MAX_BYTES + 1)
+        if len(raw) > RESPONSE_MAX_BYTES:
+            raise RenderUnavailable()
+        return parse_answer(raw, width, height)
+    except RenderUnavailable:
+        raise
+    except (OSError, http.client.HTTPException, RenderAnswerInvalid, ValueError):
+        raise RenderUnavailable() from None
+    finally:
+        timer.cancel()
+        conn.close()

@@ -179,6 +179,10 @@ class Settings:
     backup_dir: str = ""
     tools_dir: str = "/app/dist"
     browser: str = ""
+    # A renderer running as its own process (`python -m ream.renderd`), as http://host:port.
+    # Set: renders are sent there and this process never starts a browser (REAM_BROWSER is
+    # not read). Unset: the browser runs in this process, as on a fresh install.
+    renderer_url: str = ""
     # The command-line tools' endpoint (`REAM_API`); see HOUSE_DEFAULT_API.
     api_url: str = HOUSE_DEFAULT_API
     # Served text (3.4): what the service calls itself, the line under every shipped template,
@@ -324,8 +328,53 @@ class Settings:
                 "the inbound partner bridge needs the outbound one: set "
                 + ", ".join(PARTNER_OUT)
             )
+        found.extend(self._renderer_problems(parts.hostname or ""))
         found.extend(self._mcp_problems())
         return found
+
+    def _renderer_problems(self, gallery_host: str) -> list[str]:
+        raw = self.renderer_url
+        if not raw:
+            return []
+        parts = urlsplit(raw)
+        try:
+            port = parts.port
+        except ValueError:
+            port = None
+        if (
+            "\\" in raw
+            or any(c.isspace() for c in raw)
+            or parts.scheme != "http"
+            or not parts.hostname
+            or port is None
+            or parts.path
+            or parts.query
+            or parts.fragment
+            or "?" in raw
+            or "#" in raw
+            or parts.username is not None
+            or parts.password is not None
+        ):
+            return [
+                (
+                    "REAM_RENDERER_URL must be http://host:port (an explicit port; no"
+                    " path, query, fragment, credentials, backslash or space)"
+                )
+            ]
+        host = parts.hostname.lower().removesuffix(".")
+        others = {
+            gallery_host.lower().removesuffix("."),
+            self.api_host.strip().lower().removesuffix("."),
+            self.former_host.strip().lower().removesuffix("."),
+        } - {""}
+        if host in others:
+            return [
+                (
+                    "REAM_RENDERER_URL must name a host other than the gallery's,"
+                    " REAM_API_HOST and REAM_FORMER_HOST"
+                )
+            ]
+        return []
 
     def _mcp_problems(self) -> list[str]:
         found = []
@@ -558,6 +607,7 @@ _ENV = {
     "backup_dir": "REAM_BACKUP_DIR",
     "tools_dir": "REAM_TOOLS_DIR",
     "browser": "REAM_BROWSER",
+    "renderer_url": "REAM_RENDERER_URL",
     "api_url": "REAM_API",
     "product": "REAM_PRODUCT",
     "footer": "REAM_FOOTER",
