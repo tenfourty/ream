@@ -2,7 +2,7 @@
 
 Pure functions, no browser: the check script added to the render copy, the
 reading of the one line it logs, the static missing-file check, and the verdict
-that sums them up. `thumbs.py` runs the browser and calls these.
+that sums them up. `rendercore.py` runs the browser and calls these.
 
 A finding is never "fine by default": no check line is `unchecked`, and a page
 that stops scripts can only get that. A page can forge nothing without the
