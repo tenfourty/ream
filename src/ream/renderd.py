@@ -26,8 +26,9 @@ browser profile and cache under the work directory, which is emptied at start
 and after each render. The process is a child subreaper
 (`prctl(PR_SET_CHILD_SUBREAPER)`, Linux only; it refuses to start without it), so a
 browser helper orphaned by a render is reparented to it rather than to pid 1. After
-each render no process descended from it may be left alive; if one is, the process
-logs it and exits non-zero so that whatever supervises it starts a fresh one.
+each render no process descended from it (nor one of its uid whose parent
+went while the list was read) may be left alive, on two lists of processes read apart; if one is,
+the process logs it and exits non-zero so that whatever supervises it starts a fresh one.
 """
 
 from __future__ import annotations
@@ -58,6 +59,10 @@ RETRY_AFTER_SECONDS = 5
 # After a render, how long the browser's processes have to be gone.
 STRAY_GRACE_SECONDS = 2.0
 STRAY_POLL_SECONDS = 0.05
+# Clean means two empty lists of what is left, read this far apart.
+STRAY_CONFIRM_SECONDS = 0.1
+# A process listed in /proc but gone before it could be read.
+GONE = "gone"
 EXIT_REFUSED = 2
 EXIT_STRAY = 3
 # prctl(2) options: make this process the reaper of its orphaned descendants.
@@ -119,10 +124,13 @@ def _empty(path: Path) -> bool:
 # --- what is left of a render ----------------------------------------------------------
 
 
-def _read_procs() -> list[tuple[int, int, str]]:
-    """Every process in /proc as `(pid, parent pid, state)`. A process that goes
-    while being read is skipped. Threads are not listed: /proc lists only
-    processes, so uvicorn's and asyncio's worker threads never appear here."""
+def _read_procs() -> list[tuple[int, int, str, int]]:
+    """Every process in /proc as `(pid, parent pid, state, real uid)`. Threads are
+    not listed: /proc lists only processes, so uvicorn's and asyncio's worker
+    threads never appear here. The entries are read one by one, so the list is not
+    one instant: a process listed in /proc that is gone before its own entry could
+    be read appears as `(pid, -1, GONE, -1)`, so that a child read just before it
+    went, still naming it as parent, can be told apart (see `leftovers`)."""
     found = []
     for entry in os.listdir("/proc"):
         if not entry.isdigit():
@@ -131,29 +139,49 @@ def _read_procs() -> list[tuple[int, int, str]]:
             with open(f"/proc/{entry}/status") as f:
                 text = f.read()
         except OSError:
+            found.append((int(entry), -1, GONE, -1))
             continue
         fields = {}
         for line in text.splitlines():
             key, _, value = line.partition(":")
             fields[key] = value.split()
         try:
-            found.append((int(entry), int(fields["PPid"][0]), fields["State"][0]))
+            found.append(
+                (
+                    int(entry),
+                    int(fields["PPid"][0]),
+                    fields["State"][0],
+                    int(fields["Uid"][0]),
+                )
+            )
         except (KeyError, IndexError, ValueError):
-            continue
+            found.append((int(entry), -1, GONE, -1))
     return found
 
 
-def leftovers(procs, me: int) -> list[int]:
-    """The pids in `procs` descended from `me` (following PPid links down from it),
-    alive and not zombies: what a render left running. As a subreaper this process
-    inherits whatever the browser orphaned, so an orphaned grandchild is a child
-    of `me` by the time it is read here. A process merely of the same uid that this
-    process did not start (a pod's exec probe, the user's shell, another job on a
-    shared machine) is not a descendant and does not count."""
+def leftovers(procs, me: int, uid: int) -> list[int]:
+    """What a render left running, in `procs` (`(pid, ppid, state, uid)`), alive
+    and not zombies:
+
+      * every process descended from `me` (following PPid links down from it). As
+        a subreaper this process inherits whatever the browser orphaned, so an
+        orphaned grandchild is a child of `me` by the time it is read here;
+      * every process of `uid` whose parent went while the list was being read
+        (listed, but GONE), unless it is one of `me`'s own ancestors: a browser
+        process read just before its parent exited still names that parent, and
+        so looks cut off from the tree. It is counted rather than missed.
+
+    A parent never listed at all is not that case: /proc may hide other users'
+    processes (`hidepid`), and a process whose parent is hidden is not one this
+    process started. A process merely of the same uid that this process did not
+    start (a pod's exec probe, the user's shell, another job on a shared machine)
+    does not count."""
     children: dict[int, list[int]] = {}
+    parent = {}
     state = {}
-    for pid, ppid, st in procs:
+    for pid, ppid, st, _ in procs:
         children.setdefault(ppid, []).append(pid)
+        parent[pid] = ppid
         state[pid] = st
     found: set[int] = set()
     todo = list(children.get(me, ()))
@@ -163,13 +191,26 @@ def leftovers(procs, me: int) -> list[int]:
             continue
         found.add(pid)
         todo.extend(children.get(pid, ()))
-    return sorted(pid for pid in found if state[pid] != "Z")
+    ancestors: set[int] = set()
+    up = parent.get(me)
+    while up in parent and up not in ancestors:
+        ancestors.add(up)
+        up = parent[up]
+    for pid, ppid, _, owner in procs:
+        if (
+            owner == uid
+            and state.get(ppid) == GONE
+            and pid != me
+            and pid not in ancestors
+        ):
+            found.add(pid)
+    return sorted(pid for pid in found if state[pid] not in ("Z", GONE))
 
 
 def _reap_zombies(procs, me: int) -> None:
     """Wait on every zombie child of `me`, without blocking: a subreaper inherits
     the browser's orphans, and nothing else would ever reap them."""
-    for pid, ppid, st in procs:
+    for pid, ppid, st, _ in procs:
         if ppid == me and st == "Z":
             try:
                 os.waitpid(pid, os.WNOHANG)
@@ -178,13 +219,24 @@ def _reap_zombies(procs, me: int) -> None:
 
 
 def _strays_after_render() -> list[int]:
-    me = os.getpid()
+    """What the last render left running, after up to STRAY_GRACE_SECONDS for it
+    to go. Clean only when two lists read STRAY_CONFIRM_SECONDS apart both show
+    nothing: one list is not one instant, so a single empty one is not proof."""
+    me, uid = os.getpid(), os.getuid()
     deadline = time.monotonic() + STRAY_GRACE_SECONDS
+    clean_once = False
     while True:
         procs = _read_procs()
         _reap_zombies(procs, me)
-        left = leftovers(procs, me)
-        if not left or time.monotonic() >= deadline:
+        left = leftovers(procs, me, uid)
+        if not left:
+            if clean_once:
+                return []
+            clean_once = True
+            time.sleep(STRAY_CONFIRM_SECONDS)
+            continue
+        clean_once = False
+        if time.monotonic() >= deadline:
             return left
         time.sleep(STRAY_POLL_SECONDS)
 

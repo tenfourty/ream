@@ -79,8 +79,11 @@ def app(work, exits, monkeypatch):
     a process list holding only this process, so nothing is left after a render."""
     monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(renderd, "STRAY_GRACE_SECONDS", 0)
-    me = os.getpid()
-    monkeypatch.setattr(renderd, "_read_procs", lambda: [(me, 1, "S")])
+    monkeypatch.setattr(renderd, "STRAY_CONFIRM_SECONDS", 0)
+    me, uid = os.getpid(), os.getuid()
+    monkeypatch.setattr(
+        renderd, "_read_procs", lambda: [(1, 0, "S", 0), (me, 1, "S", uid)]
+    )
     return renderd.Renderd(work, exit=exits.append)
 
 
@@ -407,28 +410,106 @@ def test_a_long_work_directory_is_refused_at_start(monkeypatch, capsys):
 
 
 def test_leftovers_are_live_descendants_of_this_process_only():
-    me = 50
+    me, uid = 50, 1000
     procs = [
-        (1, 0, "S"),  # its supervisor
-        (40, 1, "S"),  # its parent
-        (50, 40, "S"),  # itself
-        (60, 50, "S"),  # a child left running
-        (61, 60, "S"),  # ...and that child's child
-        (62, 50, "S"),  # an orphaned grandchild, reparented to this subreaper
-        (63, 50, "Z"),  # a zombie: runs nothing
-        (70, 1, "S"),  # same uid, not started by it: an exec probe, a shell
-        (71, 70, "S"),  # ...and what that started
-        (80, 40, "S"),  # a sibling under the same parent
+        (1, 0, "S", 0),  # its supervisor
+        (40, 1, "S", uid),  # its parent
+        (50, 40, "S", uid),  # itself
+        (60, 50, "S", uid),  # a child left running
+        (61, 60, "S", uid),  # ...and that child's child
+        (62, 50, "S", uid),  # an orphaned grandchild, reparented to this subreaper
+        (63, 50, "Z", uid),  # a zombie: runs nothing
+        (70, 1, "S", uid),  # same uid, not started by it: an exec probe, a shell
+        (71, 70, "S", uid),  # ...and what that started
+        (80, 40, "S", uid),  # a sibling under the same parent
     ]
-    assert renderd.leftovers(procs, me) == [60, 61, 62]
-    assert renderd.leftovers([(1, 0, "S"), (50, 1, "S")], me) == []
+    assert renderd.leftovers(procs, me, uid) == [60, 61, 62]
+    assert renderd.leftovers([(1, 0, "S", 0), (50, 1, "S", uid)], me, uid) == []
+
+
+def test_a_process_of_its_uid_whose_parent_went_mid_read_is_a_leftover():
+    # The list is read entry by entry: a browser helper read just before its
+    # parent exited still names that parent, which was listed but gone by the
+    # time its own entry was read.
+    me, uid = 50, 1000
+    gone = renderd.GONE
+    procs = [
+        (1, 0, "S", 0),
+        (50, 1, "S", uid),
+        (77, -1, gone, -1),  # listed, gone before it was read
+        (90, 77, "S", uid),  # its child, of this uid: a leftover
+        (91, 77, "S", 0),  # another uid's: not this process's concern
+        (92, 77, "Z", uid),  # a zombie: runs nothing
+        (93, 0, "S", uid),  # parent 0: a namespace's first process
+        (94, 1490, "S", uid),  # parent never listed (hidepid hides it): not ours
+    ]
+    assert renderd.leftovers(procs, me, uid) == [90]
+
+
+def test_an_ancestor_whose_parent_went_mid_read_is_not_a_leftover():
+    me, uid = 50, 1000
+    procs = [(30, -1, renderd.GONE, -1), (40, 30, "S", uid), (50, 40, "S", uid)]
+    assert renderd.leftovers(procs, me, uid) == []
+
+
+def test_the_process_reader_lists_an_unreadable_entry_as_gone(monkeypatch, tmp_path):
+    real_open = open
+
+    def fake_listdir(path):
+        assert path == "/proc"
+        return ["self", "424246", str(os.getpid())]
+
+    def fake_open(path, *a, **kw):
+        if path == "/proc/424246/status":
+            raise FileNotFoundError(path)
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(renderd.os, "listdir", fake_listdir)
+    monkeypatch.setattr("builtins.open", fake_open)
+    procs = renderd._read_procs()
+    assert (424246, -1, renderd.GONE, -1) in procs
+    assert [p[0] for p in procs] == [424246, os.getpid()]
+
+
+def test_one_empty_list_is_not_enough_to_call_a_render_clean(monkeypatch):
+    # The first list misses the leftover (its parent went mid-read and it was
+    # read as nobody's); the second, read a moment later, shows it.
+    me, uid = os.getpid(), os.getuid()
+    base = [(1, 0, "S", 0), (me, 1, "S", uid)]
+    lists = iter([base, base + [(424245, me, "S", uid)]])
+    slept = []
+    monkeypatch.setattr(renderd, "STRAY_GRACE_SECONDS", 0)
+    monkeypatch.setattr(renderd, "_read_procs", lambda: next(lists))
+    monkeypatch.setattr(renderd.time, "sleep", slept.append)
+    assert renderd._strays_after_render() == [424245]
+    assert slept == [renderd.STRAY_CONFIRM_SECONDS]
+
+
+def test_two_empty_lists_apart_call_a_render_clean(monkeypatch):
+    me, uid = os.getpid(), os.getuid()
+    base = [(1, 0, "S", 0), (me, 1, "S", uid)]
+    reads = []
+
+    def read():
+        reads.append(1)
+        return base
+
+    slept = []
+    monkeypatch.setattr(renderd, "STRAY_GRACE_SECONDS", 0)
+    monkeypatch.setattr(renderd, "_read_procs", read)
+    monkeypatch.setattr(renderd.time, "sleep", slept.append)
+    assert renderd._strays_after_render() == []
+    assert len(reads) == 2
+    assert slept == [renderd.STRAY_CONFIRM_SECONDS]
+    assert renderd.STRAY_CONFIRM_SECONDS == pytest.approx(0.1)
 
 
 def _after_a_render_with(client, monkeypatch, procs):
-    me = os.getpid()
+    me, uid = os.getpid(), os.getuid()
     listed = [
-        (me, 1, "S"),
-        *((pid, me if ppid == "me" else ppid, st) for pid, ppid, st in procs),
+        (1, 0, "S", 0),
+        (me, 1, "S", uid),
+        *((pid, me if ppid == "me" else ppid, st, uid) for pid, ppid, st in procs),
     ]
     monkeypatch.setattr(renderd, "_read_procs", lambda: listed)
     return client.post(f"/v1/render?w={W}&h={H}", content=PAGE, headers=HEADERS)
@@ -477,7 +558,7 @@ def test_nothing_left_means_no_exit(client, exits, browser_runs):
 
 def test_the_process_reader_sees_this_process():
     mine = [p for p in renderd._read_procs() if p[0] == os.getpid()]
-    assert mine and mine[0][1] == os.getppid()
+    assert mine and mine[0][1] == os.getppid() and mine[0][3] == os.getuid()
 
 
 SUBREAPER_CHECK = """
@@ -491,8 +572,8 @@ pid = int(subprocess.run(["sh", "-c", "sleep 30 >/dev/null 2>&1 & echo $!"], cap
                          text=True, check=True).stdout)
 try:
     procs = renderd._read_procs()
-    assert dict((p, pp) for p, pp, _ in procs)[pid] == os.getpid()
-    assert pid in renderd.leftovers(procs, os.getpid())
+    assert dict((p[0], p[1]) for p in procs)[pid] == os.getpid()
+    assert pid in renderd.leftovers(procs, os.getpid(), os.getuid())
 finally:
     os.kill(pid, 9)
     os.waitpid(pid, 0)
