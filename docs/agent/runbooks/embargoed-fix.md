@@ -38,7 +38,10 @@ fix touches none of them until release.
    pinned to a full commit (or a `docker://` digest), every container and service image to an
    `@sha256:` digest, the docker CLI download is checked against a pinned sha256, and the test jobs
    install uv with `workflow-runner-guard.sh --install-uv` (a pinned, sha256-checked release); only
-   the `image` job may carry host-privilege container options. To move a pin, change the commit,
+   the `image` job's `dind` service (at its pinned digest) may carry `--privileged`, and only the
+   jobs `test`, `test-sqlite` and `core-bare` (postgres) and `image` (dind) may start service
+   containers at all; a service holds only `image`, `env` and `options`. Moving the dind digest also
+   means `DIND_IMAGE` in the guard. To move a pin, change the commit,
    digest or hash in the same commit and run the guard's selftest. It holds
    `.github/workflows` too (the GitHub mirror's `publish.yml`): every job there is gated to
    `github.repository == 'tenfourty/ream'`, so a forge setting or version that reads that folder still

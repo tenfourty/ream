@@ -49,7 +49,15 @@
 #      @sha256: digest; and, in every job but `image`, a container or service sets only
 #      allow-listed `options:` flags (health checks and resource limits, no templating) and no
 #      `volumes:` or `ports:`; a job's `container:` mapping (in every job, `image` too) holds only the
-#      keys image, env and options, written in lower case. The two env values SEC_REGISTRY_OWNER (exactly runcove-sec) and SEC_REGISTRY_USER (a plain login)
+#      keys image, env and options, written in lower case. `services:` is allowed only where sec.yml
+#      uses it today: SEC_SERVICES below (test, test-sqlite and core-bare: postgres; image: dind). On
+#      any other job the key is refused in any letter case (even an empty mapping), the private
+#      workflow's other jobs start no service containers; on those jobs the key is exactly
+#      `services`, a mapping of only those service names, and each entry a mapping holding only the
+#      keys image, env and options, in lower case (no ports, volumes, credentials, entrypoint, cmd),
+#      in `image` too. `--privileged` is allowed in exactly one place: the `dind` service of the
+#      `image` job at the digest DIND_IMAGE; every other container or service, in every job, is held
+#      to the allow-listed health and limit flags. The two env values SEC_REGISTRY_OWNER (exactly runcove-sec) and SEC_REGISTRY_USER (a plain login)
 #      are checked, and no job or step sets them again.
 #
 # FAIL CLOSED. Anything this cannot prove is a refusal: a missing .forgejo/workflows directory,
@@ -249,6 +257,17 @@ ALLOWED_OPTIONS = {
 # The only keys a job's `container:` mapping may hold, exactly as written (a mis-cased key is
 # refused, not read: `OPTIONS` is not checked as `options`). Any job of sec.yml, `image` included.
 CONTAINER_KEYS = ("image", "env", "options")
+# The one image that may run with `--privileged`: the docker-in-docker service of the `image` job.
+# Moving its digest is a change here as well as in sec.yml (the guard's selftest says which is stale).
+DIND_IMAGE = "docker:28-dind@sha256:2a232a42256f70d78e3cc5d2b5d6b3276710a0de0596c145f627ecfae90282ac"
+# The only jobs of sec.yml that start service containers, and the service names each may start. A
+# service entry holds the same keys as a `container:` mapping. Adding a service is a change to this table.
+SEC_SERVICES = {
+    "test": ("postgres",),
+    "test-sqlite": ("postgres",),
+    "core-bare": ("postgres",),
+    "image": ("dind",),
+}
 OPTION_VALUE = re.compile(r"[A-Za-z0-9._:/+-]+")
 
 
@@ -280,6 +299,10 @@ def option_problems(opts):
     return out
 
 
+def describe_sec_services():
+    return "; ".join(f"{j}: {', '.join(n)}" for j, n in SEC_SERVICES.items())
+
+
 def check_sec_job_supply(where, jid, job):
     """sec.yml: every action pinned to a commit or digest, no host privilege outside `image`, images by digest."""
     for st in job.get("steps") if isinstance(job.get("steps"), list) else []:
@@ -290,11 +313,27 @@ def check_sec_job_supply(where, jid, job):
     boxes = []
     if "container" in job:
         boxes.append(("container", job["container"]))
+    allowed = SEC_SERVICES.get(jid, ())
+    for key in job:
+        if isinstance(key, str) and key.lower() == "services" and not allowed:
+            refuse(where, f"`{key}` on job {jid}: the private workflow's jobs may start no service containers except {describe_sec_services()} [rule: services]")
+        elif isinstance(key, str) and key.lower() == "services" and key != "services":
+            refuse(where, f"job {jid} has `{key}`, which must be written exactly `services` (lower case) [rule: services]")
     svcs = job.get("services")
-    if isinstance(svcs, dict):
-        boxes += [(f"services.{k}", v) for k, v in svcs.items()]
-    elif svcs is not None:
-        refuse(where, "`services` is not a mapping")
+    if "services" in job and allowed:
+        if not isinstance(svcs, dict):
+            refuse(where, f"job {jid}: `services` is not a mapping [rule: services]")
+        else:
+            for k, v in svcs.items():
+                if k not in allowed:
+                    refuse(where, f"job {jid}: service `{k}` is not allowed (this job may start only {', '.join(allowed)}) [rule: services]")
+                if not isinstance(v, dict):
+                    refuse(where, f"job {jid}: service `{k}` is not a mapping [rule: service keys]")
+                    continue
+                for sk in v:
+                    if sk not in CONTAINER_KEYS:
+                        refuse(where, f"job {jid}: services.{k} has `{sk}`, which is not one of {', '.join(CONTAINER_KEYS)} (exact lower case) [rule: service keys]")
+            boxes += [(f"services.{k}", v) for k, v in svcs.items() if isinstance(v, dict)]
     if isinstance(job.get("container"), dict):
         for key in job["container"]:
             if key not in CONTAINER_KEYS:
@@ -303,12 +342,16 @@ def check_sec_job_supply(where, jid, job):
         img = box if isinstance(box, str) else box.get("image") if isinstance(box, dict) else None
         if not (isinstance(img, str) and IMAGE_DIGEST.fullmatch(img.strip())):
             refuse(where, f"{name} image is not pinned by an @sha256: digest")
-        if isinstance(box, dict) and jid != SEC_IMAGE_JOB:
+        if isinstance(box, dict):
+            # `--privileged` has exactly one home: the dind service of the `image` job, at its pinned
+            # image. Everything else (a container: anywhere, any other service, dind under another
+            # job or at another digest) is held to the allow-listed health and limit flags.
+            if (jid, name) == (SEC_IMAGE_JOB, "services.dind") and isinstance(img, str) and img.strip() == DIND_IMAGE:
+                if box.get("options") not in (None, "--privileged"):
+                    refuse(where, f"{name}: `options` is {box.get('options')!r}; the one privileged service may carry only `--privileged` [rule: dind options]")
+                continue
             for why in option_problems(box.get("options")):
                 refuse(where, f"{name}: {why}")
-            for key in ("volumes", "ports"):
-                if key in box:
-                    refuse(where, f"{name} has `{key}`")
 
 
 def tokenize(s):
@@ -1390,13 +1433,14 @@ selftest() {
   # Supply chain and host privilege in sec.yml (rule 6): every `uses:` a commit or digest, every
   # image a digest, only allow-listed options outside `image`.
   local SHA=11d5960a326750d5838078e36cf38b85af677262 DG=sha256:e3d24f6906d0760bf4da0dae872415391ededefad23fd471c47dc53b0ddf3c42
+  local DIND=docker:28-dind@sha256:2a232a42256f70d78e3cc5d2b5d6b3276710a0de0596c145f627ecfae90282ac
   # supwf <dir> <job id> <runs-on> <extra job lines, printf %b> <step line>
   supwf() {
     mkdir -p "$1"
     printf 'name: s\n"on": push\njobs:\n  %s:\n    runs-on: %s\n%b    steps:\n      - %s\n' "$2" "$3" "$4" "$5" >"$1/sec.yml"
   }
   d=$tmp/sp_ok
-  supwf "$d" s1 runcove-sec-unpriv "    services:\n      pg:\n        image: postgres:18@$DG\n        options: --health-cmd=pg_isready\n" "uses: actions/checkout@$SHA"
+  supwf "$d" test runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18@$DG\n        options: --health-cmd=pg_isready\n" "uses: actions/checkout@$SHA"
   case_ "supply: a sha-pinned action, a digest image and a plain options value pass" 0 "$d"
   d=$tmp/sp_dock
   supwf "$d" s1 runcove-sec-unpriv "" "uses: docker://alpine@sha256:${DG#sha256:}"
@@ -1408,7 +1452,7 @@ selftest() {
     case_ "supply: uses: $u" 1 "$d" "is not owner/repo@<40 hex commit>"
   done
   d=$tmp/sp_img
-  supwf "$d" s1 runcove-sec-unpriv "    services:\n      pg:\n        image: postgres:18\n" "run: echo"
+  supwf "$d" test runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18\n" "run: echo"
   case_ "supply: a service image by tag" 1 "$d" "image is not pinned by an @sha256: digest"
   d=$tmp/sp_cimg
   supwf "$d" s1 runcove-sec-unpriv "    container: node:22\n" "run: echo"
@@ -1416,7 +1460,7 @@ selftest() {
   local opt
   for opt in "--privileged" "-v /var/run/docker.sock:/var/run/docker.sock" "--volume=/:/host" "--volume /:/host" "--mount type=bind,src=/,dst=/h" "--cap-add SYS_ADMIN" "--device /dev/kvm" "--pid=host" "--network=host" "--net host" "--security-opt seccomp=unconfined" "--userns=host" "--ipc=host" "--health-cmd x -v/x:/y" "--runtime runc" "--publish 80:80" "-P" "--sysctl a=b" "--tmpfs /t" "--group-add 0" "--add-host a:1.2.3.4" "--env-file /e" "--link x" "--health-cmd=x --init" "\${{ vars.OPTS }}" "--memory \${{ env.M }}" "--memory=\${{vars.M}}" "--cpus --privileged" "--memory 1g" "--cpus=" "--cpus=2  --memory=1g" "--cpus=\"2\"" "--cpus='2'"; do
     d=$tmp/sp_o_${opt//[^A-Za-z0-9]/_}
-    supwf "$d" s1 runcove-sec-unpriv "    services:\n      pg:\n        image: postgres:18@$DG\n        options: $opt\n" "run: echo"
+    supwf "$d" test runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18@$DG\n        options: $opt\n" "run: echo"
     case_ "supply: service options $opt" 1 "$d" "options"
   done
   # Values YAML decodes to characters a shell-word splitter would treat differently: written as
@@ -1425,7 +1469,7 @@ selftest() {
   for ctl in '--cpus=2\t--memory=1g' '--cpus=2\n--privileged' '--cpus=2\r--privileged' '--cpus=2\v--privileged' '--cpus=2\f--privileged' '--cpus=2\\--privileged' '--cpus=2\x00' '--cpus=2 --privileged' '--cpus=2 --memory=é1g'; do
     d=$tmp/sp_c_${ctl//[^A-Za-z0-9]/_}
     mkdir -p "$d"
-    printf 'name: s\n"on": push\njobs:\n  s1:\n    runs-on: runcove-sec-unpriv\n    services:\n      pg:\n        image: postgres:18@%s\n        options: "%s"\n    steps:\n      - run: echo\n' "$DG" "$ctl" >"$d/sec.yml"
+    printf 'name: s\n"on": push\njobs:\n  test:\n    runs-on: runcove-sec-unpriv\n    services:\n      postgres:\n        image: postgres:18@%s\n        options: "%s"\n    steps:\n      - run: echo\n' "$DG" "$ctl" >"$d/sec.yml"
     case_ "supply: options with the escape $ctl" 1 "$d" "options"
   done
   # Each options rule pinned by a case that fails when that rule alone is dropped: the case
@@ -1438,14 +1482,14 @@ selftest() {
     "--cpus=|[rule: plain value]"; do
     opt=${spec%%|*} want=${spec#*|}
     d=$tmp/sp_r_${opt//[^A-Za-z0-9]/_}
-    supwf "$d" s1 runcove-sec-unpriv "    services:\n      pg:\n        image: postgres:18@$DG\n        options: $opt\n" "run: echo"
-    case_ "supply: options $opt is refused by $want" 1 "$d" "services.pg: \`options\` has '${opt%% *}'"
+    supwf "$d" test runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18@$DG\n        options: $opt\n" "run: echo"
+    case_ "supply: options $opt is refused by $want" 1 "$d" "services.postgres: \`options\` has '${opt%% *}'"
     case_ "supply: options $opt names $want" 1 "$d" "$want"
   done
   d=$tmp/sp_r_tab
   mkdir -p "$d"
-  printf 'name: s\n"on": push\njobs:\n  s1:\n    runs-on: runcove-sec-unpriv\n    services:\n      pg:\n        image: postgres:18@%s\n        options: "--cpus=2\\t--memory=1g"\n    steps:\n      - run: echo\n' "$DG" >"$d/sec.yml"
-  case_ "supply: options with a tab is refused by the character rule" 1 "$d" "services.pg: \`options\` holds a character other than plain printable ASCII without quotes or backslashes [rule: characters]"
+  printf 'name: s\n"on": push\njobs:\n  test:\n    runs-on: runcove-sec-unpriv\n    services:\n      postgres:\n        image: postgres:18@%s\n        options: "--cpus=2\\t--memory=1g"\n    steps:\n      - run: echo\n' "$DG" >"$d/sec.yml"
+  case_ "supply: options with a tab is refused by the character rule" 1 "$d" "services.postgres: \`options\` holds a character other than plain printable ASCII without quotes or backslashes [rule: characters]"
   # A job's container mapping: only image, env and options, in exact lower case; every job.
   d=$tmp/sp_ck_ok
   supwf "$d" s1 runcove-sec-unpriv "    container:\n      image: node:22@$DG\n      env:\n        A: b\n      options: --cpus=2\n" "run: echo"
@@ -1460,20 +1504,21 @@ selftest() {
   supwf "$d" image runcove-sec "    container:\n      image: node:22@$DG\n      options: --privileged\n      OPTIONS: --privileged\n" "run: echo"
   case_ "supply: the image job's container is held to the keys too" 1 "$d" "container has \`OPTIONS\`"
   d=$tmp/sp_twoflags
-  supwf "$d" s1 runcove-sec-unpriv "    services:\n      pg:\n        image: postgres:18@$DG\n        options: --cpus=2 --memory=1g\n" "run: echo"
+  supwf "$d" test runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18@$DG\n        options: --cpus=2 --memory=1g\n" "run: echo"
   case_ "supply: --cpus=2 --memory=1g passes" 0 "$d"
   d=$tmp/sp_tmpl
-  supwf "$d" s1 runcove-sec-unpriv "    services:\n      pg:\n        image: postgres:18@$DG\n        options: --memory=\${{vars.M}}\n" "run: echo"
+  supwf "$d" test runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18@$DG\n        options: --memory=\${{vars.M}}\n" "run: echo"
   case_ "supply: a templated value on an allowed flag" 1 "$d" "is templated"
   d=$tmp/sp_optok
-  supwf "$d" s1 runcove-sec-unpriv "    services:\n      pg:\n        image: postgres:18@$DG\n        options: --health-cmd=pg_isready --health-interval=5s --health-retries=5 --memory=2g --cpus=2\n" "run: echo"
+  supwf "$d" test runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18@$DG\n        options: --health-cmd=pg_isready --health-interval=5s --health-retries=5 --memory=2g --cpus=2\n" "run: echo"
   case_ "supply: the allow-listed health and limit options pass" 0 "$d"
   d=$tmp/sp_ports
-  supwf "$d" s1 runcove-sec-unpriv "    services:\n      pg:\n        image: postgres:18@$DG\n        ports: [\"5432:5432\"]\n" "run: echo"
+  supwf "$d" test runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18@$DG\n        ports: [\"5432:5432\"]\n" "run: echo"
   case_ "supply: service ports" 1 "$d" "has \`ports\`"
+  # `ports` is refused on any service, in the `image` job too (a service holds only image, env and options).
   d=$tmp/sp_imgports
-  supwf "$d" image runcove-sec "    services:\n      dind:\n        image: docker:28-dind@$DG\n        options: --privileged\n        ports: [\"2375:2375\"]\n" "run: echo"
-  case_ "supply: the image job is not held to ports or options" 0 "$d"
+  supwf "$d" image runcove-sec "    services:\n      dind:\n        image: $DIND\n        options: --privileged\n        ports: [\"2375:2375\"]\n" "run: echo"
+  case_ "supply: the image job's dind service is held to the keys too (ports)" 1 "$d" "services.dind has \`ports\`"
   d=$tmp/sp_copt
   supwf "$d" s1 runcove-sec-unpriv "    container:\n      image: node:22@$DG\n      options: --privileged\n" "run: echo"
   case_ "supply: container options --privileged" 1 "$d" "container: \`options\` has '--privileged'"
@@ -1481,8 +1526,79 @@ selftest() {
   supwf "$d" s1 runcove-sec-unpriv "    container:\n      image: node:22@$DG\n      volumes: [\"/var/run/docker.sock:/var/run/docker.sock\"]\n" "run: echo"
   case_ "supply: container volumes" 1 "$d" "has \`volumes\`"
   d=$tmp/sp_imgjob
-  supwf "$d" image runcove-sec "    services:\n      dind:\n        image: docker:28-dind@$DG\n        options: --privileged\n" "uses: actions/checkout@$SHA"
-  case_ "supply: the image job may run dind --privileged" 0 "$d"
+  supwf "$d" image runcove-sec "    services:\n      dind:\n        image: $DIND\n        options: --privileged\n        env:\n          DOCKER_TLS_CERTDIR: \"\"\n" "uses: actions/checkout@$SHA"
+  case_ "supply: the image job may run dind --privileged at its pinned digest" 0 "$d"
+
+  # --privileged has exactly one home: the dind service of the `image` job at DIND_IMAGE.
+  d=$tmp/sp_dind_other_digest
+  supwf "$d" image runcove-sec "    services:\n      dind:\n        image: docker:28-dind@$DG\n        options: --privileged\n" "run: echo"
+  case_ "supply: dind --privileged at another digest" 1 "$d" "services.dind: \`options\` has '--privileged', which is not an allowed flag"
+  d=$tmp/sp_dind_other_opt
+  supwf "$d" image runcove-sec "    services:\n      dind:\n        image: $DIND\n        options: --privileged --cpus=2\n" "run: echo"
+  case_ "supply: the pinned dind carries only --privileged" 1 "$d" "the one privileged service may carry only \`--privileged\` [rule: dind options]"
+  local jb
+  for jb in test test-sqlite core-bare; do
+    d=$tmp/sp_pg_priv_$jb
+    supwf "$d" "$jb" runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18@$DG\n        options: --privileged\n" "run: echo"
+    case_ "supply: postgres under $jb with --privileged" 1 "$d" "services.postgres: \`options\` has '--privileged', which is not an allowed flag"
+  done
+  d=$tmp/sp_pg_priv_image
+  supwf "$d" image runcove-sec "    services:\n      postgres:\n        image: postgres:18@$DG\n        options: --privileged\n" "run: echo"
+  case_ "supply: postgres under image with --privileged" 1 "$d" "service \`postgres\` is not allowed (this job may start only dind)"
+  d=$tmp/sp_ctr_priv_image
+  supwf "$d" image runcove-sec "    container:\n      image: node:22@$DG\n      options: --privileged\n" "run: echo"
+  case_ "supply: a container with --privileged, even in the image job" 1 "$d" "container: \`options\` has '--privileged'"
+  d=$tmp/sp_dind_in_test
+  supwf "$d" test runcove-sec-unpriv "    services:\n      dind:\n        image: $DIND\n        options: --privileged\n" "run: echo"
+  case_ "supply: dind under a job other than image" 1 "$d" "service \`dind\` is not allowed (this job may start only postgres)"
+  case_ "supply: dind under a job other than image, --privileged too" 1 "$d" "services.dind: \`options\` has '--privileged'"
+
+  # services: only where sec.yml uses it today (SEC_SERVICES); the same keys as a container.
+  local sv_msg="the private workflow's jobs may start no service containers except test: postgres; test-sqlite: postgres; core-bare: postgres; image: dind [rule: services]"
+  d=$tmp/sp_sv_none
+  supwf "$d" s1 runcove-sec-unpriv "" "run: echo"
+  case_ "services: a job without services passes" 0 "$d"
+  d=$tmp/sp_sv_real
+  supwf "$d" core-bare runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18@$DG\n        env:\n          POSTGRES_HOST_AUTH_METHOD: trust\n" "run: echo"
+  case_ "services: postgres under core-bare, as sec.yml has it, passes" 0 "$d"
+  d=$tmp/sp_sv_image
+  supwf "$d" s1 runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18@$DG\n" "run: echo"
+  case_ "services: a service with an image on a job not in the table" 1 "$d" "\`services\` on job s1: $sv_msg"
+  d=$tmp/sp_sv_empty
+  supwf "$d" s1 runcove-sec-unpriv "    services: {}\n" "run: echo"
+  case_ "services: an empty mapping on a job not in the table" 1 "$d" "\`services\` on job s1: $sv_msg"
+  d=$tmp/sp_sv_null
+  supwf "$d" s1 runcove-sec-unpriv "    services:\n" "run: echo"
+  case_ "services: a null value on a job not in the table" 1 "$d" "\`services\` on job s1: $sv_msg"
+  local sk
+  for sk in Services SERVICES sErvices; do
+    d=$tmp/sp_sv_case_$sk
+    supwf "$d" s1 runcove-sec-unpriv "    $sk:\n      postgres:\n        image: postgres:18@$DG\n" "run: echo"
+    case_ "services: the key written $sk on a job not in the table" 1 "$d" "\`$sk\` on job s1: $sv_msg"
+    d=$tmp/sp_sv_case_ok_$sk
+    supwf "$d" test runcove-sec-unpriv "    $sk:\n      postgres:\n        image: postgres:18@$DG\n" "run: echo"
+    case_ "services: the key written $sk on an allowed job" 1 "$d" "job test has \`$sk\`, which must be written exactly \`services\` (lower case) [rule: services]"
+  done
+  d=$tmp/sp_sv_emptycase
+  supwf "$d" s1 runcove-sec-unpriv "    Services: {}\n" "run: echo"
+  case_ "services: an empty mis-cased mapping on a job not in the table" 1 "$d" "\`Services\` on job s1: $sv_msg"
+  d=$tmp/sp_sv_othername
+  supwf "$d" test runcove-sec-unpriv "    services:\n      redis:\n        image: redis:7@$DG\n" "run: echo"
+  case_ "services: another service name under an allowed job" 1 "$d" "job test: service \`redis\` is not allowed (this job may start only postgres)"
+  d=$tmp/sp_sv_extra
+  supwf "$d" test runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18@$DG\n      Postgres:\n        image: postgres:18@$DG\n" "run: echo"
+  case_ "services: a mis-cased service name beside the allowed one" 1 "$d" "job test: service \`Postgres\` is not allowed"
+  d=$tmp/sp_sv_notmap
+  supwf "$d" test runcove-sec-unpriv "    services:\n      postgres: postgres:18@$DG\n" "run: echo"
+  case_ "services: a service that is a bare string" 1 "$d" "job test: service \`postgres\` is not a mapping"
+  d=$tmp/sp_sv_listval
+  supwf "$d" test runcove-sec-unpriv "    services: [postgres]\n" "run: echo"
+  case_ "services: the key is not a mapping on an allowed job" 1 "$d" "job test: \`services\` is not a mapping [rule: services]"
+  for sk in "credentials: {username: u, password: p}" "volumes: [\"/x:/y\"]" "ports: [\"5432:5432\"]" "network: host" "entrypoint: sh" "cmd: x" "Image: postgres:18@$DG" "OPTIONS: --cpus=2" "Env: {A: b}" "1: x"; do
+    d=$tmp/sp_sv_key_${sk//[^A-Za-z0-9]/_}
+    supwf "$d" test runcove-sec-unpriv "    services:\n      postgres:\n        image: postgres:18@$DG\n        $sk\n" "run: echo"
+    case_ "services: a service key ${sk%%:*}" 1 "$d" "job test: services.postgres has \`${sk%%:*}\`, which is not one of image, env, options (exact lower case) [rule: service keys]"
+  done
 
   # Local actions (rule 4 reaches them too): no action.yml/action.yaml names SEC_RUNNER_NAME.
   acase_() { # <name> <want rc> <root> [<text>]
