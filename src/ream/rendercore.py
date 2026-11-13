@@ -279,12 +279,24 @@ def console_errors(stderr: str) -> list[str]:
 
 
 def screenshot(
-    binary: str, html: str, width: int = WIDTH, height: int = HEIGHT
+    binary: str,
+    html: str,
+    width: int = WIDTH,
+    height: int = HEIGHT,
+    *,
+    work_root: str | os.PathLike | None = None,
+    slot_held: bool = False,
 ) -> tuple[bytes | None, list[str] | None]:
     """Run `binary` on `html` (already stamped as a reader would see it) and
     return `(PNG or None, script errors or None)`, as a `Report` with the check
     script's numbers once the browser has run.
-    `width`/`height` are the viewport, and so the shot. Never raises."""
+    `width`/`height` are the viewport, and so the shot. Never raises.
+
+    The render's directory (the page, the shot, and the browser's profile and
+    cache) is made fresh under `work_root` (default: the system's temporary
+    directory) and removed afterwards. `slot_held` says the caller already holds
+    `_RENDER_SLOT` (`ream.renderd`, which answers "busy" itself), so it is not
+    taken again here."""
     # The check script goes into the RENDER copy only, never the stored body.
     nonce = renderfind.new_nonce()
     html = renderfind.inject(html, nonce)
@@ -293,7 +305,7 @@ def screenshot(
     # removed raised "Directory not empty" (homelab-o88p); the group is killed
     # first, and a leftover is then no reason to fail the render.
     with tempfile.TemporaryDirectory(
-        prefix="artifacts-thumb-", ignore_cleanup_errors=True
+        prefix="artifacts-thumb-", dir=work_root, ignore_cleanup_errors=True
     ) as workdir:
         page = Path(workdir) / "page.html"
         shot = Path(workdir) / "shot.png"
@@ -330,7 +342,7 @@ def screenshot(
             f"--screenshot={shot}",
             page.as_uri(),
         ]
-        if not _RENDER_SLOT.acquire(timeout=SLOT_WAIT_SECONDS):
+        if not slot_held and not _RENDER_SLOT.acquire(timeout=SLOT_WAIT_SECONDS):
             log.warning(
                 "thumbnail render skipped: no turn within %ss", SLOT_WAIT_SECONDS
             )
@@ -343,12 +355,18 @@ def screenshot(
                     max_rss=RENDER_MAX_RSS_BYTES,
                     # BUILT FROM NOTHING, not inherited. DATABASE_URL and every
                     # agent key are simply absent from the child. HOME and a temp
-                    # dir are the only things the browser genuinely needs.
+                    # dir are the only things the browser genuinely needs. Both are
+                    # this render's directory, so the browser's profile (a scoped
+                    # directory under TMPDIR) and its cache (under HOME) are made
+                    # fresh here and removed with it. With an explicit
+                    # --user-data-dir, every render by Playwright's chrome ran into
+                    # the timeout (13 Nov 2026), so the browser picks the place.
                     env={"HOME": workdir, "TMPDIR": workdir, "PATH": "/usr/bin:/bin"},
                     cwd=workdir,
                 )
             finally:
-                _RENDER_SLOT.release()
+                if not slot_held:
+                    _RENDER_SLOT.release()
         except subprocess.TimeoutExpired:
             log.warning("thumbnail render timed out after %ss", TIMEOUT_SECONDS)
             return None, None

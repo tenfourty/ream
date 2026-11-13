@@ -28,9 +28,10 @@ from __future__ import annotations
 
 import contextlib
 import ipaddress
+import os
 import re
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, fields
 from urllib.parse import urlsplit
 
@@ -677,6 +678,29 @@ def retired_mail_set() -> list[str]:
     """The names (both prefixes) of the retired mail variables the environment sets, by
     presence only: never a value, so it is safe to log. Empty when none is set."""
     return [n for suffix in RETIRED_MAIL for n in envnames.set_names(suffix)]
+
+
+# The renderer process (`ream.renderd`) takes only these settings (suffixes, under both
+# prefixes). An allow-list, so a setting added to the app later is refused there too.
+RENDERER_SETTINGS = ("BROWSER", "BIND_HOST")
+
+
+def renderer_foreign_count(environ: Mapping[str, str] | None = None) -> int:
+    """How many variables of the app's `environ` (default: this process's) carries that the
+    renderer does not take: DATABASE_URL, and every `REAM_*`/`ARTIFACTS_*` variable other
+    than those of RENDERER_SETTINGS. Presence counts, blank or not. A count only: no name or
+    value leaves here, so the refusal that reports it prints neither."""
+    env = os.environ if environ is None else environ
+    allowed = {n for suffix in RENDERER_SETTINGS for n in envnames.names(suffix)}
+    return sum(
+        1
+        for name in env
+        if name == "DATABASE_URL"
+        or (
+            name.startswith((envnames.NEW_PREFIX, envnames.OLD_PREFIX))
+            and name not in allowed
+        )
+    )
 
 
 def is_loopback(host: str) -> bool:
