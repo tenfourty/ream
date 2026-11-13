@@ -262,7 +262,7 @@ usage() {
 run_guard() {
   local url=$1 input=$2 cwd=${3:-$work}
   set +e
-  OUT=$(cd "$cwd" && printf '%s' "$input" | bash "$self" origin "$url" 2>&1)
+  OUT=$(cd "$cwd" && bash "$self" origin "$url" < <(printf '%s' "$input") 2>&1)
   CODE=$?
   set -e
 }
@@ -422,33 +422,33 @@ selftest() {
   done
   # No url argument at all (the hook always passes one; a missing one is still a refusal).
   set +e
-  OUT=$(cd "$work" && printf '%s\n' "$seclne" | bash "$self" 2>&1); CODE=$?
+  OUT=$(cd "$work" && bash "$self" <<<"$seclne" 2>&1); CODE=$?
   set -e
   if [ "$CODE" -eq 1 ] && grep -q "REFUSED" <<< "$OUT"; then pass "(b) no arguments at all refused"; else fail "(b) no arguments at all (code=$CODE)"; fi
 
   # --- (a2) the lefthook form: name and url as two lines on fd 3, however odd the url is
   local hostile='https://user:p&ss;$(touch X)`touch Y`"q'"'"'x@evil.example/runcove/artifacts.git'
   set +e
-  OUT=$(cd "$work" && printf '%s\n' "$seclne" | bash "$self" --args-on-fd3 3<<<"origin"$'\n'"$hostile" 2>&1); CODE=$?
+  OUT=$(cd "$work" && bash "$self" <<<"$seclne" --args-on-fd3 3<<<"origin"$'\n'"$hostile" 2>&1); CODE=$?
   set -e
   if [ "$CODE" -eq 1 ] && grep -q "REFUSED" <<< "$OUT" && grep -qF 'https://***@evil.example/runcove/artifacts.git' <<< "$OUT" \
      && ! grep -q 'p&ss' <<< "$OUT"; then
     pass "(a2) fd 3: a url full of shell characters is read as data, refused, redacted"
   else fail "(a2) fd 3 hostile url (code=$CODE)"; fi
   set +e
-  OUT=$(cd "$work" && printf '%s\n' "$seclne" | bash "$self" --args-on-fd3 3<<<"origin"$'\n'"git@git.tenfourty.site:runcove-sec/artifacts-sec.git" 2>&1); CODE=$?
+  OUT=$(cd "$work" && bash "$self" <<<"$seclne" --args-on-fd3 3<<<"origin"$'\n'"git@git.tenfourty.site:runcove-sec/artifacts-sec.git" 2>&1); CODE=$?
   set -e
   if [ "$CODE" -eq 0 ] && [ -z "$OUT" ]; then pass "(a2) fd 3: the artifacts-sec url passes"; else fail "(a2) fd 3 sec url (code=$CODE)"; fi
   set +e
-  OUT=$(cd "$work" && printf '%s\n' "$seclne" | bash "$self" --args-on-fd3 3<<<"origin"$'\n'"git@git-ssh.tenfourty.site:runcove-sec/artifacts-sec.git" 2>&1); CODE=$?
+  OUT=$(cd "$work" && bash "$self" <<<"$seclne" --args-on-fd3 3<<<"origin"$'\n'"git@git-ssh.tenfourty.site:runcove-sec/artifacts-sec.git" 2>&1); CODE=$?
   set -e
   if [ "$CODE" -eq 0 ] && [ -z "$OUT" ]; then pass "(a2) fd 3: the artifacts-sec url on the ssh host passes"; else fail "(a2) fd 3 sec url on the ssh host (code=$CODE)"; fi
   set +e
-  OUT=$(cd "$work" && printf '%s\n' "$seclne" | bash "$self" --args-on-fd3 3<<<"origin"$'\n'"https://git-ssh.tenfourty.site/runcove-sec/artifacts-sec.git" 2>&1); CODE=$?
+  OUT=$(cd "$work" && bash "$self" <<<"$seclne" --args-on-fd3 3<<<"origin"$'\n'"https://git-ssh.tenfourty.site/runcove-sec/artifacts-sec.git" 2>&1); CODE=$?
   set -e
   if [ "$CODE" -eq 1 ] && grep -q "REFUSED" <<< "$OUT"; then pass "(a2) fd 3: https on the ssh host is refused"; else fail "(a2) fd 3 https on the ssh host (code=$CODE)"; fi
   set +e
-  OUT=$(cd "$work" && printf '%s\n' "$seclne" | bash "$self" --args-on-fd3 2>&1); CODE=$?
+  OUT=$(cd "$work" && bash "$self" <<<"$seclne" --args-on-fd3 2>&1); CODE=$?
   set -e
   if [ "$CODE" -eq 1 ] && grep -q "REFUSED" <<< "$OUT"; then pass "(a2) fd 3 absent: a sec ref is refused"; else fail "(a2) fd 3 absent (code=$CODE)"; fi
 
