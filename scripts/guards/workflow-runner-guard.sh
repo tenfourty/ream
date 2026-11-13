@@ -48,7 +48,8 @@
 #      (no tag, branch or local `./` action); every container and service image carries an
 #      @sha256: digest; and, in every job but `image`, a container or service sets only
 #      allow-listed `options:` flags (health checks and resource limits, no templating) and no
-#      `volumes:` or `ports:`. The two env values SEC_REGISTRY_OWNER (exactly runcove-sec) and SEC_REGISTRY_USER (a plain login)
+#      `volumes:` or `ports:`; a job's `container:` mapping (in every job, `image` too) holds only the
+#      keys image, env and options, written in lower case. The two env values SEC_REGISTRY_OWNER (exactly runcove-sec) and SEC_REGISTRY_USER (a plain login)
 #      are checked, and no job or step sets them again.
 #
 # FAIL CLOSED. Anything this cannot prove is a refusal: a missing .forgejo/workflows directory,
@@ -245,6 +246,9 @@ ALLOWED_OPTIONS = {
 }
 
 
+# The only keys a job's `container:` mapping may hold, exactly as written (a mis-cased key is
+# refused, not read: `OPTIONS` is not checked as `options`). Any job of sec.yml, `image` included.
+CONTAINER_KEYS = ("image", "env", "options")
 OPTION_VALUE = re.compile(r"[A-Za-z0-9._:/+-]+")
 
 
@@ -254,20 +258,25 @@ def option_problems(opts):
         return []
     if not isinstance(opts, str):
         return [f"`options` is {opts!r}, not a string"]
+    # Each refusal names the rule that fired, so a selftest case can pin each rule on its own.
     if "${{" in opts:
-        return ["`options` is templated (an expression could add any option)"]
+        return ["`options` is templated (an expression could add any option) [rule: no templating]"]
     # No tokenizer is trusted: plain ASCII only, words split on single spaces, each exactly
     # --flag=value (an allowed flag and a plain non-empty value). No quote, backslash, tab, newline
     # or other control or non-ASCII character is accepted.
-    if not opts.strip() or any(not (" " <= c <= "~") or c in "\\'\"`" for c in opts):
-        return ["`options` is empty or holds a character other than plain printable ASCII without quotes or backslashes"]
+    if not opts.strip():
+        return ["`options` is empty [rule: not empty]"]
+    if any(not (" " <= c <= "~") or c in "\\'\"`" for c in opts):
+        return ["`options` holds a character other than plain printable ASCII without quotes or backslashes [rule: characters]"]
     out = []
     for w in opts.split(" "):
         flag, eq, val = w.partition("=")
         if flag not in ALLOWED_OPTIONS:
-            out.append(f"`options` has {w!r}, which is not an allowed flag ({', '.join(sorted(ALLOWED_OPTIONS))})")
-        elif not eq or not OPTION_VALUE.fullmatch(val):
-            out.append(f"`options` has {w!r}: an allowed flag must be written --flag=value with a plain value")
+            out.append(f"`options` has {w!r}, which is not an allowed flag ({', '.join(sorted(ALLOWED_OPTIONS))}) [rule: allowed flags]")
+        elif not eq:
+            out.append(f"`options` has {w!r}: an allowed flag must be written --flag=value [rule: --flag=value]")
+        elif not OPTION_VALUE.fullmatch(val):
+            out.append(f"`options` has {w!r}: the value must be plain (letters, digits and . _ : / + -) [rule: plain value]")
     return out
 
 
@@ -286,6 +295,10 @@ def check_sec_job_supply(where, jid, job):
         boxes += [(f"services.{k}", v) for k, v in svcs.items()]
     elif svcs is not None:
         refuse(where, "`services` is not a mapping")
+    if isinstance(job.get("container"), dict):
+        for key in job["container"]:
+            if key not in CONTAINER_KEYS:
+                refuse(where, f"container has `{key}`, which is not one of {', '.join(CONTAINER_KEYS)} (exact lower case) [rule: container keys]")
     for name, box in boxes:
         img = box if isinstance(box, str) else box.get("image") if isinstance(box, dict) else None
         if not (isinstance(img, str) and IMAGE_DIGEST.fullmatch(img.strip())):
@@ -868,7 +881,7 @@ selftest() {
     if [ "$rc" != "$2" ]; then
       printf '  FAIL  %s (rc=%s, want %s)\n%s\n' "$1" "$rc" "$2" "$(printf '%s\n' "$out" | sed 's/^/        /')"
       fail=1
-    elif [ -n "${4:-}" ] && ! printf '%s' "$out" | grep -qF -- "$4"; then
+    elif [ -n "${4:-}" ] && ! grep -qF -- "$4" <<< "$out"; then
       printf '  FAIL  %s (rc ok, but the output lacks "%s")\n%s\n' "$1" "$4" "$(printf '%s\n' "$out" | sed 's/^/        /')"
       fail=1
     else
@@ -1187,7 +1200,7 @@ selftest() {
     rc=$?
     if [ "$rc" != "$2" ]; then
       printf '  FAIL  %s (rc=%s, want %s)\n%s\n' "$1" "$rc" "$2" "$(printf '%s\n' "$out" | sed 's/^/        /')"; fail=1
-    elif [ -n "${4:-}" ] && ! printf '%s' "$out" | grep -qF -- "$4"; then
+    elif [ -n "${4:-}" ] && ! grep -qF -- "$4" <<< "$out"; then
       printf '  FAIL  %s (rc ok, but the output lacks "%s")\n%s\n' "$1" "$4" "$(printf '%s\n' "$out" | sed 's/^/        /')"; fail=1
     else
       printf '  ok    %s\n' "$1"
@@ -1415,6 +1428,37 @@ selftest() {
     printf 'name: s\n"on": push\njobs:\n  s1:\n    runs-on: runcove-sec-unpriv\n    services:\n      pg:\n        image: postgres:18@%s\n        options: "%s"\n    steps:\n      - run: echo\n' "$DG" "$ctl" >"$d/sec.yml"
     case_ "supply: options with the escape $ctl" 1 "$d" "options"
   done
+  # Each options rule pinned by a case that fails when that rule alone is dropped: the case
+  # asserts the rule's own message, which names it (another rule may still refuse the input).
+  local spec want
+  for spec in \
+    "--health-cmd --memory=1g|[rule: --flag=value]" \
+    "--health-cmd=a,b|[rule: plain value]" \
+    "--pid=host|[rule: allowed flags]" \
+    "--cpus=|[rule: plain value]"; do
+    opt=${spec%%|*} want=${spec#*|}
+    d=$tmp/sp_r_${opt//[^A-Za-z0-9]/_}
+    supwf "$d" s1 runcove-sec-unpriv "    services:\n      pg:\n        image: postgres:18@$DG\n        options: $opt\n" "run: echo"
+    case_ "supply: options $opt is refused by $want" 1 "$d" "services.pg: \`options\` has '${opt%% *}'"
+    case_ "supply: options $opt names $want" 1 "$d" "$want"
+  done
+  d=$tmp/sp_r_tab
+  mkdir -p "$d"
+  printf 'name: s\n"on": push\njobs:\n  s1:\n    runs-on: runcove-sec-unpriv\n    services:\n      pg:\n        image: postgres:18@%s\n        options: "--cpus=2\\t--memory=1g"\n    steps:\n      - run: echo\n' "$DG" >"$d/sec.yml"
+  case_ "supply: options with a tab is refused by the character rule" 1 "$d" "services.pg: \`options\` holds a character other than plain printable ASCII without quotes or backslashes [rule: characters]"
+  # A job's container mapping: only image, env and options, in exact lower case; every job.
+  d=$tmp/sp_ck_ok
+  supwf "$d" s1 runcove-sec-unpriv "    container:\n      image: node:22@$DG\n      env:\n        A: b\n      options: --cpus=2\n" "run: echo"
+  case_ "supply: a container with image, env and options passes" 0 "$d"
+  local ck
+  for ck in "credentials: {username: u, password: p}" "volumes: [\"/x:/y\"]" "ports: [\"80:80\"]" "network: host" "entrypoint: sh" "cmd: x" "Image: node:22@$DG" "OPTIONS: --privileged" "Env: {A: b}" "1: x"; do
+    d=$tmp/sp_ck_${ck//[^A-Za-z0-9]/_}
+    supwf "$d" s1 runcove-sec-unpriv "    container:\n      image: node:22@$DG\n      $ck\n" "run: echo"
+    case_ "supply: container key ${ck%%:*}" 1 "$d" "container has \`${ck%%:*}\`, which is not one of image, env, options (exact lower case) [rule: container keys]"
+  done
+  d=$tmp/sp_ck_img
+  supwf "$d" image runcove-sec "    container:\n      image: node:22@$DG\n      options: --privileged\n      OPTIONS: --privileged\n" "run: echo"
+  case_ "supply: the image job's container is held to the keys too" 1 "$d" "container has \`OPTIONS\`"
   d=$tmp/sp_twoflags
   supwf "$d" s1 runcove-sec-unpriv "    services:\n      pg:\n        image: postgres:18@$DG\n        options: --cpus=2 --memory=1g\n" "run: echo"
   case_ "supply: --cpus=2 --memory=1g passes" 0 "$d"
@@ -1447,7 +1491,7 @@ selftest() {
     rc=$?
     if [ "$rc" != "$2" ]; then
       printf '  FAIL  %s (rc=%s, want %s)\n%s\n' "$1" "$rc" "$2" "$(printf '%s\n' "$out" | sed 's/^/        /')"; fail=1
-    elif [ -n "${4:-}" ] && ! printf '%s' "$out" | grep -qF -- "$4"; then
+    elif [ -n "${4:-}" ] && ! grep -qF -- "$4" <<< "$out"; then
       printf '  FAIL  %s (rc ok, but the output lacks "%s")\n%s\n' "$1" "$4" "$(printf '%s\n' "$out" | sed 's/^/        /')"; fail=1
     else
       printf '  ok    %s\n' "$1"
