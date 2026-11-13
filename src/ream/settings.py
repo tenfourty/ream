@@ -123,6 +123,22 @@ _HOST_NAME = re.compile(rf"^(?=.{{1,253}}$){_LABEL}(?:\.{_LABEL})*$")
 BAD_LIST = object()
 
 
+_RENDERER_HOST = re.compile(r"[A-Za-z0-9.-]+")
+
+
+def _renderer_host_ok(host: str | None) -> bool:
+    """A renderer's host: letters, digits, dots and hyphens only, or an IP address."""
+    if not host:
+        return False
+    if _RENDERER_HOST.fullmatch(host):
+        return True
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
 def host_list(value: str):
     """A comma-separated host list setting: None when unset, an empty set for `none`, the
     lower-cased names otherwise, or `BAD_LIST` when an entry is not a bare host name (a
@@ -336,17 +352,20 @@ class Settings:
         raw = self.renderer_url
         if not raw:
             return []
-        parts = urlsplit(raw)
         try:
+            parts = urlsplit(raw)
             port = parts.port
-        except ValueError:
-            port = None
+        except ValueError:  # a bracketed host that is not an IP address, or no port
+            parts, port = urlsplit(""), None
         if (
             "\\" in raw
+            or "%" in raw
+            or "\0" in raw
             or any(c.isspace() for c in raw)
             or parts.scheme != "http"
-            or not parts.hostname
+            or not _renderer_host_ok(parts.hostname)
             or port is None
+            or not 1 <= port <= 65535
             or parts.path
             or parts.query
             or parts.fragment
@@ -357,8 +376,10 @@ class Settings:
         ):
             return [
                 (
-                    "REAM_RENDERER_URL must be http://host:port (an explicit port; no"
-                    " path, query, fragment, credentials, backslash or space)"
+                    "REAM_RENDERER_URL must be http://host:port (a host of letters,"
+                    " digits, dots and hyphens or an IP address; a port from 1 to"
+                    " 65535; no path, query, fragment, credentials, backslash, % or"
+                    " space)"
                 )
             ]
         host = parts.hostname.lower().removesuffix(".")
