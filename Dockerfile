@@ -60,10 +60,11 @@ RUN sed -i "0,/^version = \"\([0-9.]*\)\"/s//version = \"\1.post$(date -u +%Y%m%
 FROM python:3.12-slim-bookworm
 
 # The headless browser that draws a page's thumbnail for the gallery wall
-# (homelab-ij8.22). Jeremy chose the renderer running inside the service over a
-# separate one, with the cost of that stated to him; `ream.thumbs` is where
-# the constraints on the child process live, and they are the reason this is
-# acceptable rather than merely convenient.
+# (homelab-ij8.22). By default the browser runs inside the service; a deployment
+# may instead run it as its own process or pod from this same image
+# (`python -m ream.renderd --port 8091`, named by REAM_RENDERER_URL; runbook
+# docs/agent/runbooks/renderer-pod.md). `ream.rendercore` is where the
+# constraints on the browser process live, in either mode.
 #
 # BEFORE the venv COPY on purpose. This layer changes only when the base image
 # or this line does, so it is built once and pulled once: every ordinary deploy

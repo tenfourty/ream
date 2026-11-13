@@ -3,8 +3,10 @@
 homelab-ij8.22. Jeremy asked for a real rendered thumbnail of each page rather
 than a list of links, asked whether a tool existed, and — told that one did —
 chose (b), the renderer running inside the service itself, over (a), a separate
-renderer the service asks. He chose it with the argument against in front of
-him, so this builds (b).
+renderer the service asks. That is still the default. Since 13 Nov 2026 a
+deployment may also run the renderer as its own process or pod, for resource
+isolation (`python -m ream.renderd`, named by REAM_RENDERER_URL; decisions.md):
+then `render_report` sends the page there and no browser starts here.
 
 The browser runner itself (the constraints the child runs under, the memory
 ceilings, the one render slot, the screenshot and its log) is in

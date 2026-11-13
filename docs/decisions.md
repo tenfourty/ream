@@ -1034,3 +1034,31 @@ a release branch to test it.
 - Admin on the organisation: wider than the one repository needs.
 
 **Evidence:** confirmed (Jeremy, 12 Nov 2026, lettered answer in #hq-artifacts)
+
+## The renderer can run as its own process or pod, beside the in-process one (13 Nov 2026)
+
+A deployment may run the browser that draws page pictures as its own process or pod, for resource
+isolation: `python -m ream.renderd` from the same image, named to the service by `REAM_RENDERER_URL`.
+Both modes stay. In-process remains the default, and a fresh install with nothing set renders as it
+always has; the 24 Sep choice of rendering inside the service still holds for any deployment that does
+not set the variable.
+
+With a renderer set, the service never starts a browser itself. A render the renderer gives no usable
+answer for is stored as `unchecked` with one finding that says so; it is never redone in the service's
+own process, so a deployment that set a renderer gets exactly one place where pages are rendered.
+Preview keeps its 200 shape and adds an optional `reason`. The renderer takes no key or token: which
+pods may call it is set by the deployment's network policy, and it requires one fixed header that is
+not a secret.
+
+**Not chosen:**
+- A renderer only, dropping the in-process mode: a fresh install would need a second process before
+  it drew a single picture.
+- Falling back to an in-process render when the renderer does not answer: the deployment would have two
+  places rendering pages, and which one ran would depend on the moment.
+- Storing nothing when the renderer does not answer, as when there is no browser: the page would read
+  as not rendered yet, and an agent waiting for its render would wait for good.
+- A shared token between the service and the renderer: the renderer runs the browser, so anything it
+  holds is within the browser's reach, and the token would add a secret to a pod that otherwise has none.
+
+**Evidence:** the maintainer's choices from the renderer design, 13 Nov 2026; the owner's confirmation
+is not recorded in this entry.

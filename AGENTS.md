@@ -72,6 +72,7 @@ the reason to whoever holds the key. A fold refuses a key used in the last 24 ho
 | MCP at `/mcp` (transport, registries, the content fence; the tools, resources and prompts) | `src/ream/mcp.py`, `src/ream/mcp_tools.py`; trying it: `docs/mcp.md` |
 | The owner: settings, the stored id, its start-up guard | `src/ream/settings.py`, `src/ream/owner.py` |
 | The Postgres <-> SQLite copier and its verifier | `src/ream/migrate.py` |
+| Rendering a page's picture: the browser runner, the wire and its checks, the renderer as its own process (`python -m ream.renderd`), and the store-facing background render | `src/ream/rendercore.py`, `renderwire.py`, `renderd.py`, `thumbs.py`; running it apart: `docs/agent/runbooks/renderer-pod.md` |
 | HTML parsing: the one parser base every reader of a page uses (a new reader subclasses it; `tests/test_htmlbound.py` refuses any other) | `src/ream/htmlbound.py` |
 | The logo: its drawings, and the gallery's bar mark and tab icon cut from them | `src/ream/brand/`, `src/ream/logo.py` |
 | Writing a plug-in (the `ream.plugins` interfaces, `REAM_PLUGINS`, failure rules) | `docs/plugins.md` |
@@ -122,6 +123,16 @@ need no plug-in: format, signing and the addresses it refuses are in `docs/plugi
 `REAM_SCAN_SLOTS` (also `ARTIFACTS_SCAN_SLOTS`; unset: 4) is how many scans of a page over 256 KiB one server process runs at once
 (`src/ream/scanslots.py`): the rest wait up to 5 seconds, then the publish checks and the render findings say they did not run and a reader
 that a request needs answers 503 with `Retry-After`.
+`REAM_RENDERER_URL` (also `ARTIFACTS_RENDERER_URL`; unset: nothing changes, the browser runs in the
+service's own process as on a fresh install) names a renderer running as its own process or pod, for resource
+isolation: `python -m ream.renderd --port 8091`, same image. It must be `http://host:port` with an explicit port and
+nothing else (no path, query, fragment or credentials), on a host other than the gallery's, `REAM_API_HOST` and
+`REAM_FORMER_HOST`, or start-up refuses. Set, `thumbs.render_report` sends the stamped page there through
+`renderwire.call` and never starts a browser itself (`REAM_BROWSER` is not read); a renderer that gives no usable
+answer (down, slow past 30 s, busy, or an answer failing `renderwire`'s checks) stores the verdict `unchecked` with
+one finding saying so, and is never replaced by a render in the service's own process. Preview answers 200 as
+before, with `reason: "renderer_unavailable"` then. renderd takes no key: who may call it is the deployment's
+network policy. Runbook: `docs/agent/runbooks/renderer-pod.md`.
 
 Tools update themselves (`src/ream/clientlevel.py`, `selfupdate.py`; decisions.md, 9 Nov 2026): every call sends
 `X-Ream-Client: <level>`, `/api/v1` answers `X-Ream-Client-Min` and, for an older
