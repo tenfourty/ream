@@ -7,6 +7,7 @@ real browser.
 """
 
 import asyncio
+import io
 import os
 import queue
 import re
@@ -452,23 +453,62 @@ def test_an_ancestor_whose_parent_went_mid_read_is_not_a_leftover():
     assert renderd.leftovers(procs, me, uid) == []
 
 
-def test_the_process_reader_lists_an_unreadable_entry_as_gone(monkeypatch, tmp_path):
+def _fake_proc(monkeypatch, failures):
+    """`_read_procs` over a /proc listing this process and the pids of `failures`,
+    whose status reads raise the exception given (or answer the text given)."""
     real_open = open
 
     def fake_listdir(path):
         assert path == "/proc"
-        return ["self", "424246", str(os.getpid())]
+        return ["self", *map(str, failures), str(os.getpid())]
 
     def fake_open(path, *a, **kw):
-        if path == "/proc/424246/status":
-            raise FileNotFoundError(path)
+        for pid, outcome in failures.items():
+            if path == f"/proc/{pid}/status":
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                return io.StringIO(outcome)
         return real_open(path, *a, **kw)
 
     monkeypatch.setattr(renderd.os, "listdir", fake_listdir)
     monkeypatch.setattr("builtins.open", fake_open)
-    procs = renderd._read_procs()
+    return renderd._read_procs()
+
+
+def test_the_process_reader_lists_an_entry_gone_mid_read_as_gone(monkeypatch):
+    procs = _fake_proc(
+        monkeypatch,
+        {
+            424246: FileNotFoundError("/proc/424246/status"),
+            424247: ProcessLookupError(),
+        },
+    )
     assert (424246, -1, renderd.GONE, -1) in procs
-    assert [p[0] for p in procs] == [424246, os.getpid()]
+    assert (424247, -1, renderd.GONE, -1) in procs
+    assert [p[0] for p in procs] == [424246, 424247, os.getpid()]
+
+
+def test_the_process_reader_lists_an_entry_it_may_not_read_as_unreadable(
+    monkeypatch,
+):
+    procs = _fake_proc(
+        monkeypatch,
+        {424248: PermissionError("/proc/424248/status"), 424249: "Name:\tx\n"},
+    )
+    assert (424248, -1, renderd.UNREADABLE, -1) in procs
+    assert (424249, -1, renderd.UNREADABLE, -1) in procs
+
+
+def test_a_child_of_an_unreadable_parent_is_not_a_leftover():
+    # hidepid, or another uid's entry: the parent is alive, only not readable.
+    me, uid = 50, 1000
+    procs = [
+        (1, 0, "S", 0),
+        (50, 1, "S", uid),
+        (77, -1, renderd.UNREADABLE, -1),
+        (90, 77, "S", uid),
+    ]
+    assert renderd.leftovers(procs, me, uid) == []
 
 
 def test_one_empty_list_is_not_enough_to_call_a_render_clean(monkeypatch):

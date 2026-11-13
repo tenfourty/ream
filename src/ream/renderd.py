@@ -63,6 +63,8 @@ STRAY_POLL_SECONDS = 0.05
 STRAY_CONFIRM_SECONDS = 0.1
 # A process listed in /proc but gone before it could be read.
 GONE = "gone"
+# A process listed in /proc whose entry is there but could not be read: alive.
+UNREADABLE = "unreadable"
 EXIT_REFUSED = 2
 EXIT_STRAY = 3
 # prctl(2) options: make this process the reaper of its orphaned descendants.
@@ -129,8 +131,10 @@ def _read_procs() -> list[tuple[int, int, str, int]]:
     not listed: /proc lists only processes, so uvicorn's and asyncio's worker
     threads never appear here. The entries are read one by one, so the list is not
     one instant: a process listed in /proc that is gone before its own entry could
-    be read appears as `(pid, -1, GONE, -1)`, so that a child read just before it
-    went, still naming it as parent, can be told apart (see `leftovers`)."""
+    be read (ENOENT, ESRCH) appears as `(pid, -1, GONE, -1)`, so that a child read
+    just before it went, still naming it as parent, can be told apart (see
+    `leftovers`). One whose entry is there but cannot be read (a permission refused,
+    a status without its fields) is alive, and appears as `(pid, -1, UNREADABLE, -1)`."""
     found = []
     for entry in os.listdir("/proc"):
         if not entry.isdigit():
@@ -138,8 +142,11 @@ def _read_procs() -> list[tuple[int, int, str, int]]:
         try:
             with open(f"/proc/{entry}/status") as f:
                 text = f.read()
-        except OSError:
+        except (FileNotFoundError, ProcessLookupError):
             found.append((int(entry), -1, GONE, -1))
+            continue
+        except OSError:  # alive but not ours to read (hidepid, another uid)
+            found.append((int(entry), -1, UNREADABLE, -1))
             continue
         fields = {}
         for line in text.splitlines():
@@ -155,7 +162,7 @@ def _read_procs() -> list[tuple[int, int, str, int]]:
                 )
             )
         except (KeyError, IndexError, ValueError):
-            found.append((int(entry), -1, GONE, -1))
+            found.append((int(entry), -1, UNREADABLE, -1))
     return found
 
 
@@ -171,7 +178,7 @@ def leftovers(procs, me: int, uid: int) -> list[int]:
         process read just before its parent exited still names that parent, and
         so looks cut off from the tree. It is counted rather than missed.
 
-    A parent never listed at all is not that case: /proc may hide other users'
+    A parent never listed at all, or listed but UNREADABLE, is not that case: /proc may hide other users'
     processes (`hidepid`), and a process whose parent is hidden is not one this
     process started. A process merely of the same uid that this process did not
     start (a pod's exec probe, the user's shell, another job on a shared machine)
@@ -204,7 +211,7 @@ def leftovers(procs, me: int, uid: int) -> list[int]:
             and pid not in ancestors
         ):
             found.add(pid)
-    return sorted(pid for pid in found if state[pid] not in ("Z", GONE))
+    return sorted(pid for pid in found if state[pid] not in ("Z", GONE, UNREADABLE))
 
 
 def _reap_zombies(procs, me: int) -> None:
