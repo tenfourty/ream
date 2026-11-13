@@ -177,7 +177,7 @@ def test_the_data_limit_is_enforced_by_the_kernel():
 
 
 @needs_browser
-def test_a_real_page_renders_to_a_real_png():
+def test_a_real_page_renders_to_a_real_png(render_mode):
     png = thumbs.render(PAGE)
     assert png is not None
     assert png.startswith(b"\x89PNG\r\n\x1a\n")
@@ -185,7 +185,7 @@ def test_a_real_page_renders_to_a_real_png():
 
 
 @needs_browser
-def test_a_page_that_never_settles_still_returns(monkeypatch):
+def test_a_page_that_never_settles_still_returns(render_mode):
     """A page can loop. It must not hold a worker: the virtual time budget ends
     the render whatever the page is doing."""
     spinning = (

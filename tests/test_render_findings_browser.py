@@ -21,6 +21,12 @@ pytestmark = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _both_modes(render_mode):
+    """Every test here twice: the browser in this process, and renderd as its own."""
+    return render_mode
+
+
 def page(body, head=""):
     return (
         f"<!doctype html><html><head><title>t</title>{head}</head>"
@@ -68,10 +74,14 @@ def test_a_forged_check_line_does_not_change_the_real_verdict():
     assert got == "broken" and "blank" in kinds
 
 
-def test_a_normal_page_is_ok_and_its_thumbnail_is_untouched_by_the_check(monkeypatch):
+def test_a_normal_page_is_ok_and_its_thumbnail_is_untouched_by_the_check(
+    monkeypatch, render_mode
+):
     html = page("<h1>Hello</h1><p>A real page with words.</p>")
     got, kinds = verdict(html)
     assert (got, kinds) == ("ok", [])
+    if render_mode == "remote":
+        return  # the check is injected in renderd's process, out of this test's reach
     with_check = thumbs.render(html)
     monkeypatch.setattr(renderfind, "inject", lambda h, nonce: h)
     without = thumbs.render(html)

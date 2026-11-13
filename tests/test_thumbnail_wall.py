@@ -84,11 +84,12 @@ def test_a_picture_for_a_version_that_has_gone_is_dropped_not_raised(db):
 @pytest.mark.skipif(
     not thumbs.available(), reason="no headless browser in this environment"
 )
-def test_a_real_publish_gets_a_real_picture_in_the_background(client, db):
+def test_a_real_publish_gets_a_real_picture_in_the_background(client, db, render_mode):
     """End to end with the real browser: a publish through the API returns, and
     the page's picture arrives afterwards. Every other test in the suite has the
     background render switched off (tests/conftest.py), so this is where the
-    whole path -- publish, thread, browser, store -- is proved."""
+    whole path -- publish, thread, browser, store -- is proved, with the browser
+    in this process and with renderd as its own process (`render_mode`)."""
     token, _ = keys.mint(db, agent="seat")
     got = client.post(
         "/api/v1/artifacts", json={"title": "Board", "body": PAGE}, headers=auth(token)

@@ -20,7 +20,7 @@ import threading
 import time
 from datetime import UTC, datetime
 
-from ream import rendercore, renderfind, scanslots, stamp, store
+from ream import rendercore, renderfind, renderwire, scanslots, settings, stamp, store
 from ream.rendercore import (  # noqa: F401 -- re-exported for callers and tests
     _PRLIMIT,
     _RENDER_SLOT,
@@ -39,7 +39,6 @@ from ream.rendercore import (  # noqa: F401 -- re-exported for callers and tests
     _pss_bytes,
     _run,
     _stat_pgrp_and_pages,
-    available,
     browser_path,
     console_errors,
     too_big_to_render,
@@ -52,6 +51,18 @@ log = logging.getLogger("ream.thumbs")
 # renders wait or run; past that a page gets no picture this time, and its next
 # publish tries again.
 _BACKGROUND_SLOTS = threading.BoundedSemaphore(4)
+
+
+def renderer_url() -> str:
+    """The renderer this deployment sends renders to (`REAM_RENDERER_URL`), or ""
+    when the browser runs in this process."""
+    return settings.current().renderer_url
+
+
+def available() -> bool:
+    """Whether this deployment renders at all: a renderer is set, or a browser is
+    here. With a renderer set, whether it answers is a render's own outcome."""
+    return bool(renderer_url()) or rendercore.available()
 
 
 def render(html: str) -> bytes | None:
@@ -69,10 +80,18 @@ def render_report(
 ) -> tuple[bytes | None, list[str] | None]:
     """(PNG or None, the page's script errors or None when it did not run).
     `width`/`height` are the viewport, and so the shot: the tile's by default,
-    a phone's for a preview (homelab-ij8.107)."""
-    binary = browser_path()
-    if binary is None:
-        return None, None
+    a phone's for a preview (homelab-ij8.107).
+
+    With a renderer set (`REAM_RENDERER_URL`) the page goes to it and no browser
+    starts here, whatever REAM_BROWSER says. When it gives no usable answer the
+    report says so (`reason` is `renderwire.UNAVAILABLE`); it is never rendered
+    here instead."""
+    url = renderer_url()
+    binary = None
+    if not url:
+        binary = browser_path()
+        if binary is None:
+            return None, None
     if too_big_to_render(html):
         log.info("no thumbnail: page is over %d bytes", RENDER_MAX_BYTES)
         return None, None
@@ -81,6 +100,12 @@ def render_report(
     # found by the first live preview, 24 Sep 2026, and true of every tile on
     # the wall. A render happens at publish or preview time, so now is the date.
     html = stamp.apply(html, datetime.now(UTC))
+    if url:
+        try:
+            return renderwire.call(url, html, width, height, check=True)
+        except renderwire.RenderUnavailable:
+            log.warning("render not run: the renderer gave no usable answer")
+            return Report(None, None, None, reason=renderwire.UNAVAILABLE)
     return rendercore.screenshot(binary, html, width, height)
 
 
@@ -171,7 +196,12 @@ def render_in_background(db, artifact_id: str, version_n: int, html: str) -> Non
             _record(key, png is not None)
             if png is not None:
                 store.save_thumbnail(db, artifact_id, version_n, png)
-            if errors is not None:
+            if getattr(result, "reason", None) == renderwire.UNAVAILABLE:
+                verdict, findings = renderfind.renderer_unavailable()
+                store.save_render_errors(
+                    db, artifact_id, version_n, [], verdict, findings
+                )
+            elif errors is not None:
                 missing, live = scan_for_findings(html)
                 verdict, findings = renderfind.assess(
                     errors, getattr(result, "check", None), missing, live

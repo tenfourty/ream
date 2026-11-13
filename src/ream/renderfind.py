@@ -426,6 +426,20 @@ def _clean(detail: str) -> str:
     return text.sanitize(detail, DETAIL_LIMIT)
 
 
+# The one finding of a render the renderer gave no usable answer for.
+UNAVAILABLE_NOTE = (
+    "the renderer could not be reached or gave no usable answer,"
+    " so the page was not rendered"
+)
+
+
+def renderer_unavailable() -> tuple[str, list[dict]]:
+    """(verdict, findings) for a render the renderer (`REAM_RENDERER_URL`) gave no
+    usable answer for: `unchecked`, with one finding that says so. Kept apart from
+    "no browser here", which stores nothing and reads as not rendered."""
+    return "unchecked", [{"kind": "unchecked", "detail": UNAVAILABLE_NOTE}]
+
+
 def assess(
     errors: list[str] | None,
     check: dict | None,

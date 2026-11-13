@@ -33,6 +33,7 @@ from __future__ import annotations
 import binascii
 import http.client
 import json
+import os
 import re
 import socket
 import struct
@@ -310,10 +311,14 @@ def call(url: str, html: str, width: int, height: int, check: bool) -> Report:
     target = f"/v1/render?w={int(width)}&h={int(height)}&check={1 if check else 0}"
     deadline = time.monotonic() + CALL_DEADLINE_SECONDS
     conn = http.client.HTTPConnection(host, port, timeout=CONNECT_TIMEOUT_SECONDS)
+    # A dup of the connected socket's descriptor, for the timer: http.client drops
+    # `conn.sock` once a response says it will close, while the response reads on.
+    handle: list[socket.socket] = []
+    expired = threading.Event()
 
     def cut() -> None:
-        sock = conn.sock
-        if sock is not None:
+        expired.set()
+        for sock in tuple(handle):
             try:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
@@ -324,6 +329,9 @@ def call(url: str, html: str, width: int, height: int, check: bool) -> Report:
     timer.start()
     try:
         conn.connect()
+        handle.append(socket.socket(fileno=os.dup(conn.sock.fileno())))
+        if expired.is_set():
+            raise RenderUnavailable()
         left = deadline - time.monotonic()
         if left <= 0:
             raise RenderUnavailable()
@@ -357,3 +365,5 @@ def call(url: str, html: str, width: int, height: int, check: bool) -> Report:
     finally:
         timer.cancel()
         conn.close()
+        for sock in handle:
+            sock.close()

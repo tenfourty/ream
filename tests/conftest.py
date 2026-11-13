@@ -1029,3 +1029,135 @@ def _new_pages_say_comments(request, monkeypatch):
         return real(self, method, url, *args, **kwargs)
 
     monkeypatch.setattr(TestClient, "request", request_with_comments)
+
+
+# --- the renderer as its own process (ream.renderd) -------------------------------------
+
+
+_RENDERD_LISTENING = re.compile(r"Uvicorn running on http://127\.0\.0\.1:(\d+) ")
+
+
+@contextlib.contextmanager
+def _renderd_process():
+    """`python -m ream.renderd` on loopback, on a port it picks itself (`--port 0`, read
+    from its start-up line), with only what it takes in its environment. Yields its
+    `http://127.0.0.1:<port>`."""
+    import queue
+    import subprocess
+    import sys
+
+    from ream import rendercore
+
+    short = Path(
+        tempfile.mkdtemp(prefix="rd", dir="/tmp")
+    )  # renderd.WORK_ROOT_MAX_CHARS
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": os.environ.get("HOME", "/"),
+        "REAM_BROWSER": rendercore.browser_path() or "",
+    }
+    proc = subprocess.Popen(  # noqa: S603 -- argv list, no shell
+        [sys.executable, "-m", "ream.renderd", "--port", "0"]
+        + ["--work-dir", str(short / "w")],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    lines: list[str] = []
+    seen: queue.Queue = queue.Queue()
+
+    def read():
+        for line in proc.stderr:
+            lines.append(line)
+            seen.put(line)
+        seen.put(None)
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    try:
+        port = None
+        while port is None:
+            line = seen.get(timeout=30)
+            assert line is not None, f"renderd ended before listening: {lines}"
+            if m := _RENDERD_LISTENING.search(line):
+                port = int(m.group(1))
+        yield f"http://127.0.0.1:{port}"
+        assert proc.poll() is None, f"renderd ended during the tests: {lines}"
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+        try:
+            proc.wait(15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        reader.join(15)
+        shutil.rmtree(short, ignore_errors=True)
+
+
+@pytest.fixture(scope="module")
+def _renderd_url():
+    with _renderd_process() as url:
+        yield url
+
+
+@pytest.fixture(params=["inprocess", "remote"])
+def render_mode(request):
+    """Run the test with the browser in this process, then again with renderd as its
+    own process and REAM_RENDERER_URL pointing at it."""
+    if request.param == "remote":
+        from ream import settings
+
+        url = request.getfixturevalue("_renderd_url")
+        with settings.override(renderer_url=url):
+            yield "remote"
+    else:
+        yield "inprocess"
+
+
+class StubRenderer:
+    """A tiny HTTP server standing in for a renderer. `answer(handler)` writes the
+    response; the requests it got are in `requests` as `(path, headers, body)`."""
+
+    def __init__(self) -> None:
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        stub = self
+        self.requests: list[tuple[str, dict, bytes]] = []
+        self.answer = None
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(length)
+                stub.requests.append((self.path, dict(self.headers), body))
+                try:
+                    stub.answer(self)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def log_message(self, *args):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.server.block_on_close = (
+            False  # a handler still sleeping never holds a test
+        )
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture()
+def stub_renderer():
+    stub = StubRenderer()
+    try:
+        yield stub
+    finally:
+        stub.close()

@@ -69,6 +69,7 @@ from ream import (
     readside,
     receipts,
     renderfind,
+    renderwire,
     review,
     scanslots,
     sections,
@@ -2285,12 +2286,15 @@ def agent_router(
         finally:
             _PREVIEW_SLOT.release()
         verdict, findings = "unchecked", []
-        if errors is not None:
+        reason = getattr(report, "reason", None)
+        if reason == renderwire.UNAVAILABLE:
+            verdict, findings = renderfind.renderer_unavailable()
+        elif errors is not None:
             missing, live = thumbs.scan_for_findings(body)
             verdict, findings = renderfind.assess(
                 errors, getattr(report, "check", None), missing, live
             )
-        return {
+        answer = {
             "rendered": png is not None,
             "renderer": True,
             "width": width,
@@ -2300,6 +2304,11 @@ def agent_router(
             "findings": findings,
             "png_base64": base64.b64encode(png).decode() if png else None,
         }
+        if reason:
+            # Why nothing was rendered, when it is not the page's doing: the
+            # renderer (REAM_RENDERER_URL) gave no usable answer.
+            answer["reason"] = reason
+        return answer
 
     @router.get("/artifacts/{artifact_id}/render")
     def read_render(artifact_id: str, agent: str = Depends(caller)):
