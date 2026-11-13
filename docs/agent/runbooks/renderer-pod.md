@@ -16,10 +16,20 @@ Set:
   renderer; the service starts no browser and ignores `REAM_BROWSER`;
 - `renderer: true` is reported whether or not the renderer is up; the service's own readiness never
   depends on it;
-- a render the renderer gives no usable answer for (not up, slower than 30 s, busy, or an answer that
-  fails the service's checks) is stored as verdict `unchecked` with one finding saying the renderer could
-  not be reached. It is never redone in the service's own process. Preview still answers 200, with
-  `rendered: false` and `reason: "renderer_unavailable"`.
+- a renderer that answers 503 is asked once more after its `Retry-After` (whole seconds, at most 10),
+  when that fits in the same 30 s;
+- a render the renderer gives no usable answer for (not up, slower than 30 s, still busy, or an answer
+  that fails the service's checks) is stored as verdict `unchecked` with one finding saying the renderer
+  could not be reached; one it answers it did not render (`not_run`) is stored as `unchecked` with a
+  finding saying so. Neither is redone in the service's own process. Preview still answers 200, with
+  `rendered: false` and `reason` `"renderer_unavailable"` or `"renderer_not_run"`.
+
+**What the service trusts the renderer for.** The service checks the shape of every answer (the
+picture is a well-formed PNG of the size asked for, the errors are short plain strings, the check
+numbers are in bounds), but it cannot tell whether the renderer's check numbers and errors are honest.
+A renderer is trusted for its verdict on a page, and that is all: it holds no key, no database and none
+of the service's settings, so what it can affect is limited to its own pod and the verdicts and
+pictures it answers.
 
 ## What a deployment adds
 
@@ -41,7 +51,16 @@ Set:
 3. **A network policy** that admits only the service's pods to the renderer. renderd has no key or token:
    who may call it is decided by this policy alone. It requires a fixed, non-secret request header
    (`X-Ream-Render: 1`), so that a page in a browser cannot be made to call it.
-4. Then set `REAM_RENDERER_URL=http://<service name>:8091` on the service and restart it.
+4. **The pod's own limits:**
+   - a network policy that allows no egress;
+   - no service-account token (`automountServiceAccountToken: false`);
+   - a read-only root filesystem, with `/tmp` an `emptyDir`;
+   - all capabilities dropped, no privilege escalation;
+   - a non-root user;
+   - probes that are `httpGet` or `tcpSocket` on port 8091 (`/healthz` for liveness, `/readyz` for
+     readiness), never `exec`.
+5. Then set `REAM_RENDERER_URL=http://<service name>:8091` on the service and restart it. The host is a
+   name of letters, digits, dots and hyphens, or an IP address; the port is 1 to 65535.
 
 ## How to check it
 
