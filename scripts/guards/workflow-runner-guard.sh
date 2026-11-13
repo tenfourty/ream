@@ -72,7 +72,9 @@
 # files, Forgejo would fall back to publish.yml. Rule 3 keeps it out of the private copy.
 #
 # HOW. Parsed with PyYAML (`python3` if it has it, else `uv run --with pyyaml`; CI's selftest step
-# has uv). The `if:` is read by a small tokenizer for the expression syntax (single-quoted strings
+# has uv), always through the one reader YAML_READER below: the workflow files, sec.yml again for
+# its job order, and local action files are all read with the same refusals. The `if:` is read
+# by a small tokenizer for the expression syntax (single-quoted strings
 # with '' as the escape, parentheses, && || ! == != < > <= >=), not by a regex: an `if:` that
 # is wrapped in ${{ }} only as a whole is unwrapped, one that mixes ${{ }} with other text is refused.
 # Workflow files are found recursively (*.yml, *.yaml in any letter case); `sec.yml` is the file
@@ -191,6 +193,63 @@ pinned_python() {
   }
 }
 
+# YAML_READER — the one way this guard reads YAML, prepended to each embedded Python program below
+# (check_dir, check_sec_order, check_actions), so every workflow and action file is read the same way.
+# read_yaml(text) returns the list of documents, or raises Refused (a rule fired: the message names
+# it) or yaml.YAMLError (the text does not parse cleanly). It refuses what a second parser could read
+# differently: an anchor or alias, any explicit tag (`!!str`, `!!binary`, `!local`, `!`, on a key or a
+# value, a scalar, a mapping or a sequence), a merge key (<<), a duplicate key, and any mapping key
+# that does not load as a string (the plain key `on` aside, which PyYAML reads as true and the
+# runner as the string "on").
+read -r -d '' YAML_READER <<'PYEOF' || true
+import yaml
+
+MERGE_TAG = "tag:yaml.org,2002:merge"
+
+
+class Refused(yaml.YAMLError):
+    """A reading rule fired; the message says which ([rule: ...] where it has a name)."""
+
+
+class Loader(yaml.SafeLoader):
+    """SafeLoader that refuses what a second parser could read differently."""
+
+    def construct_mapping(self, node, deep=False):
+        seen = set()
+        for key_node, _ in node.value:
+            if key_node.tag == MERGE_TAG:
+                raise yaml.YAMLError("a merge key (<<) is not allowed")
+            key = self.construct_object(key_node, deep=True)
+            # Every mapping key must load as a string, so each rule that looks a key up by its name
+            # sees every key. The one exception is the plain key `on` (see above).
+            plain_on = (
+                key is True and isinstance(key_node, yaml.ScalarNode)
+                and key_node.value == "on" and key_node.style is None
+            )
+            if not isinstance(key, str) and not plain_on:
+                raise Refused(
+                    f"line {key_node.start_mark.line + 1}: a mapping key that is not a string "
+                    f"(a {type(key).__name__}): workflow and action files may use only string mapping keys [rule: string keys]"
+                )
+            if key in seen:
+                raise yaml.YAMLError(f"duplicate key {key!r}")
+            seen.add(key)
+        return super().construct_mapping(node, deep)
+
+
+def read_yaml(text):
+    for ev in yaml.parse(text, Loader=yaml.SafeLoader):
+        if isinstance(ev, yaml.AliasEvent) or getattr(ev, "anchor", None):
+            raise Refused("an anchor or alias: a parser could read it differently from Forgejo's")
+        # PyYAML leaves `tag` None on every node written without an explicit tag.
+        if getattr(ev, "tag", None) is not None:
+            raise Refused(
+                f"line {ev.start_mark.line + 1}: an explicit YAML tag ({str(ev.tag)[:80]}): "
+                "workflow and action files may not use explicit YAML tags [rule: no explicit tags]"
+            )
+    return list(yaml.load_all(text, Loader=Loader))
+PYEOF
+
 # check_dir <dir> [forgejo|github] — prints a refusal per problem and a final count line; rc 0 clean,
 # 1 refused, 3 cannot run (no PyYAML). forgejo (the default): sec.yml and the gate runcove/artifacts,
 # the directory must exist and hold a workflow. github: the gate tenfourty/ream, no special file,
@@ -206,7 +265,7 @@ check_dir() {
     echo "$SELF: REFUSED — no PyYAML: neither python3 nor uv (with pyyaml) can parse the workflows, and an unchecked workflow is a refused one" >&2
     return 3
   fi
-  "${PY[@]}" - "$1" "$kind" "$repo" <<'PYEOF'
+  { printf '%s\n' "$YAML_READER"; cat; } <<'PYEOF' | "${PY[@]}" - "$1" "$kind" "$repo"
 import pathlib
 import re
 import sys
@@ -221,44 +280,12 @@ SEC_LABEL = "runcove-sec"  # the privileged dedicated runner: the image job only
 SEC_UNPRIV = "runcove-sec-unpriv"  # every other job of sec.yml
 SEC_IMAGE_JOB = "image"
 GATE = [("w", "github.repository"), ("op", "=="), ("str", GATE_REPO)]
-MERGE_TAG = "tag:yaml.org,2002:merge"
 
 problems = []
 
 
 def refuse(where, why):
     problems.append(f"{SELF}: REFUSED {where}: {why}")
-
-
-class KeyNotString(yaml.YAMLError):
-    """A mapping key that does not load as a string (see Loader.construct_mapping)."""
-
-
-class Loader(yaml.SafeLoader):
-    """SafeLoader that refuses what a second parser could read differently."""
-
-    def construct_mapping(self, node, deep=False):
-        seen = set()
-        for key_node, _ in node.value:
-            if key_node.tag == MERGE_TAG:
-                raise yaml.YAMLError("a merge key (<<) is not allowed")
-            key = self.construct_object(key_node, deep=True)
-            # Every mapping key must load as a string, so each rule below that looks a key up by
-            # its name sees every key. The one exception is the plain key `on`, which this
-            # YAML 1.1 parser reads as the boolean true (and the runner reads as the string "on").
-            plain_on = (
-                key is True and isinstance(key_node, yaml.ScalarNode)
-                and key_node.value == "on" and key_node.style is None
-            )
-            if not isinstance(key, str) and not plain_on:
-                raise KeyNotString(
-                    f"line {key_node.start_mark.line + 1}: a mapping key that is not a string "
-                    f"(a {type(key).__name__}): workflow files may use only string mapping keys [rule: string keys]"
-                )
-            if key in seen:
-                raise yaml.YAMLError(f"duplicate key {key!r}")
-            seen.add(key)
-        return super().construct_mapping(node, deep)
 
 
 USES_SHA = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_./-]+)?@[0-9a-f]{40}")
@@ -513,18 +540,8 @@ def check_file(path, rel):
         refuse(rel, f"cannot be read as UTF-8 ({e})")
         return 0, 0
     try:
-        for ev in yaml.parse(text, Loader=yaml.SafeLoader):
-            if isinstance(ev, yaml.AliasEvent) or getattr(ev, "anchor", None):
-                refuse(rel, "an anchor or alias: a parser could read it differently from Forgejo's")
-                return 0, 0
-            # Any explicit tag (`!!str`, `!!binary`, `!local`, `!`), on a key or a value, a scalar,
-            # a mapping or a sequence: PyYAML leaves `tag` None on every node written without one.
-            if getattr(ev, "tag", None) is not None:
-                line = ev.start_mark.line + 1
-                refuse(rel, f"line {line}: an explicit YAML tag ({str(ev.tag)[:80]}): workflow files may not use explicit YAML tags [rule: no explicit tags]")
-                return 0, 0
-        docs = list(yaml.load_all(text, Loader=Loader))
-    except KeyNotString as e:
+        docs = read_yaml(text)
+    except Refused as e:
         refuse(rel, str(e))
         return 0, 0
     except (yaml.YAMLError, TypeError, ValueError) as e:
@@ -635,7 +652,7 @@ check_sec_order() {
     echo "$SELF: REFUSED — no PyYAML: cannot read sec.yml's job order" >&2
     return 3
   fi
-  "${PY[@]}" - "$1" <<'PYEOF'
+  { printf '%s\n' "$YAML_READER"; cat; } <<'PYEOF' | "${PY[@]}" - "$1"
 import re
 import sys
 
@@ -646,11 +663,17 @@ GUARD = "runner-guard"
 path = sys.argv[1]
 problems = []
 try:
-    with open(path) as fh:
-        doc = yaml.safe_load(fh)
+    with open(path, encoding="utf-8") as fh:
+        docs = read_yaml(fh.read())
+    if len(docs) != 1:
+        raise ValueError("not exactly one YAML document")
+    doc = docs[0]
     jobs = doc["jobs"]
     if not isinstance(jobs, dict) or not jobs or not all(isinstance(j, dict) for j in jobs.values()):
         raise ValueError("no jobs")
+except Refused as e:
+    print(f"{SELF}: REFUSED {path}: {e}")
+    sys.exit(1)
 except Exception as e:
     print(f"{SELF}: {path}: could not be read as a workflow with jobs ({type(e).__name__})")
     sys.exit(1)
@@ -847,7 +870,7 @@ check_actions() {
     echo "$SELF: REFUSED — no PyYAML: cannot read the local actions" >&2
     return 3
   fi
-  "${PY[@]}" - "$1" <<'PYEOF'
+  { printf '%s\n' "$YAML_READER"; cat; } <<'PYEOF' | "${PY[@]}" - "$1"
 import os
 import pathlib
 import sys
@@ -883,8 +906,11 @@ for dirpath, dirnames, filenames in os.walk(root):
             problems.append(f"{rel}: is a symlink")
             continue
         try:
-            docs = list(yaml.safe_load_all(p.read_text()))
-        except (yaml.YAMLError, UnicodeDecodeError, ValueError) as e:
+            docs = read_yaml(p.read_bytes().decode("utf-8"))
+        except Refused as e:
+            problems.append(f"{rel}: {e}")
+            continue
+        except (OSError, yaml.YAMLError, UnicodeDecodeError, ValueError, TypeError) as e:
             problems.append(f"{rel}: does not parse ({type(e).__name__})")
             continue
         if any("sec_runner_name" in t.casefold() for t in texts(docs)):
@@ -1292,6 +1318,14 @@ selftest() {
   mkdir -p "$o"
   ordwf "$o/ok.yml" "" "    needs: [runner-guard]\n" "    needs: [privacy]\n"
   ocase_ "order: the guard first, everything after it" 0 "$o/ok.yml"
+  # sec.yml read on its own goes through the same reader: no explicit tag, only string keys.
+  # The base64 word is built here from the plain key name `if`.
+  cp "$o/ok.yml" "$o/tagkey.yml"
+  sed -i "s|^  test:\$|  test:\n    !!binary $(printf if | base64): always()|" "$o/tagkey.yml"
+  ocase_ "order: a sec.yml with a !!binary key is refused on its own" 1 "$o/tagkey.yml" "[rule: no explicit tags]"
+  cp "$o/ok.yml" "$o/intkey.yml"
+  sed -i 's|^  test:$|  test:\n    1: x|' "$o/intkey.yml"
+  ocase_ "order: a sec.yml with an int key is refused on its own" 1 "$o/intkey.yml" "[rule: string keys]"
   ordwf "$o/none.yml" - "" "    needs: [privacy]\n"
   ocase_ "order: no runner-guard job" 1 "$o/none.yml" "has no runner-guard job"
   { printf 'name: sec\n"on": push\njobs:\n  privacy:\n    runs-on: runcove-sec\n    needs: [runner-guard]\n    steps:\n      - run: echo\n'
@@ -1725,6 +1759,17 @@ selftest() {
   mkdir -p "$a/venv/.venv/x"
   printf 'runs:\n  env: {SEC_RUNNER_NAME: x}\n' >"$a/venv/.venv/x/action.yml"
   acase_ "actions: one under .venv is read too" 1 "$a/venv" ".venv/x/action.yml: names SEC_RUNNER_NAME"
+  # Local actions go through the same reader: no explicit tag, only string keys. The base64 word is
+  # built here from the plain variable name.
+  mkdir -p "$a/tag/x"
+  printf 'runs:\n  env:\n    !!binary %s: x\n' "$(printf SEC_RUNNER_NAME | base64)" >"$a/tag/x/action.yml"
+  acase_ "actions: a !!binary key in an action.yml" 1 "$a/tag" "x/action.yml: line 3: an explicit YAML tag"
+  mkdir -p "$a/tagval/x"
+  printf 'runs:\n  using: !local composite\n' >"$a/tagval/x/action.yml"
+  acase_ "actions: a !local tag on a value in an action.yml" 1 "$a/tagval" "[rule: no explicit tags]"
+  mkdir -p "$a/intkey/x"
+  printf 'runs:\n  env:\n    1: x\n' >"$a/intkey/x/action.yml"
+  acase_ "actions: an int key in an action.yml" 1 "$a/intkey" "[rule: string keys]"
 
   echo "----"
   if [ "$fail" -eq 0 ]; then
