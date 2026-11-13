@@ -1057,7 +1057,7 @@ def _renderd_process():
         "REAM_BROWSER": rendercore.browser_path() or "",
     }
     proc = subprocess.Popen(  # noqa: S603 -- argv list, no shell
-        [sys.executable, "-m", "ream.renderd", "--port", "0"]
+        [sys.executable, "-m", "ream.renderd", "--dev", "--port", "0"]
         + ["--work-dir", str(short / "w")],
         env=env,
         stdout=subprocess.DEVNULL,

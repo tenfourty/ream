@@ -1,6 +1,8 @@
 """The renderer as its own process: one browser at a time, nothing of the app's environment.
 
-    python -m ream.renderd --port 8091 [--bind 0.0.0.0] [--selfcheck]
+    python -m ream.renderd --end-all-after-render --port 8091 [--bind 0.0.0.0]
+    python -m ream.renderd --dev --port 8091      # on a shared machine
+    python -m ream.renderd --dev --selfcheck --work-dir /tmp/rd-check
 
 A bare ASGI app under uvicorn (no FastAPI), serving the wire `ream.renderwire`
 describes. The app sends a page already stamped as a reader would see it; this
@@ -14,7 +16,9 @@ process stamps nothing, makes the check script's nonce, runs the browser through
     nothing here ever sends a CORS header. `check=0` answers `check: null`.
   * `GET /healthz`: the process is up. `GET /readyz`: the browser, prlimit and a
     writable work directory are there.
-  * `--selfcheck`: render a built-in page, check the answer, exit 0 or 1.
+  * `--selfcheck`: render a built-in page, check the answer, exit 0 or 1. It
+    empties its work directory and, armed, ends every process of its uid, so
+    beside a running renderer it takes `--dev` and a work directory of its own.
 
 It refuses to start while its environment carries anything of the app's
 (`settings.renderer_foreign_count`): DATABASE_URL, or a `REAM_*`/`ARTIFACTS_*`
@@ -24,11 +28,26 @@ One browser at a time: a request waits up to SLOT_WAIT_SECONDS for the render
 slot, then answers 503 with Retry-After. Every render gets its own directory,
 browser profile and cache under the work directory, which is emptied at start
 and after each render. The process is a child subreaper
-(`prctl(PR_SET_CHILD_SUBREAPER)`, Linux only; it refuses to start without it), so a
-browser helper orphaned by a render is reparented to it rather than to pid 1. After
-each render no process descended from it (nor one of its uid whose parent
-went while the list was read) may be left alive, on two lists of processes read apart; if one is,
-the process logs it and exits non-zero so that whatever supervises it starts a fresh one.
+(`prctl(PR_SET_CHILD_SUBREAPER)`, Linux only), so a browser helper orphaned by a
+render is reparented to it rather than to pid 1, and it is not dumpable
+(`prctl(PR_SET_DUMPABLE, 0)`), so a process of its uid cannot trace it or read its
+memory; it refuses to start without either.
+
+It runs in one of two modes, and refuses to start in neither (or both):
+
+  * `--end-all-after-render`, for its own container: after every render it ends
+    every process of its uid (`kill(-1, SIGKILL)`: every process it may signal but
+    pid 1 and itself), reaps its children, and empties the work directory. Armed
+    only where that is safe: it refuses to start as pid 1, without a `/proc/1`, or
+    where it looks like a whole machine rather than a container (`host_signs`: pid
+    1's command is `systemd` or `init`, or cannot be read, or `kthreadd` is pid 2).
+    Anything else of its uid in the container ends with each render, so a probe
+    is httpGet or tcpSocket on its port, never exec.
+  * `--dev`, on a shared machine (a developer's, the tests): nothing is ended. It
+    logs that at start, and after each render no process descended from it (nor
+    one of its uid whose parent went while the list was read) may be left alive, on
+    two lists of processes read apart; if one is, it logs it and exits non-zero so
+    that whatever supervises it starts a fresh one.
 """
 
 from __future__ import annotations
@@ -39,6 +58,7 @@ import ctypes
 import logging
 import os
 import shutil
+import signal
 import stat
 import sys
 import tempfile
@@ -70,6 +90,14 @@ EXIT_STRAY = 3
 # prctl(2) options: make this process the reaper of its orphaned descendants.
 PR_SET_CHILD_SUBREAPER = 36
 PR_GET_CHILD_SUBREAPER = 37
+# ... and make it not dumpable: no ptrace, no /proc/<pid>/mem, by its own uid.
+PR_GET_DUMPABLE = 3
+PR_SET_DUMPABLE = 4
+# Armed (--end-all-after-render): how long its children have to be reaped after
+# every process of its uid was ended.
+REAP_GRACE_SECONDS = 2.0
+# Pid 1 on a whole machine rather than in a container.
+HOST_INITS = frozenset({"systemd", "init"})
 WORK_DIR_NAME = "ream-renderd"
 # The browser makes its profile, and a socket inside it, under each render's
 # directory, and a socket's path is short (108 bytes on Linux). Playwright's chrome
@@ -248,24 +276,23 @@ def _strays_after_render() -> list[int]:
         time.sleep(STRAY_POLL_SECONDS)
 
 
-def _prctl(option: int, arg) -> None:
-    """prctl(2) through libc, with one argument; raises OSError on failure, and on
-    anything but Linux."""
+def _prctl(option: int, arg) -> int:
+    """prctl(2) through libc, with one argument, and what it returns; raises OSError
+    on failure, and on anything but Linux."""
     if not sys.platform.startswith("linux"):
         raise OSError("prctl needs Linux")
     libc = ctypes.CDLL(None, use_errno=True)
-    if (
-        libc.prctl(
-            ctypes.c_int(option),
-            arg,
-            ctypes.c_ulong(0),
-            ctypes.c_ulong(0),
-            ctypes.c_ulong(0),
-        )
-        < 0
-    ):
+    result = libc.prctl(
+        ctypes.c_int(option),
+        arg,
+        ctypes.c_ulong(0),
+        ctypes.c_ulong(0),
+        ctypes.c_ulong(0),
+    )
+    if result < 0:
         errno = ctypes.get_errno()
         raise OSError(errno, os.strerror(errno))
+    return result
 
 
 def set_subreaper(on: bool = True) -> None:
@@ -278,6 +305,78 @@ def is_subreaper() -> bool:
     value = ctypes.c_int(0)
     _prctl(PR_GET_CHILD_SUBREAPER, ctypes.byref(value))
     return value.value != 0
+
+
+def set_not_dumpable() -> None:
+    """Make this process not dumpable: a process of its uid (the browser it starts
+    among them) can then neither trace it nor read its memory. OSError when it
+    cannot, or when the setting did not take."""
+    _prctl(PR_SET_DUMPABLE, ctypes.c_ulong(0))
+    if is_dumpable():
+        raise OSError("still dumpable")
+
+
+def is_dumpable() -> bool:
+    return _prctl(PR_GET_DUMPABLE, ctypes.c_ulong(0)) != 0
+
+
+# --- ending every process of its uid (--end-all-after-render) ---------------------------
+
+
+def host_signs(proc: Path = Path("/proc")) -> str | None:
+    """Why this looks like a whole machine rather than a container, or None. Pid 1's
+    command (the last part of its first argument) is `systemd` or `init`, or cannot
+    be read or is empty; or pid 2 is `kthreadd`, the kernel's own, which a pid
+    namespace never holds. Read from `proc` (a test's own directory)."""
+    try:
+        argv0 = (proc / "1" / "cmdline").read_bytes().split(b"\0", 1)[0]
+    except OSError:
+        return "pid 1's command cannot be read"
+    name = os.path.basename(argv0.decode("utf-8", "replace"))
+    if not name:
+        return "pid 1's command is empty"
+    if name in HOST_INITS:
+        return f"pid 1 is {name}"
+    try:
+        status = (proc / "2" / "status").read_text()
+    except OSError:
+        return None
+    if status.startswith("Name:\tkthreadd\n"):
+        return "pid 2 is kthreadd"
+    return None
+
+
+def end_all_refusal(proc: Path = Path("/proc")) -> str | None:
+    """Why --end-all-after-render may not be armed here, or None."""
+    if os.getpid() == 1:
+        return "it is pid 1"
+    if not (proc / "1").exists():
+        return "there is no /proc/1"
+    return host_signs(proc)
+
+
+def end_all() -> None:
+    """End every process this one may signal but pid 1 and itself."""
+    try:
+        os.kill(-1, signal.SIGKILL)
+    except ProcessLookupError:  # nothing else to signal
+        pass
+
+
+def reap_children(grace: float = REAP_GRACE_SECONDS) -> bool:
+    """Wait on every child of this process (as a subreaper, every orphan of what was
+    ended is one) until there is none; False if one is still there after `grace`."""
+    deadline = time.monotonic() + grace
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return True
+        if pid:
+            continue
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(STRAY_POLL_SECONDS)
 
 
 # --- one render --------------------------------------------------------------------------
@@ -300,10 +399,13 @@ def _fit(report):
 
 
 class Renderd:
-    """The ASGI app. `work_root` must already have been prepared."""
+    """The ASGI app. `work_root` must already have been prepared. `end_all`: after
+    every render, end every process of its uid (`--end-all-after-render`); otherwise
+    check that nothing descended from it is left (`--dev`)."""
 
-    def __init__(self, work_root: Path, *, exit=os._exit):
+    def __init__(self, work_root: Path, *, end_all: bool = False, exit=os._exit):
         self.work_root = Path(work_root)
+        self.end_all = end_all
         self._exit = exit
 
     # -- the render, on a worker thread, holding the slot for all of it --
@@ -343,8 +445,19 @@ class Renderd:
             return renderwire.encode_answer(renderwire.Report(None, None, None))
 
     def _after_render(self) -> bool:
-        """True when the render left nothing behind; otherwise logs what, and exits."""
-        left = _strays_after_render()
+        """True when the render left nothing behind; otherwise logs what, and exits.
+        Armed, every process of its uid is ended first and its children reaped."""
+        if self.end_all:
+            end_all()
+            if not reap_children():
+                log.error(
+                    "a child was still there after every process was ended: exiting"
+                )
+                self._exit(EXIT_STRAY)
+                return False
+            left = []
+        else:
+            left = _strays_after_render()
         if left:
             log.error(
                 "%d process(es) descended from this one left after a render"
@@ -547,6 +660,23 @@ def refusal() -> str | None:
     )
 
 
+def mode_refusal(end_all_after_render: bool, dev: bool) -> str | None:
+    """The start-up refusal for the mode flags, or None."""
+    if end_all_after_render == dev:
+        return (
+            "ream.renderd refuses to start: give exactly one of --end-all-after-render"
+            " (in its own container) and --dev"
+        )
+    if end_all_after_render:
+        why = end_all_refusal()
+        if why:
+            return (
+                "ream.renderd refuses to start: --end-all-after-render is for its own"
+                f" container, and {why}"
+            )
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m ream.renderd",
@@ -558,6 +688,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--work-dir", type=Path, default=None)
     parser.add_argument("--selfcheck", action="store_true")
+    parser.add_argument(
+        "--end-all-after-render",
+        action="store_true",
+        help="after every render, end every process of this uid (its own container only)",
+    )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="end nothing; check only what descends from this process",
+    )
     args = parser.parse_args(argv)
     if args.port is None and not args.selfcheck:
         parser.error("--port is required")
@@ -579,6 +719,10 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return EXIT_REFUSED
+    message = mode_refusal(args.end_all_after_render, args.dev)
+    if message:
+        print(message, file=sys.stderr)
+        return EXIT_REFUSED
     try:
         set_subreaper()
     except OSError as exc:
@@ -586,8 +730,20 @@ def main(argv: list[str] | None = None) -> int:
             "ream.renderd refuses to start: it cannot be a child subreaper: %s", exc
         )
         return EXIT_REFUSED
+    try:
+        set_not_dumpable()
+    except OSError as exc:
+        log.error(
+            "ream.renderd refuses to start: it cannot be made not dumpable: %s", exc
+        )
+        return EXIT_REFUSED
+    if args.dev:
+        log.warning(
+            "--dev: processes a render leaves are not ended; what descends from"
+            " this process is checked instead"
+        )
     work_root = prepare_work_root(work_root)
-    app = Renderd(work_root)
+    app = Renderd(work_root, end_all=args.end_all_after_render)
     if args.selfcheck:
         return 0 if selfcheck(app) else 1
 

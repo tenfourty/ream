@@ -12,6 +12,7 @@ import os
 import queue
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -172,7 +173,7 @@ def test_it_refuses_to_start_naming_a_count_and_no_name_or_value(
     started = []
     monkeypatch.setattr(renderd, "prepare_work_root", started.append)
 
-    code = renderd.main(["--port", "1", "--work-dir", str(tmp_path / "w")])
+    code = renderd.main(["--dev", "--port", "1", "--work-dir", str(tmp_path / "w")])
 
     assert code == renderd.EXIT_REFUSED
     assert started == []
@@ -402,7 +403,10 @@ def test_a_long_work_directory_is_refused_at_start(monkeypatch, capsys):
     long = "/var/" + "x" * renderd.WORK_ROOT_MAX_CHARS
     started = []
     monkeypatch.setattr(renderd, "prepare_work_root", started.append)
-    assert renderd.main(["--selfcheck", "--work-dir", long]) == renderd.EXIT_REFUSED
+    assert (
+        renderd.main(["--dev", "--selfcheck", "--work-dir", long])
+        == renderd.EXIT_REFUSED
+    )
     assert started == []
     assert "work directory" in capsys.readouterr().err
 
@@ -596,6 +600,174 @@ def test_nothing_left_means_no_exit(client, exits, browser_runs):
     assert exits == []
 
 
+# --- ending every process of its uid after a render (--end-all-after-render) -----------
+
+
+@pytest.fixture()
+def kills(monkeypatch):
+    """`os.kill` recorded, never called, and the reaping after it a no-op that
+    succeeds: these tests must not signal anything."""
+    sent = []
+    monkeypatch.setattr(renderd.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    monkeypatch.setattr(renderd, "reap_children", lambda grace=0: True)
+    return sent
+
+
+def test_armed_it_ends_every_process_of_its_uid_after_each_render(
+    work, exits, kills, monkeypatch, browser_runs
+):
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
+
+    def not_looked_at():
+        raise AssertionError("armed, nothing is looked for: everything is ended")
+
+    monkeypatch.setattr(renderd, "_strays_after_render", not_looked_at)
+    client = TestClient(renderd.Renderd(work, end_all=True, exit=exits.append))
+    for _ in range(2):
+        r = client.post(f"/v1/render?w={W}&h={H}", content=PAGE, headers=HEADERS)
+        assert r.status_code == 200
+    assert kills == [(-1, signal.SIGKILL)] * 2
+    assert exits == []
+    assert list(work.iterdir()) == []
+
+
+def test_not_armed_it_ends_nothing(client, kills, exits, browser_runs):
+    r = client.post(f"/v1/render?w={W}&h={H}", content=PAGE, headers=HEADERS)
+    assert r.status_code == 200
+    assert kills == []
+    assert exits == []
+
+
+def test_armed_a_child_that_cannot_be_reaped_ends_the_renderer(
+    work, exits, kills, monkeypatch, browser_runs
+):
+    monkeypatch.setenv("REAM_BROWSER", "/bin/true")
+    monkeypatch.setattr(renderd, "reap_children", lambda grace=0: False)
+    client = TestClient(renderd.Renderd(work, end_all=True, exit=exits.append))
+    r = client.post(f"/v1/render?w={W}&h={H}", content=PAGE, headers=HEADERS)
+    assert r.status_code == 500
+    assert exits == [renderd.EXIT_STRAY]
+
+
+def test_end_all_signals_everything_it_may_and_takes_nothing_to_signal(monkeypatch):
+    sent = []
+
+    def kill(pid, sig):
+        sent.append((pid, sig))
+        raise ProcessLookupError
+
+    monkeypatch.setattr(renderd.os, "kill", kill)
+    renderd.end_all()
+    assert sent == [(-1, signal.SIGKILL)]
+
+
+def _proc(tmp_path, cmdline: bytes | None, pid2: str | None = None) -> Path:
+    proc = tmp_path / "proc"
+    (proc / "1").mkdir(parents=True)
+    if cmdline is not None:
+        (proc / "1" / "cmdline").write_bytes(cmdline)
+    if pid2 is not None:
+        (proc / "2").mkdir()
+        (proc / "2" / "status").write_text(f"Name:\t{pid2}\nState:\tS\n")
+    return proc
+
+
+@pytest.mark.parametrize(
+    "cmdline",
+    [
+        b"/usr/lib/systemd/systemd\0--switched-root\0--system\0",
+        b"/sbin/init\0splash\0",
+        b"init\0",
+        b"",
+        None,
+    ],
+)
+def test_arming_is_refused_on_what_looks_like_a_whole_machine(tmp_path, cmdline):
+    assert renderd.end_all_refusal(_proc(tmp_path, cmdline)) is not None
+
+
+def test_arming_is_refused_where_pid_2_is_the_kernels_thread(tmp_path):
+    proc = _proc(tmp_path, b"/usr/bin/tini\0-g\0--\0", pid2="kthreadd")
+    assert renderd.end_all_refusal(proc) == "pid 2 is kthreadd"
+
+
+def test_arming_is_refused_without_a_proc_1_or_as_pid_1(tmp_path, monkeypatch):
+    assert renderd.end_all_refusal(tmp_path) == "there is no /proc/1"
+    proc = _proc(tmp_path, b"/usr/bin/tini\0")
+    monkeypatch.setattr(renderd.os, "getpid", lambda: 1)
+    assert renderd.end_all_refusal(proc) == "it is pid 1"
+
+
+@pytest.mark.parametrize("pid2", [None, "python3"])
+def test_arming_is_allowed_under_a_container_init(tmp_path, pid2):
+    proc = _proc(tmp_path, b"/usr/bin/tini\0-g\0--\0python\0", pid2=pid2)
+    assert renderd.end_all_refusal(proc) is None
+
+
+def _clean_env(monkeypatch):
+    for name in list(os.environ):
+        if name.startswith(("REAM_", "ARTIFACTS_")) or name == "DATABASE_URL":
+            monkeypatch.delenv(name)
+
+
+@pytest.mark.parametrize(
+    "flags", [[], ["--dev", "--end-all-after-render"]], ids=["neither", "both"]
+)
+def test_it_refuses_to_start_without_exactly_one_mode(monkeypatch, capsys, flags):
+    _clean_env(monkeypatch)
+    started = []
+    monkeypatch.setattr(renderd, "prepare_work_root", started.append)
+    monkeypatch.setattr(renderd, "set_subreaper", started.append)
+    code = renderd.main([*flags, "--port", "1", "--work-dir", "/nonexistent/rd/w"])
+    assert code == renderd.EXIT_REFUSED
+    assert started == []
+    assert "--end-all-after-render" in capsys.readouterr().err
+
+
+def test_it_refuses_to_arm_where_it_is_not_safe(monkeypatch, capsys):
+    _clean_env(monkeypatch)
+    started = []
+    monkeypatch.setattr(renderd, "prepare_work_root", started.append)
+    monkeypatch.setattr(renderd, "set_subreaper", started.append)
+    monkeypatch.setattr(renderd, "end_all_refusal", lambda: "pid 1 is systemd")
+    code = renderd.main(
+        ["--end-all-after-render", "--port", "1", "--work-dir", "/nonexistent/rd/w"]
+    )
+    assert code == renderd.EXIT_REFUSED
+    assert started == []
+    assert "pid 1 is systemd" in capsys.readouterr().err
+
+
+def test_dev_says_at_start_that_nothing_is_ended(monkeypatch, caplog):
+    _clean_env(monkeypatch)
+    monkeypatch.setattr(renderd, "set_subreaper", lambda: None)
+    monkeypatch.setattr(renderd, "set_not_dumpable", lambda: None)
+    monkeypatch.setattr(renderd, "selfcheck", lambda app: app.end_all is False)
+    short = tempfile.mkdtemp(prefix="rd", dir="/tmp")
+    try:
+        code = renderd.main(["--dev", "--selfcheck", "--work-dir", short + "/w"])
+    finally:
+        shutil.rmtree(short, ignore_errors=True)
+    assert code == 0
+    assert "not ended" in caplog.text
+
+
+def test_armed_the_app_ends_everything(monkeypatch):
+    _clean_env(monkeypatch)
+    monkeypatch.setattr(renderd, "end_all_refusal", lambda: None)
+    monkeypatch.setattr(renderd, "set_subreaper", lambda: None)
+    monkeypatch.setattr(renderd, "set_not_dumpable", lambda: None)
+    monkeypatch.setattr(renderd, "selfcheck", lambda app: app.end_all is True)
+    short = tempfile.mkdtemp(prefix="rd", dir="/tmp")
+    try:
+        code = renderd.main(
+            ["--end-all-after-render", "--selfcheck", "--work-dir", short + "/w"]
+        )
+    finally:
+        shutil.rmtree(short, ignore_errors=True)
+    assert code == 0
+
+
 def test_the_process_reader_sees_this_process():
     mine = [p for p in renderd._read_procs() if p[0] == os.getpid()]
     assert mine and mine[0][1] == os.getppid() and mine[0][3] == os.getuid()
@@ -649,9 +821,46 @@ def test_it_refuses_to_start_when_it_cannot_be_a_subreaper(
     monkeypatch.setattr(renderd, "prepare_work_root", started.append)
     short = tempfile.mkdtemp(prefix="rd", dir="/tmp")
     try:
-        code = renderd.main(["--port", "1", "--work-dir", short + "/w"])
+        code = renderd.main(["--dev", "--port", "1", "--work-dir", short + "/w"])
     finally:
         shutil.rmtree(short, ignore_errors=True)
+    assert code == renderd.EXIT_REFUSED
+    assert started == []
+
+
+DUMPABLE_CHECK = """
+from ream import renderd
+assert renderd.is_dumpable()
+renderd.set_not_dumpable()
+assert not renderd.is_dumpable()
+print("ok")
+"""
+
+
+def test_it_is_not_dumpable_once_set():
+    """The real prctl call, in a process of its own (this one is left as it is)."""
+    done = subprocess.run(  # noqa: S603 -- argv list, no shell
+        [sys.executable, "-c", DUMPABLE_CHECK],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "ok"
+
+
+def test_it_refuses_to_start_when_it_cannot_be_made_not_dumpable(monkeypatch):
+    _clean_env(monkeypatch)
+    monkeypatch.setattr(renderd, "set_subreaper", lambda: None)
+
+    def refused():
+        raise OSError(22, "Invalid argument")
+
+    monkeypatch.setattr(renderd, "set_not_dumpable", refused)
+    started = []
+    monkeypatch.setattr(renderd, "prepare_work_root", started.append)
+    code = renderd.main(["--dev", "--port", "1", "--work-dir", "/nonexistent/rd/w"])
     assert code == renderd.EXIT_REFUSED
     assert started == []
 
@@ -716,6 +925,7 @@ def served():
             sys.executable,
             "-m",
             "ream.renderd",
+            "--dev",
             "--port",
             "0",
             "--work-dir",

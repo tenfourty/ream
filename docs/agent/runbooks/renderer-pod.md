@@ -24,7 +24,15 @@ Set:
 ## What a deployment adds
 
 1. **A Deployment** of one replica running the service's own image (the same digest), with the command
-   `python -m ream.renderd --port 8091`. The image already has the browser, fonts and init. Give it
+   `python -m ream.renderd --end-all-after-render --port 8091`. The image already has the browser, fonts
+   and init. After every render, renderd ends every process of its uid in its container (`kill(-1,
+   SIGKILL)`) and empties its work directory, so nothing a render started outlives it. That is safe only
+   in its own container: renderd refuses to start without `--end-all-after-render` or `--dev`, and with
+   `--end-all-after-render` it refuses when it is pid 1, when there is no `/proc/1`, or when it looks like a
+   whole machine rather than a container (pid 1's command is `systemd` or `init` or cannot be read, or pid 2
+   is `kthreadd`). `--dev` is for a shared machine: nothing is ended, it says so at start, and a process
+   left descended from renderd makes it exit instead. renderd also makes itself not dumpable at start, so
+   the browser it starts cannot trace it or read its memory; it refuses to start if it cannot. Give it
    none of the service's environment: renderd refuses to start if `DATABASE_URL` or any `REAM_*` /
    `ARTIFACTS_*` variable other than `REAM_BROWSER` and `REAM_BIND_HOST` is set (it prints how many,
    never their names or values). It needs a writable `/tmp` and nothing else written. One browser runs
@@ -37,11 +45,15 @@ Set:
 
 ## How to check it
 
+**Probes are `httpGet` or `tcpSocket` on renderd's port, never `exec`.** An exec probe runs as the same uid in
+the same container, and is ended with every render.
+
 - `GET /healthz` on the renderer: 200 while the process is up (liveness).
 - `GET /readyz`: 200 once the browser, `prlimit` and a writable work directory are there; 503 naming
-  what is missing otherwise.
-- `python -m ream.renderd --selfcheck` inside the renderer's container renders a built-in page, checks the
-  answer and exits 0 (or 1). The same command works as an exec probe.
+  what is missing otherwise (readiness).
+- `python -m ream.renderd --dev --selfcheck --work-dir /tmp/rd-check` renders a built-in page, checks the
+  answer and exits 0 (or 1). Run it by hand, never as a probe. Beside a running renderer it needs `--dev`
+  (armed, it would end the renderer) and a work directory of its own (it empties the one it is given).
 - From the service: publish a page, then `GET /api/v1/pages/<id>/render`. A verdict other than
   `unchecked` with the "could not be reached" finding means the two are talking.
 

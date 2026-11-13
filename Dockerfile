@@ -62,7 +62,8 @@ FROM python:3.12-slim-bookworm
 # The headless browser that draws a page's thumbnail for the gallery wall
 # (homelab-ij8.22). By default the browser runs inside the service; a deployment
 # may instead run it as its own process or pod from this same image
-# (`python -m ream.renderd --port 8091`, named by REAM_RENDERER_URL; runbook
+# (`python -m ream.renderd --end-all-after-render --port 8091`, named by
+# REAM_RENDERER_URL; runbook
 # docs/agent/runbooks/renderer-pod.md). `ream.rendercore` is where the
 # constraints on the browser process live, in either mode.
 #
