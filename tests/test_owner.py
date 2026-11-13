@@ -452,7 +452,7 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt, skill.md and the artifacts-publish help re-taken on 12 Nov 2026 for publishing a page closed (`--closed-to-agents`) and the read-state line.
 GOLDEN = {
     "agents.txt": "e15b44af884122a7e6d8dd718449be98c201988525fd1db2e8ce632d410d7ebd",
-    "skill.md": "8214a9e152be91af21d3ae2d08f61215081421c4e9fe4a94f8b428ba36cb7b36",
+    "skill.md": "b2840aa70d5a27888264c8d11b5f8096ff2adbe8f35dabc786a274efd7cbfa37",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"
@@ -496,7 +496,7 @@ FOOTER = "<footer>Published from BABA through the homelab artifacts service.</fo
 NEWS_TAIL = 26  # every entry so far; newer ones are added in front, so these never move
 NEWS_TAIL_DIGEST = "08b7ad27fd383101cc42c10f0994c8368d6fa5b33dc1617635d6068b5902f467"
 HELP_DIGEST = {
-    "artifacts-publish": "d938d8ffe175eaed8386a6c6e756660a4e02f07b0109f85ddc9a9b17eeb9b6ce",
+    "artifacts-publish": "e7ac4e65605a588c82b59fb088b6eb288218d8354c081e513837664f1c2c83d4",
     "artifacts-decide": "2a31c966178e2ea6ce7fa9f4ecb40c7c4e4b9506890802b05534e75dd3572a10",
 }
 
