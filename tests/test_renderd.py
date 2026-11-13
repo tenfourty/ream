@@ -8,6 +8,7 @@ real browser.
 
 import asyncio
 import io
+import json
 import os
 import queue
 import re
@@ -341,10 +342,20 @@ def test_no_browser_answers_not_run(client, monkeypatch, browser_runs):
     assert browser_runs == []
 
 
-def test_an_error_with_a_control_character_answers_not_run(
-    client, monkeypatch, browser_runs
+@pytest.mark.parametrize(
+    ("said", "kept"),
+    [
+        ("x\x1b[2Jis not", "x\ufffd[2Jis not"),
+        ("x\tis not", "x is not"),
+        ("x\x7f\x85is not", "x\ufffd\ufffdis not"),
+    ],
+)
+def test_an_error_with_a_control_character_is_kept_cleaned(
+    client, monkeypatch, browser_runs, said, kept
 ):
-    log = CONSOLE.replace("x is not", "x\x1b[2Jis not")
+    """A page's error text is the page's to choose: whatever it holds, the page
+    is still reported with that error (cleaned), never as a render that did not run."""
+    log = CONSOLE.replace("x is not", said)
 
     def fake_run(argv, **kw):
         shot = next(a for a in argv if a.startswith("--screenshot="))
@@ -355,8 +366,9 @@ def test_an_error_with_a_control_character_answers_not_run(
     r = client.post(f"/v1/render?w={W}&h={H}&check=1", content=PAGE, headers=HEADERS)
     assert r.status_code == 200
     report = renderwire.parse_answer(r.content, W, H)
-    assert tuple(report) == (None, None)
-    assert report.reason == renderwire.NOT_RUN
+    assert report[0] is not None
+    assert report[1] == [f"line 3: Uncaught ReferenceError: {kept} defined"]
+    assert report.reason is None
 
 
 # --- the work directory ----------------------------------------------------------------
@@ -679,6 +691,142 @@ def test_end_all_signals_everything_it_may_and_takes_nothing_to_signal(monkeypat
     assert sent == [(-1, signal.SIGKILL)]
 
 
+# The end-all for real, in a user and pid namespace of the test's own: pid 1 there
+# is this script, as tini is in the pod, and its child is renderd's process. The
+# child sets itself up as a subreaper, starts a chain of processes (some in
+# sessions of their own, some orphaned onto it), then ends everything and reaps.
+END_ALL_CHAIN = r"""
+import json, os, subprocess, sys, time
+from pathlib import Path
+from ream import renderd
+
+outer_ns, work = sys.argv[1], sys.argv[2]
+# Only ever inside the namespace the test made: pid 1 of a pid namespace that is
+# not the test's own. Anywhere else, end nothing.
+if os.getpid() != 1 or os.readlink("/proc/self/ns/pid") == outer_ns:
+    print(json.dumps({"refused": "not in a namespace of its own"}), flush=True)
+    sys.exit(97)
+
+
+def others():
+    # Every process listed but pid 1 and this one: pid -> (name, state, ppid, sid).
+    me, found = os.getpid(), {}
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit() or int(entry) in (1, me):
+            continue
+        try:
+            stat = Path(f"/proc/{entry}/stat").read_text()
+        except OSError:
+            continue
+        name = stat[stat.index("(") + 1 : stat.rindex(")")]
+        rest = stat[stat.rindex(")") + 2 :].split()
+        found[int(entry)] = (name, rest[0], int(rest[1]), int(rest[3]))
+    return found
+
+
+CHAIN = (
+    "setsid sh -c 'sleep 300 & setsid sleep 300 & (setsid sleep 300 &); exec sleep 300'"
+    " & (sleep 300 &); sleep 300 & exit 0"
+)
+SLEEPS = 6
+
+child = os.fork()
+if child == 0:
+    code, result = 1, {}
+    try:
+        if os.getppid() != 1 or os.readlink("/proc/self/ns/pid") == outer_ns:
+            raise SystemExit(97)
+        renderd.set_subreaper()
+        quiet = subprocess.DEVNULL
+        subprocess.run(["sh", "-c", CHAIN], stdin=quiet, stdout=quiet, stderr=quiet,
+                       check=True, timeout=30)
+        deadline = time.monotonic() + 20
+        while True:
+            before = {p: v for p, v in others().items() if v[0] == "sleep" and v[1] != "Z"}
+            if len(before) >= SLEEPS or time.monotonic() > deadline:
+                break
+            time.sleep(0.05)
+        exits = []
+        app = renderd.Renderd(renderd.prepare_work_root(Path(work)), end_all=True,
+                              exit=exits.append)
+        clean = app._after_render()
+        result = {
+            "before": len(before),
+            "sessions": len({v[3] for v in before.values()}),
+            "orphans_on_it": sum(1 for v in before.values() if v[2] == os.getpid()),
+            "clean": clean,
+            "exits": exits,
+            "left": {str(p): list(v) for p, v in others().items()},
+        }
+        code = 0
+    finally:
+        print(json.dumps(result), flush=True)
+        os._exit(code)
+
+_, status = os.waitpid(child, 0)
+sys.exit(os.waitstatus_to_exitcode(status))
+"""
+
+
+def _private_namespaces_or_skip() -> str:
+    """`unshare`, once a user and pid namespace of this test's own has been made
+    with it; otherwise the test is skipped."""
+    if not sys.platform.startswith("linux"):
+        pytest.skip("user and pid namespaces are Linux only")
+    unshare = shutil.which("unshare")
+    if unshare is None or shutil.which("setsid") is None:
+        pytest.skip("no unshare or setsid here")
+    probe = subprocess.run(  # noqa: S603 -- argv list, no shell
+        [unshare, "-Urpf", "--mount-proc", "--kill-child", "true"],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if probe.returncode != 0:
+        pytest.skip(
+            "no private user and pid namespace here: " + probe.stderr.strip()[:200]
+        )
+    return unshare
+
+
+def test_end_all_leaves_no_process_of_a_real_fork_chain(tmp_path):
+    """The end-all and reap for real (not through a recorder), only ever inside a
+    user and pid namespace the test made: setsid grandchildren and orphans of the
+    renderer's process, and none of them alive afterwards."""
+    unshare = _private_namespaces_or_skip()
+    outer = os.readlink("/proc/self/ns/pid")
+    done = subprocess.run(  # noqa: S603 -- argv list, no shell
+        [
+            unshare,
+            "-Urpf",
+            "--mount-proc",
+            "--kill-child",
+            sys.executable,
+            "-c",
+            END_ALL_CHAIN,
+            outer,
+            str(tmp_path / "w"),
+        ],
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+    assert done.returncode == 0, (done.stdout, done.stderr)
+    got = json.loads(done.stdout.strip().splitlines()[-1])
+    # The chain was there: every sleep, in sessions of their own, some orphaned
+    # onto the renderer's process.
+    assert got["before"] == 6, got
+    assert got["sessions"] >= 3, got
+    assert got["orphans_on_it"] >= 1, got
+    # ... and after the end-all and the reap, nothing but pid 1 and the renderer.
+    assert got["clean"] is True and got["exits"] == [], got
+    assert got["left"] == {}, got
+
+
 def _proc(tmp_path, cmdline: bytes | None, pid2: str | None = None) -> Path:
     proc = tmp_path / "proc"
     (proc / "1").mkdir(parents=True)
@@ -714,6 +862,33 @@ def test_arming_is_refused_without_a_proc_1_or_as_pid_1(tmp_path, monkeypatch):
     proc = _proc(tmp_path, b"/usr/bin/tini\0")
     monkeypatch.setattr(renderd.os, "getpid", lambda: 1)
     assert renderd.end_all_refusal(proc) == "it is pid 1"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        PermissionError(13, "Permission denied"),  # hidepid=1, another uid's pid 2
+        OSError(5, "Input/output error"),
+    ],
+)
+def test_arming_is_refused_where_pid_2_cannot_be_read(tmp_path, monkeypatch, failure):
+    proc = _proc(tmp_path, b"/usr/bin/tini\0-g\0--\0", pid2="kthreadd")
+    status = proc / "2" / "status"
+    real = Path.read_text
+
+    def read_text(self, *a, **kw):
+        if self == status:
+            raise failure
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    assert renderd.end_all_refusal(proc) == "pid 2's status cannot be read"
+
+
+def test_arming_is_refused_where_pid_2_is_not_text(tmp_path):
+    proc = _proc(tmp_path, b"/usr/bin/tini\0-g\0--\0", pid2="x")
+    (proc / "2" / "status").write_bytes(b"Name:\t\xff\xfe\n")
+    assert renderd.end_all_refusal(proc) == "pid 2's status cannot be read"
 
 
 @pytest.mark.parametrize("pid2", [None, "python3"])

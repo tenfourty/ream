@@ -524,18 +524,28 @@ def _console(message: str) -> str:
     return f'[1:1:1:INFO:CONSOLE:3] "{message}", source: file:///p.html (3)\n'
 
 
-def test_an_in_process_error_with_a_control_character_makes_it_unchecked(
+def test_an_in_process_error_with_a_control_character_is_kept_cleaned(
     monkeypatch,
 ):
-    got = _shoot_logging(monkeypatch, _console("Uncaught Error: a\x1bb"))
-    assert tuple(got) == (None, None)
+    got = _shoot_logging(monkeypatch, _console("Uncaught Error: a\x1bb\tc"))
+    assert got[0] == png() and got[1] == ["line 3: Uncaught Error: a\ufffdb c"]
     got = _shoot_logging(monkeypatch, _console("Uncaught Error: plain"))
     assert got[0] == png() and got[1] == ["line 3: Uncaught Error: plain"]
 
 
-def test_an_in_process_error_that_is_not_utf8_makes_it_unchecked(monkeypatch):
+def test_an_in_process_error_that_is_not_utf8_is_kept_cleaned(monkeypatch):
     monkeypatch.setattr(rendercore, "console_errors", lambda text: ["line 1: \ud800"])
-    assert tuple(_shoot_logging(monkeypatch, "")) == (None, None)
+    got = _shoot_logging(monkeypatch, "")
+    assert got[0] == png() and got[1] == ["line 1: \ufffd"]
+
+
+def test_cleaning_leaves_text_the_wire_takes_and_keeps_its_length():
+    every = "".join(map(chr, range(0xA0))) + "\ud800\udfff \u00e9\u2603"
+    clean = rendercore.clean_error_text(every)
+    assert len(clean) == len(every)
+    assert renderwire.check_error_text(clean) == clean
+    assert clean[0x20:0x7F] == every[0x20:0x7F]
+    assert clean.endswith(" \u00e9\u2603")
 
 
 def _shoot_into(monkeypatch, make):

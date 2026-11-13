@@ -40,7 +40,10 @@ It runs in one of two modes, and refuses to start in neither (or both):
     pid 1 and itself), reaps its children, and empties the work directory. Armed
     only where that is safe: it refuses to start as pid 1, without a `/proc/1`, or
     where it looks like a whole machine rather than a container (`host_signs`: pid
-    1's command is `systemd` or `init`, or cannot be read, or `kthreadd` is pid 2).
+    1's command is `systemd` or `init`, or cannot be read, or `kthreadd` is pid 2,
+    or pid 2 is there but cannot be read). In a pod it runs under the image's
+    entrypoint (tini as pid 1): the start line is the container's `args:`, never
+    its `command:`, which would make it pid 1.
     Anything else of its uid in the container ends with each render, so a probe
     is httpGet or tcpSocket on its port, never exec.
   * `--dev`, on a shared machine (a developer's, the tests): nothing is ended. It
@@ -327,7 +330,10 @@ def host_signs(proc: Path = Path("/proc")) -> str | None:
     """Why this looks like a whole machine rather than a container, or None. Pid 1's
     command (the last part of its first argument) is `systemd` or `init`, or cannot
     be read or is empty; or pid 2 is `kthreadd`, the kernel's own, which a pid
-    namespace never holds. Read from `proc` (a test's own directory)."""
+    namespace never holds, or pid 2 is listed but its status cannot be read (a
+    process of another uid, as `kthreadd` is to a non-root renderd under
+    `hidepid=1`). No pid 2 at all is a container's usual case. Read from `proc` (a
+    test's own directory)."""
     try:
         argv0 = (proc / "1" / "cmdline").read_bytes().split(b"\0", 1)[0]
     except OSError:
@@ -339,8 +345,10 @@ def host_signs(proc: Path = Path("/proc")) -> str | None:
         return f"pid 1 is {name}"
     try:
         status = (proc / "2" / "status").read_text()
-    except OSError:
+    except (FileNotFoundError, ProcessLookupError):  # no pid 2
         return None
+    except (OSError, ValueError):
+        return "pid 2's status cannot be read"
     if status.startswith("Name:\tkthreadd\n"):
         return "pid 2 is kthreadd"
     return None

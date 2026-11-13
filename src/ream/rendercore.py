@@ -41,6 +41,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import unicodedata
 from pathlib import Path
 
 from ream import renderfind, renderwire, settings
@@ -262,6 +263,27 @@ def available() -> bool:
 # it returned nothing from the real browser.
 _CONSOLE = re.compile(r':CONSOLE(?:\((\d+)\)|:(\d+))\] "(.*)", source: ')
 _MAX_ERRORS = 10
+# A control character that stands for space (tab, line and page breaks) becomes a
+# space in an error's text; any other one (C0, DEL, C1), and a lone surrogate,
+# becomes U+FFFD.
+_SPACELIKE = frozenset("\t\n\v\f\r")
+
+
+def clean_error_text(text: str) -> str:
+    """`text` with every control character (Unicode category Cc) and every lone
+    surrogate replaced, one for one, so it passes `renderwire.check_error_text`
+    and keeps its length. A page's own error message is the page's to choose, and
+    it stays a finding of that page, cleaned, rather than making the whole render
+    one that did not run."""
+    out = []
+    for c in text:
+        if c in _SPACELIKE:
+            out.append(" ")
+        elif unicodedata.category(c) in ("Cc", "Cs"):
+            out.append("\ufffd")
+        else:
+            out.append(c)
+    return "".join(out)
 
 
 def console_errors(stderr: str) -> list[str]:
@@ -403,16 +425,18 @@ def screenshot(
         log_text = (
             raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
         )
-        errors = console_errors(log_text)
+        # Cleaned first (`clean_error_text`), so the page's error stays a finding
+        # of the page whatever characters its message holds.
+        errors = [clean_error_text(e) for e in console_errors(log_text)]
         seen = {e.split(": ", 1)[-1] for e in errors}
         errors += [
             e
-            for e in renderfind.parse_errors(log_text, nonce)
+            for e in map(clean_error_text, renderfind.parse_errors(log_text, nonce))
             if e.split(": ", 1)[-1] not in seen
         ][: _MAX_ERRORS - len(errors)]
         check = renderfind.parse_check(log_text, nonce)
-        # The same rule for an error's text as a renderer's answer (`renderwire`):
-        # one with a control character, or not UTF-8, makes the render unchecked.
+        # The same rule for an error's text as a renderer's answer (`renderwire`).
+        # Cleaned above, so this holds; it stays so that the rule is one.
         try:
             for error in errors:
                 renderwire.check_error_text(error)
