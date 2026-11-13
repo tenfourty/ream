@@ -1527,7 +1527,7 @@ def section_refusal(exc: Exception) -> HTTPException:
             },
         )
     if isinstance(exc, store.PageChanged):
-        return HTTPException(409, f"page changed since revision {exc.given}, re-fetch")
+        return HTTPException(409, exc.message)
     if isinstance(exc, store.RevisionMismatch):
         return HTTPException(409, "page changed, re-fetch")
     if isinstance(exc, store.NotAPage):
@@ -2601,9 +2601,7 @@ def agent_router(
             except store.NotFound as exc:
                 raise HTTPException(404, "no such page") from exc
             except store.PageChanged as exc:
-                raise HTTPException(
-                    409, f"page changed since revision {exc.given}, re-fetch"
-                ) from exc
+                raise HTTPException(409, exc.message) from exc
             except store.BadInterval as exc:
                 raise HTTPException(422, _BAD_INTERVAL) from exc
             except store.InvalidText as exc:

@@ -1060,7 +1060,8 @@ and refuse to overwrite a hand edit made since its last publish:
 
     ream publish board.html --update <page-id> --note "2 slices landed" --if-revision <rev>
 
-<rev> is the revision your last publish printed (or a version number). An
+<rev> is the revision your last publish printed (or its first 8 or more characters, in either
+case, or a version number). An
 unchanged page makes no version, so the note is only stored when something moved.
 
 Say how often you promise to keep it current, and vouch for it on a round where nothing changed:

@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from ream import keys, store
+from ream import keys, revision, store
 from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p id='a'>x</p></body></html>"
@@ -132,6 +132,74 @@ def test_if_revision_vouches_only_for_the_page_it_names(client, db, mine):
     moved = store.patch(db, "seat", page.id, OTHER, page.revision)
     assert touch(client, token, page.id, if_revision=page.revision).status_code == 409
     assert touch(client, token, page.id, if_revision=moved.revision).status_code == 200
+
+
+def test_if_revision_may_be_shortened_to_eight_characters(client, db, mine):
+    token, page = mine
+    assert len(page.revision) == 16
+    ok = touch(client, token, page.id, if_revision=page.revision[:8])
+    assert ok.status_code == 200
+    assert (
+        touch(client, token, page.id, if_revision=page.revision[:12]).status_code == 200
+    )
+    upper = touch(client, token, page.id, if_revision=page.revision[:8].upper())
+    assert upper.status_code == 200
+
+
+def test_if_revision_prefix_shorter_than_eight_is_refused_plainly(client, mine):
+    token, page = mine
+    refused = touch(client, token, page.id, if_revision=page.revision[:7])
+    assert refused.status_code == 409
+    assert "8 or more of its characters" in refused.json()["detail"]
+
+
+def test_if_revision_wrong_prefix_or_non_hex_is_refused(client, mine):
+    token, page = mine
+    first = page.revision[0]
+    other = "0" if first != "0" else "1"
+    wrong = other + page.revision[1:8]
+    assert touch(client, token, page.id, if_revision=wrong).status_code == 409
+    for junk in ("zzzzzzzz", "not-a-revision", "365a5d69xyz"):
+        out = touch(client, token, page.id, if_revision=junk)
+        assert out.status_code == 409
+        assert "is not a revision" in out.json()["detail"]
+    # a stale (but well-formed) value keeps the old text
+    stale = touch(client, token, page.id, if_revision=wrong)
+    assert stale.json()["detail"] == f"page changed since revision {wrong}, re-fetch"
+
+
+def test_a_prefix_matches_only_the_current_revision(client, db, mine):
+    token, page = mine
+    moved = store.patch(db, "seat", page.id, OTHER, page.revision)
+    assert (
+        touch(client, token, page.id, if_revision=page.revision[:8]).status_code == 409
+    )
+    assert (
+        touch(client, token, page.id, if_revision=moved.revision[:8]).status_code == 200
+    )
+    assert touch(client, token, page.id, if_revision="2").status_code == 200
+    assert touch(client, token, page.id, if_revision="1").status_code == 409
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        ("365a5d69", True),
+        ("365A5D69", True),
+        ("  365a5d69  ", True),
+        ("365a5d69b2c4e1f0", True),
+        ("365A5D69B2C4E1F0", True),
+        ("365a5d6", False),
+        ("365a5d68", False),
+        ("365a5d69b2c4e1f09", False),
+        ("365a5d6g", False),
+        ("10", True),
+        ("11", False),
+        ("", False),
+    ],
+)
+def test_revision_matching_rules(given, expected):
+    assert revision.matches(given, 10, "365a5d69b2c4e1f0") is expected
 
 
 def test_a_refused_touch_writes_nothing(client, db, mine):

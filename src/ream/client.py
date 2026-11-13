@@ -40,6 +40,9 @@ from ream import (
     textvars,
     traps,
 )
+from ream import (
+    revision as revision_form,
+)
 from ream.cli import prog_name
 
 _DEFAULT_KEY_FILE = "~/.config/artifacts/key"
@@ -998,21 +1001,22 @@ def _update(
     refresh_every: int | None = None,
     comments: str | None = None,
 ) -> dict:
-    """A whole-page update. With `if_revision` (the hash or version number the
-    caller last published or read), refuse if the page has moved on since: a
+    """A whole-page update. With `if_revision` (the hash, 8 or more of its characters, or the version
+    number the caller last published or read), refuse if the page has moved on since: a
     generator that owns a page must not overwrite a hand edit made in between
     (7 Oct 2026). The read-then-PATCH gap is covered by `expected_revision`."""
     current = _read_current(artifact_id, key)
     if if_revision is not None:
         given = if_revision.strip()
-        same = (
-            int(given) == current.get("current_version")
-            if given.isdigit()
-            else given == current["revision"]
-        )
-        if not same:
+        if not revision_form.matches(
+            given, current.get("current_version"), current["revision"]
+        ):
+            if revision_form.well_formed(given):
+                why = f"{artifact_id} has changed since revision {given}"
+            else:
+                why = f"{given!r} is not a revision: {revision_form.FORM}"
             raise Conflict(
-                f"{artifact_id} has changed since revision {given} -- it is at"
+                f"{why} -- it is at"
                 f" version {current.get('current_version')} now. Your update was NOT"
                 " applied, and nothing was overwritten.\n"
                 f"  artifacts-publish --fetch {artifact_id} page.html\n"
@@ -1107,8 +1111,13 @@ def _touch(args, key: str) -> int:
     except HTTPFailure as exc:
         if exc.status != 409:
             raise
+        given = args.if_revision.strip()
+        if revision_form.well_formed(given):
+            why = f"{args.touch} has changed since revision {given}"
+        else:
+            why = f"{given!r} is not a revision: {revision_form.FORM}"
         raise Conflict(
-            f"{args.touch} has changed since revision {args.if_revision} -- it was NOT"
+            f"{why} -- it was NOT"
             " vouched for. Look at it before you vouch for it again:\n"
             f"  artifacts-publish --fetch {args.touch} page.html"
         ) from exc
@@ -2226,7 +2235,8 @@ def build_parser() -> argparse.ArgumentParser:
     part.add_argument(
         "--if-revision",
         metavar="N",
-        help="refuse if the page changed since this revision (hash or version);"
+        help="refuse if the page changed since this revision (the hash an update"
+        " returns, or its first 8 or more characters, or the version number);"
         " also on a whole-page --update",
     )
     part.add_argument(

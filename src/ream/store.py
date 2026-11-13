@@ -64,6 +64,9 @@ from ream import (
 )
 from ream import reach as caller_reach
 from ream import rename as agent_rename
+from ream import (
+    revision as revision_form,
+)
 from ream.db import DUPLICATE_KEY, Database, in_list, jsonb
 from ream.text import LEADING_DOCTYPE
 
@@ -1200,6 +1203,14 @@ class PageChanged(Exception):
     def __init__(self, given: str):
         self.given = given
 
+    @property
+    def message(self) -> str:
+        """The 409's text: a stale revision says re-fetch; a value that could never
+        name a revision says what one is."""
+        if revision_form.well_formed(self.given):
+            return f"page changed since revision {self.given}, re-fetch"
+        return f"{self.given!r} is not a revision: {revision_form.FORM}"
+
 
 class OpenDecisionDropped(Exception):
     """A section update would remove the slot of a question still open."""
@@ -1260,13 +1271,11 @@ def _open_among(conn, artifact_id: str, slots) -> tuple[str, str] | None:
 
 
 def _matches_revision(given: str, version_n: int, revision: str) -> bool:
-    """`if_revision` may be the revision hash every update returns, or the
-    version number -- the spec says "revision N", and a script that chains on
-    `version` should not have to learn a second field to do it."""
-    given = given.strip()
-    if given.isdigit():
-        return int(given) == version_n
-    return given == revision
+    """`if_revision` may be the revision hash every update returns (whole, or its
+    first 8 or more characters), or the version number -- the spec says
+    "revision N", and a script that chains on `version` should not have to learn a
+    second field to do it. A prefix is compared with the CURRENT revision only."""
+    return revision_form.matches(given, version_n, revision)
 
 
 def get_section(

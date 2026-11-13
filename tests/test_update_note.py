@@ -158,7 +158,7 @@ def test_cli_update_with_a_note(live, key_file, tmp_path, capsys):
     assert first.endswith("\t1 PR ready")
 
 
-@pytest.mark.parametrize("pin", ["revision", "version"])
+@pytest.mark.parametrize("pin", ["revision", "version", "prefix", "upper-prefix"])
 def test_cli_if_revision_applies_when_the_page_is_as_read(
     live, key_file, tmp_path, capsys, pin
 ):
@@ -166,7 +166,12 @@ def test_cli_if_revision_applies_when_the_page_is_as_read(
     f = tmp_path / "board.html"
     made = _publish(path, f, capsys)
     # The publish echo carries the hash; a fresh page is version 1.
-    given = made["revision"] if pin == "revision" else "1"
+    given = {
+        "revision": made["revision"],
+        "version": "1",
+        "prefix": made["revision"][:8],
+        "upper-prefix": made["revision"][:8].upper(),
+    }[pin]
     f.write_text(PAGE2)
     rc = cli.main(
         [
@@ -209,4 +214,47 @@ def test_cli_if_revision_refuses_when_someone_changed_the_page(
     err = capsys.readouterr().err
     assert "NOT applied" in err
     assert "--fetch" in err
+    assert store.get_body(db, "ops-seat", made["id"]).body == edit
+
+
+def _stale_update(path, f, aid, given):
+    return cli.main(
+        ["--key-file", str(path), str(f), "--update", aid, "--if-revision", given]
+    )
+
+
+@pytest.mark.parametrize("bad", ["short", "nothex!!", "wrong", "cut"])
+def test_cli_if_revision_refuses_a_bad_or_wrong_prefix(
+    live, key_file, db, tmp_path, capsys, bad
+):
+    path, _ = key_file
+    f = tmp_path / "board.html"
+    made = _publish(path, f, capsys)
+    rev = made["revision"]
+    given = {
+        "short": rev[:7],
+        "nothex!!": "zzzzzzzz",
+        "wrong": ("0" if rev[0] != "0" else "1") + rev[1:8],
+        "cut": rev[:8] + "g",
+    }[bad]
+    f.write_text(PAGE2)
+    assert _stale_update(path, f, made["id"], given) != 0
+    err = capsys.readouterr().err
+    assert "NOT applied" in err
+    if bad in ("short", "nothex!!", "cut"):
+        assert "8 or more of its characters" in err
+    assert store.get_body(db, "ops-seat", made["id"]).body == PAGE
+
+
+def test_cli_if_revision_prefix_of_an_old_revision_is_refused(
+    live, key_file, db, tmp_path, capsys
+):
+    path, _ = key_file
+    f = tmp_path / "board.html"
+    made = _publish(path, f, capsys)
+    edit = "<!doctype html><html><body><p id='s'>hand edit</p></body></html>"
+    store.patch(db, "ops-seat", made["id"], edit, made["revision"])
+    f.write_text(PAGE2)
+    assert _stale_update(path, f, made["id"], made["revision"][:8]) != 0
+    assert "NOT applied" in capsys.readouterr().err
     assert store.get_body(db, "ops-seat", made["id"]).body == edit

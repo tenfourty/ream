@@ -221,6 +221,37 @@ def test_if_revision_lands_when_current_and_refuses_when_stale(client, db, page)
     assert by_n.status_code == 200
 
 
+def test_if_revision_accepts_a_prefix_of_the_current_revision_only(client, db, page):
+    aid, token = page
+    rev = client.get(f"/api/v1/artifacts/{aid}", headers=auth(token)).json()["revision"]
+    short = section(
+        client, aid, token, "log", op="append", html="a", if_revision=rev[:8]
+    )
+    assert short.status_code == 200
+    # the page has moved on: the old revision's prefix no longer matches
+    stale = section(
+        client, aid, token, "log", op="append", html="b", if_revision=rev[:8]
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"] == f"page changed since revision {rev[:8]}, re-fetch"
+    now = client.get(f"/api/v1/artifacts/{aid}", headers=auth(token)).json()["revision"]
+    upper = section(
+        client, aid, token, "log", op="append", html="c", if_revision=now[:8].upper()
+    )
+    assert upper.status_code == 200
+
+
+def test_if_revision_shorter_than_eight_or_not_hex_is_refused(client, db, page):
+    aid, token = page
+    rev = client.get(f"/api/v1/artifacts/{aid}", headers=auth(token)).json()["revision"]
+    for bad in (rev[:7], "zzzzzzzz"):
+        out = section(client, aid, token, "log", op="append", html="x", if_revision=bad)
+        assert out.status_code == 409
+        assert "8 or more of its characters" in out.json()["detail"]
+    after = client.get(f"/api/v1/artifacts/{aid}", headers=auth(token)).json()
+    assert after["revision"] == rev
+
+
 def test_if_section_lands_when_unchanged_and_refuses_when_changed(client, db, page):
     aid, token = page
     got = client.get(f"/api/v1/artifacts/{aid}/sections/log", headers=auth(token))
