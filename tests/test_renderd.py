@@ -1344,6 +1344,33 @@ def test_a_process_left_after_a_shot_ends_the_renderer(
     rendercore._RENDER_SLOT.release()
 
 
+def test_a_shot_that_raises_is_failed_and_still_checked_after(
+    client, monkeypatch, exits, shots
+):
+    def raising(*args, **kwargs):
+        raise OverflowError("cannot convert float infinity to integer")
+
+    monkeypatch.setattr(rendercore, "shoot", raising)
+    me, uid = os.getpid(), os.getuid()
+    listed = [(1, 0, "S", 0), (me, 1, "S", uid), (424243, me, "S", uid)]
+    monkeypatch.setattr(renderd, "_read_procs", lambda: listed)
+    r = client.post("/v1/shot?w=1280&theme=light", content=PAGE, headers=HEADERS)
+    assert exits == [renderd.EXIT_STRAY], "what it left was checked"
+    assert r.status_code == 500 and r.content == b""
+    assert rendercore._RENDER_SLOT.acquire(blocking=False)
+    rendercore._RENDER_SLOT.release()
+
+
+def test_a_shot_that_raises_answers_failed(client, monkeypatch, shots):
+    def raising(*args, **kwargs):
+        raise OverflowError("cannot convert float infinity to integer")
+
+    monkeypatch.setattr(rendercore, "shoot", raising)
+    r = client.post("/v1/shot?w=1280&theme=light", content=PAGE, headers=HEADERS)
+    assert r.status_code == 200
+    assert renderwire.parse_shot_answer(r.content).outcome == "failed"
+
+
 def test_a_shot_with_no_browser_answers_no_browser(client, monkeypatch):
     monkeypatch.setenv("REAM_BROWSER", "/nonexistent/browser")
     r = client.post("/v1/shot?w=1280&theme=light", content=PAGE, headers=HEADERS)

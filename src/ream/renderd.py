@@ -463,13 +463,17 @@ class Renderd:
         if not rendercore._RENDER_SLOT.acquire(timeout=SLOT_WAIT_SECONDS):
             return _BUSY
         try:
-            shot = rendercore.shoot(
-                rendercore.browser_path(),
-                html,
-                request,
-                work_root=self.work_root,
-                slot_held=True,
-            )
+            try:
+                shot = rendercore.shoot(
+                    rendercore.browser_path(),
+                    html,
+                    request,
+                    work_root=self.work_root,
+                    slot_held=True,
+                )
+            except Exception as exc:  # noqa: BLE001 -- what it left is still checked
+                log.warning("screenshot raised %s", type(exc).__name__)
+                shot = renderwire.Shot("failed")
             if not self._after_render():
                 return _LEFT
         finally:

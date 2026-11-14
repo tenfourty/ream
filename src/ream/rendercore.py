@@ -513,7 +513,7 @@ if(el!==null){var l=d.querySelectorAll('[id="'+CSS.escape(el)+'"]');
   if(l.length!==1)return{n:l.length,ph:ph,vw:vw};
   return{n:1,ph:ph,vw:vw,box:box(l[0].getBoundingClientRect())}}
 if(sec!==null){hs=d.querySelectorAll("h1,h2,h3,h4,h5,h6");
-  for(i=0;i<hs.length;i++){t=(hs[i].textContent||"").replace(/\s+/g," ").trim().toLowerCase();
+  for(i=0;i<hs.length;i++){t=(hs[i].textContent||"").replace(/__SPACE__+/g," ").trim().toLowerCase();
     if(t===sec){n++;hit=hs[i]}}
   if(n!==1)return{n:n,ph:ph,vw:vw};
   lv=+String(hit.nodeName).charAt(1);
@@ -523,6 +523,7 @@ if(sec!==null){hs=d.querySelectorAll("h1,h2,h3,h4,h5,h6");
   bot=end?end.getBoundingClientRect().top+scrollY:ph;
   return{n:1,ph:ph,vw:vw,box:{x:0,y:top,w:vw,h:Math.max(0,bot-top)}}}
 return{n:-1,ph:ph,vw:vw}})"""
+_RESOLVE_JS = _RESOLVE_JS.replace("__SPACE__", renderwire.SHOT_SPACE_CLASS)
 
 
 class _Watch:
@@ -656,6 +657,18 @@ class _Offline:
 
 # The most targets one shot may start (the page, its frames, workers, windows).
 SHOT_TARGETS_MAX = 64
+# The events `_converse` waits for: the only ones the pipe keeps. Every other
+# event is seen by `_Offline` and dropped.
+_SHOT_EVENTS_WAITED = frozenset(
+    {
+        "Target.attachedToTarget",
+        "Page.loadEventFired",
+        "Emulation.virtualTimeBudgetExpired",
+    }
+)
+# The most bytes of those events kept at once, all sessions together; past it
+# the shot fails.
+SHOT_EVENTS_KEPT_MAX_BYTES = 1024 * 1024
 _AUTO_ATTACH = {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True}
 
 
@@ -741,7 +754,9 @@ def _converse(pipe: devtools.Pipe, page_url: str, request, offline: _Offline):
             },
             session,
         )
-    except devtools.MessageTooBig:
+    except devtools.AnswerTooBig:
+        # The picture's own answer is over the limit. Any other message over it
+        # (an event read meanwhile) fails the shot, from the caller.
         return renderwire.Shot("picture_too_big")
     data = taken.get("data")
     if not isinstance(data, str) or not data.isascii():
@@ -848,6 +863,8 @@ def _shoot_in(argv: list[str], workdir: str, page_url: str, request) -> renderwi
             deadline=deadline,
             max_message=SHOT_MESSAGE_MAX_BYTES,
             on_event=offline,
+            keep=_SHOT_EVENTS_WAITED,
+            max_kept=SHOT_EVENTS_KEPT_MAX_BYTES,
         )
         offline.pipe = pipe
         try:
@@ -858,8 +875,11 @@ def _shoot_in(argv: list[str], workdir: str, page_url: str, request) -> renderwi
         except devtools.Timeout:
             _kill_group(proc)
             shot = renderwire.Shot("timeout")
-        except (devtools.DevToolsError, KeyError, TypeError, ValueError) as exc:
+        except devtools.DevToolsError as exc:
             log.warning("screenshot: %s", exc)
+            shot = renderwire.Shot("failed")
+        except Exception as exc:  # noqa: BLE001 -- a shot never raises
+            log.warning("screenshot failed: %s", type(exc).__name__)
             shot = renderwire.Shot("failed")
         watch.stop()
         if watch.reason is not None:

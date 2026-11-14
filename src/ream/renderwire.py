@@ -576,10 +576,22 @@ class ShotRequest(tuple):
     section = property(lambda self: self[3])
 
 
+# White space as JavaScript's `\s` and `trim()` read it, which the screenshot's
+# resolver (`rendercore._RESOLVE_JS`) folds a heading by: a section asked for is
+# folded by the same set here, so both sides agree (U+FEFF is space to both;
+# U+001C..U+001F and U+0085 to neither, and a request holding one is refused).
+SHOT_SPACE_CLASS = (
+    "[\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029"
+    "\\u202f\\u205f\\u3000\\ufeff]"
+)
+_SHOT_SPACES = re.compile(SHOT_SPACE_CLASS + "+")
+
+
 def fold_heading(text: str) -> str:
     """A heading's words as a section is matched by them: runs of white space as
-    one space, trimmed, lower-cased (as `anchors` and the pin script fold them)."""
-    return " ".join(text.split()).lower()
+    one space, trimmed, lower-cased (as `anchors` and the pin script fold them),
+    white space being `SHOT_SPACE_CLASS`."""
+    return _SHOT_SPACES.sub(" ", text).strip(" ").lower()
 
 
 def shot_request(width=1280, theme="light", element=None, section=None) -> ShotRequest:
