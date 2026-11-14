@@ -17,15 +17,24 @@ import time
 import pytest
 from test_shots import needs_browser, pixels
 
-from ream import devtools, rendercore, renderwire
+from ream import devtools, rendercore, renderwire, thumbs
 
 
 class _Listener:
-    """TCP and UDP on 127.0.0.1 at one port; counts every connection and datagram."""
+    """TCP and UDP on 127.0.0.1 at one port, and TCP on ::1 at the same port where
+    it can be, so a `localhost` that resolves to either is caught; counts every
+    connection and datagram."""
 
     def __init__(self):
         self.tcp = socket.create_server(("127.0.0.1", 0))
         self.port = self.tcp.getsockname()[1]
+        self.tcp6 = []
+        try:
+            self.tcp6.append(
+                socket.create_server(("::1", self.port), family=socket.AF_INET6)
+            )
+        except OSError:
+            pass  # no IPv6 loopback here; 127.0.0.1 is still caught
         self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp.bind(("127.0.0.1", self.port))
         self.seen: list[str] = []
@@ -35,7 +44,7 @@ class _Listener:
 
     def _serve(self):
         while not self._stop.is_set():
-            ready, _, _ = select.select([self.tcp, self.udp], [], [], 0.05)
+            ready, _, _ = select.select([self.tcp, *self.tcp6, self.udp], [], [], 0.05)
             for sock in ready:
                 if sock is self.udp:
                     self.udp.recvfrom(4096)
@@ -53,15 +62,16 @@ class _Listener:
     def close(self):
         self._stop.set()
         self._thread.join(timeout=2)
-        self.tcp.close()
-        self.udp.close()
+        for sock in [self.tcp, *self.tcp6, self.udp]:
+            sock.close()
 
 
 def _worker(code: str) -> str:
     return f'new Worker(URL.createObjectURL(new Blob(["{code}"])));'
 
 
-# Each way out, as markup and script, with {b} the listener's http base and {p} its port.
+# Each way out, as markup and script, with {b} the listener's http base, {h} its
+# host (by address and by name) and {p} its port.
 WAYS = {
     "fetch": "<script>fetch('{b}/fetch').catch(()=>0)</script>",
     "xhr": "<script>var x=new XMLHttpRequest();x.open('GET','{b}/xhr');x.send()</script>",
@@ -72,7 +82,7 @@ WAYS = {
     "iframe": '<iframe src="{b}/iframe"></iframe>',
     "popup": "<script>window.open('{b}/popup')</script>",
     "beacon": "<script>navigator.sendBeacon('{b}/beacon','x')</script>",
-    "websocket": "<script>new WebSocket('ws://127.0.0.1:{p}/ws')</script>",
+    "websocket": "<script>new WebSocket('ws://{h}:{p}/ws')</script>",
     "meta_refresh": '<meta http-equiv=refresh content="0;url={b}/refresh">',
     # Not here: <link rel=preconnect>, which opened no connection even with the
     # block off (headless shell 1217), so no control could show it fire.
@@ -81,12 +91,12 @@ WAYS = {
     + _worker("fetch('{b}/wfetch').catch(()=>0)")
     + "</script>",
     "worker_websocket": "<script>"
-    + _worker("new WebSocket('ws://127.0.0.1:{p}/wws')")
+    + _worker("new WebSocket('ws://{h}:{p}/wws')")
     + "</script>",
-    "webtransport": "<script>try{{new WebTransport('https://127.0.0.1:{p}/wt')"
+    "webtransport": "<script>try{{new WebTransport('https://{h}:{p}/wt')"
     ".ready.catch(()=>0)}}catch(e){{}}</script>",
     "webrtc": "<script>try{{var pc=new RTCPeerConnection({{iceServers:[{{urls:"
-    "'stun:127.0.0.1:{p}'}}]}});pc.createDataChannel('x');pc.createOffer()"
+    "'stun:{h}:{p}'}}]}});pc.createDataChannel('x');pc.createOffer()"
     ".then(o=>pc.setLocalDescription(o))}}catch(e){{}}</script>",
 }
 
@@ -123,15 +133,18 @@ def _picture(path: str, page: str, element: str | None = None) -> bytes | None:
         request = renderwire.shot_request(element=element)
         shot = rendercore.shoot(rendercore.browser_path(), page, request)
         return shot.png if shot.outcome == "shot" else None
-    report = rendercore.screenshot(rendercore.browser_path(), page, RENDER_W, RENDER_H)
-    return report[0]
+    # Through thumbs.render_report, the entry the wall's tiles and preview use.
+    return thumbs.render_report(page, RENDER_W, RENDER_H)[0]
 
 
 def _try(path: str, way: str, tries: int) -> list[str]:
     listener = _Listener()
     try:
-        base = f"http://127.0.0.1:{listener.port}"
-        page = "<!doctype html><p>out</p>" + WAYS[way].format(b=base, p=listener.port)
+        # Each way twice: to the listener by address, and by the name `localhost`.
+        page = "<!doctype html><p>out</p>" + "".join(
+            WAYS[way].format(b=f"http://{h}:{listener.port}", h=h, p=listener.port)
+            for h in ("127.0.0.1", "localhost")
+        )
         for _ in range(tries):
             png = _picture(path, page)
             # A page that navigates itself away may leave nothing to shoot.
