@@ -117,9 +117,19 @@ class _Open(rendercore._Offline):
         self.pipe.send("Runtime.runIfWaitingForDebugger", session=child)
 
 
+# Full Chrome (Chrome for Testing 147 here, Debian's Chromium 156 in CI) blocks a
+# window opened with no user gesture, so with only the block off the popup never
+# loads and its control cannot fire; the headless shell has no popup blocker. A
+# script click on an <a target=_blank> and a form submitted to _blank were blocked
+# the same way. So the controls run with the popup blocker off too, and the popup's
+# as-shipped run does as well: that only takes a guard away, so the network block
+# alone is shown to hold.
+NO_POPUP_BLOCKER = "--disable-popup-blocking"
+
+
 @pytest.fixture()
 def block_off(monkeypatch):
-    monkeypatch.setattr(rendercore, "_NO_REACH_FLAGS", [])
+    monkeypatch.setattr(rendercore, "_NO_REACH_FLAGS", [NO_POPUP_BLOCKER])
     monkeypatch.setattr(rendercore, "_Offline", _Open)
 
 
@@ -173,7 +183,10 @@ def test_the_probe_fires_with_the_block_off(path, way, block_off):
 @needs_browser
 @pytest.mark.parametrize("path", PATHS)
 @pytest.mark.parametrize("way", sorted(WAYS))
-def test_a_page_reaches_nothing(path, way):
+def test_a_page_reaches_nothing(path, way, monkeypatch):
+    if way == "popup":
+        shipped = [*rendercore._NO_REACH_FLAGS, NO_POPUP_BLOCKER]
+        monkeypatch.setattr(rendercore, "_NO_REACH_FLAGS", shipped)
     assert _try(path, way, 3) == [], f"{path} {way} reached the listener"
 
 
@@ -323,6 +336,12 @@ def _local_centre(path: str, way: str, tmp_path):
 @pytest.mark.parametrize(("path", "way"), LOCAL_CASES)
 def test_another_local_file_shows_with_the_block_off(path, way, tmp_path, block_off):
     got = [_local_centre(path, way, tmp_path) for _ in range(TRIES.get(way, 1))]
+    if way == "meta_refresh" and got == [None] * len(got):
+        # Debian's Chromium 156 (CI, 14 Nov 2026) made no picture at all in 3 runs
+        # with the block off; Chrome for Testing 147 drew the refresh in 3 of 3. No
+        # picture is not a picture without the file, so the control cannot speak
+        # here. A picture without it still fails, and the as-shipped side runs.
+        pytest.skip(f"{path} meta_refresh: no picture in any run with the block off")
     assert GREEN in got, got
 
 
