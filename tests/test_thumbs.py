@@ -16,6 +16,9 @@ from pathlib import Path
 
 import pytest
 
+# The fake browser on its DevTools pipe (tests/test_shots.py), for the render's envelope.
+from test_shots import fake  # noqa: F401
+
 from ream import rendercore, thumbs
 
 # The real background render: tests elsewhere have it switched off.
@@ -166,9 +169,10 @@ def test_without_prlimit_the_browser_still_runs(monkeypatch):
 @pytest.mark.skipif(thumbs._PRLIMIT is None, reason="no prlimit here")
 def test_the_data_limit_is_enforced_by_the_kernel():
     grow = [sys.executable, "-c", "b = bytearray(256 << 20); b[-1] = 1"]
-    assert thumbs._run(grow, timeout=30).returncode == 0
+    first = subprocess.run(grow, capture_output=True, timeout=30, check=False)  # noqa: S603 -- fixed argv
+    assert first.returncode == 0
     limited = thumbs._data_limited(grow, 64 << 20)
-    done = thumbs._run(limited, timeout=30)
+    done = subprocess.run(limited, capture_output=True, timeout=30, check=False)  # noqa: S603 -- fixed argv
     # The limit, and not prlimit or python failing to start, is what stopped it.
     assert done.returncode != 0
     assert b"MemoryError" in done.stderr
@@ -231,18 +235,45 @@ def _alive(pid: int) -> bool:
         return False
 
 
-def test_a_timeout_kills_the_whole_process_group(tmp_path):
-    """The child forks a grandchild that would outlive it. After the timeout
-    neither may be left running (subprocess.run killed only the direct child)."""
-    pidfile = tmp_path / "grandchild.pid"
-    script = f"sleep 300 & echo $! > {pidfile}; wait"
-    with pytest.raises(subprocess.TimeoutExpired):
-        thumbs._run(["/bin/sh", "-c", script], timeout=1)
-    grandchild = int(pidfile.read_text())
+def _render_with(binary, tmp_path, **kw):
+    """One render's run (`rendercore._render_run`, the path `thumbs.render` takes)
+    of a fake browser, through the shell line that moves its pipe into place."""
+    work = tmp_path / "work"
+    work.mkdir(exist_ok=True)
+    argv = [rendercore._SHELL, "-c", rendercore._PIPE_SHIM, binary]
+    run = {
+        "page_url": (tmp_path / "page.html").as_uri(),
+        "shot": work / "shot.png",
+        "width": 8,
+        "height": 8,
+        "timeout": 30,
+        "max_rss": 1 << 40,
+        "env": {"HOME": str(work), "TMPDIR": str(work), "PATH": "/usr/bin:/bin"},
+        "cwd": str(work),
+    }
+    return rendercore._render_run(argv, **{**run, **kw})
+
+
+def _child_of(read):
+    return next(line["child"] for line in read() if "child" in line)
+
+
+def _ended(pid: int) -> bool:
     deadline = time.monotonic() + 5
-    while _alive(grandchild) and time.monotonic() < deadline:
+    while _alive(pid) and time.monotonic() < deadline:
         time.sleep(0.05)
-    assert not _alive(grandchild), "the grandchild survived the timeout"
+    return not _alive(pid)
+
+
+def test_a_timeout_kills_the_whole_process_group(fake, tmp_path):
+    """The browser forks a helper that would outlive it. After the timeout
+    neither may be left running (subprocess.run killed only the direct child)."""
+    binary, read = fake("hang")
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        _render_with(binary, tmp_path, timeout=1.5)
+    assert time.monotonic() - started < 10
+    assert _ended(_child_of(read)), "the helper survived the timeout"
 
 
 def test_stat_and_statm_are_read_whatever_the_command_is_called():
@@ -269,36 +300,33 @@ def test_group_rss_counts_only_the_group():
         proc.wait()
 
 
-def test_a_group_over_the_memory_ceiling_is_killed(tmp_path, monkeypatch):
-    pidfile = tmp_path / "child.pid"
-    script = f"sleep 300 & echo $! > {pidfile}; wait"
-    # The ceiling is read only once the shell has written its child's pid: on a loaded runner
-    # the first 0.1 s poll could kill the group before the echo, leaving no pid to check
+def test_a_render_over_the_memory_ceiling_is_ended_with_its_group(
+    fake, tmp_path, monkeypatch
+):
+    """The render's own watch (`_on_pipe`'s `_Watch`) ends a browser past the
+    ceiling, helpers and all, as memory and not as a timeout."""
+    binary, read = fake("hang")
+    # The ceiling is read only once the browser has noted its helper: on a loaded runner
+    # the first 0.1 s poll could end the group before that, leaving no pid to check
     # (CI run on e991163, 3 Nov 2026). Before that the group reads as using nothing.
-    real = thumbs._group_rss
+    real = rendercore._group_rss
     monkeypatch.setattr(
         rendercore,
         "_group_rss",
-        lambda pid: (
-            real(pid) if pidfile.exists() and pidfile.read_text().strip() else 0
-        ),
+        lambda pid: real(pid) if any("child" in line for line in read()) else 0,
     )
     started = time.monotonic()
     with pytest.raises(thumbs.RenderTooBig):
-        thumbs._run(["/bin/sh", "-c", script], timeout=30, max_rss=1)
+        _render_with(binary, tmp_path, max_rss=1)
     assert time.monotonic() - started < 10
-    child = int(pidfile.read_text())
-    deadline = time.monotonic() + 5
-    while _alive(child) and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert not _alive(child), "the group survived the memory ceiling"
+    assert _ended(_child_of(read)), "the group survived the memory ceiling"
 
 
-def test_a_group_under_the_ceiling_is_left_alone():
-    done = thumbs._run(
-        ["/bin/sh", "-c", "sleep 0.3; echo ok"], timeout=10, max_rss=1 << 40
-    )
-    assert done.returncode == 0 and done.stdout.strip() == b"ok"
+def test_a_render_under_the_ceiling_is_left_alone(fake, tmp_path):
+    binary, _ = fake()
+    done = _render_with(binary, tmp_path)
+    assert done.returncode == 0
+    assert (tmp_path / "work" / "shot.png").read_bytes().startswith(b"\x89PNG")
 
 
 def test_a_render_that_blows_the_memory_ceiling_produces_nothing(monkeypatch):
@@ -312,17 +340,12 @@ def test_a_render_that_blows_the_memory_ceiling_produces_nothing(monkeypatch):
     assert thumbs.render_report(PAGE) == (None, None)
 
 
-def test_a_normal_exit_sweeps_stragglers(tmp_path):
-    """crashpad can outlive a browser that exited cleanly."""
-    pidfile = tmp_path / "straggler.pid"
-    script = f"sleep 300 >/dev/null 2>&1 & echo $! > {pidfile}"
-    done = thumbs._run(["/bin/sh", "-c", script], timeout=10)
-    assert done.returncode == 0
-    straggler = int(pidfile.read_text())
-    deadline = time.monotonic() + 5
-    while _alive(straggler) and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert not _alive(straggler)
+def test_a_normal_render_sweeps_stragglers(fake, tmp_path):
+    """crashpad can outlive a browser that finished cleanly."""
+    binary, read = fake("child")
+    assert _render_with(binary, tmp_path).returncode == 0
+    assert (tmp_path / "work" / "shot.png").exists()
+    assert _ended(_child_of(read))
 
 
 def test_the_temp_dir_is_gone_after_a_timeout(monkeypatch):

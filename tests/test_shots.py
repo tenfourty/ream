@@ -377,7 +377,7 @@ while True:
             time.sleep(60)
         result = {"result": {"value": cfg["found"]}}
     elif method == "Page.captureScreenshot":
-        clip = params["clip"]
+        clip = params.get("clip") or {"width": 8, "height": 8}  # a render's: no clip
         w, h = clip["width"], clip["height"]
         if mode == "wrong_size":
             w += 1

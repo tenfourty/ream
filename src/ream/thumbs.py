@@ -39,7 +39,6 @@ from ream.rendercore import (  # noqa: F401 -- re-exported for callers and tests
     _data_limited,
     _group_rss,
     _pss_bytes,
-    _run,
     _stat_pgrp_and_pages,
     browser_path,
     console_errors,

@@ -466,7 +466,7 @@ def test_a_bad_query_is_refused(query):
 
 
 def _shoot(monkeypatch, data: bytes):
-    """Run the in-process screenshot with a `_run` that writes `data` as the
+    """Run the in-process screenshot with a `_render_run` that writes `data` as the
     shot and a check line, as a browser that ran would."""
 
     def fake_run(argv, **kw):
@@ -549,7 +549,7 @@ def test_cleaning_leaves_text_the_wire_takes_and_keeps_its_length():
 
 
 def _shoot_into(monkeypatch, make):
-    """Run the in-process screenshot with a `_run` that calls `make(path)` in place
+    """Run the in-process screenshot with a `_render_run` that calls `make(path)` in place
     of writing the shot."""
 
     def fake_run(argv, **kw):

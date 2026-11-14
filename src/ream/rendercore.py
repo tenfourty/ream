@@ -188,54 +188,6 @@ def _group_rss(pgid: int) -> int:
     return total
 
 
-def _run(
-    argv: list[str],
-    *,
-    timeout: float,
-    max_rss: int | None = None,
-    **kwargs,
-) -> subprocess.CompletedProcess:
-    """subprocess.run, except that the whole process GROUP dies on a timeout,
-    and, given `max_rss`, when the group's memory passes it (RenderTooBig).
-
-    subprocess.run kills only the direct child on a timeout, so chromium's
-    helpers were orphaned to PID 1, which (uvicorn) never reaped them: 3,900
-    zombies in two days (homelab-o88p). Here the group is SIGKILLed and the
-    child is waited on, and the group is swept after a normal exit too, because
-    crashpad can outlive a browser that exited cleanly."""
-    proc = subprocess.Popen(  # noqa: S603 -- argv list, no shell, binary from config
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,  # its own process group, so a timeout kills all of it
-        **kwargs,
-    )
-    deadline = time.monotonic() + timeout
-    try:
-        while True:
-            left = deadline - time.monotonic()
-            if left <= 0:
-                raise subprocess.TimeoutExpired(argv, timeout)
-            try:
-                out, err = proc.communicate(
-                    timeout=min(left, RSS_POLL_SECONDS) if max_rss else left
-                )
-                break
-            except subprocess.TimeoutExpired:
-                if max_rss and (rss := _group_rss(proc.pid)) > max_rss:
-                    raise RenderTooBig(f"{rss} bytes resident") from None
-    except BaseException:
-        _kill_group(proc)
-        try:
-            proc.communicate(timeout=5)  # reap the child; drain the pipes
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-        raise
-    _kill_group(proc)
-    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
-
-
 def _data_limited(argv: list[str], limit: int) -> list[str]:
     """`argv` run under the kernel's per-process data limit, when prlimit is here.
     Without it the browser still runs, guarded by the sampler alone."""
@@ -553,7 +505,7 @@ return{n:-1,ph:ph,vw:vw}})"""
 class _Watch:
     """Ends the browser's process group at the deadline, or when its memory passes
     the ceiling, from a thread of its own while the caller talks to it; `reason`
-    then says which. The same rule `_run` applies to a render."""
+    then says which. A render and a screenshot both run under it (`_on_pipe`)."""
 
     def __init__(
         self,
@@ -1040,7 +992,7 @@ def _render_run(
 ) -> subprocess.CompletedProcess:
     """Run one render's browser on its pipe (`_on_pipe`, so the page reaches
     nothing but itself) and write its picture to `shot`; the browser's log is the
-    answer's stderr. Raises as `_run` does: TimeoutExpired past `timeout`,
+    answer's stderr. Raises TimeoutExpired past `timeout`,
     RenderTooBig past `max_rss`, OSError or ValueError if it could not start. A
     conversation that failed otherwise leaves no picture, as a browser that wrote
     none did."""

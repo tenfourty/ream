@@ -57,6 +57,5 @@ def test_thumbs_still_offers_the_runner_names():
         "RENDER_MAX_BYTES",
         "TIMEOUT_SECONDS",
         "_RENDER_SLOT",
-        "_run",
     ):
         assert getattr(thumbs, name) is getattr(rendercore, name), name
