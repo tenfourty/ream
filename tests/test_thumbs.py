@@ -329,6 +329,28 @@ def test_a_render_under_the_ceiling_is_left_alone(fake, tmp_path):
     assert (tmp_path / "work" / "shot.png").read_bytes().startswith(b"\x89PNG")
 
 
+def test_an_over_long_event_during_the_capture_leaves_no_picture(
+    fake, tmp_path, monkeypatch
+):
+    # Not the picture's own answer: no picture, nothing raised, nothing "too big".
+    monkeypatch.setattr(rendercore, "RENDER_MESSAGE_MAX_BYTES", 4096)
+    binary, _ = fake("huge_event", pad=8192)
+    done = _render_with(binary, tmp_path)
+    assert done.returncode == 0
+    assert not (tmp_path / "work" / "shot.png").exists()
+
+
+def test_an_unexpected_error_in_a_render_leaves_no_picture(fake, tmp_path, monkeypatch):
+    def broken(*args, **kwargs):
+        raise OverflowError("cannot convert float infinity to integer")
+
+    monkeypatch.setattr(rendercore, "_render_converse", broken)
+    binary, _ = fake()
+    done = _render_with(binary, tmp_path)
+    assert done.returncode == 0
+    assert not (tmp_path / "work" / "shot.png").exists()
+
+
 def test_a_render_that_blows_the_memory_ceiling_produces_nothing(monkeypatch):
     monkeypatch.setenv("REAM_BROWSER", "/bin/true")
 

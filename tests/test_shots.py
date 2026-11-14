@@ -12,6 +12,7 @@ import base64
 import json
 import os
 import struct
+import subprocess
 import sys
 import textwrap
 import threading
@@ -90,6 +91,15 @@ def test_a_bad_request_names_its_field(kwargs, field):
 def test_a_section_is_matched_by_its_folded_words():
     request = renderwire.shot_request(section="  Second   PART ")
     assert request.section == "second part"
+
+
+def test_a_section_is_folded_by_the_resolvers_own_white_space():
+    # The resolver folds a heading with JavaScript's white space: U+FEFF is space
+    # there, so it is here too, and the class it uses is this one.
+    request = renderwire.shot_request(section="\ufeffSecond\u3000\ufeffPart\u00a0")
+    assert request.section == "second part"
+    assert renderwire.fold_heading("a\u2028b\u205fc") == "a b c"
+    assert "/" + renderwire.SHOT_SPACE_CLASS + "+/g" in rendercore._RESOLVE_JS
 
 
 def test_the_query_goes_there_and_back():
@@ -384,6 +394,9 @@ while True:
         data = png(w, h)
         if mode == "huge":
             data += b"\0" * cfg["pad"]
+        if mode == "huge_event":
+            out({"method": "Page.frameNavigated", "sessionId": sid,
+                 "params": {"url": "u" * cfg["pad"]}})
         result = {"data": base64.b64encode(data).decode()}
     out({"id": msg["id"], "result": result, **({"sessionId": sid} if sid else {})})
     for event in events:
@@ -628,6 +641,42 @@ def test_a_message_over_the_pipes_limit_is_not_read_whole(fake, monkeypatch):
     assert shot.outcome == "picture_too_big"
 
 
+def test_an_event_over_the_pipes_limit_is_a_failed_shot(fake, monkeypatch):
+    # Over-long while the picture was asked for, but not the picture's answer.
+    monkeypatch.setattr(rendercore, "SHOT_MESSAGE_MAX_BYTES", 4096)
+    binary, _ = fake("huge_event", pad=8192)
+    shot = rendercore.shoot(binary, PAGE, renderwire.shot_request())
+    assert shot.outcome == "failed"
+
+
+def test_an_unexpected_error_is_a_failed_shot(fake, monkeypatch):
+    def broken(found, request):
+        raise OverflowError("cannot convert float infinity to integer")
+
+    monkeypatch.setattr(rendercore, "_shot_box", broken)
+    binary, _ = fake()
+    assert rendercore.shoot(binary, PAGE, renderwire.shot_request()).outcome == "failed"
+
+
+def test_the_watch_ends_the_group_at_its_deadline_on_its_own():
+    # Nothing reads a pipe here: only the watch's deadline arm can end it.
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        start_new_session=True,
+    )
+    try:
+        started = time.monotonic()
+        watch = rendercore._Watch(proc, time.monotonic() + 0.3, 1 << 40)
+        proc.wait(timeout=10)
+        watch.stop()
+        assert watch.reason == "timeout"
+        assert time.monotonic() - started < 10
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
 def test_a_browser_that_exits_is_a_failed_shot(fake):
     binary, _ = fake("exit")
     assert rendercore.shoot(binary, PAGE, renderwire.shot_request()).outcome == "failed"
@@ -666,6 +715,15 @@ def test_a_page_that_stalls_the_browser_is_a_timeout(fake, monkeypatch):
 def test_a_browser_past_the_memory_ceiling_is_ended(fake, monkeypatch):
     monkeypatch.setattr(rendercore, "RENDER_MAX_RSS_BYTES", 1)
     binary, read = fake("hang")
+    # The ceiling is read only once the fake has noted its helper: on a loaded runner the
+    # first poll could end the group before that, leaving no helper to check. Until then
+    # the group reads as using nothing.
+    real = rendercore._group_rss
+    monkeypatch.setattr(
+        rendercore,
+        "_group_rss",
+        lambda pid: real(pid) if any("child" in line for line in read()) else 0,
+    )
     shot = rendercore.shoot(binary, PAGE, renderwire.shot_request())
     assert shot.outcome == "memory"
     child = next(line["child"] for line in read() if "child" in line)
