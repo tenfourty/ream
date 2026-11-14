@@ -49,7 +49,7 @@ def test_the_child_gets_no_credentials(monkeypatch):
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://user:hunter2@db/artifacts")
     monkeypatch.setenv("REAM_BROWSER", "/bin/true")
-    monkeypatch.setattr(rendercore, "_run", capture)
+    monkeypatch.setattr(rendercore, "_render_run", capture)
 
     assert thumbs.render(PAGE) is None
     env = seen["env"]
@@ -65,7 +65,7 @@ def test_the_child_is_its_own_process_group(monkeypatch):
     monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(
         rendercore,
-        "_run",
+        "_render_run",
         lambda argv, **kw: seen.update(kw) or subprocess.CompletedProcess(argv, 0),
     )
     thumbs.render(PAGE)
@@ -84,7 +84,7 @@ def test_a_timeout_produces_nothing_rather_than_raising(monkeypatch):
     monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(
         rendercore,
-        "_run",
+        "_render_run",
         lambda argv, **kw: (_ for _ in ()).throw(subprocess.TimeoutExpired(argv, 1)),
     )
     assert thumbs.render(PAGE) is None
@@ -96,11 +96,11 @@ def test_output_that_is_not_a_png_is_refused(monkeypatch, tmp_path):
     monkeypatch.setenv("REAM_BROWSER", "/bin/true")
 
     def write_rubbish(argv, **kw):
-        shot = next(a for a in argv if str(a).startswith("--screenshot="))
-        Path(shot.split("=", 1)[1]).write_bytes(b"not a png at all")
+        shot = kw["shot"]
+        Path(shot).write_bytes(b"not a png at all")
         return subprocess.CompletedProcess(argv, 0)
 
-    monkeypatch.setattr(rendercore, "_run", write_rubbish)
+    monkeypatch.setattr(rendercore, "_render_run", write_rubbish)
     assert thumbs.render(PAGE) is None
 
 
@@ -111,7 +111,7 @@ def test_the_flags_disable_the_network(monkeypatch):
     monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(
         rendercore,
-        "_run",
+        "_render_run",
         lambda argv, **kw: (
             seen.setdefault("argv", argv) or subprocess.CompletedProcess(argv, 0)
         ),
@@ -132,7 +132,7 @@ def test_the_browser_runs_under_a_kernel_data_limit(monkeypatch):
     monkeypatch.setattr(rendercore, "_PRLIMIT", "/usr/bin/prlimit")
     monkeypatch.setattr(
         rendercore,
-        "_run",
+        "_render_run",
         lambda argv, **kw: (
             seen.setdefault("argv", argv) or subprocess.CompletedProcess(argv, 0)
         ),
@@ -144,7 +144,8 @@ def test_the_browser_runs_under_a_kernel_data_limit(monkeypatch):
         f"--data={thumbs.RENDER_MAX_DATA_BYTES}",
         "--",
     ]
-    assert argv[3] == "/bin/true"
+    # The browser starts through the shell line that moves its pipe into place.
+    assert argv[3:7] == [rendercore._SHELL, "-c", rendercore._PIPE_SHIM, "/bin/true"]
 
 
 def test_without_prlimit_the_browser_still_runs(monkeypatch):
@@ -153,13 +154,13 @@ def test_without_prlimit_the_browser_still_runs(monkeypatch):
     monkeypatch.setattr(rendercore, "_PRLIMIT", None)
     monkeypatch.setattr(
         rendercore,
-        "_run",
+        "_render_run",
         lambda argv, **kw: (
             seen.setdefault("argv", argv) or subprocess.CompletedProcess(argv, 0)
         ),
     )
     thumbs.render(PAGE)
-    assert str(seen["argv"][0]) == "/bin/true"
+    assert [str(a) for a in seen["argv"][:4:3]] == [rendercore._SHELL, "/bin/true"]
 
 
 @pytest.mark.skipif(thumbs._PRLIMIT is None, reason="no prlimit here")
@@ -205,10 +206,10 @@ def test_the_browser_sees_the_page_stamped_as_a_reader_would(monkeypatch):
     seen = {}
 
     def read_page(argv, **kw):
-        seen["html"] = Path(argv[-1].removeprefix("file://")).read_text()
+        seen["html"] = Path(kw["page_url"].removeprefix("file://")).read_text()
         return subprocess.CompletedProcess(argv, 0)
 
-    monkeypatch.setattr(rendercore, "_run", read_page)
+    monkeypatch.setattr(rendercore, "_render_run", read_page)
     thumbs.render_report("<p>DECISION · <!--artifacts:updated--> · BABA</p>")
     assert "<!--artifacts:updated-->" not in seen["html"]
     assert "· ·" not in seen["html"]
@@ -307,7 +308,7 @@ def test_a_render_that_blows_the_memory_ceiling_produces_nothing(monkeypatch):
         assert kw["max_rss"] == thumbs.RENDER_MAX_RSS_BYTES
         raise thumbs.RenderTooBig("9 bytes resident")
 
-    monkeypatch.setattr(rendercore, "_run", blow)
+    monkeypatch.setattr(rendercore, "_render_run", blow)
     assert thumbs.render_report(PAGE) == (None, None)
 
 
@@ -332,7 +333,7 @@ def test_the_temp_dir_is_gone_after_a_timeout(monkeypatch):
         seen["dir"] = Path(kw["cwd"])
         raise subprocess.TimeoutExpired(argv, 1)
 
-    monkeypatch.setattr(rendercore, "_run", hang)
+    monkeypatch.setattr(rendercore, "_render_run", hang)
     assert thumbs.render(PAGE) is None
     assert not seen["dir"].exists()
 
@@ -417,14 +418,14 @@ def test_a_page_over_the_render_cap_starts_no_browser(monkeypatch):
     """15 Oct 2026: one 8 MiB render took the pod past 1 GiB and the kernel
     killed it. A page over the cap gets the text tile, never a browser."""
     monkeypatch.setenv("REAM_BROWSER", "/bin/true")
-    monkeypatch.setattr(rendercore, "_run", _no_browser_may_start)
+    monkeypatch.setattr(rendercore, "_render_run", _no_browser_may_start)
     big = "<p>" + "x" * thumbs.RENDER_MAX_BYTES + "</p>"
     assert thumbs.render_report(big) == (None, None)
 
 
 def test_the_cap_counts_bytes_not_characters(monkeypatch):
     monkeypatch.setenv("REAM_BROWSER", "/bin/true")
-    monkeypatch.setattr(rendercore, "_run", _no_browser_may_start)
+    monkeypatch.setattr(rendercore, "_render_run", _no_browser_may_start)
     # Under the cap in characters, over it in UTF-8 bytes.
     big = "é" * (thumbs.RENDER_MAX_BYTES // 2 + 1)
     assert len(big) < thumbs.RENDER_MAX_BYTES < len(big.encode())
@@ -455,7 +456,7 @@ def test_renders_take_turns(monkeypatch):
         held.append(not free)
         raise subprocess.TimeoutExpired(argv, 1)
 
-    monkeypatch.setattr(rendercore, "_run", check_slot)
+    monkeypatch.setattr(rendercore, "_render_run", check_slot)
     assert thumbs.render(PAGE) is None
     assert held == [True]
     # and released afterwards, even on a timeout
@@ -486,7 +487,7 @@ def test_a_burst_of_publishes_parks_a_bounded_number_of_renders(monkeypatch):
 def test_a_render_that_gets_no_turn_produces_nothing(monkeypatch):
     monkeypatch.setenv("REAM_BROWSER", "/bin/true")
     monkeypatch.setattr(rendercore, "SLOT_WAIT_SECONDS", 0.05)
-    monkeypatch.setattr(rendercore, "_run", _no_browser_may_start)
+    monkeypatch.setattr(rendercore, "_render_run", _no_browser_may_start)
     assert thumbs._RENDER_SLOT.acquire(blocking=False)
     try:
         assert thumbs.render_report(PAGE) == (None, None)

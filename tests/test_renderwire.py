@@ -470,11 +470,11 @@ def _shoot(monkeypatch, data: bytes):
     shot and a check line, as a browser that ran would."""
 
     def fake_run(argv, **kw):
-        shot = next(a for a in argv if str(a).startswith("--screenshot="))
-        Path(shot.split("=", 1)[1]).write_bytes(data)
+        shot = kw["shot"]
+        Path(shot).write_bytes(data)
         return subprocess.CompletedProcess(argv, 0, b"", b"")
 
-    monkeypatch.setattr(rendercore, "_run", fake_run)
+    monkeypatch.setattr(rendercore, "_render_run", fake_run)
     return rendercore.screenshot("/bin/true", "<p>x</p>", W, H)
 
 
@@ -512,11 +512,11 @@ def test_not_run_carries_its_reason():
 
 def _shoot_logging(monkeypatch, log: str):
     def fake_run(argv, **kw):
-        shot = next(a for a in argv if str(a).startswith("--screenshot="))
-        Path(shot.split("=", 1)[1]).write_bytes(png())
+        shot = kw["shot"]
+        Path(shot).write_bytes(png())
         return subprocess.CompletedProcess(argv, 0, b"", log.encode())
 
-    monkeypatch.setattr(rendercore, "_run", fake_run)
+    monkeypatch.setattr(rendercore, "_render_run", fake_run)
     return rendercore.screenshot("/bin/true", "<p>x</p>", W, H)
 
 
@@ -553,11 +553,11 @@ def _shoot_into(monkeypatch, make):
     of writing the shot."""
 
     def fake_run(argv, **kw):
-        shot = next(a for a in argv if str(a).startswith("--screenshot="))
-        make(Path(shot.split("=", 1)[1]))
+        shot = kw["shot"]
+        make(Path(shot))
         return subprocess.CompletedProcess(argv, 0, b"", b"")
 
-    monkeypatch.setattr(rendercore, "_run", fake_run)
+    monkeypatch.setattr(rendercore, "_render_run", fake_run)
     return rendercore.screenshot("/bin/true", "<p>x</p>", W, H)
 
 

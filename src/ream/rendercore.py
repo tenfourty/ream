@@ -32,6 +32,7 @@ that will get one of them wrong.
 from __future__ import annotations
 
 import binascii
+import contextlib
 import json
 import logging
 import math
@@ -46,6 +47,7 @@ import threading
 import time
 import unicodedata
 from pathlib import Path
+from typing import NamedTuple
 
 from ream import devtools, renderfind, renderwire, settings
 from ream.renderwire import Report
@@ -323,7 +325,23 @@ def _isolation_flags() -> list[str]:
         "--no-default-browser-check",
         "--disable-extensions",
         "--disable-features=NetworkService,NetworkServiceInProcess",
+        *_NO_REACH_FLAGS,
     ]
+
+
+# THE CONTROL THAT HOLDS for the browser's own network stack. Every request goes to
+# a proxy that is not there, loopback included (<-loopback> drops the implicit
+# loopback bypass), so nothing reaches any host; that also stops WebTransport's
+# QUIC (measured 14 Nov 2026, headless shell 1217: one UDP datagram per run
+# without it, none with it). WebRTC sends UDP around a proxy, so no UDP that is not
+# proxied: full Chrome reads the first spelling, the headless shell the second.
+# tests/test_shots_offline.py
+_NO_REACH_FLAGS = [
+    "--proxy-server=127.0.0.1:1",
+    "--proxy-bypass-list=<-loopback>",
+    "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+]
 
 
 def _read_shot(path: Path) -> bytes:
@@ -384,7 +402,13 @@ def screenshot(
         except (OSError, UnicodeEncodeError):
             return None, None
 
+        # Driven over the DevTools pipe, as a screenshot is (`_render_run`), so
+        # every target the page starts is held and offline (`_Offline`); late
+        # layout settles in the page's own time there (RENDER_SETTLE_VIRTUAL_MS).
         argv = [
+            _SHELL,
+            "-c",
+            _PIPE_SHIM,
             binary,
             *_isolation_flags(),
             f"--window-size={int(width)},{int(height)}",
@@ -392,11 +416,8 @@ def screenshot(
             # to its author (homelab-ij8.72).
             "--enable-logging=stderr",
             "--v=0",
-            # Late layout settles before the shot; without it a page with web
-            # fonts or a chart renders half-built and the tile is a lie.
-            "--virtual-time-budget=3000",
-            f"--screenshot={shot}",
-            page.as_uri(),
+            "--remote-debugging-pipe",
+            "about:blank",
         ]
         if not slot_held and not _RENDER_SLOT.acquire(timeout=SLOT_WAIT_SECONDS):
             log.warning(
@@ -405,8 +426,12 @@ def screenshot(
             return None, None
         try:
             try:
-                done = _run(
+                done = _render_run(
                     _data_limited(argv, RENDER_MAX_DATA_BYTES),
+                    page_url=page.as_uri(),
+                    shot=shot,
+                    width=int(width),
+                    height=int(height),
                     timeout=TIMEOUT_SECONDS,
                     max_rss=RENDER_MAX_RSS_BYTES,
                     # BUILT FROM NOTHING, not inherited. DATABASE_URL and every
@@ -487,7 +512,7 @@ def screenshot(
 # How long a screenshot waits for the render slot before its answer is `busy`.
 SHOT_SLOT_WAIT_SECONDS = 5
 # Late layout settles in this much of the page's own time before the picture, as
-# a render's --virtual-time-budget; and at most this much real time is given to it.
+# a render's (`_load`); and at most this much real time is given to it.
 SHOT_SETTLE_VIRTUAL_MS = 3000
 SHOT_SETTLE_REAL_SECONDS = 6.0
 # The longest message read from the browser: the picture's answer, base64, with room.
@@ -530,9 +555,15 @@ class _Watch:
     the ceiling, from a thread of its own while the caller talks to it; `reason`
     then says which. The same rule `_run` applies to a render."""
 
-    def __init__(self, proc: subprocess.Popen, deadline: float) -> None:
+    def __init__(
+        self,
+        proc: subprocess.Popen,
+        deadline: float,
+        max_rss: int = RENDER_MAX_RSS_BYTES,
+    ) -> None:
         self.proc = proc
         self.deadline = deadline
+        self.max_rss = max_rss
         self.reason: str | None = None
         self._done = threading.Event()
         self._thread = threading.Thread(target=self._watch, daemon=True)
@@ -542,7 +573,7 @@ class _Watch:
         while not self._done.wait(RSS_POLL_SECONDS):
             if time.monotonic() >= self.deadline:
                 self.reason = "timeout"
-            elif _group_rss(self.proc.pid) > RENDER_MAX_RSS_BYTES:
+            elif _group_rss(self.proc.pid) > self.max_rss:
                 self.reason = "memory"
             else:
                 continue
@@ -659,15 +690,39 @@ SHOT_TARGETS_MAX = 64
 _AUTO_ATTACH = {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True}
 
 
-def _converse(pipe: devtools.Pipe, page_url: str, request, offline: _Offline):
-    """The DevTools conversation of one screenshot, on a browser just started."""
-    # Every target from here on is held at its start and taken offline (`_Offline`).
+def _open_page(pipe: devtools.Pipe, offline: _Offline) -> str:
+    """A blank page of its own on a browser just started, held and offline like
+    every target from here on (`_Offline`): its session."""
     pipe.call("Target.setAutoAttach", _AUTO_ATTACH)
     target = pipe.call("Target.createTarget", {"url": "about:blank"})["targetId"]
     session = next((s for s, t in offline.attached.items() if t == target), None)
     while session is None:
         pipe.wait_for("Target.attachedToTarget")
         session = next((s for s, t in offline.attached.items() if t == target), None)
+    return session
+
+
+def _load(pipe: devtools.Pipe, session: str, page_url: str) -> None:
+    """Open `page_url` on `session`: its load, then its own time run on to let late
+    layout settle (a render's old --virtual-time-budget), each within a bound of
+    real time."""
+    navigated = pipe.call("Page.navigate", {"url": page_url}, session)
+    if navigated.get("errorText"):
+        raise devtools.CommandFailed("the browser could not open the page")
+    settle = min(pipe.deadline, time.monotonic() + SHOT_SETTLE_REAL_SECONDS)
+    pipe.wait_for("Page.loadEventFired", session, until=settle)
+    pipe.call(
+        "Emulation.setVirtualTimePolicy",
+        {"policy": "advance", "budget": SHOT_SETTLE_VIRTUAL_MS},
+        session,
+    )
+    settle = min(pipe.deadline, time.monotonic() + SHOT_SETTLE_REAL_SECONDS)
+    pipe.wait_for("Emulation.virtualTimeBudgetExpired", session, until=settle)
+
+
+def _converse(pipe: devtools.Pipe, page_url: str, request, offline: _Offline):
+    """The DevTools conversation of one screenshot, on a browser just started."""
+    session = _open_page(pipe, offline)
     viewport = renderwire.SHOT_VIEWPORTS[request.width]
     pipe.call("Page.enable", session=session)
     pipe.call(
@@ -685,20 +740,7 @@ def _converse(pipe: devtools.Pipe, page_url: str, request, offline: _Offline):
         {"features": [{"name": "prefers-color-scheme", "value": request.theme}]},
         session,
     )
-    navigated = pipe.call("Page.navigate", {"url": page_url}, session)
-    if navigated.get("errorText"):
-        raise devtools.CommandFailed("the browser could not open the page")
-    # The page's load, then its own time run on to let late layout settle (the
-    # render's --virtual-time-budget), each within a bound of real time.
-    settle = min(pipe.deadline, time.monotonic() + SHOT_SETTLE_REAL_SECONDS)
-    pipe.wait_for("Page.loadEventFired", session, until=settle)
-    pipe.call(
-        "Emulation.setVirtualTimePolicy",
-        {"policy": "advance", "budget": SHOT_SETTLE_VIRTUAL_MS},
-        session,
-    )
-    settle = min(pipe.deadline, time.monotonic() + SHOT_SETTLE_REAL_SECONDS)
-    pipe.wait_for("Emulation.virtualTimeBudgetExpired", session, until=settle)
+    _load(pipe, session, page_url)
 
     frame = pipe.call("Page.getFrameTree", session=session)["frameTree"]["frame"]["id"]
     world = pipe.call(
@@ -817,59 +859,120 @@ def shoot(
 def _shoot_in(argv: list[str], workdir: str, page_url: str, request) -> renderwire.Shot:
     """Start the browser on its pipe, talk to it, and end its whole group, whatever
     happened."""
+    try:
+        ran = _on_pipe(
+            argv,
+            workdir,
+            page_url,
+            lambda pipe, offline: _converse(pipe, page_url, request, offline),
+            deadline=time.monotonic() + TIMEOUT_SECONDS,
+            max_message=SHOT_MESSAGE_MAX_BYTES,
+        )
+    except (OSError, ValueError) as exc:
+        log.warning("screenshot could not start: %s", exc)
+        return renderwire.Shot("failed")
+    shot = ran.value
+    if isinstance(ran.error, devtools.MessageTooBig):
+        log.warning("screenshot: a message from the browser was too long")
+        shot = renderwire.Shot("failed")
+    elif isinstance(ran.error, devtools.Timeout):
+        shot = renderwire.Shot("timeout")
+    elif ran.error is not None:
+        log.warning("screenshot: %s", ran.error)
+        shot = renderwire.Shot("failed")
+    if ran.reason is not None:
+        log.warning("screenshot: the browser was ended (%s)", ran.reason)
+        return renderwire.Shot(ran.reason)
+    try:
+        return renderwire.check_shot(shot)
+    except renderwire.RenderAnswerInvalid as exc:
+        log.warning("screenshot gave no usable picture: %s", exc)
+        return renderwire.Shot("failed")
+
+
+class _Ran(NamedTuple):
+    """What came of one browser run on its pipe (`_on_pipe`)."""
+
+    value: object  # what the conversation returned, None if it failed
+    error: Exception | None  # what ended the conversation early, if anything
+    reason: str | None  # "timeout" or "memory" when `_Watch` ended the browser
+    stderr: bytes  # the browser's log, when asked for
+
+
+def _drain(stream, chunks: list[bytes]) -> None:
+    # The browser's log, read as it comes so that a long one cannot stall it; it
+    # ends at the group's end, or when its pipe is closed under it.
+    with contextlib.suppress(OSError, ValueError):
+        chunks.extend(iter(lambda: stream.read1(65536), b""))
+
+
+def _on_pipe(
+    argv: list[str],
+    workdir: str,
+    page_url: str,
+    converse,
+    *,
+    deadline: float,
+    max_message: int,
+    max_rss: int = RENDER_MAX_RSS_BYTES,
+    env: dict | None = None,
+    keep_stderr: bool = False,
+) -> _Ran:
+    """Start the browser (`argv`, through `_PIPE_SHIM`) on its DevTools pipe, with
+    every target it starts held and offline (`_Offline`), run
+    `converse(pipe, offline)`, and end its whole group, whatever happened. The
+    envelope a screenshot and a render share: an environment built from nothing,
+    its own process group, the deadline and memory ceiling (`_Watch`). Starting
+    can raise OSError or ValueError; nothing after it raises."""
     to_browser_r, to_browser_w = os.pipe()
     from_browser_r, from_browser_w = os.pipe()
-    deadline = time.monotonic() + TIMEOUT_SECONDS
     proc = None
     watch = None
+    reader = None
+    chunks: list[bytes] = []
     try:
         try:
             proc = subprocess.Popen(  # noqa: S603 -- argv list, fixed shell text, binary from config
-                _data_limited(argv, RENDER_MAX_DATA_BYTES),
+                argv,
                 stdin=to_browser_r,
                 stdout=from_browser_w,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE if keep_stderr else subprocess.DEVNULL,
                 start_new_session=True,  # its own group, so all of it can be ended
-                # BUILT FROM NOTHING, as a render's (see `screenshot`).
-                env={"HOME": workdir, "TMPDIR": workdir, "PATH": "/usr/bin:/bin"},
+                # BUILT FROM NOTHING, as a render's always was (see `screenshot`).
+                env=env
+                if env is not None
+                else {"HOME": workdir, "TMPDIR": workdir, "PATH": "/usr/bin:/bin"},
                 cwd=workdir,
             )
-        except (OSError, ValueError) as exc:
-            log.warning("screenshot could not start: %s", exc)
-            return renderwire.Shot("failed")
         finally:
             os.close(to_browser_r)
             os.close(from_browser_w)
-        watch = _Watch(proc, deadline)
+        if keep_stderr:
+            reader = threading.Thread(
+                target=_drain, args=(proc.stderr, chunks), daemon=True
+            )
+            reader.start()
+        watch = _Watch(proc, deadline, max_rss)
         offline = _Offline(page_url)
         pipe = devtools.Pipe(
             to_browser_w,
             from_browser_r,
             deadline=deadline,
-            max_message=SHOT_MESSAGE_MAX_BYTES,
+            max_message=max_message,
             on_event=offline,
         )
         offline.pipe = pipe
+        value = None
+        error = None
         try:
-            shot = _converse(pipe, page_url, request, offline)
-        except devtools.MessageTooBig:
-            log.warning("screenshot: a message from the browser was too long")
-            shot = renderwire.Shot("failed")
-        except devtools.Timeout:
+            value = converse(pipe, offline)
+        except devtools.Timeout as exc:
             _kill_group(proc)
-            shot = renderwire.Shot("timeout")
+            error = exc
         except (devtools.DevToolsError, KeyError, TypeError, ValueError) as exc:
-            log.warning("screenshot: %s", exc)
-            shot = renderwire.Shot("failed")
+            error = exc
         watch.stop()
-        if watch.reason is not None:
-            log.warning("screenshot: the browser was ended (%s)", watch.reason)
-            return renderwire.Shot(watch.reason)
-        try:
-            return renderwire.check_shot(shot)
-        except renderwire.RenderAnswerInvalid as exc:
-            log.warning("screenshot gave no usable picture: %s", exc)
-            return renderwire.Shot("failed")
+        reason = watch.reason
     finally:
         if watch is not None:
             watch.stop()
@@ -880,8 +983,83 @@ def _shoot_in(argv: list[str], workdir: str, page_url: str, request) -> renderwi
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
+        if reader is not None:
+            reader.join(timeout=5)
+        if proc is not None and proc.stderr is not None:
+            proc.stderr.close()
         for fd in (to_browser_w, from_browser_r):
             try:
                 os.close(fd)
             except OSError:
                 pass
+    return _Ran(value, error, reason, b"".join(chunks))
+
+
+# The longest message read from the browser on a render: its picture, base64, with room.
+RENDER_MESSAGE_MAX_BYTES = 4 * ((renderwire.PNG_MAX_BYTES + 3) // 3) + 64 * 1024
+
+
+def _render_converse(
+    pipe: devtools.Pipe, offline: _Offline, page_url: str, width: int, height: int
+) -> bytes:
+    """The DevTools conversation of one render: the window's picture, as PNG."""
+    session = _open_page(pipe, offline)
+    pipe.call("Page.enable", session=session)
+    pipe.call(
+        "Emulation.setDeviceMetricsOverride",
+        {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False},
+        session,
+    )
+    _load(pipe, session, page_url)
+    taken = pipe.call(
+        "Page.captureScreenshot", {"format": "png", "fromSurface": True}, session
+    )
+    data = taken.get("data")
+    if not isinstance(data, str) or not data.isascii():
+        raise devtools.CommandFailed("the browser gave no picture")
+    try:
+        return binascii.a2b_base64(data.encode("ascii"), strict_mode=True)
+    except binascii.Error:
+        raise devtools.CommandFailed("the browser's picture is not base64") from None
+
+
+def _render_run(
+    argv: list[str],
+    *,
+    page_url: str,
+    shot: Path,
+    width: int,
+    height: int,
+    timeout: float,
+    max_rss: int,
+    env: dict,
+    cwd: str,
+) -> subprocess.CompletedProcess:
+    """Run one render's browser on its pipe (`_on_pipe`, so the page reaches
+    nothing but itself) and write its picture to `shot`; the browser's log is the
+    answer's stderr. Raises as `_run` does: TimeoutExpired past `timeout`,
+    RenderTooBig past `max_rss`, OSError or ValueError if it could not start. A
+    conversation that failed otherwise leaves no picture, as a browser that wrote
+    none did."""
+    ran = _on_pipe(
+        argv,
+        cwd,
+        page_url,
+        lambda pipe, offline: _render_converse(pipe, offline, page_url, width, height),
+        deadline=time.monotonic() + timeout,
+        max_message=RENDER_MESSAGE_MAX_BYTES,
+        max_rss=max_rss,
+        env=env,
+        keep_stderr=True,
+    )
+    if ran.reason == "memory":
+        raise RenderTooBig("the browser's memory passed its ceiling")
+    if ran.reason == "timeout" or isinstance(ran.error, devtools.Timeout):
+        raise subprocess.TimeoutExpired(argv, timeout)
+    if ran.error is not None:
+        log.warning("thumbnail render: %s", ran.error)
+    elif isinstance(ran.value, bytes):
+        fd = os.open(shot, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as out:
+            out.write(ran.value)
+    return subprocess.CompletedProcess(argv, 0, b"", ran.stderr)

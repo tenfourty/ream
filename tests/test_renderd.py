@@ -1,7 +1,7 @@
 """The renderer as its own process (`ream.renderd`).
 
 Most of these call the ASGI app directly, with a fake browser run
-(`rendercore._run`) and a fake process list; the last ones start the real
+(`rendercore._render_run`) and a fake process list; the last ones start the real
 command (`python -m ream.renderd`) as a process of its own, on loopback, with a
 real browser.
 """
@@ -104,15 +104,15 @@ def browser_runs(monkeypatch):
     def fake_run(argv, **kw):
         size = next(a for a in argv if a.startswith("--window-size="))
         w, h = (int(n) for n in size.split("=", 1)[1].split(","))
-        shot = next(a for a in argv if a.startswith("--screenshot="))
-        Path(shot.split("=", 1)[1]).write_bytes(png(w, h))
+        shot = kw["shot"]
+        Path(shot).write_bytes(png(w, h))
         # Something of the browser's own in its directory, as a real one leaves.
         profile = Path(kw["env"]["TMPDIR"]) / "org.chromium.Chromium.scoped_dir.x"
         (profile / "Default").mkdir(parents=True)
         runs.append({"argv": argv, "env": dict(kw["env"]), "cwd": kw["cwd"]})
         return subprocess.CompletedProcess(argv, 0, b"", CONSOLE.encode())
 
-    monkeypatch.setattr(rendercore, "_run", fake_run)
+    monkeypatch.setattr(rendercore, "_render_run", fake_run)
     return runs
 
 
@@ -358,11 +358,11 @@ def test_an_error_with_a_control_character_is_kept_cleaned(
     log = CONSOLE.replace("x is not", said)
 
     def fake_run(argv, **kw):
-        shot = next(a for a in argv if a.startswith("--screenshot="))
-        Path(shot.split("=", 1)[1]).write_bytes(png(W, H))
+        shot = kw["shot"]
+        Path(shot).write_bytes(png(W, H))
         return subprocess.CompletedProcess(argv, 0, b"", log.encode())
 
-    monkeypatch.setattr(rendercore, "_run", fake_run)
+    monkeypatch.setattr(rendercore, "_render_run", fake_run)
     r = client.post(f"/v1/render?w={W}&h={H}&check=1", content=PAGE, headers=HEADERS)
     assert r.status_code == 200
     report = renderwire.parse_answer(r.content, W, H)
@@ -414,13 +414,13 @@ def test_every_render_gets_a_new_profile_directory_removed_after(
 def test_what_a_render_leaves_in_the_work_directory_is_removed(
     client, work, monkeypatch, browser_runs
 ):
-    real = rendercore._run
+    real = rendercore._render_run
 
     def leave_something(argv, **kw):
         (work / "left-by-the-browser").mkdir()
         return real(argv, **kw)
 
-    monkeypatch.setattr(rendercore, "_run", leave_something)
+    monkeypatch.setattr(rendercore, "_render_run", leave_something)
     r = client.post(f"/v1/render?w={W}&h={H}", content=PAGE, headers=HEADERS)
     assert r.status_code == 200
     assert list(work.iterdir()) == []
@@ -1087,7 +1087,9 @@ def test_readyz(client, app, work, monkeypatch):
 
 def test_selfcheck_fails_without_a_picture(app, monkeypatch):
     monkeypatch.setattr(
-        rendercore, "_run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0)
+        rendercore,
+        "_render_run",
+        lambda argv, **kw: subprocess.CompletedProcess(argv, 0),
     )
     assert renderd.selfcheck(app) is False
 

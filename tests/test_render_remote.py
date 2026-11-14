@@ -94,7 +94,9 @@ def no_local_browser(monkeypatch):
     """A browser this process would start, were it to start one: none may start."""
     started = []
     monkeypatch.setenv("REAM_BROWSER", "/bin/true")
-    monkeypatch.setattr(rendercore, "_run", lambda argv, **kw: started.append(argv))
+    monkeypatch.setattr(
+        rendercore, "_render_run", lambda argv, **kw: started.append(argv)
+    )
     thumbs._failures.clear()
     yield started
     thumbs._failures.clear()

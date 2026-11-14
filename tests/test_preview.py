@@ -112,7 +112,9 @@ def remote(stub_renderer, monkeypatch):
 
     started = []
     monkeypatch.setenv("REAM_BROWSER", "/bin/true")
-    monkeypatch.setattr(rendercore, "_run", lambda argv, **kw: started.append(argv))
+    monkeypatch.setattr(
+        rendercore, "_render_run", lambda argv, **kw: started.append(argv)
+    )
 
     def valid(handler):
         q = parse_qs(urlsplit(handler.path).query)
