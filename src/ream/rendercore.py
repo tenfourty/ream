@@ -559,7 +559,7 @@ class _Watch:
         self,
         proc: subprocess.Popen,
         deadline: float,
-        max_rss: int = RENDER_MAX_RSS_BYTES,
+        max_rss: int,
     ) -> None:
         self.proc = proc
         self.deadline = deadline
@@ -861,12 +861,13 @@ def _shoot_in(argv: list[str], workdir: str, page_url: str, request) -> renderwi
     happened."""
     try:
         ran = _on_pipe(
-            argv,
+            _data_limited(argv, RENDER_MAX_DATA_BYTES),
             workdir,
             page_url,
             lambda pipe, offline: _converse(pipe, page_url, request, offline),
             deadline=time.monotonic() + TIMEOUT_SECONDS,
             max_message=SHOT_MESSAGE_MAX_BYTES,
+            max_rss=RENDER_MAX_RSS_BYTES,
         )
     except (OSError, ValueError) as exc:
         log.warning("screenshot could not start: %s", exc)
@@ -914,7 +915,7 @@ def _on_pipe(
     *,
     deadline: float,
     max_message: int,
-    max_rss: int = RENDER_MAX_RSS_BYTES,
+    max_rss: int,
     env: dict | None = None,
     keep_stderr: bool = False,
 ) -> _Ran:
@@ -922,8 +923,10 @@ def _on_pipe(
     every target it starts held and offline (`_Offline`), run
     `converse(pipe, offline)`, and end its whole group, whatever happened. The
     envelope a screenshot and a render share: an environment built from nothing,
-    its own process group, the deadline and memory ceiling (`_Watch`). Starting
-    can raise OSError or ValueError; nothing after it raises."""
+    its own process group, the deadline and memory ceiling (`_Watch`). The data
+    limit is the caller's: `argv` comes already `_data_limited`, and `max_rss` is
+    read by the caller at call time. Starting can raise OSError or ValueError;
+    nothing after it raises."""
     to_browser_r, to_browser_w = os.pipe()
     from_browser_r, from_browser_w = os.pipe()
     proc = None
