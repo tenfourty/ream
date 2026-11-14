@@ -666,6 +666,15 @@ def test_a_page_that_stalls_the_browser_is_a_timeout(fake, monkeypatch):
 def test_a_browser_past_the_memory_ceiling_is_ended(fake, monkeypatch):
     monkeypatch.setattr(rendercore, "RENDER_MAX_RSS_BYTES", 1)
     binary, read = fake("hang")
+    # The ceiling is read only once the fake has noted its helper: on a loaded runner the
+    # first poll could end the group before that, leaving no helper to check. Until then
+    # the group reads as using nothing.
+    real = rendercore._group_rss
+    monkeypatch.setattr(
+        rendercore,
+        "_group_rss",
+        lambda pid: real(pid) if any("child" in line for line in read()) else 0,
+    )
     shot = rendercore.shoot(binary, PAGE, renderwire.shot_request())
     assert shot.outcome == "memory"
     child = next(line["child"] for line in read() if "child" in line)
