@@ -162,8 +162,12 @@ def _try(path: str, way: str, tries: int) -> list[str]:
 @pytest.mark.parametrize("path", PATHS)
 @pytest.mark.parametrize("way", sorted(WAYS))
 def test_the_probe_fires_with_the_block_off(path, way, block_off):
-    # WebRTC's STUN went out in 13 of 16 renders without the flags: up to 3 tries.
-    assert _try(path, way, 3), f"{path} {way}: the probe never reached the listener"
+    # WebRTC's STUN goes out in most runs without the flags, not all, and on some
+    # browser builds less often: its control passes if any of 8 tries fires. The
+    # as-shipped side below is not loosened by this: every try there must reach
+    # nothing.
+    tries = 8 if way == "webrtc" else 3
+    assert _try(path, way, tries), f"{path} {way}: the probe never reached the listener"
 
 
 @needs_browser
@@ -201,6 +205,132 @@ def test_a_framed_local_file_shows_with_the_block_off(path, tmp_path, block_off)
 @pytest.mark.parametrize("path", PATHS)
 def test_a_framed_local_file_is_not_drawn(path, tmp_path):
     assert _frame_centre(path, _local_file_page(tmp_path)) != (0, 255, 0)
+
+
+GREEN = (0, 255, 0)
+_BOX = "border:0;width:200px;height:100px;display:block"
+
+
+def _local_files(tmp_path) -> dict[str, str]:
+    """Other local files a page might draw from, each green where it is drawn."""
+    files = {
+        "html": ("other.html", "<body style='margin:0;background:#0f0'>other</body>"),
+        "svg": (
+            "other.svg",
+            (
+                "<svg xmlns='http://www.w3.org/2000/svg' width='200' height='100'>"
+                "<rect width='200' height='100' fill='#0f0'/></svg>"
+            ),
+        ),
+        "css": ("other.css", "#frame{background:#0f0 !important}"),
+        "js": ("other.js", "document.getElementById('frame').style.background='#0f0'"),
+        "blank": ("blank.html", "<body>"),
+    }
+    uris = {}
+    for key, (name, text) in files.items():
+        (tmp_path / name).write_text(text)
+        uris[key] = (tmp_path / name).as_uri()
+    return uris
+
+
+def _local_ways(tmp_path) -> dict[str, str]:
+    """Each way a page might draw another local file into its picture, as the
+    body of a page whose top left 200 by 100 the drawing would fill."""
+    u = _local_files(tmp_path)
+    h, s = u["html"], u["svg"]
+    div = f"<div id=frame style='{_BOX}'></div>"
+    late = (
+        "border:0;width:200px;height:100px;display:block;position:absolute;top:0;left:0"
+    )
+    return {
+        "object": f"<object id=frame data='{h}' style='{_BOX}'></object>",
+        "embed": f"<embed id=frame src='{h}' style='{_BOX}'>",
+        "img_svg": f"<img id=frame src='{s}' style='{_BOX}'>",
+        "css_bg": f"<div id=frame style=\"{_BOX};background:url('{s}')\"></div>",
+        "stylesheet": f"<link rel=stylesheet href='{u['css']}'>{div}",
+        "script": f"{div}<script src='{u['js']}'></script>",
+        "location": f"{div}<script>location.href='{h}'</script>",
+        # Held the same way: with the load done first, the refresh moved the page
+        # after the picture in most runs even with the block off.
+        "meta_refresh": f"<meta http-equiv=refresh content='0;url={h}'>{div}"
+        f"<iframe src='{u['blank']}' style='border:0;width:0;height:0'></iframe>",
+        "iframe_srcdoc_nested": f"<iframe id=frame style='{_BOX}' srcdoc=\"<body "
+        f"style='margin:0'><iframe src='{h}' style='border:0;width:200px;"
+        "height:100px'></iframe>\"></iframe>",
+        # The timer fires while the hidden frame still holds the page's load, so
+        # the frame it adds is part of the load the picture waits for. One added
+        # after the load (a 50 ms timer) was not drawn even with the block off,
+        # so no control could show it fire.
+        "js_iframe_late": f"{div}<script>setTimeout(function(){{var f=document."
+        f"createElement('iframe');f.src='{h}';f.style.cssText='{late}';"
+        "document.body.appendChild(f)},0)</script>"
+        f"<iframe src='{u['blank']}' style='border:0;width:0;height:0'></iframe>",
+        "query_variant": f"<iframe id=frame src='{h}?x=1' style='{_BOX}'></iframe>",
+    }
+
+
+# Not here: a frame of the page's own directory, whose listing headless shell 1217
+# did not draw even with the block off, so no control could show it fire.
+LOCAL_WAYS = [
+    "css_bg",
+    "embed",
+    "iframe_srcdoc_nested",
+    "img_svg",
+    "js_iframe_late",
+    "location",
+    "meta_refresh",
+    "object",
+    "query_variant",
+    "script",
+    "stylesheet",
+]
+# Ways that navigate the page itself away: the picture may then be none at all.
+NAVIGATING = {"location", "meta_refresh"}
+# The shot reads the page's parts after its load; a meta refresh moves the page
+# mid-read and the shot made a picture in 1 of 3 runs with the block off, so on
+# that path no control can show it fire reliably. On the render path the refresh
+# drew in 8 of 9 runs with the block off: there each side gets TRIES runs, the
+# control passing if any draws and the as-shipped side only if none does.
+TRIES = {"meta_refresh": 3}
+LOCAL_CASES = [
+    (path, way)
+    for path in PATHS
+    for way in LOCAL_WAYS
+    if (path, way) != ("shot", "meta_refresh")
+]
+
+
+def test_every_local_way_is_tried(tmp_path):
+    assert sorted(_local_ways(tmp_path)) == LOCAL_WAYS
+
+
+def _local_centre(path: str, way: str, tmp_path):
+    """The centre of the top left 200 by 100 in the whole picture `path` makes of
+    the page drawing `way`, None if it made none."""
+    page = (
+        "<!doctype html><body style='margin:0;background:#fff'>"
+        + _local_ways(tmp_path)[way]
+        + "</body>"
+    )
+    png = _picture(path, page)
+    if png is None:
+        assert way in NAVIGATING, f"{path} {way}: no picture"
+        return None
+    return pixels(png)[2][50][100]
+
+
+@needs_browser
+@pytest.mark.parametrize(("path", "way"), LOCAL_CASES)
+def test_another_local_file_shows_with_the_block_off(path, way, tmp_path, block_off):
+    got = [_local_centre(path, way, tmp_path) for _ in range(TRIES.get(way, 1))]
+    assert GREEN in got, got
+
+
+@needs_browser
+@pytest.mark.parametrize(("path", "way"), LOCAL_CASES)
+def test_another_local_file_is_not_drawn(path, way, tmp_path):
+    got = [_local_centre(path, way, tmp_path) for _ in range(TRIES.get(way, 1))]
+    assert GREEN not in got, got
 
 
 def test_the_flags_are_in_every_run():
