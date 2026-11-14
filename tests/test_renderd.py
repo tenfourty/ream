@@ -1216,3 +1216,162 @@ def test_a_rendered_page_cannot_drive_the_renderer(served):
     assert not [l for l in served_lines if "left after a render" in l], served_lines
     answered = [l for l in served_lines if l.rstrip().endswith("POST /v1/render 200")]
     assert len(answered) == 1, served_lines
+
+
+# --- a screenshot ------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def shots(monkeypatch):
+    """A fake `rendercore.shoot` that answers a 200x100 picture; records each call."""
+    calls = []
+
+    def fake_shoot(binary, html, request, *, work_root=None, slot_held=False):
+        calls.append(
+            {
+                "binary": binary,
+                "html": html,
+                "request": request,
+                "work_root": work_root,
+                "slot_held": slot_held,
+                "slot_free": rendercore._RENDER_SLOT.acquire(blocking=False),
+            }
+        )
+        if calls[-1]["slot_free"]:
+            rendercore._RENDER_SLOT.release()
+        Path(work_root, "left-by-the-browser").write_text("x")
+        return renderwire.Shot(
+            "shot", png(200, 100), width=200, height=100, page_height=3000
+        )
+
+    monkeypatch.setattr(rendercore, "shoot", fake_shoot)
+    return calls
+
+
+def test_a_shot_answers_what_the_app_accepts(client, shots, work):
+    r = client.post(
+        "/v1/shot?w=390&theme=dark&section=Second%20part",
+        content=PAGE,
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.content
+    assert r.headers["content-type"] == "application/json"
+    assert no_cors(r.headers)
+    shot = renderwire.parse_shot_answer(r.content)
+    assert (shot.outcome, shot.width, shot.height, shot.page_height) == (
+        "shot",
+        200,
+        100,
+        3000,
+    )
+    call_ = shots[0]
+    assert call_["request"] == renderwire.shot_request(
+        390, "dark", section="second part"
+    )
+    assert call_["html"] == PAGE, "the body as sent: the renderer stamps nothing"
+    assert call_["slot_held"] is True and call_["slot_free"] is False
+    assert call_["work_root"] == work
+    assert list(work.iterdir()) == [], "the work directory is emptied after"
+
+
+def test_a_shot_needs_the_header_and_answers_options_with_403(client, shots):
+    r = client.post("/v1/shot?w=1280&theme=light", content=PAGE)
+    assert r.status_code == 403 and r.content == b""
+    assert client.options("/v1/shot").status_code == 403
+    assert client.get("/v1/shot").status_code == 405
+    assert shots == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "w=1280",
+        "w=900&theme=light",
+        "w=1280&theme=light&scale=2",
+        "w=1280&theme=light&element=a&section=b",
+        "w=1280&theme=light&element=has%20space",
+    ],
+)
+def test_a_bad_shot_query_is_a_400(client, shots, query):
+    r = client.post(f"/v1/shot?{query}", content=PAGE, headers=HEADERS)
+    assert r.status_code == 400
+    assert shots == []
+
+
+def test_a_shot_key_on_the_render_route_is_a_400(client, browser_runs):
+    r = client.post(f"/v1/render?w={W}&h={H}&theme=dark", content=PAGE, headers=HEADERS)
+    assert r.status_code == 400
+    assert browser_runs == []
+
+
+def test_a_shot_of_too_big_a_page_is_a_413_before_it_is_read(app, shots):
+    status, _, _, reads = call(
+        app,
+        "POST",
+        "/v1/shot",
+        query=b"w=1280&theme=light",
+        headers=[
+            *HEADERS.items(),
+            ("Content-Length", str(rendercore.RENDER_MAX_BYTES + 1)),
+        ],
+    )
+    assert (status, reads) == (413, 0)
+    assert shots == []
+
+
+def test_a_busy_shot_is_a_503_with_retry_after(client, shots, monkeypatch):
+    monkeypatch.setattr(renderd, "SLOT_WAIT_SECONDS", 0.05)
+    assert rendercore._RENDER_SLOT.acquire(blocking=False)
+    try:
+        r = client.post("/v1/shot?w=1280&theme=light", content=PAGE, headers=HEADERS)
+    finally:
+        rendercore._RENDER_SLOT.release()
+    assert r.status_code == 503
+    assert int(r.headers["retry-after"]) > 0
+    assert shots == []
+
+
+def test_a_process_left_after_a_shot_ends_the_renderer(
+    client, monkeypatch, exits, shots
+):
+    me, uid = os.getpid(), os.getuid()
+    listed = [(1, 0, "S", 0), (me, 1, "S", uid), (424243, me, "S", uid)]
+    monkeypatch.setattr(renderd, "_read_procs", lambda: listed)
+    r = client.post("/v1/shot?w=1280&theme=light", content=PAGE, headers=HEADERS)
+    assert exits == [renderd.EXIT_STRAY]
+    assert r.status_code == 500 and r.content == b""
+    assert rendercore._RENDER_SLOT.acquire(blocking=False)
+    rendercore._RENDER_SLOT.release()
+
+
+def test_a_shot_with_no_browser_answers_no_browser(client, monkeypatch):
+    monkeypatch.setenv("REAM_BROWSER", "/nonexistent/browser")
+    r = client.post("/v1/shot?w=1280&theme=light", content=PAGE, headers=HEADERS)
+    assert r.status_code == 200
+    assert renderwire.parse_shot_answer(r.content).outcome == "no_browser"
+
+
+@needs_browser
+def test_a_real_shot_through_the_renderer(served):
+    port, proc, lines = served
+    page = (
+        "<!doctype html><html><body style='margin:0'>"
+        "<div id=box style='width:240px;height:90px;background:#00f'></div>"
+        "<div style='height:2000px'></div></body></html>"
+    )
+    url = f"http://127.0.0.1:{port}"
+    whole = renderwire.call_shot(url, page, renderwire.shot_request())
+    assert whole.outcome == "shot", lines
+    assert (whole.width, whole.height, whole.page_height) == (1280, 2090, 2090)
+    box = renderwire.call_shot(url, page, renderwire.shot_request(390, element="box"))
+    assert (box.outcome, box.width, box.height) == ("shot", 240, 90)
+    missing = renderwire.call_shot(url, page, renderwire.shot_request(element="none"))
+    assert (missing.outcome, missing.matches) == ("no_match", 0)
+    # Still up: each shot left nothing running.
+    assert proc.poll() is None, lines
+    proc.terminate()
+    proc.wait(15)
+    served_lines = [l for l in lines if " ream.renderd " in l]
+    assert not [l for l in served_lines if "left after a render" in l], served_lines
+    answered = [l for l in served_lines if l.rstrip().endswith("POST /v1/shot 200")]
+    assert len(answered) == 3, served_lines

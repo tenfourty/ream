@@ -43,7 +43,7 @@ import threading
 import time
 import unicodedata
 import zlib
-from urllib.parse import urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 WIRE_VERSION = 1
 
@@ -414,6 +414,17 @@ def _retry_after(value: str | None) -> int | None:
 
 def _ask(host, port, target, body, width, height, deadline) -> Report:
     """One request of `call`'s, all of it before `deadline` (monotonic)."""
+    raw = _post(host, port, target, body, deadline)
+    try:
+        return parse_answer(raw, width, height)
+    except RenderAnswerInvalid:
+        raise RenderUnavailable() from None
+
+
+def _post(host, port, target, body, deadline) -> bytes:
+    """One POST of `body` (HTML) to `target`, all of it before `deadline`
+    (monotonic): the 200 answer's bytes, _Busy for a 503, RenderUnavailable for
+    anything else."""
     left = deadline - time.monotonic()
     if left <= 0:
         raise RenderUnavailable()
@@ -468,13 +479,360 @@ def _ask(host, port, target, body, width, height, deadline) -> Report:
         raw = response.read(RESPONSE_MAX_BYTES + 1)
         if len(raw) > RESPONSE_MAX_BYTES:
             raise RenderUnavailable()
-        return parse_answer(raw, width, height)
+        return raw
     except (RenderUnavailable, _Busy):
         raise
-    except (OSError, http.client.HTTPException, RenderAnswerInvalid, ValueError):
+    except (OSError, http.client.HTTPException, ValueError):
         raise RenderUnavailable() from None
     finally:
         timer.cancel()
         conn.close()
         for sock in handle:
             sock.close()
+
+
+# --- a screenshot ------------------------------------------------------------------
+#
+# A screenshot is a picture of a page as a reader sees it, whole or one part of it,
+# taken on request (`rendercore.shoot`), never stored. Over the wire it is its own
+# route, `POST /v1/shot?w=&theme=[&element=|&section=]`, with the stamped HTML as the
+# body; a renderer that does not know the route answers 404, and a shot key sent to
+# `/v1/render` is a 400 there (`parse_request_query`), so an old renderer fails
+# loudly rather than answering a render for a shot. It answers 200 with JSON:
+#
+#     {"v": 1, "outcome": ..., "png_base64": ..., "width": ..., "height": ...,
+#      "page_height": ..., "truncated": ..., "matches": ...}
+#
+# `outcome` is one of SHOT_OUTCOMES (`Shot.outcome` says what each means). A busy
+# renderer answers 503 with Retry-After, as for a render.
+
+# The widths a shot is taken at, and the height of the window the page is laid out
+# in at each: a desktop and a phone.
+SHOT_VIEWPORTS = {1280: 800, 390: 844}
+SHOT_THEMES = ("light", "dark")
+# The tallest picture: a page or part taller than this is cut to it, and the answer
+# says so (`truncated`). The widest: a part wider than this (a table that overflows
+# the page) is cut to it, also `truncated`.
+SHOT_MAX_HEIGHT = 8000
+SHOT_MAX_WIDTH = 2560
+# The largest picture kept, encoded; a larger one is the outcome `picture_too_big`.
+SHOT_PNG_MAX_BYTES = 5 * 1024 * 1024
+SHOT_PNG_BASE64_MAX_CHARS = 4 * ((SHOT_PNG_MAX_BYTES + 2) // 3)
+# An element is named by its id, under the same rule as an anchor's
+# (`anchors.ID_RE`; `tests/test_shots.py` holds them equal), and a section by its
+# heading's words, at most as long as an anchor's heading (`anchors.HEADING_MAX`).
+SHOT_ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
+SHOT_SECTION_MAX_CHARS = 200
+SHOT_QUERY_MAX_CHARS = 4096
+# How many matches a refused selector reports, at most.
+SHOT_MATCHES_MAX = 10**6
+
+SHOT_OUTCOMES = (
+    "shot",
+    "no_match",
+    "ambiguous",
+    "empty",
+    "page_too_big",
+    "picture_too_big",
+    "timeout",
+    "memory",
+    "busy",
+    "no_browser",
+    "failed",
+)
+_SHOT_KEYS = frozenset(
+    {
+        "v",
+        "outcome",
+        "png_base64",
+        "width",
+        "height",
+        "page_height",
+        "truncated",
+        "matches",
+    }
+)
+_SHOT_QUERY_KEYS = frozenset({"w", "theme", "element", "section"})
+
+
+class ShotRequestInvalid(ValueError):
+    """A screenshot's parameters failed a check. `field` names the one at fault;
+    the message is a fixed phrase."""
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field
+
+
+class ShotRequest(tuple):
+    """`(width, theme, element, section)`, checked (`shot_request`)."""
+
+    def __new__(cls, width, theme, element, section):
+        return super().__new__(cls, (width, theme, element, section))
+
+    width = property(lambda self: self[0])
+    theme = property(lambda self: self[1])
+    element = property(lambda self: self[2])
+    section = property(lambda self: self[3])
+
+
+def fold_heading(text: str) -> str:
+    """A heading's words as a section is matched by them: runs of white space as
+    one space, trimmed, lower-cased (as `anchors` and the pin script fold them)."""
+    return " ".join(text.split()).lower()
+
+
+def shot_request(width=1280, theme="light", element=None, section=None) -> ShotRequest:
+    """The checked parameters of a screenshot, or ShotRequestInvalid naming the
+    field: `width` one of SHOT_VIEWPORTS, `theme` one of SHOT_THEMES, at most one
+    of `element` (an id, SHOT_ID_RE) and `section` (a heading's words, folded,
+    non-empty, at most SHOT_SECTION_MAX_CHARS, no control character)."""
+    if not _is_int(width) or width not in SHOT_VIEWPORTS:
+        raise ShotRequestInvalid("width", "width is not one a shot is taken at")
+    if theme not in SHOT_THEMES:
+        raise ShotRequestInvalid("theme", "theme is not light or dark")
+    if element is not None and section is not None:
+        raise ShotRequestInvalid("element", "name an element or a section, not both")
+    if element is not None and (
+        not isinstance(element, str) or not SHOT_ID_RE.fullmatch(element)
+    ):
+        raise ShotRequestInvalid("element", "element is not an id")
+    if section is not None:
+        if not isinstance(section, str) or len(section) > SHOT_SECTION_MAX_CHARS:
+            raise ShotRequestInvalid("section", "section is not a heading's words")
+        try:
+            section.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ShotRequestInvalid("section", "section is not UTF-8") from None
+        if any(unicodedata.category(c) == "Cc" for c in section):
+            raise ShotRequestInvalid("section", "section holds a control character")
+        section = fold_heading(section)
+        if not section:
+            raise ShotRequestInvalid("section", "section is not a heading's words")
+    return ShotRequest(width, theme, element, section)
+
+
+def shot_query(request: ShotRequest) -> str:
+    """The query string of `POST /v1/shot` for `request`."""
+    parts = [f"w={int(request.width)}", f"theme={request.theme}"]
+    if request.element is not None:
+        parts.append("element=" + quote(request.element, safe=""))
+    if request.section is not None:
+        parts.append("section=" + quote(request.section, safe=""))
+    return "&".join(parts)
+
+
+def parse_shot_query(query: str | bytes) -> ShotRequest:
+    """The `ShotRequest` a `/v1/shot` query stands for, or ShotRequestInvalid. An
+    unknown or repeated key is refused, as on `/v1/render`."""
+    if isinstance(query, bytes):
+        try:
+            query = query.decode("ascii")
+        except UnicodeDecodeError:
+            raise ShotRequestInvalid("query", "query is not plain text") from None
+    if not isinstance(query, str) or len(query) > SHOT_QUERY_MAX_CHARS:
+        raise ShotRequestInvalid("query", "query is too long")
+    found: dict[str, str] = {}
+    for part in query.split("&") if query else []:
+        key, sep, value = part.partition("=")
+        if not sep:
+            raise ShotRequestInvalid("query", "query has a key with no value")
+        if key not in _SHOT_QUERY_KEYS:
+            raise ShotRequestInvalid("query", "query has an unknown key")
+        if key in found:
+            raise ShotRequestInvalid("query", "query repeats a key")
+        try:
+            found[key] = unquote(value, errors="strict")
+        except UnicodeDecodeError:
+            raise ShotRequestInvalid(key, f"{key} is not UTF-8") from None
+    if "w" not in found or "theme" not in found:
+        raise ShotRequestInvalid("query", "query needs w and theme")
+    if not _DIGITS.fullmatch(found["w"]):
+        raise ShotRequestInvalid("width", "width is not one a shot is taken at")
+    return shot_request(
+        int(found["w"]), found["theme"], found.get("element"), found.get("section")
+    )
+
+
+class Shot(tuple):
+    """What a screenshot came to: `(outcome, png)`, with the rest as attributes.
+
+    `outcome`, one of SHOT_OUTCOMES:
+      * `shot`: `png` is the picture, `width` x `height`; `page_height` is the
+        whole page's height, and `truncated` says the part shot was cut to
+        SHOT_MAX_HEIGHT (or SHOT_MAX_WIDTH).
+      * `no_match`, `ambiguous`: the element or section named matched no part of
+        the page, or `matches` (two or more) of them.
+      * `empty`: what was named is drawn with no size.
+      * `page_too_big`: the page is over the render limit; no browser ran.
+      * `picture_too_big`: the picture came to more than SHOT_PNG_MAX_BYTES.
+      * `timeout`, `memory`: the browser ran out of time, or past the memory
+        ceiling, and was ended.
+      * `busy`: another render held the browser past the wait.
+      * `no_browser`: there is no browser here.
+      * `failed`: anything else; nothing of what went wrong is passed on.
+    """
+
+    outcome: str
+    png: bytes | None
+    width: int
+    height: int
+    page_height: int
+    truncated: bool
+    matches: int | None
+
+    def __new__(
+        cls,
+        outcome,
+        png=None,
+        *,
+        width=0,
+        height=0,
+        page_height=0,
+        truncated=False,
+        matches=None,
+    ):
+        self = super().__new__(cls, (outcome, png))
+        self.outcome = outcome
+        self.png = png
+        self.width = width
+        self.height = height
+        self.page_height = page_height
+        self.truncated = truncated
+        self.matches = matches
+        return self
+
+    def __repr__(self) -> str:  # never the picture's bytes
+        return (
+            f"Shot({self.outcome!r}, {self.width}x{self.height},"
+            f" page_height={self.page_height}, truncated={self.truncated},"
+            f" matches={self.matches})"
+        )
+
+
+def _bounded_int(value, low: int, high: int, what: str) -> int:
+    if not _is_int(value) or not low <= value <= high:
+        raise RenderAnswerInvalid(f"{what} is out of bounds")
+    return value
+
+
+def check_shot(shot: Shot) -> Shot:
+    """`shot` if it holds together (the same rule both sides apply), else
+    RenderAnswerInvalid: a picture only with `shot`, of its stated size within the
+    limits; `matches` only with `no_match` (0) and `ambiguous` (2 or more)."""
+    if not isinstance(shot, Shot) or shot.outcome not in SHOT_OUTCOMES:
+        raise RenderAnswerInvalid("shot has an unknown outcome")
+    if shot.outcome == "shot":
+        width = _bounded_int(shot.width, 1, SHOT_MAX_WIDTH, "shot width")
+        height = _bounded_int(shot.height, 1, SHOT_MAX_HEIGHT, "shot height")
+        _bounded_int(shot.page_height, 0, CHECK_MAX, "page height")
+        if type(shot.truncated) is not bool:
+            raise RenderAnswerInvalid("truncated is not true or false")
+        if shot.matches is not None:
+            raise RenderAnswerInvalid("a shot reports no matches")
+        if not isinstance(shot.png, bytes) or len(shot.png) > SHOT_PNG_MAX_BYTES:
+            raise RenderAnswerInvalid("picture is over the size limit")
+        validate_png(shot.png, width, height)
+        return shot
+    if shot.png is not None or shot.width or shot.height or shot.page_height:
+        raise RenderAnswerInvalid("a shot not taken has no picture")
+    if shot.truncated is not False:
+        raise RenderAnswerInvalid("a shot not taken is not truncated")
+    if shot.outcome == "no_match":
+        if shot.matches != 0 or type(shot.matches) is not int:
+            raise RenderAnswerInvalid("no match reports 0 matches")
+    elif shot.outcome == "ambiguous":
+        _bounded_int(shot.matches, 2, SHOT_MATCHES_MAX, "matches")
+    elif shot.matches is not None:
+        raise RenderAnswerInvalid("only a selector's outcome reports matches")
+    return shot
+
+
+def encode_shot_answer(shot: Shot) -> bytes:
+    """The JSON answer for `shot`, the renderer's side of `parse_shot_answer`;
+    RenderAnswerInvalid rather than send one the app would refuse."""
+    check_shot(shot)
+    encoded = None
+    if shot.png is not None:
+        encoded = binascii.b2a_base64(shot.png, newline=False).decode("ascii")
+    return json.dumps(
+        {
+            "v": WIRE_VERSION,
+            "outcome": shot.outcome,
+            "png_base64": encoded,
+            "width": shot.width,
+            "height": shot.height,
+            "page_height": shot.page_height,
+            "truncated": shot.truncated,
+            "matches": shot.matches,
+        },
+        separators=(",", ":"),
+    ).encode("ascii")
+
+
+def parse_shot_answer(raw: bytes) -> Shot:
+    """The `Shot` a renderer's JSON answer stands for, or RenderAnswerInvalid."""
+    if not isinstance(raw, bytes) or len(raw) > RESPONSE_MAX_BYTES:
+        raise RenderAnswerInvalid("answer is over the size limit")
+    try:
+        answer = json.loads(
+            raw, object_pairs_hook=_no_duplicates, parse_constant=_no_constant
+        )
+    except RenderAnswerInvalid:
+        raise
+    except (ValueError, RecursionError):
+        raise RenderAnswerInvalid("answer is not JSON") from None
+    if not isinstance(answer, dict) or set(answer) != _SHOT_KEYS:
+        raise RenderAnswerInvalid("answer does not have exactly its keys")
+    if not _is_int(answer["v"]) or answer["v"] != WIRE_VERSION:
+        raise RenderAnswerInvalid("answer is of an unknown version")
+    if not isinstance(answer["outcome"], str):
+        raise RenderAnswerInvalid("shot has an unknown outcome")
+    encoded, png = answer["png_base64"], None
+    if encoded is not None:
+        if (
+            not isinstance(encoded, str)
+            or len(encoded) > SHOT_PNG_BASE64_MAX_CHARS
+            or not encoded.isascii()
+        ):
+            raise RenderAnswerInvalid("picture is over the size limit")
+        try:
+            png = binascii.a2b_base64(encoded.encode("ascii"), strict_mode=True)
+        except binascii.Error:
+            raise RenderAnswerInvalid("picture is not strict base64") from None
+    return check_shot(
+        Shot(
+            answer["outcome"],
+            png,
+            width=answer["width"],
+            height=answer["height"],
+            page_height=answer["page_height"],
+            truncated=answer["truncated"],
+            matches=answer["matches"],
+        )
+    )
+
+
+def call_shot(url: str, html: str, request: ShotRequest) -> Shot:
+    """Take a screenshot of `html` (already stamped) on the renderer at `url`, as
+    `call` renders: the same deadline, no redirect, no proxy. A 503 is the outcome
+    `busy` (the caller says so to whoever asked, rather than wait here); anything
+    else short of a 200 whose answer passes `parse_shot_answer` raises
+    RenderUnavailable."""
+    parts = urlsplit(url)
+    try:
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        raise RenderUnavailable() from None
+    if parts.scheme != "http" or not host or port is None:
+        raise RenderUnavailable()
+    target = "/v1/shot?" + shot_query(request)
+    deadline = time.monotonic() + CALL_DEADLINE_SECONDS
+    try:
+        raw = _post(host, port, target, html.encode("utf-8"), deadline)
+    except _Busy:
+        return Shot("busy")
+    try:
+        return parse_shot_answer(raw)
+    except RenderAnswerInvalid:
+        raise RenderUnavailable() from None

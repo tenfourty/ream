@@ -72,7 +72,7 @@ the reason to whoever holds the key. A fold refuses a key used in the last 24 ho
 | MCP at `/mcp` (transport, registries, the content fence; the tools, resources and prompts) | `src/ream/mcp.py`, `src/ream/mcp_tools.py`; trying it: `docs/mcp.md` |
 | The owner: settings, the stored id, its start-up guard | `src/ream/settings.py`, `src/ream/owner.py` |
 | The Postgres <-> SQLite copier and its verifier | `src/ream/migrate.py` |
-| Rendering a page's picture: the browser runner, the wire and its checks, the renderer as its own process (`python -m ream.renderd`), and the store-facing background render | `src/ream/rendercore.py`, `renderwire.py`, `renderd.py`, `thumbs.py`; running it apart: `docs/agent/runbooks/renderer-pod.md` |
+| Rendering a page's picture: the browser runner, the wire and its checks, the renderer as its own process (`python -m ream.renderd`), and the store-facing background render; a screenshot on request (`rendercore.shoot`, over the browser's DevTools pipe; `/v1/shot` on the renderer; nothing calls it yet) | `src/ream/rendercore.py`, `renderwire.py`, `renderd.py`, `devtools.py`, `thumbs.py`; running it apart: `docs/agent/runbooks/renderer-pod.md` |
 | HTML parsing: the one parser base every reader of a page uses (a new reader subclasses it; `tests/test_htmlbound.py` refuses any other) | `src/ream/htmlbound.py` |
 | The logo: its drawings, and the gallery's bar mark and tab icon cut from them | `src/ream/brand/`, `src/ream/logo.py` |
 | Writing a plug-in (the `ream.plugins` interfaces, `REAM_PLUGINS`, failure rules) | `docs/plugins.md` |

@@ -31,6 +31,15 @@ A renderer is trusted for its verdict on a page, and that is all: it holds no ke
 of the service's settings, so what it can affect is limited to its own pod and the verdicts and
 pictures it answers.
 
+## Screenshots
+
+The renderer also answers `POST /v1/shot?w=<1280|390>&theme=<light|dark>[&element=<id>|&section=<heading>]`
+(`renderwire.call_shot`, `rendercore.shoot`): one picture of the page, whole or one element or section,
+under the same rules as a render (the header, the type and length, the one browser, everything ended
+after). It answers JSON with an `outcome` (`renderwire.SHOT_OUTCOMES`); a page taller than 8000 px is
+cut to it and the answer says `truncated`. Nothing in the service asks for one yet. A renderer older
+than this answers 404 on that route, and 400 to a shot key sent to `/v1/render`.
+
 ## What a deployment adds
 
 1. **A Deployment** of one replica running the service's own image (the same digest). Give the start

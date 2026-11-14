@@ -31,7 +31,10 @@ that will get one of them wrong.
 
 from __future__ import annotations
 
+import binascii
+import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -44,7 +47,7 @@ import time
 import unicodedata
 from pathlib import Path
 
-from ream import renderfind, renderwire, settings
+from ream import devtools, renderfind, renderwire, settings
 from ream.renderwire import Report
 
 # The logger keeps the name it had in thumbs.py, so the log reads as before.
@@ -301,6 +304,28 @@ def console_errors(stderr: str) -> list[str]:
     return found
 
 
+def _isolation_flags() -> list[str]:
+    """The browser's flags every run takes, a render's and a screenshot's alike:
+    headless, no extensions, nothing fetched of its own accord, no network."""
+    return [
+        "--headless",
+        "--disable-gpu",
+        "--no-sandbox",  # the container is the sandbox
+        "--hide-scrollbars",
+        "--disable-dev-shm-usage",
+        # The page must not be able to reach anything. Its own CSP says so
+        # too, but a CSP is enforced by the component we are treating as
+        # untrusted, so it is not the control we rely on.
+        "--disable-remote-fonts",
+        "--disable-background-networking",
+        "--disable-sync",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-extensions",
+        "--disable-features=NetworkService,NetworkServiceInProcess",
+    ]
+
+
 def _read_shot(path: Path) -> bytes:
     """The screenshot's bytes, at most one past `renderwire.PNG_MAX_BYTES` (so a
     larger one is refused as over the limit). Opened without following a symlink
@@ -361,21 +386,7 @@ def screenshot(
 
         argv = [
             binary,
-            "--headless",
-            "--disable-gpu",
-            "--no-sandbox",  # the container is the sandbox; see the note below
-            "--hide-scrollbars",
-            "--disable-dev-shm-usage",
-            # The page must not be able to reach anything. Its own CSP says so
-            # too, but a CSP is enforced by the component we are treating as
-            # untrusted, so it is not the control we rely on.
-            "--disable-remote-fonts",
-            "--disable-background-networking",
-            "--disable-sync",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-extensions",
-            "--disable-features=NetworkService,NetworkServiceInProcess",
+            *_isolation_flags(),
             f"--window-size={int(width)},{int(height)}",
             # The page's console to stderr, so its script errors can be reported
             # to its author (homelab-ij8.72).
@@ -460,3 +471,417 @@ def screenshot(
         log.warning("thumbnail render gave no usable picture: %s", exc)
         return None, None
     return Report(data, errors, check)
+
+
+# --- a screenshot on request -------------------------------------------------------
+#
+# `shoot` takes a picture of a page as a reader sees it, whole or one element or
+# section of it, at a width and theme the caller picks (`renderwire.shot_request`),
+# and keeps nothing. It runs inside the same envelope as a render: an environment
+# built from nothing, the kernel's data limit, the memory sampler, the one render
+# slot, a hard timeout that ends the whole process group, the same flags, a fresh
+# directory removed afterwards, and every process ended after. It drives the browser
+# over its DevTools pipe (`ream.devtools`) rather than `--screenshot`, which takes
+# only the window and can neither pick an element nor set a theme.
+
+# How long a screenshot waits for the render slot before its answer is `busy`.
+SHOT_SLOT_WAIT_SECONDS = 5
+# Late layout settles in this much of the page's own time before the picture, as
+# a render's --virtual-time-budget; and at most this much real time is given to it.
+SHOT_SETTLE_VIRTUAL_MS = 3000
+SHOT_SETTLE_REAL_SECONDS = 6.0
+# The longest message read from the browser: the picture's answer, base64, with room.
+SHOT_MESSAGE_MAX_BYTES = renderwire.SHOT_PNG_BASE64_MAX_CHARS + 64 * 1024
+# The browser reads its commands on fd 3 and writes on fd 4. A child cannot be
+# given a descriptor at a chosen number safely from a threaded server (no
+# preexec_fn), so it gets them as its stdin and stdout, and this moves them there
+# and points stdin and stdout at /dev/null before the browser starts.
+_SHELL = "/bin/sh"
+_PIPE_SHIM = 'exec 3<&0 4>&1 </dev/null >/dev/null && exec "$0" "$@"'
+
+# Run in a world of its own the page's scripts cannot reach (Page.createIsolatedWorld),
+# so a page cannot change how its parts are found. The whole page's size, and the
+# box of the element (by id) or the section (by its heading's folded words, to the
+# next heading of the same rank or higher, as the pin script's `peers` reads one).
+_RESOLVE_JS = r"""(function(el, sec){
+var d=document,de=d.documentElement,b=d.body,i,n=0,hit=null,hs,lv,end=null,h,r,t,top,bot;
+scrollTo(0,0);
+var ph=Math.max(de.scrollHeight,b?b.scrollHeight:0,de.clientHeight);
+var vw=de.clientWidth||innerWidth;
+function box(r){return{x:r.left+scrollX,y:r.top+scrollY,w:r.width,h:r.height}}
+if(el!==null){var l=d.querySelectorAll('[id="'+CSS.escape(el)+'"]');
+  if(l.length!==1)return{n:l.length,ph:ph,vw:vw};
+  return{n:1,ph:ph,vw:vw,box:box(l[0].getBoundingClientRect())}}
+if(sec!==null){hs=d.querySelectorAll("h1,h2,h3,h4,h5,h6");
+  for(i=0;i<hs.length;i++){t=(hs[i].textContent||"").replace(/\s+/g," ").trim().toLowerCase();
+    if(t===sec){n++;hit=hs[i]}}
+  if(n!==1)return{n:n,ph:ph,vw:vw};
+  lv=+String(hit.nodeName).charAt(1);
+  for(i=0;i<hs.length;i++){h=hs[i];
+    if(h!==hit&&!hit.contains(h)&&(hit.compareDocumentPosition(h)&4)&&+String(h.nodeName).charAt(1)<=lv){end=h;break}}
+  r=hit.getBoundingClientRect();top=r.top+scrollY;
+  bot=end?end.getBoundingClientRect().top+scrollY:ph;
+  return{n:1,ph:ph,vw:vw,box:{x:0,y:top,w:vw,h:Math.max(0,bot-top)}}}
+return{n:-1,ph:ph,vw:vw}})"""
+
+
+class _Watch:
+    """Ends the browser's process group at the deadline, or when its memory passes
+    the ceiling, from a thread of its own while the caller talks to it; `reason`
+    then says which. The same rule `_run` applies to a render."""
+
+    def __init__(self, proc: subprocess.Popen, deadline: float) -> None:
+        self.proc = proc
+        self.deadline = deadline
+        self.reason: str | None = None
+        self._done = threading.Event()
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+        self._thread.start()
+
+    def _watch(self) -> None:
+        while not self._done.wait(RSS_POLL_SECONDS):
+            if time.monotonic() >= self.deadline:
+                self.reason = "timeout"
+            elif _group_rss(self.proc.pid) > RENDER_MAX_RSS_BYTES:
+                self.reason = "memory"
+            else:
+                continue
+            _kill_group(self.proc)
+            return
+
+    def stop(self) -> None:
+        self._done.set()
+        self._thread.join()
+
+
+def _shot_box(found: dict, request) -> tuple[int, int, int, int, bool] | str:
+    """`(x, y, width, height, truncated)` of the part to shoot, in whole pixels
+    (rounded outwards), from what `_RESOLVE_JS` found, or the outcome why not."""
+    n = found.get("n")
+    if request.element is None and request.section is None:
+        x, y, w, h = 0.0, 0.0, float(request.width), float(found["ph"])
+    elif n == 0:
+        return "no_match"
+    elif n != 1:
+        return "ambiguous"
+    else:
+        box = found["box"]
+        x, y, w, h = (float(box[k]) for k in ("x", "y", "w", "h"))
+    left, top = max(0, math.floor(x)), max(0, math.floor(y))
+    right, bottom = math.ceil(x + w), math.ceil(y + h)
+    width, height = right - left, bottom - top
+    if width <= 0 or height <= 0:
+        return "empty"
+    truncated = width > renderwire.SHOT_MAX_WIDTH or height > renderwire.SHOT_MAX_HEIGHT
+    return (
+        left,
+        top,
+        min(width, renderwire.SHOT_MAX_WIDTH),
+        min(height, renderwire.SHOT_MAX_HEIGHT),
+        truncated,
+    )
+
+
+class _Offline:
+    """Lets the page load itself and nothing else. Every target the browser
+    starts (the page, a frame of its own, a worker, a window it opens) is held at
+    its start (`Target.setAutoAttach` with `waitForDebuggerOnStart`) until every
+    request it makes is handed here (`Fetch.enable`), and, where the target takes
+    it, it is set offline too; the commands on one target run in order, so this
+    is in place before it runs a line. A request for `page_url` goes on; every
+    other one fails as if there were no network. An error answer to any of these
+    commands fails the shot, and so does a target past SHOT_TARGETS_MAX."""
+
+    def __init__(self, page_url: str) -> None:
+        self.page_url = page_url
+        self.pipe: devtools.Pipe | None = None
+        self.attached: dict[str, str] = {}
+        self.refused = 0
+        self.held = 0
+
+    def __call__(self, method: str, params: dict, session: str | None) -> None:
+        if method == "Fetch.requestPaused":
+            self._decide(params, session)
+        elif method == "Target.attachedToTarget":
+            self._hold(params)
+
+    def _decide(self, params: dict, session: str | None) -> None:
+        request_id = params.get("requestId")
+        url = (params.get("request") or {}).get("url")
+        if not isinstance(request_id, str):
+            raise devtools.CommandFailed("the browser paused an unnamed request")
+        if url == self.page_url:
+            self.pipe.send("Fetch.continueRequest", {"requestId": request_id}, session)
+            return
+        self.refused += 1
+        self.pipe.send(
+            "Fetch.failRequest",
+            {"requestId": request_id, "errorReason": "InternetDisconnected"},
+            session,
+        )
+
+    def _hold(self, params: dict) -> None:
+        child = params.get("sessionId")
+        info = params.get("targetInfo")
+        if not isinstance(child, str) or not isinstance(info, dict):
+            raise devtools.CommandFailed("the browser attached to something unnamed")
+        if len(self.attached) >= SHOT_TARGETS_MAX:
+            raise devtools.CommandFailed("the page started too many targets")
+        self.attached[child] = str(info.get("targetId"))
+        pipe = self.pipe
+        if info.get("type") in ("page", "iframe"):
+            pipe.send(
+                "Fetch.enable", {"patterns": [{"urlPattern": "*"}]}, child, checked=True
+            )
+            pipe.send("Network.enable", session=child, checked=True)
+            pipe.send(
+                "Network.emulateNetworkConditions",
+                {
+                    "offline": True,
+                    "latency": 0,
+                    "downloadThroughput": -1,
+                    "uploadThroughput": -1,
+                },
+                child,
+                checked=True,
+            )
+        else:
+            # A worker can be neither held to the page nor set offline here,
+            # so it is never let go: it stays held at its start, and runs nothing.
+            self.held += 1
+            return
+        pipe.send("Target.setAutoAttach", _AUTO_ATTACH, child, checked=True)
+        pipe.send("Runtime.runIfWaitingForDebugger", session=child, checked=True)
+
+
+# The most targets one shot may start (the page, its frames, workers, windows).
+SHOT_TARGETS_MAX = 64
+_AUTO_ATTACH = {"autoAttach": True, "waitForDebuggerOnStart": True, "flatten": True}
+
+
+def _converse(pipe: devtools.Pipe, page_url: str, request, offline: _Offline):
+    """The DevTools conversation of one screenshot, on a browser just started."""
+    # Every target from here on is held at its start and taken offline (`_Offline`).
+    pipe.call("Target.setAutoAttach", _AUTO_ATTACH)
+    target = pipe.call("Target.createTarget", {"url": "about:blank"})["targetId"]
+    session = next((s for s, t in offline.attached.items() if t == target), None)
+    while session is None:
+        pipe.wait_for("Target.attachedToTarget")
+        session = next((s for s, t in offline.attached.items() if t == target), None)
+    viewport = renderwire.SHOT_VIEWPORTS[request.width]
+    pipe.call("Page.enable", session=session)
+    pipe.call(
+        "Emulation.setDeviceMetricsOverride",
+        {
+            "width": request.width,
+            "height": viewport,
+            "deviceScaleFactor": 1,
+            "mobile": False,
+        },
+        session,
+    )
+    pipe.call(
+        "Emulation.setEmulatedMedia",
+        {"features": [{"name": "prefers-color-scheme", "value": request.theme}]},
+        session,
+    )
+    navigated = pipe.call("Page.navigate", {"url": page_url}, session)
+    if navigated.get("errorText"):
+        raise devtools.CommandFailed("the browser could not open the page")
+    # The page's load, then its own time run on to let late layout settle (the
+    # render's --virtual-time-budget), each within a bound of real time.
+    settle = min(pipe.deadline, time.monotonic() + SHOT_SETTLE_REAL_SECONDS)
+    pipe.wait_for("Page.loadEventFired", session, until=settle)
+    pipe.call(
+        "Emulation.setVirtualTimePolicy",
+        {"policy": "advance", "budget": SHOT_SETTLE_VIRTUAL_MS},
+        session,
+    )
+    settle = min(pipe.deadline, time.monotonic() + SHOT_SETTLE_REAL_SECONDS)
+    pipe.wait_for("Emulation.virtualTimeBudgetExpired", session, until=settle)
+
+    frame = pipe.call("Page.getFrameTree", session=session)["frameTree"]["frame"]["id"]
+    world = pipe.call(
+        "Page.createIsolatedWorld",
+        {"frameId": frame, "worldName": "ream-shot", "grantUniveralAccess": False},
+        session,
+    )["executionContextId"]
+    args = f"{json.dumps(request.element)}, {json.dumps(request.section)}"
+    expression = f"{_RESOLVE_JS}({args})"
+    evaluated = pipe.call(
+        "Runtime.evaluate",
+        {"expression": expression, "contextId": world, "returnByValue": True},
+        session,
+    )
+    found = (evaluated.get("result") or {}).get("value")
+    if evaluated.get("exceptionDetails") or not isinstance(found, dict):
+        raise devtools.CommandFailed("the page's parts could not be read")
+    page_height = found.get("ph")
+    if not isinstance(page_height, (int, float)) or not 0 <= page_height <= 10**7:
+        raise devtools.CommandFailed("the page's height could not be read")
+    page_height = math.ceil(page_height)
+    box = _shot_box(found, request)
+    if isinstance(box, str):
+        n = found.get("n")
+        matches = None
+        if box == "no_match":
+            matches = 0
+        elif box == "ambiguous":
+            matches = min(int(n), renderwire.SHOT_MATCHES_MAX)
+        return renderwire.Shot(box, matches=matches)
+    x, y, width, height, truncated = box
+    try:
+        taken = pipe.call(
+            "Page.captureScreenshot",
+            {
+                "format": "png",
+                "clip": {"x": x, "y": y, "width": width, "height": height, "scale": 1},
+                "captureBeyondViewport": True,
+                "fromSurface": True,
+            },
+            session,
+        )
+    except devtools.MessageTooBig:
+        return renderwire.Shot("picture_too_big")
+    data = taken.get("data")
+    if not isinstance(data, str) or not data.isascii():
+        raise devtools.CommandFailed("the browser gave no picture")
+    if len(data) > renderwire.SHOT_PNG_BASE64_MAX_CHARS:
+        return renderwire.Shot("picture_too_big")
+    try:
+        png = binascii.a2b_base64(data.encode("ascii"), strict_mode=True)
+    except binascii.Error:
+        raise devtools.CommandFailed("the browser's picture is not base64") from None
+    if len(png) > renderwire.SHOT_PNG_MAX_BYTES:
+        return renderwire.Shot("picture_too_big")
+    return renderwire.Shot(
+        "shot",
+        png,
+        width=width,
+        height=height,
+        page_height=page_height,
+        truncated=truncated,
+    )
+
+
+def shoot(
+    binary: str | None,
+    html: str,
+    request,
+    *,
+    work_root: str | os.PathLike | None = None,
+    slot_held: bool = False,
+) -> renderwire.Shot:
+    """A screenshot of `html` (already stamped as a reader would see it), as
+    `request` (a `renderwire.ShotRequest`) asks: a `renderwire.Shot`, whose
+    outcome says what came of it. Never raises.
+
+    `binary` None is `no_browser`. A page over RENDER_MAX_BYTES is `page_too_big`
+    and no browser starts. The slot is waited for SHOT_SLOT_WAIT_SECONDS (`busy`
+    after), unless `slot_held` (`ream.renderd`, which answers busy itself)."""
+    if binary is None:
+        return renderwire.Shot("no_browser")
+    if too_big_to_render(html):
+        return renderwire.Shot("page_too_big")
+    with tempfile.TemporaryDirectory(
+        prefix="artifacts-shot-", dir=work_root, ignore_cleanup_errors=True
+    ) as workdir:
+        page = Path(workdir) / "page.html"
+        try:
+            page.write_text(html, encoding="utf-8")
+        except (OSError, UnicodeEncodeError):
+            return renderwire.Shot("failed")
+        viewport = renderwire.SHOT_VIEWPORTS[request.width]
+        argv = [
+            _SHELL,
+            "-c",
+            _PIPE_SHIM,
+            binary,
+            *_isolation_flags(),
+            f"--window-size={int(request.width)},{int(viewport)}",
+            "--remote-debugging-pipe",
+            "about:blank",
+        ]
+        if not slot_held and not _RENDER_SLOT.acquire(timeout=SHOT_SLOT_WAIT_SECONDS):
+            log.warning(
+                "screenshot not taken: no turn within %ss", SHOT_SLOT_WAIT_SECONDS
+            )
+            return renderwire.Shot("busy")
+        try:
+            return _shoot_in(argv, workdir, page.as_uri(), request)
+        finally:
+            if not slot_held:
+                _RENDER_SLOT.release()
+
+
+def _shoot_in(argv: list[str], workdir: str, page_url: str, request) -> renderwire.Shot:
+    """Start the browser on its pipe, talk to it, and end its whole group, whatever
+    happened."""
+    to_browser_r, to_browser_w = os.pipe()
+    from_browser_r, from_browser_w = os.pipe()
+    deadline = time.monotonic() + TIMEOUT_SECONDS
+    proc = None
+    watch = None
+    try:
+        try:
+            proc = subprocess.Popen(  # noqa: S603 -- argv list, fixed shell text, binary from config
+                _data_limited(argv, RENDER_MAX_DATA_BYTES),
+                stdin=to_browser_r,
+                stdout=from_browser_w,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,  # its own group, so all of it can be ended
+                # BUILT FROM NOTHING, as a render's (see `screenshot`).
+                env={"HOME": workdir, "TMPDIR": workdir, "PATH": "/usr/bin:/bin"},
+                cwd=workdir,
+            )
+        except (OSError, ValueError) as exc:
+            log.warning("screenshot could not start: %s", exc)
+            return renderwire.Shot("failed")
+        finally:
+            os.close(to_browser_r)
+            os.close(from_browser_w)
+        watch = _Watch(proc, deadline)
+        offline = _Offline(page_url)
+        pipe = devtools.Pipe(
+            to_browser_w,
+            from_browser_r,
+            deadline=deadline,
+            max_message=SHOT_MESSAGE_MAX_BYTES,
+            on_event=offline,
+        )
+        offline.pipe = pipe
+        try:
+            shot = _converse(pipe, page_url, request, offline)
+        except devtools.MessageTooBig:
+            log.warning("screenshot: a message from the browser was too long")
+            shot = renderwire.Shot("failed")
+        except devtools.Timeout:
+            _kill_group(proc)
+            shot = renderwire.Shot("timeout")
+        except (devtools.DevToolsError, KeyError, TypeError, ValueError) as exc:
+            log.warning("screenshot: %s", exc)
+            shot = renderwire.Shot("failed")
+        watch.stop()
+        if watch.reason is not None:
+            log.warning("screenshot: the browser was ended (%s)", watch.reason)
+            return renderwire.Shot(watch.reason)
+        try:
+            return renderwire.check_shot(shot)
+        except renderwire.RenderAnswerInvalid as exc:
+            log.warning("screenshot gave no usable picture: %s", exc)
+            return renderwire.Shot("failed")
+    finally:
+        if watch is not None:
+            watch.stop()
+        if proc is not None:
+            _kill_group(proc)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        for fd in (to_browser_w, from_browser_r):
+            try:
+                os.close(fd)
+            except OSError:
+                pass

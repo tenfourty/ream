@@ -14,6 +14,11 @@ process stamps nothing, makes the check script's nonce, runs the browser through
     413 before any of it is read). The request must carry `X-Ream-Render: 1`;
     without it the answer is a bare 403. `OPTIONS` is answered the same way, and
     nothing here ever sends a CORS header. `check=0` answers `check: null`.
+  * `POST /v1/shot?w=&theme=[&element=|&section=]`: a screenshot of the page
+    (`rendercore.shoot`), under the same rules as a render (header, type, length,
+    the one browser, what is left after); it answers `renderwire.encode_shot_answer`.
+    An unknown key is a 400 on either route, so a shot key sent to `/v1/render`
+    fails rather than being answered as a render.
   * `GET /healthz`: the process is up. `GET /readyz`: the browser, prlimit and a
     writable work directory are there.
   * `--selfcheck`: render a built-in page, check the answer, exit 0 or 1. It
@@ -452,6 +457,29 @@ class Renderd:
             log.warning("render answer refused: %s", exc)
             return renderwire.encode_answer(renderwire.Report(None, None, None))
 
+    def shoot(self, html: str, request):
+        """A screenshot's answer bytes, _BUSY or _LEFT, as `render`: the same slot,
+        held for all of it, and the same check of what is left after."""
+        if not rendercore._RENDER_SLOT.acquire(timeout=SLOT_WAIT_SECONDS):
+            return _BUSY
+        try:
+            shot = rendercore.shoot(
+                rendercore.browser_path(),
+                html,
+                request,
+                work_root=self.work_root,
+                slot_held=True,
+            )
+            if not self._after_render():
+                return _LEFT
+        finally:
+            rendercore._RENDER_SLOT.release()
+        try:
+            return renderwire.encode_shot_answer(shot)
+        except renderwire.RenderAnswerInvalid as exc:
+            log.warning("shot answer refused: %s", exc)
+            return renderwire.encode_shot_answer(renderwire.Shot("failed"))
+
     def _after_render(self) -> bool:
         """True when the render left nothing behind; otherwise logs what, and exits.
         Armed, every process of its uid is ended first and its children reaped."""
@@ -527,7 +555,7 @@ class Renderd:
                     send, 503, ("not ready: " + ", ".join(missing) + "\n").encode()
                 )
             return await _answer(send, 200, b"ready\n")
-        if path != "/v1/render":
+        if path not in ("/v1/render", "/v1/shot"):
             return await _answer(send, 404, b"")
         if method == "OPTIONS":
             return await _answer(send, 403, b"")
@@ -539,11 +567,13 @@ class Renderd:
             headers.setdefault(name.lower(), []).append(value)
         if headers.get(HEADER) != [HEADER_VALUE]:
             return await _answer(send, 403, b"")
+        query = scope.get("query_string", b"")
         try:
-            width, height, check = renderwire.parse_request_query(
-                scope.get("query_string", b"")
-            )
-        except renderwire.RenderRequestInvalid as exc:
+            if path == "/v1/shot":
+                job = (self.shoot, renderwire.parse_shot_query(query))
+            else:
+                job = (self.render, *renderwire.parse_request_query(query))
+        except (renderwire.RenderRequestInvalid, renderwire.ShotRequestInvalid) as exc:
             return await _answer(send, 400, f"{exc}\n".encode())
         if not _is_html(headers.get(b"content-type")):
             return await _answer(send, 415, b"text/html only\n")
@@ -559,7 +589,7 @@ class Renderd:
         except UnicodeDecodeError:
             return await _answer(send, 400, b"the body is not UTF-8\n")
 
-        answer = await asyncio.to_thread(self.render, html, width, height, check)
+        answer = await asyncio.to_thread(job[0], html, *job[1:])
         if answer is _BUSY:
             return await _answer(
                 send,
