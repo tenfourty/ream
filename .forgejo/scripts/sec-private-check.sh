@@ -196,7 +196,7 @@ check_scopes() { # <repo> <org>
 # The repository's collaborators and each one's role, exactly: any extra, missing or changed one
 # fails. This list changes only with security's read. "login:role", role as the forge's
 # /collaborators/{login}/permission answers it (read, write, admin, owner).
-EXPECTED_COLLABORATORS="artifacts-maintainer:write security:read artifacts-sec-checker:owner"
+EXPECTED_COLLABORATORS="artifacts-maintainer:write security:read artifacts-sec-checker:owner homelab-maintainer:admin"
 
 # The logins in a collaborator list, one per line (pure). Prints "BAD <reason>" instead when the
 # list cannot be read or names an account the check cannot ask about safely.
@@ -883,13 +883,13 @@ selftest() {
     done
     printf ']' >> "$d/$name.json"
   }
-  collab_fixture cx artifacts-maintainer:write security:read artifacts-sec-checker:owner
-  collab_fixture cextra artifacts-maintainer:write security:read artifacts-sec-checker:owner someone:read
-  collab_fixture cmiss artifacts-maintainer:write artifacts-sec-checker:owner
-  collab_fixture cchg artifacts-maintainer:admin security:read artifacts-sec-checker:owner
-  collab_fixture cunread artifacts-maintainer:write security:read:403 artifacts-sec-checker:owner
-  collab_fixture cckadmin artifacts-maintainer:write security:read artifacts-sec-checker:admin
-  expect "collaborators: exactly the expected three"   empty "$(judge_collaborators o/r 200 "$d/cx.json" "$d/cx.tsv")"
+  collab_fixture cx artifacts-maintainer:write security:read artifacts-sec-checker:owner homelab-maintainer:admin
+  collab_fixture cextra artifacts-maintainer:write security:read artifacts-sec-checker:owner homelab-maintainer:admin someone:read
+  collab_fixture cmiss artifacts-maintainer:write artifacts-sec-checker:owner homelab-maintainer:admin
+  collab_fixture cchg artifacts-maintainer:admin security:read artifacts-sec-checker:owner homelab-maintainer:admin
+  collab_fixture cunread artifacts-maintainer:write security:read:403 artifacts-sec-checker:owner homelab-maintainer:admin
+  collab_fixture cckadmin artifacts-maintainer:write security:read artifacts-sec-checker:admin homelab-maintainer:admin
+  expect "collaborators: exactly the expected four"    empty "$(judge_collaborators o/r 200 "$d/cx.json" "$d/cx.tsv")"
   expect_has "collaborators: the checker only admin fails" "artifacts-sec-checker is admin, expected owner" "$(judge_collaborators o/r 200 "$d/cckadmin.json" "$d/cckadmin.tsv")"
   expect_has "collaborators: an extra one fails"       "not on the expected list: someone (read)" "$(judge_collaborators o/r 200 "$d/cextra.json" "$d/cextra.tsv")"
   expect_has "collaborators: a missing one fails"      "missing the expected collaborator security (read)" "$(judge_collaborators o/r 200 "$d/cmiss.json" "$d/cmiss.tsv")"
@@ -1093,10 +1093,10 @@ TOKENS = {
 }
 # token kind -> the collaborators of o/r and their roles
 COLLABS = {
-    "exact":         {"artifacts-maintainer": "write", "security": "read", "artifacts-sec-checker": "owner"},
-    "collabextra":   {"artifacts-maintainer": "write", "security": "read", "artifacts-sec-checker": "owner", "someone": "write"},
-    "collabmissing": {"artifacts-maintainer": "write", "artifacts-sec-checker": "owner"},
-    "collabchanged": {"artifacts-maintainer": "write", "security": "write", "artifacts-sec-checker": "owner"},
+    "exact":         {"artifacts-maintainer": "write", "security": "read", "artifacts-sec-checker": "owner", "homelab-maintainer": "admin"},
+    "collabextra":   {"artifacts-maintainer": "write", "security": "read", "artifacts-sec-checker": "owner", "homelab-maintainer": "admin", "someone": "write"},
+    "collabmissing": {"artifacts-maintainer": "write", "artifacts-sec-checker": "owner", "homelab-maintainer": "admin"},
+    "collabchanged": {"artifacts-maintainer": "write", "security": "write", "artifacts-sec-checker": "owner", "homelab-maintainer": "admin"},
 }
 # token kind -> the runners GET /repos/o/r/actions/runners?visible=true lists (repo 7, owned by org 3)
 SEC_RUNNER = {"id": 11, "uuid": "u1", "name": "dedicated-priv-1", "owner_id": 3, "repo_id": 0, "labels": ["runcove-sec"], "status": "active"}

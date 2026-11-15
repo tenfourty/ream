@@ -1033,7 +1033,15 @@ a release branch to test it.
 - Leave it unproven: the pipeline's guarantee would rest on a setting nobody had read.
 - Admin on the organisation: wider than the one repository needs.
 
-**Evidence:** confirmed (Jeremy, 12 Nov 2026, lettered answer in #hq-artifacts)
+**Standing, not per job (15 Nov 2026):** the grant was taken off on 14 Nov while security asked
+whether it should stay. It stays: the operator re-adds homelab as admin, and the privacy check
+(`sec-private-check.sh`, `EXPECTED_COLLABORATORS`) expects `homelab-maintainer` as admin, so its
+removal or any other role is refused like any other change. Not chosen: granting admin again for
+each named job and noting that the 12 Nov grant ended, which would leave the branch-rule proof
+waiting on a fresh grant each time.
+
+**Evidence:** confirmed (Jeremy, 12 Nov 2026, lettered answer in #hq-artifacts; Jeremy, 15 Nov
+2026, lettered answer (b) to security's question in #hq-security)
 
 ## The renderer can run as its own process or pod, beside the in-process one (13 Nov 2026)
 

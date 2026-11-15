@@ -80,8 +80,9 @@ Secrets on `runcove-sec/artifacts-sec` (homelab sets them; never in a file or on
 | `SEC_HOMELAB_READ_TOKEN` | read of `runcove/ream-homelab` only |
 
 `sec-private-check.sh repo` also requires artifacts-sec's collaborators to be exactly
-`artifacts-maintainer` (write), `security` (read) and `artifacts-sec-checker` (owner: the forge
-reports a collaborator's effective role, and the checker owns `runcove-sec`); that list
+`artifacts-maintainer` (write), `security` (read), `artifacts-sec-checker` (owner: the forge
+reports a collaborator's effective role, and the checker owns `runcove-sec`) and
+`homelab-maintainer` (admin, standing: docs/decisions.md, 12 Nov 2026); that list
 (`EXPECTED_COLLABORATORS` in the script) changes only with security's read.
 
 ### The checker account and the Owners-team check
