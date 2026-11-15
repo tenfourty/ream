@@ -182,6 +182,28 @@ def test_no_browser_is_the_routes_501(client, on, token, page, monkeypatch):
     assert said == refusal(answer)
 
 
+def test_a_picture_over_the_mcp_cap_is_the_routes_413_at_that_cap(
+    client, on, token, page, browser
+):
+    from ream import mcp_tools
+
+    browser.answer = a_shot(4, 4)
+    padded = browser.answer.png + b"\0" * (
+        mcp_tools.MCP_SHOT_MAX_BYTES + 1 - len(browser.answer.png)
+    )
+    browser.answer = renderwire.Shot(
+        "shot", padded, width=4, height=4, page_height=4, truncated=False
+    )
+    said = error_text(shoot(client, token, page_id=page))
+    assert json.loads(said) == {
+        "field": "picture",
+        "limit": 3_750_000,
+        "detail": "the picture is too large: name an element or a section",
+    }
+    # The route keeps its own larger cap: the same picture is served there.
+    assert route(client, token, page).status_code == 200
+
+
 def test_a_busy_browser_is_a_tool_error_saying_try_again(
     client, on, token, page, browser
 ):

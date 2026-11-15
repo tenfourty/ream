@@ -416,6 +416,11 @@ def _read_page(call: Call, arguments: dict[str, Any]) -> ToolOutput:
 
 # --- screenshot_page ------------------------------------------------------------------
 
+# The largest picture this tool hands back, raw. Claude refuses an image block over 5 MB,
+# and base64 grows bytes by a third: 3_750_000 raw is about 5 MB encoded. The route keeps
+# its own larger cap (`renderwire.SHOT_PNG_MAX_BYTES`); only MCP is held to this one.
+MCP_SHOT_MAX_BYTES = 3_750_000
+
 
 @tool(
     "screenshot_page",
@@ -467,6 +472,16 @@ def _screenshot_page(call: Call, arguments: dict[str, Any]) -> ToolOutput:
         shown, shot = shots.take(call.db, call.agent, page_id, n, request)
     except shots.ShotRefused as exc:
         raise HTTPException(exc.status, exc.detail) from None
+    if len(shot.png) > MCP_SHOT_MAX_BYTES:
+        # The route's own 413 for a too-large picture, at this tool's smaller cap.
+        raise HTTPException(
+            413,
+            {
+                "field": "picture",
+                "limit": MCP_SHOT_MAX_BYTES,
+                "detail": "the picture is too large: name an element or a section",
+            },
+        )
     return ToolOutput(
         {
             "artifact_id": page_id,

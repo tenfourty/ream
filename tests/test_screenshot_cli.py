@@ -6,13 +6,21 @@ browser faked as in `tests/test_screenshot_api.py`; the retry rules against a sc
 
 import io
 import json
+import os
+import stat
 import urllib.error
 
 import pytest
-from test_client import key_file, live  # noqa: F401
+from test_client import (  # noqa: F401
+    _BareServer,
+    _recording_target,
+    _redirector,
+    key_file,
+    live,
+)
 from test_screenshot_api import a_shot, browser, png  # noqa: F401
 
-from ream import cli, client, keys, renderwire, shots, store
+from ream import cli, client, clientlevel, keys, renderwire, shots, store
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body>one</body></html>"
 FAKE_KEY = "art_" + "k" * 30
@@ -142,9 +150,11 @@ class _Script:
     def __init__(self, *answers):
         self.answers = list(answers)
         self.timeouts = []
+        self.requests = []
 
     def open(self, request, timeout=None):
         self.timeouts.append(timeout)
+        self.requests.append(request)
         status, headers, body = self.answers.pop(0)
         if status != 200:
             raise urllib.error.HTTPError(
@@ -242,3 +252,77 @@ def test_a_200_that_is_not_a_png_writes_nothing(scripted, tmp_path, capsys):
     assert run(key, "abc", "--out", str(tmp_path / "s.png")) == 1
     assert "not a PNG" in capsys.readouterr().err
     assert not (tmp_path / "s.png").exists()
+
+
+def test_a_long_retry_after_is_waited_as_30_seconds(scripted, tmp_path):
+    key, slept, use = scripted
+    use((503, {"retry-after": "3600"}, BUSY[2]), OK)
+    assert run(key, "abc", "--out", str(tmp_path / "s.png")) == 0
+    assert slept == [30]
+
+
+def test_the_get_carries_the_key_both_client_levels_and_the_session(scripted, tmp_path):
+    key, _, use = scripted
+    opener = use(OK)
+    out = str(tmp_path / "s.png")
+    assert run(key, "abc", "--session", "ops-seat/1234", "--out", out) == 0
+    (request,) = opener.requests
+    assert request.get_method() == "GET"
+    sent = {name.lower(): value for name, value in request.header_items()}
+    level = str(clientlevel.CLIENT_LEVEL)
+    assert sent["authorization"] == f"Bearer {FAKE_KEY}"
+    assert sent["x-ream-client"] == level
+    assert sent["x-artifacts-client"] == level
+    assert sent["x-ream-session"] == "ops-seat/1234"
+    assert sent["x-artifacts-session"] == "ops-seat/1234"
+    assert FAKE_KEY not in request.full_url
+
+
+def test_a_redirect_is_refused_and_nothing_is_written(tmp_path, monkeypatch, capsys):
+    received: list = []
+    target = _BareServer("127.0.0.2", _recording_target(received))
+    redirector = _BareServer(
+        "127.0.0.1", _redirector(302, f"{target.start()}/elsewhere")
+    )
+    try:
+        monkeypatch.setenv("REAM_API", f"{redirector.start()}/api/v1")
+        key = tmp_path / "key"
+        key.write_text(FAKE_KEY)
+        key.chmod(0o600)
+        out = tmp_path / "s.png"
+        assert run(key, "abc", "--out", str(out)) == 1
+    finally:
+        target.stop()
+        redirector.stop()
+    assert received == []
+    assert "302 refused a redirect" in capsys.readouterr().err
+    assert not out.exists()
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_a_failed_rename_leaves_no_temporary_file(scripted, tmp_path, capsys):
+    key, _, use = scripted
+    use(OK)
+    out = tmp_path / "shots"
+    out.mkdir()
+    assert run(key, "abc", "--out", str(out)) == 1
+    err = capsys.readouterr().err
+    assert err.startswith(f"could not write {out}: ") and "None" not in err
+    assert out.is_dir() and list(out.iterdir()) == []
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_the_png_is_owner_only_and_replaces_a_symlink(scripted, tmp_path):
+    key, _, use = scripted
+    use(OK)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_bytes(b"untouched")
+    out = tmp_path / "s.png"
+    out.symlink_to(elsewhere)
+    assert run(key, "abc", "--out", str(out)) == 0
+    assert not out.is_symlink()
+    assert out.read_bytes() == png(4, 4)
+    assert stat.S_IMODE(os.stat(out).st_mode) == 0o600
+    assert elsewhere.read_bytes() == b"untouched"
+    help_text = " ".join(client.build_screenshot_parser().format_help().split())
+    assert "mode 600" in help_text and "never written through" in help_text

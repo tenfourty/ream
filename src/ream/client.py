@@ -2831,7 +2831,9 @@ def _retry_after(headers: dict) -> int | None:
 
 
 def _write_atomically(path: Path, data: bytes) -> None:
-    """`data` at `path`, whole or not at all: a temporary file beside it, then one rename."""
+    """`data` at `path`, whole or not at all: a temporary file beside it, then one rename.
+    The file is owner-only (mkstemp's 0600), and a symlink at `path` is replaced by it,
+    never written through (`--out`'s help says both; tests/test_screenshot_cli.py)."""
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as handle:
@@ -2877,7 +2879,12 @@ def build_screenshot_parser() -> argparse.ArgumentParser:
         "--theme", choices=("light", "dark"), default="light", help="default light"
     )
     parser.add_argument(
-        "--out", required=True, metavar="FILE", help="where to write the PNG"
+        "--out",
+        required=True,
+        metavar="FILE",
+        help="where to write the PNG: written whole or not at all, readable by you "
+        "only (mode 600); a symlink there is replaced by the file, never written "
+        "through",
     )
     parser.add_argument(
         "--key-file",
@@ -2934,7 +2941,10 @@ def _screenshot(args, key: str) -> int:
         _write_atomically(Path(args.out), raw)
     except OSError as exc:
         # The path is the caller's own: say which and why.
-        print(f"could not write {args.out}: {exc.strerror}", file=sys.stderr)
+        print(
+            f"could not write {args.out}: {exc.strerror or type(exc).__name__}",
+            file=sys.stderr,
+        )
         return 1
     width, height = _shot_fact(headers, "width"), _shot_fact(headers, "height")
     print(f"{args.out} {width}x{height} v{_shot_fact(headers, 'version')}")
