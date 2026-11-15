@@ -1080,7 +1080,7 @@ which the content origin never shows it. The picture is taken when asked, in the
 is taken (the renderer at `REAM_RENDERER_URL` when one is set, else the browser in the service under
 the render's one slot and envelope), and stored nowhere: no table, no cache, nothing to clean up when
 a page is deleted. A picture taller than 8000 px is cut and says so in a header. One shot per agent
-runs at a time; a busy browser answers 503 with `Retry-After`; a server with no browser and no
+runs at a time, counted in memory and so per server process; a busy browser answers 503 with `Retry-After`; a server with no browser and no
 renderer answers 501; a renderer with no usable answer is a 503, never a shot taken in the service.
 
 Only the page's own agent may take one. Another agent's page, even one open to agents, answers the
@@ -1096,5 +1096,6 @@ same 404 as a page that is not there.
 - Taking the picture in the service when the renderer does not answer: two places rendering pages,
   as for the render check (13 Nov 2026).
 
-**Evidence:** the maintainer's design for runcove-uap8t and its build brief for the HTTP slice,
-15 Nov 2026; the owner's confirmation is not recorded in this entry.
+**Evidence:** Jeremy's ask (13 Nov 2026, relayed by gg-ops, runcove-uap8t) was for an agent to
+take a screenshot of its own published page; the own-agent-only scope is as asked. The rest is the
+maintainer's design for runcove-uap8t and its build brief for the HTTP slice, 15 Nov 2026.

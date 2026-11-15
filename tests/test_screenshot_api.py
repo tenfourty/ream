@@ -499,3 +499,68 @@ def test_the_route_is_in_the_served_schema(api, seat):
     paths = api.get("/api/v1/openapi.json", headers=seat).json()["paths"]
     assert "get" in paths["/api/v1/pages/{artifact_id}/screenshot"]
     assert "get" in paths["/api/v1/artifacts/{artifact_id}/screenshot"]
+
+
+def test_a_renderer_with_no_browser_is_unavailable_not_this_server(
+    api, seat, page, remote
+):
+    """The renderer's own `no_browser` is the renderer being unusable: never the 501
+    that says this server has no browser."""
+    remote.answer = lambda h: _reply(
+        h, 200, renderwire.encode_shot_answer(renderwire.Shot("no_browser"))
+    )
+    got = get(api, page, seat)
+    assert got.status_code == 503
+    assert "retry-after" not in got.headers
+    assert got.json() == {
+        "detail": {
+            "renderer": True,
+            "reason": renderwire.UNAVAILABLE,
+            "detail": shots.UNAVAILABLE,
+        }
+    }
+
+
+# --- an unexpected error gives the agent's turn back ---------------------------------
+
+
+@pytest.fixture()
+def lenient(db):
+    """The app answering a 500 for an error it did not expect, as it does when served."""
+    return TestClient(create_gallery_app(db), raise_server_exceptions=False)
+
+
+def test_an_error_in_the_browser_gives_the_turn_back(
+    lenient, seat, page, browser, monkeypatch
+):
+    failures = [RuntimeError("the browser broke")]
+
+    def fails_once(path, html, request, **kw):
+        if failures:
+            raise failures.pop()
+        return a_shot()
+
+    monkeypatch.setattr(rendercore, "shoot", fails_once)
+    assert get(lenient, page, seat).status_code == 500
+    assert get(lenient, page, seat).status_code == 200, "not 429: the turn came back"
+
+
+def test_an_error_in_the_renderer_call_gives_the_turn_back(
+    lenient, seat, page, monkeypatch
+):
+    failures = [RuntimeError("the call broke")]
+
+    def fails_once(url, html, request):
+        if failures:
+            raise failures.pop()
+        return a_shot()
+
+    started = []
+    monkeypatch.setattr(renderwire, "call_shot", fails_once)
+    monkeypatch.setattr(rendercore, "shoot", lambda *a, **kw: started.append(a))
+    with settings.override(renderer_url="http://127.0.0.1:9", browser="/bin/true"):
+        assert get(lenient, page, seat).status_code == 500
+        assert get(lenient, page, seat).status_code == 200, (
+            "not 429: the turn came back"
+        )
+    assert started == []

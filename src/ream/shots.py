@@ -11,6 +11,10 @@ starts here, whatever REAM_BROWSER says; a renderer with no usable answer is a 5
 never a picture taken here instead. With none set, the browser runs in this process
 (`rendercore.shoot`), inside the render's envelope and its one slot.
 
+One shot per agent runs at a time (`one_per_agent`, a second gets 429). The count is
+held in memory, so the limit is per server process: a deployment running several
+processes lets an agent run one shot in each.
+
 A refusal is a `ShotRefused` (status, detail, headers) the surface turns into its own
 answer, except busy, which is `ShotBusy`: a `scanslots.ScanBusy`, so the app's and
 MCP's existing busy handling answers it (503 with Retry-After).
@@ -110,7 +114,8 @@ _in_flight_lock = threading.Lock()
 
 @contextlib.contextmanager
 def one_per_agent(agent: str) -> Iterator[None]:
-    """Hold this agent's one shot in flight for the block, or ShotRefused 429."""
+    """Hold this agent's one shot in flight for the block, or ShotRefused 429. Per
+    server process (an in-memory set); given back however the block ends."""
     with _in_flight_lock:
         if agent in _in_flight:
             raise ShotRefused(
@@ -160,17 +165,23 @@ def take(
                 shot = renderwire.call_shot(url, html, request)
             except renderwire.RenderUnavailable:
                 log.warning("screenshot not taken: the renderer gave no usable answer")
-                raise ShotRefused(
-                    503,
-                    {
-                        "renderer": True,
-                        "reason": renderwire.UNAVAILABLE,
-                        "detail": UNAVAILABLE,
-                    },
-                ) from None
+                raise _unavailable() from None
+            if shot.outcome == "no_browser":
+                # The renderer has no browser: the renderer is unusable, not this
+                # server short of one.
+                log.warning("screenshot not taken: the renderer has no browser")
+                raise _unavailable()
         else:
             shot = rendercore.shoot(binary, html, request)
     return stored.version, _taken(shot, request, stored.body)
+
+
+def _unavailable() -> ShotRefused:
+    """The renderer gave no usable answer: 503, with no Retry-After (do not hammer it)."""
+    return ShotRefused(
+        503,
+        {"renderer": True, "reason": renderwire.UNAVAILABLE, "detail": UNAVAILABLE},
+    )
 
 
 def _page_too_big(body: str) -> ShotRefused:
