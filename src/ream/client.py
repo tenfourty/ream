@@ -27,7 +27,7 @@ import urllib.request
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 from ream import (
     clientlevel,
@@ -2787,6 +2787,194 @@ def main(argv: list[str] | None = None) -> int:
         # header). Only the exception's class name is ever safe to print.
         print(f"error: {type(exc).__name__}", file=sys.stderr)
         return 1
+
+
+# --- ream screenshot (runcove-uap8t, slice 5) ------------------------------------------
+
+# A shot waits up to 5 s for the browser and then renders for up to 30 s: 45 s covers both.
+_SHOT_TIMEOUT = 45
+# A 503 WITH Retry-After is a busy browser: wait as it says and try again, this many times.
+# A 503 without one is a renderer that gave no usable answer: never retried.
+_SHOT_RETRIES = 3
+_SHOT_RETRY_AFTER_MAX = 30
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def _get_bytes(url: str, key: str, timeout: float) -> tuple[int, dict, bytes]:
+    """One GET carrying the key, NOT retried: `(status, headers lower-cased, body)` for any
+    answer the service gave, 2xx or not, so a caller can read a refusal's headers.
+    HTTPFailure only when no answer came (or a redirect, refused)."""
+    request = _raw_request("GET", url, key)
+    try:
+        with _opener.open(request, timeout=timeout) as response:
+            raw = response.read()
+            status = getattr(response, "status", 200)
+            seen = {k.lower(): v for k, v in getattr(response, "headers", {}).items()}
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        status = exc.code
+        seen = {k.lower(): v for k, v in (exc.headers or {}).items()}
+    except urllib.error.URLError as exc:
+        raise HTTPFailure(0, str(exc.reason)) from None
+    except (OSError, http.client.HTTPException) as exc:
+        raise HTTPFailure(0, type(exc).__name__) from None
+    selfupdate.on_response("GET", seen, request.full_url)
+    return status, seen, raw
+
+
+def _retry_after(headers: dict) -> int | None:
+    """Seconds a Retry-After header asks for (whole seconds only, capped), or None."""
+    value = (headers.get("retry-after") or "").strip()
+    if not value.isdigit():
+        return None
+    return min(int(value), _SHOT_RETRY_AFTER_MAX)
+
+
+def _write_atomically(path: Path, data: bytes) -> None:
+    """`data` at `path`, whole or not at all: a temporary file beside it, then one rename."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _shot_fact(headers: dict, name: str) -> str:
+    """One `x-ream-shot-*` header as printable text (`?` when absent or odd)."""
+    value = headers.get(f"x-ream-shot-{name}") or ""
+    return value if value.isdigit() or value in ("true", "false") else "?"
+
+
+def build_screenshot_parser() -> argparse.ArgumentParser:
+    parser = _Parser(
+        prog=prog_name("ream screenshot"),
+        description=(
+            "Save a PNG of one of YOUR OWN pages as a reader sees it, taken now and kept "
+            "nowhere on the server (GET /api/v1/pages/ID/screenshot). Prints "
+            "`FILE WIDTHxHEIGHT vVERSION`; warns when a tall page was cut."
+        ),
+    )
+    parser.add_argument("page_id", metavar="PAGE-ID")
+    parser.add_argument(
+        "--version", type=int, metavar="N", help="that version (default: the live one)"
+    )
+    part = parser.add_mutually_exclusive_group()
+    part.add_argument("--element", metavar="ID", help="only the element with this id")
+    part.add_argument(
+        "--section", metavar="HEADING", help="only the section this heading starts"
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        choices=(1280, 390),
+        default=1280,
+        help="1280 (desktop, default) or 390 (phone)",
+    )
+    parser.add_argument(
+        "--theme", choices=("light", "dark"), default="light", help="default light"
+    )
+    parser.add_argument(
+        "--out", required=True, metavar="FILE", help="where to write the PNG"
+    )
+    parser.add_argument(
+        "--key-file",
+        help=f"the file holding the agent key (default {_DEFAULT_KEY_FILE}, "
+        "or $REAM_KEY_FILE)",
+    )
+    parser.add_argument(
+        "--key-fd",
+        type=int,
+        metavar="N",
+        help="read the key from an already-open descriptor (or set $REAM_KEY_FD)",
+    )
+    parser.add_argument("--session", help="the session label (default $REAM_SESSION)")
+    return parser
+
+
+def _screenshot(args, key: str) -> int:
+    query = {"width": str(args.width), "theme": args.theme}
+    if args.version is not None:
+        query["version"] = str(args.version)
+    if args.element is not None:
+        query["element"] = args.element
+    if args.section is not None:
+        query["section"] = args.section
+    url = f"{_api_base()}/pages/{quote(args.page_id, safe='')}/screenshot?" + urlencode(
+        query, quote_via=quote
+    )
+    for attempt in range(_SHOT_RETRIES + 1):
+        status, headers, raw = _get_bytes(url, key, _SHOT_TIMEOUT)
+        wait = _retry_after(headers) if status == 503 else None
+        if wait is None or attempt == _SHOT_RETRIES:
+            break
+        print(f"the browser is busy: trying again in {wait} s", file=sys.stderr)
+        time.sleep(wait)
+    if status != 200:
+        parsed = _json_object(raw)
+        if parsed is not None and "detail" in parsed:
+            detail = parsed["detail"]
+            said = (
+                detail
+                if isinstance(detail, str)
+                else json.dumps(detail, ensure_ascii=False)
+            )
+        else:
+            said = _detail(raw, headers)
+        print(f"{status} {_printable(said)}", file=sys.stderr)
+        return 1
+    if not raw.startswith(_PNG_SIGNATURE):
+        print(
+            "the service answered 200 with something that is not a PNG", file=sys.stderr
+        )
+        return 1
+    try:
+        _write_atomically(Path(args.out), raw)
+    except OSError as exc:
+        # The path is the caller's own: say which and why.
+        print(f"could not write {args.out}: {exc.strerror}", file=sys.stderr)
+        return 1
+    width, height = _shot_fact(headers, "width"), _shot_fact(headers, "height")
+    print(f"{args.out} {width}x{height} v{_shot_fact(headers, 'version')}")
+    if _shot_fact(headers, "truncated") == "true":
+        print(
+            f"warning: the page is {_shot_fact(headers, 'page-height')} px tall and the"
+            f" picture was cut at {height} px: name an --element or a --section to see"
+            " the rest",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def screenshot_main(argv: list[str] | None = None) -> int:
+    args = build_screenshot_parser().parse_args(
+        argv if argv is not None else sys.argv[1:]
+    )
+    use_session(session_label(args.session))
+    try:
+        key = _resolve_key(args)
+        key = maybe_rotate(args, key)
+        return _screenshot(args, key)
+    except HTTPFailure as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)
+        print(f"{exc.status} {detail}", file=sys.stderr)
+        return 1
+    except UsageError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 -- last resort: `str(exc)` can carry
+        # the key. Only the exception's class name is ever safe to print.
+        print(f"error: {type(exc).__name__}", file=sys.stderr)
+        return 1
+
+
+def screenshot_run() -> None:
+    """`ream screenshot PAGE-ID --out shot.png [...]`."""
+    plugin_cli.load_or_exit()
+    news.announce()
+    sys.exit(screenshot_main())
 
 
 def changes_run() -> None:

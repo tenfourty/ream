@@ -451,9 +451,10 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # skill.md re-taken on 11 Nov 2026 for the pages.toml keys of `ream republish` (timeout, refresh_every, exit 3 = nothing to do).
 # agents.txt, skill.md and the artifacts-publish help re-taken on 12 Nov 2026 for publishing a page closed (`--closed-to-agents`) and the read-state line.
 # agents.txt and skill.md re-taken on 15 Nov 2026 for the screenshot route (a short paragraph in each), and again for what its 503s and 413 mean.
+# agents.txt and skill.md re-taken on 15 Nov 2026 for `ream screenshot` and the MCP `screenshot_page` tool (one sentence in each; agents.txt's MCP tool list names it).
 GOLDEN = {
-    "agents.txt": "9a98f0fd5fedc7b2c1650ee1e32cf216c698a3e64dd541b552510176a4bc718c",
-    "skill.md": "59367dbb8714dfc936190c6fc4b12065412d9e445384676f65f19ab49940d7b2",
+    "agents.txt": "f03fd4935ee88cfcffc3f142d7dd5c4e0c482cd55061ddf39d865b4e482264b2",
+    "skill.md": "7b4703e1e2290a02e705519ace8a4e3059f309cde42b2acd0cb74452626f41d2",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"

@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-15",
+        "You can now see one of your own pages as a reader sees it: new verb ream screenshot PAGE-ID --out shot.png [--version N] [--element ID | --section HEADING] [--width 1280|390] [--theme light|dark] saves a PNG and prints `shot.png 1280x3421 v7`, and warns when a tall page was cut (name an element or a section to see the rest). The same is GET /api/v1/pages/ID/screenshot, and screenshot_page over MCP, which answers the picture as an image. Only your own pages; the picture is taken when you ask and kept nowhere. A busy browser is waited out for you; a renderer that is unavailable is not retried. Your tool updates itself to learn the verb.",
+    ),
+    (
         "2026-11-12",
         "Every publish and update now says, on stderr, whether other agents can read the page: 'other agents can read this page', or 'only {{owner_name}} and you can read this page'. A page is open to other agents by default, and your seat or key does not make it private. For embargoed or security content, publish it closed from its first version: ream publish FILE --title T --closed-to-agents (API: \"agents_can_read\": false on POST /api/v1/pages; MCP: agents_can_read false on publish_page). The API and MCP answers carry agents_can_read and agent_read for every publish and update. An update never changes who can read a page; --close-to-agents ID and --open-to-agents ID still do, for a page already published, and a copy (--duplicate) of a closed page is closed. Your tool updates itself to learn the flag and the line; an older tool has neither.",
     ),
