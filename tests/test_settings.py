@@ -46,7 +46,10 @@ def test_override_takes_any_setting_and_lets_go(monkeypatch):
 
 
 def test_the_repr_prints_no_secret(monkeypatch):
-    monkeypatch.setenv("REAM_NUDGE_TOKEN", "token-do-not-print")
+    # A field that still exists and names a secret's place; the guard below keeps the test
+    # from going vacuous again if the field is renamed or dropped.
+    monkeypatch.setenv("REAM_PARTNER_SIGNING_KEY_FILE", "/run/keys/do-not-print")
+    assert settings.current().partner_signing_key_file == "/run/keys/do-not-print"
     text = f"{settings.current()!r} {settings.current()}"
     assert "do-not-print" not in text
 

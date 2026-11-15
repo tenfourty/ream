@@ -151,8 +151,8 @@ owner answers or comments registers an after-commit sink (the house's is named `
 `decision_answered`, `comment_added`, `thread_resolved`, `thread_reopened` and `question_asked`.
 The event carries what a ring needs: `event.id` is the journal row's seq, `event.agent` the page's
 agent, `event.note` his words, and `data` has `title`, `letter` and `recommended` on an answer and
-`nudge_note` where the ring must carry other words than the journal row (`comment_added` sets it
-empty: the journal has his comment, a ring never did). The core reads no `NUDGE_*` setting; if
+`nudge_note` where the ring must carry other words than the journal row (`comment_added` and
+`question_asked` set it empty: the journal has his words, a ring never did). The core reads no `NUDGE_*` setting; if
 `REAM_NUDGE_URL`, `_AGENT`, `_TOKEN` or `_TIMEOUT` (or the `ARTIFACTS_` forms) are still set and no
 sink named `doorbell` is registered once the plug-ins and webhook sinks load, start-up logs one
 warning naming the variables (never a value) that the doorbell is OFF; it warns and does not

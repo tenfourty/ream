@@ -706,7 +706,7 @@ def stop(timeout: float = 5.0) -> None:
 # plug-in's after-commit sink `doorbell`. What core still owes it is the event itself: the
 # journal row's seq as `event.id`, `title`, `letter` and `recommended` in `data`, and
 # `nudge_note` in `data` where the ring must carry other words than the journal row
-# (comment_added: the journal has his words, the ring never did).
+# (comment_added and question_asked: the journal has his words, the ring never did).
 
 
 def _builtin_sinks() -> list[Sink]:

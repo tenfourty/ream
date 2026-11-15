@@ -71,6 +71,15 @@ def test_an_answer_hands_a_doorbell_his_note_letter_and_recommendation(
     assert ring["event_id"].isdigit()
 
 
+def test_a_long_note_reaches_the_doorbell_whole(db, monkeypatch, rings):
+    """The summary is cut at 200 characters; the ring's note must not be (homelab-873)."""
+    note = "w" * 600
+    _answer_through_the_gallery(db, monkeypatch, note=note, letter="b")
+    (ring,) = rings
+    assert ring["note"] == note
+    assert len(ring["note"]) == 600
+
+
 def test_an_answer_without_a_recommendation_hands_none(db, monkeypatch, rings):
     _answer_through_the_gallery(db, monkeypatch, note="", letter="b")
     (ring,) = rings
