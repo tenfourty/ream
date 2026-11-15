@@ -275,7 +275,7 @@ def emit(conn, event: Event) -> Emission:
     staging) in the same transaction, or a place on the after-commit list that
     `Emission.fire()` runs. If any step here raises, the caller's transaction
     rolls back with it."""
-    from ream import sinks
+    from ream import partner, sinks
 
     seq = None
     if event.kind in KINDS:
@@ -296,13 +296,16 @@ def emit(conn, event: Event) -> Emission:
     else:
         raise ValueError(f"unknown event kind {event.kind!r}")
     late = []
-    for sink in sinks.matching(event.kind):
-        if sink.delivery == "after_commit":
-            late.append(sink)
-        elif sink.stage is not None:
-            sink.stage(conn, event)
-        else:
-            sinks.write_outbox(conn, sink.name, event)
+    # Every stage of this event sees one answer to "who holds the partner bridge"
+    # (`partner.bridge_owner`), so exactly one of them writes it.
+    with partner.one_owner_per_dispatch(conn):
+        for sink in sinks.matching(event.kind):
+            if sink.delivery == "after_commit":
+                late.append(sink)
+            elif sink.stage is not None:
+                sink.stage(conn, event)
+            else:
+                sinks.write_outbox(conn, sink.name, event)
     return Emission(event, seq, tuple(late))
 
 

@@ -744,7 +744,8 @@ def _builtin_sinks() -> list[Sink]:
         # `partner.next_version`). Anywhere else (a command-line tool, another
         # REAM_PLUGINS) core writes it to its own outbox, which core's sender leaves
         # alone while the key is set and the owner's sender empties with `hand_over`:
-        # one writer per event, and nothing lost.
+        # one writer per event, and nothing lost. `bridge_owner` answers what was read
+        # once for this event, the same answer the owner's stage gets.
         global _partner_stood_down_logged
         owner = partner.bridge_owner(conn)
         if owner is not None and bridge_stage_of(owner, event.kind):

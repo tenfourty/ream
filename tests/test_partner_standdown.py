@@ -208,6 +208,53 @@ def test_core_stages_in_a_process_without_the_owners_stage(db, page, bridge, cap
     assert _outbox(db) == []
 
 
+class OwnerFlip:
+    """A stage that runs between core's and the owner's and changes the bridge key on the
+    staging connection, as a claim or release committing between two READ COMMITTED reads
+    would look to the stages after it. Once only."""
+
+    def __init__(self, to):
+        self.to = to
+        self.done = False
+
+    def stage(self, conn, event):
+        if self.done:
+            return
+        self.done = True
+        conn.execute(
+            "delete from service_meta where key = %s", (partner.BRIDGE_OWNER_KEY,)
+        )
+        if self.to is not None:
+            conn.execute(
+                "insert into service_meta (key, value) values (%s, %s)",
+                (partner.BRIDGE_OWNER_KEY, self.to),
+            )
+
+    def sink(self):
+        return Sink("owner-flip", BRIDGE_KINDS, stage=self.stage)
+
+
+@pytest.mark.parametrize("claimed_before", [False, True], ids=["claim", "release"])
+def test_owner_changing_mid_dispatch_leaves_exactly_one_writer(
+    db, page, bridge, claimed_before
+):
+    # runcove-5t3oj.129: core's stage and the owner's stage read the owner once per
+    # event between them. A claim landing between the reads used to stage the event
+    # twice (core's outbox and the plug-in's); a release, in neither.
+    qd = FakeQuarterdeck()
+    if claimed_before:
+        _claim(db)
+    flip = OwnerFlip(None if claimed_before else "qd")
+    with sinks.isolated(*sinks._builtin_sinks(), flip.sink(), qd.sink()):
+        d = _ask(db, page)
+    assert flip.done
+    in_core = [(r[0], r[2]) for r in _outbox(db)]
+    in_plugin = [(r[0], r[2]) for r in qd.staged]
+    assert len(in_core) + len(in_plugin) == 1
+    assert (in_core or in_plugin) == [(d.id, "asked")]
+    assert _counter(db, d.id) == 1
+
+
 def test_a_cli_process_still_tells_the_partner(db, page, bridge):
     # The command-line plug-in API registers no sink (`artifacts-admin purge-deleted`
     # withdraws a purged page's open question there): the event must still be staged.

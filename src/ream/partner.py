@@ -31,13 +31,15 @@ earlier one has been.
 from __future__ import annotations
 
 import base64
+import contextvars
 import json
 import logging
 import re
 import threading
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -615,12 +617,47 @@ class BridgeHeld(Exception):
     """The bridge is held by another owner (claim), or not by this one (release)."""
 
 
-def bridge_owner(conn: Connection) -> str | None:
-    """Who holds the outbound bridge: a plug-in's name, or None while core does."""
+# One event's dispatch to its stage sinks reads the owner once (runcove-5t3oj.129): core's
+# stage and the owner's stage each ask `bridge_owner(conn)`, and under READ COMMITTED a
+# claim or release committing between two separate reads would let them disagree (no
+# stage takes the event, or two do). `events.emit` opens `one_owner_per_dispatch`; inside
+# it, every `bridge_owner` call on that same connection gets the first read's answer.
+# [connection, answer or _UNREAD], or None outside a dispatch.
+_dispatch: contextvars.ContextVar[list | None] = contextvars.ContextVar(
+    "ream_partner_dispatch_owner", default=None
+)
+_UNREAD = object()
+
+
+@contextmanager
+def one_owner_per_dispatch(conn: Connection) -> Iterator[None]:
+    """While one event is handed to its sinks on `conn`: `bridge_owner(conn)` reads the
+    database once, on first use, and gives that same answer to every later call on `conn`
+    until the block ends. Another connection still reads afresh."""
+    token = _dispatch.set([conn, _UNREAD])
+    try:
+        yield
+    finally:
+        _dispatch.reset(token)
+
+
+def _read_bridge_owner(conn: Connection) -> str | None:
     row = conn.execute(
         "select value from service_meta where key = %s", (BRIDGE_OWNER_KEY,)
     ).fetchone()
     return None if row is None else row[0]
+
+
+def bridge_owner(conn: Connection) -> str | None:
+    """Who holds the outbound bridge: a plug-in's name, or None while core does. Called
+    by a stage sink while one event is being staged (on the connection the stage was
+    given), it answers what was read once for that event, the same for every stage."""
+    pin = _dispatch.get()
+    if pin is not None and pin[0] is conn:
+        if pin[1] is _UNREAD:
+            pin[1] = _read_bridge_owner(conn)
+        return pin[1]
+    return _read_bridge_owner(conn)
 
 
 def claim_bridge(conn: Connection, owner: str) -> None:
