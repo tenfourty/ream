@@ -889,11 +889,15 @@ selftest() {
   collab_fixture cchg artifacts-maintainer:admin security:read artifacts-sec-checker:owner homelab-maintainer:admin
   collab_fixture cunread artifacts-maintainer:write security:read:403 artifacts-sec-checker:owner homelab-maintainer:admin
   collab_fixture cckadmin artifacts-maintainer:write security:read artifacts-sec-checker:admin homelab-maintainer:admin
+  collab_fixture chlmiss artifacts-maintainer:write security:read artifacts-sec-checker:owner
+  collab_fixture chlwrite artifacts-maintainer:write security:read artifacts-sec-checker:owner homelab-maintainer:write
   expect "collaborators: exactly the expected four"    empty "$(judge_collaborators o/r 200 "$d/cx.json" "$d/cx.tsv")"
   expect_has "collaborators: the checker only admin fails" "artifacts-sec-checker is admin, expected owner" "$(judge_collaborators o/r 200 "$d/cckadmin.json" "$d/cckadmin.tsv")"
   expect_has "collaborators: an extra one fails"       "not on the expected list: someone (read)" "$(judge_collaborators o/r 200 "$d/cextra.json" "$d/cextra.tsv")"
   expect_has "collaborators: a missing one fails"      "missing the expected collaborator security (read)" "$(judge_collaborators o/r 200 "$d/cmiss.json" "$d/cmiss.tsv")"
   expect_has "collaborators: a changed role fails"     "artifacts-maintainer is admin, expected write" "$(judge_collaborators o/r 200 "$d/cchg.json" "$d/cchg.tsv")"
+  expect_has "collaborators: homelab missing fails"   "missing the expected collaborator homelab-maintainer (admin)" "$(judge_collaborators o/r 200 "$d/chlmiss.json" "$d/chlmiss.tsv")"
+  expect_has "collaborators: homelab at write fails"  "homelab-maintainer is write, expected admin" "$(judge_collaborators o/r 200 "$d/chlwrite.json" "$d/chlwrite.tsv")"
   expect_has "collaborators: an unreadable role fails" "could not read the role of collaborator security" "$(judge_collaborators o/r 200 "$d/cunread.json" "$d/cunread.tsv")"
   expect_has "collaborators: list refused (403) fails" "could not read the collaborators" "$(judge_collaborators o/r 403 "$d/cx.json" "$d/cx.tsv")"
   expect_has "collaborators: list is junk"             "could not read the collaborators" "$(judge_collaborators o/r 200 "$d/junk.json" "$d/cx.tsv")"
