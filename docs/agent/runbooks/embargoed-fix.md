@@ -80,14 +80,15 @@ fix touches none of them until release.
    hold: the core named in that commit's `core.lock` contains `<core12>` (an ancestor check in a
    commits-only clone of public `main`, read with ream-homelab's `ARTIFACTS_READ_TOKEN`), and that
    ream-homelab commit contains `<plugins12>`. Then it opens the pin PR moving production back to
-   the public owner; otherwise it refuses and says which check failed. **The pin PR off a
-   hand-pinned line is merged by the homelab maintainer, not landed by itself:** homelab's pin
-   lander reads only public pin lines, so it does not judge one that replaces a private line.
+   the public owner. If the private image was built from a newer ream-homelab commit than the
+   run's, the job stands down (exit 0, green, no PR): a later run does it. Otherwise it refuses
+   (exit 64, red) and says which check failed. **The pin PR off a hand-pinned line is merged by
+   the homelab maintainer by hand:** homelab's pin lander accepts only public image lines on
+   `main`, so it refuses that PR (with a comment on it) rather than landing it.
    **Hand-back, when the pin job cannot do it** (it refuses with "could not fetch", or the
    plug-ins check fails): send homelab's office the public image to pin, one whose core contains
    `<core12>` (the `PUBLISHED image=...` line of the ream-homelab run for the `core.lock` bump
-   that follows the release), and ask them to replace the hand-pinned line with it, as on 15 Nov
-   2026. Either way, check that production left the private image: the deployment's `image:`
+   that follows the release), and ask them to replace the hand-pinned line with it. Either way, check that production left the private image: the deployment's `image:`
    line names `runcove/artifacts`, and the pod runs it.
 
 Secrets on `runcove-sec/artifacts-sec` (homelab sets them; never in a file or on a command line):
