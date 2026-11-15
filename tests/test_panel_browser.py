@@ -18,6 +18,7 @@ reports are the real ones, not a stub.
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -443,6 +444,36 @@ def _point_at(pg, n):
     pg.mouse.move(box["x"] + r["x"], box["y"] + r["y"])
 
 
+def _rest_on(pg, n, state="visible", timeout=10000):
+    """Rest the pointer on paragraph n's marked words until its card is `state`.
+
+    A person's pointer sends a stream of moves; `_point_at` sends ONE, into a
+    cross-origin frame, and that one can be lost on its way to a card with
+    nothing left to send another (runcove-5t3oj.143: on CI the card never came
+    in 10 s, the marks already painted -- a 150 ms rest, so not a slow runner).
+    So when no card has come within a moment, the pointer leaves the words for
+    the frame's margin and comes back, as a hand does: the frame says leave, then
+    hover again, and the card must still come from a real rest on the words."""
+    card = pg.locator(".hovercard")
+    deadline = time.monotonic() + timeout / 1000
+    moves = 0
+    while True:
+        if moves:
+            box = pg.locator("#artifact-frame").bounding_box()
+            pg.mouse.move(box["x"] + 2, box["y"] + 2, steps=3)
+        _point_at(pg, n)
+        moves += 1
+        left_ms = (deadline - time.monotonic()) * 1000
+        try:
+            card.wait_for(state=state, timeout=max(1, min(2000, left_ms)))
+            return card
+        except sync_api.TimeoutError:
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"no hover card for paragraph {n} after {moves} rests in {timeout} ms"
+                ) from None
+
+
 def test_a_reply_being_typed_survives_and_full_screen_shows_the_card(
     browser, served, db
 ):
@@ -460,9 +491,7 @@ def test_a_reply_being_typed_survives_and_full_screen_shows_the_card(
             " && CSS.highlights.get('ar-comment').size === 2",
             timeout=10000,
         )
-        _point_at(pg, 3)
-        card = pg.locator(".hovercard")
-        card.wait_for(state="visible", timeout=10000)
+        card = _rest_on(pg, 3)
         assert card.locator(".hcact button").all_inner_texts() == ["Mark settled"]
         assert card.locator("form.creply").is_visible()
         shot = os.environ.get("REAM_HOVER_SHOT2")
@@ -485,8 +514,7 @@ def test_a_reply_being_typed_survives_and_full_screen_shows_the_card(
         if pg.evaluate("() => document.fullscreenElement?.id") != "artifact-sheet":
             pytest.skip("this headless browser refused full screen")
         pg.frames[1].evaluate("() => window.scrollTo(0, 0)")
-        _point_at(pg, 5)
-        card.wait_for(state="attached", timeout=10000)
+        _rest_on(pg, 5, state="attached")
         seen = pg.evaluate(
             """() => {const c=document.querySelector('.hovercard'),b=c.getBoundingClientRect();
                       const hit=document.elementFromPoint(b.left+b.width/2,b.top+10);
@@ -509,9 +537,7 @@ def test_the_card_deletes_his_own_comment_and_undo_brings_it_back(browser, serve
     try:
         _frame_height_settled(pg)
         _marks_painted(pg.frames[1], 1)
-        _point_at(pg, 3)
-        card = pg.locator(".hovercard")
-        card.wait_for(state="visible", timeout=10000)
+        card = _rest_on(pg, 3)
         card.locator("form.cdel button").click()
         pg.locator(".ctoast").wait_for(state="visible", timeout=5000)
         assert "Deleted" in pg.locator(".ctoast").inner_text()
@@ -548,9 +574,7 @@ def test_the_card_replies_and_settles_in_place(browser, served, db):
             " && CSS.highlights.get('ar-comment').size === 1",
             timeout=10000,
         )
-        _point_at(pg, 3)
-        card = pg.locator(".hovercard")
-        card.wait_for(state="visible", timeout=10000)
+        card = _rest_on(pg, 3)
         box = card.locator("input[name=body]")
         box.click()
         box.type("A REPLY FROM THE CARD")
