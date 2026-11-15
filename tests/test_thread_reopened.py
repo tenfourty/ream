@@ -78,9 +78,9 @@ def test_a_reply_id_names_the_root_in_the_event(db, page):
 
 def test_the_event_is_pushed_after_the_row_is_durable(db, page, rings):
     root = _settled(db, page)
-    seen = rings
+    already = len(rings)  # the comment that set the thread up rang too
     comments.reopen(db, root.id, agent=None, by="jeremy")
-    (sent,) = seen
+    (sent,) = rings[already:]
     assert sent["kind"] == "thread_reopened" and sent["agent"] == "ops-seat"
     assert sent["event_id"] == str(events.list_for_agent(db, "ops-seat")[-1].seq)
 
