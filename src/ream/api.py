@@ -73,6 +73,7 @@ from ream import (
     review,
     scanslots,
     sections,
+    shots,
     store,
     templates,
     text,
@@ -2323,6 +2324,49 @@ def agent_router(
         # `renderer`: whether this deployment renders at all, so a client never
         # waits for a render that cannot come.
         return {**store.render_report(db, artifact_id), "renderer": thumbs.available()}
+
+    @router.get("/artifacts/{artifact_id}/screenshot")
+    def read_screenshot(
+        artifact_id: str,
+        version: str | None = None,
+        element: str | None = None,
+        section: str | None = None,
+        width: str | None = None,
+        theme: str | None = None,
+        agent: str = Depends(caller),
+    ):
+        """A PNG of YOUR OWN page as a reader sees it (runcove-uap8t): the live version
+        or `version`, whole or one `element` (by id) or `section` (by heading), at
+        `width` 1280 or 390 and `theme` light or dark. Taken on demand and kept
+        nowhere. Owner-scoped: another agent's page, open to agents or not, answers
+        exactly as a page that is not there. The picture's facts ride in headers:
+        `x-ream-shot-version`, `-width`, `-height`, `-truncated` (cut to the tallest
+        picture) and `-page-height`. Refusals are JSON (`shots.py`)."""
+        try:
+            n, request = shots.request_from(
+                artifact_id, version, element, section, width, theme
+            )
+            shown, shot = shots.take(db, agent, artifact_id, n, request)
+        except shots.ShotRefused as exc:
+            raise HTTPException(exc.status, exc.detail, headers=exc.headers) from None
+        return Response(
+            shot.png,
+            media_type="image/png",
+            headers={
+                **image_store.SERVE_HEADERS,
+                "content-disposition": "attachment",
+                "cache-control": "private, no-store",
+                **_both_headers(
+                    {
+                        "x-ream-shot-version": str(shown),
+                        "x-ream-shot-width": str(shot.width),
+                        "x-ream-shot-height": str(shot.height),
+                        "x-ream-shot-truncated": "true" if shot.truncated else "false",
+                        "x-ream-shot-page-height": str(shot.page_height),
+                    }
+                ),
+            },
+        )
 
     @router.get("/artifacts/{artifact_id}/versions")
     def read_versions(artifact_id: str, agent: str = Depends(caller)):

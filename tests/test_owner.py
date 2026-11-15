@@ -450,9 +450,10 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt and the artifacts-publish help re-taken on 11 Nov 2026 for what each round changed (`ream changes`, the paragraph on reading changes).
 # skill.md re-taken on 11 Nov 2026 for the pages.toml keys of `ream republish` (timeout, refresh_every, exit 3 = nothing to do).
 # agents.txt, skill.md and the artifacts-publish help re-taken on 12 Nov 2026 for publishing a page closed (`--closed-to-agents`) and the read-state line.
+# agents.txt and skill.md re-taken on 15 Nov 2026 for the screenshot route (a short paragraph in each).
 GOLDEN = {
-    "agents.txt": "e15b44af884122a7e6d8dd718449be98c201988525fd1db2e8ce632d410d7ebd",
-    "skill.md": "b2840aa70d5a27888264c8d11b5f8096ff2adbe8f35dabc786a274efd7cbfa37",
+    "agents.txt": "0b644e2d2f33d4c1f87b39b0b34c909de7af706092498b7f0e69ce5752814d49",
+    "skill.md": "b2ab4a7adf35940d1b3aad9fc6e48a10737597277e742c35bd4e4d2ccd333b1c",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"

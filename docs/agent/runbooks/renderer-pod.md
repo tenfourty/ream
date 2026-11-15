@@ -37,8 +37,10 @@ The renderer also answers `POST /v1/shot?w=<1280|390>&theme=<light|dark>[&elemen
 (`renderwire.call_shot`, `rendercore.shoot`): one picture of the page, whole or one element or section,
 under the same rules as a render (the header, the type and length, the one browser, everything ended
 after). It answers JSON with an `outcome` (`renderwire.SHOT_OUTCOMES`); a page taller than 8000 px is
-cut to it and the answer says `truncated`. Nothing in the service asks for one yet. A renderer older
-than this answers 404 on that route, and 400 to a shot key sent to `/v1/render`.
+cut to it and the answer says `truncated`. The service asks for one when an agent calls
+`GET /api/v1/pages/<id>/screenshot` (`shots.take`); with a renderer set it never takes one itself, and
+a renderer with no usable answer is a 503 to the agent. A renderer older than this answers 404 on that
+route (so the agent gets that 503), and 400 to a shot key sent to `/v1/render`.
 
 ## What a deployment adds
 

@@ -1070,3 +1070,31 @@ not a secret.
 
 **Evidence:** the maintainer's choices from the renderer design, 13 Nov 2026; the owner's confirmation
 is not recorded in this entry.
+
+## An agent can take a screenshot of its own page, on demand, and nothing is kept (15 Nov 2026)
+
+`GET /api/v1/pages/<id>/screenshot` (and under `/artifacts/`) answers a PNG of the calling key's own
+page as a reader sees it: the live version or an older one, whole or one element (by id) or section
+(by heading), at 1280 or 390 wide, light or dark. It is the agent's way to look at what it published,
+which the content origin never shows it. The picture is taken when asked, in the same place a render
+is taken (the renderer at `REAM_RENDERER_URL` when one is set, else the browser in the service under
+the render's one slot and envelope), and stored nowhere: no table, no cache, nothing to clean up when
+a page is deleted. A picture taller than 8000 px is cut and says so in a header. One shot per agent
+runs at a time; a busy browser answers 503 with `Retry-After`; a server with no browser and no
+renderer answers 501; a renderer with no usable answer is a 503, never a shot taken in the service.
+
+Only the page's own agent may take one. Another agent's page, even one open to agents, answers the
+same 404 as a page that is not there.
+
+**Not chosen:**
+- Storing each version's picture: database bloat, the same storage on both databases, and cleanup
+  on delete, for a cache that would rarely be hit (a shot usually follows a new version, and a
+  page's date stamp changes its picture day to day).
+- An in-memory cache: memory is what the renderer is shortest of.
+- Any agent that may read the page, as `/body` allows: a shot costs a browser run in the one render
+  slot the render check also needs, so it is limited to the agent whose page it is.
+- Taking the picture in the service when the renderer does not answer: two places rendering pages,
+  as for the render check (13 Nov 2026).
+
+**Evidence:** the maintainer's design for runcove-uap8t and its build brief for the HTTP slice,
+15 Nov 2026; the owner's confirmation is not recorded in this entry.
