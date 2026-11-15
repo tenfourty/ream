@@ -606,6 +606,7 @@ def test_every_read_tool_is_listed_with_explicit_hints(client, on, token):
 READ_TOOLS = (
     "list_pages",
     "read_page",
+    "screenshot_page",
     "get_template",
     "comments",
     "questions",
@@ -933,6 +934,7 @@ def test_every_tool_says_how_its_result_is_fenced():
     [
         "list_pages",
         "read_page",
+        "screenshot_page",
         "comments",
         "questions",
         "whats_new",
@@ -1087,6 +1089,7 @@ SPEC_TOOLS = {
     "whoami": None,
     "list_pages": mcp.READ,
     "read_page": mcp.READ,
+    "screenshot_page": mcp.READ,
     "get_template": mcp.READ,
     "comments": mcp.READ,
     "questions": mcp.READ,
