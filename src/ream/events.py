@@ -169,8 +169,8 @@ def append(
     being true the first time it's wrong (see the module docstring, and
     `test_events.py`'s own test for this).
 
-    Returns the new row's `seq`, which the caller passes to `nudge.emit` as
-    `event_id` only after `conn`'s transaction has actually committed: a
+    Returns the new row's `seq`, which reaches an after-commit sink (a doorbell) as
+    `event.id` only after `conn`'s transaction has actually committed: a
     nudge for a row that then rolls back would tell another agent about
     something that never happened."""
     # The table had a CHECK on `kind` until slice 5 of the core-and-plugins design; the

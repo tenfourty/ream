@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from ream import comments, decisions, holds, keys, nudge, store
+from ream import comments, decisions, holds, keys, store
 from ream.app import create_gallery_app
 from ream.db import Database, in_list
 
@@ -47,10 +47,9 @@ def _mode_of(db, decision_id):
 
 
 @pytest.fixture()
-def nudges(monkeypatch):
-    sent = []
-    monkeypatch.setattr(nudge, "emit", lambda **kw: sent.append(kw))
-    return sent
+def nudges(rings):
+    # The doorbell is a plug-in's after-commit sink (step 9d); `rings` stands in for it.
+    return rings
 
 
 def test_the_first_ever_mode_is_held(db: Database):

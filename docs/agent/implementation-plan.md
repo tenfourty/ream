@@ -2832,6 +2832,14 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   the house plug-in's mail backend sends all mail, and with none registered mail is off, as on a fresh
   install. A deployment that still sets `REAM_MAILGUN_*` or `REAM_MAIL_FROM` starts, with one warning
   if no backend is loaded. Ledger: `specs/2026-11-04-core-and-plugins-design.md`, step 9b.
+- **The doorbell leaves the core (15 Nov 2026, step 9d of core-and-plugins, second half; branch
+  `ci/9d-core-doorbell-out`, held off `main` until one real ring through the plug-in is seen in
+  production).** Core no longer carries its own doorbell (`nudge.py`, its `nudge` sink with the
+  stand-down check, and the `nudge_*` settings are deleted): the house plug-in's after-commit sink
+  `doorbell` rings, and with none registered nothing rings (every event still reaches its agent
+  through the journal). Core keeps what the sink reads: the event, with `nudge_note` in `data`. A
+  deployment that still sets `REAM_NUDGE_*` starts, with one warning if no `doorbell` sink is loaded.
+  Ledger: `specs/2026-11-04-core-and-plugins-design.md`, step 9d.
 - **Receipts slice 2: the decision strip in the gallery (11 Nov 2026; branch `ci/receipts-slice2`).**
   A settled decision's card shows the agent's current receipt in place of the pickup line: "Working,
   cove, cove/lane-3. note", "Answered, ... note" with its link, "Blocked", "Won't do", each with a

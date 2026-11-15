@@ -982,6 +982,65 @@ def _unbound_shared_state():
     no_sender()
 
 
+# The kinds a doorbell plug-in rings for (the house one's `ALERTNAMES`). Core carries no
+# doorbell since step 9d; what it owes one is the after-commit event with these fields.
+DOORBELL_KINDS = (
+    "decision_answered",
+    "comment_added",
+    "thread_resolved",
+    "thread_reopened",
+    "question_asked",
+)
+
+
+def ring_fields(event) -> dict:
+    """What an after-commit doorbell sink reads off one event, as the house plug-in does:
+    the journal row's seq as `event_id`, and `nudge_note` (when the producer set it) as the
+    note in place of the journal row's."""
+    data = event.data
+    return {
+        "kind": event.kind,
+        "artifact_id": event.artifact_id,
+        "title": data.get("title", ""),
+        "agent": event.agent,
+        "summary": event.summary,
+        "event_id": event.id or "",
+        "note": data.get("nudge_note", event.note),
+        "letter": data.get("letter"),
+        "recommended": data.get("recommended"),
+    }
+
+
+@pytest.fixture()
+def ring_sink(monkeypatch):
+    """Install an after-commit sink for DOORBELL_KINDS, beside core's own, that calls
+    `fn(**ring_fields(event))`; removed after the test."""
+    from ream import sinks
+
+    def install(fn) -> None:
+        sinks.registered()  # core's own sinks first, so the swap below is undone cleanly
+        monkeypatch.setitem(
+            sinks._sinks,
+            "test-doorbell",
+            sinks.Sink(
+                "test-doorbell",
+                DOORBELL_KINDS,
+                deliver=lambda event: fn(**ring_fields(event)),
+                delivery="after_commit",
+            ),
+        )
+
+    return install
+
+
+@pytest.fixture()
+def rings(ring_sink):
+    """The rings a doorbell sink was handed, each `ring_fields` of one event, in order."""
+    seen: list[dict] = []
+    ring_sink(lambda **kw: seen.append(kw))
+    return seen
+
+
 @pytest.fixture(autouse=True)
 def _postgres_only(request):
     """A test marked `postgres_only` is skipped on SQLite."""

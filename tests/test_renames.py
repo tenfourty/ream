@@ -236,6 +236,7 @@ def test_the_wording_follows_the_label(registry):
 
 def test_a_sink_label_names_it_in_wording_and_an_unlabelled_one_its_name():
     assert sinks.label_of("partner") == "quarterdeck"
-    assert sinks.label_of("nudge") == "nudge"
+    with sinks.isolated(sinks.Sink("plain", ("asked",), deliver=lambda e: None)):
+        assert sinks.label_of("plain") == "plain"
     assert sinks.label_of("not-a-sink") == "not-a-sink"
     assert gallery._sink_name() == "quarterdeck"

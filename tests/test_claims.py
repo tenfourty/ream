@@ -11,15 +11,10 @@ from fastapi.testclient import TestClient
 from test_client import live  # noqa: F401 -- fixture
 
 from ream import client as cli
-from ream import decisions, keys, nudge, store
+from ream import decisions, keys, store
 from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><title>Plan</title><p>Rotate the keys every 90 days.</p>"
-
-
-@pytest.fixture(autouse=True)
-def _quiet(monkeypatch):
-    monkeypatch.setattr(nudge, "emit", lambda **kw: None)
 
 
 @pytest.fixture()

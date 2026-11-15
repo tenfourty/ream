@@ -22,7 +22,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from ream import comments, events, nudge, sinks, store
+from ream import comments, events, sinks, store
 from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
@@ -208,17 +208,18 @@ def test_a_journal_failure_takes_the_comment_with_it(db, page, monkeypatch):
     assert comments.list_for_artifact(db, page.id) == []
 
 
-def test_the_push_happens_after_the_row_is_durable(db, page, monkeypatch):
-    """`event_id` must name a row another agent can actually read: the nudge
-    tells a seat to go and look, and a seat that looks and finds nothing has
-    been sent on an errand for something that never happened."""
+def test_the_push_happens_after_the_row_is_durable(db, page, ring_sink):
+    """`event_id` must name a row another agent can actually read: the nudge (a
+    plug-in's after-commit sink since step 9d) tells a seat to go and look, and a
+    seat that looks and finds nothing has been sent on an errand for something
+    that never happened."""
     seen = {}
 
     def spy(**kw):
         seen.update(kw)
         seen["rows_visible"] = [e.seq for e in _feed(db)]
 
-    monkeypatch.setattr(nudge, "emit", spy)
+    ring_sink(spy)
     comments.add(
         db, artifact_id=page.id, author_kind="human", author="jeremy", body="Look."
     )
@@ -230,15 +231,14 @@ def test_the_push_happens_after_the_row_is_durable(db, page, monkeypatch):
     )
 
 
-def test_a_failing_nudge_never_costs_the_comment(db, page, monkeypatch):
-    """`nudge.emit` promises never to raise, and this asserts the promise from
-    the caller's side rather than trusting it: commenting is what Jeremy came
-    to do."""
+def test_a_failing_nudge_never_costs_the_comment(db, page, ring_sink):
+    """A doorbell sink that raises must not cost the comment, asserted from the
+    caller's side rather than trusted: commenting is what Jeremy came to do."""
 
     def boom(**_kw):
         raise RuntimeError("inbox down")
 
-    monkeypatch.setattr(nudge, "emit", boom)
+    ring_sink(boom)
     before = sinks.late_failures()
     # The nudge is an after-commit sink (events.emit): a failure is a log line and a
     # count, never an exception into the comment that already committed.

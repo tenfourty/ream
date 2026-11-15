@@ -163,6 +163,28 @@ def _warn_mail_off() -> None:
     )
 
 
+# The after-commit sink the house plug-in registers for the doorbell (step 9d).
+DOORBELL_SINK = "doorbell"
+
+
+def _warn_doorbell_off() -> None:
+    """One warning when the retired doorbell variables are set and no sink named `doorbell` is
+    registered: nothing then rings the owning agent's inbox (every event still reaches it
+    through the journal, `GET /api/v1/events`). Call it after the plug-ins and the webhook
+    sinks load. A warning, not a refusal, as `_warn_second_scan_off`; names the variables,
+    never a value."""
+    stale = settings.retired_nudge_set()
+    if not stale or any(s.name == DOORBELL_SINK for s in sinks.registered()):
+        return
+    log.warning(
+        "%s set, but no %r sink plug-in is loaded: the doorbell is OFF (agents still get"
+        " every event from the journal). The core no longer reads these; install the"
+        " plug-in that registers the sink, or unset them",
+        ", ".join(stale),
+        DOORBELL_SINK,
+    )
+
+
 def app_from_env():
     """Read `DATABASE_URL`, migrate, and return the fail-closed host router
     `create_app` builds. Never includes the DSN -- or anything else read from
@@ -223,6 +245,7 @@ def app_from_env():
     partner.warn_if_owner_absent(db)
     _warn_second_scan_off()
     _warn_mail_off()
+    _warn_doorbell_off()
     comments.start_sweeper(db)
     # The nightly backup and purge (maintenance.py). REAM_MAINTENANCE=off
     # turns it off, for tests that build the real app.

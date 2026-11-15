@@ -348,7 +348,7 @@ signed-webhook sink, pattern scanner (`scan.py`, `secret_shapes.txt` with commen
 |---|---|
 | `partner.py` quarterdeck envelope, `verified_by` mapping (`:292-293`), `for_offices` mapping | event sink `quarterdeck` |
 | `partner_in.py` (inbound route, `verified_by == "quarterdeck"`, `slack_id`, `answer_here`) | answer source `slack` + `on_answer` hook + router |
-| `nudge.py` | after-commit sink `doorbell` |
+| `nudge.py` | after-commit sink `doorbell` (moved and deleted from core, 9d) |
 | `ggscan.py` | scanner `gitguardian` (moved and deleted from core, 9c) |
 | `mail.py` Mailgun | mail backend `mailgun` (moved and deleted from core, 9b) |
 | `beadpage.py`, `beadmetrics.py` and their two console scripts | CLI commands |
@@ -758,6 +758,24 @@ drivers; CI only (not on the management machine).
    code stays until the plug-in half is proven in production; deleting it is a later step. Tests in
    `tests/test_emit.py` (rings without the plug-in sink, silent with it). **Not run here:** the full
    suite (CI).
+   **9d, second half: the deletion (`ci/9d-core-doorbell-out`, 15 Nov 2026; lands on main only after
+   one real ring through the plug-in is seen in production).** Checked first that the plug-in needs
+   nothing of core's doorbell: ream-homelab's `doorbell.py` imports only `ream.rename` and
+   `ream.keys` (to follow renames of `NUDGE_AGENT`) and restates its kinds, lines, limits and
+   sanitiser; its one test of core's `nudge._ALERTNAMES` is an `importorskip`. Deleted: `nudge.py`
+   and `tests/test_nudge.py`; the `nudge` sink, `deliver_nudge` and the stand-down check
+   (`DOORBELL_PLUGIN_SINK`) in `sinks.py` (core's only built-in sink is now `partner`); the
+   `nudge_url`, `nudge_agent`, `nudge_token` and `nudge_timeout` settings. Kept, because the plug-in
+   reads them: the five event kinds and their after-commit delivery, `event.id` as the journal seq,
+   and `title`, `letter`, `recommended` and `nudge_note` in `data` (a stored-shape name, never
+   renamed). New: `settings.RETIRED_NUDGE` and `serve._warn_doorbell_off`, one start-up warning
+   naming the `NUDGE_*` variables still set (never a value) when no sink named `doorbell` is
+   registered, as 9b and 9c do; a warning, not a refusal. Tests that stubbed `nudge.emit` now
+   install a recording after-commit sink (`rings`/`ring_sink` in `tests/conftest.py`); the core's
+   half of the contract (his note, letter and recommendation reach a sink from the real gallery
+   route; a raising sink never costs the answer; the warning) is `tests/test_doorbell_contract.py`.
+   The name-only weakness noted under 9e-3's review (2) is gone with the check. **Not run here:**
+   the full suite (CI).
    **9c, built in two halves (10 to 11 Nov 2026).** *The hook (on main):* the plug-in registers a
    scanner `gitguardian` (ream-homelab: `timeout=20`, an 18 s total deadline, text that cannot be
    encoded answered with a finding) and core's relay scan stood down while one was registered;
@@ -931,8 +949,9 @@ drivers; CI only (not on the management machine).
    and would keep sending from core's outbox: the switch is deployed stop-then-start, never a
    rolling update beside the old image (no code can fix the old image). (2) The name-only
    registry check (`a sink named quarterdeck`) is gone: any sink of that name (a
-   `REAM_SINKS_FILE` entry, say) silenced core with nothing taking over. *9d's doorbell check has
-   the same weakness* (a sink named `doorbell` of any kind silences core's nudge); not fixed here.
+   `REAM_SINKS_FILE` entry, say) silenced core with nothing taking over. *9d's doorbell check had
+   the same weakness* (a sink named `doorbell` of any kind silenced core's nudge); gone with core's
+   nudge in 9d's second half.
    (3) The stage of the plug-in that holds the bridge failing now fails the action
    (`plugin_api.BridgeStageFailed`, naming the plug-in), as core's unguarded stage did; before,
    `guarded_stage` swallowed it and the answer was kept with no outbox row anywhere. Other

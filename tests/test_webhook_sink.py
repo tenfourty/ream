@@ -192,7 +192,7 @@ def test_a_name_that_is_already_a_sink_stops_the_start(tmp_path, key):
         webhook.register_all()
 
 
-@pytest.mark.parametrize("name", ["nudge", "partner"])
+@pytest.mark.parametrize("name", ["partner"])
 def test_a_built_in_name_is_refused_at_registration(name):
     with pytest.raises(ValueError, match="already registered"):
         sinks.register(sinks.Sink(name, ("asked",), deliver=lambda e: None))
@@ -200,7 +200,7 @@ def test_a_built_in_name_is_refused_at_registration(name):
     assert [s.name for s in sinks.registered()].count(name) == 1
 
 
-@pytest.mark.parametrize("name", ["nudge", "partner"])
+@pytest.mark.parametrize("name", ["partner"])
 def test_a_webhook_named_like_a_built_in_stops_the_start(tmp_path, key, name):
     path = _sinks_file(tmp_path, _entry(name=name))
     with (

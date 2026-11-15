@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from ream import comments, decisions, keys, nudge, store
+from ream import comments, decisions, keys, store
 from ream.app import create_gallery_app
 
 PAGE = (
@@ -18,11 +18,6 @@ PAGE = (
 )
 RANGE = {"kind": "range", "path": "/p[1]", "start": 0, "end": 6}
 SAME_ORIGIN = {"sec-fetch-site": "same-origin"}
-
-
-@pytest.fixture(autouse=True)
-def _quiet(monkeypatch):
-    monkeypatch.setattr(nudge, "emit", lambda **kw: None)
 
 
 @pytest.fixture()

@@ -17,11 +17,11 @@ leaves `gallery_origin` unset refuses to start (`validate_for_serve`).
 only a label: `owner.check` records it in `service_meta` and refuses to start on a database
 written for another one.
 
-SECRETS. Settings hold paths and ids (`..._KEY_FILE`). One value is still read from the
-environment as the VALUE, because the deployment mounts it that way (the nudge token); it is
-never printed: `Settings` has no field-listing `__repr__`. (The ggshield relay's address and
-token, and the Mailgun key with its API, domain and sender, are no longer core settings: the
-house plug-in's `gitguardian` scanner and mail backend read their own, and core ignores them.)
+SECRETS. Settings hold paths and ids (`..._KEY_FILE`), never a secret's value, and are never
+printed: `Settings` has no field-listing `__repr__`. (The ggshield relay's address and token,
+the Mailgun key with its API, domain and sender, and the doorbell's URL, agent, token and
+timeout are no longer core settings: the house plug-in's `gitguardian` scanner, mail backend
+and `doorbell` sink read their own, and core ignores them.)
 """
 
 from __future__ import annotations
@@ -181,10 +181,6 @@ class Settings:
     # What the server binds to (the image sets 0.0.0.0). Only used to tell a local try-out
     # from a deployment at start-up.
     bind_host: str = DEFAULT_BIND_HOST
-    nudge_url: str = ""
-    nudge_agent: str = ""
-    nudge_token: str = ""  # a VALUE; never printed
-    nudge_timeout: str = "2.0"
     partner_name: str = ""
     partner_events_url: str = ""
     partner_signing_key_file: str = ""
@@ -614,10 +610,6 @@ _ENV = {
     "display_tz": "REAM_DISPLAY_TZ",
     "trusted_ip_header": "REAM_TRUSTED_IP_HEADER",
     "bind_host": "REAM_BIND_HOST",
-    "nudge_url": "REAM_NUDGE_URL",
-    "nudge_agent": "REAM_NUDGE_AGENT",
-    "nudge_token": "REAM_NUDGE_TOKEN",
-    "nudge_timeout": "REAM_NUDGE_TIMEOUT",
     "partner_name": "REAM_PARTNER_NAME",
     "partner_events_url": "REAM_PARTNER_EVENTS_URL",
     "partner_signing_key_file": "REAM_PARTNER_SIGNING_KEY_FILE",
@@ -749,6 +741,17 @@ def retired_mail_set() -> list[str]:
     """The names (both prefixes) of the retired mail variables the environment sets, by
     presence only: never a value, so it is safe to log. Empty when none is set."""
     return [n for suffix in RETIRED_MAIL for n in envnames.set_names(suffix)]
+
+
+# The doorbell's variables: the house plug-in's `doorbell` sink reads them itself (step 9d).
+# A deployment may still set them.
+RETIRED_NUDGE = ("NUDGE_URL", "NUDGE_AGENT", "NUDGE_TOKEN", "NUDGE_TIMEOUT")
+
+
+def retired_nudge_set() -> list[str]:
+    """The names (both prefixes) of the retired doorbell variables the environment sets, by
+    presence only: never a value, so it is safe to log. Empty when none is set."""
+    return [n for suffix in RETIRED_NUDGE for n in envnames.set_names(suffix)]
 
 
 # The renderer process (`ream.renderd`) takes only these settings (suffixes, under both

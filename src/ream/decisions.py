@@ -2187,7 +2187,7 @@ def answer(
             )
             # The journal row and the nudge, as one event. The nudge fires after the
             # commit (below): it must never be mistaken for an answer that failed
-            # (nudge.py's docstring), and the journal row must be durable before any
+            # (a raising after-commit sink is a log line, sinks.deliver_late), and the journal row must be durable before any
             # other agent is told to go read it. HIS WORDS TRAVEL WITH IT: `note` on
             # the journal (the feed would say only "a: Yes" otherwise) and in the
             # mailbox (homelab-873), with the recommendation, because a letter that

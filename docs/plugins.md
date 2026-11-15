@@ -8,8 +8,10 @@ Status, 10 Nov 2026: the loader and the whole interface are built and on `main` 
 `docs/agent/specs/2026-11-04-core-and-plugins-design.md`), and the house's plug-in repo
 (`ream-homelab`, step 8) exists with its first plug-in. **Step 9 (moving the house code out of the
 core) is under way, one slice at a time:** the tracker-page commands (`beads-page`, `bead-metrics`)
-have left the core for the house's `tracker-pages` plug-in (9a); the house sinks (`nudge`, `partner`)
-and the `slack` answer source are still inside the core; the GitGuardian second opinion
+have left the core for the house's `tracker-pages` plug-in (9a); so has the doorbell (9d: the core's
+own `nudge` sink and its `NUDGE_*` settings are deleted, the house's after-commit sink `doorbell`
+rings, see Sinks below); the house `partner` sink and the `slack` answer source are still inside the
+core; the GitGuardian second opinion
 has left it (9c: the core's own relay scan is deleted, the house's `gitguardian` scanner is the
 second opinion, see Scanner below), and so has Mailgun (9b: the core's own sender is deleted, the
 house's mail backend sends all mail, see Mail backend below). Write
@@ -144,10 +146,17 @@ stay pending; `artifacts-admin outbox` shows counts by sink, and reinstalling dr
 **`delivery="after_commit"`**: `deliver(event)` is called once on the request thread's side,
 after the commit, best effort. A raise is logged (type only) and counted; it never reaches the
 caller and the action is already done. Use it for fire-and-forget nudges.
-**The doorbell (step 9d):** core's built-in `nudge` sink rings the doorbell itself. A plug-in that
-registers an after-commit sink named `doorbell` takes that over: checked at each delivery, core's
-sink stands down (it logs once at INFO and rings nothing) while a sink of that name is registered,
-so the two never both ring. Without one, core rings as before.
+**The doorbell (step 9d):** the core carries none. A plug-in that wants to push to an inbox when the
+owner answers or comments registers an after-commit sink (the house's is named `doorbell`) for
+`decision_answered`, `comment_added`, `thread_resolved`, `thread_reopened` and `question_asked`.
+The event carries what a ring needs: `event.id` is the journal row's seq, `event.agent` the page's
+agent, `event.note` his words, and `data` has `title`, `letter` and `recommended` on an answer and
+`nudge_note` where the ring must carry other words than the journal row (`comment_added` sets it
+empty: the journal has his comment, a ring never did). The core reads no `NUDGE_*` setting; if
+`REAM_NUDGE_URL`, `_AGENT`, `_TOKEN` or `_TIMEOUT` (or the `ARTIFACTS_` forms) are still set and no
+sink named `doorbell` is registered once the plug-ins and webhook sinks load, start-up logs one
+warning naming the variables (never a value) that the doorbell is OFF; it warns and does not
+refuse. Every event still reaches every agent through the journal (`GET /api/v1/events`).
 
 **The circuit breaker** is per sink and automatic. Five failures running (a raise or a timeout),
 from at least two different events (so one poison event cannot open the breaker of a healthy

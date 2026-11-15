@@ -18,16 +18,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from test_client import key_file, live  # noqa: F401
 
-from ream import decide, decisions, events, keys, listening, nudge, partner, store
+from ream import decide, decisions, events, keys, listening, partner, store
 from ream.app import create_gallery_app
 
 PAGE = "<!doctype html><html><head><title>B</title></head><body><p>x</p></body></html>"
 OPTIONS = [{"letter": "a", "label": "yes"}, {"letter": "b", "label": "no"}]
-
-
-@pytest.fixture(autouse=True)
-def _quiet(monkeypatch):
-    monkeypatch.setattr(nudge, "emit", lambda **kw: None)
 
 
 @pytest.fixture()

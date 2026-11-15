@@ -3767,8 +3767,8 @@ def agent_router(
         agent: str = Depends(caller),
         seat_session: str | None = Depends(session),
     ):
-        # The mechanism a nudge is only ever an optimisation on top of (see
-        # nudge.py's own docstring): an agent anywhere with a key -- not just one
+        # The mechanism a nudge is only ever an optimisation on top of (the
+        # doorbell, a plug-in's after-commit sink since step 9d): an agent anywhere with a key -- not just one
         # a nudge can reach -- keeps its own cursor and polls this with
         # since=<last seq it saw> to learn everything that happened while it
         # was away, in a fixed order that can never skip or repeat a row.

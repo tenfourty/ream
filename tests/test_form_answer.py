@@ -6,7 +6,7 @@ submit route, and what the agent reads back (docs/agent/specs/2026-10-29-form-co
 import pytest
 from fastapi.testclient import TestClient
 
-from ream import decide, decisions, events, formanswer, keys, nudge, store
+from ream import decide, decisions, events, formanswer, keys, store
 from ream.app import create_gallery_app
 
 ORIGIN = "https://artifacts.tenfourty.site"
@@ -165,10 +165,9 @@ def client(db, monkeypatch):
 
 
 @pytest.fixture()
-def nudges(monkeypatch):
-    sent = []
-    monkeypatch.setattr(nudge, "emit", lambda kind, **kw: sent.append((kind, kw)))
-    return sent
+def nudges(rings):
+    # The doorbell is a plug-in's after-commit sink (step 9d); `rings` stands in for it.
+    return rings
 
 
 def auth(token):
@@ -209,7 +208,7 @@ def test_a_submit_records_the_answer_event_and_nudge(client, db, made, nudges):
     (ev,) = [e for e in found if e.kind == "decision_answered"]
     assert ev.ref_id == made["id"] and ev.actor == "jeremy"
     assert ev.summary.startswith("form rollout: ")
-    assert [k for k, _ in nudges] == ["decision_answered"]
+    assert [r["kind"] for r in nudges] == ["decision_answered"]
 
 
 def test_a_submit_resets_the_acknowledgement_and_a_second_is_a_new_event(
