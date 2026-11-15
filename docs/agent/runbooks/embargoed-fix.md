@@ -57,19 +57,38 @@ fix touches none of them until release.
    ream-homelab opens or merges a pin for it. The maintainer sends homelab's office the image
    reference (the `SEC BUILT` line) and the words "security fix", nothing about the weakness, and
    homelab pins it by hand. Production pulls it with the private owner's pull credentials, which
-   homelab holds. Prove the fix in the pod, then tell security. At release the normal pin
-   replaces it.
+   homelab holds. Prove the fix in the pod, then tell security. From then until the release,
+   **every ream-homelab pin job refuses** (red), and that is intended: its image's core does not
+   contain the fix, so moving production onto it would drop the fix. The refusal says so and
+   names the core commits it compared.
 6. **Release** (after the rollout and security's yes): push artifacts-sec `main` to
    `runcove/artifacts` `main` as a fast-forward (if public `main` moved, merge it into
-   artifacts-sec first and let sec.yml rebuild and re-pin). The normal chain rebuilds the public
-   images and the next ream-homelab pin replaces the sec image, moving production back to the
-   public owner. The push goes to the public URL given on the command line, `main` only (see
+   artifacts-sec first and let sec.yml rebuild and re-pin). The push goes to the public URL given on
+   the command line, `main` only (see
    below), never through a remote added to the working clone. The order is fixed: **the operator's
    yes -> delete the local `sec/*` refs -> push.** The pre-push guard refuses that push while a
    local `sec/*` branch or tag is still in the clone (it would carry the fix), so it stays armed
    until the yes; only after the yes, delete those local refs (`git branch -D sec/<topic>`,
    `git tag -d sec/<tag>`), which is the deliberate act that lets the release go. Never delete
    them earlier to "tidy up": that disarms the guard before the release is approved.
+
+   **After the push: production leaves the private image.** The normal chain then runs: core CI
+   builds `runcove/artifacts-core:<sha12>` and opens the `core.lock` PR on ream-homelab, whose
+   `main` run builds the public image and runs its pin job. That job (ream-homelab
+   `.forgejo/scripts/pin-pr.sh`) reads the hand-pinned line
+   `runcove-sec/artifacts:<core12>-<plugins12>@sha256:<digest>` and replaces it only when both
+   hold: the core named in that commit's `core.lock` contains `<core12>` (an ancestor check in a
+   commits-only clone of public `main`, read with ream-homelab's `ARTIFACTS_READ_TOKEN`), and that
+   ream-homelab commit contains `<plugins12>`. Then it opens the pin PR moving production back to
+   the public owner; otherwise it refuses and says which check failed. **The pin PR off a
+   hand-pinned line is merged by the homelab maintainer, not landed by itself:** homelab's pin
+   lander reads only public pin lines, so it does not judge one that replaces a private line.
+   **Hand-back, when the pin job cannot do it** (it refuses with "could not fetch", or the
+   plug-ins check fails): send homelab's office the public image to pin, one whose core contains
+   `<core12>` (the `PUBLISHED image=...` line of the ream-homelab run for the `core.lock` bump
+   that follows the release), and ask them to replace the hand-pinned line with it, as on 15 Nov
+   2026. Either way, check that production left the private image: the deployment's `image:`
+   line names `runcove/artifacts`, and the pod runs it.
 
 Secrets on `runcove-sec/artifacts-sec` (homelab sets them; never in a file or on a command line):
 
