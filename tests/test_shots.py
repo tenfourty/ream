@@ -993,12 +993,14 @@ def test_a_real_selector_that_picks_no_one_part(request_, outcome, matches):
 
 
 @needs_browser
-def test_a_real_window_high_page_is_shot_one_window_high():
+@pytest.mark.parametrize("value", ["viewport", " VIEWPORT ", "\tViewport\n"])
+def test_a_real_window_high_page_is_shot_one_window_high(value):
     """The page makes its body three windows high from `innerHeight`, as the page
     that fed the frame back did: the picture is one window and says more is below,
-    and the window it measured was never grown to take the rest."""
+    and the window it measured was never grown to take the rest. The value is read
+    as the shim reads it, without case or surrounding white space (`pageframe`)."""
     page = (
-        '<!doctype html><html><head><meta name="ream-frame" content="viewport">'
+        f'<!doctype html><html><head><meta name="ream-frame" content="{value}">'
         "<style>body{margin:0;background:#00f}</style></head><body>"
         '<script>document.body.style.height=(innerHeight*3)+"px"</script>'
         "</body></html>"
