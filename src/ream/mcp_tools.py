@@ -345,7 +345,10 @@ def _list_pages(call: Call, arguments: dict[str, Any]) -> dict:
         "A page's stored HTML: the live version, one version (version), one element "
         "(section), its history (history), or which parts changed since a version "
         "(changes_since). The live version carries Ream's render report: render_verdict "
-        "(ok, broken or unchecked) and render_findings. Not for how it looks: use "
+        "(ok, broken or unchecked) and render_findings. A large page comes in parts: "
+        f"at most {api.READ_PART_DEFAULT} characters unless you give limit; size is the "
+        "whole page's length and next_offset, when not null, is the offset to read the "
+        "next part from. Not for how it looks: use "
         "screenshot_page. Not for finding a page: use list_pages."
     ),
     read_only=True,
@@ -365,6 +368,17 @@ def _list_pages(call: Call, arguments: dict[str, Any]) -> dict:
             "section": {"type": "string", "description": "An element's id."},
             "history": {"type": "boolean"},
             "changes_since": {"type": "integer", "minimum": 1},
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Where to start, in characters (the live page or a version).",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": api.READ_PART_MAX,
+                "description": f"At most this many characters (default {api.READ_PART_DEFAULT}).",
+            },
         },
         ("page_id",),
     ),
@@ -379,6 +393,12 @@ def _read_page(call: Call, arguments: dict[str, Any]) -> ToolOutput:
         raise ToolError(
             "give at most one of version, section, history and changes_since"
         )
+    offset = _int(arguments, "offset", None, 0, api.READ_PART_MAX)
+    limit = _int(arguments, "limit", None, 1, api.READ_PART_MAX)
+    if (offset is not None or limit is not None) and (
+        section is not None or history or since is not None
+    ):
+        raise ToolError("offset and limit read the live page or one version only")
     page = _page(call, page_id)
     if since is not None:
         try:
@@ -428,8 +448,15 @@ def _read_page(call: Call, arguments: dict[str, Any]) -> ToolOutput:
         raise ToolError(
             NO_SUCH_PAGE if version is None else "no such page or version"
         ) from None
+    try:
+        part = api.body_part(
+            stored.body, offset or 0, api.READ_PART_DEFAULT if limit is None else limit
+        )
+    except api.PastTheEnd as exc:
+        raise ToolError(str(exc)) from None
     out = {
         **jsonable_encoder(stored.__dict__),
+        **part,
         "warnings": api.page_warnings(call.db, page_id, stored.body),
     }
     if version is None:
@@ -615,7 +642,12 @@ def _comments(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     fences=Fences(
         ream=_REAM,
         writer=_by("agent"),
-        what={"question": "a question", "context": "its context", "label": "an option"},
+        what={
+            "question": "a question",
+            "context": "its context",
+            "label": "an option",
+            "preview": "an option's preview",
+        },
     ),
     input_schema=_schema(
         {
@@ -1390,8 +1422,9 @@ _ASK_FIELDS = {
     "ask",
     title="Ask a question",
     description=(
-        "Ask the person a question on a page, with lettered options ([{letter, label}]; "
-        "recommended is the letter you suggest). Write it to stand alone: the person may "
+        "Ask the person a question on a page, with lettered options ([{letter, label, "
+        "preview?}]; preview is optional plain text shown beside that option, up to 15 "
+        "lines, never rendered; recommended is the letter you suggest). Write it to stand alone: the person may "
         "see only the question, in the inbox or a notification, so name what it is about "
         "and make each option clear without the page or this chat. The answer reaches you "
         "in whats_new (wait_for_answer waits). Key: your own pages. Connected app: any page the person can read; "

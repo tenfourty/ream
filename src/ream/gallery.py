@@ -272,6 +272,11 @@ main{display:block}
 .carried ul{margin:var(--space-2) 0;padding-left:1.1rem}
 .carried .cstate{font:600 .68rem var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-right:var(--space-4)}
 .carried .cstate.still{color:var(--accent)}
+/* An option's preview: the agent's text, shown as text, small and scrollable. */
+.ask button .pv{display:block;margin-top:var(--space-3);padding:var(--space-3) var(--space-4);
+  font:.78rem/1.4 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:14rem;
+  overflow:auto;border:1px solid var(--line);border-radius:.3rem;background:var(--paper);
+  color:var(--ink);font-weight:400}
 .ask .tag{font:.68rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
   opacity:.8;margin-left:var(--space-45);white-space:nowrap}
 .ask input[name=note]{font:inherit;font-size:.9rem;flex:1 1 11rem;min-width:8rem;
@@ -4476,9 +4481,15 @@ def _button(option: dict, row: decisions.DecisionRow) -> str:
     else:
         tag = ""
     attr = f' class="{classes}"' if classes else ""
+    # The agent's preview of this choice, beside its label: always escaped text in a
+    # monospace block, never rendered as markup (it is the agent's, as the label is).
+    preview = option.get("preview")
+    shown = (
+        f'<span class="pv">{escape(preview)}</span>' if isinstance(preview, str) else ""
+    )
     return (
         f'<button type="submit" name="letter" value="{escape(option["letter"])}"{attr}>'
-        f"({escape(option['letter'])}) {escape(option['label'])}{tag}</button>"
+        f"({escape(option['letter'])}) {escape(option['label'])}{tag}{shown}</button>"
     )
 
 

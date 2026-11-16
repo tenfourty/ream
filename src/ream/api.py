@@ -797,6 +797,38 @@ def _checks_not_run_busy() -> list[dict]:
     ]
 
 
+# Reading a large page in parts (GET .../body and .../versions/{n} with offset and limit;
+# MCP read_page). Counted in characters (Unicode code points) of the stored text, so a
+# cut never splits a character. The route returns the whole body unless asked for a
+# part; read_page returns at most READ_PART_DEFAULT characters unless given a limit.
+READ_PART_MAX = store.MAX_BODY_BYTES
+READ_PART_DEFAULT = 50_000
+
+
+class PastTheEnd(Exception):
+    """An offset beyond the end of the page's text."""
+
+    def __init__(self, size: int) -> None:
+        super().__init__(f"offset is past the end of the page (its size is {size})")
+        self.size = size
+
+
+def body_part(body: str, offset: int = 0, limit: int | None = None) -> dict:
+    """`body` from `offset`, at most `limit` characters (None: to the end), with the
+    page's whole `size` and where the next part starts (`next_offset`, None at the
+    end). An offset equal to the size is an empty last part; past it, `PastTheEnd`."""
+    size = len(body)
+    if offset > size:
+        raise PastTheEnd(size)
+    end = size if limit is None else min(size, offset + limit)
+    return {
+        "body": body[offset:end],
+        "offset": offset,
+        "size": size,
+        "next_offset": end if end < size else None,
+    }
+
+
 def page_warnings(db: Database, artifact_id: str, body: str) -> list[dict]:
     """CSP advisories, plus every decision slot that names no decision here.
 
@@ -1892,6 +1924,14 @@ def agent_router(
     SESSION_MAX = _SESSION_MAX
     session = declared_session
 
+    def _part_or_422(body: str, offset: int, limit: int | None) -> dict:
+        try:
+            return body_part(body, offset, limit)
+        except PastTheEnd as exc:
+            raise HTTPException(
+                422, {"field": "offset", "detail": str(exc), "size": exc.size}
+            ) from None
+
     def _warnings_for(artifact_id: str, body: str) -> list[dict]:
         return page_warnings(db, artifact_id, body)
 
@@ -2221,7 +2261,12 @@ def agent_router(
             raise HTTPException(404, "no such page") from exc
 
     @router.get("/artifacts/{artifact_id}/body")
-    def read_body(artifact_id: str, agent: str = Depends(caller)):
+    def read_body(
+        artifact_id: str,
+        agent: str = Depends(caller),
+        offset: int = Query(0, ge=0),
+        limit: int | None = Query(None, ge=1, le=READ_PART_MAX),
+    ):
         """The publisher reads back what it published.
 
         The rendered page is unreachable to its own author by design (framed
@@ -2229,14 +2274,17 @@ def agent_router(
         an agent has: it proves what is stored, not what a browser makes of
         it. `warnings` repeats the CSP advisory for the stored body, so a page
         published before that check existed still reports its own problems.
+        `offset` and `limit` read a large page in parts (`body_part`).
         """
         try:
             stored = store.get_body(db, agent, artifact_id, as_reader=True)
         except store.NotFound as exc:
             raise HTTPException(404, "no such page") from exc
+        part = _part_or_422(stored.body, offset, limit)
         report = store.render_report(db, artifact_id)
         return {
             **stored.__dict__,
+            **part,
             "warnings": _warnings_for(artifact_id, stored.body),
             # What the service's own render made of the live version (runcove-5t3oj.56).
             "render_verdict": report["verdict"],
@@ -2437,7 +2485,13 @@ def agent_router(
         return out
 
     @router.get("/artifacts/{artifact_id}/versions/{n}")
-    def read_version_body(artifact_id: str, n: int, agent: str = Depends(caller)):
+    def read_version_body(
+        artifact_id: str,
+        n: int,
+        agent: str = Depends(caller),
+        offset: int = Query(0, ge=0),
+        limit: int | None = Query(None, ge=1, le=READ_PART_MAX),
+    ):
         """One version's stored body (homelab-50ze).
 
         Rolling back is this plus an ordinary update: fetch the old bytes,
@@ -2451,6 +2505,7 @@ def agent_router(
             raise HTTPException(404, "no such artifact or version") from exc
         return {
             **stored.__dict__,
+            **_part_or_422(stored.body, offset, limit),
             "warnings": _warnings_for(artifact_id, stored.body),
         }
 

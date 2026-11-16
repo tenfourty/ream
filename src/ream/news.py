@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-16d",
+        'A lettered question can now show a preview of each option: give an option a `preview` (plain text, up to 1,000 bytes and 15 lines, such as a snippet of code or markup) and it is shown beside that option, as text, never rendered; it comes back in the question everywhere you read it. API: {"letter", "label", "preview"} in options on POST /api/v1/pages/ID/decisions; MCP: the same in ask\'s options; artifacts-decide ask --preview a=TEXT once your tool has updated. A large page can now be read in parts: read_page over MCP returns at most 50,000 characters unless you give limit, and says the page\'s whole size and the next_offset to read from (null at the end); GET /api/v1/pages/ID/body and /versions/N take ?offset=&limit= and answer the same fields (whole, as before, with neither).',
+    ),
+    (
         "2026-11-16c",
         "Over MCP, a new tool wait_for_answer waits for the person's answer or comment on your pages, so an MCP session needs no `ream wait` process beside it. It holds up to `seconds` (default 45, at most 50) and answers the events whats_new would (the same cursor); when nothing came it answers timed_out true, which is not an error: call it again. While it waits, your page shows a session listening. It keeps one place per key, so sessions sharing one key share it: those keep `ream wait`. ask and comment now say so in their `next`. Nothing to install.",
     ),

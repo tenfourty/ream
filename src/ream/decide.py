@@ -93,8 +93,24 @@ def _options(pairs: list[str]) -> list[dict]:
     return options
 
 
+def _with_previews(options: list[dict], pairs: list[str]) -> list[dict]:
+    """`--preview a=TEXT` (TEXT `-` reads stdin) adds a preview to option a. The service
+    checks its size and line count; here only the shape and that the letter is asked."""
+    by_letter = {o["letter"]: o for o in options}
+    for pair in pairs:
+        letter, sep, preview = pair.partition("=")
+        letter = letter.strip().lower()
+        if not sep or not preview or letter not in by_letter:
+            raise UsageError(
+                f"--preview must be LETTER=TEXT for a letter given with --option, got"
+                f" {pair!r}"
+            )
+        by_letter[letter]["preview"] = _read_text_arg(preview)
+    return options
+
+
 def _ask(args, key: str) -> dict:
-    options = _options(args.option)
+    options = _with_previews(_options(args.option), args.preview)
     recommended = args.recommend
     if recommended is None and options:
         # The first option IS the recommendation unless told otherwise, because
@@ -1801,6 +1817,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="LETTER=LABEL",
         help="repeatable; give them in the order {{owner_they}} should read them",
+    )
+    ask.add_argument(
+        "--preview",
+        action="append",
+        default=[],
+        metavar="LETTER=TEXT",
+        help="repeatable; a short plain-text preview shown beside that option"
+        " (up to 15 lines; TEXT - reads stdin)",
     )
     ask.add_argument(
         "--recommend",

@@ -455,8 +455,9 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # skill.md re-taken on 16 Nov 2026 for embedded fonts (the Fonts bullet: data: fonts allowed, and Ream's own pictures may show a fallback font for now); agents.txt and agent.json did not move.
 # skill.md re-taken on 16 Nov 2026 for questions that stand alone (two lines under the lettered-options bullet); agents.txt and agent.json did not move.
 # agents.txt and skill.md re-taken on 16 Nov 2026 for the MCP wait_for_answer tool (agents.txt names it in the MCP tool list and says to use it instead of a `ream wait` process; skill.md says the same in one sentence under "After you ask"), and again the same day for its review: both now say sessions sharing one key share its place and keep `ream wait`; agent.json did not move.
+# agents.txt and the artifacts-decide help re-taken on 16 Nov 2026 for option previews (`--preview`, three lines) and reading a large page in parts (two lines on the body route); skill.md and agent.json did not move.
 GOLDEN = {
-    "agents.txt": "70a4189d74534aee1d4c48f2cdb1e7c2981863e03705d00466ad0f3d6b1ab470",
+    "agents.txt": "bc3faba2021c5c412ac0868fef2d2249d1d7644b06275d447e70080fc3ea5576",
     "skill.md": "d464a0cd20ea79ddb6aeb7e887da24adfa94fc2c53f684ba34874c3368fbdad0",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
@@ -502,7 +503,7 @@ NEWS_TAIL = 26  # every entry so far; newer ones are added in front, so these ne
 NEWS_TAIL_DIGEST = "08b7ad27fd383101cc42c10f0994c8368d6fa5b33dc1617635d6068b5902f467"
 HELP_DIGEST = {
     "artifacts-publish": "e7ac4e65605a588c82b59fb088b6eb288218d8354c081e513837664f1c2c83d4",
-    "artifacts-decide": "2a31c966178e2ea6ce7fa9f4ecb40c7c4e4b9506890802b05534e75dd3572a10",
+    "artifacts-decide": "1d592613826304b91d11381e64fef393d6020a2a5245e743ebad8aa86abbf88b",
 }
 
 

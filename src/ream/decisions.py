@@ -67,6 +67,13 @@ MAX_QUESTION_BYTES = 500
 # itself, because "(a) <label>" needs to read at a glance.
 MAX_LABEL_BYTES = 200
 
+# An option may carry a preview of what choosing it looks like (a snippet of code or
+# markup, a short layout sketch), shown beside its button. It is the agent's text like
+# the label -- size-capped, secret-scanned, and always shown as text, never rendered as
+# markup -- and small: a glance at each choice, not a page.
+MAX_PREVIEW_BYTES = 1_000
+MAX_PREVIEW_LINES = 15
+
 # Jeremy's note travels back to the agent as-is; it is a short aside ("go ahead, but
 # watch the disk"), not a reply. Small enough that answering never becomes its own
 # comment thread -- that already exists, on purpose, as a separate feature.
@@ -311,16 +318,20 @@ def _validate_options(options: object) -> tuple[list[dict], set[str]]:
     it uses, so `ask` can check `recommended` against exactly what was just validated
     rather than re-deriving it. Raises `InvalidOptions` for anything that doesn't
     match: not a list, too few or too many entries, an entry that isn't a dict with
-    exactly `letter` and `label`, a `letter` that isn't one lowercase ASCII character,
-    a `letter` repeated within the same decision, or a `label` that is empty or over
-    `MAX_LABEL_BYTES`."""
+    `letter` and `label` (and optionally `preview`), a `letter` that isn't one
+    lowercase ASCII character, a `letter` repeated within the same decision, a `label`
+    that is empty or over `MAX_LABEL_BYTES`, or a `preview` that is not a non-empty
+    string within `MAX_PREVIEW_BYTES` and `MAX_PREVIEW_LINES`."""
     if not isinstance(options, list) or not (2 <= len(options) <= MAX_OPTIONS):
         raise InvalidOptions()
 
     validated: list[dict] = []
     letters: set[str] = set()
     for option in options:
-        if not isinstance(option, dict) or option.keys() != {"letter", "label"}:
+        if not isinstance(option, dict) or option.keys() not in (
+            {"letter", "label"},
+            {"letter", "label", "preview"},
+        ):
             raise InvalidOptions()
         letter, label = option["letter"], option["label"]
         if not (isinstance(letter, str) and len(letter) == 1 and "a" <= letter <= "z"):
@@ -342,8 +353,25 @@ def _validate_options(options: object) -> tuple[list[dict], set[str]]:
         if label_size > MAX_LABEL_BYTES:
             raise InvalidOptions()
         letters.add(letter)
-        validated.append({"letter": letter, "label": label})
+        clean = {"letter": letter, "label": label}
+        if "preview" in option:
+            clean["preview"] = _validate_preview(option["preview"])
+        validated.append(clean)
     return validated, letters
+
+
+def _validate_preview(preview: object) -> str:
+    """An option's preview: a non-empty string of at most `MAX_PREVIEW_BYTES` bytes
+    and `MAX_PREVIEW_LINES` lines, or `InvalidOptions` (naming only the field)."""
+    if not isinstance(preview, str) or not preview.strip():
+        raise InvalidOptions()
+    try:
+        size = len(preview.encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise InvalidOptions() from exc
+    if size > MAX_PREVIEW_BYTES or len(preview.splitlines()) > MAX_PREVIEW_LINES:
+        raise InvalidOptions()
+    return preview
 
 
 URGENCIES = ("blocking", "by", "when_you_can")
@@ -745,6 +773,10 @@ def ask(
             store._check_secrets(
                 option["label"], "options", agent=agent, artifact_id=artifact_id
             )
+            if "preview" in option:
+                store._check_secrets(
+                    option["preview"], "options", agent=agent, artifact_id=artifact_id
+                )
         for value, name in (
             (fields.context, "context"),
             (fields.blocked_on, "blocked_on"),
