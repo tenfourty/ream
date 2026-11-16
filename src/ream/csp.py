@@ -412,9 +412,12 @@ class Lines:
     how two checks on one page start disagreeing about where a problem is.
 
     It remembers where it last counted and counts only the newlines between that
-    and the next offset asked, in either direction, so offsets asked in increasing
-    order cost one pass over the page in all and no list of every newline is made
-    (a page of nothing but newlines would otherwise make millions of them)."""
+    and the next offset asked, so offsets asked in increasing order cost one pass
+    over the page in all and no list of every newline is made (a page of nothing
+    but newlines would otherwise make millions of them). An answer is right in any
+    order, but a backward ask costs a pass over the gap it goes back across, so
+    ask in increasing order. An offset below 0 is on line 1, as offset 0 would be
+    were it not a newline itself; one past the end is on the last line."""
 
     def __init__(self, text: str) -> None:
         self._text = text
@@ -422,7 +425,7 @@ class Lines:
         self._line = 1
 
     def of(self, offset: int) -> int:
-        end = offset + 1
+        end = max(offset + 1, 0)
         if end >= self._seen:
             self._line += self._text.count("\n", self._seen, end)
         else:
