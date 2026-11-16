@@ -955,20 +955,27 @@ def _plugin_loader_env(request, monkeypatch):
 def _unbound_shared_state():
     """`serve.app_from_env` binds the shared breaker state and failure counts to its
     database, and starts the core outbox sender on it; no test may inherit that (or
-    leave its own) binding or sender. A sender left running polls this worker's
+    leave its own) binding, sender or comment sweeper. A sender left running polls this worker's
     database and delivers the next test's rows behind its back (runcove-5t3oj.127:
     a row asserted untouched was marked delivered between two lines), so every
     test starts and ends with none, whoever started it."""
-    from ream import sinks
+    from ream import comments, sinks
 
     def no_sender() -> None:
         sinks.stop()  # also unbinds and stops the failure-count writer
+        comments.stop_sweeper()
         alive = [
             t
             for t in threading.enumerate()
             if t.name == "outbox-sender" and t.is_alive()
         ]
         assert not alive, f"an outbox sender did not stop: {alive}"
+        swept = [
+            t
+            for t in threading.enumerate()
+            if t.name == "comment-sweep" and t.is_alive()
+        ]
+        assert not swept, f"a comment sweeper did not stop: {swept}"
 
     no_sender()
     yield

@@ -27,7 +27,6 @@ import hashlib
 import json
 import logging
 import threading
-import time
 from collections import OrderedDict
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
@@ -2050,18 +2049,52 @@ def sweep_unscanned(db: Database, *, limit: int = 200) -> int:
 SWEEP_EVERY_SECONDS = 600
 
 
+_sweeper: threading.Thread | None = None
+_sweeper_stop: threading.Event | None = None
+_sweeper_lock = threading.Lock()
+
+
 def start_sweeper(db: Database) -> threading.Thread:
     """One daemon thread: a pass at startup, then one every ten minutes. It never
-    blocks startup and never dies of an exception."""
+    blocks startup and never dies of an exception. Idempotent: while a sweeper is
+    running, a second call returns it and starts nothing. Each sweeper has its own
+    stop flag, so a restart can never revive one that was told to stop."""
+    global _sweeper, _sweeper_stop
+    with _sweeper_lock:
+        if (
+            _sweeper is not None
+            and _sweeper.is_alive()
+            and _sweeper_stop is not None
+            and not _sweeper_stop.is_set()
+        ):
+            return _sweeper
+        stop_flag = threading.Event()
 
-    def loop() -> None:
-        while True:
-            try:
-                sweep_unscanned(db)
-            except Exception:  # noqa: BLE001 -- the loop must outlive one bad pass
-                _log.error("comment sweep failed", exc_info=True)
-            time.sleep(SWEEP_EVERY_SECONDS)
+        def loop() -> None:
+            while not stop_flag.is_set():
+                try:
+                    sweep_unscanned(db)
+                except Exception:  # noqa: BLE001 -- the loop must outlive one bad pass
+                    _log.error("comment sweep failed", exc_info=True)
+                stop_flag.wait(SWEEP_EVERY_SECONDS)
 
-    thread = threading.Thread(target=loop, name="comment-sweep", daemon=True)
-    thread.start()
-    return thread
+        thread = threading.Thread(target=loop, name="comment-sweep", daemon=True)
+        _sweeper_stop, _sweeper = stop_flag, thread
+        thread.start()
+        return thread
+
+
+def stop_sweeper(timeout: float = 5.0) -> None:
+    """Ask the sweeper to stop and wait briefly for it (a pass in flight finishes
+    first, so it may outlast `timeout`). Safe when none was started; idempotent."""
+    global _sweeper, _sweeper_stop
+    with _sweeper_lock:
+        thread, flag = _sweeper, _sweeper_stop
+        if flag is not None:
+            flag.set()
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(timeout)
+    with _sweeper_lock:
+        if _sweeper is thread and (thread is None or not thread.is_alive()):
+            _sweeper = None
+            _sweeper_stop = None

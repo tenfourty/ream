@@ -2,6 +2,8 @@
 (homelab-ij8.112). Jeremy's never wait on it."""
 
 import logging
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -545,3 +547,76 @@ def test_a_hold_nothing_can_clear_is_lifted(db, page, monkeypatch):
     assert comments.second_scan(db, row.id) == "unavailable"
     assert _body_state(db, row.id) == ("fine", False, None)
     assert not _stamped(db, row.id)
+
+
+def _sweeper_threads():
+    return [
+        t for t in threading.enumerate() if t.name == "comment-sweep" and t.is_alive()
+    ]
+
+
+@pytest.fixture()
+def passes(monkeypatch):
+    """The sweeper's passes, stubbed: `passes.ran` is set by each one."""
+    ran = threading.Event()
+
+    def fake(db, *, limit=200):
+        ran.set()
+        return 0
+
+    monkeypatch.setattr(comments, "sweep_unscanned", fake)
+    fake.ran = ran
+    return fake
+
+
+def test_the_sweeper_stops_and_leaves_no_thread(db, passes):
+    thread = comments.start_sweeper(db)
+    assert passes.ran.wait(5)
+    comments.stop_sweeper()
+    assert not thread.is_alive()
+    assert _sweeper_threads() == []
+
+
+def test_stopping_a_sweeper_never_started_does_nothing(db):
+    comments.stop_sweeper()
+    comments.stop_sweeper()
+    assert _sweeper_threads() == []
+
+
+def test_stop_wakes_a_sweeper_waiting_between_passes(db, passes, monkeypatch):
+    monkeypatch.setattr(comments, "SWEEP_EVERY_SECONDS", 600)
+    thread = comments.start_sweeper(db)
+    assert passes.ran.wait(5)  # now it waits out the interval
+    time.sleep(0.05)
+    began = time.monotonic()
+    comments.stop_sweeper(timeout=5.0)
+    assert time.monotonic() - began < 2
+    assert not thread.is_alive()
+
+
+def test_a_second_start_returns_the_running_sweeper(db, passes):
+    first = comments.start_sweeper(db)
+    assert comments.start_sweeper(db) is first
+    assert _sweeper_threads() == [first]
+    comments.stop_sweeper()
+    second = comments.start_sweeper(db)
+    assert second is not first
+    comments.stop_sweeper()
+    assert _sweeper_threads() == []
+
+
+def test_a_pass_that_fails_does_not_end_the_sweeper(db, monkeypatch):
+    monkeypatch.setattr(comments, "SWEEP_EVERY_SECONDS", 0.01)
+    calls = []
+
+    def boom(db, *, limit=200):
+        calls.append(1)
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(comments, "sweep_unscanned", boom)
+    comments.start_sweeper(db)
+    deadline = time.monotonic() + 5
+    while len(calls) < 3 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    comments.stop_sweeper()
+    assert len(calls) >= 3

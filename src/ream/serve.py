@@ -84,6 +84,7 @@ def _arm_shutdown_signals(app):
                 if message["type"].startswith("lifespan.shutdown"):
                     plugin_api.stop_all()
                     sinks.stop(timeout=2.0)
+                    comments.stop_sweeper(timeout=2.0)
                 await send(message)
 
             await app(scope, receive, watching)
