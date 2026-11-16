@@ -101,7 +101,7 @@ function build(innerWidth = 1280, { media = null, position = "absolute", innerHe
   // `media === null` means "this browser has no matchMedia", which is the
   // fallback path; otherwise it is the answer the stylesheet's own query gives.
   if (media !== null) {
-    win.matchMedia = (q) => { queried.push(q); return { matches: media }; };
+    win.matchMedia = (q) => { queried.push(q); return { matches: typeof media === "function" ? media(q) : media }; };
   }
   const history = {
     replaceState() { dlg.replaced++; },
@@ -522,6 +522,33 @@ navigatorStub = {};
   const e = build();
   e.send(good({ source: { NAME: "evil" }, data: { type: "artifact-state", height: 900, frame: "viewport", slots: [] } }));
   ok(e.iframe.getAttribute("data-frame") === null, "another window cannot turn it on");
+}
+
+// 16. ON A PHONE THE FRAME LEAVES A STRIP OF THE GALLERY (17 Nov 2026). An iPhone sends a
+// swipe over a frame that scrolls to the frame and never on to the gallery, so a frame
+// filling everything under the bar left the questions above it reachable only from the
+// bar. On a coarse pointer or a narrow window the frame is 96px shorter.
+{
+  const vpMsg = (g) => good({ source: g.iframe.contentWindow,
+    data: { type: "artifact-state", height: 1200, frame: "viewport", slots: [] } });
+  const phone = build(390, { innerHeight: 800, barHeight: 48 });
+  phone.send(vpMsg(phone));
+  ok(phone.iframe.style.height === "656px", "a narrow window leaves a 96px strip of the gallery: " + phone.iframe.style.height);
+  phone.resize(600);
+  ok(phone.iframe.style.height === "456px", "and keeps it as the window changes: " + phone.iframe.style.height);
+  const tablet = build(1280, { innerHeight: 800, barHeight: 48, media: (q) => q === "(pointer:coarse)" || q === "(min-width:56rem)" });
+  tablet.send(vpMsg(tablet));
+  ok(tablet.iframe.style.height === "656px", "a wide touch screen leaves it too: " + tablet.iframe.style.height);
+  ok(tablet.queried.includes("(pointer:coarse)"), "asked by the pointer media query");
+  const desk = build(1280, { innerHeight: 800, barHeight: 48, media: (q) => q === "(min-width:56rem)" });
+  desk.send(vpMsg(desk));
+  ok(desk.iframe.style.height === "752px", "a wide window with a mouse fills everything under the bar: " + desk.iframe.style.height);
+  const narrowMouse = build(1280, { innerHeight: 800, barHeight: 48, media: () => false });
+  narrowMouse.send(vpMsg(narrowMouse));
+  ok(narrowMouse.iframe.style.height === "656px", "a window below the breakpoint by the stylesheet's own query leaves the strip: " + narrowMouse.iframe.style.height);
+  const tiny = build(390, { innerHeight: 250, barHeight: 48 });
+  tiny.send(vpMsg(tiny));
+  ok(tiny.iframe.style.height === "200px", "never below the 200px floor");
 }
 
 console.log(`\n${passes} passed, ${fails} failed`);

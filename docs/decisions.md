@@ -1131,7 +1131,8 @@ advice, 16 Nov 2026, no hold.
 
 A page that sizes itself from its window declares it in its head: `<meta name="ream-frame"
 content="viewport">` (`src/ream/pageframe.py`). The shim reports `frame: "viewport"` with every
-height report; the gallery then keeps the page's frame at the window's height less the gallery bar's,
+height report; the gallery then keeps the page's frame at the window's height less the gallery bar's
+(and 96px less on a touch or narrow screen, so an iPhone always has a strip of gallery to swipe),
 follows the window, lets the frame scroll, and ignores the page's height reports. The frame carries
 `data-frame="viewport"` and the comments script treats it as it treats full screen (the pill is placed
 from where the frame shows the words, no pin badges, and jumping to a comment only brings the frame up

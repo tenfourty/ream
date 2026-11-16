@@ -1392,6 +1392,11 @@ _CSS = design.ROOT_CSS + _RULES
 # /comments.js treats it as it treats full screen. Decision controls are not lifted
 # onto it (page coordinates move as it scrolls): they stay above the page, and the
 # page is told to reserve no room. Full screen still wins (100vh, !important).
+# On a touch screen or a narrow one (`touchy`: a coarse pointer, or below the lifting
+# breakpoint) the frame is 96px shorter than that, so wherever the gallery is scrolled
+# a strip of the gallery shows beside it: an iPhone sends a swipe over a frame that
+# scrolls to the frame, and it does not pass the swipe on, so with nothing but frame
+# under the bar the questions above it could be reached only from the 48px bar.
 _GALLERY_JS = """(function(){
 "use strict";
 var iframe=document.getElementById("artifact-frame");
@@ -1412,7 +1417,8 @@ document.addEventListener("fullscreenchange",frameScroll);
 function fitVp(){if(!vp)return;var b=document.querySelector(".bar.bleed"),bh=0;
   try{bh=b?b.getBoundingClientRect().height:0}catch(e){}
   if(!isNum(bh)||bh<0)bh=0;
-  iframe.style.height=Math.max(200,Math.floor((window.innerHeight||0)-bh))+"px"}
+  iframe.style.height=Math.max(200,Math.floor((window.innerHeight||0)-bh-(touchy()?96:0)))+"px"}
+function touchy(){try{if(window.matchMedia)return window.matchMedia("(pointer:coarse)").matches||!liftsHere()}catch(e){}return !liftsHere()}
 window.addEventListener("resize",fitVp);
 function liftsHere(){try{if(window.matchMedia)return window.matchMedia("(min-width:56rem)").matches}catch(e){}return window.innerWidth>=896}
 function isStatic(el){try{return window.getComputedStyle(el).position==="static"}catch(e){return false}}

@@ -9,7 +9,8 @@ its own HTML:
 
     <meta name="ream-frame" content="viewport">
 
-and the gallery then keeps the frame at the visible height under its bar, lets the
+and the gallery then keeps the frame at the visible height under its bar (96px less on
+a touch or narrow screen, so a swipe always has some gallery to land on), lets the
 frame scroll, and ignores the page's height reports. The value is read without case
 or surrounding white space; any other value (or none) is the default, `content`.
 
