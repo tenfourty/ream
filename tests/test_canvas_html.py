@@ -80,7 +80,7 @@ def test_a_render_shows_what_the_page_drew_in_a_canvas():
 
 # ---------------------------------------------------------------------------
 # A font a page embeds as a data: URL. The browser runs with --disable-remote-fonts;
-# whether that also stops a data: source is what this settles, in CI's browser step.
+# CI's browser step showed that it also stops a data: source, so these tests pin the fallback.
 # The font is built here, byte by byte (no font library is a dependency): a TrueType
 # font whose only drawn glyph, for A-Z, is a solid square 0.8 em on a side. The
 # fallback `monospace` letter H is nothing like a solid square.
@@ -207,11 +207,8 @@ p {{ margin: 20px; font: 100px/100px test, monospace; color: #000 }}
 <p>H</p>"""
 
 
-def _check_font(png: bytes | None, path: str) -> None:
-    named = (
-        f"{path}: embedded data: font not applied by the renderer (chromium --version {_version()!r}); "
-        "--disable-remote-fonts likely blocks it"
-    )
+def _check_font_is_fallback(png: bytes | None, path: str) -> None:
+    named = f"{path}: the renderer now applies embedded fonts (chromium --version {_version()!r})"
     assert png is not None, f"{path}: no picture"
     _, _, rows = pixels(png)
     dark = [
@@ -220,24 +217,31 @@ def _check_font(png: bytes | None, path: str) -> None:
         for x, px in enumerate(row)
         if sum(px[:3]) < 150
     ]
-    assert dark, f"{named}; no dark pixels at all"
+    assert dark, f"{path}: no dark pixels at all, not even a fallback letter"
     xs, ys = [x for x, _ in dark], [y for _, y in dark]
     w, h = max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
     fill = len(dark) / (w * h)
-    assert w >= 40 and abs(w - h) <= 3 and fill >= 0.95, (
-        f"{named}; dark box {w}x{h}, {fill:.0%} filled, wanted a solid square about 80x80"
+    # The monospace letter H is taller than wide and mostly empty (CI's Chromium 156: 46x73);
+    # the embedded font would give a solid square about 80x80.
+    assert h > w and fill < 0.8, (
+        f"{named}; dark box {w}x{h}, {fill:.0%} filled, wanted a fallback letter H "
+        "(taller than wide, under 80% filled). Expected only if --disable-remote-fonts was "
+        "dropped deliberately; then flip this test back to asserting the solid square and "
+        "drop the onboarding 'may show a fallback font' sentence"
     )
 
 
+# Pins today's behaviour: rendercore keeps --disable-remote-fonts, which also stops a data: font;
+# security owns the decision to change that.
 @needs_browser
-def test_a_screenshot_applies_a_font_the_page_embeds_as_a_data_url():
+def test_a_screenshot_shows_a_fallback_for_a_font_the_page_embeds_as_a_data_url():
     shot = rendercore.shoot(
         rendercore.browser_path(), FONT_PAGE, renderwire.shot_request()
     )
     assert shot.outcome == "shot", shot
-    _check_font(shot.png, "shot")
+    _check_font_is_fallback(shot.png, "shot")
 
 
 @needs_browser
-def test_a_render_applies_a_font_the_page_embeds_as_a_data_url():
-    _check_font(thumbs.render_report(FONT_PAGE, 1280, 720)[0], "render")
+def test_a_render_shows_a_fallback_for_a_font_the_page_embeds_as_a_data_url():
+    _check_font_is_fallback(thumbs.render_report(FONT_PAGE, 1280, 720)[0], "render")
