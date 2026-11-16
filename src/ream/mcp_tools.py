@@ -39,6 +39,7 @@ Which fields are which (section 15):
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -743,6 +744,132 @@ def _whats_new(call: Call, arguments: dict[str, Any]) -> dict:
     }
 
 
+# --- wait_for_answer ------------------------------------------------------------------
+#
+# whats_new that holds: the same cursor, the same events, the same fences, but when nothing
+# is new it holds the request (`events.wait_for_agent`, as a held GET /events does) until
+# something lands or the time runs out. MCP here is one request per call, so the hold is
+# capped under what sits in front of it: Cloudflare cuts a held request past 50 seconds
+# (`api.PUBLIC_MAX_WAIT`), and an MCP client's own request timeout is commonly 60 seconds.
+# Nothing new by then is an ordinary answer, `timed_out` true: call again.
+
+WAIT_DEFAULT_SECONDS = 45
+WAIT_MAX_SECONDS = int(api.PUBLIC_MAX_WAIT)
+_NEXT_WAIT = (
+    "If timed_out is true nothing arrived yet: call wait_for_answer again to keep "
+    "waiting. Otherwise act on the events, then call it again to hear the next one."
+)
+
+
+def _listen_from_here(call: Call) -> None:
+    """A key that has never looked starts its feed from now. One that asks or comments
+    before its first look must not lose the reply that lands before it does look: its
+    cursor starts here, before the write (a saved cursor never moves, back or forward)."""
+    if call.key is None and call.app is None:
+        return  # nothing to keep a cursor on (a call built by hand)
+    if _seen(call) is None:
+        _save_seen(call, events.latest_seq(call.db, call.agent))
+
+
+@tool(
+    "wait_for_answer",
+    title="Wait for an answer or comment",
+    description=(
+        "Wait until the person answers or comments on your pages, then answer the events "
+        "whats_new would (same cursor). Holds up to seconds (default 45, at most 50); "
+        "nothing by then answers timed_out true: call again. Use it instead of a ream "
+        "wait process. Not for a look that must not block: use whats_new."
+    ),
+    read_only=True,
+    destructive=False,
+    idempotent=False,
+    next_step=_NEXT_WAIT,
+    fences=Fences(
+        ream=_REAM,
+        writer=lambda obj, key: _event_writer(obj, key),
+        what={"summary": "an event's summary", "note": "an event's note"},
+    ),
+    input_schema=_schema(
+        {
+            "seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    f"How long to wait (default {WAIT_DEFAULT_SECONDS}); more than "
+                    f"{WAIT_MAX_SECONDS} waits {WAIT_MAX_SECONDS}."
+                ),
+            },
+            "limit": LIMIT,
+        }
+    ),
+)
+def _wait_for_answer(call: Call, arguments: dict[str, Any]) -> dict:
+    seconds = _int(arguments, "seconds", WAIT_DEFAULT_SECONDS, 1, 2**31 - 1)
+    seconds = min(seconds, WAIT_MAX_SECONDS)
+    limit = _int(arguments, "limit", 100, 1, MAX_LIMIT)
+    saved = _seen(call)
+    # As whats_new: a key that has never looked starts from now.
+    since = events.latest_seq(call.db, call.agent) if saved is None else saved
+    started = time.monotonic()
+    # A hold, as on GET /events: the session reads as waiting on its pages and in
+    # GET /listening until this returns (`events.note_read`, `note_hold_end`).
+    held_until = events.note_read(
+        call.db, call.agent, call.session, hold_seconds=seconds
+    )
+    try:
+        # Only someone else's act ends the wait, as `ream wait` asks (exclude_self):
+        # the agent's own comment is not news to it. An answer always is.
+        woke = events.list_for_agent(
+            call.db, call.agent, since=since, limit=1, exclude_actor=call.agent
+        )
+        if not woke:
+            woke = events.wait_for_agent(
+                call.db,
+                call.agent,
+                since=since,
+                limit=1,
+                seconds=seconds,
+                exclude_actor=call.agent,
+            )
+    finally:
+        if held_until is not None:
+            events.note_hold_end(call.db, call.agent, call.session, held_until)
+    waited = round(time.monotonic() - started)
+    if not woke:
+        # The cursor stays where it was: anything of the agent's own below it still
+        # reaches whats_new, or the next wake.
+        return {
+            "events": [],
+            "since": since,
+            "cursor": since,
+            "more": False,
+            "timed_out": True,
+            "waited": waited,
+        }
+    # Woken: everything since the cursor, the agent's own events too, so the cursor
+    # whats_new shares never passes an event neither tool answered.
+    pre = events.latest_seq(call.db, call.agent)
+    rows = events.list_for_agent(call.db, call.agent, since=since, limit=limit)
+    cursor = events.safe_cursor(since, pre, rows, limit)
+    _save_seen(call, cursor)
+    out = [
+        {
+            **row.__dict__,
+            "summary": text.strip_controls(row.summary),
+            "note": text.strip_controls(row.note),
+        }
+        for row in rows
+    ]
+    return {
+        "events": jsonable_encoder(out),
+        "since": since,
+        "cursor": cursor,
+        "more": len(rows) >= limit,
+        "timed_out": False,
+        "waited": waited,
+    }
+
+
 # --- The writing tools (slice 2) ------------------------------------------------------
 #
 # Each builds its route's own body model from the arguments, so a field the route
@@ -841,14 +968,15 @@ _NEXT_UPDATE = (
 )
 _NEXT_DELETE = "organise_page with action restore puts it back."
 _NEXT_ASK = (
-    "The answer reaches you in whats_new. To withdraw the question: close_question."
+    "The answer reaches you in whats_new; wait_for_answer waits for it. To withdraw "
+    "the question: close_question."
 )
 
 
 def _next_comment(arguments: dict[str, Any]) -> str | None:
     action = arguments.get("action", "comment")
     if action == "comment":
-        return "Replies reach you in whats_new."
+        return "Replies reach you in whats_new; wait_for_answer waits for one."
     if action == "delete":
         return "action restore takes it back within ten minutes."
     return None
@@ -1160,6 +1288,7 @@ def _comment(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     session = _session(call, arguments)
     api.refuse_decision_anchor(payload)
     page = _page(call, page_id)
+    _listen_from_here(call)
     later: list = []
     out = api.add_comment(call.db, page_id, payload, call.agent, None, session, later)
     call.after.extend(later)
@@ -1195,7 +1324,7 @@ _ASK_FIELDS = {
         "recommended is the letter you suggest). Write it to stand alone: the person may "
         "see only the question, in the inbox or a notification, so name what it is about "
         "and make each option clear without the page or this chat. The answer reaches you "
-        "in whats_new. Key: your own pages. Connected app: any page the person can read; "
+        "in whats_new (wait_for_answer waits). Key: your own pages. Connected app: any page the person can read; "
         "the card says it came from you and only you can withdraw it. Not for a remark or "
         "a reply: use comment. Not when they already answered in this chat: use "
         "record_answer."
@@ -1230,6 +1359,7 @@ def _ask(call: Call, arguments: dict[str, Any]) -> dict:
     page_id = _str(arguments, "page_id", required=True)
     payload = _body(api.DecisionBody, arguments, _ASK_FIELDS)
     session = _session(call, arguments)
+    _listen_from_here(call)
     return jsonable_encoder(
         api.ask_question(call.db, call.agent, session, page_id, payload)
     )

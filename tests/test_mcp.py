@@ -609,7 +609,7 @@ def test_every_read_tool_is_listed_with_explicit_hints(client, on, token):
         assert hints["readOnlyHint"] is True
         assert hints["destructiveHint"] is False
         assert hints["openWorldHint"] is False
-        assert hints["idempotentHint"] is (name != "whats_new")
+        assert hints["idempotentHint"] is (name not in ("whats_new", "wait_for_answer"))
         assert mcp.TOOLS[name].permission == mcp.READ
 
 
@@ -621,6 +621,7 @@ READ_TOOLS = (
     "comments",
     "questions",
     "whats_new",
+    "wait_for_answer",
 )
 
 
@@ -948,6 +949,7 @@ def test_every_tool_says_how_its_result_is_fenced():
         "comments",
         "questions",
         "whats_new",
+        "wait_for_answer",
         "publish_page",
         "update_page",
         "organise_page",
@@ -1104,6 +1106,7 @@ SPEC_TOOLS = {
     "comments": mcp.READ,
     "questions": mcp.READ,
     "whats_new": mcp.READ,
+    "wait_for_answer": mcp.READ,
     "publish_page": mcp.WRITE,
     "update_page": mcp.WRITE,
     "organise_page": mcp.WRITE,
@@ -1728,7 +1731,9 @@ def test_a_comments_anchor_kind_is_bare_and_its_words_fenced(client, on, token, 
     made = out["comment"]
     assert made["anchor"] == {"kind": "page"}
     assert FENCED.fullmatch(made["body"]) and FENCED.fullmatch(made["session"])
-    assert out["next"] == "Replies reach you in whats_new."
+    assert (
+        out["next"] == "Replies reach you in whats_new; wait_for_answer waits for one."
+    )
     _, read = call_tool(client, token, "comments", page_id=page)
     assert read["comments"][0]["anchor"] == {"kind": "page"}
     assert FENCED.fullmatch(read["comments"][0]["body"])

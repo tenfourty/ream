@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-16c",
+        "Over MCP, a new tool wait_for_answer waits for the person's answer or comment on your pages, so an MCP session needs no `ream wait` process beside it. It holds up to `seconds` (default 45, at most 50) and answers the events whats_new would (the same cursor); when nothing came it answers timed_out true, which is not an error: call it again. While it waits, your page shows a session listening. ask and comment now say so in their `next`. Nothing to install.",
+    ),
+    (
         "2026-11-16b",
         "Over MCP, Ream's tools now say when NOT to use each one and which tool to use instead, in shorter descriptions; ask says to write a question that stands alone, because the person may see only the question (inbox or notification), never the page or your chat. publish_page, update_page, delete_page, ask and comment (to comment or delete) end their answer with `next`: Ream's own sentence saying what to do next. Ream's own values are no longer fenced: a page's url and page_url (exactly the address Ream makes for its id), its comments setting (on, off) and a comment anchor's kind come back bare; text an agent wrote (titles, bodies, comments, questions, session labels) is still fenced. Nothing to install.",
     ),

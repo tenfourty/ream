@@ -53,7 +53,7 @@ speaks MCP rather than the agent API. The design is
 The read tools: each answers what its `/api/v1` route answers for the same key, inside an
 object (`structuredContent`, and the same JSON as text). Hints are explicit on each:
 `readOnlyHint` true, `destructiveHint` false, `openWorldHint` false, `idempotentHint` true
-except `whats_new`. All but `whoami` need `ream:read` (a key holds it). A page another agent
+except `whats_new` and `wait_for_answer`. All but `whoami` need `ream:read` (a key holds it). A page another agent
 closed answers exactly as a missing one: the tool error `no such page`.
 
 | Tool | Arguments | Answers | Route |
@@ -66,6 +66,7 @@ closed answers exactly as a missing one: the tool error `no such page`.
 | `comments` | `page_id`, `include_resolved` | `comments`; an agent's `body` fenced | `GET /pages/{id}/comments` |
 | `questions` | `scope` (`mine`, `all`), `include_set_aside`, `limit` | `questions` in inbox order (`question`, `context` fenced), `truncated` | `GET /questions` |
 | `whats_new` | `since`, `limit` | `events` since the key last looked, `since`, `cursor`, `more` | `GET /events` |
+| `wait_for_answer` | `seconds` (default 45; more than 50 waits 50), `limit` | as `whats_new`, with `timed_out` and `waited` (whole seconds) | `GET /events?wait=...&exclude_self=true` |
 
 `whats_new` keeps its cursor on the server, one row per key (`mcp_events_seen`), because a chat
 does not remember one. A key that has never looked starts from now (its first call answers no
@@ -74,6 +75,26 @@ cursor, and a saved cursor never moves back, so a look further back leaves it wh
 never waits. Like `GET /events` it records that the agent read its feed (`seat_read`, never as a
 hold), so the stranded-answer alert counts an MCP client that looks as a reader. A comment's words
 in an event `summary` are fenced.
+
+**Waiting for an answer instead of running `ream wait`.** `wait_for_answer` is `whats_new` that
+holds: same cursor, same events, same fences. When nothing is new since the cursor it holds the
+request, the way a held `GET /events` does (`events.wait_for_agent`: a look every half second,
+each on its own short database connection, none held while it sleeps; at most
+`events.MAX_WAITERS` holds at once across the process, past which it answers at once; a
+shutdown ends the hold with a normal answer), until an event lands on the calling agent's own
+pages or `seconds` pass. Only someone else's act ends it (`exclude_self`, as `ream wait`
+asks); an answer always does, even one the agent's own key relayed. Woken, it answers every
+event since the cursor, the agent's own included, and saves the cursor; on time it answers
+`timed_out: true` with no events and leaves the cursor where it was. That is an ordinary
+answer, not an error: call it again. While it holds, the session reads as waiting on the
+page and in `GET /listening`, as a `ream wait` does (`seat_read.held_until`, cleared when it
+returns). The ceiling is 50 seconds because a held request through Cloudflare is cut past
+that (`api.PUBLIC_MAX_WAIT`) and an MCP client's own request timeout is commonly 60
+seconds; the default of 45 leaves a margin under both. The hold occupies a worker thread
+for its length, as a held `GET /events` does. A key that asks or comments before it has
+ever looked starts its feed at that write, so an answer that lands before its first wait
+is not skipped as history. Scoped like every agent route: the calling key's own agent's
+events (a signed-in app: its own agent's, where the answers to its questions go).
 
 `screenshot_page` takes a picture of one of the calling agent's OWN pages, on demand and kept
 nowhere, through the same flow as `GET /pages/{id}/screenshot` (`src/ream/shots.py`): another
@@ -102,7 +123,8 @@ another agent owns answers exactly as a missing one, `no such page`. `publish_pa
 **What to do next.** `publish_page`, `update_page`, `delete_page`, `ask` and `comment` (to
 comment, or to delete one) end a successful answer with `next`: one fixed Ream sentence saying
 what to do next (give the person `page_url`; the render report follows in `read_page`; the
-answer reaches you in `whats_new`; how to take a delete back). It is added after the fence, is
+answer reaches you in `whats_new`, and `wait_for_answer` waits for it; how to take a delete back).
+`wait_for_answer` ends every answer with one saying to call it again. It is added after the fence, is
 never an agent's text, and is the one key a tool's answer has that its route's does not.
 
 **Session label** (spec 11.1): a write that takes `session` stores it (the `X-Ream-Session`
