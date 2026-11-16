@@ -201,9 +201,13 @@ class BoundedParser(HTMLParser):
         meter: Budget | None = None,
     ) -> None:
         self._meter = meter
-        self._absolute = 0
         self._tag_budget = budget if budget is not None else meter
         super().__init__(convert_charrefs=convert_charrefs)
+
+    def reset(self):
+        # `HTMLParser.__init__` calls this, so it is also where the offset starts.
+        super().reset()
+        self._absolute = 0
 
     def goahead(self, end):
         # `feed` and `close` both read through here. A reference of too many digits is

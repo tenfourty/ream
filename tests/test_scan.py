@@ -1540,10 +1540,17 @@ def test_a_page_of_newlines_is_scanned_in_no_list():
 @pytest.mark.scaling
 def test_the_one_line_ending_view_of_a_big_non_ascii_page_is_fast():
     """A table-driven `translate` took over a second on an 8 MiB page holding one
-    non-ASCII character; plain `replace` calls do not care."""
-    text = "é\n" * (4 * 1024 * 1024)
-    started = time.perf_counter()
-    out = scan._one_line_ending(text)
-    elapsed = time.perf_counter() - started
-    assert out == text[:-1]
-    assert elapsed < 2.0, f"{elapsed:.2f}s"
+    non-ASCII character (about 36 times an ASCII page of the same length); plain
+    `replace` calls do not care. So the bound is relative, not a fixed number of
+    seconds that the slow code also met."""
+    count = 4 * 1024 * 1024
+    timed = {}
+    for label, unit in (("ascii", "e\n"), ("non-ascii", "é\n")):
+        text = unit * count
+        started = time.perf_counter()
+        out = scan._one_line_ending(text)
+        timed[label] = time.perf_counter() - started
+        assert out == text[:-1]
+    assert timed["non-ascii"] < 5 * timed["ascii"] + 0.05, (
+        f"non-ascii {timed['non-ascii']:.3f}s, ascii {timed['ascii']:.3f}s"
+    )

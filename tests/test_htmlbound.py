@@ -934,3 +934,17 @@ def test_a_value_error_of_a_handler_is_not_taken_for_it():
         parser.feed("x")
         parser.close()
     assert not isinstance(seen.value, htmlbound.TooComplex)
+
+
+def test_the_absolute_position_starts_again_after_a_reset():
+    seen = []
+
+    class Records(htmlbound.BoundedParser):
+        def handle_starttag(self, tag, attrs):
+            seen.append((tag, self.absolute_position))
+
+    parser = Records()
+    parser.feed("abc<b>")
+    parser.reset()
+    parser.feed("<i>x")
+    assert seen == [("b", 3), ("i", 0)]
