@@ -277,6 +277,12 @@ def _isolation_flags() -> list[str]:
         "--no-default-browser-check",
         "--disable-extensions",
         "--disable-features=NetworkService,NetworkServiceInProcess",
+        # HTML-in-Canvas (`<canvas layoutsubtree>`, `ctx.drawElementImage`): behind a
+        # flag in Chromium 147-156 (chrome://flags/#canvas-draw-element), on by default
+        # from 157. Without it such a page's canvas is blank in the picture. Passing it
+        # where it is already on does nothing, and a build that does not know the name
+        # ignores it. tests/test_canvas_html.py
+        "--enable-blink-features=CanvasDrawElement",
         *_NO_REACH_FLAGS,
     ]
 
