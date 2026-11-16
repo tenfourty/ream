@@ -253,7 +253,7 @@ def test_the_publish_checks_say_they_did_not_run_and_the_page_is_published(
     clear = publish(api, auth, PAGE)
     assert clear.status_code == 201
     assert {w["shape"] for w in clear.json()["warnings"]}.isdisjoint(
-        {"csp_checks_not_run", "trap_checks_not_run"}
+        {"csp_checks_not_run", "trap_checks_not_run", "embedded_fonts_not_run"}
     )
     with taken():
         busy = publish(api, auth, PAGE)
@@ -261,9 +261,10 @@ def test_the_publish_checks_say_they_did_not_run_and_the_page_is_published(
     warnings = busy.json()["warnings"]
     assert sorted(w["shape"] for w in warnings) == [
         "csp_checks_not_run",
+        "embedded_fonts_not_run",
         "trap_checks_not_run",
     ], (
-        "the two warnings a page too large for the checks gets, and nothing that reads as clean"
+        "the three warnings a page too large for the checks gets, and nothing that reads as clean"
     )
     assert all("busy" in w["hint"] for w in warnings)
     assert len(store.list_for_agent(db, "seat")) == 2

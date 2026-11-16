@@ -784,11 +784,16 @@ _CHECKS_BUSY = (
 
 
 def _checks_not_run_busy() -> list[dict]:
-    """The two warnings a page gets when every scan slot stayed taken: the ones a page
-    too large for the checks gets (`csp.check`, `traps.check`), with the reason this time."""
+    """The three warnings a page gets when every scan slot stayed taken: the ones a page
+    too large for the checks gets (`csp.check`, `traps.check`, `embeddedfonts.check`),
+    with the reason this time."""
     return [
         csp.CspWarning(shape=shape, line=1, hint=_CHECKS_BUSY).__dict__
-        for shape in ("csp_checks_not_run", "trap_checks_not_run")
+        for shape in (
+            "csp_checks_not_run",
+            "trap_checks_not_run",
+            embeddedfonts.NOT_RUN_SHAPE,
+        )
     ]
 
 
