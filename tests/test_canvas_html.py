@@ -41,9 +41,10 @@ if (c.requestPaint) c.requestPaint();
 # The same canvas, its drawing asked for at the very end of the settle: a timer
 # near the end of the 3 s of the page's own time a render gives it. Virtual time
 # runs on in a few milliseconds of real time, while the frame that fires `paint`
-# comes in real time, so this pins that the picture waits for the page's next
-# frames (`rendercore._await_frames`) rather than racing them (main CI run 62167:
-# a render's canvas came out blank, intermittently, on Chromium 156).
+# comes in real time, so this exercises the picture's wait for the page's next
+# frames (`rendercore._await_frames`) (main CI run 62167: a render's canvas came out
+# blank, intermittently, on Chromium 156). Without that wait it still passed on
+# Chromium 147 (16 Nov 2026), so it is not shown to catch the race there.
 LATE_PAGE = PAGE.replace(
     "if (c.requestPaint) c.requestPaint();",
     "setTimeout(() => { if (c.requestPaint) c.requestPaint(); }, 2990);",

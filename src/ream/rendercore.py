@@ -709,26 +709,48 @@ def _await_frames(pipe: devtools.Pipe, session: str) -> None:
     asked for before the frame that runs the page's pending rendering work, a
     canvas's `paint` event (HTML-in-Canvas) among it. The second animation frame
     starts only once the first frame's rendering is done. Asked in a world of its
-    own, so the page cannot answer for it; a page that draws no frame in the bound
-    is pictured as it stands, as before."""
-    frame = pipe.call("Page.getFrameTree", session=session)["frameTree"]["frame"]["id"]
-    world = pipe.call(
-        "Page.createIsolatedWorld",
-        {"frameId": frame, "worldName": "ream-frames", "grantUniveralAccess": False},
-        session,
-    )["executionContextId"]
+    own, so the page cannot answer for it.
+
+    Best effort: past the bound, or when the browser refuses one of these
+    commands (a page that navigates away destroys the world), the page is pictured
+    as it stands, as before. Only the pipe's own failures go on up: its deadline,
+    a message it cannot take, and a checked command's error (`_Offline`'s)."""
     until = min(pipe.deadline, time.monotonic() + FRAMES_REAL_SECONDS)
-    answered = pipe.call_until(
-        "Runtime.evaluate",
-        {
-            "expression": _FRAMES_JS,
-            "contextId": world,
-            "awaitPromise": True,
-            "returnByValue": True,
-        },
-        session,
-        until=until,
-    )
+    try:
+        tree = pipe.call_until("Page.getFrameTree", session=session, until=until)
+        if tree is None:
+            log.info("picture taken without waiting for frames: no frame tree in time")
+            return
+        made = pipe.call_until(
+            "Page.createIsolatedWorld",
+            {
+                "frameId": tree["frameTree"]["frame"]["id"],
+                "worldName": "ream-frames",
+                "grantUniveralAccess": False,
+            },
+            session,
+            until=until,
+        )
+        if made is None:
+            log.info("picture taken without waiting for frames: no world in time")
+            return
+        answered = pipe.call_until(
+            "Runtime.evaluate",
+            {
+                "expression": _FRAMES_JS,
+                "contextId": made["executionContextId"],
+                "awaitPromise": True,
+                "returnByValue": True,
+            },
+            session,
+            until=until,
+        )
+    except devtools.Refused:
+        log.info("picture taken without waiting for frames: the browser refused")
+        return
+    except (KeyError, TypeError):
+        log.info("picture taken without waiting for frames: an answer had no id")
+        return
     if answered is None:
         log.info("picture taken without waiting for frames: none within the bound")
 

@@ -74,6 +74,12 @@ class CommandFailed(DevToolsError):
     not an answer."""
 
 
+class Refused(CommandFailed):
+    """The browser answered the very command being called with an error. Not
+    raised for another command's error met meanwhile (a checked `send`'s), which
+    stays a plain CommandFailed."""
+
+
 class Pipe:
     """The caller's end: `to_browser` is written (the browser's fd 3), and
     `from_browser` read (its fd 4). The descriptors stay the caller's to close."""
@@ -280,7 +286,7 @@ class Pipe:
                 self._answered(message)
                 continue
             if "error" in message or not isinstance(message.get("result"), dict):
-                raise CommandFailed(f"the browser refused {method}")
+                raise Refused(f"the browser refused {method}")
             return message["result"]
 
     def seen(self, method: str, session: str | None = None) -> bool:
