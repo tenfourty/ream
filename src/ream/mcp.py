@@ -144,7 +144,8 @@ class ToolOutput:
     # after the text, with `image_label` (who wrote what it shows) just before it.
     images: tuple[tuple[str, bytes], ...] = ()
     # What to do next instead of the tool's `next_step`, when the answer itself decides
-    # it: still one of Ream's own fixed sentences, never an agent's text.
+    # it: still one of Ream's own fixed sentences, never an agent's text. `_call_tool`
+    # refuses any not declared for the tool (`Tool.next_alternatives`).
     next: str | None = None
 
 
@@ -250,6 +251,9 @@ class Tool:
     # structured answer as `next`, after the fence, so it is never fenced and never an
     # agent's text. A callable picks one from the arguments (or None for no hint).
     next_step: str | Callable[[dict[str, Any]], str | None] | None = None
+    # The other fixed sentences a handler may put in `ToolOutput.next` instead of
+    # `next_step`. Any other `next` is refused, so stored text can never reach it unfenced.
+    next_alternatives: tuple[str, ...] = ()
 
     def listing(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -290,11 +294,14 @@ def tool(
     output_schema: dict[str, Any] | None = None,
     fences: Fences | None,
     next_step: str | Callable[[dict[str, Any]], str | None] | None = None,
+    next_alternatives: tuple[str, ...] = (),
 ) -> Callable[[Handler], Handler]:
     """Register a tool. Every hint is given explicitly: a client reads a missing
     `destructiveHint` as true and a missing `openWorldHint` as true. `fences` has no
     default either: a tool says how its result is fenced, or that it holds no text an
-    agent wrote (None). `next_step` is the hint its answer ends with (`Tool.next_step`)."""
+    agent wrote (None). `next_step` is the hint its answer ends with (`Tool.next_step`);
+    `next_alternatives` the other fixed sentences its handler may answer with
+    (`Tool.next_alternatives`)."""
 
     def register(handler: Handler) -> Handler:
         if name in TOOLS:
@@ -320,6 +327,7 @@ def tool(
             output_schema=output_schema,
             fences=fences,
             next_step=next_step,
+            next_alternatives=next_alternatives,
         )
         return handler
 
@@ -712,6 +720,10 @@ def _call_tool(call: Call, params: dict, id: Any) -> dict:
             )
     hint = found.next_step(arguments) if callable(found.next_step) else found.next_step
     if output.next is not None:
+        if output.next != hint and output.next not in found.next_alternatives:
+            raise RuntimeError(
+                f"MCP tool {name!r}: its handler answered a next it did not declare"
+            )
         hint = output.next
     if hint is not None and output.structured is not None:
         if "next" in output.structured:

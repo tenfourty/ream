@@ -102,8 +102,9 @@ that times out still saves where it started, so what lands before the next wait 
 skipped. When it answered more than a second before its time because it could not hold
 (every waiter taken, or the server restarting), `next` says to pause about 20 seconds
 before calling again. If the client hung up during the hold, the answer goes nowhere and the
-cursor is not saved (`request.is_disconnected()`, asked from the worker thread); a client
-that drops the answer without hanging up loses it, as a `whats_new` answer can be lost.
+cursor is not saved (the request's ASGI `receive` is read for an `http.disconnect` from the
+worker thread; `Request.is_disconnected` always reads False behind the app's HTTP middleware);
+a client that drops the answer without hanging up loses it, as a `whats_new` answer can be lost.
 Scoped like every agent route: the calling key's own agent's events (a signed-in app: its own
 agent's, where the answers to its questions go).
 

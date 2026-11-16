@@ -6,7 +6,9 @@ import threading
 import time
 
 import anyio
+import anyio.lowlevel
 import pytest
+from starlette.requests import Request
 from test_mcp import (  # noqa: F401
     FENCED,
     PAGE,
@@ -17,7 +19,7 @@ from test_mcp import (  # noqa: F401
     token,
     unfence,
 )
-from test_mcp_reach import _app, _as, _tool
+from test_mcp_reach import _app, _as, _as_key, _tool
 
 from ream import decisions, events, keys, listening, mcp, mcp_tools, settings, store
 
@@ -273,14 +275,40 @@ def test_an_apps_first_wait_that_times_out_loses_nothing(db):
     assert [e["ref_id"] for e in second["events"]] == [decision]
 
 
-class _HungUp:
-    """A request whose client has gone."""
+def _real_request(receive) -> Request:
+    """A real Starlette request over `receive`, as the app hands a tool its call."""
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "query_string": b"",
+            "headers": [(b"host", b"artifacts.tenfourty.site")],
+        },
+        receive,
+    )
 
-    async def is_disconnected(self) -> bool:
-        return True
+
+async def _client_gone():
+    await anyio.lowlevel.checkpoint()
+    return {"type": "http.disconnect"}
 
 
-def test_a_client_that_hung_up_does_not_move_the_cursor(db):
+async def _client_still_there():
+    await anyio.sleep(10)
+    return {"type": "http.request", "body": b"", "more_body": False}
+
+
+def _wait_in_a_worker(call):
+    """A wait run as the server runs a tool: a worker thread under the event loop."""
+
+    def in_a_worker():
+        return _tool(call, "wait_for_answer", seconds=5)
+
+    return anyio.run(anyio.to_thread.run_sync, in_a_worker)["structuredContent"]
+
+
+def _answered(db):
     app = _app(db)
     page = store.publish(db, "office", "Theirs", PAGE.format("x"))
     asked = _tool(
@@ -288,16 +316,38 @@ def test_a_client_that_hung_up_does_not_move_the_cursor(db):
     )
     decision = asked["structuredContent"]["id"]
     decisions.answer(db, decision, letter="a", by=settings.owner_id())
-    gone = dataclasses.replace(_as(db, app), request=_HungUp())
+    return app, decision
 
-    def in_a_worker():  # as the server runs a tool: a worker thread under the loop
-        return _tool(gone, "wait_for_answer", seconds=5)
 
-    lost = anyio.run(anyio.to_thread.run_sync, in_a_worker)["structuredContent"]
+def test_a_client_that_hung_up_does_not_move_the_cursor(db):
+    app, decision = _answered(db)
+    gone = dataclasses.replace(_as(db, app), request=_real_request(_client_gone))
+    lost = _wait_in_a_worker(gone)
     assert [e["ref_id"] for e in lost["events"]] == [decision]
     # Nobody read that answer: the next wait answers the same event again.
     again = _tool(_as(db, app), "wait_for_answer", seconds=5)["structuredContent"]
     assert [e["ref_id"] for e in again["events"]] == [decision]
+
+
+def test_a_client_still_connected_has_its_cursor_saved(db):
+    app, decision = _answered(db)
+    there = dataclasses.replace(
+        _as(db, app), request=_real_request(_client_still_there)
+    )
+    read = _wait_in_a_worker(there)
+    assert [e["ref_id"] for e in read["events"]] == [decision]
+    # Read and kept: the next wait does not answer it again.
+    after = _tool(_as(db, app), "wait_for_answer", seconds=1)["structuredContent"]
+    assert after["events"] == [] and after["timed_out"] is True
+
+
+def test_a_call_with_neither_key_nor_app_has_no_cursor_and_does_not_crash(db):
+    store.publish(db, "seat", "Mine", PAGE.format("x"))
+    bare = _as_key(db, "seat")
+    assert mcp_tools._seen(bare) is None
+    mcp_tools._save_seen(bare, 5)  # nothing to keep: a no-op
+    out = _tool(bare, "wait_for_answer", seconds=1)["structuredContent"]
+    assert out["timed_out"] is True
 
 
 def test_a_wait_that_could_not_hold_says_to_pause(

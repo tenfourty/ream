@@ -640,7 +640,8 @@ def _questions(call: Call, arguments: dict[str, Any]) -> dict:
 
 
 def _seen(call: Call) -> int | None:
-    """This key's saved cursor, or None for a key that has never looked.
+    """This key's saved cursor, or None for a key that has never looked (or a call built
+    by hand with neither a key nor an app, which has no cursor to keep).
 
     A signed-in app keeps its cursor on its consent (11.3), where 0 is "never looked" (the
     column's default). An app never answers None: until it has looked, its cursor is where
@@ -648,6 +649,8 @@ def _seen(call: Call) -> int | None:
     before its first look is never skipped as history. Computed, not stored at consent, so
     an app connected before this rule reads the same way."""
     if call.key is None:
+        if call.app is None:
+            return None
         with call.db.connect() as conn:
             row = conn.execute(
                 "select events_seen from mcp_app where id = %s", (call.app.id,)
@@ -670,6 +673,8 @@ def _seen(call: Call) -> int | None:
 def _save_seen(call: Call, seq: int) -> None:
     """Move this key's cursor to `seq`, never back (two calls at once keep the higher)."""
     if call.key is None:
+        if call.app is None:
+            return  # a call built by hand: no cursor to keep
         with call.db.connect() as conn:
             conn.execute(
                 "update mcp_app set events_seen = %s where id = %s"
@@ -787,22 +792,36 @@ def _listen_from_here(call: Call, at: int) -> None:
     """A key that has never looked starts its feed from now. One that asks, comments or
     waits before its first look must not lose what lands after: its cursor is saved at
     `at` (`events.latest_seq` read before the write), so it has looked from then on. A
-    saved cursor is left alone. An app always has a cursor (`_seen`)."""
+    saved cursor is left alone. An app always has a cursor (`_seen`); a hand-built call
+    with neither has none."""
     if call.key is None:
         return  # an app, or a call built by hand with neither
     if _seen(call) is None:
         _save_seen(call, at)
 
 
+async def _hung_up(request: Any) -> bool:
+    """Whether `request`'s client has disconnected, read off its ASGI `receive`. Not
+    `Request.is_disconnected`: under `@app.middleware("http")` (BaseHTTPMiddleware) this
+    runs in an already-cancelled scope, where that call's `receive()` cannot answer in
+    time and so always reads False. A short `move_on_after` bounds the read. Calling
+    `receive()` after the body was consumed is the ASGI way to learn of a disconnect: it
+    answers `http.disconnect` once the client is gone and otherwise waits, which the
+    bound turns into "still there"."""
+    message: dict[str, Any] = {}
+    with anyio.move_on_after(0.05):
+        message = await request.receive()
+    return message.get("type") == "http.disconnect"
+
+
 def _gone(call: Call) -> bool:
     """Whether the client that sent this call has disconnected. Asked of the request on
     the event loop from this worker thread; anything that cannot be asked (a call built
     by hand, not in a worker thread) counts as still there."""
-    ask = getattr(call.request, "is_disconnected", None)
-    if ask is None:
+    if getattr(call.request, "receive", None) is None:
         return False
     try:
-        return bool(anyio.from_thread.run(ask))
+        return bool(anyio.from_thread.run(_hung_up, call.request))
     except Exception:  # noqa: BLE001 -- unknown is "still there": the save is the default
         return False
 
@@ -820,6 +839,7 @@ def _gone(call: Call) -> bool:
     destructive=False,
     idempotent=False,
     next_step=_NEXT_WAIT,
+    next_alternatives=(_NEXT_WAIT_BUSY,),
     fences=Fences(
         ream=_REAM,
         writer=lambda obj, key: _event_writer(obj, key),

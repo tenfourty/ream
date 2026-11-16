@@ -1786,6 +1786,49 @@ def test_a_handler_that_answers_its_own_next_is_refused(client, on, token, monke
         mcp._call_tool(call, {"name": "throwaway", "arguments": {}}, 1)
 
 
+def _throwaway(monkeypatch, handler, **declared):
+    monkeypatch.setitem(
+        mcp.TOOLS,
+        "throwaway",
+        mcp.Tool(
+            name="throwaway",
+            description="x",
+            input_schema=mcp.NO_ARGUMENTS,
+            annotations={},
+            handler=handler,
+            fences=None,
+            next_step="Ream's own hint.",
+            **declared,
+        ),
+    )
+    call = mcp.Call.__new__(mcp.Call)
+    object.__setattr__(call, "permissions", frozenset(mcp.PERMISSIONS))
+    return call
+
+
+def test_a_handler_may_answer_only_a_next_its_tool_declared(monkeypatch):
+    def undeclared(_call, _arguments):
+        return mcp.ToolOutput({"ok": True}, next="stored text, not Ream's own")
+
+    call = _throwaway(
+        monkeypatch, undeclared, next_alternatives=("Another of Ream's.",)
+    )
+    with pytest.raises(RuntimeError, match="did not declare"):
+        mcp._call_tool(call, {"name": "throwaway", "arguments": {}}, 1)
+
+    def declared(_call, _arguments):
+        return mcp.ToolOutput({"ok": True}, next="Another of Ream's.")
+
+    call = _throwaway(monkeypatch, declared, next_alternatives=("Another of Ream's.",))
+    out = mcp._call_tool(call, {"name": "throwaway", "arguments": {}}, 1)
+    assert out["structuredContent"]["next"] == "Another of Ream's."
+
+
+def test_wait_for_answer_declares_its_busy_sentence():
+    wait = mcp.TOOLS["wait_for_answer"]
+    assert mcp_tools._NEXT_WAIT_BUSY in wait.next_alternatives
+
+
 def test_every_anchor_kind_validate_anchor_stores_is_in_anchor_kinds():
     stored = {
         comments.validate_anchor(None)["kind"],
