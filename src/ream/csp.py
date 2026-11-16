@@ -308,9 +308,9 @@ _SHAPES: tuple[tuple[str, Finder, str], ...] = (
         "remote_stylesheet",
         _attribute_shape(r"<link\b", "href"),
         (
-            "style-src is 'self' 'unsafe-inline' and font-src is 'self': a "
+            "style-src is 'self' 'unsafe-inline' and font-src is 'self' data:: a "
             "stylesheet or web font from another origin (Google Fonts) is "
-            "blocked. Use an inline <style> and the system font stack."
+            "blocked. Use an inline <style>; embed a font as a data: address or use the system font stack."
         ),
     ),
     (
@@ -318,7 +318,7 @@ _SHAPES: tuple[tuple[str, Finder, str], ...] = (
         _starts(re.compile(r"url\(\s*[\"']?" + _REMOTE)),
         (
             "A CSS url() pointing at another origin -- a @font-face source or a "
-            "background image -- is blocked by font-src/img-src 'self'. Inline "
+            "background image -- is blocked by font-src 'self' data: and img-src 'self' data:. Inline "
             "the asset as a data: URI, or drop it."
         ),
     ),

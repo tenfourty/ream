@@ -179,7 +179,7 @@ def test_every_shape_is_justified_by_the_policy_actually_served():
     present = {
         "remote_script": "script-src 'self' 'unsafe-inline'",
         "remote_stylesheet": "style-src 'self' 'unsafe-inline'",
-        "remote_css_url": "font-src 'self'",
+        "remote_css_url": "font-src 'self' data:",
         "css_import": "style-src 'self' 'unsafe-inline'",
         "remote_image": "img-src 'self' data:",
         "form_element": "form-action 'none'",
@@ -209,6 +209,24 @@ def test_connect_src_is_never_wider_than_self():
     for live in (True, False):
         header = content.headers_for(live)["content-security-policy"]
         assert "connect-src 'self';" in header or "connect-src 'none';" in header
+
+
+def test_the_whole_policy_is_pinned_for_live_and_static_pages():
+    """Every directive, exactly. A widening (data: in script-src, a worker, another font
+    origin) fails here and has to be argued in decisions.md. Fonts may be embedded as
+    data: addresses (16 Nov 2026); worker-src stays 'none'."""
+    origin = content.gallery_origin()
+    base = (
+        "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline'; font-src 'self' data:; form-action 'none'; "
+        "base-uri 'none'; worker-src 'none'; webrtc 'block'; "
+    )
+    assert content.headers_for(True)["content-security-policy"] == (
+        base + f"connect-src 'self'; frame-ancestors {origin}"
+    )
+    assert content.headers_for(False)["content-security-policy"] == (
+        base + f"connect-src 'none'; frame-ancestors {origin}"
+    )
 
 
 # ------------------------------------------------------- through the publish API

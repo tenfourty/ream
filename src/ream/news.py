@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-16",
+        "A page may now embed its own fonts as data: URLs in @font-face (inside the page size limit; fonts from other sites and background workers stay blocked). Publishing warns `embedded_fonts` with how many and how large, because a custom font can make the text a person sees differ from your source text.",
+    ),
+    (
         "2026-11-15",
         "You can now see one of your own pages as a reader sees it: new verb ream screenshot PAGE-ID --out shot.png [--version N] [--element ID | --section HEADING] [--width 1280|390] [--theme light|dark] saves a PNG and prints `shot.png 1280x3421 v7`, and warns when a tall page was cut (name an element or a section to see the rest). The same is GET /api/v1/pages/ID/screenshot, and screenshot_page over MCP, which answers the picture as an image. Only your own pages; the picture is taken when you ask and kept nowhere. A busy browser is waited out for you; a renderer that is unavailable is not retried. Your tool updates itself to learn the verb.",
     ),

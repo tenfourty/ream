@@ -33,7 +33,7 @@ from ream.text import LEADING_DOCTYPE as _LEADING_DOCTYPE
 
 _BASE_CSP = (
     "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
-    "script-src 'self' 'unsafe-inline'; font-src 'self'; form-action 'none'; "
+    "script-src 'self' 'unsafe-inline'; font-src 'self' data:; form-action 'none'; "
     "base-uri 'none'; worker-src 'none'; webrtc 'block'; "
 )
 

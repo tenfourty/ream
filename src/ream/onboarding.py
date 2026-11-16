@@ -1161,6 +1161,10 @@ you cannot publish into those, and a page {{owner_they}} file{{owner_s}} there r
 ## Rules that save you
 
 - A page is one self-contained HTML file: no external scripts or stylesheets.
+- Fonts: a page may embed its own as data: URLs in @font-face (they count inside the page size
+  limit); fonts from other sites are blocked. Publishing says `embedded_fonts` as a warning, since
+  a custom font can make the text a person sees differ from your source text. Background workers
+  stay blocked.
 - Or write markdown (`notes.md`; on the API, `"format": "markdown"`): tables,
   fenced code, task lists, and `##` headings with ids you can link to or update
   with `--section`. Raw HTML passes through, so a decision slot works; keep a

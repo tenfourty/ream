@@ -1041,7 +1041,8 @@ each named job and noting that the 12 Nov grant ended, which would leave the bra
 waiting on a fresh grant each time.
 
 **Evidence:** confirmed (Jeremy, 12 Nov 2026, lettered answer in #hq-artifacts; Jeremy, 15 Nov
-2026, lettered answer (b) to security's question in #hq-security)
+2026, lettered answer (b) to security's question in #hq-security); the grant was gone again on 16 Nov 2026 and
+the operator re-added it (lettered answer (a) in #hq-artifacts)
 
 ## The renderer can run as its own process or pod, beside the in-process one (13 Nov 2026)
 
@@ -1099,3 +1100,21 @@ same 404 as a page that is not there.
 **Evidence:** Jeremy's ask (13 Nov 2026, relayed by gg-ops, runcove-uap8t) was for an agent to
 take a screenshot of its own published page; the own-agent-only scope is as asked. The rest is the
 maintainer's design for runcove-uap8t and its build brief for the HTTP slice, 15 Nov 2026.
+
+## Pages may embed their own fonts (16 Nov 2026)
+
+A page may carry fonts as data: URLs in `@font-face`, so HTML-in-Canvas and other designed pages
+render as their authors drew them. Only `font-src` changes, to `'self' data:`; nothing else in the
+page policy moves (no data: in script-src, style-src or worker-src, and background workers stay
+blocked: nobody asked for them). The fonts count inside the existing page size limit
+(`store.MAX_BODY_BYTES`, 8 MiB; the limit is on the body, so no check changed). Publishing answers a
+warning, `embedded_fonts`, saying how many fonts and how many bytes, and why it matters: a custom
+font can make the text a person sees differ from the page's source text. The full policy string,
+live and not live, is pinned by `tests/test_csp.py`, so a later widening fails a test.
+
+**Not chosen:**
+- A separate font allowance outside the page limit: a page could carry a blob as a font.
+- Fonts from other sites: a new origin and a way out for a page's data.
+
+**Evidence:** confirmed (Jeremy, 16 Nov 2026, lettered answer (a) in #hq-artifacts); security's
+advice, 16 Nov 2026, no hold.

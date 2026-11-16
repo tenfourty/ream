@@ -45,6 +45,7 @@ from ream import (
     connect,
     csp,
     decisions,
+    embeddedfonts,
     events,
     folders,
     formanswer,
@@ -809,6 +810,7 @@ def page_warnings(db: Database, artifact_id: str, body: str) -> list[dict]:
                 csp.as_json(body, budget)
                 + traps.as_json(body, budget)
                 + forms.warnings(body)
+                + embeddedfonts.check(body, budget)
             )
     except scanslots.ScanBusy:
         out = _checks_not_run_busy()
