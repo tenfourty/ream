@@ -124,7 +124,9 @@ jobs:
     # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
     # 30, not 20: a passing run takes 14-16 min, and on a slower docker-light runner on
     # 11 Nov 2026 every step passed but the SQLite suite was cut off at 99% by the 20.
-    timeout-minutes: 30
+    # 45, not 30: test_shots_offline.py adds ~10 min to the browser step (run 60677,
+    # 16 Nov 2026: the step took 17:42, then the SQLite suite was cut off at 80%).
+    timeout-minutes: 45
     # Public repo only, named (see `test`); skipped in the private copy.
     if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
