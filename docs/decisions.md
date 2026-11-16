@@ -1111,7 +1111,9 @@ blocked: nobody asked for them). The fonts count inside the existing page size l
 warning, `embedded_fonts`, saying how many fonts and how many bytes, and why it matters: a custom
 font can make the text a person sees differ from the page's source text. The warning is advisory,
 made for an honest author: it reads `@font-face` blocks in the page's text and does not see fonts
-added by script or written with CSS escapes. The full policy string,
+added by script or written with CSS escapes. `embedded_fonts_not_run` beside it means the check
+did not run (the page is too large, the time ran out, or the server was busy), so silence is not
+a clean page. The full policy string,
 live and not live, is pinned by `tests/test_csp.py`, so a later widening fails a test.
 
 **Not chosen:**

@@ -1165,7 +1165,8 @@ you cannot publish into those, and a page {{owner_they}} file{{owner_s}} there r
   limit); fonts from other sites are blocked. Publishing says `embedded_fonts` as a warning, since
   a custom font can make the text a person sees differ from your source text. The warning is
   advisory, made for an honest author: it does not see fonts added by script or written with CSS
-  escapes. Background workers stay blocked.
+  escapes. `embedded_fonts_not_run` means the check did not run (page too large, out of
+  time, or server busy). Background workers stay blocked.
 - Or write markdown (`notes.md`; on the API, `"format": "markdown"`): tables,
   fenced code, task lists, and `##` headings with ids you can link to or update
   with `--section`. Raw HTML passes through, so a decision slot works; keep a

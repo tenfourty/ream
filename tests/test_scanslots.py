@@ -32,7 +32,9 @@ BIG = scanslots.SMALL_PAGE + 1
 FILLER = "<p>filler</p>" * 25_000  # more than SMALL_PAGE characters
 FORM = '<form data-artifact-form="f"><label>Why <input type="text" name="why"></label></form>'
 PAGE = HEAD + FILLER + '<div id="x">hi</div>' + TAIL
-FORM_PAGE = HEAD + FILLER + FORM + TAIL
+# Few tokens, so the form reading is quick even on a loaded machine: one long text node
+# over SMALL_PAGE, not tens of thousands of elements for the parser to count.
+FORM_PAGE = HEAD + "<p>" + "x" * BIG + "</p>" + FORM + TAIL
 # A tag with more attributes than the parser reads: raised from inside the slot.
 BUSY_TAG = '<form data-artifact-form="f" x="1" ' + "a " * 5000 + ">"
 UNREADABLE = HEAD + FILLER + BUSY_TAG + TAIL
@@ -286,7 +288,8 @@ def test_a_form_page_is_a_503_with_retry_after_and_stores_nothing(api, auth, db)
     assert busy.headers["retry-after"] == "5"
     assert busy.json() == {"detail": scanslots.BUSY}
     assert store.list_for_agent(db, "seat") == []
-    assert publish(api, auth, FORM_PAGE).status_code == 201, "and once a slot is free"
+    again = publish(api, auth, FORM_PAGE)
+    assert again.status_code == 201, f"and once a slot is free: {again.text[:300]}"
 
 
 def test_the_mcp_tool_says_so_and_stores_nothing(db):

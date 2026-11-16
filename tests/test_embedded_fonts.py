@@ -124,7 +124,7 @@ def test_a_page_too_large_or_a_spent_budget_says_the_check_did_not_run():
     [
         ("<style>@font-face{", "/* ", "}</style>"),
         ("<style>", "@font-face{/**/", "}</style>"),
-        ("<style>@font-face{", "'}", "</style>"),
+        ("<style>@font-face{", "'", "</style>"),
     ],
     ids=["unclosed comments", "closed comments", "quotes"],
 )
@@ -145,3 +145,38 @@ def test_publish_answers_the_warning(client, db):
     assert response.status_code == 201
     found = [w for w in response.json()["warnings"] if w["shape"] == "embedded_fonts"]
     assert len(found) == 1
+
+
+def test_the_block_cap_with_no_font_read_says_the_check_did_not_run():
+    body = (
+        "<style>"
+        + "@font-face{}" * embeddedfonts.MAX_BLOCKS
+        + f"@font-face{{src:url({FONT})}}</style>"
+    )
+    (found,) = shapes(body)
+    assert found["shape"] == "embedded_fonts_not_run"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"<style>@font-face{{font-family:x;/*</style><style>@font-face{{src:url({FONT})}}</style>",
+        f"<style>@font-face{{/*</style><style>@font-face{{src:url({FONT})}}</style><style>*/}}</style>",
+        f"<p>The @font-face rule; see src/*.css</p><style>@font-face{{src:url({FONT})}}</style>",
+        f"<style>@font-face{{font-family:'</style><style>@font-face{{src:url({FONT})}}</style>",
+    ],
+    ids=["open comment", "comment closed in a later style", "prose", "open string"],
+)
+def test_an_open_comment_or_string_ends_at_the_style_end_tag(body):
+    (found,) = shapes(body)
+    assert found["shape"] == "embedded_fonts" and "1 font " in found["hint"]
+
+
+def test_a_long_s_is_not_an_end_tag():
+    body = f"<style>@font-face{{/*</\u017ftyle>*/ src:url({FONT})}}</style>"
+    assert "1 font " in shapes(body)[0]["hint"]
+
+
+def test_an_escaped_quote_does_not_end_a_string():
+    body = f'<style>@font-face{{font-family:"a\\"}}";src:url({FONT})}}</style>'
+    assert "1 font " in shapes(body)[0]["hint"]
