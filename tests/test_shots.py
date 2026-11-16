@@ -670,6 +670,22 @@ def test_a_tall_page_is_cut_and_says_so(fake):
     assert (shot.height, shot.page_height, shot.truncated) == (8000, 12345, True)
 
 
+def test_a_window_high_page_is_shot_one_window_high_without_growing_it(fake):
+    """16 Nov 2026: a page that declares `<meta name="ream-frame" content="viewport">`
+    sizes itself from the window, so a taller clip with `captureBeyondViewport` would
+    resize the window and the page with it. It is shot as its frame shows it."""
+    binary, read = fake(found={"n": -1, "ph": 2400, "vw": 1280, "vp": True})
+    shot = rendercore.shoot(binary, PAGE, renderwire.shot_request())
+    assert shot.outcome == "shot", shot
+    assert (shot.width, shot.height, shot.page_height) == (1280, 800, 2400)
+    assert shot.truncated is True
+    capture = next(
+        line for line in read() if line.get("method") == "Page.captureScreenshot"
+    )
+    assert capture["params"]["clip"]["height"] == 800
+    assert capture["params"]["captureBeyondViewport"] is False
+
+
 @pytest.mark.parametrize(
     ("found", "outcome", "matches"),
     [
@@ -974,6 +990,26 @@ def test_the_theme_is_the_pages_own_dark_or_light():
 def test_a_real_selector_that_picks_no_one_part(request_, outcome, matches):
     shot = rendercore.shoot(rendercore.browser_path(), real_page(), request_)
     assert (shot.outcome, shot.matches) == (outcome, matches)
+
+
+@needs_browser
+def test_a_real_window_high_page_is_shot_one_window_high():
+    """The page makes its body three windows high from `innerHeight`, as the page
+    that fed the frame back did: the picture is one window and says more is below,
+    and the window it measured was never grown to take the rest."""
+    page = (
+        '<!doctype html><html><head><meta name="ream-frame" content="viewport">'
+        "<style>body{margin:0;background:#00f}</style></head><body>"
+        '<script>document.body.style.height=(innerHeight*3)+"px"</script>'
+        "</body></html>"
+    )
+    shot = rendercore.shoot(rendercore.browser_path(), page, renderwire.shot_request())
+    assert shot.outcome == "shot", shot
+    viewport = renderwire.SHOT_VIEWPORTS[1280]
+    assert (shot.width, shot.height) == (1280, viewport)
+    assert shot.page_height == viewport * 3
+    assert shot.truncated is True
+    renderwire.validate_png(shot.png, shot.width, shot.height)
 
 
 @needs_browser
