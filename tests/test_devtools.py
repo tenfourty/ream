@@ -164,3 +164,45 @@ def test_a_closed_pipe_is_closed(browser):
     pipe = browser()
     with pytest.raises(devtools.Closed):
         pipe.call("Page.enable")
+
+
+def test_a_bounded_call_returns_its_answer(browser):
+    pipe = browser(ANSWER)
+    assert pipe.call_until("Runtime.evaluate", until=time.monotonic() + 5) == {}
+
+
+def test_a_bounded_call_gives_up_at_its_bound_and_drops_the_late_answer():
+    """The bound passes with no answer: None, and the pipe's own deadline is
+    untouched. The late answer is read by the next call and dropped."""
+    to_r, to_w = os.pipe()
+    from_r, from_w = os.pipe()
+    try:
+        deadline = time.monotonic() + 10
+        pipe = devtools.Pipe(to_w, from_r, deadline=deadline, max_message=MAX)
+        started = time.monotonic()
+        assert pipe.call_until("Runtime.evaluate", until=started + 0.2) is None
+        assert 0.2 <= time.monotonic() - started < 5
+        assert pipe.deadline == deadline
+        os.write(
+            from_w, json.dumps({"id": 1, "result": {"late": True}}).encode() + b"\0"
+        )
+        os.write(
+            from_w, json.dumps({"id": 2, "result": {"next": True}}).encode() + b"\0"
+        )
+        assert pipe.call("Page.enable") == {"next": True}
+    finally:
+        for fd in (to_r, to_w, from_r, from_w):
+            os.close(fd)
+
+
+def test_a_bounded_call_still_times_out_at_the_pipes_deadline():
+    to_r, to_w = os.pipe()
+    from_r, from_w = os.pipe()
+    try:
+        now = time.monotonic()
+        pipe = devtools.Pipe(to_w, from_r, deadline=now + 0.2, max_message=MAX)
+        with pytest.raises(devtools.Timeout):
+            pipe.call_until("Runtime.evaluate", until=now + 5)
+    finally:
+        for fd in (to_r, to_w, from_r, from_w):
+            os.close(fd)

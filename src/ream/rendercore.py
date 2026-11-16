@@ -473,6 +473,13 @@ SHOT_SLOT_WAIT_SECONDS = 5
 # a render's (`_load`); and at most this much real time is given to it.
 SHOT_SETTLE_VIRTUAL_MS = 3000
 SHOT_SETTLE_REAL_SECONDS = 6.0
+# After the settle, at most this much real time waits for the page's next two
+# frames before the picture (`_await_frames`); about 33 ms at 60 frames a second.
+FRAMES_REAL_SECONDS = 2.0
+_FRAMES_JS = (
+    "new Promise(function(done){requestAnimationFrame(function(){"
+    "requestAnimationFrame(function(){done(true)})})})"
+)
 # The longest message read from the browser: the picture's answer, base64, with room.
 SHOT_MESSAGE_MAX_BYTES = renderwire.SHOT_PNG_BASE64_MAX_CHARS + 64 * 1024
 # The browser reads its commands on fd 3 and writes on fd 4. A child cannot be
@@ -691,6 +698,39 @@ def _load(pipe: devtools.Pipe, session: str, page_url: str) -> None:
     )
     settle = min(pipe.deadline, time.monotonic() + SHOT_SETTLE_REAL_SECONDS)
     pipe.wait_for("Emulation.virtualTimeBudgetExpired", session, until=settle)
+    _await_frames(pipe, session)
+
+
+def _await_frames(pipe: devtools.Pipe, session: str) -> None:
+    """Hold the picture until the page has rendered two more frames, within
+    FRAMES_REAL_SECONDS of real time. The settle's virtual time runs on as fast as
+    the page is idle (3 s of it passed in under 10 ms of real time, measured on
+    Chromium 147), but frames come in real time: without this the picture can be
+    asked for before the frame that runs the page's pending rendering work, a
+    canvas's `paint` event (HTML-in-Canvas) among it. The second animation frame
+    starts only once the first frame's rendering is done. Asked in a world of its
+    own, so the page cannot answer for it; a page that draws no frame in the bound
+    is pictured as it stands, as before."""
+    frame = pipe.call("Page.getFrameTree", session=session)["frameTree"]["frame"]["id"]
+    world = pipe.call(
+        "Page.createIsolatedWorld",
+        {"frameId": frame, "worldName": "ream-frames", "grantUniveralAccess": False},
+        session,
+    )["executionContextId"]
+    until = min(pipe.deadline, time.monotonic() + FRAMES_REAL_SECONDS)
+    answered = pipe.call_until(
+        "Runtime.evaluate",
+        {
+            "expression": _FRAMES_JS,
+            "contextId": world,
+            "awaitPromise": True,
+            "returnByValue": True,
+        },
+        session,
+        until=until,
+    )
+    if answered is None:
+        log.info("picture taken without waiting for frames: none within the bound")
 
 
 def _converse(pipe: devtools.Pipe, page_url: str, request, offline: _Offline):

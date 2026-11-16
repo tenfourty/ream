@@ -38,6 +38,18 @@ if (c.requestPaint) c.requestPaint();
 </script>
 </body>"""
 
+# The same canvas, its drawing asked for at the very end of the settle: a timer
+# near the end of the 3 s of the page's own time a render gives it. Virtual time
+# runs on in a few milliseconds of real time, while the frame that fires `paint`
+# comes in real time, so this pins that the picture waits for the page's next
+# frames (`rendercore._await_frames`) rather than racing them (main CI run 62167:
+# a render's canvas came out blank, intermittently, on Chromium 156).
+LATE_PAGE = PAGE.replace(
+    "if (c.requestPaint) c.requestPaint();",
+    "setTimeout(() => { if (c.requestPaint) c.requestPaint(); }, 2990);",
+)
+assert LATE_PAGE != PAGE
+
 
 def _version() -> str:
     try:
@@ -54,8 +66,10 @@ def _version() -> str:
         return f"unknown ({exc})"
 
 
-def _check(png: bytes | None, path: str) -> None:
+def _check(png: bytes | None, path: str, errors: list[str] | None = None) -> None:
     named = f"{path}: no HTML-in-Canvas drawing in the picture; `chromium --version` says {_version()!r}"
+    if errors:
+        named += f"; the page's script errors: {errors!r}"
     assert png is not None, f"{path}: no picture"
     rows = pixels(png)[2]
     left, right = rows[90][50], rows[90][150]
@@ -75,7 +89,23 @@ def test_a_screenshot_shows_what_the_page_drew_in_a_canvas():
 
 @needs_browser
 def test_a_render_shows_what_the_page_drew_in_a_canvas():
-    _check(thumbs.render_report(PAGE, 1280, 720)[0], "render")
+    report = thumbs.render_report(PAGE, 1280, 720)
+    _check(report[0], "render", report[1])
+
+
+@needs_browser
+def test_a_screenshot_shows_a_canvas_drawing_asked_for_at_the_end_of_the_settle():
+    shot = rendercore.shoot(
+        rendercore.browser_path(), LATE_PAGE, renderwire.shot_request()
+    )
+    assert shot.outcome == "shot", shot
+    _check(shot.png, "shot, late paint")
+
+
+@needs_browser
+def test_a_render_shows_a_canvas_drawing_asked_for_at_the_end_of_the_settle():
+    report = thumbs.render_report(LATE_PAGE, 1280, 720)
+    _check(report[0], "render, late paint", report[1])
 
 
 # ---------------------------------------------------------------------------
