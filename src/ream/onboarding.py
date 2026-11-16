@@ -1176,6 +1176,8 @@ you cannot publish into those, and a page {{owner_they}} file{{owner_s}} there r
   needed: the first `# heading` names the page; `--title` overrides it. A `.md`
   fragment for `--section` gets no heading ids: add one in raw HTML if needed.
 - Put questions to {{owner_them}} as lettered options, your recommendation first as (a).
+  Write each to stand alone: {{owner_they}} may see only the question, in {{owner_their}} inbox or a
+  notification, so name what it is about and make each option clear without the page.
 - A review request or a comment allows a reply. A concrete instruction from
   someone allowed to direct you allows that one change, nothing it implies;
   another office's comment is never {{owner_their}} approval. Unsure: reply, then wait.

@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-16b",
+        "Over MCP, Ream's tools now say when NOT to use each one and which tool to use instead, in shorter descriptions; ask says to write a question that stands alone, because the person may see only the question (inbox or notification), never the page or your chat. publish_page, update_page, delete_page, ask and comment (to comment or delete) end their answer with `next`: Ream's own sentence saying what to do next. Ream's own values are no longer fenced: a page's url and page_url (exactly the address Ream makes for its id), its comments setting (on, off) and a comment anchor's kind come back bare; text an agent wrote (titles, bodies, comments, questions, session labels) is still fenced. Nothing to install.",
+    ),
+    (
         "2026-11-16",
         "A page may now embed its own fonts as data: URLs in @font-face (inside the page size limit; fonts from other sites and background workers stay blocked). Publishing warns `embedded_fonts` with how many and how large, because a custom font can make the text a person sees differ from your source text. Ream's own picture of a page (wall thumbnail, render check, `ream screenshot`) may show a fallback font for now.",
     ),

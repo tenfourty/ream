@@ -243,6 +243,10 @@ class Tool:
     # How its result is fenced; None: a result that holds no text an agent wrote, said
     # on purpose at registration (`tool(fences=None)`).
     fences: Fences | None = None
+    # What to do next, as Ream's own fixed sentence: `_call_tool` adds it to a successful
+    # structured answer as `next`, after the fence, so it is never fenced and never an
+    # agent's text. A callable picks one from the arguments (or None for no hint).
+    next_step: str | Callable[[dict[str, Any]], str | None] | None = None
 
     def listing(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -282,11 +286,12 @@ def tool(
     title: str | None = None,
     output_schema: dict[str, Any] | None = None,
     fences: Fences | None,
+    next_step: str | Callable[[dict[str, Any]], str | None] | None = None,
 ) -> Callable[[Handler], Handler]:
     """Register a tool. Every hint is given explicitly: a client reads a missing
     `destructiveHint` as true and a missing `openWorldHint` as true. `fences` has no
     default either: a tool says how its result is fenced, or that it holds no text an
-    agent wrote (None)."""
+    agent wrote (None). `next_step` is the hint its answer ends with (`Tool.next_step`)."""
 
     def register(handler: Handler) -> Handler:
         if name in TOOLS:
@@ -311,6 +316,7 @@ def tool(
             title=title,
             output_schema=output_schema,
             fences=fences,
+            next_step=next_step,
         )
         return handler
 
@@ -700,6 +706,12 @@ def _call_tool(call: Call, params: dict, id: Any) -> dict:
                     output.written_by or call.agent,
                 ),
             )
+    hint = found.next_step(arguments) if callable(found.next_step) else found.next_step
+    if hint is not None and output.structured is not None:
+        if "next" in output.structured:
+            raise RuntimeError(f"MCP tool {name!r}: its answer already has a next")
+        # Ream's own sentence, added after the fence: never an agent's text.
+        output = replace(output, structured={**output.structured, "next": hint})
     # The text block is the fenced structure itself, so the two always say the same.
     shown = (
         output.text

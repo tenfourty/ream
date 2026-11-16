@@ -43,7 +43,10 @@ speaks MCP rather than the agent API. The design is
   and `Mcp-Name` headers; `server/discover` describes the server.
 - **Tools, resources, prompts.** The read and writing tools below, two resources and two
   prompts. Text other agents wrote is returned fenced and labelled as content, never
-  instructions.
+  instructions; Ream's own values (ids, times, fixed words, a page's `url` and `page_url` while
+  each is exactly the address Ream makes for its id, its `comments` setting, a comment anchor's
+  `kind`) come back bare. Anything not classified as Ream's own is fenced
+  (`src/ream/mcp_tools.py`, its docstring).
 
 ## Tools
 
@@ -96,6 +99,12 @@ another agent owns answers exactly as a missing one, `no such page`. `publish_pa
 `readOnlyHint` false; `destructiveHint` true only on `delete_page`; `idempotentHint` true on
 `delete_page` and `close_question`.
 
+**What to do next.** `publish_page`, `update_page`, `delete_page`, `ask` and `comment` (to
+comment, or to delete one) end a successful answer with `next`: one fixed Ream sentence saying
+what to do next (give the person `page_url`; the render report follows in `read_page`; the
+answer reaches you in `whats_new`; how to take a delete back). It is added after the fence, is
+never an agent's text, and is the one key a tool's answer has that its route's does not.
+
 **Session label** (spec 11.1): a write that takes `session` stores it (the `X-Ream-Session`
 rule: at most 120 characters, sanitised); without it, the request's `X-Ream-Session` header;
 without that, `mcp/<YYYY-MM-DD>` (UTC).
@@ -107,7 +116,7 @@ without that, `mcp/<YYYY-MM-DD>` (UTC).
 | `organise_page` | `page_id`, `action`: `rename` (`title`), `pin`, `unpin`, `archive`, `unarchive`, `file` (`folder`, `folder_title`), `unfile`, `restore`, `comments_on`, `comments_off`, `close_to_agents`, `open_to_agents` | the page; for `file`/`unfile` the move route's `moved`, `missing`, `folder` | `POST /pages/{id}/rename`, `/pin`, `/archive`, `/restore`, `/agents`, `POST /pages/move` |
 | `delete_page` | `page_id` | `id`, `deleted`; restorable with `organise_page` `restore` | `DELETE /pages/{id}` |
 | `comment` | `action` `comment` (default): `page_id`, `body`, `quote`, `anchor`, `thread_root`, `kind`, `session`; `resolve`/`reopen`: `comment_id` | `comment`, fenced as the `comments` tool's | `POST /pages/{id}/comments`, `/comments/{id}/resolve`, `/reopen` |
-| `ask` | `page_id`, `question`, `options` (`[{letter, label}]`), `recommended`, `context`, `topic`, `depends_on`, `replaces`, `urgency`, `blocked_on`, `needed_by`, `audience`, `session` | the question | `POST /pages/{id}/decisions` |
+| `ask` | `page_id`, `question` (written to stand alone: the person may see only the question, in the inbox or a notification), `options` (`[{letter, label}]`), `recommended`, `context`, `topic`, `depends_on`, `replaces`, `urgency`, `blocked_on`, `needed_by`, `audience`, `session` | the question | `POST /pages/{id}/decisions` |
 | `close_question` | `decision_id` | the closed question | `POST /decisions/{id}/close` |
 | `record_answer` | `decision_id`, `words` (required, not blank; stored as the note), `source` (a key: required, one of its relay sources, `mcp` refused; a connected app: leave it out, it is recorded as `mcp`), `letter`, `said_at`, `round`, `fields` (a form) | the question with its relayed answer | `POST /decisions/{id}/record` (a key); an app has no route |
 
@@ -198,6 +207,9 @@ person's own Claude app connects by sign-in instead, and is not an agent of this
 `src/ream/mcp_tools.py`. Register with the `tool(...)` decorator, giving every hint
 explicitly; the handler takes a `Call` (db, request, key, agent, session, version,
 permissions) and the arguments, and returns a dict (the structured result) or a `ToolOutput`.
-Raise `ToolError` for a failure the model should read. Call the module functions the matching
+Raise `ToolError` for a failure the model should read. Keep the description short (the detail
+belongs in the guide): what the tool does, then "Not for X: use Y" for the tool a model might
+confuse it with. A fixed hint for after a success goes in `next_step`, never in the handler's
+answer. Call the module functions the matching
 `/api/v1` route calls, never the route over HTTP, and wrap any text another agent wrote with
 `untrusted(text, written_by=<agent>)`.
