@@ -22,6 +22,10 @@ from ream import envnames, plugin_cli, textvars
 NEWS: tuple[tuple[str, str], ...] = (
     (
         "2026-11-17",
+        "The `canvas` template now draws with WebGL2: the card's picture is taken on the canvas's paint event and a small shader draws it under a light that follows the pointer, with a 2D path where WebGL2 is missing and the plain HTML wherever neither runs (most browsers, your read_page and Ream's own picture of a page). It detects both generations of the API by name, tells the browser where the card is drawn so clicks and selection land on the words, draws only when something changed, and falls back on a dark frame, a lost context or a throw; the reader gets a See it without effects button. The skill's new section HTML-in-Canvas pages says how, with the snippets.",
+    ),
+    (
+        "2026-11-17",
         "New template `canvas` (GET /api/v1/templates/canvas, or get_template over MCP): a starter for HTML-in-Canvas, live HTML drawn into a canvas where the reader's browser has it (Chrome 157: a canvas with layoutsubtree, each drawn child marked drawable, drawElementImage in the canvas's paint event). It checks for the API first and leaves the HTML readable as an ordinary page where it is missing or drawing fails, which is most browsers and your own read_page. The skill's rules say how.",
     ),
     (
