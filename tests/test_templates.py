@@ -200,11 +200,24 @@ def test_the_canvas_template_falls_back_to_plain_html():
     until then, and reaches for nothing off the page."""
     body = _body(CANON / "canvas.html")
     visible = _strip_comments(body)
-    check = '"drawElementImage" in CanvasRenderingContext2D.prototype'
+    check = "if (!api.paint || !(api.webgl || api.draw2d))"
     move = "canvas.appendChild(card)"
     assert check in visible and move in visible
     assert visible.index(check) < visible.index(move), (
         "the card moves into the canvas before the API is checked for"
+    )
+    # Both generations of the API, detected by name, never by browser.
+    for name in (
+        "drawElementImage",
+        "drawElement",
+        "texElementSubImage2D",
+        "texElementImage2D",
+        "updateElementGeometry",
+        "requestPaint",
+    ):
+        assert f'"{name}"' in visible, f"the starter does not test for {name}"
+    assert not re.search(r"userAgent|navigator\.vendor", visible), (
+        "support is decided by the feature, never by the browser's name"
     )
     assert re.search(
         r'<canvas[^>]*\blayoutsubtree\b[^>]*content="drawable"[^>]*\bhidden\b', body
@@ -227,6 +240,36 @@ def test_the_canvas_template_falls_back_to_plain_html():
         "a tab opened in the background does not paint: the no-paint timer must "
         "run only while the page is visible"
     )
+    assert re.search(r'getElementById\("plain"\)', visible) and re.search(
+        r'<button\b[^>]*\bid="plain"[^>]*\bhidden\b', body
+    ), "the reader needs a way to see the page without the effect, hidden until it runs"
+
+
+def test_the_canvas_template_carries_the_lessons():
+    """runcove-5t3oj.155: what a larger page built on the API taught, kept in the starter
+    an agent copies: the drawn transform given to the browser for hit-testing, data
+    colours scoped to the shader, drawing on demand, and the safety nets."""
+    visible = _strip_comments(_body(CANON / "canvas.html"))
+    # Hit-testing follows the drawing, with a probe and a CSS fallback.
+    assert "canvasTransform: new DOMMatrix(m)" in visible
+    assert 'card.style.transform = "matrix("' in visible
+    assert "getElementTransform" not in _body(CANON / "canvas.html")
+    # Data colours, only while the shader draws, and the masks read from them.
+    assert re.search(r"\.stage\.gl \.card\s*\{[^}]*color:#000", visible)
+    assert re.search(
+        r"\.stage\.gl[^{]*::selection\s*\{\s*background:#f00;color:#00f", visible
+    )
+    assert "max(t.a - t.r - t.g - t.b, 0.)" in visible
+    # On demand: pictures on the paint event's changed elements and the reader's events.
+    assert "changedElements" in visible and "selectionchange" in visible
+    for event in ("input", "change", "focusin", "focusout", "click", "keyup"):
+        assert f'"{event}"' in visible
+    # Safety nets.
+    assert "readPixels" in visible, "a dark first frame must be caught"
+    assert "webglcontextlost" in visible
+    assert re.search(r"Math\.min\(2, Math\.max\(1, window\.devicePixelRatio", visible)
+    assert "MAX_PIXELS" in visible
+    assert "prefers-reduced-motion" in visible
     off_page = re.findall(r"https?://|\b(?:src|href)=\"//|url\(", visible)
     assert not off_page, f"the starter reaches off the page: {off_page}"
     assert not re.search(r"\bnew\s+(?:Shared)?Worker\b|\bfetch\(|@import", visible)
