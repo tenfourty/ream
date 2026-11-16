@@ -12,7 +12,7 @@
   draw that picture however you like. canvas.requestPaint() asks for the next
   paint. Two generations of the API are in browsers, so test for each name,
   never for a browser or a version:
-    current (Chrome 157): content="drawable", ctx.drawElementImage in 2D,
+    current (renamed in Chrome 155): content="drawable", ctx.drawElementImage in 2D,
       gl.texElementSubImage2D in WebGL, canvas.updateElementGeometry
     earlier builds: layoutsubtree, ctx.drawElement, gl.texElementImage2D
   The canvas below carries both attributes, so either generation lays it out.
@@ -23,9 +23,10 @@
   tilted, without the light. The lessons it carries, each marked in the
   script (learned from a larger page built on the API, 16 Nov 2026):
     1. feature-detect both generations;
-    2. tell the browser where the card is drawn (updateElementGeometry), so
-       clicks and selection land on the words, with a CSS-transform fallback
-       for a build that ignores it;
+    2. tell the browser where the card is drawn (updateElementGeometry, in
+       WebGL; the current 2D call does it by itself), so clicks and selection
+       land on the words, with a CSS-transform fallback for a build that
+       ignores it;
     3. while the shader draws, the card is set in data colours (black ink,
        green accent, red/blue selection), so one picture gives four masks;
     4. draw on demand: re-upload only when the card changed, and let the
@@ -34,15 +35,16 @@
        picture at all, all put the plain HTML back; pixels are budgeted; the
        reader can turn the effect off; reduced motion stills it;
     6. an editable the effect moves needs caret-color:transparent and a caret
-       you draw yourself (the skill's HTML-in-Canvas section shows how).
+       you draw yourself (the skill's HTML-in-Canvas section shows how; this
+       card has no editable, so the starter sets neither).
 
   The rule this template exists to keep: the HTML is the page. It starts in
   normal flow, outside the canvas, and the script moves it in only when the
   browser has the API, and moves it back out if drawing throws after it has
-  once worked, the first frame is dark, or nothing has been drawn after a
-  second and a half on screen. So a reader whose browser lacks it, a reader
-  with scripts off, Ream's own picture of the page and your read_page all see
-  the same real text. Keep the words in HTML; never paint text the reader
+  once worked, the first frame drawn comes out dark, blank or a slab of ink,
+  or nothing has been drawn after a second and a half on screen. So a reader
+  whose browser lacks it, a reader with scripts off, Ream's own picture of the
+  page and your read_page all see the same real text. Keep the words in HTML; never paint text the reader
   cannot select or read aloud.
 
   Ream's page policy: scripts and canvas run; background workers do not, and
@@ -215,9 +217,6 @@
   .stage.gl .card{background:transparent;border-color:transparent;box-shadow:none;color:#000}
   .stage.gl .card code,.stage.gl .card a{background:transparent;color:#0f0}
   .stage.gl .card::selection,.stage.gl .card ::selection{background:#f00;color:#00f}
-  /* Lesson 6: an editable the effect moves hides the browser's caret and
-     draws its own where the caret is (the skill shows how). */
-  .stage.gl [contenteditable]{caret-color:transparent}
 </style>
 </head>
 <body>
@@ -248,7 +247,7 @@
     <p>Each child the canvas draws carries <code>drawable</code>. Change the
       words here; the effect needs no changes to follow them.</p>
   </div>
-  <p class="mode"><span id="mode">Shown as plain HTML: this browser does not draw HTML into a canvas.</span><button type="button" class="chip" id="plain" hidden>See it without effects</button></p>
+  <p class="mode"><span id="mode" role="status">Shown as plain HTML: this browser does not draw HTML into a canvas.</span><button type="button" class="chip" id="plain" hidden>See it without effects</button></p>
 
   <footer>{{footer}}</footer>
 </main>
@@ -290,7 +289,6 @@
   var drawn = false;        // a picture of the card has been drawn once
   var dirty = true;         // the card changed: take a new picture on the next paint
   var uploaded = false;     // the texture holds a picture of the card
-  var check = false;        // look at the next frame's pixels
   var stopped = false;
   var watcher = null;
   var frameId = 0;
@@ -301,10 +299,19 @@
   var placed = "";
   var ownMove = false;      // our own CSS transform, reported back as a change
   var bound = [];
+  var fill = [1, 1];        // the part of the texture the picture fills
 
   function on(target, type, fn, options) {
     target.addEventListener(type, fn, options);
     bound.push([target, type, fn, options]);
+  }
+
+  // Moving a node drops focus from inside it: give it back to what had it.
+  function move(put) {
+    var had = document.activeElement;
+    var inside = had && had !== card && card.contains(had);
+    put();
+    if (inside && document.activeElement !== had) { had.focus({ preventScroll: true }); }
   }
 
   // Anything going wrong puts the page back as plain HTML: the card returns to
@@ -316,7 +323,7 @@
     if (timer !== null) { clearTimeout(timer); }
     if (frameId) { cancelAnimationFrame(frameId); }
     bound.forEach(function (b) { b[0].removeEventListener(b[1], b[2], b[3]); });
-    canvas.parentNode.insertBefore(card, canvas.nextSibling);
+    move(function () { canvas.parentNode.insertBefore(card, canvas.nextSibling); });
     card.style.width = "";
     card.style.transform = "";
     canvas.classList.remove("gl");
@@ -359,7 +366,8 @@
   }
 
   // Lesson 2. Tell the browser where the card is drawn, so hover, clicks, the
-  // caret and selection land on the words drawn there. Some builds have the
+  // caret and selection land on the words drawn there (WebGL, and the earlier
+  // 2D call; the current drawElementImage does this itself). Some builds have the
   // method but ignore it for hit-testing, so move once by a known amount and
   // look; where it does not move, place the card with a CSS transform instead.
   // An effect that bends pixels (a ripple) has no one matrix: fit a local one
@@ -390,6 +398,7 @@
   }
 
   function place(m) {
+    if (geo === "auto") { return; } // the 2D call placed it as it drew
     var key = m.map(function (v) { return +v.toFixed(4); }).join(",");
     if (key === placed) { return; }
     placed = key;
@@ -411,6 +420,7 @@
     "uniform sampler2D uTex;  // the browser's picture of the card",
     "uniform mat3 uInv;       // canvas CSS px -> card CSS px",
     "uniform vec2 uSize;      // the card, CSS px",
+    "uniform vec2 uFill;      // the part of the texture the picture fills",
     "uniform float uScale;    // device px per CSS px",
     "uniform float uRows;     // the canvas height, device px",
     "uniform vec2 uLight;     // card CSS px",
@@ -425,7 +435,7 @@
     "  float d = length(max(q, 0.)) + min(max(q.x, q.y), 0.) - 11.; // to the card's edge",
     "  float inside = clamp(.5 - d, 0., 1.);",
     "  float shadow = .1 * exp(-max(d, 0.) / 5.) * step(0., d);",
-    "  vec4 k = inks(texture(uTex, p / uSize));",
+    "  vec4 k = inks(texture(uTex, p / uSize * uFill));",
     "  vec2 l = p - uLight;",
     "  float glow = exp(-dot(l, l) / 30000.);",
     "  vec3 col = mix(uCard, uAccent, .08 * glow);",
@@ -457,7 +467,7 @@
     }
     g.useProgram(program);
     uniforms = {};
-    ["uTex", "uInv", "uSize", "uScale", "uRows", "uLight", "uCard", "uInk", "uAccent", "uLine", "uOk"]
+    ["uTex", "uInv", "uSize", "uFill", "uScale", "uRows", "uLight", "uCard", "uInk", "uAccent", "uLine", "uOk"]
       .forEach(function (name) { uniforms[name] = g.getUniformLocation(program, name); });
     g.bindTexture(g.TEXTURE_2D, g.createTexture());
     g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.LINEAR);
@@ -469,31 +479,27 @@
   }
 
   // The card's picture into the texture. Only in a paint event.
-  var allocated = "", sized = true;
+  // texElementSubImage2D(target, level, xoffset, yoffset, element) takes no
+  // size: the picture comes at the browser's own size for the card, in canvas
+  // pixels, which getElementImageDefaultSize says, and it allocates nothing,
+  // so the texture is allocated here to hold it (rounded up), and the shader
+  // samples only the part the picture fills. A GL error is treated as a throw.
+  var allocated = "";
   function upload() {
-    var w = Math.max(1, Math.round(card.offsetWidth * scale));
-    var h = Math.max(1, Math.round(card.offsetHeight * scale));
+    for (var e = 0; e < 8 && gl.getError(); e++) { /* clear older errors */ }
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
     if (api.webgl === "texElementSubImage2D") {
-      if (sized) {
-        allocate(w, h);
-        try {
-          while (gl.getError()) { /* clear */ }
-          gl.texElementSubImage2D(gl.TEXTURE_2D, 0, 0, 0, card, { width: w, height: h });
-          if (gl.getError()) { sized = false; }
-        } catch (err) {
-          if (!(err instanceof TypeError)) { throw err; }
-          sized = false;
-        }
-      }
-      if (!sized) {
-        // A build that takes no size: the picture comes at the browser's own.
-        var own = canvas.getElementImageDefaultSize ? canvas.getElementImageDefaultSize(card) : { width: w, height: h };
-        allocate(Math.max(1, Math.round(own.width)), Math.max(1, Math.round(own.height)));
-        gl.texElementSubImage2D(gl.TEXTURE_2D, 0, 0, 0, card);
-      }
+      var own = canvas.getElementImageDefaultSize
+        ? canvas.getElementImageDefaultSize(card)
+        : { width: card.offsetWidth * scale, height: card.offsetHeight * scale };
+      var w = Math.max(1, Math.ceil(own.width)), h = Math.max(1, Math.ceil(own.height));
+      allocate(w, h);
+      fill = [Math.max(1, own.width) / w, Math.max(1, own.height) / h];
+      gl.texElementSubImage2D(gl.TEXTURE_2D, 0, 0, 0, card);
     } else {
-      // The earlier call, in its three-argument form or its six.
+      // The earlier call, which sizes the texture itself: its three-argument
+      // form (Chrome 150 on) or its six.
+      fill = [1, 1];
       try {
         gl.texElementImage2D(gl.TEXTURE_2D, gl.RGBA8, card);
       } catch (err) {
@@ -502,6 +508,7 @@
       }
     }
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    if (gl.getError()) { throw new Error("the card's picture did not upload"); }
     dirty = false;
   }
   function allocate(w, h) {
@@ -520,7 +527,7 @@
     return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
   }
 
-  function drawGL(m) {
+  function drawGL(m, check) {
     var inv = new DOMMatrix(m).inverse();
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(0, 0, 0, 0);
@@ -528,6 +535,7 @@
     gl.uniform1i(uniforms.uTex, 0);
     gl.uniformMatrix3fv(uniforms.uInv, false, [inv.a, inv.b, 0, inv.c, inv.d, 0, inv.e, inv.f, 1]);
     gl.uniform2f(uniforms.uSize, card.offsetWidth, card.offsetHeight);
+    gl.uniform2f(uniforms.uFill, fill[0], fill[1]);
     gl.uniform1f(uniforms.uScale, scale);
     gl.uniform1f(uniforms.uRows, canvas.height);
     gl.uniform2f(uniforms.uLight, light.x, light.y);
@@ -537,16 +545,20 @@
     gl.uniform3fv(uniforms.uLine, colour("--line"));
     gl.uniform3fv(uniforms.uOk, colour("--ok"));
     gl.drawArrays(gl.TRIANGLES, 0, 3); // one triangle that covers the canvas
-    if (check) {
-      check = false;
-      if (dark(m)) { fallBack(); }
-    }
+    if (check && (dark(m) || blank())) { fallBack(); }
   }
 
   // Lesson 5: never fail to black. Read a grid of pixels inside the card, in
-  // the same task as the draw (the buffer is not kept after it is shown).
+  // the same task as the draw (the buffer is not kept after it is shown), and
+  // fail when every one is dark or every one is the ink colour (a texture that
+  // never got its picture samples opaque black, which the shader paints as
+  // ink: a solid slab). "Dark" is no channel above 14 of 255: the page's
+  // --card is far brighter in both themes, so only a card set nearly black
+  // would trip it. colour() reads a token that is not a plain hex as black,
+  // so a non-hex --card always falls back here: that fails safe.
   function dark(m) {
-    var pixel = new Uint8Array(4), brightest = 0;
+    var pixel = new Uint8Array(4), brightest = 0, inkOnly = true;
+    var ink = colour("--ink").map(function (v) { return Math.round(v * 255); });
     var w = card.offsetWidth, h = card.offsetHeight;
     for (var i = 0; i < 12; i++) {
       var x = w * (0.15 + 0.7 * (i % 4) / 3), y = h * (0.2 + 0.6 * Math.floor(i / 4) / 2);
@@ -554,8 +566,37 @@
       var py = Math.floor((m[1] * x + m[3] * y + m[5]) * scale);
       gl.readPixels(px, canvas.height - 1 - py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
       brightest = Math.max(brightest, pixel[0], pixel[1], pixel[2]);
+      for (var c = 0; c < 3; c++) {
+        if (Math.abs(pixel[c] - ink[c]) > 3) { inkOnly = false; }
+      }
     }
-    return brightest <= 14;
+    return brightest <= 14 || inkOnly;
+  }
+
+  // A picture with nothing in it (every pixel transparent) draws a wordless
+  // card that passes dark(). Read the texture back once, through a
+  // framebuffer, and fail when no pixel has any alpha. Where the texture
+  // cannot be read back this way the check says nothing. Still uncaught: a
+  // picture that is present but wrong (stale, cut short, the wrong scale),
+  // and a frame that is right when checked and goes wrong later.
+  function blank() {
+    var size = allocated.split("x");
+    if (size.length !== 2) { return false; }
+    var w = +size[0], h = +size[1], fb = gl.createFramebuffer(), empty = false;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D,
+      gl.getParameter(gl.TEXTURE_BINDING_2D), 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+      var pixels = new Uint8Array(w * h * 4);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      empty = true;
+      for (var i = 3; i < pixels.length; i += 4) {
+        if (pixels[i]) { empty = false; break; }
+      }
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.deleteFramebuffer(fb);
+    return empty;
   }
 
   // ---- 2D: where there is no WebGL2, the card drawn tilted, without the light
@@ -597,7 +638,7 @@
       var m = matrix();
       if (geo) { place(m); }
       if (gl) {
-        if (uploaded) { drawGL(m); shown(); }
+        if (uploaded) { drawGL(m, !drawn); shown(); } // check the first frame drawn
       } else {
         canvas.requestPaint(); // the 2D call draws only in a paint event
       }
@@ -643,7 +684,6 @@
       : gl ? "Drawn live into a canvas, under a light that follows your pointer."
         : "Drawn live into a canvas.";
     button.hidden = false;
-    if (gl) { setTimeout(function () { check = true; wake(); }, 1000); }
   }
 
   // Anything the reader does to the card may change its picture.
@@ -672,10 +712,13 @@
     on(canvas, "paint", onPaint);
     if (api.webgl) { gl = startGL(); }
     if (!gl) {
-      if (!api.draw2d) { return; }
+      if (!api.draw2d) { fallBack(); return; }
       ctx = canvas.getContext("2d");
+      // The current 2D call tells the browser where it drew the card by
+      // itself, so hit-testing needs neither the probe nor a CSS transform.
+      if (api.draw2d === "drawElementImage") { geo = "auto"; }
     }
-    canvas.appendChild(card); // a child of the canvas is laid out, not painted
+    move(function () { canvas.appendChild(card); }); // a child of the canvas is laid out, not painted
     canvas.hidden = false;
     watcher = new ResizeObserver(fit);
     watcher.observe(card);
@@ -692,6 +735,9 @@
     // Lesson 5: the reader can always have the page without the effect.
     on(button, "click", function () {
       fallBack("Shown as plain HTML, as you asked. Reload the page to draw it again.");
+      // The button is hidden now: put focus on the card it gave back.
+      card.setAttribute("tabindex", "-1");
+      card.focus({ preventScroll: true });
     });
     if (document.fonts) { document.fonts.ready.then(fit); }
     fit();

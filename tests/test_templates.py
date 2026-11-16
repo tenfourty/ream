@@ -273,3 +273,62 @@ def test_the_canvas_template_carries_the_lessons():
     off_page = re.findall(r"https?://|\b(?:src|href)=\"//|url\(", visible)
     assert not off_page, f"the starter reaches off the page: {off_page}"
     assert not re.search(r"\bnew\s+(?:Shared)?Worker\b|\bfetch\(|@import", visible)
+
+
+def _js_block(text: str, head: str) -> str:
+    """The body of the block that opens at the first `{` after `head`, braces matched."""
+    start = text.index(head)
+    at = text.index("{", start)
+    depth = 0
+    for i in range(at, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[at + 1 : i]
+    raise AssertionError(f"no end to the block after {head!r}")
+
+
+def test_the_canvas_template_safety_nets_do_what_they_say():
+    """runcove-5t3oj.155 review: the safety nets pinned by what their code does,
+    not by the names it mentions."""
+    visible = _strip_comments(_body(CANON / "canvas.html"))
+    # Falling back stops everything that could draw again or move the card back.
+    back = _js_block(visible, "function fallBack(why)")
+    for stop in (
+        "removeEventListener",
+        "cancelAnimationFrame(frameId)",
+        "clearTimeout(timer)",
+        "watcher.disconnect()",
+    ):
+        assert stop in back, f"fallBack does not {stop}"
+    # The reader's button falls back, then focuses the card it gave back.
+    click = _js_block(visible, 'on(button, "click", function ()')
+    assert "fallBack(" in click
+    assert click.index("fallBack(") < click.index("card.focus(")
+    assert re.search(r'<span\b[^>]*\bid="mode"[^>]*\brole="status"', visible)
+    # Reduced motion: no tilt, and no pointer listeners at all.
+    assert re.search(r"var angle = still \? 0 :", visible)
+    pointer = _js_block(visible, "if (!still)")
+    assert '"pointermove"' in pointer and visible.count('"pointermove"') == 1
+    # Neither drawing call present: the listeners already bound are dropped.
+    assert "if (!api.draw2d) { fallBack(); return; }" in visible
+    # The first frame drawn is the one checked, and a blank picture fails too.
+    assert "drawGL(m, !drawn)" in visible
+    assert "check = true" not in visible
+    gl_draw = _js_block(visible, "function drawGL(m, check)")
+    assert re.search(
+        r"if \(check && \(dark\(m\) \|\| blank\(\)\)\) \{ fallBack\(\); \}", gl_draw
+    )
+    assert "inkOnly" in _js_block(visible, "function dark(m)")
+    # The upload: the documented five arguments, and a GL error is a throw.
+    upload = _js_block(visible, "function upload()")
+    assert "gl.texElementSubImage2D(gl.TEXTURE_2D, 0, 0, 0, card);" in upload
+    assert "getElementImageDefaultSize" in upload
+    assert re.search(r"if \(gl\.getError\(\)\) \{ throw ", upload)
+    # The current 2D call places the card itself: no second geometry update.
+    assert 'if (api.draw2d === "drawElementImage") { geo = "auto"; }' in visible
+    assert 'if (geo === "auto") { return; }' in _js_block(visible, "function place(m)")
+    # The starter has no editable, so it sets no caret rule.
+    assert "caret-color" not in visible
