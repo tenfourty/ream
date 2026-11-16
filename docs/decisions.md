@@ -1108,13 +1108,14 @@ render as their authors drew them. Only `font-src` changes, to `'self' data:`; n
 page policy moves (no data: in script-src, style-src or worker-src, and background workers stay
 blocked: nobody asked for them). The fonts count inside the existing page size limit
 (`store.MAX_BODY_BYTES`, 8 MiB; the limit is on the body, so no check changed). Publishing answers a
-warning, `embedded_fonts`, saying how many fonts and how many bytes, and why it matters: a custom
-font can make the text a person sees differ from the page's source text. The warning is advisory,
-made for an honest author: it reads `@font-face` blocks in the page's text and does not see fonts
-added by script or written with CSS escapes. `embedded_fonts_not_run` beside it means the check
-did not run (the page is too large, the time ran out, or the server was busy), so silence is not
-a clean page. The full policy string,
-live and not live, is pinned by `tests/test_csp.py`, so a later widening fails a test.
+warning, `embedded_fonts`, saying how many font files and how many bytes, and why it matters: a
+custom font can make the text a person sees differ from the page's source text. The warning is
+advisory, made for an honest author: one linear pass counts the data: addresses with a font media
+type wherever they appear in the page's text (a comment too), with no parsing of CSS. It does not
+see fonts added by script, written with CSS escapes or embedded without a font type.
+`embedded_fonts_not_run` beside it means the check did not run (the page is too large, the time
+ran out, or the server was busy), so silence is not a clean page. The full policy string, live
+and not live, is pinned by `tests/test_csp.py`, so a later widening fails a test.
 
 **Not chosen:**
 - A separate font allowance outside the page limit: a page could carry a blob as a font.
