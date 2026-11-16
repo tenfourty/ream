@@ -1175,16 +1175,22 @@ its HTML children without painting them, fires `paint`, and only in that event c
 a picture of a child; `canvas.requestPaint()` asks for the next one. The `canvas` template
 does all of this, with one WebGL2 shader and a 2D path; what to keep if you write your own:
 
-1. Detect each name, never the browser. Current (Chrome 157): `content="drawable"`,
-   `ctx.drawElementImage`, `gl.texElementSubImage2D`, `canvas.updateElementGeometry`. Earlier
-   builds: `layoutsubtree`, `ctx.drawElement`, `gl.texElementImage2D` (three arguments, or
-   six). Give the canvas both attributes, mark each drawn child `drawable`, and require
-   `requestPaint`.
+1. Detect each name, never the browser. Current (renamed in Chrome 155):
+   `content="drawable"`, `ctx.drawElementImage`, `gl.texElementSubImage2D`,
+   `canvas.updateElementGeometry`. Earlier builds: `layoutsubtree`, `ctx.drawElement`,
+   `gl.texElementImage2D` (three arguments, or six). Give the canvas both attributes, mark
+   each drawn child `drawable`, and require `requestPaint`.
 2. Shaders: in `paint`, upload only what `event.changedElements` names (or what you marked
-   dirty): `gl.texElementSubImage2D(gl.TEXTURE_2D, 0, 0, 0, el, {width: w, height: h})` into
-   a texture you allocated, `UNPACK_PREMULTIPLY_ALPHA_WEBGL` on. Draw in
-   `requestAnimationFrame`, not inside the event (a WebGL draw there can stall the page).
-3. Keep clicks and selection on the words: give the browser the transform you drew with,
+   dirty): `gl.texElementSubImage2D(gl.TEXTURE_2D, 0, 0, 0, el)` (target, level, xoffset,
+   yoffset, element; no size) into a texture you allocated yourself with
+   `gl.texImage2D(..., null)` at `Math.ceil` of `canvas.getElementImageDefaultSize(el)` (the
+   picture's own size, canvas pixels; reallocate when it changes), and sample only the part
+   it fills. `UNPACK_PREMULTIPLY_ALPHA_WEBGL` on; check `gl.getError()` after the upload.
+   Draw in `requestAnimationFrame`, not inside the event (a WebGL draw there can stall the
+   page).
+3. Keep clicks and selection on the words. In 2D, `drawElementImage` syncs hit-testing to
+   where it drew by itself (unless you pass `{preserveElementGeometry: true}`): do not also
+   call `updateElementGeometry`. For WebGL, give the browser the transform you drew with,
    `canvas.updateElementGeometry(el, {canvasTransform: new DOMMatrix([a, b, c, d, e, f])})`
    (element px to canvas CSS px). Some builds ignore it, so probe once (move by a known
    offset, read `getBoundingClientRect` a frame later); where it did not move, set the
@@ -1199,8 +1205,9 @@ does all of this, with one WebGL2 shader and a 2D path; what to keep if you writ
    `requestPaint()`); let the frame loop sleep when nothing moves.
 6. Safety nets, each putting the plain HTML back: a draw that throws after the first good
    one; no picture within a second or two while the page is visible (a background tab does
-   not paint); a dark first frame (`readPixels` a few points right after drawing);
-   `webglcontextlost`. With several effects, catch each one and draw it flat instead. Clamp
+   not paint); a first frame that is dark, all the ink colour (an incomplete texture
+   samples black) or all one colour (`readPixels` a few points right after drawing); a GL
+   error after the upload; `webglcontextlost`. With several effects, catch each one and draw it flat instead. Clamp
    the pixel ratio to 1..2 and cap the canvas's pixels; give the reader a "See it without
    effects" control; honour `prefers-reduced-motion`.
 7. An editable the effect moves: `caret-color: transparent`, and draw the caret yourself at
@@ -1223,7 +1230,7 @@ the plain HTML. No workers, nothing fetched; a font is a data: URL (`embedded_fo
   time, or server busy). Background workers stay blocked. Ream's own picture of a page
   (wall thumbnail, render check, `ream screenshot`) may show a fallback font for now.
 - HTML-in-Canvas (live HTML drawn into a canvas): start from the `canvas` template, and keep
-  the HTML readable in normal flow wherever it cannot be drawn. "HTML-in-Canvas pages" below.
+  the HTML readable in normal flow wherever it cannot be drawn. "HTML-in-Canvas pages" above.
 - Or write markdown (`notes.md`; on the API, `"format": "markdown"`): tables,
   fenced code, task lists, and `##` headings with ids you can link to or update
   with `--section`. Raw HTML passes through, so a decision slot works; keep a
