@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import pytest
+import scalecheck
 from fastapi.testclient import TestClient
 
 from ream import embeddedfonts, keys
 from ream.app import create_gallery_app
+from ream.renderfind import MAX_SCAN_CHARS, Budget
 
 FONT = "data:font/woff2;base64," + "A" * 100
 
@@ -46,8 +48,90 @@ def test_other_pages_get_no_finding():
     assert shapes(f"<style>@font-face{{/* url({FONT}) */ src:local(x)}}</style>") == []
 
 
-def test_an_unclosed_font_face_ends_the_reading_without_a_finding():
+def test_an_unclosed_font_face_runs_to_the_end_of_the_text():
     assert shapes("@font-face {" * 50_000) == []
+    # the face is open, and its data: address is still a font
+    (found,) = shapes(f"<style>@font-face{{src:url({FONT})")
+    assert "1 font " in found["hint"]
+
+
+def test_offsets_survive_a_character_that_grows_when_lower_cased():
+    body = (
+        "<title>"
+        + "İ" * 200
+        + f"</title>\n<style>@font-face{{src:url({FONT})}}</style>"
+    )
+    (found,) = shapes(body)
+    assert "1 font " in found["hint"] and f"{len(FONT)} bytes" in found["hint"]
+    assert found["line"] == 2
+
+
+def test_a_comment_hides_the_closing_brace_and_the_font():
+    body = f"<style>@font-face{{/* }} */ src:url({FONT})}}</style>"
+    assert "1 font " in shapes(body)[0]["hint"]
+    # a comment that never closes runs to the end, so the address in it is not read
+    assert shapes(f"<style>@font-face{{/* src:url({FONT})}}</style>") == []
+
+
+def test_a_brace_inside_a_string_does_not_end_the_block():
+    body = f"<style>@font-face{{font-family:'}}';src:url({FONT})}}</style>"
+    assert "1 font " in shapes(body)[0]["hint"]
+
+
+def test_whitespace_inside_the_quotes_before_data_is_read():
+    body = f"<style>@font-face{{src:url(' {FONT}')}}</style>"
+    (found,) = shapes(body)
+    assert f"{len(FONT)} bytes" in found["hint"]
+
+
+def test_a_face_with_fallbacks_is_one_font_and_a_paren_in_quotes_does_not_cut():
+    plain = "data:font/woff;base64,AAAA"
+    body = (
+        f"<style>@font-face{{src:url({FONT}) format('woff2'),url({plain}) format('woff')}}"
+        "@font-face{src:url('data:font/x;base64,A)B')}</style>"
+    )
+    (found,) = shapes(body)
+    assert "2 fonts" in found["hint"]
+    assert (
+        f"{len(FONT) + len(plain) + len('data:font/x;base64,A)B')} bytes"
+        in found["hint"]
+    )
+
+
+def test_the_block_cap_says_at_least():
+    body = (
+        "<style>"
+        + f"@font-face{{src:url({FONT})}}" * (embeddedfonts.MAX_BLOCKS + 5)
+        + "</style>"
+    )
+    (found,) = shapes(body)
+    assert f"at least {embeddedfonts.MAX_BLOCKS} fonts" in found["hint"]
+
+
+def test_a_page_too_large_or_a_spent_budget_says_the_check_did_not_run():
+    (found,) = shapes("x" * (MAX_SCAN_CHARS + 1))
+    assert found["shape"] == "embedded_fonts_not_run"
+    spent = Budget(0)
+    (found,) = embeddedfonts.check(
+        f"<style>@font-face{{src:url({FONT})}}</style>", spent
+    )
+    assert found["shape"] == "embedded_fonts_not_run"
+
+
+@pytest.mark.scaling
+@pytest.mark.parametrize(
+    ("first", "unit", "last"),
+    [
+        ("<style>@font-face{", "/* ", "}</style>"),
+        ("<style>", "@font-face{/**/", "}</style>"),
+        ("<style>@font-face{", "'}", "</style>"),
+    ],
+    ids=["unclosed comments", "closed comments", "quotes"],
+)
+def test_eight_times_the_page_costs_about_eight_times_the_time(first, unit, last):
+    scalecheck.assert_linear(
+        lambda text: embeddedfonts.check(text, Budget(600)), first, unit, last
+    )
 
 
 def test_publish_answers_the_warning(client, db):

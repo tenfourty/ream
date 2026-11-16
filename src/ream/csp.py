@@ -308,9 +308,10 @@ _SHAPES: tuple[tuple[str, Finder, str], ...] = (
         "remote_stylesheet",
         _attribute_shape(r"<link\b", "href"),
         (
-            "style-src is 'self' 'unsafe-inline' and font-src is 'self' data:: a "
-            "stylesheet or web font from another origin (Google Fonts) is "
-            "blocked. Use an inline <style>; embed a font as a data: address or use the system font stack."
+            "style-src is 'self' 'unsafe-inline' and font-src is 'self' data:, so a "
+            "stylesheet or web font from another origin (Google Fonts) is blocked. "
+            "Use an inline <style>; embed a font as a data: address or use the system "
+            "font stack."
         ),
     ),
     (

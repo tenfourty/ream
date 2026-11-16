@@ -1040,9 +1040,9 @@ removal or any other role is refused like any other change. Not chosen: granting
 each named job and noting that the 12 Nov grant ended, which would leave the branch-rule proof
 waiting on a fresh grant each time.
 
-**Evidence:** confirmed (Jeremy, 12 Nov 2026, lettered answer in #hq-artifacts; Jeremy, 15 Nov
-2026, lettered answer (b) to security's question in #hq-security); the grant was gone again on 16 Nov 2026 and
-the operator re-added it (lettered answer (a) in #hq-artifacts)
+**Evidence:** confirmed (Jeremy, 12 Nov 2026, lettered answer in #hq-artifacts; Jeremy, 15 Nov 2026,
+lettered answer (b) to security's question in #hq-security); the grant was gone again on 16 Nov 2026
+and the operator re-added it (lettered answer (a) in #hq-artifacts)
 
 ## The renderer can run as its own process or pod, beside the in-process one (13 Nov 2026)
 
@@ -1109,7 +1109,9 @@ page policy moves (no data: in script-src, style-src or worker-src, and backgrou
 blocked: nobody asked for them). The fonts count inside the existing page size limit
 (`store.MAX_BODY_BYTES`, 8 MiB; the limit is on the body, so no check changed). Publishing answers a
 warning, `embedded_fonts`, saying how many fonts and how many bytes, and why it matters: a custom
-font can make the text a person sees differ from the page's source text. The full policy string,
+font can make the text a person sees differ from the page's source text. The warning is advisory,
+made for an honest author: it reads `@font-face` blocks in the page's text and does not see fonts
+added by script or written with CSS escapes. The full policy string,
 live and not live, is pinned by `tests/test_csp.py`, so a later widening fails a test.
 
 **Not chosen:**

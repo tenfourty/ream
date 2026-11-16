@@ -78,9 +78,9 @@ FROM python:3.12-slim-bookworm
 # twenty-odd system libraries it needs, and the package keeps getting security
 # updates. `ream.thumbs` finds it on PATH, so nothing has to name the path.
 #
-# fonts-dejavu-core is not optional. The pages deliberately use no web fonts —
-# they ask for the reader's own sans, serif and mono — so a container with no
-# fonts at all renders every thumbnail as boxes. DejaVu supplies all three.
+# fonts-dejavu-core is not optional. The shipped pages ask for the reader's own
+# sans, serif and mono (fonts from other sites are blocked; a page may embed its own as data:
+# URLs), so a container with no fonts at all renders every thumbnail as boxes. DejaVu supplies all three.
 # A thumbnail will therefore not be letter-for-letter what Jeremy sees in his
 # own browser, which is inherent to rendering anywhere but on his machine.
 # The chromium layer is the slowest step (~2 min) and the biggest push (~70 s),
