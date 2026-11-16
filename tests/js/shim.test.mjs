@@ -37,7 +37,9 @@ function build(opts = {}) {
       getBoundingClientRect: () => ({ bottom: 800 }),
     },
     querySelectorAll: () => [slot],
-    querySelector: (sel) => sel.includes('"dec1"') ? slot : null,
+    querySelector: (sel) => sel.includes('"dec1"') ? slot
+      : sel === 'meta[name="ream-frame" i]' && opts.meta !== undefined
+        ? { getAttribute: (k) => (k === "content" ? opts.meta : null) } : null,
   };
   const scope = {
     document: doc,
@@ -101,6 +103,27 @@ const sized = (over = {}) => ({
      "grow and never shrink, leaving dead space under every released slot");
   ok(JSON.stringify(msg.slots) === '[{"id":"dec1","top":40,"left":10,"width":300}]',
      "reports the marked slot's page-coordinate rectangle, and nothing of its contents");
+}
+// 1c. A page that asks for a frame the window's height (16 Nov 2026: a claude.ai
+// artifact sized itself from innerHeight and the frame grew to the cap). It says so
+// with <meta name="ream-frame" content="viewport">, read on every report; anything
+// else, or no tag, is the default.
+{
+  const g = build();
+  g.fire("load", {});
+  ok(g.posted[0][0].frame === "content", "a page that declares nothing reports frame content");
+  for (const [v, want] of [["viewport", "viewport"], ["  ViewPort ", "viewport"],
+                           ["content", "content"], ["fill", "content"], [null, "content"]]) {
+    const h = build({ meta: v });
+    h.fire("resize", {});
+    ok(h.posted[0][0].frame === want, `a ream-frame of ${JSON.stringify(v)} reports frame ${want}`);
+  }
+  const t = build({ meta: "viewport" });
+  t.fire("load", {});
+  ok(t.posted[0][0].frame === "viewport", "(control) the declared page reports viewport");
+  const u = build({ meta: { toString() { throw new Error("hostile"); } } });
+  u.fire("load", {});
+  ok(u.posted.length === 1 && u.posted[0][0].frame === "content", "a content that throws when read reports the default and still reports");
 }
 // 2. the return leg reserves the room
 {

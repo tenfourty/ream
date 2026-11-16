@@ -35,8 +35,13 @@ function el(attrs = {}, offsetHeight = 88) {
 // can only show that by letting the media query and the pixel width disagree.
 // `position` is what `getComputedStyle` reports for a block once it is on the
 // sheet, which is how the script notices a rule un-lifted it anyway.
-function build(innerWidth = 1280, { media = null, position = "absolute" } = {}) {
+function build(innerWidth = 1280, { media = null, position = "absolute", innerHeight = 800, barHeight = null } = {}) {
   const iframe = el(); iframe.src = "https://abc.tenfourty.com/";
+  iframe.setAttribute = (k, v) => { iframe._attrs[k] = String(v); };
+  iframe.removeAttribute = (k) => { delete iframe._attrs[k]; };
+  // The page view's sticky bar, or none (null).
+  const bar = barHeight === null ? null : { getBoundingClientRect: () => ({ height: barHeight }) };
+  const resizers = [];
   const posted = [];
   iframe.contentWindow = { NAME: "frame", postMessage: (m, o) => posted.push([m, o]) };
   const sheet = el(); sheet.appendChild = function (c) { c.parentNode = sheet; };
@@ -85,12 +90,13 @@ function build(innerWidth = 1280, { media = null, position = "absolute" } = {}) 
     // The rename dialog is a :target, so closing it is a navigation. Only the
     // one selector the script asks for; anything else returns null, so a wrong
     // selector shows up here rather than silently matching.
-    querySelector(sel) { return sel === ".dlg:target" ? dlg.el : null; },
+    querySelector(sel) { return sel === ".dlg:target" ? dlg.el : sel === ".bar.bleed" ? bar : null; },
     createElement: () => ({ addEventListener(t, fn) { this._on = fn; },
                             textContent: "", type: "", className: "" }),
   };
   const queried = [];
-  const win = { innerWidth, addEventListener: (t, fn) => t === "message" && listeners.push(fn),
+  const win = { innerWidth, innerHeight,
+                addEventListener: (t, fn) => t === "message" ? listeners.push(fn) : t === "resize" && resizers.push(fn),
                 getComputedStyle: () => ({ position }) };
   // `media === null` means "this browser has no matchMedia", which is the
   // fallback path; otherwise it is the answer the stylesheet's own query gives.
@@ -108,7 +114,8 @@ function build(innerWidth = 1280, { media = null, position = "absolute" } = {}) 
   )(doc, win, URL, Map, Set, isFinite, navigatorStub, history, location);
   const send = (e) => listeners.forEach((fn) => fn(e));
   const fire = (t, e) => (docListeners[t] || []).forEach((fn) => fn(e));
-  return { iframe, sheet, d1, d2, send, posted, asks, menus, fire, dlg, queried, home };
+  const resize = (h) => { win.innerHeight = h; resizers.forEach((fn) => fn({})); };
+  return { iframe, sheet, d1, d2, send, posted, asks, menus, fire, dlg, queried, home, resize, doc };
 }
 
 const good = (over = {}) => ({
@@ -471,6 +478,51 @@ navigatorStub = {};
   ok(g.d1.style.width === "1380px", "and follows it back out when the panel closes");
 }
 
+// 15. A PAGE THAT ASKS FOR A FRAME THE WINDOW'S HEIGHT (16 Nov 2026). A page that
+// sizes itself from its window fed back through the reported height until the
+// cap. Declared (`frame: "viewport"`), the frame is the window less the bar,
+// follows the window, scrolls itself, and every height report is ignored.
+{
+  const g = build(1280, { innerHeight: 800, barHeight: 48 });
+  const vp = (over = {}) => good({ source: g.iframe.contentWindow,
+    data: { type: "artifact-state", height: 1200, frame: "viewport",
+            slots: [{ id: "dec1", top: 40, left: 10, width: 300 }], ...over } });
+  g.send(vp());
+  ok(g.iframe.style.height === "752px", "a declared page's frame is the window less the bar: " + g.iframe.style.height);
+  ok(g.iframe.getAttribute("scrolling") === "auto", "and it scrolls itself");
+  ok(g.iframe.getAttribute("data-frame") === "viewport", "and says so for the comments script");
+  g.send(vp({ height: 2400 })); g.send(vp({ height: 99999 }));
+  ok(g.iframe.style.height === "752px", "its height reports are ignored, however they grow");
+  ok(g.d1.parentNode === g.home, "no control is lifted onto a frame whose page scrolls under it");
+  ok(g.posted.length === 1 && JSON.stringify(g.posted[0][0].sizes) === "[]",
+     "and the page is told to reserve no room for one");
+  g.resize(600);
+  ok(g.iframe.style.height === "552px", "it follows the window");
+  g.resize(100);
+  ok(g.iframe.style.height === "200px", "never below the 200px floor");
+  // The page drops the tag: back to sizing by its height, and lifting.
+  g.send(good({ source: g.iframe.contentWindow }));
+  ok(g.iframe.style.height === "1200px" && g.iframe.getAttribute("data-frame") === null,
+     "a page that stops declaring it is sized by its height again");
+  ok(g.iframe.getAttribute("scrolling") === "no", "and the frame stops scrolling itself");
+  ok(g.d1.parentNode === g.sheet, "and its control is lifted again");
+  g.resize(900);
+  ok(g.iframe.style.height === "1200px", "a resize no longer moves a frame sized by its page");
+}
+{
+  const g = build(1280, { innerHeight: 700 });
+  g.send(good({ source: g.iframe.contentWindow, data: { type: "artifact-state", height: 900, frame: "viewport", slots: [] } }));
+  ok(g.iframe.style.height === "700px", "with no bar to measure, the whole window");
+  for (const f of ["Viewport", "fill", 1, null]) {
+    const h = build();
+    h.send(good({ source: h.iframe.contentWindow, data: { type: "artifact-state", height: 900, frame: f, slots: [] } }));
+    ok(h.iframe.style.height === "900px" && h.iframe.getAttribute("data-frame") === null,
+       "only the exact word turns it on, not " + JSON.stringify(f));
+  }
+  const e = build();
+  e.send(good({ source: { NAME: "evil" }, data: { type: "artifact-state", height: 900, frame: "viewport", slots: [] } }));
+  ok(e.iframe.getAttribute("data-frame") === null, "another window cannot turn it on");
+}
 
 console.log(`\n${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

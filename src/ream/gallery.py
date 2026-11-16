@@ -1383,6 +1383,15 @@ _CSS = design.ROOT_CSS + _RULES
 # it does not hold the whole page: before the first height arrives (the 78vh
 # floor), past the cap, when the page is wider than its frame (the right of it
 # would be unreachable; the shim reports `wide`), and in fullscreen (100vh).
+# `vp`: a page that declares `<meta name="ream-frame" content="viewport">` (the shim
+# reports `frame:"viewport"`, `pageframe`) sizes itself from the window, so sizing the
+# frame to it fed back until the cap (16 Nov 2026, a claude.ai artifact: a blurry
+# canvas, its text far below, fixed buttons off-screen). For it the frame is the
+# window's height less the gallery bar's, follows the window, scrolls itself, and the
+# page's height reports are ignored; it carries `data-frame="viewport"` so
+# /comments.js treats it as it treats full screen. Decision controls are not lifted
+# onto it (page coordinates move as it scrolls): they stay above the page, and the
+# page is told to reserve no room. Full screen still wins (100vh, !important).
 _GALLERY_JS = """(function(){
 "use strict";
 var iframe=document.getElementById("artifact-frame");
@@ -1397,9 +1406,14 @@ document.querySelectorAll("[data-decision-id]").forEach(function(el){
 });
 function isNum(v){return typeof v==="number"&&isFinite(v)}
 var homes=new Map();var fits=true;
-var sized=false,wide=false;
-function frameScroll(){try{iframe.setAttribute("scrolling",sized&&fits&&!wide&&!document.fullscreenElement?"no":"auto")}catch(e){}}
+var sized=false,wide=false,vp=false;
+function frameScroll(){try{iframe.setAttribute("scrolling",sized&&fits&&!wide&&!vp&&!document.fullscreenElement?"no":"auto")}catch(e){}}
 document.addEventListener("fullscreenchange",frameScroll);
+function fitVp(){if(!vp)return;var b=document.querySelector(".bar.bleed"),bh=0;
+  try{bh=b?b.getBoundingClientRect().height:0}catch(e){}
+  if(!isNum(bh)||bh<0)bh=0;
+  iframe.style.height=Math.max(200,Math.floor((window.innerHeight||0)-bh))+"px"}
+window.addEventListener("resize",fitVp);
 function liftsHere(){try{if(window.matchMedia)return window.matchMedia("(min-width:56rem)").matches}catch(e){}return window.innerWidth>=896}
 function isStatic(el){try{return window.getComputedStyle(el).position==="static"}catch(e){return false}}
 var renewals=0;
@@ -1417,7 +1431,10 @@ window.addEventListener("message",function(event){
     if(data&&data.type==="artifact-expired"){renew();return}
     if(!data||typeof data!=="object"||data.type!=="artifact-state")return;
     renewals=0;
-    if(isNum(data.height)&&data.height>0){
+    if((data.frame==="viewport")!==vp){vp=!vp;
+      try{if(vp)iframe.setAttribute("data-frame","viewport");else iframe.removeAttribute("data-frame")}catch(e){}}
+    if(vp){fits=true;sized=true;fitVp();frameScroll()}
+    else if(isNum(data.height)&&data.height>0){
       fits=data.height<=100000;
       if(data.height>=200){iframe.style.height=(fits?data.height:100000)+"px";sized=true}
       wide=data.wide===true;frameScroll();
@@ -1427,7 +1444,8 @@ window.addEventListener("message",function(event){
       // The stylesheet's breakpoint, in the stylesheet's unit -- never a pixel
       // number of our own. See the Python comment above this file's source.
       // `fits` too: a slot coordinate points nowhere while the frame is clipped.
-      var lifting=fits&&liftsHere();
+      // Never onto a frame that scrolls itself: page coordinates move under it.
+      var lifting=fits&&!vp&&liftsHere();
       if(!lifting)homes.forEach(function(h,e){
         if(e.parentNode===sheet&&h!==sheet)h.appendChild(e);
         e.style.top=e.style.left=e.style.width="";
@@ -2121,6 +2139,12 @@ _COMMENTS_JS = """(function(){
 "use strict";
 var f=document.getElementById("artifact-frame");if(!f)return;
 var o;try{o=new URL(f.src).origin}catch(e){return}
+// The frame scrolls itself: in full screen, or for a page that asked for a frame the
+// window's height (gallery.js sets data-frame). Page offsets then point at nothing.
+function vpf(){try{return f.getAttribute("data-frame")==="viewport"}catch(x){return false}}
+function own(){return !!document.fullscreenElement||vpf()}
+function barH(){try{var b=document.querySelector(".bar.bleed"),h=b?b.getBoundingClientRect().height:0;
+  return typeof h==="number"&&isFinite(h)&&h>0?h:0}catch(x){return 0}}
 var mk=document.getElementById("artifact-marks"),marks=[],known=Object.create(null),sent=false;
 try{marks=JSON.parse(mk?mk.textContent:"[]");if(!Array.isArray(marks))marks=[]}catch(e){marks=[]}
 marks.forEach(function(m){if(m&&typeof m.id==="string")known[m.id]=1});
@@ -2636,15 +2660,17 @@ window.addEventListener("message",function(e){
   if(typeof d.quote!=="string"||!d.quote||!d.anchor||!d.rect||!num(d.rect.top)||!num(d.rect.left)||!num(d.rect.height)){
     bar.hidden=true;last=null;return}
   last=d;if(!offer){bar.hidden=true;return}
-  var r=f.getBoundingClientRect(),sw2=num(d.rect.width)?d.rect.width:0,fs=!!document.fullscreenElement&&num(d.rect.vt)&&num(d.rect.vl);
+  var r=f.getBoundingClientRect(),sw2=num(d.rect.width)?d.rect.width:0,fs=own()&&num(d.rect.vt)&&num(d.rect.vl),
+    fx=!!document.fullscreenElement,sy=fx?0:window.scrollY,sx=fx?0:window.scrollX;
   bar.hidden=false;
   var w=bar.offsetWidth||90,h=bar.offsetHeight||28,gap=7,cx,top,below;
   // The pill sits above the words with its pointer down at them; on touch, or with
-  // no room above, below them. In full screen the frame scrolls itself, so the
-  // bar is fixed by where the frame shows the words (vt/vl).
-  if(fs){bar.style.position="fixed";cx=r.left+Math.min(Math.max(0,d.rect.vl+sw2/2),r.width);
-    top=r.top+d.rect.vt-h-gap;below=touch||top<56;
-    if(below)top=r.top+Math.min(Math.max(0,d.rect.vt+d.rect.height),r.height)+gap}
+  // no room above, below them. Where the frame scrolls itself (full screen, or a
+  // window-high frame) the bar goes by where the frame shows the words (vt/vl):
+  // fixed in full screen, in page coordinates otherwise.
+  if(fs){bar.style.position=fx?"fixed":"";cx=r.left+sx+Math.min(Math.max(0,d.rect.vl+sw2/2),r.width);
+    top=r.top+sy+d.rect.vt-h-gap;below=touch||top-sy<56;
+    if(below)top=r.top+sy+Math.min(Math.max(0,d.rect.vt+d.rect.height),r.height)+gap}
   else{bar.style.position="";cx=r.left+window.scrollX+d.rect.left+sw2/2;
     top=r.top+window.scrollY+d.rect.top-h-gap;below=touch||top-window.scrollY<56;
     if(below)top=r.top+window.scrollY+d.rect.top+d.rect.height+gap}
@@ -2721,7 +2747,7 @@ function takePin(d){
 function badges(rs){
   if(!bar)return;
   pbs.forEach(drop);pbs=[];prects=Object.create(null);
-  if(!Array.isArray(rs)||document.fullscreenElement)return;
+  if(!Array.isArray(rs)||own())return;
   var n=0,nums=Object.create(null),fr=f.getBoundingClientRect();
   marks.forEach(function(m){if(m&&typeof m.id==="string"&&m.anchor&&m.anchor.kind==="element")nums[m.id]=++n});
   rs.slice(0,200).forEach(function(r){
@@ -2766,7 +2792,9 @@ window.addEventListener("message",function(e){try{
   if(nav&&nav.id===d.id&&nav.ph===2){var n2=nav;nav=null;
     if(fin(q.left)&&fin(q.width)&&fin(q.height))show(n2.id,{top:q.top,left:q.left,width:q.width,height:q.height},true);return}
   if(nav&&nav.id===d.id&&nav.ph===0){nav.ph=1;navSettle()}
-  var fr=f.getBoundingClientRect(),y=window.scrollY+fr.top+q.top-(window.innerHeight||0)/3;
+  // A window-high frame has scrolled itself to the mark: this page only brings the
+  // frame up under the bar.
+  var fr=f.getBoundingClientRect(),y=window.scrollY+fr.top+(vpf()?-barH():q.top-(window.innerHeight||0)/3);
   if(window.scrollTo)window.scrollTo({top:Math.max(0,y),behavior:"smooth"})}catch(x){}});
 // THE COMMENT CONTROL. Pressing it lights comment mode and opens the panel on Open
 // with the steps showing; pressing it again turns the mode off and closes the panel.
