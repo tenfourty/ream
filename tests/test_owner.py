@@ -454,10 +454,10 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt and skill.md re-taken on 15 Nov 2026 for `ream screenshot` and the MCP `screenshot_page` tool (one sentence in each; agents.txt's MCP tool list names it).
 # skill.md re-taken on 16 Nov 2026 for embedded fonts (the Fonts bullet: data: fonts allowed, and Ream's own pictures may show a fallback font for now); agents.txt and agent.json did not move.
 # skill.md re-taken on 16 Nov 2026 for questions that stand alone (two lines under the lettered-options bullet); agents.txt and agent.json did not move.
-# agents.txt and skill.md re-taken on 16 Nov 2026 for the MCP wait_for_answer tool (agents.txt names it in the MCP tool list and says to use it instead of a `ream wait` process; skill.md says the same in one sentence under "After you ask"); agent.json did not move.
+# agents.txt and skill.md re-taken on 16 Nov 2026 for the MCP wait_for_answer tool (agents.txt names it in the MCP tool list and says to use it instead of a `ream wait` process; skill.md says the same in one sentence under "After you ask"), and again the same day for its review: both now say sessions sharing one key share its place and keep `ream wait`; agent.json did not move.
 GOLDEN = {
-    "agents.txt": "e517a1f4f0a8c0d48c129bef3ea9423cf124ec5dfc37f62b4dcae43159cbc909",
-    "skill.md": "71aee1429b949dfc415e59e1440b4fcf46175a6f651b7d70b42f852eba8fb0c5",
+    "agents.txt": "70a4189d74534aee1d4c48f2cdb1e7c2981863e03705d00466ad0f3d6b1ab470",
+    "skill.md": "d464a0cd20ea79ddb6aeb7e887da24adfa94fc2c53f684ba34874c3368fbdad0",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"

@@ -143,6 +143,9 @@ class ToolOutput:
     # Pictures of page content, as `(mime type, bytes)`: each goes back as an image block
     # after the text, with `image_label` (who wrote what it shows) just before it.
     images: tuple[tuple[str, bytes], ...] = ()
+    # What to do next instead of the tool's `next_step`, when the answer itself decides
+    # it: still one of Ream's own fixed sentences, never an agent's text.
+    next: str | None = None
 
 
 class ToolError(Exception):
@@ -708,6 +711,8 @@ def _call_tool(call: Call, params: dict, id: Any) -> dict:
                 ),
             )
     hint = found.next_step(arguments) if callable(found.next_step) else found.next_step
+    if output.next is not None:
+        hint = output.next
     if hint is not None and output.structured is not None:
         if "next" in output.structured:
             raise RuntimeError(f"MCP tool {name!r}: its answer already has a next")

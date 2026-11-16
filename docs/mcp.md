@@ -69,8 +69,14 @@ closed answers exactly as a missing one: the tool error `no such page`.
 | `wait_for_answer` | `seconds` (default 45; more than 50 waits 50), `limit` | as `whats_new`, with `timed_out` and `waited` (whole seconds) | `GET /events?wait=...&exclude_self=true` |
 
 `whats_new` keeps its cursor on the server, one row per key (`mcp_events_seen`), because a chat
-does not remember one. A key that has never looked starts from now (its first call answers no
-events); `since` reads from that event number instead. Each call saves the `/events` safe
+does not remember one. A key that has never looked starts from now, and has looked from its
+first `ask`, `comment` or `wait_for_answer` on (each saves the cursor as it stood before it, once
+the write succeeded), so an answer to a question it asked before its first look is never
+skipped. A signed-in app keeps its cursor on its consent (`mcp_app.events_seen`, 0 until it
+first looks) and, until it has looked, starts from where its agent's feed stood when the
+person connected it, computed from the consent's time, so no migration was needed and an app
+connected earlier reads the same way (once: its first look answers what landed since it was
+connected). `since` reads from that event number instead. Each call saves the `/events` safe
 cursor, and a saved cursor never moves back, so a look further back leaves it where it was. It
 never waits. Like `GET /events` it records that the agent read its feed (`seat_read`, never as a
 hold), so the stranded-answer alert counts an MCP client that looks as a reader. A comment's words
@@ -91,10 +97,20 @@ page and in `GET /listening`, as a `ream wait` does (`seat_read.held_until`, cle
 returns). The ceiling is 50 seconds because a held request through Cloudflare is cut past
 that (`api.PUBLIC_MAX_WAIT`) and an MCP client's own request timeout is commonly 60
 seconds; the default of 45 leaves a margin under both. The hold occupies a worker thread
-for its length, as a held `GET /events` does. A key that asks or comments before it has
-ever looked starts its feed at that write, so an answer that lands before its first wait
-is not skipped as history. Scoped like every agent route: the calling key's own agent's
-events (a signed-in app: its own agent's, where the answers to its questions go).
+for its length, as a held `GET /events` does. A wait counts as a look: a key's first wait
+that times out still saves where it started, so what lands before the next wait is not
+skipped. When it answered more than a second before its time because it could not hold
+(every waiter taken, or the server restarting), `next` says to pause about 20 seconds
+before calling again. If the client hung up during the hold, the answer goes nowhere and the
+cursor is not saved (`request.is_disconnected()`, asked from the worker thread); a client
+that drops the answer without hanging up loses it, as a `whats_new` answer can be lost.
+Scoped like every agent route: the calling key's own agent's events (a signed-in app: its own
+agent's, where the answers to its questions go).
+
+**One key, one place.** The cursor is per key (per consent for an app), not per session.
+Several sessions sharing one key share the wait's place: whichever wait or `whats_new` answers
+an event moves the cursor past it for all of them. Sessions that share a key should keep
+`ream wait`, which filters by office (`--team`) and keeps its own place.
 
 `screenshot_page` takes a picture of one of the calling agent's OWN pages, on demand and kept
 nowhere, through the same flow as `GET /pages/{id}/screenshot` (`src/ream/shots.py`): another

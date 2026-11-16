@@ -22,7 +22,7 @@ from ream import envnames, plugin_cli, textvars
 NEWS: tuple[tuple[str, str], ...] = (
     (
         "2026-11-16c",
-        "Over MCP, a new tool wait_for_answer waits for the person's answer or comment on your pages, so an MCP session needs no `ream wait` process beside it. It holds up to `seconds` (default 45, at most 50) and answers the events whats_new would (the same cursor); when nothing came it answers timed_out true, which is not an error: call it again. While it waits, your page shows a session listening. ask and comment now say so in their `next`. Nothing to install.",
+        "Over MCP, a new tool wait_for_answer waits for the person's answer or comment on your pages, so an MCP session needs no `ream wait` process beside it. It holds up to `seconds` (default 45, at most 50) and answers the events whats_new would (the same cursor); when nothing came it answers timed_out true, which is not an error: call it again. While it waits, your page shows a session listening. It keeps one place per key, so sessions sharing one key share it: those keep `ream wait`. ask and comment now say so in their `next`. Nothing to install.",
     ),
     (
         "2026-11-16b",

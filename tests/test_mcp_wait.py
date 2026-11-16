@@ -1,9 +1,11 @@
 """MCP `wait_for_answer` (runcove-5t3oj.151): whats_new that holds until someone else's act
 lands on the calling agent's pages, or its time runs out. Runs on both databases."""
 
+import dataclasses
 import threading
 import time
 
+import anyio
 import pytest
 from test_mcp import (  # noqa: F401
     FENCED,
@@ -15,6 +17,7 @@ from test_mcp import (  # noqa: F401
     token,
     unfence,
 )
+from test_mcp_reach import _app, _as, _tool
 
 from ream import decisions, events, keys, listening, mcp, mcp_tools, settings, store
 
@@ -39,6 +42,26 @@ def later(delay: float, act) -> threading.Thread:
     thread = threading.Thread(target=run)
     thread.start()
     return thread
+
+
+def when_waiting(db, agent: str, act) -> tuple[threading.Thread, dict]:
+    """`act` run on another thread once a session of `agent` reads as waiting (polled,
+    at most 10 seconds), so it lands while the wait is held. `seen["waiting"]` says
+    whether it was seen waiting; `act` runs either way, so the test never hangs."""
+    seen: dict = {"waiting": False}
+
+    def run():
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if listening.sessions(db, agent)["waiting"]:
+                seen["waiting"] = True
+                break
+            time.sleep(0.05)
+        act()
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    return thread, seen
 
 
 def ask(client, token, page_id) -> str:
@@ -93,24 +116,19 @@ def test_an_answer_that_landed_before_the_first_wait_is_not_lost(
 
 def test_nothing_by_the_time_limit_says_call_again(client, on, token, db, pages):
     _, first = call_tool(client, token, "whats_new")
-    seen = {}
-
-    def look():
-        seen["sessions"] = listening.sessions(db, "mcp-seat")
-
-    thread = later(0.4, look)
+    thread, seen = when_waiting(db, "mcp-seat", lambda: None)
     started = time.monotonic()
-    error, out = call_tool(client, token, "wait_for_answer", seconds=1)
+    error, out = call_tool(client, token, "wait_for_answer", seconds=2)
     took = time.monotonic() - started
     thread.join()
     assert not error, out
-    assert 1 <= took < 5, took
+    assert 2 <= took < 6, took
     assert out["timed_out"] is True and out["events"] == []
     assert out["cursor"] == out["since"] == first["cursor"]
-    assert "call wait_for_answer again" in out["next"]
+    assert out["next"] == mcp_tools._NEXT_WAIT
     # While it held, the session read as waiting, as a held GET /events does; once it
     # answered, it no longer does.
-    assert len(seen["sessions"]["waiting"]) == 1
+    assert seen["waiting"] is True
     assert listening.sessions(db, "mcp-seat")["waiting"] == []
 
 
@@ -123,12 +141,14 @@ def test_only_the_calling_agents_own_pages_wake_it(client, on, token, db, pages)
         question="Theirs?",
         options=OPTIONS,
     )
-    thread = later(
-        0.3,
+    thread, seen = when_waiting(
+        db,
+        "mcp-seat",
         lambda: decisions.answer(db, theirs.id, letter="a", by=settings.owner_id()),
     )
-    error, out = call_tool(client, token, "wait_for_answer", seconds=2)
+    error, out = call_tool(client, token, "wait_for_answer", seconds=3)
     thread.join()
+    assert seen["waiting"] is True  # it landed while the wait was held
     assert not error, out
     assert out["timed_out"] is True and out["events"] == []
     # The other agent's feed has it: the wait above simply never saw it.
@@ -184,3 +204,112 @@ def test_the_ceiling_is_under_the_public_hold_limit():
 def test_a_bad_time_is_refused(client, on, token, seconds):
     error, words = call_tool(client, token, "wait_for_answer", seconds=seconds)
     assert error and "seconds must be a whole number" in words
+
+
+# --- The cursor never loses an event (review of e6950b0) ---------------------------------
+
+
+def test_a_first_wait_that_times_out_still_counts_as_a_look(
+    client, on, token, db, pages
+):
+    # Never looked, never asked: the first wait starts from now and saves that, so a
+    # comment between it and the second wait is not skipped as history.
+    error, first = call_tool(client, token, "wait_for_answer", seconds=1)
+    assert not error and first["timed_out"] is True
+    third, _ = keys.mint(db, agent="third")
+    posted = client.post(
+        f"/api/v1/pages/{pages['mine'].id}/comments",
+        headers=headers(third),
+        json={"body": "between the waits"},
+    )
+    assert posted.status_code == 201, posted.text
+    error, second = call_tool(client, token, "wait_for_answer", seconds=5)
+    assert not error, second
+    assert [e["kind"] for e in second["events"]] == ["comment_added"]
+
+
+def test_a_failed_ask_leaves_a_never_looked_key_never_looked(
+    client, on, token, db, pages
+):
+    error, _ = call_tool(
+        client,
+        token,
+        "ask",
+        page_id=pages["theirs"].id,
+        question="Not mine?",
+        options=OPTIONS,
+    )
+    assert error
+    with db.connect() as conn:
+        rows = conn.execute("select count(*) from mcp_events_seen").fetchone()
+    assert rows[0] == 0
+
+
+def test_a_new_apps_answer_before_its_first_wait_is_not_lost(db):
+    app = _app(db)
+    page = store.publish(db, "office", "Theirs", PAGE.format("x"))
+    asked = _tool(
+        _as(db, app), "ask", page_id=page.id, question="Ship?", options=OPTIONS
+    )
+    assert asked["isError"] is False, asked
+    decision = asked["structuredContent"]["id"]
+    decisions.answer(db, decision, letter="a", by=settings.owner_id())
+    out = _tool(_as(db, app), "wait_for_answer", seconds=5)["structuredContent"]
+    assert out["timed_out"] is False
+    assert [e["ref_id"] for e in out["events"]] == [decision]
+
+
+def test_an_apps_first_wait_that_times_out_loses_nothing(db):
+    app = _app(db)
+    page = store.publish(db, "office", "Theirs", PAGE.format("x"))
+    asked = _tool(
+        _as(db, app), "ask", page_id=page.id, question="Ship?", options=OPTIONS
+    )
+    decision = asked["structuredContent"]["id"]
+    first = _tool(_as(db, app), "wait_for_answer", seconds=1)["structuredContent"]
+    assert first["timed_out"] is True
+    decisions.answer(db, decision, letter="b", by=settings.owner_id())
+    second = _tool(_as(db, app), "wait_for_answer", seconds=5)["structuredContent"]
+    assert [e["ref_id"] for e in second["events"]] == [decision]
+
+
+class _HungUp:
+    """A request whose client has gone."""
+
+    async def is_disconnected(self) -> bool:
+        return True
+
+
+def test_a_client_that_hung_up_does_not_move_the_cursor(db):
+    app = _app(db)
+    page = store.publish(db, "office", "Theirs", PAGE.format("x"))
+    asked = _tool(
+        _as(db, app), "ask", page_id=page.id, question="Ship?", options=OPTIONS
+    )
+    decision = asked["structuredContent"]["id"]
+    decisions.answer(db, decision, letter="a", by=settings.owner_id())
+    gone = dataclasses.replace(_as(db, app), request=_HungUp())
+
+    def in_a_worker():  # as the server runs a tool: a worker thread under the loop
+        return _tool(gone, "wait_for_answer", seconds=5)
+
+    lost = anyio.run(anyio.to_thread.run_sync, in_a_worker)["structuredContent"]
+    assert [e["ref_id"] for e in lost["events"]] == [decision]
+    # Nobody read that answer: the next wait answers the same event again.
+    again = _tool(_as(db, app), "wait_for_answer", seconds=5)["structuredContent"]
+    assert [e["ref_id"] for e in again["events"]] == [decision]
+
+
+def test_a_wait_that_could_not_hold_says_to_pause(
+    client, on, token, db, pages, monkeypatch
+):
+    call_tool(client, token, "whats_new")
+    taken = threading.BoundedSemaphore(1)
+    taken.acquire()
+    monkeypatch.setattr(events, "_waiters", taken)
+    started = time.monotonic()
+    error, out = call_tool(client, token, "wait_for_answer", seconds=10)
+    assert not error, out
+    assert time.monotonic() - started < 5
+    assert out["timed_out"] is True
+    assert out["next"] == mcp_tools._NEXT_WAIT_BUSY and "pause" in out["next"]

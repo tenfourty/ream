@@ -44,6 +44,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+import anyio
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ValidationError
@@ -639,12 +640,26 @@ def _questions(call: Call, arguments: dict[str, Any]) -> dict:
 
 
 def _seen(call: Call) -> int | None:
-    if call.key is None:  # a signed-in app keeps its cursor on its consent (11.3)
+    """This key's saved cursor, or None for a key that has never looked.
+
+    A signed-in app keeps its cursor on its consent (11.3), where 0 is "never looked" (the
+    column's default). An app never answers None: until it has looked, its cursor is where
+    its agent's feed stood when the person connected it, so an answer to a question it asked
+    before its first look is never skipped as history. Computed, not stored at consent, so
+    an app connected before this rule reads the same way."""
+    if call.key is None:
         with call.db.connect() as conn:
             row = conn.execute(
                 "select events_seen from mcp_app where id = %s", (call.app.id,)
             ).fetchone()
-        return int(row[0]) if row is not None and row[0] else None
+            if row is not None and row[0]:
+                return int(row[0])
+            row = conn.execute(
+                "select coalesce(max(seq), 0) from event"
+                " where agent = %s and created_at < %s",
+                (call.agent, call.app.created_at),
+            ).fetchone()
+        return int(row[0])
     with call.db.connect() as conn:
         row = conn.execute(
             "select seq from mcp_events_seen where key_id = %s", (call.key.id,)
@@ -689,9 +704,10 @@ def _event_writer(obj: dict, key: str):
     title="What is new",
     description=(
         "Answers, comments and changes on your pages since this key last asked, oldest "
-        "first; Ream remembers where you got to. The first call starts from now and "
-        "returns nothing; since (an event number) reads further back. Never waits: call "
-        "it again to look again. Not for the questions still open: use questions."
+        "first; Ream remembers where you got to (a key that never looked starts from "
+        "now, or from its first ask, comment or wait; an app from when it was "
+        "connected); since (an event number) reads further back. Never waits: call it "
+        "again, or use wait_for_answer. Not for the questions still open: use questions."
     ),
     read_only=True,
     destructive=False,
@@ -759,16 +775,36 @@ _NEXT_WAIT = (
     "If timed_out is true nothing arrived yet: call wait_for_answer again to keep "
     "waiting. Otherwise act on the events, then call it again to hear the next one."
 )
+# It answered well before its time because it could not hold: the server's waiters were
+# all taken, or it is restarting. Calling again at once would only spin.
+_NEXT_WAIT_BUSY = (
+    "Ream could not hold this wait (busy, or restarting) and nothing arrived: pause "
+    "about 20 seconds before calling wait_for_answer again, or use whats_new meanwhile."
+)
 
 
-def _listen_from_here(call: Call) -> None:
-    """A key that has never looked starts its feed from now. One that asks or comments
-    before its first look must not lose the reply that lands before it does look: its
-    cursor starts here, before the write (a saved cursor never moves, back or forward)."""
-    if call.key is None and call.app is None:
-        return  # nothing to keep a cursor on (a call built by hand)
+def _listen_from_here(call: Call, at: int) -> None:
+    """A key that has never looked starts its feed from now. One that asks, comments or
+    waits before its first look must not lose what lands after: its cursor is saved at
+    `at` (`events.latest_seq` read before the write), so it has looked from then on. A
+    saved cursor is left alone. An app always has a cursor (`_seen`)."""
+    if call.key is None:
+        return  # an app, or a call built by hand with neither
     if _seen(call) is None:
-        _save_seen(call, events.latest_seq(call.db, call.agent))
+        _save_seen(call, at)
+
+
+def _gone(call: Call) -> bool:
+    """Whether the client that sent this call has disconnected. Asked of the request on
+    the event loop from this worker thread; anything that cannot be asked (a call built
+    by hand, not in a worker thread) counts as still there."""
+    ask = getattr(call.request, "is_disconnected", None)
+    if ask is None:
+        return False
+    try:
+        return bool(anyio.from_thread.run(ask))
+    except Exception:  # noqa: BLE001 -- unknown is "still there": the save is the default
+        return False
 
 
 @tool(
@@ -803,13 +839,18 @@ def _listen_from_here(call: Call) -> None:
         }
     ),
 )
-def _wait_for_answer(call: Call, arguments: dict[str, Any]) -> dict:
+def _wait_for_answer(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     seconds = _int(arguments, "seconds", WAIT_DEFAULT_SECONDS, 1, 2**31 - 1)
     seconds = min(seconds, WAIT_MAX_SECONDS)
     limit = _int(arguments, "limit", 100, 1, MAX_LIMIT)
-    saved = _seen(call)
-    # As whats_new: a key that has never looked starts from now.
-    since = events.latest_seq(call.db, call.agent) if saved is None else saved
+    # A key that has never looked starts from now, and has looked from now on: a wait
+    # that times out must not leave it "never looked", or the next wait would start from
+    # its own now and skip what landed in between.
+    now = events.latest_seq(call.db, call.agent)
+    _listen_from_here(call, now)
+    since = _seen(call)
+    if since is None:  # a call built by hand, with no cursor to keep
+        since = now
     started = time.monotonic()
     # A hold, as on GET /events: the session reads as waiting on its pages and in
     # GET /listening until this returns (`events.note_read`, `note_hold_end`).
@@ -834,11 +875,12 @@ def _wait_for_answer(call: Call, arguments: dict[str, Any]) -> dict:
     finally:
         if held_until is not None:
             events.note_hold_end(call.db, call.agent, call.session, held_until)
-    waited = round(time.monotonic() - started)
+    took = time.monotonic() - started
+    waited = round(took)
     if not woke:
         # The cursor stays where it was: anything of the agent's own below it still
         # reaches whats_new, or the next wake.
-        return {
+        quiet = {
             "events": [],
             "since": since,
             "cursor": since,
@@ -846,12 +888,17 @@ def _wait_for_answer(call: Call, arguments: dict[str, Any]) -> dict:
             "timed_out": True,
             "waited": waited,
         }
+        early = took < seconds - 1
+        return ToolOutput(quiet, next=_NEXT_WAIT_BUSY if early else None)
     # Woken: everything since the cursor, the agent's own events too, so the cursor
     # whats_new shares never passes an event neither tool answered.
     pre = events.latest_seq(call.db, call.agent)
     rows = events.list_for_agent(call.db, call.agent, since=since, limit=limit)
     cursor = events.safe_cursor(since, pre, rows, limit)
-    _save_seen(call, cursor)
+    # A client that hung up mid-hold never reads this answer: leave the cursor, so the
+    # next wait or whats_new answers these events again rather than losing them.
+    if not _gone(call):
+        _save_seen(call, cursor)
     out = [
         {
             **row.__dict__,
@@ -860,14 +907,16 @@ def _wait_for_answer(call: Call, arguments: dict[str, Any]) -> dict:
         }
         for row in rows
     ]
-    return {
-        "events": jsonable_encoder(out),
-        "since": since,
-        "cursor": cursor,
-        "more": len(rows) >= limit,
-        "timed_out": False,
-        "waited": waited,
-    }
+    return ToolOutput(
+        {
+            "events": jsonable_encoder(out),
+            "since": since,
+            "cursor": cursor,
+            "more": len(rows) >= limit,
+            "timed_out": False,
+            "waited": waited,
+        }
+    )
 
 
 # --- The writing tools (slice 2) ------------------------------------------------------
@@ -1288,9 +1337,10 @@ def _comment(call: Call, arguments: dict[str, Any]) -> ToolOutput:
     session = _session(call, arguments)
     api.refuse_decision_anchor(payload)
     page = _page(call, page_id)
-    _listen_from_here(call)
+    at = events.latest_seq(call.db, call.agent)
     later: list = []
     out = api.add_comment(call.db, page_id, payload, call.agent, None, session, later)
+    _listen_from_here(call, at)  # read before the comment, saved once it succeeded
     call.after.extend(later)
     shown = jsonable_encoder(out)
     if call.app is not None:  # "Jeremy, via claude.ai" (11.1); stored as the agent
@@ -1359,10 +1409,10 @@ def _ask(call: Call, arguments: dict[str, Any]) -> dict:
     page_id = _str(arguments, "page_id", required=True)
     payload = _body(api.DecisionBody, arguments, _ASK_FIELDS)
     session = _session(call, arguments)
-    _listen_from_here(call)
-    return jsonable_encoder(
-        api.ask_question(call.db, call.agent, session, page_id, payload)
-    )
+    at = events.latest_seq(call.db, call.agent)
+    asked = api.ask_question(call.db, call.agent, session, page_id, payload)
+    _listen_from_here(call, at)  # read before the ask, saved once it succeeded
+    return jsonable_encoder(asked)
 
 
 DECISION_ID = {"type": "string", "description": "The question's id."}
