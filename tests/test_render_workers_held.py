@@ -1,10 +1,10 @@
 """Every worker a page starts is held at its start (`rendercore._Offline`), in a
 screenshot (`rendercore.shoot`) and in a render (`rendercore.screenshot`), so it
-never runs a line and never makes a request: a shared worker, a module worker and
-a service worker, each started for real.
+never runs a line and never makes a request: a shared worker, a classic dedicated
+worker, a module worker and a service worker, each started for real.
 
 Why a served page. As shipped, the page is a local file, and from a file none of
-these three starts at all (a file's origin is opaque: a shared or module worker
+these four starts at all (a file's origin is opaque: a shared or module worker
 needs a script of its own origin, and a service worker a secure one), so a test
 that loads one as a file reaches the listener zero times whether the hold works
 or not. Here the page and the workers' scripts are served by a listener on
@@ -38,7 +38,15 @@ hold off on Chromium 147 and the headless shell 1217. The held arm also runs wit
 the shipped settle, where its request must reach nothing as well; that arm does
 NOT prove the hold (the worker may never have started), only real_time does.
 
-Not here, because no control can show them fire: <link rel=preconnect> opened
+The shipped settle's control (`test_a_classic_worker_under_the_shipped_settle`):
+a classic `new Worker(url)` with nothing blocking it, under the shipped settle. If
+it starts and reaches the listener, the shipped "held" case for it means
+something. If it never starts, the control SKIPS saying so and naming the browser
+version it saw, so that the shipped held case is known to prove nothing there; it
+fails if the worker started and still reached nothing.
+
+Untested on purpose, preconnect and dns-prefetch, because no control can show
+them fire (a test that cannot fail proves nothing): <link rel=preconnect> opened
 no connection to the listener even with every block off and the page served
 (headless shell 1217 and Chromium 147), and <link rel=dns-prefetch> is a name
 lookup this machine's resolver answers, which no listener on a port can see.
@@ -65,6 +73,13 @@ KINDS = {
         "body": "fetch('/ping/shared').catch(()=>0)",
         "type": "shared_worker",
         "ping": "/ping/shared",
+    },
+    "classic_worker": {
+        "page": "new Worker('/classic.js')",
+        "script": "/classic.js",
+        "body": "fetch('/ping/classic').catch(()=>0)",
+        "type": "worker",
+        "ping": "/ping/classic",
     },
     "module_worker": {
         "page": "new Worker('/module.js',{type:'module'})",
@@ -325,3 +340,47 @@ def test_the_worker_is_held_and_reaches_nothing(
     # Nothing but the page and its frames was ever let go.
     let_go = [t for t in ATTACHED if t not in HELD]
     assert {t for t, _ in let_go} <= {"page", "iframe"}, let_go
+
+
+def _browser_version() -> str:
+    import subprocess
+
+    try:
+        out = subprocess.run(  # noqa: S603 - the browser the tests already run
+            [rendercore.browser_path(), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        return (out.stdout or out.stderr).strip() or "unknown"
+    except Exception as exc:  # noqa: BLE001 - only to name the browser in a skip
+        return f"unknown ({type(exc).__name__})"
+
+
+@needs_browser
+@pytest.mark.parametrize("path", PATHS)
+def test_a_classic_worker_under_the_shipped_settle(path, no_network_block, monkeypatch):
+    """Control for the shipped arm of the held cases: with the hold undone and the
+    shipped (virtual-time) settle, does a classic dedicated worker start and
+    reach the listener? Passes if so; skips, naming the browser, if it never
+    started (the held case's shipped arm proves nothing then); fails if it
+    started and reached nothing."""
+    monkeypatch.setattr(rendercore, "_Offline", _Open)
+    seen = _try(path, "classic_worker", monkeypatch, tries=3)
+    spec = KINDS["classic_worker"]
+    started = [(t, u) for t, u in RELEASED if u.endswith(spec["script"])]
+    if spec["ping"] in seen:
+        assert started and all(t == spec["type"] for t, _ in started), (
+            ATTACHED,
+            RELEASED,
+        )
+        return
+    assert not started, (
+        f"{path}: a classic worker started ({started}) but reached nothing ({seen})"
+    )
+    pytest.skip(
+        f"{path}: under the shipped settle a classic dedicated worker never starts "
+        f"on {_browser_version()} (no target at {spec['script']}: {ATTACHED}), so the "
+        "shipped held arm for classic_worker proves nothing; real_time proves it"
+    )
