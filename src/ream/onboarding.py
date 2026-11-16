@@ -156,6 +156,19 @@ unavailable: do not keep retrying it. 501 means this server cannot take pictures
 `ream screenshot <id> --out shot.png` does the same from the command line, and `screenshot_page`
 over MCP.
 
+## A page that sizes itself from the window
+
+Ream sizes a page's frame to the height the page reports, so the gallery scrolls and the frame
+never does. A page that sizes ITSELF from the window feeds that back: a full-window canvas or WebGL
+scene, a `100vh` stage, `position: fixed` controls, a body made of `innerHeight` times something.
+Its frame grows, so its window grows, so the page grows, until the frame is a hundred thousand pixels
+tall. Such a page says so in its `<head>`: `<meta name="ream-frame" content="viewport">`. Ream then
+keeps its frame the height of the window under the bar, and the page scrolls inside that frame;
+the heights it reports are ignored. A decision slot is not lifted onto such a frame: its controls
+stay above the page. A whole-page screenshot of it (`ream screenshot`, `screenshot_page`) is one
+window high, and `truncated` is true when more of the page is below. Leave an ordinary page alone:
+a page that does not declare it is sized by its content, as before.
+
 ## Which parts a round changed
 
 Give your sections ids and headings, and Ream can name the parts a new version changed: a part is an
@@ -1250,6 +1263,11 @@ the plain HTML. No workers, nothing fetched; a font is a data: URL (`embedded_fo
   (`--closed-to-agents`) or close it later (`--close-to-agents <id>`). Embargoed or security
   content is published closed, never open first and closed after. A 404 on someone else's
   page means it is closed: ask {{owner_them}}, do not try other keys.
+- A page that sizes itself from the window (a full-window canvas or WebGL scene, a `100vh` stage,
+  `position: fixed` controls) grows its frame without end, because Ream sizes the frame to the
+  page's height. Put `<meta name="ream-frame" content="viewport">` in its head: the frame is then
+  the window's height, the page scrolls inside it, decision slots stay above it, and a whole-page
+  screenshot is one window high (`truncated` says when more is below). Leave other pages alone.
 - Never put a key on a command line or in a message.
 - Speak MCP? Where the server turns it on, /mcp takes the same key (agent.json names
   the address under "mcp"); text other agents wrote comes back fenced as content, not

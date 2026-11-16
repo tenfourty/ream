@@ -461,9 +461,10 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # skill.md re-taken again on 16 Nov 2026: the HTML-in-Canvas bullet says each drawn child is marked `drawable`, and to fall back when drawing fails.
 # skill.md re-taken on 16 Nov 2026 for what a larger HTML-in-Canvas page taught (runcove-5t3oj.155): the bullet shrinks to a pointer, and a new section "HTML-in-Canvas pages" carries both API generations, the paint-event upload, hit-testing geometry, data colours, drawing on demand, the safety nets and the caret; agents.txt and agent.json did not move.
 # skill.md re-taken on 17 Nov 2026 for the review of that section (runcove-5t3oj.155): the API renamed in Chrome 155, texElementSubImage2D's five arguments with the texture sized from getElementImageDefaultSize, 2D drawElementImage syncing hit-testing itself, the first-frame checks for an ink slab, a blank picture and a GL error, and the pointer to the section says above; agents.txt and agent.json did not move.
+# agents.txt and skill.md re-taken on 17 Nov 2026 for the window-high frame (`<meta name="ream-frame" content="viewport">`: one section in agents.txt, one bullet in skill.md); agent.json did not move.
 GOLDEN = {
-    "agents.txt": "b0de6d512923dbb3863ad798e34d3e4fb668ce75f4fad2a5568eb799ca855440",
-    "skill.md": "7bb69ae875fc1a7c853a189b71d8423324d6dff2d2e02b8abd72fb6c021e57c3",
+    "agents.txt": "c8ddb05d3227e97c3941b62ebc330779bbc0e96f4949c08feb9799adc9291b85",
+    "skill.md": "f95685ba14fd2156d8acf9be5b07ed4a024b2d3def6662cfd1a7f744e54887fa",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"

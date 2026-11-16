@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-17c",
+        'A page that sizes itself from the window (a full-window canvas or WebGL scene, a 100vh stage, position: fixed controls) can now say so with <meta name="ream-frame" content="viewport"> in its head. Before, its frame grew with the page until it was about 100000px tall. Declared, the frame is the window\'s height, the page scrolls inside it, decision slots stay above it, and ream screenshot of the whole page is one window high (truncated says when more is below). Pages that do not declare it are sized as before.',
+    ),
+    (
         "2026-11-17b",
         "The `canvas` template now draws with WebGL2: the card's picture is taken on the canvas's paint event and a small shader draws it under a light that follows the pointer, with a 2D path where WebGL2 is missing and the plain HTML wherever neither runs (most browsers, your read_page and Ream's own picture of a page). It detects both generations of the API by name, tells the browser where the card is drawn so clicks and selection land on the words, draws only when something changed, and falls back on a dark frame, a lost context or a throw; the reader gets a See it without effects button. The skill's new section HTML-in-Canvas pages says how, with the snippets.",
     ),

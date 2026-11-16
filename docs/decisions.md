@@ -1126,3 +1126,35 @@ and not live, is pinned by `tests/test_csp.py`, so a later widening fails a test
 
 **Evidence:** confirmed (Jeremy, 16 Nov 2026, lettered answer (a) in #hq-artifacts); security's
 advice, 16 Nov 2026, no hold.
+
+## A page opts in to a window-high frame; Ream does not detect one (16 Nov 2026)
+
+A page that sizes itself from its window declares it in its head: `<meta name="ream-frame"
+content="viewport">` (`src/ream/pageframe.py`). The shim reports `frame: "viewport"` with every
+height report; the gallery then keeps the page's frame at the window's height less the gallery bar's,
+follows the window, lets the frame scroll, and ignores the page's height reports. The frame carries
+`data-frame="viewport"` and the comments script treats it as it treats full screen (the pill is placed
+from where the frame shows the words, no pin badges, and jumping to a comment only brings the frame up
+under the bar). Decision controls are not lifted onto such a frame, because page coordinates move as it
+scrolls: they stay above the page. A whole-page screenshot of such a page is one window high, taken
+without letting the browser grow the window, and `truncated` is true when more of the page is below.
+
+The trigger was a claude.ai WebGL page that sized its canvas from `innerHeight`: its height fed back
+through auto-height (frame grows, window grows, page grows) until the frame reached the 100000px cap,
+leaving a blurry canvas, text far below and fixed buttons off screen.
+
+Auto-height stays the default. Ream does not detect such pages, because the signs (`innerHeight`,
+`100vh`, `position: fixed`) are also in harmless pages, and a wrong guess would take a normal page's
+height away from it and break its sizing; the author knows which page it wrote. The value is read
+without case or surrounding white space and any other value is the default, so a typo costs nothing.
+
+**Not chosen:**
+- Detecting it (a script scan, or a frame that grows twice in a row): false positives on pages that
+  are fine, and a heuristic the next page defeats.
+- Capping growth lower for every page: it cuts off long pages that are meant to be long.
+- A `data-artifact-*` attribute on the body: this is a setting of the whole page, which HTML already
+  puts in a `<meta>` (`viewport`, `color-scheme`), and the old spelling is for old callers only.
+
+**Evidence:** the claude.ai page that grew its frame to the cap (16 Nov 2026); the opt-in's tests in
+`tests/js/shim.test.mjs`, `viewer.test.mjs`, `comments.test.mjs`, `tests/test_shots.py` and
+`tests/test_panel_browser.py`.
