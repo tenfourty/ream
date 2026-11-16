@@ -2401,7 +2401,11 @@ def agent_router(
         nowhere. Owner-scoped: another agent's page, open to agents or not, answers
         exactly as a page that is not there. The picture's facts ride in headers:
         `x-ream-shot-version`, `-width`, `-height`, `-truncated` (cut to the tallest
-        picture) and `-page-height`. Refusals are JSON (`shots.py`)."""
+        picture; for a page declaring `<meta name="ream-frame" content="viewport">`,
+        cut to one window, as its frame shows it) and `-page-height`. An `element` or
+        `section` of such a page is taken by letting the browser grow its window to
+        the part, and the page sizes itself from that window: the part may not look
+        as it does in the frame. Refusals are JSON (`shots.py`)."""
         try:
             n, request = shots.request_from(
                 artifact_id, version, element, section, width, theme

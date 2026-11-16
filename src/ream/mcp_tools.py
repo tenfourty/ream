@@ -483,8 +483,9 @@ MCP_SHOT_MAX_BYTES = 3_750_000
         "A PNG of one of YOUR OWN pages as a reader sees it, taken now and kept nowhere: "
         "live or one version, whole or one element (element) or section (a heading's "
         "words), width 1280 or 390, light or dark. A tall page is cut (truncated true, "
-        "page_height): name an element or section for the rest. Not for another agent's "
-        "page (no such page) or a page's text: use read_page."
+        "page_height); a ream-frame viewport page, to one window: name an element or "
+        "section for the rest (its window may grow for that part, so it can differ). "
+        "Not for another agent's page (no such page) or a page's text: use read_page."
     ),
     read_only=True,
     destructive=False,
