@@ -14,6 +14,7 @@ import ast
 import gc
 import pathlib
 import sys
+import threading
 import time
 import tracemalloc
 from html.parser import HTMLParser
@@ -264,6 +265,11 @@ def _page(shape: str, chars: int = 8 * MIB, lead: str = "") -> str:
     return scalecheck.page(lead + first, unit, chars, last)
 
 
+# Seconds: longer than any read here takes under tracemalloc, so another thread
+# gets the GIL back only when the read is over (see `_peak`).
+HOLD_GIL = 1000.0
+
+
 def _peak(read, page, bound=None):
     """(what the read gave or raised, the most memory in use at once, in bytes).
 
@@ -272,10 +278,19 @@ def _peak(read, page, bound=None):
     allocating ~150 KB while a 16 KiB page is read showed as 9 times the page. That
     is noise added to one read, never to every read, so a peak at or over `bound`
     is measured again, up to three reads, and the least is the answer: memory the
-    read itself holds is there in all three."""
+    read itself holds is there in all three.
+
+    Measuring again is not enough on its own: a thread that allocates without
+    stopping is there in all three reads too (CI once measured 5.8 copies of a
+    16 KiB page three times over, for a read that holds 0.14). A read is pure
+    Python and never lets go of the GIL by itself, so the switch interval is raised
+    for as long as it is traced: no other thread runs, or allocates, until it ends.
+    `test_the_peak_counts_only_the_read` holds that."""
     least = None
     for _ in range(3 if bound is not None else 1):
         gc.collect()
+        interval = sys.getswitchinterval()
+        sys.setswitchinterval(HOLD_GIL)
         tracemalloc.start()
         try:
             tracemalloc.reset_peak()
@@ -286,6 +301,7 @@ def _peak(read, page, bound=None):
             peak = tracemalloc.get_traced_memory()[1]
         finally:
             tracemalloc.stop()
+            sys.setswitchinterval(interval)
         least = peak if least is None else min(least, peak)
         if bound is None or least < bound:
             break
@@ -621,6 +637,29 @@ def test_the_memory_of_every_other_long_match_is_a_few_copies_of_the_page(
         f"{peak / len(page):.1f} times the page of {len(page)} characters"
         f" (the bound is {copies})"
     )
+
+
+def test_the_peak_counts_only_the_read():
+    """A thread allocating all the time while a page is read is not counted: it
+    made a read that holds 0.14 copies of a 16 KiB page measure 9.6 when other
+    threads could take the GIL every 5 ms, as they can by default."""
+    stop = threading.Event()
+
+    def allocate():
+        while not stop.is_set():
+            kept = [bytes(1000) for _ in range(150)]
+            del kept
+
+    noisy = threading.Thread(target=allocate, daemon=True)
+    noisy.start()
+    try:
+        page = _other_page("CDATA closed over and over", MIB // 64)
+        for _ in range(3):
+            _, peak = _peak(_visible_read, page)
+            assert peak < len(page), f"{peak / len(page):.1f} times the page"
+    finally:
+        stop.set()
+        noisy.join()
 
 
 def test_the_sets_name_shapes_of_the_table():
