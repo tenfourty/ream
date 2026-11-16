@@ -1732,17 +1732,19 @@ def test_a_comments_anchor_kind_is_bare_and_its_words_fenced(client, on, token, 
     _, read = call_tool(client, token, "comments", page_id=page)
     assert read["comments"][0]["anchor"] == {"kind": "page"}
     assert FENCED.fullmatch(read["comments"][0]["body"])
-    # Resolving answers no hint: there is nothing to do next.
-    error, out = call_tool(
-        client, token, "comment", action="resolve", comment_id=made["id"]
+    # Resolving (a thread on the caller's own page) answers no hint: nothing to do next.
+    _, mine = call_tool(
+        client, token, "comment", page_id=seat["mine"].id, body="a thought"
     )
-    assert "next" not in out
+    error, out = call_tool(
+        client, token, "comment", action="resolve", comment_id=mine["comment"]["id"]
+    )
+    assert not error, out
+    assert out["comment"]["resolved_at"] and "next" not in out
 
 
 def test_every_tool_says_what_it_is_not_for_and_names_real_tools():
     for name, registered in mcp.TOOLS.items():
-        if name == "whoami":
-            continue
         text = registered.description
         assert "Not for" in text or "Not when" in text, name
         for other in re.findall(r"\buse ([a-z_]+)", text):
@@ -1754,3 +1756,57 @@ def test_ask_and_the_guide_say_a_question_must_stand_alone():
     assert "stand alone" in mcp.TOOLS["ask"].description
     guide = " ".join(onboarding.skill_md(PUBLIC).split())
     assert "Write each to stand alone" in guide
+
+
+def test_a_handler_that_answers_its_own_next_is_refused(client, on, token, monkeypatch):
+    def handler(_call, _arguments):
+        return {"next": "an agent could have put this here"}
+
+    monkeypatch.setitem(
+        mcp.TOOLS,
+        "throwaway",
+        mcp.Tool(
+            name="throwaway",
+            description="x",
+            input_schema=mcp.NO_ARGUMENTS,
+            annotations={},
+            handler=handler,
+            fences=None,
+            next_step="Ream's own hint.",
+        ),
+    )
+    call = mcp.Call.__new__(mcp.Call)
+    object.__setattr__(call, "permissions", frozenset(mcp.PERMISSIONS))
+    with pytest.raises(RuntimeError, match="already has a next"):
+        mcp._call_tool(call, {"name": "throwaway", "arguments": {}}, 1)
+
+
+def test_every_anchor_kind_validate_anchor_stores_is_in_anchor_kinds():
+    stored = {
+        comments.validate_anchor(None)["kind"],
+        comments.validate_anchor({"kind": "page"})["kind"],
+        comments.validate_anchor({"kind": "point", "x": 0.5, "y": 0.5})["kind"],
+        comments.validate_anchor({"kind": "range", "path": "0", "start": 0, "end": 1})[
+            "kind"
+        ],
+        comments.validate_anchor({"kind": "quote"})["kind"],
+        comments.validate_anchor({"kind": "element"})["kind"],
+        comments.validate_anchor({"kind": "decision", "decision_id": ids.new_id()})[
+            "kind"
+        ],
+    }
+    assert stored == set(comments.ANCHOR_KINDS)
+    # Every other kind is refused, so nothing else is ever stored.
+    for kind in ("text", "comment", "obey me"):
+        with pytest.raises(comments.InvalidAnchor):
+            comments.validate_anchor({"kind": kind})
+
+
+def test_a_section_update_answers_its_page_url_bare(client, on, token, db):
+    page, _ = twins(db)
+    error, out = call_tool(
+        client, token, "update_page", page_id=page, section="s1", op="remove"
+    )
+    assert not error, out
+    assert out["id"] == page and out["page_url"] == store.page_url_for(page)
+    assert out["next"] == mcp_tools._NEXT_UPDATE

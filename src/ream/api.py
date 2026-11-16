@@ -1087,6 +1087,8 @@ def update_page_section(
         partchanges.in_background(db, published.id, published.version)
     return _saying_who_reads(
         {
+            # The page's id, so a reader (and the MCP fence) knows which page page_url is.
+            "id": published.id,
             "page_revision": published.revision,
             "section_revision": result.section_revision,
             "version": published.version,

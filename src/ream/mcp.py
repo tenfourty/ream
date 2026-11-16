@@ -459,7 +459,8 @@ def _find_resource(call: Call, uri: str) -> tuple[str, str] | None:
     description=(
         "Who this connection is in Ream: the agent it acts as, its key's id, whether that "
         "key rotates, its grants, the session label it declared, and the permissions it "
-        "holds here (ream:read, ream:write, ream:relay)."
+        "holds here (ream:read, ream:write, ream:relay). Not for a page or who published "
+        "it: use list_pages or read_page."
     ),
     read_only=True,
     destructive=False,

@@ -77,7 +77,7 @@ MAX_QUOTE_BYTES = 2_000
 # them as `<default> — <note>`, so an old tool that prints only the body still shows the kind.
 ASK_KINDS = ("explain", "shorten", "fix")
 KINDS = ("comment", "remove", "looks_good", *ASK_KINDS)
-# What `normalise_anchor` stores as an anchor's `kind`: Ream's own words, never an agent's.
+# What `validate_anchor` stores as an anchor's `kind`: Ream's own words, never an agent's.
 ANCHOR_KINDS = ("page", "point", "range", "quote", "element", "decision")
 DEFAULT_BODY = {
     "explain": "Explain these words.",
