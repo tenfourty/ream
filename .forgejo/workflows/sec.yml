@@ -167,7 +167,9 @@ jobs:
     runs-on: runcove-sec-unpriv
     # A hung job fails here instead of holding a builder for the runner's default of hours
     # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
-    timeout-minutes: 20
+    # 45, as ci.yml's test-sqlite: the browser step runs the offline probes, and on
+    # 16 Nov 2026 (private run 61736) every test passed but the job was cut off at 20.
+    timeout-minutes: 45
     needs: [privacy]
     if: "github.repository == 'runcove-sec/artifacts-sec'"
     services:
