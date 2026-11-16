@@ -23,18 +23,20 @@ What is turned off, in both arms, so that the hold is the one thing tested:
     module worker's case would not test the hold. It does not see a shared or a
     service worker's requests: those reached the listener with the filter on.
 
-Then each kind is run twice on each path: once with the hold off too (`_Open`:
-every target let go), where the worker's request must reach the listener, so the
-probe is known to fire; and once with the hold as shipped, where a target of that
-kind must have been attached and held, and its request must reach nothing.
+Then each kind is run twice on each path: once with the hold undone (`_Open`:
+the shipped hold, then the held target let go, so the two arms differ by that
+alone), where the worker's request must reach the listener, so the probe is known
+to fire; and once with the hold as shipped (`_Held`), where a target of that kind
+must have been attached and held, and its request must reach nothing.
 
 The page's settle. A render lets the page settle in its own (virtual) time
 (`rendercore._load`). Under it, full Chromium (Chrome for Testing 147, 16 Nov
 2026) started no dedicated worker at all, classic or module, even with the hold
 off: no target, no request. So both arms settle in real time instead (`_settle`:
 the same navigation and load, then a real wait), where every kind fired with the
-hold off on Chromium 147 and the headless shell 1217; the held arm also runs with
-the shipped settle, where its request must reach nothing as well.
+hold off on Chromium 147 and the headless shell 1217. The held arm also runs with
+the shipped settle, where its request must reach nothing as well; that arm does
+NOT prove the hold (the worker may never have started), only real_time does.
 
 Not here, because no control can show them fire: <link rel=preconnect> opened
 no connection to the listener even with every block off and the page served
@@ -159,11 +161,15 @@ def _target(params) -> tuple[str, str]:
 
 class _Held(rendercore._Offline):
     """The hold as shipped (`_Offline._hold`, unchanged), with the page's offline
-    emulation not sent and every request let go on by the filter."""
+    emulation not sent and every request let go on by the filter (checked: an
+    error answer fails the run, as the shipped filter's answers do)."""
 
     def _decide(self, params, session):
         self.pipe.send(
-            "Fetch.continueRequest", {"requestId": params["requestId"]}, session
+            "Fetch.continueRequest",
+            {"requestId": params["requestId"]},
+            session,
+            checked=True,
         )
 
     def _hold(self, params):
@@ -179,21 +185,28 @@ class _Held(rendercore._Offline):
             HELD.append(_target(params))
 
 
-class _Open(rendercore._Offline):
-    """The hold off: no filter, nothing offline, every target let go. For the
+# Every target the control let go after the shipped hold, as (type, url).
+RELEASED: list[tuple[str, str]] = []
+
+
+class _Open(_Held):
+    """`_Held` with the hold undone: each target the shipped `_hold` held is let go
+    at once. Everything else is `_Held`'s (the page's interception, the filter that
+    lets every request on, no offline emulation), so the two arms differ by the
+    release alone, and a worker's request takes the same way in both. For the
     controls only."""
 
-    def _decide(self, params, session):
-        self.pipe.send(
-            "Fetch.continueRequest", {"requestId": params["requestId"]}, session
-        )
-
     def _hold(self, params):
-        ATTACHED.append(_target(params))
-        child = params["sessionId"]
-        self.attached[child] = str(params["targetInfo"].get("targetId"))
-        self.pipe.send("Target.setAutoAttach", rendercore._AUTO_ATTACH, child)
-        self.pipe.send("Runtime.runIfWaitingForDebugger", session=child)
+        before = self.held
+        super()._hold(params)
+        if self.held > before:
+            HELD.pop()
+            RELEASED.append(_target(params))
+            self.pipe.send(
+                "Runtime.runIfWaitingForDebugger",
+                session=params["sessionId"],
+                checked=True,
+            )
 
 
 def _settle(pipe, session, page_url):
@@ -249,6 +262,7 @@ def no_network_block(monkeypatch):
     monkeypatch.setattr(rendercore, "_NO_REACH_FLAGS", [])
     ATTACHED.clear()
     HELD.clear()
+    RELEASED.clear()
 
 
 def _try(path, kind, monkeypatch, tries):
@@ -280,7 +294,9 @@ def test_the_worker_runs_with_the_hold_off(path, kind, no_network_block, monkeyp
     assert spec["ping"] in seen, f"{path} {kind}: the worker never ran ({seen})"
     if "also" in spec:
         assert spec["also"] in seen, seen
-    assert any(t == spec["type"] for t, _ in ATTACHED), ATTACHED
+    # The worker that ran is the one the shipped hold held and the control let go.
+    mine = [(t, u) for t, u in RELEASED if u.endswith(spec["script"])]
+    assert mine and all(t == spec["type"] for t, _ in mine), (ATTACHED, RELEASED)
 
 
 @needs_browser
@@ -297,6 +313,10 @@ def test_the_worker_is_held_and_reaches_nothing(
     spec = KINDS[kind]
     reached = [p for p in seen if p.startswith("/ping/")]
     assert reached == [], f"{path} {kind} ({settle}): the held worker reached {reached}"
+    # Only the real_time arm proves the hold. In the shipped arm the worker may
+    # never have started (full Chromium starts no dedicated worker under the
+    # render's virtual time), so reaching nothing there proves nothing of the
+    # hold; it is kept only to show the shipped settle lets nothing out either.
     if settle == "real_time":
         # The worker did start: a target of its kind, at its script, was held.
         mine = [(t, u) for t, u in HELD if u.endswith(spec["script"])]

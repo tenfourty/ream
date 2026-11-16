@@ -161,7 +161,8 @@ read the same on both (`docs/agent/specs/2026-10-09-sqlite-design.md`). CI runs 
 
 The browser tests (comments panel, hover cards, thumbnails, shim placement) need a headless
 chromium: `REAM_BROWSER=<path>`, or `chromium`/`chrome-headless-shell` on PATH; without one they
-skip (`-rs` names them). CI installs Debian's chromium and runs those four files serially in their own
+skip (`-rs` names them). CI installs Debian's chromium and runs the browser test files (those named in the
+`browser tests` step of `.forgejo/workflows/ci.yml`, and of `sec.yml`) serially in their own
 step of the `test-sqlite` job, which runs beside the Postgres suite's `test` job, with `REAM_REQUIRE_BROWSER=1` (the parallel runs hide the browser: `REAM_BROWSER=/nonexistent/browser`), which
 makes a missing browser fail the run at start instead of skipping -- so a green CI run means they ran.
 
