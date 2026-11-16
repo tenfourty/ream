@@ -162,7 +162,8 @@ def _target(params) -> tuple[str, str]:
 class _Held(rendercore._Offline):
     """The hold as shipped (`_Offline._hold`, unchanged), with the page's offline
     emulation not sent and every request let go on by the filter (checked: an
-    error answer fails the run, as the shipped filter's answers do)."""
+    error answer fails the run; stricter than the shipped filter, which sends
+    its answers unchecked)."""
 
     def _decide(self, params, session):
         self.pipe.send(
