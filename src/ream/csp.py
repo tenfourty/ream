@@ -416,7 +416,8 @@ class Lines:
     over the page in all and no list of every newline is made (a page of nothing
     but newlines would otherwise make millions of them). An answer is right in any
     order, but a backward ask costs a pass over the gap it goes back across, so
-    ask in increasing order. An offset below 0 is on line 1, as offset 0 would be
+    ask in increasing order, and use one `Lines` for each sequence of asks that
+    restarts at the top of the page. An offset below 0 is on line 1, as offset 0 would be
     were it not a newline itself; one past the end is on the last line."""
 
     def __init__(self, text: str) -> None:

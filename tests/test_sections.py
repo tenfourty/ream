@@ -854,7 +854,18 @@ def test_a_tag_is_placed_where_the_line_table_placed_it_on_any_line_ending():
     import random
 
     rng = random.Random(5)
-    pieces = ["\n", "\r\n", "\r", "\x0b", "\x0c", "\x85", " ", "text", " ", "&amp;"]
+    pieces = [
+        "\n",
+        "\r\n",
+        "\r",
+        "\x0b",
+        "\x0c",
+        "\x85",
+        "\u2028",
+        "text",
+        " ",
+        "&amp;",
+    ]
     pieces += ["<b>", "<i id=x>", "</b>", "<br/>", "<!-- c\n-->", "<p\nid=y>"]
     for _ in range(300):
         src = "".join(rng.choice(pieces) for _ in range(rng.randrange(1, 60)))
@@ -871,6 +882,26 @@ def test_a_tag_is_placed_where_the_line_table_placed_it_on_any_line_ending():
         walker.feed(src)
         walker.close()
         assert sorted(seen) == sorted(_old_positions(src)), repr(src)
+
+
+def test_an_end_tag_is_placed_where_it_starts_on_any_line_ending():
+    for brk in ["\n", "\r\n", "\r", "\x0b", "\x0c", "\x85", "\u2028"]:
+        src = f'a{brk}<div id="x">{brk}t</div>{brk}</p>z'
+        walker = sections._Walker(src)
+        ends: list[tuple[str, int]] = []
+        original = walker.handle_endtag
+
+        def record(tag, ends=ends, walker=walker, original=original):
+            ends.append((tag, walker._pos()))
+            original(tag)
+
+        walker.handle_endtag = record
+        walker.feed(src)
+        walker.close()
+        assert ends == [
+            ("div", src.index("</div>")),
+            ("p", src.index("</p>")),
+        ], repr(brk)
 
 
 def test_a_section_on_a_page_of_newlines_is_found_in_no_list():

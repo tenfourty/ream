@@ -827,16 +827,31 @@ def _is_placeholder(shape: str, match: re.Match, text: str) -> bool:
     return not value or _PLACEHOLDER.fullmatch(value) is not None
 
 
-# What `str.splitlines` ends a line at, other than "\n" and "\r\n" (which are
-# handled by `replace`): every one becomes "\n" in `_one_line_ending`.
-_OTHER_LINE_ENDS = {ord(c): "\n" for c in "\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"}
+# What `str.splitlines` ends a line at, other than "\n" and "\r\n" (which `replace`
+# handles): each becomes "\n" in `_one_line_ending`.
+_OTHER_LINE_ENDS = (
+    "\r",
+    "\x0b",
+    "\x0c",
+    "\x1c",
+    "\x1d",
+    "\x1e",
+    "\x85",
+    "\u2028",
+    "\u2029",
+)
 
 
 def _one_line_ending(text: str) -> str:
     """`"\n".join(text.splitlines())` without the list of every line: each line
-    end `splitlines` knows becomes "\n", and a last line end is dropped."""
-    joined = text.replace("\r\n", "\n").translate(_OTHER_LINE_ENDS)
-    if text and text[-1] in "\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029":
+    end `splitlines` knows becomes "\n", and a last line end is dropped. Plain
+    `replace` calls, each skipped when its character is absent: `str.translate`
+    with a table is many times slower on a page holding any non-ASCII text."""
+    joined = text.replace("\r\n", "\n")
+    for char in _OTHER_LINE_ENDS:
+        if char in joined:
+            joined = joined.replace(char, "\n")
+    if text and (text[-1] == "\n" or text[-1] in _OTHER_LINE_ENDS):
         return joined[:-1]
     return joined
 
@@ -846,7 +861,6 @@ def _shape_lines(
     pattern: re.Pattern,
     needs_lowered: bool,
     views: list[tuple[str, str]],
-    lines_for,
 ) -> list[int]:
     """The distinct lines (up to `_MAX_LINES_PER_SHAPE`) where `pattern`
     matches something that isn't a placeholder, across both `(view,
@@ -866,13 +880,16 @@ def _shape_lines(
     """
     lines: dict[int, None] = {}
     real_examined = 0
-    for index, (view, lowered) in enumerate(views):
+    for view, lowered in views:
+        # One counter per shape and view: `finditer` yields matches in increasing
+        # offset order, so each counter makes one forward pass over its view.
+        counter = csp.Lines(view)
         search_text = lowered if needs_lowered else view
         for match in pattern.finditer(search_text):
             if _is_placeholder(name, match, view):
                 continue
             real_examined += 1
-            lines.setdefault(lines_for(index).of(match.start()), None)
+            lines.setdefault(counter.of(match.start()), None)
             if (
                 len(lines) >= _MAX_LINES_PER_SHAPE
                 or real_examined >= _MAX_RAW_MATCHES_PER_SHAPE
@@ -898,8 +915,8 @@ def scan(text: str) -> list[Finding]:
     so a caller checking `scan(body) == []` is never looking at a scanner
     that silently gave up.
 
-    Line numbers are counted on demand (`csp.Lines`), one counter per view, and
-    only if something in that view needs one -- no list of every newline is made. `SHAPES` is re-read fresh on
+    Line numbers are counted on demand (`csp.Lines`), one counter per shape and view, each
+    one forward pass, and only if something in that view matches -- no list of every newline is made. `SHAPES` is re-read fresh on
     every call, not cached at import time, so a caller that swaps it out
     (only ever done in tests) is honoured rather than silently bypassed by a
     stale fast-path cache.
@@ -909,19 +926,10 @@ def scan(text: str) -> list[Finding]:
     view_texts = (raw_view,) if text_view == raw_view else (raw_view, text_view)
     views = [(view, _lower_ascii(view)) for view in view_texts]
 
-    # One per view, made when first asked for. Matches arrive in increasing order.
-    lines_cache: dict[int, csp.Lines] = {}
-
-    def lines_for(index: int) -> csp.Lines:
-        cached = lines_cache.get(index)
-        if cached is None:
-            cached = lines_cache[index] = csp.Lines(views[index][0])
-        return cached
-
     findings: list[Finding] = []
     for name, pattern in SHAPES:
         fast_pattern, needs_lowered = _fast_pattern(pattern)
-        for line in _shape_lines(name, fast_pattern, needs_lowered, views, lines_for):
+        for line in _shape_lines(name, fast_pattern, needs_lowered, views):
             findings.append(Finding(shape=name, line=line))
         if len(findings) >= _MAX_FINDINGS_TOTAL:
             break

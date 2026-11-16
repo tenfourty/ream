@@ -1485,7 +1485,19 @@ def test_a_slack_token_in_a_script_string_is_caught_here_too():
     assert scan.scan("<p>the xoxb- prefix alone is not a token</p>") == []
 
 
-_BREAKS = ["\n", "\r\n", "\r", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", " ", " "]
+_BREAKS = [
+    "\n",
+    "\r\n",
+    "\r",
+    "\x0b",
+    "\x0c",
+    "\x1c",
+    "\x1d",
+    "\x1e",
+    "\x85",
+    "\u2028",
+    "\u2029",
+]
 
 
 def test_the_one_line_ending_view_is_what_splitlines_and_join_give():
@@ -1523,3 +1535,15 @@ def test_a_page_of_newlines_is_scanned_in_no_list():
         ("aws_access_key_id", 8 * 1024 * 1024 - 100 + 1)
     ]
     assert peak < 40 * 1024 * 1024, "no per-line list is made"
+
+
+@pytest.mark.scaling
+def test_the_one_line_ending_view_of_a_big_non_ascii_page_is_fast():
+    """A table-driven `translate` took over a second on an 8 MiB page holding one
+    non-ASCII character; plain `replace` calls do not care."""
+    text = "é\n" * (4 * 1024 * 1024)
+    started = time.perf_counter()
+    out = scan._one_line_ending(text)
+    elapsed = time.perf_counter() - started
+    assert out == text[:-1]
+    assert elapsed < 2.0, f"{elapsed:.2f}s"
