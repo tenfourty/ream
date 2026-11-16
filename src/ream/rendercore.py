@@ -49,7 +49,7 @@ import unicodedata
 from pathlib import Path
 from typing import NamedTuple
 
-from ream import devtools, renderfind, renderwire, settings
+from ream import devtools, pageframe, renderfind, renderwire, settings
 from ream.renderwire import Report
 
 # The logger keeps the name it had in thumbs.py, so the log reads as before.
@@ -493,27 +493,33 @@ _PIPE_SHIM = 'exec 3<&0 4>&1 </dev/null >/dev/null && exec "$0" "$@"'
 # so a page cannot change how its parts are found. The whole page's size, and the
 # box of the element (by id) or the section (by its heading's folded words, to the
 # next heading of the same rank or higher, as the pin script's `peers` reads one).
+# `vp`: the page declares a window-high frame (`pageframe`), as the shim reads it.
 _RESOLVE_JS = r"""(function(el, sec){
 var d=document,de=d.documentElement,b=d.body,i,n=0,hit=null,hs,lv,end=null,h,r,t,top,bot;
 scrollTo(0,0);
 var ph=Math.max(de.scrollHeight,b?b.scrollHeight:0,de.clientHeight);
 var vw=de.clientWidth||innerWidth;
+var fm=d.querySelector(__FRAME_META__),vp=!!fm&&String(fm.getAttribute("content")||"").trim().toLowerCase()===__VIEWPORT__;
 function box(r){return{x:r.left+scrollX,y:r.top+scrollY,w:r.width,h:r.height}}
 if(el!==null){var l=d.querySelectorAll('[id="'+CSS.escape(el)+'"]');
-  if(l.length!==1)return{n:l.length,ph:ph,vw:vw};
-  return{n:1,ph:ph,vw:vw,box:box(l[0].getBoundingClientRect())}}
+  if(l.length!==1)return{n:l.length,ph:ph,vw:vw,vp:vp};
+  return{n:1,ph:ph,vw:vw,vp:vp,box:box(l[0].getBoundingClientRect())}}
 if(sec!==null){hs=d.querySelectorAll("h1,h2,h3,h4,h5,h6");
   for(i=0;i<hs.length;i++){t=(hs[i].textContent||"").replace(/__SPACE__+/g," ").trim().toLowerCase();
     if(t===sec){n++;hit=hs[i]}}
-  if(n!==1)return{n:n,ph:ph,vw:vw};
+  if(n!==1)return{n:n,ph:ph,vw:vw,vp:vp};
   lv=+String(hit.nodeName).charAt(1);
   for(i=0;i<hs.length;i++){h=hs[i];
     if(h!==hit&&!hit.contains(h)&&(hit.compareDocumentPosition(h)&4)&&+String(h.nodeName).charAt(1)<=lv){end=h;break}}
   r=hit.getBoundingClientRect();top=r.top+scrollY;
   bot=end?end.getBoundingClientRect().top+scrollY:ph;
-  return{n:1,ph:ph,vw:vw,box:{x:0,y:top,w:vw,h:Math.max(0,bot-top)}}}
-return{n:-1,ph:ph,vw:vw}})"""
-_RESOLVE_JS = _RESOLVE_JS.replace("__SPACE__", renderwire.SHOT_SPACE_CLASS)
+  return{n:1,ph:ph,vw:vw,vp:vp,box:{x:0,y:top,w:vw,h:Math.max(0,bot-top)}}}
+return{n:-1,ph:ph,vw:vw,vp:vp}})"""
+_RESOLVE_JS = (
+    _RESOLVE_JS.replace("__SPACE__", renderwire.SHOT_SPACE_CLASS)
+    .replace("__FRAME_META__", json.dumps(f'meta[name="{pageframe.META_NAME}" i]'))
+    .replace("__VIEWPORT__", json.dumps(pageframe.VIEWPORT))
+)
 
 
 class _Watch:
@@ -557,6 +563,13 @@ def _shot_box(found: dict, request) -> tuple[int, int, int, int, bool] | str:
     n = found.get("n")
     if request.element is None and request.section is None:
         x, y, w, h = 0.0, 0.0, float(request.width), float(found["ph"])
+        if found.get("vp") is True:
+            # A page that asked for a window-high frame is shot as that frame shows
+            # it: one window high. A taller clip would resize its window, which is
+            # what such a page sizes itself from (`pageframe`). Below is cut, and
+            # `truncated` says so when there is more.
+            viewport = renderwire.SHOT_VIEWPORTS[request.width]
+            return (0, 0, int(request.width), viewport, h > viewport)
     elif n == 0:
         return "no_match"
     elif n != 1:
@@ -807,13 +820,18 @@ def _converse(pipe: devtools.Pipe, page_url: str, request, offline: _Offline):
             matches = min(int(n), renderwire.SHOT_MATCHES_MAX)
         return renderwire.Shot(box, matches=matches)
     x, y, width, height, truncated = box
+    # A window-high page's whole picture is the window: never let the browser grow
+    # the window to take it (`_shot_box`).
+    window_only = (
+        found.get("vp") is True and request.element is None and request.section is None
+    )
     try:
         taken = pipe.call(
             "Page.captureScreenshot",
             {
                 "format": "png",
                 "clip": {"x": x, "y": y, "width": width, "height": height, "scale": 1},
-                "captureBeyondViewport": True,
+                "captureBeyondViewport": not window_only,
                 "fromSurface": True,
             },
             session,
