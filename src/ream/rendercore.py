@@ -574,7 +574,9 @@ class _Offline:
     it, it is set offline too; the commands on one target run in order, so this
     is in place before it runs a line. A request for `page_url` goes on; every
     other one fails as if there were no network. An error answer to any of these
-    commands fails the shot, and so does a target past SHOT_TARGETS_MAX."""
+    commands fails the shot, and so does a target past SHOT_TARGETS_MAX.
+    A shared, a module and a service worker each started for real and held:
+    tests/test_render_workers_held.py."""
 
     def __init__(self, page_url: str) -> None:
         self.page_url = page_url
