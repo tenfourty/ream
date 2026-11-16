@@ -27,8 +27,8 @@ Which fields are which (section 15):
   the actor (his verbatim words).
 - Agent-written, fenced, everything else: page titles and bodies, folder titles, version
   notes, session labels, check notes, warnings' text, comment bodies, quotes and anchors,
-  question text, context, option labels, topics, audiences, blocked_on, answer notes,
-  receipts, the page title on a question, a Slack question's asking office, and every
+  question text, context, option labels and previews, topics, audiences, blocked_on,
+  answer notes, receipts, the page title on a question, a Slack question's asking office, and every
   event summary (an owner's answer summary quotes an agent's option label, so it is
   fenced too, labelled with the page's agent).
 - Templates (`get_template`, the template resources), the guide and the prompts are
@@ -345,12 +345,10 @@ def _list_pages(call: Call, arguments: dict[str, Any]) -> dict:
         "A page's stored HTML: the live version, one version (version), one element "
         "(section), its history (history), or which parts changed since a version "
         "(changes_since). The live version carries Ream's render report: render_verdict "
-        "(ok, broken or unchecked) and render_findings. A large page comes in parts: "
-        f"at most {api.READ_PART_DEFAULT} characters unless you give limit; size is the "
-        "whole page's length and next_offset, when not null, is the offset to read the "
-        "next part from. partial true means the body is only part of the page: never "
-        "send a part to update_page as the whole page; read every part, or pass a limit "
-        "covering size, first. Not for how it looks: use "
+        "(ok, broken or unchecked) and render_findings. A large page comes in parts "
+        f"(offset, limit; default {api.READ_PART_DEFAULT} characters) with size and "
+        "next_offset; partial true is not the whole page: never update a page with it. "
+        "Not for how it looks: use "
         "screenshot_page. Not for finding a page: use list_pages."
     ),
     read_only=True,
@@ -1425,15 +1423,14 @@ _ASK_FIELDS = {
     "ask",
     title="Ask a question",
     description=(
-        "Ask the person a question on a page, with lettered options ([{letter, label, "
-        "preview?}]; preview is optional plain text shown beside that option, up to 15 "
-        "lines, never rendered; recommended is the letter you suggest). Write it to stand alone: the person may "
-        "see only the question, in the inbox or a notification, so name what it is about "
-        "and make each option clear without the page or this chat. The answer reaches you "
-        "in whats_new (wait_for_answer waits). Key: your own pages. Connected app: any page the person can read; "
-        "the card says it came from you and only you can withdraw it. Not for a remark or "
-        "a reply: use comment. Not when they already answered in this chat: use "
-        "record_answer."
+        "Ask the person a question on a page: lettered options [{letter, label, "
+        "preview?}] (preview: text shown beside it), recommended: your letter. Write it "
+        "to stand alone: they may see only the question (inbox or notification), so name "
+        "what it is about and make each option clear without the page or this chat. The "
+        "answer reaches you in whats_new (wait_for_answer waits). Key: your own pages. "
+        "Connected app: any page the person can read; the card says it came from you and "
+        "only you can withdraw it. Not for a remark or a reply: use comment. Not when they "
+        "already answered in this chat: use record_answer."
     ),
     read_only=False,
     destructive=False,
