@@ -954,14 +954,25 @@ def _plugin_loader_env(request, monkeypatch):
 @pytest.fixture(autouse=True)
 def _unbound_shared_state():
     """`serve.app_from_env` binds the shared breaker state and failure counts to its
-    database; no test may inherit that (or leave its own) binding."""
-    from ream import plugin_api, sinks
+    database, and starts the core outbox sender on it; no test may inherit that (or
+    leave its own) binding or sender. A sender left running polls this worker's
+    database and delivers the next test's rows behind its back (runcove-5t3oj.127:
+    a row asserted untouched was marked delivered between two lines), so every
+    test starts and ends with none, whoever started it."""
+    from ream import sinks
 
-    sinks.bind(None)
-    plugin_api.stop_writer()
+    def no_sender() -> None:
+        sinks.stop()  # also unbinds and stops the failure-count writer
+        alive = [
+            t
+            for t in threading.enumerate()
+            if t.name == "outbox-sender" and t.is_alive()
+        ]
+        assert not alive, f"an outbox sender did not stop: {alive}"
+
+    no_sender()
     yield
-    sinks.bind(None)
-    plugin_api.stop_writer()
+    no_sender()
 
 
 @pytest.fixture(autouse=True)
