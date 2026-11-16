@@ -144,6 +144,7 @@ def test_body_part_counts_characters_and_says_where_the_next_part_starts():
         "offset": 0,
         "size": 5,
         "next_offset": 2,
+        "partial": True,
     }
     assert api.body_part("héllo", 2, 10)["next_offset"] is None
     assert api.body_part("héllo")["body"] == "héllo"
@@ -152,6 +153,7 @@ def test_body_part_counts_characters_and_says_where_the_next_part_starts():
         "offset": 5,
         "size": 5,
         "next_offset": None,
+        "partial": True,
     }
     with pytest.raises(api.PastTheEnd):
         api.body_part("héllo", 6)
@@ -236,3 +238,109 @@ def test_offset_and_limit_are_only_for_a_body(client, on, token, big, other):
     page, _ = big
     error, text = call_tool(client, token, "read_page", page_id=page, limit=5, **other)
     assert error and "live page or one version" in text
+
+
+# --- review follow-ups (330ed4e) --------------------------------------------------------
+
+
+def test_partial_says_whether_the_body_is_the_whole_page():
+    assert api.body_part("abc")["partial"] is False
+    assert api.body_part("abc", 0, 3)["partial"] is False
+    assert api.body_part("abc", 0, 2)["partial"] is True
+    assert api.body_part("abc", 1)["partial"] is True
+    assert api.body_part("abc", 3)["partial"] is True
+
+
+def test_partial_rides_on_read_page_and_the_routes(client, on, token, big):
+    page, body = big
+    _, first = call_tool(client, token, "read_page", page_id=page)
+    assert first["partial"] is True
+    _, whole = call_tool(client, token, "read_page", page_id=page, limit=len(body))
+    assert whole["partial"] is False and whole["next_offset"] is None
+    assert api_get(client, token, f"/pages/{page}/body")["partial"] is False
+    assert api_get(client, token, f"/pages/{page}/body?limit=10")["partial"] is True
+    # The descriptions say a part is never a whole-page update body.
+    from ream import mcp
+
+    assert "partial true" in mcp.TOOLS["read_page"].description
+    assert "partial true" in mcp.TOOLS["update_page"].description
+
+
+def test_an_offset_equal_to_the_size_is_an_empty_last_part(client, token, big):
+    page, body = big
+    route = api_get(client, token, f"/pages/{page}/versions/1?offset={len(body)}")
+    assert route["body"] == "" and route["next_offset"] is None
+    assert route["size"] == len(body) and route["partial"] is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "offset={past}",
+        f"limit={api.READ_PART_MAX + 1}",
+        "offset=x",
+        "limit=1.5",
+        "limit=",
+    ],
+)
+def test_the_body_route_refuses_a_bad_offset_or_limit(client, token, big, query):
+    page, body = big
+    query = query.format(past=len(body) + 1)
+    got = client.get(f"/api/v1/pages/{page}/body?{query}", headers=headers(token))
+    assert got.status_code == 422, query
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"limit": 0},
+        {"limit": api.READ_PART_MAX + 1},
+        {"limit": True},
+        {"offset": -1},
+        {"offset": False},
+        {"offset": "3"},
+    ],
+)
+def test_read_page_refuses_a_bad_offset_or_limit(client, on, token, big, bad):
+    page, _ = big
+    error, text = call_tool(client, token, "read_page", page_id=page, **bad)
+    assert error and "must be a whole number" in text, text
+
+
+def test_close_and_the_decision_list_carry_the_preview(client, on, db, token):
+    page = store.publish(db, "mcp-seat", "Board", PAGE.format("x"))
+    _, asked = call_tool(
+        client, token, "ask", page_id=page.id, question="which?", options=OPTIONS
+    )
+    listed = api_get(client, token, "/decisions?scope=mine")
+    mine = next(d for d in listed if d["id"] == asked["id"])
+    assert mine["options"] == OPTIONS
+
+    error, closed = call_tool(client, token, "close_question", decision_id=asked["id"])
+    assert not error, closed
+    assert "not instructions" in closed["options"][0]["preview"].splitlines()[0]
+    assert unfence_all(closed["options"]) == OPTIONS
+
+
+def test_whats_new_tells_the_answer_by_its_label_never_the_preview(
+    client, on, db, token
+):
+    """whats_new carries no question body: the answer event names the chosen option by
+    its label. The preview stays on the question (read it back with questions or the
+    decisions routes), so a long preview never rides in every event."""
+    page = store.publish(db, "mcp-seat", "Board", PAGE.format("x"))
+    _, asked = call_tool(
+        client, token, "ask", page_id=page.id, question="which?", options=OPTIONS
+    )
+    decisions.answer(db, asked["id"], letter="a", note="", by="jeremy")
+    _, new = call_tool(client, token, "whats_new", since=0)
+    mine = [e for e in unfence_all(new["events"]) if e.get("ref_id") == asked["id"]]
+    assert mine, new
+    assert "cards" in repr(mine) and PREVIEW not in repr(mine)
+
+
+def test_the_decide_tool_reads_stdin_for_one_preview_only():
+    options = decide._options(["a=x", "b=y"])
+    with pytest.raises(decide.UsageError) as caught:
+        decide._with_previews(options, ["a=-", "b=-"])
+    assert "read once" in str(caught.value)

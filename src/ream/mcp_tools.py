@@ -348,7 +348,9 @@ def _list_pages(call: Call, arguments: dict[str, Any]) -> dict:
         "(ok, broken or unchecked) and render_findings. A large page comes in parts: "
         f"at most {api.READ_PART_DEFAULT} characters unless you give limit; size is the "
         "whole page's length and next_offset, when not null, is the offset to read the "
-        "next part from. Not for how it looks: use "
+        "next part from. partial true means the body is only part of the page: never "
+        "send a part to update_page as the whole page; read every part, or pass a limit "
+        "covering size, first. Not for how it looks: use "
         "screenshot_page. Not for finding a page: use list_pages."
     ),
     read_only=True,
@@ -1174,7 +1176,8 @@ _SECTION_FIELDS = {
         "A new version of one of your pages: the whole page (body, and expected_revision: "
         "the revision you read), or one element (section: its id; op replace, append, "
         "prepend or remove; body is the fragment; section_revision). A page or element "
-        "that moved on since you read it is refused. Not for renaming, filing, pinning, "
+        "that moved on since you read it is refused. A whole-page body must be the whole "
+        "page: a read_page answer with partial true is not one. Not for renaming, filing, pinning, "
         "archiving or who can read it: use organise_page."
     ),
     read_only=False,

@@ -815,8 +815,10 @@ class PastTheEnd(Exception):
 
 def body_part(body: str, offset: int = 0, limit: int | None = None) -> dict:
     """`body` from `offset`, at most `limit` characters (None: to the end), with the
-    page's whole `size` and where the next part starts (`next_offset`, None at the
-    end). An offset equal to the size is an empty last part; past it, `PastTheEnd`."""
+    page's whole `size`, where the next part starts (`next_offset`, None at the end)
+    and `partial`: true unless this is the whole page. A part is never a body to update
+    the page with (its `revision` is the whole page's). An offset equal to the size is
+    an empty last part; past it, `PastTheEnd`."""
     size = len(body)
     if offset > size:
         raise PastTheEnd(size)
@@ -826,6 +828,7 @@ def body_part(body: str, offset: int = 0, limit: int | None = None) -> dict:
         "offset": offset,
         "size": size,
         "next_offset": end if end < size else None,
+        "partial": offset > 0 or end < size,
     }
 
 

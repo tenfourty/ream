@@ -97,6 +97,11 @@ def _with_previews(options: list[dict], pairs: list[str]) -> list[dict]:
     """`--preview a=TEXT` (TEXT `-` reads stdin) adds a preview to option a. The service
     checks its size and line count; here only the shape and that the letter is asked."""
     by_letter = {o["letter"]: o for o in options}
+    if sum(1 for pair in pairs if pair.partition("=")[2] == "-") > 1:
+        raise UsageError(
+            "--preview LETTER=- reads stdin, which can be read once: give at most one"
+            " preview as -, and the others as text"
+        )
     for pair in pairs:
         letter, sep, preview = pair.partition("=")
         letter = letter.strip().lower()

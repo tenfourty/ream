@@ -456,8 +456,9 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # skill.md re-taken on 16 Nov 2026 for questions that stand alone (two lines under the lettered-options bullet); agents.txt and agent.json did not move.
 # agents.txt and skill.md re-taken on 16 Nov 2026 for the MCP wait_for_answer tool (agents.txt names it in the MCP tool list and says to use it instead of a `ream wait` process; skill.md says the same in one sentence under "After you ask"), and again the same day for its review: both now say sessions sharing one key share its place and keep `ream wait`; agent.json did not move.
 # agents.txt and the artifacts-decide help re-taken on 16 Nov 2026 for option previews (`--preview`, three lines) and reading a large page in parts (two lines on the body route); skill.md and agent.json did not move.
+# agents.txt re-taken again on 16 Nov 2026 for the review of that change: previews are not shown in Slack, and `partial` (a part is never a whole page to update with).
 GOLDEN = {
-    "agents.txt": "bc3faba2021c5c412ac0868fef2d2249d1d7644b06275d447e70080fc3ea5576",
+    "agents.txt": "b0de6d512923dbb3863ad798e34d3e4fb668ce75f4fad2a5568eb799ca855440",
     "skill.md": "d464a0cd20ea79ddb6aeb7e887da24adfa94fc2c53f684ba34874c3368fbdad0",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }

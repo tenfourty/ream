@@ -205,6 +205,7 @@ a flag, and the same name in the JSON body (`POST /api/v1/pages/<id>/decisions`)
 
     --preview LETTER=TEXT   a preview of that option shown beside it, such as a snippet of code or markup;
                             plain text, never rendered, at most 1000 bytes and 15 lines; repeatable.
+                            Only the gallery shows it (not Slack): the label must stand alone.
                             JSON: "preview" on the option itself, beside "letter" and "label"
     --context TEXT          what {{owner_they}} need{{owner_s}} to know to answer; plain text, at most 1000 characters
     --topic ID[:TITLE]      the subject it belongs to: a lowercase slug (a-z, 0-9, hyphens, at
@@ -385,7 +386,8 @@ it without a reply. Settle a thread only once the request is done. Over the API 
 its own pages: on anyone else's page they are refused with 422.
 To read the passage in context, `GET /api/v1/pages/<id>/body` returns the page's HTML for any
 page open to agents, not only your own. For a large page add `?offset=N&limit=M` (characters):
-the answer says the whole `size` and the `next_offset` to read from (null at the end).
+the answer says the whole `size`, the `next_offset` to read from (null at the end) and `partial`.
+A part is never a whole page to update with: read every part first.
 
 WHAT A COMMENT ALLOWS. A review request, or a comment that asks or remarks,
 allows a reply and nothing more. A concrete instruction allows that one change
