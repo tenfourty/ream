@@ -22,7 +22,7 @@ from ream import envnames, plugin_cli, textvars
 NEWS: tuple[tuple[str, str], ...] = (
     (
         "2026-11-16",
-        "A page may now embed its own fonts as data: URLs in @font-face (inside the page size limit; fonts from other sites and background workers stay blocked). Publishing warns `embedded_fonts` with how many and how large, because a custom font can make the text a person sees differ from your source text.",
+        "A page may now embed its own fonts as data: URLs in @font-face (inside the page size limit; fonts from other sites and background workers stay blocked). Publishing warns `embedded_fonts` with how many and how large, because a custom font can make the text a person sees differ from your source text. Ream's own picture of a page (wall thumbnail, render check, `ream screenshot`) may show a fallback font for now.",
     ),
     (
         "2026-11-15",

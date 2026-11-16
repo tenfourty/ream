@@ -1167,7 +1167,8 @@ you cannot publish into those, and a page {{owner_they}} file{{owner_s}} there r
   advisory, made for an honest author: it counts font files embedded as data: addresses, and does
   not see fonts added by script, written with CSS escapes or embedded without a font type.
   `embedded_fonts_not_run` means the check did not run (page too large, out of
-  time, or server busy). Background workers stay blocked.
+  time, or server busy). Background workers stay blocked. Ream's own picture of a page
+  (wall thumbnail, render check, `ream screenshot`) may show a fallback font for now.
 - Or write markdown (`notes.md`; on the API, `"format": "markdown"`): tables,
   fenced code, task lists, and `##` headings with ids you can link to or update
   with `--section`. Raw HTML passes through, so a decision slot works; keep a

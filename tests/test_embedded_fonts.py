@@ -82,6 +82,11 @@ def test_other_pages_get_no_finding():
     assert shapes("data:application/octet-stream;base64,AAAA") == []
 
 
+def test_a_lone_surrogate_in_an_address_does_not_raise():
+    found = shapes("url(data:font/woff2;base64,AA\ud800AA)")
+    assert [f["shape"] for f in found] == [embeddedfonts.SHAPE]
+
+
 def test_a_page_too_large_or_a_spent_budget_says_the_check_did_not_run():
     (found,) = shapes("x" * (MAX_SCAN_CHARS + 1))
     assert found["shape"] == "embedded_fonts_not_run"

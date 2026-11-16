@@ -63,7 +63,7 @@ def check(body: str, budget: Budget | None = None) -> list[dict]:
             budget.step()
             end = _REST.match(body, found.end()).end()  # type: ignore[union-attr]
             count += 1
-            size += len(body[found.start() : end].encode("utf-8"))
+            size += len(body[found.start() : end].encode("utf-8", "surrogatepass"))
             if first_at < 0:
                 first_at = found.start()
             pos = end

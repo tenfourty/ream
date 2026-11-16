@@ -1114,7 +1114,10 @@ advisory, made for an honest author: one linear pass counts the data: addresses 
 type wherever they appear in the page's text (a comment too), with no parsing of CSS. It does not
 see fonts added by script, written with CSS escapes or embedded without a font type.
 `embedded_fonts_not_run` beside it means the check did not run (the page is too large, the time
-ran out, or the server was busy), so silence is not a clean page. The full policy string, live
+ran out, or the server was busy), so silence is not a clean page. A limit that may exist until a
+renderer change settles it: Ream's own picture of a page (the wall thumbnail, the render check,
+`ream screenshot`) is drawn with Chromium launched with `--disable-remote-fonts`, which very likely
+also stops data: fonts, so those pictures may show a fallback font for now. The full policy string, live
 and not live, is pinned by `tests/test_csp.py`, so a later widening fails a test.
 
 **Not chosen:**
