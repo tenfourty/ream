@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import ast
 import gc
+import multiprocessing
 import pathlib
 import sys
 import threading
 import time
+import traceback
 import tracemalloc
 from html.parser import HTMLParser
 
@@ -265,32 +267,15 @@ def _page(shape: str, chars: int = 8 * MIB, lead: str = "") -> str:
     return scalecheck.page(lead + first, unit, chars, last)
 
 
-# Seconds: longer than any read here takes under tracemalloc, so another thread
-# gets the GIL back only when the read is over (see `_peak`).
-HOLD_GIL = 1000.0
+def _traced(read, page, bound=None):
+    """(what the read gave or raised, the most memory in use at once, in bytes),
+    measured in this process: the measuring child calls it (see `_Measurer`).
 
-
-def _peak(read, page, bound=None):
-    """(what the read gave or raised, the most memory in use at once, in bytes).
-
-    tracemalloc counts every thread of the process, and under xdist a worker has
-    others (execnet's receiver, threads earlier tests left running): one of them
-    allocating ~150 KB while a 16 KiB page is read showed as 9 times the page. That
-    is noise added to one read, never to every read, so a peak at or over `bound`
-    is measured again, up to three reads, and the least is the answer: memory the
-    read itself holds is there in all three.
-
-    Measuring again is not enough on its own: a thread that allocates without
-    stopping is there in all three reads too (CI once measured 5.8 copies of a
-    16 KiB page three times over, for a read that holds 0.14). A read is pure
-    Python and never lets go of the GIL by itself, so the switch interval is raised
-    for as long as it is traced: no other thread runs, or allocates, until it ends.
-    `test_the_peak_counts_only_the_read` holds that."""
+    A peak at or over `bound` is measured again, up to three reads, and the least is
+    the answer: memory the read itself holds is there in all three."""
     least = None
     for _ in range(3 if bound is not None else 1):
         gc.collect()
-        interval = sys.getswitchinterval()
-        sys.setswitchinterval(HOLD_GIL)
         tracemalloc.start()
         try:
             tracemalloc.reset_peak()
@@ -301,11 +286,99 @@ def _peak(read, page, bound=None):
             peak = tracemalloc.get_traced_memory()[1]
         finally:
             tracemalloc.stop()
-            sys.setswitchinterval(interval)
         least = peak if least is None else min(least, peak)
         if bound is None or least < bound:
             break
     return gave, least
+
+
+# A read is traced in a child process of its own, never in the test's process:
+# tracemalloc counts every thread of a process, and a test process has others
+# (under xdist, execnet's receiver; threads earlier tests left running). One of them
+# allocating while a 16 KiB page was read made a read that holds 0.14 copies of it
+# measure 5.8 on CI, all three times it was measured. Neither measuring again nor
+# raising the switch interval keeps such a thread out (in CPython's take_gil a
+# thread already waiting on the GIL times out on the interval it read before the
+# raise and forces the switch, and can then keep the GIL for the whole raised
+# interval). The child is spawned, runs no thread but its main one (checked before
+# and after every read), and builds the page itself from its name.
+# `test_the_peak_counts_only_the_read` holds that.
+MEASURE_SECONDS = 120  # the slowest read here takes a few seconds under tracemalloc
+
+
+def _measured(kind, key, shape, chars, bound):
+    """In the measuring child: (whether what the read gave is an answer the test
+    accepts, its repr, the peak, the page's length)."""
+    threads = threading.active_count()
+    assert threads == 1, f"{threads} threads in the measuring child"
+    if kind == "reader":
+        page = _page(shape, chars)
+        gave, peak = _traced(lambda p: _answer(key, p), page, bound)
+        accepted = True  # what it answers is the test of the time's to say, as before
+    else:
+        page = _other_page(shape, chars)
+        gave, peak = _traced(OTHER_READS[key], page, bound)
+        accepted = gave is None or isinstance(gave, htmlbound.TooComplex)
+    threads = threading.active_count()
+    assert threads == 1, f"{threads} threads in the measuring child"
+    return accepted, repr(gave)[:200], peak, len(page)
+
+
+def _serve(conn):
+    """The measuring child's loop: one request in, one answer out, until told to
+    stop or the test process is gone."""
+    while True:
+        try:
+            request = conn.recv()
+        except EOFError:
+            return
+        if request is None:
+            return
+        try:
+            conn.send((True, _measured(*request)))
+        except BaseException:  # noqa: BLE001 - the test process reports it
+            conn.send((False, traceback.format_exc()))
+
+
+class _Measurer:
+    """The measuring child: started when first asked, and killed (never waited on
+    without a limit) when the module is done or a read does not answer in time."""
+
+    def __init__(self):
+        self._proc = None
+        self._conn = None
+
+    def __call__(self, *request):
+        """(accepted, repr of what the read gave, peak, the page's length) for
+        `_measured`'s request (kind, key, shape, chars, bound)."""
+        if self._proc is None or not self._proc.is_alive():
+            self.close()
+            ctx = multiprocessing.get_context("spawn")
+            self._conn, child = ctx.Pipe()
+            self._proc = ctx.Process(target=_serve, args=(child,), daemon=True)
+            self._proc.start()
+            child.close()
+        self._conn.send(request)
+        if not self._conn.poll(MEASURE_SECONDS):
+            self.close()
+            raise AssertionError(f"no measurement in {MEASURE_SECONDS} s: {request!r}")
+        ok, answer = self._conn.recv()
+        assert ok, answer
+        return answer
+
+    def close(self):
+        if self._proc is not None:
+            self._proc.kill()
+            self._proc.join(10)
+            self._conn.close()
+        self._proc = self._conn = None
+
+
+@pytest.fixture(scope="module")
+def measure():
+    measurer = _Measurer()
+    yield measurer
+    measurer.close()
 
 
 # Each read: (a function of the page, the page's length it is given, what it gives
@@ -380,12 +453,11 @@ def test_every_reader_gives_up_on_the_three_pages_at_once(name, shape):
 
 @pytest.mark.parametrize("shape", sorted(THREE))
 @pytest.mark.parametrize("name", sorted(READS))
-def test_every_reader_gives_up_on_the_three_pages_in_a_few_copies_of_them(name, shape):
-    page = _page(shape, _chars(name))
-    _, peak = _peak(lambda p: _answer(name, p), page)
-    assert peak < FEW_COPIES * len(page), (
-        f"{peak / MIB:.0f} MiB for {len(page) / MIB:.0f}"
-    )
+def test_every_reader_gives_up_on_the_three_pages_in_a_few_copies_of_them(
+    name, shape, measure
+):
+    _, _, peak, chars = measure("reader", name, shape, _chars(name), None)
+    assert peak < FEW_COPIES * chars, f"{peak / MIB:.0f} MiB for {chars / MIB:.0f}"
 
 
 # What each module chose for a page it cannot read: the answer is the one it already
@@ -627,22 +699,22 @@ def test_the_time_of_every_other_long_match_grows_with_the_page(read, shape):
 @pytest.mark.parametrize("shape", sorted(OTHER))
 @pytest.mark.parametrize("read", sorted(OTHER_READS))
 def test_the_memory_of_every_other_long_match_is_a_few_copies_of_the_page(
-    read, shape, chars
+    read, shape, chars, measure
 ):
-    page = _other_page(shape, chars // 64 if shape in TRACED_SMALL else chars)
+    chars = chars // 64 if shape in TRACED_SMALL else chars
     copies = _copies(read, shape)
-    gave, peak = _peak(OTHER_READS[read], page, copies * len(page))
-    assert gave is None or isinstance(gave, htmlbound.TooComplex), repr(gave)
-    assert peak < copies * len(page), (
-        f"{peak / len(page):.1f} times the page of {len(page)} characters"
+    accepted, gave, peak, chars = measure("other", read, shape, chars, copies * chars)
+    assert accepted, gave
+    assert peak < copies * chars, (
+        f"{peak / chars:.1f} times the page of {chars} characters"
         f" (the bound is {copies})"
     )
 
 
-def test_the_peak_counts_only_the_read():
-    """A thread allocating all the time while a page is read is not counted: it
-    made a read that holds 0.14 copies of a 16 KiB page measure 9.6 when other
-    threads could take the GIL every 5 ms, as they can by default."""
+def test_the_peak_counts_only_the_read(measure):
+    """A thread of the test process allocating all the time while a page is read is
+    not counted: traced in the test's own process (`_traced` called here), it made
+    a read that holds 0.14 copies of a 16 KiB page measure 9.6."""
     stop = threading.Event()
 
     def allocate():
@@ -653,13 +725,15 @@ def test_the_peak_counts_only_the_read():
     noisy = threading.Thread(target=allocate, daemon=True)
     noisy.start()
     try:
-        page = _other_page("CDATA closed over and over", MIB // 64)
         for _ in range(3):
-            _, peak = _peak(_visible_read, page)
-            assert peak < len(page), f"{peak / len(page):.1f} times the page"
+            _, _, peak, chars = measure(
+                "other", "text._Visible", "CDATA closed over and over", MIB // 64, None
+            )
+            assert peak < chars, f"{peak / chars:.1f} times the page"
     finally:
         stop.set()
-        noisy.join()
+        noisy.join(10)
+    assert not noisy.is_alive()
 
 
 def test_the_sets_name_shapes_of_the_table():
