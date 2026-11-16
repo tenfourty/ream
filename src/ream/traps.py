@@ -30,7 +30,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from ream import htmlbound, renderfind, settings, textvars
-from ream.csp import CspWarning, line_of, newline_offsets, outside_comments
+from ream.csp import CspWarning, Lines, outside_comments
 from ream.renderfind import Budget, TooComplex
 
 
@@ -258,7 +258,7 @@ def check(
 
 def _check(body: str, client: bool, budget: Budget) -> list[CspWarning]:
     visible = outside_comments(body, budget)
-    newlines = newline_offsets(visible)
+    newlines = Lines(visible)
     budget.check()
     found: list[CspWarning] = []
     specimens, examples = _templates()
@@ -274,7 +274,7 @@ def _check(body: str, client: bool, budget: Budget) -> list[CspWarning]:
             found.append(
                 CspWarning(
                     shape="template_example_title",
-                    line=line_of(at, newlines),
+                    line=newlines.of(at),
                     hint=(
                         f"{where} is still the template's worked example "
                         f"({text!r}). The rest of the page probably is too: "
@@ -286,7 +286,7 @@ def _check(body: str, client: bool, budget: Budget) -> list[CspWarning]:
             found.append(
                 CspWarning(
                     shape="placeholder_title",
-                    line=line_of(at, newlines),
+                    line=newlines.of(at),
                     hint=(
                         f"{where} still carries the template's placeholder. It "
                         "renders exactly as written and you cannot see it: the "
@@ -298,13 +298,13 @@ def _check(body: str, client: bool, budget: Budget) -> list[CspWarning]:
 
     # The raw body, not `visible`: the marker IS a comment. Its line numbers are
     # the author's, so count them against the body.
-    raw_newlines = newline_offsets(body)
+    raw_newlines = Lines(body)
     for match in _REPLACE_MARKER.finditer(body if started else ""):
         budget.step()
         found.append(
             CspWarning(
                 shape="template_marker_left",
-                line=line_of(match.start(), raw_newlines),
+                line=raw_newlines.of(match.start()),
                 hint=(
                     "a template's REPLACE marker is still here. It never "
                     "renders, so nobody reading the page will see that the "
@@ -319,7 +319,7 @@ def _check(body: str, client: bool, budget: Budget) -> list[CspWarning]:
         found.append(
             CspWarning(
                 shape="placeholder_page_id",
-                line=line_of(match.start(), newlines),
+                line=newlines.of(match.start()),
                 hint=(
                     "a page id does not exist until the publish call returns, "
                     "so this renders as the literal word ID. Leave it out -- "
@@ -335,7 +335,7 @@ def _check(body: str, client: bool, budget: Budget) -> list[CspWarning]:
         found.append(
             CspWarning(
                 shape="gallery_link_same_tab",
-                line=line_of(at, newlines),
+                line=newlines.of(at),
                 hint=(
                     'a link to the gallery needs target="_blank" '
                     'rel="noopener". This page is served in a sandboxed '

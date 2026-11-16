@@ -7,6 +7,7 @@ reading must give: each looked to the end of the page from every opening tag it 
 random pages.
 """
 
+import bisect
 import random
 import re
 import time
@@ -55,12 +56,12 @@ def _old_outside_comments(body):
 def _old_check(body):
     """(shape, line) of each warning, as `csp.check` was first written."""
     body = _old_outside_comments(body)
-    newlines = csp.newline_offsets(body)
+    newlines = [m.start() for m in re.finditer("\n", body)]
     found = []
     for shape in (name for name, _finder, _hint in csp._SHAPES):
         lines = []
         for examined, match in enumerate(_OLD[shape].finditer(body), start=1):
-            line = csp.line_of(match.start(), newlines)
+            line = bisect.bisect_right(newlines, match.start()) + 1
             if line not in lines:
                 lines.append(line)
             if len(lines) >= 5 or examined >= 500:
@@ -498,3 +499,31 @@ def test_a_publish_that_could_not_be_checked_succeeds_and_says_so(
     shapes = [w["shape"] for w in response.json()["warnings"]]
     assert "csp_checks_not_run" in shapes
     assert "form_element" not in shapes, "never some of the findings"
+
+
+def test_lines_agree_with_a_list_of_every_newline_in_any_order():
+    rng = random.Random(7)
+    body = "".join(rng.choice("ab\n\n<") for _ in range(4000))
+    newlines = [m.start() for m in re.finditer("\n", body)]
+    lines = csp.Lines(body)
+    offsets = [rng.randrange(len(body)) for _ in range(600)] + list(range(0, 4000, 7))
+    for offset in offsets:
+        assert lines.of(offset) == bisect.bisect_right(newlines, offset) + 1
+
+
+def test_the_trap_checks_read_a_page_of_newlines_in_no_list_and_little_time():
+    import tracemalloc
+
+    from ream import traps
+
+    body = "\n" * (renderfind.MAX_SCAN_CHARS - 40) + "<title>PAGE TITLE</title>\n"
+    tracemalloc.start()
+    started = time.monotonic()
+    found = traps.check(body, client=False)
+    elapsed = time.monotonic() - started
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert [w.shape for w in found] == ["placeholder_title"]
+    assert found[0].line == renderfind.MAX_SCAN_CHARS - 40 + 1
+    assert elapsed < 1.5
+    assert peak < 64 * 1024 * 1024, "no per-newline list is made"

@@ -27,7 +27,6 @@ changes, this table changes with it -- `tests/test_csp.py` pins each shape to
 the directive that justifies it so the two cannot drift apart quietly.
 """
 
-import bisect
 import re
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -407,20 +406,15 @@ _SHAPES: tuple[tuple[str, Finder, str], ...] = (
 )
 
 
-def newline_offsets(body: str) -> list[int]:
-    """Public because `traps.py` reports in the same shape and must count lines
-    the same way -- two copies of "which line is this offset on" is how two
-    checks on one page start disagreeing about where a problem is."""
-    return [m.start() for m in re.finditer("\n", body)]
+class Lines:
+    """Which line an offset of `text` is on, for the CSP checks and `traps.py`, which
+    must count lines the same way -- two copies of "which line is this offset on" is
+    how two checks on one page start disagreeing about where a problem is.
 
-
-def line_of(offset: int, newline_offsets: list[int]) -> int:
-    return bisect.bisect_right(newline_offsets, offset) + 1
-
-
-class _Lines:
-    """`line_of` for offsets asked in increasing order, counting the newlines between
-    one and the next, so that no list of every newline in the page is made."""
+    It remembers where it last counted and counts only the newlines between that
+    and the next offset asked, in either direction, so offsets asked in increasing
+    order cost one pass over the page in all and no list of every newline is made
+    (a page of nothing but newlines would otherwise make millions of them)."""
 
     def __init__(self, text: str) -> None:
         self._text = text
@@ -428,8 +422,12 @@ class _Lines:
         self._line = 1
 
     def of(self, offset: int) -> int:
-        self._line += self._text.count("\n", self._seen, offset + 1)
-        self._seen = max(self._seen, offset + 1)
+        end = offset + 1
+        if end >= self._seen:
+            self._line += self._text.count("\n", self._seen, end)
+        else:
+            self._line -= self._text.count("\n", end, self._seen)
+        self._seen = end
         return self._line
 
 
@@ -516,7 +514,7 @@ def _check(body: str, budget: "renderfind.Budget") -> list[CspWarning]:
     warnings: list[CspWarning] = []
     for shape, find, hint in _SHAPES:
         lines: list[int] = []
-        counted = _Lines(page.visible)
+        counted = Lines(page.visible)
         for examined, start in enumerate(find(page, budget), start=1):
             budget.step()
             line = counted.of(start)
