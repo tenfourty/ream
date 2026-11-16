@@ -982,6 +982,21 @@ const cardFor = (g, id) => { g.send(HOV(id)); g.clk.advance(150); return g.card(
   g.clk.advance(300); g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 80, left: 5, width: 50, height: 10 } });
   ok(g.card().length === 0, "a press elsewhere during a step cancels the card that was coming"); }
 
+{ // A window-high frame scrolls itself where this page cannot follow it, so a step opens no card
+  // there, as in full screen: the frame shows the words, and this page only brings it under the bar.
+  const g = build({ marks: HMARKS, threads: hthreads(), frameAttr: "viewport" });
+  g.send(STATE); g.send(ORDER);
+  const c = cardFor(g, "m2");
+  ok(c && navOf(c).next, "(setup) a hover card with arrows opens on a window-high frame");
+  navOf(c).next.on.click({});
+  const before = g.framePosts.length;
+  g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 400, left: 5, width: 50, height: 10 } });
+  ok(g.scrolls.length === 1 && g.scrolls[0].top === 150, "a step on a window-high frame brings the frame up: " + JSON.stringify(g.scrolls));
+  g.clk.advance(300);
+  ok(g.framePosts.length === before, "and never asks again where the mark is once settled");
+  g.send({ type: "artifact-mark-at", id: "m1", rect: { top: 80, left: 5, width: 50, height: 10 } });
+  ok(g.card().length === 0, "and opens no card there, whatever the frame answers later"); }
+
 // THE PANEL IN PAGE ORDER: whole-page comments first, then the placed threads top to bottom, then the unplaced.
 { const whole = threadLi("w1");
   const g = build({ marks: HMARKS, threads: [threadLi("m1", { kind: "remove" }), threadLi("m2", { kind: "remove" }), threadLi("m9", { kind: "remove" }), whole, threadLi("h1", { kind: "remove" })] });

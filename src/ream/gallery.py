@@ -2789,11 +2789,13 @@ window.addEventListener("message",function(e){try{
   if(e.source!==f.contentWindow||e.origin!==o)return;var d=e.data;
   if(!d||d.type!=="artifact-mark-at"||typeof d.id!=="string"||!known[d.id])return;
   var q=d.rect;if(!q||typeof q!=="object"||!fin(q.top)||document.fullscreenElement)return;
-  if(nav&&nav.id===d.id&&nav.ph===2){var n2=nav;nav=null;
+  // A window-high frame scrolls itself, out of this page's sight, so a step by Back or
+  // Forward opens no card there, as in full screen: the frame shows the words, this
+  // page only brings the frame up under the bar.
+  if(vpf()){if(nav&&nav.id===d.id)nav=null}
+  else{if(nav&&nav.id===d.id&&nav.ph===2){var n2=nav;nav=null;
     if(fin(q.left)&&fin(q.width)&&fin(q.height))show(n2.id,{top:q.top,left:q.left,width:q.width,height:q.height},true);return}
-  if(nav&&nav.id===d.id&&nav.ph===0){nav.ph=1;navSettle()}
-  // A window-high frame has scrolled itself to the mark: this page only brings the
-  // frame up under the bar.
+  if(nav&&nav.id===d.id&&nav.ph===0){nav.ph=1;navSettle()}}
   var fr=f.getBoundingClientRect(),y=window.scrollY+fr.top+(vpf()?-barH():q.top-(window.innerHeight||0)/3);
   if(window.scrollTo)window.scrollTo({top:Math.max(0,y),behavior:"smooth"})}catch(x){}});
 // THE COMMENT CONTROL. Pressing it lights comment mode and opens the panel on Open
