@@ -1483,3 +1483,43 @@ def test_a_slack_token_in_a_script_string_is_caught_here_too():
     body = f'<!doctype html>\n<script>const slack = "{tok}";</script>\n'
     assert [f.shape for f in scan.scan(body)] == ["slack_token"]
     assert scan.scan("<p>the xoxb- prefix alone is not a token</p>") == []
+
+
+_BREAKS = ["\n", "\r\n", "\r", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", " ", " "]
+
+
+def test_the_one_line_ending_view_is_what_splitlines_and_join_give():
+    rng = random.Random(11)
+    pieces = [*_BREAKS, "a", "b", "\r\n\r", " "]
+    texts = ["", "\n", "\r\n", "a", "a\n", "a\r", "\n\n", "a\x85", "\r\n\r\n"]
+    texts += [
+        "".join(rng.choice(pieces) for _ in range(rng.randrange(1, 40)))
+        for _ in range(2000)
+    ]
+    for brk in _BREAKS:
+        texts += [f"x{brk}y", f"x{brk}", f"{brk}x", f"x{brk}{brk}y"]
+    for text in texts:
+        assert scan._one_line_ending(text) == "\n".join(text.splitlines()), repr(text)
+
+
+@pytest.mark.parametrize("brk", _BREAKS, ids=repr)
+def test_a_finding_is_on_the_line_splitlines_would_give_it(brk):
+    body = f"one{brk}two{brk}{brk}const k = '{FAKE_AWS}'{brk}"
+    (finding,) = [f for f in scan.scan(body) if f.shape == "aws_access_key_id"]
+    assert finding.line == 4
+
+
+def test_a_page_of_newlines_is_scanned_in_no_list():
+    import tracemalloc
+
+    body = "\n" * (8 * 1024 * 1024 - 100) + f"const k = '{FAKE_AWS}'\n"
+    tracemalloc.start()
+    try:
+        findings = scan.scan(body)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert [(f.shape, f.line) for f in findings if f.shape == "aws_access_key_id"] == [
+        ("aws_access_key_id", 8 * 1024 * 1024 - 100 + 1)
+    ]
+    assert peak < 40 * 1024 * 1024, "no per-line list is made"

@@ -45,13 +45,14 @@ letting placeholder matches run past the valve costs nothing extra that
 Task 5's body-size cap does not already bound.
 """
 
-import bisect
 import functools
 import html
 import re
 import string
 from dataclasses import dataclass
 from importlib import resources
+
+from ream import csp
 
 
 @dataclass(frozen=True)
@@ -826,12 +827,18 @@ def _is_placeholder(shape: str, match: re.Match, text: str) -> bool:
     return not value or _PLACEHOLDER.fullmatch(value) is not None
 
 
-def _newline_offsets(view: str) -> list[int]:
-    return [m.start() for m in re.finditer("\n", view)]
+# What `str.splitlines` ends a line at, other than "\n" and "\r\n" (which are
+# handled by `replace`): every one becomes "\n" in `_one_line_ending`.
+_OTHER_LINE_ENDS = {ord(c): "\n" for c in "\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"}
 
 
-def _line_of(offset: int, newline_offsets: list[int]) -> int:
-    return bisect.bisect_right(newline_offsets, offset) + 1
+def _one_line_ending(text: str) -> str:
+    """`"\n".join(text.splitlines())` without the list of every line: each line
+    end `splitlines` knows becomes "\n", and a last line end is dropped."""
+    joined = text.replace("\r\n", "\n").translate(_OTHER_LINE_ENDS)
+    if text and text[-1] in "\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029":
+        return joined[:-1]
+    return joined
 
 
 def _shape_lines(
@@ -839,7 +846,7 @@ def _shape_lines(
     pattern: re.Pattern,
     needs_lowered: bool,
     views: list[tuple[str, str]],
-    offsets_for,
+    lines_for,
 ) -> list[int]:
     """The distinct lines (up to `_MAX_LINES_PER_SHAPE`) where `pattern`
     matches something that isn't a placeholder, across both `(view,
@@ -865,7 +872,7 @@ def _shape_lines(
             if _is_placeholder(name, match, view):
                 continue
             real_examined += 1
-            lines.setdefault(_line_of(match.start(), offsets_for(index)), None)
+            lines.setdefault(lines_for(index).of(match.start()), None)
             if (
                 len(lines) >= _MAX_LINES_PER_SHAPE
                 or real_examined >= _MAX_RAW_MATCHES_PER_SHAPE
@@ -891,32 +898,30 @@ def scan(text: str) -> list[Finding]:
     so a caller checking `scan(body) == []` is never looking at a scanner
     that silently gave up.
 
-    Newline-offset tables are built lazily, at most once per view, only if
-    something in that view actually needs a line number -- a clean body (the
-    common case) never pays for one at all. `SHAPES` is re-read fresh on
+    Line numbers are counted on demand (`csp.Lines`), one counter per view, and
+    only if something in that view needs one -- no list of every newline is made. `SHAPES` is re-read fresh on
     every call, not cached at import time, so a caller that swaps it out
     (only ever done in tests) is honoured rather than silently bypassed by a
     stale fast-path cache.
     """
-    raw_view = "\n".join(text.splitlines())
+    raw_view = _one_line_ending(text)
     text_view = _text_view(raw_view)
     view_texts = (raw_view,) if text_view == raw_view else (raw_view, text_view)
     views = [(view, _lower_ascii(view)) for view in view_texts]
 
-    # Keyed by the view's index in `views`, so each view gets its own table.
-    offsets_cache: dict[int, list[int]] = {}
+    # One per view, made when first asked for. Matches arrive in increasing order.
+    lines_cache: dict[int, csp.Lines] = {}
 
-    def offsets_for(index: int) -> list[int]:
-        cached = offsets_cache.get(index)
+    def lines_for(index: int) -> csp.Lines:
+        cached = lines_cache.get(index)
         if cached is None:
-            cached = _newline_offsets(views[index][0])
-            offsets_cache[index] = cached
+            cached = lines_cache[index] = csp.Lines(views[index][0])
         return cached
 
     findings: list[Finding] = []
     for name, pattern in SHAPES:
         fast_pattern, needs_lowered = _fast_pattern(pattern)
-        for line in _shape_lines(name, fast_pattern, needs_lowered, views, offsets_for):
+        for line in _shape_lines(name, fast_pattern, needs_lowered, views, lines_for):
             findings.append(Finding(shape=name, line=line))
         if len(findings) >= _MAX_FINDINGS_TOTAL:
             break
