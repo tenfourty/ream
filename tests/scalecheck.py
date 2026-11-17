@@ -52,6 +52,11 @@ MIN_SMALL = (
     0.05  # seconds: the shortest timing the ratio is taken from (repeats make it up)
 )
 RUNS = 3
+# Seconds: a batch of repeats ends here, however many the first run asked for. The
+# count comes from one timing of one read; when that timing came back as almost
+# nothing for a read of 2 ms, the batch was 50 000 reads and the three of them ran
+# into the 300 s test timeout (test-sqlite, 17 Nov 2026).
+BATCH = 4 * MIN_SMALL
 MOST = 1024 * 1024  # the most the small page grows to; eight times that is the scan cap
 SLOW = 2.0  # seconds: a run this long is not repeated, and no run is stopped sooner
 SLACK = 2  # a first run is stopped at this many times what STEEPEST allows
@@ -113,8 +118,9 @@ def best(
 ) -> float:
     """The shortest of `runs` timings of one `read(text)`, in CPU seconds. A read
     quicker than MIN_SMALL is timed as a batch of repeats lasting at least MIN_SMALL and
-    divided, so a read of a millisecond is not lost in the clock's noise; a run over
-    SLOW seconds is the last. A first run that takes over `limit` seconds is stopped
+    divided, so a read of a millisecond is not lost in the clock's noise; a batch ends
+    early once it has lasted BATCH seconds, and is divided by the reads it made; a run
+    over SLOW seconds is the last. A first run that takes over `limit` seconds is stopped
     there, and the answer is infinity."""
     try:
         with _stopped_after(limit):
@@ -131,9 +137,14 @@ def best(
     shortest = once
     for _ in range(runs):
         began = clock()
-        for _ in range(repeats):
+        done = 0
+        while True:
             read(text)
-        took = (clock() - began) / repeats
+            done += 1
+            spent = clock() - began
+            if done >= repeats or spent >= BATCH:
+                break
+        took = spent / done
         shortest = min(shortest, took)
         if took > SLOW:
             break
