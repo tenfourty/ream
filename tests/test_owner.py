@@ -457,9 +457,11 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # agents.txt and skill.md re-taken on 16 Nov 2026 for the MCP wait_for_answer tool (agents.txt names it in the MCP tool list and says to use it instead of a `ream wait` process; skill.md says the same in one sentence under "After you ask"), and again the same day for its review: both now say sessions sharing one key share its place and keep `ream wait`; agent.json did not move.
 # agents.txt and the artifacts-decide help re-taken on 16 Nov 2026 for option previews (`--preview`, three lines) and reading a large page in parts (two lines on the body route); skill.md and agent.json did not move.
 # agents.txt re-taken again on 16 Nov 2026 for the review of that change: previews are not shown in Slack, and `partial` (a part is never a whole page to update with).
+# skill.md re-taken on 16 Nov 2026 for HTML-in-Canvas (one bullet after Fonts: the Chrome 157 API names, feature detection and fallback, the `canvas` template); agents.txt and agent.json did not move.
+# skill.md re-taken again on 16 Nov 2026: the HTML-in-Canvas bullet says each drawn child is marked `drawable`, and to fall back when drawing fails.
 GOLDEN = {
     "agents.txt": "b0de6d512923dbb3863ad798e34d3e4fb668ce75f4fad2a5568eb799ca855440",
-    "skill.md": "d464a0cd20ea79ddb6aeb7e887da24adfa94fc2c53f684ba34874c3368fbdad0",
+    "skill.md": "6b7920aa9e5ebb2695722c7f59894c57365e8e1fb4e1aeb678497c585c7f1694",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"
@@ -520,7 +522,7 @@ def _help(parser: argparse.ArgumentParser) -> str:
 
 def test_every_template_ends_with_the_same_footer():
     names = templates.names()
-    assert len(names) == 8
+    assert len(names) == 9
     for name in names:
         assert re.findall(r"<footer>.*?</footer>", templates.body(name)) == [FOOTER], (
             name

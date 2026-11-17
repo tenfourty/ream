@@ -191,3 +191,42 @@ def test_the_sync_script_agrees_that_nothing_is_stale():
         check=False,  # the assertion below reports the script's own message
     )
     assert done.returncode == 0, done.stderr
+
+
+def test_the_canvas_template_falls_back_to_plain_html():
+    """HTML-in-Canvas (runcove-5t3oj.149) draws only where the browser has the API, and
+    most readers, and an agent's own read_page, see the HTML. So the starter tests for
+    the API before it moves anything into the canvas, keeps the card in normal flow
+    until then, and reaches for nothing off the page."""
+    body = _body(CANON / "canvas.html")
+    visible = _strip_comments(body)
+    check = '"drawElementImage" in CanvasRenderingContext2D.prototype'
+    move = "canvas.appendChild(card)"
+    assert check in visible and move in visible
+    assert visible.index(check) < visible.index(move), (
+        "the card moves into the canvas before the API is checked for"
+    )
+    assert re.search(
+        r'<canvas[^>]*\blayoutsubtree\b[^>]*content="drawable"[^>]*\bhidden\b', body
+    )
+    after_canvas = body.split("</canvas>", 1)[1]
+    assert 'id="drawn"' in after_canvas, (
+        "the card must start outside the canvas, readable without the API"
+    )
+    drawn = re.search(r'<div\b[^>]*\bid="drawn"[^>]*>', body)
+    assert drawn and re.search(r"\sdrawable[\s>]", drawn.group()), (
+        "drawElementImage draws only a child marked drawable"
+    )
+    assert re.search(r"\.stage\[hidden\]\s*\{\s*display:\s*none", visible), (
+        "the stage's display:block would show a blank band where the canvas is hidden"
+    )
+    assert re.search(r"catch\s*\(\w+\)\s*\{\s*fallBack\(\)", visible), (
+        "a throw after the card has moved must put the plain HTML back"
+    )
+    assert "visibilityState" in visible, (
+        "a tab opened in the background does not paint: the no-paint timer must "
+        "run only while the page is visible"
+    )
+    off_page = re.findall(r"https?://|\b(?:src|href)=\"//|url\(", visible)
+    assert not off_page, f"the starter reaches off the page: {off_page}"
+    assert not re.search(r"\bnew\s+(?:Shared)?Worker\b|\bfetch\(|@import", visible)

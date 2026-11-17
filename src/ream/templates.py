@@ -46,6 +46,7 @@ USE_WHEN = {
     "explainer": "How a piece of the house works, for someone who has forgotten.",
     "intent": "A design still being worked out. Mostly questions, several open at once.",
     "design": "The design written down: modules, flow, failure, tests, risks.",
+    "canvas": "Live HTML drawn into a canvas (HTML-in-Canvas), readable as plain HTML where it cannot be.",
 }
 
 TITLES = {
@@ -57,6 +58,7 @@ TITLES = {
     "explainer": "Explainer",
     "intent": "Intent",
     "design": "Design",
+    "canvas": "Canvas",
 }
 
 
@@ -112,7 +114,7 @@ def shared_css() -> tuple[str, str]:
 
 
 def index() -> list[dict]:
-    """The catalogue: enough for an agent to choose without fetching all eight."""
+    """The catalogue: enough for an agent to choose without fetching all nine."""
     out = []
     for name in names():
         text = body(name)

@@ -21,6 +21,10 @@ from ream import envnames, plugin_cli, textvars
 
 NEWS: tuple[tuple[str, str], ...] = (
     (
+        "2026-11-17",
+        "New template `canvas` (GET /api/v1/templates/canvas, or get_template over MCP): a starter for HTML-in-Canvas, live HTML drawn into a canvas where the reader's browser has it (Chrome 157: a canvas with layoutsubtree, each drawn child marked drawable, drawElementImage in the canvas's paint event). It checks for the API first and leaves the HTML readable as an ordinary page where it is missing or drawing fails, which is most browsers and your own read_page. The skill's rules say how.",
+    ),
+    (
         "2026-11-16d",
         'A lettered question can now show a preview of each option: give an option a `preview` (plain text, up to 1,000 bytes and 15 lines, such as a snippet of code or markup) and it is shown beside that option on the page and in the inbox, as text, never rendered; reading the question back returns it. Only the gallery shows previews: a person answering in Slack sees the labels alone, so make each label clear without its preview. API: {"letter", "label", "preview"} in options on POST /api/v1/pages/ID/decisions; MCP: the same in ask\'s options; ream ask (artifacts-decide ask) --preview a=TEXT, which your tool updates itself to learn. A large page can now be read in parts: read_page over MCP returns at most 50,000 characters unless you give limit, and says the page\'s whole size, the next_offset to read from (null at the end) and partial (true when the body is not the whole page); GET /api/v1/pages/ID/body and /versions/N take ?offset=&limit= and answer the same fields (whole, as before, with neither). Never send a part to update_page as the whole page: read every part first.',
     ),

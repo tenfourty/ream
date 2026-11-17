@@ -1,0 +1,354 @@
+<!doctype html>
+<!--
+  TEMPLATE · canvas
+  ─────────────────
+  A page that draws live HTML into a canvas (HTML-in-Canvas), with the HTML
+  still readable when the browser cannot. Use it when the motion or the effect
+  is the point; for anything else a plain page reads better.
+
+  How it works, in the API Chrome 157 ships:
+    <canvas layoutsubtree content="drawable"> lays out its HTML children but
+    does not paint them; each child it draws carries the `drawable` attribute.
+    The canvas fires a `paint` event, and in it ctx.drawElementImage(el, x, y
+    [, w, h]) draws a child. canvas.requestPaint() asks for the next paint.
+    (The older name drawElement is gone in 157.)
+
+  The rule this template exists to keep: the HTML is the page. It starts in
+  normal flow, outside the canvas, and the script moves it in only when the
+  browser has drawElementImage, and moves it back out if drawing throws after
+  it has once worked, or nothing has been drawn after a second and a half on
+  screen. So a reader whose browser lacks it, a reader with scripts off, and
+  your own read_page all see the same real text. Keep the words in HTML; never
+  paint text the reader cannot select or read aloud.
+
+  Ream's page policy: scripts and canvas run; background workers do not, and
+  nothing is fetched from another site (no fonts, scripts or images by
+  address). A font may be embedded as a data: URL in @font-face; publishing
+  then warns `embedded_fonts`, which is advisory.
+
+  Everything below is a worked example. Replace it.
+-->
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- REPLACE: what the page is about. -->
+<title>A card drawn live into a canvas</title>
+<style>
+/* ==== shared: begin — do not edit here; edit _shared.css and re-sync ==== */
+  /* Tokens. Change values, never names — every page shares these, so a
+     page that renames one stops looking like the others. Declared on :root and
+     redefined for dark; never hard-code a colour in a rule below. */
+  :root{
+    --paper:#faf9f6; --ink:#191a17; --muted:#6c6d64; --card:#fff; --line:#e4e3db;
+    --accent:#0f6f63; --accent-soft:rgba(15,111,99,.10); --accent-ink:#0b4f46;
+    --ok:#2f7a45; --now:#b06a12; --wait:#4a5b8c;
+    /* --bar is the one hue any chart on this page may use, and it is NOT
+       --accent: --accent is tuned for text and links, a fill wants more body.
+       Both values are validated against their own surface for the OKLCH
+       lightness band, the chroma floor and >=3:1 contrast. Re-run the check
+       before changing either. */
+    --bar:#067e66; --bar-soft:rgba(6,126,102,.14);
+    --shadow:0 1px 2px rgba(20,20,15,.05), 0 8px 24px -16px rgba(20,20,15,.25);
+    --display:ui-serif,"Iowan Old Style",Georgia,"Times New Roman",serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --rule:#191a17;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#141619; --ink:#e9eae4; --muted:#989a90; --card:#1c1f23; --line:#2b2e34;
+      --accent:#5ec9b8; --accent-soft:rgba(94,201,184,.12); --accent-ink:#9fe3d7;
+      --ok:#6cc48a; --now:#e0a458; --wait:#8fa6e0;
+      --bar:#069c97; --bar-soft:rgba(6,156,151,.18);
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -20px rgba(0,0,0,.8);
+      --rule:#e9eae4;
+    }
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--paper);color:var(--ink);
+       font:16px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent-ink);text-underline-offset:.15em}
+  main{max-width:52rem;margin:0 auto;padding:1.8rem 1rem 4rem}
+
+  /* Masthead. The Gallery pill MUST keep target="_blank" rel="noopener": this
+     page is framed by the gallery, the gallery refuses to be framed, and the
+     frame's sandbox forbids top-level navigation — so a same-tab link is a dead
+     link. Found by {{owner_name}} on a real page, 19 Sep 2026. */
+  .masthead{max-width:52rem;margin:0 auto;padding:1.1rem 1rem 0}
+  .topline{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:2.6rem}
+  .topline a{color:var(--accent-ink);text-decoration:none;display:inline-flex;align-items:center;
+    gap:.4rem;border:1px solid var(--line);background:var(--card);border-radius:999px;
+    padding:.25rem .7rem;font-size:.82rem}
+  .topline a:hover{border-color:var(--accent)}
+  .topline svg{width:.9em;height:.9em;fill:currentColor}
+  .eyebrow{font:600 .78rem/1.4 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 .9rem}
+  h1{font:400 clamp(2.1rem,6vw,3.1rem)/1.05 var(--display);letter-spacing:-.015em;margin:0 0 .8rem}
+  .standfirst{margin:0;font-size:1.06rem;color:var(--ink);max-width:40rem}
+  .chips{display:flex;gap:.4rem;flex-wrap:wrap;margin:1.3rem 0 0}
+  .chip{font:.78rem/1.4 var(--mono);border-radius:999px;padding:.22rem .62rem;
+    border:1px solid var(--line);background:var(--card);color:var(--muted)}
+  .chip.on{border-color:transparent;background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+  .masthead hr{border:0;border-top:2px solid var(--rule);margin:1.6rem 0 0}
+
+  /* Shapes */
+  h2{font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+     margin:2.4rem 0 .7rem}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:.7rem;
+    padding:1rem 1.15rem;margin:.6rem 0;box-shadow:var(--shadow)}
+  .card.live{border-left:3px solid var(--ok)}
+  .card.ask{border-left:3px solid var(--now)}
+  .card > b:first-child{display:block;margin-bottom:.35rem}
+  p{margin:.5rem 0}
+  ul{margin:.4rem 0;padding-left:1.15rem} li{margin:.28rem 0}
+  table{border-collapse:collapse;width:100%;font-size:.95rem}
+  th{text-align:left;font:600 .75rem/1.4 var(--mono);letter-spacing:.06em;
+    text-transform:uppercase;color:var(--muted);padding:.35rem .5rem;
+    border-bottom:1px solid var(--line)}
+  td{padding:.45rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}
+  td.s{width:1%;white-space:nowrap}
+  .state{font-size:.75rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+    border-radius:.3rem;padding:.12rem .45rem;border:1px solid currentColor}
+  .state.done{color:var(--ok)} .state.now{color:var(--now)}
+  .state.next{color:var(--wait)} .state.held{color:var(--muted)}
+  code{background:var(--accent-soft);color:var(--accent-ink);padding:.08rem .32rem;
+    border-radius:.25rem;font-size:.88em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  blockquote{margin:.8rem 0;padding:.1rem 0 .1rem 1rem;border-left:2px solid var(--line);
+    color:var(--ink)}
+  .muted{color:var(--muted)}
+
+  /* A fold. The count belongs in the SUMMARY: a reader must be able to see how
+     much is inside without opening it, or folding becomes a way of implying a
+     list is shorter than it is. */
+  details{margin:.6rem 0}
+  summary{cursor:pointer;font:600 .8rem/1.5 var(--mono);letter-spacing:.05em;
+    text-transform:uppercase;color:var(--accent-ink);padding:.35rem 0}
+  summary:hover{color:var(--accent)}
+  details[open] summary{margin-bottom:.3rem}
+
+  /* What waits on what. A list, not a graph: an arc whose only recorded edges
+     are each item's link to its own parent has no graph worth drawing, and
+     drawing one anyway would show a hierarchy while claiming to show an order. */
+  .blocked{list-style:none;padding:0;margin:.6rem 0}
+  .blocked li{border-left:2px solid var(--wait);padding:.1rem 0 .1rem .8rem;
+    margin:.55rem 0}
+  .waits{font:600 .72rem/1.4 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+    color:var(--wait)}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  footer{margin-top:2.8rem;padding-top:.9rem;border-top:1px solid var(--line);
+    color:var(--muted);font-size:.85rem}
+
+  /* Stat tiles. A tile with no real source is DELETED, never rendered as zero —
+     a made-up number on a page {{owner_name}} trusts is worse than a missing one. Every
+     tile says what it counted and over what window, in the tile. */
+  .tiles{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr));
+    margin:.6rem 0}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:.7rem;
+    padding:.85rem .95rem;box-shadow:var(--shadow)}
+  .tile .k{font:.75rem/1.3 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);margin:0}
+  .tile .v{font:600 1.9rem/1.1 ui-sans-serif,system-ui,-apple-system,sans-serif;
+    margin:.3rem 0 .15rem;letter-spacing:-.02em}
+  .tile .w{font-size:.8rem;color:var(--muted);margin:0}
+
+  /* Chart. One series, so one hue and no legend — the caption names it.
+     Nothing legibility-critical goes inside the SVG: text in a scaled viewBox
+     scales with it, so an axis that reads on a laptop is unreadable on a phone.
+     The bars scale; the range and the reading are HTML and never do. */
+  /* Capped at the viewBox's own width so the chart never scales ABOVE 1:1:
+     stretched, a 24px bar becomes a 30px one and the spec that keeps marks
+     thin quietly stops holding. The cap covers the caption and the axis row
+     too, so all three stay aligned. */
+  figure{margin:.6rem 0;max-width:40rem}
+  figure svg{display:block;width:100%;height:7.5rem}
+  .bar{fill:var(--bar)}
+  .base{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
+  .axis{display:flex;justify-content:space-between;margin:.3rem 0 0;
+    font:.72rem var(--mono);color:var(--muted)}
+  figcaption{font-size:.82rem;color:var(--muted);margin-top:.35rem;max-width:34rem}
+
+  @media (max-width:32rem){
+    main,.masthead{padding-left:.85rem;padding-right:.85rem}
+    .tile .v{font-size:1.6rem}
+  }
+/* ==== shared: end ==== */
+
+  /* ---- page-specific: canvas -------------------------------------- */
+  /* The canvas is hidden until the script has checked for drawElementImage,
+     so a browser without it never shows an empty box. */
+  .stage{display:block;width:100%;margin:.6rem 0}
+  .stage[hidden]{display:none}
+  .stage .card{margin:0}
+  .mode{font:.78rem/1.4 var(--mono);color:var(--muted)}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <p class="topline">
+    <a href="{{gallery_origin}}/" target="_blank" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.1 1.3 1.4 6.2c-.3.2-.4.6-.2.9.2.3.6.4.9.2l.3-.3V14c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7v-3h2.1v3c0 .4.3.7.7.7h3.2c.4 0 .7-.3.7-.7V7l.3.3c.3.2.7.1.9-.2.2-.3.1-.7-.2-.9L8.9 1.3a1.4 1.4 0 0 0-1.8 0Z"/></svg> Gallery</a>
+  </p>
+  <p class="eyebrow">CANVAS &middot; <!--artifacts:updated-->{{host_suffix}}</p>
+  <!-- REPLACE -->
+  <h1>A card drawn live into a canvas</h1>
+  <!-- REPLACE: one sentence on what the effect is for. -->
+  <p class="standfirst">The card below is ordinary HTML. Where the browser can,
+    a canvas draws it with a slow sway; where it cannot, you read it as it is.</p>
+  <p class="chips"><span class="chip on">Live</span><span class="chip">Written <!--artifacts:updated--></span></p>
+  <hr>
+</header>
+
+<main>
+  <canvas class="stage" id="stage" layoutsubtree content="drawable" hidden></canvas>
+
+  <!-- REPLACE. The content the canvas draws. Keep it real HTML: this is what
+       every reader without the API, and every agent reading the page, gets. -->
+  <div class="card live" id="drawn" drawable>
+    <b>What this card shows</b>
+    <p>Text, links and layout stay in the document, so they can be selected,
+      searched and read aloud. The canvas only decides how they are drawn.</p>
+    <p>Change the words here; the effect needs no changes to follow them.</p>
+  </div>
+  <p class="mode" id="mode">Shown as plain HTML: this browser does not draw HTML into a canvas.</p>
+
+  <footer>{{footer}}</footer>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  var canvas = document.getElementById("stage");
+  var card = document.getElementById("drawn");
+  var mode = document.getElementById("mode");
+  // Feature detection. Without it the card stays where it is, in normal flow.
+  if (!("drawElementImage" in CanvasRenderingContext2D.prototype) ||
+      !("requestPaint" in HTMLCanvasElement.prototype)) {
+    return;
+  }
+  var ctx = canvas.getContext("2d");
+  var still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var margin = 16; // room for the sway and the shadow
+  var plain = mode.textContent;
+  var drawn = false;
+  var stopped = false;
+  var watcher = null;
+  var timer = null; // the no-paint timer, set only while the page is visible
+
+  // Anything going wrong puts the page back as plain HTML: the card returns to
+  // normal flow after the canvas, and the canvas is hidden again.
+  function fallBack() {
+    if (stopped) { return; }
+    stopped = true;
+    if (watcher) { watcher.disconnect(); }
+    if (timer !== null) { clearTimeout(timer); }
+    window.removeEventListener("resize", fit);
+    canvas.removeEventListener("paint", onPaint);
+    document.removeEventListener("visibilitychange", arm);
+    canvas.parentNode.insertBefore(card, canvas.nextSibling);
+    card.style.width = "";
+    canvas.hidden = true;
+    mode.textContent = plain;
+  }
+
+  // The canvas's height follows the card; its bitmap is its size on screen
+  // times the device pixel ratio.
+  function fit() {
+    if (stopped) { return; }
+    try {
+      var width = canvas.clientWidth;
+      card.style.width = (width - 2 * margin) + "px";
+      canvas.style.height = (card.offsetHeight + 2 * margin) + "px";
+      var dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(canvas.clientHeight * dpr);
+      canvas.requestPaint();
+    } catch (err) {
+      fallBack();
+    }
+  }
+
+  // The next frame, asked for once the browser is ready for one.
+  function again() {
+    requestAnimationFrame(function () {
+      if (!stopped) { canvas.requestPaint(); }
+    });
+  }
+
+  function onPaint() {
+    if (stopped) { return; }
+    try {
+      var dpr = window.devicePixelRatio || 1;
+      var t = still ? 0 : performance.now() / 1000;
+      var angle = 0.012 * Math.sin(t * 0.8);
+      var lift = 3 * Math.sin(t * 1.3);
+      var w = canvas.width / dpr;
+      var h = canvas.height / dpr;
+      ctx.reset();
+      ctx.scale(dpr, dpr); // from here on, units are CSS pixels
+      ctx.translate(w / 2, h / 2 + lift);
+      ctx.rotate(angle);
+      ctx.translate(-w / 2, -h / 2);
+      ctx.shadowColor = "rgba(0, 0, 0, 0.12)";
+      ctx.shadowBlur = 18;
+      ctx.shadowOffsetY = 6 - lift;
+      // The five-argument form, with the card's own size in CSS pixels, so the
+      // scale above is the only one applied. Not yet seen on a high-density
+      // screen: if the card looks doubled or blurred there, this is the line.
+      // The sway is under a degree, so clicks and selection still land on the
+      // text; a bigger effect should line the card up with what is drawn
+      // (canvas.getElementTransform) before the reader is asked to point at it.
+      try {
+        ctx.drawElementImage(card, margin, margin, card.offsetWidth, card.offsetHeight);
+      } catch (err) {
+        // drawElementImage throws until the browser has recorded the card's
+        // first snapshot. Before the first good draw, ask again; the no-paint
+        // timer below still decides when to give up. After it, fall back.
+        if (drawn) { throw err; }
+        again();
+        return;
+      }
+      if (!drawn) {
+        drawn = true;
+        if (timer !== null) { clearTimeout(timer); timer = null; }
+        document.removeEventListener("visibilitychange", arm);
+        mode.textContent = still
+          ? "Drawn into a canvas (still: you asked for reduced motion)."
+          : "Drawn live into a canvas.";
+      }
+      if (!still) { again(); }
+    } catch (err) {
+      fallBack();
+    }
+  }
+  canvas.addEventListener("paint", onPaint);
+
+  try {
+    canvas.appendChild(card); // a child of the canvas is laid out, not painted
+    canvas.hidden = false;
+    watcher = new ResizeObserver(fit);
+    watcher.observe(card);
+    window.addEventListener("resize", fit);
+    fit();
+  } catch (err) {
+    fallBack();
+  }
+  // No paint that drew within a second and a half of being on screen: show the
+  // plain HTML. A tab opened in the background does not paint, so the clock
+  // runs only while the page is visible, and stops if it is hidden first.
+  function arm() {
+    if (drawn || stopped) { return; }
+    if (document.visibilityState === "visible") {
+      if (timer === null) {
+        timer = setTimeout(function () { if (!drawn) { fallBack(); } }, 1500);
+      }
+    } else if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  }
+  document.addEventListener("visibilitychange", arm);
+  arm();
+})();
+</script>
+</body>
+</html>

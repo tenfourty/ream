@@ -1179,6 +1179,13 @@ you cannot publish into those, and a page {{owner_they}} file{{owner_s}} there r
   `embedded_fonts_not_run` means the check did not run (page too large, out of
   time, or server busy). Background workers stay blocked. Ream's own picture of a page
   (wall thumbnail, render check, `ream screenshot`) may show a fallback font for now.
+- HTML-in-Canvas (live HTML drawn into a canvas) works where the reader's browser has it
+  (Chrome 157): `<canvas layoutsubtree content="drawable">` with HTML children, each drawn
+  child marked `drawable`, a `paint` event in which `ctx.drawElementImage(el, x, y[, w, h])`
+  draws a child, and `canvas.requestPaint()` for the next frame. Test for `'drawElementImage'
+  in CanvasRenderingContext2D.prototype` and leave the HTML readable in normal flow when it is
+  missing, or when drawing fails: most browsers, and `read_page`, see only the HTML. No workers, nothing fetched; a font
+  is a data: URL (`embedded_fonts`, above). Start from the `canvas` template.
 - Or write markdown (`notes.md`; on the API, `"format": "markdown"`): tables,
   fenced code, task lists, and `##` headings with ids you can link to or update
   with `--section`. Raw HTML passes through, so a decision slot works; keep a
