@@ -74,6 +74,10 @@ _ROUTERS: dict[str, tuple[str, Callable]] = {}
 # (plug-in, fn), in registration order.
 _SCHEMA: list[tuple[str, str]] = []
 _STARTS: list[tuple[str, Callable]] = []
+# Answer sources only one plug-in may register (API 1.5), and which plug-in did: a
+# 'slack' answer means one party verified the press, so two may not both vouch for it.
+_SINGLE_SOURCES = ("slack",)
+_SINGLE_SOURCE_HOLDERS: dict[str, str] = {}
 _STOPS: list[tuple[str, Callable]] = []
 
 
@@ -382,8 +386,15 @@ class PluginAPI:
         verified_label: str | None = None,
         route_label: str | None = None,
     ) -> None:
-        """Declare a stored `answer_source` value and its wording (4.2, 2)."""
-        self._sources.add(name)
+        """Declare a stored `answer_source` value and its wording (4.2, 2). 'slack'
+        (API 1.5) may be registered by one plug-in only, and never with `relay=True`:
+        a second plug-in asking for it is refused (`PluginError`, naming it)."""
+        holder = _SINGLE_SOURCE_HOLDERS.get(name)
+        if name in _SINGLE_SOURCES and holder is not None and holder != self._plugin:
+            raise PluginError(
+                f"plug-in {self._plugin!r}: answer source {name!r} is already"
+                f" registered by plug-in {holder!r}"
+            )
         decisions.register_source(
             name,
             label,
@@ -391,6 +402,9 @@ class PluginAPI:
             verified_label=verified_label,
             route_label=route_label,
         )
+        if name in _SINGLE_SOURCES:
+            _SINGLE_SOURCE_HOLDERS[name] = self._plugin
+        self._sources.add(name)
 
     def on_answer(self, name: str, fn: Callable) -> None:
         """Register an answer hook (4.2, 3). `fn(conn, decision, answer)` runs inside the

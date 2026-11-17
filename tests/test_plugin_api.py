@@ -46,6 +46,7 @@ def world(monkeypatch):
     monkeypatch.setattr(decisions, "_VERIFIED_LABELS", dict(decisions._VERIFIED_LABELS))
     monkeypatch.setattr(decisions, "_ROUTE_LABELS", dict(decisions._ROUTE_LABELS))
     monkeypatch.setattr(decisions, "_ANSWER_HOOKS", [])
+    monkeypatch.setattr(plugin_api, "_SINGLE_SOURCE_HOLDERS", {})
     monkeypatch.setattr(plugin_api, "_failures", {})
     monkeypatch.setattr(plugin_api, "_loaded", [])
 
@@ -279,7 +280,9 @@ def test_a_raising_hook_rolls_the_answer_back_naming_the_plugin(db, world, caplo
     plugin_api.load()
     q = _ask(db)
     with caplog.at_level("WARNING"), pytest.raises(decisions.AnswerHookFailed) as err:
-        decisions.answer(db, q.id, letter="a", by="owner", source="toy-chat")
+        decisions.answer(
+            db, q.id, letter="a", by="owner", source="toy-chat", recorded_by="toy"
+        )
     assert "toy" in str(err.value) and "secret" not in str(err.value)
     assert "secret" not in caplog.text
     with db.connect() as conn:
@@ -311,7 +314,14 @@ def test_a_second_plugins_hook_stays_quiet_for_the_first_plugins_source(db, worl
 
     world(EP("one", _with_module(one, "1")), EP("two", _with_module(two, "1")))
     plugin_api.load()
-    decisions.answer(db, _ask(db).id, letter="a", by="owner", source="chat-one")
+    decisions.answer(
+        db,
+        _ask(db).id,
+        letter="a",
+        by="owner",
+        source="chat-one",
+        recorded_by="one",
+    )
     assert seen == [("one", "chat-one")]
 
 
@@ -335,15 +345,16 @@ def test_record_elsewhere_does_not_run_the_hook(db, world):
     assert seen == []
 
 
-@pytest.mark.parametrize("name", ["slack", "page"])
-def test_a_plugin_cannot_register_slack_or_page(world, name):
+# 'slack' may be registered by one plug-in since API 1.5: tests/test_plugin_api_1_5.py.
+@pytest.mark.parametrize("relay", [True, False])
+def test_a_plugin_cannot_register_page(world, relay):
     def register(api):
-        api.answer_source(name, "Mine", relay=True)
+        api.answer_source("page", "Mine", relay=relay)
 
     world(EP("toy", _with_module(register, "1")))
     with pytest.raises(plugin_api.PluginError, match="toy"):
         plugin_api.load()
-    assert name not in decisions.relay_sources()
+    assert "page" not in decisions.relay_sources()
 
 
 def test_an_unregistered_source_is_still_refused(db, world):

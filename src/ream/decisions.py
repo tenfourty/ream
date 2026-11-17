@@ -267,9 +267,9 @@ class RoundRow:
 
 
 class TapStands(Exception):
-    """An app's relay on a question he already answered with his own tap. The tap
-    stands; he can answer again on the page if he changed his mind. `row` is the
-    question as it stands."""
+    """An app's relay, or a press in Slack, on a question he already answered with
+    his own tap. The tap stands; he can answer again on the page if he changed his
+    mind. `row` is the question as it stands."""
 
     def __init__(self, row: "DecisionRow") -> None:
         super().__init__("answer")
@@ -1200,13 +1200,13 @@ CORE_SOURCES = ("page", *ANSWER_SOURCES, MCP_SOURCE)
 # Sources a plug-in writes, registered at import time (core-and-plugins design,
 # section 5). A stored value is data, not code: a row whose source is not
 # registered (its plug-in is absent) still reads, shown by its raw value.
-# 'slack' is declared here, in core, until the Slack plug-in moves out (slice 6):
-# it is stored by the partner bridge, inbound, but is NOT in ANSWER_SOURCES, because
-# a relay is an agent's word and 'slack' means quarterdeck verified who pressed.
-# Only `answer(..., source='slack')`, called from partner_in, writes it.
+# 'slack' is declared here, in core, so a 'slack' answer is stored and labelled with
+# no plug-in loaded. It is NOT in ANSWER_SOURCES, because a relay is an agent's word
+# and 'slack' means the press was verified: only `answer(..., source='slack')` writes
+# it, from core's partner_in or from the one plug-in that registered it (API 1.5).
 _REGISTERED: list[str] = ["slack"]
 # A source's human label, for wording ("Open in Slack"). One without a label shows
-# its raw value. 'slack' is labelled here until the Slack plug-in moves out.
+# its raw value. 'slack' is labelled here; the plug-in that registers it may reword it.
 _LABELS: dict[str, str] = {"slack": "Slack"}
 
 # What a plug-in's source adds beyond a label (plugin_api.answer_source): whether an
@@ -1215,10 +1215,11 @@ _RELAY: list[str] = []
 _VERIFIED_LABELS: dict[str, str] = {}
 _ROUTE_LABELS: dict[str, str] = {}
 
-# Names no plug-in may register: 'slack' means quarterdeck verified who pressed, and
-# core's partner bridge alone stores it; a plug-in taking it with relay=True would let
-# an agent key record answers stamped as Slack-verified.
-_RESERVED_SOURCES = ("page", "slack", "mcp")
+# Names no plug-in may register.
+_RESERVED_SOURCES = ("page", "mcp")
+# Names a plug-in may register but never with relay=True: 'slack' means the press was
+# verified, and a relay would let an agent key record answers stamped as Slack-verified.
+_NEVER_RELAYED = ("slack",)
 
 _SOURCE_NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 
@@ -1235,13 +1236,16 @@ def register_source(
     (a source without one shows its raw value). Idempotent; a core source or a
     name that is not lower-case letters, digits and hyphens (at most 32) is refused, so
     a plug-in can neither shadow 'page' nor store something the gallery would have to
-    take apart to show. `relay=True` lets an agent record it (`relay_sources()`);
+    take apart to show. `relay=True` lets an agent record it (`relay_sources()`), and
+    is refused for 'slack', which an agent may never record;
     `verified_label` and `route_label` are read back with `verified_label_of` and
     `route_label_of`."""
     if not isinstance(name, str) or not _SOURCE_NAME.match(name):
         raise ValueError(f"answer source {name!r}: lower-case letters, digits, hyphens")
     if name in CORE_SOURCES or name in _RESERVED_SOURCES:
         raise ValueError(f"answer source {name!r} is core's")
+    if relay and name in _NEVER_RELAYED:
+        raise ValueError(f"answer source {name!r} may not be relayed by an agent")
     if label is not None:
         if not isinstance(label, str) or not label.strip() or len(label) > 40:
             raise ValueError(f"answer source {name!r}: a label is 1-40 characters")
@@ -2014,6 +2018,12 @@ def answer(
     if source != "page" and source not in _REGISTERED:
         raise InvalidSource(source)
     require_stored_source(source)
+    # An inbound answer names the party that vouched for it; his own tap has none,
+    # so a stored `recorded_by` always means "not tapped on the page".
+    if source != "page" and not recorded_by:
+        raise InvalidSource("an inbound answer must name who vouched for it")
+    if source == "page" and recorded_by is not None:
+        raise InvalidSource("a page answer takes no recorded_by")
     store._check_size(note, MAX_NOTE_BYTES, "note", agent=by, artifact_id=None)
 
     emissions: list[events.Emission] = []
@@ -2092,11 +2102,19 @@ def answer(
             # first verdict. A second writer waits on the row lock, re-tests
             # and updates nothing.
             answered_at = datetime.now(UTC)
+            # A press in Slack never replaces his own tap on the page (the rule
+            # `record_elsewhere` holds an app's relay to); tested in the write, so
+            # a tap landing between the read above and here still stands.
+            keep_tap = (
+                " and (answer_source is null or answer_source <> 'page')"
+                if source == "slack"
+                else ""
+            )
             written = conn.execute(
-                "update decision set answer = %s, answer_note = %s, answered_at = %s,"
+                "update decision set answer = %s, answer_note = %s, answered_at = %s,"  # noqa: S608 -- fixed text, no caller input
                 " answered_by = %s, answer_source = %s, recorded_by = %s,"
                 " said_at = null where id = %s and closed_at is null"
-                " and (kind <> 'review' or answer is null)"
+                " and (kind <> 'review' or answer is null)" + keep_tap +
                 # The page must still be live AT THE WRITE: the set-aside check
                 # above read the row before this transaction, and an archive in
                 # between must not let an answer land on a parked question.
@@ -2119,6 +2137,12 @@ def answer(
                     # Closed (withdrawn, or replaced) between the read above
                     # and this write: answered exactly as a closed decision is.
                     raise store.NotFound()
+                if (
+                    source == "slack"
+                    and current[_KIND_IDX] != "review"
+                    and current[14] == "page"
+                ):
+                    raise TapStands(_row_to_decision(current))
                 raise _already(conn, current, round)
             # A new human act: what was declared about an earlier answer (or before
             # any) is history, and the acknowledgement reads as new again.

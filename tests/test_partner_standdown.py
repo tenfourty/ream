@@ -620,7 +620,7 @@ def test_a_failing_delivered_contributor_is_ignored(db, page, bridge, monkeypatc
 
 def test_api_1_4_accepts_delivered(monkeypatch):
     monkeypatch.setattr(readside, "_CONTRIBUTORS", [])
-    assert plugin_api.API_VERSION == (1, 4)
+    assert plugin_api.API_VERSION >= (1, 4)
     api = plugin_api.PluginAPI("qd")
     api.read_side(delivered=lambda db, ids: {})
     assert readside.contributors()[0].delivered is not None

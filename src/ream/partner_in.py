@@ -53,7 +53,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from ream import db as dbmod
-from ream import decisions, hosts, partner, settings, store
+from ream import decisions, hosts, partner, readside, settings, store
 from ream.db import Connection, Database
 
 _log = logging.getLogger("ream.partner.inbound")
@@ -532,6 +532,10 @@ def _apply_artifacts(db: Database, event: Event, now: datetime) -> str:
         # on its Slack copy is refused, and the refusal is recorded; the
         # partner is told 2xx so it stops retrying a press that can never apply.
         return _record_only(db, event, "held", now)
+    except decisions.TapStands:
+        # He already answered on the page: his tap stands and the press changes
+        # nothing. Recorded, and 2xx, so the partner stops retrying it.
+        return _record_only(db, event, "tap_stands", now)
     except (
         decisions.InvalidAnswer,
         decisions.AlreadyDecided,
@@ -774,45 +778,9 @@ _COLS = (
 )
 
 
-@dataclass(frozen=True)
-class Copy:
-    """A question whose home is the partner. Carries the attributes
-    `inbox.key` reads from a decision (id, created_at, needed_by, urgency,
-    topic), so one order serves both."""
-
-    source: str
-    version: int
-    asking_office: str
-    title: str
-    options: list
-    recommended: str | None
-    context: str
-    link: str | None
-    topic: dict | None
-    depends_on: list
-    replaces: str | None
-    replaced_by: str | None
-    urgency: str
-    blocked_on: str | None
-    needed_by: str | None
-    for_offices: list
-    state: str
-    answer: str | None
-    answer_note: str
-    answered_by: str | None
-    answered_at: str | None
-    pending_answer: str | None
-    pending_note: str
-    pending_at: str | None
-    created_at: datetime
-
-    @property
-    def id(self) -> str:
-        return self.source
-
-    @property
-    def qid(self) -> str:
-        return self.source.removeprefix(partner.FOREIGN_PREFIX)
+# Defined in `readside` (the read side's own type, so a plug-in builds one without
+# importing this module); the old name stays.
+Copy = readside.Copy
 
 
 def _iso(value) -> str | None:
