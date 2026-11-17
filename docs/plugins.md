@@ -302,8 +302,10 @@ that takes each row, so a claim landing mid-pass stops the pass before its next 
 without it (a command-line tool or a server started with a `REAM_PLUGINS` that does not select the
 owner; `artifacts-admin purge-deleted` loads the selected plug-ins since step 9e-4, most other
 commands load none) core goes on writing the event to its own outbox, and the owner's sender moves
-it with `hand_over` on its next pass (until the owner also holds inbound: then core's stage refuses
-instead, see below). So each event has
+it with `hand_over` on its next pass. Once the owner also holds inbound, core's stage refuses
+instead (see below): it reads the inbound holder with the switch row share-locked, as every inbound
+writer does, so a claim waits for a stage in flight and no row is added to core's outbox after the
+claim commits; the rows already there your sender still drains with `hand_over`. So each event has
 exactly one writer and none is lost. The check is by owner (the plug-in name recorded on each
 sink `api.sink` registers), never by a sink's name. Each stand-down logs once at INFO; a server
 process where the key names a plug-in whose bridge stage is not loaded logs a WARNING once, at
@@ -361,7 +363,7 @@ the deletion.
 | `lock_inbound(conn, share=False)` | the holder, with the switch row locked to the end of your transaction. **Call it first in every transaction that writes your inbound tables and write only if it returns your name**; `share=True` lets other writers through and holds off only a claim or release |
 | `claim_inbound(conn, owner)` | take inbound, in the same transaction as `hand_over_inbound` and your inserts. Refused (`BridgeHeld`) unless `owner` holds the outbound bridge or when another plug-in holds inbound; the same owner again is a no-op |
 | `hand_over_inbound(conn)` | returns and deletes every row of core's `partner_question`, `partner_version_seen` and `partner_event_seen`, as `InboundHandover(rows)`; insert them into your own tables before you commit, so a row is in one table set only (a row left in core would shadow your copy on the read side). No version counter is handed over: go on calling `next_version`. Refused while core holds inbound |
-| `release_inbound(conn, owner, rows)` | the undo, run **before** `release_bridge`: your rows go back and inbound returns to core. It locks the switch row first and no decision row, so it cannot deadlock with an answer in flight. `release_bridge` is refused (`InboundHeld`) while inbound is held, and `artifacts-admin partner-bridge --release` refuses with its own message: it cannot bring your rows back |
+| `release_inbound(conn, owner, read_rows)` | the undo, run **before** `release_bridge`: your rows go back and inbound returns to core. `read_rows(conn)` is **a function** that returns your rows in `hand_over_inbound`'s shape (and deletes them from your tables); the helper calls it only after it has locked the switch row, when every writer of yours has committed or is waiting, so no row written meanwhile is left behind. Do not read them beforehand and close over the result. It locks the switch row first and no decision row, so it cannot deadlock with an answer in flight. `release_bridge` is refused (`InboundHeld`) while inbound is held, and `artifacts-admin partner-bridge --release` refuses with its own message: it cannot bring your rows back |
 
 From the claim's commit, core's endpoint (`POST /partner/v1/events`) answers **503 with
 `Retry-After`** (after the signature check) and records nothing; the hub retries, so the event

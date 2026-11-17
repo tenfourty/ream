@@ -1038,8 +1038,13 @@ drivers; CI only (not on the management machine).
    sends `readside.answer_here` on to the plug-in. Core's built-in stage refuses to write core's
    outbox (`partner.InboundHeld`) where a row would be written (`partner.would_enqueue`: the bridge
    configured, a plain question already announced or being announced) once inbound is held and the
-   owner's own stage is not loaded in that process, so a command-line tool never writes a row under a
-   version the partner has seen; a stage the owner has loaded still stands down quietly as in 9e-3.
+   owner's own stage is not loaded in that process: core's outbox takes no new row once inbound is
+   claimed, and the action rolls back whole instead of an event going unsent (the version numbers
+   are not the reason: there is one counter, see below). The stage reads the holder with the switch
+   row share-locked (`lock_inbound(share=True)`), like every inbound writer, so a claim waits for a
+   stage in flight and none writes core's outbox after the claim commits; a claim or release holds
+   that row and never a decision row, so the stage's counter bump cannot deadlock with one. A stage
+   the owner has loaded still stands down quietly as in 9e-3.
    At the endpoint that refusal is 503 `stood_down`, and a failed `on_answer` hook
    (`decisions.AnswerHookFailed`) or a failed stage of the bridge's holder
    (`plugin_api.BridgeStageFailed`) inside an inbound answer is 503 `not_yet`, so the hub retries
@@ -1049,8 +1054,9 @@ drivers; CI only (not on the management machine).
    another plug-in holds inbound; `hand_over_inbound(conn)` is refused while core holds it, moves
    every row out of `partner_question`, `partner_version_seen` and `partner_event_seen` (returned
    and deleted, so a row is in one table set only and a copy left in core cannot shadow the plug-in's
-   on the read side); `release_inbound(conn, owner, rows)` locks the switch row, puts the rows back
-   and sets the key to `core`. `release_bridge` is refused (`InboundHeld`) while inbound is held, so
+   on the read side); `release_inbound(conn, owner, read_rows)` locks the switch row, then calls
+   `read_rows(conn)` for the plug-in's rows (a function, so they are read under the lock and a
+   write in flight cannot be left behind), puts them back and sets the key to `core`. `release_bridge` is refused (`InboundHeld`) while inbound is held, so
    the order back is inbound, then outbound. `artifacts-admin partner-bridge` shows who holds
    inbound and refuses `--release` with its own message while it is held: that command cannot bring
    the plug-in's rows back.
@@ -1106,8 +1112,9 @@ drivers; CI only (not on the management machine).
    key, the gate on every writer including a claim between the first look and the locked read, the
    move and its undo, the stage, the partner host; and, Postgres only, the row locks themselves
    on two connections: a claim waits for a writer in flight, an open claim holds the answer hook
-   which then answers 503 with the decision row rolled back, a release ahead of or behind an
-   answer on the same question finishes without deadlock), `tests/test_plugin_api_1_5.py` (new: the
+   which then answers 503 with the decision row rolled back, a release runs to its commit
+   while an answer holds the same question's row, a release behind an answer in flight waits for
+   it, and core's stage waits for an open claim and then refuses), `tests/test_plugin_api_1_5.py` (new: the
    source, `recorded_by`, `TapStands`), `test_partner_inbound.py`, `test_plugin_api.py` and
    `test_partner_standdown.py` adjusted (the 1.4 version pin loosened, `slack` no longer in the
    refused list). **Not run here:** the full suite and Postgres (CI on the branch);
