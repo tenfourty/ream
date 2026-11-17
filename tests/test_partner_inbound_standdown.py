@@ -11,11 +11,17 @@ outbox, and the partner host goes to the plug-in's route only if the key names i
 Every key pair is generated in memory (the fixtures of `test_partner_inbound`).
 """
 
+import threading
+import time
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
 from test_partner_inbound import (  # noqa: F401 -- fixtures and senders
+    HIM,
     HOST,
+    SAME_ORIGIN,
     _outbox,
     _row,
     _seen,
@@ -31,11 +37,14 @@ from test_partner_inbound import (  # noqa: F401 -- fixtures and senders
     partner_key,
     post,
     pressed,
+    raw_of,
+    sign,
 )
 
 from ream import (
     admin,
     decisions,
+    keys,
     partner,
     partner_in,
     plugin_api,
@@ -342,7 +351,8 @@ def test_the_move_leaves_every_row_in_one_table_set(db, client, partner_key, pag
     )
     assert press["outcome"] == "applied" and press["detail"]["slack_id"]
     # asked, then the outbound `answered` of the Slack press; asked alone.
-    assert moved.versions == {answered.id: 2, waiting.id: 1}
+    # ... and the counters stayed in core's column, the one counter there is.
+    assert _versions(db) == {answered.id: 2, waiting.id: 1}
     assert partner_in.open_copies(db, waiting_on_him=False) == []
 
 
@@ -358,27 +368,38 @@ def test_a_rolled_back_move_keeps_the_rows_in_core(db, client, partner_key, page
     assert _holder(db) == partner.CORE
 
 
-def test_release_puts_the_rows_and_the_counters_back(db, client, partner_key, page):
+def _versions(db):
+    with db.connect() as conn:
+        return dict(
+            conn.execute(
+                "select id, partner_version from decision where partner_version > 0"
+            ).fetchall()
+        )
+
+
+def test_release_puts_the_rows_back_and_the_counter_never_left(
+    db, client, partner_key, page
+):
     answered, waiting, _ = _seed(db, client, partner_key, page)
     before = partner_in.open_copies(db, waiting_on_him=False)
     assert len(before) == 1
+    assert _versions(db) == {answered.id: 2, waiting.id: 1}
     with db.connect() as conn, conn.transaction():
         partner.claim_bridge(conn, "qd")
         partner.claim_inbound(conn, "qd")
         moved = partner.hand_over_inbound(conn)
+    # No counter is handed over: there is one, and it stays where it is.
+    assert not hasattr(moved, "versions")
     total = sum(len(rows) for rows in moved.rows.values())
-    # The plug-in counted on: one question further, one never above core's number.
-    versions = {answered.id: 5, waiting.id: 1, "gone": 9}
+    # The plug-in sends on while it holds the bridge, taking each number from core.
     with db.connect() as conn, conn.transaction():
-        assert partner.release_inbound(conn, "qd", moved.rows, versions) == total
+        assert partner.next_version(conn, answered.id, "answered") == 3
+        assert partner.next_version(conn, answered.id, "answered") == 4
+    with db.connect() as conn, conn.transaction():
+        assert partner.release_inbound(conn, "qd", moved.rows) == total
     assert _holder(db) == partner.CORE
     assert partner_in.open_copies(db, waiting_on_him=False) == before
-    with db.connect() as conn:
-        assert dict(
-            conn.execute(
-                "select id, partner_version from decision where partner_version > 0"
-            ).fetchall()
-        ) == {answered.id: 5, waiting.id: 1}
+    assert _versions(db) == {answered.id: 4, waiting.id: 1}
     # Core's endpoint is back, and still knows what it had seen.
     again = make("asked", "qd:q1", 3, asked_body())
     r = post(client, partner_key, again)
@@ -387,9 +408,16 @@ def test_release_puts_the_rows_and_the_counters_back(db, client, partner_key, pa
     with db.connect() as conn, conn.transaction():
         partner.release_bridge(conn, "qd", [])
         assert partner.bridge_owner(conn) is None
+    # Core's next event for that question follows the plug-in's last, never repeats it.
+    with sinks.isolated(*sinks._builtin_sinks()):
+        decisions.answer(db, answered.id, letter="a", by="jeremy")
+    assert [(r[1], r[2]) for r in _outbox(db) if r[0] == answered.id][-1] == (
+        5,
+        "answered",
+    )
 
 
-def test_release_never_lowers_a_counter_or_replaces_a_row(
+def test_release_never_replaces_a_row_or_touches_a_counter(
     db, client, partner_key, page
 ):
     answered, _waiting, _ = _seed(db, client, partner_key, page)
@@ -401,9 +429,7 @@ def test_release_never_lowers_a_counter_or_replaces_a_row(
         ).fetchone()
     stale_copy = {**dict(zip(cols, held, strict=True)), "version": 1, "title": "old"}
     with db.connect() as conn, conn.transaction():
-        put = partner.release_inbound(
-            conn, "qd", {"partner_question": [stale_copy]}, {answered.id: 1}
-        )
+        put = partner.release_inbound(conn, "qd", {"partner_question": [stale_copy]})
     assert put == 0
     with db.connect() as conn:
         assert conn.execute("select version from partner_question").fetchall() == [(3,)]
@@ -420,7 +446,7 @@ def test_release_inbound_refuses_another_owner_and_keeps_everything(db, bridge, 
         db.connect() as conn,
         conn.transaction(),
     ):
-        partner.release_inbound(conn, "other", {}, {q.id: 7})
+        partner.release_inbound(conn, "other", {})
     assert _holder(db) == "qd"
     with db.connect() as conn:
         assert conn.execute(
@@ -435,7 +461,7 @@ def test_release_inbound_takes_only_the_inbound_tables(db):
         db.connect() as conn,
         conn.transaction(),
     ):
-        partner.release_inbound(conn, "qd", {"decision": [{}]}, {})
+        partner.release_inbound(conn, "qd", {"decision": [{}]})
 
 
 def test_the_outbound_bridge_cannot_go_back_while_inbound_is_held(db):
@@ -532,6 +558,97 @@ def test_only_the_inbound_claim_stops_cores_stage(db, bridge, page):
     assert [row[2] for row in _outbox(db)] == ["asked"]
 
 
+def _owners_stage():
+    """The holder's stage as the contract has it: every version from core's counter."""
+    return Sink(
+        "quarterdeck",
+        BRIDGE_KINDS,
+        stage=lambda conn, event: partner.next_version(conn, event.ref_id, event.kind),
+        plugin="qd",
+    )
+
+
+def test_a_question_first_announced_after_the_claim_is_refused_too(db, bridge, page):
+    # Asked where the holder's stage runs, after the claim: the stage takes the version
+    # from core's counter, so core's column says "announced". A process without that
+    # stage then refuses its `withdrawn` rather than let it pass as never announced.
+    _claim(db)
+    with sinks.isolated(*sinks._builtin_sinks(), _owners_stage()):
+        q = ask(db, page)
+    assert _versions(db) == {q.id: 1}
+    with sinks.isolated(*sinks._builtin_sinks()), pytest.raises(partner.InboundHeld):
+        decisions.close(db, "owner", q.id)
+    assert _row(db, q.id).closed_at is None
+    assert _versions(db) == {q.id: 1}
+    assert _outbox(db) == []
+
+
+# --- the refusal outside the partner endpoint -------------------------------------------
+
+
+def test_the_gallery_answer_refused_by_cores_stage_is_503_with_retry_after(
+    db, bridge, page, gallery
+):
+    q = ask(db, page)
+    _claim(db)
+    with sinks.isolated(*sinks._builtin_sinks()):
+        r = gallery.post(
+            f"/d/{q.id}/answer",
+            data={"letter": "a"},
+            headers={**HIM, **SAME_ORIGIN},
+            follow_redirects=False,
+        )
+    assert r.status_code == 503 and r.headers["Retry-After"] == "30"
+    assert "Nothing was saved" in r.text and "qd" in r.text
+    assert "Traceback" not in r.text
+    assert _row(db, q.id).answer is None
+
+
+def test_an_api_ask_refused_by_cores_stage_is_503_with_retry_after(
+    db, bridge, page, gallery
+):
+    token, _ = keys.mint(db, agent="owner")
+    _claim(db)
+    with sinks.isolated(*sinks._builtin_sinks()):
+        r = gallery.post(
+            f"/api/v1/pages/{page.id}/decisions",
+            json={
+                "question": "Which?",
+                "options": [
+                    {"letter": "a", "label": "One"},
+                    {"letter": "b", "label": "Two"},
+                ],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert r.status_code == 503 and r.headers["Retry-After"] == "30"
+    assert "Nothing was saved" in r.json()["detail"] and "qd" in r.json()["detail"]
+    assert _count(db, "decision") == 0
+
+
+def test_a_purge_refused_by_cores_stage_exits_with_one_line_and_destroys_nothing(
+    db, bridge, page, monkeypatch
+):
+    # The holder's plug-in is not selected in this command's process: the purge would
+    # withdraw an announced question, core's stage refuses, and the command says so in
+    # one line with the page still there.
+    q = ask(db, page)
+    with db.connect() as conn:
+        conn.execute(
+            "update artifact set deleted_at = %s where id = %s",
+            (datetime.now(UTC) - timedelta(days=31), page.id),
+        )
+    _claim(db)
+    monkeypatch.setattr(admin, "_database_url", lambda: db.dsn)
+    monkeypatch.setattr(plugin_api, "load", list)
+    with pytest.raises(SystemExit) as stopped:
+        admin.main(["purge-deleted"])
+    words = str(stopped.value)
+    assert "\n" not in words and "Traceback" not in words
+    assert "'qd'" in words and "nothing was changed" in words
+    assert _count(db, "artifact") == 1 and _versions(db) == {q.id: 1}
+
+
 # --- the partner host ---------------------------------------------------------------------
 
 
@@ -597,6 +714,30 @@ def test_without_cores_endpoint_an_unclaimed_plugin_route_is_not_served(
     assert post(http, partner_key, event).json() == {"result": "the plug-in's"}
 
 
+def test_a_proxied_request_never_reaches_the_plugins_route(
+    db, inbound, partner_key, plugin_route
+):
+    # The host's own rule, held by the router whoever serves the host.
+    _claim(db)
+    http = _on_host(create_app(db, inbound))
+    event = make("asked", "qd:q1", 1, asked_body())
+    for header in partner_in.PROXY_HEADERS:
+        r = post(http, partner_key, event, headers={header: "203.0.113.9"})
+        assert r.status_code == 404 and r.json() == {"error": "not found"}, header
+    assert post(http, partner_key, event).json() == {"result": "the plug-in's"}
+
+
+def test_a_body_declared_over_the_cap_never_reaches_the_plugins_route(
+    db, inbound, partner_key, plugin_route
+):
+    _claim(db)
+    http = _on_host(create_app(db, inbound))
+    r = http.post(partner_in.PATH, content=b"x" * (partner_in.MAX_BODY + 1))
+    assert r.status_code == 400 and r.json() == {"error": "too_large"}
+    r = http.post(partner_in.PATH, content=b"x" * partner_in.MAX_BODY)
+    assert r.json() == {"result": "the plug-in's"}
+
+
 def test_the_holder_is_read_on_every_request(db, inbound, partner_key, plugin_route):
     http = _on_host(create_app(db, inbound))
     _claim(db)
@@ -604,7 +745,7 @@ def test_the_holder_is_read_on_every_request(db, inbound, partner_key, plugin_ro
         "result": "the plug-in's"
     }
     with db.connect() as conn, conn.transaction():
-        partner.release_inbound(conn, "qd", {}, {})
+        partner.release_inbound(conn, "qd", {})
     r = post(http, partner_key, make("asked", "qd:q1", 1, asked_body()))
     assert r.json() == {"result": "applied"}
 
@@ -644,3 +785,198 @@ def test_purge_deleted_stops_on_a_plugin_that_cannot_load(db, monkeypatch):
     monkeypatch.setattr(plugin_api, "load", broken)
     with pytest.raises(SystemExit, match="'qd' failed to register"):
         admin.main(["purge-deleted"])
+
+
+# --- the locks themselves (Postgres: SQLite has one writer and no row locks) -----------------
+
+_WAIT = 20
+
+
+def _until_waiting_on_a_lock(db, seconds=10):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        with db.connect() as conn:
+            waiting = conn.execute(
+                "select 1 from pg_stat_activity"
+                " where datname = current_database() and wait_event_type = 'Lock'"
+            ).fetchone()
+        if waiting:
+            return
+        time.sleep(0.005)
+    raise AssertionError("no statement ever waited on a lock")
+
+
+def _thread(fn, errors):
+    """`fn` on a daemon thread, so a deadlock fails the test's join and never hangs the
+    run; what it raised lands in `errors`."""
+
+    def run():
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001 -- the test asserts on it
+            errors.append(exc)
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    return t
+
+
+def _finished(*threads):
+    for t in threads:
+        t.join(_WAIT)
+    assert not any(t.is_alive() for t in threads), "a thread never finished: a deadlock"
+
+
+@pytest.mark.postgres_only  # waits for a row lock through pg_stat_activity
+def test_a_claim_waits_for_a_writer_in_flight_and_lands_after_its_commit(db):
+    with db.connect() as conn, conn.transaction():
+        partner.claim_bridge(conn, "qd")
+    holding, go = threading.Event(), threading.Event()
+    errors, order = [], []
+
+    def writer():
+        with db.connect() as conn, conn.transaction():
+            assert partner.lock_inbound(conn, share=True) == partner.CORE
+            holding.set()
+            assert go.wait(_WAIT)
+            conn.execute(
+                "insert into partner_version_seen (source, version, updated_at)"
+                " values ('qd:q1', 1, now())"
+            )
+            order.append("written")
+
+    def claimer():
+        with db.connect() as conn, conn.transaction():
+            partner.claim_inbound(conn, "qd")
+            # Under the claim's lock the writer's row is already here to be moved.
+            order.append(
+                len(partner.hand_over_inbound(conn).rows["partner_version_seen"])
+            )
+
+    w = _thread(writer, errors)
+    assert holding.wait(_WAIT)
+    c = _thread(claimer, errors)
+    _until_waiting_on_a_lock(db)
+    assert c.is_alive() and _holder(db) == partner.CORE
+    go.set()
+    _finished(w, c)
+    assert not errors
+    assert order == ["written", 1]
+    assert _holder(db) == "qd"
+    assert _count(db, "partner_version_seen") == 0
+
+
+@pytest.mark.postgres_only  # waits for a row lock through pg_stat_activity
+def test_an_open_claim_holds_the_answer_hook_which_then_answers_503(
+    db, inbound, partner_key, page
+):
+    errors, result = [], []
+    with sinks.isolated():
+        q = ask(db, page)
+        with db.connect() as conn, conn.transaction():
+            conn.execute(
+                "update decision set partner_version = 1 where id = %s", (q.id,)
+            )
+            partner.claim_bridge(conn, "qd")
+        event = make("answered", f"artifacts:{q.id}", 2, pressed("b"))
+        raw = raw_of(event)
+        with db.connect() as conn, conn.transaction():
+            # The claim is open: not committed, so the request's first look, and the
+            # answer's own write of the decision row, still see core.
+            partner.claim_inbound(conn, "qd")
+            t = _thread(
+                lambda: result.append(
+                    partner_in.process(db, inbound, raw, sign(partner_key, raw))
+                ),
+                errors,
+            )
+            _until_waiting_on_a_lock(db)
+            assert t.is_alive() and result == []
+        _finished(t)
+    assert not errors
+    assert result == [(503, {"error": partner_in.STOOD_DOWN})]
+    assert _row(db, q.id).answer is None
+    assert _seen(db, event["event_id"]) is None
+    assert _holder(db) == "qd"
+
+
+def _held_answer(db, decision_id, held=None, go=None):
+    """A Slack answer as the holder's route records it: the decision row first, then
+    the switch's row shared, in the answer's own transaction."""
+
+    class NotMine(Exception):
+        pass
+
+    def hook(conn):
+        if partner.lock_inbound(conn, share=True) != "qd":
+            raise NotMine
+        if held is not None:
+            held.set()
+            assert go.wait(_WAIT)
+
+    try:
+        decisions.answer(
+            db,
+            decision_id,
+            letter="b",
+            by=settings.owner_id(),
+            source="slack",
+            recorded_by="quarterdeck",
+            in_transaction=hook,
+        )
+    except NotMine:
+        return "refused"
+    return "applied"
+
+
+@pytest.mark.postgres_only  # two connections and their row locks
+def test_a_release_ahead_of_an_answer_on_the_same_question_does_not_deadlock(
+    db, bridge, page
+):
+    errors, result = [], []
+    with sinks.isolated(_owners_stage()):
+        _claim(db)
+        q = ask(db, page)
+        with db.connect() as conn, conn.transaction():
+            # The release holds the switch's row; the answer takes its decision row and
+            # waits for the switch. The release must need no decision row to finish.
+            assert partner.release_inbound(conn, "qd", {}) == 0
+            t = _thread(lambda: result.append(_held_answer(db, q.id)), errors)
+            _until_waiting_on_a_lock(db)
+            assert t.is_alive()
+        _finished(t)
+    assert not errors
+    assert result == ["refused"]
+    assert _row(db, q.id).answer is None
+    assert _holder(db) == partner.CORE
+    assert _versions(db) == {q.id: 1}
+
+
+@pytest.mark.postgres_only  # waits for a row lock through pg_stat_activity
+def test_a_release_behind_an_answer_in_flight_waits_and_keeps_its_version(
+    db, bridge, page
+):
+    errors, result, put = [], [], []
+    held, go = threading.Event(), threading.Event()
+
+    def release():
+        with db.connect() as conn, conn.transaction():
+            put.append(partner.release_inbound(conn, "qd", {}))
+
+    with sinks.isolated(_owners_stage()):
+        _claim(db)
+        q = ask(db, page)
+        a = _thread(lambda: result.append(_held_answer(db, q.id, held, go)), errors)
+        assert held.wait(_WAIT)
+        r = _thread(release, errors)
+        _until_waiting_on_a_lock(db)
+        assert r.is_alive() and _holder(db) == "qd"
+        go.set()
+        _finished(a, r)
+    assert not errors
+    assert result == ["applied"] and put == [0]
+    assert _row(db, q.id).answer == "b"
+    assert _holder(db) == partner.CORE
+    # The answer's version, taken from core's counter in its own transaction, is what
+    # core counts on from: there was no copy for the release to carry back stale.
+    assert _versions(db) == {q.id: 2}
