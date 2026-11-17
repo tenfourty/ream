@@ -1243,8 +1243,10 @@ the plain HTML. No workers, nothing fetched; a font is a data: URL (`embedded_fo
   `embedded_fonts_not_run` means the check did not run (page too large, out of
   time, or server busy). Background workers stay blocked. Ream's own picture of a page
   (wall thumbnail, render check, `ream screenshot`) may show a fallback font for now.
-- HTML-in-Canvas (live HTML drawn into a canvas): start from the `canvas` template, and keep
-  the HTML readable in normal flow wherever it cannot be drawn. "HTML-in-Canvas pages" above.
+- HTML-in-Canvas (live HTML drawn into a canvas, for a page where the effect is the point) works
+  for readers in Chrome 157+, or 147-156 with the `canvas-draw-element` flag; elsewhere the page
+  must read as plain HTML. Start from the `canvas` template (`GET /api/v1/templates/canvas`, or
+  MCP `get_template`) and read "HTML-in-Canvas pages" above.
 - Or write markdown (`notes.md`; on the API, `"format": "markdown"`): tables,
   fenced code, task lists, and `##` headings with ids you can link to or update
   with `--section`. Raw HTML passes through, so a decision slot works; keep a

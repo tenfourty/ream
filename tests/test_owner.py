@@ -463,9 +463,10 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # skill.md re-taken on 17 Nov 2026 for the review of that section (runcove-5t3oj.155): the API renamed in Chrome 155, texElementSubImage2D's five arguments with the texture sized from getElementImageDefaultSize, 2D drawElementImage syncing hit-testing itself, the first-frame checks for an ink slab, a blank picture and a GL error, and the pointer to the section says above; agents.txt and agent.json did not move.
 # agents.txt and skill.md re-taken on 17 Nov 2026 for the window-high frame (`<meta name="ream-frame" content="viewport">`: one section in agents.txt, one bullet in skill.md); agent.json did not move.
 # agents.txt re-taken on 17 Nov 2026: the window-high frame is 96px shorter on a touch or narrow screen, so a strip of the gallery stays reachable (one clause); skill.md and agent.json did not move.
+# skill.md re-taken on 17 Nov 2026: the HTML-in-Canvas rules bullet says which Chrome builds draw it (157+, or 147-156 with the `canvas-draw-element` flag), that the page must read as plain HTML elsewhere, and where the `canvas` template is fetched (the same bullet, no new one); agents.txt and agent.json did not move.
 GOLDEN = {
     "agents.txt": "538d0cc5c03331321485ab2bd6add83819ad0899558ee488d656bbf55476b235",
-    "skill.md": "f95685ba14fd2156d8acf9be5b07ed4a024b2d3def6662cfd1a7f744e54887fa",
+    "skill.md": "bc2f08daaffdd8c0b4e69ee8efbaabc4785546ea7aceef31afc08512c95459ea",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
 BASE = "https://artifacts.tenfourty.site"
