@@ -299,9 +299,11 @@ Who **sends** to the partner is a **database fact**: the `service_meta` key
 stands down in **every** process that reads the database (it checks the key in the very statement
 that takes each row, so a claim landing mid-pass stops the pass before its next row). Core's
 **stage** stands down only where the owner's stage for that event's kind is loaded: in a process
-without it (a command-line tool such as `artifacts-admin purge-deleted`, whose plug-in API
-registers no sink, or a server with another `REAM_PLUGINS`) core goes on writing the event to its
-own outbox, and the owner's sender moves it with `hand_over` on its next pass. So each event has
+without it (a command-line tool or a server started with a `REAM_PLUGINS` that does not select the
+owner; `artifacts-admin purge-deleted` loads the selected plug-ins since step 9e-4, most other
+commands load none) core goes on writing the event to its own outbox, and the owner's sender moves
+it with `hand_over` on its next pass (until the owner also holds inbound: then core's stage refuses
+instead, see below). So each event has
 exactly one writer and none is lost. The check is by owner (the plug-in name recorded on each
 sink `api.sink` registers), never by a sink's name. Each stand-down logs once at INFO; a server
 process where the key names a plug-in whose bridge stage is not loaded logs a WARNING once, at
@@ -313,7 +315,7 @@ start and when it first meets it (`partner.status` reports `bridge_owner` and
 | `bridge_owner(conn)` | who holds the bridge: your plug-in's name, or `None` while core does. Your stage stages only when it is your name, so before the claim core stages and you do not, after it the reverse, exactly one writer in the same transaction. While one event is handed to its stages, the owner is read **once** and every `bridge_owner(conn)` call on the connection your stage was given (core's stage, yours, the `BridgeStageFailed` check) gets that same answer, so a claim or release committing mid-dispatch cannot leave the event with no writer or two. Call it with that connection; a connection of your own reads afresh |
 | `claim_bridge(conn, owner)` | take the bridge, in the **same transaction as your first `hand_over`**. `owner` must be **your plug-in's own entry-point name**: core's stage stands down only where a stage sink of that name's plug-in is loaded, and `BridgeStageFailed` fires only for it. The same owner again is a no-op; another is refused (`BridgeHeld`), also when two processes claim at once |
 | `core_outbox_clear(column)` | a WHERE fragment, true when core's outbox has no undelivered row for the question `column` names (`"o.decision_id"`). **Your claim statement must carry it**: `held` is a snapshot, and on Postgres a staging transaction not yet committed can add a row to core's outbox after it, so without the re-check you could send version n+1 before core's n reaches you |
-| `next_version(conn, decision_id, kind)` | in your stage, in the answering transaction: the question's next partner version, or `None` (not announced, or not a plain question: send nothing). Core keeps the counter until 9e-4, so the versions run on unbroken across the switch and back |
+| `next_version(conn, decision_id, kind)` | in your stage, in the answering transaction: the question's next partner version, or `None` (not announced, or not a plain question: send nothing). **`decision.partner_version` is the one counter of record and this is the only way to take a number from it, before and after you hold inbound**: keep no counter of your own (not a table, not a copy made at the claim). The versions then run on unbroken across each switch and back, a release has no counter to carry, and core's stage guard, which reads that column to know a question was announced, stays exact |
 | `hand_over(conn, now, limit=200)` | in your sender, each pass, in one transaction with your inserts: moves core's undelivered outbox rows (whole questions, parked ones parked) to you by returning and deleting them; the lease is checked under the row lock, and a question not wholly locked is left in core; `.held` names the questions core still has rows for (leased, locked elsewhere, or past `limit`): send none of a held question's rows that pass |
 | `release_bridge(conn, owner, rows)` | the undo, in one transaction: your undelivered rows go back to core's outbox (duplicates skipped) and the key is cleared, so there is never a moment with two senders or none. Expose it as a command the operator runs **before** removing the plug-in (core cannot call it once the plug-in is gone) |
 
@@ -358,15 +360,26 @@ the deletion.
 | `inbound_owner(conn)` | who holds inbound: `"core"` or a plug-in's name. A plain read for routing and for a first look; a writer takes the lock below |
 | `lock_inbound(conn, share=False)` | the holder, with the switch row locked to the end of your transaction. **Call it first in every transaction that writes your inbound tables and write only if it returns your name**; `share=True` lets other writers through and holds off only a claim or release |
 | `claim_inbound(conn, owner)` | take inbound, in the same transaction as `hand_over_inbound` and your inserts. Refused (`BridgeHeld`) unless `owner` holds the outbound bridge or when another plug-in holds inbound; the same owner again is a no-op |
-| `hand_over_inbound(conn)` | returns and deletes every row of core's `partner_question`, `partner_version_seen` and `partner_event_seen`, as `InboundHandover(rows, versions)`; insert them into your own tables before you commit, so a row is in one table set only (a row left in core would shadow your copy on the read side). `versions` is `decision.partner_version` for each announced question: your next version is the larger of your own and that column, plus one. Refused while core holds inbound |
-| `release_inbound(conn, owner, rows, versions)` | the undo, run **before** `release_bridge`: your rows go back, each counter is raised to yours where higher, and inbound returns to core. `release_bridge` is refused (`InboundHeld`) while inbound is held, and `artifacts-admin partner-bridge --release` refuses with its own message: it cannot restore your counters |
+| `hand_over_inbound(conn)` | returns and deletes every row of core's `partner_question`, `partner_version_seen` and `partner_event_seen`, as `InboundHandover(rows)`; insert them into your own tables before you commit, so a row is in one table set only (a row left in core would shadow your copy on the read side). No version counter is handed over: go on calling `next_version`. Refused while core holds inbound |
+| `release_inbound(conn, owner, rows)` | the undo, run **before** `release_bridge`: your rows go back and inbound returns to core. It locks the switch row first and no decision row, so it cannot deadlock with an answer in flight. `release_bridge` is refused (`InboundHeld`) while inbound is held, and `artifacts-admin partner-bridge --release` refuses with its own message: it cannot bring your rows back |
 
 From the claim's commit, core's endpoint (`POST /partner/v1/events`) answers **503 with
 `Retry-After`** (after the signature check) and records nothing; the hub retries, so the event
 reaches your route, which owns its own dedupe. His answer on a partner-home copy is "not mine" in
 core, so the read side's `answer` is called. Core's own stage refuses (`InboundHeld`) to write core's
 outbox where a row would be written, in a process where your stage is not loaded: the
-action fails rather than send nothing, and at the endpoint that is a 503 too. Run
+action is rolled back whole rather than send nothing. The caller is told plainly, never with a
+traceback: **503 with `Retry-After: 30`** and a `detail` naming your plug-in on the gallery and
+`/api/v1` (a page for a person answering in the gallery), a tool error over MCP, one line and a
+non-zero exit from `artifacts-admin`, and `stood_down` at the partner endpoint. "Would be written"
+is read from `decision.partner_version`, which is why your versions must come from `next_version`:
+a question you announced under a number of your own would look never-announced there, and its
+`withdrawn` or `answered` from such a process would be dropped in silence.
+
+**The partner host's own rules hold for your route too.** Before either core's endpoint or your
+route sees a request on that host, the router refuses one that carries a proxy header
+(`partner_in.PROXY_HEADERS`: 404) and one whose `Content-Length` is over 64 KiB or not a number
+(400). A body sent with no declared length is yours to cap as you read it. Run
 `artifacts-admin purge-deleted` with your plug-in selected: it now loads the plug-ins
 `REAM_PLUGINS` names (not on `--dry-run`), so the withdrawals it emits reach your stage.
 

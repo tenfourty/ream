@@ -2855,7 +2855,9 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   first and writes under only while core holds it. Once a plug-in claims it (`partner.claim_inbound`,
   `hand_over_inbound`, `release_inbound`): core's partner endpoint answers 503 `stood_down` with
   `Retry-After`, his answer on a partner-home copy is "not mine" in core, core's stage refuses to write
-  core's outbox, and `release_bridge` is refused until inbound is released. Plug-in API 1.5: one plug-in
+  core's outbox (503 with `Retry-After`, or one line from `artifacts-admin`, never a traceback), and
+  `release_bridge` is refused until inbound is released. The per-question version counter stays in
+  core's column: the plug-in takes every version from `partner.next_version` and keeps none of its own. Plug-in API 1.5: one plug-in
   may register the `slack` answer source (never as a relay), may mount a route on the partner inbound
   host (served only while the key names it), and `Copy` lives in `readside`. `decisions.answer` now
   demands `recorded_by` for an inbound source and refuses it for a page answer, and a Slack press never

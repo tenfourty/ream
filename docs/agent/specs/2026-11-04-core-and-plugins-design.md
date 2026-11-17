@@ -1049,15 +1049,36 @@ drivers; CI only (not on the management machine).
    another plug-in holds inbound; `hand_over_inbound(conn)` is refused while core holds it, moves
    every row out of `partner_question`, `partner_version_seen` and `partner_event_seen` (returned
    and deleted, so a row is in one table set only and a copy left in core cannot shadow the plug-in's
-   on the read side) and returns `versions`, `decision.partner_version` for each announced question
-   from a plain read with no row lock (a core answer in flight holds its decision row and waits on
-   the switch row, so locking decisions here would deadlock; a core stage still open at the claim
-   may bump a counter after the read, so the plug-in's next bump takes the larger of its own and
-   that column); `release_inbound(conn, owner, rows, versions)` raises the counters first, then
-   locks the switch row, puts the rows back and sets the key to `core`. `release_bridge` is refused
-   (`InboundHeld`) while inbound is held, so the order back is inbound, then outbound.
-   `artifacts-admin partner-bridge` shows who holds inbound and refuses `--release` with its own
-   message while it is held: that command cannot restore the plug-in's version counters.
+   on the read side); `release_inbound(conn, owner, rows)` locks the switch row, puts the rows back
+   and sets the key to `core`. `release_bridge` is refused (`InboundHeld`) while inbound is held, so
+   the order back is inbound, then outbound. `artifacts-admin partner-bridge` shows who holds
+   inbound and refuses `--release` with its own message while it is held: that command cannot bring
+   the plug-in's rows back.
+   **The counter stays in core (review round, 17 Nov 2026; this replaces "the claim copies the
+   counter" above and in the blueprint).** `decision.partner_version` is the one counter of record
+   for as long as `ream.partner` exists, and `partner.next_version` (the row's own `update …
+   returning`, so under its lock) is the only way to take a number: **the plug-in keeps no counter
+   of its own**, before the inbound claim or after it. So `hand_over_inbound` returns no `versions`
+   and `release_inbound` takes none. Two faults in the first build go with the copy. (1) The
+   release raised the counters from a dict the plug-in had read before any lock and only then
+   locked the switch row, so a bump between the read and the write left core behind the hub, which
+   then dropped core's next event as stale; raising them after the lock instead would have been
+   switch row then decision row, a deadlock with an answer in flight. With no copy there is nothing
+   to raise and the release touches no decision row. (2) Core's stage guard reads "announced" as
+   `partner_version > 0`; a plug-in counting in its own table would leave that 0 for a question
+   first asked after the claim, and a `withdrawn` or `answered` from a process without the
+   plug-in's stage would pass the guard and be lost. *Why the others lost:* a core helper that
+   mirrors the plug-in's count into the column is `next_version` under another name; re-reading
+   the plug-in's numbers inside `release_inbound` after the lock cannot be done by core (they are
+   in the plug-in's tables) and fixes only the first fault. **For C2:** the step-9 done-when says
+   the counter leaves core with the rest; with this contract it leaves only at the deletion, when
+   no process with core's stage can run, and the plug-in then bumps the same stored column itself
+   (stored names never change) or copies it once, frozen. That choice is C2's and P2's.
+   **The refusal outside the endpoint.** `InboundHeld` from core's stage in a gallery, `/api/v1` or
+   MCP action is not a 500: every app answers 503 with `Retry-After: 30` and a `detail` naming the
+   plug-in (`app._refuse_held_inbound`; the gallery's answer form gives a page), MCP a tool error,
+   and `artifacts-admin` one line and a non-zero exit (`admin.main`). The action has rolled back
+   whole, so nothing is lost and a retry where the plug-in is loaded goes through.
    **API 1.5** (`plugin_cli.API_VERSION`): (1) one plug-in may register the `slack` answer source,
    never with `relay=True` (`ValueError`), and a second plug-in is refused (`PluginError`, by a
    process-wide record of the holder); core still stores and labels `slack` with no plug-in loaded.
@@ -1073,7 +1094,9 @@ drivers; CI only (not on the management machine).
    host alone: it reads `partner_inbound_owner` on each request, off the event loop, sends the
    request to the plug-in's route only if the key names the plug-in that mounted it, and otherwise
    to core's own endpoint (404 where core's is not configured); a key that cannot be read is 503
-   with `Retry-After`, never a guess. **Not core's to do (decision A(a)):** binding the Slack press
+   with `Retry-After`, never a guess. The host's own rules are held there, before either: a request
+   carrying a proxy header is 404 and a `Content-Length` over 64 KiB (or not a number) is 400,
+   whoever would have served it (a body with no declared length is the route's to cap). **Not core's to do (decision A(a)):** binding the Slack press
    to the owner's Slack ids is the plug-in's check; core takes `verified_by` as before and its
    `recorded_by` guard is the only part C1 adds. **C(a):** the empty `partner_*` tables stay after
    the deletion (stored names never change).
@@ -1081,7 +1104,10 @@ drivers; CI only (not on the management machine).
    `--dry-run`), so the withdrawals its purge emits reach the holder's stage; it stops with the
    plug-in's name if one cannot load. Tests: `tests/test_partner_inbound_standdown.py` (new: the
    key, the gate on every writer including a claim between the first look and the locked read, the
-   move and its undo, the stage, the partner host), `tests/test_plugin_api_1_5.py` (new: the
+   move and its undo, the stage, the partner host; and, Postgres only, the row locks themselves
+   on two connections: a claim waits for a writer in flight, an open claim holds the answer hook
+   which then answers 503 with the decision row rolled back, a release ahead of or behind an
+   answer on the same question finishes without deadlock), `tests/test_plugin_api_1_5.py` (new: the
    source, `recorded_by`, `TapStands`), `test_partner_inbound.py`, `test_plugin_api.py` and
    `test_partner_standdown.py` adjusted (the 1.4 version pin loosened, `slack` no longer in the
    refused list). **Not run here:** the full suite and Postgres (CI on the branch);
