@@ -4,6 +4,7 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
 
 from ream import (
     clientlevel,
@@ -11,6 +12,7 @@ from ream import (
     forms,
     hosts,
     onboarding,
+    partner,
     partner_in,
     plugin_api,
     ratelimit,
@@ -309,6 +311,27 @@ def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
         else None
     )
 
+    def _partner_hosts() -> set[str]:
+        # The host core's endpoint was built for, and the one the settings name now (the
+        # same value `plugin_api.router` lets a plug-in mount on).
+        named = hosts.normalise(settings.current().partner_inbound_host)
+        return {
+            h
+            for h in (partner_inbound.host if partner_inbound else None, named)
+            if h is not None
+        }
+
+    def _inbound_holder() -> str:
+        with db.connect() as conn:
+            return partner.inbound_owner(conn)
+
+    def _plain(status: int, words: str, headers: dict | None = None):
+        return PlainTextResponse(
+            words,
+            status_code=status,
+            headers={"x-content-type-options": "nosniff", **(headers or {})},
+        )
+
     async def router(scope, receive, send):
         if scope["type"] == "lifespan":
             await gallery(scope, receive, send)
@@ -327,8 +350,30 @@ def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
             else:
                 await _forward_to_gallery(scope)(scope, receive, send)
                 return
-        elif partner_app is not None and host == partner_inbound.host:
+        elif host is not None and host in _partner_hosts():
+            # This branch alone decides for the partner inbound host. A plug-in's route
+            # there (API 1.5, step 9e-4) is served only while the database names that
+            # plug-in as the inbound half's holder, read per request and off the event
+            # loop; otherwise core's own endpoint answers (503 once it has stood down).
             chosen = partner_app
+            mounted = plugin_api.router_for(host)
+            if mounted is not None:
+                try:
+                    holder = await run_in_threadpool(_inbound_holder)
+                except Exception as exc:  # noqa: BLE001 -- retryable; the type only
+                    logging.getLogger(__name__).warning(
+                        "partner host: the inbound holder could not be read: %s",
+                        type(exc).__name__,
+                    )
+                    await _plain(503, "unavailable", {"Retry-After": "30"})(
+                        scope, receive, send
+                    )
+                    return
+                if holder == mounted[0]:
+                    chosen = mounted[1]
+            if chosen is None:
+                await _plain(404, "not found")(scope, receive, send)
+                return
         elif hosts.artifact_id(host) is not None:
             chosen = content
         elif host in (plugin_hosts := plugin_api.routers()):
@@ -336,12 +381,7 @@ def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
             # take any host above, and comes after them so it can never shadow one.
             chosen = plugin_hosts[host]
         else:
-            response = PlainTextResponse(
-                "not found",
-                status_code=404,
-                headers={"x-content-type-options": "nosniff"},
-            )
-            await response(scope, receive, send)
+            await _plain(404, "not found")(scope, receive, send)
             return
         await chosen(scope, receive, send)
 

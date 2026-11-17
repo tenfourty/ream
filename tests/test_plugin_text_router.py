@@ -356,7 +356,6 @@ def _reserved_cases():
     return [
         ("gallery", lambda: urlsplit(store.gallery_origin()).hostname),
         ("api", lambda: "api.example"),
-        ("partner", lambda: "svc.internal"),
         ("content", lambda: store.content_host()),
         ("content-sub", lambda: "x." + store.content_host()),
     ]
