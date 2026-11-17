@@ -1014,6 +1014,80 @@ drivers; CI only (not on the management machine).
    "stands down without the plug-in" test, which asserted the loss, replaced; a CLI process, another
    plug-in's stage, a kind the owner does not stage, a claim mid-pass, the fragment, two claims,
    the warning, status, the admin command); the same files passed serially on SQLite.
+   **9e-4, core's half built (C1; `ci/9e4-inbound-standdown`, 17 Nov 2026).** The inbound half gets
+   its own switch and core stands down behind it; nothing is deleted yet (that is C2). The plug-in
+   half (P1) is still to do. **The switch** is a second `service_meta` key, `partner_inbound_owner`
+   (`partner.INBOUND_OWNER_KEY`), apart from the outbound one: an image that knows only
+   `partner_bridge_owner` cannot stand its endpoint down, so the outbound claim must not flip
+   inbound. **An absent row means core, and there is no schema step and no seed row** (the design
+   said "seeded `core`"; the code found that wrong: `migrate.copy` refuses a non-empty destination
+   table after `migrate()`, and the test fixture empties every table, so a seed would break the
+   copier). The first writer to lock it inserts `core` (`on conflict do nothing`); readers that do
+   not lock it (`partner.inbound_owner`: routing, the stage, a first look) read absent as core.
+   **The gate.** Every inbound writer in core calls `partner.lock_inbound` first in its own
+   transaction and writes only while the answer is `core`: `_record_only`, the answer hook in
+   `_apply_artifacts` (inside `decisions.answer`'s own transaction, after the decision row), the
+   transaction in `_apply_foreign`, and `answer_here`. A writer takes the row `for share`, a claim or
+   release `for update`, so a switch waits for the writers in flight and they for it, and SQLite's
+   writer lock already serialises. The one lock order is the decision row, then the switch row.
+   `apply()` also takes an unlocked first look and refuses early.
+   **Stood down.** The endpoint answers **503 `stood_down` with `Retry-After: 30`** (the partner
+   app's existing header for any 503) and records nothing: the event is the plug-in's to apply and
+   to remember. The signature is checked first, so an unsigned caller learns nothing about who holds
+   inbound. His answer on a partner-home copy raises `store.NotFound` in core ("not mine"), which
+   sends `readside.answer_here` on to the plug-in. Core's built-in stage refuses to write core's
+   outbox (`partner.InboundHeld`) where a row would be written (`partner.would_enqueue`: the bridge
+   configured, a plain question already announced or being announced) once inbound is held and the
+   owner's own stage is not loaded in that process, so a command-line tool never writes a row under a
+   version the partner has seen; a stage the owner has loaded still stands down quietly as in 9e-3.
+   At the endpoint that refusal is 503 `stood_down`, and a failed `on_answer` hook
+   (`decisions.AnswerHookFailed`) or a failed stage of the bridge's holder
+   (`plugin_api.BridgeStageFailed`) inside an inbound answer is 503 `not_yet`, so the hub retries
+   (it honours `Retry-After`, `quarterdeck` `partner_send.py`) and the answer has rolled back.
+   **Claim, hand-over, release** (`partner.py`, all in the caller's one transaction): `claim_inbound
+   (conn, owner)` is refused (`BridgeHeld`) unless `owner` already holds the outbound bridge or when
+   another plug-in holds inbound; `hand_over_inbound(conn)` is refused while core holds it, moves
+   every row out of `partner_question`, `partner_version_seen` and `partner_event_seen` (returned
+   and deleted, so a row is in one table set only and a copy left in core cannot shadow the plug-in's
+   on the read side) and returns `versions`, `decision.partner_version` for each announced question
+   from a plain read with no row lock (a core answer in flight holds its decision row and waits on
+   the switch row, so locking decisions here would deadlock; a core stage still open at the claim
+   may bump a counter after the read, so the plug-in's next bump takes the larger of its own and
+   that column); `release_inbound(conn, owner, rows, versions)` raises the counters first, then
+   locks the switch row, puts the rows back and sets the key to `core`. `release_bridge` is refused
+   (`InboundHeld`) while inbound is held, so the order back is inbound, then outbound.
+   `artifacts-admin partner-bridge` shows who holds inbound and refuses `--release` with its own
+   message while it is held: that command cannot restore the plug-in's version counters.
+   **API 1.5** (`plugin_cli.API_VERSION`): (1) one plug-in may register the `slack` answer source,
+   never with `relay=True` (`ValueError`), and a second plug-in is refused (`PluginError`, by a
+   process-wide record of the holder); core still stores and labels `slack` with no plug-in loaded.
+   (2) `decisions.answer` refuses an inbound source (not `page`) without `recorded_by` and a `page`
+   answer with one (`InvalidSource`), so a stored `recorded_by` always means "not tapped on the
+   page". (3) **A Slack press never replaces his own page tap** (decision B(a)): the rule
+   `record_elsewhere` holds an app's relay to now holds a `slack` answer too, checked in the write's
+   `where` so a tap landing between the read and the write still stands, and `decisions.TapStands`
+   is raised; the endpoint records it as `tap_stands` and answers 2xx, so the hub stops retrying.
+   (4) `Copy` is defined in `readside` (a plug-in builds one without importing the module that
+   goes at the deletion); `partner_in.Copy` is the same class. (5) `api.router` may take the
+   partner inbound host (no longer reserved), one plug-in per host. `app.create_app` decides that
+   host alone: it reads `partner_inbound_owner` on each request, off the event loop, sends the
+   request to the plug-in's route only if the key names the plug-in that mounted it, and otherwise
+   to core's own endpoint (404 where core's is not configured); a key that cannot be read is 503
+   with `Retry-After`, never a guess. **Not core's to do (decision A(a)):** binding the Slack press
+   to the owner's Slack ids is the plug-in's check; core takes `verified_by` as before and its
+   `recorded_by` guard is the only part C1 adds. **C(a):** the empty `partner_*` tables stay after
+   the deletion (stored names never change).
+   `artifacts-admin purge-deleted` now loads the plug-ins `REAM_PLUGINS` selects (not on
+   `--dry-run`), so the withdrawals its purge emits reach the holder's stage; it stops with the
+   plug-in's name if one cannot load. Tests: `tests/test_partner_inbound_standdown.py` (new: the
+   key, the gate on every writer including a claim between the first look and the locked read, the
+   move and its undo, the stage, the partner host), `tests/test_plugin_api_1_5.py` (new: the
+   source, `recorded_by`, `TapStands`), `test_partner_inbound.py`, `test_plugin_api.py` and
+   `test_partner_standdown.py` adjusted (the 1.4 version pin loosened, `slack` no longer in the
+   refused list). **Not run here:** the full suite and Postgres (CI on the branch);
+   `test_partner_inbound_standdown.py` passed serially on SQLite. **Left for C2 and P1:** the
+   plug-in half (inbound module, `quarterdeck_*` tables, read side, claim and release command,
+   the owner-id check) and then core's deletion once production has run claimed.
 10. **Docs and decisions.** `docs/decisions.md` entry for the core-and-plug-ins split, the design
     doc's extension section, a plug-in author guide, the office doc's deployment paragraph.
     (Docs also land with each slice above; this is the consolidation.)

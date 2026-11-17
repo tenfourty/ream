@@ -2849,3 +2849,17 @@ Work built after the tasks above, newest last. Each line says what a reader can 
   serves the page and the API's `receipt.lapsed`; `current_map` and `history` take `now`. Wording in
   `listening.RECEIPT_WORDING` (`receipt_line`); a clean place is left for slice 3's "told in Slack" line.
   Spec §7 slice 2. Live proof on his phone is still to do after deploy.
+- **The inbound half stands down behind its own switch (17 Nov 2026, step 9e-4 of core-and-plugins, C1,
+  core's half; branch `ci/9e4-inbound-standdown`, not on `main`).** A second `service_meta` key,
+  `partner_inbound_owner` (absent means core; no schema step), which every inbound writer in core locks
+  first and writes under only while core holds it. Once a plug-in claims it (`partner.claim_inbound`,
+  `hand_over_inbound`, `release_inbound`): core's partner endpoint answers 503 `stood_down` with
+  `Retry-After`, his answer on a partner-home copy is "not mine" in core, core's stage refuses to write
+  core's outbox, and `release_bridge` is refused until inbound is released. Plug-in API 1.5: one plug-in
+  may register the `slack` answer source (never as a relay), may mount a route on the partner inbound
+  host (served only while the key names it), and `Copy` lives in `readside`. `decisions.answer` now
+  demands `recorded_by` for an inbound source and refuses it for a page answer, and a Slack press never
+  replaces his own page tap. `artifacts-admin purge-deleted` loads the plug-ins. Built: C1 (core). Still
+  to do: C2 (core deletes `partner.py` and `partner_in.py`, after production has run claimed) and P1 (the
+  house plug-in's inbound half, in `ream-homelab`). Ledger: `specs/2026-11-04-core-and-plugins-design.md`,
+  step 9e-4.
