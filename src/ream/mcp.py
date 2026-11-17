@@ -45,6 +45,7 @@ from ream import (
     mcp_apps,
     mcp_clients,
     onboarding,
+    partner,
     ratelimit,
     reach,
     scanslots,
@@ -693,6 +694,10 @@ def _call_tool(call: Call, params: dict, id: Any) -> dict:
         return _tool_error(str(exc))
     except scanslots.ScanBusy as exc:  # every scan slot stayed taken: say so, try again
         return _tool_error(str(exc))
+    except partner.InboundHeld as exc:
+        # Core's partner stage refused and the action rolled back (step 9e-4): the
+        # same words the HTTP routes give with their 503.
+        return _tool_error(partner.inbound_held_detail(exc.owner))
     except HTTPException as exc:
         # The route's own refusal, word for word: its text, or its structured detail
         # (a secret's field, shape and line, never what matched) as JSON.

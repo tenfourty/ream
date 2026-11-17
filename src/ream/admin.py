@@ -213,13 +213,13 @@ def cmd_partner_bridge(args: argparse.Namespace) -> None:
         try:
             partner.release_bridge(conn, owner, [])
         except partner.InboundHeld as exc:
-            # Step 9e-4: the inbound half's rows and its version counter live in that
-            # plug-in's tables, and this command cannot bring them back.
+            # Step 9e-4: the inbound half's rows live in that plug-in's tables, and
+            # this command cannot bring them back.
             raise SystemExit(
                 f"plug-in {exc.owner!r} still holds the bridge's inbound half: its"
-                " questions, its record of events seen and its version numbers are in"
-                " its own tables, which this command cannot move back. Put the plug-in"
-                " back and run its own release command; nothing was changed"
+                " questions and its record of events seen are in its own tables, which"
+                " this command cannot move back. Put the plug-in back and run its own"
+                " release command; nothing was changed"
             ) from None
         except partner.BridgeHeld:
             raise SystemExit(
@@ -806,8 +806,19 @@ def cmd_pack_versions(_args) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    from ream import partner
+
     args = build_parser().parse_args(argv if argv is not None else sys.argv[1:])
-    args.func(args)
+    try:
+        args.func(args)
+    except partner.InboundHeld as exc:
+        # Core's partner stage refused (step 9e-4) and the command's transaction rolled
+        # back: one line, not a traceback.
+        raise SystemExit(
+            f"refused, nothing was changed: this would send the partner an event, and"
+            f" plug-in {exc.owner!r} holds the bridge but is not loaded here. Run it"
+            f" again with REAM_PLUGINS selecting {exc.owner}"
+        ) from None
 
 
 if __name__ == "__main__":

@@ -71,7 +71,8 @@ MAX_FUTURE = timedelta(seconds=60)
 # A request that came through a proxy or an ingress says so in these headers; a
 # call straight to the service name carries none of them. The route is refused
 # (404) when any is present, so an ingress added by mistake fails closed.
-_PROXY_HEADERS = (
+# `app.create_app` holds a plug-in's route on this host to the same refusal.
+PROXY_HEADERS = (
     "x-forwarded-for",
     "x-forwarded-host",
     "x-forwarded-proto",
@@ -971,7 +972,7 @@ def create_partner_app(db: Database, inbound: Inbound) -> FastAPI:
     @app.post(PATH)
     async def receive(request: Request) -> JSONResponse:
         # Came through a proxy or an ingress: this route is not for that path.
-        if any(h in request.headers for h in _PROXY_HEADERS):
+        if any(h in request.headers for h in PROXY_HEADERS):
             _log.warning("refused: request arrived through a proxy")
             return JSONResponse({"error": "not found"}, status_code=404)
         declared = request.headers.get("content-length")

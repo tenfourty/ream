@@ -730,12 +730,15 @@ def _builtin_sinks() -> list[Sink]:
             return
         if owner is not None and not bridge_stage_of(owner):
             partner.note_owner_absent(owner)
-        # Step 9e-4: once a plug-in holds the inbound half too, the version counter is
-        # its own and core's outbox is dead. A process without that plug-in's stage (a
-        # command-line tool started with another REAM_PLUGINS) refuses the action rather
-        # than write a row nobody sends, under a version the partner has already seen.
-        # Only where a row would be written: an unconfigured bridge, or a question
-        # never announced, passes as before.
+        # Step 9e-4: once a plug-in holds the inbound half too, core's outbox is dead.
+        # A process without that plug-in's stage (a command-line tool started with
+        # another REAM_PLUGINS) refuses the action rather than write a row nobody
+        # sends. Only where a row would be written: an unconfigured bridge, or a
+        # question never announced, passes as before. "Announced" is the counter
+        # column, which the plug-in bumps too (`partner.next_version` is the only
+        # counter), so a question first announced after the claim is refused as well.
+        # The refusal reaches a caller as 503 with Retry-After (`app`), a tool error
+        # (`mcp`) or one line and a non-zero exit (`admin`), never a traceback.
         holder = partner.inbound_owner(conn)
         if holder != partner.CORE and partner.would_enqueue(
             conn, event.ref_id or "", event.kind

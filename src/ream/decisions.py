@@ -142,6 +142,7 @@ _COLUMNS = (
 # a column leaves both alone; inserting one before them moves them.
 _SESSION_IDX = 17
 _KIND_IDX = 18
+_ANSWER_SOURCE_IDX = 14
 _REVIEW_MODE_IDX = 19
 _ASKED_BY_IDX = 34
 
@@ -1897,7 +1898,11 @@ def record_elsewhere(
                 ).fetchone()
                 if current is None or _set_aside_fields(current)["set_aside"]:
                     raise store.NotFound()
-                if by_app and current[_KIND_IDX] != "review" and current[14] == "page":
+                if (
+                    by_app
+                    and current[_KIND_IDX] != "review"
+                    and current[_ANSWER_SOURCE_IDX] == "page"
+                ):
                     raise TapStands(_row_to_decision(current))
                 raise _already(conn, current, round)
             # A new human act: what was declared about an earlier answer (or before
@@ -2140,7 +2145,7 @@ def answer(
                 if (
                     source == "slack"
                     and current[_KIND_IDX] != "review"
-                    and current[14] == "page"
+                    and current[_ANSWER_SOURCE_IDX] == "page"
                 ):
                     raise TapStands(_row_to_decision(current))
                 raise _already(conn, current, round)

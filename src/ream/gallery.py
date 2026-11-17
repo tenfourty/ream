@@ -52,6 +52,7 @@ from ream import (
     mcp_apps,
     oauth,
     pagediff,
+    partner,
     readside,
     rename,
     settings,
@@ -7600,6 +7601,21 @@ def gallery_router(db: Database) -> APIRouter:
             return _already_decided_page(exc)
         except store.NotFound as exc:
             raise HTTPException(404, "no such open decision") from exc
+        except partner.InboundHeld as exc:
+            # Core's partner stage refused and the answer rolled back (step 9e-4):
+            # a page for a person, the same status and wait as the JSON routes.
+            return HTMLResponse(
+                _shell(
+                    "Answer not saved",
+                    f"<p>{escape(partner.inbound_held_detail(exc.owner))} "
+                    'Go back and try again, or <a href="/">return to the wall</a>.</p>',
+                ),
+                status_code=503,
+                headers={
+                    **gallery_headers(),
+                    "Retry-After": str(partner.INBOUND_HELD_RETRY_AFTER),
+                },
+            )
         except decisions.AnswerHookFailed as exc:
             # A plug-in's hook failed and the answer was rolled back: say so to a
             # person, on a page, naming the plug-in and nothing of the failure.

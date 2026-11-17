@@ -248,6 +248,15 @@ def next_version(conn: Connection, decision_id: str, kind: str) -> int | None:
     calls it too, so the partner sees one unbroken run of versions across the switch
     and back. It does not read core's partner settings: the caller decided to send.
 
+    **`decision.partner_version` is the one counter of record, and this is the only way
+    to take a number from it**, also once the plug-in holds the inbound half (step
+    9e-4): a plug-in that sends a partner event takes its version here and keeps no
+    counter of its own. Two things rest on that. Core's stage guard
+    (`would_enqueue`) reads this column to know a question was announced, so a count
+    kept elsewhere would leave it 0 and let a process without the plug-in's stage drop
+    a `withdrawn` or `answered` in silence; and a release has no counter to copy back,
+    so there is nothing for it to get wrong against a bump in flight.
+
     The statement takes the row's lock (SQLite: the whole write lock), so two events
     for one question never share a number."""
     if kind not in KINDS:
@@ -765,12 +774,28 @@ CORE = "core"
 
 class InboundHeld(Exception):
     """A plug-in holds the inbound half, so core may not do this: write a partner event
-    to core's outbox (the version counter is the plug-in's now), or give the outbound
-    bridge back. Names the plug-in, never a value."""
+    to core's outbox (nobody sends from it now), or give the outbound bridge back. Names
+    the plug-in, never a value."""
 
     def __init__(self, owner: str) -> None:
         super().__init__(f"the partner bridge's inbound half is held by {owner!r}")
         self.owner = owner
+
+
+# What a caller waits before it tries again after `InboundHeld` (seconds): the same
+# number the partner endpoint gives with its own 503.
+INBOUND_HELD_RETRY_AFTER = 30
+
+
+def inbound_held_detail(owner: str) -> str:
+    """What a caller outside the partner endpoint is told when core's stage refused
+    (`InboundHeld`): the plug-in's name, that nothing was saved, and what to do."""
+    return (
+        f"this would send an event to the partner, and that is the {owner} plug-in's"
+        " to send now, but it is not loaded in the process that took this request."
+        " Nothing was saved. Try again later or tell the operator (run it where"
+        f" REAM_PLUGINS selects {owner})."
+    )
 
 
 def inbound_owner(conn: Connection) -> str:
@@ -876,11 +901,10 @@ _INBOUND_JSON = ("options", "depends_on", "for_offices", "detail")
 @dataclass(frozen=True)
 class InboundHandover:
     """What `hand_over_inbound` moved: `rows`, each core inbound table's name to its rows
-    (dicts of `INBOUND_TABLES[name]`, JSON columns decoded), and `versions`, each
-    announced question's id to core's version counter for it at the move."""
+    (dicts of `INBOUND_TABLES[name]`, JSON columns decoded). No version counter moves:
+    `decision.partner_version` stays the counter of record (`next_version`)."""
 
     rows: dict[str, list[dict]]
-    versions: dict[str, int]
 
 
 def _decoded(value):
@@ -894,11 +918,10 @@ def hand_over_inbound(conn: Connection) -> InboundHandover:
     in exactly one table set (a rollback keeps them here; a row left here would shadow the
     plug-in's copy on the read side). Refused (`BridgeHeld`) while core holds inbound.
 
-    `versions` is a plain read of `decision.partner_version` (rows above 0), no row lock:
-    a core answer in flight holds its decision row and waits for the inbound row this
-    transaction holds, so locking decisions here would deadlock with it. A core stage
-    still open at the claim may bump a counter after this read; the plug-in's next bump
-    must take the larger of its own number and this column."""
+    It reads and locks no decision row (a core answer in flight holds its decision row
+    and waits for the inbound row this transaction holds, so locking decisions here would
+    deadlock with it), and it hands over no version counter: the plug-in takes every
+    version from `next_version`, before the claim and after it."""
     if lock_inbound(conn) == CORE:
         raise BridgeHeld("the partner bridge's inbound half is held by core")
     rows: dict[str, list[dict]] = {}
@@ -913,37 +936,23 @@ def hand_over_inbound(conn: Connection) -> InboundHandover:
                     row[col] = _decoded(row[col])
         rows[table] = moved
         conn.execute(f"delete from {table}")  # noqa: S608 -- fixed names
-    versions = dict(
-        conn.execute(
-            "select id, partner_version from decision where partner_version > 0"
-        ).fetchall()
-    )
-    return InboundHandover(rows=rows, versions=versions)
+    return InboundHandover(rows=rows)
 
 
-def release_inbound(
-    conn: Connection, owner: str, rows: dict[str, list[dict]], versions: dict[str, int]
-) -> int:
+def release_inbound(conn: Connection, owner: str, rows: dict[str, list[dict]]) -> int:
     """The undo of the inbound claim, run before `release_bridge`, in one transaction:
     put `rows` (`hand_over_inbound`'s shape, from the plug-in's own tables) back into
-    core's inbound tables, raise each question's `decision.partner_version` to the
-    plug-in's number in `versions` where that is higher, and give inbound back to core.
-    Refused (`BridgeHeld`) unless `owner` holds it; the caller's transaction must roll
-    back then. A row already here is skipped. Returns how many rows went back.
+    core's inbound tables and give inbound back to core. Refused (`BridgeHeld`) unless
+    `owner` holds it; the caller's transaction must roll back then. A row already here
+    is skipped. Returns how many rows went back.
 
-    The counters are raised BEFORE the inbound row is locked: the order everywhere is
-    decision row, then inbound row."""
+    It locks the switch row first and touches no decision row, so it cannot deadlock
+    with an answer in flight (which holds its decision row and waits for this row), and
+    it carries no version numbers: `decision.partner_version` never left core
+    (`next_version`), so there is no copy that a bump landing meanwhile could overtake."""
     unknown = set(rows) - set(INBOUND_TABLES)
     if unknown:
         raise ValueError(f"not an inbound table: {min(unknown)!r}")
-    if inbound_owner(conn) != owner:
-        raise BridgeHeld(f"the partner bridge's inbound half is not held by {owner!r}")
-    for decision_id, version in sorted(versions.items()):
-        conn.execute(
-            "update decision set partner_version = %s"
-            " where id = %s and partner_version < %s",
-            (version, decision_id, version),
-        )
     if lock_inbound(conn) != owner:
         raise BridgeHeld(f"the partner bridge's inbound half is not held by {owner!r}")
     put = 0
@@ -968,7 +977,9 @@ def release_inbound(
 def would_enqueue(conn: Connection, decision_id: str, kind: str) -> bool:
     """Whether `enqueue` would write a row for this event: the bridge is configured and
     the question is a plain question already announced (or this is its `asked`). A read
-    only; the counter is not touched."""
+    only; the counter is not touched. "Announced" is `decision.partner_version > 0`,
+    which is exact because every sender, core's or a plug-in's, takes its versions from
+    `next_version`."""
     if not enabled():
         return False
     return (

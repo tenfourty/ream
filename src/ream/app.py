@@ -51,6 +51,22 @@ def _refuse_failed_answer_hooks(app: FastAPI) -> None:
         )
 
 
+def _refuse_held_inbound(app: FastAPI) -> None:
+    """Core's partner stage refused (`partner.InboundHeld`, step 9e-4): a plug-in holds
+    the bridge's inbound half and its stage is not loaded in this process, so the action
+    that would have sent the partner an event was rolled back whole. 503 with
+    `Retry-After`, whichever route met it, never a 500: the event is not lost, the
+    caller tries again."""
+
+    @app.exception_handler(partner.InboundHeld)
+    async def _on_inbound_held(_request: Request, exc: partner.InboundHeld):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": partner.inbound_held_detail(exc.owner)},
+            headers={"Retry-After": str(partner.INBOUND_HELD_RETRY_AFTER)},
+        )
+
+
 def _refuse_busy_scans(app: FastAPI) -> None:
     """Every scan slot stayed taken (`scanslots`), so a page this request needed read was
     not: 503 with `Retry-After`, whichever route met it, never a 500."""
@@ -110,6 +126,7 @@ def create_gallery_app(
     _refuse_bad_forms(app)
     _scrub_validation_errors(app)
     _refuse_failed_answer_hooks(app)
+    _refuse_held_inbound(app)
     _refuse_busy_scans(app)
     _say_what_tools_need(app)
 
@@ -200,6 +217,7 @@ def create_api_app(
     _refuse_bad_forms(app)
     _scrub_validation_errors(app)
     _refuse_failed_answer_hooks(app)
+    _refuse_held_inbound(app)
     _refuse_busy_scans(app)
     _say_what_tools_need(app)
 
@@ -332,6 +350,25 @@ def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
             headers={"x-content-type-options": "nosniff", **(headers or {})},
         )
 
+    def _partner_host_refusal(scope) -> JSONResponse | None:
+        # The answers core's own endpoint gives (`partner_in.create_partner_app`).
+        if scope["type"] != "http":
+            return None
+        seen = {
+            name.decode("latin-1").lower(): value for name, value in scope["headers"]
+        }
+        if any(h in seen for h in partner_in.PROXY_HEADERS):
+            logging.getLogger(__name__).warning(
+                "partner host: refused, the request arrived through a proxy"
+            )
+            return JSONResponse({"error": "not found"}, status_code=404)
+        declared = seen.get("content-length")
+        if declared is not None:
+            length = declared.decode("latin-1")
+            if not length.isdigit() or int(length) > partner_in.MAX_BODY:
+                return JSONResponse({"error": "too_large"}, status_code=400)
+        return None
+
     async def router(scope, receive, send):
         if scope["type"] == "lifespan":
             await gallery(scope, receive, send)
@@ -355,6 +392,14 @@ def create_app(db: Database, partner_inbound: partner_in.Inbound | None = None):
             # there (API 1.5, step 9e-4) is served only while the database names that
             # plug-in as the inbound half's holder, read per request and off the event
             # loop; otherwise core's own endpoint answers (503 once it has stood down).
+            # What holds for the host holds whoever serves it, so it is checked here,
+            # before either: nothing that came through a proxy, and no body declared
+            # over the cap (a body with no declared length is the route's to cap as it
+            # reads, as core's does).
+            refusal = _partner_host_refusal(scope)
+            if refusal is not None:
+                await refusal(scope, receive, send)
+                return
             chosen = partner_app
             mounted = plugin_api.router_for(host)
             if mounted is not None:
