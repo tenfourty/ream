@@ -48,6 +48,10 @@ from ream.events import BRIDGE_KINDS
 from ream.sinks import Sink
 
 
+def _boom(conn, event):
+    raise RuntimeError("down")
+
+
 def _claim(db, owner="qd"):
     with db.connect() as conn, conn.transaction():
         partner.claim_bridge(conn, owner)
@@ -249,6 +253,25 @@ def test_a_failing_answer_hook_is_503_not_500(
     q = ask(db, page)
     event = make("answered", f"artifacts:{q.id}", 1, pressed("b"))
     r = post(client, partner_key, event)
+    assert r.status_code == 503 and r.json() == {"error": "not_yet"}
+    assert r.headers["Retry-After"] == "30"
+    assert _row(db, q.id).answer is None
+    assert _seen(db, event["event_id"]) is None
+
+
+def test_the_bridge_holders_failing_stage_in_an_answer_is_503_not_500(
+    db, client, partner_key, page
+):
+    # The question is asked while core still holds the bridge. The plug-in then claims
+    # the outbound bridge only, so core's endpoint still applies the event: the holder's
+    # stage fails inside the answer, which rolls back.
+    q = ask(db, page)
+    with db.connect() as conn, conn.transaction():
+        partner.claim_bridge(conn, "qd")
+    with sinks.isolated(*sinks._builtin_sinks()):
+        plugin_api.PluginAPI("qd").sink("quarterdeck", BRIDGE_KINDS, stage=_boom)
+        event = make("answered", f"artifacts:{q.id}", 1, pressed("b"))
+        r = post(client, partner_key, event)
     assert r.status_code == 503 and r.json() == {"error": "not_yet"}
     assert r.headers["Retry-After"] == "30"
     assert _row(db, q.id).answer is None

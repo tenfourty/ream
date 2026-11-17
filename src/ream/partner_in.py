@@ -54,7 +54,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from ream import db as dbmod
-from ream import decisions, hosts, partner, readside, settings, store
+from ream import decisions, hosts, partner, plugin_api, readside, settings, store
 from ream.db import Connection, Database
 
 _log = logging.getLogger("ream.partner.inbound")
@@ -356,6 +356,11 @@ def process(
         # this request's first look. Retryable, and the next try is the plug-in's.
         _log.warning("inbound event not applied: inbound is held by a plug-in")
         return 503, {"error": STOOD_DOWN}
+    except plugin_api.BridgeStageFailed as exc:
+        # The stage of the plug-in that holds the bridge failed inside the answer, so
+        # the answer rolled back: retryable, as for a failed hook. Its name only.
+        _log.warning("inbound event not applied: plug-in %s stage failed", exc.plugin)
+        return 503, {"error": "not_yet"}
     except decisions.AnswerHookFailed as exc:
         # A plug-in's `on_answer` hook raised and the answer rolled back: the gallery
         # answers 503 for this too. Its name only, never its error.
