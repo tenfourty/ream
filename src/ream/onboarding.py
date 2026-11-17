@@ -163,7 +163,8 @@ never does. A page that sizes ITSELF from the window feeds that back: a full-win
 scene, a `100vh` stage, `position: fixed` controls, a body made of `innerHeight` times something.
 Its frame grows, so its window grows, so the page grows, until the frame is a hundred thousand pixels
 tall. Such a page says so in its `<head>`: `<meta name="ream-frame" content="viewport">`. Ream then
-keeps its frame the height of the window under the bar, and the page scrolls inside that frame;
+keeps its frame the height of the window under the bar (96px shorter on a touch or narrow screen,
+so a strip of the gallery stays reachable), and the page scrolls inside that frame;
 the heights it reports are ignored. A decision slot is not lifted onto such a frame: its controls
 stay above the page. A whole-page screenshot of it (`ream screenshot`, `screenshot_page`) is one
 window high, and `truncated` is true when more of the page is below. Leave an ordinary page alone:

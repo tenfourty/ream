@@ -462,8 +462,9 @@ def test_the_cli_prints_each_column_and_says_what_to_set(db, monkeypatch, capsys
 # skill.md re-taken on 16 Nov 2026 for what a larger HTML-in-Canvas page taught (runcove-5t3oj.155): the bullet shrinks to a pointer, and a new section "HTML-in-Canvas pages" carries both API generations, the paint-event upload, hit-testing geometry, data colours, drawing on demand, the safety nets and the caret; agents.txt and agent.json did not move.
 # skill.md re-taken on 17 Nov 2026 for the review of that section (runcove-5t3oj.155): the API renamed in Chrome 155, texElementSubImage2D's five arguments with the texture sized from getElementImageDefaultSize, 2D drawElementImage syncing hit-testing itself, the first-frame checks for an ink slab, a blank picture and a GL error, and the pointer to the section says above; agents.txt and agent.json did not move.
 # agents.txt and skill.md re-taken on 17 Nov 2026 for the window-high frame (`<meta name="ream-frame" content="viewport">`: one section in agents.txt, one bullet in skill.md); agent.json did not move.
+# agents.txt re-taken on 17 Nov 2026: the window-high frame is 96px shorter on a touch or narrow screen, so a strip of the gallery stays reachable (one clause); skill.md and agent.json did not move.
 GOLDEN = {
-    "agents.txt": "c8ddb05d3227e97c3941b62ebc330779bbc0e96f4949c08feb9799adc9291b85",
+    "agents.txt": "538d0cc5c03331321485ab2bd6add83819ad0899558ee488d656bbf55476b235",
     "skill.md": "f95685ba14fd2156d8acf9be5b07ed4a024b2d3def6662cfd1a7f744e54887fa",
     "agent.json": "3ac2c3051230d9a6a47a415978b8fd186db5a3ea5bf487c9754449913cd191df",
 }
