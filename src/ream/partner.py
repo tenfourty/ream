@@ -774,8 +774,9 @@ CORE = "core"
 
 class InboundHeld(Exception):
     """A plug-in holds the inbound half, so core may not do this: write a partner event
-    to core's outbox (nobody sends from it now), or give the outbound bridge back. Names
-    the plug-in, never a value."""
+    to core's outbox (it takes no new row once inbound is claimed; what was there before,
+    the holder's sender drains with `hand_over`), or give the outbound bridge back.
+    Names the plug-in, never a value."""
 
     def __init__(self, owner: str) -> None:
         super().__init__(f"the partner bridge's inbound half is held by {owner!r}")
@@ -800,8 +801,8 @@ def inbound_held_detail(owner: str) -> str:
 
 def inbound_owner(conn: Connection) -> str:
     """Who holds the inbound half: `CORE`, or a plug-in's name. A plain read, no lock: for
-    routing, the stage and a first look before a transaction. A writer uses
-    `lock_inbound`."""
+    routing and a first look before a transaction. A writer uses `lock_inbound`, and so
+    does core's stage where it would write core's outbox."""
     row = conn.execute(
         "select value from service_meta where key = %s", (INBOUND_OWNER_KEY,)
     ).fetchone()

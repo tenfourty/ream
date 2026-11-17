@@ -1023,7 +1023,9 @@ drivers; CI only (not on the management machine).
    said "seeded `core`"; the code found that wrong: `migrate.copy` refuses a non-empty destination
    table after `migrate()`, and the test fixture empties every table, so a seed would break the
    copier). The first writer to lock it inserts `core` (`on conflict do nothing`); readers that do
-   not lock it (`partner.inbound_owner`: routing, the stage, a first look) read absent as core.
+   not lock it (`partner.inbound_owner`: routing, a first look) read absent as core; core's stage
+   locks it like a writer, but only where it would write a row, so an install with no bridge
+   configured never gains the row.
    **The gate.** Every inbound writer in core calls `partner.lock_inbound` first in its own
    transaction and writes only while the answer is `core`: `_record_only`, the answer hook in
    `_apply_artifacts` (inside `decisions.answer`'s own transaction, after the decision row), the
