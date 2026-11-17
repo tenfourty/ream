@@ -730,20 +730,25 @@ def _builtin_sinks() -> list[Sink]:
             return
         if owner is not None and not bridge_stage_of(owner):
             partner.note_owner_absent(owner)
-        # Step 9e-4: once a plug-in holds the inbound half too, core's outbox is dead.
-        # A process without that plug-in's stage (a command-line tool started with
-        # another REAM_PLUGINS) refuses the action rather than write a row nobody
-        # sends. Only where a row would be written: an unconfigured bridge, or a
+        # Step 9e-4: once a plug-in holds the inbound half too, core's outbox is closed
+        # to new rows. A process without that plug-in's stage (a command-line tool
+        # started with another REAM_PLUGINS) refuses the action rather than add one.
+        # The holder is read with the switch's row share-locked to the end of this
+        # transaction, as every inbound writer reads it: a claim waits for this write
+        # to commit, so no row lands in core's outbox after the claim (what was there
+        # before it, the holder's sender still drains with `hand_over`). Lock order:
+        # a claim or release holds that row and never a decision row, so the counter
+        # bump below cannot deadlock with one.
+        # Only where a row would be written: an unconfigured bridge, or a
         # question never announced, passes as before. "Announced" is the counter
         # column, which the plug-in bumps too (`partner.next_version` is the only
         # counter), so a question first announced after the claim is refused as well.
         # The refusal reaches a caller as 503 with Retry-After (`app`), a tool error
         # (`mcp`) or one line and a non-zero exit (`admin`), never a traceback.
-        holder = partner.inbound_owner(conn)
-        if holder != partner.CORE and partner.would_enqueue(
-            conn, event.ref_id or "", event.kind
-        ):
-            raise partner.InboundHeld(holder)
+        if partner.would_enqueue(conn, event.ref_id or "", event.kind):
+            holder = partner.lock_inbound(conn, share=True)
+            if holder != partner.CORE:
+                raise partner.InboundHeld(holder)
         # The body is already the partner's own shape (partner.*_body). `at` is an
         # ISO string in `data` because an event is JSON.
         at = event.data.get("at")

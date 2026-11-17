@@ -939,22 +939,33 @@ def hand_over_inbound(conn: Connection) -> InboundHandover:
     return InboundHandover(rows=rows)
 
 
-def release_inbound(conn: Connection, owner: str, rows: dict[str, list[dict]]) -> int:
+def release_inbound(
+    conn: Connection,
+    owner: str,
+    read_rows: Callable[[Connection], dict[str, list[dict]]],
+) -> int:
     """The undo of the inbound claim, run before `release_bridge`, in one transaction:
-    put `rows` (`hand_over_inbound`'s shape, from the plug-in's own tables) back into
-    core's inbound tables and give inbound back to core. Refused (`BridgeHeld`) unless
-    `owner` holds it; the caller's transaction must roll back then. A row already here
-    is skipped. Returns how many rows went back.
+    put the plug-in's rows back into core's inbound tables and give inbound back to
+    core. Refused (`BridgeHeld`) unless `owner` holds it; the caller's transaction must
+    roll back then. A row already here is skipped. Returns how many rows went back.
+
+    `read_rows(conn)` returns the rows (`hand_over_inbound`'s shape) from the plug-in's
+    own tables, and should delete them there. It is a function, not the rows, so that
+    it is called only AFTER the switch's row is locked: every inbound writer of the
+    plug-in waits on that lock or has committed, so the rows it reads are all of them.
+    Rows read before the lock could miss a write still in flight, which would then be
+    left behind in the plug-in's tables.
 
     It locks the switch row first and touches no decision row, so it cannot deadlock
     with an answer in flight (which holds its decision row and waits for this row), and
     it carries no version numbers: `decision.partner_version` never left core
     (`next_version`), so there is no copy that a bump landing meanwhile could overtake."""
+    if lock_inbound(conn) != owner:
+        raise BridgeHeld(f"the partner bridge's inbound half is not held by {owner!r}")
+    rows = read_rows(conn)
     unknown = set(rows) - set(INBOUND_TABLES)
     if unknown:
         raise ValueError(f"not an inbound table: {min(unknown)!r}")
-    if lock_inbound(conn) != owner:
-        raise BridgeHeld(f"the partner bridge's inbound half is not held by {owner!r}")
     put = 0
     for table, cols in INBOUND_TABLES.items():
         for row in rows.get(table, []):
