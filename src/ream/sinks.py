@@ -730,6 +730,17 @@ def _builtin_sinks() -> list[Sink]:
             return
         if owner is not None and not bridge_stage_of(owner):
             partner.note_owner_absent(owner)
+        # Step 9e-4: once a plug-in holds the inbound half too, the version counter is
+        # its own and core's outbox is dead. A process without that plug-in's stage (a
+        # command-line tool started with another REAM_PLUGINS) refuses the action rather
+        # than write a row nobody sends, under a version the partner has already seen.
+        # Only where a row would be written: an unconfigured bridge, or a question
+        # never announced, passes as before.
+        holder = partner.inbound_owner(conn)
+        if holder != partner.CORE and partner.would_enqueue(
+            conn, event.ref_id or "", event.kind
+        ):
+            raise partner.InboundHeld(holder)
         # The body is already the partner's own shape (partner.*_body). `at` is an
         # ISO string in `data` because an event is JSON.
         at = event.data.get("at")

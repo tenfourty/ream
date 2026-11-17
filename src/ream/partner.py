@@ -737,12 +737,248 @@ def release_bridge(conn: Connection, owner: str, rows: list[dict]) -> int:
     """The undo, run before the plug-in is removed: give `rows` (the owner's undelivered
     outbox rows, `hand_over`'s shape) back to core's outbox and the bridge back to core,
     in one transaction, so there is no moment with two senders or none. Refused
-    (`BridgeHeld`) unless `owner` holds it. Returns how many rows went back."""
+    (`BridgeHeld`) unless `owner` holds it, and (`InboundHeld`) while a plug-in still
+    holds the inbound half: `release_inbound` comes first. Returns how many rows went
+    back."""
     if bridge_owner(conn) != owner:
         raise BridgeHeld(f"the partner bridge is not held by {owner!r}")
+    # Step 9e-4: inbound goes back first. The row is locked, so an inbound claim cannot
+    # commit between this read and the delete below (it reads the bridge's owner under
+    # the same lock, and finds core).
+    holder = lock_inbound(conn)
+    if holder != CORE:
+        raise InboundHeld(holder)
     put = take_back(conn, rows)
     conn.execute("delete from service_meta where key = %s", (BRIDGE_OWNER_KEY,))
     return put
+
+
+# --- the inbound half's own switch (step 9e-4; goes with this module at the deletion) ---
+
+# A second database fact, apart from the outbound one: an image that knows only
+# `partner_bridge_owner` could not stand its endpoint down, so the outbound claim must
+# not flip inbound. No row means core (nothing seeds it: the first writer to lock it
+# inserts 'core'), and a release sets it back to 'core'.
+INBOUND_OWNER_KEY = "partner_inbound_owner"
+CORE = "core"
+
+
+class InboundHeld(Exception):
+    """A plug-in holds the inbound half, so core may not do this: write a partner event
+    to core's outbox (the version counter is the plug-in's now), or give the outbound
+    bridge back. Names the plug-in, never a value."""
+
+    def __init__(self, owner: str) -> None:
+        super().__init__(f"the partner bridge's inbound half is held by {owner!r}")
+        self.owner = owner
+
+
+def inbound_owner(conn: Connection) -> str:
+    """Who holds the inbound half: `CORE`, or a plug-in's name. A plain read, no lock: for
+    routing, the stage and a first look before a transaction. A writer uses
+    `lock_inbound`."""
+    row = conn.execute(
+        "select value from service_meta where key = %s", (INBOUND_OWNER_KEY,)
+    ).fetchone()
+    return CORE if row is None else row[0]
+
+
+def lock_inbound(conn: Connection, *, share: bool = False) -> str:
+    """The inbound holder, with its row locked for the rest of the caller's transaction.
+    Every inbound writer calls it first in its own transaction and writes only if the
+    answer is its own name; a claim or release calls it too, so a switch waits for the
+    writers in flight and they for it. `share=True` (a writer) lets other writers pass
+    and holds off only a switch. Lock order where a decision row is also written: the
+    decision row first, then this. SQLite's writer lock already serialises."""
+    conn.execute(
+        "insert into service_meta (key, value) values (%s, %s) on conflict do nothing",
+        (INBOUND_OWNER_KEY, CORE),
+    )
+    lock = conn.for_share() if share else conn.for_update()
+    row = conn.execute(
+        "select value from service_meta where key = %s" + lock,  # noqa: S608 -- fixed text and the lock clause
+        (INBOUND_OWNER_KEY,),
+    ).fetchone()
+    return row[0]
+
+
+def claim_inbound(conn: Connection, owner: str) -> None:
+    """Take the inbound half from core, in the caller's transaction: the plug-in calls it,
+    then `hand_over_inbound`, then writes what that returned into its own tables, and
+    commits once. Refused (`BridgeHeld`) unless `owner` already holds the outbound bridge
+    (`claim_bridge`), or when another plug-in holds inbound. The same owner again changes
+    nothing. From the commit core's endpoint answers 503 with `Retry-After`, core's own
+    answer on a partner-home copy says "not mine", and core's stage refuses to write
+    core's outbox."""
+    if not owner or owner == CORE:
+        raise ValueError("claim_inbound takes a plug-in's name")
+    held = lock_inbound(conn)
+    if bridge_owner(conn) != owner:
+        raise BridgeHeld(
+            f"the partner bridge is not held by {owner!r}: claim the outbound half first"
+        )
+    if held == owner:
+        return
+    if held != CORE:
+        raise BridgeHeld(f"the partner bridge's inbound half is held by {held!r}")
+    conn.execute(
+        "update service_meta set value = %s where key = %s", (owner, INBOUND_OWNER_KEY)
+    )
+
+
+# Core's three inbound tables, every column, in the order `hand_over_inbound` reads and
+# `release_inbound` writes them.
+INBOUND_TABLES: dict[str, tuple[str, ...]] = {
+    "partner_question": (
+        "source",
+        "version",
+        "asking_office",
+        "title",
+        "options",
+        "recommended",
+        "context",
+        "link",
+        "topic_id",
+        "topic_title",
+        "depends_on",
+        "replaces",
+        "replaced_by",
+        "urgency",
+        "blocked_on",
+        "needed_by",
+        "for_offices",
+        "state",
+        "answer",
+        "answer_note",
+        "answered_by",
+        "answered_at",
+        "pending_answer",
+        "pending_note",
+        "pending_at",
+        "out_version",
+        "created_at",
+        "updated_at",
+    ),
+    "partner_version_seen": ("source", "version", "updated_at"),
+    "partner_event_seen": (
+        "event_id",
+        "source",
+        "version",
+        "kind",
+        "outcome",
+        "detail",
+        "seen_at",
+    ),
+}
+_INBOUND_JSON = ("options", "depends_on", "for_offices", "detail")
+
+
+@dataclass(frozen=True)
+class InboundHandover:
+    """What `hand_over_inbound` moved: `rows`, each core inbound table's name to its rows
+    (dicts of `INBOUND_TABLES[name]`, JSON columns decoded), and `versions`, each
+    announced question's id to core's version counter for it at the move."""
+
+    rows: dict[str, list[dict]]
+    versions: dict[str, int]
+
+
+def _decoded(value):
+    return json.loads(value) if isinstance(value, str | bytes) else value
+
+
+def hand_over_inbound(conn: Connection) -> InboundHandover:
+    """Move every row out of core's three inbound tables, in the caller's open
+    transaction, after `claim_inbound` in that same transaction: the rows are returned and
+    deleted, so the caller inserts them into its own tables before it commits and a row is
+    in exactly one table set (a rollback keeps them here; a row left here would shadow the
+    plug-in's copy on the read side). Refused (`BridgeHeld`) while core holds inbound.
+
+    `versions` is a plain read of `decision.partner_version` (rows above 0), no row lock:
+    a core answer in flight holds its decision row and waits for the inbound row this
+    transaction holds, so locking decisions here would deadlock with it. A core stage
+    still open at the claim may bump a counter after this read; the plug-in's next bump
+    must take the larger of its own number and this column."""
+    if lock_inbound(conn) == CORE:
+        raise BridgeHeld("the partner bridge's inbound half is held by core")
+    rows: dict[str, list[dict]] = {}
+    for table, cols in INBOUND_TABLES.items():
+        found = conn.execute(
+            f"select {', '.join(cols)} from {table} order by {cols[0]}"  # noqa: S608 -- fixed names
+        ).fetchall()
+        moved = [dict(zip(cols, r, strict=True)) for r in found]
+        for row in moved:
+            for col in _INBOUND_JSON:
+                if col in row:
+                    row[col] = _decoded(row[col])
+        rows[table] = moved
+        conn.execute(f"delete from {table}")  # noqa: S608 -- fixed names
+    versions = dict(
+        conn.execute(
+            "select id, partner_version from decision where partner_version > 0"
+        ).fetchall()
+    )
+    return InboundHandover(rows=rows, versions=versions)
+
+
+def release_inbound(
+    conn: Connection, owner: str, rows: dict[str, list[dict]], versions: dict[str, int]
+) -> int:
+    """The undo of the inbound claim, run before `release_bridge`, in one transaction:
+    put `rows` (`hand_over_inbound`'s shape, from the plug-in's own tables) back into
+    core's inbound tables, raise each question's `decision.partner_version` to the
+    plug-in's number in `versions` where that is higher, and give inbound back to core.
+    Refused (`BridgeHeld`) unless `owner` holds it; the caller's transaction must roll
+    back then. A row already here is skipped. Returns how many rows went back.
+
+    The counters are raised BEFORE the inbound row is locked: the order everywhere is
+    decision row, then inbound row."""
+    unknown = set(rows) - set(INBOUND_TABLES)
+    if unknown:
+        raise ValueError(f"not an inbound table: {min(unknown)!r}")
+    if inbound_owner(conn) != owner:
+        raise BridgeHeld(f"the partner bridge's inbound half is not held by {owner!r}")
+    for decision_id, version in sorted(versions.items()):
+        conn.execute(
+            "update decision set partner_version = %s"
+            " where id = %s and partner_version < %s",
+            (version, decision_id, version),
+        )
+    if lock_inbound(conn) != owner:
+        raise BridgeHeld(f"the partner bridge's inbound half is not held by {owner!r}")
+    put = 0
+    for table, cols in INBOUND_TABLES.items():
+        for row in rows.get(table, []):
+            put += conn.execute(
+                f"insert into {table} ({', '.join(cols)})"  # noqa: S608 -- fixed names
+                f" values ({', '.join(['%s'] * len(cols))}) on conflict do nothing",
+                tuple(
+                    dbmod.jsonb(_decoded(row[c]))
+                    if c in _INBOUND_JSON and row.get(c) is not None
+                    else row.get(c)
+                    for c in cols
+                ),
+            ).rowcount
+    conn.execute(
+        "update service_meta set value = %s where key = %s", (CORE, INBOUND_OWNER_KEY)
+    )
+    return put
+
+
+def would_enqueue(conn: Connection, decision_id: str, kind: str) -> bool:
+    """Whether `enqueue` would write a row for this event: the bridge is configured and
+    the question is a plain question already announced (or this is its `asked`). A read
+    only; the counter is not touched."""
+    if not enabled():
+        return False
+    return (
+        conn.execute(
+            "select 1 from decision where id = %s and kind = 'question'"
+            " and (partner_version > 0 or %s)",
+            (decision_id, kind == "asked"),
+        ).fetchone()
+        is not None
+    )
 
 
 _OUTBOX_COLS = (
