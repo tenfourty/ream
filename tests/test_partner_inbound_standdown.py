@@ -578,6 +578,25 @@ def test_cores_stage_passes_with_no_bridge_configured(db, page):
     assert _outbox(db) == []
 
 
+def test_an_install_with_no_bridge_never_gains_the_switch_row(db, page):
+    # The stage locks the switch's row only where it would write core's outbox, and
+    # the lock is what inserts the row: with nothing configured, a question asked,
+    # answered and withdrawn leaves `service_meta` without it.
+    with sinks.isolated(*sinks._builtin_sinks()):
+        q = ask(db, page)
+        decisions.answer(db, q.id, letter="a", by="jeremy")
+        decisions.close(db, "owner", ask(db, page, question="And this?").id)
+    with db.connect() as conn:
+        assert (
+            conn.execute(
+                "select count(*) from service_meta where key = %s",
+                (partner.INBOUND_OWNER_KEY,),
+            ).fetchone()[0]
+            == 0
+        )
+    assert _outbox(db) == []
+
+
 def test_only_the_inbound_claim_stops_cores_stage(db, bridge, page):
     # The outbound claim alone (step 9e-3) keeps core staging for an absent owner.
     with db.connect() as conn, conn.transaction():
@@ -911,15 +930,18 @@ def test_an_open_claim_holds_the_answer_hook_which_then_answers_503(
                 "update decision set partner_version = 1 where id = %s", (q.id,)
             )
             partner.claim_bridge(conn, "qd")
-            # Committed here, so the hook waits on the claim's `for update` with its
-            # own `for share`, not on the insert of a row that is not there yet.
+            # The switch's row is committed before the race, so nothing below waits
+            # on the insert of a row that is not there yet.
             assert partner.lock_inbound(conn) == partner.CORE
         event = make("answered", f"artifacts:{q.id}", 2, pressed("b"))
         raw = raw_of(event)
         with db.connect() as conn, conn.transaction():
-            # The claim is open: not committed, so the request's first look, and the
-            # answer's own write of the decision row, still see core.
-            partner.claim_inbound(conn, "qd")
+            # The claim's first step alone: the row locked `for update` and not yet
+            # changed. (Once it is changed, a waiter would stop earlier, in its own
+            # `insert ... on conflict do nothing`, and never reach `for share`.) The
+            # request's first look and the answer's write of the decision row see
+            # core; the hook's `for share` is what waits.
+            assert partner.lock_inbound(conn) == partner.CORE
             t = _thread(
                 lambda: result.append(
                     partner_in.process(db, inbound, raw, sign(partner_key, raw))
@@ -928,6 +950,7 @@ def test_an_open_claim_holds_the_answer_hook_which_then_answers_503(
             )
             _until_waiting_on_a_lock(db)
             assert t.is_alive() and result == []
+            partner.claim_inbound(conn, "qd")
         _finished(t)
     assert not errors
     assert result == [(503, {"error": partner_in.STOOD_DOWN})]
@@ -973,9 +996,9 @@ def _held_answer(db, decision_id, held=None, go=None, *, before_lock=False):
     return "applied"
 
 
-def _release(db, put):
+def _release(db, put, read_rows=_no_rows):
     with db.connect() as conn, conn.transaction():
-        put.append(partner.release_inbound(conn, "qd", _no_rows))
+        put.append(partner.release_inbound(conn, "qd", read_rows))
 
 
 @pytest.mark.postgres_only  # two connections and their row locks
@@ -1020,10 +1043,13 @@ def test_cores_stage_waits_for_an_open_claim_and_then_refuses(db, bridge, page):
         assert partner.lock_inbound(conn) == partner.CORE
     with sinks.isolated(*sinks._builtin_sinks()):
         with db.connect() as conn, conn.transaction():
-            partner.claim_inbound(conn, "qd")
+            # The row locked `for update` and not yet changed, so the stage's
+            # `for share` is what waits (see the hook's test above); then the claim.
+            assert partner.lock_inbound(conn) == partner.CORE
             t = _thread(lambda: ask(db, page), errors)
             _until_waiting_on_a_lock(db)
             assert t.is_alive()
+            partner.claim_inbound(conn, "qd")
         _finished(t)
     assert [type(e) for e in errors] == [partner.InboundHeld]
     assert _outbox(db) == []
@@ -1034,21 +1060,32 @@ def test_cores_stage_waits_for_an_open_claim_and_then_refuses(db, bridge, page):
 def test_a_release_behind_an_answer_in_flight_waits_and_keeps_its_version(
     db, bridge, page
 ):
-    errors, result, put = [], [], []
+    errors, result, put, seen = [], [], [], []
     held, go = threading.Event(), threading.Event()
+
+    def read_rows(conn):
+        # Called under the release's `for update`: the answer has committed by now.
+        # A release that read its rows without waiting would see no answer here.
+        seen.append(
+            conn.execute(
+                "select answer from decision where id = %s", (q.id,)
+            ).fetchone()[0]
+        )
+        return {}
 
     with sinks.isolated(_owners_stage()):
         _claim(db)
         q = ask(db, page)
         a = _thread(lambda: result.append(_held_answer(db, q.id, held, go)), errors)
         assert held.wait(_WAIT)
-        r = _thread(lambda: _release(db, put), errors)
+        r = _thread(lambda: _release(db, put, read_rows), errors)
         _until_waiting_on_a_lock(db)
         assert r.is_alive() and _holder(db) == "qd"
         go.set()
         _finished(a, r)
     assert not errors
     assert result == ["applied"] and put == [0]
+    assert seen == ["b"], "the rows were read before the answer in flight committed"
     assert _row(db, q.id).answer == "b"
     assert _holder(db) == partner.CORE
     # The answer's version, taken from core's counter in its own transaction, is what
