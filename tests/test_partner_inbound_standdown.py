@@ -368,6 +368,31 @@ def test_a_rolled_back_move_keeps_the_rows_in_core(db, client, partner_key, page
     assert _holder(db) == partner.CORE
 
 
+def _no_rows(_conn):
+    return {}
+
+
+def test_release_reads_the_rows_only_once_the_switch_row_is_locked(db, monkeypatch):
+    # The reader is a function so that it runs after the lock: every writer of the
+    # holder's has committed or waits, and none can add a row behind the read.
+    _claim(db)
+    calls = []
+    real = partner.lock_inbound
+
+    def locking(conn, **kw):
+        calls.append("lock")
+        return real(conn, **kw)
+
+    def read(conn):
+        calls.append("read")
+        return {}
+
+    monkeypatch.setattr(partner, "lock_inbound", locking)
+    with db.connect() as conn, conn.transaction():
+        partner.release_inbound(conn, "qd", read)
+    assert calls == ["lock", "read"]
+
+
 def _versions(db):
     with db.connect() as conn:
         return dict(
@@ -396,7 +421,7 @@ def test_release_puts_the_rows_back_and_the_counter_never_left(
         assert partner.next_version(conn, answered.id, "answered") == 3
         assert partner.next_version(conn, answered.id, "answered") == 4
     with db.connect() as conn, conn.transaction():
-        assert partner.release_inbound(conn, "qd", moved.rows) == total
+        assert partner.release_inbound(conn, "qd", lambda _c: moved.rows) == total
     assert _holder(db) == partner.CORE
     assert partner_in.open_copies(db, waiting_on_him=False) == before
     assert _versions(db) == {answered.id: 4, waiting.id: 1}
@@ -429,7 +454,9 @@ def test_release_never_replaces_a_row_or_touches_a_counter(
         ).fetchone()
     stale_copy = {**dict(zip(cols, held, strict=True)), "version": 1, "title": "old"}
     with db.connect() as conn, conn.transaction():
-        put = partner.release_inbound(conn, "qd", {"partner_question": [stale_copy]})
+        put = partner.release_inbound(
+            conn, "qd", lambda _c: {"partner_question": [stale_copy]}
+        )
     assert put == 0
     with db.connect() as conn:
         assert conn.execute("select version from partner_question").fetchall() == [(3,)]
@@ -441,12 +468,14 @@ def test_release_never_replaces_a_row_or_touches_a_counter(
 def test_release_inbound_refuses_another_owner_and_keeps_everything(db, bridge, page):
     q = ask(db, page)
     _claim(db)
+    read = []
     with (
         pytest.raises(partner.BridgeHeld, match="'other'"),
         db.connect() as conn,
         conn.transaction(),
     ):
-        partner.release_inbound(conn, "other", {})
+        partner.release_inbound(conn, "other", read.append)
+    assert read == [], "the rows are not even read for one who does not hold inbound"
     assert _holder(db) == "qd"
     with db.connect() as conn:
         assert conn.execute(
@@ -461,7 +490,7 @@ def test_release_inbound_takes_only_the_inbound_tables(db):
         db.connect() as conn,
         conn.transaction(),
     ):
-        partner.release_inbound(conn, "qd", {"decision": [{}]})
+        partner.release_inbound(conn, "qd", lambda _c: {"decision": [{}]})
 
 
 def test_the_outbound_bridge_cannot_go_back_while_inbound_is_held(db):
@@ -745,7 +774,7 @@ def test_the_holder_is_read_on_every_request(db, inbound, partner_key, plugin_ro
         "result": "the plug-in's"
     }
     with db.connect() as conn, conn.transaction():
-        partner.release_inbound(conn, "qd", {})
+        partner.release_inbound(conn, "qd", _no_rows)
     r = post(http, partner_key, make("asked", "qd:q1", 1, asked_body()))
     assert r.json() == {"result": "applied"}
 
@@ -831,6 +860,10 @@ def _finished(*threads):
 def test_a_claim_waits_for_a_writer_in_flight_and_lands_after_its_commit(db):
     with db.connect() as conn, conn.transaction():
         partner.claim_bridge(conn, "qd")
+        # The switch's row is committed before either thread starts, so what the claim
+        # waits on below is the writer's share lock (`for share` against `for update`),
+        # not the insert of a row that is not there yet.
+        assert partner.lock_inbound(conn) == partner.CORE
     holding, go = threading.Event(), threading.Event()
     errors, order = [], []
 
@@ -878,6 +911,9 @@ def test_an_open_claim_holds_the_answer_hook_which_then_answers_503(
                 "update decision set partner_version = 1 where id = %s", (q.id,)
             )
             partner.claim_bridge(conn, "qd")
+            # Committed here, so the hook waits on the claim's `for update` with its
+            # own `for share`, not on the insert of a row that is not there yet.
+            assert partner.lock_inbound(conn) == partner.CORE
         event = make("answered", f"artifacts:{q.id}", 2, pressed("b"))
         raw = raw_of(event)
         with db.connect() as conn, conn.transaction():
@@ -900,19 +936,27 @@ def test_an_open_claim_holds_the_answer_hook_which_then_answers_503(
     assert _holder(db) == "qd"
 
 
-def _held_answer(db, decision_id, held=None, go=None):
+def _held_answer(db, decision_id, held=None, go=None, *, before_lock=False):
     """A Slack answer as the holder's route records it: the decision row first, then
-    the switch's row shared, in the answer's own transaction."""
+    the switch's row shared, in the answer's own transaction. With `held` and `go` it
+    stops inside that transaction, the decision row written and locked: before it asks
+    for the switch's row (`before_lock`), or holding it."""
 
     class NotMine(Exception):
         pass
 
-    def hook(conn):
-        if partner.lock_inbound(conn, share=True) != "qd":
-            raise NotMine
+    def pause():
         if held is not None:
             held.set()
             assert go.wait(_WAIT)
+
+    def hook(conn):
+        if before_lock:
+            pause()
+        if partner.lock_inbound(conn, share=True) != "qd":
+            raise NotMine
+        if not before_lock:
+            pause()
 
     try:
         decisions.answer(
@@ -929,27 +973,61 @@ def _held_answer(db, decision_id, held=None, go=None):
     return "applied"
 
 
+def _release(db, put):
+    with db.connect() as conn, conn.transaction():
+        put.append(partner.release_inbound(conn, "qd", _no_rows))
+
+
 @pytest.mark.postgres_only  # two connections and their row locks
-def test_a_release_ahead_of_an_answer_on_the_same_question_does_not_deadlock(
+def test_a_release_runs_to_its_commit_while_an_answer_holds_that_questions_row(
     db, bridge, page
 ):
-    errors, result = [], []
+    # The deadlock a release must not have: the answer in flight holds its decision
+    # row and will next ask for the switch's row. A release that needed that decision
+    # row (to raise a counter, say) would wait on the answer here while the answer
+    # waits on it. It needs none, so it commits with the answer still open, and the
+    # answer then finds inbound is core's and rolls back.
+    errors, result, put = [], [], []
+    held, go = threading.Event(), threading.Event()
     with sinks.isolated(_owners_stage()):
         _claim(db)
         q = ask(db, page)
-        with db.connect() as conn, conn.transaction():
-            # The release holds the switch's row; the answer takes its decision row and
-            # waits for the switch. The release must need no decision row to finish.
-            assert partner.release_inbound(conn, "qd", {}) == 0
-            t = _thread(lambda: result.append(_held_answer(db, q.id)), errors)
-            _until_waiting_on_a_lock(db)
-            assert t.is_alive()
-        _finished(t)
+        a = _thread(
+            lambda: result.append(_held_answer(db, q.id, held, go, before_lock=True)),
+            errors,
+        )
+        assert held.wait(_WAIT)
+        r = _thread(lambda: _release(db, put), errors)
+        _finished(r)
+        assert put == [0] and a.is_alive() and result == []
+        assert _holder(db) == partner.CORE
+        go.set()
+        _finished(a)
     assert not errors
     assert result == ["refused"]
     assert _row(db, q.id).answer is None
-    assert _holder(db) == partner.CORE
     assert _versions(db) == {q.id: 1}
+
+
+@pytest.mark.postgres_only  # waits for a row lock through pg_stat_activity
+def test_cores_stage_waits_for_an_open_claim_and_then_refuses(db, bridge, page):
+    # Core's stage reads the holder under the switch's row lock, not with a plain
+    # read: with a claim open it waits, and once the claim commits it refuses, so no
+    # row is added to core's outbox behind the claim.
+    errors = []
+    with db.connect() as conn, conn.transaction():
+        partner.claim_bridge(conn, "qd")
+        assert partner.lock_inbound(conn) == partner.CORE
+    with sinks.isolated(*sinks._builtin_sinks()):
+        with db.connect() as conn, conn.transaction():
+            partner.claim_inbound(conn, "qd")
+            t = _thread(lambda: ask(db, page), errors)
+            _until_waiting_on_a_lock(db)
+            assert t.is_alive()
+        _finished(t)
+    assert [type(e) for e in errors] == [partner.InboundHeld]
+    assert _outbox(db) == []
+    assert _count(db, "decision") == 0
 
 
 @pytest.mark.postgres_only  # waits for a row lock through pg_stat_activity
@@ -959,16 +1037,12 @@ def test_a_release_behind_an_answer_in_flight_waits_and_keeps_its_version(
     errors, result, put = [], [], []
     held, go = threading.Event(), threading.Event()
 
-    def release():
-        with db.connect() as conn, conn.transaction():
-            put.append(partner.release_inbound(conn, "qd", {}))
-
     with sinks.isolated(_owners_stage()):
         _claim(db)
         q = ask(db, page)
         a = _thread(lambda: result.append(_held_answer(db, q.id, held, go)), errors)
         assert held.wait(_WAIT)
-        r = _thread(release, errors)
+        r = _thread(lambda: _release(db, put), errors)
         _until_waiting_on_a_lock(db)
         assert r.is_alive() and _holder(db) == "qd"
         go.set()
