@@ -806,14 +806,17 @@ def cmd_pack_versions(_args) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    from ream import partner
-
     args = build_parser().parse_args(argv if argv is not None else sys.argv[1:])
     try:
         args.func(args)
-    except partner.InboundHeld as exc:
+    except Exception as exc:
         # Core's partner stage refused (step 9e-4) and the command's transaction rolled
-        # back: one line, not a traceback.
+        # back: one line, not a traceback. `partner` is not imported here: it pulls in
+        # the database driver, and `new-key` must run where only the client is installed
+        # (tests/test_admin_no_db.py). Only a command that loaded it can raise this.
+        partner = sys.modules.get("ream.partner")
+        if partner is None or not isinstance(exc, partner.InboundHeld):
+            raise
         raise SystemExit(
             f"refused, nothing was changed: this would send the partner an event, and"
             f" plug-in {exc.owner!r} holds the bridge but is not loaded here. Run it"
