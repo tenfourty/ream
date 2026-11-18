@@ -15,9 +15,12 @@ every scan through `settings.current()`). When all are taken it waits up to
 * the publish checks (`api.page_warnings`) answer the warnings that say they did not run;
 * the render findings (`thumbs.scan_for_findings`) leave the page unread, which `assess`
   turns into the verdict `unchecked`;
+* the comment listings (`comments._pin_states`) leave the page unread, and its pins come
+  back with no state, as for a page too large to search: the listing still answers;
 * the readers that a request needs the answer of (forms on publish and update, sections,
-  the text and the headings behind a comment or a pin) let it go up: the two apps answer
-  503 with `Retry-After` (`app._refuse_busy_scans`), and an MCP tool answers an error.
+  the text and the headings behind a comment being written or a pin being set) let it go
+  up: the two apps answer 503 with `Retry-After` (`app._refuse_busy_scans`), and an MCP
+  tool answers an error.
 
 A thread that already holds a slot takes no second one, so a scan made of smaller scans
 (the publish checks read forms inside theirs) never waits on itself. A slot is held only

@@ -1,7 +1,8 @@
 """Only so many scans of a large page run at once in one server process, and when they
 are all taken a request waits a short while, then answers as each path was designed to:
-the publish checks and the render findings say they did not run, a reader a request
-needs answers 503 with `Retry-After`. A slot is always given back."""
+the publish checks and the render findings say they did not run, a comment listing
+leaves its pins' states unknown, a reader a request needs answers 503 with
+`Retry-After`. A slot is always given back."""
 
 import base64
 import contextlib
@@ -494,3 +495,42 @@ def test_a_listing_holds_no_connection_while_it_waits_for_a_slot(
         "a connection was open while a slot was asked for"
     )
     assert [r.anchor_state for r in rows] == ["current"]
+
+
+@pytest.mark.parametrize("listing", ["page", "agent", "wall"])
+def test_a_listing_answers_when_every_slot_is_taken_its_pins_unknown(
+    db, pinned, listing
+):
+    page, comment = pinned
+    read = _listings(db, page)[listing]
+    with taken():
+        busy = read()
+    assert [r.id for r in busy] == [comment.id], "the comment is still listed"
+    assert (busy[0].quote_state, busy[0].anchor_state, busy[0].anchor_note) == ("",) * 3
+    assert busy[0].anchor_current == ""
+    # Nothing unread was kept: with a slot free the same listing tells the state.
+    assert [r.anchor_state for r in read()] == ["current"]
+
+
+def test_a_listing_keeps_the_words_it_had_and_leaves_only_the_unread_html_unknown(
+    db, pinned
+):
+    page, _ = pinned
+    assert comments.list_for_artifact(db, page.id)[0].anchor_state == "current"
+    with taken():  # the page's words are kept from that listing; its headings are not
+        (row,) = comments.list_for_artifact(db, page.id)
+    assert row.quote_state != "", "the kept words still tell the quote"
+    assert (row.anchor_state, row.anchor_note, row.anchor_current) == ("", "", "")
+
+
+def test_the_comment_routes_answer_200_when_every_slot_is_taken(api, auth, pinned):
+    page, _ = pinned
+    with taken():
+        per_page = api.get(f"/api/v1/pages/{page.id}/comments", headers=auth)
+        every = api.get("/api/v1/comments", headers=auth)
+    for got in (per_page, every):
+        assert got.status_code == 200, got.text[:300]
+        (row,) = got.json()
+        assert row["anchor_state"] == "" and row["quote_state"] == ""
+    again = api.get(f"/api/v1/pages/{page.id}/comments", headers=auth)
+    assert again.json()[0]["anchor_state"] == "current"

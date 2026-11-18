@@ -40,6 +40,7 @@ from ream import (
     image_store,
     images,
     scanners,
+    scanslots,
     settings,
     store,
     text,
@@ -1238,7 +1239,9 @@ def _pin_states(
 
     A page is read from the database in one short read of its own, and scanned after
     that read ended: a scan may wait for a slot (`scanslots`), and no connection is
-    held while it does. Only a `conn` the caller owns stays open across them.
+    held while it does. Only a `conn` the caller owns stays open across them. When every
+    scan slot stays taken, a page not read comes back with no state, as one too large to
+    search does: the listing answers, its pins for that page unknown.
     """
     pinning = [row for row in rows if row.quote or _pin_id(row.anchor)]
     if not pinning:
@@ -1269,6 +1272,9 @@ def _pin_states(
             missing.append((artifact_id, n))
         if cached is not None:
             words_by_page[artifact_id] = cached
+    # Set when every scan slot stayed taken for a scan of this listing: the large pages
+    # after it are left unread without waiting again, each its own `scanslots.WAIT_SECONDS`.
+    busy = False
     for artifact_id, n in missing:
         body = _body_of(db, conn, artifact_id, n)
         if body is None:
@@ -1277,7 +1283,14 @@ def _pin_states(
             bodies[artifact_id] = body
         if artifact_id in words_by_page:
             continue
-        words, cut = text.visible(body)
+        if busy and len(body) > scanslots.SMALL_PAGE:
+            continue
+        try:
+            words, cut = text.visible(body)
+        except scanslots.ScanBusy:
+            # Not read: unknown, as when cut, and never cached. The listing still answers.
+            busy = True
+            continue
         if cut:
             # Truncated text is not authoritative: unknown, and never cached.
             continue
@@ -1301,15 +1314,31 @@ def _pin_states(
         # A reply carries its root's anchor and quote: resolve each once.
         key = (row.artifact_id, json.dumps(row.anchor, sort_keys=True), row.quote)
         if key not in seen:
-            state, note = _resolve_pin(
-                row, words, bodies, indexes, html_resolved, wanted_ids, budget
-            )
-            now = ""
-            if state == anchors.EDITED and len(edited) < EDITED_NOW_MAX:
-                edited.add(key)
-                now = _current_of(
-                    db, conn, row, bodies, indexes, current_n, wanted_ids, budget
-                )
+            state = note = now = ""  # unknown, until the page has been read
+            held = bodies.get(row.artifact_id, "")
+            if not (busy and len(held) > scanslots.SMALL_PAGE):
+                try:
+                    state, note = _resolve_pin(
+                        row, words, bodies, indexes, html_resolved, wanted_ids, budget
+                    )
+                    if (
+                        state == anchors.EDITED
+                        and len(edited) < EDITED_NOW_MAX
+                        and not busy
+                    ):
+                        edited.add(key)
+                        now = _current_of(
+                            db,
+                            conn,
+                            row,
+                            bodies,
+                            indexes,
+                            current_n,
+                            wanted_ids,
+                            budget,
+                        )
+                except scanslots.ScanBusy:
+                    busy = True  # what was not read stays unknown
             seen[key] = (state, note, now)
         state, note, now = seen[key]
         out.append(
