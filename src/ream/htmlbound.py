@@ -24,7 +24,7 @@ Python test tags another way, so they keep their own.
 Memory is not the only cost: a page of 8 MiB of tags of 4000 attributes each, or of
 end tags, took `forms`, `sections`, `text` and `anchors` 3 to 20 seconds with every tag
 read as it is. So each of those four gives its parser a `Budget` as its `meter`
-(`PARSE_SECONDS`, made per call, started at its first token), which `BoundedParser`
+(`PARSE_SECONDS` of the thread's CPU time, made per call, started at its first token), which `BoundedParser`
 asks about every token it steps over and about each long tag, and `TooComplex` is
 raised when it is spent.
 
@@ -50,9 +50,10 @@ class TooComplex(Exception):
     on it, or (for a reader with a budget, `renderfind.Budget` or `Budget`) the time is spent."""
 
 
-# What reading one page may cost, in time: memory is bounded by the tag rules below,
-# and this bounds the rest (a page of 8 MiB of tags of 4000 attributes each, or of
-# end tags, takes the readers 5 to 20 seconds with nothing else wrong with it).
+# What reading one page may cost, in CPU time of the reading thread (not wall time, so a
+# loaded machine does not refuse a page that is fine): memory is bounded by the tag
+# rules below, and this bounds the rest (a page of 8 MiB of tags of 4000 attributes
+# each, or of end tags, takes the readers 5 to 20 seconds with nothing else wrong with it).
 PARSE_SECONDS = 2.0
 
 
@@ -61,8 +62,10 @@ class _Budget(Protocol):
 
 
 class Budget:
-    """The time one reading of a page may take. It starts at its first use, so the
-    time a request waited for a scan slot is not spent. `check()` raises TooComplex
+    """The CPU time one reading of a page may take, counted in the reading thread
+    (`time.thread_time`), so time spent waiting, or descheduled on a loaded machine,
+    is not spent: use it only in the thread that reads. It starts at its first use,
+    so the time a request waited for a scan slot is not spent either. `check()` raises TooComplex
     when time is up and is cheap to call between tags; `step()` is for each token, and
     reads the clock only now and then. (`renderfind.Budget`, shared by the readings of
     a request and started when it is made, is its own: its readers count their own
@@ -77,7 +80,7 @@ class Budget:
     def check(self) -> None:
         if self.spent:
             raise TooComplex
-        now = time.monotonic()
+        now = time.thread_time()
         if self._deadline is None:
             self._deadline = now + self._seconds
         if now >= self._deadline:

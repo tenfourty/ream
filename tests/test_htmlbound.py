@@ -934,3 +934,25 @@ def test_a_value_error_of_a_handler_is_not_taken_for_it():
         parser.feed("x")
         parser.close()
     assert not isinstance(seen.value, htmlbound.TooComplex)
+
+
+def _burn(seconds: float) -> None:
+    """Use this thread's CPU for `seconds` of its own CPU time."""
+    until = time.thread_time() + seconds
+    while time.thread_time() < until:
+        pass
+
+
+@pytest.mark.parametrize("make", [htmlbound.Budget, renderfind.Budget])
+def test_a_budget_counts_the_cpu_time_of_its_thread_not_the_wall_time(make):
+    budget = make(0.05)
+    budget.check()  # started
+    time.sleep(0.3)  # six times the limit of wall time, no CPU
+    budget.check()
+    for _ in range(128):
+        budget.step()
+    assert not budget.spent
+    _burn(0.1)  # twice the limit of this thread's CPU time
+    with pytest.raises(htmlbound.TooComplex):
+        budget.check()
+    assert budget.spent

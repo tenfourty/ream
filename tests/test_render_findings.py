@@ -635,7 +635,7 @@ def test_the_budget_reads_the_clock_every_few_tokens_and_stays_spent(monkeypatch
     now = [100.0]
 
     class Clock:
-        monotonic = staticmethod(lambda: now[0])
+        thread_time = staticmethod(lambda: now[0])
 
     monkeypatch.setattr(renderfind, "time", Clock)
     budget = renderfind.Budget(1.0)

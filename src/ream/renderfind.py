@@ -32,8 +32,8 @@ UNREAD_NOTE = (
 # What reading a page's markup may cost. A page over MAX_SCAN_CHARS is not read
 # at all: that is the publish limit (`store.MAX_BODY_BYTES`, in bytes; a page
 # has no more characters than bytes), so a page that could be published is
-# never over it. SCAN_SECONDS is what the readings of ONE request may take
-# together: `Budget` is made once per request, every reading draws on it, and
+# never over it. SCAN_SECONDS is what the readings of ONE request may take, in CPU
+# time of the reading thread, together: `Budget` is made once per request, every reading draws on it, and
 # when it is spent each reading stops at its next step. A reading that did not
 # finish reports None, which is "not read" and never "nothing found".
 MAX_SCAN_CHARS = 8 * 1024 * 1024
@@ -41,15 +41,17 @@ SCAN_SECONDS = 2.0
 
 
 class Budget:
-    """The time one request allows for reading a page's markup."""
+    """The CPU time (`time.thread_time`, of the thread that makes it and reads) one
+    request allows for reading a page's markup; not wall time, so a loaded machine
+    does not spend it."""
 
     def __init__(self, seconds: float = SCAN_SECONDS) -> None:
-        self._deadline = time.monotonic() + seconds
+        self._deadline = time.thread_time() + seconds
         self._steps = 0
         self.spent = False
 
     def check(self) -> None:
-        if self.spent or time.monotonic() >= self._deadline:
+        if self.spent or time.thread_time() >= self._deadline:
             self.spent = True
             raise TooComplex
 
