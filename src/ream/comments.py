@@ -1177,18 +1177,31 @@ def _resolve_pin(row, words, bodies, indexes, html_resolved, wanted_ids, budget)
 EDITED_NOW_MAX = 50
 
 
-def _current_of(conn, row, bodies, indexes, current_n, wanted_ids, budget) -> str:
+def _reading(db: Database, conn: Connection | None):
+    """The connection for ONE short read: `conn` when the caller owns one (a
+    transaction that must stay open), else a connection of its own, given back
+    when the block ends. A scan never runs inside it (`scanslots`)."""
+    return nullcontext(conn) if conn is not None else db.connect()
+
+
+def _body_of(db: Database, conn: Connection | None, page: str, n: int) -> str | None:
+    with _reading(db, conn) as c:
+        got = c.execute(
+            "select body from version where artifact_id = %s and n = %s",
+            (page, n),
+        ).fetchone()
+    return None if got is None else got[0]
+
+
+def _current_of(db, conn, row, bodies, indexes, current_n, wanted_ids, budget) -> str:
     """`anchors.current_quote` for an edited pin, reading the page's HTML now
     if this listing had not needed it yet."""
     page = row.artifact_id
     if page not in bodies:
-        got = conn.execute(
-            "select body from version where artifact_id = %s and n = %s",
-            (page, current_n[page]),
-        ).fetchone()
+        got = _body_of(db, conn, page, current_n[page])
         if got is None:
             return ""
-        bodies[page] = got[0]
+        bodies[page] = got
     if page not in indexes:
         indexes[page] = anchors.PageIndex(
             bodies[page], wanted_ids.get(page, set()), budget
@@ -1196,13 +1209,20 @@ def _current_of(conn, row, bodies, indexes, current_n, wanted_ids, budget) -> st
     return anchors.current_quote(row.anchor, row.quote, indexes[page])
 
 
-def _with_quote_state(conn, rows: list[CommentRow]) -> list[CommentRow]:
+def _with_quote_state(
+    db: Database, rows: list[CommentRow], conn: Connection | None = None
+) -> list[CommentRow]:
     """Every row told its pin's state (`_pin_states`) and its pictures. The one funnel
-    every listing passes through."""
-    return image_store.with_images(conn, _pin_states(conn, rows))
+    every listing passes through. A listing passes no `conn`, having read its rows and
+    given its connection back: each read here takes one of its own, only for that read."""
+    stated = _pin_states(db, rows, conn)
+    with _reading(db, conn) as c:
+        return image_store.with_images(c, stated)
 
 
-def _pin_states(conn, rows: list[CommentRow]) -> list[CommentRow]:
+def _pin_states(
+    db: Database, rows: list[CommentRow], conn: Connection | None = None
+) -> list[CommentRow]:
     """Every pinning row told whether its quote is still on its page
     (`quote_state`) and where its pin is now (`anchor_state`, `anchor_note`).
 
@@ -1215,6 +1235,10 @@ def _pin_states(conn, rows: list[CommentRow]) -> list[CommentRow]:
     `replace`, not assignment: CommentRow is frozen, which is right -- a row
     read out of the database is a record, and code that can edit one in place
     is code that can silently disagree with it.
+
+    A page is read from the database in one short read of its own, and scanned after
+    that read ended: a scan may wait for a slot (`scanslots`), and no connection is
+    held while it does. Only a `conn` the caller owns stays open across them.
     """
     pinning = [row for row in rows if row.quote or _pin_id(row.anchor)]
     if not pinning:
@@ -1223,11 +1247,12 @@ def _pin_states(conn, rows: list[CommentRow]) -> list[CommentRow]:
     words_by_page: dict[str, tuple[str, str]] = {}
     # Visible text is worked out once per (page, version) and kept in process:
     # a version never changes, so a listing does not re-parse the page.
-    versions = conn.execute(
-        "select id, current_version from artifact"  # noqa: S608 -- placeholders only
-        f" where id in {in_list(pages)}",
-        tuple(pages),
-    ).fetchall()
+    with _reading(db, conn) as c:
+        versions = c.execute(
+            "select id, current_version from artifact"  # noqa: S608 -- placeholders only
+            f" where id in {in_list(pages)}",
+            tuple(pages),
+        ).fetchall()
     needs_html = {row.artifact_id for row in pinning if _context_of(row.anchor)}
     bodies: dict[str, str] = {}
     missing = []
@@ -1245,17 +1270,14 @@ def _pin_states(conn, rows: list[CommentRow]) -> list[CommentRow]:
         if cached is not None:
             words_by_page[artifact_id] = cached
     for artifact_id, n in missing:
-        row = conn.execute(
-            "select body from version where artifact_id = %s and n = %s",
-            (artifact_id, n),
-        ).fetchone()
-        if row is None:
+        body = _body_of(db, conn, artifact_id, n)
+        if body is None:
             continue
         if artifact_id in needs_html:
-            bodies[artifact_id] = row[0]
+            bodies[artifact_id] = body
         if artifact_id in words_by_page:
             continue
-        words, cut = text.visible(row[0])
+        words, cut = text.visible(body)
         if cut:
             # Truncated text is not authoritative: unknown, and never cached.
             continue
@@ -1286,7 +1308,7 @@ def _pin_states(conn, rows: list[CommentRow]) -> list[CommentRow]:
             if state == anchors.EDITED and len(edited) < EDITED_NOW_MAX:
                 edited.add(key)
                 now = _current_of(
-                    conn, row, bodies, indexes, current_n, wanted_ids, budget
+                    db, conn, row, bodies, indexes, current_n, wanted_ids, budget
                 )
             seen[key] = (state, note, now)
         state, note, now = seen[key]
@@ -1309,10 +1331,7 @@ def with_state(
     `anchor_note`, `anchor_current`), as a listing would tell it. Reads the
     page only, never the comment, so `conn` may be the transaction that wrote
     it."""
-    if conn is not None:
-        return _with_quote_state(conn, [row])[0]
-    with db.connect() as own:
-        return _with_quote_state(own, [row])[0]
+    return _with_quote_state(db, [row], conn)[0]
 
 
 def list_for_artifact(
@@ -1342,11 +1361,11 @@ def list_for_artifact(
     sql += " order by comment.created_at asc, comment.id asc"
     with db.connect() as conn:
         rows = conn.execute(sql, (artifact_id,)).fetchall()
-        # The page as it is NOW, read only when something actually quotes it --
-        # see `_with_quote_state`, which every listing in this module shares so
-        # that an agent is never told "this quote is gone" on one route and
-        # nothing at all on another.
-        return _with_quote_state(conn, [_row_to_comment(row) for row in rows])
+    # The page as it is NOW, read only when something actually quotes it --
+    # see `_with_quote_state`, which every listing in this module shares so
+    # that an agent is never told "this quote is gone" on one route and
+    # nothing at all on another. After the connection is given back: it scans.
+    return _with_quote_state(db, [_row_to_comment(row) for row in rows])
 
 
 def marks_for_page(db: Database, artifact_id: str) -> list[dict]:
@@ -1425,12 +1444,12 @@ def list_for_agent(
     sql += " order by comment.created_at desc, comment.id desc limit %s"
     with db.connect() as conn:
         rows = conn.execute(sql, (agent, limit)).fetchall()
-        # THE SAME FIELD THE PER-PAGE ROUTE GIVES IT. This one returned "" for
-        # every row until 21 Sep, so an agent polling its whole feed was told
-        # nothing about quotes that had been edited away, while the same
-        # comment read through /artifacts/<id>/comments said "changed". One of
-        # those two answers was always wrong.
-        return _with_quote_state(conn, [_row_to_comment(row) for row in rows])
+    # THE SAME FIELD THE PER-PAGE ROUTE GIVES IT. This one returned "" for
+    # every row until 21 Sep, so an agent polling its whole feed was told
+    # nothing about quotes that had been edited away, while the same
+    # comment read through /artifacts/<id>/comments said "changed". One of
+    # those two answers was always wrong.
+    return _with_quote_state(db, [_row_to_comment(row) for row in rows])
 
 
 @dataclass(frozen=True)
@@ -1479,11 +1498,10 @@ def across_pages(
 
     with db.connect() as conn:
         rows = conn.execute(sql, (limit,)).fetchall()
-        stated = _with_quote_state(conn, [_row_to_comment(row) for row in rows])
-        found = [
-            (comment, row[-2], row[-1])
-            for comment, row in zip(stated, rows, strict=True)
-        ]
+    stated = _with_quote_state(db, [_row_to_comment(row) for row in rows])
+    found = [
+        (comment, row[-2], row[-1]) for comment, row in zip(stated, rows, strict=True)
+    ]
 
     grouped: dict[str, PageComments] = {}
     for row, title, archived_at in found:

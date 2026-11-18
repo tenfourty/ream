@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from ream import (
     anchors,
+    comments,
     envnames,
     forms,
     keys,
@@ -412,3 +413,84 @@ def test_the_background_render_stores_unchecked_when_the_findings_could_not_be_r
 
 
 _original_render_in_background = thumbs.render_in_background
+
+
+# --- the comment listings ------------------------------------------------------------
+
+PIN_QUOTE = "Cost per seat is flat across plans"
+# A page over SMALL_PAGE with a pin on a heading in it: both its words and its headings
+# are scanned for the pin's state, each under a slot.
+PINNED_PAGE = (
+    HEAD + '<h2 id="costs">Costs</h2><p>' + PIN_QUOTE + ".</p>" + FILLER + TAIL
+)
+PIN_ANCHOR = {
+    "kind": "range",
+    "path": "body>p:nth-of-type(1)",
+    "start": 0,
+    "end": len(PIN_QUOTE),
+    "heading": "Costs",
+    "heading_id": "costs",
+}
+
+
+@pytest.fixture()
+def pinned(db):
+    """A large page with one pinned comment on it, its words not kept from the write."""
+    assert len(PINNED_PAGE) > scanslots.SMALL_PAGE
+    page = store.publish(db, "seat", "Costs", PINNED_PAGE)
+    comment = comments.add(
+        db,
+        artifact_id=page.id,
+        author_kind="human",
+        author="jeremy",
+        body="Why flat?",
+        quote=PIN_QUOTE,
+        anchor=PIN_ANCHOR,
+    )
+    comments._VISIBLE_CACHE.clear()
+    yield page, comment
+    comments._VISIBLE_CACHE.clear()
+
+
+def _listings(db, page):
+    return {
+        "page": lambda: comments.list_for_artifact(db, page.id),
+        "agent": lambda: comments.list_for_agent(db, "seat"),
+        "wall": lambda: [c for g in comments.across_pages(db) for c in g.rows],
+    }
+
+
+@pytest.mark.parametrize("listing", ["page", "agent", "wall"])
+def test_a_listing_holds_no_connection_while_it_waits_for_a_slot(
+    db, pinned, monkeypatch, listing
+):
+    page, _ = pinned
+    open_now, waited = [0], []
+    connect = db.connect
+
+    @contextlib.contextmanager
+    def counted():
+        with connect() as conn:
+            open_now[0] += 1
+            try:
+                yield conn
+            finally:
+                open_now[0] -= 1
+
+    real = scanslots.slot
+
+    @contextlib.contextmanager
+    def slot(size=None, wait=None):
+        if size is not None and size > scanslots.SMALL_PAGE:
+            waited.append(open_now[0])  # connections open as a slot is asked for
+        with real(size, wait):
+            yield
+
+    monkeypatch.setattr(db, "connect", counted)
+    monkeypatch.setattr(scanslots, "slot", slot)
+    rows = _listings(db, page)[listing]()
+    assert waited, "the listing scanned the page under a slot"
+    assert waited == [0] * len(waited), (
+        "a connection was open while a slot was asked for"
+    )
+    assert [r.anchor_state for r in rows] == ["current"]
