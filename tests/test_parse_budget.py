@@ -26,6 +26,8 @@ BOUND = TEST_SECONDS * 2 + 1
 
 @pytest.fixture()
 def tight_budget(monkeypatch):
+    # The CPU limit is what these tests prove: no slow runner may trip the backstop.
+    monkeypatch.setattr(htmlbound, "WALL_FACTOR", 1000)
     for module in (forms, sections, text, anchors):
         monkeypatch.setattr(module, "Budget", lambda: htmlbound.Budget(TEST_SECONDS))
 
