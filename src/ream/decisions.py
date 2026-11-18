@@ -2779,6 +2779,9 @@ _SLOT_IN_BODY = re.compile(
 )
 
 
+_SLOT_CHUNK = 500  # bound values per query, well under any driver's limit
+
+
 def unresolved_slots(
     db: Database, artifact_id: str, body: str
 ) -> list[tuple[str, int]]:
@@ -2818,13 +2821,19 @@ def unresolved_slots(
             first[slot] = line
     if not first:
         return []
+    real: set[str] = set()
+    ids = list(first)
     with db.connect() as conn:
-        rows = conn.execute(
-            "select id from decision where artifact_id = %s"  # noqa: S608 -- placeholders only
-            f" and id in {in_list(first)}",
-            (artifact_id, *first),
-        ).fetchall()
-    real = {r[0] for r in rows}
+        # In chunks: one `in` list of every slot id passes a driver's limit on bound
+        # values (SQLite 32766, Postgres 65535) on a page of very many slots.
+        for at in range(0, len(ids), _SLOT_CHUNK):
+            chunk = ids[at : at + _SLOT_CHUNK]
+            rows = conn.execute(
+                "select id from decision where artifact_id = %s"  # noqa: S608 -- placeholders only
+                f" and id in {in_list(chunk)}",
+                (artifact_id, *chunk),
+            ).fetchall()
+            real.update(r[0] for r in rows)
     return [(slot, line) for slot, line in first.items() if slot not in real]
 
 
