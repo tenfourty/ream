@@ -1159,3 +1159,36 @@ without case or surrounding white space and any other value is the default, so a
 **Evidence:** the claude.ai page that grew its frame to the cap (16 Nov 2026); the opt-in's tests in
 `tests/js/shim.test.mjs`, `viewer.test.mjs`, `comments.test.mjs`, `tests/test_shots.py` and
 `tests/test_panel_browser.py`.
+
+## Hosting a claude.ai canvas page, and the full-screen frame (16-18 Nov 2026)
+
+Jeremy asked whether Ream can host a page like a claude.ai HTML-in-Canvas artifact (the Explainer).
+It can, for readers in Chrome, and the decision has three parts.
+
+**Chosen:**
+- **Full support (16 Nov 2026).** Such pages work in his browser, with embedded fonts allowed
+  ("Pages may embed their own fonts", 16 Nov 2026), and agents get a how-to ("HTML-in-Canvas pages"
+  in the served onboarding text) and a starter (the `canvas` template).
+- **How to test it (16 Nov 2026).** Publish the saved page unchanged, then rebuild its three effects
+  (melt, lamp, pool) on the improved WebGL starter and compare the two.
+- **What the first test found.** The unchanged copy first rendered wrongly: the gallery sizes a frame
+  to its content, while the page sizes itself from the window's height, so each fed the other. The fix
+  is the page's own opt-in, `<meta name="ream-frame" content="viewport">`, which asks for a frame the
+  height of the window that scrolls inside (`src/ream/pageframe.py`; "A page opts in to a window-high
+  frame", 16 Nov 2026). With that line the unchanged copy looks like the original in Chrome (Jeremy,
+  18 Nov 2026).
+- **Agent guidance (17 Nov 2026): the simplest minimum.** One note in the served skill, and one in the
+  house ream skill, that canvas pages work for readers in Chrome, pointing to the canvas starter and
+  the how-to. No new skill.
+
+**Not chosen:**
+- Rebuild the effects only, without publishing the saved page unchanged: it would not show whether
+  Ream hosts the original, and the frame problem would not have surfaced.
+- Publish the saved page only, without the rebuild: shows that it displays, not whether our starter
+  can reach the same effects.
+- A separate canvas-effects skill: a second document for agents to find and keep in step with the
+  starter and the how-to, for what one note and a pointer cover.
+
+**Evidence:** confirmed (Jeremy, lettered answers (a) of 16 Nov 2026 for full support and for how to
+test it, and 17 Nov 2026 for the agent guidance; he saw the unchanged copy match the original in
+Chrome on 18 Nov 2026). The served skill's note is in `src/ream/onboarding.py`.
