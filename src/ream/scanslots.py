@@ -21,11 +21,9 @@ every scan through `settings.current()`). When all are taken it waits up to
 
 A thread that already holds a slot takes no second one, so a scan made of smaller scans
 (the publish checks read forms inside theirs) never waits on itself. A slot is held only
-across work that waits on nothing else, never across a database or network call, so a slot
-is given back within its budgets' bound (their limit in CPU time, and at the latest the
-wall-time backstop) -- except where there is no budget: `sections.check_target` and
-`sections.verify` hold a slot across html5lib parses that have none, bounded only by
-`sections.SECTION_PAGE_MAX`. Standard library and `settings` only: the
+across work that waits on nothing else, never across a database or network call. Where the
+work runs under a budget, the slot is given back within that budget's bound: its limit in CPU
+time, and at the latest the wall-time backstop. Standard library and `settings` only: the
 command-line tools import the readers that call it.
 """
 
