@@ -534,3 +534,65 @@ def test_the_comment_routes_answer_200_when_every_slot_is_taken(api, auth, pinne
         assert row["anchor_state"] == "" and row["quote_state"] == ""
     again = api.get(f"/api/v1/pages/{page.id}/comments", headers=auth)
     assert again.json()[0]["anchor_state"] == "current"
+
+
+def test_a_reply_on_a_pin_is_written_with_its_state_unknown_when_every_slot_is_taken(
+    api, auth, pinned
+):
+    page, root = pinned
+    url = f"/api/v1/pages/{page.id}/comments"
+    reply = {"body": "Flat since the pricing change.", "thread_root": root.id}
+    headers = {**auth, "Idempotency-Key": "reply-1"}
+    with taken():
+        made = api.post(url, json=reply, headers=headers)
+    assert made.status_code == 201, made.text[:300]
+    assert made.json()["quote_state"] == "" and made.json()["anchor_state"] == ""
+    # The reply is stored once, and a retry of the same key replays the reply as it
+    # was answered; a later listing, with a slot free, tells the real state.
+    again = api.post(url, json=reply, headers=headers)
+    assert again.status_code == 201 and again.json() == made.json()
+    listed = api.get(url, headers=auth).json()
+    assert [c["id"] for c in listed].count(made.json()["id"]) == 1
+    assert {c["anchor_state"] for c in listed} == {"current"}
+
+
+def test_after_one_refused_slot_a_listing_leaves_the_other_large_pages_unread(
+    db, pinned, monkeypatch
+):
+    first, _ = pinned
+    second = store.publish(db, "seat", "Costs again", PINNED_PAGE)
+    comments.add(
+        db,
+        artifact_id=second.id,
+        author_kind="human",
+        author="jeremy",
+        body="Why flat?",
+        quote=PIN_QUOTE,
+        anchor=PIN_ANCHOR,
+    )
+    comments._VISIBLE_CACHE.clear()
+    asked = []
+    real = scanslots.slot
+
+    @contextlib.contextmanager
+    def counted(size=None, wait=None):
+        if size is not None and size > scanslots.SMALL_PAGE:
+            asked.append(size)
+        with real(size, wait):
+            yield
+
+    monkeypatch.setattr(scanslots, "slot", counted)
+    with taken():
+        asked.clear()  # the holders asked too
+        busy = comments.list_for_agent(db, "seat")
+    assert len(busy) == 2 and {r.artifact_id for r in busy} == {first.id, second.id}
+    assert len(asked) == 1, "one refused wait, then the rest were not tried"
+    for row in busy:
+        assert (row.quote_state, row.anchor_state) == ("", ""), "empty, never stale"
+        assert (row.anchor_note, row.anchor_current) == ("", "")
+    asked.clear()
+    states = {
+        r.artifact_id: r.anchor_state for r in comments.list_for_agent(db, "seat")
+    }
+    assert states == {first.id: "current", second.id: "current"}
+    assert asked, "and with a slot free each page was read"
