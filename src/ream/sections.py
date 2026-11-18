@@ -23,7 +23,7 @@ import re
 from dataclasses import dataclass
 
 from ream import scanslots
-from ream.htmlbound import BoundedParser, Budget, TooComplex, unescape
+from ream.htmlbound import BoundedParser, Budget, TooComplex, is_digit_limit, unescape
 
 OPS = ("replace", "append", "prepend", "remove")
 
@@ -513,7 +513,7 @@ def _parse(body: str):
         # html5lib reads a decimal reference with `int()`, which refuses over 4300
         # digits (`sys.get_int_max_str_digits()`): a page it cannot read, not a 500.
         # Any other ValueError is not that, and is let through to be seen.
-        if "integer string conversion" not in str(exc):
+        if not is_digit_limit(exc):
             raise
         raise _too_complex() from None
 

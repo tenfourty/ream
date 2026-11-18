@@ -133,15 +133,19 @@ def unescape(text: str) -> str:
         raise TooComplex from exc
 
 
-def _came_from_unescape(exc: BaseException) -> bool:
-    """Whether `exc` was raised under `html.unescape`, which the parser calls on text and
-    on attribute values when `convert_charrefs` is on. It reads a decimal reference
-    (`&#` and digits) with `int()`, which refuses more digits than
-    `sys.get_int_max_str_digits()` (4300) with a ValueError. The traceback says where it
-    came from, so a ValueError from a subclass's own handler is not taken for it."""
+def is_digit_limit(exc: BaseException, under=None) -> bool:
+    """Whether `exc` is the ValueError `int()` raises for a decimal reference of more
+    digits than `sys.get_int_max_str_digits()` (4300): the one rule for "a page the
+    parser cannot read", here and in `sections`. With `under` (a code object), also
+    that it was raised beneath that code, found from the traceback, so a ValueError
+    from a subclass's own handler is not taken for it."""
+    if not isinstance(exc, ValueError) or "integer string conversion" not in str(exc):
+        return False
+    if under is None:
+        return True
     tb = exc.__traceback__
     while tb is not None:
-        if tb.tb_frame.f_code is _UNESCAPE_CODE:
+        if tb.tb_frame.f_code is under:
             return True
         tb = tb.tb_next
     return False
@@ -210,7 +214,7 @@ class BoundedParser(HTMLParser):
         try:
             super().goahead(end)
         except ValueError as exc:
-            if not _came_from_unescape(exc):
+            if not is_digit_limit(exc, under=_UNESCAPE_CODE):
                 raise
             raise TooComplex from exc
 
