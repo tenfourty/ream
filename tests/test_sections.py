@@ -747,6 +747,30 @@ def test_every_way_into_html5lib_is_behind_the_cap():
     sections.check_target(small, "log")  # a small page is read as before
 
 
+def test_a_decimal_reference_over_the_digit_limit_is_too_complex_to_read():
+    """The page html5lib cannot read for want of digits stays a refusal, not a 500."""
+    import sys
+
+    digits = "9" * (sys.get_int_max_str_digits() + 1)
+    with pytest.raises(sections.TooComplexError):
+        sections._parse(f"<p>&#{digits};</p>")
+
+
+def test_another_value_error_from_html5lib_is_not_taken_for_the_digit_limit(
+    monkeypatch,
+):
+    """Only the digit limit is "too complex"; any other ValueError is a bug to see."""
+    import html5lib
+
+    def broken(*_a, **_k):
+        raise ValueError("something else entirely")
+
+    monkeypatch.setattr(html5lib, "parse", broken)
+    with pytest.raises(ValueError, match="something else") as caught:
+        sections._parse("<p>x</p>")
+    assert not isinstance(caught.value, sections.TooComplexError)
+
+
 def test_the_section_read_of_a_page_over_the_cap_is_the_refusal_an_update_gets(
     client, db, page
 ):
