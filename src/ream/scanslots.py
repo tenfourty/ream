@@ -1,8 +1,9 @@
 """How many scans of a large page one server process runs at once.
 
 Reading a large page (the publish checks, the render findings, the readers of its markup
-for forms, sections, text and pins) may hold tens of megabytes and take up to two seconds
-(`renderfind.SCAN_SECONDS`). One request thread each, a handful of them at once add up,
+for forms, sections, text and pins) may hold tens of megabytes and take up to two seconds of the
+thread's CPU time (`renderfind.SCAN_SECONDS`; a scan that waits is stopped by the wall-time
+backstop, `htmlbound.WALL_FACTOR` times that, so ten seconds). One request thread each, a handful of them at once add up,
 and the service is one process under one memory limit. So a scan of a page over
 `SMALL_PAGE` characters takes a slot first: `REAM_SCAN_SLOTS` of them (default 4, read at
 every scan through `settings.current()`). When all are taken it waits up to
@@ -19,7 +20,8 @@ every scan through `settings.current()`). When all are taken it waits up to
 A thread that already holds a slot takes no second one, so a scan made of smaller scans
 (the publish checks read forms inside theirs) never waits on itself. A slot is held only
 across work that waits on nothing else, never across a database or network call, so it is
-always given back within the scan's own time. Standard library and `settings` only: the
+always given back within the scan's own bound: its limit in CPU time, and at the latest
+the wall-time backstop. Standard library and `settings` only: the
 command-line tools import the readers that call it.
 """
 

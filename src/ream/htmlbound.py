@@ -55,6 +55,11 @@ class TooComplex(Exception):
 # rules below, and this bounds the rest (a page of 8 MiB of tags of 4000 attributes
 # each, or of end tags, takes the readers 5 to 20 seconds with nothing else wrong with it).
 PARSE_SECONDS = 2.0
+# The backstop: CPU time does not run while the thread waits, so a reading that is
+# stuck waiting would never spend its budget. A budget (this one and `renderfind`'s) is
+# also spent when this many times its limit has passed in wall time, from the moment its
+# CPU clock starts, checked where the CPU clock is.
+WALL_FACTOR = 5
 
 
 class _Budget(Protocol):
@@ -65,7 +70,8 @@ class Budget:
     """The CPU time one reading of a page may take, counted in the reading thread
     (`time.thread_time`), so time spent waiting, or descheduled on a loaded machine,
     is not spent: use it only in the thread that reads. It starts at its first use,
-    so the time a request waited for a scan slot is not spent either. `check()` raises TooComplex
+    so the time a request waited for a scan slot is not spent either. Wall time is
+    only a backstop: it is spent too when `WALL_FACTOR` times its limit has passed. `check()` raises TooComplex
     when time is up and is cheap to call between tags; `step()` is for each token, and
     reads the clock only now and then. (`renderfind.Budget`, shared by the readings of
     a request and started when it is made, is its own: its readers count their own
@@ -74,6 +80,7 @@ class Budget:
     def __init__(self, seconds: float = PARSE_SECONDS) -> None:
         self._seconds = seconds
         self._deadline: float | None = None
+        self._wall_deadline = 0.0
         self._steps = 0
         self.spent = False
 
@@ -81,9 +88,11 @@ class Budget:
         if self.spent:
             raise TooComplex
         now = time.thread_time()
+        wall = time.monotonic()
         if self._deadline is None:
             self._deadline = now + self._seconds
-        if now >= self._deadline:
+            self._wall_deadline = wall + self._seconds * WALL_FACTOR
+        if now >= self._deadline or wall >= self._wall_deadline:
             self.spent = True
             raise TooComplex
 

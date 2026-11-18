@@ -73,6 +73,13 @@ QUICK = 0.25
 clock = time.thread_time  # CPU time: what a busy machine takes away is not counted
 
 
+def burn(seconds: float) -> None:
+    """Use this thread's CPU for `seconds` of its own CPU time."""
+    until = clock() + seconds
+    while clock() < until:
+        pass
+
+
 class _Stopped(BaseException):
     """Raised inside a read that ran past its limit. Not an Exception, so a read's own
     `except Exception` cannot take it for a finding."""

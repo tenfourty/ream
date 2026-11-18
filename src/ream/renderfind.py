@@ -16,7 +16,7 @@ import secrets
 import time
 from collections.abc import Iterator
 
-from ream import csp, text
+from ream import csp, htmlbound, text
 from ream.htmlbound import BoundedParser, TooComplex
 
 MAX_FINDINGS = 10
@@ -42,16 +42,21 @@ SCAN_SECONDS = 2.0
 
 class Budget:
     """The CPU time (`time.thread_time`, of the thread that makes it and reads) one
-    request allows for reading a page's markup; not wall time, so a loaded machine
-    does not spend it."""
+    request allows for reading a page's markup; wall time only as a backstop
+    (`htmlbound.WALL_FACTOR` times the limit), so a loaded machine does not spend it."""
 
     def __init__(self, seconds: float = SCAN_SECONDS) -> None:
         self._deadline = time.thread_time() + seconds
+        self._wall_deadline = time.monotonic() + seconds * htmlbound.WALL_FACTOR
         self._steps = 0
         self.spent = False
 
     def check(self) -> None:
-        if self.spent or time.thread_time() >= self._deadline:
+        if (
+            self.spent
+            or time.thread_time() >= self._deadline
+            or time.monotonic() >= self._wall_deadline
+        ):
             self.spent = True
             raise TooComplex
 

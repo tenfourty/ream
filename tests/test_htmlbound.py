@@ -936,15 +936,14 @@ def test_a_value_error_of_a_handler_is_not_taken_for_it():
     assert not isinstance(seen.value, htmlbound.TooComplex)
 
 
-def _burn(seconds: float) -> None:
-    """Use this thread's CPU for `seconds` of its own CPU time."""
-    until = time.thread_time() + seconds
-    while time.thread_time() < until:
-        pass
+BUDGETS = [htmlbound.Budget, renderfind.Budget]
 
 
-@pytest.mark.parametrize("make", [htmlbound.Budget, renderfind.Budget])
-def test_a_budget_counts_the_cpu_time_of_its_thread_not_the_wall_time(make):
+@pytest.mark.parametrize("make", BUDGETS)
+def test_a_budget_counts_the_cpu_time_of_its_thread_not_the_wall_time(
+    make, monkeypatch
+):
+    monkeypatch.setattr(htmlbound, "WALL_FACTOR", 1000)  # the backstop is tested below
     budget = make(0.05)
     budget.check()  # started
     time.sleep(0.3)  # six times the limit of wall time, no CPU
@@ -952,7 +951,33 @@ def test_a_budget_counts_the_cpu_time_of_its_thread_not_the_wall_time(make):
     for _ in range(128):
         budget.step()
     assert not budget.spent
-    _burn(0.1)  # twice the limit of this thread's CPU time
+    scalecheck.burn(0.1)  # twice the limit of this thread's CPU time
+    with pytest.raises(htmlbound.TooComplex):
+        budget.check()
+    assert budget.spent
+
+
+@pytest.mark.parametrize("make", BUDGETS)
+def test_another_threads_cpu_is_not_spent_from_a_budget(make, monkeypatch):
+    """`time.thread_time`, not `time.process_time`: a thread that burns more CPU than the
+    limit while the budget's own thread waits leaves the budget alone."""
+    monkeypatch.setattr(htmlbound, "WALL_FACTOR", 1000)
+    budget = make(0.1)
+    budget.check()
+    other = threading.Thread(target=scalecheck.burn, args=(0.3,))
+    other.start()
+    other.join()
+    budget.check()
+    assert not budget.spent
+
+
+@pytest.mark.parametrize("make", BUDGETS)
+def test_a_budget_is_spent_by_wall_time_past_the_backstop(make):
+    """A thread stuck waiting uses no CPU: five times the limit of wall time spends it."""
+    assert htmlbound.WALL_FACTOR == 5
+    budget = make(0.05)
+    budget.check()
+    time.sleep(0.4)  # more than 5 x 0.05 s
     with pytest.raises(htmlbound.TooComplex):
         budget.check()
     assert budget.spent
