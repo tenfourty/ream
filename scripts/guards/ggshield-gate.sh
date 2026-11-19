@@ -433,13 +433,16 @@ ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}"
 # watchdog stops its own sleep, also one it had started but not yet named. A gate that ends while a listing
 # runs (Ctrl-C, or TERM to the gate: a background child of a non-interactive bash ignores SIGINT and
 # SIGQUIT, so git would walk on) stops git and the watchdog too, from the EXIT trap (glist_stop).
-# The one limit: the watchdog is its own process, so it signals git by its process id, not through the
-# gate's job table. If git ends at the very moment the limit runs out, the gate can reap it, and the system
-# give its id to another process, in the moment before the gate stops the watchdog; that process would get
-# the TERM (and 5 s later the KILL, but only if the watchdog is still running then, and the gate stops it as
-# soon as git is reaped).
+# Two limits, both from the watchdog being its own process, which signals git by its process id, not
+# through the gate's job table. (1) If git ends at the very moment the limit runs out, the gate can reap it,
+# and the system give its id to another process, in the moment before the gate stops the watchdog; that
+# process would get the TERM (and 5 s later the KILL, but only if the watchdog is still running then, and
+# the gate stops it as soon as git is reaped). (2) A gate killed with SIGKILL runs no EXIT trap: its
+# watchdog is left, and up to the limit plus 5 s later TERMs and KILLs git's id, which by then may name
+# another process.
 LIST_TIMEOUT=120
 GLIST_DOG=
+GLIST_ACTIVE=
 glist() {
   local out=$1 what=$2 secs=$LIST_TIMEOUT rc gpid fired="$SCRATCH/glist-fired"
   shift 2
@@ -449,6 +452,9 @@ glist() {
     [ "$((10#$GGSHIELD_LIST_TIMEOUT))" -lt "$secs" ] && secs=$((10#$GGSHIELD_LIST_TIMEOUT))
   fi
   rm -f -- "$fired" || { could_not_scan "no temporary file"; return 1; }
+  # Set before the fork and cleared once glist_stop has run: the EXIT trap lists jobs only while it is set,
+  # so a gate that ends outside a listing (its scratch directory already removed) runs no `jobs -l` at all.
+  GLIST_ACTIVE=1
   GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}" "$@" </dev/null >"$out" 2>/dev/null &
   gpid=$!
   # The watchdog's TERM trap only marks that it was stopped and stops a sleep it has named; after each sleep
@@ -472,7 +478,8 @@ glist() {
   ) </dev/null >/dev/null 2>&1 &
   GLIST_DOG=$!
   wait "$gpid"; rc=$?
-  glist_stop || { could_not_scan "the gate could not list its own background jobs to stop them"; return 1; }
+  glist_stop || { GLIST_ACTIVE=; could_not_scan "the gate could not list its own background jobs to stop them"; return 1; }
+  GLIST_ACTIVE=
   if [ -e "$fired" ]; then
     could_not_scan "git's listing of $what did not finish within $secs s (a tree too large to walk)"
   elif [ "$rc" = 0 ]; then
@@ -482,17 +489,22 @@ glist() {
   fi
   return 1
 }
-# glist_stop: TERM every background job of the gate, then reap glist's watchdog. Every background job the
-# gate starts is glist's (its git and its watchdog), and a job is in bash's table from the fork, before `$!`
-# is read, so this also stops a git or a watchdog whose id was never stored (a signal that ended the gate
-# just after the fork). Called when git has ended, it stops the watchdog; from the EXIT trap, whatever runs.
-# Jobs are signalled through bash's job table (`kill %<job>`), never by a bare process id: bash signals a
-# job's process only while it has not reaped it, so an id the system has since given to another process is
-# never signalled. If `jobs -l` cannot be read it still TERMs jobs %1 to %8 (a gate starts at most four)
-# and returns 1, so glist refuses.
+# glist_stop: while a listing is in progress (GLIST_ACTIVE), TERM every background job of the gate, then
+# reap glist's watchdog; otherwise nothing. Every background job the gate starts is glist's (its git and its
+# watchdog), and a job is normally in bash's table from the fork, before `$!` is read, so this also stops a
+# git or a watchdog whose id was never stored (a signal that ended the gate just after the fork). Not
+# always: on bash 5.2 a TERM that lands in the parent just after the fork, before bash records the job, can
+# run the EXIT trap first. Then git runs to the end of its listing and exits, unsignalled; the watchdog has
+# not started, so nothing is left to signal an id. Called when git has ended, it stops the watchdog; from
+# the EXIT trap, whatever runs. Jobs are signalled through bash's job table (`kill %<job>`), never by a bare
+# process id: bash signals a job's process only while it has not reaped it, so an id the system has since
+# given to another process is never signalled. If `jobs -l` cannot be read it still TERMs jobs %1 to %8
+# (a gate starts at most six: a git and a watchdog for each of its three listings) and returns 1, so glist
+# refuses.
 glist_stop() {
   local spec rest n st=0
-  if jobs -l >"$SCRATCH/glist-jobs" 2>/dev/null; then
+  [ -n "$GLIST_ACTIVE" ] || return 0
+  if jobs -l 2>/dev/null >"$SCRATCH/glist-jobs"; then
     # A line is "[<n>]<mark> <pid> <state> <command>"; a command's further lines start with no "[<n>]".
     while read -r spec rest; do
       [[ $spec =~ ^\[([0-9]+)\] ]] || continue
@@ -1203,6 +1215,13 @@ EOF
 
   out=$(gate GGSHIELD_STUB_RC=0); rc=$?
   check "rc 0 with a clean report allows the commit" "$rc" 0 "$out" "$SELF: clean"
+  # A clean run prints no shell error (its EXIT trap once listed jobs into the removed scratch directory and
+  # printed "No such file or directory"). check only looks for a substring, so the absence is tested here.
+  if grep -qE 'No such file|: line [0-9]+: ' <<< "$out"; then
+    printf '  FAIL  a clean run printed a shell error\n'; printf '%s\n' "$out" | sed 's/^/        /'; fail=1
+  else
+    printf '  ok    …and printed no shell error\n'
+  fi
 
   out=$(gate GGSHIELD_STUB_RC=1); rc=$?
   check "rc 1 with a finding in the report BLOCKS the commit" "$rc" 1 "$out" "found a secret"
@@ -2174,7 +2193,7 @@ exec %q "$@"
 ' "$slept" "$(command -v sleep)" >"$sleepdir/sleep"
   printf '#!/bin/sh
 s=; k=; for a; do if [ -n \"$k\" ]; then k=; elif [ \"$a\" = -c ]; then k=1; else s=$a; break; fi; done
-if [ "$s" = diff-tree ]; then n=0; while [ ! -s %q ] && [ "$n" -lt 100 ]; do %q 0.1; n=$((n + 1)); done; fi
+if [ "$s" = diff-tree ]; then n=0; while [ ! -s %q ] && [ "$n" -lt 300 ]; do %q 0.1; n=$((n + 1)); done; fi
 exec %q "$@"
 ' \
     "$slept" "$(command -v sleep)" "$(command -v git)" >"$waitgit/git"
