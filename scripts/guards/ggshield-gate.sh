@@ -129,7 +129,12 @@ unset CDPATH
 # stub that reads as ggshield 1.56.1 does). A file added has no such object
 # and a submodule's id names none here, so neither is hashed. The objects of
 # the scanned commit's own tree are not hash-checked; that commit's object is
-# (above). A HEAD whose commit fails git's own check when the gate peels it is
+# (above). Those objects are read by one `git cat-file --batch` and hashed by
+# one python3, so the check costs the same few processes for 2 files or 2000.
+# git's two listings of the change (diff-tree) are bounded by a watchdog in
+# plain bash (no coreutils `timeout`, which macOS lacks): one that does not
+# finish in 120 s, or the lower GGSHIELD_LIST_TIMEOUT, is stopped and refuses
+# instead of holding the commit. A HEAD whose commit fails git's own check when the gate peels it is
 # read as no first commit, so the whole tree is scanned. A shallow HEAD (a --depth clone) is not refused:
 # the change is still shown in full. Probed against ggshield's two show calls and found to change nothing
 # in what reaches the scan: diff.<x>.command (no --ext-diff), diff.external,
@@ -415,7 +420,107 @@ git_env_proven() {
 # ggit: git for the gate's own reads of the repository, with core.fsmonitor off (an inherited setting of
 # it would run a program inside write-tree and diff-index), and with replace refs and grafts ignored. A
 # filter driver's program also runs in write-tree: settings_proven refuses those before it is called.
-ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git -c core.fsmonitor=false -c core.commitGraph=false "$@"; }
+GGIT_OPTS=(-c core.fsmonitor=false -c core.commitGraph=false)
+ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}" "$@"; }
+
+# glist <out file> <what> <git arguments...>: ggit with its output to <out file>, stopped after LIST_TIMEOUT
+# seconds (120; the environment variable GGSHIELD_LIST_TIMEOUT can lower it, never raise it). A listing of
+# the change that does not finish (a tree too large to walk) refuses, naming <what>, instead of holding the
+# commit for good; one git cannot make refuses as before. The bound needs no `timeout` program: git runs
+# in the background, a watchdog subshell sleeps the limit, marks that it fired and stops git (TERM, then
+# KILL 5 s later), and any listing the watchdog fired on refuses, even one that finished as it fired. The
+# watchdog holds none of the gate's output, and is stopped and reaped when git ends (glist_stop); a stopped
+# watchdog stops its own sleep, also one it had started but not yet named. A gate that ends while a listing
+# runs (Ctrl-C, or TERM to the gate: a background child of a non-interactive bash ignores SIGINT and
+# SIGQUIT, so git would walk on) stops git and the watchdog too, from the EXIT trap (glist_stop).
+# Three limits, all from the watchdog being its own process, which signals git by its process id, not
+# through the gate's job table. (1) If git ends at the very moment the limit runs out, the gate can reap it,
+# and the system give its id to another process, in the moment before the gate stops the watchdog; that
+# process would get the TERM (and 5 s later the KILL, but only if the watchdog is still running then, and
+# the gate stops it as soon as git is reaped). (2) A gate killed with SIGKILL runs no EXIT trap: its
+# watchdog is left, and up to the limit plus 5 s later TERMs and KILLs git's id, which by then may name
+# another process. (3) The same happens, on bash 5.2, when a TERM ends the gate just after the watchdog's
+# fork and before bash records it as a job (see glist_stop): the trap cannot reach that watchdog.
+LIST_TIMEOUT=120
+GLIST_DOG=
+GLIST_ACTIVE=
+glist() {
+  local out=$1 what=$2 secs=$LIST_TIMEOUT rc gpid fired="$SCRATCH/glist-fired"
+  shift 2
+  if [ -n "${GGSHIELD_LIST_TIMEOUT-}" ]; then
+    [[ $GGSHIELD_LIST_TIMEOUT =~ ^[0-9]{1,6}$ ]] && [ "$((10#$GGSHIELD_LIST_TIMEOUT))" -ge 1 ] \
+      || { could_not_scan "GGSHIELD_LIST_TIMEOUT is not a whole number of seconds above 0"; return 1; }
+    [ "$((10#$GGSHIELD_LIST_TIMEOUT))" -lt "$secs" ] && secs=$((10#$GGSHIELD_LIST_TIMEOUT))
+  fi
+  rm -f -- "$fired" || { could_not_scan "no temporary file"; return 1; }
+  # Set before the fork and cleared once glist_stop has run: the EXIT trap lists jobs only while it is set,
+  # so a gate that ends outside a listing (its scratch directory already removed) runs no `jobs -l` at all.
+  GLIST_ACTIVE=1
+  GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}" "$@" </dev/null >"$out" 2>/dev/null &
+  gpid=$!
+  # The watchdog's TERM trap only marks that it was stopped and stops a sleep it has named; after each sleep
+  # is started and named the mark is read again, so a TERM between the two leaves no sleep behind. Its sleep
+  # is stopped with KILL, which nothing catches: with TERM a `sleep 5` was seen left running, most likely a
+  # TERM that reached the child after bash forked it and before it ran sleep, while it still held the trap.
+  (
+    s='' stop=''
+    trap 'stop=1; [ -z "$s" ] || kill -KILL "$s" 2>/dev/null' TERM
+    sleep "$secs" & s=$!
+    [ -z "$stop" ] || { kill -KILL "$s" 2>/dev/null; exit 0; }
+    wait "$s"; s=''
+    [ -z "$stop" ] || exit 0
+    : >"$fired"
+    kill -TERM "$gpid" 2>/dev/null
+    sleep 5 & s=$!
+    [ -z "$stop" ] || { kill -KILL "$s" 2>/dev/null; exit 0; }
+    wait "$s"; s=''
+    [ -z "$stop" ] || exit 0
+    kill -KILL "$gpid" 2>/dev/null
+  ) </dev/null >/dev/null 2>&1 &
+  GLIST_DOG=$!
+  wait "$gpid"; rc=$?
+  glist_stop || { GLIST_ACTIVE=; could_not_scan "the gate could not list its own background jobs to stop them"; return 1; }
+  GLIST_ACTIVE=
+  if [ -e "$fired" ]; then
+    could_not_scan "git's listing of $what did not finish within $secs s (a tree too large to walk)"
+  elif [ "$rc" = 0 ]; then
+    return 0
+  else
+    could_not_scan "git could not list $what"
+  fi
+  return 1
+}
+# glist_stop: while a listing is in progress (GLIST_ACTIVE), TERM every background job of the gate, then
+# reap glist's watchdog; otherwise nothing. Every background job the gate starts is glist's (its git and its
+# watchdog), and a job is normally in bash's table from the fork, before `$!` is read, so this also stops a
+# git or a watchdog whose id was never stored (a signal that ended the gate just after the fork). Not
+# always: on bash 5.2 a TERM that lands in the parent just after the fork, before bash records the job, can
+# run the EXIT trap first. After git's fork, git runs to the end of its listing and exits, unsignalled,
+# and no watchdog has started; after the watchdog's fork, that watchdog is left (limit (3) above). Called when git has ended, it stops the watchdog; from
+# the EXIT trap, whatever runs. Jobs are signalled through bash's job table (`kill %<job>`), never by a bare
+# process id: bash signals a job's process only while it has not reaped it, so an id the system has since
+# given to another process is never signalled. If `jobs -l` cannot be read it still TERMs jobs %1 to %8
+# (a gate starts at most six: a git and a watchdog for each of its three listings) and returns 1, so glist
+# refuses.
+glist_stop() {
+  local spec rest n st=0
+  [ -n "$GLIST_ACTIVE" ] || return 0
+  if jobs -l 2>/dev/null >"$SCRATCH/glist-jobs"; then
+    # A line is "[<n>]<mark> <pid> <state> <command>"; a command's further lines start with no "[<n>]".
+    while read -r spec rest; do
+      [[ $spec =~ ^\[([0-9]+)\] ]] || continue
+      kill -TERM "%${BASH_REMATCH[1]}" 2>/dev/null
+    done <"$SCRATCH/glist-jobs"
+  else
+    st=1
+    for n in 1 2 3 4 5 6 7 8; do kill -TERM "%$n" 2>/dev/null; done
+  fi
+  if [ -n "$GLIST_DOG" ]; then
+    wait "$GLIST_DOG" 2>/dev/null
+    GLIST_DOG=
+  fi
+  return "$st"
+}
 
 # The settings ggshield's git runs with, as one GIT_CONFIG_COUNT group (command-line scope, so they
 # outrank every config file). Each changed or hid ggshield's patch when set otherwise, or could run a
@@ -512,7 +617,11 @@ shallow_proven() {
   # upper case, a CR, a space or other text after the id all counted), so the line is read the same way.
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line:0:${#1}}
-    if [ "${line,,}" = "$1" ]; then
+    # In lower case for the id's hex letters (bash 3.2, macOS's /bin/bash, has no ${line,,}); the id is
+    # lower-case hex, so no other letter can match either way.
+    line=${line//A/a}; line=${line//B/b}; line=${line//C/c}
+    line=${line//D/d}; line=${line//E/e}; line=${line//F/f}
+    if [ "$line" = "$1" ]; then
       echo "$SELF: REFUSED — the shallow list ($f) names the commit made for the scan, so git would not show its change as it is and NOTHING was scanned for secrets." >&2
       echo "  Take that line out, or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
       return 1
@@ -539,14 +648,48 @@ objects_proven() {
   return 0
 }
 
-# hashed <type> <id>: the object, read as git reads it, hashes to its id (cat-file must succeed too: a
-# failed read hashes as empty, the id of an empty blob).
+# hashed <list> <out>: every object in <list> (lines "<type> <id>"), read as git reads it, hashes to its id
+# and has that type. One `cat-file --batch` reads them all and one python3 hashes what it prints (sha1 or
+# sha256, by the id's length). A missing object, another type, a short or overlong answer, or a cat-file that
+# fails is a mismatch. On a mismatch the first id that failed is written to <out> (empty when the answer as a
+# whole could not be read) and it returns 1. $py is run_gate's python3, proven outside the tree.
 hashed() {
-  local got
-  ggit cat-file "$1" "$2" </dev/null >"$SCRATCH/obj" 2>/dev/null || return 1
-  got=$(ggit hash-object --literally -t "$1" --stdin <"$SCRATCH/obj" 2>/dev/null)
-  rm -f -- "$SCRATCH/obj"
-  [ -n "$got" ] && [ "$got" = "$2" ]
+  local list=$1 res=$2 st id
+  : >"$res" || return 1
+  [ -r "$list" ] || return 1
+  # The ids alone, one per line, read with builtins bash 3.2 has (macOS's /bin/bash: no mapfile).
+  while read -r _ id; do printf '%s\n' "$id"; done <"$list" \
+    | ggit cat-file --batch 2>/dev/null | "$py" -I -c '
+import hashlib, sys
+want = [line.split() for line in open(sys.argv[1], encoding="ascii")]
+f = sys.stdin.buffer
+def fail(oid=""):
+    open(sys.argv[2], "w").write(oid)
+    sys.exit(1)
+for kind, oid in want:
+    head = f.readline()
+    parts = head[:-1].split(b" ") if head.endswith(b"\n") else []
+    if len(parts) != 3 or parts[0] != oid.encode() or parts[1] != kind.encode() or not parts[2].isdigit():
+        fail(oid)
+    size = int(parts[2])
+    if len(oid) not in (40, 64):
+        fail(oid)
+    h = hashlib.new("sha1" if len(oid) == 40 else "sha256")
+    h.update(b"%s %d\0" % (kind.encode(), size))
+    left = size
+    while left:
+        chunk = f.read(min(left, 1 << 20))
+        if not chunk:
+            fail(oid)
+        h.update(chunk)
+        left -= len(chunk)
+    if f.read(1) != b"\n" or h.hexdigest() != oid:
+        fail(oid)
+if f.read(1):
+    fail()
+' "$list" "$res"
+  st=("${PIPESTATUS[@]}")
+  [ "${st[*]}" = "0 0 0" ]
 }
 
 # base_proven <HEAD's commit> <the staged tree>: refuses unless every object on HEAD's side of the
@@ -556,29 +699,58 @@ hashed() {
 # HEAD's id for a file or directory, holding the staged content, made that part of the change look
 # unchanged and the patch empty (measured with the stub, which reads as ggshield 1.56.1 does). A file
 # added has no old side (the null id), and a submodule's id names no object here: neither is hashed.
+# HEAD's commit and tree are hashed before the listing, the objects it names in one pass after it.
 base_proven() {
-  local head=$1 tree=$2 rec meta omode oid id
+  local head=$1 tree=$2 id bad
   local refuse="$SELF: REFUSED — an object on HEAD's side of the change does not hash to its id"
-  hashed commit "$head" || { echo "$refuse (HEAD's commit $head), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2; base_advice; return 1; }
+  printf 'commit %s\n' "$head" >"$SCRATCH/base-ids"
+  hashed "$SCRATCH/base-ids" "$SCRATCH/base-bad" || { echo "$refuse (HEAD's commit $head), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2; base_advice; return 1; }
   id=$(ggit rev-parse -q --verify "$head^{tree}" 2>/dev/null) && [ ${#id} = ${#tree} ] \
     || { could_not_scan "git could not name HEAD's tree"; return 1; }
-  hashed tree "$id" || { echo "$refuse (HEAD's tree $id), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2; base_advice; return 1; }
-  ggit diff-tree -r -t --no-renames --no-abbrev --raw -z "$head" "$tree" </dev/null >"$SCRATCH/base-raw" 2>/dev/null \
-    || { could_not_scan "git could not list the objects HEAD's side of the change is read from"; return 1; }
+  printf 'tree %s\n' "$id" >"$SCRATCH/base-ids"
+  hashed "$SCRATCH/base-ids" "$SCRATCH/base-bad" || { echo "$refuse (HEAD's tree $id), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2; base_advice; return 1; }
+  glist "$SCRATCH/base-raw" "the objects HEAD's side of the change is read from" \
+    diff-tree -r -t --no-renames --no-abbrev --raw -z "$head" "$tree" || return 1
   # A record is ":<old mode> <new mode> <old id> <new id> <status>" and then the path, each ended by NUL.
-  while IFS= read -r -d '' meta; do
-    IFS= read -r -d '' rec || { could_not_scan "git listed an object of HEAD's side without its path"; return 1; }
-    [[ $meta =~ ^:([0-7]{6})\ [0-7]{6}\ ([0-9a-f]+)\ [0-9a-f]+\ [A-Z]$ ]] \
-      || { could_not_scan "git listed HEAD's side of the change in a form the gate cannot read"; return 1; }
-    omode=${BASH_REMATCH[1]} oid=${BASH_REMATCH[2]}
-    [ ${#oid} = ${#tree} ] || { could_not_scan "git listed an object id of HEAD's side of the wrong length"; return 1; }
-    [[ $oid =~ ^0+$ ]] && continue
-    case "$omode" in
-      000000 | 160000) continue ;;
-      040000) hashed tree "$oid" ;;
-      *) hashed blob "$oid" ;;
-    esac || { echo "$refuse (object $oid), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2; base_advice; return 1; }
-  done <"$SCRATCH/base-raw"
+  # One python3 reads them all and writes "<type> <id>" for each old side to hash; it answers a word when
+  # the listing cannot be read.
+  bad=$("$py" -I -c '
+import re, sys
+parts = open(sys.argv[1], "rb").read().split(b"\0")
+if parts[-1] != b"":
+    sys.exit("form")
+parts.pop()
+if len(parts) % 2:
+    sys.exit("nopath")
+out = []
+for meta in parts[0::2]:
+    m = re.fullmatch(rb":([0-7]{6}) [0-7]{6} ([0-9a-f]+) [0-9a-f]+ [A-Z]", meta)
+    if not m:
+        sys.exit("form")
+    mode, oid = m.groups()
+    if len(oid) != int(sys.argv[3]):
+        sys.exit("length")
+    if oid.strip(b"0") == b"" or mode in (b"000000", b"160000"):
+        continue
+    out.append(("tree " if mode == b"040000" else "blob ") + oid.decode() + "\n")
+open(sys.argv[2], "w").write("".join(out))
+' "$SCRATCH/base-raw" "$SCRATCH/base-ids" "${#tree}" 2>&1 </dev/null)
+  case "$?:$bad" in
+    0:) ;;
+    *:nopath) could_not_scan "git listed an object of HEAD's side without its path"; return 1 ;;
+    *:length) could_not_scan "git listed an object id of HEAD's side of the wrong length"; return 1 ;;
+    *) could_not_scan "git listed HEAD's side of the change in a form the gate cannot read"; return 1 ;;
+  esac
+  [ -s "$SCRATCH/base-ids" ] || return 0
+  if ! hashed "$SCRATCH/base-ids" "$SCRATCH/base-bad"; then
+    bad=$(<"$SCRATCH/base-bad")
+    # Named once: ${bad:-...} alone would give the id again after "object $bad", since it expands to $bad
+    # whenever $bad is set.
+    if [ -n "$bad" ]; then bad="object $bad"; else bad="an object git could not read in full"; fi
+    echo "$refuse ($bad), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2
+    base_advice
+    return 1
+  fi
   return 0
 }
 base_advice() {
@@ -729,8 +901,8 @@ run_gate() {
   [ -f "$JUDGE" ] || { could_not_scan "ggshield-judge.py is not beside this script"; return 1; }
 
   SCRATCH=$(mktemp -d) || { could_not_scan "no temporary directory"; return 1; }
-  # Removed on any exit; this script sets no other EXIT trap.
-  trap 'rm -rf "$SCRATCH"' EXIT
+  # Removed on any exit, with glist's git and watchdog stopped first; this script sets no other EXIT trap.
+  trap 'glist_stop; rm -rf "$SCRATCH"' EXIT
   local cfg="$SCRATCH/config" idx="$SCRATCH/index" src tree parent commit range base basetree same scanned
   : >"$cfg" || { could_not_scan "no temporary file"; return 1; }
   # Before write-tree, the first git call that could run a filter driver's program.
@@ -771,8 +943,8 @@ run_gate() {
     *) could_not_scan "git could not compare the staged index with the tree to scan (exit $same)"; return 1 ;;
   esac
   # The files of that tree's change: their count for the message, their names for the attribute check.
-  ggit diff-tree -r --no-renames --name-only -z "$base" "$tree" >"$SCRATCH/names" 2>/dev/null </dev/null \
-    || { could_not_scan "git could not list the files of the commit to scan"; return 1; }
+  glist "$SCRATCH/names" "the files of the commit to scan" \
+    diff-tree -r --no-renames --name-only -z "$base" "$tree" || return 1
   scanned=$(tr -cd '\0' <"$SCRATCH/names" | wc -c) || { could_not_scan "the files of the commit to scan could not be counted"; return 1; }
   case "$scanned" in
     *[!0-9]* | "") could_not_scan "the files of the commit to scan could not be counted"; return 1 ;;
@@ -1047,6 +1219,13 @@ EOF
 
   out=$(gate GGSHIELD_STUB_RC=0); rc=$?
   check "rc 0 with a clean report allows the commit" "$rc" 0 "$out" "$SELF: clean"
+  # A clean run prints no shell error (its EXIT trap once listed jobs into the removed scratch directory and
+  # printed "No such file or directory"). check only looks for a substring, so the absence is tested here.
+  if grep -qE 'No such file|: line [0-9]+: ' <<< "$out"; then
+    printf '  FAIL  a clean run printed a shell error\n'; printf '%s\n' "$out" | sed 's/^/        /'; fail=1
+  else
+    printf '  ok    …and printed no shell error\n'
+  fi
 
   out=$(gate GGSHIELD_STUB_RC=1); rc=$?
   check "rc 1 with a finding in the report BLOCKS the commit" "$rc" 1 "$out" "found a secret"
@@ -1952,6 +2131,14 @@ open(sys.argv[3], "wb").write(zlib.compress(sys.argv[1].encode() + b" %d\0" % le
   git -C "$mk" add dir/secret.txt
   out=$(mgate "$mk"); rc=$?
   check "…and with nothing planted a benign edit in the directory passes clean" "$rc" 0 "$out" "$SELF: clean"
+  # An object on HEAD's side that is missing: cat-file --batch answers "<id> missing" for it, which the
+  # batch's reader takes as a mismatch and names.
+  mk="$tmp/mk27k"; mkdir_mark "$mk"
+  gc=$(git -C "$mk" rev-parse HEAD:dir/secret.txt)
+  rm -f "$mk/.git/objects/${gc:0:2}/${gc:2}"
+  out=$(mgate "$mk"); rc=$?
+  check "a blob on HEAD's side that is missing is refused" "$rc" 1 "$out" "on HEAD's side of the change does not hash to its id (object $gc)"
+  not_clean "a blob on HEAD's side that is missing" "$out"
   # A submodule's id is not an object here: it is not hashed, and changing it passes.
   mk="$tmp/mk27g"; mkrepo "$mk"
   git -C "$mk" update-index --add --cacheinfo "160000,$(git -C "$mk" rev-parse HEAD),sub"
@@ -1960,6 +2147,147 @@ open(sys.argv[3], "wb").write(zlib.compress(sys.argv[1].encode() + b" %d\0" % le
   git -C "$mk" update-index --cacheinfo "160000,$(git -C "$mk" rev-parse HEAD),sub"
   out=$(mgate "$mk"); rc=$?
   check "a changed submodule id passes clean (it is not an object here)" "$rc" 0 "$out" "$SELF: clean"
+  # git's listings of the change are bounded in time. A tree on HEAD's side planted to name itself as its
+  # own subdirectory: git 2.56 stops at its tree-depth limit, an older git may walk on; either way it is
+  # refused within the bound and never passes.
+  local t0 secs
+  mk="$tmp/mk27i"; mkdir_mark "$mk"
+  gc=$(git -C "$mk" rev-parse HEAD:dir)
+  python3 -I -c '
+import binascii, sys
+open(sys.argv[2], "wb").write(b"40000 dir\0" + binascii.unhexlify(sys.argv[1]))
+' "$gc" "$tmp/plant"
+  plant "$mk" tree "$gc" "$tmp/plant"
+  t0=$SECONDS
+  out=$(mgate "$mk" GGSHIELD_LIST_TIMEOUT=5); rc=$?
+  secs=$((SECONDS - t0))
+  check "a tree on HEAD's side that names itself is refused" "$rc" 1 "$out" "REFUSED"
+  not_clean "a tree on HEAD's side that names itself" "$out"
+  check "…within the time bound ($secs s)" "$((secs < 30 ? 0 : 1))" 0 "$out" "REFUSED"
+  # A listing that does not finish: a git whose diff-tree never returns. With HEAD, the first listing is the
+  # one of HEAD's side; before the first commit it is the list of files to scan.
+  local slowgit="$tmp/gitslow"
+  mkdir -p "$slowgit"
+  printf '#!/bin/sh\ns=; k=; for a; do if [ -n \"$k\" ]; then k=; elif [ \"$a\" = -c ]; then k=1; else s=$a; break; fi; done\ncase "$s" in diff-tree) exec sleep 60 ;; esac\nexec %q "$@"\n' "$(command -v git)" >"$slowgit/git"
+  chmod +x "$slowgit/git"
+  t0=$SECONDS
+  out=$(cd "$repo" && PATH="$slowgit:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=2 bash "$self" 2>&1); rc=$?
+  secs=$((SECONDS - t0))
+  check "a listing of HEAD's side that does not finish is stopped at the time limit" "$rc" 1 "$out" "did not finish within 2 s"
+  check "…and counts as not scanned" "$rc" 1 "$out" "NOT scanned"
+  check "…and was stopped, not waited for ($secs s)" "$((secs < 30 ? 0 : 1))" 0 "$out" "REFUSED"
+  mk="$tmp/mk27j"; mkdir -p "$mk"
+  git -C "$mk" init -q 2>/dev/null
+  printf 'first\n' >"$mk/first.txt"
+  git -C "$mk" add first.txt
+  t0=$SECONDS
+  out=$(cd "$mk" && PATH="$slowgit:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=2 bash "$self" 2>&1); rc=$?
+  secs=$((SECONDS - t0))
+  check "before the first commit, a list of files that does not finish is stopped at the time limit" "$rc" 1 "$out" "files of the commit to scan did not finish within 2 s"
+  check "…and was stopped, not waited for ($secs s)" "$((secs < 30 ? 0 : 1))" 0 "$out" "REFUSED"
+  out=$(cd "$repo" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=0 bash "$self" 2>&1); rc=$?
+  check "a time limit of 0 is refused" "$rc" 1 "$out" "GGSHIELD_LIST_TIMEOUT is not a whole number of seconds above 0"
+  # The limit in force is read from the watchdog's sleep: a sleep first on PATH records its argument, and a
+  # git whose diff-tree waits (up to 30 s) until one is recorded, so the watchdog is never stopped before it.
+  local sleepdir="$tmp/sleeprec" waitgit="$tmp/gitwait" slept="$tmp/slept"
+  mkdir -p "$sleepdir" "$waitgit"
+  printf '#!/bin/sh
+echo "$1" >>%q
+exec %q "$@"
+' "$slept" "$(command -v sleep)" >"$sleepdir/sleep"
+  printf '#!/bin/sh
+s=; k=; for a; do if [ -n \"$k\" ]; then k=; elif [ \"$a\" = -c ]; then k=1; else s=$a; break; fi; done
+if [ "$s" = diff-tree ]; then n=0; while [ ! -s %q ] && [ "$n" -lt 300 ]; do %q 0.1; n=$((n + 1)); done; fi
+exec %q "$@"
+' \
+    "$slept" "$(command -v sleep)" "$(command -v git)" >"$waitgit/git"
+  chmod +x "$sleepdir/sleep" "$waitgit/git"
+  : >"$slept"
+  out=$(cd "$repo" && PATH="$waitgit:$sleepdir:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=600 bash "$self" 2>&1); rc=$?
+  check "a time limit above 120 s is not refused" "$rc" 0 "$out" "$SELF: clean"
+  check "…and is lowered to 120 (the watchdog slept: $(tr '\n' ' ' <"$slept"))" \
+    "$( [ -s "$slept" ] && ! grep -qvx 120 "$slept"; echo $?)" 0 "$out" "$SELF: clean"
+  : >"$slept"
+  out=$(cd "$repo" && PATH="$waitgit:$sleepdir:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=7 bash "$self" 2>&1); rc=$?
+  check "a time limit of 7 s is the one the watchdog sleeps ($(tr '\n' ' ' <"$slept"))" \
+    "$( [ -s "$slept" ] && ! grep -qvx 7 "$slept"; echo $?)" 0 "$out" "$SELF: clean"
+  # A listing git cannot make (diff-tree exits 3) refuses as not scanned, without waiting for the limit.
+  local failgit="$tmp/gitfail"
+  mkdir -p "$failgit"
+  printf '#!/bin/sh
+s=; k=; for a; do if [ -n \"$k\" ]; then k=; elif [ \"$a\" = -c ]; then k=1; else s=$a; break; fi; done
+case "$s" in diff-tree) exit 3 ;; esac
+exec %q "$@"
+' "$(command -v git)" >"$failgit/git"
+  chmod +x "$failgit/git"
+  t0=$SECONDS
+  out=$(cd "$repo" && PATH="$failgit:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  secs=$((SECONDS - t0))
+  check "a listing of HEAD's side that git cannot make is refused" "$rc" 1 "$out" "git could not list the objects HEAD's side of the change is read from"
+  check "…and counts as not scanned" "$rc" 1 "$out" "NOT scanned"
+  check "…at once, not at the time limit ($secs s)" "$((secs < 30 ? 0 : 1))" 0 "$out" "REFUSED"
+  # A gate stopped while git lists (TERM to the gate) leaves no git behind: a background child of a
+  # non-interactive bash ignores SIGINT and SIGQUIT, so only the gate's EXIT trap stops it. The git records
+  # its process id and never returns; the gate is stopped once it has, and that process must be gone. (TERM,
+  # not INT: this selftest's own background children ignore SIGINT, so the gate it starts could not get one.)
+  local pidgit="$tmp/gitpid" gpidf="$tmp/git-pid" gp gpid n
+  running() { # running <pid>: the process is there and not a zombie (an orphan's zombie can outlive the
+    # gate where nothing reaps it, as in a container whose first process does not)
+    local st
+    kill -0 "$1" 2>/dev/null || return 1
+    [ -r "/proc/$1/stat" ] || return 0
+    st=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+    st=${st##*) }
+    [ "${st%% *}" != Z ]
+  }
+  mkdir -p "$pidgit"
+  printf '#!/bin/sh
+s=; k=; for a; do if [ -n \"$k\" ]; then k=; elif [ \"$a\" = -c ]; then k=1; else s=$a; break; fi; done
+case "$s" in diff-tree) echo $$ >%q; exec sleep 60 ;; esac
+exec %q "$@"
+' "$gpidf" "$(command -v git)" >"$pidgit/git"
+  chmod +x "$pidgit/git"
+  rm -f "$gpidf"
+  (cd "$repo" && exec env PATH="$pidgit:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" >"$tmp/stopped-out" 2>&1) &
+  gp=$!
+  n=0
+  while [ ! -s "$gpidf" ] && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done
+  gpid=$(cat "$gpidf" 2>/dev/null)
+  kill -TERM "$gp" 2>/dev/null
+  wait "$gp"; rc=$?
+  n=0
+  while [ -n "$gpid" ] && running "$gpid" && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+  out=$(cat "$tmp/stopped-out")
+  check "a gate stopped mid-listing ends by the signal (rc $rc)" "$rc" 143 "listing started: ${gpid:-no}" "listing started: [0-9]"
+  not_clean "a gate stopped mid-listing" "$out"
+  if [ -n "$gpid" ] && ! running "$gpid"; then
+    printf '  ok    …and the git it started is gone\n'
+  else
+    printf '  FAIL  a gate stopped mid-listing left its git (%s) running\n' "${gpid:-never started}"; fail=1
+    [ -z "$gpid" ] || kill -KILL "$gpid" 2>/dev/null
+  fi
+  # The bound needs no `timeout` program (macOS has none without coreutils): on a PATH of links to the
+  # tools the gate and its stubs use, with no timeout or gtimeout among them, a listing that does not
+  # finish is still stopped and refused, and a normal one passes.
+  local notmo="$tmp/notimeout" tool tp
+  mkdir -p "$notmo"
+  for tool in bash sh env git python3 mktemp rm tr wc sleep cat sed grep head tail cut chmod id mkdir \
+    cp mv date dirname basename readlink realpath ls touch sort awk cmp diff pwd; do
+    tp=$(type -P "$tool") && ln -s "$tp" "$notmo/$tool"
+  done
+  if PATH="$notmo" type -P timeout gtimeout >/dev/null 2>&1; then
+    printf '  FAIL  the PATH without timeout still finds one\n'; fail=1
+  else
+    printf '  ok    the PATH without timeout finds none\n'
+  fi
+  t0=$SECONDS
+  out=$(cd "$repo" && PATH="$slowgit:$stub_dir:$notmo" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=2 bash "$self" 2>&1); rc=$?
+  secs=$((SECONDS - t0))
+  check "with no timeout program, a listing that does not finish is stopped at the time limit" "$rc" 1 "$out" "did not finish within 2 s"
+  check "…and counts as not scanned" "$rc" 1 "$out" "NOT scanned"
+  check "…and was stopped, not waited for ($secs s)" "$((secs < 30 ? 0 : 1))" 0 "$out" "REFUSED"
+  out=$(cd "$repo" && PATH="$stub_dir:$notmo" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  check "with no timeout program, a normal listing passes clean" "$rc" 0 "$out" "$SELF: clean"
   # The top of the tree is read through a sentinel and physdir: a core.worktree ending in a newline was read
   # as the name without it (command substitution drops it) before that change, and passed.
   mk="$tmp/mk28"; mkdir -p "$mk" "$tmp/wt28"$'\n'
