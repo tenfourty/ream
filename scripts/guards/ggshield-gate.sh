@@ -743,7 +743,10 @@ open(sys.argv[2], "w").write("".join(out))
   [ -s "$SCRATCH/base-ids" ] || return 0
   if ! hashed "$SCRATCH/base-ids" "$SCRATCH/base-bad"; then
     bad=$(<"$SCRATCH/base-bad")
-    echo "$refuse (${bad:+object $bad}${bad:-an object git could not read in full}), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2
+    # Named once: ${bad:-...} alone would give the id again after "object $bad", since it expands to $bad
+    # whenever $bad is set.
+    if [ -n "$bad" ]; then bad="object $bad"; else bad="an object git could not read in full"; fi
+    echo "$refuse ($bad), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2
     base_advice
     return 1
   fi
