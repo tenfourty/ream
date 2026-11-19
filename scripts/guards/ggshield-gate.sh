@@ -430,14 +430,18 @@ ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}"
 # in the background, a watchdog subshell sleeps the limit, marks that it fired and stops git (TERM, then
 # KILL 5 s later), and any listing the watchdog fired on refuses, even one that finished as it fired. The
 # watchdog holds none of the gate's output, and is stopped and reaped when git ends (glist_stop); a stopped
-# watchdog stops its own sleep, also one it had started but not yet named. It signals only the git it was
-# given. A gate that ends while git still runs (Ctrl-C, or TERM to the gate: a background child of a
-# non-interactive bash ignores SIGINT and SIGQUIT, so git would walk on) stops git too, from the EXIT trap.
+# watchdog stops its own sleep, also one it had started but not yet named. A gate that ends while a listing
+# runs (Ctrl-C, or TERM to the gate: a background child of a non-interactive bash ignores SIGINT and
+# SIGQUIT, so git would walk on) stops git and the watchdog too, from the EXIT trap (glist_stop).
+# The one limit: the watchdog is its own process, so it signals git by its process id, not through the
+# gate's job table. If git ends at the very moment the limit runs out, the gate can reap it, and the system
+# give its id to another process, in the moment before the gate stops the watchdog; that process would get
+# the TERM (and 5 s later the KILL, but only if the watchdog is still running then, and the gate stops it as
+# soon as git is reaped).
 LIST_TIMEOUT=120
 GLIST_DOG=
-GLIST_GIT=
 glist() {
-  local out=$1 what=$2 secs=$LIST_TIMEOUT rc fired="$SCRATCH/glist-fired"
+  local out=$1 what=$2 secs=$LIST_TIMEOUT rc gpid fired="$SCRATCH/glist-fired"
   shift 2
   if [ -n "${GGSHIELD_LIST_TIMEOUT-}" ]; then
     [[ $GGSHIELD_LIST_TIMEOUT =~ ^[0-9]{1,6}$ ]] && [ "$((10#$GGSHIELD_LIST_TIMEOUT))" -ge 1 ] \
@@ -446,7 +450,7 @@ glist() {
   fi
   rm -f -- "$fired" || { could_not_scan "no temporary file"; return 1; }
   GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}" "$@" </dev/null >"$out" 2>/dev/null &
-  GLIST_GIT=$!
+  gpid=$!
   # The watchdog's TERM trap only marks that it was stopped and stops a sleep it has named; after each sleep
   # is started and named the mark is read again, so a TERM between the two leaves no sleep behind. Its sleep
   # is stopped with KILL, which nothing catches: with TERM a `sleep 5` was seen left running, most likely a
@@ -459,17 +463,16 @@ glist() {
     wait "$s"; s=''
     [ -z "$stop" ] || exit 0
     : >"$fired"
-    kill -TERM "$GLIST_GIT" 2>/dev/null
+    kill -TERM "$gpid" 2>/dev/null
     sleep 5 & s=$!
     [ -z "$stop" ] || { kill -KILL "$s" 2>/dev/null; exit 0; }
     wait "$s"; s=''
     [ -z "$stop" ] || exit 0
-    kill -KILL "$GLIST_GIT" 2>/dev/null
+    kill -KILL "$gpid" 2>/dev/null
   ) </dev/null >/dev/null 2>&1 &
   GLIST_DOG=$!
-  wait "$GLIST_GIT"; rc=$?
-  GLIST_GIT=
-  glist_stop
+  wait "$gpid"; rc=$?
+  glist_stop || { could_not_scan "the gate could not list its own background jobs to stop them"; return 1; }
   if [ -e "$fired" ]; then
     could_not_scan "git's listing of $what did not finish within $secs s (a tree too large to walk)"
   elif [ "$rc" = 0 ]; then
@@ -479,32 +482,31 @@ glist() {
   fi
   return 1
 }
-# glist_stop: stop the git glist started, if the gate ends while it runs, then stop and reap the watchdog.
-# git is signalled through bash's job table (`kill %<job>`), never by its bare process id: bash signals a
+# glist_stop: TERM every background job of the gate, then reap glist's watchdog. Every background job the
+# gate starts is glist's (its git and its watchdog), and a job is in bash's table from the fork, before `$!`
+# is read, so this also stops a git or a watchdog whose id was never stored (a signal that ended the gate
+# just after the fork). Called when git has ended, it stops the watchdog; from the EXIT trap, whatever runs.
+# Jobs are signalled through bash's job table (`kill %<job>`), never by a bare process id: bash signals a
 # job's process only while it has not reaped it, so an id the system has since given to another process is
-# never signalled. The watchdog is signalled the same way, then waited for.
+# never signalled. If `jobs -l` cannot be read it still TERMs jobs %1 to %8 (a gate starts at most four)
+# and returns 1, so glist refuses.
 glist_stop() {
-  if [ -n "$GLIST_GIT" ]; then
-    glist_kill "$GLIST_GIT"
-    GLIST_GIT=
+  local spec rest n st=0
+  if jobs -l >"$SCRATCH/glist-jobs" 2>/dev/null; then
+    # A line is "[<n>]<mark> <pid> <state> <command>"; a command's further lines start with no "[<n>]".
+    while read -r spec rest; do
+      [[ $spec =~ ^\[([0-9]+)\] ]] || continue
+      kill -TERM "%${BASH_REMATCH[1]}" 2>/dev/null
+    done <"$SCRATCH/glist-jobs"
+  else
+    st=1
+    for n in 1 2 3 4 5 6 7 8; do kill -TERM "%$n" 2>/dev/null; done
   fi
   if [ -n "$GLIST_DOG" ]; then
-    glist_kill "$GLIST_DOG"
     wait "$GLIST_DOG" 2>/dev/null
     GLIST_DOG=
   fi
-  return 0
-}
-# glist_kill <pid>: TERM to the gate's job whose process is <pid>, if bash still holds one. `jobs -l` writes
-# "[<n>]<mark> <pid> <state> <command>"; a job no longer listed is not signalled.
-glist_kill() {
-  local spec pid rest
-  jobs -l >"$SCRATCH/glist-jobs" 2>/dev/null || return 0
-  while read -r spec pid rest; do
-    [ "$pid" = "$1" ] && [[ $spec =~ ^\[([0-9]+)\] ]] || continue
-    kill -TERM "%${BASH_REMATCH[1]}" 2>/dev/null
-  done <"$SCRATCH/glist-jobs"
-  return 0
+  return "$st"
 }
 
 # The settings ggshield's git runs with, as one GIT_CONFIG_COUNT group (command-line scope, so they
@@ -883,7 +885,7 @@ run_gate() {
   [ -f "$JUDGE" ] || { could_not_scan "ggshield-judge.py is not beside this script"; return 1; }
 
   SCRATCH=$(mktemp -d) || { could_not_scan "no temporary directory"; return 1; }
-  # Removed on any exit, with glist's watchdog stopped first; this script sets no other EXIT trap.
+  # Removed on any exit, with glist's git and watchdog stopped first; this script sets no other EXIT trap.
   trap 'glist_stop; rm -rf "$SCRATCH"' EXIT
   local cfg="$SCRATCH/config" idx="$SCRATCH/index" src tree parent commit range base basetree same scanned
   : >"$cfg" || { could_not_scan "no temporary file"; return 1; }
@@ -2226,7 +2228,7 @@ exec %q "$@"
   (cd "$repo" && exec env PATH="$pidgit:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" >"$tmp/stopped-out" 2>&1) &
   gp=$!
   n=0
-  while [ ! -s "$gpidf" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+  while [ ! -s "$gpidf" ] && [ "$n" -lt 300 ]; do sleep 0.1; n=$((n + 1)); done
   gpid=$(cat "$gpidf" 2>/dev/null)
   kill -TERM "$gp" 2>/dev/null
   wait "$gp"; rc=$?

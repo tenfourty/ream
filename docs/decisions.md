@@ -1193,19 +1193,23 @@ It can, for readers in Chrome, and the decision has three parts.
 test it, and 17 Nov 2026 for the agent guidance; he saw the unchanged copy match the original in
 Chrome on 18 Nov 2026). The served skill's note is in `src/ream/onboarding.py`.
 
-## An embargoed fix to a commit hook skips the hand-pinned rollout (19 Nov 2026)
+## The 19 Nov 2026 secret-scan gate fix is released without the hand-pinned rollout (19 Nov 2026)
 
 The secret-scan gate fix of 19 Nov 2026 changed only a commit hook (`scripts/guards/ggshield-gate.sh`),
-nothing in the deployed image, so the embargoed-fix runbook's steps 4 and 5 (the private image and its
-hand pin) were skipped, with security's agreement.
+nothing in the deployed image. For this one release the embargoed-fix runbook's steps 4 and 5 (the
+private image and its hand pin) were skipped: security agreed, and Jeremy approved this release.
 
-**Chosen:** release from the private repository once its CI is green and security has agreed the
-commit wording, on two conditions:
+**Chosen:** this fix is released from the private repository once its CI is green and security has
+agreed the commit wording, on two conditions:
 - the release text names the behaviour, not the weakness;
 - the release post says how each clone picks the hook up: lefthook runs the script from the working
   tree, so a pull of `main` is enough, and an office VM gets it at its next refresh.
 
-**Not chosen:** building and hand-pinning a private image, which would not differ from the public one.
+**Not chosen:** building and hand-pinning a private image for this fix, which would not differ from the
+public one.
+
+A later fix that changes nothing in the deployed image skips steps 4 and 5 only with both again:
+security's agreement and Jeremy's approval of that release.
 
 **Evidence:** Jeremy approved the release on 19 Nov 2026 (lettered answer (a): release once private CI
 is green and security has agreed the commit wording). The runbook's note is in
