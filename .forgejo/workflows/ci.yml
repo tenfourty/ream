@@ -104,11 +104,13 @@ jobs:
           # This service container exists only for this job, so the tests may
           # turn its commit flushes off (tests/conftest.py, _declared_throwaway).
           REAM_TEST_PG_THROWAWAY: "1"
-        # -n auto (one worker per core the runner gives this job), capped at 5:
-        # more workers only queue behind each other and the Postgres service
+        # -n auto, capped at 2: the runner slot gives this job 2 CPUs and 1.5 GB
+        # while xdist counts the whole machine's cores, and more workers only
+        # queue behind each other and the Postgres service, and past the slot's
+        # memory cap get killed (19 Nov 2026: -9 kills at 5 workers)
         # (the deployment repo's CI-builders doc); each in its own database
         # (artifacts_test_<worker>) on this one Postgres service.
-        run: uv run pytest -q -n auto --maxprocesses 5
+        run: uv run pytest -q -n auto --maxprocesses 2
 
   test-sqlite:
     # docker-light, not docker: this job needs no docker-in-docker, only its
@@ -210,7 +212,7 @@ jobs:
         env:
           REAM_TEST_DB: sqlite
           REAM_BROWSER: /nonexistent/browser
-        run: uv run pytest -q -n auto --maxprocesses 5
+        run: uv run pytest -q -n auto --maxprocesses 2
 
   # core-bare (core-and-plugins design 7.3, slice 7b part 5): the whole core suite with no
   # plug-in installed and none loaded (REAM_PLUGINS=none), on Postgres and on SQLite, so
@@ -273,12 +275,12 @@ jobs:
         env:
           PG_TEST_DSN: postgresql://postgres@postgres:5432/postgres?connect_timeout=30
           REAM_TEST_PG_THROWAWAY: "1"
-        run: uv run pytest -q -n auto --maxprocesses 5
+        run: uv run pytest -q -n auto --maxprocesses 2
 
       - name: core suite on SQLite
         env:
           REAM_TEST_DB: sqlite
-        run: uv run pytest -q -n auto --maxprocesses 5
+        run: uv run pytest -q -n auto --maxprocesses 2
 
   # No `needs:` -- the image builds while the tests run. An image whose tests fail
   # is only ever pushed to the internal registry; `deploy` below waits for both.
