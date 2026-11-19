@@ -86,8 +86,9 @@ unset CDPATH
 # attr.tree or GIT_ATTR_SOURCE, so the gate does not try to follow them to a
 # driver. Before any git call that could run one, it REFUSES when any
 # diff.<x>.textconv, diff.<x>.command, diff.<x>.binary, filter.<x>.clean,
-# filter.<x>.smudge, filter.<x>.process or attr.tree is set, whether or not an
-# attribute uses it today. The settings are read with --includes twice: as the
+# filter.<x>.smudge, filter.<x>.process, lfs.extension.<x>.<anything> or
+# attr.tree is set (git-lfs's own stock filter.lfs.* excepted: see below),
+# whether or not an attribute uses it today. The settings are read with --includes twice: as the
 # gate's own git reads them (system, global, XDG, local, worktree and the
 # command line), and as ggshield's git does (its own environment and -c
 # options, safe.directory=* included). And it REFUSES when the diff attribute
@@ -160,16 +161,24 @@ unset CDPATH
 # and no grafts, and an inherited GIT_CONFIG_COUNT group is dropped.
 # GIT_CONFIG_PARAMETERS is dropped for ggshield's git. A machine whose git
 # config holds git-lfs's filter.lfs.* is accepted only when every filter.lfs
-# key present is one of clean, smudge, process and required, each set once
-# (across every file read, includes too), at exactly git-lfs's stock value
-# (`git-lfs clean -- %f`, `git-lfs smudge -- %f`, `git-lfs filter-process`,
-# `true`); any other key or value, a repeat, or another driver (a name that
-# differs only in case included) is refused as above. Because that driver is
-# let through, the gate also REFUSES any changed path whose filter attribute is
-# set to anything, read with check-attr as the gate's git and as ggshield's git
-# read it, both from the working tree and with --cached (the index only, so a
-# staged .gitattributes counts); attr.tree stays refused. The gate's own
-# write-tree may run the stock git-lfs program before that refusal.
+# key present is one of clean, smudge, process and required, at exactly git-lfs's
+# stock value (`git-lfs clean -- %f`, `git-lfs smudge -- %f`,
+# `git-lfs filter-process`, `true`); an identical value repeated across files
+# (the package's system file and a user's `git lfs install`) is the same value,
+# but any differing value, any other key, or another driver (a name that differs
+# only in case included) is refused as above, and so is any lfs.extension.* (git-lfs
+# runs those programs during clean). Because that driver is let through, the gate
+# also REFUSES (1) any changed path whose filter attribute is set to anything,
+# read with check-attr as the gate's git and as ggshield's git read them, from the
+# working tree and with --cached (the index only, so a staged .gitattributes
+# counts); attr.tree stays refused; and (2) any changed path whose new blob is a
+# git-lfs pointer (at most 1024 bytes, first line exactly `version
+# https://git-lfs.github.com/spec/v1` or the legacy `version
+# https://hawser.github.com/spec/v1`), read from the scanned tree with cat-file:
+# the attribute that made a pointer can be gone by commit time (`git lfs
+# untrack`), and the content behind it sits in .git/lfs/objects, never in the
+# scan. The gate's own write-tree may run the stock git-lfs program before those
+# refusals.
 # CHECKED BEFORE, READ AGAIN AFTER: the settings, attributes, shallow list,
 # the scanned commit's object and the objects on HEAD's side are read before ggshield's git reads them, and
 # lefthook runs pre-commit jobs in parallel, so something could change them in
@@ -428,7 +437,9 @@ git_env_proven() {
 
 # ggit: git for the gate's own reads of the repository, with core.fsmonitor off (an inherited setting of
 # it would run a program inside write-tree and diff-index), and with replace refs and grafts ignored. A
-# filter driver's program also runs in write-tree: settings_proven refuses those before it is called.
+# filter driver's program also runs in write-tree: settings_proven refuses those before it is called,
+# except git-lfs's own stock one (its stock program may run there; filters_proven and pointers_proven then refuse
+# what it would have changed).
 GGIT_OPTS=(-c core.fsmonitor=false -c core.commitGraph=false)
 ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}" "$@"; }
 
@@ -573,14 +584,14 @@ scangit() { GIT_CONFIG_SYSTEM='' GIT_CONFIG_GLOBAL="${GG_GIT_CONFIG-}" git -c co
 # the gate's reads system, global and XDG config, which ggshield's does not, and ggshield's trusts
 # every directory (safe.directory=*), where the gate's would skip the repository's own config.
 settings_proven() {
-  local view f rc rec key found="" want val lfs_seen
+  local view f rc rec key found="" want val
   for view in gate scan; do
     f=$SCRATCH/settings-$view
     if [ "$view" = gate ]; then
-      ggit config --includes -z --get-regexp '^(diff|filter|attr)\.' >"$f" 2>/dev/null </dev/null
+      ggit config --includes -z --get-regexp '^(diff|filter|attr|lfs\.extension)\.' >"$f" 2>/dev/null </dev/null
       rc=$?
     else
-      (scan_env; scangit config --includes -z --get-regexp '^(diff|filter|attr)\.' >"$f" 2>/dev/null </dev/null)
+      (scan_env; scangit config --includes -z --get-regexp '^(diff|filter|attr|lfs\.extension)\.' >"$f" 2>/dev/null </dev/null)
       rc=$?
     fi
     # 0 is some found, 1 with nothing printed is none; anything else is not knowing.
@@ -589,14 +600,14 @@ settings_proven() {
       1) [ ! -s "$f" ] || { could_not_scan "git's settings could not be read"; return 1; } ;;
       *) could_not_scan "git's settings could not be read (exit $rc)"; return 1 ;;
     esac
-    lfs_seen=
     while IFS= read -r -d '' rec; do
       key=${rec%%$'\n'*}
       key=${key//[[:cntrl:]]/?}
       case "$key" in
         filter.lfs.clean | filter.lfs.smudge | filter.lfs.process | filter.lfs.required)
-          # git-lfs's stock values, exactly, each key once: the one filter driver let through
-          # (attrs_proven then refuses any changed path with a filter attribute).
+          # git-lfs's stock values, exactly (an identical value repeated across files is the same value; a
+          # differing one refuses): the one filter driver let through. filters_proven then refuses any changed
+          # path with a filter attribute, and pointers_proven any changed path holding an LFS pointer.
           case "$key" in
             filter.lfs.clean) want='git-lfs clean -- %f' ;;
             filter.lfs.smudge) want='git-lfs smudge -- %f' ;;
@@ -605,8 +616,8 @@ settings_proven() {
           esac
           val=
           case "$rec" in *$'\n'*) val=${rec#*$'\n'} ;; esac
-          if [ "$val" = "$want" ] && [[ " $lfs_seen " != *" $key "* ]]; then
-            lfs_seen="$lfs_seen $key"
+          if [ "$val" = "$want" ]; then
+            :
           else
             case " $found " in
               *" $key "*) ;;
@@ -620,8 +631,9 @@ settings_proven() {
             *) found="$found $key" ;;
           esac
           ;;
-        filter.lfs.?*)
-          # any other key under the lfs driver (filter.lfs.foo) is not the stock set
+        lfs.extension.?* | filter.lfs.?*)
+          # lfs.extension.<x>.* names programs git-lfs runs during clean; any other key under the lfs driver
+          # (filter.lfs.foo) is not the stock set
           case " $found " in
             *" $key "*) ;;
             *) found="$found $key" ;;
@@ -633,7 +645,7 @@ settings_proven() {
   [ -n "$found" ] || return 0
   echo "$SELF: REFUSED — git is set to run a program on file content or to hide it from the scan (found:$found), so NOTHING was scanned for secrets." >&2
   echo "  The gate refuses any diff.<driver>.textconv, .command or .binary, filter.<driver>.clean, .smudge or .process, and attr.tree," >&2
-  echo "  except git-lfs's own filter.lfs.clean, .smudge, .process and .required at exactly their stock values, each set once," >&2
+  echo "  except git-lfs's own filter.lfs.clean, .smudge, .process and .required at exactly their stock values, and any lfs.extension.<x>.*," >&2
   echo "  wherever it is set and whether or not an attribute uses it today: attributes can come from a staged .gitattributes," >&2
   echo "  info/attributes, core.attributesFile or the XDG attributes file. Remove the setting (git-lfs's stock filter.lfs.* values are accepted, a changed one is not)," >&2
   echo "  or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
@@ -833,7 +845,7 @@ attrs_proven() {
   return 1
 }
 
-# filters_proven <file of the changed paths, -z, from the top> <the way from here to the top>: refuses when
+# filters_proven <file of the changed paths, -z, from the top>: refuses when
 # a changed path has a filter attribute set to anything (git-lfs's filter.lfs.* settings are let through, so
 # no filter may name a driver). Read with check-attr as either git reads it, from the working tree and from
 # the index only (--cached, so a staged .gitattributes counts). Every path must be answered for.
@@ -874,6 +886,91 @@ filters_proven() {
   [ "$set" -gt 0 ] || return 0
   echo "$SELF: REFUSED — a staged file has a filter attribute, which would run a filter driver's program, so NOTHING was scanned for secrets." >&2
   echo "  Take the attribute off the changed files (a .gitattributes, info/attributes, core.attributesFile or the XDG attributes file)," >&2
+  echo "  or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
+  return 1
+}
+
+# pointers_proven <base tree> <tree to scan>: refuses when a changed path's new blob is a git-lfs pointer
+# (1024 bytes or fewer, first line exactly `version https://git-lfs.github.com/spec/v1`, or the legacy
+# `version https://hawser.github.com/spec/v1`). A pointer is what git-lfs's clean filter stages: the content
+# sits in .git/lfs/objects, never reaches the scan, and is uploaded by `git lfs pre-push`. The attribute that
+# made it can be gone by commit time (git lfs untrack), so the blob itself is read, from the tree being
+# scanned, with cat-file (it runs no filter). The blobs are named by oid, so they cannot change under the
+# scan and are not read again after it.
+pointers_proven() {
+  local raw=$SCRATCH/ptr-raw oids=$SCRATCH/ptr-oids sizes=$SCRATCH/ptr-sizes small=$SCRATCH/ptr-small
+  local blobs=$SCRATCH/ptr-blobs found
+  glist "$raw" "the changed blobs of the commit to scan" \
+    diff-tree -r --no-renames --raw -z --no-abbrev "$1" "$2" || return 1
+  cat >"$SCRATCH/ptr.py" <<'PTRPY'
+import sys
+mode, src, dst = sys.argv[1:4]
+ptr_lines = (b"version https://git-lfs.github.com/spec/v1", b"version https://hawser.github.com/spec/v1")
+data = open(src, "rb").read()
+if mode == "oids":
+    parts = data.split(b"\0")
+    if parts and parts[-1] == b"":
+        parts.pop()
+    if len(parts) % 2:
+        sys.exit(2)
+    out = []
+    for meta in parts[0::2]:
+        f = meta.split(b" ")
+        if len(f) != 5 or not f[0].startswith(b":"):
+            sys.exit(2)
+        if f[4][:1] == b"D" or f[1] == b"160000":
+            continue
+        out.append(f[3])
+    open(dst, "wb").write(b"".join(o + b"\n" for o in sorted(set(out))))
+elif mode == "small":
+    oids = open(sys.argv[4], "rb").read().split()
+    lines = data.split(b"\n")
+    if lines and lines[-1] == b"":
+        lines.pop()
+    if len(lines) != len(oids):
+        sys.exit(2)
+    out = []
+    for o, l in zip(oids, lines):
+        f = l.split(b" ")
+        if len(f) != 3 or f[0] != o or f[1] != b"blob" or not f[2].isdigit():
+            sys.exit(2)
+        if int(f[2]) <= 1024:
+            out.append(o)
+    open(dst, "wb").write(b"".join(o + b"\n" for o in out))
+elif mode == "count":
+    want = open(sys.argv[4], "rb").read().split()
+    pos, found, seen = 0, 0, 0
+    while pos < len(data):
+        nl = data.index(b"\n", pos)
+        f = data[pos:nl].split(b" ")
+        if len(f) != 3 or f[1] != b"blob" or not f[2].isdigit():
+            sys.exit(2)
+        size = int(f[2])
+        body = data[nl + 1:nl + 1 + size]
+        if len(body) != size or data[nl + 1 + size:nl + 2 + size] != b"\n":
+            sys.exit(2)
+        pos = nl + 2 + size
+        seen += 1
+        if body.split(b"\n", 1)[0] in ptr_lines:
+            found += 1
+    if seen != len(want):
+        sys.exit(2)
+    open(dst, "w").write("%d\n" % found)
+PTRPY
+  "$py" -I "$SCRATCH/ptr.py" oids "$raw" "$oids" || { could_not_scan "the changed blobs could not be listed"; return 1; }
+  [ -s "$oids" ] || return 0
+  ggit cat-file --batch-check <"$oids" >"$sizes" 2>/dev/null || { could_not_scan "git could not read the sizes of the changed blobs"; return 1; }
+  "$py" -I "$SCRATCH/ptr.py" small "$sizes" "$small" "$oids" || { could_not_scan "git's answer about the changed blobs could not be read"; return 1; }
+  [ -s "$small" ] || return 0
+  ggit cat-file --batch <"$small" >"$blobs" 2>/dev/null || { could_not_scan "git could not read the small changed blobs"; return 1; }
+  "$py" -I "$SCRATCH/ptr.py" count "$blobs" "$SCRATCH/ptr-count" "$small" || { could_not_scan "the small changed blobs could not be read"; return 1; }
+  found=$(cat "$SCRATCH/ptr-count" 2>/dev/null) || found=
+  case "$found" in
+    *[!0-9]* | "") could_not_scan "the count of LFS pointers among the changed blobs is unknown"; return 1 ;;
+  esac
+  [ "$found" -gt 0 ] || return 0
+  echo "$SELF: REFUSED — $found changed file(s) are git-lfs pointers, so their real content never reaches the scan and NOTHING of it was scanned for secrets." >&2
+  echo "  The content sits in .git/lfs/objects and would be uploaded by git lfs pre-push. Stage the file without the lfs filter," >&2
   echo "  or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
   return 1
 }
@@ -1065,7 +1162,8 @@ run_gate() {
     return 1
   fi
   attrs_proven "$SCRATCH/names" "$cdup" || return 1
-  filters_proven "$SCRATCH/names" "$cdup" || return 1
+  filters_proven "$SCRATCH/names" || return 1
+  pointers_proven "$base" "$tree" || return 1
 
   # No pipe: a pipeline's rc is the LAST command's. The judge keeps ggshield's
   # two outputs apart and in memory, and answers with an exit status and one
@@ -1096,7 +1194,7 @@ run_gate() {
     done
     settings_proven || { rm -rf "$SCRATCH"; return 1; }
     attrs_proven "$SCRATCH/names" "$cdup" || { rm -rf "$SCRATCH"; return 1; }
-    filters_proven "$SCRATCH/names" "$cdup" || { rm -rf "$SCRATCH"; return 1; }
+    filters_proven "$SCRATCH/names" || { rm -rf "$SCRATCH"; return 1; }
     shallow_proven "$commit" || { rm -rf "$SCRATCH"; return 1; }
     objects_proven "$commit" || { rm -rf "$SCRATCH"; return 1; }
     if [ -n "$parent" ]; then base_proven "$parent" "$tree" || { rm -rf "$SCRATCH"; return 1; }; fi
@@ -2107,7 +2205,19 @@ PROTO
   mk="$tmp/lfs4"; mkmark "$mk"; lfsstock "$mk"
   git -C "$mk" config --add filter.lfs.clean 'git-lfs clean -- %f'
   out=$(mgate "$mk"); rc=$?
-  refused_hidden "a duplicated filter.lfs.clean key" "$rc" "$out" "filter.lfs.clean"
+  check "an identical stock value repeated passes (the marker is seen)" "$rc" 1 "$out" "found a secret"
+  mk="$tmp/lfs4b"; mkmark "$mk"; lfsstock "$mk"
+  git -C "$mk" config --add filter.lfs.clean 'git-lfs clean %f'
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a differing repeat of filter.lfs.clean" "$rc" "$out" "filter.lfs.clean"
+  mk="$tmp/lfs4c"; mkmark "$mk"; lfsstock "$mk"
+  git -C "$mk" config lfs.extension.ext.clean 'x %f'
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "an lfs.extension setting" "$rc" "$out" "lfs.extension.ext.clean"
+  mk="$tmp/lfs4d"; mkmark "$mk"; lfsstock "$mk"
+  git -C "$mk" config lfs.url 'https://example.invalid/lfs'
+  out=$(mgate "$mk"); rc=$?
+  check "another lfs.* setting (lfs.url) is not refused (the marker is seen)" "$rc" 1 "$out" "found a secret"
   mk="$tmp/lfs5"; mkmark "$mk"; lfsstock "$mk"
   git -C "$mk" config filter.other.clean 'git-lfs clean -- %f'
   out=$(mgate "$mk"); rc=$?
@@ -2120,7 +2230,10 @@ PROTO
   git -C "$mk" config -f "$tmp/lfs-inc" filter.lfs.clean 'git-lfs clean -- %f'
   git -C "$mk" config include.path "$tmp/lfs-inc"
   out=$(mgate "$mk"); rc=$?
-  refused_hidden "filter.lfs.clean repeated in an included file" "$rc" "$out" "filter.lfs.clean"
+  check "an identical stock value repeated in an included file passes (the marker is seen)" "$rc" 1 "$out" "found a secret"
+  git -C "$mk" config -f "$tmp/lfs-inc" filter.lfs.clean 'git-lfs clean %f'
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "filter.lfs.clean differing in an included file" "$rc" "$out" "filter.lfs.clean"
   rm -f "$tmp/lfs-inc"
   # With the lfs driver tolerated, a filter attribute on a changed path refuses, from any source.
   mk="$tmp/lfs6"; mkmark "$mk"; lfsstock "$mk"
@@ -2162,6 +2275,34 @@ PROTO
   echo 'other.txt filter=lfs' >"$mk/.git/info/attributes"
   out=$(mgate "$mk"); rc=$?
   check "a filter attribute on a path not changed is not refused (the marker is seen)" "$rc" 1 "$out" "found a secret"
+  # An LFS pointer staged with no attribute left (git lfs untrack after the add) refuses; other small files pass.
+  local ptrmsg="are git-lfs pointers"
+  mk="$tmp/ptr1"; mkrepo "$mk"
+  printf 'version https://git-lfs.github.com/spec/v1\noid sha256:%064d\nsize 12\n' 0 >"$mk/secrets.env"
+  git -C "$mk" add secrets.env
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a staged LFS pointer with no filter attribute" "$rc" "$out" "$ptrmsg"
+  mk="$tmp/ptr2"; mkrepo "$mk"
+  printf 'version https://hawser.github.com/spec/v1\noid sha256:%064d\nsize 12\n' 0 >"$mk/old.env"
+  git -C "$mk" add old.env
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a staged legacy (hawser) LFS pointer" "$rc" "$out" "$ptrmsg"
+  mk="$tmp/ptr3"; mkrepo "$mk"
+  printf 'version 1\nnot a pointer\n' >"$mk/plain.txt"
+  printf 'version https://git-lfs.github.com/spec/v1x\n' >"$mk/near.txt"
+  printf 'note\nversion https://git-lfs.github.com/spec/v1\n' >"$mk/second.txt"
+  git -C "$mk" add plain.txt near.txt second.txt
+  out=$(mgate "$mk"); rc=$?
+  check "small files that are not pointers pass clean" "$rc" 0 "$out" "$SELF: clean"
+  mk="$tmp/ptr4"; mkrepo "$mk"
+  { printf 'version https://git-lfs.github.com/spec/v1\n'; head -c 2000 /dev/zero | tr '\0' x; } >"$mk/big.txt"
+  git -C "$mk" add big.txt
+  out=$(mgate "$mk"); rc=$?
+  check "a file over 1024 bytes that starts with the pointer line passes clean" "$rc" 0 "$out" "$SELF: clean"
+  mk="$tmp/ptr5"; mkrepo "$mk"
+  git -C "$mk" rm -q --cached kept.txt
+  out=$(mgate "$mk"); rc=$?
+  check "a deletion and an addition with no pointer pass clean" "$rc" 0 "$out" "$SELF: clean"
 
   # GIT_CONFIG makes `git config` read that one file and nothing else, while show and write-tree ignore
   # it: an empty file there hid a textconv driver from the settings check, and the program ran.
