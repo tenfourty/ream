@@ -159,8 +159,17 @@ unset CDPATH
 # git calls run with core.fsmonitor and core.commitGraph off, no replace refs
 # and no grafts, and an inherited GIT_CONFIG_COUNT group is dropped.
 # GIT_CONFIG_PARAMETERS is dropped for ggshield's git. A machine whose git
-# config holds filter.lfs.* (git-lfs) is refused: take the setting out of that
-# repository's reach or opt out.
+# config holds git-lfs's filter.lfs.* is accepted only when every filter.lfs
+# key present is one of clean, smudge, process and required, each set once
+# (across every file read, includes too), at exactly git-lfs's stock value
+# (`git-lfs clean -- %f`, `git-lfs smudge -- %f`, `git-lfs filter-process`,
+# `true`); any other key or value, a repeat, or another driver (a name that
+# differs only in case included) is refused as above. Because that driver is
+# let through, the gate also REFUSES any changed path whose filter attribute is
+# set to anything, read with check-attr as the gate's git and as ggshield's git
+# read it, both from the working tree and with --cached (the index only, so a
+# staged .gitattributes counts); attr.tree stays refused. The gate's own
+# write-tree may run the stock git-lfs program before that refusal.
 # CHECKED BEFORE, READ AGAIN AFTER: the settings, attributes, shallow list,
 # the scanned commit's object and the objects on HEAD's side are read before ggshield's git reads them, and
 # lefthook runs pre-commit jobs in parallel, so something could change them in
@@ -564,7 +573,7 @@ scangit() { GIT_CONFIG_SYSTEM='' GIT_CONFIG_GLOBAL="${GG_GIT_CONFIG-}" git -c co
 # the gate's reads system, global and XDG config, which ggshield's does not, and ggshield's trusts
 # every directory (safe.directory=*), where the gate's would skip the repository's own config.
 settings_proven() {
-  local view f rc rec key found=
+  local view f rc rec key found="" want val lfs_seen
   for view in gate scan; do
     f=$SCRATCH/settings-$view
     if [ "$view" = gate ]; then
@@ -580,11 +589,39 @@ settings_proven() {
       1) [ ! -s "$f" ] || { could_not_scan "git's settings could not be read"; return 1; } ;;
       *) could_not_scan "git's settings could not be read (exit $rc)"; return 1 ;;
     esac
+    lfs_seen=
     while IFS= read -r -d '' rec; do
       key=${rec%%$'\n'*}
       key=${key//[[:cntrl:]]/?}
       case "$key" in
+        filter.lfs.clean | filter.lfs.smudge | filter.lfs.process | filter.lfs.required)
+          # git-lfs's stock values, exactly, each key once: the one filter driver let through
+          # (attrs_proven then refuses any changed path with a filter attribute).
+          case "$key" in
+            filter.lfs.clean) want='git-lfs clean -- %f' ;;
+            filter.lfs.smudge) want='git-lfs smudge -- %f' ;;
+            filter.lfs.process) want='git-lfs filter-process' ;;
+            *) want=true ;;
+          esac
+          val=
+          case "$rec" in *$'\n'*) val=${rec#*$'\n'} ;; esac
+          if [ "$val" = "$want" ] && [[ " $lfs_seen " != *" $key "* ]]; then
+            lfs_seen="$lfs_seen $key"
+          else
+            case " $found " in
+              *" $key "*) ;;
+              *) found="$found $key" ;;
+            esac
+          fi
+          ;;
         diff.?*.textconv | diff.?*.command | diff.?*.binary | filter.?*.clean | filter.?*.smudge | filter.?*.process | attr.tree)
+          case " $found " in
+            *" $key "*) ;;
+            *) found="$found $key" ;;
+          esac
+          ;;
+        filter.lfs.?*)
+          # any other key under the lfs driver (filter.lfs.foo) is not the stock set
           case " $found " in
             *" $key "*) ;;
             *) found="$found $key" ;;
@@ -596,8 +633,9 @@ settings_proven() {
   [ -n "$found" ] || return 0
   echo "$SELF: REFUSED — git is set to run a program on file content or to hide it from the scan (found:$found), so NOTHING was scanned for secrets." >&2
   echo "  The gate refuses any diff.<driver>.textconv, .command or .binary, filter.<driver>.clean, .smudge or .process, and attr.tree," >&2
+  echo "  except git-lfs's own filter.lfs.clean, .smudge, .process and .required at exactly their stock values, each set once," >&2
   echo "  wherever it is set and whether or not an attribute uses it today: attributes can come from a staged .gitattributes," >&2
-  echo "  info/attributes, core.attributesFile or the XDG attributes file. Remove the setting (git-lfs sets filter.lfs.*)," >&2
+  echo "  info/attributes, core.attributesFile or the XDG attributes file. Remove the setting (git-lfs's stock filter.lfs.* values are accepted, a changed one is not)," >&2
   echo "  or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
   return 1
 }
@@ -795,6 +833,51 @@ attrs_proven() {
   return 1
 }
 
+# filters_proven <file of the changed paths, -z, from the top> <the way from here to the top>: refuses when
+# a changed path has a filter attribute set to anything (git-lfs's filter.lfs.* settings are let through, so
+# no filter may name a driver). Read with check-attr as either git reads it, from the working tree and from
+# the index only (--cached, so a staged .gitattributes counts). Every path must be answered for.
+filters_proven() {
+  local view mode f rc p a v n=0 got set=0
+  while IFS= read -r -d '' p; do
+    n=$((n + 1))
+  done <"$1"
+  [ "$n" -gt 0 ] || return 0
+  for view in gate scan; do
+    for mode in tree index; do
+      f=$SCRATCH/filters-$view-$mode
+      if [ "$view" = gate ]; then
+        if [ "$mode" = tree ]; then
+          ggit check-attr -z --stdin filter <"$SCRATCH/attr-paths" >"$f" 2>/dev/null
+        else
+          ggit check-attr --cached -z --stdin filter <"$SCRATCH/attr-paths" >"$f" 2>/dev/null
+        fi
+        rc=$?
+      else
+        if [ "$mode" = tree ]; then
+          (scan_env; scangit check-attr -z --stdin filter <"$SCRATCH/attr-paths" >"$f" 2>/dev/null)
+        else
+          (scan_env; scangit check-attr --cached -z --stdin filter <"$SCRATCH/attr-paths" >"$f" 2>/dev/null)
+        fi
+        rc=$?
+      fi
+      [ "$rc" = 0 ] || { could_not_scan "git could not read the filter attributes of the staged files (exit $rc)"; return 1; }
+      got=0
+      while IFS= read -r -d '' p && IFS= read -r -d '' a && IFS= read -r -d '' v; do
+        [ "$a" = filter ] || { could_not_scan "git answered for an attribute it was not asked about"; return 1; }
+        got=$((got + 1))
+        [ "$v" = unspecified ] || set=$((set + 1))
+      done <"$f"
+      [ "$got" = "$n" ] || { could_not_scan "git answered for $got of the $n staged files' filter attributes"; return 1; }
+    done
+  done
+  [ "$set" -gt 0 ] || return 0
+  echo "$SELF: REFUSED — a staged file has a filter attribute, which would run a filter driver's program, so NOTHING was scanned for secrets." >&2
+  echo "  Take the attribute off the changed files (a .gitattributes, info/attributes, core.attributesFile or the XDG attributes file)," >&2
+  echo "  or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
+  return 1
+}
+
 # outside_tree <program path> <tree top, or empty>: false when the program resolves inside the tree.
 outside_tree() {
   local real top
@@ -982,6 +1065,7 @@ run_gate() {
     return 1
   fi
   attrs_proven "$SCRATCH/names" "$cdup" || return 1
+  filters_proven "$SCRATCH/names" "$cdup" || return 1
 
   # No pipe: a pipeline's rc is the LAST command's. The judge keeps ggshield's
   # two outputs apart and in memory, and answers with an exit status and one
@@ -1007,15 +1091,16 @@ run_gate() {
   # is not seen: a stated limit. Any other answer refuses already, and keeps its own message.
   if [ "$rc:$word" = 0:clean ]; then
     local again
-    for again in settings-gate settings-scan attrs-gate attrs-scan; do
+    for again in settings-gate settings-scan attrs-gate attrs-scan filters-gate-tree filters-gate-index filters-scan-tree filters-scan-index; do
       mv -f -- "$SCRATCH/$again" "$SCRATCH/$again.before" 2>/dev/null || : >"$SCRATCH/$again.before"
     done
     settings_proven || { rm -rf "$SCRATCH"; return 1; }
     attrs_proven "$SCRATCH/names" "$cdup" || { rm -rf "$SCRATCH"; return 1; }
+    filters_proven "$SCRATCH/names" "$cdup" || { rm -rf "$SCRATCH"; return 1; }
     shallow_proven "$commit" || { rm -rf "$SCRATCH"; return 1; }
     objects_proven "$commit" || { rm -rf "$SCRATCH"; return 1; }
     if [ -n "$parent" ]; then base_proven "$parent" "$tree" || { rm -rf "$SCRATCH"; return 1; }; fi
-    for again in settings-gate settings-scan attrs-gate attrs-scan; do
+    for again in settings-gate settings-scan attrs-gate attrs-scan filters-gate-tree filters-gate-index filters-scan-tree filters-scan-index; do
       [ -e "$SCRATCH/$again" ] || : >"$SCRATCH/$again"
       if ! cmp -s -- "$SCRATCH/$again.before" "$SCRATCH/$again"; then
         rm -rf "$SCRATCH"
@@ -1820,6 +1905,10 @@ while True:
     flush(); flush()
 PROTO
   chmod +x "$tmp/proto-filter"
+  # A stand-in for the git-lfs program (the stock lfs settings name it), noting its own runs apart from $hran.
+  sed "s#$hran#$tmp/lfs-ran#" "$tmp/proto-filter" >"$tmp/proto-filter-lfs"
+  printf '#!/bin/sh\ncase "$1" in filter-process) exec %q ;; *) exec cat ;; esac\n' "$tmp/proto-filter-lfs" >"$stub_dir/git-lfs"
+  chmod +x "$tmp/proto-filter-lfs" "$stub_dir/git-lfs"
   mkmark() { # mkmark <dir>: mkrepo, plus a staged file holding the marker line
     mkrepo "$1"
     printf 'GATE_STUB_MARKER\n' >"$1/marked.txt"
@@ -1983,6 +2072,97 @@ PROTO
   out=$(mgate "$mk"); rc=$?
   check "harmless diff settings with nothing secret staged pass clean" "$rc" 0 "$out" "$SELF: clean"
 
+  # git-lfs's stock filter.lfs.* values are the one filter driver let through; any change to them, an extra
+  # key, another driver, or a filter attribute on a changed path still refuses.
+  lfsstock() { # lfsstock <dir>: the four stock values git-lfs's package writes
+    git -C "$1" config filter.lfs.clean 'git-lfs clean -- %f'
+    git -C "$1" config filter.lfs.smudge 'git-lfs smudge -- %f'
+    git -C "$1" config filter.lfs.process 'git-lfs filter-process'
+    git -C "$1" config filter.lfs.required true
+  }
+  local fattr="has a filter attribute"
+  mk="$tmp/lfs1"; mkmark "$mk"; lfsstock "$mk"
+  out=$(mgate "$mk"); rc=$?
+  check "stock filter.lfs.* values pass the settings check (the marker is seen)" "$rc" 1 "$out" "found a secret"
+  mk="$tmp/lfs1b"; mkrepo "$mk"; lfsstock "$mk"
+  out=$(mgate "$mk"); rc=$?
+  check "stock filter.lfs.* values with nothing secret staged pass clean" "$rc" 0 "$out" "$SELF: clean"
+  mk="$tmp/lfs1c"; mkmark "$mk"; lfsstock "$mk"
+  echo '*.dat -filter' >"$mk/.git/info/attributes"
+  out=$(mgate "$mk"); rc=$?
+  check "stock filter.lfs.* values and an attribute on a path not changed pass (the marker is seen)" "$rc" 1 "$out" "found a secret"
+  mk="$tmp/lfs2"; mkmark "$mk"; lfsstock "$mk"
+  git -C "$mk" config filter.lfs.clean 'git-lfs clean %f'
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a changed filter.lfs.clean value" "$rc" "$out" "$setting"
+  check "…and the refusal names the key, not the value" "$rc" 1 "$out" "filter.lfs.clean"
+  mk="$tmp/lfs2b"; mkmark "$mk"; lfsstock "$mk"
+  git -C "$mk" config filter.lfs.required false
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a changed filter.lfs.required value" "$rc" "$out" "filter.lfs.required"
+  mk="$tmp/lfs3"; mkmark "$mk"; lfsstock "$mk"
+  git -C "$mk" config filter.lfs.extra x
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "an extra key under filter.lfs" "$rc" "$out" "filter.lfs.extra"
+  mk="$tmp/lfs4"; mkmark "$mk"; lfsstock "$mk"
+  git -C "$mk" config --add filter.lfs.clean 'git-lfs clean -- %f'
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a duplicated filter.lfs.clean key" "$rc" "$out" "filter.lfs.clean"
+  mk="$tmp/lfs5"; mkmark "$mk"; lfsstock "$mk"
+  git -C "$mk" config filter.other.clean 'git-lfs clean -- %f'
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "another filter driver with the lfs value" "$rc" "$out" "filter.other.clean"
+  mk="$tmp/lfs5b"; mkmark "$mk"; lfsstock "$mk"
+  git -C "$mk" config filter.LFS.clean 'git-lfs clean -- %f'
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a filter driver whose name differs from lfs only in case" "$rc" "$out" "filter.LFS.clean"
+  mk="$tmp/lfs5c"; mkmark "$mk"; lfsstock "$mk"
+  git -C "$mk" config -f "$tmp/lfs-inc" filter.lfs.clean 'git-lfs clean -- %f'
+  git -C "$mk" config include.path "$tmp/lfs-inc"
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "filter.lfs.clean repeated in an included file" "$rc" "$out" "filter.lfs.clean"
+  rm -f "$tmp/lfs-inc"
+  # With the lfs driver tolerated, a filter attribute on a changed path refuses, from any source.
+  mk="$tmp/lfs6"; mkmark "$mk"; lfsstock "$mk"
+  echo 'marked.txt filter=lfs' >"$mk/.git/info/attributes"
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a filter attribute in info/attributes" "$rc" "$out" "$fattr"
+  mk="$tmp/lfs7"; mkmark "$mk"; lfsstock "$mk"
+  echo 'marked.txt filter=lfs' >"$mk/.gitattributes"
+  PATH="$stub_dir:$PATH" git -C "$mk" add .gitattributes
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a filter attribute in a staged .gitattributes" "$rc" "$out" "$fattr"
+  mk="$tmp/lfs7b"; mkmark "$mk"; lfsstock "$mk"
+  echo 'marked.txt filter=lfs' >"$mk/.gitattributes"
+  PATH="$stub_dir:$PATH" git -C "$mk" add .gitattributes
+  rm -f "$mk/.gitattributes"
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a filter attribute in a staged .gitattributes deleted from the working tree" "$rc" "$out" "$fattr"
+  mk="$tmp/lfs7c"; mkmark "$mk"; lfsstock "$mk"
+  echo 'marked.txt filter=lfs' >"$mk/.gitattributes"
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a filter attribute in an unstaged .gitattributes" "$rc" "$out" "$fattr"
+  mk="$tmp/lfs8"; mkmark "$mk"; lfsstock "$mk"
+  echo 'marked.txt filter=lfs' >"$tmp/lfs-attrs"
+  git -C "$mk" config core.attributesFile "$tmp/lfs-attrs"
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a filter attribute in core.attributesFile" "$rc" "$out" "$fattr"
+  mk="$tmp/lfs9"; mkmark "$mk"; lfsstock "$mk"
+  mkdir -p "$tmp/xdg-lfs/git"
+  echo 'marked.txt filter=lfs' >"$tmp/xdg-lfs/git/attributes"
+  out=$(mgate "$mk" XDG_CONFIG_HOME="$tmp/xdg-lfs"); rc=$?
+  refused_hidden "a filter attribute in the XDG attributes file" "$rc" "$out" "$fattr"
+  mk="$tmp/lfs10"; mkmark "$mk"; lfsstock "$mk"
+  attrtree=$(cd "$mk" && b=$(printf 'marked.txt filter=lfs\n' | git hash-object -w --stdin) \
+    && printf '100644 blob %s\t.gitattributes\n' "$b" | git mktree)
+  git -C "$mk" config attr.tree "$attrtree"
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "attr.tree with the lfs settings" "$rc" "$out" "$setting"
+  mk="$tmp/lfs11"; mkmark "$mk"; lfsstock "$mk"
+  echo 'other.txt filter=lfs' >"$mk/.git/info/attributes"
+  out=$(mgate "$mk"); rc=$?
+  check "a filter attribute on a path not changed is not refused (the marker is seen)" "$rc" 1 "$out" "found a secret"
+
   # GIT_CONFIG makes `git config` read that one file and nothing else, while show and write-tree ignore
   # it: an empty file there hid a textconv driver from the settings check, and the program ran.
   mk="$tmp/mk20"; mkmark "$mk"
@@ -2064,6 +2244,9 @@ PROTO
   out=$(mgate "$mk" GGSHIELD_STUB_DURING="echo '* diff=late' >>.git/info/attributes"); rc=$?
   check "an attribute added while the scan ran refuses" "$rc" 1 "$out" "changed while the scan ran"
   not_clean "an attribute added while the scan ran" "$out"
+  mk="$tmp/mk-late-filter"; mkrepo "$mk"; lfsstock "$mk"
+  out=$(mgate "$mk" GGSHIELD_STUB_DURING="echo 'staged.txt filter=lfs' >>.git/info/attributes"); rc=$?
+  check "a filter attribute added while the scan ran refuses" "$rc" 1 "$out" "$fattr"
   mk="$tmp/mk25c"; mkrepo "$mk"
   out=$(mgate "$mk"); rc=$?
   check "…and with nothing changed the same repository passes clean" "$rc" 0 "$out" "$SELF: clean"
