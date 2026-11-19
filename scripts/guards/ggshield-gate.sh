@@ -129,7 +129,11 @@ unset CDPATH
 # stub that reads as ggshield 1.56.1 does). A file added has no such object
 # and a submodule's id names none here, so neither is hashed. The objects of
 # the scanned commit's own tree are not hash-checked; that commit's object is
-# (above). A HEAD whose commit fails git's own check when the gate peels it is
+# (above). Those objects are read by one `git cat-file --batch` and hashed by
+# one python3, so the check costs the same few processes for 2 files or 2000.
+# git's two listings of the change (diff-tree) run under `timeout` (coreutils;
+# none on PATH refuses): one that does not finish in 120 s, or the lower
+# GGSHIELD_LIST_TIMEOUT, refuses instead of holding the commit. A HEAD whose commit fails git's own check when the gate peels it is
 # read as no first commit, so the whole tree is scanned. A shallow HEAD (a --depth clone) is not refused:
 # the change is still shown in full. Probed against ggshield's two show calls and found to change nothing
 # in what reaches the scan: diff.<x>.command (no --ext-diff), diff.external,
@@ -415,7 +419,31 @@ git_env_proven() {
 # ggit: git for the gate's own reads of the repository, with core.fsmonitor off (an inherited setting of
 # it would run a program inside write-tree and diff-index), and with replace refs and grafts ignored. A
 # filter driver's program also runs in write-tree: settings_proven refuses those before it is called.
-ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git -c core.fsmonitor=false -c core.commitGraph=false "$@"; }
+GGIT_OPTS=(-c core.fsmonitor=false -c core.commitGraph=false)
+ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}" "$@"; }
+
+# glist <out file> <what> <git arguments...>: ggit with its output to <out file>, stopped after LIST_TIMEOUT
+# seconds (120; the environment variable GGSHIELD_LIST_TIMEOUT can lower it, never raise it). A listing of
+# the change that does not finish (a tree too large to walk) refuses, naming <what>, instead of holding the
+# commit for good; one git cannot make refuses as before.
+LIST_TIMEOUT=120
+glist() {
+  local out=$1 what=$2 secs=$LIST_TIMEOUT rc
+  shift 2
+  if [ -n "${GGSHIELD_LIST_TIMEOUT-}" ]; then
+    [[ $GGSHIELD_LIST_TIMEOUT =~ ^[0-9]{1,6}$ ]] && [ "$((10#$GGSHIELD_LIST_TIMEOUT))" -ge 1 ] \
+      || { could_not_scan "GGSHIELD_LIST_TIMEOUT is not a whole number of seconds above 0"; return 1; }
+    [ "$((10#$GGSHIELD_LIST_TIMEOUT))" -lt "$secs" ] && secs=$((10#$GGSHIELD_LIST_TIMEOUT))
+  fi
+  GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null timeout -k 5 "$secs" git "${GGIT_OPTS[@]}" "$@" </dev/null >"$out" 2>/dev/null
+  rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    124 | 137) could_not_scan "git's listing of $what did not finish within $secs s (a tree too large to walk)" ;;
+    *) could_not_scan "git could not list $what" ;;
+  esac
+  return 1
+}
 
 # The settings ggshield's git runs with, as one GIT_CONFIG_COUNT group (command-line scope, so they
 # outrank every config file). Each changed or hid ggshield's patch when set otherwise, or could run a
@@ -539,14 +567,46 @@ objects_proven() {
   return 0
 }
 
-# hashed <type> <id>: the object, read as git reads it, hashes to its id (cat-file must succeed too: a
-# failed read hashes as empty, the id of an empty blob).
+# hashed <list> <out>: every object in <list> (lines "<type> <id>"), read as git reads it, hashes to its id
+# and has that type. One `cat-file --batch` reads them all and one python3 hashes what it prints (sha1 or
+# sha256, by the id's length). A missing object, another type, a short or overlong answer, or a cat-file that
+# fails is a mismatch. On a mismatch the first id that failed is written to <out> (empty when the answer as a
+# whole could not be read) and it returns 1. $py is run_gate's python3, proven outside the tree.
 hashed() {
-  local got
-  ggit cat-file "$1" "$2" </dev/null >"$SCRATCH/obj" 2>/dev/null || return 1
-  got=$(ggit hash-object --literally -t "$1" --stdin <"$SCRATCH/obj" 2>/dev/null)
-  rm -f -- "$SCRATCH/obj"
-  [ -n "$got" ] && [ "$got" = "$2" ]
+  local list=$1 res=$2 st ids
+  : >"$res" || return 1
+  mapfile -t ids <"$list" || return 1
+  printf '%s\n' "${ids[@]#* }" | ggit cat-file --batch 2>/dev/null | "$py" -I -c '
+import hashlib, sys
+want = [line.split() for line in open(sys.argv[1], encoding="ascii")]
+f = sys.stdin.buffer
+def fail(oid=""):
+    open(sys.argv[2], "w").write(oid)
+    sys.exit(1)
+for kind, oid in want:
+    head = f.readline()
+    parts = head[:-1].split(b" ") if head.endswith(b"\n") else []
+    if len(parts) != 3 or parts[0] != oid.encode() or parts[1] != kind.encode() or not parts[2].isdigit():
+        fail(oid)
+    size = int(parts[2])
+    if len(oid) not in (40, 64):
+        fail(oid)
+    h = hashlib.new("sha1" if len(oid) == 40 else "sha256")
+    h.update(b"%s %d\0" % (kind.encode(), size))
+    left = size
+    while left:
+        chunk = f.read(min(left, 1 << 20))
+        if not chunk:
+            fail(oid)
+        h.update(chunk)
+        left -= len(chunk)
+    if f.read(1) != b"\n" or h.hexdigest() != oid:
+        fail(oid)
+if f.read(1):
+    fail()
+' "$list" "$res"
+  st=("${PIPESTATUS[@]}")
+  [ "${st[*]}" = "0 0 0" ]
 }
 
 # base_proven <HEAD's commit> <the staged tree>: refuses unless every object on HEAD's side of the
@@ -556,29 +616,55 @@ hashed() {
 # HEAD's id for a file or directory, holding the staged content, made that part of the change look
 # unchanged and the patch empty (measured with the stub, which reads as ggshield 1.56.1 does). A file
 # added has no old side (the null id), and a submodule's id names no object here: neither is hashed.
+# HEAD's commit and tree are hashed before the listing, the objects it names in one pass after it.
 base_proven() {
-  local head=$1 tree=$2 rec meta omode oid id
+  local head=$1 tree=$2 id bad
   local refuse="$SELF: REFUSED — an object on HEAD's side of the change does not hash to its id"
-  hashed commit "$head" || { echo "$refuse (HEAD's commit $head), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2; base_advice; return 1; }
+  printf 'commit %s\n' "$head" >"$SCRATCH/base-ids"
+  hashed "$SCRATCH/base-ids" "$SCRATCH/base-bad" || { echo "$refuse (HEAD's commit $head), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2; base_advice; return 1; }
   id=$(ggit rev-parse -q --verify "$head^{tree}" 2>/dev/null) && [ ${#id} = ${#tree} ] \
     || { could_not_scan "git could not name HEAD's tree"; return 1; }
-  hashed tree "$id" || { echo "$refuse (HEAD's tree $id), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2; base_advice; return 1; }
-  ggit diff-tree -r -t --no-renames --no-abbrev --raw -z "$head" "$tree" </dev/null >"$SCRATCH/base-raw" 2>/dev/null \
-    || { could_not_scan "git could not list the objects HEAD's side of the change is read from"; return 1; }
+  printf 'tree %s\n' "$id" >"$SCRATCH/base-ids"
+  hashed "$SCRATCH/base-ids" "$SCRATCH/base-bad" || { echo "$refuse (HEAD's tree $id), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2; base_advice; return 1; }
+  glist "$SCRATCH/base-raw" "the objects HEAD's side of the change is read from" \
+    diff-tree -r -t --no-renames --no-abbrev --raw -z "$head" "$tree" || return 1
   # A record is ":<old mode> <new mode> <old id> <new id> <status>" and then the path, each ended by NUL.
-  while IFS= read -r -d '' meta; do
-    IFS= read -r -d '' rec || { could_not_scan "git listed an object of HEAD's side without its path"; return 1; }
-    [[ $meta =~ ^:([0-7]{6})\ [0-7]{6}\ ([0-9a-f]+)\ [0-9a-f]+\ [A-Z]$ ]] \
-      || { could_not_scan "git listed HEAD's side of the change in a form the gate cannot read"; return 1; }
-    omode=${BASH_REMATCH[1]} oid=${BASH_REMATCH[2]}
-    [ ${#oid} = ${#tree} ] || { could_not_scan "git listed an object id of HEAD's side of the wrong length"; return 1; }
-    [[ $oid =~ ^0+$ ]] && continue
-    case "$omode" in
-      000000 | 160000) continue ;;
-      040000) hashed tree "$oid" ;;
-      *) hashed blob "$oid" ;;
-    esac || { echo "$refuse (object $oid), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2; base_advice; return 1; }
-  done <"$SCRATCH/base-raw"
+  # One python3 reads them all and writes "<type> <id>" for each old side to hash; it answers a word when
+  # the listing cannot be read.
+  bad=$("$py" -I -c '
+import re, sys
+parts = open(sys.argv[1], "rb").read().split(b"\0")
+if parts[-1] != b"":
+    sys.exit("form")
+parts.pop()
+if len(parts) % 2:
+    sys.exit("nopath")
+out = []
+for meta in parts[0::2]:
+    m = re.fullmatch(rb":([0-7]{6}) [0-7]{6} ([0-9a-f]+) [0-9a-f]+ [A-Z]", meta)
+    if not m:
+        sys.exit("form")
+    mode, oid = m.groups()
+    if len(oid) != int(sys.argv[3]):
+        sys.exit("length")
+    if oid.strip(b"0") == b"" or mode in (b"000000", b"160000"):
+        continue
+    out.append(("tree " if mode == b"040000" else "blob ") + oid.decode() + "\n")
+open(sys.argv[2], "w").write("".join(out))
+' "$SCRATCH/base-raw" "$SCRATCH/base-ids" "${#tree}" 2>&1 </dev/null)
+  case "$?:$bad" in
+    0:) ;;
+    *:nopath) could_not_scan "git listed an object of HEAD's side without its path"; return 1 ;;
+    *:length) could_not_scan "git listed an object id of HEAD's side of the wrong length"; return 1 ;;
+    *) could_not_scan "git listed HEAD's side of the change in a form the gate cannot read"; return 1 ;;
+  esac
+  [ -s "$SCRATCH/base-ids" ] || return 0
+  if ! hashed "$SCRATCH/base-ids" "$SCRATCH/base-bad"; then
+    bad=$(<"$SCRATCH/base-bad")
+    echo "$refuse (${bad:+object $bad}${bad:-an object git could not read in full}), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2
+    base_advice
+    return 1
+  fi
   return 0
 }
 base_advice() {
@@ -726,6 +812,13 @@ run_gate() {
     echo "  Put python3 on PATH from outside the tree, or opt out for this commit with GGSHIELD_SKIP=1." >&2
     return 1
   fi
+  local tmo
+  tmo=$(command -v timeout 2>/dev/null) || { could_not_scan "there is no timeout program (coreutils) to bound git's listings with"; return 1; }
+  if ! outside_tree "$tmo" "$here" || ! outside_tree "$tmo" "$top"; then
+    echo "$SELF: REFUSED — timeout resolves inside the repository working tree, so NOTHING was scanned." >&2
+    echo "  Put timeout on PATH from outside the tree, or opt out for this commit with GGSHIELD_SKIP=1." >&2
+    return 1
+  fi
   [ -f "$JUDGE" ] || { could_not_scan "ggshield-judge.py is not beside this script"; return 1; }
 
   SCRATCH=$(mktemp -d) || { could_not_scan "no temporary directory"; return 1; }
@@ -771,8 +864,8 @@ run_gate() {
     *) could_not_scan "git could not compare the staged index with the tree to scan (exit $same)"; return 1 ;;
   esac
   # The files of that tree's change: their count for the message, their names for the attribute check.
-  ggit diff-tree -r --no-renames --name-only -z "$base" "$tree" >"$SCRATCH/names" 2>/dev/null </dev/null \
-    || { could_not_scan "git could not list the files of the commit to scan"; return 1; }
+  glist "$SCRATCH/names" "the files of the commit to scan" \
+    diff-tree -r --no-renames --name-only -z "$base" "$tree" || return 1
   scanned=$(tr -cd '\0' <"$SCRATCH/names" | wc -c) || { could_not_scan "the files of the commit to scan could not be counted"; return 1; }
   case "$scanned" in
     *[!0-9]* | "") could_not_scan "the files of the commit to scan could not be counted"; return 1 ;;
@@ -1960,6 +2053,48 @@ open(sys.argv[3], "wb").write(zlib.compress(sys.argv[1].encode() + b" %d\0" % le
   git -C "$mk" update-index --cacheinfo "160000,$(git -C "$mk" rev-parse HEAD),sub"
   out=$(mgate "$mk"); rc=$?
   check "a changed submodule id passes clean (it is not an object here)" "$rc" 0 "$out" "$SELF: clean"
+  # git's listings of the change are bounded in time. A tree on HEAD's side planted to name itself as its
+  # own subdirectory: git 2.56 stops at its tree-depth limit, an older git may walk on; either way it is
+  # refused within the bound and never passes.
+  local t0 secs
+  mk="$tmp/mk27i"; mkdir_mark "$mk"
+  gc=$(git -C "$mk" rev-parse HEAD:dir)
+  python3 -I -c '
+import binascii, sys
+open(sys.argv[2], "wb").write(b"40000 dir\0" + binascii.unhexlify(sys.argv[1]))
+' "$gc" "$tmp/plant"
+  plant "$mk" tree "$gc" "$tmp/plant"
+  t0=$SECONDS
+  out=$(mgate "$mk" GGSHIELD_LIST_TIMEOUT=5); rc=$?
+  secs=$((SECONDS - t0))
+  check "a tree on HEAD's side that names itself is refused" "$rc" 1 "$out" "REFUSED"
+  not_clean "a tree on HEAD's side that names itself" "$out"
+  check "…within the time bound ($secs s)" "$((secs < 30 ? 0 : 1))" 0 "$out" "REFUSED"
+  # A listing that does not finish: a git whose diff-tree never returns. With HEAD, the first listing is the
+  # one of HEAD's side; before the first commit it is the list of files to scan.
+  local slowgit="$tmp/gitslow"
+  mkdir -p "$slowgit"
+  printf '#!/bin/sh\ns=; k=; for a; do if [ -n \"$k\" ]; then k=; elif [ \"$a\" = -c ]; then k=1; else s=$a; break; fi; done\ncase "$s" in diff-tree) exec sleep 60 ;; esac\nexec %q "$@"\n' "$(command -v git)" >"$slowgit/git"
+  chmod +x "$slowgit/git"
+  t0=$SECONDS
+  out=$(cd "$repo" && PATH="$slowgit:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=2 bash "$self" 2>&1); rc=$?
+  secs=$((SECONDS - t0))
+  check "a listing of HEAD's side that does not finish is stopped at the time limit" "$rc" 1 "$out" "did not finish within 2 s"
+  check "…and counts as not scanned" "$rc" 1 "$out" "NOT scanned"
+  check "…and was stopped, not waited for ($secs s)" "$((secs < 30 ? 0 : 1))" 0 "$out" "REFUSED"
+  mk="$tmp/mk27j"; mkdir -p "$mk"
+  git -C "$mk" init -q 2>/dev/null
+  printf 'first\n' >"$mk/first.txt"
+  git -C "$mk" add first.txt
+  t0=$SECONDS
+  out=$(cd "$mk" && PATH="$slowgit:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=2 bash "$self" 2>&1); rc=$?
+  secs=$((SECONDS - t0))
+  check "before the first commit, a list of files that does not finish is stopped at the time limit" "$rc" 1 "$out" "files of the commit to scan did not finish within 2 s"
+  check "…and was stopped, not waited for ($secs s)" "$((secs < 30 ? 0 : 1))" 0 "$out" "REFUSED"
+  out=$(cd "$repo" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=0 bash "$self" 2>&1); rc=$?
+  check "a time limit of 0 (no limit, to timeout) is refused" "$rc" 1 "$out" "GGSHIELD_LIST_TIMEOUT is not a whole number of seconds above 0"
+  out=$(cd "$repo" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=600 bash "$self" 2>&1); rc=$?
+  check "a time limit above 120 s is lowered to 120, not refused" "$rc" 0 "$out" "$SELF: clean"
   # The top of the tree is read through a sentinel and physdir: a core.worktree ending in a newline was read
   # as the name without it (command substitution drops it) before that change, and passed.
   mk="$tmp/mk28"; mkdir -p "$mk" "$tmp/wt28"$'\n'
