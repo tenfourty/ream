@@ -30,7 +30,10 @@ jobs:
     runs-on: docker-light
     # A hung job fails here instead of holding a builder for the runner's default of hours
     # (6 Oct 2026: a test job sat idle for 35 min on a CPU-starved builder03).
-    timeout-minutes: 20
+    # 40, not 20: the guard selftests alone take ~12 min on a 2-CPU slot, and on
+    # 19 Nov 2026 four runs were cut off at 20 min mid-suite (reported by the
+    # runner as "context deadline exceeded", not as a timeout).
+    timeout-minutes: 40
     # Only in the public repo, NAMED (not "anything but the sec repo"): a copy of this file anywhere
     # else has its jobs skipped (the private repo runs sec.yml instead). A job whose `if:` is false
     # is never dispatched. Every job in this file carries this gate;
@@ -128,7 +131,8 @@ jobs:
     # 11 Nov 2026 every step passed but the SQLite suite was cut off at 99% by the 20.
     # 45, not 30: test_shots_offline.py adds ~10 min to the browser step (run 60677,
     # 16 Nov 2026: the step took 17:42, then the SQLite suite was cut off at 80%).
-    timeout-minutes: 45
+    # 60, not 45: a passing run took 41 min on 19 Nov 2026.
+    timeout-minutes: 60
     # Public repo only, named (see `test`); skipped in the private copy.
     if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
@@ -222,7 +226,8 @@ jobs:
   # The browser tests stay in `test-sqlite`: they test the page, not plug-in loading.
   core-bare:
     runs-on: docker-light
-    timeout-minutes: 25
+    # 45, not 25: both suites at two workers ran past 25 min on 19 Nov 2026.
+    timeout-minutes: 45
     # Public repo only, named (see `test`); skipped in the private copy.
     if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
