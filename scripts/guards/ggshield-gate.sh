@@ -429,12 +429,15 @@ ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}"
 # commit for good; one git cannot make refuses as before. The bound needs no `timeout` program: git runs
 # in the background, a watchdog subshell sleeps the limit, marks that it fired and stops git (TERM, then
 # KILL 5 s later), and any listing the watchdog fired on refuses, even one that finished as it fired. The
-# watchdog holds none of the gate's output, and is stopped and reaped when git ends (glist_stop, also on
-# exit); a stopped watchdog stops its own sleep. It signals only the git it was given.
+# watchdog holds none of the gate's output, and is stopped and reaped when git ends (glist_stop); a stopped
+# watchdog stops its own sleep, also one it had started but not yet named. It signals only the git it was
+# given. A gate that ends while git still runs (Ctrl-C, or TERM to the gate: a background child of a
+# non-interactive bash ignores SIGINT and SIGQUIT, so git would walk on) stops git too, from the EXIT trap.
 LIST_TIMEOUT=120
 GLIST_DOG=
+GLIST_GIT=
 glist() {
-  local out=$1 what=$2 secs=$LIST_TIMEOUT rc gpid fired="$SCRATCH/glist-fired"
+  local out=$1 what=$2 secs=$LIST_TIMEOUT rc fired="$SCRATCH/glist-fired"
   shift 2
   if [ -n "${GGSHIELD_LIST_TIMEOUT-}" ]; then
     [[ $GGSHIELD_LIST_TIMEOUT =~ ^[0-9]{1,6}$ ]] && [ "$((10#$GGSHIELD_LIST_TIMEOUT))" -ge 1 ] \
@@ -443,18 +446,29 @@ glist() {
   fi
   rm -f -- "$fired" || { could_not_scan "no temporary file"; return 1; }
   GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}" "$@" </dev/null >"$out" 2>/dev/null &
-  gpid=$!
+  GLIST_GIT=$!
+  # The watchdog's TERM trap only marks that it was stopped and stops a sleep it has named; after each sleep
+  # is started and named the mark is read again, so a TERM between the two leaves no sleep behind. Its sleep
+  # is stopped with KILL, which nothing catches: with TERM a `sleep 5` was seen left running, most likely a
+  # TERM that reached the child after bash forked it and before it ran sleep, while it still held the trap.
   (
-    s=
-    trap '[ -n "$s" ] && kill -TERM "$s" 2>/dev/null; exit 0' TERM
-    sleep "$secs" & s=$!; wait "$s"
+    s='' stop=''
+    trap 'stop=1; [ -z "$s" ] || kill -KILL "$s" 2>/dev/null' TERM
+    sleep "$secs" & s=$!
+    [ -z "$stop" ] || { kill -KILL "$s" 2>/dev/null; exit 0; }
+    wait "$s"; s=''
+    [ -z "$stop" ] || exit 0
     : >"$fired"
-    kill -TERM "$gpid" 2>/dev/null
-    sleep 5 & s=$!; wait "$s"
-    kill -KILL "$gpid" 2>/dev/null
+    kill -TERM "$GLIST_GIT" 2>/dev/null
+    sleep 5 & s=$!
+    [ -z "$stop" ] || { kill -KILL "$s" 2>/dev/null; exit 0; }
+    wait "$s"; s=''
+    [ -z "$stop" ] || exit 0
+    kill -KILL "$GLIST_GIT" 2>/dev/null
   ) </dev/null >/dev/null 2>&1 &
   GLIST_DOG=$!
-  wait "$gpid"; rc=$?
+  wait "$GLIST_GIT"; rc=$?
+  GLIST_GIT=
   glist_stop
   if [ -e "$fired" ]; then
     could_not_scan "git's listing of $what did not finish within $secs s (a tree too large to walk)"
@@ -465,12 +479,32 @@ glist() {
   fi
   return 1
 }
-# glist_stop: stop and reap glist's watchdog, if one is running.
+# glist_stop: stop the git glist started, if the gate ends while it runs, then stop and reap the watchdog.
+# git is signalled through bash's job table (`kill %<job>`), never by its bare process id: bash signals a
+# job's process only while it has not reaped it, so an id the system has since given to another process is
+# never signalled. The watchdog is signalled the same way, then waited for.
 glist_stop() {
-  [ -n "$GLIST_DOG" ] || return 0
-  kill -TERM "$GLIST_DOG" 2>/dev/null
-  wait "$GLIST_DOG" 2>/dev/null
-  GLIST_DOG=
+  if [ -n "$GLIST_GIT" ]; then
+    glist_kill "$GLIST_GIT"
+    GLIST_GIT=
+  fi
+  if [ -n "$GLIST_DOG" ]; then
+    glist_kill "$GLIST_DOG"
+    wait "$GLIST_DOG" 2>/dev/null
+    GLIST_DOG=
+  fi
+  return 0
+}
+# glist_kill <pid>: TERM to the gate's job whose process is <pid>, if bash still holds one. `jobs -l` writes
+# "[<n>]<mark> <pid> <state> <command>"; a job no longer listed is not signalled.
+glist_kill() {
+  local spec pid rest
+  jobs -l >"$SCRATCH/glist-jobs" 2>/dev/null || return 0
+  while read -r spec pid rest; do
+    [ "$pid" = "$1" ] && [[ $spec =~ ^\[([0-9]+)\] ]] || continue
+    kill -TERM "%${BASH_REMATCH[1]}" 2>/dev/null
+  done <"$SCRATCH/glist-jobs"
+  return 0
 }
 
 # The settings ggshield's git runs with, as one GIT_CONFIG_COUNT group (command-line scope, so they
@@ -568,7 +602,11 @@ shallow_proven() {
   # upper case, a CR, a space or other text after the id all counted), so the line is read the same way.
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line:0:${#1}}
-    if [ "${line,,}" = "$1" ]; then
+    # In lower case for the id's hex letters (bash 3.2, macOS's /bin/bash, has no ${line,,}); the id is
+    # lower-case hex, so no other letter can match either way.
+    line=${line//A/a}; line=${line//B/b}; line=${line//C/c}
+    line=${line//D/d}; line=${line//E/e}; line=${line//F/f}
+    if [ "$line" = "$1" ]; then
       echo "$SELF: REFUSED — the shallow list ($f) names the commit made for the scan, so git would not show its change as it is and NOTHING was scanned for secrets." >&2
       echo "  Take that line out, or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
       return 1
@@ -601,10 +639,12 @@ objects_proven() {
 # fails is a mismatch. On a mismatch the first id that failed is written to <out> (empty when the answer as a
 # whole could not be read) and it returns 1. $py is run_gate's python3, proven outside the tree.
 hashed() {
-  local list=$1 res=$2 st ids
+  local list=$1 res=$2 st id
   : >"$res" || return 1
-  mapfile -t ids <"$list" || return 1
-  printf '%s\n' "${ids[@]#* }" | ggit cat-file --batch 2>/dev/null | "$py" -I -c '
+  [ -r "$list" ] || return 1
+  # The ids alone, one per line, read with builtins bash 3.2 has (macOS's /bin/bash: no mapfile).
+  while read -r _ id; do printf '%s\n' "$id"; done <"$list" \
+    | ggit cat-file --batch 2>/dev/null | "$py" -I -c '
 import hashlib, sys
 want = [line.split() for line in open(sys.argv[1], encoding="ascii")]
 f = sys.stdin.buffer
@@ -2066,6 +2106,14 @@ open(sys.argv[3], "wb").write(zlib.compress(sys.argv[1].encode() + b" %d\0" % le
   git -C "$mk" add dir/secret.txt
   out=$(mgate "$mk"); rc=$?
   check "…and with nothing planted a benign edit in the directory passes clean" "$rc" 0 "$out" "$SELF: clean"
+  # An object on HEAD's side that is missing: cat-file --batch answers "<id> missing" for it, which the
+  # batch's reader takes as a mismatch and names.
+  mk="$tmp/mk27k"; mkdir_mark "$mk"
+  gc=$(git -C "$mk" rev-parse HEAD:dir/secret.txt)
+  rm -f "$mk/.git/objects/${gc:0:2}/${gc:2}"
+  out=$(mgate "$mk"); rc=$?
+  check "a blob on HEAD's side that is missing is refused" "$rc" 1 "$out" "on HEAD's side of the change does not hash to its id (object $gc)"
+  not_clean "a blob on HEAD's side that is missing" "$out"
   # A submodule's id is not an object here: it is not hashed, and changing it passes.
   mk="$tmp/mk27g"; mkrepo "$mk"
   git -C "$mk" update-index --add --cacheinfo "160000,$(git -C "$mk" rev-parse HEAD),sub"
@@ -2114,8 +2162,85 @@ open(sys.argv[2], "wb").write(b"40000 dir\0" + binascii.unhexlify(sys.argv[1]))
   check "…and was stopped, not waited for ($secs s)" "$((secs < 30 ? 0 : 1))" 0 "$out" "REFUSED"
   out=$(cd "$repo" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=0 bash "$self" 2>&1); rc=$?
   check "a time limit of 0 is refused" "$rc" 1 "$out" "GGSHIELD_LIST_TIMEOUT is not a whole number of seconds above 0"
-  out=$(cd "$repo" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=600 bash "$self" 2>&1); rc=$?
-  check "a time limit above 120 s is lowered to 120, not refused" "$rc" 0 "$out" "$SELF: clean"
+  # The limit in force is read from the watchdog's sleep: a sleep first on PATH records its argument, and a
+  # git whose diff-tree waits (up to 10 s) until one is recorded, so the watchdog is never stopped before it.
+  local sleepdir="$tmp/sleeprec" waitgit="$tmp/gitwait" slept="$tmp/slept"
+  mkdir -p "$sleepdir" "$waitgit"
+  printf '#!/bin/sh
+echo "$1" >>%q
+exec %q "$@"
+' "$slept" "$(command -v sleep)" >"$sleepdir/sleep"
+  printf '#!/bin/sh
+s=; k=; for a; do if [ -n \"$k\" ]; then k=; elif [ \"$a\" = -c ]; then k=1; else s=$a; break; fi; done
+if [ "$s" = diff-tree ]; then n=0; while [ ! -s %q ] && [ "$n" -lt 100 ]; do %q 0.1; n=$((n + 1)); done; fi
+exec %q "$@"
+' \
+    "$slept" "$(command -v sleep)" "$(command -v git)" >"$waitgit/git"
+  chmod +x "$sleepdir/sleep" "$waitgit/git"
+  : >"$slept"
+  out=$(cd "$repo" && PATH="$waitgit:$sleepdir:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=600 bash "$self" 2>&1); rc=$?
+  check "a time limit above 120 s is not refused" "$rc" 0 "$out" "$SELF: clean"
+  check "…and is lowered to 120 (the watchdog slept: $(tr '\n' ' ' <"$slept"))" \
+    "$( [ -s "$slept" ] && ! grep -qvx 120 "$slept"; echo $?)" 0 "$out" "$SELF: clean"
+  : >"$slept"
+  out=$(cd "$repo" && PATH="$waitgit:$sleepdir:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=7 bash "$self" 2>&1); rc=$?
+  check "a time limit of 7 s is the one the watchdog sleeps ($(tr '\n' ' ' <"$slept"))" \
+    "$( [ -s "$slept" ] && ! grep -qvx 7 "$slept"; echo $?)" 0 "$out" "$SELF: clean"
+  # A listing git cannot make (diff-tree exits 3) refuses as not scanned, without waiting for the limit.
+  local failgit="$tmp/gitfail"
+  mkdir -p "$failgit"
+  printf '#!/bin/sh
+s=; k=; for a; do if [ -n \"$k\" ]; then k=; elif [ \"$a\" = -c ]; then k=1; else s=$a; break; fi; done
+case "$s" in diff-tree) exit 3 ;; esac
+exec %q "$@"
+' "$(command -v git)" >"$failgit/git"
+  chmod +x "$failgit/git"
+  t0=$SECONDS
+  out=$(cd "$repo" && PATH="$failgit:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  secs=$((SECONDS - t0))
+  check "a listing of HEAD's side that git cannot make is refused" "$rc" 1 "$out" "git could not list the objects HEAD's side of the change is read from"
+  check "…and counts as not scanned" "$rc" 1 "$out" "NOT scanned"
+  check "…at once, not at the time limit ($secs s)" "$((secs < 30 ? 0 : 1))" 0 "$out" "REFUSED"
+  # A gate stopped while git lists (TERM to the gate) leaves no git behind: a background child of a
+  # non-interactive bash ignores SIGINT and SIGQUIT, so only the gate's EXIT trap stops it. The git records
+  # its process id and never returns; the gate is stopped once it has, and that process must be gone. (TERM,
+  # not INT: this selftest's own background children ignore SIGINT, so the gate it starts could not get one.)
+  local pidgit="$tmp/gitpid" gpidf="$tmp/git-pid" gp gpid n
+  running() { # running <pid>: the process is there and not a zombie (an orphan's zombie can outlive the
+    # gate where nothing reaps it, as in a container whose first process does not)
+    local st
+    kill -0 "$1" 2>/dev/null || return 1
+    [ -r "/proc/$1/stat" ] || return 0
+    st=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+    st=${st##*) }
+    [ "${st%% *}" != Z ]
+  }
+  mkdir -p "$pidgit"
+  printf '#!/bin/sh
+s=; k=; for a; do if [ -n \"$k\" ]; then k=; elif [ \"$a\" = -c ]; then k=1; else s=$a; break; fi; done
+case "$s" in diff-tree) echo $$ >%q; exec sleep 60 ;; esac
+exec %q "$@"
+' "$gpidf" "$(command -v git)" >"$pidgit/git"
+  chmod +x "$pidgit/git"
+  rm -f "$gpidf"
+  (cd "$repo" && exec env PATH="$pidgit:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" >"$tmp/stopped-out" 2>&1) &
+  gp=$!
+  n=0
+  while [ ! -s "$gpidf" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+  gpid=$(cat "$gpidf" 2>/dev/null)
+  kill -TERM "$gp" 2>/dev/null
+  wait "$gp"; rc=$?
+  n=0
+  while [ -n "$gpid" ] && running "$gpid" && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+  out=$(cat "$tmp/stopped-out")
+  check "a gate stopped mid-listing ends by the signal (rc $rc)" "$rc" 143 "listing started: ${gpid:-no}" "listing started: [0-9]"
+  not_clean "a gate stopped mid-listing" "$out"
+  if [ -n "$gpid" ] && ! running "$gpid"; then
+    printf '  ok    …and the git it started is gone\n'
+  else
+    printf '  FAIL  a gate stopped mid-listing left its git (%s) running\n' "${gpid:-never started}"; fail=1
+    [ -z "$gpid" ] || kill -KILL "$gpid" 2>/dev/null
+  fi
   # The bound needs no `timeout` program (macOS has none without coreutils): on a PATH of links to the
   # tools the gate and its stubs use, with no timeout or gtimeout among them, a listing that does not
   # finish is still stopped and refused, and a normal one passes.

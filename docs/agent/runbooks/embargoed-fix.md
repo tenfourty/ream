@@ -53,9 +53,12 @@ fix touches none of them until release.
    then not pullable anonymously. After the last push the repo, the owner and both images are
    proved again, in case one went public while the pushes ran; only then does the run print one
    `SEC BUILT image=<ref>@sha256:<digest>` line. No lock PR: ream-homelab's `main` never moves.
-   A fix that changes nothing in the deployed image (a commit hook, a guard script) skips this
-   step and step 5, with security's agreement ("An embargoed fix to a commit hook skips the
-   hand-pinned rollout", `docs/decisions.md`, 19 Nov 2026).
+   This step and step 5 were skipped once: for the secret-scan gate fix of 19 Nov 2026, which
+   changed only a commit hook and nothing in the deployed image, with security's agreement and
+   Jeremy's answer approving that release ("An embargoed fix to a commit hook skips the
+   hand-pinned rollout", `docs/decisions.md`, 19 Nov 2026). A later fix that changes nothing in
+   the image skips them only with both again: security's agreement and Jeremy's answer for that
+   release.
 5. **The pin is by hand.** No automation pins a sec image: nothing in this repo or in
    ream-homelab opens or merges a pin for it. The maintainer sends homelab's office the image
    reference (the `SEC BUILT` line) and the words "security fix", nothing about the weakness, and
