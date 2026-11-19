@@ -433,13 +433,14 @@ ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}"
 # watchdog stops its own sleep, also one it had started but not yet named. A gate that ends while a listing
 # runs (Ctrl-C, or TERM to the gate: a background child of a non-interactive bash ignores SIGINT and
 # SIGQUIT, so git would walk on) stops git and the watchdog too, from the EXIT trap (glist_stop).
-# Two limits, both from the watchdog being its own process, which signals git by its process id, not
+# Three limits, all from the watchdog being its own process, which signals git by its process id, not
 # through the gate's job table. (1) If git ends at the very moment the limit runs out, the gate can reap it,
 # and the system give its id to another process, in the moment before the gate stops the watchdog; that
 # process would get the TERM (and 5 s later the KILL, but only if the watchdog is still running then, and
 # the gate stops it as soon as git is reaped). (2) A gate killed with SIGKILL runs no EXIT trap: its
 # watchdog is left, and up to the limit plus 5 s later TERMs and KILLs git's id, which by then may name
-# another process.
+# another process. (3) The same happens, on bash 5.2, when a TERM ends the gate just after the watchdog's
+# fork and before bash records it as a job (see glist_stop): the trap cannot reach that watchdog.
 LIST_TIMEOUT=120
 GLIST_DOG=
 GLIST_ACTIVE=
@@ -494,8 +495,8 @@ glist() {
 # watchdog), and a job is normally in bash's table from the fork, before `$!` is read, so this also stops a
 # git or a watchdog whose id was never stored (a signal that ended the gate just after the fork). Not
 # always: on bash 5.2 a TERM that lands in the parent just after the fork, before bash records the job, can
-# run the EXIT trap first. Then git runs to the end of its listing and exits, unsignalled; the watchdog has
-# not started, so nothing is left to signal an id. Called when git has ended, it stops the watchdog; from
+# run the EXIT trap first. After git's fork, git runs to the end of its listing and exits, unsignalled,
+# and no watchdog has started; after the watchdog's fork, that watchdog is left (limit (3) above). Called when git has ended, it stops the watchdog; from
 # the EXIT trap, whatever runs. Jobs are signalled through bash's job table (`kill %<job>`), never by a bare
 # process id: bash signals a job's process only while it has not reaped it, so an id the system has since
 # given to another process is never signalled. If `jobs -l` cannot be read it still TERMs jobs %1 to %8
@@ -2187,7 +2188,7 @@ open(sys.argv[2], "wb").write(b"40000 dir\0" + binascii.unhexlify(sys.argv[1]))
   out=$(cd "$repo" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=0 bash "$self" 2>&1); rc=$?
   check "a time limit of 0 is refused" "$rc" 1 "$out" "GGSHIELD_LIST_TIMEOUT is not a whole number of seconds above 0"
   # The limit in force is read from the watchdog's sleep: a sleep first on PATH records its argument, and a
-  # git whose diff-tree waits (up to 10 s) until one is recorded, so the watchdog is never stopped before it.
+  # git whose diff-tree waits (up to 30 s) until one is recorded, so the watchdog is never stopped before it.
   local sleepdir="$tmp/sleeprec" waitgit="$tmp/gitwait" slept="$tmp/slept"
   mkdir -p "$sleepdir" "$waitgit"
   printf '#!/bin/sh
