@@ -38,7 +38,7 @@ jobs:
     if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
         env:
           # No password literal anywhere: trust auth is fine for a service container
           # that exists only for the length of this job, on a network nothing else
@@ -131,7 +131,7 @@ jobs:
     if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
         env:
           # No password literal anywhere: trust auth is fine for a service container
           # that exists only for the length of this job, on a network nothing else
@@ -225,7 +225,7 @@ jobs:
     if: "github.repository == 'runcove/artifacts' && !contains(github.event.head_commit.message, '[skip ci]')"
     services:
       postgres:
-        image: postgres:18
+        image: postgres:18@sha256:e754b839f447639b7004895f4d8a4bfcb4e9dbe3a1bc035f27f646562a16fd61
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
     env:

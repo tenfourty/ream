@@ -5,7 +5,7 @@
 # a fresh copy of the same base image: uv and pip never exist in the image a
 # pod actually runs.
 
-FROM python:3.12-slim-bookworm AS build
+FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df AS build
 
 # The pinned uv release itself, copied from astral's own image rather than
 # installed via pip/curl -- no interpreter needed to fetch it, and the pin
@@ -57,7 +57,7 @@ RUN sed -i "0,/^version = \"\([0-9.]*\)\"/s//version = \"\1.post$(date -u +%Y%m%
  && [ "$(ls /app/dist/ream-*-py3-none-any.whl | wc -l)" = 1 ] \
  && ls /app/dist
 
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
 
 # The headless browser that draws a page's thumbnail for the gallery wall
 # (homelab-ij8.22). By default the browser runs inside the service; a deployment
