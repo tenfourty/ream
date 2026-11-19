@@ -912,8 +912,8 @@ pointers_proven() {
   cat >"$SCRATCH/ptr.py" <<'PTRPY'
 import sys
 mode, src, dst = sys.argv[1:4]
-ptr_lines = (b"version https://git-lfs.github.com/spec/v1", b"version https://hawser.github.com/spec/v1",
-             b"version http://git-media.io/v/2")
+ptr_lines = ("version https://git-lfs.github.com/spec/v1", "version https://hawser.github.com/spec/v1",
+             "version http://git-media.io/v/2")
 data = open(src, "rb").read()
 if mode == "oids":
     parts = data.split(b"\0")
@@ -959,8 +959,8 @@ elif mode == "count":
             sys.exit(2)
         pos = nl + 2 + size
         seen += 1
-        # git-lfs's decoder trims the whole blob's whitespace first, then reads lines with any CR at the end cut off.
-        if body.strip().split(b"\n", 1)[0].rstrip(b"\r") in ptr_lines:
+        # git-lfs's decoder trims the whole blob's whitespace (Unicode's too, as Go does) first, then reads lines with any CR at the end cut off.
+        if body.decode("utf-8", "replace").strip().split("\n", 1)[0].rstrip("\r") in ptr_lines:
             found += 1
     if seen != len(want):
         sys.exit(2)
@@ -2311,6 +2311,16 @@ PROTO
   git -C "$mk" add crlf.env
   out=$(mgate "$mk"); rc=$?
   refused_hidden "a staged LFS pointer with CRLF line ends" "$rc" "$out" "$ptrmsg"
+  mk="$tmp/ptr2e"; mkrepo "$mk"
+  printf '\xc2\xa0version https://git-lfs.github.com/spec/v1\noid sha256:%064d\nsize 12\n' 0 >"$mk/nbsp.env"
+  git -C "$mk" add nbsp.env
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a staged LFS pointer after a no-break space" "$rc" "$out" "$ptrmsg"
+  mk="$tmp/ptr2f"; mkrepo "$mk"
+  printf '\xc2\x85version https://git-lfs.github.com/spec/v1\noid sha256:%064d\nsize 12\n' 0 >"$mk/nel.env"
+  git -C "$mk" add nel.env
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a staged LFS pointer after a NEL character" "$rc" "$out" "$ptrmsg"
   mk="$tmp/ptr3"; mkrepo "$mk"
   printf 'version 1\nnot a pointer\n' >"$mk/plain.txt"
   printf 'version https://git-lfs.github.com/spec/v1x\n' >"$mk/near.txt"
