@@ -675,7 +675,9 @@ def _visible_read(page):
 OTHER_READS = {"BoundedParser": _bounded_read, "text._Visible": _visible_read}
 # The secret scan reads every body published, whatever its markup, and is held to the
 # same time rule on each of these pages (it is not a parser, so not to the memory one).
-TIMED_READS = {**OTHER_READS, "scan.scan": scan.scan}
+# Timed without its scan slot, as the parsers above are read without one: a read the
+# timing stops part way must not leave a slot taken for the reads after it.
+TIMED_READS = {**OTHER_READS, "scan.scan": scan._scan}
 
 
 def _other_page(shape: str, chars: int) -> str:

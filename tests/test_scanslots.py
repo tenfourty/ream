@@ -288,7 +288,11 @@ def test_a_small_page_is_checked_though_every_slot_is_taken(api, auth, full):
     assert "remote_script" in shapes and "csp_checks_not_run" not in shapes
 
 
-def test_a_form_page_is_a_503_with_retry_after_and_stores_nothing(api, auth, db):
+def test_a_form_page_is_a_503_with_retry_after_and_stores_nothing(
+    api, auth, db, monkeypatch
+):
+    # The forms' own wait: the secret scan before it runs without a slot here.
+    monkeypatch.setattr(scan, "scan", scan._scan)
     with taken():
         busy = publish(api, auth, FORM_PAGE)
     assert busy.status_code == 503
@@ -351,7 +355,7 @@ def test_the_secret_scan_waits_for_a_slot_and_gets_it_when_one_is_given_back(
 
 
 def test_a_publish_the_secret_scan_could_not_read_is_a_503_and_stores_nothing(
-    api, auth, db, caplog
+    api, auth, db, caplog, monkeypatch
 ):
     caplog.set_level(logging.INFO, logger="ream.refusals")
     with taken():
@@ -363,6 +367,13 @@ def test_a_publish_the_secret_scan_could_not_read_is_a_503_and_stores_nothing(
     assert "scan_failed" not in caplog.text, "a busy server is not a scanner defect"
     again = publish(api, auth, PAGE)
     assert again.status_code == 201, f"and once a slot is free: {again.text[:300]}"
+
+    def broken(_text):
+        raise RuntimeError("a scanner defect")
+
+    monkeypatch.setattr(scan, "scan", broken)
+    publish(api, auth, PAGE)
+    assert "scan_failed" in caplog.text, "the log above was captured: a defect is in it"
 
 
 def test_an_update_the_secret_scan_could_not_read_is_a_503_and_changes_nothing(
@@ -396,7 +407,7 @@ def test_a_preview_the_secret_scan_could_not_read_is_a_503(api, auth):
     assert busy.json() == {"detail": scanslots.BUSY}
 
 
-def test_the_mcp_tool_says_so_and_stores_nothing(db):
+def test_the_mcp_tool_says_so_and_stores_nothing(db, monkeypatch):
     host = "artifacts.tenfourty.site"
     token, _ = keys.mint(db, agent="mcp-seat")
 
@@ -422,6 +433,13 @@ def test_the_mcp_tool_says_so_and_stores_nothing(db):
 
     with settings.override(mcp_public_url=f"https://{host}"):
         client = TestClient(create_app(db), follow_redirects=False)
+        with taken():
+            unscanned = call(PAGE)  # the secret scan's wait
+        assert unscanned["isError"] is True
+        assert unscanned["content"][0]["text"] == scanslots.BUSY
+        assert store.list_for_agent(db, "mcp-seat") == []
+        # The forms' own wait: the secret scan before it runs without a slot here.
+        monkeypatch.setattr(scan, "scan", scan._scan)
         with taken():
             busy = call(FORM_PAGE)
         assert busy["isError"] is True
