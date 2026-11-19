@@ -943,6 +943,10 @@ def patch(
             )
 
         if scanned is None or _digest(body) not in scanned:
+            # Scanned after the owner check, so inside this connection: a body over
+            # `scanslots.SMALL_PAGE` may wait here for a scan slot (at most
+            # `scanslots.WAIT_SECONDS`) with the connection open but idle, no transaction
+            # or lock held; when none frees, `ScanBusy` goes up as a 503.
             _check_secrets(body, "body", agent=agent, artifact_id=artifact_id)
             if scanned is not None:
                 scanned.add(_digest(body))
