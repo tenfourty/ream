@@ -442,6 +442,8 @@ ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}"
 # another process. (3) The same happens, on bash 5.2, when a TERM ends the gate just after the watchdog's
 # fork and before bash records it as a job (see glist_stop): the trap cannot reach that watchdog.
 LIST_TIMEOUT=120
+GATE_PID=
+GATE_EXIT_TRAP='if [ "${BASHPID:-$GATE_PID}" = "$GATE_PID" ]; then glist_stop; rm -rf "$SCRATCH"; fi'
 GLIST_DOG=
 GLIST_ACTIVE=
 glist() {
@@ -902,7 +904,14 @@ run_gate() {
 
   SCRATCH=$(mktemp -d) || { could_not_scan "no temporary directory"; return 1; }
   # Removed on any exit, with glist's git and watchdog stopped first; this script sets no other EXIT trap.
-  trap 'glist_stop; rm -rf "$SCRATCH"' EXIT
+  # Only by the gate's own process: a subshell forked while the trap is set (glist's watchdog) holds the trap
+  # until bash resets it, and a TERM that reaches it in that window (glist_stop sends one as soon as git ends)
+  # runs this trap in the subshell, which removed the scratch directory under the running gate (measured: the
+  # listing file gone before the parser read it, "git listed HEAD's side ... in a form the gate cannot read").
+  # BASHPID names the process running the trap (bash 4 and later; where it is unset the guard always passes).
+  GATE_PID=${BASHPID:-$$}
+  # shellcheck disable=SC2064  # the trap is a constant string; its variables are read when it runs
+  trap "$GATE_EXIT_TRAP" EXIT
   local cfg="$SCRATCH/config" idx="$SCRATCH/index" src tree parent commit range base basetree same scanned
   : >"$cfg" || { could_not_scan "no temporary file"; return 1; }
   # Before write-tree, the first git call that could run a filter driver's program.
@@ -1342,6 +1351,29 @@ EOF
   check "GGSHIELD_SKIP=1 says loudly that nothing was scanned" "$rc" 0 "$out" "NOTHING was scanned"
   out=$(cd "$repo" && PATH="$tmp/empty" GGSHIELD_SKIP=1 "$BASH" "$self" 2>&1); rc=$?
   check "GGSHIELD_SKIP=1 allows with ggshield absent" "$rc" 0 "$out" "NOTHING was scanned"
+
+  # A subshell TERMed just after its fork must not run the gate's EXIT trap (it removed the gate's scratch
+  # directory: measured with the unguarded trap, hundreds of 400 forks did). Same trap string as the gate's.
+  local lost rd="$tmp/trapdir"
+  lost=$(
+    n=0
+    for _ in $(seq 300); do
+      mkdir -p "$rd"
+      if ! (
+        # shellcheck disable=SC2034  # read by the trap string
+        GATE_PID=${BASHPID:-$$}; SCRATCH=$rd; GLIST_ACTIVE=
+        # shellcheck disable=SC2064
+        trap "$GATE_EXIT_TRAP" EXIT
+        ( trap ':' TERM; sleep 5 & s=$!; wait "$s" ) </dev/null >/dev/null 2>&1 &
+        w=$!
+        kill -TERM "%1" 2>/dev/null
+        wait "$w" 2>/dev/null
+        [ -d "$SCRATCH" ]
+      ); then n=$((n + 1)); fi
+    done
+    echo "$n"
+  )
+  check "a watchdog-like subshell TERMed after its fork leaves the scratch directory alone (300 tries)" 0 0 "lost=$lost" "lost=0"
 
   # The skip is for a person's own machine: refused wherever an automated run says it is one.
   local v
