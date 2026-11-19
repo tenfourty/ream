@@ -10,7 +10,7 @@ FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf22
 # The pinned uv release itself, copied from astral's own image rather than
 # installed via pip/curl -- no interpreter needed to fetch it, and the pin
 # means the exact uv version is a `FROM` line, not a moving `latest`.
-COPY --from=ghcr.io/astral-sh/uv:0.12.9 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.9@sha256:8b940d3a9d65bed080436972241af2e21c84b5e8c9193f7014ed71479ee795ff /uv /uvx /bin/
 
 WORKDIR /app
 ENV UV_LINK_MODE=copy \
