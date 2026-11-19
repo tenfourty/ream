@@ -1,15 +1,49 @@
-#!/usr/bin/env bash
-# scripts/guards/ggshield-gate.sh — run ggshield over the staged diff and map
-# its exit code to a decision this repo can live with.
+#!/bin/bash -p
+unset CDPATH
+# scripts/guards/ggshield-gate.sh — run ggshield over the staged change and
+# allow the commit only when the scan provably finished and found nothing.
 #
 # WHY A WRAPPER. ggshield has three outcomes and they must not be conflated:
-# a finding (block the commit), a clean scan (allow it), and "could not scan"
-# (no ggshield installed, no API key, no network, quota exhausted). Only a
-# clean scan lets a commit through. A finding refuses it, and so does "could
-# not scan": a gate that passes when it cannot look reads as a scanned repo
-# when it is not. The way out is explicit, never silent: GGSHIELD_SKIP=1 lets
-# one commit (or a run of them, offline) through and says loudly that nothing
-# was scanned.
+# a finding (block the commit), a clean scan (allow it), and "could not scan,
+# or not all of it" (no ggshield installed, no API key, no network, quota
+# exhausted, a request the service refused). Only a clean scan lets a commit
+# through. A finding refuses it, and so does anything else: a gate that passes
+# when it cannot look reads as a scanned repo when it is not. The way out is
+# explicit, never silent: GGSHIELD_SKIP=1 lets one commit (or a run of them,
+# offline) through and says loudly that nothing was scanned.
+#
+# CLEAN IS READ FROM ggshield's REPORT, NOT ITS EXIT STATUS. The verdict is
+# ggshield-judge.py's (beside this file, run with `python3 -I`; its header has
+# the whole rule): exit 0, a JSON report that parses, no errors entry in it,
+# the scanned commit listed in it exactly once, and no error line in ggshield's
+# other output. Anything short of that refuses. The judge answers with an exit
+# status and one word, and the gate takes only these pairs (the whole of its
+# stdout must be the word): 0 clean allows; 1 finding, 1 finding-incomplete (an
+# incident listed in a scan that did not finish) and 1 finding-unread (ggshield
+# exited 1 and no finding could be read) refuse as a finding, with no opt-out
+# named; 2 skipped (ggshield left a file out: a re-run leaves it out again) and
+# 2 incomplete refuse as not scanned. Any other pair refuses as not scanned.
+#
+# WHAT IS SCANNED. `ggshield secret scan pre-commit` has no JSON report (with
+# --json it still prints text; measured, ggshield 1.56.1), so the staged
+# change is scanned as a commit instead: `git write-tree` on a COPY of the
+# index the hook was given (the real index is not touched, and `git commit --
+# <paths>` hands the hook its own index of exactly what will be committed),
+# `git commit-tree` on that tree with HEAD as its parent (unsigned, no ref
+# moved, left unreferenced for git's own clean-up), then
+# `ggshield secret scan --json commit-range` over that one commit. Its tree is
+# the tree the real commit will have. While a merge is being concluded the
+# commit's one parent is still HEAD, so everything the merge brings in is
+# scanned. The index must be found where git says it is, and it must be
+# exactly the tree that was written (`git diff-index --cached
+# --ita-invisible-in-index --quiet`: an intent-to-add entry is not in the
+# commit and is not a difference): no index, a difference or an error refuses,
+# so a staged change is never reported clean from a scan of another tree. When
+# the tree lists no changed file it must be HEAD's own tree, or the gate refuses.
+# "Every document handed over" is therefore that one commit: the report must
+# list it, once, and no other. Files are not compared one by one,
+# because ggshield itself leaves some out (binaries, deletions); a request the
+# service refused shows as an error line or an errors entry (measured).
 #
 # THE SCAN USES ONLY ITS OWN FIXED SETTINGS: the environment variable
 # GITGUARDIAN_DONT_LOAD_ENV=1, the default dashboard as --instance, and
@@ -21,15 +55,140 @@
 # THE ggshield IT RUNS is the one on PATH, and the script refuses one that
 # resolves inside this repository's working tree (a repo virtualenv, a bin
 # directory a tool adds): the scan is run by a program from outside the tree.
+# The same holds for the python3 that runs the judge and for git, each checked
+# against the directory the hook runs in, the nearest directory above it that
+# holds .git, and the top git names. Before any program runs, PATH itself is
+# proven with bash builtins only: an empty or relative entry, or one inside the
+# working tree (one that does not exist is read through its longest existing
+# ancestor, resolved physically, with the missing parts appended; a dangling symlink among
+# them cannot be read and refuses), refuses (a helper
+# such as env or readlink planted there would otherwise decide the verdict). So
+# are GIT_DIR and GIT_WORK_TREE: set, they must name the repository the hook runs
+# in (the nearest directory above the current one holding .git, and that tree's
+# own git directory, which in a linked worktree is where its .git file points), or
+# the gate refuses before running anything; a run from outside the tree with
+# either set is refused too, and so is a git directory kept apart from its work
+# tree. A control character (a newline) in the directory the hook runs in, a
+# PATH entry, GIT_DIR, GIT_WORK_TREE or the .git file refuses: command
+# substitution drops a trailing newline, so a name ending in one would be read as
+# another.
+#
+# GIT SETTINGS THAT RUN A PROGRAM OR HIDE CONTENT. ggshield reads the commit
+# with porcelain (measured, 1.56.1: `git -c core.quotePath=false -c
+# safe.directory=* show <commit> --raw -z`, then `... --raw -z --patch -- <paths>`,
+# with GIT_CONFIG_SYSTEM empty and GIT_CONFIG_GLOBAL set to GG_GIT_CONFIG or
+# empty), so textconv and the diff attribute apply there: a textconv program can
+# replace a staged file's content, and a file marked -diff or binary is shown as
+# "Binary files differ", and either way the secret never reaches the scan. The
+# gate's own write-tree runs a filter driver's program (filter.<x>.process,
+# measured with GIT_TRACE). Attributes can come from a staged or unstaged
+# .gitattributes, info/attributes, core.attributesFile, the XDG attributes file,
+# attr.tree or GIT_ATTR_SOURCE, so the gate does not try to follow them to a
+# driver. Before any git call that could run one, it REFUSES when any
+# diff.<x>.textconv, diff.<x>.command, diff.<x>.binary, filter.<x>.clean,
+# filter.<x>.smudge, filter.<x>.process or attr.tree is set, whether or not an
+# attribute uses it today. The settings are read with --includes twice: as the
+# gate's own git reads them (system, global, XDG, local, worktree and the
+# command line), and as ggshield's git does (its own environment and -c
+# options, safe.directory=* included). And it REFUSES when the diff attribute
+# is unset (-diff, binary) for a changed path, read with check-attr in both
+# environments. The other settings and variables MEASURED to change
+# ggshield's patch are pinned for ggshield's git instead (only those: see the
+# end of this section): GG_GIT_CONFIG, GIT_ATTR_SOURCE, GIT_EXTERNAL_DIFF,
+# GIT_DIFF_OPTS and GIT_SHALLOW_FILE are unset, GIT_NO_REPLACE_OBJECTS=1 and
+# GIT_GRAFT_FILE=/dev/null are set (a replace ref or a graft changed the parent
+# and hid the change), and a GIT_CONFIG_COUNT group (command-line scope, above
+# every file) pins core.fsmonitor, core.bigFileThreshold (1 hid the content),
+# colour, format.pretty, the diff prefixes, diff.relative (from a subdirectory
+# it dropped the file), i18n.logOutputEncoding, log.showSignature,
+# log.showRoot (off, it emptied the patch of a first commit, or of any commit
+# the shallow list names) and core.commitGraph (off: a planted commit-graph
+# gave the scanned commit another tree) (see SCAN_PINS). Also for ggshield's
+# git: GIT_LITERAL_PATHSPECS=1 with the glob, noglob and icase variables
+# unset (a path is never read as pathspec magic; ggshield 1.56.1 itself dies on
+# a staged path that starts with ":" before it asks for the patch, measured,
+# so this is a second wall, not a hole closed), the scan run from the top of
+# the tree (ggshield hands git show the paths named from the top while its git
+# runs where ggshield runs: from a subdirectory the patch held nothing,
+# measured with ggshield 1.56.1 and GIT_TRACE),
+# and no notes shown (GIT_NOTES_REF and GIT_NOTES_DISPLAY_REF both empty; a
+# note named by either, core.notesRef or notes.displayRef is not shown).
+# GIT_CONFIG is unset for every git call: `git config` reads only that file,
+# while show and write-tree ignore it, so set it would blind the settings
+# check. The id of the commit made for the scan can be predicted (its tree,
+# parent and the dates passed through), so the gate REFUSES when the shallow
+# list names it (git reads a line by its leading id, in either case; listed,
+# git would show it as a first commit), and when that commit's object, read as
+# git reads it, does not hash to its id (git show does not check that: a
+# planted object naming HEAD's tree, loose or in an alternate store, emptied
+# the patch). Every object on HEAD's side of the change is hash-checked the
+# same way: HEAD's commit, its tree, and each tree and blob the comparison
+# reads on that side (git does not check a tree's or a blob's id when it
+# compares them: a loose object planted under HEAD's id for a file or a
+# directory, holding the staged content, emptied the patch, measured with the
+# stub that reads as ggshield 1.56.1 does). A file added has no such object
+# and a submodule's id names none here, so neither is hashed. The objects of
+# the scanned commit's own tree are not hash-checked; that commit's object is
+# (above). A HEAD whose commit fails git's own check when the gate peels it is
+# read as no first commit, so the whole tree is scanned. A shallow HEAD (a --depth clone) is not refused:
+# the change is still shown in full. Probed against ggshield's two show calls and found to change nothing
+# in what reaches the scan: diff.<x>.command (no --ext-diff), diff.external,
+# core.pager and pager.show (no terminal), log.showSignature with gpg.program
+# (the scanned commit is unsigned), filter drivers, working-tree-encoding,
+# core.autocrlf, core.eol, core.safecrlf, core.whitespace, diff.algorithm,
+# diff.context=0, diff.interHunkContext, diff.renames=copies,
+# diff.renameLimit, diff.suppressBlankEmpty, diff.indentHeuristic,
+# diff.wsErrorHighlight, diff.colorMoved, diff.dirstat, diff.submodule,
+# diff.ignoreSubmodules, diff.trustExitCode, log.follow, log.diffMerges,
+# log.decorate, log.excludeDecoration, log.initialDecorationSet, log.date,
+# log.mailmap, log.abbrevCommit, core.abbrev, pretty.medium (an alias cannot
+# replace the built-in format), i18n.commitEncoding, core.commentChar,
+# core.sparseCheckout, core.sparseCheckoutCone, index.sparse, core.splitIndex,
+# core.multiPackIndex, core.ignoreCase, core.precomposeUnicode, column.ui,
+# status.*, skip-worktree, objects/info/alternates (an object planted there is
+# caught by the hash check); diff.orderFile only reorders the files;
+# core.maxTreeDepth set low makes git show fail aloud (measured), which the
+# judge should refuse (inferred, not run through ggshield). These are the
+# settings measured, not a proof that no other one exists: a git setting or
+# variable not listed here is outside what this gate defends. The gate's own
+# git calls run with core.fsmonitor and core.commitGraph off, no replace refs
+# and no grafts, and an inherited GIT_CONFIG_COUNT group is dropped.
+# GIT_CONFIG_PARAMETERS is dropped for ggshield's git. A machine whose git
+# config holds filter.lfs.* (git-lfs) is refused: take the setting out of that
+# repository's reach or opt out.
+# CHECKED BEFORE, READ AGAIN AFTER: the settings, attributes, shallow list,
+# the scanned commit's object and the objects on HEAD's side are read before ggshield's git reads them, and
+# lefthook runs pre-commit jobs in parallel, so something could change them in
+# between. For a scan that would pass they are read again once it ends, and
+# any difference refuses; a change made and undone while the scan ran is not
+# seen (a stated limit).
+# The identity check below assumes an honest git, one found outside the tree.
+#
+# WHAT STILL RUNS BEFORE THIS GATE, and is not checked by it: lefthook's own
+# `sh` (it starts the hook through one), the interpreter the shebang names
+# (/bin/bash -p, an absolute path, so no PATH lookup; -p ignores BASH_ENV, ENV,
+# CDPATH and exported functions, and the first lines unset CDPATH anyway), and
+# the ENVIRONMENT the gate inherits. The scan call drops BASH_ENV, ENV and the
+# PYTHON* variables that change how a Python ggshield starts (PYTHONPATH,
+# PYTHONHOME, PYTHONSTARTUP, PYTHONUSERBASE, PYTHONINSPECT) and the instance
+# variables; HTTPS_PROXY, HTTP_PROXY, REQUESTS_CA_BUNDLE and SSL_CERT_FILE are
+# left alone on purpose (a person may need them), so a hostile environment
+# that sets them is outside what this gate defends. Two more are trusted, as
+# stated limits: GIT_INDEX_FILE (git itself exports it in a pre-commit hook, for
+# commit -a and for a partial commit; the index it names is compared with the tree
+# that was scanned, but it is not checked to be this repository's), and
+# core.worktree in .git/config (a setting that needs write access to .git/config
+# and makes git read another tree).
 #
 # SKIPPING is exactly GGSHIELD_SKIP=1. Any other value (0, empty, yes) scans.
+# It is a switch for a person's own machine only: where CI, FORGEJO_ACTIONS or
+# GITHUB_ACTIONS is set (to anything, even empty) GGSHIELD_SKIP=1 is refused.
 #
 # CI does not run this script or ggshield; it runs the guard selftests and the
 # whole-tree scan for credentials on a command line. lefthook's own skips
 # (LEFTHOOK=0, git commit --no-verify) are outside this gate.
 #
 # MEASURED on the management machine, 22 Sep 2026 (ij8.76), against ggshield 1.54.0:
-#   * clean staged diff                    -> rc 0, "No secrets have been found"
 #   * a throwaway RSA private key staged   -> rc 1, "1 secret detected"
 #   * outside a git repo                   -> rc != 0 with "Not a git directory"
 #   * `ggshield api-status`                -> healthy: ggshield IS
@@ -51,69 +210,674 @@
 # commits offline.
 #
 # Usage:  scripts/guards/ggshield-gate.sh            # lefthook pre-commit
-#         scripts/guards/ggshield-gate.sh --selftest # rc mapping, with a stub
+#         scripts/guards/ggshield-gate.sh --selftest # the verdicts, with a stub
 set -uo pipefail
 SELF="ggshield-gate"
-CFG_FILE=""
+SCRATCH=""
 INSTANCE="https://dashboard.gitguardian.com"
+# Bash builtins only: no helper program has been proven yet when this line runs.
+case "${BASH_SOURCE[0]}" in
+  /*) JUDGE="$(cd -- "${BASH_SOURCE[0]%/*}/" >/dev/null 2>&1 && pwd)/ggshield-judge.py" ;;
+  */*) JUDGE="$(cd -- "./${BASH_SOURCE[0]%/*}" >/dev/null 2>&1 && pwd)/ggshield-judge.py" ;;
+  *) JUDGE="$(pwd)/ggshield-judge.py" ;;
+esac
+
+# physdir <dir>: bash builtins only. Sets PHYS to the physical path of <dir>. Returns 1 when it cannot be
+# resolved and 2 when the path holds a control character (a newline included: command substitution drops
+# a trailing newline, so a sentinel is appended and taken off again, and a tree named with one cannot
+# be read as another).
+physdir() {
+  # A relative value is read from here, as git reads it: bash would take a bare - as $OLDPWD.
+  case "$1" in
+    /*) ;;
+    *) set -- "./$1" ;;
+  esac
+  PHYS=$(cd -P -- "$1" >/dev/null 2>&1 && pwd -P 2>/dev/null; printf x)
+  PHYS=${PHYS%x}
+  [ -n "$PHYS" ] || return 1
+  PHYS=${PHYS%$'\n'}
+  [ -n "$PHYS" ] || return 1
+  [[ $PHYS == *[[:cntrl:]]* ]] && return 2
+  return 0
+}
+
+# path_proven [<tree top>]: bash builtins only (cd -P, pwd -P), so that no program a PATH entry could
+# hold has run yet. Refuses an empty entry (the current directory), a relative one (also .), one with a
+# control character, and one inside the working tree, which is taken as the directory the hook runs in
+# AND the nearest directory above it holding .git (found without git, which cannot be trusted yet), AND
+# the top git names once the caller has it. An entry that does not exist is read through its longest
+# existing ancestor, resolved physically, with the missing components appended. A current directory
+# with a control character in its path refuses. Prints why and returns 1 on the first entry refused.
+path_proven() {
+  local rest=${PATH:-}: entry real here up d t p tail anc rc
+  physdir . ; rc=$?
+  case "$rc" in
+    0) here=$PHYS ;;
+    2)
+      echo "$SELF: REFUSED — the directory the hook runs in has a control character (a newline) in its path, so NOTHING was scanned for secrets." >&2
+      return 1
+      ;;
+    *)
+      echo "$SELF: REFUSED — the current directory cannot be resolved, so NOTHING was scanned for secrets." >&2
+      return 1
+      ;;
+  esac
+  up=
+  d=$here
+  while [ -n "$d" ]; do
+    if [ -e "$d/.git" ]; then up=$d; break; fi
+    d=${d%/*}
+  done
+  while [ -n "$rest" ]; do
+    entry=${rest%%:*}
+    rest=${rest#*:}
+    if [[ $entry == *[[:cntrl:]]* ]]; then
+      echo "$SELF: REFUSED — PATH has an entry with a control character (a newline) in it, so NOTHING was scanned for secrets." >&2
+      return 1
+    fi
+    case "$entry" in
+      "")
+        echo "$SELF: REFUSED — PATH has an empty entry (the current directory), so NOTHING was scanned for secrets." >&2
+        echo "  Remove it from PATH, or opt out for this commit with GGSHIELD_SKIP=1." >&2
+        return 1
+        ;;
+      /*) ;;
+      *)
+        echo "$SELF: REFUSED — PATH has a relative entry ($entry), so NOTHING was scanned for secrets." >&2
+        echo "  Make it absolute or remove it, or opt out for this commit with GGSHIELD_SKIP=1." >&2
+        return 1
+        ;;
+    esac
+    physdir "$entry"; rc=$?
+    if [ "$rc" = 2 ]; then
+      echo "$SELF: REFUSED — the PATH entry $entry resolves to a path with a control character (a newline) in it, so NOTHING was scanned for secrets." >&2
+      return 1
+    fi
+    if [ "$rc" = 0 ]; then
+      real=$PHYS
+    else
+      # An entry that does not exist is read through its longest existing ancestor, resolved
+      # physically, with the missing components appended: with link -> repo, an entry of
+      # link/.not-there/bin is inside the tree. A symlink among the missing components (a dangling
+      # one) cannot be read, and so refuses.
+      case "$entry" in
+        */.. | */../* | */. | */./*)
+          echo "$SELF: REFUSED — the PATH entry $entry does not exist and holds . or .. , so NOTHING was scanned for secrets." >&2
+          return 1
+          ;;
+      esac
+      p=$entry
+      tail=
+      anc=
+      while [ -n "$p" ]; do
+        if [ -L "$p" ]; then
+          echo "$SELF: REFUSED — the PATH entry $entry passes through a symlink that leads nowhere ($p), so NOTHING was scanned for secrets." >&2
+          return 1
+        fi
+        tail=/${p##*/}$tail
+        p=${p%/*}
+        [ -n "$p" ] || break
+        physdir "$p"; rc=$?
+        if [ "$rc" = 2 ]; then
+          echo "$SELF: REFUSED — the PATH entry $entry passes through a path with a control character (a newline) in it, so NOTHING was scanned for secrets." >&2
+          return 1
+        fi
+        if [ "$rc" = 0 ]; then anc=$PHYS; break; fi
+        anc=
+      done
+      real=${anc%/}$tail
+    fi
+    for t in "$here" "$up" "${1:-}"; do
+      [ -n "$t" ] || continue
+      case "$real" in
+        "$t" | "$t"/*)
+          echo "$SELF: REFUSED — the PATH entry $entry resolves inside the repository working tree, so NOTHING was scanned for secrets." >&2
+          echo "  Take it off PATH, or opt out for this commit with GGSHIELD_SKIP=1." >&2
+          return 1
+          ;;
+      esac
+    done
+  done
+  return 0
+}
+
+# git_env_proven: bash builtins only. GIT_DIR and GIT_WORK_TREE make git work in a repository other than
+# the one the hook runs in, so when either is set both must point at the directory the hook runs in:
+# the nearest directory above the current one that holds .git (found without git) is the work tree
+# GIT_WORK_TREE names, and the git directory GIT_DIR names is that tree's own (its .git directory, or
+# where its .git file points, which is what git exports in a linked worktree). All compared as physical
+# paths. An empty value, a control character (a newline) in either value, in the current directory's
+# path or anywhere in the .git file, or a current directory outside the tree, refuses. A git
+# directory kept apart from its work tree (as --git-dir and --work-tree give it, or a bare repository)
+# is refused and said to be. Unset: nothing to prove.
+git_env_proven() {
+  local here up d line gd want v rc apart=
+  [ -n "${GIT_DIR+set}" ] || [ -n "${GIT_WORK_TREE+set}" ] || return 0
+  physdir . ; rc=$?
+  here=
+  [ "$rc" != 0 ] || here=$PHYS
+  for v in GIT_DIR GIT_WORK_TREE; do
+    if [ -n "${!v+set}" ] && [[ ${!v} == *[[:cntrl:]]* ]]; then rc=2; fi
+  done
+  if [ "$rc" = 2 ]; then
+    echo "$SELF: REFUSED — GIT_DIR, GIT_WORK_TREE or the directory the hook runs in has a control character (a newline) in it, so NOTHING was scanned for secrets." >&2
+    echo "  Unset them, or opt out for this commit with GGSHIELD_SKIP=1." >&2
+    return 1
+  fi
+  up=
+  d=$here
+  while [ -n "$d" ]; do
+    if [ -e "$d/.git" ]; then up=$d; break; fi
+    d=${d%/*}
+  done
+  if [ -n "$up" ] && [ -n "${GIT_WORK_TREE+set}" ]; then
+    want=
+    if [ -n "$GIT_WORK_TREE" ] && physdir "$GIT_WORK_TREE"; then want=$PHYS; fi
+    [ -n "$want" ] && [ "$want" = "$up" ] || up=
+  fi
+  if [ -n "$up" ] && [ -n "${GIT_DIR+set}" ]; then
+    gd=
+    if [ -d "$up/.git" ]; then
+      gd=$up/.git
+    elif [ -f "$up/.git" ]; then
+      line=
+      IFS= read -r -d '' line <"$up/.git" || :
+      line=${line%$'\n'}
+      if [[ $line == *[[:cntrl:]]* ]]; then
+        echo "$SELF: REFUSED — the .git file of the tree holds a control character (a newline) beyond its one line, so NOTHING was scanned for secrets." >&2
+        return 1
+      fi
+      case "$line" in
+        "gitdir: "?*) gd=${line#gitdir: } ;;
+      esac
+      case "$gd" in
+        "" | /*) ;;
+        *) gd=$up/$gd ;;
+      esac
+    fi
+    if [ -n "$gd" ] && physdir "$gd"; then gd=$PHYS; else gd=; fi
+    want=
+    if [ -n "$GIT_DIR" ] && physdir "$GIT_DIR"; then want=$PHYS; fi
+    [ -n "$gd" ] && [ -n "$want" ] && [ "$want" = "$gd" ] || { up=; apart=1; }
+  fi
+  [ -n "$up" ] && return 0
+  [ -z "${GIT_DIR+set}" ] || apart=1
+  echo "$SELF: REFUSED — GIT_DIR or GIT_WORK_TREE is set and does not name the repository this hook runs in, so NOTHING was scanned for secrets." >&2
+  if [ -n "$apart" ]; then
+    echo "  A git directory kept apart from its work tree (GIT_DIR as --git-dir and --work-tree give it, or a bare repository) is not supported by this gate:" >&2
+    echo "  run from the top of the tree whose own .git is the git directory, or opt out for this commit with GGSHIELD_SKIP=1." >&2
+  else
+    echo "  Unset them, or run from the top of the tree, or opt out for this commit with GGSHIELD_SKIP=1." >&2
+  fi
+  return 1
+}
+
+# ggit: git for the gate's own reads of the repository, with core.fsmonitor off (an inherited setting of
+# it would run a program inside write-tree and diff-index), and with replace refs and grafts ignored. A
+# filter driver's program also runs in write-tree: settings_proven refuses those before it is called.
+ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git -c core.fsmonitor=false -c core.commitGraph=false "$@"; }
+
+# The settings ggshield's git runs with, as one GIT_CONFIG_COUNT group (command-line scope, so they
+# outrank every config file). Each changed or hid ggshield's patch when set otherwise, or could run a
+# program in it (measured against its own git show call; see the header).
+SCAN_PINS=(core.fsmonitor=false core.bigFileThreshold=512m color.ui=never color.diff=never
+  format.pretty=medium diff.noprefix=false diff.mnemonicPrefix=false diff.srcPrefix=a/ diff.dstPrefix=b/
+  diff.relative=false i18n.logOutputEncoding=UTF-8 log.showSignature=false advice.graftFileDeprecated=false
+  log.showRoot=true core.commitGraph=false)
+
+# scan_env: sets, in the current shell (always a subshell), the environment ggshield and its git get. The
+# settings check and the scan call both use it, so the check reads what the scan's git reads.
+scan_env() {
+  local i=0 kv
+  unset GITGUARDIAN_INSTANCE GITGUARDIAN_API_URL BASH_ENV ENV
+  unset PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE PYTHONINSPECT GIT_CONFIG_PARAMETERS
+  unset GG_GIT_CONFIG GIT_ATTR_SOURCE GIT_EXTERNAL_DIFF GIT_CONFIG GIT_DIFF_OPTS GIT_SHALLOW_FILE
+  unset GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS
+  # Literal pathspecs: ggshield hands the staged paths to git show, and a path is never to be read as magic
+  # (":(exclude)x"). ggshield 1.56.1 dies on a staged path starting with ":" before that call (measured), so
+  # this is a second wall. Notes are not
+  # shown: both variables empty show none, whatever core.notesRef, notes.displayRef or a notes ref holds
+  # (measured; a named ref was shown, so any ref name is not enough), and nothing of them belongs in the scan.
+  export GITGUARDIAN_DONT_LOAD_ENV=1 GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null GIT_LITERAL_PATHSPECS=1
+  export GIT_NOTES_REF='' GIT_NOTES_DISPLAY_REF=''
+  for kv in "${SCAN_PINS[@]}"; do
+    export "GIT_CONFIG_KEY_$i=${kv%%=*}" "GIT_CONFIG_VALUE_$i=${kv#*=}"
+    i=$((i + 1))
+  done
+  export GIT_CONFIG_COUNT=$i
+}
+
+# scangit: git as ggshield 1.56.1 runs it (measured): its two -c options, no system config, and
+# GG_GIT_CONFIG (unset by scan_env) or nothing as the global config. Only inside a scan_env subshell.
+scangit() { GIT_CONFIG_SYSTEM='' GIT_CONFIG_GLOBAL="${GG_GIT_CONFIG-}" git -c core.quotePath=false -c safe.directory='*' "$@"; }
+
+# settings_proven: refuses (saying which key, never its value) when git, as the gate's git or as
+# ggshield's reads it, has a setting that runs a program on content or hides it: diff.<x>.textconv,
+# .command or .binary, filter.<x>.clean, .smudge or .process, or attr.tree. Both readings are needed:
+# the gate's reads system, global and XDG config, which ggshield's does not, and ggshield's trusts
+# every directory (safe.directory=*), where the gate's would skip the repository's own config.
+settings_proven() {
+  local view f rc rec key found=
+  for view in gate scan; do
+    f=$SCRATCH/settings-$view
+    if [ "$view" = gate ]; then
+      ggit config --includes -z --get-regexp '^(diff|filter|attr)\.' >"$f" 2>/dev/null </dev/null
+      rc=$?
+    else
+      (scan_env; scangit config --includes -z --get-regexp '^(diff|filter|attr)\.' >"$f" 2>/dev/null </dev/null)
+      rc=$?
+    fi
+    # 0 is some found, 1 with nothing printed is none; anything else is not knowing.
+    case "$rc" in
+      0) ;;
+      1) [ ! -s "$f" ] || { could_not_scan "git's settings could not be read"; return 1; } ;;
+      *) could_not_scan "git's settings could not be read (exit $rc)"; return 1 ;;
+    esac
+    while IFS= read -r -d '' rec; do
+      key=${rec%%$'\n'*}
+      key=${key//[[:cntrl:]]/?}
+      case "$key" in
+        diff.?*.textconv | diff.?*.command | diff.?*.binary | filter.?*.clean | filter.?*.smudge | filter.?*.process | attr.tree)
+          case " $found " in
+            *" $key "*) ;;
+            *) found="$found $key" ;;
+          esac
+          ;;
+      esac
+    done <"$f"
+  done
+  [ -n "$found" ] || return 0
+  echo "$SELF: REFUSED — git is set to run a program on file content or to hide it from the scan (found:$found), so NOTHING was scanned for secrets." >&2
+  echo "  The gate refuses any diff.<driver>.textconv, .command or .binary, filter.<driver>.clean, .smudge or .process, and attr.tree," >&2
+  echo "  wherever it is set and whether or not an attribute uses it today: attributes can come from a staged .gitattributes," >&2
+  echo "  info/attributes, core.attributesFile or the XDG attributes file. Remove the setting (git-lfs sets filter.lfs.*)," >&2
+  echo "  or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
+  return 1
+}
+
+# shallow_proven <commit>: refuses when the shallow list names the commit to scan (GIT_SHALLOW_FILE, which
+# names another list, is unset for every git call). git takes a commit
+# listed there as having no parent, and ggshield's git would then show its whole tree, or (with
+# log.showRoot off) nothing at all (measured). The commit is new, so no honest list names it; its id can be
+# predicted, so a list can. Bash builtins only; the list is where git names it.
+shallow_proven() {
+  local f line
+  f=$(ggit rev-parse --git-path shallow 2>/dev/null; printf x)
+  f=${f%x}
+  f=${f%$'\n'}
+  [ -n "$f" ] && [[ $f != *[[:cntrl:]]* ]] || { could_not_scan "git could not name its shallow list"; return 1; }
+  [ -e "$f" ] || return 0
+  [ -f "$f" ] && [ -r "$f" ] || { could_not_scan "the shallow list cannot be read"; return 1; }
+  # git reads a line by its leading hex digits, in either case, and ignores what follows them (measured:
+  # upper case, a CR, a space or other text after the id all counted), so the line is read the same way.
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line:0:${#1}}
+    if [ "${line,,}" = "$1" ]; then
+      echo "$SELF: REFUSED — the shallow list ($f) names the commit made for the scan, so git would not show its change as it is and NOTHING was scanned for secrets." >&2
+      echo "  Take that line out, or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
+      return 1
+    fi
+  done <"$f"
+  return 0
+}
+
+# objects_proven <commit>: refuses unless the commit object, read as git reads it, hashes to its own id.
+# git show does not check an object's content against its id, and the id of the commit made for the scan
+# can be predicted, so an object planted under that id (loose, or in an alternate store) is read instead of
+# the one written, with any tree or parent (measured: one naming HEAD's tree emptied the patch). Hashed with
+# --literally, which only hashes (without it git also judges the format). HEAD's side is checked by
+# base_proven. A commit-graph is not read (core.commitGraph=false, for the gate's git and the scan's): a
+# planted one gave the commit another tree the same way (measured).
+objects_proven() {
+  local got
+  got=$(ggit cat-file commit "$1" </dev/null 2>/dev/null | ggit hash-object --literally -t commit --stdin 2>/dev/null)
+  if [ "$got" != "$1" ]; then
+    echo "$SELF: REFUSED — the object stored for commit $1 does not hash to that id, so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2
+    echo "  Check the repository (git fsck), or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
+    return 1
+  fi
+  return 0
+}
+
+# hashed <type> <id>: the object, read as git reads it, hashes to its id (cat-file must succeed too: a
+# failed read hashes as empty, the id of an empty blob).
+hashed() {
+  local got
+  ggit cat-file "$1" "$2" </dev/null >"$SCRATCH/obj" 2>/dev/null || return 1
+  got=$(ggit hash-object --literally -t "$1" --stdin <"$SCRATCH/obj" 2>/dev/null)
+  rm -f -- "$SCRATCH/obj"
+  [ -n "$got" ] && [ "$got" = "$2" ]
+}
+
+# base_proven <HEAD's commit> <the staged tree>: refuses unless every object on HEAD's side of the
+# change, read as git reads it, hashes to its own id: HEAD's commit, its tree, and each tree and blob
+# the comparison reads on that side (diff-tree -t lists every tree it descends into). git does not check a
+# tree's or a blob's id when it compares them, so an object planted loose (or in an alternate store) under
+# HEAD's id for a file or directory, holding the staged content, made that part of the change look
+# unchanged and the patch empty (measured with the stub, which reads as ggshield 1.56.1 does). A file
+# added has no old side (the null id), and a submodule's id names no object here: neither is hashed.
+base_proven() {
+  local head=$1 tree=$2 rec meta omode oid id
+  local refuse="$SELF: REFUSED — an object on HEAD's side of the change does not hash to its id"
+  hashed commit "$head" || { echo "$refuse (HEAD's commit $head), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2; base_advice; return 1; }
+  id=$(ggit rev-parse -q --verify "$head^{tree}" 2>/dev/null) && [ ${#id} = ${#tree} ] \
+    || { could_not_scan "git could not name HEAD's tree"; return 1; }
+  hashed tree "$id" || { echo "$refuse (HEAD's tree $id), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2; base_advice; return 1; }
+  ggit diff-tree -r -t --no-renames --no-abbrev --raw -z "$head" "$tree" </dev/null >"$SCRATCH/base-raw" 2>/dev/null \
+    || { could_not_scan "git could not list the objects HEAD's side of the change is read from"; return 1; }
+  # A record is ":<old mode> <new mode> <old id> <new id> <status>" and then the path, each ended by NUL.
+  while IFS= read -r -d '' meta; do
+    IFS= read -r -d '' rec || { could_not_scan "git listed an object of HEAD's side without its path"; return 1; }
+    [[ $meta =~ ^:([0-7]{6})\ [0-7]{6}\ ([0-9a-f]+)\ [0-9a-f]+\ [A-Z]$ ]] \
+      || { could_not_scan "git listed HEAD's side of the change in a form the gate cannot read"; return 1; }
+    omode=${BASH_REMATCH[1]} oid=${BASH_REMATCH[2]}
+    [ ${#oid} = ${#tree} ] || { could_not_scan "git listed an object id of HEAD's side of the wrong length"; return 1; }
+    [[ $oid =~ ^0+$ ]] && continue
+    case "$omode" in
+      000000 | 160000) continue ;;
+      040000) hashed tree "$oid" ;;
+      *) hashed blob "$oid" ;;
+    esac || { echo "$refuse (object $oid), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2; base_advice; return 1; }
+  done <"$SCRATCH/base-raw"
+  return 0
+}
+base_advice() {
+  echo "  Check the repository (git fsck), or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
+}
+
+# attrs_proven <file of the changed paths, -z, from the top> <the way from here to the top>: refuses when
+# the diff attribute is unset (-diff, or the binary macro) for a changed path, as either git reads it:
+# git show prints such a file as "Binary files differ" and its content never reaches the scan. Every path
+# must be answered for, or the check did not happen.
+attrs_proven() {
+  local view f rc p a v n=0 got hidden=0
+  while IFS= read -r -d '' p; do
+    printf '%s%s\0' "$2" "$p"
+    n=$((n + 1))
+  done <"$1" >"$SCRATCH/attr-paths"
+  [ "$n" -gt 0 ] || return 0
+  for view in gate scan; do
+    f=$SCRATCH/attrs-$view
+    if [ "$view" = gate ]; then
+      ggit check-attr -z --stdin diff <"$SCRATCH/attr-paths" >"$f" 2>/dev/null
+      rc=$?
+    else
+      (scan_env; scangit check-attr -z --stdin diff <"$SCRATCH/attr-paths" >"$f" 2>/dev/null)
+      rc=$?
+    fi
+    [ "$rc" = 0 ] || { could_not_scan "git could not read the attributes of the staged files (exit $rc)"; return 1; }
+    got=0
+    while IFS= read -r -d '' p && IFS= read -r -d '' a && IFS= read -r -d '' v; do
+      [ "$a" = diff ] || { could_not_scan "git answered for an attribute it was not asked about"; return 1; }
+      got=$((got + 1))
+      [ "$v" != unset ] || hidden=$((hidden + 1))
+    done <"$f"
+    [ "$got" = "$n" ] || { could_not_scan "git answered for $got of the $n staged files' attributes"; return 1; }
+  done
+  [ "$hidden" -gt 0 ] || return 0
+  echo "$SELF: REFUSED — git is told to show a staged file as binary (its diff attribute is unset: -diff or binary), so its content would not reach the scan and NOTHING was scanned for secrets." >&2
+  echo "  Take the attribute off the changed files (a .gitattributes, info/attributes, core.attributesFile or the XDG attributes file)," >&2
+  echo "  or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
+  return 1
+}
+
+# outside_tree <program path> <tree top, or empty>: false when the program resolves inside the tree.
+outside_tree() {
+  local real top
+  real=$(readlink -f -- "$1" 2>/dev/null || printf '%s' "$1")
+  [ -n "$2" ] || return 0
+  top=$(readlink -f -- "$2" 2>/dev/null || printf '%s' "$2")
+  case "$real" in
+    "$top"/*) return 1 ;;
+  esac
+  return 0
+}
+
+could_not_scan() { # could_not_scan <why>
+  echo "$SELF: REFUSED — $1, so the staged change was NOT scanned for secrets." >&2
+  echo "  Fix the cause, or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
+  return 1
+}
+
+leak_policy() {
+  echo "Remove it from the change. If it is a real credential that reached a file," >&2
+  echo "AGENTS.md's leak policy applies: vault it, redact every copy on this machine," >&2
+  echo "and rotate it only if it left the homelab." >&2
+}
 
 run_gate() {
   if [ "${GGSHIELD_SKIP:-0}" = "1" ]; then
+    local v
+    for v in CI FORGEJO_ACTIONS GITHUB_ACTIONS; do
+      if [ -n "${!v+set}" ]; then
+        echo "$SELF: REFUSED — GGSHIELD_SKIP=1 is a switch for a person's own machine and $v is set here." >&2
+        echo "  NOTHING was scanned for secrets, and an automated run may not skip the scan." >&2
+        return 1
+      fi
+    done
     echo "$SELF: SKIP (GGSHIELD_SKIP=1) — NOTHING was scanned for secrets"
     return 0
   fi
+  # Before any program is run: the git variables that name another repository, and PATH itself.
+  git_env_proven || return 1
+  path_proven || return 1
+  # An inherited GIT_CONFIG_COUNT group would set configuration for every git run from here, ggshield's
+  # included; it is dropped. GIT_CONFIG_PARAMETERS, which `git -c` sets for a hook, is kept for the gate's
+  # own git calls (their core.fsmonitor=false comes after it) and dropped for ggshield's.
+  local cv
+  for cv in "${!GIT_CONFIG_KEY_@}" "${!GIT_CONFIG_VALUE_@}"; do unset "$cv"; done
+  unset GIT_CONFIG_COUNT
+  # GIT_ATTR_SOURCE reads attributes from a tree of its choosing (a -diff there hid the change); dropped for
+  # every git run from here, so the attribute check and the scan read the same attributes. GIT_CONFIG makes
+  # `git config` read that one file and nothing else, while show and write-tree ignore it: set, it would
+  # blind the settings check (measured); dropped for every git run from here. GIT_SHALLOW_FILE names a
+  # shallow list other than the repository's; dropped too, so the shallow check reads the one git reads.
+  unset GIT_ATTR_SOURCE GIT_CONFIG GIT_SHALLOW_FILE
   if ! command -v ggshield >/dev/null 2>&1; then
     echo "$SELF: REFUSED — ggshield is not installed, so NOTHING was scanned for secrets." >&2
     echo "  Install it, or opt out for this commit with GGSHIELD_SKIP=1." >&2
     return 1
   fi
 
-  local gg top real
+  local gg top py gitbin here
+  physdir . || { could_not_scan "the current directory cannot be resolved"; return 1; }
+  here=$PHYS
   gg=$(command -v ggshield)
-  real=$(readlink -f -- "$gg" 2>/dev/null || printf '%s' "$gg")
-  top=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  # Each program is checked against the directory the hook runs in and, once git is proven, against
+  # the top git names: a git inside the tree could name any top.
+  gitbin=$(command -v git 2>/dev/null) || { could_not_scan "git is not installed"; return 1; }
+  if ! outside_tree "$gitbin" "$here"; then
+    echo "$SELF: REFUSED — git resolves inside the repository working tree, so NOTHING was scanned." >&2
+    echo "  Put git on PATH from outside the tree, or opt out for this commit with GGSHIELD_SKIP=1." >&2
+    return 1
+  fi
+  # A sentinel keeps a trailing newline in the name git prints (command substitution drops them all), and
+  # physdir reads the result physically and refuses a control character. Outside a repository top stays
+  # empty: physdir "" would read the current directory.
+  local rc
+  top=$(ggit rev-parse --show-toplevel 2>/dev/null; printf x)
+  top=${top%x}
+  top=${top%$'\n'}
   if [ -n "$top" ]; then
-    top=$(readlink -f -- "$top" 2>/dev/null || printf '%s' "$top")
-    case "$real" in
-      "$top"/*)
-        echo "$SELF: REFUSED — ggshield resolves inside the repository working tree, so NOTHING was scanned." >&2
-        echo "  Put ggshield on PATH from outside the tree, or opt out for this commit with GGSHIELD_SKIP=1." >&2
+    physdir "$top"; rc=$?
+    case "$rc" in
+      0) top=$PHYS ;;
+      2)
+        echo "$SELF: REFUSED — the top of the tree has a control character in its path, so NOTHING was scanned for secrets." >&2
         return 1
         ;;
+      *) could_not_scan "the top of the tree git names cannot be resolved"; return 1 ;;
     esac
   fi
+  path_proven "$top" || return 1
+  if ! outside_tree "$gitbin" "$top"; then
+    echo "$SELF: REFUSED — git resolves inside the repository working tree, so NOTHING was scanned." >&2
+    echo "  Put git on PATH from outside the tree, or opt out for this commit with GGSHIELD_SKIP=1." >&2
+    return 1
+  fi
+  if ! outside_tree "$gg" "$here" || ! outside_tree "$gg" "$top"; then
+    echo "$SELF: REFUSED — ggshield resolves inside the repository working tree, so NOTHING was scanned." >&2
+    echo "  Put ggshield on PATH from outside the tree, or opt out for this commit with GGSHIELD_SKIP=1." >&2
+    return 1
+  fi
+  py=$(command -v python3 2>/dev/null) || { could_not_scan "there is no python3 to read ggshield's report with"; return 1; }
+  if ! outside_tree "$py" "$here" || ! outside_tree "$py" "$top"; then
+    echo "$SELF: REFUSED — python3 resolves inside the repository working tree, so NOTHING was scanned." >&2
+    echo "  Put python3 on PATH from outside the tree, or opt out for this commit with GGSHIELD_SKIP=1." >&2
+    return 1
+  fi
+  [ -f "$JUDGE" ] || { could_not_scan "ggshield-judge.py is not beside this script"; return 1; }
 
-  local out rc cfg
-  cfg=$(mktemp) || { echo "$SELF: REFUSED — no temporary file; NOTHING was scanned." >&2; return 1; }
-  CFG_FILE=$cfg
+  SCRATCH=$(mktemp -d) || { could_not_scan "no temporary directory"; return 1; }
   # Removed on any exit; this script sets no other EXIT trap.
-  trap 'rm -f "$CFG_FILE"' EXIT
-  # No pipe: a pipeline's rc is the LAST command's, so `ggshield … | head`
-  # reports head's success and a finding reads as clean.
+  trap 'rm -rf "$SCRATCH"' EXIT
+  local cfg="$SCRATCH/config" idx="$SCRATCH/index" src tree parent commit range base basetree same scanned
+  : >"$cfg" || { could_not_scan "no temporary file"; return 1; }
+  # Before write-tree, the first git call that could run a filter driver's program.
+  settings_proven || return 1
+
+  # The commit that stands for the staged change. write-tree runs on a copy:
+  # it may rewrite the index file it reads, and other hooks run beside this one.
+  src=${GIT_INDEX_FILE:-$(ggit rev-parse --git-path index 2>/dev/null)}
+  # No index file where git says it is: write-tree would build the EMPTY tree and the scan would
+  # cover nothing, so that is a refusal, never a clean scan.
+  if [ -z "$src" ] || [ ! -f "$src" ]; then
+    could_not_scan "the index file (${src:-no path}) was not found"
+    return 1
+  fi
+  cp -- "$src" "$idx" || { could_not_scan "the index could not be copied"; return 1; }
+  tree=$(GIT_INDEX_FILE="$idx" ggit write-tree 2>/dev/null) && [ -n "$tree" ] \
+    || { could_not_scan "git could not write the staged tree (not a repository, or an unmerged path)"; return 1; }
+  parent=$(ggit rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null || true)
+  commit=$(GIT_AUTHOR_NAME="$SELF" GIT_AUTHOR_EMAIL="$SELF@localhost" \
+    GIT_COMMITTER_NAME="$SELF" GIT_COMMITTER_EMAIL="$SELF@localhost" \
+    ggit commit-tree --no-gpg-sign ${parent:+-p "$parent"} -m "staged change, for the secret scan" "$tree" </dev/null 2>/dev/null) \
+    && [ -n "$commit" ] || { could_not_scan "git could not make the commit to scan"; return 1; }
+  range=${parent:+$parent..}$commit
+  shallow_proven "$commit" || return 1
+  objects_proven "$commit" || return 1
+
+  # What is scanned must be exactly what is staged: the index, read where git put it, is compared with
+  # the tree written from its copy. 0 is identical, 1 differs, anything else is an error; both
+  # refuse. An intent-to-add entry (git add -N) is not in the index's tree and is not in the commit.
+  base=${parent:-$(ggit hash-object -t tree /dev/null 2>/dev/null)}
+  [ -n "$base" ] || { could_not_scan "git could not name the tree the staged change is compared with"; return 1; }
+  if [ -n "$parent" ]; then base_proven "$parent" "$tree" || return 1; fi
+  GIT_INDEX_FILE="$src" ggit diff-index --cached --ita-invisible-in-index --quiet "$tree" </dev/null 2>/dev/null
+  same=$?
+  case "$same" in
+    0) ;;
+    1) could_not_scan "the staged index is not exactly the tree that was scanned"; return 1 ;;
+    *) could_not_scan "git could not compare the staged index with the tree to scan (exit $same)"; return 1 ;;
+  esac
+  # The files of that tree's change: their count for the message, their names for the attribute check.
+  ggit diff-tree -r --no-renames --name-only -z "$base" "$tree" >"$SCRATCH/names" 2>/dev/null </dev/null \
+    || { could_not_scan "git could not list the files of the commit to scan"; return 1; }
+  scanned=$(tr -cd '\0' <"$SCRATCH/names" | wc -c) || { could_not_scan "the files of the commit to scan could not be counted"; return 1; }
+  case "$scanned" in
+    *[!0-9]* | "") could_not_scan "the files of the commit to scan could not be counted"; return 1 ;;
+  esac
+  # "Nothing to scan" passes only when proven: with no file listed the tree written must be the one
+  # the commit starts from (HEAD's, or the empty tree before the first commit), whatever the
+  # comparisons above said.
+  if [ "$scanned" -eq 0 ]; then
+    basetree=$base
+    if [ -n "$parent" ]; then
+      basetree=$(ggit rev-parse -q --verify "$parent^{tree}" 2>/dev/null) \
+        || { could_not_scan "git could not name HEAD's tree"; return 1; }
+    fi
+    if [ "$tree" != "$basetree" ]; then
+      could_not_scan "no file is listed as changed, yet the tree to scan $tree is not HEAD's tree"
+      return 1
+    fi
+  fi
+  # The changed paths are named from the top; check-attr runs here, so they are handed over from here.
+  local cdup
+  cdup=$(ggit rev-parse --show-cdup 2>/dev/null; printf x)
+  cdup=${cdup%x}
+  cdup=${cdup%$'\n'}
+  if [[ $cdup == *[[:cntrl:]]* ]] || [[ -n $cdup && $cdup != */ ]]; then
+    could_not_scan "git could not say where the top of the tree is from here"
+    return 1
+  fi
+  attrs_proven "$SCRATCH/names" "$cdup" || return 1
+
+  # No pipe: a pipeline's rc is the LAST command's. The judge keeps ggshield's
+  # two outputs apart and in memory, and answers with an exit status and one
+  # word; both must agree, and any other pair is not a pass.
   # --instance outranks GITGUARDIAN_INSTANCE and GITGUARDIAN_API_URL (measured);
   # both are also unset for the call.
-  out=$(env -u GITGUARDIAN_INSTANCE -u GITGUARDIAN_API_URL GITGUARDIAN_DONT_LOAD_ENV=1 \
-    ggshield --config-path "$cfg" --instance "$INSTANCE" secret scan pre-commit 2>&1)
+  local word rc
+  # ggshield's git runs where ggshield runs, and it hands git show the paths named from the top: from a
+  # subdirectory git reads them as below it and the patch held nothing (measured with ggshield 1.56.1 and
+  # GIT_TRACE: cwd the subdirectory, paths from the top). So the scan runs from the top, with GIT_DIR and
+  # GIT_WORK_TREE (proven above to name this repository) made absolute first.
+  word=$(
+    scan_env
+    if [ -n "${GIT_DIR-}" ]; then physdir "$GIT_DIR" && export GIT_DIR="$PHYS" || exit 3; fi
+    if [ -n "${GIT_WORK_TREE-}" ]; then physdir "$GIT_WORK_TREE" && export GIT_WORK_TREE="$PHYS" || exit 3; fi
+    cd -- "$top" || exit 3
+    exec "$py" -I "$JUDGE" --label "$SELF" "$range" -- "$gg" --config-path "$cfg" --instance "$INSTANCE"
+  )
   rc=$?
-  rm -f "$cfg"
+  # The settings, attributes, shallow list, the commit's object and HEAD's side were read before ggshield's git read them, and other
+  # pre-commit jobs run beside this one (lefthook runs them in parallel). For a scan that would pass they
+  # are read again now, and a change while the scan ran refuses. A change made and undone within the scan
+  # is not seen: a stated limit. Any other answer refuses already, and keeps its own message.
+  if [ "$rc:$word" = 0:clean ]; then
+    local again
+    for again in settings-gate settings-scan attrs-gate attrs-scan; do
+      mv -f -- "$SCRATCH/$again" "$SCRATCH/$again.before" 2>/dev/null || : >"$SCRATCH/$again.before"
+    done
+    settings_proven || { rm -rf "$SCRATCH"; return 1; }
+    attrs_proven "$SCRATCH/names" "$cdup" || { rm -rf "$SCRATCH"; return 1; }
+    shallow_proven "$commit" || { rm -rf "$SCRATCH"; return 1; }
+    objects_proven "$commit" || { rm -rf "$SCRATCH"; return 1; }
+    if [ -n "$parent" ]; then base_proven "$parent" "$tree" || { rm -rf "$SCRATCH"; return 1; }; fi
+    for again in settings-gate settings-scan attrs-gate attrs-scan; do
+      [ -e "$SCRATCH/$again" ] || : >"$SCRATCH/$again"
+      if ! cmp -s -- "$SCRATCH/$again.before" "$SCRATCH/$again"; then
+        rm -rf "$SCRATCH"
+        could_not_scan "git's settings or the staged files' attributes changed while the scan ran"
+        return 1
+      fi
+    done
+  fi
+  rm -rf "$SCRATCH"
 
-  case "$rc" in
-    0)
+  case "$rc:$word" in
+    0:clean)
+      if [ "$scanned" -gt 0 ]; then
+        echo "$SELF: $scanned staged file(s) scanned"
+      else
+        echo "$SELF: the staged change holds no file, so there was nothing to scan"
+      fi
       echo "$SELF: clean"
       return 0
       ;;
-    1)
-      printf '%s\n' "$out"
-      echo "$SELF: REFUSED — ggshield found a secret in the staged diff (above)." >&2
-      echo "Remove it from the change. If it is a real credential that reached a file," >&2
-      echo "AGENTS.md's leak policy applies: vault it, redact every copy on this machine," >&2
-      echo "and rotate it only if it left the homelab." >&2
+    1:finding)
+      echo "$SELF: REFUSED — ggshield found a secret in the staged change (above)." >&2
+      leak_policy
+      return 1
+      ;;
+    1:finding-incomplete)
+      echo "$SELF: REFUSED — ggshield listed a secret in a scan that did not complete (above): the staged change fails, and a second run is not needed." >&2
+      leak_policy
+      return 1
+      ;;
+    1:finding-unread)
+      echo "$SELF: REFUSED — ggshield exited 1 (it found problems) but the judge could not read a finding in full (above): the staged change fails." >&2
+      leak_policy
+      return 1
+      ;;
+    2:skipped)
+      echo "$SELF: REFUSED — ggshield skipped a file it cannot scan (over its size limit, an encoding it cannot detect, or a file it cannot read), so the staged change was NOT scanned for secrets in full." >&2
+      echo "  A re-run skips the same file: change or leave out the file, or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
       return 1
       ;;
     *)
-      printf '%s\n' "$out" | sed 's/^/  /'
-      echo "$SELF: REFUSED (rc=$rc, could not scan) — NOTHING was scanned for secrets." >&2
-      echo "  Fix the cause (key, network, quota), or opt out for this commit with GGSHIELD_SKIP=1." >&2
+      echo "$SELF: REFUSED (could not scan, or the scan did not provably finish) — the staged change counts as NOT scanned for secrets." >&2
+      echo "  Fix the cause (key, network, quota; \`ggshield api-status\` says more), or on your own machine opt out for this commit with GGSHIELD_SKIP=1." >&2
       return 1
       ;;
   esac
@@ -126,24 +890,146 @@ selftest() {
   mkdir -p "$stub_dir" "$tmp/empty"
   trap 'rm -rf "$tmp"' RETURN
 
-  # A stub ggshield whose exit code we choose: this proves THIS script's rc
-  # mapping without spending a single call on the real service. It also
-  # records its arguments and the environment fact the script pins.
+  # A stub ggshield whose exit code and report we choose: this proves THIS
+  # script's verdicts without spending a single call on the real service. It
+  # also records its arguments, the environment facts the script pins, and
+  # the tree and files of the commit it was asked to scan.
   cat >"$stub_dir/ggshield" <<'EOF'
 #!/usr/bin/env bash
+range=${*: -1}
+id=${range##*..}
+rc=${GGSHIELD_STUB_RC:-0}
+mode=${GGSHIELD_STUB_MODE:-auto}
 {
   echo "args: $*"
   echo "dont_load_env=${GITGUARDIAN_DONT_LOAD_ENV-unset}"
   echo "env_instance=${GITGUARDIAN_INSTANCE-unset} env_api_url=${GITGUARDIAN_API_URL-unset}"
+  echo "gg_max_doc_size=${GG_MAX_DOC_SIZE-unset}"
+  echo "bash_env=${BASH_ENV-unset} env_file=${ENV-unset}"
+  echo "git_config=${GIT_CONFIG_COUNT-unset}/${GIT_CONFIG_KEY_0-unset}/${GIT_CONFIG_VALUE_0-unset} params=${GIT_CONFIG_PARAMETERS-unset}"
+  echo "pythonpath=${PYTHONPATH-unset} pythonhome=${PYTHONHOME-unset} pythonstartup=${PYTHONSTARTUP-unset}"
+  echo "pythonuserbase=${PYTHONUSERBASE-unset} pythoninspect=${PYTHONINSPECT-unset}"
+  echo "no_replace=${GIT_NO_REPLACE_OBJECTS-unset} graft_file=${GIT_GRAFT_FILE-unset} gg_git_config=${GG_GIT_CONFIG-unset} attr_source=${GIT_ATTR_SOURCE-unset} ext_diff=${GIT_EXTERNAL_DIFF-unset}"
+  echo "config_file=${GIT_CONFIG-unset} shallow_file=${GIT_SHALLOW_FILE-unset} literal=${GIT_LITERAL_PATHSPECS-unset}"
+  echo "notes_ref=${GIT_NOTES_REF-unset} notes_display=${GIT_NOTES_DISPLAY_REF-unset}"
+  echo "commits=$(git rev-list "$range" -- 2>/dev/null | wc -l)"
+  echo "tree=$(git rev-parse -q --verify "$id^{tree}" 2>/dev/null)"
+  echo "files=$(git diff-tree --root --no-commit-id --name-only -r "$id" 2>/dev/null | tr '\n' ' ')"
 } >"${GGSHIELD_STUB_LOG:-/dev/null}"
-echo "stub ggshield: rc ${GGSHIELD_STUB_RC:-0}"
-exit "${GGSHIELD_STUB_RC:-0}"
+# show: read the commit as ggshield 1.56.1 does (its git environment and its two git show calls, measured:
+# the header lists the paths, split as ggshield splits it, and the patch is asked for those paths) and
+# report a finding exactly when the marker line reaches the patch. GGSHIELD_STUB_DURING runs while the
+# scan runs, to change something under it.
+if [ "$mode" = show ]; then
+  hdr=$(GIT_CONFIG_SYSTEM= GIT_CONFIG_GLOBAL="${GG_GIT_CONFIG-}" git -c core.quotePath=false -c safe.directory='*' \
+    show "$id" --raw -z 2>/dev/null | python3 -I -c '
+import re, sys
+info, *lines = re.split("[\n\0]:", sys.stdin.buffer.read().decode("utf-8", "replace"))
+sys.stdout.write("NOTES_SEEN\0" if "GATE_NOTE_TEXT" in info else "")
+for x in lines:
+    prefix, path, *rest = x.rstrip("\0").split("\0")
+    if rest:
+        sys.stdout.write(path + "\0")
+        path = rest[0]
+    sys.stdout.write(path + "\0")
+' | tr '\0' '\n'; printf '\n%s' "${PIPESTATUS[*]}")
+  # ggshield's own parse fails on a header it cannot split (a path that starts with ":"): it dies.
+  hdr_rc=${hdr##*$'\n'}
+  hdr=${hdr%$'\n'*}
+  [ -z "${GGSHIELD_STUB_DURING-}" ] || sh -c "$GGSHIELD_STUB_DURING"
+  case "$hdr" in
+    NOTES_SEEN*) echo "notes_seen=yes" >>"${GGSHIELD_STUB_LOG:-/dev/null}"; hdr=${hdr#NOTES_SEEN} ;;
+    *) echo "notes_seen=no" >>"${GGSHIELD_STUB_LOG:-/dev/null}" ;;
+  esac
+  paths=()
+  while IFS= read -r p; do [ -z "$p" ] || paths+=("$p"); done <<<"$hdr"
+  if [ "$hdr_rc" != "0 0 0" ]; then
+    mode=dead
+  elif [ "${#paths[@]}" -gt 0 ] && GIT_CONFIG_SYSTEM= GIT_CONFIG_GLOBAL="${GG_GIT_CONFIG-}" git -c core.quotePath=false -c safe.directory='*' \
+    show "$id" --raw -z --patch -- "${paths[@]}" 2>/dev/null | grep -aq 'GATE_STUB_MARKER'; then
+    mode=finding rc=1
+  else
+    mode=clean rc=0
+  fi
+fi
+if [ "$mode" = auto ]; then
+  case "$rc" in
+    0) mode=clean ;;
+    1) mode=finding ;;
+    *) mode=dead ;;
+  esac
+fi
+scan() { # scan <commit id> <incidents in it>
+  local ents=""
+  [ "$2" = 0 ] || ents='"entities_with_incidents": [{"mode": "NEW", "filename": "stub.txt", "incidents": [{"type": "Stub Detector", "occurrences": [{"match": "st**ub"}]}], "total_incidents": 1}], '
+  printf '{"id": "%s", "type": "commit", %s"total_incidents": %s}' "$1" "$ents" "$2"
+}
+report() { # report <scans, comma separated> <total incidents>
+  printf '{"id": "stub", "type": "commit-range", "scans": [%s], "total_incidents": %s}\n' "$1" "$2"
+}
+case "$mode" in
+  clean) report "$(scan "$id" 0)" 0 ;;
+  finding | hidden-finding) report "$(scan "$id" 1)" 1 ;;
+  dead) echo "Error: stub ggshield could not scan" >&2 ;;
+  errors) report "{\"id\": \"$id\", \"type\": \"commit\", \"errors\": [{\"files\": [], \"description\": \"ServiceUnavailableError: stub\"}], \"total_incidents\": 0}" 0 ;;
+  text) printf '\nNo secrets have been found\n\n' ;;
+  cut) report "$(scan "$id" 0)" 0 | head -c 40 ;;
+  twice-json) report "$(scan "$id" 0)" 0; report "$(scan "$id" 0)" 0 ;;
+  silent) ;;
+  error-line) report "$(scan "$id" 0)" 0; echo "Error: 413:stub refusal" >&2 ;;
+  coloured-error-line) report "$(scan "$id" 0)" 0; printf '\033[31mError:\033[0m stub\n' >&2 ;;
+  log-error-line) report "$(scan "$id" 0)" 0; echo "2026-11-17 10:00:00,000 4242 [E] stub" >&2 ;;
+  scanning-failed) report "$(scan "$id" 0)" 0; echo "Warning: Scanning failed for a chunk" >&2 ;;
+  may-be-incomplete) report "$(scan "$id" 0)" 0; echo "note - Results may be incomplete." >&2 ;;
+  finding-error-line) report "$(scan "$id" 1)"; echo "Error: 413:stub refusal" >&2 ;;
+  skipped-file) report "$(scan "$id" 0)" 0; echo "Skipped big.bin: file too large" >&2 ;;
+  hang) sleep 20; report "$(scan "$id" 0)" 0 ;;
+  harmless-stderr) report "$(scan "$id" 0)" 0; echo "Scanning 1 commit" >&2 ;;
+  no-commit) report "" 0 ;;
+  other-commit) report "$(scan 0000000000000000000000000000000000000000 0)" 0 ;;
+  extra-commit) report "$(scan "$id" 0), $(scan 0000000000000000000000000000000000000000 0)" 0 ;;
+  commit-twice) report "$(scan "$id" 0), $(scan "$id" 0)" 0 ;;
+  wrong-type) printf '{"id": "stub", "type": "path", "scans": [%s], "total_incidents": 0}\n' "$(scan "$id" 0)" ;;
+  bad-total) report "$(scan "$id" 0)" 1 ;;
+  *) echo "stub ggshield: unknown mode $mode" >&2; exit 99 ;;
+esac
+exit "$rc"
 EOF
   chmod +x "$stub_dir/ggshield"
 
-  local self log
+  local self log repo
   self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
   log="$tmp/stub.log"
+
+  # Every case runs in a scratch repository with one commit and a staged
+  # change, with the variables this script reads cleared: CI sets CI, and a
+  # selftest started from a hook inherits git's own variables.
+  unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+  unset GGSHIELD_SKIP CI FORGEJO_ACTIONS GITHUB_ACTIONS
+  unset GGSHIELD_STUB_RC GGSHIELD_STUB_MODE GGSHIELD_STUB_LOG GGSHIELD_STUB_DURING
+  # The machine's own git settings and attributes stay out of every case (a runner's git-lfs filter.lfs.*
+  # would refuse them all): no system or global config, a scratch HOME, no system attributes.
+  mkdir -p "$tmp/home"
+  export HOME="$tmp/home" GIT_CONFIG_SYSTEM=/dev/null GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1
+  unset XDG_CONFIG_HOME GG_GIT_CONFIG GIT_ATTR_SOURCE GIT_EXTERNAL_DIFF GIT_NO_REPLACE_OBJECTS GIT_GRAFT_FILE
+  unset GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT GIT_CONFIG GIT_SHALLOW_FILE GIT_DIFF_OPTS GIT_NOTES_REF GIT_NOTES_DISPLAY_REF
+  unset GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS
+  mkrepo() { # mkrepo <dir>: one commit, then a staged new file and a staged edit
+    mkdir -p "$1"
+    git -C "$1" init -q 2>/dev/null
+    printf 'one\n' >"$1/kept.txt"
+    git -C "$1" add kept.txt
+    git -C "$1" -c user.name=t -c user.email=t@localhost -c commit.gpgsign=false \
+      -c core.hooksPath=/dev/null commit -q -m base
+    printf 'two\n' >>"$1/kept.txt"
+    printf 'new\n' >"$1/staged.txt"
+    git -C "$1" add kept.txt staged.txt
+  }
+  repo="$tmp/repo"
+  mkrepo "$repo"
+  gate() { # gate [NAME=value...]: the gate in $repo, the stub first on PATH
+    (cd "$repo" && env PATH="$stub_dir:$PATH" "$@" bash "$self" 2>&1)
+  }
 
   check() { # check <name> <got-rc> <want-rc> <output> <must-contain>
     if [ "$2" = "$3" ] && grep -qi -- "$5" <<< "$4"; then
@@ -155,53 +1041,190 @@ EOF
     fi
   }
 
-  out=$(PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 env -u GGSHIELD_SKIP bash "$self" 2>&1); rc=$?
-  check "rc 0 (clean) allows the commit" "$rc" 0 "$out" "clean"
+  local head_before status_before
+  head_before=$(git -C "$repo" rev-parse HEAD)
+  status_before=$(git -C "$repo" status --porcelain)
 
-  out=$(PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=1 env -u GGSHIELD_SKIP bash "$self" 2>&1); rc=$?
-  check "rc 1 (finding) BLOCKS the commit" "$rc" 1 "$out" "REFUSED"
+  out=$(gate GGSHIELD_STUB_RC=0); rc=$?
+  check "rc 0 with a clean report allows the commit" "$rc" 0 "$out" "$SELF: clean"
+
+  out=$(gate GGSHIELD_STUB_RC=1); rc=$?
+  check "rc 1 with a finding in the report BLOCKS the commit" "$rc" 1 "$out" "found a secret"
+  check "…and names the detector and the file" "$rc" 1 "$out" "detector 'Stub Detector', file 'stub.txt'"
+  if grep -q 'st\*\*ub' <<< "$out"; then
+    printf '  FAIL  the matched text was printed\n'; fail=1
+  else
+    printf '  ok    the matched text is not printed\n'
+  fi
 
   local n
   for n in 2 3 128; do
-    out=$(PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=$n env -u GGSHIELD_SKIP bash "$self" 2>&1); rc=$?
-    check "rc $n (cannot scan) BLOCKS, and says nothing was scanned" "$rc" 1 "$out" "NOTHING was scanned"
+    out=$(gate GGSHIELD_STUB_RC=$n); rc=$?
+    check "rc $n (cannot scan) BLOCKS, and says the change was not scanned" "$rc" 1 "$out" "NOT scanned"
     check "rc $n names the opt-out" "$rc" 1 "$out" "GGSHIELD_SKIP=1"
   done
+
+  # Exit 0 is not a pass by itself: the report and the other output decide.
+  local m
+  for m in errors text cut twice-json silent error-line coloured-error-line log-error-line \
+    scanning-failed may-be-incomplete no-commit other-commit extra-commit commit-twice \
+    wrong-type skipped-file; do
+    out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=$m); rc=$?
+    check "rc 0, report '$m': BLOCKS, not scanned" "$rc" 1 "$out" "NOT scanned"
+  done
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=errors); rc=$?
+  check "an errors entry is named, by kind only" "$rc" 1 "$out" "error kinds reported: ServiceUnavailableError"
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=error-line); rc=$?
+  check "an error line is named, by kind only" "$rc" 1 "$out" "error kinds reported: 413"
+  if grep -q 'stub refusal' <<< "$out"; then
+    printf '  FAIL  a line of ggshield'"'"'s own text was printed\n'; fail=1
+  else
+    printf '  ok    no line of ggshield'"'"'s own text is printed\n'
+  fi
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=no-commit); rc=$?
+  check "a report covering less than was handed over says so" "$rc" 1 "$out" "commits scanned are not the range's"
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=skipped-file); rc=$?
+  check "a file ggshield skipped is named as skipped, not scanned" "$rc" 1 "$out" "skipped 1 file(s)"
+  # A scan that does not finish is stopped at the judge's time limit (lowered here), not waited for.
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=hang GGSHIELD_JUDGE_TIMEOUT=2); rc=$?
+  check "a scan that stalls is stopped at the time limit, not a pass" "$rc" 1 "$out" "did not finish within 2 s"
+  check "…and counts as not scanned" "$rc" 1 "$out" "NOT scanned"
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=harmless-stderr); rc=$?
+  check "rc 0, a clean report and a harmless other line allows" "$rc" 0 "$out" "$SELF: clean"
+  out=$(gate GGSHIELD_STUB_RC=1 GGSHIELD_STUB_MODE=clean); rc=$?
+  check "rc 1 with no finding in the report BLOCKS, as a finding it could not read" "$rc" 1 "$out" "could not read a finding"
+  out=$(gate GGSHIELD_STUB_RC=1 GGSHIELD_STUB_MODE=error-line); rc=$?
+  check "rc 1 with an error line BLOCKS" "$rc" 1 "$out" "REFUSED"
+
+  # The judge's verdicts for a finding it could not take as a plain one: each refuses as a FINDING, with
+  # no invitation to opt out and no claim that nothing was scanned (a secret was seen); a skipped file
+  # is "not scanned" and says that a re-run skips it again.
+  refused_as_finding() { # refused_as_finding <name> <output> <must-contain>
+    check "$1" 1 1 "$2" "$3"
+    if grep -q 'GGSHIELD_SKIP\|NOT scanned' <<< "$2"; then
+      printf '  FAIL  %s: it calls the change not scanned or names the opt-out\n' "$1"; fail=1
+    else
+      printf '  ok    …and it neither calls the change not scanned nor names the opt-out\n'
+    fi
+  }
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=hidden-finding); rc=$?
+  check "rc 0 with an incident in the report is a finding in a scan that did not finish: BLOCKS" "$rc" 1 "$out" "listed a secret in a scan that did not complete"
+  refused_as_finding "rc 0 with an incident in the report: refused as a finding" "$out" "leak policy"
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=bad-total); rc=$?
+  refused_as_finding "rc 0 with a count above 0 and no incident listed: refused as a finding" "$out" "listed a secret in a scan that did not complete"
+  out=$(gate GGSHIELD_STUB_RC=1 GGSHIELD_STUB_MODE=finding-error-line); rc=$?
+  check "rc 1 with a finding and an error line BLOCKS" "$rc" 1 "$out" "listed a secret in a scan that did not complete"
+  refused_as_finding "rc 1 with a finding and an error line: refused as a finding" "$out" "vault it"
+  out=$(gate GGSHIELD_STUB_RC=1 GGSHIELD_STUB_MODE=clean); rc=$?
+  refused_as_finding "rc 1 and nothing the judge could read: refused as a finding" "$out" "could not read a finding"
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_MODE=skipped-file); rc=$?
+  check "a skipped file says a re-run skips it again" "$rc" 1 "$out" "re-run skips the same file"
+
+  # The word and the exit status must be one of the pairs the judge makes; any other pair, and any
+  # stdout that is more than the one word, is refused as not scanned. A judge that is a stand-in
+  # here (the gate copied beside it) prints the word and exits as it is told.
+  local fj="$tmp/fj" pair
+  mkdir -p "$fj"
+  cp -- "$self" "$fj/ggshield-gate.sh"
+  printf 'import os, sys\nprint(os.environ["FAKE_WORD"].replace("+", "\\n"))\nsys.exit(int(os.environ["FAKE_RC"]))\n' >"$fj/ggshield-judge.py"
+  fgate() { # fgate <rc> <word, + for a newline>
+    (cd "$repo" && env PATH="$stub_dir:$PATH" FAKE_RC="$1" FAKE_WORD="$2" bash "$fj/ggshield-gate.sh" 2>&1)
+  }
+  out=$(fgate 0 clean); rc=$?
+  check "a stand-in judge saying 0 clean allows (the harness itself works)" "$rc" 0 "$out" "$SELF: clean"
+  for pair in 0:finding 0:finding-incomplete 0:finding-unread 0:skipped 0:incomplete 0:nonsense 0: \
+    1:clean 1:incomplete 1:nonsense 1: 2:clean 2:finding 2:finding-incomplete 2:finding-unread 2:nonsense \
+    3:clean 3:finding 5:clean 0:clean+clean 0:nonsense+clean 0:clean+nonsense; do
+    out=$(fgate "${pair%%:*}" "${pair#*:}"); rc=$?
+    check "judge exit ${pair%%:*} with '${pair#*:}' is refused, not scanned" "$rc" 1 "$out" "REFUSED"
+    if grep -q "$SELF: clean" <<< "$out"; then
+      printf '  FAIL  judge exit %s with %s was taken as clean\n' "${pair%%:*}" "'${pair#*:}'"; fail=1
+    fi
+  done
+  out=$(fgate 1 finding-incomplete); rc=$?
+  check "a stand-in judge's 1 finding-incomplete is refused as a finding" "$rc" 1 "$out" "listed a secret in a scan that did not complete"
+  out=$(fgate 1 finding-unread); rc=$?
+  check "a stand-in judge's 1 finding-unread is refused as a finding" "$rc" 1 "$out" "could not read a finding"
+  out=$(fgate 2 skipped); rc=$?
+  check "a stand-in judge's 2 skipped is refused, not scanned" "$rc" 1 "$out" "skipped a file it cannot scan"
+  out=$(fgate 2 incomplete); rc=$?
+  check "a stand-in judge's 2 incomplete is refused, not scanned" "$rc" 1 "$out" "NOT scanned"
 
   # PATH is the empty dir ALONE: with /usr/bin on it the real ggshield is
   # found and the case proves nothing (measured — it scanned for real and
   # reported "clean", which would have passed a weaker assertion).
   # "$BASH", not `bash`, and no `env`: with an empty PATH neither is findable.
-  out=$(unset GGSHIELD_SKIP; PATH="$tmp/empty" "$BASH" "$self" 2>&1); rc=$?
+  out=$(cd "$repo" && PATH="$tmp/empty" "$BASH" "$self" 2>&1); rc=$?
   check "ggshield absent BLOCKS, and says nothing was scanned" "$rc" 1 "$out" "NOTHING was scanned"
   check "ggshield absent names the opt-out" "$rc" 1 "$out" "GGSHIELD_SKIP=1"
 
-  out=$(PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=1 GGSHIELD_SKIP=1 bash "$self" 2>&1); rc=$?
+  out=$(gate GGSHIELD_STUB_RC=1 GGSHIELD_SKIP=1); rc=$?
   check "GGSHIELD_SKIP=1 allows, wins even over a finding" "$rc" 0 "$out" "SKIP"
   check "GGSHIELD_SKIP=1 says loudly that nothing was scanned" "$rc" 0 "$out" "NOTHING was scanned"
-  out=$(PATH="$tmp/empty" GGSHIELD_SKIP=1 "$BASH" "$self" 2>&1); rc=$?
+  out=$(cd "$repo" && PATH="$tmp/empty" GGSHIELD_SKIP=1 "$BASH" "$self" 2>&1); rc=$?
   check "GGSHIELD_SKIP=1 allows with ggshield absent" "$rc" 0 "$out" "NOTHING was scanned"
+
+  # The skip is for a person's own machine: refused wherever an automated run says it is one.
+  local v
+  for v in CI FORGEJO_ACTIONS GITHUB_ACTIONS; do
+    out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_SKIP=1 "$v=true"); rc=$?
+    check "GGSHIELD_SKIP=1 with $v=true is REFUSED" "$rc" 1 "$out" "REFUSED"
+    check "…and it names $v and says nothing was scanned" "$rc" 1 "$out" "$v is set here"
+    out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_SKIP=1 "$v="); rc=$?
+    check "GGSHIELD_SKIP=1 with $v set but empty is REFUSED" "$rc" 1 "$out" "NOTHING was scanned"
+    out=$(cd "$repo" && PATH="$tmp/empty" GGSHIELD_SKIP=1 "$BASH" -c "export $v=1; exec \"\$BASH\" \"\$0\"" "$self" 2>&1); rc=$?
+    check "GGSHIELD_SKIP=1 with $v=1 and ggshield absent is REFUSED" "$rc" 1 "$out" "REFUSED"
+    out=$(gate GGSHIELD_STUB_RC=0 "$v=true"); rc=$?
+    check "$v=true without the skip scans as anywhere (clean allows)" "$rc" 0 "$out" "$SELF: clean"
+    out=$(gate GGSHIELD_STUB_RC=1 GGSHIELD_SKIP=0 "$v=true"); rc=$?
+    check "$v=true with GGSHIELD_SKIP=0 scans (a finding blocks)" "$rc" 1 "$out" "found a secret"
+  done
 
   # The scan's settings are its own: the stub records what ggshield was called with.
   : >"$log"
-  out=$(PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" env -u GGSHIELD_SKIP -u GITGUARDIAN_DONT_LOAD_ENV bash "$self" 2>&1); rc=$?
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" GITGUARDIAN_DONT_LOAD_ENV=0); rc=$?
   check "the scan runs" "$rc" 0 "$out" "clean"
   check "the scan sets GITGUARDIAN_DONT_LOAD_ENV=1" 0 0 "$(cat "$log")" "dont_load_env=1"
+  : >"$log"
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" GG_MAX_DOC_SIZE=1); rc=$?
+  check "GG_MAX_DOC_SIZE in the environment does not reach ggshield" 0 0 "$(cat "$log")" "gg_max_doc_size=unset"
   check "the scan passes --config-path" 0 0 "$(cat "$log")" "args: --config-path "
-  check "the scan is a pre-commit scan" 0 0 "$(cat "$log")" "secret scan pre-commit"
+  check "the scan asks for a JSON report of a commit range" 0 0 "$(cat "$log")" "secret scan --json commit-range "
   check "the scan pins the instance" 0 0 "$(cat "$log")" "--instance https://dashboard.gitguardian.com "
+  check "the range holds exactly one commit" 0 0 "$(cat "$log")" "^commits=1$"
+  check "that commit's change is the staged change" 0 0 "$(cat "$log")" "^files=kept.txt staged.txt $"
+  if [ "$(git -C "$repo" rev-parse HEAD)" = "$head_before" ] \
+    && [ "$(git -C "$repo" status --porcelain)" = "$status_before" ] \
+    && [ "$(git -C "$repo" for-each-ref --format='%(refname)' | wc -l)" = 1 ]; then
+    printf '  ok    the scans moved no ref and left the index and working tree as they were\n'
+  else
+    printf '  FAIL  a scan moved a ref or changed the index or working tree\n'; fail=1
+  fi
+
+  # The commit to scan is never signed: with signing on and a signing program
+  # that records being called and fails, the scan still runs and it was not called.
+  printf '#!/bin/sh\necho called >>%q\nexit 1\n' "$tmp/signer.log" >"$tmp/signer"
+  chmod +x "$tmp/signer"
+  git -C "$repo" config commit.gpgsign true
+  git -C "$repo" config gpg.program "$tmp/signer"
+  out=$(gate GGSHIELD_STUB_RC=0); rc=$?
+  check "with commit.gpgsign on, the scan still runs" "$rc" 0 "$out" "$SELF: clean"
+  if [ -e "$tmp/signer.log" ]; then
+    printf '  FAIL  the signing program was called\n'; fail=1
+  else
+    printf '  ok    …and the signing program is never called\n'
+  fi
+  git -C "$repo" config --unset commit.gpgsign
+  git -C "$repo" config --unset gpg.program
 
   # Foreign settings ignored: the instance variables and files in the working
   # directory name another host; the stub must see the fixed instance and
   # none of those values.
-  local other="$tmp/other"
-  mkdir -p "$other"
-  printf 'instance: https://other.example\n' >"$other/.gitguardian.yaml"
-  printf 'GITGUARDIAN_INSTANCE=https://other.example\nGITGUARDIAN_API_URL=https://other.example/v1\n' >"$other/.env"
+  printf 'instance: https://other.example\n' >"$repo/.gitguardian.yaml"
+  printf 'GITGUARDIAN_INSTANCE=https://other.example\nGITGUARDIAN_API_URL=https://other.example/v1\n' >"$repo/.env"
   : >"$log"
-  out=$(cd "$other" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" \
-    GITGUARDIAN_INSTANCE=https://other.example GITGUARDIAN_API_URL=https://other.example/v1 \
-    env -u GGSHIELD_SKIP bash "$self" 2>&1); rc=$?
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" \
+    GITGUARDIAN_INSTANCE=https://other.example GITGUARDIAN_API_URL=https://other.example/v1); rc=$?
   check "the scan runs with foreign settings present" "$rc" 0 "$out" "clean"
   check "foreign settings ignored: the instance is the fixed one" 0 0 "$(cat "$log")" "--instance https://dashboard.gitguardian.com "
   check "foreign settings ignored: GITGUARDIAN_INSTANCE is unset for the call" 0 0 "$(cat "$log")" "env_instance=unset"
@@ -211,40 +1234,920 @@ EOF
   else
     printf '  ok    no foreign value reached ggshield\n'
   fi
+  rm -f "$repo/.gitguardian.yaml" "$repo/.env"
   local cfg
   cfg=$(sed -n 's/^args: --config-path \([^ ]*\) .*/\1/p' "$log")
-  if [ -n "$cfg" ] && [ "$cfg" != ".gitguardian.yaml" ] && [ "${cfg#"$PWD"/}" = "$cfg" ]; then
+  if [ -n "$cfg" ] && [ "$cfg" != ".gitguardian.yaml" ] && [ "${cfg#"$repo"/}" = "$cfg" ]; then
     printf '  ok    the config path is not the working directory'"'"'s own file\n'
   else
     printf '  FAIL  the config path (%s) is empty or inside the working directory\n' "$cfg"
     fail=1
   fi
-  if [ -n "$cfg" ] && [ ! -e "$cfg" ]; then
-    printf '  ok    the temporary config file is gone after the run\n'
+  if [ -n "$cfg" ] && [ ! -e "$cfg" ] && [ ! -e "$(dirname "$cfg")" ]; then
+    printf '  ok    the temporary config file and its directory are gone after the run\n'
   else
-    printf '  FAIL  the temporary config file (%s) is still there\n' "$cfg"
+    printf '  FAIL  the temporary config file (%s) or its directory is still there\n' "$cfg"
     fail=1
   fi
 
   # Only exactly 1 skips.
-  local v
   for v in 0 "" yes true 11; do
-    out=$(PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=1 GGSHIELD_SKIP="$v" bash "$self" 2>&1); rc=$?
-    check "GGSHIELD_SKIP='$v' still scans (a finding blocks)" "$rc" 1 "$out" "REFUSED"
+    out=$(gate GGSHIELD_STUB_RC=1 GGSHIELD_SKIP="$v"); rc=$?
+    check "GGSHIELD_SKIP='$v' still scans (a finding blocks)" "$rc" 1 "$out" "found a secret"
   done
-  out=$(PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_SKIP=0 bash "$self" 2>&1); rc=$?
-  check "GGSHIELD_SKIP=0 scans (a clean scan says clean, not SKIP)" "$rc" 0 "$out" "clean"
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_SKIP=0); rc=$?
+  check "GGSHIELD_SKIP=0 scans (a clean scan says clean, not SKIP)" "$rc" 0 "$out" "$SELF: clean"
 
-  # A ggshield that resolves inside the working tree is refused; one outside is used.
-  local tree="$tmp/tree"
-  mkdir -p "$tree/.venv/bin"
-  git -C "$tree" init -q 2>/dev/null
-  cp "$stub_dir/ggshield" "$tree/.venv/bin/ggshield"
-  out=$(cd "$tree" && PATH="$tree/.venv/bin:$PATH" GGSHIELD_STUB_RC=0 env -u GGSHIELD_SKIP bash "$self" 2>&1); rc=$?
-  check "a ggshield inside the working tree is refused" "$rc" 1 "$out" "inside the repository"
+  # A ggshield or python3 that resolves inside the working tree is refused; one outside is used.
+  mkdir -p "$repo/.venv/bin" "$repo/.tools/bin"
+  cp "$stub_dir/ggshield" "$repo/.venv/bin/ggshield"
+  out=$(cd "$repo" && PATH="$repo/.venv/bin:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  check "a PATH entry holding ggshield inside the working tree is refused" "$rc" 1 "$out" "PATH entry .* resolves inside the repository"
   check "…and nothing was scanned, with the opt-out named" "$rc" 1 "$out" "GGSHIELD_SKIP=1"
-  out=$(cd "$tree" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 env -u GGSHIELD_SKIP bash "$self" 2>&1); rc=$?
-  check "a ggshield outside the working tree is used" "$rc" 0 "$out" "clean"
+  mkdir -p "$tmp/link-gg" "$tmp/link-py" "$tmp/link-git"
+  ln -s "$repo/.venv/bin/ggshield" "$tmp/link-gg/ggshield"
+  out=$(cd "$repo" && PATH="$tmp/link-gg:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  check "a ggshield linked from outside to a file inside the working tree is refused" "$rc" 1 "$out" "ggshield resolves inside the repository"
+  printf '#!/bin/sh\necho clean\nexit 0\n' >"$repo/.tools/bin/python3"
+  chmod +x "$repo/.tools/bin/python3"
+  out=$(cd "$repo" && PATH="$repo/.tools/bin:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  check "a PATH entry holding python3 inside the working tree is refused" "$rc" 1 "$out" "PATH entry .* resolves inside the repository"
+  ln -s "$repo/.tools/bin/python3" "$tmp/link-py/python3"
+  out=$(cd "$repo" && PATH="$tmp/link-py:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  check "a python3 linked from outside to a file inside the working tree is refused" "$rc" 1 "$out" "python3 resolves inside the repository"
+  out=$(gate GGSHIELD_STUB_RC=0); rc=$?
+  check "a ggshield outside the working tree is used" "$rc" 0 "$out" "$SELF: clean"
+  printf '#!/bin/sh\nexec %q "$@"\n' "$(command -v git)" >"$repo/.tools/bin/git"
+  chmod +x "$repo/.tools/bin/git"
+  out=$(cd "$repo" && PATH="$repo/.tools/bin:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  check "a PATH entry holding git inside the working tree is refused" "$rc" 1 "$out" "PATH entry .* resolves inside the repository"
+  check "…and nothing was scanned, with the opt-out named" "$rc" 1 "$out" "GGSHIELD_SKIP=1"
+  ln -s "$repo/.tools/bin/git" "$tmp/link-git/git"
+  out=$(cd "$repo" && PATH="$tmp/link-git:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  check "a git linked from outside to a file inside the working tree is refused" "$rc" 1 "$out" "git resolves inside the repository"
+  rm -rf "$repo/.venv" "$repo/.tools"
+
+  # PATH is proven before any helper program runs: a helper planted where PATH finds it first (env,
+  # readlink, ...) must never decide anything. Each case plants a helper that would let the gate pass.
+  local plant="$repo/.planted" ran="$tmp/git-ran" plant_git
+  plant_git=$(command -v git)
+  mkdir -p "$plant/bin" "$repo/relbin"
+  planted_env() { # planted_env <dir>: an env that answers like the judge saying "clean"
+    printf '#!/bin/sh\necho clean\nexit 0\n' >"$1/env"
+    chmod +x "$1/env"
+  }
+  not_clean() { # not_clean <name> <output>
+    if grep -q "$SELF: clean" <<< "$2"; then
+      printf '  FAIL  %s: it passed as clean\n' "$1"; fail=1
+    else
+      printf '  ok    …and it did not pass as clean\n'
+    fi
+  }
+  planted_env "$plant/bin"
+  out=$(cd "$repo" && PATH="$plant/bin:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a planted env in a PATH directory inside the tree is refused" "$rc" 1 "$out" "PATH entry"
+  not_clean "a planted env in the tree" "$out"
+  rm -f "$plant/bin/env"
+  # a readlink that calls every path outside the tree, and a git that records that it ran
+  printf '#!/bin/sh\nprintf "%%s\\n" /outside/the/tree\n' >"$plant/bin/readlink"
+  printf '#!/bin/sh\necho ran >>%q\nexec %q "$@"\n' "$ran" "$plant_git" >"$plant/bin/git"
+  chmod +x "$plant/bin/readlink" "$plant/bin/git"
+  rm -f "$ran"
+  out=$(cd "$repo" && PATH="$plant/bin:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a planted readlink cannot let a git inside the tree run" "$rc" 1 "$out" "PATH entry"
+  if [ -e "$ran" ]; then
+    printf '  FAIL  the git inside the tree was run\n'; fail=1
+  else
+    printf '  ok    …and the git inside the tree never ran\n'
+  fi
+  rm -f "$plant/bin/readlink" "$plant/bin/git"
+  planted_env "$repo/relbin"
+  planted_env "$repo"
+  out=$(cd "$repo" && PATH="relbin:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a relative PATH entry is refused" "$rc" 1 "$out" "relative"
+  not_clean "a relative PATH entry" "$out"
+  out=$(cd "$repo" && PATH=".:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a PATH entry of . is refused" "$rc" 1 "$out" "relative"
+  not_clean "a PATH entry of ." "$out"
+  out=$(cd "$repo" && PATH=":$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "an empty PATH entry (first) is refused" "$rc" 1 "$out" "empty"
+  not_clean "an empty PATH entry (first)" "$out"
+  out=$(cd "$repo" && PATH="$stub_dir:$PATH:" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "an empty PATH entry (last) is refused" "$rc" 1 "$out" "empty"
+  not_clean "an empty PATH entry (last)" "$out"
+  out=$(cd "$repo" && PATH="$stub_dir::$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "an empty PATH entry (middle) is refused" "$rc" 1 "$out" "empty"
+  rm -rf "$repo/relbin" "$repo/env" "$plant"
+
+  # What runs before the gate's own first line: the interpreter its shebang names (looked up on no
+  # PATH), CDPATH, exported functions and BASH_ENV. Each row plants something that would give a pass
+  # or run a program from inside the tree; the gate is run through its shebang, as lefthook does.
+  local mk="$tmp/marker-bin" mark="$tmp/marker-ran"
+  mkdir -p "$mk" "$plant/bin"
+  printf '#!/bin/sh\necho ran >>%q\nexec %q "$@"\n' "$mark" "$plant_git" >"$mk/git"
+  chmod +x "$mk/git"
+  printf '#!/bin/sh\necho "%s: clean"\nexit 0\n' "$SELF" >"$plant/bin/bash"
+  chmod +x "$plant/bin/bash"
+  out=$(cd "$repo" && PATH="$plant/bin:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$self" 2>&1); rc=$?
+  check "a planted bash in a PATH directory inside the tree is not what runs the gate" "$rc" 1 "$out" "PATH entry"
+  not_clean "a planted bash in the tree" "$out"
+  rm -rf "$plant"
+
+  # CDPATH: the gate is started by a relative path, the way lefthook does, with a CDPATH that holds
+  # a directory of the same name containing a judge that says "clean".
+  local cdp="$tmp/cdp"
+  mkdir -p "$repo/gcopy" "$cdp/gcopy"
+  cp -- "$self" "$repo/gcopy/ggshield-gate.sh"
+  cp -- "$(dirname -- "$self")/ggshield-judge.py" "$repo/gcopy/ggshield-judge.py"
+  printf 'open("%s", "a").write("ran\\n")\nprint("clean")\n' "$tmp/judge-ran" >"$cdp/gcopy/ggshield-judge.py"
+  rm -f "$tmp/judge-ran"
+  out=$(cd "$repo" && CDPATH="$cdp" GGSHIELD_STUB_RC=0 PATH="$stub_dir:$PATH" "$BASH" gcopy/ggshield-gate.sh 2>&1); rc=$?
+  check "a judge beside the script is used, whatever CDPATH holds" "$rc" 0 "$out" "$SELF: clean"
+  if [ -e "$tmp/judge-ran" ]; then
+    printf '  FAIL  a judge found through CDPATH was run\n'; fail=1
+  else
+    printf '  ok    …and the judge CDPATH pointed at was never run\n'
+  fi
+  rm -rf "$repo/gcopy"
+
+  # An exported function named cd and a BASH_ENV file, each running a git from the marker directory:
+  # neither may run, and the gate still passes as it did.
+  rm -f "$mark"
+  out=$(cd "$repo" && env "BASH_FUNC_cd%%=() { \"$mk/git\" --version >/dev/null; builtin cd \"\$@\"; }" \
+    PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$self" 2>&1); rc=$?
+  check "an exported function named cd is not imported" "$rc" 0 "$out" "$SELF: clean"
+  if [ -e "$mark" ]; then
+    printf '  FAIL  the exported cd function ran\n'; fail=1
+  else
+    printf '  ok    …and it never ran\n'
+  fi
+  printf '"%s/git" --version >/dev/null\n' "$mk" >"$tmp/benv"
+  rm -f "$mark"
+  out=$(cd "$repo" && BASH_ENV="$tmp/benv" PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$self" 2>&1); rc=$?
+  check "a BASH_ENV file is not read" "$rc" 0 "$out" "$SELF: clean"
+  if [ -e "$mark" ]; then
+    printf '  FAIL  the BASH_ENV file ran\n'; fail=1
+  else
+    printf '  ok    …and it never ran\n'
+  fi
+
+  # What reaches ggshield: BASH_ENV and ENV (a child shell would read them), and the variables that
+  # change how a Python program starts. The proxy and CA variables are left alone on purpose.
+  : >"$log"
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" BASH_ENV=/dev/null ENV=/dev/null PYTHONPATH=/x \
+    PYTHONHOME=/x PYTHONSTARTUP=/x PYTHONUSERBASE=/x PYTHONINSPECT=1); rc=$?
+  check "the scan runs with those variables set" "$rc" 0 "$out" "clean"
+  check "BASH_ENV and ENV do not reach ggshield" 0 0 "$(cat "$log")" "bash_env=unset env_file=unset"
+  check "PYTHONPATH, PYTHONHOME and PYTHONSTARTUP do not reach ggshield" 0 0 "$(cat "$log")" "pythonpath=unset pythonhome=unset pythonstartup=unset"
+  check "PYTHONUSERBASE and PYTHONINSPECT do not reach ggshield" 0 0 "$(cat "$log")" "pythonuserbase=unset pythoninspect=unset"
+
+  # Run from a subdirectory: the tree is also the nearest directory above that holds .git, so a PATH
+  # directory at the top is refused before git has been asked anything. A PATH entry that does not
+  # exist is read through its existing ancestor: inside the tree, refused.
+  mkdir -p "$repo/sub" "$repo/.tools/bin"
+  printf '#!/bin/sh\nprintf "%%s\\n" /outside/the/tree\n' >"$repo/.tools/bin/readlink"
+  printf '#!/bin/sh\necho ran >>%q\nexec %q "$@"\n' "$mark" "$plant_git" >"$repo/.tools/bin/git"
+  chmod +x "$repo/.tools/bin/readlink" "$repo/.tools/bin/git"
+  rm -f "$mark"
+  out=$(cd "$repo/sub" && PATH="$repo/.tools/bin:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "from a subdirectory, a PATH directory at the top of the tree is refused" "$rc" 1 "$out" "PATH entry"
+  if [ -e "$mark" ]; then
+    printf '  FAIL  the git inside the tree was run\n'; fail=1
+  else
+    printf '  ok    …and the git inside the tree never ran\n'
+  fi
+  rm -rf "$repo/.tools" "$repo/sub"
+  out=$(cd "$repo" && PATH="$repo/.not-there/bin:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a PATH entry that does not exist, inside the tree, is refused" "$rc" 1 "$out" "PATH entry"
+  not_clean "a missing PATH entry in the tree" "$out"
+  # A missing entry is read through its longest existing ancestor, resolved physically: through a link
+  # to the tree it is inside the tree, whatever the entry's own spelling says.
+  local other="$tmp/other"
+  mkrepo "$other"
+  ln -s "$repo" "$tmp/lnk-in"
+  ln -s "$tmp/outside" "$tmp/lnk-out"
+  ln -s "$repo/.nope" "$tmp/lnk-dangling"
+  mkdir -p "$tmp/outside"
+  out=$(cd "$repo" && PATH="$tmp/lnk-in/.not-there/bin:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a missing PATH entry under a link to the tree is refused" "$rc" 1 "$out" "PATH entry .* resolves inside the repository"
+  not_clean "a missing PATH entry under a link to the tree" "$out"
+  out=$(cd "$repo" && PATH="$tmp/lnk-in/a/b/.not-there/bin:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "…also with several missing components" "$rc" 1 "$out" "PATH entry .* resolves inside the repository"
+  out=$(cd "$repo" && PATH="$tmp/lnk-dangling/bin:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a PATH entry through a dangling link is refused" "$rc" 1 "$out" "symlink that leads nowhere"
+  not_clean "a PATH entry through a dangling link" "$out"
+  out=$(cd "$repo" && PATH="$tmp/lnk-out/.not-there/bin:$tmp/not-there/bin:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "missing PATH entries outside the tree (one under a link to outside it) are allowed" "$rc" 0 "$out" "$SELF: clean"
+  rm -f "$tmp/lnk-in" "$tmp/lnk-out" "$tmp/lnk-dangling"
+
+  # GIT_DIR and GIT_WORK_TREE are proven with builtins before any program runs: set, they must name the
+  # repository the hook runs in. Each hostile row runs from a directory outside the tree with a git and a
+  # readlink planted in a PATH directory inside it; neither may run.
+  mkdir -p "$repo/.tools/bin"
+  printf '#!/bin/sh\nprintf "%%s\\n" /outside/the/tree\n' >"$repo/.tools/bin/readlink"
+  printf '#!/bin/sh\necho ran >>%q\nexec %q "$@"\n' "$mark" "$plant_git" >"$repo/.tools/bin/git"
+  chmod +x "$repo/.tools/bin/readlink" "$repo/.tools/bin/git"
+  local hostile
+  for hostile in "GIT_DIR=$repo/.git GIT_WORK_TREE=$repo" "GIT_DIR=$repo/.git" "GIT_WORK_TREE=$repo"; do
+    rm -f "$mark"
+    # shellcheck disable=SC2086 # the words of $hostile are the assignments
+    out=$(cd "$tmp/outside" && env $hostile PATH="$repo/.tools/bin:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+    check "from outside the tree, '$hostile' is refused" "$rc" 1 "$out" "GIT_DIR or GIT_WORK_TREE is set"
+    not_clean "'$hostile' from outside the tree" "$out"
+    if [ -e "$mark" ]; then
+      printf '  FAIL  the git planted in the tree was run\n'; fail=1
+    else
+      printf '  ok    …and the git planted in the tree never ran\n'
+    fi
+  done
+  rm -rf "$repo/.tools"
+  mkdir -p "$repo/sub"
+  out=$(cd "$repo" && env GIT_WORK_TREE="$tmp/outside" PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a GIT_WORK_TREE that is not the tree the hook runs in is refused" "$rc" 1 "$out" "GIT_DIR or GIT_WORK_TREE is set"
+  out=$(cd "$repo" && env GIT_DIR="$other/.git" PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a GIT_DIR of another repository is refused" "$rc" 1 "$out" "GIT_DIR or GIT_WORK_TREE is set"
+  out=$(cd "$repo" && env GIT_DIR= PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "an empty GIT_DIR is refused" "$rc" 1 "$out" "GIT_DIR or GIT_WORK_TREE is set"
+  out=$(cd "$repo" && env GIT_WORK_TREE= PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "an empty GIT_WORK_TREE is refused" "$rc" 1 "$out" "GIT_DIR or GIT_WORK_TREE is set"
+  # What a normal run looks like: the variables naming this very repository still pass.
+  out=$(cd "$repo" && env GIT_DIR="$repo/.git" GIT_WORK_TREE="$repo" PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "GIT_DIR and GIT_WORK_TREE naming this repository pass, from the top" "$rc" 0 "$out" "$SELF: clean"
+  out=$(cd "$repo/sub" && env GIT_DIR="$repo/.git" GIT_WORK_TREE="$repo" PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "…and from a subdirectory" "$rc" 0 "$out" "$SELF: clean"
+  rmdir "$repo/sub"
+  # A linked worktree: its .git is a file, and git exports GIT_DIR as the directory that file names.
+  local lwmain="$tmp/lwmain" lw="$tmp/lw"
+  mkrepo "$lwmain"
+  git -C "$lwmain" worktree add -q "$lw" -b lwb >/dev/null 2>&1
+  printf 'in the worktree\n' >"$lw/lw.txt"
+  git -C "$lw" add lw.txt
+  mkdir -p "$lw/sub"
+  out=$(cd "$lw" && env GIT_DIR="$lwmain/.git/worktrees/lw" PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a linked worktree's GIT_DIR (as git exports it in a hook) passes" "$rc" 0 "$out" "$SELF: clean"
+  out=$(cd "$lw/sub" && env GIT_DIR="$lwmain/.git/worktrees/lw" GIT_WORK_TREE="$lw" PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "…also from a subdirectory of it, with its GIT_WORK_TREE" "$rc" 0 "$out" "$SELF: clean"
+  out=$(cd "$lw" && env GIT_DIR="$lwmain/.git" PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "the main repository's git directory is not a linked worktree's: refused" "$rc" 1 "$out" "GIT_DIR or GIT_WORK_TREE is set"
+  out=$(cd "$tmp/outside" && env GIT_DIR="$repo/.git" GIT_WORK_TREE="$repo" PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a git directory kept apart from its work tree is refused, and the refusal says so" "$rc" 1 "$out" "kept apart from its work tree"
+  out=$(cd "$repo" && env GIT_DIR="$other/.git" PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "…also for a GIT_DIR of another repository" "$rc" 1 "$out" "kept apart from its work tree"
+
+  # A control character, a newline above all, in a path the gate reads: command substitution drops a
+  # trailing newline, so a name that ends in one was read as the name without it.
+  local nl=$'\n' nltree
+  nltree="$tmp/nltree"$'\n'
+  mkrepo "$nltree"
+  mkdir -p "$nltree/.tools/bin"
+  printf '#!/bin/sh\necho ran >>%q\nexec %q "$@"\n' "$mark" "$plant_git" >"$nltree/.tools/bin/git"
+  chmod +x "$nltree/.tools/bin/git"
+  rm -f "$mark"
+  out=$(cd "$nltree" && PATH="$nltree/.tools/bin:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a tree whose directory name ends in a newline is refused, with a git planted in it" "$rc" 1 "$out" "control character"
+  not_clean "a tree named with a newline, with a git in its .tools/bin" "$out"
+  if [ -e "$mark" ]; then
+    printf '  FAIL  the git planted in the tree named with a newline was run\n'; fail=1
+  else
+    printf '  ok    …and the git planted in it never ran\n'
+  fi
+  out=$(cd "$nltree" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a tree named with a newline is refused even with a clean PATH" "$rc" 1 "$out" "control character"
+  not_clean "a tree named with a newline" "$out"
+  out=$(cd "$nltree" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GIT_DIR="$nltree/.git" "$BASH" "$self" 2>&1); rc=$?
+  check "…and with GIT_DIR set" "$rc" 1 "$out" "control character"
+  mkdir -p "$tmp/pathnl"
+  out=$(cd "$repo" && PATH="$stub_dir:$tmp/pathnl$nl:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a PATH entry with a newline in it is refused" "$rc" 1 "$out" "control character"
+  not_clean "a PATH entry with a newline in it" "$out"
+  cp -R "$repo/.git" "$repo/.git$nl"
+  out=$(cd "$repo" && env GIT_DIR="$repo/.git$nl" PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a GIT_DIR ending in a newline, with a copied directory of that name, is refused" "$rc" 1 "$out" "control character"
+  not_clean "a GIT_DIR ending in a newline" "$out"
+  rm -rf "$repo/.git$nl"
+  out=$(cd "$repo" && env GIT_WORK_TREE="$repo$nl" PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a GIT_WORK_TREE ending in a newline is refused" "$rc" 1 "$out" "control character"
+  # A value of - : bash's cd reads it as $OLDPWD (inherited from the environment), git as a directory of that name.
+  cp -R "$repo/.git" "$repo/-"
+  out=$(cd "$repo" && env OLDPWD="$repo/.git" GIT_DIR=- PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a GIT_DIR of - is not read as OLDPWD: refused" "$rc" 1 "$out" "GIT_DIR or GIT_WORK_TREE is set"
+  not_clean "a GIT_DIR of - with OLDPWD set to the git directory" "$out"
+  out=$(cd "$repo" && env OLDPWD="$repo" GIT_WORK_TREE=- PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a GIT_WORK_TREE of - is not read as OLDPWD: refused" "$rc" 1 "$out" "GIT_DIR or GIT_WORK_TREE is set"
+  rm -rf "$repo/-"
+  mkdir -p "$tmp/gf"
+  printf 'gitdir: %s\n/second/line\n' "$lwmain/.git/worktrees/lw" >"$tmp/gf/.git"
+  out=$(cd "$tmp/gf" && env GIT_DIR="$lwmain/.git/worktrees/lw" PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 "$BASH" "$self" 2>&1); rc=$?
+  check "a .git file with more than its one gitdir line is refused" "$rc" 1 "$out" "control character"
+
+  # Configuration handed to git through the environment or the repository can run a program inside the
+  # gate's own git calls (core.fsmonitor): the gate turns it off for them and drops a GIT_CONFIG_COUNT
+  # group; the scan never sees either, and `git -c` (GIT_CONFIG_PARAMETERS) keeps working in a hook.
+  printf '#!/bin/sh\necho ran >>%q\nexit 1\n' "$tmp/fsm-ran" >"$tmp/fsm"
+  chmod +x "$tmp/fsm"
+  rm -f "$tmp/fsm-ran"
+  : >"$log"
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0="$tmp/fsm"); rc=$?
+  check "a GIT_CONFIG_COUNT group setting core.fsmonitor does not stop a clean scan" "$rc" 0 "$out" "$SELF: clean"
+  if [ -e "$tmp/fsm-ran" ]; then
+    printf '  FAIL  the program named by core.fsmonitor was run\n'; fail=1
+  else
+    printf '  ok    …and the program it names never ran\n'
+  fi
+  check "…and the scan sees no GIT_CONFIG_COUNT group but the gate's own, turning core.fsmonitor off" 0 0 "$(cat "$log")" "git_config=[0-9][0-9]*/core.fsmonitor/false"
+  out=$(gate GGSHIELD_STUB_RC=0 GIT_CONFIG_PARAMETERS="'core.fsmonitor'='$tmp/fsm'"); rc=$?
+  check "core.fsmonitor in GIT_CONFIG_PARAMETERS does not stop a clean scan" "$rc" 0 "$out" "$SELF: clean"
+  if [ -e "$tmp/fsm-ran" ]; then
+    printf '  FAIL  the program named in GIT_CONFIG_PARAMETERS was run\n'; fail=1
+  else
+    printf '  ok    …and the program it names never ran\n'
+  fi
+  git -C "$repo" config core.fsmonitor "$tmp/fsm"
+  out=$(gate GGSHIELD_STUB_RC=0); rc=$?
+  git -C "$repo" config --unset core.fsmonitor
+  check "core.fsmonitor in the repository's config does not stop a clean scan" "$rc" 0 "$out" "$SELF: clean"
+  if [ -e "$tmp/fsm-ran" ]; then
+    printf '  FAIL  the program named in the repository config was run\n'; fail=1
+  else
+    printf '  ok    …and the program it names never ran\n'
+  fi
+  : >"$log"
+  out=$(gate GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" GIT_CONFIG_PARAMETERS="'user.name'='t'"); rc=$?
+  check "a harmless GIT_CONFIG_PARAMETERS still passes" "$rc" 0 "$out" "$SELF: clean"
+  check "…and does not reach the scan" 0 0 "$(cat "$log")" "params=unset"
+
+  # Settings and attributes that make git run a program on content or hide it from ggshield's own
+  # `git show` (the stub's show mode reads the commit as ggshield does and reports a finding exactly when
+  # the marker line reaches the patch). Each case stages the marker; before the fix each one passed it
+  # clean, ran a program, or both.
+  local hp="$tmp/hide" hran="$tmp/hide-ran" mk
+  printf '#!/bin/sh\necho ran >>%q\necho REPLACED\n' "$hran" >"$hp"
+  chmod +x "$hp"
+  # A long-running filter driver that speaks git's filter protocol, passes content through and notes it ran.
+  cat >"$tmp/proto-filter" <<PROTO
+#!/usr/bin/python3 -I
+import sys
+open("$hran", "a").write("ran\\n")
+i, o = sys.stdin.buffer, sys.stdout.buffer
+def rd():
+    n = i.read(4)
+    if not n: sys.exit(0)
+    if n == b"0000": return None
+    return i.read(int(n, 16) - 4)
+def wr(b): o.write(b"%04x" % (len(b) + 4) + b)
+def flush(): o.write(b"0000"); o.flush()
+while rd() is not None: pass
+wr(b"git-filter-server\\n"); wr(b"version=2\\n"); flush()
+while rd() is not None: pass
+wr(b"capability=clean\\n"); wr(b"capability=smudge\\n"); flush()
+while True:
+    while rd() is not None: pass
+    data = b""
+    while (c := rd()) is not None: data += c
+    wr(b"status=success\\n"); flush()
+    if data: wr(data)
+    flush(); flush()
+PROTO
+  chmod +x "$tmp/proto-filter"
+  mkmark() { # mkmark <dir>: mkrepo, plus a staged file holding the marker line
+    mkrepo "$1"
+    printf 'GATE_STUB_MARKER\n' >"$1/marked.txt"
+    git -C "$1" add marked.txt
+  }
+  mgate() { # mgate <dir> [NAME=value...]: the gate in <dir> with the stub reading the commit as ggshield does
+    local d=$1
+    shift
+    (cd "$d" && env PATH="$stub_dir:$PATH" GGSHIELD_STUB_MODE=show "$@" bash "$self" 2>&1)
+  }
+  refused_hidden() { # refused_hidden <name> <rc> <output> <must-contain>: refused before any program ran
+    check "$1: REFUSED, not scanned" "$2" 1 "$3" "$4"
+    if grep -q "$SELF: clean" <<< "$3" || [ -e "$hran" ]; then
+      printf '  FAIL  %s: passed clean, or the program ran\n' "$1"; fail=1
+    else
+      printf '  ok    …and nothing passed clean and no program ran\n'
+    fi
+    rm -f "$hran"
+  }
+  local setting="git is set to run a program on file content or to hide it" asbin="told to show a staged file as binary"
+  # The positive control: the marker reaches the stub's patch and is refused as a finding.
+  mk="$tmp/mk0"; mkmark "$mk"
+  out=$(mgate "$mk"); rc=$?
+  check "the stub reading as ggshield does sees a staged marker (positive control)" "$rc" 1 "$out" "found a secret"
+  mk="$tmp/mk1"; mkmark "$mk"
+  git -C "$mk" config diff.hide.textconv "$hp"
+  echo '* diff=hide' >"$mk/.git/info/attributes"
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "diff.<x>.textconv in .git/config with info/attributes" "$rc" "$out" "$setting"
+  check "…and the refusal names the key" "$rc" 1 "$out" "diff.hide.textconv"
+  mk="$tmp/mk2"; mkmark "$mk"
+  git -C "$mk" config diff.hide.textconv "$hp"
+  echo '* diff=hide' >"$mk/.gitattributes"
+  git -C "$mk" add .gitattributes
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "diff.<x>.textconv with only a staged .gitattributes" "$rc" "$out" "$setting"
+  mk="$tmp/mk3"; mkmark "$mk"
+  printf '[diff "hide"]\n\ttextconv = %s\n' "$hp" >"$tmp/gg-git-config"
+  echo '* diff=hide' >"$mk/.git/info/attributes"
+  : >"$log"
+  out=$(mgate "$mk" GG_GIT_CONFIG="$tmp/gg-git-config" GGSHIELD_STUB_LOG="$log"); rc=$?
+  check "textconv through GG_GIT_CONFIG does not reach ggshield's git: the marker is seen" "$rc" 1 "$out" "found a secret"
+  check "…GG_GIT_CONFIG is unset for the scan" 0 0 "$(cat "$log")" "gg_git_config=unset"
+  [ ! -e "$hran" ] || { printf '  FAIL  the textconv program named in GG_GIT_CONFIG ran\n'; fail=1; }
+  rm -f "$hran"
+  mk="$tmp/mk4"; mkmark "$mk"
+  mkdir -p "$tmp/xdg/git"
+  echo '* diff=hide' >"$tmp/xdg/git/attributes"
+  git -C "$mk" config diff.hide.textconv "$hp"
+  out=$(mgate "$mk" XDG_CONFIG_HOME="$tmp/xdg"); rc=$?
+  refused_hidden "the XDG attributes file with a textconv driver" "$rc" "$out" "$setting"
+  mk="$tmp/mk4b"; mkmark "$mk"
+  printf '[diff "hide"]\n\ttextconv = %s\n' "$hp" >"$tmp/xdg/git/config"
+  out=$(cd "$mk" && env -u GIT_CONFIG_GLOBAL PATH="$stub_dir:$PATH" GGSHIELD_STUB_MODE=show XDG_CONFIG_HOME="$tmp/xdg" bash "$self" 2>&1); rc=$?
+  refused_hidden "a textconv driver in the XDG config file, read as the gate's git reads it" "$rc" "$out" "$setting"
+  rm -f "$tmp/xdg/git/config"
+  mk="$tmp/mk5"; mkmark "$mk"
+  git -C "$mk" config filter.pf.process "$tmp/proto-filter"
+  echo '* filter=pf' >"$mk/.git/info/attributes"
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a long-running filter driver (filter.<x>.process) that speaks the protocol" "$rc" "$out" "$setting"
+  check "…and the refusal names the key" "$rc" 1 "$out" "filter.pf.process"
+  mk="$tmp/mk5b"; mkmark "$mk"
+  git -C "$mk" config filter.cs.clean "$hp"
+  git -C "$mk" config filter.cs.smudge "$hp"
+  echo '* filter=cs' >"$mk/.git/info/attributes"
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a clean/smudge filter driver" "$rc" "$out" "$setting"
+  mk="$tmp/mk6"; mkmark "$mk"
+  git -C "$mk" config diff.hide.command "$hp"
+  echo '* diff=hide' >"$mk/.git/info/attributes"
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "diff.<x>.command" "$rc" "$out" "$setting"
+  mk="$tmp/mk7"; mkmark "$mk"
+  git -C "$mk" config diff.hide.binary true
+  echo '* diff=hide' >"$mk/.git/info/attributes"
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "diff.<x>.binary" "$rc" "$out" "$setting"
+  mk="$tmp/mk8"; mkmark "$mk"
+  echo 'marked.txt -diff' >"$mk/.git/info/attributes"
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a -diff attribute on a changed path, no setting" "$rc" "$out" "$asbin"
+  mk="$tmp/mk9"; mkmark "$mk"
+  echo '*.txt binary' >"$mk/.gitattributes"
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "the binary attribute in an unstaged .gitattributes" "$rc" "$out" "$asbin"
+  mk="$tmp/mk9b"; mkmark "$mk"
+  mkdir -p "$mk/sub"
+  echo 'marked.txt -diff' >"$mk/.git/info/attributes"
+  # From a subdirectory the index is named as git names it in a hook, absolute (a relative --git-path is
+  # not read from there; the gate then refuses, as it always has).
+  out=$(mgate "$mk/sub" GIT_INDEX_FILE="$mk/.git/index"); rc=$?
+  refused_hidden "a -diff attribute, the gate run from a subdirectory" "$rc" "$out" "$asbin"
+  mk="$tmp/mk9c"; mkmark "$mk"
+  echo 'unchanged.txt -diff' >"$mk/.git/info/attributes"
+  out=$(mgate "$mk"); rc=$?
+  check "a -diff attribute on paths not changed is not refused (the marker is seen)" "$rc" 1 "$out" "found a secret"
+  mk="$tmp/mk10"; mkmark "$mk"
+  local attrtree
+  attrtree=$(cd "$mk" && b=$(printf '* -diff\n' | git hash-object -w --stdin) \
+    && printf '100644 blob %s\t.gitattributes\n' "$b" | git mktree)
+  git -C "$mk" config attr.tree "$attrtree"
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "attr.tree" "$rc" "$out" "$setting"
+  mk="$tmp/mk11"; mkmark "$mk"
+  attrtree=$(cd "$mk" && b=$(printf '* -diff\n' | git hash-object -w --stdin) \
+    && printf '100644 blob %s\t.gitattributes\n' "$b" | git mktree)
+  : >"$log"
+  out=$(mgate "$mk" GIT_ATTR_SOURCE="$attrtree" GGSHIELD_STUB_LOG="$log"); rc=$?
+  check "GIT_ATTR_SOURCE naming a -diff tree does not reach ggshield's git: the marker is seen" "$rc" 1 "$out" "found a secret"
+  check "…GIT_ATTR_SOURCE is unset for the scan" 0 0 "$(cat "$log")" "attr_source=unset"
+  mk="$tmp/mk12"; mkmark "$mk"
+  git -C "$mk" config core.bigFileThreshold 1
+  out=$(mgate "$mk"); rc=$?
+  check "core.bigFileThreshold=1 is pinned for ggshield's git: the marker is seen" "$rc" 1 "$out" "found a secret"
+  mk="$tmp/mk13"; mkmark "$mk"
+  mkdir -p "$mk/sub"
+  git -C "$mk" config diff.relative true
+  out=$(mgate "$mk/sub" GIT_INDEX_FILE="$mk/.git/index"); rc=$?
+  check "diff.relative from a subdirectory is pinned off: the marker is seen" "$rc" 1 "$out" "found a secret"
+  mk="$tmp/mk13b"; mkmark "$mk"
+  mkdir -p "$mk/sub"
+  out=$(mgate "$mk/sub" GIT_INDEX_FILE="$mk/.git/index"); rc=$?
+  check "from a subdirectory the scan still reads a file at the top (it runs from the top): the marker is seen" "$rc" 1 "$out" "found a secret"
+  # A replace ref swapping HEAD for a commit that already holds the staged tree: read through it, the change is empty.
+  mk="$tmp/mk14"; mkmark "$mk"
+  local swapc
+  swapc=$(cd "$mk" && GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@localhost GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@localhost \
+    git commit-tree --no-gpg-sign -m swap "$(git write-tree)" </dev/null)
+  git -C "$mk" replace HEAD "$swapc"
+  : >"$log"
+  out=$(mgate "$mk" GGSHIELD_STUB_LOG="$log"); rc=$?
+  check "a replace ref for HEAD is ignored by the gate's and ggshield's git: the marker is seen" "$rc" 1 "$out" "found a secret"
+  check "…GIT_NO_REPLACE_OBJECTS=1 for the scan" 0 0 "$(cat "$log")" "no_replace=1"
+  # A graft giving the scanned commit a parent that already holds its tree. The commit is predictable
+  # because the date is fixed here, and made exactly as the gate makes it.
+  mk="$tmp/mk15"; mkmark "$mk"
+  local gc gp
+  gc=$(cd "$mk" && GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' \
+    GIT_AUTHOR_NAME="$SELF" GIT_AUTHOR_EMAIL="$SELF@localhost" GIT_COMMITTER_NAME="$SELF" GIT_COMMITTER_EMAIL="$SELF@localhost" \
+    git commit-tree --no-gpg-sign -p "$(git rev-parse HEAD)" -m "staged change, for the secret scan" "$(git write-tree)" </dev/null)
+  gp=$(cd "$mk" && GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@localhost GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@localhost \
+    git commit-tree --no-gpg-sign -m graft "$(git write-tree)" </dev/null)
+  printf '%s %s\n' "$gc" "$gp" >"$mk/.git/info/grafts"
+  : >"$log"
+  out=$(mgate "$mk" GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' GGSHIELD_STUB_LOG="$log"); rc=$?
+  check "a graft on the scanned commit is ignored by ggshield's git: the marker is seen" "$rc" 1 "$out" "found a secret"
+  check "…GIT_GRAFT_FILE=/dev/null for the scan" 0 0 "$(cat "$log")" "graft_file=/dev/null"
+  # Harmless settings of the same sections still pass: a funcname and an algorithm, with and without the marker.
+  mk="$tmp/mk16"; mkmark "$mk"
+  git -C "$mk" config diff.hide.xfuncname '^(.*)$'
+  git -C "$mk" config diff.algorithm histogram
+  git -C "$mk" config filter.none.required false
+  echo '* diff=hide' >"$mk/.git/info/attributes"
+  out=$(mgate "$mk"); rc=$?
+  check "harmless diff and filter settings do not stop a scan (the marker is seen)" "$rc" 1 "$out" "found a secret"
+  mk="$tmp/mk17"; mkrepo "$mk"
+  git -C "$mk" config diff.hide.xfuncname '^(.*)$'
+  git -C "$mk" config diff.algorithm histogram
+  echo '* diff=hide' >"$mk/.git/info/attributes"
+  out=$(mgate "$mk"); rc=$?
+  check "harmless diff settings with nothing secret staged pass clean" "$rc" 0 "$out" "$SELF: clean"
+
+  # GIT_CONFIG makes `git config` read that one file and nothing else, while show and write-tree ignore
+  # it: an empty file there hid a textconv driver from the settings check, and the program ran.
+  mk="$tmp/mk20"; mkmark "$mk"
+  git -C "$mk" config diff.hide.textconv "$hp"
+  echo '* diff=hide' >"$mk/.git/info/attributes"
+  : >"$tmp/empty-git-config"
+  out=$(mgate "$mk" GIT_CONFIG="$tmp/empty-git-config"); rc=$?
+  refused_hidden "a textconv driver with GIT_CONFIG naming an empty file" "$rc" "$out" "$setting"
+  mk="$tmp/mk20b"; mkmark "$mk"
+  : >"$log"
+  out=$(mgate "$mk" GIT_CONFIG="$tmp/empty-git-config" GGSHIELD_STUB_LOG="$log"); rc=$?
+  check "GIT_CONFIG does not reach ggshield's git: the marker is seen" "$rc" 1 "$out" "found a secret"
+  check "…GIT_CONFIG is unset for the scan" 0 0 "$(cat "$log")" "config_file=unset"
+  # log.showRoot off: git show prints no file for a commit without a parent.
+  mk="$tmp/mk21"; mkdir -p "$mk"; git -C "$mk" init -q 2>/dev/null
+  printf 'GATE_STUB_MARKER\n' >"$mk/marked.txt"
+  git -C "$mk" add marked.txt
+  git -C "$mk" config log.showRoot false
+  out=$(mgate "$mk"); rc=$?
+  check "log.showRoot=false before the first commit is pinned on: the marker is seen" "$rc" 1 "$out" "found a secret"
+  # The shallow list: the commit made for the scan is predictable (the dates are fixed here, and it is made
+  # exactly as the gate makes it), and a list naming it makes git show it as a first commit.
+  predc() { # predc <dir>: the id the gate's commit will have with the fixed dates
+    (cd "$1" && p=$(git rev-parse -q --verify 'HEAD^{commit}') ; GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' \
+      GIT_AUTHOR_NAME="$SELF" GIT_AUTHOR_EMAIL="$SELF@localhost" GIT_COMMITTER_NAME="$SELF" GIT_COMMITTER_EMAIL="$SELF@localhost" \
+      git commit-tree --no-gpg-sign ${p:+-p "$p"} -m "staged change, for the secret scan" "$(git write-tree)" </dev/null)
+  }
+  dgate() { mgate "$@" GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z'; }
+  mk="$tmp/mk22"; mkmark "$mk"
+  git -C "$mk" config log.showRoot false
+  gc=$(predc "$mk")
+  printf '%s\n' "$gc" >"$mk/.git/shallow"
+  out=$(dgate "$mk"); rc=$?
+  check "a shallow list naming the commit made for the scan is refused" "$rc" 1 "$out" "shallow list"
+  not_clean "a shallow list naming the commit made for the scan" "$out"
+  printf '%s\r\n' "${gc^^}" >"$mk/.git/shallow"
+  out=$(dgate "$mk"); rc=$?
+  check "…and so is its id in upper case ending in a CR, as git reads that line" "$rc" 1 "$out" "shallow list"
+  rm -f "$mk/.git/shallow"
+  printf '%s\n' "$gc" >"$tmp/other-shallow"
+  : >"$log"
+  out=$(dgate "$mk" GIT_SHALLOW_FILE="$tmp/other-shallow" GGSHIELD_STUB_LOG="$log"); rc=$?
+  check "GIT_SHALLOW_FILE naming the commit does not reach ggshield's git: the marker is seen" "$rc" 1 "$out" "found a secret"
+  check "…GIT_SHALLOW_FILE is unset for the scan" 0 0 "$(cat "$log")" "shallow_file=unset"
+  git -C "$mk" rev-parse HEAD >"$mk/.git/shallow"
+  out=$(dgate "$mk"); rc=$?
+  check "a shallow HEAD (a --depth clone) is not refused, and the change is shown in full: the marker is seen" "$rc" 1 "$out" "found a secret"
+  rm -f "$mk/.git/shallow"
+  # Notes are not shown, whichever ref holds them: the old fixed ref, the default, or a configured one.
+  mk="$tmp/mk23"; mkmark "$mk"
+  gc=$(predc "$mk")
+  git -C "$mk" -c user.name=t -c user.email=t@localhost notes add -m GATE_NOTE_TEXT "$gc"
+  git -C "$mk" -c user.name=t -c user.email=t@localhost notes --ref=refs/notes/ggshield-gate-shows-no-notes add -m GATE_NOTE_TEXT "$gc"
+  git -C "$mk" -c user.name=t -c user.email=t@localhost notes --ref=refs/notes/mine add -m GATE_NOTE_TEXT "$gc"
+  git -C "$mk" config core.notesRef refs/notes/mine
+  git -C "$mk" config notes.displayRef 'refs/notes/*'
+  : >"$log"
+  out=$(dgate "$mk" GIT_NOTES_REF=refs/notes/ggshield-gate-shows-no-notes GGSHIELD_STUB_LOG="$log"); rc=$?
+  check "notes on the commit made for the scan: the marker is seen" "$rc" 1 "$out" "found a secret"
+  check "…and no note reaches ggshield's git show" 0 0 "$(cat "$log")" "^notes_seen=no$"
+  check "…though each note is there to be shown (the case is not empty)" 0 0 "$(git -C "$mk" notes --ref=refs/notes/mine show "$gc" 2>&1; git -C "$mk" notes show "$gc" 2>&1)" "GATE_NOTE_TEXT"
+  # A staged file named with pathspec magic (":!x"): ggshield 1.56.1's header parse dies on a path that
+  # starts with ":" (measured: "not enough values to unpack"), which the stub repeats, so it refuses; and
+  # ggshield's git reads pathspecs literally besides.
+  mk="$tmp/mk24"; mkmark "$mk"
+  printf 'x\n' >"$mk/:!marked.txt"
+  GIT_LITERAL_PATHSPECS=1 git -C "$mk" add ':!marked.txt'
+  : >"$log"
+  out=$(dgate "$mk" GGSHIELD_STUB_LOG="$log"); rc=$?
+  check "a staged file named \":!marked.txt\" beside the marker does not pass" "$rc" 1 "$out" "REFUSED"
+  not_clean "a staged file named \":!marked.txt\"" "$out"
+  check "…GIT_LITERAL_PATHSPECS=1 for the scan" 0 0 "$(cat "$log")" "literal=1"
+  # Read again after the scan: a setting or an attribute changed while ggshield ran refuses a clean scan.
+  mk="$tmp/mk25"; mkrepo "$mk"
+  out=$(mgate "$mk" GGSHIELD_STUB_DURING="git config diff.late.xfuncname x"); rc=$?
+  check "a diff setting added while the scan ran refuses" "$rc" 1 "$out" "changed while the scan ran"
+  not_clean "a diff setting added while the scan ran" "$out"
+  mk="$tmp/mk25b"; mkrepo "$mk"
+  out=$(mgate "$mk" GGSHIELD_STUB_DURING="echo '* diff=late' >>.git/info/attributes"); rc=$?
+  check "an attribute added while the scan ran refuses" "$rc" 1 "$out" "changed while the scan ran"
+  not_clean "an attribute added while the scan ran" "$out"
+  mk="$tmp/mk25c"; mkrepo "$mk"
+  out=$(mgate "$mk"); rc=$?
+  check "…and with nothing changed the same repository passes clean" "$rc" 0 "$out" "$SELF: clean"
+  # A commit-graph planted for the commit made for the scan, naming HEAD's tree: read, the change is empty.
+  mk="$tmp/mk26"; mkmark "$mk"
+  gc=$(predc "$mk")
+  printf '%s\n' "$gc" | git -C "$mk" commit-graph write --stdin-commits 2>/dev/null
+  rm -f "$mk/.git/objects/${gc:0:2}/${gc:2}"
+  chmod u+w "$mk/.git/objects/info/commit-graph"
+  python3 -I -c '
+import hashlib, sys
+p, t, pt = sys.argv[1:]
+b = bytearray(open(p, "rb").read())
+i = b.find(bytes.fromhex(t))
+assert i > 0
+b[i:i + 20] = bytes.fromhex(pt)
+b[-20:] = hashlib.sha1(bytes(b[:-20])).digest()
+open(p, "wb").write(b)
+' "$mk/.git/objects/info/commit-graph" "$(git -C "$mk" write-tree)" "$(git -C "$mk" rev-parse 'HEAD^{tree}')"
+  out=$(dgate "$mk"); rc=$?
+  check "a commit-graph planted for the commit made for the scan is not read: the marker is seen" "$rc" 1 "$out" "found a secret"
+  # An object planted under the predicted id, naming HEAD's tree: git does not check it against its id.
+  forge() { # forge <dir> <id> <tree>: replaces the loose commit <id> with one naming <tree>
+    local o="$1/.git/objects/${2:0:2}/${2:2}"
+    git -C "$1" cat-file commit "$2" | sed "1s/.*/tree $3/" >"$tmp/forged"
+    rm -f "$o"
+    python3 -I -c '
+import sys, zlib
+d = open(sys.argv[1], "rb").read()
+open(sys.argv[2], "wb").write(zlib.compress(b"commit %d\0" % len(d) + d))
+' "$tmp/forged" "$o"
+  }
+  mk="$tmp/mk27"; mkmark "$mk"
+  gc=$(predc "$mk")
+  forge "$mk" "$gc" "$(git -C "$mk" rev-parse 'HEAD^{tree}')"
+  out=$(dgate "$mk"); rc=$?
+  check "an object planted under the id of the commit made for the scan is refused" "$rc" 1 "$out" "does not hash to that id"
+  not_clean "an object planted under the id of the commit made for the scan" "$out"
+  mk="$tmp/mk27b"; mkmark "$mk"
+  forge "$mk" "$(git -C "$mk" rev-parse HEAD)" "$(git -C "$mk" write-tree)"
+  out=$(mgate "$mk"); rc=$?
+  # git checks the hash when it peels HEAD, so the gate reads it as no first commit and scans the whole tree.
+  check "HEAD's object replaced by one naming the staged tree does not pass" "$rc" 1 "$out" "REFUSED"
+  not_clean "HEAD's object replaced by one naming the staged tree" "$out"
+  # An object on HEAD's side planted under its id with the staged content: git does not check a tree's or a
+  # blob's id when it compares them, so read, the patch was empty. Every object the diff compares against
+  # is hashed (a packed HEAD would not be read from the planted copy, so these stay loose).
+  plant() { # plant <dir> <type> <id> <content file>: replaces the loose object <id> with <content file>
+    local o="$1/.git/objects/${3:0:2}/${3:2}"
+    rm -f "$o"
+    python3 -I -c '
+import sys, zlib
+d = open(sys.argv[2], "rb").read()
+open(sys.argv[3], "wb").write(zlib.compress(sys.argv[1].encode() + b" %d\0" % len(d) + d))
+' "$2" "$4" "$o"
+  }
+  mkdir_mark() { # mkdir_mark <dir>: mkrepo with dir/secret.txt committed benign, then staged with the marker
+    mkrepo "$1"
+    mkdir -p "$1/dir"
+    printf 'benign\n' >"$1/dir/secret.txt"
+    git -C "$1" add dir/secret.txt
+    git -C "$1" -c user.name=t -c user.email=t@localhost -c commit.gpgsign=false \
+      -c core.hooksPath=/dev/null commit -q -m dir
+    printf 'GATE_STUB_MARKER\n' >"$1/dir/secret.txt"
+    git -C "$1" add dir/secret.txt
+  }
+  mk="$tmp/mk27c"; mkdir_mark "$mk"
+  out=$(mgate "$mk"); rc=$?
+  check "a marker staged over a committed file in a directory is seen (control for the planted objects)" "$rc" 1 "$out" "found a secret"
+  mk="$tmp/mk27d"; mkdir_mark "$mk"
+  git -C "$mk" cat-file blob :dir/secret.txt >"$tmp/plant"
+  plant "$mk" blob "$(git -C "$mk" rev-parse HEAD:dir/secret.txt)" "$tmp/plant"
+  out=$(mgate "$mk"); rc=$?
+  check "a blob on HEAD's side planted with the staged content is refused" "$rc" 1 "$out" "on HEAD's side of the change does not hash to its id"
+  not_clean "a blob on HEAD's side planted with the staged content" "$out"
+  mk="$tmp/mk27e"; mkdir_mark "$mk"
+  printf 'other\n' >"$mk/other.txt"
+  git -C "$mk" add other.txt
+  git -C "$mk" cat-file tree "$(git -C "$mk" write-tree):dir" >"$tmp/plant"
+  plant "$mk" tree "$(git -C "$mk" rev-parse HEAD:dir)" "$tmp/plant"
+  out=$(mgate "$mk"); rc=$?
+  check "a tree on HEAD's side planted with the staged tree is refused" "$rc" 1 "$out" "on HEAD's side of the change does not hash to its id"
+  not_clean "a tree on HEAD's side planted with the staged tree" "$out"
+  mk="$tmp/mk27h"; mkdir_mark "$mk"
+  printf 'other\n' >"$mk/other.txt"
+  git -C "$mk" add other.txt
+  git -C "$mk" cat-file blob :dir/secret.txt >"$tmp/plant"
+  gc=$(git -C "$mk" rev-parse HEAD:dir/secret.txt)
+  # The planted copy is made beside the repository and moved in by the stub while the scan runs.
+  mkdir -p "$tmp/mk27h-src/.git/objects/${gc:0:2}"
+  plant "$tmp/mk27h-src" blob "$gc" "$tmp/plant"
+  out=$(mgate "$mk" GGSHIELD_STUB_DURING="rm -f .git/objects/${gc:0:2}/${gc:2} && cp $tmp/mk27h-src/.git/objects/${gc:0:2}/${gc:2} .git/objects/${gc:0:2}/"); rc=$?
+  check "a blob on HEAD's side planted while the scan ran is refused" "$rc" 1 "$out" "on HEAD's side of the change does not hash to its id"
+  not_clean "a blob on HEAD's side planted while the scan ran" "$out"
+  mk="$tmp/mk27f"; mkdir_mark "$mk"
+  printf 'benign again\n' >"$mk/dir/secret.txt"
+  git -C "$mk" add dir/secret.txt
+  out=$(mgate "$mk"); rc=$?
+  check "…and with nothing planted a benign edit in the directory passes clean" "$rc" 0 "$out" "$SELF: clean"
+  # A submodule's id is not an object here: it is not hashed, and changing it passes.
+  mk="$tmp/mk27g"; mkrepo "$mk"
+  git -C "$mk" update-index --add --cacheinfo "160000,$(git -C "$mk" rev-parse HEAD),sub"
+  git -C "$mk" -c user.name=t -c user.email=t@localhost -c commit.gpgsign=false \
+    -c core.hooksPath=/dev/null commit -q -m sub
+  git -C "$mk" update-index --cacheinfo "160000,$(git -C "$mk" rev-parse HEAD),sub"
+  out=$(mgate "$mk"); rc=$?
+  check "a changed submodule id passes clean (it is not an object here)" "$rc" 0 "$out" "$SELF: clean"
+  # The top of the tree is read through a sentinel and physdir: a core.worktree ending in a newline was read
+  # as the name without it (command substitution drops it) before that change, and passed.
+  mk="$tmp/mk28"; mkdir -p "$mk" "$tmp/wt28"$'\n'
+  git -C "$mk" init -q 2>/dev/null
+  git -C "$mk" config core.worktree "$tmp/wt28"$'\n'
+  printf 'one\n' >"$tmp/wt28"$'\n'"/a.txt"
+  (cd "$tmp/wt28"$'\n' && GIT_DIR="$mk/.git" git add a.txt)
+  out=$(mgate "$mk"); rc=$?
+  check "a core.worktree ending in a newline is refused (the top is read through a sentinel)" "$rc" 1 "$out" "control character"
+  not_clean "a core.worktree ending in a newline" "$out"
+
+  # No repository, no first commit yet, and an unmerged path.
+  mkdir -p "$tmp/plain"
+  out=$(cd "$tmp/plain" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GIT_CEILING_DIRECTORIES="$tmp" bash "$self" 2>&1); rc=$?
+  check "outside a repository BLOCKS, not scanned" "$rc" 1 "$out" "NOT scanned"
+  local fresh="$tmp/fresh"
+  mkdir -p "$fresh"
+  git -C "$fresh" init -q 2>/dev/null
+  printf 'first\n' >"$fresh/first.txt"
+  git -C "$fresh" add first.txt
+  : >"$log"
+  out=$(cd "$fresh" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" bash "$self" 2>&1); rc=$?
+  check "before the first commit the staged files are scanned as one commit" "$rc" 0 "$out" "$SELF: clean"
+  check "…holding the staged file" 0 0 "$(cat "$log")" "^files=first.txt $"
+  check "…and only that commit" 0 0 "$(cat "$log")" "^commits=1$"
+
+  # The index must be found, and the tree scanned must be exactly what it stages: a gate that cannot
+  # find the index, or builds a tree other than what is staged, scanned the wrong thing and must not
+  # call that clean.
+  out=$(gate GGSHIELD_STUB_RC=0 GIT_INDEX_FILE="$tmp/no-such-index"); rc=$?
+  check "GIT_INDEX_FILE naming no file BLOCKS, not scanned" "$rc" 1 "$out" "NOT scanned"
+  check "…and says the index was not found" "$rc" 1 "$out" "index file .* was not found"
+  local noindex="$tmp/noindex"
+  mkrepo "$noindex"
+  rm -f "$noindex/.git/index"
+  out=$(cd "$noindex" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  check "no index file in the repository BLOCKS, not scanned" "$rc" 1 "$out" "NOT scanned"
+  # A git whose write-tree answers HEAD's tree (the staged change left out of it): the counts disagree.
+  local shim="$tmp/gitshim" realgit
+  realgit=$(command -v git)
+  mkdir -p "$shim"
+  printf '#!/bin/sh\ns=; k=; for a; do if [ -n \"$k\" ]; then k=; elif [ \"$a\" = -c ]; then k=1; else s=$a; break; fi; done\nif [ "$s" = write-tree ]; then exec %q rev-parse "HEAD^{tree}"; fi\nexec %q "$@"\n' "$realgit" "$realgit" >"$shim/git"
+  chmod +x "$shim/git"
+  out=$(cd "$repo" && PATH="$shim:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  check "a tree that lacks the staged files BLOCKS, not scanned" "$rc" 1 "$out" "NOT scanned"
+  check "…and says the staged index is not the tree scanned" "$rc" 1 "$out" "not exactly the tree that was scanned"
+  out=$(gate GGSHIELD_STUB_RC=0); rc=$?
+  check "a clean scan says how many staged files it covered" "$rc" 0 "$out" "2 staged file(s) scanned"
+  # A git whose write-tree answers a tree of its own with as many changed files as are staged (counts
+  # equal, content not): what is scanned is not what is staged, so it is refused.
+  local swap="$tmp/swap" alt
+  mkrepo "$swap"
+  alt=$(cd "$swap" && export GIT_INDEX_FILE="$tmp/altindex" \
+    && "$realgit" read-tree HEAD \
+    && blob=$(printf 'swapped\n' | "$realgit" hash-object -w --stdin) \
+    && "$realgit" update-index --add --cacheinfo "100644,$blob,kept.txt" \
+    && "$realgit" update-index --add --cacheinfo "100644,$blob,staged.txt" \
+    && "$realgit" write-tree)
+  printf '#!/bin/sh\ns=; k=; for a; do if [ -n \"$k\" ]; then k=; elif [ \"$a\" = -c ]; then k=1; else s=$a; break; fi; done\nif [ "$s" = write-tree ]; then echo %q; exit 0; fi\nexec %q "$@"\n' "$alt" "$realgit" >"$shim/git"
+  out=$(cd "$swap" && PATH="$shim:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  check "a swapped tree with the same number of changed files BLOCKS, not scanned" "$rc" 1 "$out" "NOT scanned"
+  check "…and says the staged index is not the tree scanned" "$rc" 1 "$out" "not exactly the tree that was scanned"
+  # An intent-to-add file (git add -N) beside a real staged change is not a mismatch: what is scanned
+  # is what will be committed, and the file is not in it.
+  local ita="$tmp/ita"
+  mkrepo "$ita"
+  printf 'later\n' >"$ita/ita.txt"
+  git -C "$ita" add -N ita.txt
+  : >"$log"
+  out=$(cd "$ita" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" bash "$self" 2>&1); rc=$?
+  check "an intent-to-add file beside a staged change is scanned and allowed" "$rc" 0 "$out" "2 staged file(s) scanned"
+  check "…the scan holding the staged files and not the intent-to-add one" 0 0 "$(cat "$log")" "^files=kept.txt staged.txt $"
+
+  # Nothing staged to scan passes only when it is proven: the tree written must be HEAD's own. A git whose
+  # diff-index and diff-tree list nothing (both counts 0) beside a real staged change is refused.
+  local blind="$tmp/gitblind"
+  mkdir -p "$blind"
+  printf '#!/bin/sh\ns=; k=; for a; do if [ -n \"$k\" ]; then k=; elif [ \"$a\" = -c ]; then k=1; else s=$a; break; fi; done\ncase "$s" in diff-index | diff-tree) exit 0 ;; esac\nexec %q "$@"\n' "$realgit" >"$blind/git"
+  chmod +x "$blind/git"
+  out=$(cd "$repo" && PATH="$blind:$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  check "counts of 0 beside a changed tree BLOCKS, not scanned" "$rc" 1 "$out" "NOT scanned"
+  check "…and says the tree is not HEAD's" "$rc" 1 "$out" "is not HEAD's tree"
+  # A merge that keeps our side (a staged change of no file, tree equal to HEAD's) is still nothing to scan.
+  local ours="$tmp/ours"
+  mkrepo "$ours"
+  git -C "$ours" -c user.name=t -c user.email=t@localhost -c commit.gpgsign=false \
+    -c core.hooksPath=/dev/null commit -q -m ours
+  git -C "$ours" checkout -q -b side HEAD~1
+  printf 'side\n' >"$ours/side.txt"
+  git -C "$ours" add side.txt
+  git -C "$ours" -c user.name=t -c user.email=t@localhost -c commit.gpgsign=false \
+    -c core.hooksPath=/dev/null commit -q -m side
+  git -C "$ours" checkout -q -
+  git -C "$ours" -c user.name=t -c user.email=t@localhost merge -q -s ours --no-commit --no-ff side >/dev/null 2>&1
+  out=$(cd "$ours" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  check "a merge keeping our side (tree equal to HEAD's) is still nothing to scan" "$rc" 0 "$out" "nothing to scan"
+  check "…and allowed" "$rc" 0 "$out" "$SELF: clean"
+
+  # A merge being concluded: scanned against HEAD alone, the index left as it was.
+  local merging="$tmp/merging" index_before
+  mkrepo "$merging"
+  git -C "$merging" -c user.name=t -c user.email=t@localhost -c commit.gpgsign=false \
+    -c core.hooksPath=/dev/null commit -q -m ours
+  git -C "$merging" checkout -q -b side HEAD~1
+  printf 'side\n' >"$merging/side.txt"
+  git -C "$merging" add side.txt
+  git -C "$merging" -c user.name=t -c user.email=t@localhost -c commit.gpgsign=false \
+    -c core.hooksPath=/dev/null commit -q -m side
+  git -C "$merging" checkout -q -
+  git -C "$merging" -c user.name=t -c user.email=t@localhost merge -q --no-commit --no-ff side >/dev/null 2>&1
+  index_before=$(sha256sum <"$merging/.git/index")
+  : >"$log"
+  out=$(cd "$merging" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" bash "$self" 2>&1); rc=$?
+  check "a merge being concluded is scanned" "$rc" 0 "$out" "$SELF: clean"
+  check "…as one commit holding what the merge brings in" 0 0 "$(cat "$log")" "^files=side.txt $"
+  check "…and only that commit" 0 0 "$(cat "$log")" "^commits=1$"
+  if [ -f "$merging/.git/MERGE_HEAD" ] && [ "$(sha256sum <"$merging/.git/index")" = "$index_before" ]; then
+    printf '  ok    …with the merge still in progress and the index file untouched\n'
+  else
+    printf '  FAIL  the scan changed the index file or ended the merge\n'; fail=1
+  fi
+
+  # From a real pre-commit hook: what is scanned is what is committed, for a
+  # plain commit, `commit -a`, and `commit -- <path>` beside another staged file.
+  local hooked="$tmp/hooked" want
+  mkrepo "$hooked"
+  mkdir -p "$tmp/hooks"
+  printf '#!/usr/bin/env bash\nexec bash %q\n' "$self" >"$tmp/hooks/pre-commit"
+  chmod +x "$tmp/hooks/pre-commit"
+  commit() { # commit <git commit arguments...>: in $hooked, through the hook, with the stub
+    : >"$log"
+    (cd "$hooked" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC="${STUB_RC:-0}" GGSHIELD_STUB_LOG="$log" \
+      git -c user.name=t -c user.email=t@localhost -c commit.gpgsign=false \
+      -c core.hooksPath="$tmp/hooks" commit -q "$@" 2>&1)
+  }
+  scanned_is_committed() { # scanned_is_committed <name> <rc> <output>
+    want=$(git -C "$hooked" rev-parse 'HEAD^{tree}')
+    check "$1: the commit is made" "$2" 0 "$3" "$SELF: clean"
+    check "$1: the tree scanned is the tree committed" 0 0 "$(cat "$log")" "^tree=$want$"
+    check "$1: one commit was scanned" 0 0 "$(cat "$log")" "^commits=1$"
+  }
+  out=$(commit -m "plain"); rc=$?
+  scanned_is_committed "git commit" "$rc" "$out"
+  printf 'three\n' >>"$hooked/kept.txt"
+  out=$(commit -a -m "all"); rc=$?
+  scanned_is_committed "git commit -a" "$rc" "$out"
+  check "git commit -a: the edit it picked up was scanned" 0 0 "$(cat "$log")" "^files=kept.txt $"
+  printf 'four\n' >>"$hooked/kept.txt"
+  printf 'more\n' >>"$hooked/staged.txt"
+  git -C "$hooked" add kept.txt staged.txt
+  out=$(commit -m "one path" -- staged.txt); rc=$?
+  scanned_is_committed "git commit -- <path>" "$rc" "$out"
+  check "git commit -- <path>: only that path was scanned" 0 0 "$(cat "$log")" "^files=staged.txt $"
+  want=$(git -C "$hooked" rev-parse HEAD)
+  out=$(STUB_RC=1 commit -m "refused"); rc=$?
+  check "a finding stops a real commit" "$rc" 1 "$out" "found a secret"
+  if [ "$(git -C "$hooked" rev-parse HEAD)" = "$want" ] && [ -n "$(git -C "$hooked" diff --cached --name-only)" ]; then
+    printf '  ok    …and HEAD has not moved, with the change still staged\n'
+  else
+    printf '  FAIL  a refused commit moved HEAD or lost the staged change\n'; fail=1
+  fi
+
+  # The same through real hooks, from a subdirectory and from a linked worktree: what git exports to the
+  # hook there (GIT_DIR in a linked worktree, GIT_INDEX_FILE and GIT_PREFIX from a subdirectory) passes.
+  hook_commit() { # hook_commit <directory> <git commit arguments...>
+    local dir=$1
+    shift
+    : >"$log"
+    (cd "$dir" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_STUB_LOG="$log" \
+      git -c user.name=t -c user.email=t@localhost -c commit.gpgsign=false \
+      -c core.hooksPath="$tmp/hooks" commit -q "$@" 2>&1)
+  }
+  mkdir -p "$hooked/subdir"
+  printf 'five\n' >>"$hooked/kept.txt"
+  out=$(hook_commit "$hooked/subdir" -a -m "from a subdirectory"); rc=$?
+  check "git commit -a from a subdirectory passes the gate" "$rc" 0 "$out" "$SELF: clean"
+  check "…and scanned the edit" 0 0 "$(cat "$log")" "^files=kept.txt $"
+  git -C "$hooked" worktree add -q "$tmp/hlw" -b hlwb >/dev/null 2>&1
+  mkdir -p "$tmp/hlw/subdir"
+  printf 'linked\n' >"$tmp/hlw/linked.txt"
+  git -C "$tmp/hlw" add linked.txt
+  out=$(hook_commit "$tmp/hlw" -m "from a linked worktree"); rc=$?
+  check "git commit from a linked worktree passes the gate" "$rc" 0 "$out" "$SELF: clean"
+  check "…and scanned the staged file" 0 0 "$(cat "$log")" "^files=linked.txt $"
+  printf 'linked again\n' >>"$tmp/hlw/linked.txt"
+  out=$(hook_commit "$tmp/hlw/subdir" -a -m "from a linked worktree's subdirectory"); rc=$?
+  check "git commit -a from a subdirectory of a linked worktree passes the gate" "$rc" 0 "$out" "$SELF: clean"
+  check "…and scanned the edit" 0 0 "$(cat "$log")" "^files=linked.txt $"
 
   echo "----"
   if [ "$fail" -eq 0 ]; then
