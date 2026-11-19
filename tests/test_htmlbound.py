@@ -31,6 +31,7 @@ from ream import (
     pagediff,
     partdiff,
     renderfind,
+    scan,
     sections,
     text,
 )
@@ -672,6 +673,9 @@ def _visible_read(page):
 
 
 OTHER_READS = {"BoundedParser": _bounded_read, "text._Visible": _visible_read}
+# The secret scan reads every body published, whatever its markup, and is held to the
+# same time rule on each of these pages (it is not a parser, so not to the memory one).
+TIMED_READS = {**OTHER_READS, "scan.scan": scan.scan}
 
 
 def _other_page(shape: str, chars: int) -> str:
@@ -688,11 +692,11 @@ def _copies(read: str, shape: str) -> int:
 
 
 @pytest.mark.parametrize("shape", sorted(OTHER))
-@pytest.mark.parametrize("read", sorted(OTHER_READS))
+@pytest.mark.parametrize("read", sorted(TIMED_READS))
 @pytest.mark.scaling
 def test_the_time_of_every_other_long_match_grows_with_the_page(read, shape):
     first, unit, last = OTHER[shape]
-    scalecheck.assert_linear(OTHER_READS[read], first, unit, last)
+    scalecheck.assert_linear(TIMED_READS[read], first, unit, last)
 
 
 @pytest.mark.parametrize("chars", [MIB, 8 * MIB], ids=["1 MiB", "8 MiB"])

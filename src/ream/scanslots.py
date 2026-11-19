@@ -1,7 +1,7 @@
 """How many scans of a large page one server process runs at once.
 
-Reading a large page (the publish checks, the render findings, the readers of its markup
-for forms, sections, text and pins) may hold tens of megabytes and take up to two seconds of the
+Reading a large page (the secret scan, the publish checks, the render findings, the readers
+of its markup for forms, sections, text and pins) may hold tens of megabytes and take up to two seconds of the
 thread's CPU time (`renderfind.SCAN_SECONDS`; a scan that waits is stopped by the wall-time
 backstop, `htmlbound.WALL_FACTOR` times that, so ten seconds). That is per budget: the
 publish checks (`api.page_warnings`) hold one slot across two budgets (the shared
@@ -23,7 +23,11 @@ every scan through `settings.current()`). When all are taken it waits up to
 * the readers that a request needs the answer of (forms on publish and update, sections,
   the text and the headings that a comment's quote or a pin is checked against before it
   is saved) let it go up: the two apps answer 503 with `Retry-After`
-  (`app._refuse_busy_scans`), and an MCP tool answers an error.
+  (`app._refuse_busy_scans`), and an MCP tool answers an error;
+* the secret scan (`scan.scan`, through `store._check_secrets`) is one of those: a body it
+  could not scan is never stored, the request answers 503 as above, and it is not counted
+  as a scanner failure. On an update it waits after the page's owner is checked, with that
+  request's database connection open (no transaction, no lock held).
 
 A thread that already holds a slot takes no second one, so a scan made of smaller scans
 (the publish checks read forms inside theirs) never waits on itself. A slot is held only

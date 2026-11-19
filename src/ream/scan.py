@@ -53,6 +53,8 @@ import string
 from dataclasses import dataclass
 from importlib import resources
 
+from ream import scanslots
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -897,7 +899,18 @@ def scan(text: str) -> list[Finding]:
     every call, not cached at import time, so a caller that swaps it out
     (only ever done in tests) is honoured rather than silently bypassed by a
     stale fast-path cache.
+
+    A body over `scanslots.SMALL_PAGE` characters is scanned under a scan slot, as
+    every other reader of a large page is: `scanslots.ScanBusy` when none comes free
+    in time. It is never "no findings": a caller lets it go up, so a busy server is
+    a refusal to try again, never a clean scan.
     """
+    with scanslots.slot(len(text)):  # ScanBusy goes up: a busy server, not this body
+        return _scan(text)
+
+
+def _scan(text: str) -> list[Finding]:
+    """`scan` without the slot: the views, the shapes, the bounds."""
     raw_view = "\n".join(text.splitlines())
     text_view = _text_view(raw_view)
     view_texts = (raw_view,) if text_view == raw_view else (raw_view, text_view)

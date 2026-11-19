@@ -122,7 +122,7 @@ the gallery origin or `https://<REAM_API_HOST>` (unset: 404); `REAM_MCP_ACCEPT_K
 `REAM_SINKS_FILE` (also `ARTIFACTS_SINKS_FILE`; unset: none) names a TOML file of `[[sink]]` signed-webhook sinks that
 need no plug-in: format, signing and the addresses it refuses are in `docs/plugins.md` and `src/ream/webhook.py`.
 `REAM_SCAN_SLOTS` (also `ARTIFACTS_SCAN_SLOTS`; unset: 4) is how many scans of a page over 256 KiB one server process runs at once
-(`src/ream/scanslots.py`): the rest wait up to 5 seconds, then the publish checks and the render findings say they did not run, the comment
+(`src/ream/scanslots.py`): the rest wait up to 5 seconds, then the secret scan refuses the request (503 with `Retry-After`, nothing stored), the publish checks and the render findings say they did not run, the comment
 listings answer 200 with the pins of the pages they could not read unknown (`anchor_state` "", and `quote_state` "" too unless the page's words were already read), and a reader
 that a request needs answers 503 with `Retry-After`.
 `REAM_RENDERER_URL` (also `ARTIFACTS_RENDERER_URL`; unset: nothing changes, the browser runs in the
