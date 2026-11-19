@@ -178,7 +178,11 @@ unset CDPATH
 # the attribute that made a pointer can be gone by commit time (`git lfs
 # untrack`), and the content behind it sits in .git/lfs/objects, never in the
 # scan. The gate's own write-tree may run the stock git-lfs program before those
-# refusals.
+# refusals. Limits outside the repository's reach: `skip_lfs: true` in lefthook.yml
+# (so lefthook runs no `git lfs pre-push`) can be turned off again by a person's
+# own lefthook-local.yml, and a manual `git lfs push` uploads whatever
+# .git/lfs/objects holds regardless. The pointer refusal is the wall; skip_lfs is
+# the second one.
 # CHECKED BEFORE, READ AGAIN AFTER: the settings, attributes, shallow list,
 # the scanned commit's object and the objects on HEAD's side are read before ggshield's git reads them, and
 # lefthook runs pre-commit jobs in parallel, so something could change them in
@@ -753,7 +757,7 @@ if f.read(1):
 # added has no old side (the null id), and a submodule's id names no object here: neither is hashed.
 # HEAD's commit and tree are hashed before the listing, the objects it names in one pass after it.
 base_proven() {
-  local head=$1 tree=$2 id bad
+  local head=$1 tree=$2 id bad prc
   local refuse="$SELF: REFUSED — an object on HEAD's side of the change does not hash to its id"
   printf 'commit %s\n' "$head" >"$SCRATCH/base-ids"
   hashed "$SCRATCH/base-ids" "$SCRATCH/base-bad" || { echo "$refuse (HEAD's commit $head), so git would not show the staged change as it is and NOTHING was scanned for secrets." >&2; base_advice; return 1; }
@@ -787,11 +791,13 @@ for meta in parts[0::2]:
     out.append(("tree " if mode == b"040000" else "blob ") + oid.decode() + "\n")
 open(sys.argv[2], "w").write("".join(out))
 ' "$SCRATCH/base-raw" "$SCRATCH/base-ids" "${#tree}" 2>&1 </dev/null)
-  case "$?:$bad" in
+  prc=$?
+  case "$prc:$bad" in
     0:) ;;
     *:nopath) could_not_scan "git listed an object of HEAD's side without its path"; return 1 ;;
     *:length) could_not_scan "git listed an object id of HEAD's side of the wrong length"; return 1 ;;
-    *) could_not_scan "git listed HEAD's side of the change in a form the gate cannot read"; return 1 ;;
+    *:form) could_not_scan "git listed HEAD's side of the change in a form the gate cannot read (parser exited $prc: form)"; return 1 ;;
+    *) could_not_scan "the listing of HEAD's side of the change could not be parsed (parser exited $prc, its output ${bad:+non-}empty)"; return 1 ;;
   esac
   [ -s "$SCRATCH/base-ids" ] || return 0
   if ! hashed "$SCRATCH/base-ids" "$SCRATCH/base-bad"; then
@@ -891,8 +897,9 @@ filters_proven() {
 }
 
 # pointers_proven <base tree> <tree to scan>: refuses when a changed path's new blob is a git-lfs pointer
-# (1024 bytes or fewer, first line exactly `version https://git-lfs.github.com/spec/v1`, or the legacy
-# `version https://hawser.github.com/spec/v1`). A pointer is what git-lfs's clean filter stages: the content
+# (1024 bytes or fewer; read as git-lfs's decoder reads it: the blob's leading and trailing whitespace
+# trimmed, a CR at a line's end cut off, and the first line exactly `version https://git-lfs.github.com/spec/v1`
+# or one of the legacy forms `version https://hawser.github.com/spec/v1`, `version http://git-media.io/v/2`). A pointer is what git-lfs's clean filter stages: the content
 # sits in .git/lfs/objects, never reaches the scan, and is uploaded by `git lfs pre-push`. The attribute that
 # made it can be gone by commit time (git lfs untrack), so the blob itself is read, from the tree being
 # scanned, with cat-file (it runs no filter). The blobs are named by oid, so they cannot change under the
@@ -905,7 +912,8 @@ pointers_proven() {
   cat >"$SCRATCH/ptr.py" <<'PTRPY'
 import sys
 mode, src, dst = sys.argv[1:4]
-ptr_lines = (b"version https://git-lfs.github.com/spec/v1", b"version https://hawser.github.com/spec/v1")
+ptr_lines = (b"version https://git-lfs.github.com/spec/v1", b"version https://hawser.github.com/spec/v1",
+             b"version http://git-media.io/v/2")
 data = open(src, "rb").read()
 if mode == "oids":
     parts = data.split(b"\0")
@@ -951,7 +959,8 @@ elif mode == "count":
             sys.exit(2)
         pos = nl + 2 + size
         seen += 1
-        if body.split(b"\n", 1)[0] in ptr_lines:
+        # git-lfs's decoder trims the whole blob's whitespace first, then reads lines with any CR at the end cut off.
+        if body.strip().split(b"\n", 1)[0].rstrip(b"\r") in ptr_lines:
             found += 1
     if seen != len(want):
         sys.exit(2)
@@ -2287,6 +2296,21 @@ PROTO
   git -C "$mk" add old.env
   out=$(mgate "$mk"); rc=$?
   refused_hidden "a staged legacy (hawser) LFS pointer" "$rc" "$out" "$ptrmsg"
+  mk="$tmp/ptr2b"; mkrepo "$mk"
+  printf 'version http://git-media.io/v/2\noid sha256:%064d\nsize 12\n' 0 >"$mk/media.env"
+  git -C "$mk" add media.env
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a staged legacy (git-media) LFS pointer" "$rc" "$out" "$ptrmsg"
+  mk="$tmp/ptr2c"; mkrepo "$mk"
+  printf '\n  \nversion https://git-lfs.github.com/spec/v1\noid sha256:%064d\nsize 12\n' 0 >"$mk/lead.env"
+  git -C "$mk" add lead.env
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a staged LFS pointer after a blank line" "$rc" "$out" "$ptrmsg"
+  mk="$tmp/ptr2d"; mkrepo "$mk"
+  printf 'version https://git-lfs.github.com/spec/v1\r\noid sha256:%064d\r\nsize 12\r\n' 0 >"$mk/crlf.env"
+  git -C "$mk" add crlf.env
+  out=$(mgate "$mk"); rc=$?
+  refused_hidden "a staged LFS pointer with CRLF line ends" "$rc" "$out" "$ptrmsg"
   mk="$tmp/ptr3"; mkrepo "$mk"
   printf 'version 1\nnot a pointer\n' >"$mk/plain.txt"
   printf 'version https://git-lfs.github.com/spec/v1x\n' >"$mk/near.txt"
