@@ -131,9 +131,10 @@ unset CDPATH
 # the scanned commit's own tree are not hash-checked; that commit's object is
 # (above). Those objects are read by one `git cat-file --batch` and hashed by
 # one python3, so the check costs the same few processes for 2 files or 2000.
-# git's two listings of the change (diff-tree) run under `timeout` (coreutils;
-# none on PATH refuses): one that does not finish in 120 s, or the lower
-# GGSHIELD_LIST_TIMEOUT, refuses instead of holding the commit. A HEAD whose commit fails git's own check when the gate peels it is
+# git's two listings of the change (diff-tree) are bounded by a watchdog in
+# plain bash (no coreutils `timeout`, which macOS lacks): one that does not
+# finish in 120 s, or the lower GGSHIELD_LIST_TIMEOUT, is stopped and refuses
+# instead of holding the commit. A HEAD whose commit fails git's own check when the gate peels it is
 # read as no first commit, so the whole tree is scanned. A shallow HEAD (a --depth clone) is not refused:
 # the change is still shown in full. Probed against ggshield's two show calls and found to change nothing
 # in what reaches the scan: diff.<x>.command (no --ext-diff), diff.external,
@@ -425,24 +426,51 @@ ggit() { GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}"
 # glist <out file> <what> <git arguments...>: ggit with its output to <out file>, stopped after LIST_TIMEOUT
 # seconds (120; the environment variable GGSHIELD_LIST_TIMEOUT can lower it, never raise it). A listing of
 # the change that does not finish (a tree too large to walk) refuses, naming <what>, instead of holding the
-# commit for good; one git cannot make refuses as before.
+# commit for good; one git cannot make refuses as before. The bound needs no `timeout` program: git runs
+# in the background, a watchdog subshell sleeps the limit, marks that it fired and stops git (TERM, then
+# KILL 5 s later), and any listing the watchdog fired on refuses, even one that finished as it fired. The
+# watchdog holds none of the gate's output, and is stopped and reaped when git ends (glist_stop, also on
+# exit); a stopped watchdog stops its own sleep. It signals only the git it was given.
 LIST_TIMEOUT=120
+GLIST_DOG=
 glist() {
-  local out=$1 what=$2 secs=$LIST_TIMEOUT rc
+  local out=$1 what=$2 secs=$LIST_TIMEOUT rc gpid fired="$SCRATCH/glist-fired"
   shift 2
   if [ -n "${GGSHIELD_LIST_TIMEOUT-}" ]; then
     [[ $GGSHIELD_LIST_TIMEOUT =~ ^[0-9]{1,6}$ ]] && [ "$((10#$GGSHIELD_LIST_TIMEOUT))" -ge 1 ] \
       || { could_not_scan "GGSHIELD_LIST_TIMEOUT is not a whole number of seconds above 0"; return 1; }
     [ "$((10#$GGSHIELD_LIST_TIMEOUT))" -lt "$secs" ] && secs=$((10#$GGSHIELD_LIST_TIMEOUT))
   fi
-  GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null timeout -k 5 "$secs" git "${GGIT_OPTS[@]}" "$@" </dev/null >"$out" 2>/dev/null
-  rc=$?
-  case "$rc" in
-    0) return 0 ;;
-    124 | 137) could_not_scan "git's listing of $what did not finish within $secs s (a tree too large to walk)" ;;
-    *) could_not_scan "git could not list $what" ;;
-  esac
+  rm -f -- "$fired" || { could_not_scan "no temporary file"; return 1; }
+  GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git "${GGIT_OPTS[@]}" "$@" </dev/null >"$out" 2>/dev/null &
+  gpid=$!
+  (
+    s=
+    trap '[ -n "$s" ] && kill -TERM "$s" 2>/dev/null; exit 0' TERM
+    sleep "$secs" & s=$!; wait "$s"
+    : >"$fired"
+    kill -TERM "$gpid" 2>/dev/null
+    sleep 5 & s=$!; wait "$s"
+    kill -KILL "$gpid" 2>/dev/null
+  ) </dev/null >/dev/null 2>&1 &
+  GLIST_DOG=$!
+  wait "$gpid"; rc=$?
+  glist_stop
+  if [ -e "$fired" ]; then
+    could_not_scan "git's listing of $what did not finish within $secs s (a tree too large to walk)"
+  elif [ "$rc" = 0 ]; then
+    return 0
+  else
+    could_not_scan "git could not list $what"
+  fi
   return 1
+}
+# glist_stop: stop and reap glist's watchdog, if one is running.
+glist_stop() {
+  [ -n "$GLIST_DOG" ] || return 0
+  kill -TERM "$GLIST_DOG" 2>/dev/null
+  wait "$GLIST_DOG" 2>/dev/null
+  GLIST_DOG=
 }
 
 # The settings ggshield's git runs with, as one GIT_CONFIG_COUNT group (command-line scope, so they
@@ -812,18 +840,11 @@ run_gate() {
     echo "  Put python3 on PATH from outside the tree, or opt out for this commit with GGSHIELD_SKIP=1." >&2
     return 1
   fi
-  local tmo
-  tmo=$(command -v timeout 2>/dev/null) || { could_not_scan "there is no timeout program (coreutils) to bound git's listings with"; return 1; }
-  if ! outside_tree "$tmo" "$here" || ! outside_tree "$tmo" "$top"; then
-    echo "$SELF: REFUSED — timeout resolves inside the repository working tree, so NOTHING was scanned." >&2
-    echo "  Put timeout on PATH from outside the tree, or opt out for this commit with GGSHIELD_SKIP=1." >&2
-    return 1
-  fi
   [ -f "$JUDGE" ] || { could_not_scan "ggshield-judge.py is not beside this script"; return 1; }
 
   SCRATCH=$(mktemp -d) || { could_not_scan "no temporary directory"; return 1; }
-  # Removed on any exit; this script sets no other EXIT trap.
-  trap 'rm -rf "$SCRATCH"' EXIT
+  # Removed on any exit, with glist's watchdog stopped first; this script sets no other EXIT trap.
+  trap 'glist_stop; rm -rf "$SCRATCH"' EXIT
   local cfg="$SCRATCH/config" idx="$SCRATCH/index" src tree parent commit range base basetree same scanned
   : >"$cfg" || { could_not_scan "no temporary file"; return 1; }
   # Before write-tree, the first git call that could run a filter driver's program.
@@ -2092,9 +2113,31 @@ open(sys.argv[2], "wb").write(b"40000 dir\0" + binascii.unhexlify(sys.argv[1]))
   check "before the first commit, a list of files that does not finish is stopped at the time limit" "$rc" 1 "$out" "files of the commit to scan did not finish within 2 s"
   check "…and was stopped, not waited for ($secs s)" "$((secs < 30 ? 0 : 1))" 0 "$out" "REFUSED"
   out=$(cd "$repo" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=0 bash "$self" 2>&1); rc=$?
-  check "a time limit of 0 (no limit, to timeout) is refused" "$rc" 1 "$out" "GGSHIELD_LIST_TIMEOUT is not a whole number of seconds above 0"
+  check "a time limit of 0 is refused" "$rc" 1 "$out" "GGSHIELD_LIST_TIMEOUT is not a whole number of seconds above 0"
   out=$(cd "$repo" && PATH="$stub_dir:$PATH" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=600 bash "$self" 2>&1); rc=$?
   check "a time limit above 120 s is lowered to 120, not refused" "$rc" 0 "$out" "$SELF: clean"
+  # The bound needs no `timeout` program (macOS has none without coreutils): on a PATH of links to the
+  # tools the gate and its stubs use, with no timeout or gtimeout among them, a listing that does not
+  # finish is still stopped and refused, and a normal one passes.
+  local notmo="$tmp/notimeout" tool tp
+  mkdir -p "$notmo"
+  for tool in bash sh env git python3 mktemp rm tr wc sleep cat sed grep head tail cut chmod id mkdir \
+    cp mv date dirname basename readlink realpath ls touch sort awk cmp diff pwd; do
+    tp=$(type -P "$tool") && ln -s "$tp" "$notmo/$tool"
+  done
+  if PATH="$notmo" type -P timeout gtimeout >/dev/null 2>&1; then
+    printf '  FAIL  the PATH without timeout still finds one\n'; fail=1
+  else
+    printf '  ok    the PATH without timeout finds none\n'
+  fi
+  t0=$SECONDS
+  out=$(cd "$repo" && PATH="$slowgit:$stub_dir:$notmo" GGSHIELD_STUB_RC=0 GGSHIELD_LIST_TIMEOUT=2 bash "$self" 2>&1); rc=$?
+  secs=$((SECONDS - t0))
+  check "with no timeout program, a listing that does not finish is stopped at the time limit" "$rc" 1 "$out" "did not finish within 2 s"
+  check "…and counts as not scanned" "$rc" 1 "$out" "NOT scanned"
+  check "…and was stopped, not waited for ($secs s)" "$((secs < 30 ? 0 : 1))" 0 "$out" "REFUSED"
+  out=$(cd "$repo" && PATH="$stub_dir:$notmo" GGSHIELD_STUB_RC=0 bash "$self" 2>&1); rc=$?
+  check "with no timeout program, a normal listing passes clean" "$rc" 0 "$out" "$SELF: clean"
   # The top of the tree is read through a sentinel and physdir: a core.worktree ending in a newline was read
   # as the name without it (command substitution drops it) before that change, and passed.
   mk="$tmp/mk28"; mkdir -p "$mk" "$tmp/wt28"$'\n'
